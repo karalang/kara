@@ -92,10 +92,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 258 | 1 |
+| miscompile | 259 | 2 |
 | leak | 182 | 0 |
 | double-free | 132 | 1 |
-| run-vs-build | 128 | 1 |
+| run-vs-build | 128 | 0 |
 | codegen-gap | 115 | 0 |
 | missing-feature | 103 | 4 |
 | perf | 77 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 914 | 3 |
-| typecheck | 193 | 6 |
-| interp | 150 | 2 |
+| codegen | 915 | 4 |
+| typecheck | 193 | 5 |
+| interp | 150 | 1 |
 | ownership | 57 | 0 |
 | other | 51 | 2 |
 | autopar | 48 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1301 surfaced · 13 open · 1271 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1302 surfaced · 13 open · 1272 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (13)
 
@@ -133,7 +133,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1301 surfaced
 | B-2026-08-17-20 | 2026-08-17 | typecheck | low | The default-parameter-value const validator rejects FOUR of the forms design.md explicitly lists as allowed, including the spec's own example literal. § Default Parameter Values says "The allowed forms are identical to those for Module-Level Bindings: literals (`42`, `"localhost"`, `true`), arithmetic on literals (`60 * 1000`), enum variants (`Direction.North`), struct/tuple/array literals built from constant expressions, and references to other module-level bindings", and separately calls `Option[T] = None` "idiomatic". Measured, one form per line: ACCEPTED -- `i64 = 42`, `bool = true`, `f64 = 1.5`, `char = 'z'`, `i64 = 60 * 1000`, `Direction = Direction.North`, `(i64,i64) = (1, 2)`. REJECTED -- (a) `String = "localhost"` -> "default parameter value must be a constant expression (no function calls, closures, or runtime-only values)", the spec's own quoted literal; (b) `i64 = LIMIT` where `let LIMIT: i64 = 7` is a module-level binding -> "const expression: 'LIMIT' is not a known const"; (c) `P = P { x: 1, y: 2 }` struct literal -> same not-a-constant-expression message (the TUPLE literal sibling is accepted, so it is the struct shape specifically); (d) `Option[i64] = None` -> "const expression: 'None' is not a known const", and `Option[i64] = Option.Some(42)` -> not-a-constant-expression. | roadmap.md |
 | B-2026-08-17-28 | 2026-08-17 | codegen+interp | high | Optional chaining `?.` ICEs the interpreter at one shape and silently returns the wrong answer at another, and is not lowered by codegen at all -- `karac check` says "All checks passed" for every case. design.md line 782: "`user.address?.city?.name` short-circuits to `None` if any level is absent." (1) INTERPRETER ICE: `match u.address?.city { Some(c) => println("L2 some: " + c.name), None => ... }` panics with `internal error: entered unreachable code: field access at 7:42: receiver was Value::EnumVariant not Struct/SharedStruct; either an interpreter codepath produced the wrong variant or the typechecker accepted field access on a non-struct` (src/interpreter.rs:2252) -- the Some-arm binding `c` holds an unstripped enum value rather than the `City` struct, the same wrapper-not-stripped shape as B-2026-08-17-27's `??` legs. (2) INTERPRETER SILENT WRONG ANSWER: the spec's own three-level example `u.address?.city?.name`, built with EVERY level `Some`, takes the `None` arm and prints "L3 none". (3) CODEGEN: not lowered -- both compiled backends refuse the same programs (`codegen failed: Undefined variable 's'`, and `no handler for method 'to_string' on variable 'z'` for the one-level form). | roadmap.md |
 | B-2026-08-17-31 | 2026-08-17 | other | medium | 77 of design.md's code-block declarations omit the trailing `;` the grammar REQUIRES -- 51 of 63 bodyless trait declarations, plus 26 of 31 `type` aliases and `distinct type` declarations, so transcribing almost any trait from the authoritative spec produces code that does not parse -- and the document contradicts itself, since the other 12 have it. The parser needs `type Item;` in a trait, `type Item = i64;` in an impl, and `;` after every bodyless method signature (roadmap.md line 447 documents exactly that form as shipped and tested: `trait Container { type Item; fn first(ref self) -> Self.Item; }` + `impl Container for B { type Item = i64; ... }`, which checks and runs on all three backends). design.md's § Associated Types example writes the same construct as `type Item` / `type Item = i64` with no semicolons, and it fails with `error[parse]: Expected Semicolon, found Fn`. Same for § Conversion Traits' `trait From[T] { fn from(value: T) -> Self with _ }` and § Operator Traits' entire canonical-definition block. The 12 that DO carry the semicolon (e.g. line 3366 `fn default() -> Self;`, line 3370 `type Err;`, line 5360 `fn write(mut ref self, bytes: ref Slice[u8]);`) sit in the same document as the 51 that do not, so this is an internal inconsistency, not a deliberate grammar choice the parser has yet to catch up with. | roadmap.md |
-| B-2026-08-17-32 | 2026-08-17 | typecheck+interp | medium | Calling a PLAIN REFINEMENT TYPE as a constructor -- `ValidPort(80)` where `type ValidPort = u16 where self >= 1 and self <= 65535;` -- is ACCEPTED by `karac check` even though the language has no such form, and the two backends then disagree with one of them silent. `karac run --interp` dies with `runtime error: internal: name 'ValidPort' resolved but has no binding at run time. This is a compiler bug (the resolver should have rejected or bound it) -- please report it with the source.` `karac run` (JIT) prints `q = 0`. `karac check` reports "All checks passed." The `T(value)` constructor belongs to `distinct type` (design.md § Distinct Types: "Wrap: `UserId(42)` -- constructor syntax"), NOT to a plain refinement, whose § Refinement Types construction paragraph offers only `Refined.try_from(value)`, `value as Refined`, and the const-eval binding-site elision. The two declaration forms differ by one keyword, so reaching for the wrong constructor is an easy and likely mistake -- and it compiles. | roadmap.md |
 | B-2026-08-17-33 | 2026-08-17 | typecheck | medium | Derive dependency auto-resolution is implemented for the `Ord` chain but NOT for `Copy` or `Hash`, and design.md states the behaviour unconditionally. § Derive: "The compiler resolves derive dependencies automatically regardless of the order items appear in `#[derive(...)]`. Writing `#[derive(Hash)]` when `PartialEq` and `Eq` are not yet derived causes the compiler to auto-derive them in dependency order (`PartialEq` -> `Eq` -> `Hash`). Listing dependencies explicitly is valid and idiomatic; omitting them is also allowed. `#[derive(Copy)]` auto-derives `Clone` if not already present -- **`Copy` without `Clone` is NEVER a compile error, because the compiler fills in the missing dependency.**" Measured: `#[derive(Copy)] struct C { a: i64 }` is EXACTLY that compile error -- `error[typecheck]: struct 'C' derives Copy but not Clone; Copy requires Clone`. `#[derive(Hash)] struct K { a: i64 }` used as a Map key fails with `Map[K, ...]: key type does not implement 'Eq'; only hashable equality-comparable types (... or structs/enums with '#[derive(Hash, Eq)]') can be Map keys`. In BOTH cases the diagnostic names the very dependency the compiler was supposed to fill in, and recommends the manual spelling the spec says is optional. The discriminator that makes this a partial implementation rather than an absent one: `#[derive(Ord)] struct S { a: i64 }` + `x < y` passes `karac check` clean, so the `Ord -> PartialOrd + Eq -> PartialEq` chain IS resolved. | roadmap.md |
 | B-2026-08-17-35 | 2026-08-17 | other | low | Two design.md sections state things the language does not have: § derive(Display) uses an enum-variant syntax that does not parse, and § Subscript Trait claims a v1 capability the resolver explicitly rejects. (1) The payload example writes `Circle(radius: f64),` / `Rect(w: f64, h: f64),` -- a tuple-style variant with NAMED fields. That form does not exist: `error[parse]: Expected RightParen, found Colon`. § Feature 3 defines the two real forms, struct variants (`Circle { radius: f64 }`) and tuple variants (`And(Expr, Expr)`), so this is a third spelling that appears nowhere else. (2) § Subscript Trait opens "User-defined types support `[]` indexing by implementing two standard traits" with no v1 caveat, but `impl Index[i64] for Grid` is rejected outright: `error[resolve]: user-defined 'impl Index for Grid' is not supported in v1; operator traits are stdlib-only`. The sibling § Operator Traits DOES carry the caveat ("makes the later addition of user-defined operator impls a purely additive change"), so the two sections disagree with each other about the same v1 boundary. | roadmap.md |
 | B-2026-08-17-36 | 2026-08-17 | typecheck | medium | `collect()` can only ever produce `Vec[T]` -- every other `FromIterator` target design.md promises is rejected at typecheck. § Iterator Adaptors: "Every standard collection (`Vec`, `Map`, `Set`, `VecDeque`, `TreeMap`, `String`) implements `FromIterator` for its natural element type. `collect` infers the target type from context or requires annotation." Measured, one target per file: `let up: String = s.chars().map(|c| c.to_uppercase()).collect()` -> "expected 'String', found 'Vec[char]'"; `let j: String = v.iter().map(|s| s.to_uppercase()).collect()` -> "expected 'String', found 'Vec[String]'"; `let s: Set[i64] = ... .collect()` -> "expected 'Set[i64]', found 'Vec[i64]'"; `let d: VecDeque[i64] = ... .collect()` -> "expected 'VecDeque[i64]', found 'Vec[i64]'"; `let m: Map[i64, i64] = v.iter().map(|x| (x, x * 10)).collect()` -> "expected 'Map[i64, i64]', found 'Vec[(i64, i64)]'". The sixth target, `TreeMap`, cannot even be named -- see B-2026-08-17-38. In every case the annotation is ignored and the chain's type is fixed to `Vec` of the element type, so the diagnostic reads as a mismatch the user caused rather than a target the compiler does not support. | roadmap.md |
@@ -143,6 +142,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1301 surfaced
 | B-2026-08-18-1 | 2026-08-18 | cli | medium | `karac build` renders NO warning-level diagnostic on a successful build -- the suppression is GLOBAL to the build path, not a `must_use` wiring quirk. Control measurement: `deprecated`, which reaches the user through a COMPLETELY DIFFERENT channel from must_use (the typechecker's `type_lint_warning` / `TypeErrorKind::Deprecated` at src/typechecker.rs:3098-3113, not the `cmd_run` lint block), behaves IDENTICALLY -- emitted under `karac run`, absent under `karac build`. Two independent warning-production mechanisms both go silent on the build path, so the defect is the path's MISSING RENDER SURFACE rather than any one lint's wiring: `cmd_build` (src/cli/build_cmds.rs) renders only manifest warnings (`mf.warnings`) and `monomorphization-budget` violations, and never consults typecheck lint warnings or any lint pass. A build-only workflow therefore sees none of the warnings the compiler actually produced. | roadmap.md |
 | B-2026-08-18-2 | 2026-08-18 | cli | medium | Four sibling lints -- `undocumented_unsafe` / `unsafe_op_in_unsafe_fn`, `missing_must_use`, `missing_track_caller`, `ffi_float_eq` -- are invoked ONLY from `cmd_run`, the exact wiring gap B-2026-08-17-37 reports for `must_use`. All five calls sit in one contiguous block in src/cli/run_check_cmds.rs (~lines 654-730), inside `cmd_run` (which begins at line 338); `cmd_check` (line 1238) and `cmd_build` (src/cli/build_cmds.rs) call none of them. So four further lint surfaces are invisible to `karac check --output=json`, and therefore to the Mend loop, for the same reason must_use was. | roadmap.md |
 | B-2026-08-18-4 | 2026-08-18 | codegen | high | The user-`Drop` spelling of B-2026-08-17-45 still DOUBLE FREES: moving an `Option`-typed field out of a matched struct payload aborts under both compiled backends when the payload struct carries an `impl Drop`. Minimal: `struct C { name: String, zip: i64 } struct A { c: Option[C], other: String } impl Drop for A { fn drop(mut ref self) { println("dropping A"); } }` plus `let f = match a { Some(x) => { x.c } None => { None } };` where `a: Option[A]` -- ASAN reports `attempting double-free`, and plain `karac run` / `karac build` abort. `karac check` passes and `--interp` is correct, same as the parent row. | roadmap.md |
+| B-2026-08-18-5 | 2026-08-18 | codegen | high | A `distinct type` refinement predicate over an UNSIGNED base compiles its bound as SIGNED, so a valid value is rejected at run time on both compiled backends while the interpreter accepts it. `distinct type Port = u16 where self >= 1 and self <= 65535; let p = Port(80);` prints nothing and exits 0 under `--interp`, and PANICS under `karac run` (JIT) and `karac build` (AOT) with `contract violated: value does not satisfy refinement `Port``. 80 plainly satisfies 1..=65535. `karac check` is clean. The compiled backends reject a value the spec says is in range -- a false CONTRACT VIOLATION, which is worse than a missed check because the program dies on correct input. | roadmap.md |
 
 ### Wontfix (7)
 
@@ -160,9 +160,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1301 surfaced
 
 </details>
 
-### Fixed (1271)
+### Fixed (1272)
 
-<details><summary>1271 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1272 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -10695,6 +10695,56 @@ passes with the wrong anchor. `invalid_mut_marker_keeps_its_deletion_fix_it`
 is the counterweight -- E0219 is the other half of the pair and must keep its
 own edit. The insertion test was verified failing on the pre-fix source; the
 E0219 one passes both ways, as a counterweight should. |
+| B-2026-08-17-32 | typecheck+interp | medium | Calling a PLAIN REFINEMENT TYPE as a constructor -- `ValidPort(80)` where `type ValidPort = u16 where self >= 1 and self <= 65535;` -- is ACCEPTED by… | FIXED by feb79b2. The call is now rejected in `infer_call`
+(src/typechecker/expr_call.rs), immediately after the distinct-type
+constructor arm and told apart from it by exactly one map: a name in
+`refinement_predicates` WITH a `distinct_bases` entry is the legal distinct
+constructor, and the same name WITHOUT one is this error.
+
+WHY THERE AND NOT IN THE EXISTING HELPER. `type_name_in_value_position_message`
+is the established home for the "type used where a value belongs" diagnostic
+family, and it already carries per-family remedies. It cannot host this one: it
+is consulted only from `infer_expr`'s bare-identifier arm, which by construction
+runs when the identifier is the WHOLE expression. A callee never reaches it.
+Nor can `resolve_identifier_type` be made to error at its fallback -- the
+comment there (B-2026-08-11-6) records that the silent `Type::Error` is
+load-bearing for `resolve_path_type`, which calls the same helper on a path's
+first segment before resource dispatch (`RandomSource.next()`) gets its turn.
+Erroring there breaks that caller. The call site is the one place with both the
+refinement maps and the knowledge that this is a call.
+
+THE MESSAGE names all three sanctioned constructions from design.md
+§ Refinement Types with the author's OWN argument substituted in, plus the
+one-keyword contrast that is the likely intent:
+
+    'ValidPort' is a refinement type, not a constructor — `type ValidPort = u16
+    where …` has no `ValidPort(…)` form. Construct one with
+    `ValidPort.try_from(80)` (checked, returns a Result), `80 as ValidPort`
+    (asserted), or let a const-evaluable value elide the check at a binding site
+    (`let x: ValidPort = 80`). The `ValidPort(80)` constructor syntax belongs to
+    `distinct type ValidPort = u16`, which is one keyword away.
+
+Every suggested edit is one the author can paste. Kind is `NotCallable`.
+
+VERIFIED on all four surfaces: `karac check`, `karac build`, `karac run` (JIT)
+and `karac run --interp` all now reject, where previously check passed clean,
+interp died with an internal "resolved but has no binding at run time. This is
+a compiler bug", and the JIT printed `q = 0`.
+
+FOUR TESTS in tests/typechecker.rs: the rejection itself; the message carrying
+all three remedies; the three legal constructions still typechecking; and the
+predicated `distinct type` constructor the new arm must NOT over-fire on. A
+fourth pins the invariant the arm leans on -- a `fn` can never share a
+refinement type's name, because fn names must be Value-class (`fn Tag` is a
+parse error) -- so the `functions` guard in the arm is DEFENSIVE ONLY and is
+commented as such rather than claiming work it does not do.
+
+SPUN OUT: building the distinct-type control surfaced an unrelated and more
+serious defect, filed as B-2026-08-18-5 -- a refinement predicate over an
+UNSIGNED base compiles its bound as signed, so `distinct type Port = u16 where
+self >= 1 and self <= 65535; Port(80)` panics "contract violated" on both
+compiled backends while the interpreter accepts it. Confirmed to predate this
+change by stashing it and reproducing on a clean tree. |
 | B-2026-08-17-34 | codegen | medium | `#[derive(Display)]` on an enum works under `--interp` and is REFUSED by both compiled backends when the interpolated expression is an enum-variant P… | Two missing arms in codegen's Display operand recognition, plus the casing
 divergence that fixing them exposed.
 
