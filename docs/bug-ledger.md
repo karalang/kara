@@ -97,9 +97,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 132 | 1 |
 | run-vs-build | 128 | 0 |
 | codegen-gap | 115 | 0 |
-| missing-feature | 103 | 4 |
+| missing-feature | 103 | 3 |
+| false-positive | 78 | 2 |
 | perf | 77 | 0 |
-| false-positive | 77 | 1 |
 | diagnostics | 73 | 4 |
 | crash | 51 | 1 |
 | soundness | 50 | 0 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 915 | 4 |
-| typecheck | 193 | 5 |
+| typecheck | 194 | 5 |
 | interp | 150 | 1 |
 | ownership | 57 | 0 |
 | other | 51 | 2 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1302 surfaced · 13 open · 1272 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1303 surfaced · 13 open · 1273 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (13)
 
@@ -133,7 +133,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1302 surfaced
 | B-2026-08-17-20 | 2026-08-17 | typecheck | low | The default-parameter-value const validator rejects FOUR of the forms design.md explicitly lists as allowed, including the spec's own example literal. § Default Parameter Values says "The allowed forms are identical to those for Module-Level Bindings: literals (`42`, `"localhost"`, `true`), arithmetic on literals (`60 * 1000`), enum variants (`Direction.North`), struct/tuple/array literals built from constant expressions, and references to other module-level bindings", and separately calls `Option[T] = None` "idiomatic". Measured, one form per line: ACCEPTED -- `i64 = 42`, `bool = true`, `f64 = 1.5`, `char = 'z'`, `i64 = 60 * 1000`, `Direction = Direction.North`, `(i64,i64) = (1, 2)`. REJECTED -- (a) `String = "localhost"` -> "default parameter value must be a constant expression (no function calls, closures, or runtime-only values)", the spec's own quoted literal; (b) `i64 = LIMIT` where `let LIMIT: i64 = 7` is a module-level binding -> "const expression: 'LIMIT' is not a known const"; (c) `P = P { x: 1, y: 2 }` struct literal -> same not-a-constant-expression message (the TUPLE literal sibling is accepted, so it is the struct shape specifically); (d) `Option[i64] = None` -> "const expression: 'None' is not a known const", and `Option[i64] = Option.Some(42)` -> not-a-constant-expression. | roadmap.md |
 | B-2026-08-17-28 | 2026-08-17 | codegen+interp | high | Optional chaining `?.` ICEs the interpreter at one shape and silently returns the wrong answer at another, and is not lowered by codegen at all -- `karac check` says "All checks passed" for every case. design.md line 782: "`user.address?.city?.name` short-circuits to `None` if any level is absent." (1) INTERPRETER ICE: `match u.address?.city { Some(c) => println("L2 some: " + c.name), None => ... }` panics with `internal error: entered unreachable code: field access at 7:42: receiver was Value::EnumVariant not Struct/SharedStruct; either an interpreter codepath produced the wrong variant or the typechecker accepted field access on a non-struct` (src/interpreter.rs:2252) -- the Some-arm binding `c` holds an unstripped enum value rather than the `City` struct, the same wrapper-not-stripped shape as B-2026-08-17-27's `??` legs. (2) INTERPRETER SILENT WRONG ANSWER: the spec's own three-level example `u.address?.city?.name`, built with EVERY level `Some`, takes the `None` arm and prints "L3 none". (3) CODEGEN: not lowered -- both compiled backends refuse the same programs (`codegen failed: Undefined variable 's'`, and `no handler for method 'to_string' on variable 'z'` for the one-level form). | roadmap.md |
 | B-2026-08-17-31 | 2026-08-17 | other | medium | 77 of design.md's code-block declarations omit the trailing `;` the grammar REQUIRES -- 51 of 63 bodyless trait declarations, plus 26 of 31 `type` aliases and `distinct type` declarations, so transcribing almost any trait from the authoritative spec produces code that does not parse -- and the document contradicts itself, since the other 12 have it. The parser needs `type Item;` in a trait, `type Item = i64;` in an impl, and `;` after every bodyless method signature (roadmap.md line 447 documents exactly that form as shipped and tested: `trait Container { type Item; fn first(ref self) -> Self.Item; }` + `impl Container for B { type Item = i64; ... }`, which checks and runs on all three backends). design.md's § Associated Types example writes the same construct as `type Item` / `type Item = i64` with no semicolons, and it fails with `error[parse]: Expected Semicolon, found Fn`. Same for § Conversion Traits' `trait From[T] { fn from(value: T) -> Self with _ }` and § Operator Traits' entire canonical-definition block. The 12 that DO carry the semicolon (e.g. line 3366 `fn default() -> Self;`, line 3370 `type Err;`, line 5360 `fn write(mut ref self, bytes: ref Slice[u8]);`) sit in the same document as the 51 that do not, so this is an internal inconsistency, not a deliberate grammar choice the parser has yet to catch up with. | roadmap.md |
-| B-2026-08-17-33 | 2026-08-17 | typecheck | medium | Derive dependency auto-resolution is implemented for the `Ord` chain but NOT for `Copy` or `Hash`, and design.md states the behaviour unconditionally. § Derive: "The compiler resolves derive dependencies automatically regardless of the order items appear in `#[derive(...)]`. Writing `#[derive(Hash)]` when `PartialEq` and `Eq` are not yet derived causes the compiler to auto-derive them in dependency order (`PartialEq` -> `Eq` -> `Hash`). Listing dependencies explicitly is valid and idiomatic; omitting them is also allowed. `#[derive(Copy)]` auto-derives `Clone` if not already present -- **`Copy` without `Clone` is NEVER a compile error, because the compiler fills in the missing dependency.**" Measured: `#[derive(Copy)] struct C { a: i64 }` is EXACTLY that compile error -- `error[typecheck]: struct 'C' derives Copy but not Clone; Copy requires Clone`. `#[derive(Hash)] struct K { a: i64 }` used as a Map key fails with `Map[K, ...]: key type does not implement 'Eq'; only hashable equality-comparable types (... or structs/enums with '#[derive(Hash, Eq)]') can be Map keys`. In BOTH cases the diagnostic names the very dependency the compiler was supposed to fill in, and recommends the manual spelling the spec says is optional. The discriminator that makes this a partial implementation rather than an absent one: `#[derive(Ord)] struct S { a: i64 }` + `x < y` passes `karac check` clean, so the `Ord -> PartialOrd + Eq -> PartialEq` chain IS resolved. | roadmap.md |
 | B-2026-08-17-35 | 2026-08-17 | other | low | Two design.md sections state things the language does not have: § derive(Display) uses an enum-variant syntax that does not parse, and § Subscript Trait claims a v1 capability the resolver explicitly rejects. (1) The payload example writes `Circle(radius: f64),` / `Rect(w: f64, h: f64),` -- a tuple-style variant with NAMED fields. That form does not exist: `error[parse]: Expected RightParen, found Colon`. § Feature 3 defines the two real forms, struct variants (`Circle { radius: f64 }`) and tuple variants (`And(Expr, Expr)`), so this is a third spelling that appears nowhere else. (2) § Subscript Trait opens "User-defined types support `[]` indexing by implementing two standard traits" with no v1 caveat, but `impl Index[i64] for Grid` is rejected outright: `error[resolve]: user-defined 'impl Index for Grid' is not supported in v1; operator traits are stdlib-only`. The sibling § Operator Traits DOES carry the caveat ("makes the later addition of user-defined operator impls a purely additive change"), so the two sections disagree with each other about the same v1 boundary. | roadmap.md |
 | B-2026-08-17-36 | 2026-08-17 | typecheck | medium | `collect()` can only ever produce `Vec[T]` -- every other `FromIterator` target design.md promises is rejected at typecheck. § Iterator Adaptors: "Every standard collection (`Vec`, `Map`, `Set`, `VecDeque`, `TreeMap`, `String`) implements `FromIterator` for its natural element type. `collect` infers the target type from context or requires annotation." Measured, one target per file: `let up: String = s.chars().map(|c| c.to_uppercase()).collect()` -> "expected 'String', found 'Vec[char]'"; `let j: String = v.iter().map(|s| s.to_uppercase()).collect()` -> "expected 'String', found 'Vec[String]'"; `let s: Set[i64] = ... .collect()` -> "expected 'Set[i64]', found 'Vec[i64]'"; `let d: VecDeque[i64] = ... .collect()` -> "expected 'VecDeque[i64]', found 'Vec[i64]'"; `let m: Map[i64, i64] = v.iter().map(|x| (x, x * 10)).collect()` -> "expected 'Map[i64, i64]', found 'Vec[(i64, i64)]'". The sixth target, `TreeMap`, cannot even be named -- see B-2026-08-17-38. In every case the annotation is ignored and the chain's type is fixed to `Vec` of the element type, so the diagnostic reads as a mismatch the user caused rather than a target the compiler does not support. | roadmap.md |
 | B-2026-08-17-38 | 2026-08-17 | typecheck | medium | `TreeMap[K, V]` -- a standard collection design.md documents 13 times, with its own method table, and prescribes TWICE as the remedy for Map/Set's unstable iteration order -- is an UNDEFINED TYPE. `let mut m: TreeMap[i64, i64] = TreeMap.new();` -> `error[resolve]: undefined type 'TreeMap'` + `undefined name 'TreeMap'`. The implementation ships the same container as `SortedMap`, which design.md mentions exactly ONCE, in passing, inside a naming erratum about `Bf16` (line 2299) -- it appears in none of the collection tables, none of the method tables, and neither of the two "use this for stable iteration" directives (lines 1735 and 9849, the § Map hash-seeding note and the § Determinism list). A user or an LLM following the spec's own advice about non-deterministic Map iteration writes `TreeMap` and gets an undefined-type error with no pointer to the real name. Knock-on: the same mismatch is the most likely cause of the `SortedMap.insert` / `.remove` hole in the must_use displaced-value exemption -- design.md's exemption list names `Map.insert` / `TreeMap.insert` / `Map.remove` / `TreeMap.remove`, and MEASURED, `Map`, `Vec` and `VecDeque` are all exempt while `SortedMap.insert` and `SortedMap.remove` both warn. | roadmap.md |
@@ -143,6 +142,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1302 surfaced
 | B-2026-08-18-2 | 2026-08-18 | cli | medium | Four sibling lints -- `undocumented_unsafe` / `unsafe_op_in_unsafe_fn`, `missing_must_use`, `missing_track_caller`, `ffi_float_eq` -- are invoked ONLY from `cmd_run`, the exact wiring gap B-2026-08-17-37 reports for `must_use`. All five calls sit in one contiguous block in src/cli/run_check_cmds.rs (~lines 654-730), inside `cmd_run` (which begins at line 338); `cmd_check` (line 1238) and `cmd_build` (src/cli/build_cmds.rs) call none of them. So four further lint surfaces are invisible to `karac check --output=json`, and therefore to the Mend loop, for the same reason must_use was. | roadmap.md |
 | B-2026-08-18-4 | 2026-08-18 | codegen | high | The user-`Drop` spelling of B-2026-08-17-45 still DOUBLE FREES: moving an `Option`-typed field out of a matched struct payload aborts under both compiled backends when the payload struct carries an `impl Drop`. Minimal: `struct C { name: String, zip: i64 } struct A { c: Option[C], other: String } impl Drop for A { fn drop(mut ref self) { println("dropping A"); } }` plus `let f = match a { Some(x) => { x.c } None => { None } };` where `a: Option[A]` -- ASAN reports `attempting double-free`, and plain `karac run` / `karac build` abort. `karac check` passes and `--interp` is correct, same as the parent row. | roadmap.md |
 | B-2026-08-18-5 | 2026-08-18 | codegen | high | A `distinct type` refinement predicate over an UNSIGNED base compiles its bound as SIGNED, so a valid value is rejected at run time on both compiled backends while the interpreter accepts it. `distinct type Port = u16 where self >= 1 and self <= 65535; let p = Port(80);` prints nothing and exits 0 under `--interp`, and PANICS under `karac run` (JIT) and `karac build` (AOT) with `contract violated: value does not satisfy refinement `Port``. 80 plainly satisfies 1..=65535. `karac check` is clean. The compiled backends reject a value the spec says is in range -- a false CONTRACT VIOLATION, which is worse than a missed check because the program dies on correct input. | roadmap.md |
+| B-2026-08-18-6 | 2026-08-18 | typecheck | medium | The `PartialEq` derive's FIELD validator is STRICTER than `Eq`'s, which is backwards: `#[derive(Eq)] struct A { v: Vec[i64] }` is accepted and its `==` lowering is pinned by a passing E2E test, while `#[derive(PartialEq)] struct B { v: Vec[i64] }` is REFUSED with "struct 'B' derives PartialEq but field 'v' has non-PartialEq type 'Vec[i64]'". `Eq` is the stronger trait -- anything comparable for `Eq` is comparable for `PartialEq` -- so a field type accepted by the former and rejected by the latter cannot both be right. The practical effect is that the weaker, more common derive is the one an author cannot use on a struct with a `Vec` field. | — |
 
 ### Wontfix (7)
 
@@ -160,9 +160,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1302 surfaced
 
 </details>
 
-### Fixed (1272)
+### Fixed (1273)
 
-<details><summary>1272 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1273 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -10745,6 +10745,58 @@ UNSIGNED base compiles its bound as signed, so `distinct type Port = u16 where
 self >= 1 and self <= 65535; Port(80)` panics "contract violated" on both
 compiled backends while the interpreter accepts it. Confirmed to predate this
 change by stashing it and reproducing on a clean tree. |
+| B-2026-08-17-33 | typecheck | medium | Derive dependency auto-resolution is implemented for the `Ord` chain but NOT for `Copy` or `Hash`, and design.md states the behaviour unconditionally | Close the derive set over its dependencies at the single point every consumer
+reads derives through — `extract_derived_traits` (src/typechecker.rs):
+`Copy` => `Clone`, `Hash` => `Eq`, `Eq` => `PartialEq`.
+
+WHY THAT POINT. The Copy/Clone validator, the `Map`-key `Eq`/`Hash` gate,
+codegen (`declarations.rs` calls `extract_derived_traits` directly) and the
+interpreter (`info.derived_traits`, populated from the same function in
+`env_build`) all read derives through it. Closing there means every consumer
+sees the same closed set, so none of them can disagree about what a type
+derives — the alternative, teaching each gate its own chain, is three copies
+of one rule waiting to drift.
+
+WHY IT IS ONLY A NAME. `Copy` / `Clone` / `Eq` / `Hash` are NATIVE derives:
+`comptime::expand_derives` explicitly skips them ("a derive without a backing
+comptime fn — the native built-ins: Eq / Hash / Display / … — is left to the
+existing handling"). So there is no impl to synthesize; the backends already
+know how to lower each of these once the name is present. Measured, not
+assumed: the auto-filled `Eq`/`PartialEq` genuinely drive equality — two
+equal `Hash` keys collapse to ONE `Map` entry and the second insert
+overwrites (len = 2, k12 = 20) on all three backends.
+
+`Ord` DELIBERATELY UNTOUCHED. The row's own discriminator is that
+`#[derive(Ord)]` + `x < y` already checks clean, because the comparison
+checks accept `Ord` directly rather than requiring the chain in the set.
+Adding names to a path that already works buys nothing and risks behaviour
+nobody asked to change, so the closure covers exactly the two chains that
+were broken.
+
+TWO THINGS THIS DELETES, both deliberately:
+
+  * `validate_copy_implies_clone` is REMOVED, not left in place. Its
+    condition can no longer occur (the set is closed before it ever runs), and
+    a validation pass that can never fire misrepresents the rule to the next
+    reader. A doc comment in `derives.rs` that justified `type_supports_clone`
+    by "the existing `validate_copy_implies_clone` rule" now cites the closure
+    instead, so the invariant is documented where it actually lives.
+  * `test_derive_copy_without_clone_error` asserted the diagnostic design.md
+    says can never happen. It is INVERTED rather than dropped — renamed to
+    `..._auto_fills`, with the spec sentence quoted in the body — because a
+    test encoding a spec violation should be corrected in place where the
+    history is visible, not silently deleted.
+
+TESTS: the inverted case, `#[derive(Hash)]`-only as a `Map` key, an
+idempotence case (explicitly listing `Copy, Clone` / `Hash, Eq, PartialEq`
+must not become a double-derive error — the spec calls the explicit spelling
+"valid and idiomatic"), and a guard that the REAL Copy rule still rejects a
+`String` field, so the auto-fill cannot be mistaken for weakening Copy. Plus
+an interpreter oracle and its codegen E2E twin pinning byte-identical output.
+Three are baseline-red against the reverted change.
+
+Corpus: the set of files failing `karac check` across 400 examples/ +
+kara-katas files is byte-identical to before. |
 | B-2026-08-17-34 | codegen | medium | `#[derive(Display)]` on an enum works under `--interp` and is REFUSED by both compiled backends when the interpolated expression is an enum-variant P… | Two missing arms in codegen's Display operand recognition, plus the casing
 divergence that fixing them exposed.
 
