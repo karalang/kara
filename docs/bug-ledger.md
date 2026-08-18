@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | perf | 77 | 0 |
 | false-positive | 77 | 1 |
 | diagnostics | 73 | 4 |
-| crash | 51 | 2 |
+| crash | 51 | 1 |
 | soundness | 50 | 0 |
 | other | 35 | 0 |
 | use-after-free | 20 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 914 | 4 |
+| codegen | 914 | 3 |
 | typecheck | 193 | 6 |
-| interp | 150 | 3 |
+| interp | 150 | 2 |
 | ownership | 57 | 0 |
 | other | 51 | 2 |
 | autopar | 48 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1301 surfaced · 14 open · 1270 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1301 surfaced · 13 open · 1271 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (14)
+### Open (13)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -142,7 +142,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1301 surfaced
 | B-2026-08-17-44 | 2026-08-17 | typecheck | medium | `self` inside `impl Trait for Slice[i64]` types as `Named { name: "Slice", args: [] }` -- the ELEMENT TYPE IS LOST -- so the body can barely do anything with it. `self[0]` is rejected outright, and `self.len().to_string()` fails codegen with "no handler for method 'to_string' on variable 'n'". A `Slice[i64]` PARAMETER has none of these problems, so the defect is in how a builtin-container impl head types its receiver. | The impl-head Self typing for builtin containers; symptom sites are the index rule in src/typechecker/exprs.rs and method dispatch in codegen. tests/codegen.rs `a_range_subscript_by_ref_passes_a_slice_not_an_element_pointer` is shaped around this — it reads `self.len()` and returns it directly, because `self.len().to_string()` does not compile. |
 | B-2026-08-18-1 | 2026-08-18 | cli | medium | `karac build` renders NO warning-level diagnostic on a successful build -- the suppression is GLOBAL to the build path, not a `must_use` wiring quirk. Control measurement: `deprecated`, which reaches the user through a COMPLETELY DIFFERENT channel from must_use (the typechecker's `type_lint_warning` / `TypeErrorKind::Deprecated` at src/typechecker.rs:3098-3113, not the `cmd_run` lint block), behaves IDENTICALLY -- emitted under `karac run`, absent under `karac build`. Two independent warning-production mechanisms both go silent on the build path, so the defect is the path's MISSING RENDER SURFACE rather than any one lint's wiring: `cmd_build` (src/cli/build_cmds.rs) renders only manifest warnings (`mf.warnings`) and `monomorphization-budget` violations, and never consults typecheck lint warnings or any lint pass. A build-only workflow therefore sees none of the warnings the compiler actually produced. | roadmap.md |
 | B-2026-08-18-2 | 2026-08-18 | cli | medium | Four sibling lints -- `undocumented_unsafe` / `unsafe_op_in_unsafe_fn`, `missing_must_use`, `missing_track_caller`, `ffi_float_eq` -- are invoked ONLY from `cmd_run`, the exact wiring gap B-2026-08-17-37 reports for `must_use`. All five calls sit in one contiguous block in src/cli/run_check_cmds.rs (~lines 654-730), inside `cmd_run` (which begins at line 338); `cmd_check` (line 1238) and `cmd_build` (src/cli/build_cmds.rs) call none of them. So four further lint surfaces are invisible to `karac check --output=json`, and therefore to the Mend loop, for the same reason must_use was. | roadmap.md |
-| B-2026-08-18-3 | 2026-08-18 | interp+codegen | medium | Indexing by a `let`-BOUND range crashes the interpreter with an internal `unreachable!()`, and does not compile under either compiled backend. `let v = [10, 20, 30, 40]; let r = 1..3; let s = v[r]; println(s.len())` is `karac check`-clean, then panics under `--interp` with "internal error: entered unreachable code: index expression at 4:13: obj=Value::Array, index=Value::Iterator" (src/interpreter/eval_expr.rs:747), and fails both `karac run` (JIT) and `karac build` (AOT) with "codegen failed: Undefined variable 'r'". The INLINE form `let s = v[1..3]` works on all three backends and prints 2, so this is the binding indirection alone, on the indexing path. | roadmap.md |
 | B-2026-08-18-4 | 2026-08-18 | codegen | high | The user-`Drop` spelling of B-2026-08-17-45 still DOUBLE FREES: moving an `Option`-typed field out of a matched struct payload aborts under both compiled backends when the payload struct carries an `impl Drop`. Minimal: `struct C { name: String, zip: i64 } struct A { c: Option[C], other: String } impl Drop for A { fn drop(mut ref self) { println("dropping A"); } }` plus `let f = match a { Some(x) => { x.c } None => { None } };` where `a: Option[A]` -- ASAN reports `attempting double-free`, and plain `karac run` / `karac build` abort. `karac check` passes and `--interp` is correct, same as the parent row. | roadmap.md |
 
 ### Wontfix (7)
@@ -161,9 +160,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1301 surfaced
 
 </details>
 
-### Fixed (1270)
+### Fixed (1271)
 
-<details><summary>1270 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1271 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -10944,6 +10943,60 @@ THE LEAK SIDE IS MEASURED, NOT ASSUMED, because every neighbouring suppressor's 
 TESTS: `asan_boxed_option_local_scrutinee_field_move_out_no_leak_no_double_free` (tests/memory_sanitizer.rs) plus a value twin `test_e2e_local_scrutinee_option_field_move_out_runs` (tests/codegen.rs) -- the defect ABORTED rather than printing a wrong answer, so the value assertion catches the opposite failure mode, a neutralizer firing too widely and printing empty while ASAN stays quiet. Coverage is stronger than the sibling B-2026-08-06-10 fixture's, which only bites at `-O0`: against the pre-fix compiler this one SEGVs under ASAN at BOTH `-O2` and `KARAC_OPT_LEVEL=0`. Full `--features llvm` suite green (106 targets, 13962 passed, 0 failed) with `KARAC_REQUIRE_RUNTIME_ARCHIVE=1`.
 
 UNBLOCKS B-2026-08-17-28 leg (3): `?.`'s flatten case lowers to exactly this shape, and that leg was deferred solely because implementing it would have traded a loud build error for this runtime double free. |
+| B-2026-08-18-3 | interp+codegen | medium | Indexing by a `let`-BOUND range crashes the interpreter with an internal `unreachable!()`, and does not compile under either compiled backend | Fixed in a587e325, on both evaluators. The row's "either index by a bound range
+or reject it with a span" is answered by the first: the TYPECHECKER IS ALREADY
+RIGHT and rejecting would have contradicted it.
+
+Measured before touching anything: `1..3` types as `Range[i64]`, `v[r]` types
+as `Slice[i64]`, and a non-contiguous iterator index is ALREADY rejected with
+a span ("index must be an integer or range, found 'Iterator[i64]'"). So the
+front end blesses exactly the programs that should work, and both evaluators
+were simply missing the bound spelling.
+
+ONE ROOT, TWO BACKENDS: each reads the range's bounds SYNTACTICALLY off an
+`ExprKind::Range` node in index position, so a range arriving through a
+binding entered neither path.
+
+INTERPRETER. A range VALUE is modelled as an eagerly materialized
+`Value::Iterator`, so it carries its elements rather than its bounds; the pair
+`(Array, Iterator)` fell to the index arm's `unreachable!()`. The elements
+determine the bounds exactly -- the typechecker admits only a contiguous
+ascending range here -- so `range_value_bounds` recovers `[first, last+1)`,
+honouring `cursor` so a partially consumed range slices from where it now
+stands. The recovered pair is turned into a SYNTHETIC `ExprKind::Range` and
+the existing block runs unchanged, rather than growing a second copy of the
+Array/Slice/String/Vec slicing it already implements. Only an IDENTIFIER index
+is looked up, through `env.get` rather than by evaluating, so the object is
+still evaluated exactly once in its original order.
+
+CODEGEN. "Undefined variable 'r'" was accurate: there is no runtime `Range`
+value. There are the BOUNDS, though -- B-2026-08-17-29 spills them to two
+allocas at the `let` and records them in `range_let_bindings`, whose own doc
+names this exact use as still failing ("Every other use of the binding
+(`v[r]`, ...) still fails LOUDLY"). Three parts: `compile_range_slice` is
+split into a `compile_range_slice_values` core taking already-compiled bounds
+(the same split -29 made for the loop, and for the same reason); the index
+site loads the captured pair and calls it; and `infer_slice_elem_from_rhs`
+learns the bound spelling, without which the index compiled correctly and the
+BINDING was then unregistered -- `s.len()` reported "no handler for method
+'len' on variable 's'", a second, more confusing failure one step downstream.
+
+VALUE SEMANTICS HOLD, which is the property worth pinning rather than the
+lengths: `let mut a = 1; let r = a..3; a = 0; v[r]` slices 1..3, not 0..3, on
+all three backends -- the bounds are captured at the binding, exactly as -29
+settled for the loop position.
+
+MEASURED, interp / JIT / AOT agreeing on every shape: the row's repro, element
+reads through the slice (20, 30 -- the right WINDOW, not just the right
+length), an inclusive `1..=2`, an empty `2..2`, a `Vec` receiver, the
+mutate-after-bind case above, and the inline control that always worked.
+
+Tests: `test_index_by_a_let_bound_range` and
+`test_let_bound_range_index_captures_its_bounds` (tests/interpreter.rs), and
+`indexing_by_a_let_bound_range_slices_like_the_inline_form`
+(tests/codegen.rs), which pins each bound spelling against the INLINE one it
+must equal rather than against a literal -- the two spellings meaning the same
+thing is the property. All verified failing on the pre-fix source. |
 
 </details>
 
