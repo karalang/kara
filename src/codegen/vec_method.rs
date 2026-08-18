@@ -11350,6 +11350,22 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // ── entry: pick the live/dead buffers, bail to the merge if small ──
         self.builder.position_at_end(entry);
+        // MEASUREMENT ONLY, default 0 and inert. `KARAC_SORT_RANGE_PAD=N`
+        // executes once per partition CALL, so it counts ranges rather than
+        // elements — the denominator needed to turn the unattributed remainder
+        // into a per-range cost, and the one thing the per-element pads cannot
+        // give.
+        let range_pad = std::env::var("KARAC_SORT_RANGE_PAD")
+            .ok()
+            .and_then(|s| s.parse::<u32>().ok())
+            .unwrap_or(0);
+        if range_pad > 0 {
+            let p = self.create_entry_alloca(qpart_fn, "rgpad", i64_t.into());
+            for _ in 0..range_pad {
+                let st = self.builder.build_store(p, zero).unwrap();
+                st.set_volatile(true).unwrap();
+            }
+        }
         let piv_a = self.create_entry_alloca(qpart_fn, "piv", elem_ty);
         let nlt_a = self.create_entry_alloca(qpart_fn, "nlt", i64_t.into());
         let nle_a = self.create_entry_alloca(qpart_fn, "nle", i64_t.into());
@@ -12500,6 +12516,23 @@ impl<'ctx> super::Codegen<'ctx> {
             .into_int_value();
         let i_next = self.builder.build_int_add(i_v2, one, "is.i.next").unwrap();
         self.builder.build_store(i_a, i_next).unwrap();
+        // MEASUREMENT ONLY, default 0 and inert. `KARAC_SORT_LEAFOUT_PAD=N`
+        // counts the leaf's OUTER iterations — one per element handed to the
+        // leaf — the way FU_PAD/REV_PAD count the fused pass and the reversal.
+        // The shift loop's cost is already known; this separates the leaf's
+        // per-element overhead from the per-range cost inside the partition's
+        // unattributed remainder, which is the only block left unmeasured.
+        let leafout_pad = std::env::var("KARAC_SORT_LEAFOUT_PAD")
+            .ok()
+            .and_then(|s| s.parse::<u32>().ok())
+            .unwrap_or(0);
+        if leafout_pad > 0 {
+            let p = self.create_entry_alloca(isort_fn, "ispad", i64_t.into());
+            for _ in 0..leafout_pad {
+                let st = self.builder.build_store(p, zero).unwrap();
+                st.set_volatile(true).unwrap();
+            }
+        }
         self.builder.build_unconditional_branch(i_chk).unwrap();
 
         self.builder.position_at_end(ret);
