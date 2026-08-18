@@ -2800,7 +2800,14 @@ pub(super) fn print_type_warnings_text(per_module: &[ModuleTypeErrors]) {
 pub(super) fn print_type_errors_text(per_module: &[ModuleTypeErrors]) {
     for te in per_module {
         for err in &te.errors {
-            let code = type_error_code(&err.kind);
+            // A promoted lint names its lint rather than the generic type
+            // code — see the single-file renderer's note (B-2026-08-18-25).
+            // `-D deprecated` rendered `error[E0200]` here, the TypeMismatch
+            // code, which points at neither the rule nor the flag.
+            let code = err
+                .lint_name
+                .clone()
+                .unwrap_or_else(|| type_error_code(&err.kind).to_string());
             eprintln!(
                 "error[{code}]: {}:{}:{}: {}",
                 te.file.display(),

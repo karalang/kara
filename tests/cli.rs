@@ -26783,3 +26783,95 @@ fn project_build_renders_and_suppresses_typecheck_warnings() {
     );
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+/// B-2026-08-18-25 — a lint diagnostic carries its severity prefix ONCE, and
+/// a promoted one names its lint.
+///
+/// `emit_deprecated_warning` baked `warning[deprecated]: ` into the message
+/// text while every renderer adds a prefix of its own from `lint_name`, so the
+/// rendered line read `warning[deprecated]: f.kara:7:13: warning[deprecated]:
+/// use of deprecated item …` on every lane. Under `-D deprecated` the doubling
+/// became a contradiction: a promoted error header followed by the message
+/// calling itself a warning. design.md § Deprecation shows the single-prefix
+/// shape.
+///
+/// Removing the baked prefix exposed a second gap, fixed with it: the promoted
+/// error rendered `error[typecheck]` (single-file) / `error[E0200]` (project),
+/// neither of which names the lint the author would pass to `-A`. The bracket
+/// is the actionable label on the warning side for that reason; it is now the
+/// same on the promoted side.
+#[test]
+fn a_lint_diagnostic_is_prefixed_once_and_names_its_lint() {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-lint-prefix-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let src = tmp.join("dep.kara");
+    std::fs::write(
+        &src,
+        "#[deprecated(note: \"use `next_way` instead\")]\n\
+         fn old_way() -> i64 { return 1; }\n\
+         fn next_way() -> i64 { return 2; }\n\
+         fn main() { println(old_way().to_string()); }\n",
+    )
+    .unwrap();
+    let path = src.to_str().unwrap().to_string();
+
+    let out = karac_bin().args(["check", &path]).output().unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    let line = stderr
+        .lines()
+        .find(|l| l.starts_with("warning[deprecated]"))
+        .unwrap_or_default()
+        .to_string();
+    assert!(!line.is_empty(), "expected a deprecated warning: {stderr}");
+    assert_eq!(
+        line.matches("warning[deprecated]").count(),
+        1,
+        "the severity prefix belongs to the renderer, not the message: {line}"
+    );
+    // The suppression route still reaches the author through the message body.
+    assert!(
+        line.contains("#[allow(deprecated)]"),
+        "the message must still name its suppression: {line}"
+    );
+
+    // Promoted: an error that names the lint, and says `warning` nowhere.
+    let out = karac_bin()
+        .args(["check", "-D", "deprecated", &path])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    let line = stderr
+        .lines()
+        .find(|l| l.starts_with("error["))
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        line.starts_with("error[deprecated]"),
+        "a promoted lint must name its lint, not the phase or a type code: {line}"
+    );
+    assert!(
+        !line.contains("warning["),
+        "a promoted lint must not call itself a warning: {line}"
+    );
+
+    // A plain type error is untouched — it has no lint to name.
+    let plain = tmp.join("te.kara");
+    std::fs::write(&plain, "fn main() { let x: i64 = f\"s\"; }\n").unwrap();
+    let out = karac_bin()
+        .args(["check", plain.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(
+        stderr.contains("error[typecheck]"),
+        "a non-lint type error keeps the phase label: {stderr}"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}

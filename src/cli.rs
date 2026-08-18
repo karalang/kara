@@ -1850,9 +1850,17 @@ fn render_text_diagnostics(pipeline: &Pipeline) -> Vec<String> {
     }
     if let Some(ref t) = pipeline.typed {
         for err in &t.errors {
+            // A PROMOTED LINT names its lint, not the phase. `-D deprecated`
+            // routes the entry here as an error, and `error[typecheck]` left
+            // the author with no way back to the `-A <name>` that governs it
+            // — the more so since B-2026-08-18-25 stopped the message from
+            // repeating the lint name itself. The bracket is the actionable
+            // label in the warning renderer below for exactly this reason;
+            // this is the same rule on the promoted side.
+            let label = err.lint_name.as_deref().unwrap_or("typecheck");
             out.push(with_snippet(
                 format!(
-                    "error[typecheck]: {}:{}:{}: {}",
+                    "error[{label}]: {}:{}:{}: {}",
                     filename, err.span.line, err.span.column, err.message
                 ),
                 source,

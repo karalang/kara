@@ -3207,7 +3207,16 @@ impl<'a> TypeChecker<'a> {
         note: Option<&str>,
         since: Option<&str>,
     ) {
-        let mut message = format!("warning[deprecated]: use of deprecated item `{display_name}`");
+        // NO SEVERITY PREFIX IN THE MESSAGE. Every renderer already prefixes
+        // `warning[{lint_name}]` (or the promoted `error[...]` under `-D`)
+        // from the `lint_name` this entry carries, so baking one in here
+        // printed it twice — "warning[deprecated]: f.kara:7:13:
+        // warning[deprecated]: use of deprecated item …" on check, run, build
+        // and project builds alike. Under `-D deprecated` the doubling read as
+        // a contradiction: the promoted `error[…]` header followed by the
+        // message calling itself a warning. design.md § Deprecation shows the
+        // single-prefix shape this now produces. B-2026-08-18-25.
+        let mut message = format!("use of deprecated item `{display_name}`");
         if let Some(note) = note {
             message.push_str(&format!(": {note}"));
         }
@@ -3265,8 +3274,11 @@ impl<'a> TypeChecker<'a> {
     /// method-aware [`Self::check_method_stability`] (see
     /// [`Self::emit_deprecated_warning`] for the same factoring rationale).
     fn emit_unstable_warning(&mut self, span: &Span, display_name: &str, note: Option<&str>) {
+        // Same de-doubling as `emit_deprecated_warning` above, and for the
+        // same reason — the renderer supplies the severity word from
+        // `lint_name`. B-2026-08-18-25.
         let mut message = format!(
-            "warning[unstable_api]: use of `#[unstable]` item `{display_name}` — the API \
+            "use of `#[unstable]` item `{display_name}` — the API \
              surface may change before v1 lock",
         );
         if let Some(note) = note {
