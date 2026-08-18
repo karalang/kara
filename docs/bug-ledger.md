@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 130 | 0 |
 | codegen-gap | 118 | 0 |
 | missing-feature | 110 | 3 |
-| diagnostics | 83 | 3 |
+| diagnostics | 83 | 2 |
 | false-positive | 80 | 0 |
 | perf | 77 | 0 |
 | crash | 52 | 0 |
@@ -116,17 +116,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | ownership | 60 | 0 |
 | other | 55 | 3 |
 | autopar | 49 | 0 |
-| cli | 46 | 1 |
+| cli | 46 | 0 |
 | parser | 26 | 1 |
 | runtime | 22 | 0 |
-| resolver | 20 | 1 |
+| resolver | 20 | 0 |
 | effect | 7 | 0 |
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1346 surfaced · 8 open · 1320 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1346 surfaced · 7 open · 1321 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (8)
+### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -135,7 +135,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1346 surfaced
 | B-2026-08-18-40 | 2026-08-18 | typecheck+codegen | low | A `#[gpu]` KERNEL BODY COULD NOT LOOP, BIND A LOCAL, OR BRANCH ON A VALUE — it had to be a SINGLE EXPRESSION. All four increments LANDED 2026-08-18: immutable `let`, `while` + mutable locals + assignment, `for`-over-range, and value `match`. Reductions, accumulators, nested counted loops and table lookups now compile AND run (each verified on lavapipe against the interpreter). REMAINDER SPLIT OUT AS B-2026-08-18-49: statement-form `if` is unsupported (and a value-`if` branch cannot hold a local) — wider than this row's original "locals inside an `if` branch" wording, which understated it. | docs/implementation_checklist/phase-10-targets.md § GPU codegen cluster (CG-1…CG-7); the slice-0 scope decision is docs/spikes/gpu-wgsl-slice0.md. Not a regression — an unlifted slice-0 floor. Sibling of the CG-5 assessment (docs/spikes/gpu-llvm-offload-assessment.md finding 4), which is where it surfaced. |
 | B-2026-08-18-41 | 2026-08-18 | parser | low | THREE `effect resource` declaration forms design.md specifies normatively do not parse: a GENERIC trait bound (`effect resource C: Provider[Request];` -> "Expected Semicolon, found LeftBracket"), MULTI-BOUNDS (`effect resource UserDB: DatabaseProvider + HealthCheckable;` -> "found Plus", spec'd at design.md:7216, under the normative line "Multiple trait bounds are allowed on a resource declaration:" at :7213), and PARAMETERIZED resources (`effect resource UserDB[user_id: i64];` -> the `[...]` is parsed as generic type params, so the diagnostic is the naming-convention error "`user_id` is Value-class but generic type parameters must be Type-class", spec'd at design.md:7124 under its own heading "### Parameterized Resources" at :7121). Only `effect resource X;` and `effect resource X: Trait;` parse. | the `effect resource` declaration parser (src/parser.rs) vs design.md:6071, :7216 (multi-bound, prose at :7213) and design.md:7124 (§ Parameterized Resources, heading at :7121); allow-list entry in tests/design_md_code_blocks.rs NON_TERMINATOR |
 | B-2026-08-18-42 | 2026-08-18 | other | low | EIGHT occurrences across SEVEN lines in design.md's kara blocks use Rust MACRO syntax (`name!(...)`), which Kara does not have -- the parser rejects `!` outright with "the `!` operator is not used in Kara". `panic!` (6, five of them in § Never type -- one line carries two -- plus § FFI callbacks), `matches!` (1, § peek-and-drop) and `format_into!` (1, § embedded formatting). Transcribing any of them fails to parse. Only `panic!` has a drop-in replacement -- `panic("x")` checks FULLY clean -- while `matches` resolves to nothing at all ("undefined name 'matches'") and `format_into!` is variadic over a format string, so two of the three need a language answer before the doc can be corrected. | docs/design.md:542, :543, :556, :557 (panic!), :5941 (panic!), :8419 (matches!), :12162 (format_into!); allow-list entry in tests/design_md_code_blocks.rs NON_TERMINATOR; cf. B-2026-08-17-35 for the same class |
-| B-2026-08-18-47 | 2026-08-18 | resolver+cli | medium | `karac fix` AUTO-APPLIES a `did you mean` rename to a SEMANTICALLY UNRELATED function: an undefined `format("{}", 1)` is rewritten to `forget("{}", 1)` -- `forget` being the memory intrinsic. `suggest_similar` accepts any candidate within Levenshtein distance 2 for a name of 3+ characters, and the winner is written straight into a machine-applicable `TextEdit` that `karac fix` applies without further checks. | roadmap.md |
 | B-2026-08-18-48 | 2026-08-18 | codegen | medium | A HEAP-BOXED enum payload that is MOVED into a by-value call is freed by nobody. The move-out sentinel zeroes the caller's slot so its `BoxedEnumDrop` no-ops, and a by-value enum PARAMETER does not adopt the box — `fn tail(o: Option[W])` emits no free at all. Measured 2000/2000 boxes leaked (64000 bytes) in a loop repro under auto-par. Sequentially the identical program is clean only because the box never escapes one function and LLVM deletes the allocation outright, so nothing frees it there either — the hole is the same, only unobservable. | the move-out sentinel at the by-value call site (src/codegen) vs `CleanupAction::BoxedEnumDrop`; by-value enum parameter cleanup registration in the callee prologue. Regression fixture deliberately excludes this shape — see `asan_par_slot_boxed_option_payload_freed_once` in tests/memory_sanitizer.rs, which documents the exclusion and points here. |
 | B-2026-08-18-49 | 2026-08-18 | typecheck+codegen | low | STATEMENT-FORM `if` IS NOT SUPPORTED AT ALL in a `#[gpu]` kernel body — not merely `if` branches containing locals. `if c { acc = x; } else { acc = -x; }` is rejected even though neither branch declares a local, because the scalar statement walker has no `If` arm. Separately, a VALUE-`if` branch cannot contain a local. Both need the same fix (a `KStmt::If`), and the second rides on the first as a desugar. Workaround verified: move the `if` into value position — `acc = acc + (if c { x } else { -x })` compiles and runs. | docs/implementation_checklist/phase-10-targets.md § GPU codegen cluster — the "Kernel-body expressiveness" entry. Split out of B-2026-08-18-40 (whose four increments landed `let`, `while` + mutable locals, `for`-over-range and value `match`); that row named this remainder but UNDERSTATED it, see the SCOPE CORRECTION below. |
 
@@ -155,9 +154,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1346 surfaced
 
 </details>
 
-### Fixed (1320)
+### Fixed (1321)
 
-<details><summary>1320 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1321 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -11974,6 +11973,24 @@ Four regression tests: the multi-line `let`, the mid-expression `::` negative, t
 | B-2026-08-18-44 | ownership | medium | A SLICE PATTERN'S BINDINGS were dropped by `cfg::pattern_bindings`, so the ownership CFG recorded no `Define` for them and never called `note_local_i… | b55a046 |
 | B-2026-08-18-45 | ownership | medium | EVERY `collect()` into a non-`Vec` target emitted a `perf[rc-fallback]` note naming a SYNTHESIZED binding the user never wrote -- "RC fallback insert… | b55a046 |
 | B-2026-08-18-46 | parser | medium | `karac fix` CORRUPTED a Rust macro call: `println!("hi");` was rewritten to `printlnnot ("hi");` | ce0ae03 |
+| B-2026-08-18-47 | resolver+cli | medium | `karac fix` AUTO-APPLIES a `did you mean` rename to a SEMANTICALLY UNRELATED function: an undefined `format("{}", 1)` is rewritten to `forget("{}", 1… | FIXED by a1a0ca0. MEASURED FIRST, as the row asked, and the measurement overturned two of its three proposed directions.
+
+THE POPULATION. All 893 distinct function names in examples/ and kara-katas, each perturbed into typos and probed against a realistic `visible` set (the 35 prelude functions plus a 40-name window of corpus neighbours, so one scope is not unrealistically dense). Typos generated as adjacent transpositions, single deletions/substitutions/insertions, AND genuine two-edit typos — two independent substitutions, and a substitution paired with a deletion.
+
+THE GENERATOR'S SECOND HALF IS LOAD-BEARING, and getting it wrong the first time is what makes this worth recording. Plain Levenshtein scores an adjacent TRANSPOSITION as distance 2, and a transposition is the commonest human typo — so a distance-2 population built only from the obvious edit shapes is ALL transpositions. Against that population a rule of "apply at distance 2 only when the candidate is a rearrangement of the typed name" scored perfectly: 7,889 good recoveries kept, 0 lost, 157 wrong renames blocked, 0 through. Adding real two-edit typos collapsed it to 8,187 kept against 133,692 LOST, for 1,628 blocked. The rule had scored 100% only because the population contained nothing it rejects.
+
+RESULT — the threshold is not the defect:
+    distance-1 typos:  27,877   recovered 99.4%   wrong 0.4%
+    distance-2 typos: 143,602   recovered 98.8%   wrong 1.1%
+Restricting APPLY to distance 1 (the row's option (a)) would discard ~141,879 correct auto-fixes to block 1,642 wrong ones. Length-scaling (option (b)) does not separate the cases either: the bad renames include `format` (6 chars) and `append` (6), the same length as plenty of good ones.
+
+WHAT ACTUALLY SEPARATES THEM IS FIT, NOT SPELLING. `format` is not a typo of `forget`; the call proves it, handing two arguments to a one-parameter intrinsic. A genuine typo of a function you are calling carries the argument count you meant, so gating the machine-applicable edit on arity — the row's option (c) — costs essentially nothing on the population the threshold exists to serve. Implemented there: SUGGEST is untouched at distance 2, only the `TextEdit` is gated, and only in call position (a non-call reference has no call to fit and keeps auto-fixing).
+
+ONE OBSTACLE WORTH RECORDING FOR THE NEXT READER: the resolver registers ALL 35 prelude functions with an EMPTY `param_names`, so the symbol table cannot tell `forget` from a zero-parameter user function. The first cut therefore behaved as "never auto-apply onto a prelude function" — which blocks the repro for the wrong reason and costs 6,052 good recoveries, essentially every typo of `println` / `assert_eq` / `unreachable`. Measured, not assumed, and it is why the fix carries a `PRELUDE_FN_ARITY` table (22 entries, derived by asking the typechecker) with absence meaning "variadic, do not gate" rather than "zero parameters". A drift guard re-derives every entry from a real typecheck run, because a second copy of the typechecker's knowledge is only safe if something checks the two agree.
+
+`<=` RATHER THAN `==`: a parameter with a default makes the accepted count a range, so equality would reject calls that compile. Over-supply is the signal the repro trips.
+
+NOT A COMPLETE FILTER, and the row should not be read as claiming otherwise. `zip(a, b)` still renames to `min` — two arguments against a two-parameter function genuinely fits, and no arity rule can see that one. What is fixed is the class where the call visibly contradicts the candidate, which is where the row's own example sat. |
 
 </details>
 
