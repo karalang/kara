@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 129 | 0 |
 | codegen-gap | 117 | 0 |
 | missing-feature | 106 | 1 |
-| diagnostics | 80 | 3 |
+| diagnostics | 80 | 2 |
 | false-positive | 78 | 0 |
 | perf | 77 | 0 |
 | crash | 51 | 0 |
@@ -116,7 +116,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | ownership | 58 | 1 |
 | other | 52 | 2 |
 | autopar | 48 | 0 |
-| cli | 45 | 1 |
+| cli | 45 | 0 |
 | runtime | 22 | 0 |
 | parser | 22 | 1 |
 | resolver | 19 | 0 |
@@ -124,15 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1329 surfaced · 7 open · 1305 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1329 surfaced · 6 open · 1306 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (7)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-17-35 | 2026-08-17 | other | low | Two design.md sections state things the language does not have: § derive(Display) uses an enum-variant syntax that does not parse, and § Subscript Trait claims a v1 capability the resolver explicitly rejects. (1) The payload example writes `Circle(radius: f64),` / `Rect(w: f64, h: f64),` -- a tuple-style variant with NAMED fields. That form does not exist: `error[parse]: Expected RightParen, found Colon`. § Feature 3 defines the two real forms, struct variants (`Circle { radius: f64 }`) and tuple variants (`And(Expr, Expr)`), so this is a third spelling that appears nowhere else. (2) § Subscript Trait opens "User-defined types support `[]` indexing by implementing two standard traits" with no v1 caveat, but `impl Index[i64] for Grid` is rejected outright: `error[resolve]: user-defined 'impl Index for Grid' is not supported in v1; operator traits are stdlib-only`. The sibling § Operator Traits DOES carry the caveat ("makes the later addition of user-defined operator impls a purely additive change"), so the two sections disagree with each other about the same v1 boundary. | roadmap.md |
 | B-2026-08-18-27 | 2026-08-18 | typecheck | low | `collect()` in ARGUMENT position still fixes the chain to `Vec`: `f(<chain>.collect())` against a non-`Vec` parameter reports "expected 'Set[i64]', found 'Vec[i64]'". The last of the three positions design.md's "infers the target type from context" covers -- the annotated `let` landed in B-2026-08-17-36, return and tail in B-2026-08-18-18. | src/desugar.rs (`desugar_collect_target`, and the `walk_expr` Call arm that would have to know parameter types); src/typechecker/exprs.rs (`check_expr`) for the type-directed route. |
-| B-2026-08-18-28 | 2026-08-18 | cli | low | NO lint diagnostic code is registered in `karac explain`'s CODE_TABLE, so `karac explain E0278` (must_use) and `karac explain E0259` (the four compile-path lints) both answer "not in the catalogue yet" -- for codes the compiler actively emits under `-D <lint>`. | roadmap.md |
 | B-2026-08-18-29 | 2026-08-18 | other | low | 28 of design.md's code blocks still fail to parse on STATEMENT terminators -- a `let` whose `;` is missing (13 blocks), bare expression statements, `return None`, `+=`, `while`, `unsafe`. The DECLARATION half was fixed in B-2026-08-17-31; this is what a line-level pass provably cannot finish. | docs/design.md. Reproduce by extracting each fenced block to a file and running `karac check`, counting diagnostics containing `Expected Semicolon`; that harness is what produced the 49 -> 28 measurement. |
 | B-2026-08-18-30 | 2026-08-18 | codegen | low | `compile_method_call`'s `args_close_span` parameter is now a REDUNDANT second key: it exists only to disambiguate side-table reads across a chain, and B-2026-08-18-24 made `call_span` unique per chain step, which is the job it was hired for. | src/codegen/method_call.rs (the `args_close_span` parameter and its ~12 call sites); `method_call_key`; `try_compile_freshtemp_user_method`. |
 | B-2026-08-18-31 | 2026-08-18 | parser+codegen | low | `FieldAccess` nodes still copy their object's span -- a FIFTH postfix arm with the identical defect the four-row family (`?.`, `?`, `Index`, `MethodCall`) just finished closing. `v[0]` and `v[0].second` share one SpanKey. | src/parser/exprs.rs (the `Token::Dot` field-access arm, `span: lhs.span`); selfhost/src/parser.kara `finish_dot`; src/codegen/expr_ops.rs `receiver_struct_inst` for the consumer that already compensates. |
@@ -154,9 +153,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1329 surfaced
 
 </details>
 
-### Fixed (1305)
+### Fixed (1306)
 
-<details><summary>1305 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1306 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -11764,6 +11763,52 @@ MEASURED, `--interp` vs `karac build`, before -> after:
 Tests: `asan_freshtemp_mapset_len_frees_its_handle` pins the handle accounting at zero leaked bytes, in a loop and with a `Map[String, i64]` whose String keys give the handle per-entry heap of its own, plus a bound-receiver control for the spelling that always worked. `test_freshtemp_mapset_read_methods_oracle` (interpreter) and `freshtemp_mapset_read_methods_answer_and_evaluate_once` (codegen E2E) pin the values AND print one marker per producer call, so a regression in either defect fails on its own line.
 
 Gates: cargo fmt clean, clippy clean on both feature sets, full suite green. |
+| B-2026-08-18-28 | cli | low | NO lint diagnostic code is registered in `karac explain`'s CODE_TABLE, so `karac explain E0278` (must_use) and `karac explain E0259` (the four compil… | FIXED by 4d071c5. `CODE_TABLE` gains a `lint()` row constructor and rows for
+both halves of both pairs: W0259/E0259 (`undocumented_unsafe |
+unsafe_op_in_unsafe_fn | ffi_float_eq`) and W0278/E0278 (`must_use`). All four
+now resolve; the row's own repro commands answer from the catalogue.
+
+THE ROW'S FIX SHAPE WAS RIGHT and is what landed: `ty(kind, class)` restates a
+variant of an exhaustive compiler enum and cannot express a lint that is not
+one, so a new constructor was the missing piece rather than more rows. It
+carries `phase: "lint"`, matching the phase these diagnostics already carry in
+the JSON feed, so the catalogue and the emitted record agree on the field an
+agent loop reads.
+
+WHAT THE ROW DID NOT PREDICT, and the part worth keeping: a GUARD MADE THE FIX
+IMPOSSIBLE UNTIL IT WAS CORRECTED. B-2026-08-18-17 added
+`lint_codes_do_not_collide_with_the_code_table`, which asserts lint codes are
+ABSENT from `CODE_TABLE` — so the catalogue could not list a lint code without
+failing the very test written to protect lint codes. It fails on E0278 the
+moment the row lands.
+
+Relaxed rather than deleted, to the invariant -17 actually wanted: no OTHER
+PHASE owns this number. "The table has never heard of it" was a proxy that
+happened to hold only while lints were uncatalogued, and it silently encoded
+"lints are second-class in the catalogue" as a test. The protection -17 wanted
+is intact -- a lint landing on a typecheck or resolve number still fails.
+
+`every_lint_code_is_catalogued` pins the opposite direction, so the relaxation
+loses no coverage: a lint code must now both take nobody else's number AND have
+one anyone can look up. Both scan the emitter's own source for the single line
+shape lint entries use, so a lint added later with a fresh code pair fails until
+it is catalogued -- which is the regression path that produced this row.
+
+NON-VACUITY MEASURED: removing the E0278 row makes `every_lint_code_is_catalogued`
+fail naming that exact code; restoring it passes. Checked rather than assumed,
+because a scanner-based test that matches nothing is the one way both of these
+rot into no-ops -- the sibling already carries a `checked >= 2` floor for that
+reason and the new one repeats it.
+
+`kind` NAMES THE LINT(S) A CODE COVERS rather than a single enum variant,
+because E0259 is shared by three: `lint_name` is the discriminator `-A` / `-D`
+address, while the code identifies the family. Whether that sharing should
+persist is B-2026-08-18-17's open note and is deliberately NOT settled here --
+splitting the codes would churn B-2026-08-18-2's wiring, and the catalogue is
+correct either way.
+
+Gates: fmt clean, clippy --all --all-targets --features llvm clean, 14,056
+passed / 0 failed / 18 ignored across 107 suites. |
 
 </details>
 
