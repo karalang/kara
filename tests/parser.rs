@@ -12450,6 +12450,57 @@ fn test_field_access_nodes_span_past_the_field_name() {
     );
 }
 
+/// `TupleIndex`, the sibling of the `FieldAccess` arm (B-2026-08-18-33).
+///
+/// Both are `.`-postfix place projections, and this one cost exactly ONE test —
+/// the self-host oracle — where `FieldAccess` cost twelve. The difference is
+/// not luck: B-2026-08-18-31 fixed the use-after-move readers by resolving a
+/// place to its ROOT rather than patching the arm that happened to break, and
+/// noted at the time that this made the remaining arm's widening a non-event.
+/// This is that prediction coming due.
+#[test]
+fn test_tuple_index_nodes_span_past_the_index() {
+    let source = "fn f(t: (i64, (i64, i64))) -> i64 {\n  let a = t.1.0;\n  return a;\n}";
+    let prog = parse(source).program;
+
+    fn collect(e: &Expr, out: &mut Vec<karac::token::Span>) {
+        if let ExprKind::TupleIndex { object, .. } = &e.kind {
+            out.push(e.span);
+            collect(object, out);
+        }
+    }
+    let mut spans = Vec::new();
+    for item in &prog.items {
+        if let Item::Function(f) = item {
+            for st in &f.body.stmts {
+                if let StmtKind::Let { value, .. } = &st.kind {
+                    collect(value, &mut spans);
+                }
+            }
+        }
+    }
+    assert_eq!(
+        spans.len(),
+        2,
+        "expected two `TupleIndex` nodes, got {spans:?}"
+    );
+
+    let text = |s: &karac::token::Span| &source[s.offset..s.offset + s.length];
+    assert_eq!(text(&spans[0]), "t.1.0");
+    assert_eq!(text(&spans[1]), "t.1");
+
+    assert_ne!(
+        (spans[0].offset, spans[0].length),
+        (spans[1].offset, spans[1].length),
+        "a chained tuple index must not share a SpanKey with its object"
+    );
+    assert_ne!(
+        (spans[1].offset, spans[1].length),
+        (spans[1].offset, 1),
+        "a tuple index must not collapse onto its bare root `t`"
+    );
+}
+
 /// `Span.line`/`Span.column` of an interpolation sub-expression must point to
 /// its true position in the ORIGINAL source — not into the synthetic
 /// `fn __interp__() { … }` re-parse wrapper (B-2026-06-09-1a). Before the fix

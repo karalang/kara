@@ -212,9 +212,23 @@ impl super::Parser {
                     // Field access, tuple index, or method call
                     match self.peek_token_ref() {
                         &Token::Integer(idx, _) => {
+                            let idx_span = self.current_span();
                             self.advance();
+                            // B-2026-08-18-33 — span the whole projection
+                            // (lhs start -> past the index) rather than copying
+                            // `lhs.span`. Sibling of the `FieldAccess` arm
+                            // widened in B-2026-08-18-31: both are `.`-postfix
+                            // place projections, and a node without a key of
+                            // its own collides with its object in every
+                            // span-keyed table.
+                            let end = idx_span.offset + idx_span.length;
                             lhs = Expr {
-                                span: lhs.span,
+                                span: Span {
+                                    line: lhs.span.line,
+                                    column: lhs.span.column,
+                                    offset: lhs.span.offset,
+                                    length: end.saturating_sub(lhs.span.offset),
+                                },
                                 kind: ExprKind::TupleIndex {
                                     object: Box::new(lhs),
                                     index: idx as u64,

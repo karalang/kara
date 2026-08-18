@@ -1091,9 +1091,10 @@ impl Parser {
     // the node, then EXTENDED to cover the postfix itself: past the `]`
     // (`finish_index`, B-2026-08-18-21), past the `)` (`finish_dot`'s
     // method-call arm, B-2026-08-18-24), past the field name (`finish_dot`'s
-    // field arm, B-2026-08-18-31). `finish_call` and the tuple-index arm still
-    // reuse the operand's span verbatim — the seed's `lhs.span.clone()` — and
-    // are the two the seed has not split out either.
+    // field arm, B-2026-08-18-31), past the index (`finish_dot`'s tuple-index
+    // arm, B-2026-08-18-33). `finish_call` alone still reuses the operand's
+    // span verbatim — the seed's `lhs.span.clone()` — and is the one arm the
+    // seed has not split out either.
 
     // `callee(args)`.
     fn finish_call(mut ref self, callee: Expr) -> Expr {
@@ -1155,10 +1156,14 @@ impl Parser {
                 _ => 0,
             };
             self.advance();
+            // B-2026-08-18-33 — spans object-start -> past the index, mirroring
+            // the seed. `advance` has just made the index the token before
+            // `pos`, which is what `span_from` reads.
+            let span = self.span_from(sp);
             return Expr.TupleIdx(TupleIndexExpr {
                 object: object,
                 index: idx,
-                span: sp,
+                span: span,
             });
         }
         // Field / method name (Identifier, or the weak keywords union/const/mut
