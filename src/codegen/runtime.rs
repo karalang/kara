@@ -1595,7 +1595,23 @@ impl<'ctx> super::Codegen<'ctx> {
         // (B-2026-08-06-9 leg A) deliberately excludes. A by-value call must
         // therefore leave this binding armed rather than zero its slot as a
         // move; see the arg-site skip in `call_dispatch.rs`.
-        if inner_struct_name.is_some() && inner_drop_fn.is_some() {
+        //
+        // B-2026-08-18-48 — keyed on `inner_struct_name` ALONE. It used to also
+        // require `inner_drop_fn.is_some()`, which asks a different question:
+        // whether the struct INTERIOR needs cleanup. `emit_struct_drop_synthesis`
+        // returns `None` for a struct with no heap-bearing fields, so an
+        // all-POD payload (`struct W { f0..f3: i64 }`) fell out of this set,
+        // the arg-site zeroed its slot as a move, and the box was owned by
+        // nobody — the callee registers nothing for a struct payload by
+        // design. Measured 64,000 B leaked over 2,000 calls; the same program
+        // with one `String` field in `W` was already clean, and that asymmetry
+        // is what located it.
+        //
+        // Whether the interior needs freeing has no bearing on who owns the
+        // ENVELOPE. A box always needs its own `free`, POD interior or not, so
+        // the ownership question this set answers is settled by the payload
+        // being a user struct at all.
+        if inner_struct_name.is_some() {
             self.payload_vars
                 .boxed_struct_payload_vars
                 .insert(name.to_string());

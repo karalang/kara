@@ -46352,6 +46352,76 @@ fn main() {
         );
     }
 
+    /// B-2026-08-18-48 — a heap-boxed enum payload MOVED into a by-value call
+    /// is freed by nobody.
+    ///
+    /// The caller's move-out sentinel zeroes its slot, so the scope-exit
+    /// `BoxedEnumDrop` reloads tag 0 and skips; the callee takes an
+    /// `Option[W]` by value and emits no free at all. Ownership passes from a
+    /// party that gave it up to one that never took it.
+    ///
+    /// AUTO-PAR IS LOAD-BEARING, not incidental. The same source with
+    /// `KARAC_AUTO_PAR=0` is clean at 2000 iterations, and NOT because anything
+    /// frees: everything inlines into one function, the box never escapes, and
+    /// LLVM deletes the allocation outright. Under auto-par the pointer crosses
+    /// a thread boundary through the fork's return struct, so the allocation is
+    /// real and the missing free is a real leak. The `min_allocs` floor is what
+    /// keeps that honest — if a future optimizer change elides the box again,
+    /// this fixture fails as "optimized away" rather than passing vacuously.
+    ///
+    /// `W` is four `i64`s deliberately: 32 bytes exceeds the 3-word inline
+    /// payload area, so `Option[W]` boxes. Two `let`s from independent `get`
+    /// calls are what auto-par forks on, and `tail(hit) + tail(miss)` is what
+    /// moves both.
+    #[test]
+    fn asan_boxed_payload_moved_into_by_value_call_is_freed() {
+        assert_clean_asan_run_min_allocs_auto_par(
+            r#"
+struct W { f0: i64, f1: i64, f2: i64, f3: i64 }
+
+fn get(v: ref Vec[W], k: i64) -> Option[W] {
+    let mut i = 0;
+    while i < v.len() {
+        if v[i].f0 == k {
+            return Some(v[i]);
+        }
+        i = i + 1;
+    }
+    return None;
+}
+
+fn tail(o: Option[W]) -> i64 {
+    match o {
+        Some(w) => w.f3,
+        None => -1i64,
+    }
+}
+
+fn build(seed: i64) -> i64 {
+    let mut ns: Vec[W] = Vec.new();
+    ns.push(W { f0: seed, f1: seed + 1i64, f2: seed + 2i64, f3: seed + 3i64 });
+    let hit = get(ns, seed);
+    let miss = get(ns, seed + 99i64);
+    return tail(hit) + tail(miss);
+}
+
+fn main() {
+    let mut total = 0;
+    let mut n = 0;
+    while n < 2000 {
+        total = total + build(n);
+        n = n + 1;
+    }
+    println(total.to_string());
+}
+"#,
+            // sum over n in 0..2000 of (n + 3) + (-1) = 1999000 + 4000.
+            &["2003000"],
+            "boxed_payload_moved_into_by_value_call_is_freed",
+            2000,
+        );
+    }
+
     /// B-2026-08-04-2 — a boxed payload bound whole and then MOVED must leave
     /// exactly one owner of the box's interior.
     ///

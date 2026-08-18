@@ -31,6 +31,20 @@ fn main() {
     assert!(tc.errors.is_empty(), "typecheck errors: {:?}", tc.errors);
     karac::lowering::lower_program(&mut program, &tc);
     let own = karac::ownershipcheck(&program, &tc);
-    let ir = karac::codegen::compile_to_ir(&program, Some(&own), None).unwrap();
+    // `KARAC_DUMP_AUTO_PAR=1` runs the concurrency analysis and hands it to
+    // codegen, i.e. what `karac build` does by default. Without it the dump is
+    // the `KARAC_AUTO_PAR=0` shape, and the two differ in ways that matter for
+    // a memory bug: auto-par lifts work into `__par_branch_*` functions, so a
+    // value that never escaped one frame sequentially now crosses a thread
+    // boundary through the fork's return struct. B-2026-08-18-48 is only
+    // OBSERVABLE in that shape -- sequentially the same missing free hides
+    // because the allocation is optimized away entirely.
+    let concurrency = std::env::var("KARAC_DUMP_AUTO_PAR")
+        .is_ok_and(|v| v != "0")
+        .then(|| {
+            let effects = karac::effectcheck(&program);
+            karac::concurrency_analyze_typed(&program, &effects, Some(&tc))
+        });
+    let ir = karac::codegen::compile_to_ir(&program, Some(&own), concurrency.as_ref()).unwrap();
     println!("{ir}");
 }
