@@ -5844,6 +5844,93 @@ fn test_pipe_type_mismatch() {
     assert!(errors.iter().any(|e| e.kind == TypeErrorKind::TypeMismatch));
 }
 
+/// B-2026-08-17-26 — a closure literal as the pipe's right-hand side was
+/// rejected outright ("right-hand side of pipe must be a function name or
+/// function call"), even though design.md § Pipe Operator prescribes exactly
+/// that form as the escape hatch from its own `_` restrictions:
+///
+///   "The correct form is `let d = data |> g; d |> |d| f(d, extra)` or
+///    `data |> |d| f(g(d), extra)`"
+///   "Workaround for multi-use: wrap in a closure — `data |> |d| f(d, d)`"
+///
+/// All three are transcribed here VERBATIM, because a spec whose documented
+/// workaround does not compile leaves its restrictions with no way out — and
+/// a paraphrase of the workaround would not have caught that.
+#[test]
+fn pipe_accepts_the_closure_rhs_design_md_prescribes() {
+    typecheck_ok(
+        "
+        fn f(a: i64, b: i64) -> i64 { return a + b; }
+        fn g(x: i64) -> i64 { return x * 2; }
+        fn main() {
+            let data = 5;
+            let extra = 1;
+            let d = data |> g;
+            let r1 = d |> |d| f(d, extra);
+            let r2 = data |> |d| f(g(d), extra);
+            let r3 = data |> |d| f(d, d);
+        }
+    ",
+    );
+    // A heap param, and a closure that captures — neither is special-cased.
+    typecheck_ok(
+        "
+        fn tag(s: String) -> String { return \"[\" + s + \"]\"; }
+        fn f(a: i64, b: i64) -> i64 { return a + b; }
+        fn main() {
+            let r = \"x\" |> |s| tag(s);
+            let k = 3;
+            let n = 5 |> |d| f(d, k);
+        }
+    ",
+    );
+}
+
+/// The gate is a SHAPE gate, and widening it must not turn it off: an operand
+/// that is not callable at all still has to be rejected.
+#[test]
+fn pipe_still_rejects_a_non_callable_rhs() {
+    let errors = typecheck_errors("fn main() { let r = 5 |> 7; }");
+    assert!(
+        errors.iter().any(|e| e.kind == TypeErrorKind::NotCallable),
+        "an integer literal is still not a pipe stage; got: {errors:?}"
+    );
+}
+
+/// The second half of the same row, and NOT the "cascade that disappears with
+/// the first" the row predicted — it is an independent defect that survives
+/// the gate fix, and it is pipe-INDEPENDENT: the plain immediately-invoked
+/// spelling fails identically.
+///
+/// The call-site param solving (B-2026-07-12-20) runs after the closure body
+/// has already been typed against the unsolved var, so the body reports
+/// `expected 'i64', found '?T0'` and the solution arrives too late to matter.
+/// Every form design.md prescribes is un-annotated, so without this its escape
+/// hatch still would not compile.
+#[test]
+fn an_immediately_invoked_closure_takes_its_param_types_from_the_call() {
+    // Pipe-independent: no `|>` anywhere.
+    typecheck_ok(
+        "
+        fn f(a: i64, b: i64) -> i64 { return a + b; }
+        fn main() { let r = (|d| f(d, 1))(5); }
+    ",
+    );
+    typecheck_ok(
+        "
+        fn tag(s: String) -> String { return \"[\" + s + \"]\"; }
+        fn main() { let r = (|s| tag(s))(\"x\"); }
+    ",
+    );
+    // The annotated spelling — the path this borrows — must keep working.
+    typecheck_ok(
+        "
+        fn f(a: i64, b: i64) -> i64 { return a + b; }
+        fn main() { let r = (|d: i64| f(d, 1))(5); let q = 5 |> |d: i64| f(d, 1); }
+    ",
+    );
+}
+
 // ── Category: `?.` (optional chaining) ─────────────────────────
 
 const OPTCHAIN_DECLS: &str = "

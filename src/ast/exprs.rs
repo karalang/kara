@@ -482,8 +482,17 @@ pub fn desugar_pipe(left: &Expr, right: &Expr, span: Span) -> Option<Expr> {
     };
 
     let (callee, args) = match &right.kind {
-        // `a |> f` => `f(a)`
-        ExprKind::Identifier(_) | ExprKind::Path { .. } => {
+        // `a |> f` => `f(a)`, and the same for a CLOSURE LITERAL right-hand
+        // side: `a |> |x| body` => `(|x| body)(a)`.
+        //
+        // B-2026-08-17-26 — the closure form was rejected ("right-hand side of
+        // pipe must be a function name or function call") even though design.md
+        // § Pipe Operator prescribes exactly it as the escape hatch from its own
+        // `_` restrictions: "The correct form is `let d = data |> g; d |> |d|
+        // f(d, extra)`", and for multi-use, "wrap in a closure — `data |> |d|
+        // f(d, d)`". Both restrictions were documented with a workaround that
+        // did not compile, so they had no way out at all.
+        ExprKind::Identifier(_) | ExprKind::Path { .. } | ExprKind::Closure { .. } => {
             (Box::new(right.clone()), vec![piped(None, false)])
         }
 

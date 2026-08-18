@@ -1492,7 +1492,93 @@ impl<'a> super::TypeChecker<'a> {
             _ => None,
         };
 
-        let callee_ty = self.infer_expr(callee);
+        // B-2026-08-17-26 — an IMMEDIATELY-INVOKED closure literal with
+        // un-annotated params: `(|d| f(d, 1))(5)`, and the pipe spelling
+        // `5 |> |d| f(d, 1)` that desugars to it.
+        //
+        // The call-site param solving further down (B-2026-07-12-20) already
+        // solves such a param from the argument's type — but it runs AFTER the
+        // closure BODY has been typed against the still-unsolved var, and the
+        // body is where the error surfaces: `f(d, 1)` reports `expected 'i64',
+        // found '?T0'`, and the substitution arrives too late to prevent it.
+        // The param does get solved; the diagnostic was simply already written.
+        //
+        // This is why design.md's own escape hatch from the `_` rules — "wrap
+        // in a closure — `data |> |d| f(d, d)`" — still did not compile once
+        // the pipe accepted a closure right-hand side: every prescribed form is
+        // un-annotated.
+        //
+        // Fixed by typing an ANNOTATED COPY of the closure, with each missing
+        // annotation filled from the argument opposite it. That is exactly the
+        // program the author would have written by hand, and the annotated
+        // spelling already works end to end — so this borrows a working path
+        // rather than adding an inference rule. Going through the `check_expr`
+        // expectation instead does NOT work: it wants a concrete expected
+        // RETURN type, and the only honest thing to put there is a fresh var,
+        // which that path compares against the body's actual type rather than
+        // solving ("expected '?T0', found 'i64'").
+        //
+        // The copy is typed at the ORIGINAL closure's span, so the resolved
+        // `Fn` type lands in `expr_types` where codegen's `compile_closure`
+        // reads it (B-2026-07-02-12) — the evaluators still see the author's
+        // un-annotated AST and need that record to type its params.
+        //
+        // Narrow by construction: a closure literal, at matching arity, with
+        // at least one missing annotation, and only when every argument types
+        // to something concrete. Anything else falls through untouched.
+        let annotated_callee: Option<Expr> = match &callee.kind {
+            ExprKind::Closure {
+                params: cparams,
+                capture_mode,
+                prefix_span,
+                body,
+            } if cparams.len() == args.len() && cparams.iter().any(|p| p.ty.is_none()) => {
+                let arg_tys: Vec<Type> = args.iter().map(|a| self.infer_expr(&a.value)).collect();
+                if arg_tys
+                    .iter()
+                    .all(|t| *t != Type::Error && !matches!(t, Type::TypeVar(_)))
+                {
+                    let filled: Vec<ClosureParam> = cparams
+                        .iter()
+                        .zip(arg_tys.iter())
+                        .map(|(p, t)| ClosureParam {
+                            pattern: p.pattern.clone(),
+                            ty: p.ty.clone().or_else(|| {
+                                // A string LITERAL argument types as `str`.
+                                // Annotating the param `str` would then reject
+                                // the body's ordinary `String` uses, so fill
+                                // the owned type the literal coerces to — the
+                                // annotation an author would write.
+                                let t = if matches!(t, Type::Str) {
+                                    Type::Named {
+                                        name: "String".to_string(),
+                                        args: Vec::new(),
+                                    }
+                                } else {
+                                    t.clone()
+                                };
+                                Some(Self::type_to_type_expr(&t))
+                            }),
+                            span: p.span,
+                        })
+                        .collect();
+                    Some(Expr {
+                        span: callee.span,
+                        kind: ExprKind::Closure {
+                            params: filled,
+                            capture_mode: *capture_mode,
+                            prefix_span: *prefix_span,
+                            body: body.clone(),
+                        },
+                    })
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+
+        let callee_ty = self.infer_expr(annotated_callee.as_ref().unwrap_or(callee));
 
         // Closure-VALUE call through a non-identifier callee — a struct field
         // `(h.f)(x)`, a Vec/array index `v[i](x)`, a tuple index `(t.0)(x)`,

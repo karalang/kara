@@ -97404,6 +97404,36 @@ fn main() {
         assert_eq!(arith, "6\n", "the `??` result must be the bare payload");
     }
 
+    /// B-2026-08-17-26 — design.md § Pipe Operator prescribes a closure RHS as
+    /// the escape hatch from its `_` restrictions, and all three prescribed
+    /// forms were rejected at typecheck. They are transcribed verbatim here
+    /// and pinned against the direct spelling they stand for, because the
+    /// point of the workaround is that it RUNS, not merely that it checks.
+    #[test]
+    fn a_closure_pipe_stage_compiles_to_the_call_it_stands_for() {
+        let prelude = "fn f(a: i64, b: i64) -> i64 { return a + b; }\n\
+                       fn g(x: i64) -> i64 { return x * 2; }\n\
+                       fn tag(s: String) -> String { return \"[\" + s + \"]\"; }\n";
+        // (piped-through-a-closure spelling, the equivalent direct call)
+        for (piped, direct) in [
+            // design.md: "let d = data |> g; d |> |d| f(d, extra)"
+            ("(5 |> g) |> |d| f(d, 1)", "f(g(5), 1)"),
+            // design.md: "data |> |d| f(g(d), extra)"
+            ("5 |> |d| f(g(d), 1)", "f(g(5), 1)"),
+            // design.md: "wrap in a closure — data |> |d| f(d, d)"
+            ("5 |> |d| f(d, d)", "f(5, 5)"),
+            // the un-annotated param resolved from a HEAP argument
+            ("\"x\" |> |s| tag(s)", "tag(\"x\")"),
+        ] {
+            let src = |e: &str| format!("{prelude}fn main() {{ println({e}); }}\n");
+            let Some(got) = run_program(&src(piped)) else {
+                return;
+            };
+            let want = run_program(&src(direct)).expect("direct-call control must build");
+            assert_eq!(got, want, "`{piped}` must run as `{direct}` does");
+        }
+    }
+
     /// B-2026-08-17-25 fallout — a RANGE subscript passed by `ref` to a
     /// trait-bound generic used to reach `ref_arg_index_borrow_ptr`, which
     /// borrows ONE ELEMENT. It compiled the range as the subscript, got the
