@@ -103,7 +103,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | perf | 77 | 0 |
 | crash | 52 | 0 |
 | soundness | 50 | 0 |
-| other | 45 | 1 |
+| other | 46 | 1 |
 | use-after-free | 20 | 0 |
 
 ### By surface
@@ -114,7 +114,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | typecheck | 199 | 1 |
 | interp | 153 | 0 |
 | ownership | 58 | 0 |
-| other | 53 | 3 |
+| other | 54 | 3 |
 | autopar | 48 | 0 |
 | cli | 45 | 0 |
 | parser | 23 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1334 surfaced · 4 open · 1312 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1335 surfaced · 4 open · 1313 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (4)
 
@@ -151,9 +151,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1334 surfaced
 
 </details>
 
-### Fixed (1312)
+### Fixed (1313)
 
-<details><summary>1312 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1313 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -11920,6 +11920,7 @@ That restores the precondition the catch-all `unreachable!()` always assumed but
 Third visit to this arm; B-2026-08-18-3 taught it one more legal operand shape (a let-bound range), and this is the complementary half.
 
 Verified: the map miss through a struct field, the same miss through a local, and a nested-Vec out-of-range now all report the real user-facing error with exit 1 under `--interp`, matching what JIT and AOT already did. The error is reported ONCE, not compounded by the outer subscript re-reporting against the `Unit` placeholder. Anti-vacuity pinned in the test: the present-key and in-range spellings still evaluate to the right elements, and the test fails with the original ICE when the fix is stashed. |
+| B-2026-08-18-38 | other | medium | The ENTIRE wasm E2E surface in `tests/cli.rs` passed VACUOUSLY on any machine whose default rustup toolchain is not the pinned one: 36 tests took the… | c3f5f3f |
 
 </details>
 
