@@ -9867,6 +9867,52 @@ fn plain_string_move_is_still_reported() {
     );
 }
 
+#[test]
+fn slice_pattern_binding_shadows_a_consumed_outer_name() {
+    // A SLICE PATTERN BINDS. `cfg::pattern_bindings` — the helper the ownership
+    // CFG uses to record a `Define` and to call `note_local_introduced` — had
+    // arms for every other binding form and let `Slice` fall into its `_ => {}`
+    // catch-all, so `[s, ..rest]` introduced nothing. The fresh `s` then shared
+    // the outer `s`'s CFG identity, and reading it inside the arm paired with
+    // the outer `s`'s move: "value 's' moved here, used again here".
+    //
+    // The outer `let t = s;` is the consume that made it visible; without it
+    // the missing `Define` had nothing to collide with, which is why the gap
+    // survived. The `Some(s)` control below is the same program with a
+    // tuple-variant pattern — it was always clean, so it isolates the pattern
+    // form as the variable.
+    ownership_ok(
+        "fn main() {\n\
+             let s: String = \"outer\";\n\
+             let t = s;\n\
+             println(t);\n\
+             let v: Vec[String] = [\"a\", \"b\"];\n\
+             match v[0..v.len()] {\n\
+                 [] => {}\n\
+                 [s, ..rest] => { println(f\"{s} {rest.len()}\"); }\n\
+             }\n\
+         }",
+    );
+}
+
+#[test]
+fn tuple_variant_binding_shadows_a_consumed_outer_name() {
+    // The control for the test above: the same shadow through a
+    // `TupleVariant` pattern, which `cfg::pattern_bindings` always handled.
+    ownership_ok(
+        "fn main() {\n\
+             let s: String = \"outer\";\n\
+             let t = s;\n\
+             println(t);\n\
+             let o: Option[String] = Some(\"a\");\n\
+             match o {\n\
+                 None => {}\n\
+                 Some(s) => { println(s); }\n\
+             }\n\
+         }",
+    );
+}
+
 // ── B-2026-07-16-12: builtin collection lookup methods borrow their key ──
 
 #[test]

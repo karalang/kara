@@ -1535,7 +1535,31 @@ pub(crate) fn pattern_bindings(pattern: &Pattern) -> Vec<String> {
                     walk(first, out);
                 }
             }
-            _ => {}
+            // A slice pattern binds too — `[first, ..rest]` introduces both
+            // names. Until B-2026-08-18-44 these fell into the catch-all below
+            // and were DROPPED, so the CFG recorded no `Define` for them and
+            // `note_local_introduced` never saw them. A slice binding that
+            // shadowed an already-consumed outer name of the same spelling then
+            // read as a use of the MOVED value: `let t = s;` followed by
+            // `match … { [s, ..rest] => … s … }` reported a false
+            // use-after-move. Every other binding form was already here; slice
+            // was the one gap.
+            PatternKind::Slice {
+                prefix,
+                rest,
+                suffix,
+            } => {
+                for sp in prefix.iter().chain(suffix.iter()) {
+                    walk(sp, out);
+                }
+                if let Some(crate::ast::RestPattern::Bound(name)) = rest {
+                    out.push(name.clone());
+                }
+            }
+            // Exhaustive on purpose — no catch-all. The dropped-`Slice` bug
+            // above is exactly what a `_` arm hides, so a new `PatternKind`
+            // must break this build rather than silently bind nothing.
+            PatternKind::Wildcard | PatternKind::Literal(_) | PatternKind::RangePattern { .. } => {}
         }
     }
     let mut v = Vec::new();

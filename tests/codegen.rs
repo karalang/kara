@@ -98728,6 +98728,57 @@ fn main() {
         );
     }
 
+    /// B-2026-08-18-27 — `collect()` into a non-`Vec` target in ARGUMENT
+    /// position, the last of design.md's three "infers the target type from
+    /// context" positions. `f(<chain>.collect())` reported
+    /// "expected 'Set[i64]', found 'Vec[i64]'" while the annotated `let`
+    /// (B-2026-08-17-36) and return/tail (B-2026-08-18-18) both worked.
+    ///
+    /// THE `ambush` CALL IS THE TEST, not the first four lines. A local
+    /// `let ambush = |x: Vec[i64]| ...` shadows the top-level `fn ambush(s:
+    /// Set[i64])` and is callable identically, so a rewrite that trusts the
+    /// name would aim the argument at `Set[i64]` and turn a program that
+    /// compiles today into a typecheck error — a regression traded for a
+    /// feature. The desugar collects every name the body binds before it
+    /// rewrites anything, and stands down on a hit. `6` here is the shadowed
+    /// closure's answer (`Vec` length, dups kept); `3` would mean the guard
+    /// is gone. The last line prints the VEC length 4, not the set size 3.
+    ///
+    /// THE TWO `take_str` CALLS pin the other half. Both aim at one `String`
+    /// parameter, so both rewrites derive from the SAME declared type — but
+    /// their elements differ (`String` from `w.iter()`, `char` from
+    /// `s.chars()`). The synthesized nodes take their spans from the ARGUMENT
+    /// rather than the parameter for exactly this reason: shared spans would
+    /// record `char` and `String` under one key and let the last write win.
+    #[test]
+    fn collect_reaches_a_non_vec_target_in_argument_position() {
+        let src = "fn take_set(s: Set[i64]) -> i64 { return s.len() as i64; }\n\
+                   fn take_deque(d: VecDeque[i64]) -> i64 { return d.len() as i64; }\n\
+                   fn take_map(m: Map[i64, i64]) -> i64 { return m.len() as i64; }\n\
+                   fn take_str(s: String) -> i64 { return s.len() as i64; }\n\
+                   fn ambush(s: Set[i64]) -> i64 { return s.len() as i64; }\n\
+                   fn main() {\n\
+                       let v: Vec[i64] = [3, 1, 3, 2];\n\
+                       println(take_set(v.iter().collect()).to_string());\n\
+                       println(take_deque(v.iter().map(|x| x + 1).collect()).to_string());\n\
+                       println(take_map(v.iter().map(|x| (x, x * 2)).collect()).to_string());\n\
+                       let w: Vec[String] = [\"ab\", \"cd\"];\n\
+                       println(take_str(w.iter().collect()).to_string());\n\
+                       let s: String = \"xyz\";\n\
+                       println(take_str(s.chars().collect()).to_string());\n\
+                       let ambush = |x: Vec[i64]| x.len() as i64;\n\
+                       println(ambush(v.iter().collect()).to_string());\n\
+                   }\n";
+        let Some(out) = run_program(src) else {
+            return;
+        };
+        assert_eq!(
+            out, "3\n4\n3\n4\n3\n4\n",
+            "a `collect()` argument must build the callee's declared parameter type, \
+             and must stand down when a local binding shadows the callee's name"
+        );
+    }
+
     /// B-2026-08-18-22 — the STRING sibling of B-2026-08-18-14, end to end.
     /// `s[0..5].len()` failed the build with "element TypeExpr unknown" while
     /// `karac check` and `--interp` both ran it: the receiver fell through to

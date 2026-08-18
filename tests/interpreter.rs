@@ -34422,6 +34422,42 @@ fn test_collect_target_in_return_and_tail_position_oracle() {
     assert_eq!(out, "3\n3\n3\n");
 }
 
+/// B-2026-08-18-27 — the interpreter oracle for `collect()` into a non-`Vec`
+/// target in ARGUMENT position, the third and last of design.md's "infers the
+/// target type from context" positions.
+///
+/// The rewrite is the same pre-typecheck desugar as the `let` and `return`
+/// halves, so this side is the reference the compiled backends must match.
+///
+/// THE `ambush` CALL IS THE POINT. A local closure shadows the top-level
+/// `fn ambush(s: Set[i64])`, so the rewrite must NOT fire: `4` is the closure's
+/// answer over the four-element `Vec`, `3` would mean the argument was aimed at
+/// the shadowed function's `Set` parameter and a working program had been
+/// turned into a typecheck error.
+#[test]
+fn test_collect_target_in_argument_position_oracle() {
+    let out = run_no_errors(
+        "fn take_set(s: Set[i64]) -> i64 { return s.len() as i64; }\n\
+         fn take_deque(d: VecDeque[i64]) -> i64 { return d.len() as i64; }\n\
+         fn take_map(m: Map[i64, i64]) -> i64 { return m.len() as i64; }\n\
+         fn take_str(s: String) -> i64 { return s.len() as i64; }\n\
+         fn ambush(s: Set[i64]) -> i64 { return s.len() as i64; }\n\
+         fn main() {\n\
+             let v: Vec[i64] = [3, 1, 3, 2];\n\
+             println(take_set(v.iter().collect()).to_string());\n\
+             println(take_deque(v.iter().map(|x| x + 1).collect()).to_string());\n\
+             println(take_map(v.iter().map(|x| (x, x * 2)).collect()).to_string());\n\
+             let w: Vec[String] = [\"ab\", \"cd\"];\n\
+             println(take_str(w.iter().collect()).to_string());\n\
+             let s: String = \"xyz\";\n\
+             println(take_str(s.chars().collect()).to_string());\n\
+             let ambush = |x: Vec[i64]| x.len() as i64;\n\
+             println(ambush(v.iter().collect()).to_string());\n\
+         }\n",
+    );
+    assert_eq!(out, "3\n4\n3\n4\n3\n4\n");
+}
+
 /// B-2026-08-18-26 — the interpreter oracle for READ METHODS on a freshly
 /// returned `Set`/`Map`. `mk_set().len()` printed 0 for a three-element set
 /// under `karac build`, `mk_map().len()` printed 152, `is_empty()` printed raw

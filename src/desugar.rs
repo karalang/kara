@@ -1341,17 +1341,22 @@ fn make_default_impl(type_name: &str, body: Expr, span: Span) -> Item {
 ///   * parallel / destructuring assignment (`a, b = b, a`), and
 ///   * `collect()` into a non-`Vec` `FromIterator` target (B-2026-08-17-36).
 fn desugar_stmt_rewrites_in_program(program: &mut Program) {
+    let sigs = collect_arg_sigs(program);
     for item in &mut program.items {
         match item {
             Item::Function(f) => {
                 let ret = f.return_type.clone();
-                walk_fn_body(&mut f.body, ret.as_ref());
+                let params = std::mem::take(&mut f.params);
+                walk_fn_body(&mut f.body, ret.as_ref(), &params, &sigs);
+                f.params = params;
             }
             Item::ImplBlock(imp) => {
                 for it in &mut imp.items {
                     if let ImplItem::Method(m) = it {
                         let ret = m.return_type.clone();
-                        walk_fn_body(&mut m.body, ret.as_ref());
+                        let params = std::mem::take(&mut m.params);
+                        walk_fn_body(&mut m.body, ret.as_ref(), &params, &sigs);
+                        m.params = params;
                     }
                 }
             }
@@ -1359,15 +1364,209 @@ fn desugar_stmt_rewrites_in_program(program: &mut Program) {
                 for it in &mut t.items {
                     if let TraitItem::Method(m) = it {
                         let ret = m.return_type.clone();
+                        let params = std::mem::take(&mut m.params);
                         if let Some(body) = &mut m.body {
-                            walk_fn_body(body, ret.as_ref());
+                            walk_fn_body(body, ret.as_ref(), &params, &sigs);
                         }
+                        m.params = params;
                     }
                 }
             }
-            Item::TestCase(tc) => walk_fn_body(&mut tc.body, None),
-            Item::ConstDecl(c) => walk_expr(&mut c.value, None),
+            Item::TestCase(tc) => walk_fn_body(&mut tc.body, None, &[], &sigs),
+            Item::ConstDecl(c) => {
+                // Not a function body: no parameters, and no local bindings to
+                // stand down for. A fresh context with no collected names is
+                // exactly right, and the arg-position pass is skipped because
+                // `walk_fn_body`'s two-pass driver is what enables it.
+                let mut cx = WalkCx::collecting();
+                walk_expr(&mut c.value, None, &mut cx);
+            }
             _ => {}
+        }
+    }
+}
+
+// ── Argument-position `collect()` target (B-2026-08-18-27) ──────
+
+/// Top-level fn name → one entry per parameter: `Some(ty)` when that
+/// parameter's declared type is a `collect()` target this pass can build,
+/// `None` otherwise. Only functions with at least one `Some` are present, so a
+/// lookup miss is the overwhelmingly common case and costs one hash.
+type ArgSigs = std::collections::HashMap<String, Vec<Option<TypeExpr>>>;
+
+/// Build [`ArgSigs`] from the program's top-level functions.
+///
+/// GENERIC FUNCTIONS ARE EXCLUDED WHOLESALE. The rewrite pastes the parameter's
+/// written type into the caller as a `let` annotation, so a parameter spelled
+/// `Set[T]` would land `let mut __dst: Set[T]` in a scope where `T` is not
+/// bound — turning a working call into a resolve error. Discriminating "`Set[T]`
+/// mentions a type parameter" from "`Set[i64]` happens to sit in a generic fn"
+/// is a type walk this pass does not need: excluding every generic fn costs
+/// only a missed rewrite, which is the pre-existing behaviour.
+///
+/// A DUPLICATED NAME POISONS THE ENTRY. Two same-named top-level fns are a
+/// resolve error, but this pass runs before resolve and must not pick one.
+fn collect_arg_sigs(program: &Program) -> ArgSigs {
+    let mut sigs: ArgSigs = std::collections::HashMap::new();
+    let mut poisoned: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for item in &program.items {
+        let Item::Function(f) = item else {
+            continue;
+        };
+        if f.generic_params.is_some() || f.self_param.is_some() || f.is_comptime {
+            poisoned.insert(f.name.clone());
+            continue;
+        }
+        let params: Vec<Option<TypeExpr>> = f
+            .params
+            .iter()
+            .map(|p| collect_target_of(&p.ty).map(|_| p.ty.clone()))
+            .collect();
+        if sigs.insert(f.name.clone(), params).is_some() {
+            poisoned.insert(f.name.clone());
+        }
+    }
+    for name in poisoned {
+        sigs.remove(&name);
+    }
+    sigs.retain(|_, params| params.iter().any(Option::is_some));
+    sigs
+}
+
+/// State threaded through one function body's walk.
+///
+/// The walk runs TWICE over each body. Pass 1 (`args: None`) performs the
+/// existing `let`/`return` rewrites and records every name the body binds. Pass
+/// 2 (`args: Some(..)`) performs the argument-position rewrite, consulting the
+/// names pass 1 collected.
+///
+/// TWO PASSES OF THE SAME TRAVERSAL, rather than a separate binding-collector,
+/// is the load-bearing choice. A shadowing local can appear anywhere in the
+/// body — including textually AFTER the call — so the decision needs the whole
+/// body's binding set before any rewrite fires. A second traversal written by
+/// hand would be a second place to forget an AST form; reusing this one means
+/// any expression the rewrite can reach is an expression the collector already
+/// reached. Both `walk_expr` matches are exhaustive over `ExprKind`, so a new
+/// variant breaks the build rather than silently escaping either pass.
+///
+/// The `let`/`return` rewrites re-run on pass 2 and are idempotent: once a
+/// value has become the accumulate-into-`T` `Block`, `desugar_collect_target`
+/// no longer matches it.
+struct WalkCx<'a> {
+    /// Every name bound by a pattern anywhere in this body, plus its
+    /// parameters. Complete before pass 2 begins.
+    bound: std::collections::HashSet<String>,
+    /// `None` on pass 1 (collect only), `Some` on pass 2 (rewrite).
+    args: Option<&'a ArgSigs>,
+    /// Did pass 1 see a `collect()` call anywhere in this body? Pass 2 has
+    /// nothing to do otherwise, and most bodies contain no `collect()` at all —
+    /// so without this the second traversal would be pure overhead on nearly
+    /// every function, given that a plain `String` parameter is enough to put a
+    /// function in `ArgSigs`.
+    saw_collect: bool,
+}
+
+impl WalkCx<'_> {
+    fn collecting() -> Self {
+        WalkCx {
+            bound: std::collections::HashSet::new(),
+            args: None,
+            saw_collect: false,
+        }
+    }
+
+    fn bind_pattern(&mut self, p: &Pattern) {
+        collect_binding_names(p, &mut self.bound);
+    }
+}
+
+/// Every name a pattern binds. Exhaustive by construction — no catch-all arm,
+/// so a new `PatternKind` breaks the build. `Slice` matters here and is the
+/// reason [`crate::cfg::pattern_bindings`] is not reused: that helper's `_`
+/// arm silently drops `[first, .., last]` and `[head, ..rest]` bindings, and a
+/// dropped binding here would be a WRONG REWRITE rather than a missed one.
+fn collect_binding_names(p: &Pattern, out: &mut std::collections::HashSet<String>) {
+    match &p.kind {
+        PatternKind::Binding(name) => {
+            out.insert(name.clone());
+        }
+        PatternKind::AtBinding { name, pattern, .. } => {
+            out.insert(name.clone());
+            collect_binding_names(pattern, out);
+        }
+        PatternKind::Struct { fields, .. } => {
+            for f in fields {
+                match &f.pattern {
+                    Some(sub) => collect_binding_names(sub, out),
+                    // Shorthand `Foo { x }` binds the field name itself.
+                    None => {
+                        out.insert(f.name.clone());
+                    }
+                }
+            }
+        }
+        PatternKind::Tuple(ps) | PatternKind::TupleVariant { patterns: ps, .. } => {
+            for sub in ps {
+                collect_binding_names(sub, out);
+            }
+        }
+        PatternKind::Or(alts) => {
+            for sub in alts {
+                collect_binding_names(sub, out);
+            }
+        }
+        PatternKind::Slice {
+            prefix,
+            rest,
+            suffix,
+        } => {
+            for sub in prefix.iter().chain(suffix.iter()) {
+                collect_binding_names(sub, out);
+            }
+            if let Some(RestPattern::Bound(name)) = rest {
+                out.insert(name.clone());
+            }
+        }
+        PatternKind::Wildcard | PatternKind::Literal(_) | PatternKind::RangePattern { .. } => {}
+    }
+}
+
+/// The argument-position half of the rewrite, applied at a `Call` on pass 2.
+///
+/// WHY THE CALLEE MUST NOT BE A LOCALLY BOUND NAME: a `let f = |v| ...` closure
+/// shadows a top-level `fn f` and is callable exactly the same way (verified —
+/// the language allows it). Rewriting the argument against the top-level
+/// signature would then aim at the wrong type and turn a program that compiles
+/// today into a typecheck error. `cx.bound` is the whole body's binding set, so
+/// any such shadow — before or after the call — stands the rewrite down.
+///
+/// The remaining conservative gates: only a bare `Identifier` callee (a path
+/// call may cross modules, whose signatures this pass cannot see), only
+/// all-positional arguments at exact arity (labels and defaults change which
+/// parameter an argument lands on), and only the parameters `collect_arg_sigs`
+/// already screened.
+fn rewrite_call_arg_collects(
+    callee: &Expr,
+    args: &mut [CallArg],
+    sigs: &ArgSigs,
+    bound: &std::collections::HashSet<String>,
+) {
+    let ExprKind::Identifier(name) = &callee.kind else {
+        return;
+    };
+    if bound.contains(name) {
+        return;
+    }
+    let Some(param_tys) = sigs.get(name) else {
+        return;
+    };
+    if param_tys.len() != args.len() || args.iter().any(|a| a.label.is_some()) {
+        return;
+    }
+    for (arg, param_ty) in args.iter_mut().zip(param_tys) {
+        if let Some(ty) = param_ty {
+            let synth_base = arg.value.span;
+            desugar_collect_target_at(ty, &mut arg.value, synth_base);
         }
     }
 }
@@ -1381,50 +1580,77 @@ fn desugar_stmt_rewrites_in_program(program: &mut Program) {
 /// rewrite to an explicit `return` and the function body's own tail keeps the
 /// pass syntactic and is what the two spellings in the row's repro use; the
 /// rest still fails loudly at typecheck rather than silently building a `Vec`.
-fn walk_fn_body(block: &mut Block, ret: Option<&TypeExpr>) {
-    walk_block(block, ret);
+fn walk_fn_body(block: &mut Block, ret: Option<&TypeExpr>, params: &[Param], sigs: &ArgSigs) {
+    let mut cx = WalkCx::collecting();
+    for p in params {
+        cx.bind_pattern(&p.pattern);
+    }
+    walk_block(block, ret, &mut cx);
     if let (Some(tail), Some(ty)) = (block.final_expr.as_mut(), ret) {
         desugar_collect_target(ty, tail);
     }
+
+    // Pass 2 — argument position (B-2026-08-18-27). Skipped entirely when no
+    // top-level fn in the program takes a `collect()`-able parameter, which is
+    // the usual case.
+    if sigs.is_empty() || !cx.saw_collect {
+        return;
+    }
+    cx.args = Some(sigs);
+    walk_block(block, ret, &mut cx);
 }
 
-fn walk_block(block: &mut Block, ret: Option<&TypeExpr>) {
+fn walk_block(block: &mut Block, ret: Option<&TypeExpr>, cx: &mut WalkCx) {
     for stmt in &mut block.stmts {
-        walk_stmt(stmt, ret);
+        walk_stmt(stmt, ret, cx);
     }
     if let Some(e) = &mut block.final_expr {
-        walk_expr(e, ret);
+        walk_expr(e, ret, cx);
     }
 }
 
-fn walk_stmt(stmt: &mut Stmt, ret: Option<&TypeExpr>) {
+fn walk_stmt(stmt: &mut Stmt, ret: Option<&TypeExpr>, cx: &mut WalkCx) {
     match &mut stmt.kind {
-        StmtKind::Let { ty, value, .. } => {
+        StmtKind::Let {
+            pattern, ty, value, ..
+        } => {
+            cx.bind_pattern(pattern);
             // Recurse FIRST so a nested `let` inside the value (a closure body,
             // a block expr) is rewritten before this one wraps the value.
-            walk_expr(value, ret);
+            walk_expr(value, ret, cx);
             if let Some(ty) = ty {
                 desugar_collect_target(ty, value);
             }
         }
-        StmtKind::LetUninit { .. } => {}
-        StmtKind::LetElse {
-            value, else_block, ..
-        } => {
-            walk_expr(value, ret);
-            walk_block(else_block, ret);
+        StmtKind::LetUninit { name, .. } => {
+            cx.bound.insert(name.clone());
         }
-        StmtKind::Defer { body } => walk_block(body, ret),
-        StmtKind::ErrDefer { body, .. } => walk_block(body, ret),
+        StmtKind::LetElse {
+            pattern,
+            value,
+            else_block,
+            ..
+        } => {
+            cx.bind_pattern(pattern);
+            walk_expr(value, ret, cx);
+            walk_block(else_block, ret, cx);
+        }
+        StmtKind::Defer { body } => walk_block(body, ret, cx),
+        StmtKind::ErrDefer { binding, body } => {
+            if let Some(name) = binding {
+                cx.bound.insert(name.clone());
+            }
+            walk_block(body, ret, cx);
+        }
         StmtKind::Assign { target, value } => {
-            walk_expr(target, ret);
-            walk_expr(value, ret);
+            walk_expr(target, ret, cx);
+            walk_expr(value, ret, cx);
         }
         StmtKind::CompoundAssign { target, value, .. } => {
-            walk_expr(target, ret);
-            walk_expr(value, ret);
+            walk_expr(target, ret, cx);
+            walk_expr(value, ret, cx);
         }
-        StmtKind::Expr(e) => walk_expr(e, ret),
+        StmtKind::Expr(e) => walk_expr(e, ret, cx),
         StmtKind::MultiAssign { .. } => {
             let span = stmt.span;
             let placeholder = StmtKind::Expr(Expr {
@@ -1441,10 +1667,10 @@ fn walk_stmt(stmt: &mut Stmt, ret: Option<&TypeExpr>) {
             // Operands may themselves contain nested blocks (e.g. a block-expr
             // value) that hold further multi-assigns — recurse before expanding.
             for t in targets.iter_mut() {
-                walk_expr(t, ret);
+                walk_expr(t, ret, cx);
             }
             for v in values.iter_mut() {
-                walk_expr(v, ret);
+                walk_expr(v, ret, cx);
             }
             stmt.kind = expand_multi_assign(targets, values, span);
         }
@@ -1498,7 +1724,7 @@ fn expand_multi_assign(targets: Vec<Expr>, values: Vec<Expr>, span: Span) -> Stm
     })
 }
 
-fn walk_expr(expr: &mut Expr, ret: Option<&TypeExpr>) {
+fn walk_expr(expr: &mut Expr, ret: Option<&TypeExpr>, cx: &mut WalkCx) {
     match &mut expr.kind {
         // Leaves — no sub-expressions or blocks.
         ExprKind::Integer(..)
@@ -1521,103 +1747,136 @@ fn walk_expr(expr: &mut Expr, ret: Option<&TypeExpr>) {
         ExprKind::InterpolatedStringLit(parts) => {
             for part in parts.iter_mut() {
                 if let ParsedInterpolationPart::Expr(e, _) = part {
-                    walk_expr(e, ret);
+                    walk_expr(e, ret, cx);
                 }
             }
         }
         ExprKind::Binary { left, right, .. }
         | ExprKind::NilCoalesce { left, right }
         | ExprKind::Pipe { left, right } => {
-            walk_expr(left, ret);
-            walk_expr(right, ret);
+            walk_expr(left, ret, cx);
+            walk_expr(right, ret, cx);
         }
-        ExprKind::Unary { operand, .. } => walk_expr(operand, ret),
-        ExprKind::Question(e) => walk_expr(e, ret),
+        ExprKind::Unary { operand, .. } => walk_expr(operand, ret, cx),
+        ExprKind::Question(e) => walk_expr(e, ret, cx),
         ExprKind::OptionalChain { object, args, .. } => {
-            walk_expr(object, ret);
+            walk_expr(object, ret, cx);
             if let Some(args) = args {
                 for a in args.iter_mut() {
-                    walk_expr(&mut a.value, ret);
+                    walk_expr(&mut a.value, ret, cx);
                 }
             }
         }
         ExprKind::Call { callee, args } => {
-            walk_expr(callee, ret);
+            walk_expr(callee, ret, cx);
             for a in args.iter_mut() {
-                walk_expr(&mut a.value, ret);
+                walk_expr(&mut a.value, ret, cx);
+            }
+            // B-2026-08-18-27 — `f(<chain>.collect())` against a non-`Vec`
+            // parameter. Pass 2 only: the decision needs the whole body's
+            // binding set, which pass 1 is what collects.
+            if let Some(sigs) = cx.args {
+                rewrite_call_arg_collects(callee, args, sigs, &cx.bound);
             }
         }
-        ExprKind::MethodCall { object, args, .. } => {
-            walk_expr(object, ret);
+        ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } => {
+            if method == "collect" {
+                cx.saw_collect = true;
+            }
+            walk_expr(object, ret, cx);
             for a in args.iter_mut() {
-                walk_expr(&mut a.value, ret);
+                walk_expr(&mut a.value, ret, cx);
             }
         }
         ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
-            walk_expr(object, ret)
+            walk_expr(object, ret, cx)
         }
         ExprKind::Index { object, index } => {
-            walk_expr(object, ret);
-            walk_expr(index, ret);
+            walk_expr(object, ret, cx);
+            walk_expr(index, ret, cx);
         }
-        ExprKind::Block(b) | ExprKind::Comptime(b) => walk_block(b, ret),
+        ExprKind::Block(b) | ExprKind::Comptime(b) => walk_block(b, ret, cx),
         ExprKind::If {
             condition,
             then_block,
             else_branch,
         } => {
-            walk_expr(condition, ret);
-            walk_block(then_block, ret);
+            walk_expr(condition, ret, cx);
+            walk_block(then_block, ret, cx);
             if let Some(e) = else_branch {
-                walk_expr(e, ret);
+                walk_expr(e, ret, cx);
             }
         }
         ExprKind::IfLet {
+            pattern,
             value,
             then_block,
             else_branch,
-            ..
         } => {
-            walk_expr(value, ret);
-            walk_block(then_block, ret);
+            cx.bind_pattern(pattern);
+            walk_expr(value, ret, cx);
+            walk_block(then_block, ret, cx);
             if let Some(e) = else_branch {
-                walk_expr(e, ret);
+                walk_expr(e, ret, cx);
             }
         }
         ExprKind::Match { scrutinee, arms } => {
-            walk_expr(scrutinee, ret);
+            walk_expr(scrutinee, ret, cx);
             for arm in arms.iter_mut() {
+                cx.bind_pattern(&arm.pattern);
                 if let Some(g) = &mut arm.guard {
-                    walk_expr(g, ret);
+                    walk_expr(g, ret, cx);
                 }
-                walk_expr(&mut arm.body, ret);
+                walk_expr(&mut arm.body, ret, cx);
             }
         }
         ExprKind::While {
             condition, body, ..
         } => {
-            walk_expr(condition, ret);
-            walk_block(body, ret);
+            walk_expr(condition, ret, cx);
+            walk_block(body, ret, cx);
         }
-        ExprKind::WhileLet { value, body, .. } => {
-            walk_expr(value, ret);
-            walk_block(body, ret);
+        ExprKind::WhileLet {
+            pattern,
+            value,
+            body,
+            ..
+        } => {
+            cx.bind_pattern(pattern);
+            walk_expr(value, ret, cx);
+            walk_block(body, ret, cx);
         }
-        ExprKind::For { iterable, body, .. } => {
-            walk_expr(iterable, ret);
-            walk_block(body, ret);
+        ExprKind::For {
+            pattern,
+            iterable,
+            body,
+            ..
+        } => {
+            cx.bind_pattern(pattern);
+            walk_expr(iterable, ret, cx);
+            walk_block(body, ret, cx);
         }
-        ExprKind::Loop { body, .. } => walk_block(body, ret),
-        ExprKind::LabeledBlock { body, .. } => walk_block(body, ret),
+        ExprKind::Loop { body, .. } => walk_block(body, ret, cx),
+        ExprKind::LabeledBlock { body, .. } => walk_block(body, ret, cx),
         // A `return` inside a closure returns from the CLOSURE, not the
         // enclosing fn, so the fn's declared return type must NOT reach here —
         // rewriting against it would target the wrong type exactly where it
         // looks like it works. Closures declare no return type of their own, so
         // there is nothing to substitute: the target is simply dropped.
-        ExprKind::Closure { body, .. } => walk_expr(body, None),
+        ExprKind::Closure { params, body, .. } => {
+            for cp in params.iter() {
+                cx.bind_pattern(&cp.pattern);
+            }
+            walk_expr(body, None, cx);
+        }
         ExprKind::Return(opt) => {
             if let Some(e) = opt {
-                walk_expr(e, ret);
+                walk_expr(e, ret, cx);
                 // B-2026-08-18-18 — `return <chain>.collect()` against a
                 // declared non-`Vec` return type, the sibling of the
                 // annotated-`let` form. Same syntactic rewrite, same
@@ -1630,55 +1889,55 @@ fn walk_expr(expr: &mut Expr, ret: Option<&TypeExpr>) {
         }
         ExprKind::Break { value, .. } => {
             if let Some(e) = value {
-                walk_expr(e, ret);
+                walk_expr(e, ret, cx);
             }
         }
         ExprKind::Tuple(items)
         | ExprKind::ArrayLiteral(items)
         | ExprKind::PrefixCollectionLiteral { items, .. } => {
             for e in items.iter_mut() {
-                walk_expr(e, ret);
+                walk_expr(e, ret, cx);
             }
         }
         ExprKind::RepeatLiteral { value, count, .. } => {
-            walk_expr(value, ret);
-            walk_expr(count, ret);
+            walk_expr(value, ret, cx);
+            walk_expr(count, ret, cx);
         }
         ExprKind::MapLiteral(pairs) => {
             for (k, v) in pairs.iter_mut() {
-                walk_expr(k, ret);
-                walk_expr(v, ret);
+                walk_expr(k, ret, cx);
+                walk_expr(v, ret, cx);
             }
         }
         ExprKind::StructLiteral { fields, spread, .. } => {
             for f in fields.iter_mut() {
-                walk_expr(&mut f.value, ret);
+                walk_expr(&mut f.value, ret, cx);
             }
             if let Some(s) = spread {
-                walk_expr(s, ret);
+                walk_expr(s, ret, cx);
             }
         }
-        ExprKind::Cast { expr: e, .. } => walk_expr(e, ret),
+        ExprKind::Cast { expr: e, .. } => walk_expr(e, ret, cx),
         ExprKind::Range { start, end, .. } => {
             if let Some(s) = start {
-                walk_expr(s, ret);
+                walk_expr(s, ret, cx);
             }
             if let Some(e) = end {
-                walk_expr(e, ret);
+                walk_expr(e, ret, cx);
             }
         }
         ExprKind::Unsafe(b) | ExprKind::Try(b) | ExprKind::Seq(b) | ExprKind::Par(b) => {
-            walk_block(b, ret)
+            walk_block(b, ret, cx)
         }
         ExprKind::Lock { mutex, body, .. } => {
-            walk_expr(mutex, ret);
-            walk_block(body, ret);
+            walk_expr(mutex, ret, cx);
+            walk_block(body, ret, cx);
         }
         ExprKind::Providers { bindings, body } => {
             for bnd in bindings.iter_mut() {
-                walk_expr(&mut bnd.value, ret);
+                walk_expr(&mut bnd.value, ret, cx);
             }
-            walk_block(body, ret);
+            walk_block(body, ret, cx);
         }
     }
 }
@@ -1973,6 +2232,27 @@ fn is_iterator_chain(e: &Expr) -> bool {
 /// `to_string()` on an already-`String` element is a copy; correctness and
 /// backend parity are worth it here, and a later type-directed pass can drop it.
 fn desugar_collect_target(ty: &TypeExpr, value: &mut Expr) {
+    desugar_collect_target_at(ty, value, ty.span);
+}
+
+/// [`desugar_collect_target`] with the base for the SYNTHESIZED nodes' spans
+/// given separately from the target type.
+///
+/// The two coincide for a `let` annotation and a `return` type — the written
+/// type sits at a unique place in the source, so `ty.span` distinguishes one
+/// rewrite from every other. In ARGUMENT position it does not: the target type
+/// is the CALLEE'S PARAMETER, one span shared by every call site of that
+/// function. Deriving the synthetic spans from it would give two call sites the
+/// same `SpanKey`s, and a `String` target makes that a real miscompile rather
+/// than a tidiness issue — `s.chars()...collect()` at one site and
+/// `v.iter().map(to_upper)...collect()` at another record `char` and `String`
+/// for the same element key, last write wins. Callers in argument position pass
+/// the ARGUMENT's own span instead, which is unique per call.
+///
+/// The BLOCK keeps `ty.span` in both cases: no expression is recorded at a type
+/// annotation's span, and two call sites recording the same target type under
+/// one key is a harmless agreement rather than a collision.
+fn desugar_collect_target_at(ty: &TypeExpr, value: &mut Expr, synth_base: Span) {
     let Some(target) = collect_target_of(ty) else {
         return;
     };
@@ -1993,7 +2273,7 @@ fn desugar_collect_target(ty: &TypeExpr, value: &mut Expr) {
         _ => return,
     }
 
-    let base = ty.span;
+    let base = synth_base;
     let src_name = format!("__karac_collect_src_{}", base.offset);
     let dst_name = format!("__karac_collect_dst_{}", base.offset);
     let it_name = format!("__karac_collect_it_{}", base.offset);
@@ -2001,7 +2281,7 @@ fn desugar_collect_target(ty: &TypeExpr, value: &mut Expr) {
     // The block itself takes the ANNOTATION's span: it is the node whose type
     // is the target, so a diagnostic about the target points at the written
     // target, and no EXPRESSION is recorded at a type annotation's span.
-    let block_span = base;
+    let block_span = ty.span;
     let s1 = collect_synth_span(&base, 1);
     let s2 = collect_synth_span(&base, 2);
     let s3 = collect_synth_span(&base, 3);
@@ -2010,6 +2290,7 @@ fn desugar_collect_target(ty: &TypeExpr, value: &mut Expr) {
     let s6 = collect_synth_span(&base, 6);
     let s7 = collect_synth_span(&base, 7);
     let s8 = collect_synth_span(&base, 8);
+    let s9 = collect_synth_span(&base, 9);
 
     // `let __src = <the original collect call>;` — untouched, so the chain keeps
     // its own spans and its `Vec[E]` typing.
@@ -2147,7 +2428,17 @@ fn desugar_collect_target(ty: &TypeExpr, value: &mut Expr) {
     *value = Expr {
         kind: ExprKind::Block(Block {
             stmts: vec![src_stmt, dst_stmt, for_stmt],
-            final_expr: Some(Box::new(collect_ident(&dst_name, s6))),
+            // `s9`, NOT `s6` — the block's tail must not share a span with the
+            // `__dst` receiver inside the loop. When it did, the ownership CFG
+            // saw the tail's MOVE and the loop body's USE at one `SpanKey` and
+            // could not order them, so every `collect()` into a non-`Vec`
+            // target reported `perf[rc-fallback]: RC fallback inserted for
+            // '__karac_collect_dst_N' (direct re-use after consume)` — a note
+            // naming a synthesized binding the user never wrote, attached to an
+            // RC box the code does not need. The hand-written equivalent of
+            // this same block checks clean, which is what identified the shared
+            // span rather than the shape as the cause.
+            final_expr: Some(Box::new(collect_ident(&dst_name, s9))),
             span: block_span,
         }),
         span: block_span,
