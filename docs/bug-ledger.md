@@ -103,14 +103,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | perf | 77 | 0 |
 | crash | 51 | 0 |
 | soundness | 50 | 0 |
-| other | 40 | 1 |
+| other | 42 | 2 |
 | use-after-free | 20 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 926 | 1 |
+| codegen | 928 | 2 |
 | typecheck | 199 | 1 |
 | interp | 150 | 0 |
 | ownership | 57 | 0 |
@@ -118,23 +118,24 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | autopar | 48 | 0 |
 | cli | 45 | 1 |
 | runtime | 22 | 0 |
-| parser | 21 | 1 |
+| parser | 22 | 1 |
 | resolver | 19 | 0 |
 | effect | 7 | 0 |
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1326 surfaced · 5 open · 1304 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1328 surfaced · 6 open · 1305 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-17-35 | 2026-08-17 | other | low | Two design.md sections state things the language does not have: § derive(Display) uses an enum-variant syntax that does not parse, and § Subscript Trait claims a v1 capability the resolver explicitly rejects. (1) The payload example writes `Circle(radius: f64),` / `Rect(w: f64, h: f64),` -- a tuple-style variant with NAMED fields. That form does not exist: `error[parse]: Expected RightParen, found Colon`. § Feature 3 defines the two real forms, struct variants (`Circle { radius: f64 }`) and tuple variants (`And(Expr, Expr)`), so this is a third spelling that appears nowhere else. (2) § Subscript Trait opens "User-defined types support `[]` indexing by implementing two standard traits" with no v1 caveat, but `impl Index[i64] for Grid` is rejected outright: `error[resolve]: user-defined 'impl Index for Grid' is not supported in v1; operator traits are stdlib-only`. The sibling § Operator Traits DOES carry the caveat ("makes the later addition of user-defined operator impls a purely additive change"), so the two sections disagree with each other about the same v1 boundary. | roadmap.md |
-| B-2026-08-18-24 | 2026-08-18 | parser+codegen | medium | `MethodCall` nodes still copy their object's span, so a method CHAIN collapses onto its innermost receiver's SpanKey. Widening it is a MEASURED 21 memory_sanitizer + 16 codegen failures, because tables are written at one level of a chain and read at another and agree only while every level shares a key. The last of the four postfix arms. | The `span: lhs.span` in the MethodCall arm of `src/parser/exprs.rs`'s postfix loop, which carries the measurement as a comment. Start from `method_callee_types` and the other `method_call`-span-keyed tables in src/codegen/; `try_compile_freshtemp_user_method`'s dispatch_key fallback shows the shape of the problem. |
 | B-2026-08-18-27 | 2026-08-18 | typecheck | low | `collect()` in ARGUMENT position still fixes the chain to `Vec`: `f(<chain>.collect())` against a non-`Vec` parameter reports "expected 'Set[i64]', found 'Vec[i64]'". The last of the three positions design.md's "infers the target type from context" covers -- the annotated `let` landed in B-2026-08-17-36, return and tail in B-2026-08-18-18. | src/desugar.rs (`desugar_collect_target`, and the `walk_expr` Call arm that would have to know parameter types); src/typechecker/exprs.rs (`check_expr`) for the type-directed route. |
 | B-2026-08-18-28 | 2026-08-18 | cli | low | NO lint diagnostic code is registered in `karac explain`'s CODE_TABLE, so `karac explain E0278` (must_use) and `karac explain E0259` (the four compile-path lints) both answer "not in the catalogue yet" -- for codes the compiler actively emits under `-D <lint>`. | roadmap.md |
 | B-2026-08-18-29 | 2026-08-18 | other | low | 28 of design.md's code blocks still fail to parse on STATEMENT terminators -- a `let` whose `;` is missing (13 blocks), bare expression statements, `return None`, `+=`, `while`, `unsafe`. The DECLARATION half was fixed in B-2026-08-17-31; this is what a line-level pass provably cannot finish. | docs/design.md. Reproduce by extracting each fenced block to a file and running `karac check`, counting diagnostics containing `Expected Semicolon`; that harness is what produced the 49 -> 28 measurement. |
+| B-2026-08-18-30 | 2026-08-18 | codegen | low | `compile_method_call`'s `args_close_span` parameter is now a REDUNDANT second key: it exists only to disambiguate side-table reads across a chain, and B-2026-08-18-24 made `call_span` unique per chain step, which is the job it was hired for. | src/codegen/method_call.rs (the `args_close_span` parameter and its ~12 call sites); `method_call_key`; `try_compile_freshtemp_user_method`. |
+| B-2026-08-18-31 | 2026-08-18 | parser+codegen | low | `FieldAccess` nodes still copy their object's span -- a FIFTH postfix arm with the identical defect the four-row family (`?.`, `?`, `Index`, `MethodCall`) just finished closing. `v[0]` and `v[0].second` share one SpanKey. | src/parser/exprs.rs (the `Token::Dot` field-access arm, `span: lhs.span`); selfhost/src/parser.kara `finish_dot`; src/codegen/expr_ops.rs `receiver_struct_inst` for the consumer that already compensates. |
 
 ### Wontfix (7)
 
@@ -152,9 +153,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1326 surfaced
 
 </details>
 
-### Fixed (1304)
+### Fixed (1305)
 
-<details><summary>1304 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1305 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -11698,6 +11699,31 @@ VERIFIED ON ALL THREE INVOCATIONS: `cargo clippy --all -- -D warnings` (CI's exa
 THE DURABLE GUARD IS A CLAUDE.md ENTRY, because nothing in the test suite can catch this class. `--features llvm` IS NOT A SUPERSET of the default build: the two cfgs contain different code, so each hides lints from the other -- the same asymmetry the existing `--all-targets`-not-`--tests` note documents one axis over. Anyone running only the llvm leg locally (as this session had been) sees green while CI's leg fails. Both invocations are now written out in the Commands section.
 
 WHY IT REACHED MAIN AT ALL: B-2026-08-18-1 introduced the helpers and their call sites TOGETHER, so under `--features llvm` -- the leg used to verify that work -- nothing was ever unused. The gate that would have caught it is the one the session was not running. |
+| B-2026-08-18-24 | parser+codegen | medium | `MethodCall` nodes still copy their object's span, so a method CHAIN collapses onto its innermost receiver's SpanKey | FIXED by 849096a2. The LAST of the four postfix arms. `MethodCall` now spans lhs-start -> past the closing paren, joining `?.` (B-2026-08-18-7), `?` (B-2026-08-18-9) and `Index` (B-2026-08-18-21).
+
+THE ROW'S NUMBERS WERE STALE AND THAT WAS PREDICTABLE: it measured 21 memory_sanitizer + 16 codegen failures BEFORE the `Index` half landed. Re-measured on current main the widening broke 42 tests -- 22 memory_sanitizer, 17 codegen, 1 ownership, 2 self-host oracles. Re-measure before planning; the count moves whenever a sibling arm lands.
+
+THE DOMINANT CLUSTER WAS ONE MISTAKE MADE THREE TIMES, and it is the exact shape this family exists to expose. `record_temp_receiver_types` (src/typechecker/method_temp_receiver.rs) inserts `temp_recv_elem_types` / `temp_recv_mapset_types` / `temp_recv_len_elem_types` under the CALL's span -- it says so: "keyed by the call span -- the same collision dodge `method_unwrap_inner_types` / `method_callee_types` use". Codegen read all three at the RECEIVER's span. The two agreed only while `MethodCall` copied its object's span; separated, every lookup missed, the fresh-temp arms returned `Ok(None)`, and dispatch fell through to "no handler for method '<m>' on non-identifier receiver". Threading `call_span` into `try_compile_freshtemp_vec_read_method`, `try_compile_freshtemp_mapset_read_method`, the early mapset skip-gate and `try_track_len_family_recv_temp` took codegen 17 -> 2 and memory_sanitizer 22 -> 0. Note the len-family site keeps TWO keys on purpose: `temp_recv_len_elem_types` is call-keyed, `owned_temp_drops` is receiver-keyed, and one key had been serving both.
+
+THE TWO STRAGGLERS WERE EACH A DIFFERENT SHAPE OF THE SAME ERROR, and both are worth reading before touching this area again.
+
+  1. `for x in t.0.iter()` DOUBLE-FREED (`free(): double free detected in tcache 2`). `try_compile_for_vec_value` drop-tracks on an `owned_temp_drops` hit, but the lowering pass fills that table from EVERY `expr_types` entry whose type is Vec/String/Map/... -- a hit means "this span holds a Vec", not "this Vec is ours to free". What had been keeping borrowed iterables out was the collision itself: the call wore `t`'s span, where the recorded type is the TUPLE, which is not in the droppable set, so the lookup missed. The first fix gated the LOOKUP and the loop then iterated ZERO times -- the hit was doing double duty, materializing (which iteration needs) and tracking (which it does not). The gate belongs on the cleanup alone, which is how the sibling `try_compile_freshtemp_vec_read_method` has always done it.
+
+  2. `v[0].second.len()` LOUD-BAILED with "no handler for method 'len' on variable '__field_elem_0'" -- the exact diagnostic B-2026-07-15-20 fixed, reappearing through a different door. `receiver_struct_inst` asked the span table before the structural walk; `FieldAccess` STILL copies its object's span, so `v[0]` and `v[0].second` share a key, and once `MethodCall` stopped copying, the surviving write there was `v[0].second`'s `Vec[i64]`. Asking span-first returned `Vec[i64]` for `v[0]`, whose head is not `Pair`, so `resolve_generic_field_te` skipped the substitution and the synth field element registered as the bare param `B`. Reordered to structural-walk-first -- the discriminator B-2026-08-18-14 established.
+
+FIELDACCESS IS A FIFTH ARM WITH THE SAME DEFECT. It is not in this family's inventory but it copies its object's span exactly as the other four did, and finding #2 is what surfaced it. Not widened here (out of scope, and its fallout is unmeasured); recorded in the code at `receiver_struct_inst` and filed as B-2026-08-18-31.
+
+THE TWO PREREQUISITES THE ROW NAMED BOTH HELD.
+  * `slice_borrow_key_for` -- written as specified: walk the RECEIVER spine outermost-first, return the first step carrying a `slice_borrow_sources` entry, never descend into arguments (a slice created in an argument is not the binding's borrow). Used for both the lookup and `end_copied_out_slice_borrow`'s key at all four sites in `ownership/block_stmt.rs`. Without it `slice_chain_copied_out_does_not_borrow_the_source` fails with "cannot create a `mut Slice[T]` of `m` while another slice borrow is live".
+  * The self-host oracles, carried forward from B-2026-08-18-21's note: `selfhost/src/parser.kara`'s `finish_dot` method-call arm needed the same widening, and its section comment now records that `finish_index` and the method-call arm are the two builders whose span is not their operand's.
+
+AND ONE TEST RE-ADDED FROM -21. That row measured `scalar_projection_bases`' root taint as changing no answer, and named this arm as the reason: `ps.len()`'s receiver read as `i64`, so it was never seen as a non-projection use. With the call keyed separately the receiver carries `Vec[shared P]` and the taint is the only thing declining the loop. `test_disjoint_write_declines_when_the_projected_root_has_a_non_projection_use` now asserts it, and fails on pre-widening source with exactly the `None` -21 recorded -- the prediction was checked, not assumed.
+
+THE -O0 ASAN LEG CAUGHT A REGRESSION THE ENTIRE -O2 SUITE COULD NOT, which is the single most useful thing this row produced and is worth reading before anyone trusts a green `cargo test --features llvm` on ownership work. With 14,056 tests passing and both clippy legs clean, `scripts/asan-o0-leg.sh` failed on `asan_iter_chain_over_temporary_vec_source` -- NOT on the quarantine list, and verified to pass on pristine main at -O0, so the regression was mine and freshly introduced. At -O2 the fixture's `vec![1,2,3,4]` folds away and nothing is allocated to leak; at -O0 it is a real 32-byte allocation and LSan sees it go unfreed.
+
+The cause was the ownership gate above, applied one step too broadly. First it gated the table LOOKUP, which stopped the loop iterating at all (the hit materializes as well as tracks). Corrected to gate only the cleanup, and only on the `owned_temp_drops` branch -- `temp_recv_elem_types` is recorded solely for fresh-temp receivers, so a hit there is already an ownership claim. That still leaked, because an iterator terminal PEELS its adaptors: `vec![1,2,3,4].iter().sum()` reaches the for-loop lowering with the bare `vec![…]` as its iterable, and `expr_yields_fresh_owned_temp` matches only `Call`/`MethodCall` -- it answers FALSE for a collection literal, the one shape that is fresh by construction. Confirmed by instrumenting the fallback and reading the actual `ExprKind` rather than reasoning about it. The gate now mirrors the producer's own test on the identical question (`recv_is_call || recv_is_coll_lit`), which is what keeps the two ends of the decision agreeing.
+
+Three attempts, three different wrong answers, each one visible only by running something: gate the lookup -> zero iterations (E2E output); gate both branches -> leak (LSan at -O0); gate the fallback with the call-only predicate -> still a leak (LSan at -O0). None of the three would have been caught by reading the code, and only the last two needed the -O0 leg. |
 | B-2026-08-18-25 | typecheck | low | The `deprecated` diagnostic's MESSAGE TEXT begins with its own severity prefix, so every renderer that adds one prints it twice: "warning[deprecated]… | FIXED by 0ad5c51b. Two emit sites baked their own severity word into the message: `emit_deprecated_warning` ("warning[deprecated]: ") and `emit_unstable_warning` ("warning[unstable_api]: "). Every renderer already builds that prefix from the `lint_name` the entry carries, so the rendered line said it twice on every lane. The other five `type_lint_warning` call sites pass clean messages, which is why this was two sites and not a systemic convention.
 
 design.md § Deprecation shows the intended shape -- `warning[deprecated]: use of deprecated function ...`, one prefix -- so this aligns the implementation with the spec rather than inventing a house style.
