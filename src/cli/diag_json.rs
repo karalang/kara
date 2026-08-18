@@ -1886,6 +1886,43 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
         });
     }
 
+    // B-2026-08-18-2 — the JSON twin of the three sibling lints wired onto the
+    // compile path in `cli.rs`. Same lints, same overrides, same order, so the
+    // two renderings cannot disagree; see that call site for why these three
+    // and not the other two.
+    //
+    // W0259/E0259 rather than reusing must_use's W0250/E0250: `E0250` is
+    // ALREADY the typecheck `ModuleBindingEffectfulInit`, so a must_use
+    // escalated with `-D must_use` emits a code `karac explain` describes as an
+    // unrelated module-binding error. Filed separately; not compounded here.
+    // `lint_name` remains the addressable key for `-A` / `-D` either way.
+    for (lint_name, is_error, message, span) in lint_entries_for_compile_path(pipeline) {
+        id_counter += 1;
+        diags.add(DiagEntry {
+            id: &format!("d{id_counter}"),
+            severity: if is_error { "error" } else { "warning" },
+            phase: "lint",
+            code: if is_error { "E0259" } else { "W0259" },
+            category: "lint",
+            message: &message,
+            filename,
+            span: &span,
+            suggestion: None,
+            extra_json: None,
+            lint_name: Some(&lint_name),
+            // No machine-applicable edit for any of the three. A `// Safety:`
+            // justification is prose only the author can write; an
+            // `unsafe { }` wrap and an FFI float comparison both depend on
+            // intent. `karac fix` offering a guess here would be worse than
+            // offering nothing.
+            fix_it: None,
+            class: Some("LINT_WARNING"),
+            expected: None,
+            got: None,
+            stub_hint_json: None,
+        });
+    }
+
     if let Some(ref e) = pipeline.effects {
         for err in &e.errors {
             id_counter += 1;
@@ -2793,6 +2830,41 @@ pub(super) fn run_pipeline_jsonl(pipeline: &mut Pipeline) {
             effects,
         ),
     );
+}
+/// The three lints B-2026-08-18-2 moved onto the compile path, as
+/// `(lint_name, is_error, message, span)`.
+///
+/// One list, two renderers: `cli.rs`'s text path and `collect_diagnostics`
+/// above both iterate it, so a lint added here reaches both feeds or neither.
+/// That is the property the row was really about — `must_use` was invisible to
+/// `karac check --output=json` for exactly as long as its call site lived in
+/// one command instead of one shared place.
+pub(super) fn lint_entries_for_compile_path(
+    pipeline: &Pipeline,
+) -> Vec<(String, bool, String, crate::token::Span)> {
+    let source = pipeline.source.as_deref().unwrap_or("");
+    let mut out: Vec<(String, bool, String, crate::token::Span)> = Vec::new();
+    for d in crate::unsafe_lint::check_undocumented_unsafe(
+        &pipeline.parsed.program,
+        source,
+        &pipeline.lint_overrides,
+    ) {
+        let is_err = d.level == crate::unsafe_lint::LintLevel::Error;
+        out.push((d.lint_name, is_err, d.message, d.span));
+    }
+    for d in crate::unsafe_lint::check_unsafe_op_in_unsafe_fn(
+        &pipeline.parsed.program,
+        pipeline.typed.as_ref(),
+    ) {
+        let is_err = d.level == crate::unsafe_lint::LintLevel::Error;
+        out.push((d.lint_name, is_err, d.message, d.span));
+    }
+    for d in crate::ffi_lint::check_ffi_float_eq(&pipeline.parsed.program, &pipeline.lint_overrides)
+    {
+        let is_err = d.level == crate::ffi_lint::LintLevel::Error;
+        out.push(("ffi_float_eq".to_string(), is_err, d.message, d.span));
+    }
+    out
 }
 
 #[cfg(test)]

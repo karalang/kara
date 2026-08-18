@@ -287,13 +287,41 @@ fn check_unsafe_span(
     level: LintLevel,
     diags: &mut Vec<LintDiagnostic>,
 ) {
-    // span.line is 1-indexed. The preceding line is at index span.line - 2.
-    let preceding_ok = if span.line >= 2 {
-        let preceding = lines[span.line - 2];
-        is_safety_comment(preceding.trim())
-    } else {
-        false
-    };
+    // span.line is 1-indexed, so the preceding line is at index span.line - 2.
+    //
+    // B-2026-08-18-2 — scan the WHOLE contiguous comment block above the
+    // block, not just the one line directly above it. A real safety
+    // justification is usually several lines long:
+    //
+    //     // Safety: the loop guard proves `lo >= 0 and hi < n` before each
+    //     // indexing. The remaining bound is proved transitively from the
+    //     // initial value range and monotonic update direction.
+    //     unsafe { … }
+    //
+    // Reading only the last line saw `// direction.` — not a `Safety:` prefix
+    // — and reported the block as undocumented. That is a FALSE POSITIVE on
+    // the shape the lint most wants to encourage, and it punished the author
+    // for explaining more rather than less. Measured on the kata corpus: of
+    // the two `undocumented_unsafe` diagnostics the lint produced, one was
+    // this false positive and only the other was real.
+    //
+    // Walk up while the lines are comments and accept if ANY of them opens
+    // the justification; stop at the first non-comment line, so a `Safety:`
+    // comment belonging to some earlier construct cannot be borrowed across
+    // intervening code.
+    let mut preceding_ok = false;
+    let mut idx = span.line as isize - 2;
+    while idx >= 0 {
+        let line = lines[idx as usize].trim();
+        if !line.starts_with("//") {
+            break;
+        }
+        if is_safety_comment(line) {
+            preceding_ok = true;
+            break;
+        }
+        idx -= 1;
+    }
     if !preceding_ok {
         diags.push(LintDiagnostic {
             level,

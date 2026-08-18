@@ -1688,6 +1688,31 @@ fn with_snippet(
 /// Factored out of `print_text_diagnostics` for the multi-target check
 /// driver, which compares rendered blocks across per-target pipeline
 /// runs to deduplicate target-agnostic findings (`cmd_check_targets`).
+/// Render one lint diagnostic as a text block, for the lints wired onto the
+/// compile path by B-2026-08-18-2. Factored so the three call sites cannot
+/// drift in severity word or span formatting; `must_use` keeps its own inline
+/// block because it also carries `help` / `note` continuation lines.
+fn render_lint_block_text(
+    lint_name: &str,
+    is_error: bool,
+    message: &str,
+    filename: &str,
+    span: &crate::token::Span,
+    source: Option<&str>,
+) -> String {
+    let severity = if is_error { "error" } else { "warning" };
+    with_snippet(
+        format!(
+            "{severity}[{lint_name}]: {filename}:{}:{}: {message}",
+            span.line, span.column
+        ),
+        source,
+        span.line,
+        span.column,
+        span.length,
+    )
+}
+
 fn render_text_diagnostics(pipeline: &Pipeline) -> Vec<String> {
     let filename = &pipeline.filename;
     let source = pipeline.source.as_deref();
@@ -1788,6 +1813,34 @@ fn render_text_diagnostics(pipeline: &Pipeline) -> Vec<String> {
             block.push_str(&format!("\n  = note: {note}"));
         }
         out.push(block);
+    }
+    // B-2026-08-18-2 — the three SIBLING lints that were also invoked only
+    // from `cmd_run`, joining `must_use` on the compile path. Which three, and
+    // why not all five, is a measurement rather than a judgement call: sweeping
+    // `karac check` over the 955-file examples + katas corpus with all five
+    // wired produced 70 new diagnostics, and reading them split the set in two.
+    //
+    //   * `undocumented_unsafe` — 2 diagnostics, both on real user `unsafe`
+    //     blocks with valid spans. One was a false positive on a MULTI-LINE
+    //     `// Safety:` comment, fixed in the same change (see
+    //     `check_unsafe_span`); the other is a genuine undocumented block.
+    //   * `unsafe_op_in_unsafe_fn`, `ffi_float_eq` — 0 diagnostics. Silent on
+    //     the whole corpus, so wiring them changes no existing output.
+    //
+    // The other two — `missing_must_use` and `missing_track_caller` — are NOT
+    // here, and deliberately: they produced 68 of the 70, every one of them
+    // rendered against the USER's filename with the baked stdlib item's own
+    // span. `examples/autograd_training.kara` is 88 lines and drew diagnostics
+    // at lines 378 and 387. Those are stdlib-hygiene findings pointing at
+    // coordinates that do not exist in the file named, so putting them on the
+    // JSON feed would feed the Mend loop 68 unresolvable locations — the exact
+    // harm this row exists to prevent. Filed separately.
+    for (lint_name, is_error, message, span) in
+        crate::cli::diag_json::lint_entries_for_compile_path(pipeline)
+    {
+        out.push(render_lint_block_text(
+            &lint_name, is_error, &message, filename, &span, source,
+        ));
     }
     if let Some(ref e) = pipeline.effects {
         for err in &e.errors {

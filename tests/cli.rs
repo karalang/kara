@@ -1163,6 +1163,123 @@ fn takeu(n: usize) -> usize { return n; }
 /// JSON feed, so the whole category was invisible to it — and invisibly so,
 /// since a diagnostic that is never emitted also never counts as unfixed.
 #[test]
+fn test_sibling_lints_reach_check_and_json() {
+    // B-2026-08-18-2 — the three lints that joined `must_use` on the compile
+    // path. `undocumented_unsafe` is the one with output on the corpus, so it
+    // is the fixture; the other two are silent everywhere measured and ride
+    // the same shared collector, so a regression in the wiring shows up here.
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-sibling-lints-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let path = tmp.join("us.kara");
+    std::fs::write(
+        &path,
+        "fn main() {\n\
+             let v: Vec[i64] = Vec.filled(4, 7);\n\
+             // just an ordinary comment, not a justification\n\
+             unsafe {\n\
+                 println(f\"{v.get_unchecked(1)}\");\n\
+             }\n\
+         }\n",
+    )
+    .unwrap();
+    let file = path.to_str().unwrap();
+
+    // 1. Text `check` reports it, and stays exit 0 — it is a warning.
+    let out = karac_bin().args(["check", file]).output().unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("undocumented_unsafe"),
+        "check must report the undocumented unsafe block; stderr={stderr}",
+    );
+    assert!(
+        out.status.success(),
+        "a lint warning must not fail check; stderr={stderr}",
+    );
+
+    // 2. JSON carries it with the lint name — the Mend loop's feed, which is
+    //    the surface this row exists for.
+    let out = karac_bin()
+        .args(["check", file, "--output=json"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("undocumented_unsafe"),
+        "JSON feed must carry the lint name; stdout={stdout}",
+    );
+
+    // 3. `-A` suppresses on BOTH surfaces — one shared override set.
+    let out = karac_bin()
+        .args(["check", "-A", "undocumented_unsafe", file])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("undocumented_unsafe"),
+        "-A must silence the text feed; stderr={stderr}",
+    );
+    let out = karac_bin()
+        .args(["check", "-A", "undocumented_unsafe", file, "--output=json"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !stdout.contains("undocumented_unsafe"),
+        "-A must silence the JSON feed too; stdout={stdout}",
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn test_multiline_safety_comment_is_not_undocumented() {
+    // B-2026-08-18-2 — the false positive that had to be fixed BEFORE this
+    // lint could go on the compile path. The check read only the single line
+    // directly above the block, so a multi-line justification — the shape a
+    // real safety argument takes — was reported as undocumented, punishing the
+    // author for explaining more rather than less. Measured on the kata corpus:
+    // one of the lint's two diagnostics was this false positive.
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-multiline-safety-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let path = tmp.join("ms.kara");
+    std::fs::write(
+        &path,
+        "fn main() {\n\
+             let v: Vec[i64] = Vec.filled(4, 7);\n\
+             // Safety: the index is proved in range by the literal bound\n\
+             // above, and the vector is freshly filled with a known length,\n\
+             // so the unchecked read cannot go out of bounds.\n\
+             unsafe {\n\
+                 println(f\"{v.get_unchecked(1)}\");\n\
+             }\n\
+         }\n",
+    )
+    .unwrap();
+    let file = path.to_str().unwrap();
+    let out = karac_bin().args(["check", file]).output().unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("undocumented_unsafe"),
+        "a multi-line `// Safety:` comment documents the block; stderr={stderr}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
 fn test_must_use_reaches_check_and_json() {
     let tmp = std::env::temp_dir().join(format!(
         "karac-cli-must-use-{}-{}",
