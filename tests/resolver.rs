@@ -5838,3 +5838,155 @@ fn the_rename_fix_replaces_only_the_identifier() {
         assert_eq!(edit.replacement, "SortedMap");
     }
 }
+
+// ── `did you mean` renames: suggest freely, apply only when the call fits ──
+
+/// B-2026-08-18-47 — a `did you mean` rename is SUGGESTED at edit distance 2
+/// but only becomes a MACHINE-APPLICABLE edit when the call site fits the
+/// candidate.
+///
+/// The row's repro: `format("{}", 1)` is not a typo of anything in Kāra — it is
+/// a name carried over from another language — and `suggest_similar` offered
+/// `forget`, the memory intrinsic, at distance 2. That suggestion is defensible
+/// to PRINT; what was not defensible is that the same string went straight into
+/// a `TextEdit` that `karac fix` applied unreviewed, rewriting the call to
+/// `forget("{}", 1)`.
+///
+/// THE EDIT-DISTANCE THRESHOLD IS DELIBERATELY UNCHANGED, and that is the
+/// measured half of this row rather than a judgement call. Over the 893 distinct
+/// function names in examples/ and kara-katas, perturbed with transpositions,
+/// single edits and genuine two-edit typos, distance-2 suggestions recover the
+/// intended name 98.8% of the time (141,879 of 143,602). Restricting APPLY to
+/// distance 1 would throw those away to block 1,642 wrong ones. A rule keyed on
+/// the candidate being a rearrangement of the typed name looks perfect against
+/// transpositions alone — and transpositions are what plain Levenshtein scores
+/// as 2 — but collapses once real two-edit typos are in the population: 133,692
+/// good fixes lost against 1,628 bad ones blocked.
+///
+/// What separates a bad rename is FIT, not spelling. A genuine typo of a
+/// function you are calling carries the argument count you meant, so gating the
+/// edit on arity costs essentially nothing on the population the threshold
+/// exists to serve.
+#[test]
+fn undefined_name_rename_is_applied_only_when_the_call_fits() {
+    // The row's repro. Suggestion present, machine-applicable edit absent.
+    let errors = resolve_errors("fn main() { let s = format(\"{}\", 1); println(s); }");
+    let err = errors
+        .iter()
+        .find(|e| e.message.contains("undefined name 'format'"))
+        .expect("the undefined name must still be reported");
+    assert!(
+        err.message.contains("did you mean"),
+        "the SUGGESTION must survive — only the auto-applied edit is gated: {}",
+        err.message
+    );
+    assert!(
+        err.replacement.is_none(),
+        "`forget` takes one parameter and the call passes two, so this must NOT \
+         be machine-applicable; `karac fix` would rewrite the call to the memory \
+         intrinsic unreviewed"
+    );
+
+    // A REAL typo of the same intrinsic, with the argument count it declares,
+    // still auto-fixes. Without this the test would pass under a rule that
+    // simply refused to ever rename onto a prelude function.
+    let errors = resolve_errors("fn main() { let v = 1; forgt(v); }");
+    let err = errors
+        .iter()
+        .find(|e| e.message.contains("undefined name 'forgt'"))
+        .expect("the typo must be reported");
+    assert_eq!(
+        err.replacement.as_ref().map(|r| r.replacement.as_str()),
+        Some("forget"),
+        "a distance-1 typo whose call fits must stay machine-applicable"
+    );
+
+    // A VARIADIC prelude function has no fixed arity, and absence from the
+    // table must mean "do not gate" rather than "zero parameters" — measured,
+    // 6,052 good recoveries target prelude names, nearly all of them these.
+    let errors = resolve_errors("fn main() { printn(\"hi\"); }");
+    let err = errors
+        .iter()
+        .find(|e| e.message.contains("undefined name 'printn'"))
+        .expect("the typo must be reported");
+    assert!(
+        err.replacement.is_some(),
+        "a typo of a variadic prelude function must still auto-fix; treating an \
+         absent arity entry as zero would silently drop this whole class"
+    );
+
+    // A USER function, both ways round: fitting call auto-fixes, over-supplied
+    // call does not.
+    let src = "fn helper(a: i64) -> i64 { a + 1 }\nfn main() { let x = helepr(1); println(x); }";
+    let errors = resolve_errors(src);
+    let err = errors
+        .iter()
+        .find(|e| e.message.contains("undefined name 'helepr'"))
+        .expect("the typo must be reported");
+    assert_eq!(
+        err.replacement.as_ref().map(|r| r.replacement.as_str()),
+        Some("helper")
+    );
+
+    let src = "fn helper(a: i64) -> i64 { a + 1 }\nfn main() { let x = helepr(1, 2); println(x); }";
+    let errors = resolve_errors(src);
+    let err = errors
+        .iter()
+        .find(|e| e.message.contains("undefined name 'helepr'"))
+        .expect("the typo must be reported");
+    assert!(
+        err.replacement.is_none(),
+        "two arguments against a one-parameter function does not fit, so the \
+         rename must not be auto-applied"
+    );
+
+    // A non-call reference is untouched by any of this — there is no call to
+    // fit, and gating it would drop ordinary variable-typo fixes.
+    let errors = resolve_errors("fn main() { let counter = 1; println(countr); }");
+    let err = errors
+        .iter()
+        .find(|e| e.message.contains("undefined name 'countr'"))
+        .expect("the typo must be reported");
+    assert_eq!(
+        err.replacement.as_ref().map(|r| r.replacement.as_str()),
+        Some("counter")
+    );
+}
+
+/// `PRELUDE_FN_ARITY` is a SECOND copy of knowledge the typechecker already
+/// holds, so something has to check the two agree. This asks the compiler.
+///
+/// B-2026-08-18-47. The resolver registers every prelude function with an empty
+/// `param_names`, so the arity gate above cannot read it from the symbol table
+/// and consults that table instead. A stale entry would either drop a good
+/// auto-fix (arity recorded too low) or let a bad rename through (too high) —
+/// quietly, in a tool that edits files. Deriving the expected value from a real
+/// typecheck run rather than restating it here is what makes this a check and
+/// not a second transcription.
+#[test]
+fn prelude_fn_arity_table_matches_the_typechecker() {
+    for (name, declared) in karac::prelude::PRELUDE_FN_ARITY {
+        // Call with deliberately too many arguments; the typechecker's arity
+        // diagnostic then names the count it expected.
+        let src = format!("fn main() {{ {name}(1, 2, 3, 4, 5, 6, 7, 8); }}");
+        let mut parsed = karac::parse(&src);
+        karac::prepare_for_resolve(&mut parsed.program);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        let found = typed.errors.iter().find_map(|e| {
+            let msg = e.to_string();
+            let idx = msg.find("expected ")?;
+            let rest = &msg[idx + "expected ".len()..];
+            let end = rest.find(" argument(s)")?;
+            rest[..end].parse::<usize>().ok()
+        });
+        assert_eq!(
+            found,
+            Some(*declared),
+            "PRELUDE_FN_ARITY says `{name}` takes {declared}, but the \
+             typechecker reports {found:?}. Either the intrinsic's signature \
+             changed and the table is stale, or the entry was wrong when \
+             written — re-derive it, do not adjust the assertion."
+        );
+    }
+}

@@ -452,6 +452,15 @@ impl<'a> super::Resolver<'a> {
                         } else if self.is_test_file {
                             self.error_undefined_call_with_stub(name, callee.span, args);
                             handled = true;
+                        } else {
+                            // B-2026-08-18-47 — emit here, in CALL position,
+                            // where the argument count is in hand: a `did you
+                            // mean` rename becomes a machine-applicable edit
+                            // only when the call fits the candidate. The bare
+                            // identifier walk below has no call context and
+                            // cannot make that check.
+                            self.error_undefined_name_in_call(name, callee.span, args.len());
+                            handled = true;
                         }
                     }
                 }

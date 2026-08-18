@@ -1537,6 +1537,59 @@ pub static STDLIB_METHOD_STABILITY: LazyLock<HashMap<String, StabilityPayload>> 
 /// stay compiler-side (`!` return type, source-location capture, release
 /// elision) per `docs/design.md § Module System › Prelude` — only the names
 /// live here.
+/// Fixed parameter counts for the prelude functions that HAVE one.
+///
+/// B-2026-08-18-47. `karac fix` auto-applies `did you mean` renames, and the
+/// resolver registers every prelude function with an EMPTY `param_names`, so it
+/// could not tell `forget` (one parameter) from a zero-parameter user function.
+/// An undefined `format("{}", 1)` was therefore rewritten to `forget("{}", 1)`,
+/// the memory intrinsic, by a tool nobody reviews.
+///
+/// Only entries whose arity the typechecker actually FIXES appear here. The
+/// variadic and overloaded ones — `print`, `println`, `panic`, `assert`, `dbg`,
+/// `with_provider`, … — are deliberately absent, and their absence means "do
+/// not gate", never "zero parameters": dropping the auto-fix for a typo of
+/// `println` would cost far more than the bad renames it prevents (measured:
+/// 6,052 good prelude-name recoveries against a handful of bad ones).
+///
+/// KEPT HONEST BY `prelude_fn_arity_table_matches_the_typechecker` in
+/// tests/resolver.rs, which asks the compiler for each entry rather than
+/// trusting this list — a second copy of knowledge the typechecker already has
+/// can only be safe if something checks the two agree.
+pub const PRELUDE_FN_ARITY: &[(&str, usize)] = &[
+    ("size_of", 0),
+    ("align_of", 0),
+    ("forget", 1),
+    ("volatile_read", 1),
+    ("volatile_write", 2),
+    ("fence", 1),
+    ("compiler_fence", 1),
+    ("swap", 2),
+    ("replace", 2),
+    ("take", 1),
+    ("sleep_ms", 1),
+    ("spawn", 1),
+    ("collect_all_vec", 1),
+    ("with_span", 2),
+    ("tracing_active_span", 0),
+    ("tracing_level_enabled", 1),
+    ("tracing_emit_event", 1),
+    ("tracing_set_min_level", 1),
+    ("tracing_reset", 0),
+    ("min", 2),
+    ("max", 2),
+    ("clamp", 3),
+];
+
+/// The declared parameter count for a prelude function, or `None` when it is
+/// variadic / overloaded and no single count applies. See [`PRELUDE_FN_ARITY`].
+pub fn prelude_fn_arity(name: &str) -> Option<usize> {
+    PRELUDE_FN_ARITY
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, a)| *a)
+}
+
 pub const PRELUDE_FUNCTIONS: &[&str] = &[
     "todo",
     "unreachable",

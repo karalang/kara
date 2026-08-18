@@ -1374,6 +1374,29 @@ impl<'a> Resolver<'a> {
         });
     }
 
+    /// Call-position sibling of [`Self::error_undefined_name`], carrying the
+    /// argument count so a `did you mean` rename can be gated on FIT before it
+    /// becomes a machine-applicable edit. B-2026-08-18-47 — see
+    /// [`Self::call_arity_allows_rename`] for why the edit-distance threshold
+    /// itself is deliberately left alone.
+    pub(crate) fn error_undefined_name_in_call(&mut self, name: &str, span: Span, argc: usize) {
+        let before = self.errors.len();
+        self.error_undefined_name(name, span);
+        // Re-gate whatever the shared emitter produced. Done here rather than
+        // by threading `argc` through `error_undefined_name` because that fn
+        // has several early-return arms (par-sibling reads, builtin misuse)
+        // that must keep behaving exactly as they do for a non-call read.
+        if let Some(err) = self.errors.get(before) {
+            if err.replacement.is_some() {
+                if let Some(sug) = err.suggestion.clone() {
+                    if !self.call_arity_allows_rename(&sug, argc) {
+                        self.errors[before].replacement = None;
+                    }
+                }
+            }
+        }
+    }
+
     fn error_undefined_name(&mut self, name: &str, span: Span) {
         // B-2026-07-02-5: the name exists — as a binding of a SIBLING branch
         // of the enclosing `par { }` block. Each top-level statement of a
@@ -1447,6 +1470,68 @@ impl<'a> Resolver<'a> {
     /// and to comparison-context return types). Reuses the existing
     /// `did you mean` suggestion logic so the diagnostic remains useful
     /// when the unresolved name is in fact a typo.
+    /// Is a `did you mean` rename onto `candidate` safe to APPLY MACHINE-ALLY
+    /// at a call site passing `argc` arguments?
+    ///
+    /// B-2026-08-18-47. `suggest_similar` accepts any candidate within edit
+    /// distance 2, and the winner used to be written straight into a
+    /// machine-applicable `TextEdit` that `karac fix` applies unreviewed — so
+    /// an undefined `format("{}", 1)`, a name from another language rather than
+    /// a typo of anything, was rewritten to `forget("{}", 1)`, the memory
+    /// intrinsic.
+    ///
+    /// THE THRESHOLD IS NOT THE PROBLEM, which is worth stating because
+    /// tightening it is the obvious move and it is measurably wrong. Over the
+    /// 893 distinct function names in examples/ and kara-katas, perturbed with
+    /// transpositions, single edits and genuine two-edit typos: distance-2
+    /// suggestions recover the intended name 98.8% of the time (141,879 of
+    /// 143,602). Restricting APPLY to distance 1 would discard those to block
+    /// 1,642 wrong ones. A rule keyed on the candidate being a rearrangement of
+    /// the typed name scores perfectly on transpositions alone and collapses
+    /// once real two-edit typos are in the population — 133,692 good fixes lost
+    /// against 1,628 bad ones blocked. Neither trade is worth making.
+    ///
+    /// What separates the bad renames is not spelling but FIT: `format` is not
+    /// a typo of `forget`, and the call proves it — two arguments against a
+    /// one-parameter intrinsic. A genuine typo of a function you are calling
+    /// has the right argument count by construction, so this costs essentially
+    /// nothing on the population the threshold exists to serve.
+    ///
+    /// SUGGESTING IS UNAFFECTED — only the machine-applicable edit is gated.
+    /// A suggestion a human reads and rejects is cheap; an edit nobody reviewed
+    /// is not, and that asymmetry is the whole point of the row.
+    ///
+    /// Returns `true` when arity is unknown (a non-function candidate, or one
+    /// whose parameters the table does not carry): this must never become a
+    /// silent way to drop good fixes.
+    fn call_arity_allows_rename(&self, candidate: &str, argc: usize) -> bool {
+        let Some(sym) = self.table.lookup(candidate) else {
+            return true;
+        };
+        let SymbolKind::Function { param_names } = &sym.kind else {
+            return true;
+        };
+        // A PRELUDE function's `param_names` is empty by construction — the
+        // resolver registers all 35 with `Vec::new()` — so the symbol table
+        // cannot distinguish `forget` from a zero-parameter user function.
+        // `PRELUDE_FN_ARITY` supplies the count for the ones that have a fixed
+        // one, and returning `None` for the variadic rest means "do not gate".
+        let declared = if self.table.prelude_fn_ids.contains(&sym.id) {
+            match crate::prelude::prelude_fn_arity(candidate) {
+                Some(n) => n,
+                None => return true,
+            }
+        } else {
+            param_names.len()
+        };
+        // `<=`, not `==`: a parameter with a default makes the accepted count a
+        // RANGE, and this must never reject a call that would have compiled.
+        // Over-supply is the signal that matters and the one the row's repro
+        // trips — `format("{}", 1)` hands two arguments to a one-parameter
+        // intrinsic.
+        argc <= declared
+    }
+
     pub(crate) fn error_undefined_call_with_stub(
         &mut self,
         name: &str,
@@ -1463,8 +1548,10 @@ impl<'a> Resolver<'a> {
         if let Some(ref s) = suggestion {
             message.push_str(&format!(", did you mean '{}'?", s));
         }
+        // B-2026-08-18-47 — SUGGEST freely, APPLY only when the call fits.
         let replacement = suggestion
             .as_ref()
+            .filter(|s| self.call_arity_allows_rename(s, args.len()))
             .map(|s| Self::name_only_replacement(name, &span, s));
         let stub_args: Vec<StubArg> = args
             .iter()
