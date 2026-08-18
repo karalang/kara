@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 260 | 1 |
+| miscompile | 260 | 0 |
 | leak | 184 | 0 |
 | double-free | 132 | 0 |
 | run-vs-build | 128 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 922 | 4 |
+| codegen | 922 | 3 |
 | typecheck | 196 | 3 |
 | interp | 150 | 0 |
 | ownership | 57 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1312 surfaced · 11 open · 1284 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1312 surfaced · 10 open · 1285 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (11)
+### Open (10)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -136,7 +136,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1312 surfaced
 | B-2026-08-17-38 | 2026-08-17 | typecheck | medium | `TreeMap[K, V]` -- a standard collection design.md documents 13 times, with its own method table, and prescribes TWICE as the remedy for Map/Set's unstable iteration order -- is an UNDEFINED TYPE. `let mut m: TreeMap[i64, i64] = TreeMap.new();` -> `error[resolve]: undefined type 'TreeMap'` + `undefined name 'TreeMap'`. The implementation ships the same container as `SortedMap`, which design.md mentions exactly ONCE, in passing, inside a naming erratum about `Bf16` (line 2299) -- it appears in none of the collection tables, none of the method tables, and neither of the two "use this for stable iteration" directives (lines 1735 and 9849, the § Map hash-seeding note and the § Determinism list). A user or an LLM following the spec's own advice about non-deterministic Map iteration writes `TreeMap` and gets an undefined-type error with no pointer to the real name. Knock-on: the same mismatch is the most likely cause of the `SortedMap.insert` / `.remove` hole in the must_use displaced-value exemption -- design.md's exemption list names `Map.insert` / `TreeMap.insert` / `Map.remove` / `TreeMap.remove`, and MEASURED, `Map`, `Vec` and `VecDeque` are all exempt while `SortedMap.insert` and `SortedMap.remove` both warn. | roadmap.md |
 | B-2026-08-18-1 | 2026-08-18 | cli | medium | `karac build` renders NO warning-level diagnostic on a successful build -- the suppression is GLOBAL to the build path, not a `must_use` wiring quirk. Control measurement: `deprecated`, which reaches the user through a COMPLETELY DIFFERENT channel from must_use (the typechecker's `type_lint_warning` / `TypeErrorKind::Deprecated` at src/typechecker.rs:3098-3113, not the `cmd_run` lint block), behaves IDENTICALLY -- emitted under `karac run`, absent under `karac build`. Two independent warning-production mechanisms both go silent on the build path, so the defect is the path's MISSING RENDER SURFACE rather than any one lint's wiring: `cmd_build` (src/cli/build_cmds.rs) renders only manifest warnings (`mf.warnings`) and `monomorphization-budget` violations, and never consults typecheck lint warnings or any lint pass. A build-only workflow therefore sees none of the warnings the compiler actually produced. | roadmap.md |
 | B-2026-08-18-2 | 2026-08-18 | cli | medium | Four sibling lints -- `undocumented_unsafe` / `unsafe_op_in_unsafe_fn`, `missing_must_use`, `missing_track_caller`, `ffi_float_eq` -- are invoked ONLY from `cmd_run`, the exact wiring gap B-2026-08-17-37 reports for `must_use`. All five calls sit in one contiguous block in src/cli/run_check_cmds.rs (~lines 654-730), inside `cmd_run` (which begins at line 338); `cmd_check` (line 1238) and `cmd_build` (src/cli/build_cmds.rs) call none of them. So four further lint surfaces are invisible to `karac check --output=json`, and therefore to the Mend loop, for the same reason must_use was. | roadmap.md |
-| B-2026-08-18-11 | 2026-08-18 | codegen | high | An OWNED `self` receiver on a builtin-container impl head is not lowered, and the two shapes measured fail in the two worst ways: `for x in self` over an owned `Set[i64]` self compiles to a sum over NOTHING (interpreter 12, `karac build` 0 -- a silent wrong answer), and `self[k]` over an owned `Map[String, i64]` self SEGFAULTS if the map index path is allowed to route it, because the slot does not hold the handle `compile_map_index` loads. The BORROWED spelling of both works. `Vec` and `Slice` owned selves work. | roadmap.md |
 | B-2026-08-18-12 | 2026-08-18 | codegen | medium | `self.len()` inside an `impl Trait for Map[K, V]` or `impl Trait for Set[T]` body has NO codegen dispatcher -- "no handler for method 'len' on non-identifier receiver" -- on BOTH receiver modes. The identical body over a `Vec[i64]` or `Slice[i64]` head compiles and runs. The interpreter answers correctly in every case, so this is a `karac check` / `karac build` divergence, not a language rule. | roadmap.md |
 | B-2026-08-18-13 | 2026-08-18 | typecheck | medium | A method declared by `impl Trait for Array[i64, 3]` CANNOT BE CALLED: the call site reports "no method 'g' on type 'Array'" even though the impl block itself now checks. Every other builtin container head measured (Vec, VecDeque, Slice, Map, Set, SortedMap, SortedSet, Option, Result, Column, Tensor) dispatches; `Array[T, N]` is the one that does not. | roadmap.md |
 | B-2026-08-18-14 | 2026-08-18 | codegen | medium | A RANGE SUBSCRIPT used directly as a METHOD RECEIVER -- `v[0..3].first_or(-1)` -- has no codegen: "no handler for expression kind Range". The same slice passed as an ARGUMENT works (`show(v[0..2])`), and binding it first works (`let s: Slice[i64] = v[0..3]; s.first_or(-1)`), so it is the receiver position specifically. | roadmap.md |
@@ -158,9 +157,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1312 surfaced
 
 </details>
 
-### Fixed (1284)
+### Fixed (1285)
 
-<details><summary>1284 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1285 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -11364,6 +11363,29 @@ THE INDEX EXCLUSION STAYS, now measured rather than cautious. `v[k].city` is an 
 Fifteen probes, each byte-identical to `--interp`, covering both identifier spellings, the unrelated-local field arm, three-level nesting, an owned-param source, both arms handing out the same local, `Result`, wildcard and struct-destructure outer arms, a `ref`-param source, and the declined index arm.
 
 Gates: cargo fmt clean, clippy clean on both feature sets, memory_sanitizer 1124 passed, codegen 3046 passed, full suite 104 targets / 13,976 tests green. |
+| B-2026-08-18-11 | codegen | high | An OWNED `self` receiver on a builtin-container impl head is not lowered, and the two shapes measured fail in the two worst ways: `for x in self` ove… | FIXED by 4a484fb0. Both symptoms had ONE cause, and it was in the CALLER, not in either of the two places the row pointed at. `compile_method_call` decides the receiver calling convention from the resolved function's first LLVM param type: pointer-typed means "pass the address of the receiver's storage", struct-typed means "pass the value". A `Map`/`Set` handle IS a pointer, so an OWNED `self` on those heads took the address path and the callee received the address of the caller's slot -- one indirection too many. Iterating it handed `karac_map_iter_new` a stack slot, which yielded no elements and returned 0; indexing it loaded a stack word as a handle, which segfaulted.
+
+READ OFF THE IR, which is what turned a guess into the fix. The two spellings of the same body differ in exactly one instruction:
+    owned:  %set.iter.i = call ptr @karac_map_iter_new(ptr nonnull %s.slot)
+    ref:    %set.iter.i = call ptr @karac_map_iter_new(ptr %set.new)
+`%s.slot` is the receiver's alloca; `%set.new` is the handle.
+
+THE RULE WAS ALREADY THERE, just scoped too narrowly. An owned-`self` SHARED receiver had the identical problem in 2026-06-05 ("passed the STACK SLOT address: the callee's entry rc_inc then incremented a stack word as if it were a refcount header"), and the branch added for it tested `shared_types.contains(receiver_type)`. But shared-ness was never what made it true -- what makes it true is that the callee declared the param OWNED while its LLVM type came out `ptr`, which is exactly `first_param_is_ptr && !first_param_is_ref`. The predicate is now that, with shared receivers a special case of it rather than the whole rule.
+
+ONE CARVE-OUT, and it is the reason this is not a one-word change: an AArch64 INDIRECT struct param (> 16 B `#[repr(C)]`) is also owned-and-`ptr`, and it genuinely wants the address -- it arrives as a pointer to the caller's copy. It is excluded by name+index off `target_abi.indirect_struct_params`. That map is EMPTY ON X86-64, which is also why this axis cannot be measured here: the carve-out is what keeps arm64 on the path it has today, and an arm64 run is what would prove it.
+
+WHY VEC AND SLICE WERE NEVER AFFECTED, which is what made the bug look container-specific rather than representation-specific: they lower to `{ptr, len, cap}` and `{ptr, len}` STRUCTS, so `first_param_is_ptr` is false and they already took the value path. `String` likewise measures 4 / 4 / 4 on both receiver modes, before and after.
+
+MEASURED AFTER, interpreter / JIT / `karac build`:
+    Set[i64], owned self, `for x in self`   ->  12 / 12 / 12   (was 12 / 12 / 0)
+    Set[i64], ref self,   `for x in self`   ->  12 / 12 / 12
+    Map[String, i64], owned self, `self[k]` ->  42 / 42 / 42   (was 42 / 42 / SEGFAULT)
+    Map[String, i64], ref self,   `self[k]` ->  42 / 42 / 42
+    String, both modes, `self.len()`        ->   4 /  4 /  4   (unchanged control)
+
+IT ALSO RETIRED A GUARD. B-2026-08-17-44 had restricted `compile_index`'s map arm to a BORROWED receiver precisely because the owned one segfaulted -- a symptom, not a rule. With the convention fixed the restriction is unnecessary and is gone; the E2E test now pins both receiver modes so neither half can regress alone.
+
+NOT FIXED, and confirmed still separate: B-2026-08-18-12 (`self.len()` on a Map/Set head has no dispatcher) fails identically before and after, on both receiver modes -- it is a missing arm in method dispatch, not a receiver-convention problem. |
 
 </details>
 
