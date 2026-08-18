@@ -12199,7 +12199,7 @@ fn test_optional_chain_nodes_have_distinct_spans() {
         if let Item::Function(f) = item {
             for st in &f.body.stmts {
                 if let StmtKind::Let { value, .. } = &st.kind {
-                    collect(&value, &mut spans);
+                    collect(value, &mut spans);
                 }
             }
         }

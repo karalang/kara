@@ -103,15 +103,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | diagnostics | 73 | 4 |
 | crash | 51 | 0 |
 | soundness | 50 | 0 |
-| other | 36 | 1 |
+| other | 37 | 1 |
 | use-after-free | 20 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 916 | 2 |
-| typecheck | 194 | 4 |
+| codegen | 917 | 3 |
+| typecheck | 195 | 5 |
 | interp | 150 | 0 |
 | ownership | 57 | 0 |
 | other | 51 | 2 |
@@ -119,12 +119,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | cli | 39 | 2 |
 | runtime | 22 | 0 |
 | resolver | 19 | 0 |
-| parser | 19 | 1 |
+| parser | 19 | 0 |
 | effect | 7 | 0 |
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1305 surfaced · 11 open · 1277 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1306 surfaced · 11 open · 1278 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (11)
 
@@ -139,8 +139,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1305 surfaced
 | B-2026-08-18-1 | 2026-08-18 | cli | medium | `karac build` renders NO warning-level diagnostic on a successful build -- the suppression is GLOBAL to the build path, not a `must_use` wiring quirk. Control measurement: `deprecated`, which reaches the user through a COMPLETELY DIFFERENT channel from must_use (the typechecker's `type_lint_warning` / `TypeErrorKind::Deprecated` at src/typechecker.rs:3098-3113, not the `cmd_run` lint block), behaves IDENTICALLY -- emitted under `karac run`, absent under `karac build`. Two independent warning-production mechanisms both go silent on the build path, so the defect is the path's MISSING RENDER SURFACE rather than any one lint's wiring: `cmd_build` (src/cli/build_cmds.rs) renders only manifest warnings (`mf.warnings`) and `monomorphization-budget` violations, and never consults typecheck lint warnings or any lint pass. A build-only workflow therefore sees none of the warnings the compiler actually produced. | roadmap.md |
 | B-2026-08-18-2 | 2026-08-18 | cli | medium | Four sibling lints -- `undocumented_unsafe` / `unsafe_op_in_unsafe_fn`, `missing_must_use`, `missing_track_caller`, `ffi_float_eq` -- are invoked ONLY from `cmd_run`, the exact wiring gap B-2026-08-17-37 reports for `must_use`. All five calls sit in one contiguous block in src/cli/run_check_cmds.rs (~lines 654-730), inside `cmd_run` (which begins at line 338); `cmd_check` (line 1238) and `cmd_build` (src/cli/build_cmds.rs) call none of them. So four further lint surfaces are invisible to `karac check --output=json`, and therefore to the Mend loop, for the same reason must_use was. | roadmap.md |
 | B-2026-08-18-4 | 2026-08-18 | codegen | high | The user-`Drop` spelling of B-2026-08-17-45 still DOUBLE FREES: moving an `Option`-typed field out of a matched struct payload aborts under both compiled backends when the payload struct carries an `impl Drop`. Minimal: `struct C { name: String, zip: i64 } struct A { c: Option[C], other: String } impl Drop for A { fn drop(mut ref self) { println("dropping A"); } }` plus `let f = match a { Some(x) => { x.c } None => { None } };` where `a: Option[A]` -- ASAN reports `attempting double-free`, and plain `karac run` / `karac build` abort. `karac check` passes and `--interp` is correct, same as the parent row. | roadmap.md |
-| B-2026-08-18-7 | 2026-08-18 | parser | medium | Every `?.` node copies its object's span VERBATIM, so nested chains are indistinguishable to any span-keyed side table. `src/parser/exprs.rs`'s `Token::QuestionDot` arm builds the node with `span: lhs.span`, and `lhs` is the previous chain step -- so every node in `a?.b?.c` collapses onto the innermost object's span. MEASURED: both the inner and outer nodes of `u.address?.city?.name` report span `(267,1)`. The `Token::Question` arm three lines above has the identical `span: lhs.span` and so the identical latent hazard. | src/parser/exprs.rs (the `Token::QuestionDot` and `Token::Question` arms of `parse_expr_bp_with_ctx_inner`; the `Binary` arm in the same fn is the model) |
 | B-2026-08-18-8 | 2026-08-18 | codegen | medium | A `match` whose SCRUTINEE is itself a `match` yielding a boxed `Option` payload LEAKS the box -- 32 bytes per evaluation, unbounded in a loop. Minimal, with no `?.` and no closure anywhere: `match (match u.address { Some(x) => { x.city } None => { None } }) { Some(c) => { ... } None => { ... } }` over 200 iterations leaks 3200 bytes in 100 objects under LeakSanitizer. Binding the inner match to a `let` first is CLEAN, which is what isolates it to the scrutinee position. | The match-result temp's box cleanup in src/codegen/control_flow_match.rs. tests/memory_sanitizer.rs `asan_optional_chain_heap_payload_clean` deliberately uses the `let`-bound spelling and records why; switching it to the scrutinee spelling is the reproducer. |
+| B-2026-08-18-9 | 2026-08-18 | typecheck+codegen | medium | `question_ok_payload_types`' PRODUCER and CONSUMER do not key off the same node, and the `?` operator's span cannot be fixed until they do. Giving `ExprKind::Question` a span of its own (lhs start -> past the `?`, the way B-2026-08-18-7 fixed `?.`) makes `let b = mk(n)?;` stop resolving the binding's fields under codegen -- "codegen: cannot resolve field 'name' on this receiver" -- whenever the `Some`/`Ok` payload is a multi-word struct, while `--interp` stays correct. The two ends agree TODAY only because the node copies its operand's span, so they collide onto the same key by accident rather than by construction. | src/parser/exprs.rs (the `Token::Question` arm); the `question_ok_payload_types` producer in the typechecker and its consumer in codegen |
 
 ### Wontfix (7)
 
@@ -158,9 +158,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1305 surfaced
 
 </details>
 
-### Fixed (1277)
+### Fixed (1278)
 
-<details><summary>1277 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1278 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -11220,6 +11220,19 @@ rather than only in whichever spelling a caller happened to use; Ord still
 rejects it; Eq implies PartialEq) plus an interpreter oracle and its codegen
 E2E twin over the silent-failure table above. Baseline-red verified against
 the reverted change. Corpus failing-file set unchanged. |
+| B-2026-08-18-7 | parser | medium | Every `?.` node copies its object's span VERBATIM, so nested chains are indistinguishable to any span-keyed side table | FIXED by 0addd77 for `?.`; the `?` half is SPLIT OUT, not done — see below.
+
+`?.` now spans from its object's start through the member (past the closing paren for the method form) instead of copying `lhs.span`. Measured on `u.address?.city?.name`: the two nodes went from an identical `(267,1)` to `(267,15)` and `(267,21)`. The idiom is the `Binary` arm's, three arms away in the same function, whose comment already states the rule the postfix arms never adopted.
+
+DIAGNOSTICS IMPROVE as a side effect, which is worth recording because it was not the goal: `'?.' requires an `Option` on the left` underlined only the first character of the receiver (`^` under `p` in `p?.x`) and now underlines the whole expression.
+
+BLAST RADIUS MEASURED, since that is what the row said was missing. Full `--features llvm` suite with `KARAC_REQUIRE_RUNTIME_ARCHIVE=1`: 106/106 targets, 13991 passed, 0 failed — including the codegen E2E corpus (3036), the ASAN/LSan memory-sanitizer corpus (1118) and the self-host oracles, which re-parse the compiler's own sources and are the strongest available check that no span-keyed table or caret rendering depended on the old narrow span. Both clippy passes and `cargo fmt --check` clean.
+
+THE `?` ARM IS DELIBERATELY UNCHANGED, and this is the row's real remainder rather than a scoping decision. Widening it the same way BREAKS `question_ok_payload_types`: `let b = mk(n)?;` where the `Some` payload is a multi-word struct stops resolving the binding's fields under codegen ("cannot resolve field 'name'") while `--interp` stays correct. Confirmed as a genuine regression rather than a coincidence by reverting the change and re-running the same program — works without, breaks with.
+
+WHAT THAT MEANS, and it is a finding the row did not anticipate: that table's PRODUCER and its CONSUMER do not both key off the Question node. They agree today only because the node's span happens to equal its operand's, so the two ends silently disagree the moment the node gets a span of its own. `?` therefore carries the same latent one-slot-per-chain collision `?.` had, and it cannot be fixed at the parser alone — the table's two ends have to be put on one key first. The arm carries that evidence in a comment so the next attempt does not rediscover it by breaking the suite. Split into its own row rather than left implicit in this one, per the rule that a closed-out investigation's live remainder gets its own open row.
+
+TEST: `test_optional_chain_nodes_have_distinct_spans` (tests/parser.rs) asserts both properties a SpanKey consumer needs — nested steps do not share a key, and each span covers its own step — across the field form and the method form, whose span has to reach past the argument list. It sits beside `test_fstring_interp_spans_distinct_across_strings`, which pins the identical collision class one node type over. |
 
 </details>
 
