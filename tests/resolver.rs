@@ -5771,3 +5771,70 @@ fn test_did_you_mean_prefers_the_nearer_scope_over_alphabetical() {
         err.message
     );
 }
+
+/// B-2026-08-17-38 — `TreeMap` points at the name that exists.
+///
+/// design.md wrote the sorted map as `TreeMap` in twelve places while the
+/// language ships `SortedMap`, so a reader following the spec's own advice
+/// about `Map`'s unstable iteration order got a bare "undefined type" with no
+/// route to the real name. The document is corrected, but that does not
+/// correct what has already been read from it — and edit distance cannot
+/// bridge `TreeMap` → `SortedMap`, so the mapping is explicit.
+///
+/// Both halves are checked because the two spellings resolve through
+/// different paths: the annotation is an undefined TYPE, the constructor an
+/// undefined NAME.
+#[test]
+fn the_spec_only_sorted_map_spelling_suggests_the_real_name() {
+    let errors = resolve_errors(
+        "fn main() { let mut m: TreeMap[i64, i64] = TreeMap.new(); m.insert(1, 2); }",
+    );
+    let messages: Vec<&str> = errors.iter().map(|e| e.message.as_str()).collect();
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("undefined type 'TreeMap'") && m.contains("'SortedMap'")),
+        "the type position must name SortedMap, got: {messages:?}"
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("undefined name 'TreeMap'") && m.contains("'SortedMap'")),
+        "the constructor must name SortedMap, got: {messages:?}"
+    );
+
+    // `TreeSet` rides the same mapping, by analogy from `TreeMap`.
+    let errors = resolve_errors("fn main() { let s: TreeSet[i64] = TreeSet.new(); }");
+    assert!(
+        errors.iter().any(|e| e.message.contains("'SortedSet'")),
+        "TreeSet must point at SortedSet, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+/// The machine-applicable half, and the reason it needed care: these
+/// suggestions ride spans that are NOT identifier-sized. A type position spans
+/// `TreeMap[i64, i64]` and an associated call spans `TreeMap.new()`, so
+/// replacing the whole span swallowed the generic args and the constructor —
+/// measured, `karac fix` produced `let mut m: SortedMap = SortedMap;`, which
+/// does not compile. Every such span STARTS at the name, so the edit is
+/// clamped to the name's length.
+#[test]
+fn the_rename_fix_replaces_only_the_identifier() {
+    let errors = resolve_errors(
+        "fn main() { let mut m: TreeMap[i64, i64] = TreeMap.new(); m.insert(1, 2); }",
+    );
+    let edits: Vec<_> = errors
+        .iter()
+        .filter_map(|e| e.replacement.as_ref())
+        .collect();
+    assert_eq!(edits.len(), 2, "expected an edit for each half: {edits:?}");
+    for edit in edits {
+        assert_eq!(
+            edit.length,
+            "TreeMap".len(),
+            "the edit must cover the identifier alone, not the whole span: {edit:?}"
+        );
+        assert_eq!(edit.replacement, "SortedMap");
+    }
+}

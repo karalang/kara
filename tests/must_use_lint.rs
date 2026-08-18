@@ -1067,3 +1067,46 @@ fn test_bound_critical_section_guard_does_not_warn() {
     );
     assert!(diags.is_empty(), "expected no warnings, got: {diags:?}");
 }
+
+/// B-2026-08-17-38 — the sorted map is exempt from the displaced-value rule,
+/// like every other stdlib container whose mutating method returns the value
+/// it displaced.
+///
+/// `displaced_value_exempt` spelled it `TreeMap`, following design.md, and no
+/// such type exists — so the arm was dead and `SortedMap.insert` / `.remove`
+/// warned while `Map`, `Vec`, `VecDeque` and `SortedSet` were all exempt. The
+/// spec was incoherent with itself rather than ahead of the implementation: it
+/// paired `TreeMap` with `SortedSet` inside single sentences, and `SortedSet`
+/// is what both the spec and the compiler call the sorted set.
+#[test]
+fn sorted_map_insert_and_remove_are_displaced_value_exempt() {
+    let diags = lint(
+        "fn main() {\n\
+             let mut m: SortedMap[String, i64] = SortedMap.new();\n\
+             m.insert(f\"a\", 1);\n\
+             m.remove(f\"a\");\n\
+         }",
+    );
+    assert!(
+        diags.iter().all(|d| d.lint_name != "must_use"),
+        "SortedMap.insert / .remove must be exempt like Map's, got: {diags:?}"
+    );
+}
+
+/// The counterweight: the exemption is still scoped to the containers, so a
+/// USER type's `insert` returning `Option` keeps warning. Widening the arm to
+/// the right name must not widen it to everything.
+#[test]
+fn a_user_defined_insert_returning_option_still_warns() {
+    let diags = lint(
+        "struct Bag { n: i64 }\n\
+         impl Bag {\n\
+             fn insert(mut ref self, v: i64) -> Option[i64] { return None; }\n\
+         }\n\
+         fn main() {\n\
+             let mut b = Bag { n: 0 };\n\
+             b.insert(1);\n\
+         }",
+    );
+    assert_must_use_warning(&diags, "Option");
+}

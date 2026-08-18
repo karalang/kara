@@ -1596,7 +1596,7 @@ foo(Array[10, 20, 30]);             // OK in argument position
 return Set[1, 2, 3];                // OK in return position
 ```
 
-The prefix form is not limited to `Array`; it is supported by `Vec`, `Set`, `Map`, `VecDeque`, and `TreeMap`. The parser enters the `PREFIX_LITERAL` production (see `docs/syntax.md` §5.17b) when it sees a Type-class collection identifier before `[` — this is unambiguous because Type-class identifiers are never local value bindings. Bare `[...]` without a prefix remains the Vec-default form.
+The prefix form is not limited to `Array`; it is supported by `Vec`, `Set`, `Map`, `VecDeque`, and `SortedMap`. The parser enters the `PREFIX_LITERAL` production (see `docs/syntax.md` §5.17b) when it sees a Type-class collection identifier before `[` — this is unambiguous because Type-class identifiers are never local value bindings. Bare `[...]` without a prefix remains the Vec-default form.
 
 **Repeat form.** The `[value; count]` repeat literal is accepted both bare and inside a prefix:
 
@@ -1656,7 +1656,7 @@ let evens = Vec.from_fn(5, |i| i * 2);   // [0, 2, 4, 6, 8]
 |---|---|---|
 | `String` | `String` / `&str` | Text (owned); `ref String` for borrowed references; `StringSlice` for borrowed string views |
 | `VecDeque[T]` | `VecDeque<T>` | Double-ended queue (ring buffer) |
-| `TreeMap[K, V]` | `BTreeMap<K, V>` | Sorted key-value lookup (`K: Ord`) |
+| `SortedMap[K, V]` | `BTreeMap<K, V>` | Sorted key-value lookup (`K: Ord`) |
 | `SortedSet[T]` | `BTreeSet<T>` | Sorted set (`T: Ord`); O(log n) insert/remove/contains; ordered iteration, min/max, range queries |
 | `(A, B, C)` | `(A, B, C)` | Tuple |
 | `Option[T]` | `Option<T>` | Nullable values |
@@ -1732,7 +1732,7 @@ self.table.entry(key).or_insert_with(Vec.new).push(row);
 
 `or_insert` and `or_insert_with` return a `mut ref V` into the map, valid for the duration of the `mut ref self` borrow. `and_modify` chains a mutation on an occupied entry and returns `self` for further chaining.
 
-**Iteration order is unspecified and varies across process runs** — the default hasher is DoS-resistant and seeded fresh per process (see [§ `Hash` and `Hasher`](#hash-and-hasher) stability policy), so bucket placement and therefore iteration order differ from one run to the next. Code that depends on a stable iteration order — sorted output, snapshot testing, cross-run reproducibility — should use `TreeMap[K, V]` (sorted by key) instead. `Set[T]` inherits the same property.
+**Iteration order is unspecified and varies across process runs** — the default hasher is DoS-resistant and seeded fresh per process (see [§ `Hash` and `Hasher`](#hash-and-hasher) stability policy), so bucket placement and therefore iteration order differ from one run to the next. Code that depends on a stable iteration order — sorted output, snapshot testing, cross-run reproducibility — should use `SortedMap[K, V]` (sorted by key) instead. `Set[T]` inherits the same property.
 
 **`Set[T]` where `T: Hash + Eq`**
 
@@ -1763,11 +1763,14 @@ self.table.entry(key).or_insert_with(Vec.new).push(row);
 | `get` | `fn get(ref self, idx: i64) -> Option[ref T]` | Bounds-checked access |
 | `clear` | `fn clear(mut ref self)` | Removes all elements |
 
-**`TreeMap[K, V]` where `K: Ord`**
+**`SortedMap[K, V]` where `K: Ord`**
+
+> **Naming erratum (2026-08-18):** the sorted map is spelled **`SortedMap`**, not `TreeMap`. This document said `TreeMap` in twelve places — this table, the collection table, and both of the "use this for stable iteration order" directives — while the language has always shipped it as `SortedMap`, and the inconsistency was internal to the spec rather than a gap in the implementation: the same sentences paired `TreeMap` with **`SortedSet`**, which is what both this document and the compiler call the sorted set. `Sorted*` is the pair. `TreeMap` and `TreeSet` resolve to a `did you mean 'SortedMap'?` diagnostic carrying a machine-applicable fix, so code written against the old text is repaired by `karac fix` rather than merely rejected. Rust's corresponding type is `BTreeMap<K, V>`, which is why the comparison column still names it.
+
 
 | Method | Signature | Notes |
 |---|---|---|
-| `new` | `fn new() -> TreeMap[K, V]` | Empty sorted map |
+| `new` | `fn new() -> SortedMap[K, V]` | Empty sorted map |
 | `insert` | `fn insert(mut ref self, key: K, val: V) -> Option[V]` | Returns previous value if key existed |
 | `get` | `fn get(ref self, key: ref K) -> Option[ref V]` | Lookup by key |
 | `remove` | `fn remove(mut ref self, key: ref K) -> Option[V]` | Removes and returns value |
@@ -1829,14 +1832,14 @@ B-tree–backed ordered set. All operations are O(log n). Because `T: Ord` (not 
 | `Map[K, V]` | `(ref K, ref V)` | `(ref K, mut ref V)` | `(K, V)` | Arbitrary order |
 | `Set[T]` | `ref T` | — | `T` | No `iter_mut` (mutating elements would break hash invariant) |
 | `VecDeque[T]` | `ref T` | `mut ref T` | `T` | Front-to-back order |
-| `TreeMap[K, V]` | `(ref K, ref V)` | `(ref K, mut ref V)` | `(K, V)` | Sorted key order |
+| `SortedMap[K, V]` | `(ref K, ref V)` | `(ref K, mut ref V)` | `(K, V)` | Sorted key order |
 | `SortedSet[T]` | `ref T` | — | `T` | Ascending sorted order; no `iter_mut` (mutating would break ordering) |
 | `String` | `char` | — | `char` | Unicode scalar values; no `iter_mut` (UTF-8 encoding) |
 | `Array[T, N]` | `ref T` | `mut ref T` | `T` | Index order |
 
 `iter()` borrows the collection — the caller retains access. `into_iter()` consumes it — the caller cannot use the collection afterward. `iter_mut()` borrows mutably — exclusive access for the duration of iteration. All three return `impl Iterator` with the `Item` type shown above.
 
-`Vec`, `Map`, `Set`, `VecDeque`, `TreeMap`, and `SortedSet` implement `Clone`. `Display` is implemented for all collections when the element type implements `Display`. All collections implement `FromIterator` (see [Iterator Adaptors](#iterator-adaptors)).
+`Vec`, `Map`, `Set`, `VecDeque`, `SortedMap`, and `SortedSet` implement `Clone`. `Display` is implemented for all collections when the element type implements `Display`. All collections implement `FromIterator` (see [Iterator Adaptors](#iterator-adaptors)).
 
 ### Fallible Allocation API and OOM Handling
 
@@ -2252,7 +2255,7 @@ This rule covers `arr + 1` without opening the implicit-widening middle-ground b
 - **Ordering:** `-Infinity < ... < -0.0 < 0.0 < ... < +Infinity < NaN`. Note `-0.0` and `0.0` are **distinct, adjacent** values here: the wrapper compares bit patterns, not IEEE values, so `-0.0 == 0.0` is `false` (on the `f64` primitive it is `true`).
 - **Equality is bit-equality.** This is what makes the `Hash` impl sound — equal keys have identical bits, so they necessarily hash alike, with no normalization step that `Eq` and `Hash` could implement inconsistently.
 - **NaN is one value.** Every NaN bit pattern is canonicalized to a single quiet NaN when a wrapper is *constructed* (`F64.from(x)` and `F64 { value: x }` both do it), so `NaN == NaN` is `true` and NaN sorts after every other value regardless of the sign and payload the NaN arrived with.
-- Implement `Eq`, `Ord`, `Hash` — usable as `Map`/`Set` keys, in `TreeMap`, and anywhere `T: Ord` is required.
+- Implement `Eq`, `Ord`, `Hash` — usable as `Map`/`Set` keys, in `SortedMap`, and anywhere `T: Ord` is required.
 
 Canonicalizing NaN is not cosmetic. Raw totalOrder distinguishes NaNs by sign, which places `-NaN` *before* `-Infinity` and `+NaN` *after* `+Infinity` — and nothing at the source level chooses between them: on x86 a runtime `z / z` yields a negative NaN while the same expression constant-folded at compile time yields a positive one. Without normalization the identical program sorted differently under `karac run` and `karac build`, changed answer with the optimization level, and gave a `Map[F64, _]` a different *size* on each backend. Canonicalization at construction is what makes the order a property of the program rather than of how it was compiled.
 
@@ -2845,7 +2848,7 @@ trait FromIterator[T] {
 }
 ```
 
-Every standard collection (`Vec`, `Map`, `Set`, `VecDeque`, `TreeMap`, `String`) implements `FromIterator` for its natural element type. `collect` infers the target type from context or requires annotation: `let v: Vec[i32] = iter.collect()`.
+Every standard collection (`Vec`, `Map`, `Set`, `VecDeque`, `SortedMap`, `String`) implements `FromIterator` for its natural element type. `collect` infers the target type from context or requires annotation: `let v: Vec[i32] = iter.collect()`.
 
 **Laziness.** Transformations (`map`, `filter`, `take`, etc.) are lazy — they return iterator wrappers that produce elements on demand. Only terminal operations (`fold`, `collect`, `count`, `any`, `all`, `find`) drive iteration. This ensures no intermediate allocations for chains like `xs.iter().map(f).filter(g).collect()`.
 
@@ -3865,7 +3868,7 @@ let by_pos: Index[Vec[i32]] = HashMap.new();     // ERROR — Vec[i32] does not 
 
 **Bounds are enforced, not silently ignored.** Per item 50 of the v60 design lessons, Kāra makes a binary choice: bounds on type alias generic parameters are part of the alias's interface contract and the typechecker checks them at every use site. The historical Rust behavior (silently ignored, then warning, then enforced over multiple editions) is rejected — Kāra commits to enforcement from v1. Programs that write `type X[T: Ord] = Vec[T]` get the bound they wrote: every use site of `X[U]` checks `U: Ord`.
 
-**Bound semantics — additive to the underlying type's bounds.** A type alias's bounds extend (not replace) the bounds the underlying type already requires. `type SortedVec[T: Ord] = Vec[T]` makes `Ord` an *additional* requirement that `Vec` does not impose; `SortedVec[String]` checks `String: Ord` (succeeds), and the alias resolves to `Vec[String]` for every other purpose. If the alias's body uses a more constrained type (e.g., `type SortedKeyMap[T: Ord] = TreeMap[T, i32]` where `TreeMap` already requires `K: Ord`), the bound is **redundant but accepted** — the typechecker emits `warning[redundant_alias_bound]: bound 'T: Ord' on alias 'SortedKeyMap' is implied by the underlying type 'TreeMap[T, i32]'; consider removing` (suppressible with `#[allow(redundant_alias_bound)]` if the alias author wants to document the requirement explicitly).
+**Bound semantics — additive to the underlying type's bounds.** A type alias's bounds extend (not replace) the bounds the underlying type already requires. `type SortedVec[T: Ord] = Vec[T]` makes `Ord` an *additional* requirement that `Vec` does not impose; `SortedVec[String]` checks `String: Ord` (succeeds), and the alias resolves to `Vec[String]` for every other purpose. If the alias's body uses a more constrained type (e.g., `type SortedKeyMap[T: Ord] = SortedMap[T, i32]` where `SortedMap` already requires `K: Ord`), the bound is **redundant but accepted** — the typechecker emits `warning[redundant_alias_bound]: bound 'T: Ord' on alias 'SortedKeyMap' is implied by the underlying type 'SortedMap[T, i32]'; consider removing` (suppressible with `#[allow(redundant_alias_bound)]` if the alias author wants to document the requirement explicitly).
 
 **Bound enforcement diagnostic.** When an alias's bound is not satisfied at a use site:
 
@@ -8690,7 +8693,7 @@ Rules:
 5. **Async / suspended computation handles.** `JoinHandle[T]` returned by `spawn()`, `Future[T]`-shaped types where `Future` lands in v2 — discarding the handle drops the structured-concurrency contract on the floor. (For v1 the structured-concurrency model already enforces join via the surrounding scope, so this category is mostly forward-looking; but the attribute is mandated for every handle stdlib hands out so the warning fires consistently when the runtime model evolves.)
 6. **Pure transformations whose discard cannot be intentional.** `String.to_lowercase()`, `String.trim()`, `Vec.iter()`, `Path.with_extension(...)`, every method that returns a *new* value derived from `self` without mutating `self`. The attribute is on the **function**, not the return type (so `String` itself isn't `#[must_use]`).
 
-**Displaced-value exception to category 1.** A mutating container method whose `Option` return reports the element the mutation displaced or removed — `Map.insert` / `TreeMap.insert` (the previous value, if the key existed), `Map.remove` / `TreeMap.remove` (the removed value), `Vec.pop`, `Vec.remove_first`, `VecDeque.pop_front` / `pop_back` — is **exempt** from the implicit `Option` must-use. For these methods the mutation is the operation's purpose and the `Option` is an ancillary report; discarding it is the dominant correct idiom (`map.insert(k, v);` as a statement is the shape virtually every map user writes). Warning here would train users to reflexively scatter `let _ =`, eroding the lint's signal where it matters — lookups, parses, fallible operations, where the `Option` *is* the result. Rust reaches the same conclusion: `HashMap::insert` is deliberately not `#[must_use]`. The exemption is scoped by receiver type to the stdlib containers listed — a user-defined `insert` returning `Option` still warns (user code's escape remains `let _ =`). `Set.insert` / `Set.remove` / `SortedSet.insert` / `SortedSet.remove` return `bool` and were never covered by category 1.
+**Displaced-value exception to category 1.** A mutating container method whose `Option` return reports the element the mutation displaced or removed — `Map.insert` / `SortedMap.insert` (the previous value, if the key existed), `Map.remove` / `SortedMap.remove` (the removed value), `Vec.pop`, `Vec.remove_first`, `VecDeque.pop_front` / `pop_back` — is **exempt** from the implicit `Option` must-use. For these methods the mutation is the operation's purpose and the `Option` is an ancillary report; discarding it is the dominant correct idiom (`map.insert(k, v);` as a statement is the shape virtually every map user writes). Warning here would train users to reflexively scatter `let _ =`, eroding the lint's signal where it matters — lookups, parses, fallible operations, where the `Option` *is* the result. Rust reaches the same conclusion: `HashMap::insert` is deliberately not `#[must_use]`. The exemption is scoped by receiver type to the stdlib containers listed — a user-defined `insert` returning `Option` still warns (user code's escape remains `let _ =`). `Set.insert` / `Set.remove` / `SortedSet.insert` / `SortedSet.remove` return `bool` and were never covered by category 1.
 
 The mandate is enforced by a stdlib lint, not a hard compiler rule for user code: a stdlib reviewer rejects a new public API in any of the six categories that lacks the attribute. User code is free to use `#[must_use]` on its own types and functions where the same "discarding is almost always a bug" property holds. The escape hatch for legitimate discards is universal: `let _ = expr;` suppresses the warning at the call site.
 
@@ -9846,7 +9849,7 @@ This section is the single reference for what determinism property Kāra's auto-
 **What is NOT guaranteed.** The four rules above pin user-observable behavior mediated by the effect system. They do not pin:
 
 - **Wall-clock completion ordering of parallel branches.** A `par { a(); b(); c() }` with non-conflicting `a`/`b`/`c` may complete in any order. Source-order serialization is what runs only when the effect system sees a conflict; without one, the runtime is free to schedule the branches however.
-- **`HashMap[K, V]` and `Set[T]` iteration order.** Already non-deterministic per the seeded-hasher rule at [§ Map](#mapk-v-where-k-hash--eq) — varies *per process run* independent of parallelism. Code that needs stable iteration uses `TreeMap[K, V]` / `SortedSet[T]`.
+- **`HashMap[K, V]` and `Set[T]` iteration order.** Already non-deterministic per the seeded-hasher rule at [§ Map](#mapk-v-where-k-hash--eq) — varies *per process run* independent of parallelism. Code that needs stable iteration uses `SortedMap[K, V]` / `SortedSet[T]`.
 - **`Hash` ordering of un-interned strings, addresses of heap allocations, system entropy, wall-clock time.** None of these are effect-system-visible by default. A program that depends on any of them produces non-deterministic output regardless of parallelism — orthogonal concern, not a determinism-contract gap.
 - **Side effects on user-declared resources that the programmer forgot to declare in the effect signature.** If `f()` and `g()` both mutate some thread-local accumulator but neither declares `writes(SomeResource)`, the conflict analysis cannot see them and they may run in either order. This is a missing-effect-declaration *bug*, not a non-determinism contract gap — the fix is to declare the resource, which restores deterministic ordering via rule (2).
 

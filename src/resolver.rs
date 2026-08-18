@@ -1424,18 +1424,18 @@ impl<'a> Resolver<'a> {
             return;
         }
         let visible = self.table.visible_names();
-        let suggestion = suggest_similar(name, &visible);
+        // Same known-rename preference as `error_undefined_type` — the
+        // constructor half (`TreeMap.new()`) resolves as a NAME.
+        let suggestion = Self::renamed_stdlib_type(name)
+            .map(str::to_string)
+            .or_else(|| suggest_similar(name, &visible));
         let mut message = format!("undefined name '{}'", name);
         if let Some(ref s) = suggestion {
             message.push_str(&format!(", did you mean '{}'?", s));
         }
-        let replacement = suggestion.as_ref().map(|s| {
-            Box::new(TextEdit {
-                offset: span.offset,
-                length: span.length,
-                replacement: s.clone(),
-            })
-        });
+        let replacement = suggestion
+            .as_ref()
+            .map(|s| Self::name_only_replacement(name, &span, s));
         self.errors.push(ResolveError {
             message,
             span,
@@ -1462,18 +1462,18 @@ impl<'a> Resolver<'a> {
         args: &[CallArg],
     ) {
         let visible = self.table.visible_names();
-        let suggestion = suggest_similar(name, &visible);
+        // Same known-rename preference as `error_undefined_type` — the
+        // constructor half (`TreeMap.new()`) resolves as a NAME.
+        let suggestion = Self::renamed_stdlib_type(name)
+            .map(str::to_string)
+            .or_else(|| suggest_similar(name, &visible));
         let mut message = format!("undefined name '{}'", name);
         if let Some(ref s) = suggestion {
             message.push_str(&format!(", did you mean '{}'?", s));
         }
-        let replacement = suggestion.as_ref().map(|s| {
-            Box::new(TextEdit {
-                offset: span.offset,
-                length: span.length,
-                replacement: s.clone(),
-            })
-        });
+        let replacement = suggestion
+            .as_ref()
+            .map(|s| Self::name_only_replacement(name, &span, s));
         let stub_args: Vec<StubArg> = args
             .iter()
             .map(|a| StubArg {
@@ -1495,20 +1495,70 @@ impl<'a> Resolver<'a> {
         });
     }
 
+    /// A machine-applicable rename of just the IDENTIFIER at the start of
+    /// `span`.
+    ///
+    /// The diagnostic spans these suggestions ride are not all identifier-sized.
+    /// A typo'd call (`helpr(41)`) spans exactly `helpr`, so replacing the whole
+    /// span is right; a type position spans `TreeMap[i64, i64]` and an
+    /// associated call spans `TreeMap.new()`, so replacing the whole span
+    /// swallows the generic args and the constructor — measured, `karac fix`
+    /// turned `let mut m: TreeMap[i64, i64] = TreeMap.new();` into `let mut m:
+    /// SortedMap = SortedMap;`, which does not compile. Every one of these
+    /// spans STARTS at the name, so clamping the edit to the name's length is
+    /// correct in all three cases and strictly safer than the alternative.
+    /// B-2026-08-17-38.
+    fn name_only_replacement(name: &str, span: &Span, to: &str) -> Box<TextEdit> {
+        Box::new(TextEdit {
+            offset: span.offset,
+            length: span.length.min(name.len()),
+            replacement: to.to_string(),
+        })
+    }
+
+    /// The stdlib name a SPEC-ONLY spelling should resolve to.
+    ///
+    /// `docs/design.md` writes the sorted map as `TreeMap` in twelve places —
+    /// its collection table, its own method table, and twice as the prescribed
+    /// remedy for `Map`'s unspecified iteration order — while the language ships
+    /// it as `SortedMap`. The spec is incoherent with itself there rather than
+    /// merely ahead of the implementation: it pairs `TreeMap` with `SortedSet`
+    /// inside single sentences ("uses `TreeMap[K, V]` / `SortedSet[T]`"), and
+    /// `SortedSet` is what both the spec and the code call the set. So
+    /// B-2026-08-17-38 settles the pair on `Sorted*` and corrects the spec.
+    ///
+    /// The mapping stays because correcting the document does not correct
+    /// what has already been read from it. Anyone — or any model — working
+    /// from the old text writes `TreeMap` and used to get a bare "undefined
+    /// type" with no route to the real name; edit distance cannot bridge
+    /// `TreeMap` → `SortedMap`. Routed through the same `suggestion` /
+    /// `replacement` channel as a typo, so the diagnostic names the type AND
+    /// `karac fix` repairs it.
+    ///
+    /// `TreeSet` is here for symmetry: the spec never uses it, but anyone
+    /// reaching for `TreeMap`'s sibling by analogy lands on the same wall.
+    fn renamed_stdlib_type(name: &str) -> Option<&'static str> {
+        match name {
+            "TreeMap" => Some("SortedMap"),
+            "TreeSet" => Some("SortedSet"),
+            _ => None,
+        }
+    }
+
     fn error_undefined_type(&mut self, name: &str, span: Span) {
         let visible = self.table.visible_names();
-        let suggestion = suggest_similar(name, &visible);
+        // A known rename wins over edit distance — `TreeMap` is nowhere near
+        // `SortedMap` by distance, so the generic suggester cannot find it.
+        let suggestion = Self::renamed_stdlib_type(name)
+            .map(str::to_string)
+            .or_else(|| suggest_similar(name, &visible));
         let mut message = format!("undefined type '{}'", name);
         if let Some(ref s) = suggestion {
             message.push_str(&format!(", did you mean '{}'?", s));
         }
-        let replacement = suggestion.as_ref().map(|s| {
-            Box::new(TextEdit {
-                offset: span.offset,
-                length: span.length,
-                replacement: s.clone(),
-            })
-        });
+        let replacement = suggestion
+            .as_ref()
+            .map(|s| Self::name_only_replacement(name, &span, s));
         self.errors.push(ResolveError {
             message,
             span,

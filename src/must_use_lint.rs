@@ -54,7 +54,7 @@ fn implicit_must_use_kind(name: &str) -> Option<(&'static str, &'static str)> {
 /// Displaced-value exception (design.md § `#[must_use]` on Types >
 /// Mandate for stdlib): mutating container methods whose `Option` return
 /// reports the element the mutation displaced or removed — `Map` /
-/// `TreeMap` `insert` (the previous value) and `remove` (the removed
+/// `SortedMap` `insert` (the previous value) and `remove` (the removed
 /// value), `Vec.pop` / `Vec.remove_first`, `VecDeque.pop_front` /
 /// `pop_back` — are exempt from the implicit `Option` must-use. For
 /// these the mutation is the operation's purpose and the `Option` is an
@@ -66,10 +66,17 @@ fn implicit_must_use_kind(name: &str) -> Option<(&'static str, &'static str)> {
 /// the two halves of the typechecker's canonical `Type.method` callee
 /// key (`method_callee_types`), already wrapper-normalized — a
 /// `mut ref Map[K, V]` parameter records `"Map.insert"`.
+/// The sorted map is spelled `SortedMap` here, NOT `TreeMap`. This arm read
+/// `"TreeMap"` and was therefore dead: no such type exists, so
+/// `SortedMap.insert` / `.remove` warned while `Map`, `Vec`, `VecDeque` and
+/// `SortedSet` were all exempt. design.md § must_use writes the exemption with
+/// the spec's `TreeMap` spelling, which the spec pairs with `SortedSet` in the
+/// same sentences — an incoherent pair the implementation never had.
+/// B-2026-08-17-38 settles it on `Sorted*` and corrects the spec.
 fn displaced_value_exempt(receiver: &str, method: &str) -> bool {
     matches!(
         (receiver, method),
-        ("Map" | "TreeMap", "insert" | "remove")
+        ("Map" | "SortedMap", "insert" | "remove")
             | ("Vec", "pop" | "remove_first")
             | ("VecDeque", "pop_front" | "pop_back")
     )
