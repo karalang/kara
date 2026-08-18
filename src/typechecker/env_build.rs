@@ -1760,7 +1760,32 @@ impl<'a> super::TypeChecker<'a> {
         }
         // Add for String — heap concatenation. Effect tracking (allocates(Heap))
         // wired in Step 6 when operator lowering routes through this impl.
-        self.register_builtin_impl("Add", "String", vec![("add", binop(&Type::Str))]);
+        //
+        // B-2026-08-18-32 — the receiver BORROWS. It used to be the shared
+        // `binop` signature, whose first param is a bare `ty` and therefore an
+        // OWNED receiver, and the ownership checker read that faithfully:
+        // `let x = e + "x"; let y = e + "y";` warned "value 'e' moved here,
+        // used again here" and advised `e.clone()`.
+        //
+        // Neither backend ever enforced that move — `e` is intact and correct
+        // after both concatenations on interp, JIT, AOT and AOT under
+        // KARAC_AUTO_PAR=0 — so the warning described a rule nothing applied,
+        // and its remedy was a real deep copy for a problem that does not
+        // exist at runtime. Aligning the signature with the two backends is
+        // the resolution the owner chose over teaching the backends to consume;
+        // it is also the smaller diff, since the emitted code does not change.
+        //
+        // Only String's `Add` takes a ref receiver: the shared `binop` helper
+        // stays owned for the scalar types, where the receiver is a register
+        // copy and the distinction costs nothing.
+        let string_add = FunctionSig {
+            generic_params: vec![],
+            param_names: vec![Some("self".into()), Some("rhs".into())],
+            params: vec![Type::Ref(Box::new(Type::Str)), Type::Str],
+            return_type: Type::Str,
+            where_clause: None,
+        };
+        self.register_builtin_impl("Add", "String", vec![("add", string_add)]);
 
         // Numeric widening: register `impl From[Source] for Target` for every
         // lossless source→target pair. `target.from(value)` then dispatches

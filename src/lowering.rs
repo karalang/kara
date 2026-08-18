@@ -54,6 +54,35 @@ pub fn callee_is_relational_operator(callee: &Expr) -> bool {
     }
 }
 
+/// Is `callee` the lowered form of a `String + String` concatenation
+/// (`Call(Path(["String", "add"]), [lhs, rhs])`)?
+///
+/// B-2026-08-18-32 — sibling of [`callee_is_relational_operator`], and for the
+/// same reason: `+` on `String` lowers to a free-call of an INSTANCE trait
+/// method, which never gets a `callee_param_modes` entry (that table is
+/// static-methods-only), so its receiver fell to the consume default. The
+/// ownership checker then reported `let x = e + "x"; let y = e + "y";` as a
+/// use-after-move and advised `e.clone()`.
+///
+/// Neither backend ever enforced that move — `e` is intact and correct after
+/// both concatenations on interp, JIT and AOT — so the warning described a
+/// rule nothing applied and its remedy was a real deep copy for a problem that
+/// does not exist at runtime. design.md's signature is updated to `ref self`
+/// alongside this, so spec, checker and backends now agree.
+///
+/// Narrower than the relational sibling on purpose: that one reads BOTH
+/// operands, while concatenation borrows only the RECEIVER. The right-hand
+/// operand keeps whatever mode its own position gives it, so
+/// `a + consume_it(b)` still reports `b`.
+pub fn callee_is_string_concat(callee: &Expr) -> bool {
+    match &callee.kind {
+        ExprKind::Path { segments, .. } => {
+            segments.len() == 2 && segments[0] == "String" && segments[1] == "add"
+        }
+        _ => false,
+    }
+}
+
 /// Rewrite operator expressions across the entire program in place.
 pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
     let mut lowerer = Lowerer { tc };

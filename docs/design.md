@@ -1821,7 +1821,7 @@ B-tree–backed ordered set. All operations are O(log n). Because `T: Ord` (not 
 | `replace` | `fn replace(ref self, from: ref String, to: ref String) -> String` | Replace all occurrences |
 | `to_uppercase` | `fn to_uppercase(ref self) -> String` | Unicode uppercasing |
 | `to_lowercase` | `fn to_lowercase(ref self) -> String` | Unicode lowercasing |
-| `+` | `fn add(self, other: ref String) -> String` | Concatenation operator — allocates a new buffer; prefer `push_str` in loops |
+| `+` | `fn add(ref self, other: ref String) -> String` | Concatenation operator — allocates a new buffer; prefer `push_str` in loops. BORROWS the left operand: `a + b` leaves `a` usable, so building several strings from one base needs no clone (B-2026-08-18-32) |
 | `f"..."` | (language feature, not a method) | String interpolation — see [String Interpolation](#string-interpolation) |
 
 **Iteration.** All collections implement `Iterable` and support `for` loops. The table below shows each collection's `iter()`, `iter_mut()`, and `into_iter()` return types:

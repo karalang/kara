@@ -603,6 +603,15 @@ impl<'a> UseClassifier<'a> {
                 // Comparisons borrow both operands (`ref self, other: ref
                 // Self`), so classify every arg as a read.
                 let is_relational = crate::lowering::callee_is_relational_operator(callee);
+                // B-2026-08-18-32 — `String + String` lowers to the same
+                // free-call-of-an-instance-method shape as the comparisons
+                // above (`Call(Path(["String", "add"]), [lhs, rhs])`), so its
+                // receiver also fell to the consume default and the checker
+                // reported a move neither backend performs. Concatenation
+                // borrows only the RECEIVER, so unlike `is_relational` this
+                // frees argument 0 alone; the right operand keeps whatever
+                // mode its own position gives it.
+                let is_string_concat = crate::lowering::callee_is_string_concat(callee);
                 // B-2026-07-29-16: the callee is NAMEABLE but has no entry in
                 // `callee_param_modes` — its signature is not visible in this
                 // compilation unit. That is the normal state of an IMPORTED
@@ -648,6 +657,7 @@ impl<'a> UseClassifier<'a> {
                 for (i, arg) in args.iter().enumerate() {
                     let is_borrow = arg.mut_marker
                         || is_relational
+                        || (is_string_concat && i == 0)
                         || callee_signature_unknown
                         || modes.as_ref().and_then(|m| m.get(i)).is_some_and(|m| {
                             matches!(m, OwnershipMode::Ref | OwnershipMode::MutRef)

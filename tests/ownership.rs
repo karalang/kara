@@ -9794,6 +9794,79 @@ fn generic_ord_min_body_passes_ownership() {
     );
 }
 
+// ── B-2026-08-18-32: `String +` borrows its left operand ──
+
+#[test]
+fn string_concat_borrows_its_left_operand() {
+    // `+` on `String` lowers to `Call(Path(["String", "add"]), [lhs, rhs])` —
+    // a free-call of an INSTANCE trait method, which gets no
+    // `callee_param_modes` entry (that table is static-methods-only), so the
+    // receiver fell to the consume default. The checker reported
+    // "value 'e' moved here, used again here" and advised `e.clone()`.
+    //
+    // Neither backend ever performed that move: `e` is intact and correct
+    // after both concatenations on interp, JIT and AOT. The spec signature is
+    // now `fn add(ref self, other: ref String)` (design.md), so spec, checker
+    // and backends agree, and building several strings from one base costs no
+    // clone.
+    ownership_ok(
+        "fn main() {\n\
+             let e: String = \"ab\";\n\
+             let x = e + \"x\";\n\
+             let y = e + \"y\";\n\
+             println(f\"{x} {y} {e}\");\n\
+         }",
+    );
+}
+
+#[test]
+fn string_concat_still_reports_a_moved_right_operand() {
+    // THE ANTI-VACUITY GUARD, and the reason this frees argument 0 alone
+    // rather than copying `is_relational`'s both-operands treatment:
+    // concatenation borrows only the RECEIVER. The right operand keeps
+    // whatever mode its own position gives it, so a genuine move THROUGH it is
+    // still reported — here `f` is consumed by `eat(f)` inside the `+` and
+    // then used again.
+    let errors = ownership_errors(
+        "fn eat(s: String) -> String { s }\n\
+         fn main() {\n\
+             let e: String = \"ab\";\n\
+             let f: String = \"cd\";\n\
+             let x = e + eat(f);\n\
+             let y = f.len();\n\
+             println(f\"{x} {y}\");\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("moved here, used again")),
+        "a move through the RIGHT operand must still be reported; got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn plain_string_move_is_still_reported() {
+    // The other half of the guard: the fix must not blanket-suppress
+    // use-after-move for `String`. An ordinary rebind still moves.
+    let errors = ownership_errors(
+        "fn main() {\n\
+             let e: String = \"ab\";\n\
+             let x = e;\n\
+             let y = e;\n\
+             println(f\"{x} {y}\");\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("moved here, used again")),
+        "a plain move must still be reported; got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
 // ── B-2026-07-16-12: builtin collection lookup methods borrow their key ──
 
 #[test]
