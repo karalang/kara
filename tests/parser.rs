@@ -12551,6 +12551,58 @@ fn test_cast_nodes_span_past_the_target_type() {
     );
 }
 
+/// `Call`, the seventh arm of B-2026-08-18-33 — and the one predicted to be
+/// expensive, which it was not.
+///
+/// A call's span collided with its CALLEE's — `add(mul(2, 3), 4)` was keyed as
+/// the three characters `add` — which is the same shape behind all five
+/// earlier rows, so the expectation was another `MethodCall`-sized bill (42
+/// tests). It cost two: both self-host oracles, nothing else. Recorded because
+/// the prediction was wrong in a useful direction. By this point the span-keyed
+/// consumers had been moved onto keys that are correct by construction rather
+/// than by coincidence, so the later arms are cheap for exactly the reason the
+/// earlier ones were dear.
+#[test]
+fn test_call_nodes_span_past_the_closing_paren() {
+    let source = "fn mul(a: i64, b: i64) -> i64 { return a * b; }\n\
+                  fn add(a: i64, b: i64) -> i64 { return a + b; }\n\
+                  fn f() -> i64 {\n  let a = add(mul(2, 3), 4);\n  return a;\n}";
+    let prog = parse(source).program;
+
+    fn collect(e: &Expr, out: &mut Vec<karac::token::Span>) {
+        if let ExprKind::Call { callee, .. } = &e.kind {
+            out.push(e.span);
+            collect(callee, out);
+        }
+    }
+    let mut spans = Vec::new();
+    for item in &prog.items {
+        if let Item::Function(f) = item {
+            for st in &f.body.stmts {
+                if let StmtKind::Let { value, .. } = &st.kind {
+                    collect(value, &mut spans);
+                }
+            }
+        }
+    }
+    assert_eq!(
+        spans.len(),
+        1,
+        "expected the outer `Call` node, got {spans:?}"
+    );
+
+    let text = |s: &karac::token::Span| &source[s.offset..s.offset + s.length];
+    // The outer call covers its whole argument list; pre-fix it was the bare
+    // callee `add`, three characters long.
+    assert_eq!(text(&spans[0]), "add(mul(2, 3), 4)");
+
+    assert_ne!(
+        (spans[0].offset, spans[0].length),
+        (spans[0].offset, 3),
+        "a call must not collapse onto its bare callee `add`"
+    );
+}
+
 /// `Span.line`/`Span.column` of an interpolation sub-expression must point to
 /// its true position in the ORIGINAL source — not into the synthetic
 /// `fn __interp__() { … }` re-parse wrapper (B-2026-06-09-1a). Before the fix

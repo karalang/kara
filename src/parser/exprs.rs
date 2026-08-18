@@ -329,8 +329,14 @@ impl super::Parser {
                     self.advance();
                     let args = self.parse_arg_list()?;
                     self.expect(&Token::RightParen)?;
+                    // B-2026-08-18-33 — span the whole call (callee start ->
+                    // past the `)`) rather than copying `lhs.span`. A call and
+                    // its callee otherwise share a key, which is the same
+                    // collision the five postfix arms carried: `f(x)(y)` and
+                    // `mk()(z)` collapse onto `f` / `mk`.
+                    let call_span = self.span_from(&lhs.span);
                     lhs = Expr {
-                        span: lhs.span,
+                        span: call_span,
                         kind: ExprKind::Call {
                             callee: Box::new(lhs),
                             args,

@@ -1092,20 +1092,24 @@ impl Parser {
     // (`finish_index`, B-2026-08-18-21), past the `)` (`finish_dot`'s
     // method-call arm, B-2026-08-18-24), past the field name (`finish_dot`'s
     // field arm, B-2026-08-18-31), past the index (`finish_dot`'s tuple-index
-    // arm, B-2026-08-18-33). `finish_call` alone still reuses the operand's
-    // span verbatim — the seed's `lhs.span.clone()` — and is the one arm the
-    // seed has not split out either.
+    // arm, B-2026-08-18-33), past the `)` (`finish_call`, B-2026-08-18-33).
+    // No builder here reuses its operand's span any more, matching the seed.
 
     // `callee(args)`.
+    //
+    // B-2026-08-18-33 — spans callee-start -> past the `)`, mirroring the seed.
+    // `expect_rparen` has just made `)` the token before `pos`, which is what
+    // `span_from` reads.
     fn finish_call(mut ref self, callee: Expr) -> Expr {
         let sp = expr_span(callee);
         self.advance(); // consume (
         let args = self.parse_arg_list();
         self.expect_rparen();
+        let span = self.span_from(sp);
         Expr.Call(CallExpr {
             callee: callee,
             args: args,
-            span: sp,
+            span: span,
         })
     }
 
