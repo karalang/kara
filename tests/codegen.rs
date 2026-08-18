@@ -75537,6 +75537,51 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_local_scrutinee_option_field_move_out_runs() {
+        // B-2026-08-17-45 — the VALUE half of the move-out fix; the memory half
+        // is `asan_boxed_option_local_scrutinee_field_move_out_no_leak_no_double_free`
+        // in tests/memory_sanitizer.rs. Both are needed: the defect aborted the
+        // process (`free(): double free detected in tcache 2`) rather than
+        // printing a wrong answer, so a value assertion alone would have caught
+        // it only by the run dying — and a neutralizer that fires too widely
+        // frees a live buffer and prints EMPTY here while ASAN stays quiet.
+        //
+        // The moved-out `C` must survive the arm that handed it out, and the
+        // struct it came from carries a second owning field (`other`) that the
+        // move did not take, so a too-wide zero shows up as a blank second line
+        // rather than as a crash.
+        let output = run_program(
+            "struct C { name: String, zip: i64 }\n\
+             struct A { c: Option[C], other: String }\n\
+             fn main() {\n\
+                 let a = Option.Some(A {\n\
+                     c: Option.Some(C { name: \"moved out payload\", zip: 7 }),\n\
+                     other: \"untouched sibling\",\n\
+                 });\n\
+                 let f = match a {\n\
+                     Option.Some(x) => { x.c }\n\
+                     Option.None => { Option.None }\n\
+                 };\n\
+                 match f {\n\
+                     Option.Some(cc) => { println(cc.name); println(cc.zip); }\n\
+                     Option.None => { println(\"none\"); }\n\
+                 }\n\
+                 let b = Option.Some(A {\n\
+                     c: Option.Some(C { name: \"kept payload\", zip: 3 }),\n\
+                     other: \"kept sibling\",\n\
+                 });\n\
+                 let n = match b {\n\
+                     Option.Some(y) => { y.other.len() }\n\
+                     Option.None => { 0 }\n\
+                 };\n\
+                 println(n);\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "moved out payload\n7\n12\n");
+    }
+
+    #[test]
     fn test_e2e_modbind_string_for_loop_iterates_chars() {
         // The String arm rides the same dispatch, and it is ordered BEFORE the
         // Vec arm on purpose (String vars are also registered in

@@ -4154,17 +4154,42 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(slot) = self.variables.get(name.as_str()).map(|s| s.ptr) else {
             return;
         };
-        // OWNED-PARAM scrutinees only — the one shape where the box's owner is
-        // out of reach. Everywhere else the owner is a `BoxedEnumDrop` in this
-        // frame's cleanup queue, and B-2026-08-04-2 already neutralizes those by
-        // retracting the action's inner walk. It chose retraction over a data
-        // write for a reason worth not re-learning: the box's words are also
-        // what a re-homed payload-BODIES walk reads, and zeroing them made a
-        // user Drop body print an empty string — a double free traded for a
-        // silent wrong value. Recording nothing here leaves every in-frame shape
-        // byte-identical and confines the mirror to the cross-call case, where a
-        // data write is the ONLY channel to the caller's drop fn.
-        if !self.pattern_state.pattern_binding_scrutinee_is_owned_param {
+        // OWNED-PARAM scrutinees are the shape where the box's owner is out of
+        // reach entirely, so they always record. An in-frame owner is a
+        // `BoxedEnumDrop` in this frame's cleanup queue, and B-2026-08-04-2
+        // neutralizes those by RETRACTING the action's inner walk — which it
+        // chose over a data write for a reason worth not re-learning: the box's
+        // words are also what a re-homed payload-BODIES walk reads, and zeroing
+        // them made a user Drop body print an empty string, a double free
+        // traded for a silent wrong value.
+        //
+        // B-2026-08-17-45 — retraction is whole-action, so it covers the WHOLE
+        // payload escaping and nothing else. Move a single `Option`-typed FIELD
+        // out of the arm binding (`match a { Some(x) => x.c }`) and there is no
+        // action to retract: the box's drop must still run for every field the
+        // move did NOT take. The neutralizer that exists for exactly this —
+        // `suppress_source_vec_cleanup_for_arg_ex`'s per-field cap/tag zero —
+        // writes into the DEBOXED COPY, which the box's owner cannot see, so
+        // `__karac_drop_struct_A(box)` freed the field the move had already
+        // handed away: `free(): double free detected in tcache 2` under both
+        // compiled backends on a program `--interp` runs correctly.
+        //
+        // So record for an in-frame owner too, but ONLY when no payload-BODIES
+        // walk rides this box — which is precisely the hazard the paragraph
+        // above measured, and precisely what
+        // `pattern_binding_scrutinee_payload_bodies_src` already tracks (it is
+        // `Some` only when the payload runs a user Drop). With it `None` the
+        // box's only reader is a compiler-generated MEMORY drop, and a
+        // per-field zero through the box is neutralization rather than
+        // corruption: the mirror writes one field, so every field the move left
+        // alone keeps its live cap and that drop still frees it. With it
+        // `Some`, nothing is recorded and the shape stays byte-identical.
+        if !self.pattern_state.pattern_binding_scrutinee_is_owned_param
+            && self
+                .pattern_state
+                .pattern_binding_scrutinee_payload_bodies_src
+                .is_some()
+        {
             self.payload_vars.deboxed_payload_box_ptrs.remove(&slot);
             return;
         }

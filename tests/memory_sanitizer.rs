@@ -12724,6 +12724,98 @@ fn main() {
         );
     }
 
+    /// B-2026-08-17-45 — the LOCAL-scrutinee sibling of the owned-param test
+    /// above, and the shape B-2026-08-06-10's mirror was never armed for.
+    ///
+    /// `record_deboxed_payload_box` recorded the payload box ONLY when the
+    /// scrutinee was an owned param, on the reasoning that an in-frame owner is
+    /// a `BoxedEnumDrop` this frame can RETRACT (B-2026-08-04-2). Retraction is
+    /// whole-action, so it covers the whole payload escaping and nothing else.
+    /// Move a single `Option`-typed FIELD out of the arm binding and there is
+    /// no action to retract — the box's drop must still run for the fields the
+    /// move did not take — while the per-field neutralizer that does exist
+    /// wrote into the DEBOXED COPY, which that drop cannot see. Both compiled
+    /// backends aborted with `free(): double free detected in tcache 2` on a
+    /// program `--interp` ran correctly and `karac check` passed.
+    ///
+    /// THREE LEGS, and the second is the one that catches an over-eager fix:
+    ///
+    ///   * MOVED (`x.c`) — the field the arm hands out must be freed exactly
+    ///     once. This is the double-free leg.
+    ///   * KEPT (`y.other.len()`) — an arm that moves NOTHING, over a struct
+    ///     carrying TWO owning fields. The mirror writes one field, so `other`
+    ///     and the un-taken `c` must both still be freed by the box's drop. A
+    ///     neutralizer that zeroed the whole payload surfaces here as a leak,
+    ///     which is the trade every neighbouring suppressor's doc records
+    ///     having made at least once.
+    ///   * `None` source — the direction where an over-eager source zero
+    ///     strands a payload instead of double-freeing it.
+    ///
+    /// COVERAGE IS STRONGER THAN THE SIBLING'S, which is worth stating because
+    /// that one had to fall back to the `-O0` leg: measured against the pre-fix
+    /// compiler this SEGVs under ASAN at BOTH the default `-O2` and
+    /// `KARAC_OPT_LEVEL=0`, so the fixture pins the fix at whichever level CI
+    /// happens to run.
+    ///
+    /// The user-`Drop` spelling of the same move is deliberately NOT here: it
+    /// still double-frees, measured identical with and without this fix, and
+    /// the mirror excludes it on purpose because the box's words are what a
+    /// re-homed payload-BODIES walk reads. Filed separately.
+    #[test]
+    fn asan_boxed_option_local_scrutinee_field_move_out_no_leak_no_double_free() {
+        assert_clean_asan_run(
+            r#"
+struct C { name: String, zip: i64 }
+struct A { c: Option[C], other: String }
+
+fn main() {
+    let mut acc: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 20 {
+        let a = Option.Some(A {
+            c: Option.Some(C { name: "payload-string-" + i.to_string(), zip: i }),
+            other: "sibling-string-" + i.to_string(),
+        });
+        let f = match a {
+            Option.Some(x) => { x.c }
+            Option.None => { Option.None }
+        };
+        match f {
+            Option.Some(cc) => { acc = acc + cc.name.len() + cc.zip; }
+            Option.None => { acc = acc + 1; }
+        }
+        i = i + 1;
+    }
+    let mut j: i64 = 0;
+    while j < 20 {
+        let b = Option.Some(A {
+            c: Option.Some(C { name: "kept-string-" + j.to_string(), zip: j }),
+            other: "kept-sibling-" + j.to_string(),
+        });
+        let n = match b {
+            Option.Some(y) => { y.other.len() }
+            Option.None => { 0 }
+        };
+        acc = acc + n;
+        j = j + 1;
+    }
+    let e: Option[A] = Option.None;
+    let g = match e {
+        Option.Some(z) => { z.c }
+        Option.None => { Option.None }
+    };
+    match g {
+        Option.Some(cc) => { acc = acc + cc.name.len(); }
+        Option.None => { acc = acc + 7; }
+    }
+    println(acc);
+}
+"#,
+            &["817"],
+            "boxed_option_local_scrutinee_field_move_out",
+        );
+    }
+
     /// B-2026-08-06-31 — the STRUCT-payload sibling of B-2026-08-06-9 leg A,
     /// both halves.
     ///
