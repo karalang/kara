@@ -1432,6 +1432,33 @@ pub(crate) enum SlotOwnership<'ctx> {
         member_type: String,
         link_field_index: usize,
     },
+    /// A HEAP-BOXED enum payload the branch built and published
+    /// (`BoxedEnumDrop`). B-2026-08-18-39.
+    ///
+    /// An `Option[T]` whose `T` outgrows Option's 3-word payload area spills
+    /// behind a `malloc`'d box (`coerce_to_payload_words`), and the slot
+    /// carries only the box POINTER in word 0. `BoxedEnumDrop` was matched by
+    /// neither the sentinel scan nor the transfer loop, so the branch freed the
+    /// box it had just written into the parent's return struct and the parent's
+    /// first read was a use-after-free — the identical defect `Column`
+    /// (B-2026-07-03-32), `RcDec` / `FreeSharedElided` (B-2026-08-08-15) and
+    /// `FreeClusterWalkOption` (B-2026-08-14-28) each had in turn.
+    ///
+    /// The read is quiet rather than fatal, which is what made it a miscompile
+    /// instead of a crash: the allocator writes its free-list metadata over the
+    /// first two words of the returned chunk and leaves the rest, so the
+    /// payload's leading fields come back as pointer-shaped noise that varies
+    /// per run while the trailing fields still read correctly.
+    ///
+    /// Transferred, not suppressed — suppressing alone would leave the box
+    /// owned by nobody and leak it, the same trap the `SharedElided` arm
+    /// documents above.
+    BoxedEnum {
+        enum_ty: StructType<'ctx>,
+        inner_drop_fn: Option<FunctionValue<'ctx>>,
+        some_tag: u64,
+        deeper_tags: Vec<u64>,
+    },
 }
 
 #[derive(Clone)]

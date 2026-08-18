@@ -3226,6 +3226,144 @@ fn main() {
         }
     }
 
+    /// B-2026-08-18-39: an `Option[T]` whose `T` outgrows the enum's INLINE
+    /// payload area spills behind a `malloc`'d box, and a branch that published
+    /// one to the parent's return slot then ran its own `BoxedEnumDrop` at
+    /// branch end — so the parent read a freed box after the join. Same defect
+    /// as the `Column` sibling above (B-2026-07-03-32) and as `RcDec` /
+    /// `FreeSharedElided` (B-2026-08-08-15): an ownership-bearing cleanup
+    /// action that the return-slot transfer loop did not match, so the branch
+    /// freed what it had just handed over.
+    ///
+    /// THE READ IS QUIET, NOT FATAL, which is what made it a silent miscompile
+    /// rather than a crash: `free` writes allocator free-list metadata over the
+    /// first two words of the chunk and leaves the rest intact. So the
+    /// payload's LEADING fields come back as pointer-shaped noise that differs
+    /// on every run while the TRAILING fields still read correctly — the
+    /// assertion below pins all four precisely because a partial corruption is
+    /// what this looks like.
+    ///
+    /// THE WIDTH IS THE TRIGGER, not the field types. `Option`'s payload area
+    /// is 3 words: a 3-field struct rides inline and is unaffected, a 4-field
+    /// one boxes and was corrupted. The row's original repro used
+    /// `{i64, Vec[i64]}` and read as though the `Vec` mattered; it is i64 plus
+    /// a 3-word Vec header — 4 words — so it is the same case. Both are
+    /// exercised here, together with the 3-word control that must stay correct.
+    #[test]
+    fn test_e2e_auto_par_boxed_option_payload_slot_not_freed_early() {
+        // Wide (4-word) all-scalar payload: every field pinned, since the
+        // failure corrupted only the leading two.
+        let out = run_program(
+            r#"
+struct W { f0: i64, f1: i64, f2: i64, f3: i64 }
+fn get(v: ref Vec[W], k: i64) -> Option[W] {
+    let mut i = 0i64;
+    while i < v.len() { if v[i].f0 == k { return Some(v[i]); } i = i + 1i64; }
+    return None;
+}
+fn main() {
+    let mut ns: Vec[W] = Vec.new();
+    ns.push(W { f0: 5i64, f1: 1111i64, f2: 2222i64, f3: 3333i64 });
+    let hit = get(ns, 5i64);
+    let miss = get(ns, 9i64);
+    println(f"{hit?.f0} {hit?.f1} {hit?.f2} {hit?.f3} {miss?.f0}");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "Some(5) Some(1111) Some(2222) Some(3333) None\n",
+                "auto-par branch must not free the boxed Option payload it \
+                 published to its return slot; got {out:?}"
+            );
+        }
+
+        // The row's own repro — `{i64, Vec[i64]}` is 4 words for the same
+        // reason, and adds a heap field so the box's INNER drop runs too.
+        let out = run_program(
+            r#"
+struct P { val: i64, mut kids: Vec[i64] }
+fn get(v: ref Vec[P], k: i64) -> Option[P] {
+    let mut i = 0i64;
+    while i < v.len() { if v[i].val == k { return Some(v[i]); } i = i + 1i64; }
+    return None;
+}
+fn main() {
+    let mut ns: Vec[P] = Vec.new();
+    ns.push(P { val: 5i64, kids: [1i64] });
+    let hit = get(ns, 5i64);
+    let miss = get(ns, 9i64);
+    println(f"{hit?.val} {miss?.val}");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "Some(5) None\n",
+                "the row's repro: a boxed payload owning heap must survive the \
+                 join intact; got {out:?}"
+            );
+        }
+
+        // NOT `?.`-SPECIFIC. The row read as though the optional chain were an
+        // ingredient, because the `match` spelling it compared against does not
+        // FORK at all — no parallel group, so nothing to get wrong. An ordinary
+        // function-call consumer keeps the group and was equally corrupted.
+        let out = run_program(
+            r#"
+struct W { f0: i64, f1: i64, f2: i64, f3: i64 }
+fn get(v: ref Vec[W], k: i64) -> Option[W] {
+    let mut i = 0i64;
+    while i < v.len() { if v[i].f0 == k { return Some(v[i]); } i = i + 1i64; }
+    return None;
+}
+fn first(o: Option[W]) -> i64 { match o { Some(p) => p.f1, None => -1i64 } }
+fn main() {
+    let mut ns: Vec[W] = Vec.new();
+    ns.push(W { f0: 5i64, f1: 1111i64, f2: 2222i64, f3: 3333i64 });
+    let a = get(ns, 5i64);
+    let b = get(ns, 9i64);
+    println(f"{first(a)} {first(b)}");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "1111 -1\n",
+                "a plain function-call consumer keeps the group and must read \
+                 the published box intact; got {out:?}"
+            );
+        }
+
+        // ANTI-VACUITY / boundary: a 3-word payload rides INLINE, never boxes,
+        // and was correct before the fix. If this ever starts failing the
+        // boxing threshold moved and the assertions above stopped testing the
+        // boxed path at all.
+        let out = run_program(
+            r#"
+struct N { f0: i64, f1: i64, f2: i64 }
+fn get(v: ref Vec[N], k: i64) -> Option[N] {
+    let mut i = 0i64;
+    while i < v.len() { if v[i].f0 == k { return Some(v[i]); } i = i + 1i64; }
+    return None;
+}
+fn main() {
+    let mut ns: Vec[N] = Vec.new();
+    ns.push(N { f0: 5i64, f1: 1111i64, f2: 2222i64 });
+    let hit = get(ns, 5i64);
+    let miss = get(ns, 9i64);
+    println(f"{hit?.f0} {hit?.f2} {miss?.f0}");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out, "Some(5) Some(2222) None\n",
+                "the inline (3-word) payload boundary case; got {out:?}"
+            );
+        }
+    }
+
     /// B-2026-07-03-9 on the auto-par surface: a by-value generic `Slice[T]`
     /// param called with a Vec argument returns the correct value under
     /// auto-par too (this harness compiles WITH `concurrency_analyze`). The

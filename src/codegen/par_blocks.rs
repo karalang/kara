@@ -626,6 +626,19 @@ impl<'ctx> super::Codegen<'ctx> {
                 ptr: parent_alloca,
                 heap_type,
             },
+            SlotOwnership::BoxedEnum {
+                enum_ty,
+                inner_drop_fn,
+                some_tag,
+                ref deeper_tags,
+            } => CleanupAction::BoxedEnumDrop {
+                name: binding_name.to_string(),
+                enum_slot: parent_alloca,
+                enum_ty,
+                inner_drop_fn,
+                some_tag,
+                deeper_tags: deeper_tags.clone(),
+            },
             SlotOwnership::SharedElided => CleanupAction::FreeSharedElided {
                 name: binding_name.to_string(),
                 ptr: parent_alloca,
@@ -2573,6 +2586,26 @@ impl<'ctx> super::Codegen<'ctx> {
                             {
                                 Some(SlotOwnership::SharedElided)
                             }
+                            // B-2026-08-18-39 — a heap-BOXED enum payload
+                            // (`Option[T]` with `T` wider than Option's 3-word
+                            // area). The slot carries the box POINTER, so
+                            // letting the branch's free run hands the parent a
+                            // dangling box; keyed on the alloca like the
+                            // handle kinds above, since `BoxedEnumDrop`
+                            // reloads the enum value from `enum_slot`.
+                            CleanupAction::BoxedEnumDrop {
+                                enum_slot,
+                                enum_ty,
+                                inner_drop_fn,
+                                some_tag,
+                                deeper_tags,
+                                ..
+                            } if Some(*enum_slot) == local_ptr => Some(SlotOwnership::BoxedEnum {
+                                enum_ty: *enum_ty,
+                                inner_drop_fn: *inner_drop_fn,
+                                some_tag: *some_tag,
+                                deeper_tags: deeper_tags.clone(),
+                            }),
                             _ => None,
                         };
                         match transfer {

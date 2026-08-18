@@ -16814,6 +16814,94 @@ fn main() {
         );
     }
 
+    /// B-2026-08-18-39 — a HEAP-BOXED enum payload published as an auto-par
+    /// RETURN SLOT is freed exactly once, by the JOINING SCOPE.
+    ///
+    /// An `Option[T]` whose `T` outgrows the enum's 3-word inline area spills
+    /// behind a `malloc`'d box, and the return slot carries only that pointer.
+    /// `BoxedEnumDrop` was matched by neither the sentinel scan nor the
+    /// `SlotOwnership` transfer loop, so the branch freed the box it had just
+    /// published and the parent's read was a use-after-free.
+    ///
+    /// THIS IS THE LEAK-SIDE GUARD ON THE FIX, not on the original defect. The
+    /// repair is a TRANSFER — remove the branch's action, re-register the
+    /// equivalent against the parent's alloca — and the way to get that half
+    /// right and still be wrong is the one the `SharedElided` row documents:
+    /// suppress in the branch, adopt in nobody, and the box leaks instead of
+    /// being read after free. Measured: with the transfer reduced to bare
+    /// suppression this fixture reports 32 leaked bytes. The use-after-free
+    /// half is pinned by output value in tests/par_codegen.rs.
+    ///
+    /// THE CONSUMER READS, IT DOES NOT MOVE, and that is a deliberate
+    /// restriction rather than an accident of drafting. Moving the joined
+    /// binding into a by-value call (`tail(hit)`) still leaks — the move-out
+    /// sentinel zeroes the parent's slot so the adopted drop no-ops, and a
+    /// by-value enum parameter does not adopt the box. That hole is older than
+    /// this row and independent of it: sequentially the same program is clean
+    /// only because the box never escapes one function and LLVM deletes the
+    /// allocation outright, so nothing was ever freeing it there either. It is
+    /// filed as B-2026-08-18-48 and is NOT covered here.
+    ///
+    /// BUILT IN A HELPER AND THE STACK THEN CHURNED, for the reason the
+    /// B-2026-08-08-15 fixture below spells out: built inline in `main`, the
+    /// parent's alloca and returns-struct are stack slots still holding the
+    /// pointer at exit, so LSan's conservative scan calls an orphaned box
+    /// reachable and reports nothing.
+    ///
+    /// Vacuity guard lives in tests/codegen.rs
+    /// (`par_slot_boxed_option_fixture_actually_parallelizes`): a `match` on
+    /// these bindings makes the analyzer decline to fork at all, which would
+    /// empty this fixture silently — the first draft did exactly that and
+    /// passed against the broken compiler. Keep the two bodies in sync.
+    #[test]
+    fn asan_par_slot_boxed_option_payload_freed_once() {
+        assert_clean_asan_run_min_allocs_auto_par(
+            r#"
+struct W { f0: i64, f1: i64, f2: i64, f3: i64 }
+
+fn get(v: ref Vec[W], k: i64) -> Option[W] {
+    let mut i = 0i64;
+    while i < v.len() { if v[i].f0 == k { return Some(v[i]); } i = i + 1i64; }
+    return None;
+}
+
+fn build(seed: i64) -> i64 {
+    let mut ns: Vec[W] = Vec.new();
+    ns.push(W { f0: seed, f1: seed + 1i64, f2: seed + 2i64, f3: seed + 3i64 });
+    // Two independent Option-returning calls: the group the analyzer forks,
+    // and the shape whose slots carry box pointers.
+    let hit = get(ns, seed);
+    let miss = get(ns, seed + 99i64);
+    // A READING consumer — `?.` projects out of the box without moving the
+    // binding, so the parent stays the owner and its adopted drop is what has
+    // to fire. See the doc comment on why a moving consumer is excluded.
+    let a = hit?.f3;
+    let b = miss?.f3;
+    return match a { Some(x) => x, None => -1i64 } + match b { Some(x) => x, None => -1i64 };
+}
+
+// Overwrites the dead frame the published box pointers lived in, so LSan
+// cannot mistake stack residue for reachability. See the doc comment.
+fn churn(n: i64) -> i64 {
+    if n <= 0 { return 0; }
+    let pad: i64 = n * 3;
+    return pad + churn(n - 1);
+}
+
+fn main() {
+    let seed: i64 = env.args().len();
+    let k = build(seed);
+    let noise = churn(2000);
+    println(k + noise - noise);
+}
+"#,
+            &["3"],
+            "par_slot_boxed_option_payload",
+            // The Vec's element buffer plus the boxed payload.
+            2,
+        );
+    }
+
     /// B-2026-08-08-15 — an RC-bearing `shared struct` published as an auto-par
     /// RETURN SLOT is released exactly once, by the JOINING SCOPE.
     ///

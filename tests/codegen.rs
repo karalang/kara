@@ -3277,6 +3277,93 @@ mod codegen_tests {
         compile_to_ir(&parsed.program, None, None).expect("codegen failed")
     }
 
+    /// B-2026-08-18-39 — THE ANTI-VACUITY GUARD for the ASAN fixture
+    /// `asan_par_slot_boxed_option_payload_freed_once`.
+    ///
+    /// That fixture certifies a branch→parent ownership transfer for a heap-BOXED
+    /// enum payload. If the analyzer stops splitting its `build`, there is no
+    /// branch, no return slot and no transfer — and the fixture goes green while
+    /// covering nothing. This is not hypothetical: the fixture's FIRST draft
+    /// consumed the bindings with `match`, which makes the analyzer decline to
+    /// fork, and it passed against the broken compiler. (The same mistake is why
+    /// the row itself recorded `?.` as an ingredient of the bug — the `match`
+    /// spelling it compared against never parallelized.)
+    ///
+    /// So this asserts both halves the transfer needs: that the function splits
+    /// at all, and that `hit` is PUBLISHED as a return slot.
+    #[test]
+    fn par_slot_boxed_option_fixture_actually_parallelizes() {
+        // The ASAN fixture's source VERBATIM — churn and all, for the reason
+        // the sibling guard below gives.
+        let src = r#"
+struct W { f0: i64, f1: i64, f2: i64, f3: i64 }
+
+fn get(v: ref Vec[W], k: i64) -> Option[W] {
+    let mut i = 0i64;
+    while i < v.len() { if v[i].f0 == k { return Some(v[i]); } i = i + 1i64; }
+    return None;
+}
+
+fn build(seed: i64) -> i64 {
+    let mut ns: Vec[W] = Vec.new();
+    ns.push(W { f0: seed, f1: seed + 1i64, f2: seed + 2i64, f3: seed + 3i64 });
+    let hit = get(ns, seed);
+    let miss = get(ns, seed + 99i64);
+    let a = hit?.f3;
+    let b = miss?.f3;
+    return match a { Some(x) => x, None => -1i64 } + match b { Some(x) => x, None => -1i64 };
+}
+
+fn churn(n: i64) -> i64 {
+    if n <= 0 { return 0; }
+    let pad: i64 = n * 3;
+    return pad + churn(n - 1);
+}
+
+fn main() {
+    let seed: i64 = env.args().len();
+    let k = build(seed);
+    let noise = churn(2000);
+    println(k + noise - noise);
+}
+"#;
+        // Mirror the ASAN harness's pipeline, NOT `ir_for`'s — that helper
+        // passes `ownership: None` and no concurrency analysis, which turns
+        // auto-par off and would make this guard assert the opposite of what
+        // it means to.
+        let mut parsed = karac::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        karac::prepare_for_resolve(&mut parsed.program);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let concurrency = karac::concurrency_analyze_typed(&parsed.program, &effects, Some(&typed));
+        let ir = compile_to_ir(&parsed.program, Some(&ownership), Some(&concurrency))
+            .expect("codegen failed");
+        let branches = ir
+            .lines()
+            .filter(|l| l.starts_with("define") && l.contains("@__par_branch"))
+            .count();
+        assert!(
+            branches > 0,
+            "the analyzer no longer splits `build`, so \
+             asan_par_slot_boxed_option_payload_freed_once is now vacuous — it \
+             covers a branch→parent ownership transfer that never happens. \
+             Re-shape the fixture until this parallelizes again."
+        );
+        assert!(
+            ir.contains("__par_slot_hit_dst"),
+            "`hit` is no longer PUBLISHED as a return slot, so the boxed-payload \
+             ownership hand-off this row fixed is not exercised."
+        );
+    }
+
     /// B-2026-08-08-15 — THE ANTI-VACUITY GUARD for the two ASAN fixtures in
     /// `tests/memory_sanitizer.rs` that cover the auto-par slot-ownership
     /// transfer (`asan_par_slot_shared_struct_*`).
