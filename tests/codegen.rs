@@ -98050,6 +98050,52 @@ fn main() {
         }
     }
 
+    /// B-2026-08-18-30 — a LEFT-CHAINED `??` needs its two nodes on distinct
+    /// side-table keys, and nothing pinned that until now.
+    ///
+    /// `NilCoalesce` still copies its LHS's span (one of seven arms the
+    /// postfix-span family left behind), so both nodes of `a ?? b ?? c` carry
+    /// `a`'s span. What tells them apart is `method_call_key`'s preference for
+    /// the args-close span: `desugar_nil_coalesce` passes the FALLBACK's span
+    /// in that slot precisely because it differs per node. Drop that
+    /// preference — as an attempt to retire the parameter did, on the premise
+    /// that B-2026-08-18-24 had made it redundant — and the outer `??` reads
+    /// the INNER's payload type, failing the build with "Option/Result method
+    /// 'unwrap_or' expected struct receiver, got IntValue".
+    ///
+    /// The whole 14k-test suite passed under that change. This test is the
+    /// gate that was missing: the only prior chained-`??` coverage
+    /// (`tests/typechecker.rs`) parenthesizes the inner one, which gives the
+    /// two nodes different spans and hides the collision, and asserts no
+    /// runtime value.
+    ///
+    /// The chain needs a nested `Option` payload to typecheck at all — `a ?? b`
+    /// already unwraps one layer, so `find(2) ?? find(3) ?? -1` over
+    /// `Option[i64]` is a type error, not a chain. That is why the shape here
+    /// looks contrived: it is the smallest one that actually chains.
+    #[test]
+    fn chained_nil_coalesce_keeps_its_two_nodes_apart() {
+        let src = "fn outer(k: i64) -> Option[Option[i64]] {\n\
+                   if k == 1 { return Some(Some(11)); }\n\
+                   if k == 2 { return Some(None); }\n\
+                   return None;\n\
+                   }\n\
+                   fn mid(k: i64) -> Option[i64] {\n\
+                   if k == 5 { return Some(55); }\n\
+                   return None;\n\
+                   }\n\
+                   fn main() {\n\
+                   println(outer(1) ?? mid(5) ?? -1);\n\
+                   println(outer(2) ?? mid(5) ?? -1);\n\
+                   println(outer(3) ?? mid(9) ?? -1);\n\
+                   }";
+        // Some(Some(11)) -> the inner payload survives both peels;
+        // Some(None)     -> the outer supplies `Some(None)`'s payload, then -1;
+        // None           -> the middle falls back to `mid(9)` = None, then -1.
+        // The interpreter agrees on all three (it keys nothing by span).
+        assert_eq!(run_program(src).as_deref(), Some("11\n-1\n-1\n"));
+    }
+
     /// B-2026-08-17-27 — `??` fell to the same catch-all, so all four of its
     /// legs compiled to 0. It is lowered to `unwrap_or` now, and the point of
     /// this test is that the two spellings agree: `??` IS `unwrap_or`, so any

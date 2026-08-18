@@ -19,12 +19,25 @@ pub struct Span {
 /// The `(offset, length)` key for a method-call side-table entry, chosen to
 /// disambiguate CHAINED method calls.
 ///
-/// The parser sets `MethodCall.span = receiver.span`, so every call in a chain
-/// (`opt.map(f).unwrap_or(d)`, `s.to_string().to_uppercase()`) shares one span
-/// — a receiver-span key therefore collides, and the outer call's table entry
-/// clobbers the inner call's (the chained-method span-collision class; see the
-/// span-collision fix scope). The closing-paren span (`MethodCall.args_close_span`)
-/// is unique per call, so key on it when it is a real, distinct span. Synthetic
+/// HISTORICALLY: the parser set `MethodCall.span = receiver.span`, so every
+/// call in a chain (`opt.map(f).unwrap_or(d)`) shared one span, a receiver-span
+/// key collided, and the outer call's entry clobbered the inner's. The
+/// closing-paren span (`MethodCall.args_close_span`) is unique per call, so
+/// this keys on it when it is a real, distinct span.
+///
+/// THAT REASON EXPIRED with B-2026-08-18-24, which gave `MethodCall` a span of
+/// its own — no method chain needs the second key now. The helper survives for
+/// a DIFFERENT client, measured in B-2026-08-18-30: `??`. `NilCoalesce` still
+/// copies its LHS's span (one of seven arms the postfix-span family left
+/// behind), so both nodes of `a ?? b ?? c` carry `a`'s, and
+/// `ast::desugar_nil_coalesce` passes the FALLBACK's span in the args-close
+/// slot precisely because that differs per node. Collapse this to the receiver
+/// span and the outer `??` reads the inner's payload type, failing the build
+/// with "'unwrap_or' expected struct receiver, got IntValue" — with the whole
+/// suite green, which is what `chained_nil_coalesce_keeps_its_two_nodes_apart`
+/// now guards.
+///
+/// So: retiring the args-close key means widening `NilCoalesce` first. Synthetic
 /// `MethodCall`s built after parse (lowering / codegen) carry a placeholder
 /// `args_close_span` (zero-length, or a clone of the receiver span); for those
 /// we fall back to the receiver span, preserving the pre-fix behavior (they

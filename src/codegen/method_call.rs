@@ -833,13 +833,22 @@ impl<'ctx> super::Codegen<'ctx> {
         // fix, Slice 1.
         //
         // The premise this parameter was BUILT on is gone as of
-        // B-2026-08-18-24: the parser no longer sets `MethodCall.span ==
-        // receiver.span`, so `call_span` is already unique per chain step and
-        // this is now a redundant second key rather than the only one that
-        // works. It is kept because a producer and its consumer have to move
-        // together and this table's inserts still use it — collapsing the pair
-        // back onto `call_span` is a mechanical follow-up, filed as
-        // B-2026-08-18-30, not a free deletion.
+        // B-2026-08-18-24 — the parser no longer sets `MethodCall.span ==
+        // receiver.span`, so `call_span` is unique per chain step and no
+        // METHOD chain needs a second key any more. It does NOT follow that the
+        // parameter is redundant, and B-2026-08-18-30 measured why: `??` is now
+        // its live client. `NilCoalesce` still copies its LHS's span, so both
+        // nodes of `a ?? b ?? c` carry `a`'s, and `desugar_nil_coalesce` passes
+        // the FALLBACK's span here precisely because that differs per node.
+        // Collapsing `method_call_key` onto the receiver span makes the outer
+        // `??` read the inner's payload type and fail the build with
+        // "'unwrap_or' expected struct receiver, got IntValue" — while all
+        // ~14k tests pass, which is why `chained_nil_coalesce_keeps_its_two_
+        // nodes_apart` now exists.
+        //
+        // Retiring this parameter therefore means widening `NilCoalesce` first,
+        // exactly as the five postfix arms were: producer and consumer move
+        // together, never one alone.
         args_close_span: &crate::token::Span,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         // Materialized iterator binding (B-2026-07-11-19): `let it =
