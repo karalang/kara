@@ -3145,6 +3145,65 @@ fn test_disjoint_write_declines_when_the_projected_root_is_also_bound() {
     );
 }
 
+#[test]
+fn test_disjoint_write_declines_when_the_projected_root_has_a_non_projection_use() {
+    // The isolating case for `scalar_projection_bases`' ROOT TAINT, deferred
+    // from B-2026-08-18-21 and assertable only now.
+    //
+    // That row measured the taint as changing no answer, and named the reason:
+    // `MethodCall` still copied its receiver's span, so `ps.len()`'s receiver
+    // carried the call's `i64` and was never seen as a non-projection use at
+    // all. B-2026-08-18-24 gives the call its own key, the receiver carries
+    // `Vec[shared P]`, and the taint becomes the only thing standing between
+    // the sibling `ps[j].v` projection's exemption and a fan-out.
+    //
+    // The decline is the conservative direction, not a claim that `Vec.len`
+    // races: the whitelist's contract is that ONE use it cannot vouch for
+    // costs the whole root its exemption, and a rule that quietly excepted the
+    // uses it happens to model today would be exactly the fail-open shape
+    // `iter_local` exists to avoid.
+    let analysis = analyze_typed(
+        r#"
+        shared struct P {
+            v: i64,
+        }
+
+        fn main() {
+            let n = 64;
+            let mut ps: Vec[P] = Vec.new();
+            let mut i = 0;
+            while i < n {
+                ps.push(P { v: i });
+                i = i + 1;
+            }
+            let mut out: Vec[i64] = Vec.filled(n, 0);
+            for j in 0..n {
+                out[j] = ps[j].v * 2 + ps.len();
+            }
+            println(out[0]);
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    let d = main_fc
+        .disjoint_write_loops
+        .iter()
+        .find(|d| d.loop_var == "j")
+        .unwrap_or_else(|| {
+            panic!(
+                "expected a disjoint-write candidate for loop `j`, got {:?}",
+                main_fc.disjoint_write_loops
+            )
+        });
+    assert_eq!(
+        d.decline,
+        Some(karac::index_disjoint::DisjointDecline::NotCrossTaskSafe),
+        "a root with a use the whitelist cannot vouch for keeps NO exemption, \
+         not even for its scalar projections, got {:?}",
+        d.decline
+    );
+}
+
 // ── B-2026-07-30-1: iteration-local `shared` precision pass ─────────────
 //
 // The four tests below pin the boundary of `src/iter_local.rs`. The first

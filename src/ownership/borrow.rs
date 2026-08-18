@@ -331,6 +331,44 @@ impl<'a> super::OwnershipChecker<'a> {
         }
     }
 
+    /// The key under which a statement's RHS carries its slice-creation
+    /// entry — B-2026-08-18-24.
+    ///
+    /// `record_slice_creation` keys an entry by the span of the expression
+    /// that CREATED the slice, which in a chain is an inner step:
+    /// `m.as_slice_mut().to_vec()` registers against `m.as_slice_mut()`. While
+    /// `MethodCall` copied its object's span the whole chain shared one key
+    /// and a direct lookup at the RHS resolved by coincidence — B-2026-08-17-16
+    /// says so in its own comment ("the parser aliases the chain's span to
+    /// `m`'s"). Once the steps have keys of their own the direct lookup misses,
+    /// the copy-out gate never fires, and the source stays borrowed for the
+    /// rest of the scope: `slice_chain_copied_out_does_not_borrow_the_source`
+    /// fails with "cannot create a `mut Slice[T]` of `m` while another slice
+    /// borrow is live".
+    ///
+    /// Walks the RECEIVER spine outermost-first and returns the first step
+    /// that has an entry, falling back to the expression's own key. Receivers
+    /// only — never into arguments: a slice created inside an argument
+    /// (`f(v.as_slice())`) is not the binding's borrow, and following it would
+    /// end a borrow that is still live.
+    pub(crate) fn slice_borrow_key_for(&self, expr: &Expr) -> SpanKey {
+        let outer = SpanKey::from_span(&expr.span);
+        let mut cur = expr;
+        loop {
+            let key = SpanKey::from_span(&cur.span);
+            if self.slice_borrow_sources.contains_key(&key) {
+                return key;
+            }
+            cur = match &cur.kind {
+                ExprKind::MethodCall { object, .. }
+                | ExprKind::Index { object, .. }
+                | ExprKind::FieldAccess { object, .. }
+                | ExprKind::TupleIndex { object, .. } => object,
+                _ => return outer,
+            };
+        }
+    }
+
     /// B-2026-08-17-16 — end a statement-scoped slice borrow whose value
     /// was COPIED OUT of before binding. The parser aliases a postfix
     /// chain's span to its receiver's, so at `let mc =

@@ -1088,10 +1088,10 @@ impl Parser {
     //
     // Each takes the already-parsed left operand BY VALUE and returns the
     // wrapped node. The operand's span is read BEFORE the operand moves into
-    // the node. Most builders reuse it verbatim — exactly the seed's
-    // `lhs.span.clone()`, not extended to cover the call args — but
-    // `finish_index` extends it past the `]`, mirroring the seed after
-    // B-2026-08-18-21; see the note there.
+    // the node. `finish_index` extends it past the `]` (B-2026-08-18-21) and
+    // `finish_dot`'s METHOD-CALL arm past the `)` (B-2026-08-18-24), mirroring
+    // the seed; the rest — `finish_call`, tuple index, field access — still
+    // reuse it verbatim, exactly the seed's `lhs.span.clone()`.
 
     // `callee(args)`.
     fn finish_call(mut ref self, callee: Expr) -> Expr {
@@ -1174,11 +1174,18 @@ impl Parser {
             self.advance(); // consume (
             let args = self.parse_arg_list();
             self.expect_rparen();
+            // B-2026-08-18-24 — a method call spans object-start -> past the
+            // closing `)`, mirroring the seed. `expect_rparen` has just made
+            // `)` the token before `pos`, which is what `span_from` reads.
+            // The FIELD arm below still reuses the operand's span: field access
+            // is the one postfix arm in both parsers that has not been split
+            // out yet.
+            let span = self.span_from(sp);
             Expr.MethodCall(MethodCallExpr {
                 object: object,
                 method: name,
                 args: args,
-                span: sp,
+                span: span,
             })
         } else {
             Expr.Field(FieldAccessExpr {

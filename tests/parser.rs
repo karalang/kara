@@ -12342,6 +12342,62 @@ fn test_index_nodes_span_past_the_closing_bracket() {
     );
 }
 
+/// Last of the four postfix arms (B-2026-08-18-24), after `?.`
+/// (B-2026-08-18-7), `?` (B-2026-08-18-9) and `Index` (B-2026-08-18-21).
+///
+/// A method call must span its receiver PLUS the call, so a chain does not
+/// collapse onto its innermost receiver. `MethodCall` was the arm the rest of
+/// the family had to work around: `compile_method_call` still carries an
+/// `args_close_span` parameter that exists ONLY to disambiguate side-table
+/// reads across a chain, and `try_compile_freshtemp_user_method` carries a
+/// fallback for the same reason — both are documented as compensations for
+/// this span, not as designs.
+#[test]
+fn test_method_call_nodes_span_past_the_closing_paren() {
+    let source = "fn f(v: Vec[i64]) -> i64 {\n  let a = v.as_slice().len();\n  return a;\n}";
+    let prog = parse(source).program;
+
+    fn collect(e: &Expr, out: &mut Vec<karac::token::Span>) {
+        if let ExprKind::MethodCall { object, .. } = &e.kind {
+            out.push(e.span);
+            collect(object, out);
+        }
+    }
+    let mut spans = Vec::new();
+    for item in &prog.items {
+        if let Item::Function(f) = item {
+            for st in &f.body.stmts {
+                if let StmtKind::Let { value, .. } = &st.kind {
+                    collect(value, &mut spans);
+                }
+            }
+        }
+    }
+    assert_eq!(
+        spans.len(),
+        2,
+        "expected two `MethodCall` nodes, got {spans:?}"
+    );
+
+    let text = |s: &karac::token::Span| &source[s.offset..s.offset + s.length];
+    // Outermost first: the whole chain, then the step it is built on.
+    assert_eq!(text(&spans[0]), "v.as_slice().len()");
+    assert_eq!(text(&spans[1]), "v.as_slice()");
+
+    // The property every span-keyed side table relies on: each link of a chain
+    // is its own key, distinct from the link below it and from the receiver.
+    assert_ne!(
+        (spans[0].offset, spans[0].length),
+        (spans[1].offset, spans[1].length),
+        "a chained method call must not share a SpanKey with its receiver"
+    );
+    assert_ne!(
+        (spans[1].offset, spans[1].length),
+        (spans[1].offset, 1),
+        "a method call must not collapse onto its bare receiver `v`"
+    );
+}
+
 /// `Span.line`/`Span.column` of an interpolation sub-expression must point to
 /// its true position in the ORIGINAL source — not into the synthetic
 /// `fn __interp__() { … }` re-parse wrapper (B-2026-06-09-1a). Before the fix

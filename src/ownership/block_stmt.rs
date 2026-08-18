@@ -129,11 +129,8 @@ impl<'a> super::OwnershipChecker<'a> {
                 // creation whose source is the binding name walks through
                 // this map in `place_expr_root` so the recorded root is
                 // the original storage (`v`), not the intermediate slice.
-                if let Some(entry) = self
-                    .slice_borrow_sources
-                    .get(&SpanKey::from_span(&value.span))
-                    .cloned()
-                {
+                let borrow_key = self.slice_borrow_key_for(value);
+                if let Some(entry) = self.slice_borrow_sources.get(&borrow_key).cloned() {
                     // B-2026-08-17-16 — the span-keyed hit cannot tell "the
                     // RHS IS the slice" from "the RHS passed through a
                     // slice and copied out of it": the parser aliases a
@@ -155,7 +152,7 @@ impl<'a> super::OwnershipChecker<'a> {
                         .get(&SpanKey::from_span(&value.span))
                         .is_some_and(crate::ownership::type_is_deeply_owned);
                     if copied_out {
-                        self.end_copied_out_slice_borrow(&SpanKey::from_span(&value.span));
+                        self.end_copied_out_slice_borrow(&borrow_key);
                     } else {
                         for name in pattern.binding_names() {
                             self.slice_binding_sources
@@ -312,11 +309,8 @@ impl<'a> super::OwnershipChecker<'a> {
                     // drain can detect "slice outlives source" cases.
                     // The LHS's scope depth is already captured in
                     // `binding_scope_depth` from the `LetUninit` arm.
-                    if let Some(entry) = self
-                        .slice_borrow_sources
-                        .get(&SpanKey::from_span(&value.span))
-                        .cloned()
-                    {
+                    let borrow_key = self.slice_borrow_key_for(value);
+                    if let Some(entry) = self.slice_borrow_sources.get(&borrow_key).cloned() {
                         // Same copy-out gate as the `Let` arm
                         // (B-2026-08-17-16): a deeply-owned RHS type means
                         // the chain copied out of the slice, so the
@@ -328,7 +322,7 @@ impl<'a> super::OwnershipChecker<'a> {
                             .get(&SpanKey::from_span(&value.span))
                             .is_some_and(crate::ownership::type_is_deeply_owned);
                         if copied_out {
-                            self.end_copied_out_slice_borrow(&SpanKey::from_span(&value.span));
+                            self.end_copied_out_slice_borrow(&borrow_key);
                         } else if let Some(&lhs_depth) = self.binding_scope_depth.get(name) {
                             self.slice_binding_sources
                                 .insert(name.clone(), entry.clone());

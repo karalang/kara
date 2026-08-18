@@ -1086,13 +1086,54 @@ impl<'ctx> super::Codegen<'ctx> {
         // used, so this reorder is a pure fix with no regression. The
         // element-drop threading below is identical for both sources, so heap
         // elements are freed once at scope exit.
-        let te = if let Some(elem_te) = self.span_tables.temp_recv_elem_types.get(&key).cloned() {
-            super::Codegen::vec_type_expr_from_element(&elem_te)
-        } else if let Some(te) = self.drop_rc.owned_temp_drops.get(&key).cloned() {
-            te
-        } else {
-            return Ok(None);
-        };
+        //
+        // B-2026-08-18-24 — the `owned_temp_drops` fallback needs an OWNERSHIP
+        // gate, and until `MethodCall` got a span of its own it had one by
+        // accident. `owned_temp_drops` is not a fresh-temp table: the lowering
+        // pass fills it from EVERY `expr_types` entry whose type is
+        // Vec/String/Map/…, so a hit says "this span holds a Vec", not "this
+        // Vec is ours to free". What kept a borrowed iterable out was the
+        // collision: `for x in t.0.iter()` stamped the call with `t`'s span,
+        // where `expr_types` holds the TUPLE type, which is not in the
+        // droppable set — so the lookup missed and no cleanup was queued.
+        // Separate the spans and the call's own `Vec[i64]` is right there, the
+        // materialized temp gets a `FreeVecBuffer`, and `t`'s buffer is freed
+        // twice (measured: `free(): double free detected in tcache 2` on
+        // `for x in t.0.iter()`).
+        //
+        // `temp_recv_elem_types` needs no such gate: its producer records only
+        // `Call`/`MethodCall`/collection-literal receivers — the fresh-temp
+        // shapes — so a hit there is already an ownership claim.
+        //
+        // `owns` records WHICH table answered, because only one of them is an
+        // ownership claim. `temp_recv_elem_types` is recorded solely for
+        // `Call`/`MethodCall`/collection-literal receivers — the fresh-temp
+        // shapes — so a hit there means the buffer is ours to free.
+        // `owned_temp_drops` claims nothing of the kind: the lowering pass
+        // fills it from EVERY `expr_types` entry whose type is
+        // Vec/String/Map/…, so a hit says only "this span holds a Vec".
+        let (te, owns) =
+            if let Some(elem_te) = self.span_tables.temp_recv_elem_types.get(&key).cloned() {
+                (super::Codegen::vec_type_expr_from_element(&elem_te), true)
+            } else if let Some(te) = self.drop_rc.owned_temp_drops.get(&key).cloned() {
+                // Fresh iff a call-shaped temp OR a collection LITERAL. The literal
+                // half is not decoration: an iterator terminal peels its adaptors,
+                // so `vec![1,2,3,4].iter().sum()` reaches here with the bare
+                // `vec![…]` as the iterable — and `expr_yields_fresh_owned_temp`
+                // only recognizes `Call`/`MethodCall`, so it answers false for the
+                // one shape that is fresh by construction. Mirrors the gate the
+                // producer of `temp_recv_elem_types` uses on the same question
+                // (`recv_is_call || recv_is_coll_lit`), which is what keeps the two
+                // ends of this decision agreeing.
+                let fresh = self.expr_yields_fresh_owned_temp(iterable)
+                    || matches!(
+                        iterable.kind,
+                        ExprKind::PrefixCollectionLiteral { .. } | ExprKind::ArrayLiteral(_)
+                    );
+                (te, fresh)
+            } else {
+                return Ok(None);
+            };
         let is_vec = matches!(
             &te.kind,
             TypeKind::Path(p) if p.segments.last().map(|s| s.as_str()) == Some("Vec")
@@ -1137,7 +1178,21 @@ impl<'ctx> super::Codegen<'ctx> {
             .get(synth.as_str())
             .cloned()
             .and_then(|et| self.vec_elem_agg_drop_for_type_expr(&et));
-        if is_tensor_elem {
+        // …but ONLY when the iterable is ours to free. Materializing is about
+        // ITERATING (the loop needs a named slot); the cleanup is a separate
+        // claim — see the note on the lookup above.
+        //
+        // `for x in t.0.iter()` arrives through `owned_temp_drops` over a PLACE
+        // and must iterate without queuing anything (it double-freed `t`'s
+        // buffer otherwise). `for s in vec![..].iter()` arrives through
+        // `temp_recv_elem_types` over a literal and MUST queue one — gating
+        // that branch too leaked it, which only the -O0 ASAN leg could see:
+        // at -O2 the fixture's allocation folds away and 14k tests stayed
+        // green. `for a in t.iter_axis(n)` is a genuine fresh temp reached
+        // through the fallback and keeps its drop via the predicate.
+        if !owns {
+            // no cleanup: the buffer belongs to whatever the receiver borrows
+        } else if is_tensor_elem {
             self.track_vec_of_tensors_var(alloca);
         } else if let Some(map_drop) = map_elem_drop {
             // `Vec[Map]` / `Vec[Set]` iterable temp: the Vec owns its map

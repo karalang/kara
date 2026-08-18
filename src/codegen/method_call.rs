@@ -826,12 +826,20 @@ impl<'ctx> super::Codegen<'ctx> {
         args: &[CallArg],
         call_span: &crate::token::Span,
         // The call's closing-paren span, used ONLY to disambiguate the
-        // method_unwrap_* side-table reads for CHAINED calls (parser sets
-        // `MethodCall.span == receiver.span`, so `call_span` collides across a
-        // chain). Synthetic callers pass `call_span` here — `method_call_key`
-        // then falls back to the receiver span, preserving prior behavior.
-        // Other side-tables still key on `call_span` (their inserts are
-        // unchanged); see the span-collision fix, Slice 1.
+        // method_unwrap_* side-table reads for CHAINED calls. Synthetic callers
+        // pass `call_span` here — `method_call_key` then falls back to the
+        // receiver span, preserving prior behavior. Other side-tables still key
+        // on `call_span` (their inserts are unchanged); see the span-collision
+        // fix, Slice 1.
+        //
+        // The premise this parameter was BUILT on is gone as of
+        // B-2026-08-18-24: the parser no longer sets `MethodCall.span ==
+        // receiver.span`, so `call_span` is already unique per chain step and
+        // this is now a redundant second key rather than the only one that
+        // works. It is kept because a producer and its consumer have to move
+        // together and this table's inserts still use it — collapsing the pair
+        // back onto `call_span` is a mechanical follow-up, filed as
+        // B-2026-08-18-30, not a free deletion.
         args_close_span: &crate::token::Span,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         // Materialized iterator binding (B-2026-07-11-19): `let it =
@@ -6831,7 +6839,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let freshtemp_mapset_recv = self
             .mapset
             .temp_recv_mapset_types
-            .contains_key(&(object.span.offset, object.span.length));
+            .contains_key(&(call_span.offset, call_span.length));
         if !user_method_for_len_family
             && !freshtemp_mapset_recv
             && (!matches!(&object.kind, ExprKind::Identifier(_)) || borrow_local_recv)
@@ -6894,7 +6902,15 @@ impl<'ctx> super::Codegen<'ctx> {
                         && !self.expr_is_unwrap_of_borrow_accessor(object)
                     {
                         let recv_span_key = (object.span.offset, object.span.length);
-                        if !self.try_track_len_family_recv_temp(recv_val, recv_span_key) {
+                        // Two tables, two keys, and they are NOT interchangeable
+                        // (B-2026-08-18-24). `temp_recv_len_elem_types` is
+                        // inserted by the typechecker under the CALL's span;
+                        // `owned_temp_drops` is recorded against the receiver
+                        // EXPRESSION. While `MethodCall` copied its object's
+                        // span one key served both, which is precisely why the
+                        // difference went unnoticed.
+                        let call_span_key = (call_span.offset, call_span.length);
+                        if !self.try_track_len_family_recv_temp(recv_val, call_span_key) {
                             self.materialize_owned_temp(recv_val, recv_span_key);
                         }
                     }
@@ -7695,7 +7711,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // shape, which is element-erased). Runs before the String redispatch
         // below; no-ops (returns `Ok(None)`) when there's no recorded element
         // type, so the String path and the diagnostic are untouched.
-        if let Some(result) = self.try_compile_freshtemp_vec_read_method(object, method, args)? {
+        if let Some(result) =
+            self.try_compile_freshtemp_vec_read_method(object, method, args, call_span)?
+        {
             return Ok(result);
         }
 
@@ -7703,7 +7721,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // FRESH-TEMP `Map`/`Set` receiver (`make_map().get(k)`). The handle is a
         // plain `ptr` (no struct shape to detect), so it keys off the
         // typechecker's `temp_recv_mapset_types`; no-ops (`Ok(None)`) when absent.
-        if let Some(result) = self.try_compile_freshtemp_mapset_read_method(object, method, args)? {
+        if let Some(result) =
+            self.try_compile_freshtemp_mapset_read_method(object, method, args, call_span)?
+        {
             return Ok(result);
         }
 
@@ -9085,12 +9105,21 @@ impl<'ctx> super::Codegen<'ctx> {
         object: &Expr,
         method: &str,
         args: &[CallArg],
+        call_span: &crate::token::Span,
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
         // Identifier / self receivers route through the named-binding dispatch.
         if matches!(&object.kind, ExprKind::Identifier(_) | ExprKind::SelfValue) {
             return Ok(None);
         }
-        let span_key = (object.span.offset, object.span.length);
+        // B-2026-08-18-24 — keyed by the CALL's span, which is what
+        // `record_temp_receiver_types` inserts under ("keyed by the call span
+        // — the same collision dodge `method_unwrap_inner_types` /
+        // `method_callee_types` use"). Reading it at the RECEIVER's span
+        // resolved only while `MethodCall` copied its object's span; once the
+        // two are distinct the lookup misses, this arm returns `Ok(None)`, and
+        // dispatch falls through to "no handler for method '<m>' on
+        // non-identifier receiver".
+        let span_key = (call_span.offset, call_span.length);
         let Some(elem_te) = self
             .span_tables
             .temp_recv_elem_types
@@ -9378,11 +9407,14 @@ impl<'ctx> super::Codegen<'ctx> {
         object: &Expr,
         method: &str,
         args: &[CallArg],
+        call_span: &crate::token::Span,
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
         if matches!(&object.kind, ExprKind::Identifier(_) | ExprKind::SelfValue) {
             return Ok(None);
         }
-        let span_key = (object.span.offset, object.span.length);
+        // Call-span keyed, for the reason `try_compile_freshtemp_vec_read_method`
+        // records (B-2026-08-18-24).
+        let span_key = (call_span.offset, call_span.length);
         let Some(recv_te) = self.mapset.temp_recv_mapset_types.get(&span_key).cloned() else {
             return Ok(None);
         };

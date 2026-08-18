@@ -6786,9 +6786,24 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `compile_function`). A range index (`v[a..b]`) is a sub-Vec, not an
     /// element, so it is excluded.
     pub(super) fn receiver_struct_inst(&self, expr: &Expr) -> Option<TypeExpr> {
-        if let Some(t) = self.enum_inst_type_of_expr(expr) {
-            return Some(t);
-        }
+        // B-2026-08-18-24 — the STRUCTURAL answer first, the span table second.
+        // For `v[0]` the container's registered element type IS the receiver's
+        // instantiation; `enum_inst_type_of_expr` is span-keyed and, at a
+        // collided span, answers for a DIFFERENT node. `FieldAccess` still
+        // copies its object's span (the fifth postfix arm, after `?`, `?.`,
+        // `Index` and `MethodCall`), so `v[0]` and `v[0].second` share a key —
+        // and once `MethodCall` stopped copying too, the surviving write at
+        // that key became `v[0].second`'s `Vec[i64]`. Asking span-first then
+        // returned `Vec[i64]` for `v[0]`, whose head is not `Pair`, so
+        // `resolve_generic_field_te` skipped the substitution, the synth field
+        // element registered as the bare param `B`, and `v[0].second.len()`
+        // loud-bailed with "no handler for method 'len' on variable
+        // '__field_elem_0'" — the exact diagnostic B-2026-07-15-20 fixed,
+        // reappearing through a different door.
+        //
+        // Same discriminator B-2026-08-18-14 established: the static walk is
+        // authoritative where it has an answer, and the span table is the
+        // fallback for the shapes it cannot see.
         if let ExprKind::Index { object, index } = &expr.kind {
             if matches!(&index.kind, ExprKind::Range { .. }) {
                 return None;
@@ -6803,7 +6818,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
         }
-        None
+        self.enum_inst_type_of_expr(expr)
     }
 
     /// Span-keyed instantiation lookup (the lowering pass's

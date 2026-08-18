@@ -261,8 +261,15 @@ impl super::Parser {
                                 let args = self.parse_arg_list()?;
                                 self.expect(&Token::RightParen)?;
                                 let args_close_span = self.tokens[self.pos - 1].span;
+                                // B-2026-08-18-24 — MEASUREMENT SCAFFOLD.
+                                let end = args_close_span.offset + args_close_span.length;
                                 lhs = Expr {
-                                    span: lhs.span,
+                                    span: Span {
+                                        line: lhs.span.line,
+                                        column: lhs.span.column,
+                                        offset: lhs.span.offset,
+                                        length: end.saturating_sub(lhs.span.offset),
+                                    },
                                     kind: ExprKind::MethodCall {
                                         object: Box::new(lhs),
                                         method,
