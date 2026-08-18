@@ -3796,10 +3796,11 @@ impl<'a> super::TypeChecker<'a> {
                 self.infer_question(inner, &expr.span)
             }
 
-            ExprKind::OptionalChain { object, .. } => {
-                let _obj_ty = self.infer_expr(object);
-                Type::Error // Needs advanced option handling, stubbed for now
-            }
+            ExprKind::OptionalChain {
+                object,
+                field_or_method,
+                args,
+            } => self.infer_optional_chain(object, field_or_method, args, &expr.span),
 
             // Infix
             ExprKind::NilCoalesce { left, right } => {

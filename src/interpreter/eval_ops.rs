@@ -15,7 +15,7 @@ use std::sync::{Arc, RwLock};
 use crate::ast::*;
 use crate::token::Span;
 
-use super::value::{TensorElemWidth, Value};
+use super::value::{EnumData, TensorElemWidth, Value};
 
 impl<'a> super::Interpreter<'a> {
     // ── Operators ───────────────────────────────────────────────
@@ -901,6 +901,62 @@ impl<'a> super::Interpreter<'a> {
         Value::Column {
             data: Arc::new(RwLock::new(out_data)),
             valid: Arc::new(RwLock::new(valids)),
+        }
+    }
+
+    /// Project `member` out of an optional chain's unwrapped payload — a
+    /// field read when `a?.f`, a real method call when `a?.m(args)`.
+    ///
+    /// B-2026-08-17-28 — the method form used to be a FIELD lookup with the
+    /// argument list thrown away, which found nothing and produced `Unit`.
+    /// Routing it through `eval_method_call` is what makes `c?.label()` mean
+    /// the same call as `c.label()`; binding the payload to a scope-local
+    /// synthetic name is how an already-evaluated `Value` is handed to an
+    /// evaluator whose interface takes an `Expr`. The name is not a valid
+    /// Kara identifier, so it cannot shadow anything the author wrote, and
+    /// the scope is popped before returning.
+    pub(crate) fn optional_chain_project(
+        &mut self,
+        payload: Value,
+        member: &str,
+        args: &Option<Vec<CallArg>>,
+        expr: &Expr,
+    ) -> Value {
+        let Some(call_args) = args else {
+            // Field form: read it straight off the struct.
+            return match payload {
+                Value::Struct { fields, .. } => fields.get(member).cloned().unwrap_or(Value::Unit),
+                _ => Value::Unit,
+            };
+        };
+
+        const RECV: &str = "__optional_chain_recv";
+        self.env.push_scope();
+        self.env.define(RECV.to_string(), payload);
+        let recv_expr = Expr {
+            span: expr.span,
+            kind: ExprKind::Identifier(RECV.to_string()),
+        };
+        let out = self.eval_method_call(&recv_expr, member, call_args, &expr.span, &expr.span);
+        self.env.pop_scope();
+        out
+    }
+
+    /// Wrap an optional chain's projected value back into the chain's
+    /// `Option`, FLATTENING when the projection was already one.
+    ///
+    /// `a?.f` yields `Option[U]`, never `Option[Option[U]]` — that is what
+    /// lets the next `?.` in `a?.f?.g` project from the payload instead of
+    /// from a wrapper. Without it the spec's own `user.address?.city?.name`
+    /// could not work at all (B-2026-08-17-28).
+    pub(crate) fn rewrap_optional_chain(projected: Value) -> Value {
+        if matches!(&projected, Value::EnumVariant { enum_name, .. } if enum_name == "Option") {
+            return projected;
+        }
+        Value::EnumVariant {
+            enum_name: "Option".to_string(),
+            variant: "Some".to_string(),
+            data: EnumData::Tuple(vec![projected]),
         }
     }
 

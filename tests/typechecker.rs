@@ -5844,6 +5844,106 @@ fn test_pipe_type_mismatch() {
     assert!(errors.iter().any(|e| e.kind == TypeErrorKind::TypeMismatch));
 }
 
+// ── Category: `?.` (optional chaining) ─────────────────────────
+
+const OPTCHAIN_DECLS: &str = "
+    struct City { name: String, zip: i64 }
+    struct Address { city: Option[City], zip: i64 }
+    fn mk() -> Option[Address] { return Some(Address { city: Some(City { name: \"Paris\", zip: 7 }), zip: 3 }); }
+";
+
+/// B-2026-08-17-28 — the `?.` rule was a stub: `Type::Error // Needs advanced
+/// option handling, stubbed for now`. Because a REPORTED error also returns
+/// `Type::Error`, the stub was silent, so `karac check` passed on every `?.`
+/// program and handed an untyped expression to the evaluators.
+///
+/// A bare `typecheck_ok` cannot test this — an unreported `Type::Error` is
+/// universally assignable and satisfies any annotation. The type is pinned
+/// through annotations that a REAL type rejects.
+#[test]
+fn optional_chain_yields_the_flattened_option() {
+    // An `Option`-typed member FLATTENS: `Option[City]`, not
+    // `Option[Option[City]]`. That is what lets `?.city?.name` chain at all.
+    typecheck_ok(&format!(
+        "{OPTCHAIN_DECLS} fn main() {{ let c: Option[City] = mk()?.city; }}"
+    ));
+    let nested = typecheck_errors(&format!(
+        "{OPTCHAIN_DECLS} fn main() {{ let c: Option[Option[City]] = mk()?.city; }}"
+    ));
+    assert!(
+        nested.iter().any(|e| e.kind == TypeErrorKind::TypeMismatch),
+        "`?.` on an Option-typed member must FLATTEN, not double-wrap; got: {nested:?}"
+    );
+    // A non-`Option` member wraps once.
+    typecheck_ok(&format!(
+        "{OPTCHAIN_DECLS} fn main() {{ let z: Option[i64] = mk()?.zip; }}"
+    ));
+    let wrong = typecheck_errors(&format!(
+        "{OPTCHAIN_DECLS} fn main() {{ let z: Option[String] = mk()?.zip; }}"
+    ));
+    assert!(
+        wrong.iter().any(|e| e.kind == TypeErrorKind::TypeMismatch),
+        "an unreported `Type::Error` would accept this annotation; got: {wrong:?}"
+    );
+    // The full chain from design.md line 782.
+    typecheck_ok(&format!(
+        "{OPTCHAIN_DECLS} fn main() {{ let n: Option[String] = mk()?.city?.name; }}"
+    ));
+}
+
+/// The member is resolved against the payload by the ordinary rules, so a
+/// method call resolves exactly as `.` would — and a member that does not
+/// exist is still reported rather than silently typed.
+#[test]
+fn optional_chain_resolves_members_the_ordinary_way() {
+    typecheck_ok(&format!(
+        "{OPTCHAIN_DECLS}
+         impl Address {{ fn label(ref self) -> String {{ return \"a\"; }} }}
+         fn main() {{ let s: Option[String] = mk()?.label(); }}"
+    ));
+    let missing = typecheck_errors(&format!(
+        "{OPTCHAIN_DECLS} fn main() {{ let x = mk()?.nope; }}"
+    ));
+    assert!(
+        !missing.is_empty(),
+        "an unknown member must be reported, not silently typed"
+    );
+}
+
+/// `?.` needs a receiver that can BE absent. A non-`Option` operand used to
+/// reach the silent stub; it is now a run-fatal diagnostic, so the rejection
+/// reaches the author instead of the evaluators.
+#[test]
+fn optional_chain_on_a_non_option_is_diagnosed_and_run_fatal() {
+    for (decls, recv) in [
+        (
+            "struct City { name: String, zip: i64 }",
+            "City { name: \"P\", zip: 1 }",
+        ),
+        ("", "5"),
+        ("", "\"s\""),
+    ] {
+        let src = format!("{decls} fn main() {{ let c = ({recv})?.name; }}");
+        let errors = typecheck_errors(&src);
+        let e = errors
+            .iter()
+            .find(|e| e.kind == TypeErrorKind::OptionalChainNotOption)
+            .unwrap_or_else(|| {
+                panic!("expected OptionalChainNotOption for `{recv}?.name`, got: {errors:?}")
+            });
+        assert!(
+            e.message.contains("`Option`") && e.message.contains("use '.' instead of '?.'"),
+            "the message must name the requirement and the remedy: {}",
+            e.message
+        );
+        assert!(
+            e.kind.is_run_fatal(),
+            "OptionalChainNotOption must be run-fatal — the interpreter's `?.` has no \
+             meaning on `{recv}`, so a downgraded error would reach it"
+        );
+    }
+}
+
 // ── Category: `??` (nil coalescing) ────────────────────────────
 
 /// B-2026-08-17-27 — design.md line 782 gives `??` both wrappers: it yields

@@ -512,6 +512,15 @@ pub enum TypeErrorKind {
     /// has no meaning on an unwrapped receiver, so a downgraded error would
     /// reach them instead of being printed.
     NilCoalesceNotWrapped,
+    /// `x?.f` where `x` is not an `Option`. `?.` is the short-circuiting
+    /// form of member access, so a receiver that cannot be absent has
+    /// nothing for it to do. The rule was a SILENT stub returning
+    /// `Type::Error` — no diagnostic, so `karac check` passed on every `?.`
+    /// program and the evaluators improvised (B-2026-08-17-28). Run-fatal
+    /// for the same reason as its siblings: the interpreter's `?.` has no
+    /// meaning on a non-`Option` receiver, so a downgraded error would reach
+    /// it instead of being printed.
+    OptionalChainNotOption,
     /// An `Atomic[T]` operation (`load` / `store` / `fetch_add` /
     /// `fetch_sub` / `fetch_and` / `fetch_or` / `fetch_xor` / `swap`) was
     /// called without its required explicit `MemoryOrdering` argument.
@@ -968,6 +977,7 @@ impl TypeErrorKind {
                 | TypeErrorKind::IteratorNotIndexable
                 | TypeErrorKind::TypeNotIndexable
                 | TypeErrorKind::NilCoalesceNotWrapped
+                | TypeErrorKind::OptionalChainNotOption
                 | TypeErrorKind::SharedFieldNotMut
                 | TypeErrorKind::AtomicMissingOrdering
                 | TypeErrorKind::AtomicInvalidInnerType
@@ -1005,6 +1015,7 @@ pub(crate) fn class_for_type_error_kind(
         | TypeErrorKind::IteratorNotIndexable
         | TypeErrorKind::TypeNotIndexable
         | TypeErrorKind::NilCoalesceNotWrapped
+        | TypeErrorKind::OptionalChainNotOption
         | TypeErrorKind::LabelMismatch
         | TypeErrorKind::NonContiguousLabels
         | TypeErrorKind::PatternScrutineeMismatch

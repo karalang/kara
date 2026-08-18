@@ -1569,10 +1569,37 @@ impl<'a> super::Interpreter<'a> {
             }
 
             // Optional chaining (?.)
+            // Optional chaining `a?.f` / `a?.m(args)` — design.md line 782:
+            // "`user.address?.city?.name` short-circuits to `None` if any
+            // level is absent."
+            //
+            // B-2026-08-17-28 — this arm was wrong three ways, all visible in
+            // that one spec example:
+            //
+            //  * IT NEVER FLATTENED. The projection was re-wrapped in `Some`
+            //    unconditionally, so `u.address?.city` — whose `city` field is
+            //    ALREADY an `Option[City]` — produced `Some(Some(City))`.
+            //    Matching `Some(c)` then bound `c` to an enum value, and
+            //    `c.name` tripped the `unreachable!` in `eval_field_access`.
+            //  * THE SPEC'S OWN THREE-LEVEL CHAIN SILENTLY TOOK THE `None`
+            //    ARM. Same root: the second `?.` received `Some(Some(City))`,
+            //    unwrapped one layer to `Some(City)` — not a struct — and fell
+            //    to the `_ => None` default. Every level being `Some` printed
+            //    the absent branch.
+            //  * THE METHOD FORM IGNORED ITS ARGUMENTS. `args` was discarded
+            //    and `field_or_method` looked up as a FIELD, so `c?.label()`
+            //    found no field `label` and yielded `Unit` — which then failed
+            //    a `String + Unit` at runtime, on a program `karac check`
+            //    passed.
+            //
+            // Flattening is what makes a chain a chain, and it is the rule
+            // every `?.` language uses: the result is `Option[U]`, never
+            // `Option[Option[U]]`, so the next `?.` in the chain sees a
+            // payload it can project from.
             ExprKind::OptionalChain {
                 object,
-                field_or_method: field,
-                args: _,
+                field_or_method: member,
+                args,
             } => {
                 let obj = self.eval_expr_inner(object);
                 match &obj {
@@ -1581,7 +1608,7 @@ impl<'a> super::Interpreter<'a> {
                         data: EnumData::Unit,
                         ..
                     } if variant == "None" => {
-                        obj // propagate None
+                        obj // absent: short-circuit, the whole chain is None
                     }
                     Value::EnumVariant {
                         variant,
@@ -1589,30 +1616,22 @@ impl<'a> super::Interpreter<'a> {
                         ..
                     } if variant == "Some" => {
                         let inner = vals.first().cloned().unwrap_or(Value::Unit);
-                        match inner {
-                            Value::Struct { fields, .. } => {
-                                let val = fields.get(field).cloned().unwrap_or(Value::Unit);
-                                Value::EnumVariant {
-                                    enum_name: "Option".to_string(),
-                                    variant: "Some".to_string(),
-                                    data: EnumData::Tuple(vec![val]),
-                                }
-                            }
-                            _ => Value::EnumVariant {
-                                enum_name: "Option".to_string(),
-                                variant: "None".to_string(),
-                                data: EnumData::Unit,
-                            },
+                        let projected = self.optional_chain_project(inner, member, args, expr);
+                        if self.pending_cf.is_some() {
+                            return Value::Unit;
                         }
+                        Self::rewrap_optional_chain(projected)
                     }
+                    // A non-`Option` receiver has nothing to short-circuit on.
+                    // The typechecker rejects this (`OptionalChainNotOption`),
+                    // so it is only reachable through `karac run`'s execute-
+                    // despite-errors path; project anyway rather than crash.
                     _ => {
-                        // Not an Option, just do field access
-                        match obj {
-                            Value::Struct { fields, .. } => {
-                                fields.get(field).cloned().unwrap_or(Value::Unit)
-                            }
-                            _ => Value::Unit,
+                        let projected = self.optional_chain_project(obj, member, args, expr);
+                        if self.pending_cf.is_some() {
+                            return Value::Unit;
                         }
+                        Self::rewrap_optional_chain(projected)
                     }
                 }
             }

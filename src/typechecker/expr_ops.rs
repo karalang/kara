@@ -2631,6 +2631,113 @@ impl<'a> super::TypeChecker<'a> {
         payload
     }
 
+    // ── ?. optional chaining ────────────────────────────────────
+
+    /// Typecheck `a?.f` / `a?.m(args)` (design.md line 782): the operand must
+    /// be an `Option[T]`; the member is resolved against `T`; and the result
+    /// is `Option[U]` where `U` is the member's type with any outer `Option`
+    /// STRIPPED.
+    ///
+    /// B-2026-08-17-28 — this rule did not exist. The arm read
+    /// `Type::Error // Needs advanced option handling, stubbed for now`, and
+    /// because a *reported* error returns `Type::Error` too, the stub was
+    /// SILENT: `karac check` passed on every `?.` program and handed an
+    /// untyped expression to the evaluators, which then disagreed three
+    /// different ways. Same shape as the index rule's silent tail
+    /// (B-2026-08-17-10) and `??`'s missing `Result` arm (B-2026-08-17-27) —
+    /// the third rule found returning `Type::Error` without saying anything.
+    ///
+    /// FLATTENING IS THE WHOLE POINT, and design.md's own example is what
+    /// forces it: `user.address?.city?.name` can only chain if `address?.city`
+    /// is `Option[City]` rather than `Option[Option[City]]`, since the next
+    /// `?.` has to project from a `City`. Every language with `?.` flattens
+    /// for this reason.
+    ///
+    /// The member is resolved by binding the payload to a scope-local
+    /// synthetic name and typing the ordinary field access / method call
+    /// against it. That reuses field resolution, method dispatch, generic
+    /// instantiation and their diagnostics wholesale, rather than
+    /// reimplementing member lookup here — and it is what makes `c?.label()`
+    /// resolve exactly as `c.label()` does.
+    pub(super) fn infer_optional_chain(
+        &mut self,
+        object: &Expr,
+        member: &str,
+        args: &Option<Vec<CallArg>>,
+        span: &Span,
+    ) -> Type {
+        let obj_ty = resolve_type_var_top(&self.infer_expr(object), &self.env.substitutions);
+        // A borrow projects through, exactly as field access does.
+        let peeled = match &obj_ty {
+            Type::Ref(inner) | Type::MutRef(inner) => (**inner).clone(),
+            _ => obj_ty.clone(),
+        };
+
+        let payload = match &peeled {
+            Type::Named { name, args: targs } if name == "Option" && targs.len() == 1 => {
+                targs[0].clone()
+            }
+            _ => {
+                // Still type any arguments, so their own errors are reported
+                // in the same pass rather than on a second round-trip.
+                if let Some(call_args) = args {
+                    for a in call_args {
+                        self.infer_expr(&a.value);
+                    }
+                }
+                if peeled != Type::Error && !matches!(peeled, Type::TypeVar(_)) {
+                    self.type_error(
+                        format!(
+                            "'?.' requires an `Option` on the left, found '{}'\n  \
+                             '?.' is the short-circuiting form of member access: it yields `None`\n  \
+                             when the receiver is absent, so it needs a receiver that can BE absent.\n  \
+                             help: '{}' is always present — use '.' instead of '?.'",
+                            type_display(&peeled),
+                            type_display(&peeled)
+                        ),
+                        *span,
+                        TypeErrorKind::OptionalChainNotOption,
+                    );
+                }
+                return Type::Error;
+            }
+        };
+
+        // Resolve the member against the PAYLOAD, through a synthetic binding
+        // so the ordinary rules apply. The name cannot collide with anything
+        // the author wrote — it is not lexable as a Kara identifier.
+        const RECV: &str = "__optional_chain_recv";
+        self.local_scope.push();
+        self.local_scope.insert(RECV.to_string(), payload);
+        let recv_expr = Expr {
+            span: object.span,
+            kind: ExprKind::Identifier(RECV.to_string()),
+        };
+        let projected = match args {
+            None => self.infer_field_access(&recv_expr, member, span),
+            Some(call_args) => self.infer_method_call(&recv_expr, member, call_args, span, span),
+        };
+        self.local_scope.pop();
+
+        if projected == Type::Error {
+            return Type::Error;
+        }
+
+        // Flatten: an already-`Option` member IS the chain's result.
+        let projected = resolve_type_var_top(&projected, &self.env.substitutions);
+        let inner = match &projected {
+            Type::Named { name, args: targs } if name == "Option" && targs.len() == 1 => {
+                targs[0].clone()
+            }
+            other => other.clone(),
+        };
+
+        Type::Named {
+            name: "Option".to_string(),
+            args: vec![inner],
+        }
+    }
+
     // ── ? operator ──────────────────────────────────────────────
 
     /// Type-check `inner?`: validate that the operand is `Result[T, E1]` or

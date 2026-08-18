@@ -457,6 +457,13 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
         "E0276",
         ty("NilCoalesceNotWrapped", Some(DiagnosticClass::TypeMismatch)),
     ),
+    (
+        "E0277",
+        ty(
+            "OptionalChainNotOption",
+            Some(DiagnosticClass::TypeMismatch),
+        ),
+    ),
     ("E0269", ty("SharedFieldNotMut", None)),
     (
         "E0270",
@@ -1211,6 +1218,7 @@ mod tests {
             ("E0274", K::IteratorNotIndexable),
             ("E0275", K::TypeNotIndexable),
             ("E0276", K::NilCoalesceNotWrapped),
+            ("E0277", K::OptionalChainNotOption),
             ("E0270", K::AtomicMissingOrdering),
             ("E0271", K::ImplTraitMultipleWitnesses),
             ("E0272", K::AtomicInvalidInnerType),

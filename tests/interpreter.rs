@@ -3399,6 +3399,94 @@ fn test_pipe_chained() {
     );
 }
 
+// ── `?.` (optional chaining) ───────────────────────────────────
+
+/// B-2026-08-17-28 — design.md line 782: "`user.address?.city?.name`
+/// short-circuits to `None` if any level is absent." Three separate defects
+/// stood between that sentence and the interpreter, all rooted in `?.` never
+/// FLATTENING its projection.
+///
+/// The chain is the test, because the chain is what flattening is for: a
+/// second `?.` can only project from a payload, so if the first produced
+/// `Option[Option[City]]` the rest of the spec's example cannot work.
+#[test]
+fn test_optional_chain_flattens_and_short_circuits() {
+    let decls = "struct City { name: String, zip: i64 }\n\
+                 struct Address { city: Option[City], zip: i64 }\n\
+                 struct User { address: Option[Address] }\n";
+    let build = |addr: &str| {
+        format!(
+            "{decls}fn main() {{ let u = User {{ address: {addr} }};\n\
+             match u.address?.city?.name {{ Some(n) => {{ println(n); }} None => {{ println(\"none\"); }} }} }}"
+        )
+    };
+    // Every level present: the spec's own example. Used to print "none".
+    assert_eq!(
+        run(&build(
+            "Some(Address { city: Some(City { name: \"Paris\", zip: 7 }), zip: 3 })"
+        )),
+        "Paris\n"
+    );
+    // Absent at the INNER level, and at the OUTER level: both short-circuit.
+    assert_eq!(
+        run(&build("Some(Address { city: None, zip: 3 })")),
+        "none\n"
+    );
+    assert_eq!(run(&build("None")), "none\n");
+}
+
+/// The single-level chain in both member shapes. A struct-typed member is the
+/// one that ICE'd: the Some-arm binding held `Some(City)` rather than `City`,
+/// so reading a field off it tripped `eval_field_access`'s `unreachable!`.
+#[test]
+fn test_optional_chain_single_level_binds_the_payload_not_a_wrapper() {
+    let decls = "struct City { name: String, zip: i64 }\n\
+                 struct Address { city: Option[City], zip: i64 }\n\
+                 fn mk() -> Option[Address] { return Some(Address { city: Some(City { name: \"Paris\", zip: 7 }), zip: 3 }); }\n";
+    // An `Option`-typed member FLATTENS — `c` is a `City`, so `c.name` reads.
+    assert_eq!(
+        run(&format!(
+            "{decls}fn main() {{ match mk()?.city {{ Some(c) => {{ println(c.name); }} None => {{ println(\"none\"); }} }} }}"
+        )),
+        "Paris\n"
+    );
+    // A NON-`Option` member wraps, which is the case that always worked and
+    // must keep working — the flattening rule has to leave it alone.
+    assert_eq!(
+        run(&format!(
+            "{decls}fn main() {{ match mk()?.zip {{ Some(z) => {{ println(z); }} None => {{ println(\"none\"); }} }} }}"
+        )),
+        "3\n"
+    );
+}
+
+/// The method form, which the row did not name: `args` was discarded and the
+/// member looked up as a FIELD, so `c?.label()` found nothing and produced
+/// `Unit` — surfacing later as a bogus "operator 'Add' is not defined for
+/// 'String' and 'Unit'" on a program `karac check` had passed.
+#[test]
+fn test_optional_chain_method_form_calls_the_method() {
+    let src = "struct City { name: String, zip: i64 }\n\
+               impl City { fn label(ref self) -> String { return self.name; } }\n\
+               fn mk(present: bool) -> Option[City] {\n\
+                   if present { return Some(City { name: \"Paris\", zip: 7 }); }\n\
+                   return None;\n\
+               }\n";
+    assert_eq!(
+        run(&format!(
+            "{src}fn main() {{ match mk(true)?.label() {{ Some(s) => {{ println(s); }} None => {{ println(\"none\"); }} }} }}"
+        )),
+        "Paris\n"
+    );
+    // and it still short-circuits rather than calling the method on nothing
+    assert_eq!(
+        run(&format!(
+            "{src}fn main() {{ match mk(false)?.label() {{ Some(s) => {{ println(s); }} None => {{ println(\"none\"); }} }} }}"
+        )),
+        "none\n"
+    );
+}
+
 // ── `??` (nil coalescing) ──────────────────────────────────────
 
 /// B-2026-08-17-27 — the interpreter's `??` was wrong on three of its four
