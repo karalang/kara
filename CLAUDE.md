@@ -19,6 +19,13 @@ cargo fmt --all -- --check             # Verify formatted (must be clean before 
 
 **Use `--all-targets`, not `--tests`, on the clippy gate.** `--tests` only builds the test target (cfg(test)), so any lint that fires only in production cfg slips through. The runtime crate has cfg-gated type definitions (e.g. `KARAC_SPAWN_SITES` is `extern KaracSpawnSiteEntry` in production but a `SpawnSiteEntryStandIn` wrapper under cfg(test)) — clippy lints on those code paths only fire in the cfg where they're real, and CI runs `cargo clippy --all -- -D warnings` (no `--tests`). `--all-targets` builds lib + bins + tests + examples + benches, each in its own cfg, so it covers both surfaces.
 
+**Run the clippy gate on BOTH feature legs — `--features llvm` is not a superset.** The two cfgs contain different code, so each has lints the other cannot see, exactly as `--all-targets` covers cfgs `--tests` cannot. Measured: two `src/cli.rs` helpers whose only callers sit inside `#[cfg(feature = "llvm")]` were dead in the DEFAULT build, so `cargo clippy --all --all-targets -- -D warnings` failed on a clean checkout while the `--features llvm` leg stayed green — and CI runs the default leg (B-2026-08-18-23). Run both before declaring work done:
+
+```bash
+cargo clippy --all --all-targets -- -D warnings                  # CI's leg — the one easiest to miss locally
+cargo clippy --all --all-targets --features llvm -- -D warnings  # the codegen surface
+```
+
 **Codegen and memory-sanitizer tests are gated on `--features llvm`.** Plain `cargo test` will skip `tests/codegen.rs`, `tests/par_codegen.rs`, and `tests/memory_sanitizer.rs` entirely (the modules are `#[cfg(feature = "llvm")]`). Always use `--features llvm` when verifying codegen-related work; otherwise you will miss real regressions.
 
 **Codegen E2E + memory_sanitizer require the runtime library.** One-time setup on a fresh checkout:

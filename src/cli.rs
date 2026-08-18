@@ -1719,6 +1719,13 @@ fn render_lint_block_text(
     )
 }
 
+/// `cfg(llvm)`: the only caller is `cmd_build`'s codegen path. The
+/// non-llvm fallback delegates to `cmd_check`, which renders warnings
+/// through `render_text_diagnostics` itself — so this is genuinely dead
+/// there, and CI's default-feature `cargo clippy --all --all-targets -D
+/// warnings` said so (B-2026-08-18-23). The `--features llvm` leg is
+/// green either way, which is exactly why it is easy to miss locally.
+#[cfg(feature = "llvm")]
 /// The WARNING-severity subset of [`render_text_diagnostics`], for the build
 /// path (B-2026-08-18-1).
 ///
@@ -1757,6 +1764,13 @@ fn collect_warning_diagnostics_json(pipeline: &Pipeline) -> Vec<String> {
         .collect()
 }
 
+/// `cfg(llvm)`: the only caller is `cmd_build`'s codegen path. The
+/// non-llvm fallback delegates to `cmd_check`, which renders warnings
+/// through `render_text_diagnostics` itself — so this is genuinely dead
+/// there, and CI's default-feature `cargo clippy --all --all-targets -D
+/// warnings` said so (B-2026-08-18-23). The `--features llvm` leg is
+/// green either way, which is exactly why it is easy to miss locally.
+#[cfg(feature = "llvm")]
 fn render_text_warning_diagnostics(pipeline: &Pipeline) -> Vec<String> {
     render_text_diagnostics(pipeline)
         .into_iter()
