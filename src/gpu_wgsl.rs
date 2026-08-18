@@ -178,6 +178,22 @@ enum KStmt<'a> {
         inclusive: bool,
         body: Vec<KStmt<'a>>,
     },
+    /// `if cond { … } else { … }` in STATEMENT position → WGSL's native `if`
+    /// statement (B-2026-08-18-49).
+    ///
+    /// This is a genuinely different lowering from the value-`if` a few
+    /// hundred lines down, which becomes a branchless `select(else, then,
+    /// cond)`. Position picks between them, and both are wanted: `select`
+    /// keeps a value-producing conditional divergence-free, which is what a
+    /// GPU wants, while a conditional that ASSIGNS cannot be an expression at
+    /// all and needs the real statement.
+    If {
+        cond: &'a Expr,
+        then_body: Vec<KStmt<'a>>,
+        /// `None` for a bare `if` with no `else`. An `else if` chain nests
+        /// here as a single-element list holding another [`KStmt::If`].
+        else_body: Option<Vec<KStmt<'a>>>,
+    },
 }
 
 /// Lexical scope for a scalar kernel body: a stack of (source name, WGSL name)
@@ -370,10 +386,21 @@ fn scalar_stmt_list(stmts: &[Stmt]) -> Result<Vec<KStmt<'_>>, WgslError> {
                     body: scalar_stmt_list(&body.stmts)?,
                 });
             }
+            StmtKind::Expr(Expr {
+                kind:
+                    ExprKind::If {
+                        condition,
+                        then_block,
+                        else_branch,
+                    },
+                ..
+            }) => {
+                out.push(stmt_if(condition, then_block, else_branch)?);
+            }
             _ => {
                 return Err(WgslError::UnsupportedBody(
-                    "a GPU kernel body supports `let` bindings, assignments and `while` loops \
-                     before the final expression"
+                    "a GPU kernel body supports `let` bindings, assignments, `if`, `while` and \
+                     `for` before the final expression"
                         .to_string(),
                 ));
             }
@@ -416,6 +443,54 @@ fn compound_assign_op(op: &CompoundOp) -> Result<&'static str, WgslError> {
 }
 
 /// Emit a statement list into `out` at `indent` levels of four spaces.
+/// Build a [`KStmt::If`] from the pieces of an `ExprKind::If` in statement
+/// position, recursing through an `else if` chain.
+///
+/// A branch that produces a VALUE is rejected here rather than silently
+/// discarded: in statement position its value would go nowhere, and the shape
+/// that means to produce one (`let y = if c { a } else { b };`) is already
+/// handled by the value-`if` lowering, which is a `select()`.
+fn stmt_if<'a>(
+    condition: &'a Expr,
+    then_block: &'a Block,
+    else_branch: &'a Option<Box<Expr>>,
+) -> Result<KStmt<'a>, WgslError> {
+    let branch_stmts = |b: &'a Block, which: &str| -> Result<Vec<KStmt<'a>>, WgslError> {
+        if b.final_expr.is_some() {
+            return Err(WgslError::UnsupportedBody(format!(
+                "a GPU kernel's `{which}` branch must not produce a value when the `if` is a \
+                 statement — bind it instead (`let y = if c {{ a }} else {{ b }};`)"
+            )));
+        }
+        scalar_stmt_list(&b.stmts)
+    };
+
+    let then_body = branch_stmts(then_block, "if")?;
+    let else_body = match else_branch.as_deref() {
+        None => None,
+        Some(e) => match &e.kind {
+            ExprKind::Block(b) => Some(branch_stmts(b, "else")?),
+            // `else if` — one nested statement, so the emitter's recursion
+            // produces WGSL's own `else if` spelling without extra machinery.
+            ExprKind::If {
+                condition,
+                then_block,
+                else_branch,
+            } => Some(vec![stmt_if(condition, then_block, else_branch)?]),
+            _ => {
+                return Err(WgslError::UnsupportedBody(
+                    "a GPU kernel's `else` must be a block or another `if`".to_string(),
+                ));
+            }
+        },
+    };
+    Ok(KStmt::If {
+        cond: condition,
+        then_body,
+        else_body,
+    })
+}
+
 fn emit_stmts<'a>(
     stmts: &[KStmt<'a>],
     scope: &mut Scope<'a>,
@@ -486,6 +561,41 @@ fn emit_stmts<'a>(
                 emit_stmts(body, scope, helpers, indent + 1, out)?;
                 scope.truncate(depth);
                 out.push_str(&format!("{pad}}}\n"));
+            }
+            KStmt::If {
+                cond,
+                then_body,
+                else_body,
+            } => {
+                let c = lower_expr(cond, &scope.resolver(), helpers)?;
+                out.push_str(&format!("{pad}if ({c}) {{\n"));
+                // Each branch is its own scope, exactly as a loop body is: a
+                // `let` in the `then` arm must not be visible in `else` or
+                // after the `if`.
+                let depth = scope.depth();
+                emit_stmts(then_body, scope, helpers, indent + 1, out)?;
+                scope.truncate(depth);
+                match else_body.as_deref() {
+                    None => out.push_str(&format!("{pad}}}\n")),
+                    // An `else if` arrives as one nested `KStmt::If`. Emit it
+                    // into a scratch buffer at this indent and splice it after
+                    // `} else `, which yields WGSL's flat `} else if (c) {`
+                    // rather than a block nested one level deeper per arm.
+                    Some(nested @ [KStmt::If { .. }]) => {
+                        let mut chained = String::new();
+                        let depth = scope.depth();
+                        emit_stmts(nested, scope, helpers, indent, &mut chained)?;
+                        scope.truncate(depth);
+                        out.push_str(&format!("{pad}}} else {}", chained.trim_start()));
+                    }
+                    Some(stmts) => {
+                        out.push_str(&format!("{pad}}} else {{\n"));
+                        let depth = scope.depth();
+                        emit_stmts(stmts, scope, helpers, indent + 1, out)?;
+                        scope.truncate(depth);
+                        out.push_str(&format!("{pad}}}\n"));
+                    }
+                }
             }
         }
     }
@@ -3019,6 +3129,105 @@ mod tests {
             "{wgsl}"
         );
         assert!(wgsl.contains("acc = (acc + input[i]);"), "{wgsl}");
+    }
+
+    // ── Statement-form `if` (B-2026-08-18-49) ───────────────────────────
+
+    #[test]
+    fn scalar_kernel_lowers_statement_if_to_a_real_wgsl_if() {
+        // The conditional accumulator: the shape B-2026-08-18-49 was filed for,
+        // and the reason "locals inside an `if` branch" understated the gap —
+        // NEITHER branch here declares a local, and it was still rejected.
+        let func = parse_kernel(
+            "#[gpu]\nfn poly(x: f32) -> f32 {\n    let mut acc: f32 = 0.0;\n    \
+             let mut n: i32 = 0;\n    while n < 3 {\n        \
+             if x > 2.0 {\n            acc = acc + x;\n        } else {\n            \
+             acc = acc - 1.0;\n        }\n        n = n + 1;\n    }\n    acc\n}",
+        );
+        let wgsl = emit_kernel(&func, &[]).unwrap();
+        assert!(wgsl.contains("if ((input[i] > 2.0)) {"), "{wgsl}");
+        assert!(wgsl.contains("acc = (acc + input[i]);"), "{wgsl}");
+        assert!(wgsl.contains("} else {"), "{wgsl}");
+        assert!(wgsl.contains("acc = (acc - 1.0);"), "{wgsl}");
+        // A statement `if` must NOT go through the value-`if` lowering.
+        assert!(!wgsl.contains("select("), "{wgsl}");
+    }
+
+    #[test]
+    fn scalar_kernel_lowers_bare_statement_if_without_else() {
+        // A value-`if` REQUIRES an `else` (it must produce something); a
+        // statement one does not, which is the other reason these cannot share
+        // a lowering.
+        let func = parse_kernel(
+            "#[gpu]\nfn poly(x: f32) -> f32 {\n    let mut acc: f32 = x;\n    \
+             if x > 2.0 {\n        acc = acc * 10.0;\n    }\n    acc\n}",
+        );
+        let wgsl = emit_kernel(&func, &[]).unwrap();
+        assert!(wgsl.contains("if ((input[i] > 2.0)) {"), "{wgsl}");
+        assert!(wgsl.contains("acc = (acc * 10.0);"), "{wgsl}");
+        assert!(!wgsl.contains("else"), "{wgsl}");
+    }
+
+    #[test]
+    fn scalar_kernel_flattens_an_else_if_chain() {
+        // `else if` nests in the AST but must emit FLAT, or a long chain walks
+        // one indent level right per arm and reads nothing like the source.
+        let func = parse_kernel(
+            "#[gpu]\nfn pick(x: i32) -> i32 {\n    let mut r: i32 = 0;\n    \
+             if x == 0 {\n        r = 100;\n    } else if x == 1 {\n        \
+             r = 200;\n    } else {\n        r = 300;\n    }\n    r\n}",
+        );
+        let wgsl = emit_kernel(&func, &[]).unwrap();
+        assert!(wgsl.contains("} else if ((input[i] == 1)) {"), "{wgsl}");
+        // Flat: every arm's body sits at one indent inside `main`, so no arm is
+        // pushed deeper than the first.
+        assert!(wgsl.contains("\n        r = 100;\n"), "{wgsl}");
+        assert!(wgsl.contains("\n        r = 200;\n"), "{wgsl}");
+        assert!(wgsl.contains("\n        r = 300;\n"), "{wgsl}");
+    }
+
+    #[test]
+    fn scalar_kernel_scopes_a_binding_to_its_if_branch() {
+        // Each branch is its own scope, as a loop body is. The `then` arm's `t`
+        // and the `else` arm's `t` are separate bindings, and neither escapes.
+        let func = parse_kernel(
+            "#[gpu]\nfn poly(x: f32) -> f32 {\n    let mut acc: f32 = 0.0;\n    \
+             if x > 2.0 {\n        let t: f32 = x * 2.0;\n        acc = t;\n    } else {\n        \
+             let t: f32 = x + 1.0;\n        acc = t;\n    }\n    acc\n}",
+        );
+        let wgsl = emit_kernel(&func, &[]).unwrap();
+        // Both arms may use the plain name — the first is popped at arm exit.
+        assert_eq!(wgsl.matches("let t = ").count(), 2, "{wgsl}");
+        assert!(wgsl.contains("let t = (input[i] * 2.0);"), "{wgsl}");
+        assert!(wgsl.contains("let t = (input[i] + 1.0);"), "{wgsl}");
+    }
+
+    #[test]
+    fn scalar_kernel_rejects_a_statement_if_branch_that_produces_a_value() {
+        // In statement position the value would go nowhere. The diagnostic
+        // points at the shape that DOES produce one, which is a `select()`.
+        let func = parse_kernel(
+            "#[gpu]\nfn poly(x: f32) -> f32 {\n    let mut acc: f32 = 0.0;\n    \
+             if x > 2.0 {\n        acc = x;\n        x\n    } else {\n        acc = 0.0;\n    }\n    acc\n}",
+        );
+        let err = emit_kernel(&func, &[]).unwrap_err();
+        let msg = format!("{err:?}");
+        assert!(msg.contains("must not produce a value"), "{msg}");
+        assert!(msg.contains("bind it instead"), "{msg}");
+    }
+
+    #[test]
+    fn scalar_kernel_body_rejection_message_lists_every_supported_form() {
+        // The `_ =>` fallthrough message was written at increment 2 and went
+        // stale: it never mentioned `for` (supported since increment 3) and
+        // never mentioned `if`. A message that under-reports what works sends
+        // people looking for workarounds they do not need.
+        let func = parse_kernel("#[gpu]\nfn poly(x: f32) -> f32 {\n    loop {\n    }\n    x\n}");
+        let err = emit_kernel(&func, &[]).unwrap_err();
+        let msg = format!("{err:?}");
+        for form in ["`let`", "assignments", "`if`", "`while`", "`for`"] {
+            assert!(msg.contains(form), "message omits {form}: {msg}");
+        }
     }
 
     #[test]

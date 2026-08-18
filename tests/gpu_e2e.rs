@@ -362,3 +362,71 @@ fn gpu_executes_value_if_as_select() {
         "1\n2\n30\n40",
     );
 }
+
+// ── Statement-form `if` (B-2026-08-18-49) ───────────────────────────────────
+
+#[test]
+fn gpu_executes_statement_if_inside_a_loop() {
+    // The conditional accumulator — the shape B-2026-08-18-49 was filed for.
+    // Note neither branch declares a local, which is why "locals inside an
+    // `if` branch" understated the gap: this was rejected outright.
+    //
+    // The expected values are what make this a real oracle rather than a
+    // smoke test: 1.0 and 2.0 take the `else` arm three times (0-1-1-1 = -3),
+    // while 3.0 and 4.0 take the `then` arm three times (3x). A lowering that
+    // inverted the condition would still run, still print four numbers, and be
+    // caught here.
+    assert_gpu_matches_interp(
+        "cond_acc",
+        "#[gpu]\n\
+         fn k(x: f32) -> f32 {\n\
+         \x20   let mut acc: f32 = 0.0;\n\
+         \x20   let mut i: i32 = 0;\n\
+         \x20   while i < 3 {\n\
+         \x20       if x > 2.0 { acc = acc + x; } else { acc = acc - 1.0; }\n\
+         \x20       i = i + 1;\n\
+         \x20   }\n\
+         \x20   acc\n\
+         }",
+        "f32",
+        "1.0, 2.0, 3.0, 4.0",
+        "-3\n-3\n9\n12",
+    );
+}
+
+#[test]
+fn gpu_executes_else_if_chain() {
+    // One input per arm, with distinct outputs, so a chain that emitted its
+    // arms in the wrong order or collapsed one into another cannot pass.
+    assert_gpu_matches_interp(
+        "elseif",
+        "#[gpu]\n\
+         fn k(x: i32) -> i32 {\n\
+         \x20   let mut r: i32 = 0;\n\
+         \x20   if x == 0 { r = 100; } else if x == 1 { r = 200; } \
+         else if x == 2 { r = 300; } else { r = 400; }\n\
+         \x20   r\n\
+         }",
+        "i32",
+        "0, 1, 2, 3",
+        "100\n200\n300\n400",
+    );
+}
+
+#[test]
+fn gpu_executes_bare_statement_if_without_else() {
+    // A value-`if` must have an `else`; a statement one need not. The inputs
+    // straddle the threshold so both the taken and untaken paths are observed.
+    assert_gpu_matches_interp(
+        "bare_if",
+        "#[gpu]\n\
+         fn k(x: f32) -> f32 {\n\
+         \x20   let mut acc: f32 = x;\n\
+         \x20   if x > 2.0 { acc = acc * 10.0; }\n\
+         \x20   acc\n\
+         }",
+        "f32",
+        "1.0, 2.0, 3.0, 4.0",
+        "1\n2\n30\n40",
+    );
+}
