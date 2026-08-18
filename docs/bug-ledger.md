@@ -103,15 +103,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | diagnostics | 73 | 4 |
 | crash | 51 | 0 |
 | soundness | 50 | 0 |
-| other | 37 | 1 |
+| other | 37 | 0 |
 | use-after-free | 20 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 918 | 2 |
-| typecheck | 195 | 4 |
+| codegen | 918 | 1 |
+| typecheck | 195 | 3 |
 | interp | 150 | 0 |
 | ownership | 57 | 0 |
 | other | 51 | 2 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1307 surfaced · 9 open · 1281 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1307 surfaced · 8 open · 1282 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (9)
+### Open (8)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -137,7 +137,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1307 surfaced
 | B-2026-08-17-44 | 2026-08-17 | typecheck | medium | `self` inside `impl Trait for Slice[i64]` types as `Named { name: "Slice", args: [] }` -- the ELEMENT TYPE IS LOST -- so the body can barely do anything with it. `self[0]` is rejected outright, and `self.len().to_string()` fails codegen with "no handler for method 'to_string' on variable 'n'". A `Slice[i64]` PARAMETER has none of these problems, so the defect is in how a builtin-container impl head types its receiver. | The impl-head Self typing for builtin containers; symptom sites are the index rule in src/typechecker/exprs.rs and method dispatch in codegen. tests/codegen.rs `a_range_subscript_by_ref_passes_a_slice_not_an_element_pointer` is shaped around this — it reads `self.len()` and returns it directly, because `self.len().to_string()` does not compile. |
 | B-2026-08-18-1 | 2026-08-18 | cli | medium | `karac build` renders NO warning-level diagnostic on a successful build -- the suppression is GLOBAL to the build path, not a `must_use` wiring quirk. Control measurement: `deprecated`, which reaches the user through a COMPLETELY DIFFERENT channel from must_use (the typechecker's `type_lint_warning` / `TypeErrorKind::Deprecated` at src/typechecker.rs:3098-3113, not the `cmd_run` lint block), behaves IDENTICALLY -- emitted under `karac run`, absent under `karac build`. Two independent warning-production mechanisms both go silent on the build path, so the defect is the path's MISSING RENDER SURFACE rather than any one lint's wiring: `cmd_build` (src/cli/build_cmds.rs) renders only manifest warnings (`mf.warnings`) and `monomorphization-budget` violations, and never consults typecheck lint warnings or any lint pass. A build-only workflow therefore sees none of the warnings the compiler actually produced. | roadmap.md |
 | B-2026-08-18-2 | 2026-08-18 | cli | medium | Four sibling lints -- `undocumented_unsafe` / `unsafe_op_in_unsafe_fn`, `missing_must_use`, `missing_track_caller`, `ffi_float_eq` -- are invoked ONLY from `cmd_run`, the exact wiring gap B-2026-08-17-37 reports for `must_use`. All five calls sit in one contiguous block in src/cli/run_check_cmds.rs (~lines 654-730), inside `cmd_run` (which begins at line 338); `cmd_check` (line 1238) and `cmd_build` (src/cli/build_cmds.rs) call none of them. So four further lint surfaces are invisible to `karac check --output=json`, and therefore to the Mend loop, for the same reason must_use was. | roadmap.md |
-| B-2026-08-18-9 | 2026-08-18 | typecheck+codegen | medium | `question_ok_payload_types`' PRODUCER and CONSUMER do not key off the same node, and the `?` operator's span cannot be fixed until they do. Giving `ExprKind::Question` a span of its own (lhs start -> past the `?`, the way B-2026-08-18-7 fixed `?.`) makes `let b = mk(n)?;` stop resolving the binding's fields under codegen -- "codegen: cannot resolve field 'name' on this receiver" -- whenever the `Some`/`Ok` payload is a multi-word struct, while `--interp` stays correct. The two ends agree TODAY only because the node copies its operand's span, so they collide onto the same key by accident rather than by construction. | src/parser/exprs.rs (the `Token::Question` arm); the `question_ok_payload_types` producer in the typechecker and its consumer in codegen |
 | B-2026-08-18-10 | 2026-08-18 | codegen | medium | A `match` whose SCRUTINEE is a nested `match` with a BARE-IDENTIFIER arm leaks the boxed payload -- `match (match i % 3 { 0 => { o } _ => { None } }) { ... }` over an `o: Option[City]` local strands 1205 bytes in 68 objects across 200 iterations, while the `let`-bound twin `let c = match ...; match c { ... }` is clean. The last arm shape B-2026-08-18-8's fail-closed rule declines. | `match_result_scrutinee_owns_box` in src/codegen/control_flow_match.rs -- the `_ => self.expr_yields_fresh_owned_temp(tail)` arm is where a bare identifier currently falls through to false. The per-arm suppression this needs is the same channel `compile_match`'s arm loop uses for `freshtemp_boxed_slot`. |
 
 ### Wontfix (7)
@@ -156,9 +155,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1307 surfaced
 
 </details>
 
-### Fixed (1281)
+### Fixed (1282)
 
-<details><summary>1281 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1282 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -11321,6 +11320,13 @@ Also verified clean, matching `--interp` byte for byte: a `Result` scrutinee, a 
 Two ASAN fixtures pin it — `asan_match_on_match_result_scrutinee_clean` (explicit nested match, no `?.` anywhere, so it stays honest if the `?.` lowering changes again) and `asan_optional_chain_as_match_scrutinee_clean` (two-level chain with RUNTIME-built strings, since a literal's `cap == 0` would make an interior leak invisible). The sibling `asan_optional_chain_heap_payload_clean` keeps its `let`-bound spelling on purpose, so the pair reads as the contrast that isolated the defect.
 
 Gates: cargo fmt clean, clippy clean on both feature sets (the `--features llvm` leg caught a doc-lint the default leg does not see), memory_sanitizer 1121 passed, codegen 3038 passed, full suite green. |
+| B-2026-08-18-9 | typecheck+codegen | medium | `question_ok_payload_types`' PRODUCER and CONSUMER do not key off the same node, and the `?` operator's span cannot be fixed until they do | Fixed in 19d7c7f. Two changes, in the order that matters: the consumer moved onto the producer's key FIRST, and only then did the span widen.
+
+(1) `reconstruct_question_ok_payload` (src/codegen/exprs.rs) now takes the `?` NODE's span instead of its operand's. Every lookup in that function wants one fact -- the type this `?` evaluates to -- and the typechecker records that against the `?` expression's own span (`question_ok_payload_types` explicitly in `resolve_question`, and `expr_types` generically, whence `string_typed_exprs` / `enum_inst_type_exprs` / `concrete_named_type_exprs` are derived in lowering). Reading the operand's span worked only because the parser handed `ExprKind::Question` a verbatim copy of it: the two keys were one key, and the `?` node -- typed after its operand -- was simply the last write there.
+
+(2) The parser's `Token::Question` arm (src/parser/exprs.rs) now spans lhs-start -> past the `?` token, the way B-2026-08-18-7 fixed `?.`. With (1) in place the regression this row was filed for does not reproduce: the `struct Big { name: String, n: i64 }` + `let b = mk(n)?;` program is correct under `--interp`, JIT and AOT alike.
+
+THE ROW NAMED THE RIGHT TABLE BUT UNDERSTATED THE SCOPE. `question_ok_payload_types` is indeed the table whose miss produced "cannot resolve field 'name'", but the three fallback lookups beneath it carried the same operand-span key with the same intent, so all four moved together -- fixing only the named one would have left the fallbacks reading the operand's own type (the `Result`/`Option` WRAPPER) and reintroduced the `w0` truncation by a different route. `question_conversions` needed nothing, and the row's guess as to why was right: its codegen consumer already read `outer_span` and the interpreter's already read `expr.span`, so both ends were on the producer's key by construction. That is what made it the control -- same parser node, same widening, no regression. |
 
 </details>
 
