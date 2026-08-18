@@ -34290,3 +34290,46 @@ fn test_string_range_slice_scalar_readers_oracle() {
     );
     assert_eq!(out, "7\n5\n11\n");
 }
+
+/// B-2026-08-18-18 — the interpreter oracle for `collect()` into a non-`Vec`
+/// target in RETURN position, and in a function body's TAIL.
+///
+/// design.md says `collect()` "infers the target type from context";
+/// B-2026-08-17-36 delivered that for an annotated `let`, and these are two of
+/// the positions it left fixed to `Vec` ("expected 'Set[i64]', found
+/// 'Vec[i64]'"). Both are pure typecheck failures, so the interpreter answers
+/// here are what the rewrite has to reproduce.
+///
+/// THE CLOSURE CASE IS THE POINT OF THE THIRD FUNCTION. A `return` inside a
+/// closure returns from the CLOSURE, so the enclosing fn's declared return type
+/// must not reach it — rewriting there would aim at `Set[i64]` where the
+/// closure genuinely yields `Vec[i64]`, and would look like it worked.
+#[test]
+fn test_collect_target_in_return_and_tail_position_oracle() {
+    let out = run_no_errors(
+        "fn build_ret(v: Vec[i64]) -> Set[i64] {\n\
+             return v.iter().map(|x| x * 2).collect();\n\
+         }\n\
+         fn build_tail(v: Vec[i64]) -> VecDeque[i64] {\n\
+             v.iter().map(|x| x + 1).collect()\n\
+         }\n\
+         fn apply(f: Fn(i64) -> Vec[i64], n: i64) -> Vec[i64] { return f(n); }\n\
+         fn closure_return_is_the_closures(v: Vec[i64]) -> Set[i64] {\n\
+             let f = |x: i64| { return v.iter().map(|y| y + x).collect(); };\n\
+             let inner = apply(f, 10);\n\
+             let mut out: Set[i64] = Set.new();\n\
+             for e in inner { out.insert(e); }\n\
+             return out;\n\
+         }\n\
+         fn main() {\n\
+             let v: Vec[i64] = [1, 2, 3];\n\
+             let a = build_ret(v);\n\
+             println(a.len().to_string());\n\
+             let b = build_tail(v);\n\
+             println(b.len().to_string());\n\
+             let c = closure_return_is_the_closures(v);\n\
+             println(c.len().to_string());\n\
+         }\n",
+    );
+    assert_eq!(out, "3\n3\n3\n");
+}

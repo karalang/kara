@@ -98416,6 +98416,62 @@ fn main() {
         }
     }
 
+    /// B-2026-08-18-18 — `collect()` into a non-`Vec` target in RETURN position
+    /// and in a function body's TAIL, end to end.
+    ///
+    /// B-2026-08-17-36 delivered design.md's "infers the target type from
+    /// context" for an annotated `let` only; these two positions still fixed the
+    /// chain to `Vec` and failed with "expected 'Set[i64]', found 'Vec[i64]'".
+    /// The rewrite is the SAME pre-typecheck desugar that row introduced, so
+    /// interpreter/JIT/AOT parity holds by construction — the only new input is
+    /// which type to aim at.
+    ///
+    /// THE CLOSURE FUNCTION IS THE GUARD, not filler. A `return` inside a
+    /// closure returns from the CLOSURE, so the enclosing fn's declared return
+    /// type must not reach it; aiming at `Set[i64]` there would rewrite a
+    /// closure that genuinely yields `Vec[i64]`, and it would look correct
+    /// until the closure's own type mattered. The target is dropped on entry to
+    /// a closure body, and this pins that.
+    ///
+    /// Receivers are BOUND before the `.len()` call on purpose: calling a read
+    /// method directly on a returned `Set`/`Map` temp is a separate, unrelated
+    /// defect, and threading it through here would make this test fail for a
+    /// reason it is not about.
+    #[test]
+    fn collect_reaches_a_non_vec_target_in_return_and_tail_position() {
+        let src = "fn build_ret(v: Vec[i64]) -> Set[i64] {\n\
+                       return v.iter().map(|x| x * 2).collect();\n\
+                   }\n\
+                   fn build_tail(v: Vec[i64]) -> VecDeque[i64] {\n\
+                       v.iter().map(|x| x + 1).collect()\n\
+                   }\n\
+                   fn apply(f: Fn(i64) -> Vec[i64], n: i64) -> Vec[i64] { return f(n); }\n\
+                   fn closure_return_is_the_closures(v: Vec[i64]) -> Set[i64] {\n\
+                       let f = |x: i64| { return v.iter().map(|y| y + x).collect(); };\n\
+                       let inner = apply(f, 10);\n\
+                       let mut out: Set[i64] = Set.new();\n\
+                       for e in inner { out.insert(e); }\n\
+                       return out;\n\
+                   }\n\
+                   fn main() {\n\
+                       let v: Vec[i64] = [1, 2, 3];\n\
+                       let a = build_ret(v);\n\
+                       println(a.len().to_string());\n\
+                       let b = build_tail(v);\n\
+                       println(b.len().to_string());\n\
+                       let c = closure_return_is_the_closures(v);\n\
+                       println(c.len().to_string());\n\
+                   }\n";
+        let Some(out) = run_program(src) else {
+            return;
+        };
+        assert_eq!(
+            out, "3\n3\n3\n",
+            "a `collect()` in return or tail position must build the declared target, \
+             and a closure's own `return` must not be aimed at the fn's type"
+        );
+    }
+
     /// B-2026-08-18-22 — the STRING sibling of B-2026-08-18-14, end to end.
     /// `s[0..5].len()` failed the build with "element TypeExpr unknown" while
     /// `karac check` and `--interp` both ran it: the receiver fell through to

@@ -1343,45 +1343,66 @@ fn make_default_impl(type_name: &str, body: Expr, span: Span) -> Item {
 fn desugar_stmt_rewrites_in_program(program: &mut Program) {
     for item in &mut program.items {
         match item {
-            Item::Function(f) => walk_block(&mut f.body),
+            Item::Function(f) => {
+                let ret = f.return_type.clone();
+                walk_fn_body(&mut f.body, ret.as_ref());
+            }
             Item::ImplBlock(imp) => {
                 for it in &mut imp.items {
                     if let ImplItem::Method(m) = it {
-                        walk_block(&mut m.body);
+                        let ret = m.return_type.clone();
+                        walk_fn_body(&mut m.body, ret.as_ref());
                     }
                 }
             }
             Item::TraitDef(t) => {
                 for it in &mut t.items {
                     if let TraitItem::Method(m) = it {
+                        let ret = m.return_type.clone();
                         if let Some(body) = &mut m.body {
-                            walk_block(body);
+                            walk_fn_body(body, ret.as_ref());
                         }
                     }
                 }
             }
-            Item::TestCase(tc) => walk_block(&mut tc.body),
-            Item::ConstDecl(c) => walk_expr(&mut c.value),
+            Item::TestCase(tc) => walk_fn_body(&mut tc.body, None),
+            Item::ConstDecl(c) => walk_expr(&mut c.value, None),
             _ => {}
         }
     }
 }
 
-fn walk_block(block: &mut Block) {
-    for stmt in &mut block.stmts {
-        walk_stmt(stmt);
-    }
-    if let Some(e) = &mut block.final_expr {
-        walk_expr(e);
+/// A FUNCTION BODY, whose trailing expression is the implicit return value.
+///
+/// B-2026-08-18-18 — split from `walk_block` because only this block's tail is
+/// a return position. A nested block's tail is that block's value, and while
+/// some of those are transitively returned too (an `if` in tail position), the
+/// analysis to tell which is real tail-position reasoning. Restricting the
+/// rewrite to an explicit `return` and the function body's own tail keeps the
+/// pass syntactic and is what the two spellings in the row's repro use; the
+/// rest still fails loudly at typecheck rather than silently building a `Vec`.
+fn walk_fn_body(block: &mut Block, ret: Option<&TypeExpr>) {
+    walk_block(block, ret);
+    if let (Some(tail), Some(ty)) = (block.final_expr.as_mut(), ret) {
+        desugar_collect_target(ty, tail);
     }
 }
 
-fn walk_stmt(stmt: &mut Stmt) {
+fn walk_block(block: &mut Block, ret: Option<&TypeExpr>) {
+    for stmt in &mut block.stmts {
+        walk_stmt(stmt, ret);
+    }
+    if let Some(e) = &mut block.final_expr {
+        walk_expr(e, ret);
+    }
+}
+
+fn walk_stmt(stmt: &mut Stmt, ret: Option<&TypeExpr>) {
     match &mut stmt.kind {
         StmtKind::Let { ty, value, .. } => {
             // Recurse FIRST so a nested `let` inside the value (a closure body,
             // a block expr) is rewritten before this one wraps the value.
-            walk_expr(value);
+            walk_expr(value, ret);
             if let Some(ty) = ty {
                 desugar_collect_target(ty, value);
             }
@@ -1390,20 +1411,20 @@ fn walk_stmt(stmt: &mut Stmt) {
         StmtKind::LetElse {
             value, else_block, ..
         } => {
-            walk_expr(value);
-            walk_block(else_block);
+            walk_expr(value, ret);
+            walk_block(else_block, ret);
         }
-        StmtKind::Defer { body } => walk_block(body),
-        StmtKind::ErrDefer { body, .. } => walk_block(body),
+        StmtKind::Defer { body } => walk_block(body, ret),
+        StmtKind::ErrDefer { body, .. } => walk_block(body, ret),
         StmtKind::Assign { target, value } => {
-            walk_expr(target);
-            walk_expr(value);
+            walk_expr(target, ret);
+            walk_expr(value, ret);
         }
         StmtKind::CompoundAssign { target, value, .. } => {
-            walk_expr(target);
-            walk_expr(value);
+            walk_expr(target, ret);
+            walk_expr(value, ret);
         }
-        StmtKind::Expr(e) => walk_expr(e),
+        StmtKind::Expr(e) => walk_expr(e, ret),
         StmtKind::MultiAssign { .. } => {
             let span = stmt.span;
             let placeholder = StmtKind::Expr(Expr {
@@ -1420,10 +1441,10 @@ fn walk_stmt(stmt: &mut Stmt) {
             // Operands may themselves contain nested blocks (e.g. a block-expr
             // value) that hold further multi-assigns — recurse before expanding.
             for t in targets.iter_mut() {
-                walk_expr(t);
+                walk_expr(t, ret);
             }
             for v in values.iter_mut() {
-                walk_expr(v);
+                walk_expr(v, ret);
             }
             stmt.kind = expand_multi_assign(targets, values, span);
         }
@@ -1477,7 +1498,7 @@ fn expand_multi_assign(targets: Vec<Expr>, values: Vec<Expr>, span: Span) -> Stm
     })
 }
 
-fn walk_expr(expr: &mut Expr) {
+fn walk_expr(expr: &mut Expr, ret: Option<&TypeExpr>) {
     match &mut expr.kind {
         // Leaves — no sub-expressions or blocks.
         ExprKind::Integer(..)
@@ -1500,55 +1521,55 @@ fn walk_expr(expr: &mut Expr) {
         ExprKind::InterpolatedStringLit(parts) => {
             for part in parts.iter_mut() {
                 if let ParsedInterpolationPart::Expr(e, _) = part {
-                    walk_expr(e);
+                    walk_expr(e, ret);
                 }
             }
         }
         ExprKind::Binary { left, right, .. }
         | ExprKind::NilCoalesce { left, right }
         | ExprKind::Pipe { left, right } => {
-            walk_expr(left);
-            walk_expr(right);
+            walk_expr(left, ret);
+            walk_expr(right, ret);
         }
-        ExprKind::Unary { operand, .. } => walk_expr(operand),
-        ExprKind::Question(e) => walk_expr(e),
+        ExprKind::Unary { operand, .. } => walk_expr(operand, ret),
+        ExprKind::Question(e) => walk_expr(e, ret),
         ExprKind::OptionalChain { object, args, .. } => {
-            walk_expr(object);
+            walk_expr(object, ret);
             if let Some(args) = args {
                 for a in args.iter_mut() {
-                    walk_expr(&mut a.value);
+                    walk_expr(&mut a.value, ret);
                 }
             }
         }
         ExprKind::Call { callee, args } => {
-            walk_expr(callee);
+            walk_expr(callee, ret);
             for a in args.iter_mut() {
-                walk_expr(&mut a.value);
+                walk_expr(&mut a.value, ret);
             }
         }
         ExprKind::MethodCall { object, args, .. } => {
-            walk_expr(object);
+            walk_expr(object, ret);
             for a in args.iter_mut() {
-                walk_expr(&mut a.value);
+                walk_expr(&mut a.value, ret);
             }
         }
         ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
-            walk_expr(object)
+            walk_expr(object, ret)
         }
         ExprKind::Index { object, index } => {
-            walk_expr(object);
-            walk_expr(index);
+            walk_expr(object, ret);
+            walk_expr(index, ret);
         }
-        ExprKind::Block(b) | ExprKind::Comptime(b) => walk_block(b),
+        ExprKind::Block(b) | ExprKind::Comptime(b) => walk_block(b, ret),
         ExprKind::If {
             condition,
             then_block,
             else_branch,
         } => {
-            walk_expr(condition);
-            walk_block(then_block);
+            walk_expr(condition, ret);
+            walk_block(then_block, ret);
             if let Some(e) = else_branch {
-                walk_expr(e);
+                walk_expr(e, ret);
             }
         }
         ExprKind::IfLet {
@@ -1557,94 +1578,107 @@ fn walk_expr(expr: &mut Expr) {
             else_branch,
             ..
         } => {
-            walk_expr(value);
-            walk_block(then_block);
+            walk_expr(value, ret);
+            walk_block(then_block, ret);
             if let Some(e) = else_branch {
-                walk_expr(e);
+                walk_expr(e, ret);
             }
         }
         ExprKind::Match { scrutinee, arms } => {
-            walk_expr(scrutinee);
+            walk_expr(scrutinee, ret);
             for arm in arms.iter_mut() {
                 if let Some(g) = &mut arm.guard {
-                    walk_expr(g);
+                    walk_expr(g, ret);
                 }
-                walk_expr(&mut arm.body);
+                walk_expr(&mut arm.body, ret);
             }
         }
         ExprKind::While {
             condition, body, ..
         } => {
-            walk_expr(condition);
-            walk_block(body);
+            walk_expr(condition, ret);
+            walk_block(body, ret);
         }
         ExprKind::WhileLet { value, body, .. } => {
-            walk_expr(value);
-            walk_block(body);
+            walk_expr(value, ret);
+            walk_block(body, ret);
         }
         ExprKind::For { iterable, body, .. } => {
-            walk_expr(iterable);
-            walk_block(body);
+            walk_expr(iterable, ret);
+            walk_block(body, ret);
         }
-        ExprKind::Loop { body, .. } => walk_block(body),
-        ExprKind::LabeledBlock { body, .. } => walk_block(body),
-        ExprKind::Closure { body, .. } => walk_expr(body),
+        ExprKind::Loop { body, .. } => walk_block(body, ret),
+        ExprKind::LabeledBlock { body, .. } => walk_block(body, ret),
+        // A `return` inside a closure returns from the CLOSURE, not the
+        // enclosing fn, so the fn's declared return type must NOT reach here —
+        // rewriting against it would target the wrong type exactly where it
+        // looks like it works. Closures declare no return type of their own, so
+        // there is nothing to substitute: the target is simply dropped.
+        ExprKind::Closure { body, .. } => walk_expr(body, None),
         ExprKind::Return(opt) => {
             if let Some(e) = opt {
-                walk_expr(e);
+                walk_expr(e, ret);
+                // B-2026-08-18-18 — `return <chain>.collect()` against a
+                // declared non-`Vec` return type, the sibling of the
+                // annotated-`let` form. Same syntactic rewrite, same
+                // by-construction backend parity; the only new input is which
+                // type to aim at, and `ret` is `None` inside a closure.
+                if let Some(ty) = ret {
+                    desugar_collect_target(ty, e);
+                }
             }
         }
         ExprKind::Break { value, .. } => {
             if let Some(e) = value {
-                walk_expr(e);
+                walk_expr(e, ret);
             }
         }
         ExprKind::Tuple(items)
         | ExprKind::ArrayLiteral(items)
         | ExprKind::PrefixCollectionLiteral { items, .. } => {
             for e in items.iter_mut() {
-                walk_expr(e);
+                walk_expr(e, ret);
             }
         }
         ExprKind::RepeatLiteral { value, count, .. } => {
-            walk_expr(value);
-            walk_expr(count);
+            walk_expr(value, ret);
+            walk_expr(count, ret);
         }
         ExprKind::MapLiteral(pairs) => {
             for (k, v) in pairs.iter_mut() {
-                walk_expr(k);
-                walk_expr(v);
+                walk_expr(k, ret);
+                walk_expr(v, ret);
             }
         }
         ExprKind::StructLiteral { fields, spread, .. } => {
             for f in fields.iter_mut() {
-                walk_expr(&mut f.value);
+                walk_expr(&mut f.value, ret);
             }
             if let Some(s) = spread {
-                walk_expr(s);
+                walk_expr(s, ret);
             }
         }
-        ExprKind::Cast { expr: e, .. } => walk_expr(e),
+        ExprKind::Cast { expr: e, .. } => walk_expr(e, ret),
         ExprKind::Range { start, end, .. } => {
             if let Some(s) = start {
-                walk_expr(s);
+                walk_expr(s, ret);
             }
             if let Some(e) = end {
-                walk_expr(e);
+                walk_expr(e, ret);
             }
         }
         ExprKind::Unsafe(b) | ExprKind::Try(b) | ExprKind::Seq(b) | ExprKind::Par(b) => {
-            walk_block(b)
+            walk_block(b, ret)
         }
         ExprKind::Lock { mutex, body, .. } => {
-            walk_expr(mutex);
-            walk_block(body);
+            walk_expr(mutex, ret);
+            walk_block(body, ret);
         }
         ExprKind::Providers { bindings, body } => {
             for bnd in bindings.iter_mut() {
-                walk_expr(&mut bnd.value);
+                walk_expr(&mut bnd.value, ret);
             }
-            walk_block(body);
+            walk_block(body, ret);
         }
     }
 }
