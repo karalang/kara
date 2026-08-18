@@ -11683,6 +11683,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.build_store(nlt_a, zero).unwrap();
         self.builder.build_store(nle_a, zero).unwrap();
         self.builder.build_store(ii_a, lo).unwrap();
+        let mut fu_inv_slot: Option<inkwell::values::IntValue<'ctx>> = None;
         match fu {
             // The fused pass seeds its cursors here; the count path overwrites
             // both in `pick`, so these stores are dead on that route.
@@ -11690,6 +11691,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 let hi_1 = self.builder.build_int_sub(hi, one, "q.hi.1").unwrap();
                 self.builder.build_store(lc_a, lo).unwrap();
                 self.builder.build_store(rc_a, hi_1).unwrap();
+                // `hi - 1`, the invariant half of the right destination.
+                // DERIVATION, because the `lo` terms cancel and adding one is
+                // an off-by-lo that mis-sorts silently at lo > 0 (it crashed
+                // outright here, which was luck): with `k` the count of `>=`
+                // seen and `lcur = lo + nlt`, the destination is
+                //   hi-1-k = hi-1-((i-lo)-nlt) = hi-1-i+lo+nlt = (hi-1)-i+lcur.
+                fu_inv_slot = Some(hi_1);
                 if fused_mode >= 2 {
                     self.builder.build_unconditional_branch(fu_chk).unwrap();
                 } else {
@@ -12053,16 +12061,56 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_load(i64_t, lc_a, "q.flc")
                 .unwrap()
                 .into_int_value();
-            let frc = self
-                .builder
-                .build_load(i64_t, rc_a, "q.frc")
-                .unwrap()
-                .into_int_value();
-            let f_dsti = self
-                .builder
-                .build_select(f_left, flc, frc, "q.f.dsti")
-                .unwrap()
-                .into_int_value();
+            // THE DESCENDING CURSOR IS THE DEFAULT, AND IT IS THE FASTER ONE
+            // DESPITE COSTING MORE INSTRUCTIONS — the alternative was built and
+            // measured rather than argued about, and it loses.
+            //
+            // The alternative (`KARAC_SORT_FUSED_ADDR=affine`): every element
+            // goes exactly one way, so `l + k == i - lo` and the right
+            // destination `hi-1-k` equals `(hi-1) - i + lcur`. That needs no
+            // descending cursor at all — both cursors ascend, both advance with
+            // `cinc` straight out of the flags, and the loop drops from 11
+            // instructions to 9. It is correct (six patterns, 462-case
+            // stability sweep) and it removes 13.7 instructions per element.
+            //
+            // It buys NOTHING: 279.1 -> 265.4 instr/elem for 66.89 -> 66.96
+            // cycles, 1.001x, layout-validated across five emission orders.
+            // IPC falls 4.17 -> 3.96 and eats the entire saving. The reason is
+            // the identity itself — deriving the right index FROM `lcur` makes
+            // the two cursors one loop-carried dependency chain, where a
+            // descending `rcur` is an independent chain advancing in parallel
+            // with the ascending one. The two extra instructions buy cursor
+            // independence and are worth exactly what they cost.
+            let fu_inv = fu_inv_slot.expect("fused preheader must have run");
+            let descend = std::env::var("KARAC_SORT_FUSED_ADDR").as_deref() != Ok("affine");
+            let f_dsti = if descend {
+                let frc = self
+                    .builder
+                    .build_load(i64_t, rc_a, "q.frc")
+                    .unwrap()
+                    .into_int_value();
+                let d = self
+                    .builder
+                    .build_select(f_left, flc, frc, "q.f.dsti")
+                    .unwrap()
+                    .into_int_value();
+                let f_rbit = self.builder.build_not(f_left, "q.f.rbit").unwrap();
+                let f_rdec = self
+                    .builder
+                    .build_int_z_extend(f_rbit, i64_t, "q.f.rdec")
+                    .unwrap();
+                let frc_n = self.builder.build_int_sub(frc, f_rdec, "q.frc.n").unwrap();
+                self.builder.build_store(rc_a, frc_n).unwrap();
+                d
+            } else {
+                let back = self.builder.build_int_sub(fu_inv, fi, "q.f.back").unwrap();
+                let off = self
+                    .builder
+                    .build_select(f_left, zero, back, "q.f.off")
+                    .unwrap()
+                    .into_int_value();
+                self.builder.build_int_add(flc, off, "q.f.dsti").unwrap()
+            };
             let f_dstp = unsafe {
                 self.builder
                     .build_in_bounds_gep(elem_ty, dead, &[f_dsti], "q.f.dst.p")
@@ -12073,15 +12121,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 .builder
                 .build_int_z_extend(f_left, i64_t, "q.f.linc")
                 .unwrap();
-            let f_rbit = self.builder.build_not(f_left, "q.f.rbit").unwrap();
-            let f_rdec = self
-                .builder
-                .build_int_z_extend(f_rbit, i64_t, "q.f.rdec")
-                .unwrap();
             let flc_n = self.builder.build_int_add(flc, f_linc, "q.flc.n").unwrap();
-            let frc_n = self.builder.build_int_sub(frc, f_rdec, "q.frc.n").unwrap();
             self.builder.build_store(lc_a, flc_n).unwrap();
-            self.builder.build_store(rc_a, frc_n).unwrap();
             let fi2 = self
                 .builder
                 .build_load(i64_t, ii_a, "q.fi2")
