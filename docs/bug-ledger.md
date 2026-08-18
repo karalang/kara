@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 261 | 0 |
+| miscompile | 262 | 1 |
 | leak | 184 | 0 |
 | double-free | 133 | 0 |
 | run-vs-build | 130 | 0 |
@@ -110,12 +110,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 931 | 0 |
+| codegen | 932 | 1 |
 | typecheck | 199 | 1 |
 | interp | 153 | 0 |
 | ownership | 58 | 0 |
 | other | 54 | 3 |
-| autopar | 48 | 0 |
+| autopar | 49 | 1 |
 | cli | 45 | 0 |
 | parser | 23 | 0 |
 | runtime | 22 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1335 surfaced · 4 open · 1313 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1336 surfaced · 5 open · 1313 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,6 +134,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1335 surfaced
 | B-2026-08-18-27 | 2026-08-18 | typecheck | low | `collect()` in ARGUMENT position still fixes the chain to `Vec`: `f(<chain>.collect())` against a non-`Vec` parameter reports "expected 'Set[i64]', found 'Vec[i64]'". The last of the three positions design.md's "infers the target type from context" covers -- the annotated `let` landed in B-2026-08-17-36, return and tail in B-2026-08-18-18. | src/desugar.rs (`desugar_collect_target`, and the `walk_expr` Call arm that would have to know parameter types); src/typechecker/exprs.rs (`check_expr`) for the type-directed route. |
 | B-2026-08-18-29 | 2026-08-18 | other | low | 28 of design.md's code blocks still fail to parse on STATEMENT terminators -- a `let` whose `;` is missing (13 blocks), bare expression statements, `return None`, `+=`, `while`, `unsafe`. The DECLARATION half was fixed in B-2026-08-17-31; this is what a line-level pass provably cannot finish. | docs/design.md. Reproduce by extracting each fenced block to a file and running `karac check`, counting diagnostics containing `Expected Semicolon`; that harness is what produced the 49 -> 28 measurement. |
 | B-2026-08-18-35 | 2026-08-18 | other | low | `wasm_threads_animation_frames_recv_e2e` INTERMITTENTLY fails the whole suite with a node/V8 FATAL on module teardown, AFTER its own assertions have passed. The harness prints `RAF_OK elapsed=212.8ms` — the test body succeeded — and then node aborts with `# Fatal error in , line 0 / # Check failed: (location_) != nullptr.` inside `v8::internal::SourceTextModule::ExecuteAsyncModule`, so the test is recorded as failed and `cargo test` exits 101. Observed once in a full `--features llvm` run; the same commit re-run green (14,065 passed), and the test passes 3/3 in isolation. | roadmap.md |
+| B-2026-08-18-39 | 2026-08-18 | autopar+codegen | high | `?.` ON TWO LET-BOUND CALL RESULTS MISCOMPILES UNDER AUTO-PAR, RETURNING MEMORY THAT VARIES BETWEEN RUNS. Two independent `let`s from Option-returning calls, consumed by `?.`, print `Some(23092184781)` where the answer is `Some(5)` — a different value on every execution. `--interp` and `KARAC_AUTO_PAR=0` are correct; the JIT and the default build each give their own garbage. | Unknown. The SHAPE is B-2026-08-16-1's family — two independent `let`s form an auto-par fork group and a later expression reading them gets no return slot — but that row's cause (a missing `refs_in_expr` arm) is NOT it here: `ExprKind::OptionalChain` IS handled, at closure_escape.rs:2362, recursing into both `object` and `args`. Checked before filing so the next reader does not repeat it. |
 
 ### Wontfix (7)
 
