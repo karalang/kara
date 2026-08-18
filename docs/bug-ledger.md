@@ -98,8 +98,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 129 | 0 |
 | codegen-gap | 117 | 0 |
 | missing-feature | 106 | 2 |
+| diagnostics | 79 | 3 |
 | false-positive | 78 | 0 |
-| diagnostics | 78 | 3 |
 | perf | 77 | 0 |
 | crash | 51 | 0 |
 | soundness | 50 | 0 |
@@ -116,7 +116,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | ownership | 57 | 0 |
 | other | 51 | 2 |
 | autopar | 48 | 0 |
-| cli | 44 | 1 |
+| cli | 45 | 1 |
 | runtime | 22 | 0 |
 | parser | 21 | 2 |
 | resolver | 19 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1324 surfaced · 8 open · 1299 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1325 surfaced · 8 open · 1300 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (8)
 
@@ -133,11 +133,11 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1324 surfaced
 | B-2026-08-17-31 | 2026-08-17 | other | medium | 77 of design.md's code-block declarations omit the trailing `;` the grammar REQUIRES -- 51 of 63 bodyless trait declarations, plus 26 of 31 `type` aliases and `distinct type` declarations, so transcribing almost any trait from the authoritative spec produces code that does not parse -- and the document contradicts itself, since the other 12 have it. The parser needs `type Item;` in a trait, `type Item = i64;` in an impl, and `;` after every bodyless method signature (roadmap.md line 447 documents exactly that form as shipped and tested: `trait Container { type Item; fn first(ref self) -> Self.Item; }` + `impl Container for B { type Item = i64; ... }`, which checks and runs on all three backends). design.md's § Associated Types example writes the same construct as `type Item` / `type Item = i64` with no semicolons, and it fails with `error[parse]: Expected Semicolon, found Fn`. Same for § Conversion Traits' `trait From[T] { fn from(value: T) -> Self with _ }` and § Operator Traits' entire canonical-definition block. The 12 that DO carry the semicolon (e.g. line 3366 `fn default() -> Self;`, line 3370 `type Err;`, line 5360 `fn write(mut ref self, bytes: ref Slice[u8]);`) sit in the same document as the 51 that do not, so this is an internal inconsistency, not a deliberate grammar choice the parser has yet to catch up with. | roadmap.md |
 | B-2026-08-17-35 | 2026-08-17 | other | low | Two design.md sections state things the language does not have: § derive(Display) uses an enum-variant syntax that does not parse, and § Subscript Trait claims a v1 capability the resolver explicitly rejects. (1) The payload example writes `Circle(radius: f64),` / `Rect(w: f64, h: f64),` -- a tuple-style variant with NAMED fields. That form does not exist: `error[parse]: Expected RightParen, found Colon`. § Feature 3 defines the two real forms, struct variants (`Circle { radius: f64 }`) and tuple variants (`And(Expr, Expr)`), so this is a third spelling that appears nowhere else. (2) § Subscript Trait opens "User-defined types support `[]` indexing by implementing two standard traits" with no v1 caveat, but `impl Index[i64] for Grid` is rejected outright: `error[resolve]: user-defined 'impl Index for Grid' is not supported in v1; operator traits are stdlib-only`. The sibling § Operator Traits DOES carry the caveat ("makes the later addition of user-defined operator impls a purely additive change"), so the two sections disagree with each other about the same v1 boundary. | roadmap.md |
 | B-2026-08-17-38 | 2026-08-17 | typecheck | medium | `TreeMap[K, V]` -- a standard collection design.md documents 13 times, with its own method table, and prescribes TWICE as the remedy for Map/Set's unstable iteration order -- is an UNDEFINED TYPE. `let mut m: TreeMap[i64, i64] = TreeMap.new();` -> `error[resolve]: undefined type 'TreeMap'` + `undefined name 'TreeMap'`. The implementation ships the same container as `SortedMap`, which design.md mentions exactly ONCE, in passing, inside a naming erratum about `Bf16` (line 2299) -- it appears in none of the collection tables, none of the method tables, and neither of the two "use this for stable iteration" directives (lines 1735 and 9849, the § Map hash-seeding note and the § Determinism list). A user or an LLM following the spec's own advice about non-deterministic Map iteration writes `TreeMap` and gets an undefined-type error with no pointer to the real name. Knock-on: the same mismatch is the most likely cause of the `SortedMap.insert` / `.remove` hole in the must_use displaced-value exemption -- design.md's exemption list names `Map.insert` / `TreeMap.insert` / `Map.remove` / `TreeMap.remove`, and MEASURED, `Map`, `Vec` and `VecDeque` are all exempt while `SortedMap.insert` and `SortedMap.remove` both warn. | roadmap.md |
-| B-2026-08-18-17 | 2026-08-18 | cli | low | The `must_use` lint's JSON entry reuses diagnostic code `E0250`, which is ALREADY the typechecker's `ModuleBindingEffectfulInit` -- so a `must_use` escalated to an error with `-D must_use` emits a code that `karac explain E0250` describes as an unrelated module-binding error. Introduced by B-2026-08-17-37's wiring (src/cli/diag_json.rs, `code: if is_error { "E0250" } else { "W0250" }`); `W0250` itself is unique and unaffected, so the collision only bites on the escalated path. | roadmap.md |
 | B-2026-08-18-21 | 2026-08-18 | parser+codegen | medium | `Index` and `MethodCall` nodes still copy their object's span, so a whole postfix CHAIN collapses onto its innermost receiver's SpanKey and the last write wins. Measured on `v[0..3].first_or(-1).to_string()`: `string_typed_exprs` held ONE entry, `(256,1)` -- the span of the `Vec[i64]` receiver `v` -- because the chain's String-typed tail was recorded against it. Widening `Index` alone is a MEASURED REGRESSION, so the fix is not local to the parser. | The two `span: lhs.span` sites in `src/parser/exprs.rs`'s postfix loop (the `Token::LeftBracket` Index arm and the MethodCall arm). `record_expr_type` in src/typechecker.rs has 117 call sites and none for `Index`. The consumers that broke are the ones keyed on a subscript's own span; `asan_push_str_range_slice_temp_no_double_free` is the canary. |
 | B-2026-08-18-24 | 2026-08-18 | parser+codegen | medium | `MethodCall` nodes still copy their object's span, so a method CHAIN collapses onto its innermost receiver's SpanKey. Widening it is a MEASURED 21 memory_sanitizer + 16 codegen failures, because tables are written at one level of a chain and read at another and agree only while every level shares a key. The last of the four postfix arms. | The `span: lhs.span` in the MethodCall arm of `src/parser/exprs.rs`'s postfix loop, which carries the measurement as a comment. Start from `method_callee_types` and the other `method_call`-span-keyed tables in src/codegen/; `try_compile_freshtemp_user_method`'s dispatch_key fallback shows the shape of the problem. |
 | B-2026-08-18-26 | 2026-08-18 | codegen | high | A READ METHOD called directly on a returned `Set`/`Map` temp reads GARBAGE under `karac build` while `--interp` is correct: `mk_set().len()` gives 0 for a 3-element set, `mk_map().len()` gives 152 for a 2-element map, `mk_set().is_empty()` prints raw bytes, and six such calls in one program SEGFAULT. `contains` / `contains_key` on the same receiver are correct, and `Vec` is unaffected -- so it is `len`/`is_empty` specifically. | `try_compile_freshtemp_mapset_method` in src/codegen/method_call.rs and the method roster it gates on; compare against the Vec fresh-temp path. The receiver reaches it as a non-Identifier `Call`, so the identifier-keyed `compile_map_method` / `compile_set_method` never see it. |
 | B-2026-08-18-27 | 2026-08-18 | typecheck | low | `collect()` in ARGUMENT position still fixes the chain to `Vec`: `f(<chain>.collect())` against a non-`Vec` parameter reports "expected 'Set[i64]', found 'Vec[i64]'". The last of the three positions design.md's "infers the target type from context" covers -- the annotated `let` landed in B-2026-08-17-36, return and tail in B-2026-08-18-18. | src/desugar.rs (`desugar_collect_target`, and the `walk_expr` Call arm that would have to know parameter types); src/typechecker/exprs.rs (`check_expr`) for the type-directed route. |
+| B-2026-08-18-28 | 2026-08-18 | cli | low | NO lint diagnostic code is registered in `karac explain`'s CODE_TABLE, so `karac explain E0278` (must_use) and `karac explain E0259` (the four compile-path lints) both answer "not in the catalogue yet" -- for codes the compiler actively emits under `-D <lint>`. | roadmap.md |
 
 ### Wontfix (7)
 
@@ -155,9 +155,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1324 surfaced
 
 </details>
 
-### Fixed (1299)
+### Fixed (1300)
 
-<details><summary>1299 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1300 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -11588,6 +11588,15 @@ relocated, there is still nothing to wire -- the exclusion in
 `lint_entries_for_compile_path` stays correct and should not be revisited until
 a bundled-stdlib compile mode exists to give them a legitimate user-facing
 scope. |
+| B-2026-08-18-17 | cli | low | The `must_use` lint's JSON entry reuses diagnostic code `E0250`, which is ALREADY the typechecker's `ModuleBindingEffectfulInit` -- so a `must_use` e… | FIXED by f32eae6d. `must_use` moved to the free pair W0278/E0278 (E0277 was the highest code in the 02xx block; W0278 was free too). `E0250` stays with `ModuleBindingEffectfulInit`, its rightful owner and the meaning `explain.rs`'s CODE_TABLE assigns it.
+
+THE PAIR MOVED TOGETHER even though only `E0250` collided. A lint whose warn and error codes differ in number would be its own wart -- `deprecated` is W0245/E0245, the B-2026-08-18-2 lints are W0259/E0259 -- and `W0250` is referenced by neither the code table nor any consumer in-tree, so nothing depended on it.
+
+THE REAL HOLE WAS THAT NOTHING COULD CATCH THIS, and that is the part worth keeping. `explain.rs` already has `code_table_has_no_duplicate_rows`, but it only sees CODE_TABLE; a lint's codes are string literals in `diag_json.rs`'s emitters and never enter the table, so a lint could -- and did -- ship on a number the table already owned, with the two halves invisible to each other. Added `lint_codes_do_not_collide_with_the_code_table` beside it: it `include_str!`s the emitter, scans for the one line shape every lint entry uses (`code: if is_error { "Ennnn" } else { "Wnnnn" },`), and asserts both halves are absent from the table. Verified it FAILS on the pre-fix source with "lint code E0250 is already assigned in CODE_TABLE". It also asserts it matched at least one pair, so the scanner cannot rot into a silent no-op if that line shape ever changes.
+
+MEASURED AFTER: `must_use` emits `W0278` by default and `E0278` under `-D must_use`; `karac explain E0250` still answers for the typecheck module-binding error; `karac explain E0278` no longer describes something else. The end-to-end CLI test asserts the two halves are the same NUMBER and that `karac explain <escalated code>` does not name `ModuleBindingEffectfulInit` -- the row's actual complaint, phrased as the property rather than as a literal.
+
+REMAINING, and NOT a collision: no lint code is registered in CODE_TABLE at all (`E0259`, and now `E0278`, are absent, as `E0250` was), so `karac explain` on any lint code returns nothing rather than the wrong thing. That is a gap in coverage rather than a wrong answer, needs prose per lint, and is filed separately. |
 | B-2026-08-18-18 | typecheck | low | `collect()` reaches a non-`Vec` `FromIterator` target only through an ANNOTATED `let` | FIXED by 8eae11c for RETURN and TAIL position. Argument position is split into its own row, for the reason this row already anticipated.
 
 SAME DESUGAR, NEW TARGET. B-2026-08-17-36 lowers the annotated-`let` form as a PRE-TYPECHECK rewrite, which is what buys interpreter/JIT/AOT parity by construction. Return position turns out to be reachable exactly that way after all: the enclosing fn's declared return type is threaded through the statement walk and applied at an explicit `return` and at the function body's own tail. No `pending_collect_target` expectation, no span-keyed target table, no per-backend materialization — the machinery this row sketched is not needed for two of the three positions.
