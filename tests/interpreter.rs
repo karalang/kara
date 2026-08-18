@@ -34261,3 +34261,32 @@ fn test_range_subscript_as_method_receiver_oracle() {
     );
     assert_eq!(out, "10\n20\n-1\n");
 }
+
+/// B-2026-08-18-22 — the interpreter oracle for SCALAR READERS on a String
+/// range subscript. `s[0..5].len()` ran here and under `karac check` all along
+/// while the build died on "element TypeExpr unknown", so this is the side the
+/// compiled fix was measured against — a run-vs-build divergence.
+///
+/// The `ref String` parameter is deliberate: that receiver records as
+/// `Ref(Str)`, the shape a span-keyed String test filters out, and it is what
+/// the first cut of the fix silently declined.
+#[test]
+fn test_string_range_slice_scalar_readers_oracle() {
+    let out = run_no_errors(
+        "fn count(s: ref String) -> i64 {\n\
+             let mut n = 0;\n\
+             n = n + s[0..5].len();\n\
+             if s[0..5].starts_with(\"he\") { n = n + 1; }\n\
+             if s[6..11].contains(\"or\") { n = n + 1; }\n\
+             if s[0..5].is_empty() { n = n + 100; }\n\
+             return n;\n\
+         }\n\
+         fn main() {\n\
+             let src: String = \"hello world\";\n\
+             println(count(src).to_string());\n\
+             println(src[0..5].char_count().to_string());\n\
+             println(src.len().to_string());\n\
+         }\n",
+    );
+    assert_eq!(out, "7\n5\n11\n");
+}

@@ -19,6 +19,28 @@ use inkwell::IntPredicate;
 
 use super::state::VarSlot;
 
+/// B-2026-08-18-22 — the `String` methods a BORROWED `s[a..b]` view may be
+/// dispatched on directly, without allocating the slice.
+///
+/// Every one returns a SCALAR, which is the whole membership rule: the result
+/// cannot carry the `{ptr, len, cap = 0}` view out of the statement, so the
+/// view's pointer into the source can never outlive it. Methods returning a
+/// `String`, a collection or an iterator are deliberately absent — `trim` and
+/// `substring` can hand back a value aliasing the receiver, and whether that
+/// outlives the source depends on the receiver expression, which the dispatch
+/// site cannot see. Those keep the bind-to-a-`let`-first requirement.
+const STRING_BORROWED_READERS: &[&str] = &[
+    "char_at",
+    "char_count",
+    "cmp",
+    "contains",
+    "ends_with",
+    "find",
+    "is_empty",
+    "len",
+    "starts_with",
+];
+
 impl<'ctx> super::Codegen<'ctx> {
     /// Tear down the per-call-site registry entries a hoisted synthetic
     /// container / element binding installed (`variables` + every collection
@@ -99,6 +121,90 @@ impl<'ctx> super::Codegen<'ctx> {
             } = &index.kind
             {
                 return self.compile_string_slice(inner, start, end, *inclusive);
+            }
+        }
+
+        // B-2026-08-18-22 — the NON-OWNING readers the arm above deferred
+        // ("`s[a..b].len()`/`.bytes()` etc. still bind the slice to a `let`
+        // first"). `karac check` and `--interp` accepted `s[0..5].len()` all
+        // along; the build died on "element TypeExpr unknown" because the
+        // receiver fell through to the Vec/Slice/Array-element path below,
+        // which has no String element to find. A run-vs-build divergence.
+        //
+        // BORROWED, not owned, and that is what makes this safe without any
+        // owned-temp bookkeeping. `to_string`/`clone` above RETAIN the slice,
+        // so they must allocate; a reader consumes it inside the call and
+        // discards it, so `compile_string_slice_borrowed`'s `{ptr, len,
+        // cap = 0}` view into the source is exactly right — `cap = 0` is the
+        // existing borrowed marker every `cap > 0` free guard skips, so there
+        // is nothing to free and nothing to leak. That asymmetry is why the
+        // original arm stopped where it did rather than an oversight.
+        //
+        // SCALAR-RETURNING READERS ONLY. A method whose result is a scalar
+        // provably cannot carry the view out of the statement. Anything that
+        // returns a String, a collection or an iterator is left alone: it may
+        // hand back a value aliasing the view (`trim` is the clear case), and
+        // whether that outlives the source depends on the receiver, which this
+        // position cannot see. Binding to a `let` still works for those.
+        if STRING_BORROWED_READERS.contains(&method) {
+            if let ExprKind::Range {
+                start,
+                end,
+                inclusive,
+            } = &index.kind
+            {
+                // Ask the static type walk, falling back to the span table
+                // only when it has no answer — the discriminator
+                // B-2026-08-18-14 established for `compile_index`'s range
+                // branch, and for the same reason. A `ref String` PARAMETER is
+                // recorded as `Ref(Str)`, which `string_typed_exprs` filters
+                // out, so a span-table gate silently declines the most ordinary
+                // receiver there is: a string passed by reference. The fixture
+                // for this row uses exactly that shape and caught it.
+                let inner_is_string = match self.type_name_of_expr(inner).as_deref() {
+                    Some(name) => name == "String",
+                    None => self
+                        .span_tables
+                        .string_typed_exprs
+                        .contains(&(inner.span.offset, inner.span.length)),
+                };
+                if inner_is_string {
+                    let view = self.compile_string_slice_borrowed(inner, start, end, *inclusive)?;
+                    let cur_fn = self
+                        .current_fn
+                        .ok_or_else(|| "string slice reader outside a fn".to_string())?;
+                    let slot = self.create_entry_alloca(cur_fn, "__sstr_view", view.get_type());
+                    self.builder.build_store(slot, view).unwrap();
+                    let synth = format!("__sstr_view_{}", self.indexed_elem_counter);
+                    self.indexed_elem_counter += 1;
+                    self.variables.insert(
+                        synth.clone(),
+                        super::state::VarSlot {
+                            ptr: slot,
+                            ty: view.get_type(),
+                        },
+                    );
+                    let string_te = TypeExpr {
+                        kind: TypeKind::Path(crate::ast::PathExpr {
+                            segments: vec!["String".to_string()],
+                            generic_args: None,
+                            span: inner.span,
+                        }),
+                        span: inner.span,
+                    };
+                    self.register_var_from_type_expr(&synth, &string_te);
+                    let synth_expr = Expr {
+                        kind: ExprKind::Identifier(synth.clone()),
+                        span: inner.span,
+                    };
+                    let out =
+                        self.compile_method_call(&synth_expr, method, args, call_span, call_span);
+                    // Dispatch-only registrations; the view itself owns nothing.
+                    self.variables.remove(&synth);
+                    self.var_types.string_vars.remove(&synth);
+                    self.var_types.var_type_names.remove(&synth);
+                    return out;
+                }
             }
         }
 

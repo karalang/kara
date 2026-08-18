@@ -98416,6 +98416,49 @@ fn main() {
         }
     }
 
+    /// B-2026-08-18-22 — the STRING sibling of B-2026-08-18-14, end to end.
+    /// `s[0..5].len()` failed the build with "element TypeExpr unknown" while
+    /// `karac check` and `--interp` both ran it: the receiver fell through to
+    /// the Vec/Slice/Array-element path, which has no String element to find.
+    ///
+    /// The readers dispatch on a BORROWED `{ptr, len, cap = 0}` view rather
+    /// than an allocated slice, which is what separates them from the
+    /// `to_string`/`clone` arm that has always worked — those RETAIN the slice
+    /// and must allocate; a scalar reader consumes it inside the call. The
+    /// companion ASAN fixture pins the allocation count at zero; this pins the
+    /// answers.
+    ///
+    /// A `ref String` receiver is included because it records as `Ref(Str)`,
+    /// the shape a span-keyed String test filters out, and the first cut of the
+    /// fix declined it silently. `trim()` is NOT here: it can hand back a value
+    /// aliasing the receiver, so it stays on the bind-to-a-`let` path by design.
+    #[test]
+    fn string_range_slice_scalar_readers_dispatch_in_receiver_position() {
+        let src = "fn count(s: ref String) -> i64 {\n\
+                       let mut n = 0;\n\
+                       n = n + s[0..5].len();\n\
+                       if s[0..5].starts_with(\"he\") { n = n + 1; }\n\
+                       if s[6..11].contains(\"or\") { n = n + 1; }\n\
+                       if s[0..5].is_empty() { n = n + 100; }\n\
+                       return n;\n\
+                   }\n\
+                   fn main() {\n\
+                       let src: String = \"hello world\";\n\
+                       println(count(src).to_string());\n\
+                       println(src[0..5].char_count().to_string());\n\
+                       println(src[6..11].to_string());\n\
+                       println(src.len().to_string());\n\
+                   }\n";
+        let Some(out) = run_program(src) else {
+            return;
+        };
+        assert_eq!(
+            out, "7\n5\nworld\n11\n",
+            "a String range subscript must dispatch scalar readers on a borrowed view, \
+             and must leave the source intact for its own later use"
+        );
+    }
+
     /// B-2026-08-18-14 — the E2E half: a RANGE SUBSCRIPT used directly as a
     /// METHOD RECEIVER. `v[0..3].first_or(-1)` failed the build with "no
     /// handler for expression kind Range" while `karac check` and `--interp`

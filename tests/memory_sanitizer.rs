@@ -10029,6 +10029,45 @@ fn main() {
     // view or a `ref String` identifier untouched).
 
     #[test]
+    fn asan_string_range_slice_reader_receiver_allocates_nothing() {
+        // B-2026-08-18-22 — `s[a..b].len()` and its scalar-reader siblings
+        // dispatch on a BORROWED `{ptr, len, cap = 0}` view of the source
+        // rather than an allocated slice. `cap = 0` is the existing borrowed
+        // marker every `cap > 0` free guard skips, so the correct result here
+        // is zero allocations: a leak would mean the owning path was taken,
+        // and a double free would mean the view was treated as owned.
+        //
+        // IN A LOOP, and reading a `ref String` PARAMETER, because both are
+        // where the accounting would show. A `ref String` is recorded as
+        // `Ref(Str)`, the shape that made the sibling borrowed-slice gate
+        // decline in B-2026-08-18-21's investigation; iterating multiplies any
+        // per-evaluation slip into something LSan cannot round away.
+        assert_clean_asan_run(
+            r#"
+fn count(s: ref String) -> i64 {
+    let mut n = 0;
+    let mut i = 0;
+    while i < 6 {
+        n = n + s[0..5].len();
+        if s[0..5].starts_with("he") { n = n + 1; }
+        if s[6..11].contains("or") { n = n + 1; }
+        i = i + 1;
+    }
+    return n;
+}
+
+fn main() {
+    let src: String = "hello world";
+    println(count(src));
+    println(src.len());
+}
+"#,
+            &["42", "11"],
+            "string_range_slice_reader_receiver",
+        );
+    }
+
+    #[test]
     fn asan_push_str_range_slice_temp_no_double_free() {
         assert_clean_asan_run(
             r#"
