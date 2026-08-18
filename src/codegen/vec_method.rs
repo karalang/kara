@@ -11362,6 +11362,27 @@ impl<'ctx> super::Codegen<'ctx> {
         // passing through those blocks cannot see them; routing them through
         // memory lets both paths converge and leaves mem2reg to rebuild the phi.
         // `rv` is the reversal's descending cursor.
+        // MEASUREMENT ONLY, default 0 and inert. `KARAC_SORT_FU_PAD=N` /
+        // `KARAC_SORT_REV_PAD=N` emit N volatile stores into the fused pass's
+        // body and the reversal's body respectively.
+        //
+        // A volatile store of a constant to a dead alloca is exactly one `str`
+        // that LLVM may not eliminate, so the instruction delta between PAD=0
+        // and PAD=N is N x (iterations of that loop) — which turns an iteration
+        // count into something COUNTED rather than modelled. That matters here
+        // because the levers that did this before (SCATTER_SPLIT, ISORT_NE) only
+        // reach loops the fused path does not use, so without this the fused
+        // build's level count and reversal cost are both guesses.
+        let fu_pad = std::env::var("KARAC_SORT_FU_PAD")
+            .ok()
+            .and_then(|s| s.parse::<u32>().ok())
+            .unwrap_or(0);
+        let rev_pad = std::env::var("KARAC_SORT_REV_PAD")
+            .ok()
+            .and_then(|s| s.parse::<u32>().ok())
+            .unwrap_or(0);
+        let pad_a = (fused && (fu_pad > 0 || rev_pad > 0))
+            .then(|| self.create_entry_alloca(qpart_fn, "qpad", i64_t.into()));
         let bool_t = self.context.bool_type();
         let fu_slots = fu.map(|_| {
             (
@@ -12052,6 +12073,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 .into_int_value();
             let fi_n = self.builder.build_int_add(fi2, one, "q.fi.n").unwrap();
             self.builder.build_store(ii_a, fi_n).unwrap();
+            if let Some(p) = pad_a {
+                for _ in 0..fu_pad {
+                    let st = self.builder.build_store(p, zero).unwrap();
+                    st.set_volatile(true).unwrap();
+                }
+            }
             self.builder.build_unconditional_branch(fu_chk).unwrap();
 
             // The cursors met at `lo + nlt`, so the left cursor IS the split.
@@ -12130,6 +12157,12 @@ impl<'ctx> super::Codegen<'ctx> {
             let rb_n = self.builder.build_int_sub(rb, one, "q.rb.n").unwrap();
             self.builder.build_store(ii_a, ra_n).unwrap();
             self.builder.build_store(rv_a, rb_n).unwrap();
+            if let Some(p) = pad_a {
+                for _ in 0..rev_pad {
+                    let st = self.builder.build_store(p, zero).unwrap();
+                    st.set_volatile(true).unwrap();
+                }
+            }
             // DELIBERATELY NOT VECTORISED. The count pass this replaces was
             // 8-wide NEON, so widening the swap is the obvious way to pay for
             // the +2.2% instructions the reversal costs — but the same
