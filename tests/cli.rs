@@ -26875,3 +26875,81 @@ fn a_lint_diagnostic_is_prefixed_once_and_names_its_lint() {
     );
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+/// B-2026-08-18-17 — an escalated `must_use` emits a code that means
+/// `must_use`, not somebody else's diagnostic.
+///
+/// It shipped on `E0250`, which `explain.rs`'s code table already assigns to
+/// the typechecker's `ModuleBindingEffectfulInit`, so `-D must_use` produced a
+/// code `karac explain` described as an unrelated module-binding error. Only
+/// the escalated path collided — `W0250` was unique — which is why no default
+/// build was ever wrong and the collision sat unnoticed.
+///
+/// The end-to-end assertion is the one the row is actually about: the code the
+/// compiler emits and the code `karac explain` answers for must describe the
+/// same thing. `lint_codes_do_not_collide_with_the_code_table` is the unit
+/// guard that stops the next lint landing on a taken number.
+#[test]
+fn an_escalated_must_use_emits_a_code_that_is_its_own() {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-mustuse-code-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let src = tmp.join("mu.kara");
+    std::fs::write(
+        &src,
+        "#[must_use]\n\
+         fn compute() -> i64 { return 7; }\n\
+         fn main() { compute(); println(f\"done\"); }\n",
+    )
+    .unwrap();
+    let path = src.to_str().unwrap().to_string();
+
+    let code_of = |args: &[&str]| -> String {
+        let out = karac_bin().args(args).output().unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+        // Find `"lint_name":"must_use"` and read the `"code"` that precedes it
+        // in the same entry. Searching BACKWARD rather than splitting on `{`:
+        // the entry carries a nested `hints` array, so a split would separate
+        // the lint name from its own code.
+        let Some(at) = stdout.find("\"lint_name\":\"must_use\"") else {
+            return String::new();
+        };
+        let Some(i) = stdout[..at].rfind("\"code\":\"") else {
+            return String::new();
+        };
+        let rest = &stdout[i + 8..];
+        match rest.find('"') {
+            Some(j) => rest[..j].to_string(),
+            None => String::new(),
+        }
+    };
+
+    let warn_code = code_of(&["check", "--output=json", &path]);
+    let error_code = code_of(&["check", "--output=json", "-D", "must_use", &path]);
+    assert!(
+        !warn_code.is_empty() && !error_code.is_empty(),
+        "expected a must_use diagnostic in both modes, got {warn_code:?} / {error_code:?}"
+    );
+    assert_eq!(
+        warn_code.trim_start_matches('W'),
+        error_code.trim_start_matches('E'),
+        "a lint's warn and error codes must be the same number"
+    );
+
+    // The escalated code must not be one `karac explain` describes as
+    // something else. `E0250` — what this shipped with — is the
+    // module-binding error, and that is the exact wrong answer.
+    let out = karac_bin().args(["explain", &error_code]).output().unwrap();
+    let explained = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(
+        !explained.contains("ModuleBindingEffectfulInit"),
+        "`karac explain {error_code}` describes an unrelated diagnostic: {explained}"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}

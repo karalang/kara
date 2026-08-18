@@ -1158,6 +1158,61 @@ mod tests {
         );
     }
 
+    /// A LINT's diagnostic code must not be a code the table already assigns
+    /// to something else.
+    ///
+    /// `code_table_has_no_duplicate_rows` above cannot see this: the lint codes
+    /// are string literals in `diag_json.rs`'s emitters and never enter
+    /// `CODE_TABLE`, so a lint could — and did — ship on a number the table
+    /// already owned. `must_use` escalated by `-D must_use` emitted `E0250`,
+    /// which `karac explain E0250` answers for the typecheck
+    /// `ModuleBindingEffectfulInit` (B-2026-08-18-17).
+    ///
+    /// Scans the emitter's source for the one line shape every lint entry uses
+    /// — `code: if is_error { "Ennnn" } else { "Wnnnn" },` — and asserts both
+    /// halves are absent from the table. A lint that lands on a taken number
+    /// fails here rather than at whichever user runs `karac explain` on it.
+    #[test]
+    fn lint_codes_do_not_collide_with_the_code_table() {
+        const DIAG_JSON_SRC: &str = include_str!("diag_json.rs");
+        let taken: std::collections::HashSet<&str> =
+            CODE_TABLE.iter().map(|(code, _)| *code).collect();
+
+        let mut checked = 0usize;
+        for line in DIAG_JSON_SRC.lines() {
+            let line = line.trim();
+            let Some(rest) = line.strip_prefix("code: if is_error {") else {
+                continue;
+            };
+            // `"Ennnn" } else { "Wnnnn" },`
+            let codes: Vec<&str> = rest
+                .split('"')
+                .skip(1)
+                .step_by(2)
+                .filter(|s| s.len() == 5)
+                .collect();
+            assert_eq!(
+                codes.len(),
+                2,
+                "unrecognized lint-code line shape (update this scanner): {line}"
+            );
+            for code in codes {
+                checked += 1;
+                assert!(
+                    !taken.contains(code),
+                    "lint code {code} is already assigned in CODE_TABLE — pick a free \
+                     number for the lint (see B-2026-08-18-17)"
+                );
+            }
+        }
+        // The scanner silently passing because it matched nothing is the one
+        // way this test could rot into a no-op.
+        assert!(
+            checked >= 2,
+            "expected to find at least one lint code pair to check, found {checked}"
+        );
+    }
+
     /// The table's `class` column must agree with the typechecker's
     /// own `class_for_type_error_kind` — that function is the emitter's
     /// source of truth for the JSON `class` field, so any disagreement

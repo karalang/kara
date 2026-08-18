@@ -1867,7 +1867,15 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
             id: &format!("d{id_counter}"),
             severity: if is_error { "error" } else { "warning" },
             phase: "lint",
-            code: if is_error { "E0250" } else { "W0250" },
+            // W0278/E0278, NOT the W0250/E0250 this lint shipped with:
+            // `E0250` is ALREADY the typecheck `ModuleBindingEffectfulInit`,
+            // registered under that meaning in `explain.rs`'s code table, so a
+            // `must_use` escalated by `-D must_use` emitted a code `karac
+            // explain` answers for an unrelated module-binding error. The pair
+            // moves together — a lint whose warn and error codes differ in
+            // number would be its own wart, and `W0250` is not referenced by
+            // the explain table or any consumer in-tree. B-2026-08-18-17.
+            code: if is_error { "E0278" } else { "W0278" },
             category: "lint",
             message: &diag.message,
             filename,
@@ -1891,11 +1899,12 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
     // two renderings cannot disagree; see that call site for why these three
     // and not the other two.
     //
-    // W0259/E0259 rather than reusing must_use's W0250/E0250: `E0250` is
-    // ALREADY the typecheck `ModuleBindingEffectfulInit`, so a must_use
-    // escalated with `-D must_use` emits a code `karac explain` describes as an
-    // unrelated module-binding error. Filed separately; not compounded here.
-    // `lint_name` remains the addressable key for `-A` / `-D` either way.
+    // W0259/E0259 rather than reusing must_use's pair — a separate number per
+    // lint, which is the convention `deprecated` (W0245/E0245) follows. The
+    // collision this comment used to warn about (must_use shipping on
+    // `E0250`, already the typecheck `ModuleBindingEffectfulInit`) is fixed:
+    // must_use moved to W0278/E0278. `lint_name` remains the addressable key
+    // for `-A` / `-D` either way. B-2026-08-18-17.
     for (lint_name, is_error, message, span) in lint_entries_for_compile_path(pipeline) {
         id_counter += 1;
         diags.add(DiagEntry {
