@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 259 | 0 |
 | leak | 183 | 1 |
-| double-free | 132 | 1 |
+| double-free | 132 | 0 |
 | run-vs-build | 128 | 0 |
 | codegen-gap | 115 | 0 |
 | missing-feature | 103 | 3 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 917 | 3 |
+| codegen | 917 | 2 |
 | typecheck | 195 | 5 |
 | interp | 150 | 0 |
 | ownership | 57 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1306 surfaced · 11 open · 1278 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1306 surfaced · 10 open · 1279 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (11)
+### Open (10)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -138,7 +138,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1306 surfaced
 | B-2026-08-17-44 | 2026-08-17 | typecheck | medium | `self` inside `impl Trait for Slice[i64]` types as `Named { name: "Slice", args: [] }` -- the ELEMENT TYPE IS LOST -- so the body can barely do anything with it. `self[0]` is rejected outright, and `self.len().to_string()` fails codegen with "no handler for method 'to_string' on variable 'n'". A `Slice[i64]` PARAMETER has none of these problems, so the defect is in how a builtin-container impl head types its receiver. | The impl-head Self typing for builtin containers; symptom sites are the index rule in src/typechecker/exprs.rs and method dispatch in codegen. tests/codegen.rs `a_range_subscript_by_ref_passes_a_slice_not_an_element_pointer` is shaped around this — it reads `self.len()` and returns it directly, because `self.len().to_string()` does not compile. |
 | B-2026-08-18-1 | 2026-08-18 | cli | medium | `karac build` renders NO warning-level diagnostic on a successful build -- the suppression is GLOBAL to the build path, not a `must_use` wiring quirk. Control measurement: `deprecated`, which reaches the user through a COMPLETELY DIFFERENT channel from must_use (the typechecker's `type_lint_warning` / `TypeErrorKind::Deprecated` at src/typechecker.rs:3098-3113, not the `cmd_run` lint block), behaves IDENTICALLY -- emitted under `karac run`, absent under `karac build`. Two independent warning-production mechanisms both go silent on the build path, so the defect is the path's MISSING RENDER SURFACE rather than any one lint's wiring: `cmd_build` (src/cli/build_cmds.rs) renders only manifest warnings (`mf.warnings`) and `monomorphization-budget` violations, and never consults typecheck lint warnings or any lint pass. A build-only workflow therefore sees none of the warnings the compiler actually produced. | roadmap.md |
 | B-2026-08-18-2 | 2026-08-18 | cli | medium | Four sibling lints -- `undocumented_unsafe` / `unsafe_op_in_unsafe_fn`, `missing_must_use`, `missing_track_caller`, `ffi_float_eq` -- are invoked ONLY from `cmd_run`, the exact wiring gap B-2026-08-17-37 reports for `must_use`. All five calls sit in one contiguous block in src/cli/run_check_cmds.rs (~lines 654-730), inside `cmd_run` (which begins at line 338); `cmd_check` (line 1238) and `cmd_build` (src/cli/build_cmds.rs) call none of them. So four further lint surfaces are invisible to `karac check --output=json`, and therefore to the Mend loop, for the same reason must_use was. | roadmap.md |
-| B-2026-08-18-4 | 2026-08-18 | codegen | high | The user-`Drop` spelling of B-2026-08-17-45 still DOUBLE FREES: moving an `Option`-typed field out of a matched struct payload aborts under both compiled backends when the payload struct carries an `impl Drop`. Minimal: `struct C { name: String, zip: i64 } struct A { c: Option[C], other: String } impl Drop for A { fn drop(mut ref self) { println("dropping A"); } }` plus `let f = match a { Some(x) => { x.c } None => { None } };` where `a: Option[A]` -- ASAN reports `attempting double-free`, and plain `karac run` / `karac build` abort. `karac check` passes and `--interp` is correct, same as the parent row. | roadmap.md |
 | B-2026-08-18-8 | 2026-08-18 | codegen | medium | A `match` whose SCRUTINEE is itself a `match` yielding a boxed `Option` payload LEAKS the box -- 32 bytes per evaluation, unbounded in a loop. Minimal, with no `?.` and no closure anywhere: `match (match u.address { Some(x) => { x.city } None => { None } }) { Some(c) => { ... } None => { ... } }` over 200 iterations leaks 3200 bytes in 100 objects under LeakSanitizer. Binding the inner match to a `let` first is CLEAN, which is what isolates it to the scrutinee position. | The match-result temp's box cleanup in src/codegen/control_flow_match.rs. tests/memory_sanitizer.rs `asan_optional_chain_heap_payload_clean` deliberately uses the `let`-bound spelling and records why; switching it to the scrutinee spelling is the reproducer. |
 | B-2026-08-18-9 | 2026-08-18 | typecheck+codegen | medium | `question_ok_payload_types`' PRODUCER and CONSUMER do not key off the same node, and the `?` operator's span cannot be fixed until they do. Giving `ExprKind::Question` a span of its own (lhs start -> past the `?`, the way B-2026-08-18-7 fixed `?.`) makes `let b = mk(n)?;` stop resolving the binding's fields under codegen -- "codegen: cannot resolve field 'name' on this receiver" -- whenever the `Some`/`Ok` payload is a multi-word struct, while `--interp` stays correct. The two ends agree TODAY only because the node copies its operand's span, so they collide onto the same key by accident rather than by construction. | src/parser/exprs.rs (the `Token::Question` arm); the `question_ok_payload_types` producer in the typechecker and its consumer in codegen |
 
@@ -158,9 +157,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1306 surfaced
 
 </details>
 
-### Fixed (1278)
+### Fixed (1279)
 
-<details><summary>1278 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1279 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -11108,6 +11107,65 @@ Tests: `test_index_by_a_let_bound_range` and
 (tests/codegen.rs), which pins each bound spelling against the INLINE one it
 must equal rather than against a literal -- the two spellings meaning the same
 thing is the property. All verified failing on the pre-fix source. |
+| B-2026-08-18-4 | codegen | high | The user-`Drop` spelling of B-2026-08-17-45 still DOUBLE FREES: moving an `Option`-typed field out of a matched struct payload aborts under both comp… | FIXED by 3966efa. The row asked for "a channel that narrows the OWNER's walk
+instead of overwriting the box's data — the per-field analogue of
+B-2026-08-04-2's whole-action retraction". The channel that landed is a
+different shape than that and closes the same gap: the zero is neither written
+early nor skipped, it is QUEUED and emitted BETWEEN THE TWO READERS.
+
+WHY THAT WORKS, and it is the whole fix in one sentence: the payload-BODIES
+walk and the box's MEMORY drop are two separate calls at two separate points,
+so "the bodies walk and the memory walk have to disagree about that single
+field" — the row's own statement of the problem — is satisfied by writing the
+field between them rather than by teaching either walk to skip.
+
+THE ORDERING IS STRUCTURAL, NOT INCIDENTAL. The bodies action is registered
+against the ARM BINDING; the box drop belongs to the SOURCE, whose registration
+is older; LIFO therefore drains the body first. Confirmed in emitted IR for the
+row's own repro, where main's cleanup reads:
+
+    call void @__karac_dropelems_opt_A(ptr %a)      <- bodies walk (user Drop)
+    call void @__karac_drop_struct_C(ptr %f_box_ptr) ; the moved field, now f's
+    call void @free(ptr %f_box_ptr)
+    call void @__karac_drop_struct_A(ptr %a_box_ptr) <- the box's memory drop
+    call void @free(ptr %a_box_ptr)
+
+The double free is the last `__karac_drop_struct_A` re-freeing what the second
+line already freed. The queued zero is emitted immediately after line 1.
+
+MECHANICS. `record_deboxed_payload_box`'s user-Drop branch no longer drops the
+box pointer on the floor — it routes it to a DEFERRED map keyed by binding
+name (`deferred_payload_box_ptrs`). The move site, finding the box on that
+channel instead of the immediate one, queues a `PendingBoxFieldZero` rather
+than writing. The `CleanupAction::UserDrop` arm emits the queue right after the
+walker call, through the SAME `zero_struct_field_move_cap_inst` helper the
+immediate mirror uses — same layout, same field, only the emission point moves.
+-45's gate is untouched, so every shape that already worked is byte-identical.
+
+THE QUEUE IS READ AT THE DRAIN, NOT DRAINED, and this is the non-obvious half.
+A cleanup action is emitted once per control-flow path that leaves the scope
+(fall-through, early `return`, `?`), and every one of those paths reaches the
+box's memory drop — so each needs its own zero. Draining would neutralize the
+first path and leave every other one double-freeing, which a straight-line
+repro cannot show. The compiler surfaced this: the emit fn takes `&self`, so
+`remove` did not typecheck, and the right answer turned out to be the one the
+borrow checker forced.
+
+VERIFICATION. All four surfaces (interp / JIT / AOT / AOT under
+KARAC_AUTO_PAR=0) agree with the interpreter on the row's repro. The ASAN/LSan
+fixture carries the sibling's three legs (MOVED, KEPT — a struct with a second
+owning field the move does not take, where a too-wide zero shows as a leak —
+and a `None` source). NON-VACUITY IS MEASURED: against the pre-fix compiler the
+fixture exits 1 under ASAN at BOTH the default opt level and
+`KARAC_OPT_LEVEL=0`; clean at both after.
+
+THE HAZARD THE ORIGINAL REFUSAL RECORDED IS DIRECTLY TESTED, since avoiding it
+is this fix's entire claim. The fixture's `impl Drop` body READS a sibling
+field (`self.other.len()`), so a zero landing too early is a use-after-free
+ASAN catches rather than silence; the value twin asserts
+`other=untouched sibling`, catching the same error in its quiet form — the
+empty-string print that comment measured when the box was zeroed at the move
+site. |
 | B-2026-08-18-5 | codegen | high | EVERY SYNTHESIZED predicate compared an UNSIGNED operand with the SIGNED comparison predicate, so a valid value was rejected at run time on both comp… | FIXED by dc42b14. One arm in `src/codegen/exprs.rs`'s `ExprKind::Binary`
 handler: when both operands are integers and either is unsigned, select
 `compile_binop_typed(.., is_unsigned = true)` instead of `compile_binop`,
