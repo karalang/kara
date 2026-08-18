@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 260 | 0 |
 | leak | 184 | 0 |
 | double-free | 133 | 0 |
-| run-vs-build | 129 | 1 |
+| run-vs-build | 129 | 0 |
 | codegen-gap | 117 | 0 |
 | missing-feature | 105 | 2 |
 | false-positive | 78 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 925 | 3 |
+| codegen | 925 | 2 |
 | typecheck | 198 | 3 |
 | interp | 150 | 0 |
 | ownership | 57 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1322 surfaced · 9 open · 1296 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1322 surfaced · 8 open · 1297 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (9)
+### Open (8)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -136,7 +136,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1322 surfaced
 | B-2026-08-18-17 | 2026-08-18 | cli | low | The `must_use` lint's JSON entry reuses diagnostic code `E0250`, which is ALREADY the typechecker's `ModuleBindingEffectfulInit` -- so a `must_use` escalated to an error with `-D must_use` emits a code that `karac explain E0250` describes as an unrelated module-binding error. Introduced by B-2026-08-17-37's wiring (src/cli/diag_json.rs, `code: if is_error { "E0250" } else { "W0250" }`); `W0250` itself is unique and unaffected, so the collision only bites on the escalated path. | roadmap.md |
 | B-2026-08-18-18 | 2026-08-18 | typecheck | low | `collect()` reaches a non-`Vec` `FromIterator` target only through an ANNOTATED `let`. The other two positions design.md's "infers the target type from context" covers still fix the chain to `Vec`: `return <chain>.collect()` against a declared non-`Vec` return type -> "expected 'Set[i64]', found 'Vec[i64]'", and argument position `f(<chain>.collect())` against a non-`Vec` parameter -> the same. Measured AFTER B-2026-08-17-36 landed, so these are the residue of that fix rather than a restatement of it. | src/desugar.rs (desugar_collect_target); src/typechecker/exprs.rs (check_expr) |
 | B-2026-08-18-21 | 2026-08-18 | parser+codegen | medium | `Index` and `MethodCall` nodes still copy their object's span, so a whole postfix CHAIN collapses onto its innermost receiver's SpanKey and the last write wins. Measured on `v[0..3].first_or(-1).to_string()`: `string_typed_exprs` held ONE entry, `(256,1)` -- the span of the `Vec[i64]` receiver `v` -- because the chain's String-typed tail was recorded against it. Widening `Index` alone is a MEASURED REGRESSION, so the fix is not local to the parser. | The two `span: lhs.span` sites in `src/parser/exprs.rs`'s postfix loop (the `Token::LeftBracket` Index arm and the MethodCall arm). `record_expr_type` in src/typechecker.rs has 117 call sites and none for `Index`. The consumers that broke are the ones keyed on a subscript's own span; `asan_push_str_range_slice_temp_no_double_free` is the canary. |
-| B-2026-08-18-22 | 2026-08-18 | codegen | medium | A STRING range subscript used as a METHOD RECEIVER reaches codegen only for `to_string` / `clone`: `s[0..5].len()` fails the build with "indexed-receiver method 'len' on 's' -- element TypeExpr unknown" while `karac check` accepts it and `--interp` prints 5. The non-owning readers the String-slice arm defers. | The `method == "to_string" || method == "clone"` gate at the head of `compile_indexed_receiver_method` in src/codegen/calls.rs. A wider set needs the borrowed-slice path (`try_compile_borrowed_string_slice`, already used for `push_str` and map-key lookups) or owned-temp tracking for the materialized slice. |
 | B-2026-08-18-24 | 2026-08-18 | parser+codegen | medium | `MethodCall` nodes still copy their object's span, so a method CHAIN collapses onto its innermost receiver's SpanKey. Widening it is a MEASURED 21 memory_sanitizer + 16 codegen failures, because tables are written at one level of a chain and read at another and agree only while every level shares a key. The last of the four postfix arms. | The `span: lhs.span` in the MethodCall arm of `src/parser/exprs.rs`'s postfix loop, which carries the measurement as a comment. Start from `method_callee_types` and the other `method_call`-span-keyed tables in src/codegen/; `try_compile_freshtemp_user_method`'s dispatch_key fallback shows the shape of the problem. |
 | B-2026-08-18-25 | 2026-08-18 | typecheck | low | The `deprecated` diagnostic's MESSAGE TEXT begins with its own severity prefix, so every renderer that adds one prints it twice: "warning[deprecated]: file:7:13: warning[deprecated]: use of deprecated item `old_way`...". Under `-D deprecated` the doubling reads as a contradiction -- "error[E0200]: ... warning[deprecated]: ..." -- telling the author it is a warning in the same line that rejects the build. | roadmap.md |
 
@@ -156,9 +155,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1322 surfaced
 
 </details>
 
-### Fixed (1296)
+### Fixed (1297)
 
-<details><summary>1296 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1297 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -11609,6 +11608,27 @@ WHY NOT JUST CALL `render_text_diagnostics` FROM `run`, which would have been th
 MEASURED AFTER, on the same `#[deprecated]` program: `karac check`, `karac build`, `karac run` and `karac run --interp` all render a byte-identical `warning[deprecated]` line, and run still executes the program (prints `1`). `-A deprecated` suppresses it in every lane. `must_use` under run: one occurrence, unchanged rendering. A warning-free program stays silent everywhere.
 
 THIS ROW EXISTED BECAUSE B-2026-08-18-1's OWN CONTROL WAS MISREPORTED -- that row used "deprecated is emitted under run" as the evidence that the BUILD path specifically suppressed warnings, and re-measurement showed it absent under run too. The conclusion there survived (two independent mechanisms went silent on the build path); the leftover was this. Worth remembering as the general shape: a row's control measurement deserves re-running, not just its subject. |
+| B-2026-08-18-22 | codegen | medium | A STRING range subscript used as a METHOD RECEIVER reaches codegen only for `to_string` / `clone`: `s[0..5].len()` fails the build with "indexed-rece… | FIXED by b3d0c97 for the SCALAR readers. `s[0..5].len()` and its scalar siblings now dispatch in receiver position; the value-returning readers stay deferred, deliberately and for a stated reason.
+
+BORROWED, NOT OWNED — that is the whole fix, and it is why the arm stopped where it did rather than by oversight. `to_string` / `clone` RETAIN the slice, so they must allocate, which is why they were the two methods the String-slice arm already handled. A scalar reader consumes the bytes inside the call and discards them, so `compile_string_slice_borrowed`'s `{ptr, len, cap = 0}` view into the source is exactly the right shape: `cap = 0` is the existing borrowed marker every `cap > 0` free guard skips, so there is nothing to free and no owned-temp bookkeeping to get wrong. The view is materialized into a synth local and re-dispatched by IDENTIFIER — the same materialize-and-re-dispatch move `try_compile_nonident_slice_method` makes for a `Slice` receiver.
+
+MEMBERSHIP IS A RULE, NOT A LIST OF CONVENIENT NAMES: every admitted method returns a SCALAR, so its result provably cannot carry the view out of the statement, and the view's pointer into the source can never outlive it. `char_at`, `char_count`, `cmp`, `contains`, `ends_with`, `find`, `is_empty`, `len`, `starts_with`.
+
+STILL DEFERRED, and the reason is specific rather than caution: anything returning a `String`, a collection or an iterator. `trim` is the clear case — it can hand back a value ALIASING the receiver, and whether that outlives the source depends on the receiver expression, which the dispatch site cannot see. Those keep the bind-to-a-`let`-first requirement and the existing diagnostic; verified unchanged (`s[0..5].trim()` still declines with "element TypeExpr unknown"). Whoever lifts that will need real escape reasoning, not a longer list.
+
+THE FIXTURE CAUGHT A GAP IN THE FIRST CUT, which is worth recording because the shape is ordinary. The gate originally asked the span-keyed `string_typed_exprs` whether the receiver was a String; a `ref String` PARAMETER is recorded as `Ref(Str)` and is filtered out of that table, so `s[0..5].len()` inside `fn count(s: ref String)` — a string passed by reference, about as common as receivers get — silently declined and the fixture failed to compile. It now asks `type_name_of_expr` and falls back to the table only when the static walk has no answer: the discriminator B-2026-08-18-14 established, applied to the third and last of the String-slice gates, so all three now agree. That `Ref(Str)` filtering is the same mechanism B-2026-08-18-21's investigation isolated one row earlier.
+
+MEASURED, all three backends byte-identical (`--interp`, `karac run` JIT, `karac build`):
+  * `s[0..5].len()`              build FAILED ("element TypeExpr unknown") -> 5
+  * `.starts_with` / `.ends_with` / `.contains` / `.is_empty` / `.char_count`   same failure -> correct
+  * `s[6..11].to_string()`       unchanged (owning arm)                   -> "world"
+  * `s[0..5].trim()`             still declines, by design
+  * the source's own `src.len()` after all of it                          -> 11, so the view never disturbs it
+`karac check` accepted every one of these throughout, so this was a run-vs-build divergence rather than a wrong answer.
+
+Tests: `asan_string_range_slice_reader_receiver_allocates_nothing` pins the allocation count at ZERO — a leak would mean the owning path was taken and a double free would mean the view was treated as owned — reading a `ref String` parameter in a loop so any per-evaluation slip multiplies rather than rounds away. `test_string_range_slice_scalar_readers_oracle` (interpreter) and `string_range_slice_scalar_readers_dispatch_in_receiver_position` (codegen E2E) pin the answers, including the source staying intact for its own later use.
+
+Gates: cargo fmt clean, clippy clean under `--features llvm`, memory_sanitizer 1127 passed, codegen 3052 passed, full suite green. The DEFAULT-feature clippy is red on main for two never-used fns in src/cli.rs, unrelated to this row and filed as B-2026-08-18-23. |
 | B-2026-08-18-23 | cli | medium | `cargo clippy --all --all-targets -- -D warnings` is RED on main: `collect_warning_diagnostics_json` and `render_text_warning_diagnostics` in src/cli… | FIXED by 81b1fe4f, by the session whose scaffolding it was -- which is what the row asked for, having deliberately declined to delete another session's in-flight code. Both functions are now WIRED (B-2026-08-18-19 gave project builds a warning surface, B-2026-08-18-20 gave `karac run` one), and the default-feature gate was STILL red afterward, which is the part worth recording: wiring them up was not the fix.
 
 THE ACTUAL CAUSE is a cfg boundary, not dead code. `collect_warning_diagnostics_json` and `render_text_warning_diagnostics` have exactly one caller each, in `cmd_build`'s CODEGEN path, which sits inside `#[cfg(feature = "llvm")]`. Without that feature the callers do not exist, so the helpers really are dead -- and correctly so: the non-llvm fallback delegates to `cmd_check`, which renders warnings through `render_text_diagnostics` itself. They carry `#[cfg(feature = "llvm")]` now, matching where their callers live.
