@@ -103,7 +103,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | diagnostics | 73 | 4 |
 | crash | 51 | 1 |
 | soundness | 50 | 0 |
-| other | 35 | 0 |
+| other | 36 | 1 |
 | use-after-free | 20 | 0 |
 
 ### By surface
@@ -119,14 +119,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | cli | 39 | 2 |
 | runtime | 22 | 0 |
 | resolver | 19 | 0 |
-| parser | 18 | 0 |
+| parser | 19 | 1 |
 | effect | 7 | 0 |
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1303 surfaced · 12 open · 1274 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1304 surfaced · 13 open · 1274 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (12)
+### Open (13)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -142,6 +142,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1303 surfaced
 | B-2026-08-18-2 | 2026-08-18 | cli | medium | Four sibling lints -- `undocumented_unsafe` / `unsafe_op_in_unsafe_fn`, `missing_must_use`, `missing_track_caller`, `ffi_float_eq` -- are invoked ONLY from `cmd_run`, the exact wiring gap B-2026-08-17-37 reports for `must_use`. All five calls sit in one contiguous block in src/cli/run_check_cmds.rs (~lines 654-730), inside `cmd_run` (which begins at line 338); `cmd_check` (line 1238) and `cmd_build` (src/cli/build_cmds.rs) call none of them. So four further lint surfaces are invisible to `karac check --output=json`, and therefore to the Mend loop, for the same reason must_use was. | roadmap.md |
 | B-2026-08-18-4 | 2026-08-18 | codegen | high | The user-`Drop` spelling of B-2026-08-17-45 still DOUBLE FREES: moving an `Option`-typed field out of a matched struct payload aborts under both compiled backends when the payload struct carries an `impl Drop`. Minimal: `struct C { name: String, zip: i64 } struct A { c: Option[C], other: String } impl Drop for A { fn drop(mut ref self) { println("dropping A"); } }` plus `let f = match a { Some(x) => { x.c } None => { None } };` where `a: Option[A]` -- ASAN reports `attempting double-free`, and plain `karac run` / `karac build` abort. `karac check` passes and `--interp` is correct, same as the parent row. | roadmap.md |
 | B-2026-08-18-6 | 2026-08-18 | typecheck | medium | The `PartialEq` derive's FIELD validator is STRICTER than `Eq`'s, which is backwards: `#[derive(Eq)] struct A { v: Vec[i64] }` is accepted and its `==` lowering is pinned by a passing E2E test, while `#[derive(PartialEq)] struct B { v: Vec[i64] }` is REFUSED with "struct 'B' derives PartialEq but field 'v' has non-PartialEq type 'Vec[i64]'". `Eq` is the stronger trait -- anything comparable for `Eq` is comparable for `PartialEq` -- so a field type accepted by the former and rejected by the latter cannot both be right. The practical effect is that the weaker, more common derive is the one an author cannot use on a struct with a `Vec` field. | — |
+| B-2026-08-18-7 | 2026-08-18 | parser | medium | Every `?.` node copies its object's span VERBATIM, so nested chains are indistinguishable to any span-keyed side table. `src/parser/exprs.rs`'s `Token::QuestionDot` arm builds the node with `span: lhs.span`, and `lhs` is the previous chain step -- so every node in `a?.b?.c` collapses onto the innermost object's span. MEASURED: both the inner and outer nodes of `u.address?.city?.name` report span `(267,1)`. The `Token::Question` arm three lines above has the identical `span: lhs.span` and so the identical latent hazard. | src/parser/exprs.rs (the `Token::QuestionDot` and `Token::Question` arms of `parse_expr_bp_with_ctx_inner`; the `Binary` arm in the same fn is the model) |
 
 ### Wontfix (7)
 
