@@ -1902,6 +1902,61 @@ fn test_effect_resource_no_provider() {
     }
 }
 
+/// B-2026-08-18-41 — design.md § Parameterized Resources declares
+/// `effect resource UserDB[user_id: i64];`, and it did not parse. The `[...]`
+/// went to `parse_optional_generic_params`, so the spec's own example failed
+/// the Type-class naming rule for generic parameters -- a naming complaint
+/// about a declaration that was never generic.
+///
+/// THE USE SIDE HAS BEEN LIVE ALL ALONG. `Resource::param` carries
+/// `writes(UserDB[id])` and `apply_parameterized_keys` proves literal keys
+/// distinct, so the declaration was the one missing piece of a working
+/// feature, not the tip of an unimplemented one.
+#[test]
+fn test_effect_resource_partition_key() {
+    let prog = parse_ok("effect resource UserDB[user_id: i64];");
+    let Item::EffectResource(e) = &prog.items[0] else {
+        panic!("expected an effect resource, got {:?}", prog.items[0]);
+    };
+    assert_eq!(e.name, "UserDB");
+    let key = e.key_param.as_ref().expect("a partition key");
+    assert_eq!(key.name, "user_id");
+    assert!(e.provider_trait.is_none());
+}
+
+/// The bare `resource R;` shorthand takes the same path — the two spellings
+/// had duplicate parser copies and now share one helper, so the key form
+/// cannot land on only one of them.
+#[test]
+fn test_bare_resource_shorthand_takes_a_partition_key() {
+    let prog = parse_ok("resource UserDB[user_id: i64]: DatabaseProvider;");
+    let Item::EffectResource(e) = &prog.items[0] else {
+        panic!("expected an effect resource, got {:?}", prog.items[0]);
+    };
+    assert_eq!(e.name, "UserDB");
+    assert_eq!(
+        e.key_param.as_ref().map(|k| k.name.as_str()),
+        Some("user_id")
+    );
+    assert_eq!(e.provider_trait, Some("DatabaseProvider".to_string()));
+}
+
+/// The key is a BINDING name, so it is Value-class. Naming it `T` is the
+/// mistake the old generic-param path made in the other direction, and the
+/// diagnostic now names the right class.
+#[test]
+fn test_effect_resource_key_name_must_be_value_class() {
+    let result = karac::parse("effect resource UserDB[T: i64];");
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| e.message.contains("resource key") && e.message.contains("Value-class")),
+        "expected a Value-class complaint about the key; got: {:?}",
+        result.errors
+    );
+}
+
 #[test]
 fn test_effect_group_decl() {
     let prog =

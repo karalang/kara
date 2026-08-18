@@ -4,6 +4,7 @@
 
 use crate::ast::*;
 use crate::lexer::IdentClass;
+use crate::token::Span;
 use crate::token::Token;
 
 impl super::Parser {
@@ -38,28 +39,7 @@ impl super::Parser {
         match self.peek_token_ref() {
             Token::Resource => {
                 self.advance();
-                let name = self.expect_identifier()?;
-                let name_span = self.span_from(&start);
-                self.check_ident_class(&name, IdentClass::Type, "effect resource", name_span);
-                let generic_params = self.parse_optional_generic_params();
-                let mut provider_trait_span = None;
-                let provider_trait = if self.eat(&Token::Colon) {
-                    let trait_start = self.current_span();
-                    let t = self.expect_identifier()?;
-                    provider_trait_span = Some(self.span_from(&trait_start));
-                    Some(t)
-                } else {
-                    None
-                };
-                self.expect(&Token::Semicolon)?;
-                Some(Item::EffectResource(EffectResourceDecl {
-                    span: self.span_from(&start),
-                    name,
-                    generic_params,
-                    provider_trait,
-                    provider_trait_span,
-                    canonical_host_name: None,
-                }))
+                self.parse_effect_resource_tail(&start)
             }
             Token::Group => {
                 self.advance();
@@ -95,6 +75,72 @@ impl super::Parser {
                 None
             }
         }
+    }
+
+    /// The body of an `effect resource` declaration, from just after the
+    /// `resource` keyword to the terminating `;`.
+    ///
+    /// ONE implementation for the two spellings — `effect resource R;` and the
+    /// bare `resource R;` shorthand — which had duplicate copies that were
+    /// already one edit away from drifting apart.
+    pub(super) fn parse_effect_resource_tail(&mut self, start: &Span) -> Option<Item> {
+        let name = self.expect_identifier()?;
+        let name_span = self.span_from(start);
+        self.check_ident_class(&name, IdentClass::Type, "effect resource", name_span);
+        let key_param = self.parse_optional_resource_key_param();
+        let mut provider_trait_span = None;
+        let provider_trait = if self.eat(&Token::Colon) {
+            let trait_start = self.current_span();
+            let t = self.expect_identifier()?;
+            provider_trait_span = Some(self.span_from(&trait_start));
+            Some(t)
+        } else {
+            None
+        };
+        self.expect(&Token::Semicolon)?;
+        Some(Item::EffectResource(EffectResourceDecl {
+            span: self.span_from(start),
+            name,
+            key_param,
+            provider_trait,
+            provider_trait_span,
+            canonical_host_name: None,
+        }))
+    }
+
+    /// `[user_id: i64]` after a resource name — the PARTITION KEY of a
+    /// parameterized resource (design.md § Parameterized Resources,
+    /// B-2026-08-18-41).
+    ///
+    /// This slot used to go to `parse_optional_generic_params`, so the spec's
+    /// own example failed with "`user_id` is Value-class but generic type
+    /// parameters must be Type-class" — a naming-convention complaint about a
+    /// declaration that was never generic. Nothing downstream ever read those
+    /// generic params, no spec text declares a generic effect resource, and the
+    /// key is the only `[...]` written after a resource name anywhere in
+    /// design.md, so the slot is the key's outright.
+    fn parse_optional_resource_key_param(&mut self) -> Option<ResourceKeyParam> {
+        if !self.check(&Token::LeftBracket) {
+            return None;
+        }
+        let open = self.current_span();
+        self.advance();
+        let name_start = self.current_span();
+        let name = self.expect_identifier()?;
+        let name_span = self.span_from(&name_start);
+        // Value-class, like any binding: `[user_id: i64]`, never `[T: i64]`.
+        // Getting this backwards is exactly the error the old generic-param
+        // path produced, so it is worth naming the right class here.
+        self.check_ident_class(&name, IdentClass::Value, "resource key", name_span);
+        self.expect(&Token::Colon)?;
+        let ty = self.parse_type()?;
+        self.expect(&Token::RightBracket)?;
+        Some(ResourceKeyParam {
+            name,
+            name_span,
+            ty,
+            span: self.span_from(&open),
+        })
     }
 
     fn parse_effect_group_body(&mut self) -> Option<Vec<EffectGroupTerm>> {

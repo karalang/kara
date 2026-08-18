@@ -168,7 +168,11 @@ pub fn visit_item_spans(item: &Item, visit: &mut impl FnMut(&Span)) {
         Item::ImplBlock(b) => visit_impl_block(b, visit),
         Item::EffectResource(r) => {
             visit(&r.span);
-            visit_generics(r.generic_params.as_ref(), &[], None, visit);
+            if let Some(k) = &r.key_param {
+                visit(&k.span);
+                visit(&k.name_span);
+                visit_type(&k.ty, visit);
+            }
             if let Some(t) = &r.provider_trait_span {
                 visit(t);
             }
@@ -1334,7 +1338,11 @@ pub fn visit_item_spans_mut(item: &mut Item, visit: &mut impl FnMut(&mut Span)) 
         Item::ImplBlock(b) => visit_impl_block_mut(b, visit),
         Item::EffectResource(r) => {
             visit(&mut r.span);
-            visit_generics_mut(r.generic_params.as_mut(), &mut [], None, visit);
+            if let Some(k) = &mut r.key_param {
+                visit(&mut k.span);
+                visit(&mut k.name_span);
+                visit_type_spans_mut(&mut k.ty, visit);
+            }
             if let Some(t) = &mut r.provider_trait_span {
                 visit(t);
             }

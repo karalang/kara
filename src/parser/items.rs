@@ -163,28 +163,7 @@ impl super::Parser {
             Token::Resource => {
                 let start = self.current_span();
                 self.advance();
-                let name = self.expect_identifier()?;
-                let name_span = self.span_from(&start);
-                self.check_ident_class(&name, IdentClass::Type, "effect resource", name_span);
-                let generic_params = self.parse_optional_generic_params();
-                let mut provider_trait_span = None;
-                let provider_trait = if self.eat(&Token::Colon) {
-                    let trait_start = self.current_span();
-                    let t = self.expect_identifier()?;
-                    provider_trait_span = Some(self.span_from(&trait_start));
-                    Some(t)
-                } else {
-                    None
-                };
-                self.expect(&Token::Semicolon)?;
-                Some(Item::EffectResource(EffectResourceDecl {
-                    span: self.span_from(&start),
-                    name,
-                    generic_params,
-                    provider_trait,
-                    provider_trait_span,
-                    canonical_host_name: None,
-                }))
+                self.parse_effect_resource_tail(&start)
             }
             Token::Stable => {
                 self.advance();

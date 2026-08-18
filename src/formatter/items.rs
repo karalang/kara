@@ -690,7 +690,13 @@ impl super::Formatter {
         self.write_indent();
         self.write_str("effect resource ");
         self.write_ident(&e.name);
-        self.format_generic_params(&e.generic_params);
+        if let Some(ref k) = e.key_param {
+            self.write_str("[");
+            self.write_ident(&k.name);
+            self.write_str(": ");
+            self.format_type_expr(&k.ty);
+            self.write_str("]");
+        }
         if let Some(ref pt) = e.provider_trait {
             self.write_str(": ");
             self.write_ident(pt);

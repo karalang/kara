@@ -879,7 +879,17 @@ pub struct AssocTypeBinding {
 pub struct EffectResourceDecl {
     pub span: Span,
     pub name: String,
-    pub generic_params: Option<GenericParams>,
+    /// `effect resource UserDB[user_id: i64];` — the PARTITION KEY, per
+    /// design.md § Parameterized Resources. `None` for an unparameterized
+    /// resource, which is every other declaration in the spec.
+    ///
+    /// This slot used to hold `Option<GenericParams>`, parsed and read by
+    /// nobody but the formatter (B-2026-08-18-41). There is no such thing as a
+    /// generic effect resource: the spec declares none, no phase consumed the
+    /// field, and the only `[...]` written after a resource name anywhere in
+    /// design.md is this key. Parsing it as type parameters is what made
+    /// `[user_id: i64]` fail the Type-class naming rule.
+    pub key_param: Option<ResourceKeyParam>,
     pub provider_trait: Option<String>,
     /// Span of the `provider_trait` identifier itself, so a diagnostic about
     /// the trait points at the trait rather than at the whole declaration.
@@ -892,6 +902,25 @@ pub struct EffectResourceDecl {
     /// on the canonical name so renames cannot evade the gate. `None`
     /// for ordinary declarations.
     pub canonical_host_name: Option<String>,
+}
+
+/// The partition key of a parameterized `effect resource`
+/// (design.md § Parameterized Resources).
+///
+/// The USE side of this feature has been live all along —
+/// `Resource::param` carries `writes(UserDB[id])`, and
+/// `apply_parameterized_keys` proves literal keys distinct so
+/// `update(42)` / `update(99)` parallelize while `update(42)` /
+/// `update(42)` serialize. Only the DECLARATION had no syntax.
+#[derive(Debug, Clone)]
+pub struct ResourceKeyParam {
+    /// The key's name (`user_id`). Value-class, like any binding.
+    pub name: String,
+    pub name_span: Span,
+    /// The key's declared type (`i64`).
+    pub ty: TypeExpr,
+    /// The whole `[name: Type]`, for a diagnostic that wants to point at it.
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]

@@ -533,10 +533,16 @@ fn render_effect_resource(r: &EffectResourceDecl, filename: &str) -> String {
     record.push(',');
     write_kv(&mut record, "name", &json_string(&r.name));
     record.push(',');
+    // B-2026-08-18-41 — a resource has no generic params (the slot is the
+    // partition key). Emitted under its own name so a consumer that wanted
+    // "generics" here gets nothing rather than something mislabelled.
     write_kv(
         &mut record,
-        "generics",
-        &render_generics_json(&r.generic_params),
+        "key_param",
+        &match &r.key_param {
+            Some(k) => json_string(&k.name),
+            None => "null".to_string(),
+        },
     );
     if let Some(p) = &r.provider_trait {
         record.push(',');
