@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 133 | 0 |
 | run-vs-build | 128 | 0 |
 | codegen-gap | 117 | 1 |
-| missing-feature | 105 | 3 |
+| missing-feature | 105 | 2 |
 | false-positive | 78 | 0 |
 | perf | 77 | 0 |
 | diagnostics | 75 | 5 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 922 | 1 |
-| typecheck | 197 | 3 |
+| typecheck | 197 | 2 |
 | interp | 150 | 0 |
 | ownership | 57 | 0 |
 | other | 51 | 2 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1315 surfaced · 9 open · 1289 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1315 surfaced · 8 open · 1290 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (9)
+### Open (8)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,7 +134,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1315 surfaced
 | B-2026-08-17-35 | 2026-08-17 | other | low | Two design.md sections state things the language does not have: § derive(Display) uses an enum-variant syntax that does not parse, and § Subscript Trait claims a v1 capability the resolver explicitly rejects. (1) The payload example writes `Circle(radius: f64),` / `Rect(w: f64, h: f64),` -- a tuple-style variant with NAMED fields. That form does not exist: `error[parse]: Expected RightParen, found Colon`. § Feature 3 defines the two real forms, struct variants (`Circle { radius: f64 }`) and tuple variants (`And(Expr, Expr)`), so this is a third spelling that appears nowhere else. (2) § Subscript Trait opens "User-defined types support `[]` indexing by implementing two standard traits" with no v1 caveat, but `impl Index[i64] for Grid` is rejected outright: `error[resolve]: user-defined 'impl Index for Grid' is not supported in v1; operator traits are stdlib-only`. The sibling § Operator Traits DOES carry the caveat ("makes the later addition of user-defined operator impls a purely additive change"), so the two sections disagree with each other about the same v1 boundary. | roadmap.md |
 | B-2026-08-17-38 | 2026-08-17 | typecheck | medium | `TreeMap[K, V]` -- a standard collection design.md documents 13 times, with its own method table, and prescribes TWICE as the remedy for Map/Set's unstable iteration order -- is an UNDEFINED TYPE. `let mut m: TreeMap[i64, i64] = TreeMap.new();` -> `error[resolve]: undefined type 'TreeMap'` + `undefined name 'TreeMap'`. The implementation ships the same container as `SortedMap`, which design.md mentions exactly ONCE, in passing, inside a naming erratum about `Bf16` (line 2299) -- it appears in none of the collection tables, none of the method tables, and neither of the two "use this for stable iteration" directives (lines 1735 and 9849, the § Map hash-seeding note and the § Determinism list). A user or an LLM following the spec's own advice about non-deterministic Map iteration writes `TreeMap` and gets an undefined-type error with no pointer to the real name. Knock-on: the same mismatch is the most likely cause of the `SortedMap.insert` / `.remove` hole in the must_use displaced-value exemption -- design.md's exemption list names `Map.insert` / `TreeMap.insert` / `Map.remove` / `TreeMap.remove`, and MEASURED, `Map`, `Vec` and `VecDeque` are all exempt while `SortedMap.insert` and `SortedMap.remove` both warn. | roadmap.md |
 | B-2026-08-18-1 | 2026-08-18 | cli | medium | `karac build` renders NO warning-level diagnostic on a successful build -- the suppression is GLOBAL to the build path, not a `must_use` wiring quirk. Control measurement: `deprecated`, which reaches the user through a COMPLETELY DIFFERENT channel from must_use (the typechecker's `type_lint_warning` / `TypeErrorKind::Deprecated` at src/typechecker.rs:3098-3113, not the `cmd_run` lint block), behaves IDENTICALLY -- emitted under `karac run`, absent under `karac build`. Two independent warning-production mechanisms both go silent on the build path, so the defect is the path's MISSING RENDER SURFACE rather than any one lint's wiring: `cmd_build` (src/cli/build_cmds.rs) renders only manifest warnings (`mf.warnings`) and `monomorphization-budget` violations, and never consults typecheck lint warnings or any lint pass. A build-only workflow therefore sees none of the warnings the compiler actually produced. | roadmap.md |
-| B-2026-08-18-13 | 2026-08-18 | typecheck | medium | A method declared by `impl Trait for Array[i64, 3]` CANNOT BE CALLED: the call site reports "no method 'g' on type 'Array'" even though the impl block itself now checks. Every other builtin container head measured (Vec, VecDeque, Slice, Map, Set, SortedMap, SortedSet, Option, Result, Column, Tensor) dispatches; `Array[T, N]` is the one that does not. | roadmap.md |
 | B-2026-08-18-14 | 2026-08-18 | codegen | medium | A RANGE SUBSCRIPT used directly as a METHOD RECEIVER -- `v[0..3].first_or(-1)` -- has no codegen: "no handler for expression kind Range". The same slice passed as an ARGUMENT works (`show(v[0..2])`), and binding it first works (`let s: Slice[i64] = v[0..3]; s.first_or(-1)`), so it is the receiver position specifically. | roadmap.md |
 | B-2026-08-18-16 | 2026-08-18 | cli | medium | `missing_must_use` and `missing_track_caller` render BAKED-STDLIB findings against the USER's filename with the stdlib item's own span, producing diagnostics whose line numbers do not exist in the file named. `examples/autograd_training.kara` is 88 LINES LONG and draws `stdlib `pub fn TensorVar.value` has `panics` ... but lacks `#[track_caller]`` at line 378 and 387; `examples/fathom/mandelbrot.kara` draws `stdlib `fn animation_frames` returns a new value but is not annotated `#[must_use]`` at line 94, where `animation_frames` is not defined at all -- it is IMPORTED from `std.web.time` (line 50). The finding is real stdlib hygiene; the LOCATION is another file's. Both lints are therefore unfit for `karac check` / the JSON feed until the span carries its own file. | roadmap.md |
 | B-2026-08-18-17 | 2026-08-18 | cli | low | The `must_use` lint's JSON entry reuses diagnostic code `E0250`, which is ALREADY the typechecker's `ModuleBindingEffectfulInit` -- so a `must_use` escalated to an error with `-D must_use` emits a code that `karac explain E0250` describes as an unrelated module-binding error. Introduced by B-2026-08-17-37's wiring (src/cli/diag_json.rs, `code: if is_error { "E0250" } else { "W0250" }`); `W0250` itself is unique and unaffected, so the collision only bites on the escalated path. | roadmap.md |
@@ -156,9 +155,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1315 surfaced
 
 </details>
 
-### Fixed (1289)
+### Fixed (1290)
 
-<details><summary>1289 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1290 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -11461,6 +11460,23 @@ THE ARM IS PLACED LAST, immediately before the fall-through diagnostic, and that
 MEASURED, nine shapes, interpreter / `karac build` agreeing on every one: `Map.len` on `ref self` and on owned `self` (2), `Map.is_empty` (no), `Map.contains_key` (yes), `Map.get(...).unwrap_or(0)` (5), `Set.len` on both receiver modes (2), `Set.contains` (yes), `Set.is_empty` (no). Vec and Slice `self.len()` are unchanged controls at 3.
 
 Both receiver modes are pinned by the test on purpose: one method passing would not distinguish "the arm is there" from "this one method happens to be intercepted somewhere else", which is exactly the confusion that made the original row's diagnosis wrong. |
+| B-2026-08-18-13 | typecheck | medium | A method declared by `impl Trait for Array[i64, 3]` CANNOT BE CALLED: the call site reports "no method 'g' on type 'Array'" even though the impl bloc… | FIXED by b9d50b4d. The row guessed `env_add_impl`'s registration and said "unverified; check the registration before assuming" -- that guess was right about the site and incomplete about the work. Registering `Array` was one of THREE legs, and the in-repo comment that had kept it out named two of them, so the fix is mostly about answering that comment rather than overruling it.
+
+LEG 1, REGISTRATION (`env_add_impl`). `Array[T, N]` lowers to `Type::Array`, which fell through the `_ => return` and never registered -- the same shape the `String` and `Slice` arms were added for. It registers under the head name "Array" with its ELEMENT as the single arg. THE SIZE IS NOT PART OF THE KEY, which is deliberate and consistent: `target_args` is a `Vec<Type>` and `N` is a const, and `impl_dispatch::render_impl_target` already declines a const-carrying target, so a per-`N` key could not be named apart downstream anyway.
+
+LEG 2, LOOKUP, AND THE OBJECTION IT HAD TO ANSWER. `dispatch_user_impl_method`'s comment said `Array` was OUT because widening its impl-table arm "intercepts every absent-method call ahead of the branch that renders the `.iter()` hint, turning a helpful rejection into a silent `Type::Error`". That was measured, not theoretical: the first attempt did exactly that, and `a.map(...)` plus a plain typo both went from a clear rejection to "All checks passed". So the arm is NOT widened. Only a receiver whose method a user impl ACTUALLY declares (`array_user_impl_declares`) is normalized to a `Named` receiver; every other Array receiver keeps the dedicated rejection path it had, hint and all. A test pins both halves.
+
+LEG 3, THE INTERPRETER, which is what nearly shipped this broken. A fixed `Array[T, N]` and a `Vec[T]` are BOTH `Value::Array` at runtime and `value_type_name` reports "Vec" for either, so an impl registered under "Array" was unreachable: check and `karac build` both accepted a program that `--interp` killed with "method not found on type 'Vec' (no interpreter dispatch arm)". That run-vs-build split is precisely what got the `Slice` version of this reverted TWICE (B-2026-08-13-7). Resolved by recording the resolved head per call site in `method_impl_dispatch`, which the interpreter already consults. The FIRST attempt used `method_callee_types` and failed for an instructive reason: it is keyed by span alone, and `a.head_or(-1).to_string()` shares one span, so the outer call had overwritten the entry with "i64.to_string" and the recovery correctly declined its own stale recording. `method_impl_dispatch` is keyed by (span, METHOD) and cannot be clobbered that way. Codegen reads the same table through `impl_dispatch_segment_at`, whose fallback is the bare head -- already "Array" -- so the compiled backends are untouched.
+
+A FOURTH THING FELL OUT, and it was NOT introduced by this row. Two impls of one trait method whose targets differ inside a CONST argument cannot be qualified apart, so `collect_impl_dispatch_names` leaves the group unqualified (half-qualifying is worse, as its doc explains) and the group collapses onto one `Head.method` symbol. Nothing reported that. Measured on the PRE-EXISTING `Tensor` spelling -- `impl Head for Tensor[f32, [2]]` and `Tensor[f64, [2]]`, `f32` receiver -- `--interp` printed F64 and `karac build` printed F32, opposite wrong answers on a check-green program, with no `Array` involved. Admitting `Array` would have added a second instance of that class, so instead `reject_unqualifiable_impl_collisions` now refuses the whole shape at check, with an actionable message. The `Tensor` case is fixed by the same edit; a renderable group (`Vec[i64]` vs `Vec[String]`) is untouched and still qualifies.
+
+TWO ARRAY IMPLS DIFFERING ONLY IN `N` need no new code: they land on the identical `(trait, "Array", [element])` key and the existing conflicting-impl check already rejects them ("another `impl Head for Array[i64]` already exists").
+
+MEASURED AFTER, `karac check` / `--interp` / JIT / `karac build` all agreeing: `self[0]` on an owned `self` -> 1; `self[1]` on a `ref self` -> 2; an `Array` impl and a `Vec` impl declaring one method name -> ARR and VEC to their own receivers. Preserved: the `.iter()` hint with and without a user impl in scope, and a typo'd Array method with one in scope.
+
+STILL OUT: `Vector[T, N]`. It has neither a registration arm nor an interpreter receiver name, so admitting it at the lookup would report a method the backends cannot find -- the same run-vs-build split leg 3 exists to prevent.
+
+THE BOUNDARY TEST B-2026-08-13-7 LEFT BEHIND did its job. `test_user_trait_impl_on_fixed_array_still_rejected` pinned the rejection with the note "pinned here so a later widening has to confront that test rather than drift past it" -- it failed on the first full-suite run, which is exactly the intended outcome. Rewritten as `test_user_trait_impl_on_simd_vector_still_rejected`: the `Vector[T, N]` half is still a real boundary and keeps its assertion, and the fixed-array half now asserts the opposite, with the reasoning for the flip in the doc. |
 | B-2026-08-18-15 | codegen | high | Binding a container element's BOXED `Option` field double-frees the payload envelope: `let c = v[i].opt;` aborts with `free(): double free detected i… | Narrowed the let-site box registration: an initializer that PROJECTS A FIELD OUT OF A CONTAINER ELEMENT no longer registers a `BoxedEnumDrop`, leaving the container the sole owner it already was.
 
 THIS ROW UNDERSTATED ITS OWN SHAPE, and the correction matters more than the fix. It was filed as a match-arm-tail case found while probing which arm shapes B-2026-08-18-10 could admit, and titled accordingly. The match is INCIDENTAL. The minimal repro is a plain `let c = v[i].opt;` — no match anywhere — and it aborts with `free(): double free detected in tcache 2` on a DEFAULT `karac build`, no sanitizer needed. That is an everyday shape, and the row read as an exotic one.
