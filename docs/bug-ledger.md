@@ -103,7 +103,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | perf | 77 | 0 |
 | crash | 51 | 0 |
 | soundness | 50 | 0 |
-| other | 40 | 3 |
+| other | 40 | 2 |
 | use-after-free | 20 | 0 |
 
 ### By surface
@@ -116,7 +116,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | ownership | 57 | 0 |
 | other | 51 | 2 |
 | autopar | 48 | 0 |
-| cli | 44 | 2 |
+| cli | 44 | 1 |
 | runtime | 22 | 0 |
 | parser | 21 | 2 |
 | resolver | 19 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1322 surfaced · 10 open · 1295 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1322 surfaced · 9 open · 1296 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (10)
+### Open (9)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -137,7 +137,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1322 surfaced
 | B-2026-08-18-18 | 2026-08-18 | typecheck | low | `collect()` reaches a non-`Vec` `FromIterator` target only through an ANNOTATED `let`. The other two positions design.md's "infers the target type from context" covers still fix the chain to `Vec`: `return <chain>.collect()` against a declared non-`Vec` return type -> "expected 'Set[i64]', found 'Vec[i64]'", and argument position `f(<chain>.collect())` against a non-`Vec` parameter -> the same. Measured AFTER B-2026-08-17-36 landed, so these are the residue of that fix rather than a restatement of it. | src/desugar.rs (desugar_collect_target); src/typechecker/exprs.rs (check_expr) |
 | B-2026-08-18-21 | 2026-08-18 | parser+codegen | medium | `Index` and `MethodCall` nodes still copy their object's span, so a whole postfix CHAIN collapses onto its innermost receiver's SpanKey and the last write wins. Measured on `v[0..3].first_or(-1).to_string()`: `string_typed_exprs` held ONE entry, `(256,1)` -- the span of the `Vec[i64]` receiver `v` -- because the chain's String-typed tail was recorded against it. Widening `Index` alone is a MEASURED REGRESSION, so the fix is not local to the parser. | The two `span: lhs.span` sites in `src/parser/exprs.rs`'s postfix loop (the `Token::LeftBracket` Index arm and the MethodCall arm). `record_expr_type` in src/typechecker.rs has 117 call sites and none for `Index`. The consumers that broke are the ones keyed on a subscript's own span; `asan_push_str_range_slice_temp_no_double_free` is the canary. |
 | B-2026-08-18-22 | 2026-08-18 | codegen | medium | A STRING range subscript used as a METHOD RECEIVER reaches codegen only for `to_string` / `clone`: `s[0..5].len()` fails the build with "indexed-receiver method 'len' on 's' -- element TypeExpr unknown" while `karac check` accepts it and `--interp` prints 5. The non-owning readers the String-slice arm defers. | The `method == "to_string" || method == "clone"` gate at the head of `compile_indexed_receiver_method` in src/codegen/calls.rs. A wider set needs the borrowed-slice path (`try_compile_borrowed_string_slice`, already used for `push_str` and map-key lookups) or owned-temp tracking for the materialized slice. |
-| B-2026-08-18-23 | 2026-08-18 | cli | medium | `cargo clippy --all --all-targets -- -D warnings` is RED on main: `collect_warning_diagnostics_json` and `render_text_warning_diagnostics` in src/cli.rs are never used. CI runs exactly this gate, so the default-feature lint job fails on a clean checkout. The `--features llvm` leg is green, which is why it can be missed locally. | src/cli.rs:1746 and src/cli.rs:1754. Reproduce with `cargo clippy --all --all-targets -- -D warnings` (no `--features llvm`) on a clean tree. |
 | B-2026-08-18-24 | 2026-08-18 | parser+codegen | medium | `MethodCall` nodes still copy their object's span, so a method CHAIN collapses onto its innermost receiver's SpanKey. Widening it is a MEASURED 21 memory_sanitizer + 16 codegen failures, because tables are written at one level of a chain and read at another and agree only while every level shares a key. The last of the four postfix arms. | The `span: lhs.span` in the MethodCall arm of `src/parser/exprs.rs`'s postfix loop, which carries the measurement as a comment. Start from `method_callee_types` and the other `method_call`-span-keyed tables in src/codegen/; `try_compile_freshtemp_user_method`'s dispatch_key fallback shows the shape of the problem. |
 | B-2026-08-18-25 | 2026-08-18 | typecheck | low | The `deprecated` diagnostic's MESSAGE TEXT begins with its own severity prefix, so every renderer that adds one prints it twice: "warning[deprecated]: file:7:13: warning[deprecated]: use of deprecated item `old_way`...". Under `-D deprecated` the doubling reads as a contradiction -- "error[E0200]: ... warning[deprecated]: ..." -- telling the author it is a warning in the same line that rejects the build. | roadmap.md |
 
@@ -157,9 +156,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1322 surfaced
 
 </details>
 
-### Fixed (1295)
+### Fixed (1296)
 
-<details><summary>1295 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1296 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -11610,6 +11609,15 @@ WHY NOT JUST CALL `render_text_diagnostics` FROM `run`, which would have been th
 MEASURED AFTER, on the same `#[deprecated]` program: `karac check`, `karac build`, `karac run` and `karac run --interp` all render a byte-identical `warning[deprecated]` line, and run still executes the program (prints `1`). `-A deprecated` suppresses it in every lane. `must_use` under run: one occurrence, unchanged rendering. A warning-free program stays silent everywhere.
 
 THIS ROW EXISTED BECAUSE B-2026-08-18-1's OWN CONTROL WAS MISREPORTED -- that row used "deprecated is emitted under run" as the evidence that the BUILD path specifically suppressed warnings, and re-measurement showed it absent under run too. The conclusion there survived (two independent mechanisms went silent on the build path); the leftover was this. Worth remembering as the general shape: a row's control measurement deserves re-running, not just its subject. |
+| B-2026-08-18-23 | cli | medium | `cargo clippy --all --all-targets -- -D warnings` is RED on main: `collect_warning_diagnostics_json` and `render_text_warning_diagnostics` in src/cli… | FIXED by 81b1fe4f, by the session whose scaffolding it was -- which is what the row asked for, having deliberately declined to delete another session's in-flight code. Both functions are now WIRED (B-2026-08-18-19 gave project builds a warning surface, B-2026-08-18-20 gave `karac run` one), and the default-feature gate was STILL red afterward, which is the part worth recording: wiring them up was not the fix.
+
+THE ACTUAL CAUSE is a cfg boundary, not dead code. `collect_warning_diagnostics_json` and `render_text_warning_diagnostics` have exactly one caller each, in `cmd_build`'s CODEGEN path, which sits inside `#[cfg(feature = "llvm")]`. Without that feature the callers do not exist, so the helpers really are dead -- and correctly so: the non-llvm fallback delegates to `cmd_check`, which renders warnings through `render_text_diagnostics` itself. They carry `#[cfg(feature = "llvm")]` now, matching where their callers live.
+
+VERIFIED ON ALL THREE INVOCATIONS: `cargo clippy --all -- -D warnings` (CI's exact gate), `cargo clippy --all --all-targets -- -D warnings` (the one that was red), and `cargo clippy --all --all-targets --features llvm -- -D warnings`. Plus `cargo build --all` on the default features, since a cfg attribute can break the build the lint does not reach.
+
+THE DURABLE GUARD IS A CLAUDE.md ENTRY, because nothing in the test suite can catch this class. `--features llvm` IS NOT A SUPERSET of the default build: the two cfgs contain different code, so each hides lints from the other -- the same asymmetry the existing `--all-targets`-not-`--tests` note documents one axis over. Anyone running only the llvm leg locally (as this session had been) sees green while CI's leg fails. Both invocations are now written out in the Commands section.
+
+WHY IT REACHED MAIN AT ALL: B-2026-08-18-1 introduced the helpers and their call sites TOGETHER, so under `--features llvm` -- the leg used to verify that work -- nothing was ever unused. The gate that would have caught it is the one the session was not running. |
 
 </details>
 
