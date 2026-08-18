@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 128 | 0 |
 | codegen-gap | 115 | 0 |
 | missing-feature | 103 | 3 |
-| false-positive | 78 | 2 |
+| false-positive | 78 | 1 |
 | perf | 77 | 0 |
 | diagnostics | 73 | 4 |
 | crash | 51 | 1 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 915 | 3 |
-| typecheck | 194 | 5 |
+| typecheck | 194 | 4 |
 | interp | 150 | 1 |
 | ownership | 57 | 0 |
 | other | 51 | 2 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1304 surfaced · 13 open · 1274 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1304 surfaced · 12 open · 1275 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (13)
+### Open (12)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -141,7 +141,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1304 surfaced
 | B-2026-08-18-1 | 2026-08-18 | cli | medium | `karac build` renders NO warning-level diagnostic on a successful build -- the suppression is GLOBAL to the build path, not a `must_use` wiring quirk. Control measurement: `deprecated`, which reaches the user through a COMPLETELY DIFFERENT channel from must_use (the typechecker's `type_lint_warning` / `TypeErrorKind::Deprecated` at src/typechecker.rs:3098-3113, not the `cmd_run` lint block), behaves IDENTICALLY -- emitted under `karac run`, absent under `karac build`. Two independent warning-production mechanisms both go silent on the build path, so the defect is the path's MISSING RENDER SURFACE rather than any one lint's wiring: `cmd_build` (src/cli/build_cmds.rs) renders only manifest warnings (`mf.warnings`) and `monomorphization-budget` violations, and never consults typecheck lint warnings or any lint pass. A build-only workflow therefore sees none of the warnings the compiler actually produced. | roadmap.md |
 | B-2026-08-18-2 | 2026-08-18 | cli | medium | Four sibling lints -- `undocumented_unsafe` / `unsafe_op_in_unsafe_fn`, `missing_must_use`, `missing_track_caller`, `ffi_float_eq` -- are invoked ONLY from `cmd_run`, the exact wiring gap B-2026-08-17-37 reports for `must_use`. All five calls sit in one contiguous block in src/cli/run_check_cmds.rs (~lines 654-730), inside `cmd_run` (which begins at line 338); `cmd_check` (line 1238) and `cmd_build` (src/cli/build_cmds.rs) call none of them. So four further lint surfaces are invisible to `karac check --output=json`, and therefore to the Mend loop, for the same reason must_use was. | roadmap.md |
 | B-2026-08-18-4 | 2026-08-18 | codegen | high | The user-`Drop` spelling of B-2026-08-17-45 still DOUBLE FREES: moving an `Option`-typed field out of a matched struct payload aborts under both compiled backends when the payload struct carries an `impl Drop`. Minimal: `struct C { name: String, zip: i64 } struct A { c: Option[C], other: String } impl Drop for A { fn drop(mut ref self) { println("dropping A"); } }` plus `let f = match a { Some(x) => { x.c } None => { None } };` where `a: Option[A]` -- ASAN reports `attempting double-free`, and plain `karac run` / `karac build` abort. `karac check` passes and `--interp` is correct, same as the parent row. | roadmap.md |
-| B-2026-08-18-6 | 2026-08-18 | typecheck | medium | The `PartialEq` derive's FIELD validator is STRICTER than `Eq`'s, which is backwards: `#[derive(Eq)] struct A { v: Vec[i64] }` is accepted and its `==` lowering is pinned by a passing E2E test, while `#[derive(PartialEq)] struct B { v: Vec[i64] }` is REFUSED with "struct 'B' derives PartialEq but field 'v' has non-PartialEq type 'Vec[i64]'". `Eq` is the stronger trait -- anything comparable for `Eq` is comparable for `PartialEq` -- so a field type accepted by the former and rejected by the latter cannot both be right. The practical effect is that the weaker, more common derive is the one an author cannot use on a struct with a `Vec` field. | — |
 | B-2026-08-18-7 | 2026-08-18 | parser | medium | Every `?.` node copies its object's span VERBATIM, so nested chains are indistinguishable to any span-keyed side table. `src/parser/exprs.rs`'s `Token::QuestionDot` arm builds the node with `span: lhs.span`, and `lhs` is the previous chain step -- so every node in `a?.b?.c` collapses onto the innermost object's span. MEASURED: both the inner and outer nodes of `u.address?.city?.name` report span `(267,1)`. The `Token::Question` arm three lines above has the identical `span: lhs.span` and so the identical latent hazard. | src/parser/exprs.rs (the `Token::QuestionDot` and `Token::Question` arms of `parse_expr_bp_with_ctx_inner`; the `Binary` arm in the same fn is the model) |
 
 ### Wontfix (7)
@@ -160,9 +159,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1304 surfaced
 
 </details>
 
-### Fixed (1274)
+### Fixed (1275)
 
-<details><summary>1274 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1275 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -11153,6 +11152,64 @@ SIX TESTS in tests/codegen.rs: an IR test asserting the compare is never
 `sle`/`sge`; E2E acceptance for the constructor, for `as` + `try_from`, and for
 a `requires` contract; the parameter-routed anti-vacuity rejection; and the
 runtime-value positive twin. |
+| B-2026-08-18-6 | typecheck | medium | The `PartialEq` derive's FIELD validator is STRICTER than `Eq`'s, which is backwards: `#[derive(Eq)] struct A { v: Vec[i64] }` is accepted and its `=… | One missing match arm in `type_supports_partial_eq`: `Vec[T]` supports
+`PartialEq` when `T` does, element-wise — the exact arm `type_supports_eq`
+and `type_supports_hash` already carry.
+
+WHY THE ARM IS NEEDED AT ALL (the same reason B-2026-06-20-15 added it to the
+other two): the built-in `Vec` is registered in `env.structs` with NO derived
+traits, so without an explicit arm it falls through to the generic `Named`
+lookup, finds a struct that derives nothing, and reports `Vec` as
+un-comparable. `Eq` and `Hash` learned this; `PartialEq` never did, which
+inverted the trait hierarchy — the WEAKER trait became the stricter gate:
+
+    #[derive(Eq)]        struct A { v: Vec[i64] }   // accepted
+    #[derive(PartialEq)] struct B { v: Vec[i64] }   // refused
+
+NOTHING IN THE LOWERING JUSTIFIED THE SPLIT. `==` on a Vec-carrying struct
+routes through `emit_eq_fn_for_struct` — the TYPE-directed comparator
+B-2026-08-12-5 introduced precisely so Vec fields compare element-wise —
+whichever of the two traits was written. The gate was the only thing that
+differed, which also meant the `PartialEq` spelling's lowering had never been
+exercised by anything.
+
+SO IT WAS MEASURED BEFORE THE GATE WAS RELAXED, on all three backends, using
+B-2026-08-12-5's own silent-failure shapes (a byte-compare instead of an
+element-compare gets each of these WRONG, and wrongly-true equality is the
+dangerous direction — it silently merges distinct values in a dedup):
+
+    [7] == [263]                     false   (byte-compare says true: same low byte)
+    [1,2] == [1,3]                   false   (byte-compare says true)
+    [7] == [7]                       true
+    [1] == [1,2]                     false   (length)
+    Vec[String] equal contents       true    (byte-compare says false: distinct ptrs)
+    Vec[String] differing contents   false
+    [1,2] != [1,3]                   true    (exact negation)
+
+Byte-identical under `--interp`, JIT, and AOT.
+
+`Ord` / `PartialOrd` KEEP NO `Vec` ARM, and that is correct rather than the
+same oversight one function over: Kāra has no Vec ordering at all — bare
+`a < b` on two `Vec[i64]` is rejected with "type 'Vec[i64]' does not
+implement Ord". Adding the arm there would typecheck a comparison no backend
+lowers, which is exactly the silent-wrong-answer direction this row warned
+about. A test pins the rejection so a future reader does not "fix" the
+asymmetry by symmetry alone.
+
+THIS ALSO COMPLETES B-2026-08-17-33. That row closed derive sets over their
+dependencies but had to hold back `Eq` => `PartialEq`, because with the two
+validators disagreeing the implication turned a working, test-pinned program
+into a compile error. With them agreeing, the link is filled in and
+design.md's `PartialEq` -> `Eq` -> `Hash` chain is complete;
+`test_e2e_derive_eq_struct_with_vec_field_compares_contents` — the test that
+blocked it — passes with the link in place.
+
+TESTS: four typechecker cases (PartialEq accepts a Vec field; Eq and
+PartialEq agree on the SAME field type, so a future divergence fails there
+rather than only in whichever spelling a caller happened to use; Ord still
+rejects it; Eq implies PartialEq) plus an interpreter oracle and its codegen
+E2E twin over the silent-failure table above. Baseline-red verified against
+the reverted change. Corpus failing-file set unchanged. |
 
 </details>
 
