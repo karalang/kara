@@ -37309,12 +37309,28 @@ fn gpu_dispatch_rejects_non_gpu_kernel() {
 }
 
 #[test]
-fn gpu_dispatch_rejects_unsupported_kernel_body() {
-    // A kernel with a local binding is outside the slice-0 single-expression
-    // subset — the WGSL emitter rejects it, surfaced as E_GPU_DISPATCH_KERNEL.
-    let errs = typecheck_errors(
+fn gpu_dispatch_accepts_kernel_body_with_let_locals() {
+    // Was `gpu_dispatch_rejects_unsupported_kernel_body`, which pinned the
+    // slice-0 single-expression floor. That floor is lifted (B-2026-08-18-40):
+    // a kernel may name intermediates with `let`, so this now typechecks.
+    typecheck_ok(
         "#[gpu]\n\
          fn weird(x: f32) -> f32 { let y = x * 2.0; y }\n\
+         fn main() {\n\
+             let buf: Vec[f32] = [1.0];\n\
+             let out = gpu.dispatch(weird, buf);\n\
+         }",
+    );
+}
+
+#[test]
+fn gpu_dispatch_rejects_unsupported_kernel_body() {
+    // The emitter's rejection must still surface as E_GPU_DISPATCH_KERNEL at the
+    // dispatch site. `let mut` is the boundary now that immutable locals are in:
+    // mutable locals need assignment, which arrives with loop support.
+    let errs = typecheck_errors(
+        "#[gpu]\n\
+         fn weird(x: f32) -> f32 { let mut y = x * 2.0; y }\n\
          fn main() {\n\
              let buf: Vec[f32] = [1.0];\n\
              let out = gpu.dispatch(weird, buf);\n\

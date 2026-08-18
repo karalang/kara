@@ -56332,6 +56332,45 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_gpu_scalar_kernel_lowers_let_locals() {
+        // B-2026-08-18-40: a scalar `#[gpu]` kernel body may name intermediates
+        // with `let` instead of being one hand-inlined expression. Each binding
+        // lowers to a WGSL `let` inside `main`, in source order, with the kernel
+        // parameter resolving to `input[i]` and later bindings seeing earlier
+        // ones. Codegen-only assertion on the embedded shader, so this is
+        // CI-safe (no GPU is touched); the executed twin ran on lavapipe during
+        // development and matched the interpreter.
+        let src = r#"
+#[gpu]
+fn k(x: f32) -> f32 {
+    let doubled: f32 = x * 2.0;
+    let shifted: f32 = doubled + 1.0;
+    shifted * shifted
+}
+
+fn main() {
+    let mut v: Vec[f32] = Vec.new();
+    v.push(1.0);
+    let out = gpu.dispatch(k, v);
+    println(out[0] as i64);
+}
+"#;
+        let ir = ir_for_with_ownership(src);
+        assert!(
+            ir.contains("let doubled = (input[i] * 2.0);"),
+            "the first `let` must lower to a WGSL `let` reading the param; got:\n{ir}"
+        );
+        assert!(
+            ir.contains("let shifted = (doubled + 1.0);"),
+            "a later `let` must see the earlier binding by name; got:\n{ir}"
+        );
+        assert!(
+            ir.contains("output[i] = (shifted * shifted);"),
+            "the tail expression must read the bindings; got:\n{ir}"
+        );
+    }
+
+    #[test]
     fn test_ir_gpu_upload_unlayouted_defaults_to_single_interleaved_group() {
         // GPU-SLIP-4h: `gpu.upload` on a plain `Vec[S]` (no `layout` block for
         // `S` anywhere) synthesizes ONE interleaved device group — the WGSL

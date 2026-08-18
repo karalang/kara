@@ -120,8 +120,41 @@ pub fn emit_kernel(func: &Function, helpers: &[&Function]) -> Result<String, Wgs
     // emitted as WGSL `fn`s before `main`; their names are recognized as calls.
     let (helper_defs, helper_names) = emit_helpers(func, helpers)?;
 
-    let body_expr = kernel_return_expr(func)?;
-    let resolve = |n: &str| (n == param_name).then(|| "input[i]".to_string());
+    // Leading `let` bindings then the tail expression. Each binding lowers to
+    // a WGSL `let` in `main`'s body, so an intermediate can be named instead of
+    // hand-inlined into one nested expression (B-2026-08-18-40). A binding is
+    // visible to every later binding and to the tail, and `resolve` prefers a
+    // local over the kernel parameter — matching Kāra's own scoping, and the
+    // convention the SoA emitter already uses.
+    let (lets, body_expr) = kernel_body_parts(func, "a scalar expression")?;
+    let mut locals: Vec<&str> = Vec::new();
+    let mut let_decls = String::new();
+    for (name, value) in lets {
+        let rhs = {
+            let in_scope = &locals;
+            let resolve = |n: &str| {
+                if in_scope.contains(&n) {
+                    Some(n.to_string())
+                } else if n == param_name {
+                    Some("input[i]".to_string())
+                } else {
+                    None
+                }
+            };
+            lower_expr(value, &resolve, &helper_names)?
+        };
+        let_decls.push_str(&format!("\x20   let {name} = {rhs};\n"));
+        locals.push(name);
+    }
+    let resolve = |n: &str| {
+        if locals.contains(&n) {
+            Some(n.to_string())
+        } else if n == param_name {
+            Some("input[i]".to_string())
+        } else {
+            None
+        }
+    };
     let body_wgsl = lower_expr(body_expr, &resolve, &helper_names)?;
 
     Ok(format!(
@@ -132,6 +165,7 @@ pub fn emit_kernel(func: &Function, helpers: &[&Function]) -> Result<String, Wgs
          fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{\n\
          \x20   let i = gid.y * {DISPATCH_X_SPAN}u + gid.x;\n\
          \x20   if (i >= arrayLength(&input)) {{ return; }}\n\
+         {let_decls}\
          \x20   output[i] = {body_wgsl};\n\
          }}\n"
     ))
@@ -191,40 +225,6 @@ fn is_vec_type(ty: &TypeExpr) -> bool {
         &ty.kind,
         TypeKind::Path(p) if p.segments.len() == 1 && p.segments[0] == "Vec"
     )
-}
-
-/// The expression whose value the kernel returns — the block tail expression,
-/// or a trailing `return <expr>;`. Slice-0 kernels have no locals, so any
-/// preceding statements (other than the trailing return) are rejected.
-fn kernel_return_expr(func: &Function) -> Result<&Expr, WgslError> {
-    let block = &func.body;
-    if let Some(final_expr) = &block.final_expr {
-        if !block.stmts.is_empty() {
-            return Err(WgslError::UnsupportedBody(
-                "a slice-0 GPU kernel body must be a single expression (no locals)".to_string(),
-            ));
-        }
-        return Ok(final_expr);
-    }
-    // No tail expression: accept a lone trailing `return <expr>;`.
-    match block.stmts.as_slice() {
-        [stmt] => {
-            if let StmtKind::Expr(Expr {
-                kind: ExprKind::Return(Some(inner)),
-                ..
-            }) = &stmt.kind
-            {
-                return Ok(inner);
-            }
-            Err(WgslError::UnsupportedBody(
-                "a slice-0 GPU kernel body must be a single expression or `return <expr>;`"
-                    .to_string(),
-            ))
-        }
-        _ => Err(WgslError::UnsupportedBody(
-            "a slice-0 GPU kernel body must be a single expression (no locals)".to_string(),
-        )),
-    }
 }
 
 /// Lower one scalar body expression to a WGSL text fragment. `resolve` maps an
@@ -605,7 +605,7 @@ fn emit_helper_def(func: &Function, helper_names: &HashSet<String>) -> Result<St
         }
     };
     // Body: leading `let` bindings then the return expression.
-    let (lets, ret) = kernel_body_parts(func)?;
+    let (lets, ret) = kernel_body_parts(func, "an expression")?;
     let mut lets_wgsl = String::new();
     for (name, value) in lets {
         let resolve = |n: &str| -> Option<String> { scope.contains(n).then(|| n.to_string()) };
@@ -854,7 +854,7 @@ pub fn emit_kernel_soa(
     // local; then store each group's fields from the return struct. This is what
     // lets the real LBM `collide` body (`let rho`/`ux`/`uy` + the equilibrium
     // terms) run without hand-flattening it into one nested expression.
-    let (lets, ret) = kernel_body_parts(func)?;
+    let (lets, ret) = kernel_body_parts(func, "a struct expression")?;
     let mut locals: HashSet<String> = HashSet::new();
     let mut let_decls = String::new();
     for (name, value) in lets {
@@ -919,7 +919,7 @@ type KernelBody<'a> = (Vec<(&'a str, &'a Expr)>, &'a Expr);
 /// `return`); the return is the block's tail expression or a trailing
 /// `return <expr>;`. Body-shape-generic — used by both the struct-SoA and
 /// stencil emitters.
-fn kernel_body_parts(func: &Function) -> Result<KernelBody<'_>, WgslError> {
+fn kernel_body_parts<'a>(func: &'a Function, tail_desc: &str) -> Result<KernelBody<'a>, WgslError> {
     let block = &func.body;
     let (stmts, ret) = if let Some(tail) = &block.final_expr {
         (block.stmts.as_slice(), tail.as_ref())
@@ -931,16 +931,16 @@ fn kernel_body_parts(func: &Function) -> Result<KernelBody<'_>, WgslError> {
         {
             (init, inner.as_ref())
         } else {
-            return Err(WgslError::UnsupportedBody(
-                "a GPU kernel body must end in a struct expression or `return <expr>;`".to_string(),
-            ));
+            return Err(WgslError::UnsupportedBody(format!(
+                "a GPU kernel body must end in {tail_desc} or `return <expr>;`"
+            )));
         }
     } else {
         return Err(WgslError::UnsupportedBody(
             "a GPU kernel body is empty".to_string(),
         ));
     };
-    let mut lets = Vec::new();
+    let mut lets: Vec<(&str, &Expr)> = Vec::new();
     for stmt in stmts {
         match &stmt.kind {
             StmtKind::Let {
@@ -950,12 +950,30 @@ fn kernel_body_parts(func: &Function) -> Result<KernelBody<'_>, WgslError> {
                 ..
             } => {
                 if let PatternKind::Binding(name) = &pattern.kind {
+                    reject_reserved_local(name)?;
+                    // WGSL forbids redeclaring a name in the same scope, so a
+                    // shadowing `let` would emit a shader that only fails inside
+                    // the driver at dispatch. Reject it here, where the
+                    // diagnostic can still point at the kernel.
+                    if lets.iter().any(|(n, _)| *n == name.as_str()) {
+                        return Err(WgslError::UnsupportedBody(format!(
+                            "a GPU kernel cannot shadow the local `{name}` — WGSL has no \
+                             same-scope redeclaration; rename the second binding"
+                        )));
+                    }
                     lets.push((name.as_str(), value));
                 } else {
                     return Err(WgslError::UnsupportedBody(
                         "a GPU kernel `let` must bind a simple name (no destructuring)".to_string(),
                     ));
                 }
+            }
+            StmtKind::Let { is_mut: true, .. } => {
+                return Err(WgslError::UnsupportedBody(
+                    "a GPU kernel `let mut` is not supported yet — mutable locals arrive with \
+                     loop support (B-2026-08-18-40); use an immutable `let`"
+                        .to_string(),
+                ));
             }
             _ => {
                 return Err(WgslError::UnsupportedBody(
@@ -966,6 +984,65 @@ fn kernel_body_parts(func: &Function) -> Result<KernelBody<'_>, WgslError> {
         }
     }
     Ok((lets, ret))
+}
+
+/// Names the generated shader's own wrapper occupies, plus the WGSL keywords a
+/// Kāra identifier could plausibly collide with. A kernel local spelled one of
+/// these emits a shader that fails to compile inside the GPU driver — a runtime
+/// failure a long way from its cause — so it is rejected here instead. The
+/// wrapper set (`i` / `gid` / `input` / `output` / `main`) is what the emitters
+/// declare around the body.
+const WGSL_RESERVED_LOCALS: &[&str] = &[
+    // Generated-wrapper names.
+    "i",
+    "gid",
+    "input",
+    "output",
+    "main", // WGSL keywords a Kāra local could realistically use.
+    "var",
+    "let",
+    "const",
+    "fn",
+    "struct",
+    "array",
+    "loop",
+    "break",
+    "continue",
+    "discard",
+    "return",
+    "if",
+    "else",
+    "switch",
+    "case",
+    "default",
+    "while",
+    "for",
+    "true",
+    "false",
+    "bool",
+    "f32",
+    "i32",
+    "u32",
+    "f16",
+    "vec2",
+    "vec3",
+    "vec4",
+    "select",
+    "workgroup",
+    "storage",
+    "uniform",
+    "private",
+    "function",
+];
+
+fn reject_reserved_local(name: &str) -> Result<(), WgslError> {
+    if WGSL_RESERVED_LOCALS.contains(&name) {
+        return Err(WgslError::UnsupportedBody(format!(
+            "a GPU kernel local cannot be named `{name}` — the generated WGSL shader reserves \
+             that identifier; rename the binding"
+        )));
+    }
+    Ok(())
 }
 
 /// Emit the WGSL for a **stencil** `#[gpu]` kernel
@@ -1074,7 +1151,7 @@ fn emit_kernel_stencil(
     // bindings and the return resolve it to itself. The context is rebuilt per
     // step (it borrows the growing `locals`); every other field is a stable
     // borrow, so this is cheap.
-    let (lets, ret) = kernel_body_parts(func)?;
+    let (lets, ret) = kernel_body_parts(func, "a struct expression")?;
     let mut locals: HashSet<String> = HashSet::new();
     let mut cell_aliases: HashMap<String, String> = HashMap::new();
     let mut let_decls = String::new();
@@ -1942,10 +2019,14 @@ mod tests {
     }
 
     #[test]
-    fn rejects_body_with_locals() {
+    fn accepts_body_with_locals() {
+        // Was `rejects_body_with_locals`: the single-expression floor is lifted
+        // (B-2026-08-18-40), so an unannotated `let` now lowers to a WGSL `let`
+        // and WGSL infers its type from the initializer.
         let func = parse_kernel("#[gpu]\nfn k(x: f32) -> f32 { let y = x * 2.0; y }\n");
-        let err = emit_kernel(&func, &[]).unwrap_err();
-        assert!(matches!(err, WgslError::UnsupportedBody(_)), "{err:?}");
+        let wgsl = emit_kernel(&func, &[]).unwrap();
+        assert!(wgsl.contains("let y = (input[i] * 2.0);"), "{wgsl}");
+        assert!(wgsl.contains("output[i] = y;"), "{wgsl}");
     }
 
     #[test]
@@ -2325,5 +2406,78 @@ mod tests {
         }];
         let err = emit_kernel_soa(&func, &groups, &[]).unwrap_err();
         assert!(matches!(err, WgslError::UnsupportedBody(_)), "{err:?}");
+    }
+
+    // ── Scalar-kernel `let` locals (B-2026-08-18-40) ────────────────
+
+    #[test]
+    fn scalar_kernel_lowers_let_locals_in_order() {
+        // The headline case the single-expression floor used to reject: name an
+        // intermediate instead of hand-inlining it. Each binding is visible to
+        // the next and to the tail.
+        let func = parse_kernel(
+            "#[gpu]\nfn k(x: f32) -> f32 {\n    let doubled: f32 = x * 2.0;\n    \
+             let shifted: f32 = doubled + 1.0;\n    shifted * shifted\n}",
+        );
+        let wgsl = emit_kernel(&func, &[]).unwrap();
+        assert!(wgsl.contains("let doubled = (input[i] * 2.0);"), "{wgsl}");
+        assert!(wgsl.contains("let shifted = (doubled + 1.0);"), "{wgsl}");
+        assert!(wgsl.contains("output[i] = (shifted * shifted);"), "{wgsl}");
+        // Declared before use, inside `main`.
+        let decl = wgsl.find("let doubled").unwrap();
+        let use_ = wgsl.find("(doubled + 1.0)").unwrap();
+        assert!(decl < use_, "binding must precede its use:\n{wgsl}");
+    }
+
+    #[test]
+    fn scalar_kernel_local_may_shadow_nothing_but_reads_the_param() {
+        // A local reading the kernel parameter resolves the param to `input[i]`;
+        // referring to the local afterwards resolves to the local's own name.
+        let func = parse_kernel("#[gpu]\nfn k(v: f32) -> f32 {\n    let t: f32 = v + v;\n    t\n}");
+        let wgsl = emit_kernel(&func, &[]).unwrap();
+        assert!(wgsl.contains("let t = (input[i] + input[i]);"), "{wgsl}");
+        assert!(wgsl.contains("output[i] = t;"), "{wgsl}");
+    }
+
+    #[test]
+    fn scalar_kernel_rejects_shadowing_local() {
+        // WGSL has no same-scope redeclaration, so this must fail here rather
+        // than inside the driver at dispatch.
+        let func = parse_kernel(
+            "#[gpu]\nfn k(x: f32) -> f32 {\n    let a: f32 = x * 2.0;\n    \
+             let a: f32 = a + 1.0;\n    a\n}",
+        );
+        let err = emit_kernel(&func, &[]).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("shadow"), "{msg}");
+    }
+
+    #[test]
+    fn scalar_kernel_rejects_reserved_local_name() {
+        // `i` is the generated wrapper's own thread index.
+        let func = parse_kernel("#[gpu]\nfn k(x: f32) -> f32 {\n    let i: f32 = x;\n    i\n}");
+        let err = emit_kernel(&func, &[]).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("cannot be named `i`"), "{msg}");
+    }
+
+    #[test]
+    fn scalar_kernel_rejects_let_mut_pointing_at_the_next_increment() {
+        // Mutable locals are meaningless without assignment, which arrives with
+        // loops — the diagnostic must say so rather than fail vaguely.
+        let func = parse_kernel("#[gpu]\nfn k(x: f32) -> f32 {\n    let mut a: f32 = x;\n    a\n}");
+        let err = emit_kernel(&func, &[]).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("`let mut`"), "{msg}");
+        assert!(msg.contains("loop support"), "{msg}");
+    }
+
+    #[test]
+    fn scalar_kernel_still_accepts_the_bare_single_expression() {
+        // The slice-0 shape keeps working unchanged.
+        let func = parse_kernel("#[gpu]\nfn k(x: f32) -> f32 { x * 2.0 }");
+        let wgsl = emit_kernel(&func, &[]).unwrap();
+        assert!(wgsl.contains("output[i] = (input[i] * 2.0);"), "{wgsl}");
+        assert!(!wgsl.contains("    let doubled"), "{wgsl}");
     }
 }
