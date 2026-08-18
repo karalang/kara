@@ -790,9 +790,9 @@ The trade-off is intentional: monomorphization gives Kāra near-Rust steady-stat
 ```kara
 fn process_user(id: u64) -> Result[Report, Contextual[AppError]] {
     let user = db.find(id)
-        .context(f"while loading user {id}")?
+        .context(f"while loading user {id}")?;
     let orders = db.orders_for(user.id)
-        .context(f"while fetching orders for user {id}")?
+        .context(f"while fetching orders for user {id}")?;
     build_report(user, orders)
 }
 ```
@@ -1299,18 +1299,18 @@ A `.kara` file may declare `let` or `let mut` bindings at file scope (outside an
 
 ```kara
 // ✓ allowed — all compile-time constant
-pub let MAX_RETRIES: i32 = 5
-pub let TIMEOUT_MS: i64 = 60 * 1000
-pub let APP_NAME: StringSlice = "karac"   // StringSlice — static data, no heap
-let ORIGIN: Point = Point { x: 0, y: 0 }
-let mut SCRATCH: Array[u8, 256] = [0; 256]
+pub let MAX_RETRIES: i32 = 5;
+pub let TIMEOUT_MS: i64 = 60 * 1000;
+pub let APP_NAME: StringSlice = "karac";   // StringSlice — static data, no heap
+let ORIGIN: Point = Point { x: 0, y: 0 };
+let mut SCRATCH: Array[u8, 256] = [0; 256];
 
 // ✗ rejected — effectful initializer
-let CONFIG: Config = load_config("app.toml")
+let CONFIG: Config = load_config("app.toml");
 //                   ^^^^^^^^^^^^^^^^^^^^^^^ error: effectful call at module scope
 
 // ✗ rejected — String requires heap allocation
-pub let HOST: String = "localhost"
+pub let HOST: String = "localhost";
 //            ^^^^^^ error: String is heap-allocated; use StringSlice for static string data
 ```
 
@@ -1359,7 +1359,7 @@ let CONFIG: OnceLock[AppConfig] = OnceLock.new();
 fn main() -> Result[(), Error]
     with reads(FileSystem) reads(Env)
 {
-    let cfg = parse_args_and_load_config()?
+    let cfg = parse_args_and_load_config()?;
     CONFIG.set(cfg).expect("CONFIG must be set exactly once during startup")
     run_server()
 }
@@ -1463,16 +1463,16 @@ impl AppContext {
     pub fn new(config_path: String) -> Result[AppContext, Error]
         with reads(FileSystem) reads(Env) allocates(Heap)
     {
-        let config = load_config(config_path)?
-        let db_pool = DbPool.connect(config.database_url, config.max_connections)?
-        let logger = Logger.new(config.timeout_ms)
+        let config = load_config(config_path)?;
+        let db_pool = DbPool.connect(config.database_url, config.max_connections)?;
+        let logger = Logger.new(config.timeout_ms);
         Ok(AppContext { config, db_pool, logger })
     }
 
     pub fn handle_request(ref self, req: Request) -> Result[Response, Error]
         with reads(UserDB) writes(Cache)
     {
-        let user = self.authorize(req.token)?
+        let user = self.authorize(req.token)?;
         self.fetch_profile(user.id).map(Response.ok)
     }
 }
@@ -1480,7 +1480,7 @@ impl AppContext {
 fn main() -> Result[(), Error]
     with reads(FileSystem) reads(Env) reads(UserDB) writes(Cache) allocates(Heap) sends(Net)
 {
-    let ctx = AppContext.new("app.toml")?
+    let ctx = AppContext.new("app.toml")?;
     run_server(ctx, 8080)
 }
 ```
@@ -1496,7 +1496,7 @@ Properties of this pattern:
 
 ```kara
 fn handle_request(ref self, req: Request) -> Result[Response, Error] {
-    let rctx = RequestContext.from(req)
+    let rctx = RequestContext.from(req);
     self.process(rctx)
 }
 ```
@@ -1996,10 +1996,10 @@ This preserves type-level information where possible and degrades gracefully whe
 **Runtime equality check for unified `?` dims.** When the type checker unifies two dynamic dims that must be equal — because both map to the same generic `Dim` parameter (e.g., `K` in `matmul`) — neither side is known at compile time, but correctness still requires them to agree at runtime. The compiler inserts a runtime assertion at the call site:
 
 ```kara
-let a: Tensor[f64, [3, ?]] = Tensor.zeros([3, 4])
-let b: Tensor[f64, [?, 5]] = Tensor.zeros([7, 5])   // K=4 vs K=7
+let a: Tensor[f64, [3, ?]] = Tensor.zeros([3, 4]);
+let b: Tensor[f64, [?, 5]] = Tensor.zeros([7, 5]);   // K=4 vs K=7
 
-let c = matmul(a, b)
+let c = matmul(a, b);
 // compiler inserts: assert(a.shape[1] == b.shape[0], "shape mismatch: K dim (4 != 7)")
 // panics at runtime with the above message
 ```
@@ -2753,7 +2753,7 @@ A type implementing only `IntoIterator` does not work with bare `for x in collec
 `for x in collection` requires `collection: Iterable` and desugars to:
 
 ```kara
-let _it = collection.iter()   // borrows collection
+let _it = collection.iter();   // borrows collection
 while let Some(x) = _it.next() {
     ...
 }
@@ -2983,10 +2983,10 @@ The derive emits `fn default() -> Self { EnumName.MarkedVariant }` — a constan
 struct User { name: String, age: i64, active: bool }
 
 // Serialize to JSON
-let json: String = Json.serialize(user)
+let json: String = Json.serialize(user);
 
 // Deserialize from JSON
-let user: User = Json.deserialize[User](json_string)?
+let user: User = Json.deserialize[User](json_string)?;
 ```
 
 The derived `Serialize` trait emits a `fn serialize(ref self, s: mut ref Serializer)` method that visits each field in order. `Deserialize` emits a `fn deserialize(d: mut ref Deserializer) -> Result[Self, DeserializeError]` that reconstructs the type field-by-field.
@@ -3637,7 +3637,7 @@ impl Iterator for CountUp {
     type Item = i64;
     fn next(mut ref self) -> Option[i64] {
         if self.current >= self.limit { return None }
-        self.current += 1
+        self.current += 1;
         Some(self.current - 1)
     }
 }
@@ -3819,7 +3819,7 @@ Same blanket rule applies — implement `TryFrom`, get `TryInto` for free. Same 
 
 ```kara
 fn parse_and_store(input: String) -> Result[(), AppError] {
-    let n = input.parse_i64()?   // ParseError — requires From[ParseError] for AppError
+    let n = input.parse_i64()?;   // ParseError — requires From[ParseError] for AppError
     store(n)?                    // DbError    — requires From[DbError] for AppError
     Ok(())
 }
@@ -3838,7 +3838,7 @@ impl TryFrom[i64] for Positive {
     }
 }
 
-let p = Positive.try_from(n)?
+let p = Positive.try_from(n)?;
 ```
 
 **Common standard library impls** (provided by stdlib, not user code):
@@ -4938,11 +4938,11 @@ There is no global "promote all captures on escape" rule. Each captured value is
 struct User { name: String, age: i64, history: Vec[Event] }
 
 fn split_capture(user: User) {
-    let greet = || println(f"hi, {user.name}")    // captures `user.name` (read → ref)
-    let bump  = || user.age + 1                   // captures `user.age` (read → ref)
+    let greet = || println(f"hi, {user.name}");    // captures `user.name` (read → ref)
+    let bump  = || user.age + 1;                   // captures `user.age` (read → ref)
     user.history.push(Event.Logout)               // `user.history` still usable here
     greet()
-    let _ = bump()
+    let _ = bump();
 }
 ```
 
@@ -5344,10 +5344,10 @@ Arithmetic on distinct types is **opt-in** via `#[derive(Arithmetic)]`. When opt
 #[derive(Eq, Ord, Arithmetic)]
 distinct type FloorNum = i64;
 
-let a = FloorNum(3)
-let b = FloorNum(1)
-let c = a + b          // OK — FloorNum + FloorNum -> FloorNum
-let d = a + 1          // COMPILE ERROR — FloorNum + i64 is not defined
+let a = FloorNum(3);
+let b = FloorNum(1);
+let c = a + b;          // OK — FloorNum + FloorNum -> FloorNum
+let d = a + 1;          // COMPILE ERROR — FloorNum + i64 is not defined
 ```
 
 Without `#[derive(Arithmetic)]`, unwrap explicitly: `FloorNum(a.raw() + 1)`. This is the right default for ID types, keys, tokens, and anything where "add two of these together" is semantically meaningless even within the type.
@@ -6006,7 +6006,7 @@ pub fn http_get(url: String) -> Result[Response, HttpError]
 
 // Application code — private, so effects are inferred
 fn fetch_user(id: u64) -> Result[User, AppError] {
-    let resp = http_get(f"/users/{id}")?
+    let resp = http_get(f"/users/{id}")?;
     parse_user(resp.body)
 }
 ```
@@ -6077,7 +6077,7 @@ fn controller(rx: Receiver[Request]) {
 }
 
 fn main() {
-    let (tx, rx) = Channel.new[Request]()
+    let (tx, rx) = Channel.new[Request]();
     go controller(rx)
     tx.send(Request.GoTo(5))
     tx.send(Request.GoTo(3))
@@ -6175,11 +6175,11 @@ fn main() {
   **Severity levels and API:**
 
   ```kara
-  import log.{debug, info, warn, error}
+  import log.{debug, info, warn, error};
 
   fn handle_request(req: Request) -> Response {
       info("request received", method: req.method, path: req.path)
-      let user = authenticate(req)?
+      let user = authenticate(req)?;
       debug("authenticated", user_id: user.id)
 
       match process(req) {
@@ -8539,11 +8539,11 @@ impl Counter {
 ```kara
 // Before: shared struct, Mutex at the usage site (convention, not statically enforced)
 shared struct Counter { mut val: i64 }
-let c = Mutex(Counter { val: 0 })
+let c = Mutex(Counter { val: 0 });;
 lock c { c.val += 1 }
 
 // After: par struct, Mutex at the field (enforced at the definition site)
-par struct Counter { val: Mutex[i64] }
+par struct Counter { val: Mutex[i64] };
 lock counter.val v { counter.val = v + 1 }
 ```
 
@@ -8847,14 +8847,14 @@ struct File { fd: i32 }
 
 impl Drop for File {
     fn drop(mut ref self) {
-        host::close(self.fd);
+        host.close(self.fd);
     }
 }
 
 fn read_config() -> Result[Config, Error] {
-    let f = File::open("config.toml")?;   // f owns the fd
+    let f = File.open("config.toml")?;   // f owns the fd
     parse(f.bytes())
-    // f's live range ends here — drop(mut ref f) runs, host::close fires
+    // f's live range ends here — drop(mut ref f) runs, host.close fires
 }
 ```
 
@@ -9168,9 +9168,9 @@ This section shows what non-blocking I/O looks like from the programmer's perspe
 
 ```kara
 fn load_dashboard(user_id: u64) -> Result[Dashboard, AppError] {
-    let profile = http_get(f"/users/{user_id}")?
-    let orders  = http_get(f"/orders?user={user_id}")?
-    let notifs  = http_get(f"/notifs?user={user_id}")?
+    let profile = http_get(f"/users/{user_id}")?;
+    let orders  = http_get(f"/orders?user={user_id}")?;
+    let notifs  = http_get(f"/notifs?user={user_id}")?;
 
     // All three calls read different resources — the compiler can parallelize them
     // (same auto-concurrency rules as Feature 5)
@@ -9192,7 +9192,7 @@ fn handle_connections(listener: TcpListener) -> Result[(), ServerError]
 {
     let group = TaskGroup.new()
     loop {
-        let conn = listener.accept()?       // suspends until a client connects
+        let conn = listener.accept()?;       // suspends until a client connects
         group.spawn(|| handle_client(conn)) // spawn a task per connection
     }
     // group joins all spawned tasks on scope exit
@@ -9200,8 +9200,8 @@ fn handle_connections(listener: TcpListener) -> Result[(), ServerError]
 
 fn handle_client(conn: TcpConnection) -> Result[(), ServerError] {
     loop {
-        let request = conn.read_request()?   // suspends until data arrives
-        let response = process(request)?   // pure computation
+        let request = conn.read_request()?;   // suspends until data arrives
+        let response = process(request)?;   // pure computation
         conn.write_response(response)?     // suspends until write completes
     }
 }
@@ -9213,8 +9213,8 @@ fn handle_client(conn: TcpConnection) -> Result[(), ServerError] {
 
 ```kara
 fn ingest(path: Path, url: String) -> Result[Report, IngestError] {
-    let local_data = fs.read_sync(path)          // blocks (synchronous file I/O)
-    let remote_data = http_get(url)?              // suspends (async network I/O)
+    let local_data = fs.read_sync(path);          // blocks (synchronous file I/O)
+    let remote_data = http_get(url)?;              // suspends (async network I/O)
     merge(local_data, remote_data)
 }
 // Inferred: reads(Fs), reads(Network), blocks, suspends
@@ -9486,11 +9486,11 @@ Auto-concurrency handles the common case — the compiler finds independent oper
 fn load_dashboard(user_id: u64) -> Result[Dashboard, AppError] {
     // Explicit par: each statement is a concurrent branch
     let (profile, orders, notifs) = par {
-        let p = fetch_profile(user_id)?
-        let o = fetch_orders(user_id)?
+        let p = fetch_profile(user_id)?;
+        let o = fetch_orders(user_id)?;
         let n = fetch_notifs(user_id)?
-        (p, o, n)
-    }
+        (p, o, n);
+    };
     Ok(build_dashboard(profile, orders, notifs))
 }
 ```
@@ -9514,10 +9514,10 @@ Consequences of the block-piercing rule:
 // LEGAL: ? pierces par {} to load_dashboard's Result return
 fn load_dashboard(uid: u64) -> Result[Dashboard, AppError] {
     let (profile, orders) = par {
-        let p = fetch_profile(uid)?    // pierces to load_dashboard
+        let p = fetch_profile(uid)?;    // pierces to load_dashboard
         let o = fetch_orders(uid)?     // pierces to load_dashboard
-        (p, o)
-    }
+        (p, o);
+    };
     Ok(build(profile, orders))
 }
 
@@ -9565,7 +9565,7 @@ fn handle_connections(listener: TcpListener) -> Result[(), ServerError]
 {
     let group = TaskGroup.new()
     loop {
-        let conn = listener.accept()?
+        let conn = listener.accept()?;
         group.spawn(|| handle_client(conn))
     }
     // group joins all spawned tasks on scope exit
@@ -11245,8 +11245,8 @@ let count = users.len()
 
 ```kara
 with_provider[DB](TestDB.new(), || {
-    let users = DB.query("SELECT id FROM users")
-    let count = users.len()
+    let users = DB.query("SELECT id FROM users");
+    let count = users.len();
 })
 ```
 
@@ -12497,11 +12497,11 @@ The exported function's signature **must** declare `panics` if the body may pani
 pub extern "C" fn parse_safe(input: *const u8, len: usize, out: *mut i32) -> i32 {
     catch_panic(|| {
         let s = unsafe { String.from_raw_parts(input, len) };
-        unsafe { *out = parse(s).unwrap() };
+        unsafe { *out = parse(s).unwrap(); };
         0                                  // success
     })
     .map_err(|info| {
-        log::error(f"parse_safe panicked: {info.message}");
+        log.error(f"parse_safe panicked: {info.message}");
         -1                                 // C-shaped error code
     })
     .unwrap_or_else(identity)              // collapse Result[i32, i32] → i32

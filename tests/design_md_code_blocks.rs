@@ -306,3 +306,144 @@ fn the_scanner_catches_the_shapes_it_exists_for() {
         scan(fragments).iter().map(|o| &o.text).collect::<Vec<_>>()
     );
 }
+
+// ── statement terminators, driven by the real parser ────────────
+
+/// Every `kara` block in `design.md`, with the 1-based document line its body
+/// starts on.
+fn kara_blocks(text: &str) -> Vec<(usize, &str)> {
+    let mut out = Vec::new();
+    let mut rest = text;
+    let mut consumed = 0usize;
+    while let Some(open) = rest.find("```kara\n") {
+        let body_start = open + "```kara\n".len();
+        let Some(close_rel) = rest[body_start..].find("```") else {
+            break;
+        };
+        let body = &rest[body_start..body_start + close_rel];
+        out.push((line_of(text, consumed + body_start), body));
+        let advance = body_start + close_rel + 3;
+        consumed += advance;
+        rest = &rest[advance..];
+    }
+    out
+}
+
+/// Blocks whose `Expected Semicolon` is NOT a missing statement terminator, and
+/// which therefore cannot be repaired by inserting one. Each is keyed by a
+/// substring of the offending line rather than a line number, so the entry
+/// survives edits elsewhere in the document and names WHY it is here.
+///
+/// Both are separately filed. Keep this list at two entries: a new arrival is a
+/// real regression, and a departure means its row was fixed and the entry
+/// should go.
+const NON_TERMINATOR: &[(&str, &str)] = &[
+    // The parser accepts only `effect resource X;` and `effect resource X: Trait;`.
+    // design.md normatively specifies three richer forms it rejects -- a generic
+    // bound (this line), `A + B` multi-bounds (§ 7216) and parameterized
+    // resources (§ Parameterized Resources) -- so the `Expected Semicolon` here
+    // is the parser stopping at `[`, not a terminator.
+    (
+        "effect resource RequestCh: Channel[Request]",
+        "B-2026-08-18-41: effect-resource declaration forms the spec defines and the parser rejects",
+    ),
+    // Kara has no `!` -- the parser says so outright ("the `!` operator is not
+    // used in Kara"). After `matches` it surfaces as `Expected Semicolon, found
+    // Bang` instead, which is why it lands here. Rust macro syntax, not a
+    // terminator; eight sites across the document (`panic!`, `matches!`,
+    // `format_into!`).
+    (
+        "matches!(parent.left",
+        "B-2026-08-18-42: Rust macro syntax (`name!(...)`) in kara blocks",
+    ),
+];
+
+/// No `kara` block in design.md is missing a statement terminator.
+///
+/// B-2026-08-18-29. This is the half of B-2026-08-17-31 a LINE-LEVEL pass
+/// provably cannot finish, and the reason is recorded in that row: appending
+/// `;` to a `let` whose right-hand side CONTINUES on the following lines
+/// corrupts it, and brackets balance on each line taken alone, so no
+/// bracket-counting heuristic rescues it. Two blocks went from parsing cleanly
+/// to failing when that was tried, which is the one outcome a docs edit must
+/// never produce.
+///
+/// So this gate asks the parser instead of pattern-matching text, which makes
+/// it exact: `Expected Semicolon` is reported at the token FOLLOWING the
+/// omission, and only a real parse knows where that is.
+///
+/// It deliberately checks that one diagnostic rather than "every block parses":
+/// most blocks are fragments (`{ ... }` bodies, `where` clauses shown alone)
+/// that cannot compile standalone, so a blanket gate would be noise. design.md
+/// is the corpus an LLM reads when writing Kāra and the Mend loop's premise is
+/// blind authorship against it, which is what makes a block that does not
+/// transcribe a defect rather than a cosmetic nit.
+#[test]
+fn design_md_statements_carry_their_terminating_semicolon() {
+    let mut offenders: Vec<String> = Vec::new();
+    for (start_line, body) in kara_blocks(DESIGN_MD) {
+        for err in karac::parse(body).errors {
+            if !err.message.contains("Expected Semicolon") {
+                continue;
+            }
+            // The parser reports at the token AFTER the missing `;`, so the
+            // omission is on the preceding non-empty code line -- report both,
+            // since the fix goes on the second.
+            let lines: Vec<&str> = body.split('\n').collect();
+            let at = err.span.line;
+            let reported = lines.get(at - 1).copied().unwrap_or("");
+            let mut j = at as isize - 2;
+            while j >= 0
+                && lines[j as usize]
+                    .split("//")
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .is_empty()
+            {
+                j -= 1;
+            }
+            let culprit = if j >= 0 { lines[j as usize] } else { "" };
+            if NON_TERMINATOR
+                .iter()
+                .any(|(needle, _)| reported.contains(needle) || culprit.contains(needle))
+            {
+                continue;
+            }
+            offenders.push(format!(
+                "  docs/design.md:{}: {}\n      (parser stopped at docs/design.md:{}: {})",
+                start_line + j.max(0) as usize,
+                culprit.trim(),
+                start_line + at - 1,
+                reported.trim()
+            ));
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "{} statement(s) in docs/design.md omit a terminating `;` (B-2026-08-18-29); \
+         transcribing these produces code that does not parse:\n{}",
+        offenders.len(),
+        offenders.join("\n")
+    );
+}
+
+/// The allow-list above stays honest: an entry that no longer fires means its
+/// underlying row was fixed, and the entry must go rather than silently
+/// covering a future regression at the same line.
+#[test]
+fn non_terminator_allow_list_entries_all_still_fire() {
+    for (needle, why) in NON_TERMINATOR {
+        let fires = kara_blocks(DESIGN_MD).iter().any(|(_, body)| {
+            body.contains(needle)
+                && karac::parse(body)
+                    .errors
+                    .iter()
+                    .any(|e| e.message.contains("Expected Semicolon"))
+        });
+        assert!(
+            fires,
+            "allow-list entry no longer fires and should be removed: {needle:?} ({why})"
+        );
+    }
+}
