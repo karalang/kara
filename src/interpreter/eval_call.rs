@@ -2725,12 +2725,15 @@ impl<'a> super::Interpreter<'a> {
         let Some(name) = map_var else {
             return Value::Unit;
         };
-        match self.env.get(&name) {
-            Some(Value::Map(mut m)) => {
+        // Resolved as a PLACE (B-2026-08-18-34), so a map in a struct field
+        // (`h.buckets`, `self.buckets`) inserts into the real map rather than
+        // degrading to `Value::Unit`. Mutating in place also drops the
+        // whole-map clone/write-back the name-keyed `get`/`set` pair did.
+        match self.env.map_place_mut(&name) {
+            Some(Value::Map(m)) => {
                 if !m.iter().any(|(k, _)| *k == key) {
                     m.push((key.clone(), default));
                 }
-                self.env.set(&name, Value::Map(m));
                 Value::MapSlotRef {
                     map_var: name,
                     key: Box::new(key),
@@ -2739,10 +2742,9 @@ impl<'a> super::Interpreter<'a> {
             // SortedMap sibling: insert-if-absent into the BTreeMap by key, then
             // hand back the same `MapSlotRef` shape (its get/set choke points are
             // taught to resolve a SortedMap slot by key). Mirrors the Map arm.
-            Some(Value::SortedMap(mut m)) => {
+            Some(Value::SortedMap(m)) => {
                 m.entry(super::value::OrdValue(key.clone()))
                     .or_insert(default);
-                self.env.set(&name, Value::SortedMap(m));
                 Value::MapSlotRef {
                     map_var: name,
                     key: Box::new(key),

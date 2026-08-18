@@ -1401,6 +1401,166 @@ impl<'ctx> super::Codegen<'ctx> {
     /// or_insert / or_insert_with chain, so the caller falls through to
     /// the regular dispatch (which surfaces its own diagnostic for
     /// unrecognised non-identifier receivers).
+    /// The FieldAccess root of a Map entry chain — `h.buckets.entry(k)`,
+    /// `self.buckets.entry(k).or_insert(d)` — or `None` for any other shape.
+    ///
+    /// B-2026-08-18-34. Every link of the entry-chain machinery is keyed on a
+    /// map NAME, because `emit_entry_chain` needs a slot holding the handle and
+    /// the K/V LLVM types, all of which come from the per-binding registries.
+    /// A map that lives in a struct FIELD has no such name, so the chain
+    /// declined and the whole `map.entry(k).or_insert(d).push(v)` idiom was
+    /// unavailable for `Map[K, Vec[V]]` on a struct — the ordinary home for a
+    /// multimap.
+    fn entry_chain_field_root(expr: &Expr) -> Option<&Expr> {
+        let ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        } = &expr.kind
+        else {
+            return None;
+        };
+        match method.as_str() {
+            // Terminals and wrappers pass through to the root.
+            "or_insert" | "or_insert_with" | "and_modify" => Self::entry_chain_field_root(object),
+            "entry" if args.len() == 1 => {
+                matches!(object.kind, ExprKind::FieldAccess { .. }).then_some(object.as_ref())
+            }
+            _ => None,
+        }
+    }
+
+    /// Rebuild an entry chain with its root replaced by `new_root`, preserving
+    /// every link's method, args and spans. Paired with
+    /// [`Self::entry_chain_field_root`]: the root becomes a synth identifier
+    /// bound to the field's ADDRESS, after which the existing identifier-keyed
+    /// lowering handles the chain unchanged.
+    fn rewrite_entry_chain_root(expr: &Expr, new_root: &Expr) -> Option<Expr> {
+        let ExprKind::MethodCall {
+            object,
+            method,
+            turbofish,
+            args,
+            args_close_span,
+        } = &expr.kind
+        else {
+            return None;
+        };
+        let new_obj = match method.as_str() {
+            "or_insert" | "or_insert_with" | "and_modify" => {
+                Self::rewrite_entry_chain_root(object, new_root)?
+            }
+            "entry" if args.len() == 1 => new_root.clone(),
+            _ => return None,
+        };
+        Some(Expr {
+            kind: ExprKind::MethodCall {
+                object: Box::new(new_obj),
+                method: method.clone(),
+                turbofish: turbofish.clone(),
+                args: args.clone(),
+                args_close_span: *args_close_span,
+            },
+            span: expr.span,
+        })
+    }
+
+    /// Lower a Map entry chain whose root map is a struct FIELD by binding the
+    /// field's address to a synth identifier and re-dispatching (B-2026-08-18-34).
+    ///
+    /// ONE REWRITE SERVES BOTH HALVES of the idiom. `or_insert` is dispatched by
+    /// `try_compile_entry_chain` and the trailing `.push(v)` by
+    /// `compile_entry_chain_receiver_method`, and both peel the chain down to an
+    /// `ExprKind::Identifier` map root. Rewriting the root once, here, lets each
+    /// of them run unmodified rather than teaching all of them about fields.
+    ///
+    /// THE SYNTH SLOT IS THE FIELD'S OWN ADDRESS, not a copy of the handle. That
+    /// is the part that makes the append land in the map: `emit_entry_chain`
+    /// loads the handle through this pointer, so the entry it inserts into is
+    /// the field's map. Materializing the receiver into a temporary the way the
+    /// fresh-temp read path does would append to a value that is thrown away.
+    pub(super) fn try_compile_field_rooted_entry_chain(
+        &mut self,
+        object: &Expr,
+        method: &str,
+        args: &[CallArg],
+        call_span: &crate::token::Span,
+        args_close_span: &crate::token::Span,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        let Some(root) = Self::entry_chain_field_root(object) else {
+            return Ok(None);
+        };
+        let ExprKind::FieldAccess {
+            object: inner,
+            field,
+        } = &root.kind
+        else {
+            return Ok(None);
+        };
+        // `self.buckets…` — `lower_field_access_ptr` leaves `SelfValue` at
+        // `Ok(None)` on purpose (the atomic-on-self path owns that shape), and
+        // `self` is registered under the name "self" in every per-binding
+        // registry, so normalise exactly as the field-receiver arm does.
+        let self_ident;
+        let inner: &Expr = if matches!(inner.kind, ExprKind::SelfValue) {
+            self_ident = Expr {
+                kind: ExprKind::Identifier("self".to_string()),
+                span: inner.span,
+            };
+            &self_ident
+        } else {
+            inner
+        };
+        let Some((field_ptr, field_ll_ty, field_te)) =
+            self.lower_field_access_ptr(inner, field, "Map entry chain")?
+        else {
+            return Ok(None);
+        };
+        // Only a real `Map[K, V]` field. Anything else falls through to the
+        // existing diagnostic rather than being rewritten into nonsense.
+        if self.extract_map_kv_types(&field_te).is_none() {
+            return Ok(None);
+        }
+        let synth = format!("__entrymap_{}", self.indexed_elem_counter);
+        self.indexed_elem_counter += 1;
+        self.variables.insert(
+            synth.clone(),
+            VarSlot {
+                ptr: field_ptr,
+                ty: field_ll_ty,
+            },
+        );
+        self.register_var_from_type_expr(&synth, &field_te);
+
+        let synth_expr = Expr {
+            kind: ExprKind::Identifier(synth.clone()),
+            span: root.span,
+        };
+        let rewritten = Self::rewrite_entry_chain_root(object, &synth_expr);
+        let result = match rewritten {
+            Some(new_object) => self
+                .compile_method_call(&new_object, method, args, call_span, args_close_span)
+                .map(Some),
+            None => Ok(None),
+        };
+
+        self.variables.remove(&synth);
+        self.var_types.vec_elem_types.remove(&synth);
+        self.var_types.slice_elem_types.remove(&synth);
+        self.var_types.var_elem_type_exprs.remove(&synth);
+        self.var_types.var_type_names.remove(&synth);
+        self.mapset.map_key_types.remove(&synth);
+        self.mapset.map_val_types.remove(&synth);
+        self.mapset.map_key_type_names.remove(&synth);
+        self.mapset.map_key_type_exprs.remove(&synth);
+        self.mapset.set_elem_types.remove(&synth);
+        self.mapset.set_elem_type_names.remove(&synth);
+        self.mapset.set_elem_type_exprs.remove(&synth);
+
+        result
+    }
+
     pub(super) fn compile_entry_chain_receiver_method(
         &mut self,
         inner_object: &Expr,

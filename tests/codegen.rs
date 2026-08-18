@@ -32955,6 +32955,52 @@ fn main() {
     }
 
     #[test]
+    fn e2e_entry_chain_on_a_map_field() {
+        // Codegen twin of the B-2026-08-18-34 oracle in tests/interpreter.rs.
+        // The row was a check/run divergence -- `karac check` accepted
+        // `h.buckets.entry(k).or_insert(d).push(v)` while BOTH executors refused
+        // to dispatch it ("no handler for method 'push' on non-identifier
+        // receiver") -- so the test that matters is that a real binary now
+        // prints what the interpreter prints, for the same program.
+        //
+        // The `self.` leg is LeetCode 895, the kata that found it.
+        if let Some(out) = run_program(
+            "struct Holder { buckets: Map[i64, Vec[i64]], counts: Map[i64, i64] }\n\
+             struct FreqStack { freq: Map[i64, i64], buckets: Map[i64, Vec[i64]], maxfreq: i64 }\n\
+             impl FreqStack {\n\
+                 fn push_val(mut ref self, v: i64) {\n\
+                     let f = self.freq.get_or(v, 0) + 1;\n\
+                     self.freq.insert(v, f);\n\
+                     if f > self.maxfreq { self.maxfreq = f; }\n\
+                     self.buckets.entry(f).or_insert(Vec.new()).push(v);\n\
+                 }\n\
+             }\n\
+             fn main() {\n\
+                 let mut local: Map[i64, Vec[i64]] = Map.new();\n\
+                 local.entry(1).or_insert(Vec.new()).push(7);\n\
+                 local.entry(1).or_insert(Vec.new()).push(8);\n\
+                 println(local[1].len());\n\
+                 let mut h = Holder { buckets: Map.new(), counts: Map.new() };\n\
+                 h.buckets.entry(1).or_insert(Vec.new()).push(7);\n\
+                 h.buckets.entry(1).or_insert(Vec.new()).push(8);\n\
+                 println(h.buckets[1].len());\n\
+                 h.counts.entry(2).and_modify(|v| { *v = *v + 100; }).or_insert(7);\n\
+                 println(h.counts[2]);\n\
+                 h.counts.entry(2).and_modify(|v| { *v = *v + 100; }).or_insert(7);\n\
+                 println(h.counts[2]);\n\
+                 h.buckets.entry(3).or_insert_with(|| Vec.new()).push(42);\n\
+                 println(h.buckets[3].len());\n\
+                 let mut s = FreqStack { freq: Map.new(), buckets: Map.new(), maxfreq: 0 };\n\
+                 s.push_val(5); s.push_val(7); s.push_val(5);\n\
+                 println(s.buckets[1].len());\n\
+                 println(s.buckets[2].len());\n\
+             }",
+        ) {
+            assert_eq!(out, "2\n2\n7\n107\n1\n2\n1\n");
+        }
+    }
+
+    #[test]
     fn e2e_question_struct_payload_survives_a_span_of_its_own() {
         // B-2026-08-18-9. `question_ok_payload_types` is WRITTEN by the
         // typechecker at the `?` node's span and READ by

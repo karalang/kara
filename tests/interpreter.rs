@@ -19870,6 +19870,94 @@ fn main() {
 }
 
 #[test]
+fn test_entry_chain_on_a_map_field_mutates_the_real_map() {
+    // ORACLE for B-2026-08-18-34. `map.entry(k).or_insert(d).push(v)` is the
+    // idiomatic append into a `Map[K, Vec[V]]`, and it worked only when the map
+    // was a LOCAL. Rooted at a struct FIELD -- where a multimap normally lives
+    // -- the interpreter reported "method 'push' not found on type 'unknown'"
+    // because `Value::Entry` names its map by BINDING NAME and a field has none.
+    //
+    // The local leg is kept beside the field one so the two spellings are
+    // asserted to agree, which is the property that actually matters: the row
+    // was a check/run divergence, and `karac check` accepted both all along.
+    //
+    // `and_modify` is included because it is the arm that diverged AFTER the
+    // rest was fixed -- codegen applied the modification on a field while the
+    // interpreter silently skipped it, leaving the `or_insert` default.
+    let output = run_no_errors(
+        r#"
+struct Holder { buckets: Map[i64, Vec[i64]], counts: Map[i64, i64] }
+
+fn main() {
+    let mut local: Map[i64, Vec[i64]] = Map.new();
+    local.entry(1).or_insert(Vec.new()).push(7);
+    local.entry(1).or_insert(Vec.new()).push(8);
+    println(local[1].len());
+
+    let mut h = Holder { buckets: Map.new(), counts: Map.new() };
+    h.buckets.entry(1).or_insert(Vec.new()).push(7);
+    h.buckets.entry(1).or_insert(Vec.new()).push(8);
+    println(h.buckets[1].len());
+
+    h.counts.entry(2).and_modify(|v| { *v = *v + 100; }).or_insert(7);
+    println(h.counts[2]);
+    h.counts.entry(2).and_modify(|v| { *v = *v + 100; }).or_insert(7);
+    println(h.counts[2]);
+
+    h.buckets.entry(3).or_insert_with(|| Vec.new()).push(42);
+    println(h.buckets[3].len());
+}
+"#,
+    );
+    assert_eq!(output, "2\n2\n7\n107\n1\n");
+}
+
+#[test]
+fn test_entry_chain_on_a_self_map_field() {
+    // The `self.buckets…` spelling of B-2026-08-18-34, which is how the shape
+    // actually appears: this is LeetCode 895 (Maximum Frequency Stack), the
+    // kata that found the bug. `self` is a `mut ref self` receiver, and the row
+    // established that the field root -- not the `self` context -- was the
+    // variable, so this pins the combination that has to keep working.
+    let output = run_no_errors(
+        r#"
+struct FreqStack { freq: Map[i64, i64], buckets: Map[i64, Vec[i64]], maxfreq: i64 }
+
+impl FreqStack {
+    fn push_val(mut ref self, v: i64) {
+        let f = self.freq.get_or(v, 0) + 1;
+        self.freq.insert(v, f);
+        if f > self.maxfreq { self.maxfreq = f; }
+        self.buckets.entry(f).or_insert(Vec.new()).push(v);
+    }
+
+    fn pop_val(mut ref self) -> i64 {
+        let mut b = self.buckets.get_or(self.maxfreq, Vec.new());
+        let top = b[b.len() - 1];
+        b.pop();
+        let blen = b.len() as i64;
+        self.buckets.insert(self.maxfreq, b);
+        self.freq.insert(top, self.freq.get_or(top, 0) - 1);
+        if blen == 0 { self.maxfreq = self.maxfreq - 1; }
+        return top;
+    }
+}
+
+fn main() {
+    let mut s = FreqStack { freq: Map.new(), buckets: Map.new(), maxfreq: 0 };
+    s.push_val(5); s.push_val(7); s.push_val(5); s.push_val(7); s.push_val(4); s.push_val(5);
+    println(s.pop_val());
+    println(s.pop_val());
+    println(s.pop_val());
+    println(s.pop_val());
+}
+"#,
+    );
+    // The LeetCode 895 answer for this push sequence.
+    assert_eq!(output, "5\n7\n5\n4\n");
+}
+
+#[test]
 fn test_collect_into_every_documented_from_iterator_target() {
     // ORACLE for B-2026-08-17-36. design.md § Iterator Adaptors: "Every
     // standard collection (`Vec`, `Map`, `Set`, `VecDeque`, `TreeMap`,

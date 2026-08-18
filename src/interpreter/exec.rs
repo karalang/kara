@@ -686,56 +686,86 @@ impl Env {
         None
     }
 
+    /// Resolve a map PLACE to a borrow: either a plain binding name (`m`) or a
+    /// dotted field path rooted at one (`h.buckets`, `self.buckets`).
+    ///
+    /// B-2026-08-18-34. Every map reference the entry chain builds
+    /// (`Value::Entry`, `Value::MapSlotRef`) names its map by BINDING NAME, so a
+    /// map living in a struct FIELD had no way to be named and the chain
+    /// degraded to `Value::Unit` — surfacing as "method 'push' not found on type
+    /// 'unknown'". A dot cannot occur in a Kāra identifier, nor in the `__`-
+    /// prefixed synthetic names, so it unambiguously marks a path here.
+    ///
+    /// Only value structs are walked. A `shared struct` field returns `None`
+    /// and so behaves exactly as it did before this existed, rather than being
+    /// half-supported: its fields carry interior mutability and would need the
+    /// write to go through the cell.
+    pub(crate) fn map_place_ref(&self, place: &str) -> Option<&Value> {
+        let mut parts = place.split('.');
+        let root = parts.next()?;
+        let mut cur = self.scopes.iter().rev().find_map(|s| s.get(root))?;
+        for field in parts {
+            cur = match cur {
+                Value::Struct { fields, .. } => fields.get(field)?,
+                _ => return None,
+            };
+        }
+        Some(cur)
+    }
+
+    /// Mutable peer of [`Self::map_place_ref`], for the write-through half of
+    /// an `or_insert` slot reference.
+    pub(crate) fn map_place_mut(&mut self, place: &str) -> Option<&mut Value> {
+        let mut parts = place.split('.');
+        let root = parts.next()?;
+        let mut cur = self.scopes.iter_mut().rev().find_map(|s| s.get_mut(root))?;
+        for field in parts {
+            cur = match cur {
+                Value::Struct { fields, .. } => fields.get_mut(field)?,
+                _ => return None,
+            };
+        }
+        Some(cur)
+    }
+
     /// Resolve a `MapSlotRef` to the current value in its Map slot. Returns
     /// `Value::Unit` if the binding is gone or the key is absent (a dangling
     /// ref — `or_insert` always inserts, so this is defensive against a
     /// `remove` racing a held ref).
     pub(crate) fn read_map_slot(&self, map_var: &str, key: &Value) -> Value {
-        for scope in self.scopes.iter().rev() {
-            if let Some(slot) = scope.get(map_var) {
-                match slot {
-                    Value::Map(pairs) => {
-                        if let Some((_, v)) = pairs.iter().find(|(k, _)| k == key) {
-                            return v.clone();
-                        }
-                    }
-                    // SortedMap slot (BTreeMap keyed by `OrdValue`) — the entry
-                    // chain's `MapSlotRef` resolves through here for a SortedMap too.
-                    Value::SortedMap(m) => {
-                        if let Some(v) = m.get(&super::value::OrdValue(key.clone())) {
-                            return v.clone();
-                        }
-                    }
-                    _ => {}
-                }
-                return Value::Unit;
-            }
+        match self.map_place_ref(map_var) {
+            Some(Value::Map(pairs)) => pairs
+                .iter()
+                .find(|(k, _)| k == key)
+                .map(|(_, v)| v.clone())
+                .unwrap_or(Value::Unit),
+            // SortedMap slot (BTreeMap keyed by `OrdValue`) — the entry
+            // chain's `MapSlotRef` resolves through here for a SortedMap too.
+            Some(Value::SortedMap(m)) => m
+                .get(&super::value::OrdValue(key.clone()))
+                .cloned()
+                .unwrap_or(Value::Unit),
+            _ => Value::Unit,
         }
-        Value::Unit
     }
 
     /// Write `val` through a `MapSlotRef` into its Map slot. Appends a new
     /// `(key, val)` pair if the key is missing (defensive; `or_insert`
     /// normally guarantees presence). No-op if the binding is gone.
     pub(crate) fn write_map_slot(&mut self, map_var: &str, key: &Value, val: Value) {
-        for scope in self.scopes.iter_mut().rev() {
-            if let Some(slot) = scope.get_mut(map_var) {
-                match slot {
-                    Value::Map(pairs) => {
-                        if let Some((_, v)) = pairs.iter_mut().find(|(k, _)| k == key) {
-                            *v = val;
-                        } else {
-                            pairs.push((key.clone(), val));
-                        }
-                    }
-                    // SortedMap sibling: insert-or-overwrite by `OrdValue` key.
-                    Value::SortedMap(m) => {
-                        m.insert(super::value::OrdValue(key.clone()), val);
-                    }
-                    _ => {}
+        match self.map_place_mut(map_var) {
+            Some(Value::Map(pairs)) => {
+                if let Some((_, v)) = pairs.iter_mut().find(|(k, _)| k == key) {
+                    *v = val;
+                } else {
+                    pairs.push((key.clone(), val));
                 }
-                return;
             }
+            // SortedMap sibling: insert-or-overwrite by `OrdValue` key.
+            Some(Value::SortedMap(m)) => {
+                m.insert(super::value::OrdValue(key.clone()), val);
+            }
+            _ => {}
         }
     }
 

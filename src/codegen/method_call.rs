@@ -2704,6 +2704,22 @@ impl<'ctx> super::Codegen<'ctx> {
         // so the recursive call resolves `.method(args)` through the
         // regular identifier-keyed flow. Returns Some(_) only when the
         // receiver is a recognised or_insert / or_insert_with chain.
+        // B-2026-08-18-34 — a Map entry chain rooted at a struct FIELD
+        // (`h.buckets.entry(k).or_insert(d).push(v)`, `self.buckets…`). Binds
+        // the field's address to a synth identifier and re-dispatches, so both
+        // the `or_insert` terminal and the trailing `.push` below run through
+        // their existing identifier-keyed lowerings. Must precede both, since
+        // each declines a non-identifier map root.
+        if let Some(value) = self.try_compile_field_rooted_entry_chain(
+            object,
+            method,
+            args,
+            call_span,
+            args_close_span,
+        )? {
+            return Ok(value);
+        }
+
         if let Some(value) =
             self.compile_entry_chain_receiver_method(object, method, args, call_span)?
         {

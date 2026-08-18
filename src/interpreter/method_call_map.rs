@@ -12,6 +12,26 @@ use crate::token::Span;
 use super::value::{EnumData, OrdValue, Value};
 
 impl<'a> super::Interpreter<'a> {
+    /// Name the map an entry chain is rooted at, as a PLACE: a plain binding
+    /// (`m`) or a dotted field path (`h.buckets`, `self.buckets`).
+    ///
+    /// B-2026-08-18-34. This used to accept an `ExprKind::Identifier` receiver
+    /// only, so `map.entry(k).or_insert(d).push(v)` — the idiomatic append into
+    /// a `Map[K, Vec[V]]` — was unusable whenever the map was a struct field,
+    /// which is where a multimap normally lives. `Env::map_place_ref` /
+    /// `map_place_mut` resolve what this returns.
+    fn map_place_string(object: &Expr) -> Option<String> {
+        match &object.kind {
+            ExprKind::Identifier(name) => Some(name.clone()),
+            ExprKind::SelfValue => Some("self".to_string()),
+            ExprKind::FieldAccess {
+                object: inner,
+                field,
+            } => Some(format!("{}.{}", Self::map_place_string(inner)?, field)),
+            _ => None,
+        }
+    }
+
     /// Downgrade a strong handle stored into a `weak` CONTAINER slot
     /// (`Vec[weak T].push`, `Map[K, weak V].insert`, …).
     ///
@@ -330,11 +350,7 @@ impl<'a> super::Interpreter<'a> {
                         .map(|a| self.eval_expr_inner(&a.value))
                         .unwrap_or(Value::Unit);
                     let slot_idx = m.iter().position(|(k, _)| *k == key);
-                    let map_var = if let ExprKind::Identifier(name) = &object.kind {
-                        Some(name.clone())
-                    } else {
-                        None
-                    };
+                    let map_var = Self::map_place_string(object);
                     return Some(Value::Entry {
                         map_var,
                         key: Box::new(key),
@@ -350,11 +366,7 @@ impl<'a> super::Interpreter<'a> {
                         .first()
                         .map(|a| self.eval_expr_inner(&a.value))
                         .unwrap_or(Value::Unit);
-                    let map_var = if let ExprKind::Identifier(name) = &object.kind {
-                        Some(name.clone())
-                    } else {
-                        None
-                    };
+                    let map_var = Self::map_place_string(object);
                     return Some(Value::Entry {
                         map_var,
                         key: Box::new(key),
@@ -377,7 +389,8 @@ impl<'a> super::Interpreter<'a> {
                 if let Value::Entry { map_var, key, .. } = obj {
                     // Occupancy is read from the live map by key — `slot_idx`
                     // may be stale after an earlier chain step mutated the map.
-                    let occupied = match map_var.as_deref().and_then(|n| self.env.get(n)) {
+                    let occupied = match map_var.as_deref().and_then(|n| self.env.map_place_ref(n))
+                    {
                         Some(Value::Map(pairs)) => pairs.iter().any(|(k, _)| *k == *key),
                         Some(Value::SortedMap(m)) => m.contains_key(&OrdValue((*key).clone())),
                         _ => false,
@@ -417,7 +430,13 @@ impl<'a> super::Interpreter<'a> {
                             .first()
                             .map(|a| self.eval_expr_inner(&a.value))
                             .unwrap_or(Value::Unit);
-                        match self.env.get(name) {
+                        // Resolved as a PLACE, so a map in a struct field
+                        // modifies the real map (B-2026-08-18-34). Keyed on the
+                        // binding NAME, `h.counts.entry(k).and_modify(f)` found
+                        // nothing and silently skipped the closure — the map was
+                        // left at its `or_insert` default while codegen applied
+                        // the modification, a run-vs-build divergence.
+                        match self.env.map_place_ref(name).cloned() {
                             Some(Value::Map(mut m)) => {
                                 if let Some(idx) = slot_idx {
                                     if let Some((_, slot_v)) = m.get(idx) {
@@ -428,7 +447,9 @@ impl<'a> super::Interpreter<'a> {
                                         );
                                         let new_v = cell.lock().unwrap().clone();
                                         m[idx].1 = new_v;
-                                        self.env.set(name, Value::Map(m));
+                                        if let Some(slot) = self.env.map_place_mut(name) {
+                                            *slot = Value::Map(m);
+                                        }
                                     }
                                 }
                             }
@@ -442,7 +463,9 @@ impl<'a> super::Interpreter<'a> {
                                     );
                                     let new_v = cell.lock().unwrap().clone();
                                     m.insert(ok, new_v);
-                                    self.env.set(name, Value::SortedMap(m));
+                                    if let Some(slot) = self.env.map_place_mut(name) {
+                                        *slot = Value::SortedMap(m);
+                                    }
                                 }
                             }
                             _ => {}
