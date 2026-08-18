@@ -200,18 +200,17 @@ pub(super) fn add_implied_derives(traits: &mut HashSet<String>) {
     if traits.contains("Hash") {
         traits.insert("Eq".to_string());
     }
-    // `Eq` ⇒ `PartialEq` is NOT filled, and that is a measurement rather than
-    // an omission. The two field-shape validators disagree about `Vec`:
-    // `#[derive(Eq)] struct I { v: Vec[i64] }` is accepted (and its `==`
-    // lowering is pinned by `test_e2e_derive_eq_struct_with_vec_field_
-    // compares_contents`), while the `PartialEq` validator rejects the same
-    // field — "struct 'I' derives PartialEq but field 'v' has non-PartialEq
-    // type 'Vec[i64]'". So implying `PartialEq` from `Eq` turns a working
-    // program into a compile error, which is the opposite of what this fill
-    // exists to do. Since `Eq` alone already drives equality, the implication
-    // would add no behaviour even where it is accepted. The validator
-    // inconsistency is filed separately; when it is resolved this line is the
-    // place to close the chain.
+    // `Eq` ⇒ `PartialEq` closes the chain. This link was held back when
+    // B-2026-08-17-33 landed, because the two field validators then disagreed
+    // about `Vec` — `#[derive(Eq)] struct I { v: Vec[i64] }` compiled while
+    // `#[derive(PartialEq)]` on the same field was refused, so implying
+    // `PartialEq` turned a working program into a compile error. That
+    // asymmetry was the missing `Vec` arm in `type_supports_partial_eq`
+    // (B-2026-08-18-6); with the two predicates agreeing, the implication is
+    // safe and design.md's `PartialEq` -> `Eq` -> `Hash` chain is complete.
+    if traits.contains("Eq") {
+        traits.insert("PartialEq".to_string());
+    }
 }
 
 /// Extract the `#[must_use]` message from a declaration's attribute list

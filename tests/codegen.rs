@@ -97515,6 +97515,45 @@ fn main() {
         );
     }
 
+    /// B-2026-08-18-6 — `#[derive(PartialEq)]` over a struct with a `Vec`
+    /// field. `type_supports_eq` and `type_supports_hash` both carried an
+    /// explicit `Vec` arm and `type_supports_partial_eq` did not, so the
+    /// WEAKER trait was the stricter gate: the `Eq` spelling of this program
+    /// compiled while the `PartialEq` spelling was refused at check time —
+    /// which also meant this lowering had never been exercised.
+    ///
+    /// The assertions are B-2026-08-12-5's own shapes, where comparing bytes
+    /// instead of elements is SILENTLY wrong: `[7] == [263]` (same low byte)
+    /// and `[1,2] == [1,3]` must both be false, and equal `Vec[String]`
+    /// contents in distinct allocations must be true. Paired with
+    /// `test_derive_partial_eq_vec_field_oracle` in `tests/interpreter.rs`.
+    #[test]
+    fn test_e2e_derive_partial_eq_vec_field_compares_contents() {
+        assert_eq!(
+            run_program(
+                r#"
+#[derive(PartialEq)]
+struct I { v: Vec[i64] }
+#[derive(PartialEq)]
+struct S { v: Vec[String] }
+fn one(a: i64) -> Vec[i64] { let mut v: Vec[i64] = Vec.new(); v.push(a); v }
+fn two(a: i64, b: i64) -> Vec[i64] { let mut v: Vec[i64] = Vec.new(); v.push(a); v.push(b); v }
+fn strs(a: String) -> Vec[String] { let mut v: Vec[String] = Vec.new(); v.push(a); v }
+fn main() {
+    println(I { v: one(7) } == I { v: one(263) });
+    println(I { v: two(1, 2) } == I { v: two(1, 3) });
+    println(I { v: one(7) } == I { v: one(7) });
+    println(I { v: one(1) } == I { v: two(1, 2) });
+    println(S { v: strs("abcd") } == S { v: strs("abcd") });
+    println(S { v: strs("abcd") } == S { v: strs("zzzz") });
+    println(I { v: two(1, 2) } != I { v: two(1, 3) });
+}
+"#
+            ),
+            Some("false\nfalse\ntrue\nfalse\ntrue\nfalse\ntrue\n".to_string())
+        );
+    }
+
     /// B-2026-08-15-24 — the TUPLE-element sibling of B-2026-08-15-21.
     /// `s[0].0 = v` through a `mut Slice[(A, B)]` param failed the build with
     /// "tuple-element assignment through this receiver shape is not yet

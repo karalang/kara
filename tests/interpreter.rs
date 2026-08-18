@@ -34108,3 +34108,32 @@ fn test_derive_dependency_auto_fill_oracle() {
          }\n");
     assert_eq!(out, "copy = 3,3\nlen = 2\nk12 = 20\n");
 }
+
+#[test]
+fn test_derive_partial_eq_vec_field_oracle() {
+    // Oracle twin of `tests/codegen.rs`'s
+    // `test_e2e_derive_partial_eq_vec_field_compares_contents`
+    // (B-2026-08-18-6). The `PartialEq` spelling was refused at check time, so
+    // its lowering had never been exercised; these are B-2026-08-12-5's own
+    // shapes, where a byte-compare instead of an element-compare gives
+    // SILENTLY wrong answers ([7] == [263] and [1,2] == [1,3] both true, and
+    // equal `Vec[String]` contents false).
+    let out = run("\n\
+         #[derive(PartialEq)]\n\
+         struct I { v: Vec[i64] }\n\
+         #[derive(PartialEq)]\n\
+         struct S { v: Vec[String] }\n\
+         fn one(a: i64) -> Vec[i64] { let mut v: Vec[i64] = Vec.new(); v.push(a); v }\n\
+         fn two(a: i64, b: i64) -> Vec[i64] { let mut v: Vec[i64] = Vec.new(); v.push(a); v.push(b); v }\n\
+         fn strs(a: String) -> Vec[String] { let mut v: Vec[String] = Vec.new(); v.push(a); v }\n\
+         fn main() {\n\
+             println(I { v: one(7) } == I { v: one(263) });\n\
+             println(I { v: two(1, 2) } == I { v: two(1, 3) });\n\
+             println(I { v: one(7) } == I { v: one(7) });\n\
+             println(I { v: one(1) } == I { v: two(1, 2) });\n\
+             println(S { v: strs(\"abcd\") } == S { v: strs(\"abcd\") });\n\
+             println(S { v: strs(\"abcd\") } == S { v: strs(\"zzzz\") });\n\
+             println(I { v: two(1, 2) } != I { v: two(1, 3) });\n\
+         }\n");
+    assert_eq!(out, "false\nfalse\ntrue\nfalse\ntrue\nfalse\ntrue\n");
+}

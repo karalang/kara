@@ -7012,6 +7012,68 @@ fn test_derive_hash_without_eq_is_a_map_key() {
 }
 
 #[test]
+fn test_derive_partial_eq_accepts_vec_field_like_eq() {
+    // B-2026-08-18-6. `type_supports_eq` and `type_supports_hash` both carry
+    // an explicit `Vec` arm (the built-in `Vec` is registered in `env.structs`
+    // with no derived traits, so without one it reads as un-comparable);
+    // `type_supports_partial_eq` did not. That made the WEAKER trait the
+    // stricter gate — this struct was refused while the `Eq` spelling of it
+    // compiled.
+    typecheck_ok(
+        "#[derive(PartialEq)]\n\
+         struct B { v: Vec[i64] }",
+    );
+}
+
+#[test]
+fn test_derive_eq_and_partial_eq_agree_on_vec_field() {
+    // The symmetry itself is the invariant: anything comparable for `Eq` is
+    // comparable for `PartialEq`, so the two predicates must not disagree
+    // about a field type. Both spellings in one program, so a future
+    // divergence fails here rather than only in whichever one a caller wrote.
+    typecheck_ok(
+        "#[derive(Eq)]\n\
+         struct A { v: Vec[i64] }\n\
+         #[derive(PartialEq)]\n\
+         struct B { v: Vec[i64] }",
+    );
+}
+
+#[test]
+fn test_derive_ord_still_rejects_vec_field() {
+    // GUARD against over-widening. `Ord`/`PartialOrd` deliberately keep no
+    // `Vec` arm, and that is correct rather than the same oversight: Kāra has
+    // no `Vec` ordering at all — bare `a < b` on two `Vec[i64]` is rejected
+    // with "type 'Vec[i64]' does not implement Ord". Adding the arm there
+    // would typecheck a comparison no backend lowers.
+    let errors = typecheck_errors(
+        "#[derive(Ord)]\n\
+         struct O { v: Vec[i64] }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("Ord") && e.message.contains("Vec")),
+        "expected the Ord field rejection to survive; got: {errors:?}"
+    );
+}
+
+#[test]
+fn test_derive_eq_implies_partial_eq() {
+    // The chain link B-2026-08-17-33 had to hold back, now closed: deriving
+    // `Eq` implies `PartialEq`, so `==` works without listing it.
+    typecheck_ok(
+        "#[derive(Eq)]\n\
+         struct P { a: i64 }\n\
+         fn main() {\n\
+             let x = P { a: 1 };\n\
+             let y = P { a: 1 };\n\
+             println(if x == y { \"eq\" } else { \"ne\" });\n\
+         }",
+    );
+}
+
+#[test]
 fn test_derive_dependencies_still_ok_when_listed_explicitly() {
     // "Listing dependencies explicitly is valid and idiomatic" — closing the
     // set must be idempotent, not a double-derive error.

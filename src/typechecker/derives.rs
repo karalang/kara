@@ -54,6 +54,23 @@ impl<'a> super::TypeChecker<'a> {
             Type::Vector { element, .. } => self.type_supports_partial_eq(element),
             Type::Slice { element, .. } => self.type_supports_partial_eq(element),
             Type::Ref(inner) | Type::MutRef(inner) => self.type_supports_partial_eq(inner),
+            // `Vec[T]` has value (content) equality when `T` does — the exact
+            // arm `type_supports_eq` carries, for the exact same reason: the
+            // built-in `Vec` is registered in `env.structs` with NO derived
+            // traits, so without this it falls through to the generic `Named`
+            // lookup below and reports `Vec` as un-`PartialEq`.
+            //
+            // B-2026-08-18-6: `Eq` and `Hash` both grew this arm and
+            // `PartialEq` did not, which made the WEAKER trait the stricter
+            // gate — `#[derive(Eq)] struct A { v: Vec[i64] }` compiled while
+            // `#[derive(PartialEq)]` on the same field was refused. Nothing
+            // about the lowering justified the split: `==` on a Vec-carrying
+            // struct routes through `emit_eq_fn_for_struct` (B-2026-08-12-5),
+            // the type-directed comparator, whichever of the two traits was
+            // written.
+            Type::Named { name, args } if name == "Vec" && args.len() == 1 => {
+                self.type_supports_partial_eq(&args[0])
+            }
             Type::Named { name, args } => {
                 // A user-provided `impl Eq for Name` is sufficient — the
                 // lowering pass dispatches `==`/`!=` through it. Falls back
