@@ -12932,7 +12932,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
     /// The value an arm body ultimately yields: an arm may be a bare
     /// expression or a block, and only the block's tail is the value.
-    fn block_tail_expr(body: &Expr) -> &Expr {
+    pub(super) fn block_tail_expr(body: &Expr) -> &Expr {
         match &body.kind {
             ExprKind::Block(b) | ExprKind::Seq(b) | ExprKind::Unsafe(b) => {
                 b.final_expr.as_deref().map_or(body, Self::block_tail_expr)

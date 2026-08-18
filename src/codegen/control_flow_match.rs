@@ -9687,13 +9687,137 @@ impl<'ctx> super::Codegen<'ctx> {
     /// reconstructed copy — is the subject the payload's Drop BODY walk must
     /// run against, because the box it points at is what the scope-exit box
     /// drop later reads. See `freshtemp_payload_bodies_action`.
+    /// B-2026-08-18-8 — a `match` whose SCRUTINEE is itself a `match` yielding
+    /// a boxed `Option`/`Result` payload.
+    ///
+    /// `match (match u.address { Some(a) => { a.city } None => { None } }) { … }`
+    /// leaked the 32-byte payload envelope once per evaluation — unbounded in a
+    /// loop — while the two-statement spelling of the identical program
+    /// (`let c = match …; match c { … }`) was always clean. That gap is the
+    /// whole shape of the bug: the `let` registers a `BoxedEnumDrop` for the
+    /// binding, and nothing registered one for the value in scrutinee position,
+    /// so the box had no owner at all. `?.` lowers to exactly this `match`, so a
+    /// chain used directly as a scrutinee inherited the leak — but the defect is
+    /// not `?.`'s and reproduces with none in the program.
+    ///
+    /// Admitting the shape here rather than widening
+    /// `expr_yields_fresh_owned_temp` is deliberate: that predicate has ~50
+    /// callers across codegen, each with its own aliasing contract, and this
+    /// row is one position. The general case is the still-open slice 4 of
+    /// [`docs/spikes/general-owned-temp-tracking.md`] (scrutinee sub-frame).
+    ///
+    /// FAIL-CLOSED on the arms, on the same grounds as
+    /// `discarded_match_value_tail`: exactly one arm runs and the scrutinee is
+    /// the merged phi, so a single arm that hands back storage someone else
+    /// still owns would make the registered free a double free. Each arm's tail
+    /// must be one of
+    ///   * `None` — no payload, hence no box; the drop's tag guard skips it;
+    ///   * a non-borrow `Call`/`MethodCall` — freshly allocated, including the
+    ///     `Some(x)` variant construction whose boxing allocated the envelope;
+    ///   * a FIELD or tuple-index projection **out of that arm's own payload
+    ///     binding**, when the inner match consumed an OWNED scrutinee — the
+    ///     one case where the box provably changes hands, because the field is
+    ///     MOVED out of a value this frame owns and the move zeroes the
+    ///     source's slot. That is the state the `let` spelling relies on too.
+    ///
+    /// The two restrictions on that last form are each load-bearing, and both
+    /// are hazards this fix would otherwise have introduced rather than found.
+    /// Rooting the chain at the arm's payload binding is what makes it a move:
+    /// a projection out of some OTHER local (`Some(_) => other.field`) reads a
+    /// place the frame still owns, so freeing the phi would double-free it. And
+    /// an INDEX anywhere in the chain (`Some(a) => a.items[0]`) is an element
+    /// COPY, never a move — the container keeps the box and frees it itself.
+    /// A borrowed or read-only inner scrutinee declines for the same family of
+    /// reason: there the payload aliases storage the source keeps.
+    ///
+    /// Anything else — a bare identifier above all, which may name a binding
+    /// carrying its own `BoxedEnumDrop` — declines the whole match.
+    fn match_result_scrutinee_owns_box(&self, scrutinee: &Expr) -> bool {
+        match &scrutinee.kind {
+            ExprKind::Match {
+                scrutinee: inner,
+                arms,
+            } => {
+                if arms.is_empty() {
+                    return false;
+                }
+                let inner_is_owned = self.optres_producer_source_is_owned(inner);
+                arms.iter().all(|arm| {
+                    let tail = Self::block_tail_expr(&arm.body);
+                    match &tail.kind {
+                        ExprKind::Identifier(n) if n == "None" => true,
+                        ExprKind::FieldAccess { .. } | ExprKind::TupleIndex { .. } => {
+                            if !inner_is_owned {
+                                return false;
+                            }
+                            let mut bound = Vec::new();
+                            collect_pattern_bindings(&arm.pattern, &mut bound);
+                            Self::moved_field_chain_root(tail)
+                                .is_some_and(|root| bound.iter().any(|b| b == root))
+                        }
+                        _ => self.expr_yields_fresh_owned_temp(tail),
+                    }
+                })
+            }
+            // `?.` IS the match above — `compile_optional_chain` synthesizes it
+            // rather than hand-rolling a second lowering (B-2026-08-17-28), but
+            // it does so from THIS node, so the arm walk never sees it. The
+            // synthesized arms are fixed and need no walk: `Some(x) => x.<member>`
+            // (or `Some(x.<member>)` when the chain does not flatten) and
+            // `None => None`. Both are exactly what the `Match` arm above
+            // admits, under the same owned-source condition.
+            //
+            // A CALL chain (`a?.f()`) declines: its arm is a method call whose
+            // result may alias the receiver's storage, and this position cannot
+            // tell a borrow-returning member from an allocating one. Declining
+            // leaves it as it was — a leak, not a double free.
+            ExprKind::OptionalChain { object, args, .. } => {
+                args.is_none() && self.optres_producer_source_is_owned(object)
+            }
+            _ => false,
+        }
+    }
+
+    /// Does the value an `Option`-producing chain reads FROM belong to this
+    /// frame? A borrow-returning call, a borrowed binding and a `ref` parameter
+    /// all say no: there the projected payload aliases storage the source keeps,
+    /// and registering a free against it would double-free rather than close a
+    /// leak. A nested `?.` (`a?.b?.c`) resolves through to its own root, since
+    /// each level projects out of whatever the level below produced.
+    /// The local a FIELD/tuple-index chain projects out of, or `None` if the
+    /// chain passes through anything else. Deliberately narrower than
+    /// `place_root_ident`: an `Index` link makes the leaf an element COPY
+    /// rather than a move, so a chain containing one has no single owner to
+    /// hand the box over to and must not be walked through here.
+    fn moved_field_chain_root(expr: &Expr) -> Option<&str> {
+        match &expr.kind {
+            ExprKind::Identifier(name) => Some(name.as_str()),
+            ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                Self::moved_field_chain_root(object)
+            }
+            _ => None,
+        }
+    }
+
+    fn optres_producer_source_is_owned(&self, src: &Expr) -> bool {
+        if let ExprKind::OptionalChain { object, .. } = &src.kind {
+            return self.optres_producer_source_is_owned(object);
+        }
+        !self.scrutinee_is_borrow_call(src)
+            && !self.scrutinee_is_borrowed_binding(src)
+            && !matches!(&src.kind, ExprKind::Identifier(n)
+                if self.borrow_vars.ref_params.contains_key(n.as_str()))
+    }
+
     pub(super) fn track_freshtemp_boxed_enum_scrutinee(
         &mut self,
         scrutinee: &Expr,
         patterns: &[&Pattern],
         val: BasicValueEnum<'ctx>,
     ) -> Option<PointerValue<'ctx>> {
-        if !self.expr_yields_fresh_owned_temp(scrutinee) {
+        if !self.expr_yields_fresh_owned_temp(scrutinee)
+            && !self.match_result_scrutinee_owns_box(scrutinee)
+        {
             return None;
         }
         let BasicValueEnum::StructValue(sv) = val else {

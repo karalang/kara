@@ -43453,14 +43453,14 @@ fn main() {
         // it — the two arms have different ownership obligations and only
         // running both exercises the pair.
         //
-        // BOUND TO A `let` RATHER THAN MATCHED DIRECTLY, and the difference is
-        // not this row's: a match whose SCRUTINEE is itself a match producing
-        // a boxed `Option` payload leaks that box, which reproduces with no
-        // `?.` anywhere (`match (match u.address { Some(x) => { x.city } None
-        // => { None } }) { ... }` leaks the identical 3200 bytes / 100
-        // objects). Filed as B-2026-08-18-8; `?.` inherits it in that position
-        // exactly as it inherits everything else about the shape it lowers to.
-        // Its own lowering is clean, which is what this pins.
+        // BOUND TO A `let` RATHER THAN MATCHED DIRECTLY, and the difference
+        // was not this row's: a match whose SCRUTINEE is itself a match
+        // producing a boxed `Option` payload leaked that box, reproducing with
+        // no `?.` anywhere. Filed and fixed as B-2026-08-18-8, whose two
+        // fixtures below cover the scrutinee position in both spellings. This
+        // one keeps the `let` form deliberately, so the pair reads as the
+        // contrast that isolated the defect: `?.`'s own lowering was always
+        // clean, which is what this pins.
         assert_clean_asan_run(
             r#"
 struct City { name: String, zip: i64 }
@@ -43486,6 +43486,99 @@ fn main() {
 "#,
             &["600"],
             "optional_chain_heap_payload_clean",
+        );
+    }
+
+    #[test]
+    fn asan_match_on_match_result_scrutinee_clean() {
+        // B-2026-08-18-8 — the SCRUTINEE-position twin of the fixture above.
+        // Identical program but for one thing: the inner match's result is fed
+        // straight into the outer match instead of being bound to a `let`
+        // first. That single difference used to leak the boxed `Option`
+        // payload — 32 bytes per evaluation, 3200 bytes in 100 objects over
+        // these 200 iterations — because a match RESULT consumed as a
+        // temporary registered no box cleanup, where a `let`-bound one did.
+        //
+        // Written with an explicit nested `match` and NO `?.` anywhere: the
+        // defect was found through `?.` (which lowers to exactly this shape)
+        // but is not `?.`'s, and spelling it out keeps this fixture honest if
+        // the `?.` lowering ever changes again.
+        assert_clean_asan_run(
+            r#"
+struct City { name: String, zip: i64 }
+struct Address { city: Option[City], tag: String }
+struct User { address: Option[Address] }
+
+fn mk(i: i64) -> User {
+    if i % 2 == 0 { return User { address: Some(Address { city: Some(City { name: "Paris", zip: 7 }), tag: "t" }) }; }
+    return User { address: None };
+}
+
+fn main() {
+    let mut total = 0;
+    let mut i = 0;
+    while i < 200 {
+        let u = mk(i);
+        match (match u.address { Some(a) => { a.city } None => { None } }) {
+            Some(v) => { total = total + (v.name.len() as i64); }
+            None => { total = total + 1; }
+        }
+        i = i + 1;
+    }
+    println(total);
+}
+"#,
+            &["600"],
+            "match_on_match_result_scrutinee_clean",
+        );
+    }
+
+    #[test]
+    fn asan_optional_chain_as_match_scrutinee_clean() {
+        // B-2026-08-18-8, second spelling. `?.` is synthesized into the very
+        // match the fixture above spells out (B-2026-08-17-28), so a chain in
+        // scrutinee position inherited the same orphaned box — and it is the
+        // spelling anyone would actually write.
+        //
+        // It reaches the fix through a DIFFERENT arm than the explicit match:
+        // `compile_optional_chain` builds its match from the `OptionalChain`
+        // node during compilation, so the node the scrutinee tracker sees is
+        // still the chain, not a `Match`. TWO levels deep on purpose — the
+        // outer chain's source is the inner chain, which is what exercises the
+        // recursive owned-source resolution.
+        //
+        // The payloads carry RUNTIME-built strings (not literals, whose
+        // `cap == 0` makes an interior leak invisible), so this asserts the
+        // box's interior as well as its 32-byte envelope.
+        assert_clean_asan_run(
+            r#"
+struct City { name: String, zip: i64 }
+struct Address { city: Option[City], tag: String }
+struct User { address: Option[Address] }
+
+fn mk(i: i64) -> User {
+    if i % 2 == 0 {
+        return User { address: Some(Address { city: Some(City { name: f"city-{i}", zip: i }), tag: f"t{i}" }) };
+    }
+    return User { address: None };
+}
+
+fn main() {
+    let mut total = 0;
+    let mut i = 0;
+    while i < 200 {
+        let u = mk(i);
+        match u.address?.city?.name {
+            Some(v) => { total = total + (v.len() as i64); }
+            None => { total = total + 1; }
+        }
+        i = i + 1;
+    }
+    println(total);
+}
+"#,
+            &["845"],
+            "optional_chain_as_match_scrutinee_clean",
         );
     }
 
