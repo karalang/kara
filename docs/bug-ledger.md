@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 182 | 0 |
 | double-free | 131 | 1 |
 | run-vs-build | 128 | 1 |
-| codegen-gap | 115 | 1 |
+| codegen-gap | 115 | 0 |
 | missing-feature | 103 | 4 |
 | perf | 77 | 0 |
 | false-positive | 77 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 913 | 5 |
+| codegen | 913 | 4 |
 | typecheck | 193 | 7 |
 | interp | 150 | 3 |
 | ownership | 57 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1300 surfaced · 16 open · 1267 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1300 surfaced · 15 open · 1268 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (16)
+### Open (15)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -139,7 +139,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1300 surfaced
 | B-2026-08-17-35 | 2026-08-17 | other | low | Two design.md sections state things the language does not have: § derive(Display) uses an enum-variant syntax that does not parse, and § Subscript Trait claims a v1 capability the resolver explicitly rejects. (1) The payload example writes `Circle(radius: f64),` / `Rect(w: f64, h: f64),` -- a tuple-style variant with NAMED fields. That form does not exist: `error[parse]: Expected RightParen, found Colon`. § Feature 3 defines the two real forms, struct variants (`Circle { radius: f64 }`) and tuple variants (`And(Expr, Expr)`), so this is a third spelling that appears nowhere else. (2) § Subscript Trait opens "User-defined types support `[]` indexing by implementing two standard traits" with no v1 caveat, but `impl Index[i64] for Grid` is rejected outright: `error[resolve]: user-defined 'impl Index for Grid' is not supported in v1; operator traits are stdlib-only`. The sibling § Operator Traits DOES carry the caveat ("makes the later addition of user-defined operator impls a purely additive change"), so the two sections disagree with each other about the same v1 boundary. | roadmap.md |
 | B-2026-08-17-36 | 2026-08-17 | typecheck | medium | `collect()` can only ever produce `Vec[T]` -- every other `FromIterator` target design.md promises is rejected at typecheck. § Iterator Adaptors: "Every standard collection (`Vec`, `Map`, `Set`, `VecDeque`, `TreeMap`, `String`) implements `FromIterator` for its natural element type. `collect` infers the target type from context or requires annotation." Measured, one target per file: `let up: String = s.chars().map(|c| c.to_uppercase()).collect()` -> "expected 'String', found 'Vec[char]'"; `let j: String = v.iter().map(|s| s.to_uppercase()).collect()` -> "expected 'String', found 'Vec[String]'"; `let s: Set[i64] = ... .collect()` -> "expected 'Set[i64]', found 'Vec[i64]'"; `let d: VecDeque[i64] = ... .collect()` -> "expected 'VecDeque[i64]', found 'Vec[i64]'"; `let m: Map[i64, i64] = v.iter().map(|x| (x, x * 10)).collect()` -> "expected 'Map[i64, i64]', found 'Vec[(i64, i64)]'". The sixth target, `TreeMap`, cannot even be named -- see B-2026-08-17-38. In every case the annotation is ignored and the chain's type is fixed to `Vec` of the element type, so the diagnostic reads as a mismatch the user caused rather than a target the compiler does not support. | roadmap.md |
 | B-2026-08-17-38 | 2026-08-17 | typecheck | medium | `TreeMap[K, V]` -- a standard collection design.md documents 13 times, with its own method table, and prescribes TWICE as the remedy for Map/Set's unstable iteration order -- is an UNDEFINED TYPE. `let mut m: TreeMap[i64, i64] = TreeMap.new();` -> `error[resolve]: undefined type 'TreeMap'` + `undefined name 'TreeMap'`. The implementation ships the same container as `SortedMap`, which design.md mentions exactly ONCE, in passing, inside a naming erratum about `Bf16` (line 2299) -- it appears in none of the collection tables, none of the method tables, and neither of the two "use this for stable iteration" directives (lines 1735 and 9849, the § Map hash-seeding note and the § Determinism list). A user or an LLM following the spec's own advice about non-deterministic Map iteration writes `TreeMap` and gets an undefined-type error with no pointer to the real name. Knock-on: the same mismatch is the most likely cause of the `SortedMap.insert` / `.remove` hole in the must_use displaced-value exemption -- design.md's exemption list names `Map.insert` / `TreeMap.insert` / `Map.remove` / `TreeMap.remove`, and MEASURED, `Map`, `Vec` and `VecDeque` are all exempt while `SortedMap.insert` and `SortedMap.remove` both warn. | roadmap.md |
-| B-2026-08-17-42 | 2026-08-17 | codegen | medium | DUPLICATE OF B-2026-08-17-29 -- A RANGE bound to a variable has no codegen. `let r = 0..4; for i in r { println(i); }` prints 0 1 2 3 under `--interp` and NOTHING under `karac run` (JIT) and `karac build` (AOT), exiting 0 either way, with `karac check` clean. The inline spelling (`for i in 0..4`) is correct on all three -- only the binding form is dead. | src/codegen/exprs.rs — `compile_expr` has no `ExprKind::Range` arm. tests/codegen.rs `an_unhandled_expression_kind_fails_the_build_by_name` pins the current loud failure; implementing this should flip that case, which is a deliberate edit to that test. |
 | B-2026-08-17-43 | 2026-08-17 | codegen | high | DUPLICATE OF B-2026-08-17-28 -- `?.` OPTIONAL CHAINING has no codegen and produced a SILENT WRONG ANSWER. `let v = get(1)?.x; println(v);` where `get -> Option[P]` printed `Some(5)` under `--interp` and `0` under both `karac run` (JIT) and `karac build` (AOT), with `karac check` clean. roadmap.md line 241 carries a CHECKED box claiming `?.` optional chaining is done. | src/codegen/exprs.rs — `compile_expr` has no `ExprKind::OptionalChain` arm; roadmap.md line 241. tests/codegen.rs `an_unhandled_expression_kind_fails_the_build_by_name` pins the current loud failure. |
 | B-2026-08-17-44 | 2026-08-17 | typecheck | medium | `self` inside `impl Trait for Slice[i64]` types as `Named { name: "Slice", args: [] }` -- the ELEMENT TYPE IS LOST -- so the body can barely do anything with it. `self[0]` is rejected outright, and `self.len().to_string()` fails codegen with "no handler for method 'to_string' on variable 'n'". A `Slice[i64]` PARAMETER has none of these problems, so the defect is in how a builtin-container impl head types its receiver. | The impl-head Self typing for builtin containers; symptom sites are the index rule in src/typechecker/exprs.rs and method dispatch in codegen. tests/codegen.rs `a_range_subscript_by_ref_passes_a_slice_not_an_element_pointer` is shaped around this — it reads `self.len()` and returns it directly, because `self.len().to_string()` does not compile. |
 | B-2026-08-17-45 | 2026-08-18 | codegen | high | Moving an `Option`-TYPED FIELD out of a matched struct payload DOUBLE FREES under both compiled backends, on a program `karac check` passes clean and `--interp` runs correctly. Minimal: `struct C { name: String, zip: i64 } struct A { c: Option[C] }` plus `let f = match a { Some(x) => { x.c } None => { None } };` where `a: Option[A]` -- `free(): double free detected in tcache 2`, abort, under both `karac run` (JIT) and `karac build` (AOT). The interpreter prints the right answer. No `?.`, no closure, no generic involved. | src/codegen/control_flow_match.rs (arm-tail move site, ~line 868 after `compile_tail_final_expr`; the admission classes at `place_optres_field_move_info_ex`), src/codegen/param_own.rs (`suppress_struct_field_move_into_literal`), and wherever an arm binding is deboxed — `deboxed_payload_box_ptrs` must be populated for a LOCAL enum scrutinee, not just an owned param, before any suppression can mirror through the box. |
@@ -163,9 +162,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1300 surfaced
 
 </details>
 
-### Fixed (1267)
+### Fixed (1268)
 
-<details><summary>1267 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1268 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -10870,6 +10869,34 @@ bare arm now correctly covering a later qualified one), and an undotted
 binding still binds. Four of the six are baseline-red (verified by reverting
 the fix alone: 4 failed, the two guards passed). An interpreter oracle and its
 codegen E2E twin pin that arm selection stayed correct on all three backends. |
+| B-2026-08-17-42 | codegen | medium | DUPLICATE OF B-2026-08-17-29 -- A RANGE bound to a variable has no codegen | Closed by 139562c, the fix for B-2026-08-17-29 — the row this one duplicates.
+No separate change was needed: the row itself said "Work B-2026-08-17-29; this
+row closes with it", and that is what happened.
+
+VERIFIED RATHER THAN ASSUMED, on 6facd70 with both bins freshly rebuilt (the
+`karac` / `karac_jit_runner` staleness footgun in CLAUDE.md § Commands makes a
+stale-binary "pass" the obvious way to get this wrong):
+
+  let r = 0..4; for i in r { println(f"{i}"); }
+    --interp -> 0 1 2 3
+    karac run (JIT) -> 0 1 2 3
+    karac build (AOT) -> 0 1 2 3
+
+and this row's own parent shapes from -29, all four surfaces byte-identical
+(interp / JIT / AOT / AOT under KARAC_AUTO_PAR=0):
+
+  exclusive `let r = 0..5`     -> iterations=5   (was 0)
+  inclusive `let ri = 0..=4`   -> inclusive=5    (was 0)
+  variable endpoints `a..b`    -> sum=14         (was 0)
+
+`karac check` clean throughout.
+
+PROCESS NOTE, which is the durable value of this row: -42 was filed without
+grepping the ledger for an existing row on the same subject, and its own detail
+says so. One `grep '"status": "open"' docs/bug-ledger.jsonl` before filing would
+have caught it. The same session-window collision produced -43/-28. Worth
+pairing with the id-allocation hazard in CLAUDE.md § Claiming a bug: compute the
+next id late, and grep the subject before spending one. |
 
 </details>
 
