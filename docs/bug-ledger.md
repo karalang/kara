@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 103 | 4 |
 | perf | 77 | 0 |
 | false-positive | 77 | 1 |
-| diagnostics | 73 | 5 |
+| diagnostics | 73 | 4 |
 | crash | 51 | 2 |
 | soundness | 50 | 0 |
 | other | 35 | 0 |
@@ -111,12 +111,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 913 | 4 |
-| typecheck | 193 | 7 |
+| typecheck | 193 | 6 |
 | interp | 150 | 3 |
 | ownership | 57 | 0 |
 | other | 51 | 2 |
 | autopar | 48 | 0 |
-| cli | 39 | 3 |
+| cli | 39 | 2 |
 | runtime | 22 | 0 |
 | resolver | 19 | 0 |
 | parser | 18 | 0 |
@@ -124,15 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1300 surfaced · 15 open · 1268 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1300 surfaced · 14 open · 1269 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (15)
+### Open (14)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-17-20 | 2026-08-17 | typecheck | low | The default-parameter-value const validator rejects FOUR of the forms design.md explicitly lists as allowed, including the spec's own example literal. § Default Parameter Values says "The allowed forms are identical to those for Module-Level Bindings: literals (`42`, `"localhost"`, `true`), arithmetic on literals (`60 * 1000`), enum variants (`Direction.North`), struct/tuple/array literals built from constant expressions, and references to other module-level bindings", and separately calls `Option[T] = None` "idiomatic". Measured, one form per line: ACCEPTED -- `i64 = 42`, `bool = true`, `f64 = 1.5`, `char = 'z'`, `i64 = 60 * 1000`, `Direction = Direction.North`, `(i64,i64) = (1, 2)`. REJECTED -- (a) `String = "localhost"` -> "default parameter value must be a constant expression (no function calls, closures, or runtime-only values)", the spec's own quoted literal; (b) `i64 = LIMIT` where `let LIMIT: i64 = 7` is a module-level binding -> "const expression: 'LIMIT' is not a known const"; (c) `P = P { x: 1, y: 2 }` struct literal -> same not-a-constant-expression message (the TUPLE literal sibling is accepted, so it is the struct shape specifically); (d) `Option[i64] = None` -> "const expression: 'None' is not a known const", and `Option[i64] = Option.Some(42)` -> not-a-constant-expression. | roadmap.md |
 | B-2026-08-17-28 | 2026-08-17 | codegen+interp | high | Optional chaining `?.` ICEs the interpreter at one shape and silently returns the wrong answer at another, and is not lowered by codegen at all -- `karac check` says "All checks passed" for every case. design.md line 782: "`user.address?.city?.name` short-circuits to `None` if any level is absent." (1) INTERPRETER ICE: `match u.address?.city { Some(c) => println("L2 some: " + c.name), None => ... }` panics with `internal error: entered unreachable code: field access at 7:42: receiver was Value::EnumVariant not Struct/SharedStruct; either an interpreter codepath produced the wrong variant or the typechecker accepted field access on a non-struct` (src/interpreter.rs:2252) -- the Some-arm binding `c` holds an unstripped enum value rather than the `City` struct, the same wrapper-not-stripped shape as B-2026-08-17-27's `??` legs. (2) INTERPRETER SILENT WRONG ANSWER: the spec's own three-level example `u.address?.city?.name`, built with EVERY level `Some`, takes the `None` arm and prints "L3 none". (3) CODEGEN: not lowered -- both compiled backends refuse the same programs (`codegen failed: Undefined variable 's'`, and `no handler for method 'to_string' on variable 'z'` for the one-level form). | roadmap.md |
-| B-2026-08-17-30 | 2026-08-17 | typecheck+cli | low | E0218 TELLS YOU THE EXACT TEXT TO INSERT AND `karac fix` STILL DECLINES IT: the call-site `mut`-marker diagnostic ends with ``Write `mut <expr>`.`` but carries no `replacement`, while its EXACT INVERSE E0219 ("drop the `mut` marker") does carry one and is applied automatically. Same marker, opposite directions, adjacent codes, one fixable and one not. | E0218's diagnostic construction: it has no `replacement` field where E0219 emits `replacement: {offset, length, text}`. The repair is a single insertion at a known offset. |
 | B-2026-08-17-31 | 2026-08-17 | other | medium | 77 of design.md's code-block declarations omit the trailing `;` the grammar REQUIRES -- 51 of 63 bodyless trait declarations, plus 26 of 31 `type` aliases and `distinct type` declarations, so transcribing almost any trait from the authoritative spec produces code that does not parse -- and the document contradicts itself, since the other 12 have it. The parser needs `type Item;` in a trait, `type Item = i64;` in an impl, and `;` after every bodyless method signature (roadmap.md line 447 documents exactly that form as shipped and tested: `trait Container { type Item; fn first(ref self) -> Self.Item; }` + `impl Container for B { type Item = i64; ... }`, which checks and runs on all three backends). design.md's § Associated Types example writes the same construct as `type Item` / `type Item = i64` with no semicolons, and it fails with `error[parse]: Expected Semicolon, found Fn`. Same for § Conversion Traits' `trait From[T] { fn from(value: T) -> Self with _ }` and § Operator Traits' entire canonical-definition block. The 12 that DO carry the semicolon (e.g. line 3366 `fn default() -> Self;`, line 3370 `type Err;`, line 5360 `fn write(mut ref self, bytes: ref Slice[u8]);`) sit in the same document as the 51 that do not, so this is an internal inconsistency, not a deliberate grammar choice the parser has yet to catch up with. | roadmap.md |
 | B-2026-08-17-32 | 2026-08-17 | typecheck+interp | medium | Calling a PLAIN REFINEMENT TYPE as a constructor -- `ValidPort(80)` where `type ValidPort = u16 where self >= 1 and self <= 65535;` -- is ACCEPTED by `karac check` even though the language has no such form, and the two backends then disagree with one of them silent. `karac run --interp` dies with `runtime error: internal: name 'ValidPort' resolved but has no binding at run time. This is a compiler bug (the resolver should have rejected or bound it) -- please report it with the source.` `karac run` (JIT) prints `q = 0`. `karac check` reports "All checks passed." The `T(value)` constructor belongs to `distinct type` (design.md § Distinct Types: "Wrap: `UserId(42)` -- constructor syntax"), NOT to a plain refinement, whose § Refinement Types construction paragraph offers only `Refined.try_from(value)`, `value as Refined`, and the const-eval binding-site elision. The two declaration forms differ by one keyword, so reaching for the wrong constructor is an easy and likely mistake -- and it compiles. | roadmap.md |
 | B-2026-08-17-33 | 2026-08-17 | typecheck | medium | Derive dependency auto-resolution is implemented for the `Ord` chain but NOT for `Copy` or `Hash`, and design.md states the behaviour unconditionally. § Derive: "The compiler resolves derive dependencies automatically regardless of the order items appear in `#[derive(...)]`. Writing `#[derive(Hash)]` when `PartialEq` and `Eq` are not yet derived causes the compiler to auto-derive them in dependency order (`PartialEq` -> `Eq` -> `Hash`). Listing dependencies explicitly is valid and idiomatic; omitting them is also allowed. `#[derive(Copy)]` auto-derives `Clone` if not already present -- **`Copy` without `Clone` is NEVER a compile error, because the compiler fills in the missing dependency.**" Measured: `#[derive(Copy)] struct C { a: i64 }` is EXACTLY that compile error -- `error[typecheck]: struct 'C' derives Copy but not Clone; Copy requires Clone`. `#[derive(Hash)] struct K { a: i64 }` used as a Map key fails with `Map[K, ...]: key type does not implement 'Eq'; only hashable equality-comparable types (... or structs/enums with '#[derive(Hash, Eq)]') can be Map keys`. In BOTH cases the diagnostic names the very dependency the compiler was supposed to fill in, and recommends the manual spelling the spec says is optional. The discriminator that makes this a partial implementation rather than an absent one: `#[derive(Ord)] struct S { a: i64 }` + `x < y` passes `karac check` clean, so the `Ord -> PartialOrd + Eq -> PartialEq` chain IS resolved. | roadmap.md |
@@ -162,9 +161,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1300 surfaced
 
 </details>
 
-### Fixed (1268)
+### Fixed (1269)
 
-<details><summary>1268 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1269 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -10664,6 +10663,39 @@ ONE SIBLING FOUND WHILE BOUNDING THAT SCOPE, filed as its own row: indexing by a
 SCOPING/REBINDING: the table rides `snapshot_var_env`/`restore_var_env` with the rest of the variable environment, so an inner `let r` shadows for its block only and the outer binding is intact afterwards; any rebinding of the name clears the entry first (the `int_const_locals` discipline).
 
 TESTS: three E2E cases in tests/codegen.rs. `test_e2e_let_bound_range_for_loop_iterates` covers all three iterable range forms from the row (exclusive, inclusive, variable endpoints), each paired with the equivalent INLINE range in the same program as a control. `test_e2e_let_bound_range_captures_bounds_at_binding` is the discriminator against expression-substitution (asserts 14, not 0) and pins the shadowing contract. `test_e2e_let_bound_range_empty_and_reused` covers the degenerate bounds -- an empty range must run zero times for the RIGHT reason -- plus a single-element inclusive range and nested reuse of one binding (3 x 3 = 9), which the old bug could not have produced. Verified on all three backends: `--interp`, `karac run` (JIT) and `karac build` (AOT) agree. |
+| B-2026-08-17-30 | typecheck+cli | low | E0218 TELLS YOU THE EXACT TEXT TO INSERT AND `karac fix` STILL DECLINES IT: the call-site `mut`-marker diagnostic ends with ``Write `mut <expr>`.`` b… | Fixed in 94cc17e3. E0218 now carries the insertion it was already describing, so
+`karac fix` applies it.
+
+The row's framing holds exactly: one repair, one direction, no alternative
+that compiles, and none of B-2026-08-17-11's hazard — that row's suggestion
+was the UNSAFE direction, so shipping an edit would have auto-applied a
+trapping fix. Here the message already said what to type.
+
+THE ANCHOR IS THE INTERESTING PART, and getting it wrong would have shipped a
+fix that produces source the parser rejects. The edit is a zero-length
+insertion of `mut ` at `arg.value.span.offset` -- the ARGUMENT EXPRESSION --
+not at `arg.span.offset`. `CallArg::span` starts at the LABEL, so anchoring
+there turns `bump(counter: c)` into `bump(mut counter: c)`, which does not
+parse. This is the same distinction `emit_marker_deletion` records for the
+deletion half (B-2026-08-10-2), reached from the opposite side: the deletion
+had to AVOID spanning the label, the insertion has to LAND after it.
+
+MEASURED, applied and re-checked end to end -- `karac fix` writes the edit,
+the result passes `karac check`, and the program runs correctly:
+
+    bump(c)              -> bump(mut c)
+    bump(counter: c)     -> bump(counter: mut c)      (labeled)
+    bump(s.v)            -> bump(mut s.v)             (field)
+    bump(v[0])           -> bump(mut v[0])            (index)
+    bump(a); bump(b)     -> both, "applied 2 fix(es)" (multiple per file)
+
+Tests: `missing_mut_marker_carries_an_insertion_fix_it` (tests/typechecker.rs)
+covers the unlabeled and labeled shapes and asserts on the OFFSET relative to
+the argument expression rather than only on the text, because the text alone
+passes with the wrong anchor. `invalid_mut_marker_keeps_its_deletion_fix_it`
+is the counterweight -- E0219 is the other half of the pair and must keep its
+own edit. The insertion test was verified failing on the pre-fix source; the
+E0219 one passes both ways, as a counterweight should. |
 | B-2026-08-17-34 | codegen | medium | `#[derive(Display)]` on an enum works under `--interp` and is REFUSED by both compiled backends when the interpolated expression is an enum-variant P… | Two missing arms in codegen's Display operand recognition, plus the casing
 divergence that fixing them exposed.
 
