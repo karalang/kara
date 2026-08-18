@@ -98096,6 +98096,48 @@ fn main() {
         }
     }
 
+    /// B-2026-08-17-20 — the four default-parameter forms design.md lists and
+    /// the validator refused, exercised END TO END: the declaration-side test
+    /// in tests/typechecker.rs can only show they are ACCEPTED, because that
+    /// harness does not run the call-site fill. This shows they produce the
+    /// right value when the argument is actually omitted.
+    #[test]
+    fn spec_listed_default_parameter_values_run() {
+        for (decls, want) in [
+            // The spec's own quoted example.
+            (
+                "fn f(h: String = \"localhost\") -> String { return h; }",
+                "localhost\n",
+            ),
+            // A reference to a module-level binding.
+            (
+                "let LIMIT: i64 = 7;\nfn f(n: i64 = LIMIT) -> i64 { return n; }",
+                "7\n",
+            ),
+            // A struct literal — the tuple sibling always worked.
+            (
+                "struct P { x: i64, y: i64 }\n\
+                 fn f(p: P = P { x: 1, y: 2 }) -> i64 { return p.x; }",
+                "1\n",
+            ),
+            // `Option[T] = None`, which design.md calls idiomatic, and its
+            // `Some` sibling.
+            (
+                "fn f(o: Option[i64] = None) -> i64 { match o { Some(v) => { return v; } None => { return -1; } } }",
+                "-1\n",
+            ),
+            (
+                "fn f(o: Option[i64] = Option.Some(42)) -> i64 { match o { Some(v) => { return v; } None => { return -1; } } }",
+                "42\n",
+            ),
+        ] {
+            let Some(got) = run_program(&format!("{decls}\nfn main() {{ println(f()); }}\n")) else {
+                return;
+            };
+            assert_eq!(got, want, "default value for: {decls}");
+        }
+    }
+
     /// B-2026-08-18-3 — indexing by a `let`-bound range. The interpreter ICE'd
     /// and both compiled backends refused the program with "Undefined variable
     /// 'r'", because codegen has no runtime `Range` value to hand the index.

@@ -6013,6 +6013,83 @@ fn invalid_mut_marker_keeps_its_deletion_fix_it() {
     );
 }
 
+// ── Category: default parameter values ─────────────────────────
+
+/// B-2026-08-17-20 — the default-value validator rejected four of the forms
+/// design.md § Default Parameter Values explicitly lists, including the
+/// spec's own quoted example (`"localhost"`).
+///
+/// Admitted in the SHAPE check rather than in the const evaluator: a default
+/// is evaluated PER CALL, so it needs no folded `ConstValue`, and widening the
+/// evaluator would change what a module-level `const` may hold — a different
+/// question with different rules.
+///
+/// DECLARATION-ONLY, no call sites. `typecheck_ok` runs parse→resolve→
+/// typecheck without the call-site defaulting fill (B-2026-08-17-19), so a
+/// call that omits a defaulted argument reports an arity error in this harness
+/// even for a default that has always been legal. The validator under test is
+/// declaration-side, which is what this row is; the call side is exercised
+/// end-to-end through the CLI.
+#[test]
+fn default_parameter_values_accept_every_form_the_spec_lists() {
+    // The four that were rejected, and the `Some(x)` sibling of the fourth.
+    typecheck_ok("fn f(h: String = \"localhost\") -> String { return h; }");
+    typecheck_ok(
+        "let LIMIT: i64 = 7;\n\
+         fn f(n: i64 = LIMIT) -> i64 { return n; }",
+    );
+    typecheck_ok(
+        "struct P { x: i64, y: i64 }\n\
+         fn f(p: P = P { x: 1, y: 2 }) -> i64 { return p.x; }",
+    );
+    typecheck_ok("fn f(o: Option[i64] = None) -> i64 { return 1; }");
+    typecheck_ok("fn f(o: Option[i64] = Option.Some(42)) -> i64 { return 1; }");
+    // The forms that already worked, which the widening must leave alone.
+    typecheck_ok("fn f(n: i64 = 42) -> i64 { return n; }");
+    typecheck_ok("fn f(n: i64 = 60 * 1000) -> i64 { return n; }");
+    typecheck_ok("fn f(p: (i64, i64) = (1, 2)) -> i64 { return p.0; }");
+    typecheck_ok(
+        "enum Direction { North, South }\n\
+         fn f(d: Direction = Direction.North) -> i64 { return 1; }",
+    );
+}
+
+/// The widening is a SHAPE admission, not an amnesty: a default that computes
+/// at runtime must still be refused, including one hidden inside a shape the
+/// check now recurses into.
+#[test]
+fn default_parameter_values_still_reject_runtime_shapes() {
+    for (src, why) in [
+        (
+            "fn g() -> i64 { return 1; }\nfn f(n: i64 = g()) -> i64 { return n; }",
+            "a function call",
+        ),
+        (
+            "struct P { x: i64 }\n\
+             fn g() -> i64 { return 1; }\n\
+             fn f(p: P = P { x: g() }) -> i64 { return p.x; }",
+            "a call inside a struct literal the check now recurses into",
+        ),
+        (
+            "fn g() -> i64 { return 1; }\n\
+             fn f(o: Option[i64] = Option.Some(g())) -> i64 { return 1; }",
+            "a call inside a variant constructor",
+        ),
+        (
+            // A MUTABLE module binding is not a constant, so referencing one
+            // is not the "reference to a module-level binding" the spec allows.
+            "let mut COUNTER: i64 = 0;\nfn f(n: i64 = COUNTER) -> i64 { return n; }",
+            "a mutable module binding",
+        ),
+    ] {
+        let errors = typecheck_errors(src);
+        assert!(
+            !errors.is_empty(),
+            "{why} must still be refused as a default value"
+        );
+    }
+}
+
 // ── Category: iterator-adaptor diagnostic rendering ────────────
 
 /// B-2026-08-17-39 — six iterator-adaptor diagnostics formatted the offending

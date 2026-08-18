@@ -355,10 +355,51 @@ impl<'a> super::TypeChecker<'a> {
         self.type_satisfies_bound(rhs, bound_trait)
     }
 
+    /// Is this callee a variant constructor (`Option.Some`, `MyEnum.V`, or a
+    /// bare `Some`)? Used by the default-parameter shape check
+    /// (B-2026-08-17-20) to admit `Option[i64] = Option.Some(42)`.
+    fn default_value_callee_is_variant_ctor(callee: &Expr) -> bool {
+        match &callee.kind {
+            ExprKind::Path { segments, .. } => segments.len() == 2,
+            // A bare `Some(x)` / `Ok(x)` — the prelude constructors, which
+            // parse as plain identifiers.
+            ExprKind::Identifier(n) => {
+                matches!(n.as_str(), "Some" | "Ok" | "Err")
+            }
+            _ => false,
+        }
+    }
+
+    /// Does this bare name denote a UNIT enum variant (`None`, or a user
+    /// enum's unit variant imported unqualified)? B-2026-08-17-20.
+    fn default_value_names_unit_variant(&self, name: &str) -> bool {
+        if name == "None" {
+            return true;
+        }
+        self.env.enums.values().any(|info| {
+            info.variants
+                .iter()
+                .any(|(v, kind)| v == name && matches!(kind, VariantTypeInfo::Unit))
+        })
+    }
+
+    /// Does this bare name denote a module-level binding (`let LIMIT: i64 =
+    /// 7;` at file scope)? design.md lists "references to other module-level
+    /// bindings" among the allowed default forms, but the const evaluator
+    /// searches `Item::ConstDecl` only, so a `ModuleBinding` reported "is not
+    /// a known const". B-2026-08-17-20.
+    fn default_value_names_module_binding(&self, name: &str) -> bool {
+        self.program.items.iter().any(|item| {
+            matches!(item, crate::ast::Item::ModuleBinding(b) if b.name == name && !b.is_mut)
+        })
+    }
+
     /// Verify `expr` is a valid constant for a default-parameter
-    /// position. Tuple and array literals recurse element-wise; other
-    /// shapes route through `eval_const_expr`. The composite recursion
-    /// uses an i64 placeholder for sub-element target types — sub-element
+    /// position. Composite literals (tuple, array, struct) and variant
+    /// constructors recurse argument-wise; string literals, unit variants
+    /// and module-binding references are accepted outright; anything else
+    /// routes through `eval_const_expr`. The composite recursion uses an
+    /// i64 placeholder for sub-element target types — sub-element
     /// arithmetic overflow still surfaces (against i64's range) even
     /// when the actual surface type is narrower.
     fn validate_default_value_is_const(&mut self, expr: &Expr, target_ty: &Type) {
@@ -368,6 +409,55 @@ impl<'a> super::TypeChecker<'a> {
                     self.validate_default_value_is_const(e, &Type::Int(IntSize::I64));
                 }
             }
+            // B-2026-08-17-20 — four of the forms design.md § Default
+            // Parameter Values explicitly lists were rejected, including the
+            // spec's own quoted example. They are admitted here, in the SHAPE
+            // check, rather than in `eval_const_expr`: a default is evaluated
+            // PER CALL, so it needs no single folded `ConstValue`, and the
+            // evaluator declines several of these precisely because it has no
+            // representation for them. Widening the evaluator instead would
+            // change what a module-level `const` may hold, which is a
+            // different question with different rules.
+            //
+            // A STRING LITERAL — the spec's own `"localhost"`. The module-scope
+            // rule that forbids `String` does not transfer: a default is a
+            // fresh per-call allocation, which is exactly what the example
+            // asks for.
+            ExprKind::StringLit(_) | ExprKind::MultiStringLit(_) => {}
+            // A STRUCT LITERAL built from constant expressions. The tuple
+            // sibling was already accepted by the arm above, so only the
+            // struct spelling was refused — nothing distinguishes them here.
+            // A spread (`..base`) is not a literal shape and falls through to
+            // the evaluator's rejection.
+            ExprKind::StructLiteral {
+                fields,
+                spread: None,
+                ..
+            } => {
+                for f in fields {
+                    self.validate_default_value_is_const(&f.value, &Type::Int(IntSize::I64));
+                }
+            }
+            // A VARIANT CONSTRUCTOR with constant arguments — `Option.Some(42)`,
+            // and any user enum's tuple variant. The unit form (`Direction.North`)
+            // already resolved through the evaluator's `Path` arm.
+            ExprKind::Call { callee, args }
+                if Self::default_value_callee_is_variant_ctor(callee)
+                    && !args.iter().any(|a| a.mut_marker) =>
+            {
+                for a in args {
+                    self.validate_default_value_is_const(&a.value, &Type::Int(IntSize::I64));
+                }
+            }
+            // A BARE `None` / `Some`-less unit variant, and a reference to
+            // another MODULE-LEVEL BINDING. Both reach the evaluator as a
+            // plain identifier, where it searches `Item::ConstDecl` alone and
+            // reports "is not a known const" — `None` because it is a variant
+            // rather than a const, and `let LIMIT: i64 = 7;` because a module
+            // binding is an `Item::ModuleBinding`. The spec lists both.
+            ExprKind::Identifier(name)
+                if self.default_value_names_unit_variant(name)
+                    || self.default_value_names_module_binding(name) => {}
             _ => {
                 if let Err(err) = self.eval_const_expr(expr, target_ty) {
                     match err {
