@@ -83922,6 +83922,168 @@ fn main() {
         }
     }
 
+    // ── B-2026-08-18-5: unsigned refinement/contract predicates ──
+    //
+    // A primitive scalar binop is normally rewritten by lowering into
+    // `Call(Path([u16, le]))`, whose receiver carries the signedness. A
+    // SYNTHESIZED predicate never goes through lowering, so it reached
+    // `compile_binop`, which hardcodes `is_unsigned = false` — and an
+    // unsigned operand was compared with the SIGNED predicate. `self <=
+    // 65535` on a `u16` emitted `icmp sle i16 %self, -1`, so a valid value
+    // was rejected at run time with `contract violated` while the
+    // interpreter accepted it. The failure boundary was exactly "the bound's
+    // high bit is set for the base width", which is the sign-bit reading.
+
+    #[test]
+    fn test_ir_unsigned_refinement_predicate_uses_unsigned_compare() {
+        // The mechanism, pinned at the IR: `uge`/`ule`, never `sge`/`sle`.
+        // The bound's BITS were always right (65535 is 0xFFFF is i16 -1) —
+        // only the interpretation was wrong, so the predicate IS the fix.
+        let ir = ir_for(
+            "distinct type P = u16 where self >= 1 and self <= 65535;\n\
+             fn main() { let p = P(80); println(\"built\"); }",
+        );
+        let pred: Vec<&str> = ir
+            .lines()
+            .filter(|l| l.contains("__karac_refine_self") && l.contains("icmp"))
+            .collect();
+        assert!(!pred.is_empty(), "no refinement compare in IR:\n{ir}");
+        for l in &pred {
+            assert!(
+                !l.contains("icmp sle") && !l.contains("icmp sge"),
+                "unsigned refinement compared with a SIGNED predicate: {l}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_unsigned_refinement_bound_at_base_max_accepts() {
+        // The idiomatic spelling — bound the range by the base type's own
+        // maximum — was the always-failing case.
+        let out = run_program(
+            r#"
+distinct type Port = u16 where self >= 1 and self <= 65535;
+fn main() {
+    let p = Port(80);
+    println("built");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "built");
+        }
+    }
+
+    #[test]
+    fn test_e2e_unsigned_refinement_as_and_try_from_accept() {
+        // The other two refinement enforcement sites share the predicate
+        // path, so they shared the bug.
+        let out = run_program(
+            r#"
+type P = u16 where self >= 1 and self <= 65535;
+fn main() {
+    let z: u16 = 80;
+    let a = z as P;
+    println("as-ok");
+    match P.try_from(80) { Ok(v) => println("tryfrom-ok"), Err(e) => println("tryfrom-err") }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "as-ok\ntryfrom-ok");
+        }
+    }
+
+    #[test]
+    fn test_e2e_unsigned_requires_contract_accepts() {
+        // `requires` / `ensures` are the same shape — a synthesized predicate
+        // that never went through lowering — and were broken identically.
+        let out = run_program(
+            r#"
+fn clamp_port(p: u16) -> u16
+    requires p <= 65535
+{
+    p
+}
+fn main() {
+    let r = clamp_port(80);
+    println("contract-ok");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "contract-ok");
+        }
+    }
+
+    #[test]
+    fn test_e2e_unsigned_refinement_still_rejects_out_of_range() {
+        // THE ANTI-VACUITY GUARD: the fix must select the right predicate,
+        // NOT weaken the check.
+        //
+        // The value must reach the constructor through a PARAMETER. A literal
+        // (`Small(200)`) is folded by the const-evaluable arm and rejected at
+        // compile time with E_REFINEMENT_PREDICATE_VIOLATION, so it never
+        // reaches the runtime predicate this bug lived in — a literal here
+        // would assert nothing about the emitted compare. (The check-gate in
+        // tests/common caught exactly that when this test was first written.)
+        let out = run_program(
+            r#"
+distinct type Small = u8 where self <= 100;
+fn make(x: u8) -> Small { Small(x) }
+fn main() {
+    let s = make(200);
+    println("built");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert!(
+                !out.contains("built"),
+                "out-of-range value was accepted — the predicate is now vacuous: {out}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_unsigned_refinement_runtime_value_above_signed_midpoint() {
+        // The positive twin of the guard above, also through a parameter so
+        // it exercises the RUNTIME compare: 40000 is in range for `u16` but
+        // reads as negative in `i16`, so the signed predicate rejected it.
+        let out = run_program(
+            r#"
+distinct type Port = u16 where self >= 1 and self <= 65535;
+fn make(x: u16) -> Port { Port(x) }
+fn main() {
+    let p = make(40000);
+    println("built");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "built");
+        }
+    }
+
+    #[test]
+    fn test_e2e_unsigned_refinement_above_signed_midpoint_accepts() {
+        // A value that is itself above the base's signed midpoint: 4e9 fits
+        // `u32` but reads negative as `i32`, so both operands exercise the
+        // unsigned reading, not just the bound.
+        let out = run_program(
+            r#"
+distinct type Big = u32 where self <= 4294967295;
+fn main() {
+    let b = Big(4000000000);
+    println("built");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "built");
+        }
+    }
+
     // ── Refinement runtime predicate emission (phase-9 step 5c) ──
 
     #[test]

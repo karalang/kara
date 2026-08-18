@@ -604,7 +604,44 @@ impl<'ctx> super::Codegen<'ctx> {
                             return Ok(r);
                         }
                     }
-                    let result = self.compile_binop(op, lhs, rhs)?;
+                    // Scalar sibling of the vector signedness recovery above
+                    // (B-2026-08-18-5). A primitive scalar binop is normally
+                    // rewritten by lowering's `rewrite_binary` into
+                    // `Call(Path([u16, le]))`, whose RECEIVER carries the
+                    // signedness — so an `ExprKind::Binary` still raw at this
+                    // point is a SYNTHESIZED predicate that never went through
+                    // lowering: a refinement predicate (`x as Refined`,
+                    // `Refined.try_from(x)`, a `distinct type T = Base where
+                    // pred` constructor) or a `requires` / `ensures` contract.
+                    // Those all reached `compile_binop`, which hardcodes
+                    // `is_unsigned = false`, so an unsigned operand compared
+                    // with the SIGNED predicate: `self <= 65535` on a `u16`
+                    // emitted `icmp sle i16 %self, -1`. The bound's BITS are
+                    // right (0xFFFF); only the interpretation was wrong, so
+                    // selecting the unsigned predicate is the whole fix.
+                    //
+                    // Measured boundary before the fix: the compare failed iff
+                    // the bound's high bit was set for the base width — u8 ok
+                    // at 127 and wrong from 128, u16 ok at 32767 and wrong
+                    // from 32768 — which is exactly the sign-bit reading.
+                    // Bounding a range by the base type's own maximum is the
+                    // idiomatic spelling, so the always-wrong case was the
+                    // common one.
+                    //
+                    // Gated on both operands being ints AND on the unsigned
+                    // answer being positive, so every other shape keeps the
+                    // exact path it had; `expr_is_unsigned_int` consults the
+                    // same side-tables the print path uses, including the
+                    // synthetic `__karac_refine_self` binding registered from
+                    // the refinement's base type.
+                    let result = if lhs.is_int_value()
+                        && rhs.is_int_value()
+                        && (self.expr_is_unsigned_int(left) || self.expr_is_unsigned_int(right))
+                    {
+                        self.compile_binop_typed(op, lhs, rhs, true)?
+                    } else {
+                        self.compile_binop(op, lhs, rhs)?
+                    };
                     // B-2026-07-21-12: a string concat that STAYED a surface
                     // `Binary` (the `String.add` desugar skips it when an
                     // operand is ref-typed — e.g. a Vec-accessor `Some(s)`
