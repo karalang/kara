@@ -99,8 +99,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 117 | 0 |
 | missing-feature | 105 | 2 |
 | false-positive | 78 | 0 |
+| diagnostics | 78 | 4 |
 | perf | 77 | 0 |
-| diagnostics | 77 | 4 |
 | crash | 51 | 0 |
 | soundness | 50 | 0 |
 | other | 40 | 3 |
@@ -111,12 +111,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 925 | 3 |
-| typecheck | 197 | 2 |
+| typecheck | 198 | 3 |
 | interp | 150 | 0 |
 | ownership | 57 | 0 |
 | other | 51 | 2 |
 | autopar | 48 | 0 |
-| cli | 44 | 3 |
+| cli | 44 | 2 |
 | runtime | 22 | 0 |
 | parser | 21 | 2 |
 | resolver | 19 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1321 surfaced · 10 open · 1294 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1322 surfaced · 10 open · 1295 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (10)
 
@@ -135,11 +135,11 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1321 surfaced
 | B-2026-08-17-38 | 2026-08-17 | typecheck | medium | `TreeMap[K, V]` -- a standard collection design.md documents 13 times, with its own method table, and prescribes TWICE as the remedy for Map/Set's unstable iteration order -- is an UNDEFINED TYPE. `let mut m: TreeMap[i64, i64] = TreeMap.new();` -> `error[resolve]: undefined type 'TreeMap'` + `undefined name 'TreeMap'`. The implementation ships the same container as `SortedMap`, which design.md mentions exactly ONCE, in passing, inside a naming erratum about `Bf16` (line 2299) -- it appears in none of the collection tables, none of the method tables, and neither of the two "use this for stable iteration" directives (lines 1735 and 9849, the § Map hash-seeding note and the § Determinism list). A user or an LLM following the spec's own advice about non-deterministic Map iteration writes `TreeMap` and gets an undefined-type error with no pointer to the real name. Knock-on: the same mismatch is the most likely cause of the `SortedMap.insert` / `.remove` hole in the must_use displaced-value exemption -- design.md's exemption list names `Map.insert` / `TreeMap.insert` / `Map.remove` / `TreeMap.remove`, and MEASURED, `Map`, `Vec` and `VecDeque` are all exempt while `SortedMap.insert` and `SortedMap.remove` both warn. | roadmap.md |
 | B-2026-08-18-17 | 2026-08-18 | cli | low | The `must_use` lint's JSON entry reuses diagnostic code `E0250`, which is ALREADY the typechecker's `ModuleBindingEffectfulInit` -- so a `must_use` escalated to an error with `-D must_use` emits a code that `karac explain E0250` describes as an unrelated module-binding error. Introduced by B-2026-08-17-37's wiring (src/cli/diag_json.rs, `code: if is_error { "E0250" } else { "W0250" }`); `W0250` itself is unique and unaffected, so the collision only bites on the escalated path. | roadmap.md |
 | B-2026-08-18-18 | 2026-08-18 | typecheck | low | `collect()` reaches a non-`Vec` `FromIterator` target only through an ANNOTATED `let`. The other two positions design.md's "infers the target type from context" covers still fix the chain to `Vec`: `return <chain>.collect()` against a declared non-`Vec` return type -> "expected 'Set[i64]', found 'Vec[i64]'", and argument position `f(<chain>.collect())` against a non-`Vec` parameter -> the same. Measured AFTER B-2026-08-17-36 landed, so these are the residue of that fix rather than a restatement of it. | src/desugar.rs (desugar_collect_target); src/typechecker/exprs.rs (check_expr) |
-| B-2026-08-18-19 | 2026-08-18 | cli | medium | PROJECT-mode `karac build` still renders no warning-level diagnostic. B-2026-08-18-1 gave the SINGLE-FILE build path a warning surface; a `karac build` run inside a project directory takes a different function entirely and prints only its module banner and `Built: <exe>`. | roadmap.md |
 | B-2026-08-18-21 | 2026-08-18 | parser+codegen | medium | `Index` and `MethodCall` nodes still copy their object's span, so a whole postfix CHAIN collapses onto its innermost receiver's SpanKey and the last write wins. Measured on `v[0..3].first_or(-1).to_string()`: `string_typed_exprs` held ONE entry, `(256,1)` -- the span of the `Vec[i64]` receiver `v` -- because the chain's String-typed tail was recorded against it. Widening `Index` alone is a MEASURED REGRESSION, so the fix is not local to the parser. | The two `span: lhs.span` sites in `src/parser/exprs.rs`'s postfix loop (the `Token::LeftBracket` Index arm and the MethodCall arm). `record_expr_type` in src/typechecker.rs has 117 call sites and none for `Index`. The consumers that broke are the ones keyed on a subscript's own span; `asan_push_str_range_slice_temp_no_double_free` is the canary. |
 | B-2026-08-18-22 | 2026-08-18 | codegen | medium | A STRING range subscript used as a METHOD RECEIVER reaches codegen only for `to_string` / `clone`: `s[0..5].len()` fails the build with "indexed-receiver method 'len' on 's' -- element TypeExpr unknown" while `karac check` accepts it and `--interp` prints 5. The non-owning readers the String-slice arm defers. | The `method == "to_string" || method == "clone"` gate at the head of `compile_indexed_receiver_method` in src/codegen/calls.rs. A wider set needs the borrowed-slice path (`try_compile_borrowed_string_slice`, already used for `push_str` and map-key lookups) or owned-temp tracking for the materialized slice. |
 | B-2026-08-18-23 | 2026-08-18 | cli | medium | `cargo clippy --all --all-targets -- -D warnings` is RED on main: `collect_warning_diagnostics_json` and `render_text_warning_diagnostics` in src/cli.rs are never used. CI runs exactly this gate, so the default-feature lint job fails on a clean checkout. The `--features llvm` leg is green, which is why it can be missed locally. | src/cli.rs:1746 and src/cli.rs:1754. Reproduce with `cargo clippy --all --all-targets -- -D warnings` (no `--features llvm`) on a clean tree. |
 | B-2026-08-18-24 | 2026-08-18 | parser+codegen | medium | `MethodCall` nodes still copy their object's span, so a method CHAIN collapses onto its innermost receiver's SpanKey. Widening it is a MEASURED 21 memory_sanitizer + 16 codegen failures, because tables are written at one level of a chain and read at another and agree only while every level shares a key. The last of the four postfix arms. | The `span: lhs.span` in the MethodCall arm of `src/parser/exprs.rs`'s postfix loop, which carries the measurement as a comment. Start from `method_callee_types` and the other `method_call`-span-keyed tables in src/codegen/; `try_compile_freshtemp_user_method`'s dispatch_key fallback shows the shape of the problem. |
+| B-2026-08-18-25 | 2026-08-18 | typecheck | low | The `deprecated` diagnostic's MESSAGE TEXT begins with its own severity prefix, so every renderer that adds one prints it twice: "warning[deprecated]: file:7:13: warning[deprecated]: use of deprecated item `old_way`...". Under `-D deprecated` the doubling reads as a contradiction -- "error[E0200]: ... warning[deprecated]: ..." -- telling the author it is a warning in the same line that rejects the build. | roadmap.md |
 
 ### Wontfix (7)
 
@@ -157,9 +157,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1321 surfaced
 
 </details>
 
-### Fixed (1294)
+### Fixed (1295)
 
-<details><summary>1294 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1295 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -11590,6 +11590,17 @@ relocated, there is still nothing to wire -- the exclusion in
 `lint_entries_for_compile_path` stays correct and should not be revisited until
 a bundled-stdlib compile mode exists to give them a legitimate user-facing
 scope. |
+| B-2026-08-18-19 | cli | medium | PROJECT-mode `karac build` still renders no warning-level diagnostic | FIXED by 90112fc6. The row guessed the obstacle was `BuildCodegenStatus` having no success-side diagnostic channel. It is not: the warnings never reached any render path because `typecheck_modules` DISCARDED them one layer earlier. It computes each module's `TypeCheckResult` and keeps `.errors` alone, so a project build was structurally incapable of reporting `deprecated` no matter what the renderer did. The super-program `BuildCodegenStatus` path is not involved at all -- typecheck is per-module and happens before it.
+
+WHY THE WARNINGS ARE A SEPARATE VECTOR rather than folded into the existing `Vec<ModuleTypeErrors>`: `type_errors.is_empty()` IS the project build's gate (two call sites), so a warning-carrying module in that vector would abort the build over a `#[deprecated]` call. `ModuleTypeDiagnostics { errors, warnings }` keeps the gate reading exactly what it read before.
+
+A SECOND DEFECT THIS UNCOVERED, and the fix is incomplete without it. `cmd_build_project` never received the CLI lint levels AT ALL -- it built its per-module overrides from `CliLintOverrides::default()` plus the manifest, so a project build ignored every `-A` / `-W` / `-D` the invocation named. That was invisible while the only project-mode consumer was error-severity; the moment project builds started rendering warnings it became `karac build -A deprecated` printing the warning anyway, which is strictly worse than not printing it. `Command::BuildProject` now carries `lint_overrides` and seeds the per-module set from it, which is the order `cmd_run` and `cmd_check` already use and the order `apply_manifest_lints` is written for (`or_insert`, so an explicit CLI level beats the manifest opt-in). Pinned in the same test, because a warning that cannot be turned off is not a fix.
+
+MEASURED AFTER, on a one-module project whose `main.kara` calls a `#[deprecated]` fn: `karac build` prints `warning[deprecated]: <root>/src/main.kara:4:21: …` and then `Built: …`; `-A deprecated` prints nothing and still builds; `-D deprecated` promotes it and gates the build; `--output=json` carries it on the `diagnostics` array that already existed on that path (so no consumer's shape changes, unlike the single-file case where -1 had to add the key); a warning-free project builds silent in both modes.
+
+RENDERED PER-MODULE rather than through the shared `render_text_warning_diagnostics` -- that helper takes a single-file `Pipeline`, and this path holds per-module results each with its OWN file, which is precisely the context a project build has to carry. The test asserts the module's filename appears in the warning for that reason.
+
+NOT FIXED, noticed while measuring: the `deprecated` diagnostic's MESSAGE TEXT begins with "warning[deprecated]:", so every renderer that prefixes a severity prints it twice ("warning[deprecated]: file:4:21: warning[deprecated]: use of deprecated item…"), and under `-D` the doubling reads as a contradiction ("error[E0200]: … warning[deprecated]: …"). Pre-existing on every lane including `karac check`, unrelated to this row's mechanism. Filed separately. |
 | B-2026-08-18-20 | cli | low | `karac run` is inconsistent with ITSELF about warnings: it renders `must_use` but not `deprecated` | FIXED by d2ed766c. `cmd_run` never read `TypeCheckResult::warnings`, so every lint riding that channel -- `deprecated`, `unstable_api`, the CLI-attached `map_value_clone_reinsert` -- was silent under `karac run` and `karac run --interp` alike, while `must_use` (which has its own block in that function) printed fine. One lane, two channels, one of them unwired.
 
 RENDERED THROUGH A SHARED HELPER, not a third hand-rolled block. `render_typecheck_warning_blocks` is the warnings loop lifted out of `render_text_diagnostics`; `check`, `build` (via B-2026-08-18-1's filter) and now `run` all call it, so the three lanes cannot word one warning differently. The test compares the lanes against EACH OTHER rather than against a literal, because that drift is the regression worth catching.
