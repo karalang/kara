@@ -512,7 +512,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         for (var_name, value, sfx) in const_int_captures {
             let cap_ty = saved_vars[var_name].ty;
-            let const_val = self.const_int_for_suffix(*value, *sfx);
+            let const_val = self.const_int_for_suffix((*value).into(), *sfx);
             let alloca = self.create_entry_alloca(worker_fn, var_name, cap_ty);
             self.builder.build_store(alloca, const_val).unwrap();
             self.variables.insert(

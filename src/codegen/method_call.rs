@@ -366,6 +366,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 "u16" => (16, true),
                 "u32" => (32, true),
                 "u64" | "usize" => (64, true),
+                // 128-bit (B-2026-08-19-8 stage 3). Without these the names
+                // fell to `None` and the caller's 64-bit default, so a
+                // width-sensitive intrinsic on an `i128` answered for 64 bits —
+                // `(2^100).count_ones()` returned 0 instead of 1.
+                "i128" => (128, false),
+                "u128" => (128, true),
                 _ => return None,
             })
         }

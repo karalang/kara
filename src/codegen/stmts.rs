@@ -23,7 +23,6 @@ use super::helpers::{
     vec_inner_type_expr,
 };
 use super::state::{B2Role, ReturnSlot, SharedTypeInfo, VarSlot};
-use crate::ast::narrow_literal_to_i64;
 
 /// B-2026-08-08-3 — the `Type.method` keys (as the typechecker spells them in
 /// `method_callee_types`) whose result is unconditionally `i64`. Used to size a
@@ -3171,11 +3170,23 @@ impl<'ctx> super::Codegen<'ctx> {
                 // `Codegen::int_const_locals`.
                 if let PatternKind::Binding(bind_name) = &pattern.kind {
                     match (&value.kind, is_mut) {
-                        (ExprKind::Integer(k, _), false) => {
-                            self.var_types
-                                .int_const_locals
-                                .insert(bind_name.clone(), narrow_literal_to_i64(*k));
-                        }
+                        // `int_const_locals` is an i64 constant table feeding
+                        // loop-bound reasoning. A 128-bit literal is not a
+                        // candidate, and the entry is REMOVED rather than
+                        // truncated (B-2026-08-19-8 stage 3) — a stale or wrong
+                        // constant here would mis-drive bound elision, whereas
+                        // an absent one only forgoes an optimization. Same
+                        // fail-closed rule as `bce_length_pin`.
+                        (ExprKind::Integer(k, _), false) => match i64::try_from(*k) {
+                            Ok(k64) => {
+                                self.var_types
+                                    .int_const_locals
+                                    .insert(bind_name.clone(), k64);
+                            }
+                            Err(_) => {
+                                self.var_types.int_const_locals.remove(bind_name.as_str());
+                            }
+                        },
                         _ => {
                             self.var_types.int_const_locals.remove(bind_name.as_str());
                         }

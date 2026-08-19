@@ -15,7 +15,6 @@ use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue};
 use inkwell::AddressSpace;
 
 use super::state::{SoaGroup, SoaLayout, VarSlot};
-use crate::ast::narrow_literal_to_i64;
 
 /// The variant name of an `ExprKind`, for the "no handler for expression kind"
 /// bail at the end of `compile_expr`.
@@ -62,9 +61,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return r;
         }
         match &expr.kind {
-            ExprKind::Integer(n, sfx) => Ok(self
-                .const_int_for_suffix(narrow_literal_to_i64(*n), *sfx)
-                .into()),
+            ExprKind::Integer(n, sfx) => Ok(self.const_int_for_suffix(*n, *sfx).into()),
             ExprKind::Float(f, sfx) => Ok(self.const_float_for_suffix(*f, *sfx).into()),
             // char lowers to an i32 holding the Unicode scalar value. The
             // earlier fallthrough emitted `i64 0` for every char literal,
@@ -774,9 +771,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // i64 literal, so `-n` cannot itself overflow.
                 if matches!(op, UnaryOp::Neg) {
                     if let ExprKind::Integer(n, sfx) = &operand.kind {
-                        return Ok(self
-                            .const_int_for_suffix((-*n).try_into().unwrap(), *sfx)
-                            .into());
+                        return Ok(self.const_int_for_suffix(-*n, *sfx).into());
                     }
                     // Element-wise tensor negation — the result span is
                     // tensor-typed; lower to a fresh negated tensor.

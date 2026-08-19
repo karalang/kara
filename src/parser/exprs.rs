@@ -857,13 +857,35 @@ impl super::Parser {
             // because nothing can represent it.
             &Token::IntegerOutOfRange(m, sfx) => {
                 self.advance();
+                // A 128-BIT suffix takes the magnitude POSITIVELY — no wrap
+                // (B-2026-08-19-8 stage 3). The wrap below exists only because
+                // a 64-bit-or-narrower unsigned value has to ride a signed
+                // 64-bit carrier; `i128`/`u128` have room for the whole
+                // `(i64::MAX, u64::MAX]` band as a plain positive number, and
+                // wrapping it there would hand the typechecker a NEGATIVE
+                // payload for a value that is not negative in its own width.
+                //
+                // Found by the stage-3 slice: `9223372036854775808i128` is in
+                // that band, so it reached this arm, failed the unsigned test
+                // (`i128` is signed) and was rejected outright — a literal the
+                // declared type can represent perfectly well.
+                if matches!(
+                    sfx,
+                    Some(crate::token::IntSuffix::I128) | Some(crate::token::IntSuffix::U128)
+                ) {
+                    if let Ok(v) = i128::try_from(m) {
+                        return Some(Expr {
+                            span: self.span_from(&start),
+                            kind: ExprKind::Integer(v, sfx),
+                        });
+                    }
+                }
                 if matches!(
                     sfx,
                     Some(crate::token::IntSuffix::U8)
                         | Some(crate::token::IntSuffix::U16)
                         | Some(crate::token::IntSuffix::U32)
                         | Some(crate::token::IntSuffix::U64)
-                        | Some(crate::token::IntSuffix::U128)
                 ) {
                     return Some(Expr {
                         span: self.span_from(&start),

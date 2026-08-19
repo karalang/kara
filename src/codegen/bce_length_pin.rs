@@ -55,7 +55,6 @@
 //! fails closed (returns "no pin" / "unsafe") on any shape it does not fully
 //! understand, mirroring `borrow_elision.rs` and `presize.rs`.
 
-use crate::ast::narrow_literal_to_i64;
 use crate::ast::*;
 use crate::resolver::SpanKey;
 use rustc_hash::FxHashMap;
@@ -88,7 +87,13 @@ pub(crate) enum BoundOp {
 pub(crate) fn normalize_bound(expr: &Expr) -> Option<BoundTerm> {
     match &expr.kind {
         ExprKind::Identifier(n) => Some(BoundTerm::Ident(n.clone())),
-        ExprKind::Integer(k, _) => Some(BoundTerm::Int(narrow_literal_to_i64(*k))),
+        // A 128-bit literal FAILS CLOSED here rather than narrowing
+        // (B-2026-08-19-8 stage 3): this module's contract is that every
+        // recognition helper returns "no pin" on a shape it does not fully
+        // understand, and a bound that does not fit i64 is exactly that. The
+        // cost of declining is a bounds check that stays; the cost of
+        // truncating would be a wrongly-emitted pin, i.e. an OOB.
+        ExprKind::Integer(k, _) => i64::try_from(*k).ok().map(BoundTerm::Int),
         ExprKind::Binary { op, left, right } => {
             let bop = surface_bound_op(op)?;
             Some(BoundTerm::Bin(
@@ -2947,7 +2952,11 @@ pub(super) fn int_const_bindings(body: &Block) -> HashMap<String, i64> {
             if let StmtKind::Let { pattern, value, .. } = &s.kind {
                 if let PatternKind::Binding(n) = &pattern.kind {
                     if let ExprKind::Integer(v, _) = &value.kind {
-                        cand.insert(n.clone(), narrow_literal_to_i64(*v));
+                        // Same fail-closed rule as `normalize_bound`: a
+                        // constant that does not fit i64 is not a candidate.
+                        if let Ok(v64) = i64::try_from(*v) {
+                            cand.insert(n.clone(), v64);
+                        }
                     }
                 }
             }

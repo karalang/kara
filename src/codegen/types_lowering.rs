@@ -852,7 +852,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
     pub(super) fn const_int_for_suffix(
         &self,
-        n: i64,
+        n: i128,
         sfx: Option<IntSuffix>,
     ) -> inkwell::values::IntValue<'ctx> {
         let is_signed = matches!(
@@ -863,8 +863,19 @@ impl<'ctx> super::Codegen<'ctx> {
                 | Some(IntSuffix::I64)
                 | Some(IntSuffix::I128)
         );
-        self.llvm_int_type_for_suffix(sfx)
-            .const_int(n as u64, is_signed)
+        let ty = self.llvm_int_type_for_suffix(sfx);
+        // A 128-BIT constant needs BOTH words (B-2026-08-19-8 stage 3).
+        // `const_int` takes a single `u64` and sign-extends it, which silently
+        // truncates any value whose magnitude needs more than 64 bits — the
+        // reason `i128` constants materialized as 64-bit even once the LLVM
+        // type was right. `const_int_arbitrary_precision` takes the words
+        // little-endian (low, high).
+        if ty.get_bit_width() > 64 {
+            let lo = (n as u128 & 0xFFFF_FFFF_FFFF_FFFF) as u64;
+            let hi = ((n as u128) >> 64) as u64;
+            return ty.const_int_arbitrary_precision(&[lo, hi]);
+        }
+        ty.const_int(n as u64, is_signed)
     }
 
     pub(super) fn const_float_for_suffix(
@@ -2491,6 +2502,11 @@ impl<'ctx> super::Codegen<'ctx> {
             "i16" | "u16" => self.context.i16_type().into(),
             "i32" | "u32" => self.context.i32_type().into(),
             "i64" | "u64" | "isize" | "usize" => self.context.i64_type().into(),
+            // 128-bit (B-2026-08-19-8 stage 3). Without this arm the names fell
+            // to the unknown-name `i64` default at the bottom, which is why an
+            // `i128` local allocated as `alloca i64` and every operation on it
+            // answered for 64 bits.
+            "i128" | "u128" => self.context.i128_type().into(),
             "f16" => self.context.f16_type().into(),
             "bf16" => self.context.bf16_type().into(),
             "f32" => self.context.f32_type().into(),
