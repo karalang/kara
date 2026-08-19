@@ -898,6 +898,85 @@ fn gpu_sum_agrees_bit_for_bit_past_one_workgroup() {
 }
 
 #[test]
+fn gpu_min_max_agree_with_the_interpreter_including_nan() {
+    // NaN is the reason min/max needed a hand-written combine rather than
+    // WGSL's `min` builtin: the builtin returns `e1` unless `e2 < e1`, and
+    // every comparison against NaN is false, so its answer depends on which
+    // side the NaN is on. In a halving tree that side is decided by the
+    // grouping. Both orders must give 1 — on the device, not just in the twin.
+    for (tag, buf) in [
+        ("reduce_min_nan_first", "[nan, 1.0, 2.0]"),
+        ("reduce_min_nan_last", "[2.0, 1.0, nan]"),
+    ] {
+        assert_gpu_reduce_matches_interp(
+            tag,
+            &format!(
+                "fn main() {{\n\
+                \x20   let zero: f32 = 0.0;\n\
+                \x20   let nan: f32 = zero / zero;\n\
+                \x20   let v: Vec[f32] = {buf};\n\
+                \x20   let m = gpu.min(v);\n\
+                \x20   match m {{\n\
+                \x20       Some(x) => println(f\"{{x}}\"),\n\
+                \x20       None => println(\"empty\"),\n\
+                \x20   }}\n\
+                }}\n"
+            ),
+            "1",
+        );
+    }
+
+    // Multi-workgroup, with a partial trailing chunk so the +inf padding is
+    // exercised on a real device: 200 elements is 3 full chunks plus 8.
+    assert_gpu_reduce_matches_interp(
+        "reduce_min_multi",
+        "fn main() {\n\
+        \x20   let mut v: Vec[f32] = [];\n\
+        \x20   for i in 0..200 { v.push(500.0 - (i as f32)) }\n\
+        \x20   let m = gpu.min(v);\n\
+        \x20   match m {\n\
+        \x20       Some(x) => println(f\"{x}\"),\n\
+        \x20       None => println(\"empty\"),\n\
+        \x20   }\n\
+        }\n",
+        "301",
+    );
+
+    assert_gpu_reduce_matches_interp(
+        "reduce_max_small",
+        "fn main() {\n\
+        \x20   let v: Vec[f32] = [3.0, 1.5, 2.0];\n\
+        \x20   let m = gpu.max(v);\n\
+        \x20   match m {\n\
+        \x20       Some(x) => println(f\"{x}\"),\n\
+        \x20       None => println(\"empty\"),\n\
+        \x20   }\n\
+        }\n",
+        "3",
+    );
+}
+
+#[test]
+fn gpu_min_of_an_empty_buffer_is_none_on_both_legs() {
+    // The empty case never reaches a device, so it is decided entirely by
+    // codegen's branch — and getting it wrong would hand back the shader's
+    // +inf padding identity, a plausible wrong answer rather than an obvious
+    // one. `Stats.min` and `Vec.min` both say `None` here.
+    assert_gpu_reduce_matches_interp(
+        "reduce_min_empty",
+        "fn main() {\n\
+        \x20   let v: Vec[f32] = [];\n\
+        \x20   let m = gpu.min(v);\n\
+        \x20   match m {\n\
+        \x20       Some(x) => println(f\"{x}\"),\n\
+        \x20       None => println(\"empty\"),\n\
+        \x20   }\n\
+        }\n",
+        "empty",
+    );
+}
+
+#[test]
 fn gpu_prod_of_an_empty_buffer_is_one_on_both_legs() {
     // The one input that never reaches a device: the runtime short-circuits
     // before touching an adapter, so it has to be TOLD the identity. A

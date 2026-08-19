@@ -1243,6 +1243,53 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
 }
 "#;
 
+    /// The float `min` reduction shader, as `karac`'s emitter generates it
+    /// (`gpu_wgsl::emit_reduce_kernel(ReduceOp::Min, "f32")`). Copied here so
+    /// the NaN and ±∞ behaviour can be proven against a real device without
+    /// the compiler in the loop; `karac`'s
+    /// `reduce_kernel_min_max_ignore_nan_rather_than_calling_the_builtin`
+    /// pins the generator to the same shape.
+    ///
+    /// **It does not call WGSL's `min` builtin.** That builtin is specified as
+    /// "returns `e2` if `e2 < e1`, and `e1` otherwise", and every comparison
+    /// against NaN is false — so its answer depends on which side the NaN
+    /// lands on. In a halving tree that position is decided by the grouping,
+    /// which would make the result depend on the buffer length. The hand-
+    /// written helper ignores NaN from either side, matching `f32::min`, which
+    /// makes the operation associative and the tree well-defined.
+    const MIN_REDUCE_WGSL: &str = r#"
+@group(0) @binding(0) var<storage, read>       input:  array<f32>;
+@group(0) @binding(1) var<storage, read_write> output: array<f32>;
+
+var<workgroup> scratch: array<f32, 64>;
+
+fn karac_min(a: f32, b: f32) -> f32 {
+    if (!(a == a)) { return b; }
+    if (!(b == b)) { return a; }
+    return select(a, b, b < a);
+}
+
+@compute @workgroup_size(64)
+fn main(@builtin(local_invocation_id) lid: vec3<u32>,
+        @builtin(workgroup_id) wid: vec3<u32>,
+        @builtin(global_invocation_id) gid: vec3<u32>) {
+    let t = lid.x;
+    let i = gid.x;
+    if (i < arrayLength(&input)) { scratch[t] = input[i]; } else { scratch[t] = bitcast<f32>(0x7f800000u); }
+    workgroupBarrier();
+
+    var stride: u32 = 32u;
+    loop {
+        if (stride == 0u) { break; }
+        if (t < stride) { scratch[t] = karac_min(scratch[t], scratch[t + stride]); }
+        workgroupBarrier();
+        stride = stride / 2u;
+    }
+
+    if (t == 0u) { output[wid.x] = scratch[0]; }
+}
+"#;
+
     /// The CPU twin of the multi-dispatch fold: chunk into workgroup-wide
     /// pieces, reduce each with [`tree_sum_f32`], recurse on the partials.
     /// Mirrors `karac_runtime_gpu_reduce_f32`'s `while count > 1` loop, and
@@ -1337,6 +1384,50 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
                 )
             };
             assert_eq!(got, identity);
+        }
+    }
+
+    #[test]
+    fn min_reduce_shader_ignores_nan_and_pads_with_infinity() {
+        // Proves the two things the emitter cannot prove on its own: that a
+        // real device accepts `bitcast<f32>(0x7f800000u)` and a user-defined
+        // helper inside a reduction shader, and that NaN actually behaves as
+        // the helper specifies rather than as the driver prefers.
+        let cases: &[(&str, Vec<f32>, f32)] = &[
+            // Ordinary min, and a short buffer so the +inf padding is exercised.
+            ("short", vec![3.0, 1.5, 2.0], 1.5),
+            // NaN on either side of a real value must be IGNORED, not
+            // propagated — and must give the SAME answer both ways. WGSL's
+            // `min` builtin would answer 1.0 for one of these and NaN for the
+            // other, which is precisely why the shader does not call it.
+            ("nan-first", vec![f32::NAN, 1.0, 2.0], 1.0),
+            ("nan-last", vec![2.0, 1.0, f32::NAN], 1.0),
+            // f32::MAX must not be beaten by the padding identity — the whole
+            // reason the identity is +inf rather than a large finite value.
+            ("max-elem", vec![f32::MAX], f32::MAX),
+        ];
+        for (tag, input, want) in cases {
+            let Some(output) = dispatch_f32_map(MIN_REDUCE_WGSL, input) else {
+                eprintln!("gpu-min: no GPU adapter available — skipping");
+                return;
+            };
+            assert_eq!(output[0], *want, "min {tag}");
+            // The CPU twin must agree — this is the pair `karac` relies on.
+            let twin = input.iter().copied().fold(f32::INFINITY, f32::min);
+            assert_eq!(output[0], twin, "min {tag}: GPU != f32::min fold");
+        }
+
+        // An ALL-NaN buffer is the one case where the padding is observable:
+        // every real element is ignored, so the +inf identity survives. The
+        // twin says the same, which is what makes it specified rather than
+        // accidental.
+        let all_nan = vec![f32::NAN; 3];
+        if let Some(output) = dispatch_f32_map(MIN_REDUCE_WGSL, &all_nan) {
+            assert_eq!(output[0], f32::INFINITY, "all-NaN min is the identity");
+            assert_eq!(
+                output[0],
+                all_nan.iter().copied().fold(f32::INFINITY, f32::min)
+            );
         }
     }
 

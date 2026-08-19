@@ -183,6 +183,10 @@ required-features = ["llvm"]
 # emits an NVPTX / AMDGPU kernel through the LLVM we already link, proving
 # `--target cuda` needs no different LLVM build. Needs `llvm` for inkwell.
 [[example]]
+name = "dump_reduce_shader"
+path = "examples/dump_reduce_shader.rs"
+
+[[example]]
 name = "nvptx_probe"
 path = "examples/nvptx_probe.rs"
 required-features = ["llvm"]

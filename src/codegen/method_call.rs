@@ -976,10 +976,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
         }
-        // `gpu.sum(buffer)` / `gpu.prod(buffer)` (B-2026-08-19-10 slice 1) —
-        // whole-buffer reductions, which return a SCALAR rather than a buffer.
-        // Same `gpu`-not-a-local guard as dispatch.
-        if method == "sum" || method == "prod" {
+        // `gpu.sum` / `gpu.prod` / `gpu.min` / `gpu.max` (B-2026-08-19-10,
+        // extended by B-2026-08-19-13) — whole-buffer reductions, which return
+        // ONE value rather than a buffer. Same `gpu`-not-a-local guard as
+        // dispatch.
+        if matches!(method, "sum" | "prod" | "min" | "max") {
             if let ExprKind::Identifier(name) = &object.kind {
                 if name == "gpu" && !self.variables.contains_key("gpu") {
                     return self.compile_gpu_reduce(args, method);

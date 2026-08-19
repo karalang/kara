@@ -1084,6 +1084,16 @@ impl<'a> super::TypeChecker<'a> {
             if module == "gpu" && method == "prod" {
                 return self.infer_gpu_reduce(args, span, ReduceOp::Prod, "prod");
             }
+            // `min`/`max` return `Option[f32]`, not `f32` — an empty buffer has
+            // no minimum, and `Stats.min` / `Vec.min` already answer `None`
+            // there. Matching them keeps "swap `v.min()` for `gpu.min(v)`" an
+            // honest refactor rather than a signature change.
+            if module == "gpu" && method == "min" {
+                return self.infer_gpu_reduce(args, span, ReduceOp::Min, "min");
+            }
+            if module == "gpu" && method == "max" {
+                return self.infer_gpu_reduce(args, span, ReduceOp::Max, "max");
+            }
         }
 
         // Critical sections (design.md § Critical sections):
@@ -3381,8 +3391,9 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
-    /// `gpu.sum(buf)` / `gpu.prod(buf)` — a whole-buffer reduction returning a
-    /// SCALAR (B-2026-08-19-10, slice 1).
+    /// `gpu.sum` / `gpu.prod` / `gpu.min` / `gpu.max` — a whole-buffer
+    /// reduction over `Vec[f32]` collapsing to ONE value (B-2026-08-19-10,
+    /// extended by B-2026-08-19-13).
     ///
     /// Named rather than combiner-taking on purpose. A user-supplied fold would
     /// have to be associative for a tree reduction to be meaningful, and
@@ -3394,6 +3405,9 @@ impl<'a> super::TypeChecker<'a> {
     /// `karac build` because both sides use the tree order specified in
     /// [`crate::reduce_kernel::tree_reduce_f32`]; see that function for why the
     /// order is language semantics rather than an implementation detail.
+    ///
+    /// `sum`/`prod` yield `f32`; `min`/`max` yield `Option[f32]`, because an
+    /// empty buffer has no extremum — see [`gpu_reduce_result_ty`].
     fn infer_gpu_reduce(
         &mut self,
         args: &[CallArg],
@@ -3411,7 +3425,7 @@ impl<'a> super::TypeChecker<'a> {
                 *span,
                 TypeErrorKind::WrongNumberOfArgs,
             );
-            return Type::Float(FloatSize::F32);
+            return gpu_reduce_result_ty(op, Type::Float(FloatSize::F32));
         }
 
         let buf_ty = self.infer_expr(&args[0].value);
@@ -3427,10 +3441,10 @@ impl<'a> super::TypeChecker<'a> {
                     args[0].value.span,
                     TypeErrorKind::TypeMismatch,
                 );
-                return Type::Float(FloatSize::F32);
+                return gpu_reduce_result_ty(op, Type::Float(FloatSize::F32));
             }
         };
-        // Slice 1 is **f32-only**, deliberately narrower than the emitter,
+        // The reduction surface is **f32-only**, deliberately narrower than the emitter,
         // which can also produce i32/u32 reduction shaders. Two reasons, both
         // correctness rather than effort:
         //
@@ -3449,14 +3463,14 @@ impl<'a> super::TypeChecker<'a> {
             self.type_error(
                 format!(
                     "error[E_GPU_REDUCE_BUFFER]: `gpu.{spelling}` takes a `Vec[f32]` (found \
-                     `Vec[{}]`) — slice 1 covers f32 only; integer reductions need their own \
-                     overflow rule and are not wired up yet",
+                     `Vec[{}]`) — the GPU reductions cover f32 only; integer reductions need \
+                     their own overflow rule and are not wired up yet",
                     crate::typechecker::types::type_display(&elem)
                 ),
                 args[0].value.span,
                 TypeErrorKind::TypeMismatch,
             );
-            return elem;
+            return gpu_reduce_result_ty(op, Type::Float(FloatSize::F32));
         };
 
         match crate::gpu_wgsl::emit_reduce_kernel(op, elem_spelling) {
@@ -3479,8 +3493,9 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
-        self.record_expr_type(span, &elem);
-        elem
+        let result = gpu_reduce_result_ty(op, elem);
+        self.record_expr_type(span, &result);
+        result
     }
 
     fn infer_gpu_dispatch(&mut self, args: &[CallArg], span: &Span) -> Type {
@@ -4006,4 +4021,27 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     // ── Field Access ────────────────────────────────────────────
+}
+
+/// The result type of a `gpu.<op>` whole-buffer reduction over `elem`.
+///
+/// The ONE place that decides which reductions are fallible, so the
+/// typechecker, the interpreter and codegen cannot disagree about whether a
+/// given spelling produces an `Option`.
+///
+/// `sum`/`prod` always have an answer — the empty buffer is the identity, `0`
+/// and `1` respectively — so they return `elem` bare. `min`/`max` do not: the
+/// minimum of an empty set is not a number, and inventing one (`+inf`, or the
+/// padding identity that happens to be sitting in the shader's scratch) would
+/// be a plausible wrong answer of exactly the kind this family must not
+/// produce. They return `Option[elem]`, matching `Stats.min` and `Vec.min`,
+/// which already answer `None` there.
+pub(crate) fn gpu_reduce_result_ty(op: ReduceOp, elem: Type) -> Type {
+    match op {
+        ReduceOp::Min | ReduceOp::Max => Type::Named {
+            name: "Option".to_string(),
+            args: vec![elem],
+        },
+        _ => elem,
+    }
 }

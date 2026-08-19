@@ -37595,7 +37595,8 @@ fn gpu_dispatch_rejects_unsupported_kernel_body() {
     );
 }
 
-// ── gpu.sum / gpu.prod whole-buffer reductions (B-2026-08-19-10) ────────────
+// ── gpu.sum / prod / min / max whole-buffer reductions (B-2026-08-19-10,
+//    extended by B-2026-08-19-13) ─────────────────────────────────────────────
 
 #[test]
 fn gpu_sum_returns_the_element_type_not_a_vec() {
@@ -37610,7 +37611,7 @@ fn gpu_sum_returns_the_element_type_not_a_vec() {
 }
 
 #[test]
-fn gpu_sum_rejects_integer_buffers_in_slice_1() {
+fn gpu_sum_rejects_integer_buffers() {
     // Deliberately narrower than the emitter, which can produce i32/u32
     // reduction shaders. The runtime entry point is f32-only, so an integer
     // buffer would lose precision above 2^24 (`[16777217, 1]` summing to
@@ -37623,7 +37624,7 @@ fn gpu_sum_rejects_integer_buffers_in_slice_1() {
         let errs = typecheck_errors(src);
         assert!(
             errs.iter()
-                .any(|e| e.to_string().contains("slice 1 covers f32 only")),
+                .any(|e| e.to_string().contains("cover f32 only")),
             "expected the f32-only refusal for {src}, got: {errs:?}"
         );
     }
@@ -37655,6 +37656,53 @@ fn gpu_sum_takes_exactly_one_buffer() {
         \x20   let s = gpu.sum(buf, buf);\n\
         }",
     );
+    assert!(
+        errs.iter()
+            .any(|e| e.to_string().contains("E_GPU_REDUCE_ARITY")),
+        "expected an arity error, got: {errs:?}"
+    );
+}
+
+#[test]
+fn gpu_min_max_return_option_not_a_bare_float() {
+    // `sum`/`prod` always have an answer — the empty buffer is the identity.
+    // `min`/`max` do not, so they return `Option[f32]`, the same shape
+    // `Stats.min` and `Vec.min` already produce. Making that a signature
+    // difference rather than a documented special case is what stops an empty
+    // `gpu.min` from silently yielding the shader's +inf padding.
+    typecheck_ok(
+        "fn main() {\n\
+        \x20   let buf: Vec[f32] = [1.0, 2.0];\n\
+        \x20   let m: Option[f32] = gpu.min(buf);\n\
+        \x20   let x: Option[f32] = gpu.max(buf);\n\
+        }",
+    );
+
+    // And the bare-float spelling is REJECTED, so the Option cannot be
+    // dropped by accident at the binding site.
+    let errs = typecheck_errors(
+        "fn main() {\n\
+        \x20   let buf: Vec[f32] = [1.0, 2.0];\n\
+        \x20   let m: f32 = gpu.min(buf);\n\
+        }",
+    );
+    assert!(
+        !errs.is_empty(),
+        "`gpu.min` must not typecheck as a bare f32"
+    );
+}
+
+#[test]
+fn gpu_min_max_share_the_reduction_diagnostics() {
+    // One inference path, so the arity and element-type refusals cannot drift
+    // between the four spellings.
+    let errs = typecheck_errors("fn main() { let b: Vec[i32] = [1, 2]; let m = gpu.min(b); }");
+    assert!(
+        errs.iter()
+            .any(|e| e.to_string().contains("cover f32 only")),
+        "expected the f32-only refusal, got: {errs:?}"
+    );
+    let errs = typecheck_errors("fn main() { let b: Vec[f32] = [1.0]; let m = gpu.max(b, b); }");
     assert!(
         errs.iter()
             .any(|e| e.to_string().contains("E_GPU_REDUCE_ARITY")),

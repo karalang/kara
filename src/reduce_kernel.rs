@@ -61,10 +61,27 @@ type Combiner = (fn(f32, f32) -> f32, f32);
 
 /// The [`Combiner`] for a GPU-expressible reduction, or `None` for the ops
 /// that need more than one associative pass.
+///
+/// **`Min`/`Max` are NaN-IGNORING**, matching `f32::min` / `f32::max` and the
+/// f64 twin at [`ReduceOp::Min`] — `min(x, NaN) == min(NaN, x) == x`. That is
+/// not a detail: a NaN-PROPAGATING min is fine in a left fold but breaks a
+/// tree, because whether a NaN meets a real value early or late changes the
+/// answer. NaN-ignoring min is associative, so every grouping agrees, which is
+/// the property this whole family is built on. The emitted shader spells the
+/// NaN guard out by hand rather than calling WGSL's `min` builtin, whose
+/// tie-break on NaN is positional (`min(e1, e2)` returns `e1` unless
+/// `e2 < e1`, and every comparison against NaN is false) and would therefore
+/// disagree with this in one of the two argument orders.
+///
+/// The padding identity is ±∞ rather than `f32::MAX`, so a chunk shorter than
+/// the workgroup width cannot have its padding win over a real element — even
+/// one as large as `f32::MAX`.
 fn reduce_combiner_f32(op: ReduceOp) -> Option<Combiner> {
     match op {
         ReduceOp::Sum => Some((|a, b| a + b, 0.0)),
         ReduceOp::Prod => Some((|a, b| a * b, 1.0)),
+        ReduceOp::Min => Some((f32::min, f32::INFINITY)),
+        ReduceOp::Max => Some((f32::max, f32::NEG_INFINITY)),
         _ => None,
     }
 }
@@ -418,9 +435,72 @@ mod tests {
         let long = vec![1.0f32; GPU_REDUCE_WIDTH + 1];
         assert_eq!(tree_reduce_f32(&long, ReduceOp::Sum), Some(65.0));
         // What IS still refused: the same set the emitter refuses, so the two
-        // cannot disagree about which ops exist.
+        // cannot disagree about which ops exist. `Mean` needs a count
+        // division, `Var`/`Std` two passes, the Arg family an index carried
+        // alongside the value.
         assert_eq!(tree_reduce_f32(&[1.0], ReduceOp::Mean), None);
-        assert_eq!(tree_reduce_f32(&[1.0], ReduceOp::Min), None);
+        assert_eq!(tree_reduce_f32(&[1.0], ReduceOp::Argmin), None);
+        assert_eq!(tree_reduce_f32(&[1.0], ReduceOp::Median), None);
+    }
+
+    #[test]
+    fn tree_min_max_ignore_nan_from_either_side() {
+        // The property that makes min/max legal in a TREE at all. A
+        // NaN-propagating min is fine in a left fold but not in a tree: the
+        // halving decides whether a NaN meets a real value as the left or the
+        // right operand, so a positional rule would make the answer depend on
+        // the buffer length. NaN-ignoring min is associative, so it does not.
+        assert_eq!(
+            tree_reduce_f32(&[f32::NAN, 1.0, 2.0], ReduceOp::Min),
+            Some(1.0)
+        );
+        assert_eq!(
+            tree_reduce_f32(&[2.0, 1.0, f32::NAN], ReduceOp::Min),
+            Some(1.0)
+        );
+        assert_eq!(
+            tree_reduce_f32(&[f32::NAN, 1.0, 2.0], ReduceOp::Max),
+            Some(2.0)
+        );
+
+        // An all-NaN buffer is the one case where the padding is observable:
+        // every element is ignored, so the identity survives. Specified, not
+        // accidental — the shader does the same, and the E2E test pins it.
+        assert_eq!(
+            tree_reduce_f32(&[f32::NAN; 3], ReduceOp::Min),
+            Some(f32::INFINITY)
+        );
+    }
+
+    #[test]
+    fn tree_min_max_pad_with_infinity_so_a_real_max_element_still_wins() {
+        // `f32::MAX` as the min-identity would be BEATEN by a real `f32::MAX`
+        // element in a padded chunk — the min of `[f32::MAX]` would come back
+        // as `f32::MAX` by luck rather than by computation, and the max of
+        // `[f32::MIN]` would come back wrong outright.
+        assert_eq!(tree_reduce_f32(&[f32::MAX], ReduceOp::Min), Some(f32::MAX));
+        assert_eq!(tree_reduce_f32(&[f32::MIN], ReduceOp::Max), Some(f32::MIN));
+
+        // Empty folds to the identity here; the SURFACE turns that into
+        // `None`, because +inf is a plausible wrong answer for "the minimum of
+        // nothing" and this function is not the place to invent one.
+        assert_eq!(tree_reduce_f32(&[], ReduceOp::Min), Some(f32::INFINITY));
+    }
+
+    #[test]
+    fn tree_min_max_agree_across_every_grouping() {
+        // Associativity, checked rather than asserted: min/max must give the
+        // same answer whether the buffer fits one workgroup, spills to two, or
+        // needs two full levels. `sum` genuinely cannot promise this (f32
+        // addition is not associative, which is why its grouping is part of
+        // the specified answer) — min/max can, and this pins the difference.
+        for n in [1usize, 63, 64, 65, 128, 4096] {
+            let xs: Vec<f32> = (0..n).map(|i| ((i * 37) % 1000) as f32 - 500.0).collect();
+            let want_min = xs.iter().copied().fold(f32::INFINITY, f32::min);
+            let want_max = xs.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+            assert_eq!(tree_reduce_f32(&xs, ReduceOp::Min), Some(want_min), "n={n}");
+            assert_eq!(tree_reduce_f32(&xs, ReduceOp::Max), Some(want_max), "n={n}");
+        }
     }
 
     #[test]

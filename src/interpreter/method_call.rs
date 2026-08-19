@@ -775,8 +775,8 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
-    /// `gpu.sum(buf)` / `gpu.prod(buf)` under the interpreter
-    /// (B-2026-08-19-10, slice 1).
+    /// `gpu.sum` / `gpu.prod` / `gpu.min` / `gpu.max` under the interpreter
+    /// (B-2026-08-19-10, extended by B-2026-08-19-13).
     ///
     /// Runs the reduction on the CPU — but in the GPU's TREE ORDER, not a left
     /// fold, so `karac run` and `karac build` print the same bits. That is the
@@ -823,15 +823,35 @@ impl<'a> super::Interpreter<'a> {
             }
         }
 
+        // `min`/`max` of an empty buffer is `None`, not a number — the same
+        // answer `Stats.min` and `Vec.min` give. Checked BEFORE the fold
+        // because the fold would happily return the padding identity (+inf),
+        // which is a plausible wrong answer rather than an obvious one.
+        let fallible = matches!(op, ReduceOp::Min | ReduceOp::Max);
+        if fallible && xs.is_empty() {
+            return Value::EnumVariant {
+                enum_name: "Option".to_string(),
+                variant: "None".to_string(),
+                data: EnumData::Unit,
+            };
+        }
+
         // Any length: up to one workgroup's width this is a single halving
         // tree, beyond it a tree of per-workgroup partials — the same
         // recursion the multi-dispatch runtime performs, so the two surfaces
         // agree bit-for-bit rather than one refusing what the other answers.
         match crate::reduce_kernel::tree_reduce_f32(&xs, op) {
+            // `f32 as f64` is exact (every f32 is an f64), so widening to the
+            // interpreter's carrier cannot change the answer the GPU computed.
+            Some(r) if fallible => Value::EnumVariant {
+                enum_name: "Option".to_string(),
+                variant: "Some".to_string(),
+                data: EnumData::Tuple(vec![Value::Float(r as f64)]),
+            },
             Some(r) => Value::Float(r as f64),
-            // Only the ops that need more than one associative pass land
-            // here, and `gpu.sum` / `gpu.prod` are the only spellings routed
-            // in — unreachable from any program, loud if that ever changes.
+            // Only the ops that need more than one associative pass land here,
+            // and sum / prod / min / max are the only spellings routed in —
+            // unreachable from any program, loud if that ever changes.
             None => self.record_runtime_error(
                 format!("gpu.{spelling} is not an expressible GPU reduction"),
                 span,
@@ -935,6 +955,8 @@ impl<'a> super::Interpreter<'a> {
                 // of it — see `reduce_kernel::tree_reduce_f32`.
                 ("gpu", "sum") => return self.eval_gpu_reduce(args, span, ReduceOp::Sum, "sum"),
                 ("gpu", "prod") => return self.eval_gpu_reduce(args, span, ReduceOp::Prod, "prod"),
+                ("gpu", "min") => return self.eval_gpu_reduce(args, span, ReduceOp::Min, "min"),
+                ("gpu", "max") => return self.eval_gpu_reduce(args, span, ReduceOp::Max, "max"),
                 // `gpu.upload` / `gpu.download` (resident device buffers) are
                 // compiled-only: the tree-walk interpreter has no device-buffer
                 // model. A clean diagnostic, not the `variable 'gpu' not found`

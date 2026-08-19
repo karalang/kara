@@ -991,22 +991,7 @@ fn binop_str(op: &BinOp) -> Result<&'static str, WgslError> {
 /// alongside the twin rather than chosen here, and why the twin recurses the
 /// same way (`reduce_kernel::tree_fold_f32`).
 pub fn emit_reduce_kernel(op: ReduceOp, elem: &str) -> Result<String, WgslError> {
-    // Only the associative folds have a single-shader tree form. `Mean` needs a
-    // count division, `Var`/`Std` need two passes, and the Ord family needs an
-    // index alongside the value — each is its own slice, and saying so beats
-    // emitting a shader that silently computes the wrong statistic.
-    let (infix, identity) = match (op, elem) {
-        (ReduceOp::Sum, "f32") => ("+", "0.0"),
-        (ReduceOp::Sum, "i32" | "u32") => ("+", "0"),
-        (ReduceOp::Prod, "f32") => ("*", "1.0"),
-        (ReduceOp::Prod, "i32" | "u32") => ("*", "1"),
-        _ => {
-            return Err(WgslError::UnsupportedSignature(format!(
-                "GPU reduction `{op:?}` over `{elem}` is not supported yet — slice 1 covers \
-                 `sum` and `prod` over f32/i32/u32"
-            )))
-        }
-    };
+    let (prelude, combine, identity) = reduce_combine_wgsl(op, elem)?;
     // One width, defined in `reduce_kernel` — the shader, its scratch array
     // and the CPU twin's padding must agree or the answer changes.
     let width = GPU_REDUCE_WIDTH;
@@ -1016,7 +1001,7 @@ pub fn emit_reduce_kernel(op: ReduceOp, elem: &str) -> Result<String, WgslError>
          @group(0) @binding(1) var<storage, read_write> output: array<{elem}>;\n\
          \n\
          var<workgroup> scratch: array<{elem}, {width}>;\n\
-         \n\
+         {prelude}\n\
          @compute @workgroup_size({width})\n\
          fn main(@builtin(local_invocation_id) lid: vec3<u32>,\n\
          \x20       @builtin(workgroup_id) wid: vec3<u32>,\n\
@@ -1029,17 +1014,92 @@ pub fn emit_reduce_kernel(op: ReduceOp, elem: &str) -> Result<String, WgslError>
          \x20   var stride: u32 = {half}u;\n\
          \x20   loop {{\n\
          \x20       if (stride == 0u) {{ break; }}\n\
-         \x20       if (t < stride) {{ scratch[t] = scratch[t] {infix} scratch[t + stride]; }}\n\
+         \x20       if (t < stride) {{ scratch[t] = {combine}; }}\n\
          \x20       workgroupBarrier();\n\
          \x20       stride = stride / 2u;\n\
          \x20   }}\n\
          \n\
-         \x20   // Each workgroup writes ITS OWN partial. With one workgroup that
-         \x20   // is slot 0 and the answer; with several the host folds the
-         \x20   // partials by dispatching this same shader over them.
+         \x20   // Each workgroup writes ITS OWN partial. With one workgroup\n\
+         \x20   // that is slot 0 and the answer; with several the host folds\n\
+         \x20   // the partials by dispatching this same shader over them.\n\
          \x20   if (t == 0u) {{ output[wid.x] = scratch[0]; }}\n\
          }}\n"
     ))
+}
+
+/// The three pieces `emit_reduce_kernel` needs for one op: any helper-function
+/// PRELUDE, the COMBINE expression folding `scratch[t]` with
+/// `scratch[t + stride]`, and the IDENTITY that pads a short chunk.
+///
+/// Only the associative folds have a single-shader tree form. `Mean` needs a
+/// count division, `Var`/`Std` need two passes, and the Arg family needs an
+/// index carried alongside the value through every halving step (a scratch of
+/// PAIRS, which is a different shader rather than a different combine string)
+/// — each is its own slice, and saying so beats emitting a shader that
+/// silently computes the wrong statistic.
+///
+/// **`min`/`max` on floats do not use WGSL's `min`/`max` builtins.** The
+/// builtin is specified as "returns `e2` if `e2 < e1`, and `e1` otherwise",
+/// and every comparison against NaN is false — so `min(x, NaN)` is `x` but
+/// `min(NaN, x)` is `NaN`. That positional tie-break is harmless in a left
+/// fold and fatal in a tree, where a NaN's position in the halving decides how
+/// many times it is on the left. The emitted helper ignores NaN from either
+/// side, matching `f32::min` and `reduce_kernel`'s twin, which makes the
+/// operation associative and therefore grouping-independent.
+///
+/// Integer `min`/`max` have no NaN and use the builtin directly.
+fn reduce_combine_wgsl(op: ReduceOp, elem: &str) -> Result<(String, String, String), WgslError> {
+    let lhs = "scratch[t]";
+    let rhs = "scratch[t + stride]";
+    let infix = |o: &str| format!("{lhs} {o} {rhs}");
+    let call = |f: &str| format!("{f}({lhs}, {rhs})");
+    // Bit patterns rather than literals: WGSL has no `inf` literal, and a
+    // finite stand-in like `f32::MAX` would be BEATEN by a real `f32::MAX`
+    // element in a padded chunk — the identity has to be unreachable.
+    let pos_inf = "bitcast<f32>(0x7f800000u)";
+    let neg_inf = "bitcast<f32>(0xff800000u)";
+    // WGSL's `select(f, t, cond)` takes the false value first. `!(x == x)` is
+    // the NaN test that survives an `FOrd` lowering of `==`, where `NaN == NaN`
+    // is false; spelling it `x != x` would rely on `!=` lowering to the
+    // UNORDERED form, which is not something to bet the semantics on.
+    let nan_ignoring = |name: &str, cmp: &str| {
+        format!(
+            "\nfn {name}(a: f32, b: f32) -> f32 {{\n\
+             \x20   if (!(a == a)) {{ return b; }}\n\
+             \x20   if (!(b == b)) {{ return a; }}\n\
+             \x20   return select(a, b, b {cmp} a);\n\
+             }}\n"
+        )
+    };
+    let (prelude, combine, identity) = match (op, elem) {
+        (ReduceOp::Sum, "f32") => (String::new(), infix("+"), "0.0".to_string()),
+        (ReduceOp::Sum, "i32" | "u32") => (String::new(), infix("+"), "0".to_string()),
+        (ReduceOp::Prod, "f32") => (String::new(), infix("*"), "1.0".to_string()),
+        (ReduceOp::Prod, "i32" | "u32") => (String::new(), infix("*"), "1".to_string()),
+        (ReduceOp::Min, "f32") => (
+            nan_ignoring("karac_min", "<"),
+            call("karac_min"),
+            pos_inf.to_string(),
+        ),
+        (ReduceOp::Max, "f32") => (
+            nan_ignoring("karac_max", ">"),
+            call("karac_max"),
+            neg_inf.to_string(),
+        ),
+        // `-2147483648` is not writable as an i32 literal (unary minus applies
+        // to a value already out of range), hence the subtraction.
+        (ReduceOp::Min, "i32") => (String::new(), call("min"), "2147483647".to_string()),
+        (ReduceOp::Max, "i32") => (String::new(), call("max"), "-2147483647 - 1".to_string()),
+        (ReduceOp::Min, "u32") => (String::new(), call("min"), "4294967295u".to_string()),
+        (ReduceOp::Max, "u32") => (String::new(), call("max"), "0u".to_string()),
+        _ => {
+            return Err(WgslError::UnsupportedSignature(format!(
+                "GPU reduction `{op:?}` over `{elem}` is not supported yet — the tree-shaped \
+                 ops are `sum`, `prod`, `min` and `max` over f32/i32/u32"
+            )))
+        }
+    };
+    Ok((prelude, combine, identity))
 }
 
 /// WGSL infix operator for a `wrapping_{add,sub,mul}` method call, or `None`
@@ -3879,19 +3939,66 @@ mod tests {
 
     #[test]
     fn reduce_kernel_refuses_the_ops_that_need_more_than_one_pass() {
-        // Mean needs a count division, Var/Std need two passes, the Ord family
-        // needs an index alongside the value. Refusing beats emitting a shader
-        // that silently computes a different statistic.
+        // Mean needs a count division, Var/Std need two passes, the Arg family
+        // needs an index carried alongside the value through every halving step
+        // — a scratch of PAIRS, which is a different shader rather than a
+        // different combine string. Refusing beats emitting a shader that
+        // silently computes a different statistic.
         for op in [
             ReduceOp::Mean,
             ReduceOp::Var { bessel: false },
-            ReduceOp::Min,
+            ReduceOp::Std { bessel: true },
             ReduceOp::Argmax,
+            ReduceOp::Argmin,
+            ReduceOp::Median,
         ] {
             let err = emit_reduce_kernel(op, "f32").unwrap_err();
             let msg = format!("{err:?}");
             assert!(msg.contains("not supported yet"), "{msg}");
         }
+    }
+
+    #[test]
+    fn reduce_kernel_min_max_ignore_nan_rather_than_calling_the_builtin() {
+        // WGSL's `min(e1, e2)` is "e2 if e2 < e1, else e1", and every
+        // comparison against NaN is false — so the builtin's answer depends on
+        // which side the NaN is on. Harmless in a left fold, fatal in a tree,
+        // where the halving decides that position. The emitted helper ignores
+        // NaN from EITHER side, which makes the op associative and therefore
+        // grouping-independent, matching `reduce_kernel`'s twin.
+        let min = emit_reduce_kernel(ReduceOp::Min, "f32").unwrap();
+        assert!(
+            min.contains("fn karac_min(a: f32, b: f32) -> f32"),
+            "float min must emit its own NaN-ignoring helper:\n{min}"
+        );
+        assert!(min.contains("if (!(a == a)) { return b; }"), "{min}");
+        assert!(min.contains("if (!(b == b)) { return a; }"), "{min}");
+        assert!(min.contains("scratch[t] = karac_min(scratch[t], scratch[t + stride]);"));
+        // The identity is unreachable, not merely large: a real `f32::MAX`
+        // element in a padded chunk would BEAT a finite stand-in.
+        assert!(
+            min.contains("scratch[t] = bitcast<f32>(0x7f800000u);"),
+            "min pads with +inf:\n{min}"
+        );
+
+        let max = emit_reduce_kernel(ReduceOp::Max, "f32").unwrap();
+        assert!(max.contains("return select(a, b, b > a);"), "{max}");
+        assert!(
+            max.contains("scratch[t] = bitcast<f32>(0xff800000u);"),
+            "max pads with -inf:\n{max}"
+        );
+
+        // Integers have no NaN, so they take the builtin and a finite identity.
+        let min_i = emit_reduce_kernel(ReduceOp::Min, "i32").unwrap();
+        assert!(!min_i.contains("fn karac_min"), "{min_i}");
+        assert!(min_i.contains("scratch[t] = min(scratch[t], scratch[t + stride]);"));
+        assert!(min_i.contains("scratch[t] = 2147483647;"), "{min_i}");
+        let max_i = emit_reduce_kernel(ReduceOp::Max, "i32").unwrap();
+        // `-2147483648` is not writable as an i32 literal — unary minus applies
+        // to a value already out of range.
+        assert!(min_i.contains("2147483647") && max_i.contains("-2147483647 - 1"));
+        let max_u = emit_reduce_kernel(ReduceOp::Max, "u32").unwrap();
+        assert!(max_u.contains("scratch[t] = 0u;"), "{max_u}");
     }
 
     // ── Trapping integer arithmetic (B-2026-08-19-1) ────────────────────

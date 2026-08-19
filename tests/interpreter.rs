@@ -34752,6 +34752,74 @@ fn gpu_sum_and_prod_compute_the_obvious_small_cases() {
 }
 
 #[test]
+fn gpu_min_max_return_option_and_ignore_nan() {
+    // `min`/`max` are `Option[f32]`, matching `Stats.min` / `Vec.min`: an
+    // empty buffer has no extremum, and answering with the shader's +inf
+    // padding identity would be a plausible wrong number.
+    let out = run_no_errors(
+        "fn main() {\n\
+        \x20   let v: Vec[f32] = [3.0, 1.5, 2.0];\n\
+        \x20   let m = gpu.min(v);\n\
+        \x20   match m {\n\
+        \x20       Some(x) => println(f\"{x}\"),\n\
+        \x20       None => println(\"empty\"),\n\
+        \x20   }\n\
+        }",
+    );
+    assert_eq!(out.trim(), "1.5");
+
+    let out = run_no_errors(
+        "fn main() {\n\
+        \x20   let v: Vec[f32] = [];\n\
+        \x20   let m = gpu.max(v);\n\
+        \x20   match m {\n\
+        \x20       Some(x) => println(f\"{x}\"),\n\
+        \x20       None => println(\"empty\"),\n\
+        \x20   }\n\
+        }",
+    );
+    assert_eq!(out.trim(), "empty");
+
+    // NaN is IGNORED from either side, and the two orders must agree. A
+    // NaN-propagating min would answer 1 for one of these and NaN for the
+    // other — the positional behaviour WGSL's `min` builtin has, and the
+    // reason the emitted shader does not call it.
+    for buf in ["[nan, 1.0, 2.0]", "[2.0, 1.0, nan]"] {
+        let out = run_no_errors(&format!(
+            "fn main() {{\n\
+            \x20   let zero: f32 = 0.0;\n\
+            \x20   let nan: f32 = zero / zero;\n\
+            \x20   let v: Vec[f32] = {buf};\n\
+            \x20   let m = gpu.min(v);\n\
+            \x20   match m {{\n\
+            \x20       Some(x) => println(f\"{{x}}\"),\n\
+            \x20       None => println(\"empty\"),\n\
+            \x20   }}\n\
+            }}"
+        ));
+        assert_eq!(out.trim(), "1", "NaN must not change the answer in {buf}");
+    }
+}
+
+#[test]
+fn gpu_min_folds_past_one_workgroup() {
+    // Multi-workgroup min: 200 elements is four chunks, the last one partial,
+    // so the +inf padding has to not win. 500 - 199 = 301.
+    let out = run_no_errors(
+        "fn main() {\n\
+        \x20   let mut v: Vec[f32] = [];\n\
+        \x20   for i in 0..200 { v.push(500.0 - (i as f32)) }\n\
+        \x20   let m = gpu.min(v);\n\
+        \x20   match m {\n\
+        \x20       Some(x) => println(f\"{x}\"),\n\
+        \x20       None => println(\"empty\"),\n\
+        \x20   }\n\
+        }",
+    );
+    assert_eq!(out.trim(), "301");
+}
+
+#[test]
 fn gpu_sum_folds_past_one_workgroup_instead_of_refusing() {
     // A buffer longer than one workgroup used to be refused; it now folds
     // through the multi-dispatch recursion the runtime performs — chunk into

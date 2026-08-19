@@ -1605,8 +1605,9 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `malloc`'d buffer as an owned `Vec[f32]` of the same length. The result
     /// buffer is exactly `n` f32s (element-wise maps preserve length), so
     /// `len == cap == n` and the binding's own scope drop frees it.
-    /// `gpu.sum(buf)` / `gpu.prod(buf)` — a whole-buffer reduction lowering to
-    /// a SCALAR (B-2026-08-19-10, slice 1).
+    /// `gpu.sum` / `gpu.prod` / `gpu.min` / `gpu.max` — a whole-buffer
+    /// reduction lowering to ONE value (B-2026-08-19-10, extended by
+    /// B-2026-08-19-13).
     ///
     /// Same prologue as [`Self::compile_gpu_dispatch`] — bake the WGSL the
     /// typechecker recorded, read `{data, len}` off the `Vec` — but the call
@@ -1616,6 +1617,10 @@ impl<'ctx> super::Codegen<'ctx> {
     /// The result is bit-identical to the interpreter's, because both run the
     /// tree order fixed in `reduce_kernel::tree_reduce_f32`. That is the
     /// property the whole slice exists to preserve.
+    ///
+    /// `sum`/`prod` lower to the bare call. `min`/`max` wrap it in an
+    /// `Option[f32]` — empty in, `None` out — which is the same shape
+    /// `Stats.min` produces and the reason this function branches at all.
     pub(super) fn compile_gpu_reduce(
         &mut self,
         args: &[CallArg],
@@ -1697,29 +1702,69 @@ impl<'ctx> super::Codegen<'ctx> {
         // identity) -> f32. The identity is passed rather than baked into the
         // runtime because an EMPTY buffer short-circuits before any dispatch,
         // and `gpu.prod([])` is 1 where `gpu.sum([])` is 0 — the interpreter
-        // twin says so, and this is the one input no shader ever sees.
-        let identity =
-            self.context
-                .f32_type()
-                .const_float(if spelling == "prod" { 1.0 } else { 0.0 });
+        // twin says so, and this is the one input no shader ever sees. For
+        // `min`/`max` it is ±∞, which is also what pads a short chunk, so a
+        // real `f32::MAX` element cannot be beaten by the padding.
+        let f32_t = self.context.f32_type();
+        let identity = match spelling {
+            "prod" => f32_t.const_float(1.0),
+            "min" => f32_t.const_float(f64::INFINITY),
+            "max" => f32_t.const_float(f64::NEG_INFINITY),
+            _ => f32_t.const_float(0.0),
+        };
         let reduce_fn = self.gpu_reduce_f32_fn();
-        let out = self
+        let call_reduce = |me: &Self| {
+            me.builder
+                .build_call(
+                    reduce_fn,
+                    &[
+                        wgsl_ptr.into(),
+                        wgsl_len.into(),
+                        data.into(),
+                        n.into(),
+                        identity.into(),
+                    ],
+                    "gpu.reduced",
+                )
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+        };
+
+        // `sum`/`prod` always have an answer, so the call IS the result.
+        if !matches!(spelling, "min" | "max") {
+            return Ok(call_reduce(self));
+        }
+
+        // `min`/`max` return `Option[f32]`: an empty buffer has no extremum.
+        // Guarded HERE rather than in the runtime because the runtime's empty
+        // short-circuit returns the identity, and ±∞ is exactly the plausible
+        // wrong answer this family must not produce. Same branch-and-phi shape
+        // as `stats_minmax`, which answers `None` for the same reason.
+        let i64_t = self.context.i64_type();
+        let fn_val = self.current_fn.expect("gpu reduce in function");
+        let nonempty = self
             .builder
-            .build_call(
-                reduce_fn,
-                &[
-                    wgsl_ptr.into(),
-                    wgsl_len.into(),
-                    data.into(),
-                    n.into(),
-                    identity.into(),
-                ],
-                "gpu.reduced",
-            )
-            .unwrap()
-            .try_as_basic_value()
-            .unwrap_basic();
-        Ok(out)
+            .build_int_compare(IntPredicate::UGT, n, i64_t.const_zero(), "gpu.mm.ne")
+            .unwrap();
+        let some_bb = self.context.append_basic_block(fn_val, "gpu.mm.some");
+        let none_bb = self.context.append_basic_block(fn_val, "gpu.mm.none");
+        let merge_bb = self.context.append_basic_block(fn_val, "gpu.mm.merge");
+        self.builder
+            .build_conditional_branch(nonempty, some_bb, none_bb)
+            .unwrap();
+
+        self.builder.position_at_end(some_bb);
+        let reduced = call_reduce(self);
+        let word = self.coerce_to_payload_words(reduced, 1)?[0];
+        let some_end_bb = self.builder.get_insert_block().unwrap();
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+        self.builder.position_at_end(none_bb);
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+        self.builder.position_at_end(merge_bb);
+        Ok(self.build_option_some_via_phis(&[word], some_end_bb, none_bb, "gpu.mm"))
     }
 
     pub(super) fn compile_gpu_dispatch(
