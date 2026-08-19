@@ -9590,6 +9590,131 @@ fn wrong_declared_verb_on_a_public_fn_is_fatal() {
             .iter()
             .any(|e| e.kind == EffectErrorKind::MissingEffectDeclaration),
         "expected a BLOCKING missing-effect diagnostic; got: {:?}",
-        errors.iter().map(|e| (&e.kind, &e.message)).collect::<Vec<_>>()
+        errors
+            .iter()
+            .map(|e| (&e.kind, &e.message))
+            .collect::<Vec<_>>()
     );
+}
+
+// ── Which effect results the typecheck-threaded form actually changes ──
+// (B-2026-08-19-12)
+
+/// Build both forms of the effect result for `src`, after a full
+/// resolve → typecheck → lower front end.
+fn bare_and_rich(
+    src: &str,
+) -> (
+    karac::effectchecker::EffectCheckResult,
+    karac::effectchecker::EffectCheckResult,
+) {
+    let mut parsed = karac::parse(src);
+    assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+    karac::prepare_for_resolve(&mut parsed.program);
+    let resolved = karac::resolve(&parsed.program);
+    let typed = karac::typecheck(&parsed.program, &resolved);
+    assert!(
+        typed.errors.is_empty(),
+        "typecheck: {:?}",
+        typed.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+    karac::lower(&mut parsed.program, &typed);
+    let bare = karac::effectcheck(&parsed.program);
+    let rich = karac::effectcheck_with_typecheck_data(
+        &parsed.program,
+        karac::effectchecker::PublicEffectsPolicy::default(),
+        karac::manifest::ProfileConfig::default(),
+        typed.method_callee_types.clone(),
+        typed.call_type_subs.clone(),
+    );
+    (bare, rich)
+}
+
+/// A POLYMORPHIC effect slot reached through a method call is the one thing
+/// the typecheck-threaded entrypoint changes: `call_effect_subs` is EMPTY
+/// without it.
+///
+/// This is the fact that matters when wiring a harness. `call_effect_subs`
+/// feeds `Program.call_effect_subs` (via `build_call_effect_subs_table`) and
+/// codegen reads it, so a harness that builds that table from a bare
+/// `karac::effectcheck` silently hands codegen an empty substitution table
+/// where `karac build` has entries. Every such site in `tests/` already uses
+/// the threaded form; this test is what keeps that true, since the failure is
+/// otherwise invisible — an empty table looks exactly like "no polymorphic
+/// calls in this program".
+#[test]
+fn call_effect_subs_needs_the_typecheck_threaded_effectcheck() {
+    let (bare, rich) = bare_and_rich(
+        "effect resource Net;\n\
+         struct Runner { n: i64 }\n\
+         impl Runner {\n\
+             fn run[with E](ref self, f: Fn() -> i64 with E) -> i64 with E { f() }\n\
+         }\n\
+         fn source() -> i64 with sends(Net) { 1 }\n\
+         fn drive(r: ref Runner) -> i64 with sends(Net) { r.run(source) }\n\
+         fn main() { let r = Runner { n: 0 }; let _ = drive(r); }",
+    );
+    assert_eq!(
+        bare.call_effect_subs.len(),
+        0,
+        "bare effectcheck cannot resolve the polymorphic slot's substitution"
+    );
+    assert_eq!(
+        rich.call_effect_subs.len(),
+        1,
+        "the threaded form records the `E := sends(Net)` substitution at the call site"
+    );
+}
+
+/// …and the effect SETS agree, which is why the ~96 harness sites that pass a
+/// bare result to `callee_effectful` / `concurrency_analyze` are not a latent
+/// divergence.
+///
+/// Measured over the shapes most likely to break: an effectful instance
+/// method, two types declaring the SAME method name (only one effectful, so
+/// name-based lookup alone is ambiguous), and a polymorphic effect slot. In
+/// all three the inferred sets, the declared sets and the diagnostics match.
+/// Recorded because the opposite was assumed when B-2026-08-19-12 was filed —
+/// on the strength of a documented incident in a DIFFERENT consumer
+/// (`karac query effects`, which ran no typecheck at all) — and the assumption
+/// did not survive measurement.
+#[test]
+fn effect_sets_agree_with_and_without_the_threaded_tables() {
+    for src in [
+        // Effectful instance method, unique name.
+        "effect resource Log;\n\
+         struct Sink { n: i64 }\n\
+         impl Sink { fn emit(ref self, v: i64) -> i64 with writes(Log) { v + self.n } }\n\
+         fn caller(s: ref Sink) -> i64 { s.emit(1) }\n\
+         fn main() { let s = Sink { n: 1 }; let _ = caller(s); }",
+        // SAME method name on two types — only one is effectful.
+        "effect resource Net;\n\
+         struct Pure { n: i64 }\n\
+         struct Impure { n: i64 }\n\
+         impl Pure { fn get(ref self) -> i64 { self.n } }\n\
+         impl Impure { fn get(ref self) -> i64 with sends(Net) { self.n } }\n\
+         fn only_pure(p: ref Pure) -> i64 { p.get() }\n\
+         fn main() { let p = Pure { n: 1 }; let _ = only_pure(p); }",
+        // Polymorphic effect slot through a method.
+        "effect resource Net;\n\
+         struct Runner { n: i64 }\n\
+         impl Runner {\n\
+             fn run[with E](ref self, f: Fn() -> i64 with E) -> i64 with E { f() }\n\
+         }\n\
+         fn source() -> i64 with sends(Net) { 1 }\n\
+         fn drive(r: ref Runner) -> i64 with sends(Net) { r.run(source) }\n\
+         fn main() { let r = Runner { n: 0 }; let _ = drive(r); }",
+    ] {
+        let (bare, rich) = bare_and_rich(src);
+        let key = |r: &karac::effectchecker::EffectCheckResult| {
+            let inferred: std::collections::BTreeMap<String, String> = r
+                .inferred_effects
+                .iter()
+                .map(|(k, v)| (k.clone(), format!("{:?}", v.effects.len())))
+                .collect();
+            let errs: Vec<String> = r.errors.iter().map(|e| e.message.clone()).collect();
+            format!("{inferred:?}|{errs:?}")
+        };
+        assert_eq!(key(&bare), key(&rich), "effect sets diverged for:\n{src}");
+    }
 }
