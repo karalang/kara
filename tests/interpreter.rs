@@ -34862,6 +34862,72 @@ fn gpu_u32_reductions_use_the_unsigned_rules_throughout() {
 }
 
 #[test]
+fn gpu_integer_mean_promotes_and_rounds_exactly_once() {
+    let out = run_no_errors(
+        "fn main() {\n\
+        \x20   let v: Vec[i32] = [1, 2];\n\
+        \x20   let m = gpu.mean(v);\n\
+        \x20   match m {\n\
+        \x20       Some(x) => println(f\"{x}\"),\n\
+        \x20       None => println(\"empty\"),\n\
+        \x20   }\n\
+        }",
+    );
+    assert_eq!(out.trim(), "1.5", "promotes like Stats.mean, not truncates");
+
+    // Promoting LATE is what buys the accuracy: both elements are above 2^24,
+    // where an f32 promotion would quantise each one BEFORE the sum. The exact
+    // integer sum widened to f64 gives the true mean.
+    let out = run_no_errors(
+        "fn main() {\n\
+        \x20   let v: Vec[i32] = [16777217, 16777219];\n\
+        \x20   let m = gpu.mean(v);\n\
+        \x20   match m {\n\
+        \x20       Some(x) => println(f\"{x}\"),\n\
+        \x20       None => println(\"empty\"),\n\
+        \x20   }\n\
+        }",
+    );
+    assert_eq!(out.trim(), "16777218");
+
+    // Empty has no mean — checked on the LENGTH, since a sum of 0 is a fine
+    // answer for a non-empty buffer.
+    let out = run_no_errors(
+        "fn main() {\n\
+        \x20   let v: Vec[i32] = [];\n\
+        \x20   let m = gpu.mean(v);\n\
+        \x20   match m {\n\
+        \x20       Some(x) => println(f\"{x}\"),\n\
+        \x20       None => println(\"empty\"),\n\
+        \x20   }\n\
+        }",
+    );
+    assert_eq!(out.trim(), "empty");
+}
+
+#[test]
+fn gpu_integer_mean_traps_when_the_sum_does_not_fit() {
+    // The price of computing exactly: the SUM has to fit, even where the mean
+    // would. `Stats.mean` promotes first and sails through this. The
+    // alternative on a GPU is an f32 promotion, which loses whole integers
+    // above 16777216 — strictly worse than an honest trap.
+    let errs = runtime_errors(
+        "fn main() {\n\
+        \x20   let v: Vec[i32] = [2147483647, 2147483647];\n\
+        \x20   let m = gpu.mean(v);\n\
+        \x20   match m {\n\
+        \x20       Some(x) => println(f\"{x}\"),\n\
+        \x20       None => println(\"empty\"),\n\
+        \x20   }\n\
+        }",
+    );
+    assert!(
+        format!("{errs:?}").contains("integer overflow"),
+        "expected the sum to trap, got: {errs:?}"
+    );
+}
+
+#[test]
 fn gpu_integer_reductions_trap_on_overflow() {
     // The rule: integer GPU reductions trap, exactly as `v.sum()` over a
     // `Vec[i32]` already does. Wrapping would turn a trap into a wrong answer

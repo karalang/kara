@@ -10172,6 +10172,7 @@ let lo  = gpu.min(buf)        // Option[f32] — None iff the buffer is empty
 let hi  = gpu.max(buf)        // Option[f32]
 let mu  = gpu.mean(buf)       // Option[f32]
 let d   = gpu.dot(a, b)       // f32 — traps if the lengths differ
+let a   = gpu.mean(buf)       // Option[f32]; Option[f64] over an integer buffer
 let i   = gpu.argmin(buf)     // Option[i64] — the INDEX of the minimum
 let j   = gpu.argmax(buf)     // Option[i64]
 ```
@@ -10205,6 +10206,10 @@ An integer reduction can overflow where a float one saturates to infinity, and K
 **The rule: integer reductions trap, exactly as their CPU counterparts do.** `v.sum()` over a `Vec[i32]` whose total exceeds `i32` already fails with `integer overflow` on both `karac run` and `karac build`; `gpu.sum(v)` does the same. Anything else would make moving a reduction to the GPU silently change a trap into a wrong answer, which is the divergence class the `#[gpu]` overflow rule was introduced to close.
 
 `min` and `max` cannot overflow and are therefore unconditionally available over `i32`/`u32`.
+
+`mean` over an integer buffer **promotes**, matching `Stats.mean` — the mean of `[1, 2]` is `1.5`, not `1`. It promotes to `f64`, and it promotes **late**: the sum is computed in the integer type (exactly, or trapping), and only the finished sum is widened. That widen is lossless — 32 bits into a 53-bit mantissa — so the whole operation rounds exactly once, at the divide. Promoting the *elements* first, as the CPU implementation does, would mean promoting to `f32` on a GPU, whose 24-bit mantissa loses whole integers above `16777216`.
+
+The price of computing exactly is that the **sum** must fit even where the mean would: `gpu.mean` of `[i32::MAX, i32::MAX]` traps, while `Stats.mean` promotes first and does not. A float buffer's `mean` keeps its own width (`Vec[f32]` → `Option[f32]`) — an `f32` tree cannot justify an `f64` answer.
 
 Signedness follows the element type all the way through — the shader's comparison, the overflow rule (a signed add overflows on a shared-sign-then-flip, an unsigned one on a carry), and the result's width. `gpu.sum` over a `Vec[u32]` containing `2147483647` and `1` yields `2147483648`; the same buffer typed `Vec[i32]` traps. The two are different functions, not the same function with a cast.
 

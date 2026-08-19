@@ -341,6 +341,46 @@ pub fn tree_mean_f32(xs: &[f32]) -> Option<f32> {
     Some(sum / xs.len() as f32)
 }
 
+/// The CPU twin of `gpu.mean` over an INTEGER buffer — **the definition of
+/// what an integer GPU mean means** (B-2026-08-19-13). `None` iff empty;
+/// `Some(Err)` iff the SUM overflows.
+///
+/// **It promotes rather than truncating**, matching `Stats.mean`, which
+/// answers `1.5` for `[1, 2]` rather than `1`. Truncating would be a
+/// different function — an integer average — and it would disagree with the
+/// CPU on the simplest possible input.
+///
+/// **But it promotes LATER than `Stats.mean` does, and that is strictly more
+/// accurate.** `Stats.mean` converts every element to `f64` and then sums, so
+/// it is already lossy above 2^53 for `i64` data. This sums in the integer
+/// type — exactly, or trapping — then widens the finished sum, which is
+/// lossless (an `i32`/`u32` needs at most 32 bits and `f64` carries 53), and
+/// divides once. One correctly-rounded operation on exact inputs is the best
+/// answer available.
+///
+/// The cost of computing exactly is that the SUM has to fit. `[i32::MAX,
+/// i32::MAX]` traps here even though its mean is perfectly representable,
+/// where `Stats.mean` promotes first and sails through. That is the same
+/// trade the whole integer reduction family makes — see
+/// [`tree_reduce_i32`] — and the alternative is worse: promoting first on a
+/// GPU means promoting to `f32`, whose 24-bit mantissa loses whole integers
+/// above 16777216.
+pub fn tree_mean_i32(xs: &[i32]) -> Option<Result<f64, IntFoldOverflow>> {
+    if xs.is_empty() {
+        return None;
+    }
+    Some(tree_reduce_i32(xs, ReduceOp::Sum)?.map(|sum| sum as f64 / xs.len() as f64))
+}
+
+/// The unsigned sibling of [`tree_mean_i32`]. Same promotion rule, same exact
+/// widen — `u32::MAX` is far inside `f64`'s exact-integer range.
+pub fn tree_mean_u32(xs: &[u32]) -> Option<Result<f64, IntFoldOverflow>> {
+    if xs.is_empty() {
+        return None;
+    }
+    Some(tree_reduce_u32(xs, ReduceOp::Sum)?.map(|sum| sum as f64 / xs.len() as f64))
+}
+
 /// The CPU twin of `gpu.dot(a, b)` — **the definition of what a GPU dot
 /// product MEANS** (B-2026-08-19-13). `None` iff the lengths differ.
 ///
@@ -877,6 +917,67 @@ mod tests {
         assert_eq!(tree_arg_f32(&xs, true), Some(64));
         // The sentinel is never a legal answer.
         assert_ne!(tree_arg_f32(&xs, true), Some(ARG_INVALID as i64));
+    }
+
+    #[test]
+    fn tree_integer_mean_promotes_rather_than_truncating() {
+        // The decision, and it is `Stats.mean`'s: the mean of [1, 2] is 1.5,
+        // not 1. Truncating would be a different function and would disagree
+        // with the CPU on the simplest possible input.
+        assert_eq!(tree_mean_i32(&[1, 2]), Some(Ok(1.5)));
+        assert_eq!(tree_mean_u32(&[1, 2]), Some(Ok(1.5)));
+        assert_eq!(tree_mean_i32(&[-3, -4]), Some(Ok(-3.5)));
+        // Empty has no mean.
+        assert_eq!(tree_mean_i32(&[]), None);
+        assert_eq!(tree_mean_u32(&[]), None);
+    }
+
+    #[test]
+    fn tree_integer_mean_widens_the_finished_sum_losslessly() {
+        // Promoting LATE is what buys the accuracy. Every element here is
+        // above 2^24, where an f32 promotion would quantise each one before
+        // the sum ever happened; the exact integer sum widened to f64 gives
+        // the true mean.
+        let xs = [16777217i32, 16777219];
+        assert_eq!(tree_mean_i32(&xs), Some(Ok(16777218.0)));
+        // And a sum that is not evenly divisible still rounds once, at the
+        // divide, rather than accumulating error per element.
+        assert_eq!(tree_mean_i32(&[1, 1, 1]), Some(Ok(1.0)));
+        assert_eq!(tree_mean_i32(&[1, 2, 2]), Some(Ok(5.0 / 3.0)));
+        // u32 above 2^31 is exact in f64 too.
+        assert_eq!(tree_mean_u32(&[u32::MAX]), Some(Ok(u32::MAX as f64)));
+    }
+
+    #[test]
+    fn tree_integer_mean_traps_when_the_sum_does() {
+        // The price of computing exactly: the SUM has to fit, even when the
+        // mean would. `Stats.mean` promotes first and sails through this —
+        // documented, because it is a real behavioural difference and not an
+        // oversight. The alternative on a GPU is an f32 promotion, which
+        // loses whole integers above 16777216.
+        assert_eq!(
+            tree_mean_i32(&[i32::MAX, i32::MAX]),
+            Some(Err(IntFoldOverflow))
+        );
+        assert_eq!(
+            tree_mean_u32(&[u32::MAX, u32::MAX]),
+            Some(Err(IntFoldOverflow))
+        );
+        // The mean of that first buffer IS representable — this is a trap on
+        // the intermediate, not on the answer.
+        assert!(i32::MAX as f64 <= f64::MAX);
+    }
+
+    #[test]
+    fn tree_integer_mean_is_the_tree_sum_over_the_count() {
+        // Same relationship `tree_mean_f32` has to `tree_reduce_f32`: one
+        // divide, at the end, of the tree's own sum. So the grouping story is
+        // inherited rather than re-derived.
+        for n in [1usize, 64, 65, 4096] {
+            let xs: Vec<i32> = (0..n).map(|i| (i % 11) as i32 - 5).collect();
+            let sum = tree_reduce_i32(&xs, ReduceOp::Sum).unwrap().unwrap();
+            assert_eq!(tree_mean_i32(&xs), Some(Ok(sum as f64 / n as f64)), "n={n}");
+        }
     }
 
     #[test]

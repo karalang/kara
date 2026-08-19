@@ -37771,6 +37771,34 @@ fn gpu_sum_takes_exactly_one_buffer() {
 }
 
 #[test]
+fn gpu_integer_mean_promotes_to_f64_rather_than_truncating() {
+    // THE DECISION, and it is `Stats.mean`'s: the mean of `[1, 2]` is 1.5, not
+    // 1. Truncating would be a different function and would disagree with the
+    // CPU on the simplest possible input.
+    //
+    // It promotes to `f64` rather than `f32` because the integer sum being
+    // divided is EXACT, and f64 is wide enough to keep it that way — an f32
+    // result would throw away precision the computation actually has.
+    typecheck_ok(
+        "fn main() {\n\
+        \x20   let b: Vec[i32] = [1, 2];\n\
+        \x20   let m: Option[f64] = gpu.mean(b);\n\
+        \x20   let u: Vec[u32] = [1, 2];\n\
+        \x20   let g: Option[f64] = gpu.mean(u);\n\
+        }",
+    );
+
+    // A FLOAT buffer keeps its own width — an f32 tree cannot justify an f64
+    // answer, so the promotion is specific to the integer case rather than a
+    // blanket "mean is always f64".
+    typecheck_ok("fn main() { let b: Vec[f32] = [1.0]; let m: Option[f32] = gpu.mean(b); }");
+    let errs = typecheck_errors(
+        "fn main() { let b: Vec[i32] = [1, 2]; let m: Option[i32] = gpu.mean(b); }",
+    );
+    assert!(!errs.is_empty(), "an integer mean is not an integer");
+}
+
+#[test]
 fn gpu_arg_reductions_return_an_index_not_an_element() {
     // `Option[i64]` whatever the element type — an index is not an element,
     // and `Stats.argmin` says the same. Not `Option[f32]`, which is the shape
@@ -37852,11 +37880,6 @@ fn gpu_integer_reductions_refuse_what_has_not_been_decided() {
             "fn main() { let b: Vec[i32] = [1, 2]; let p = gpu.prod(b); }",
             "widening multiply",
         ),
-        // Truncate or promote? Two defensible answers, two different functions.
-        (
-            "fn main() { let b: Vec[i32] = [1, 2]; let m = gpu.mean(b); }",
-            "truncates",
-        ),
         // u32 `prod` is refused for the SAME reason i32 `prod` is — the
         // widening multiply — not because u32 is unsupported.
         (
@@ -37896,13 +37919,9 @@ fn gpu_mean_returns_option_and_shares_the_reduction_diagnostics() {
     );
 
     // One inference path with sum/prod/min/max, so the refusals cannot drift.
-    // `mean` over integers refuses for its OWN reason — truncate or promote is
-    // an unanswered question, not a missing implementation.
-    let errs = typecheck_errors("fn main() { let b: Vec[i32] = [1, 2]; let m = gpu.mean(b); }");
-    assert!(
-        errs.iter().any(|e| e.to_string().contains("truncates")),
-        "expected the integer-mean refusal, got: {errs:?}"
-    );
+    // `mean` over integers PROMOTES — see
+    // `gpu_integer_mean_promotes_to_f64_rather_than_truncating`.
+    typecheck_ok("fn main() { let b: Vec[i32] = [1, 2]; let m: Option[f64] = gpu.mean(b); }");
     let errs = typecheck_errors("fn main() { let b: Vec[f32] = [1.0]; let m = gpu.mean(b, b); }");
     assert!(
         errs.iter()

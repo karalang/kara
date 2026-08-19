@@ -910,10 +910,10 @@ impl<'a> super::Interpreter<'a> {
             .get(&crate::resolver::SpanKey(buf_span.offset, buf_span.length))
             .is_some_and(|e| e == "u32");
 
-        let fallible = matches!(op, ReduceOp::Min | ReduceOp::Max);
-        // Empty `min`/`max` is `None`, checked before the fold for the same
-        // reason the float arm does it: the fold would return the padding
-        // identity, a plausible wrong answer.
+        let fallible = matches!(op, ReduceOp::Min | ReduceOp::Max | ReduceOp::Mean);
+        // Empty `min`/`max`/`mean` is `None`, checked before the fold for the
+        // same reason the float arm does it: the fold would return the padding
+        // identity (or divide by zero), a plausible wrong answer.
         if fallible && elems.is_empty() {
             return Value::EnumVariant {
                 enum_name: "Option".to_string(),
@@ -946,6 +946,37 @@ impl<'a> super::Interpreter<'a> {
                 );
             }
             xs.push(*i);
+        }
+
+        // `mean` PROMOTES — the mean of `[1, 2]` is 1.5, matching `Stats.mean`
+        // — and it promotes to f64 because the integer sum it divides is
+        // exact. So it leaves the integer carrier entirely and cannot share
+        // the fold below.
+        if matches!(op, ReduceOp::Mean) {
+            let folded = if unsigned {
+                let u: Vec<u32> = xs.iter().map(|&i| i as u32).collect();
+                crate::reduce_kernel::tree_mean_u32(&u)
+            } else {
+                let i: Vec<i32> = xs.iter().map(|&i| i as i32).collect();
+                crate::reduce_kernel::tree_mean_i32(&i)
+            };
+            return match folded {
+                Some(Ok(m)) => Value::EnumVariant {
+                    enum_name: "Option".to_string(),
+                    variant: "Some".to_string(),
+                    data: EnumData::Tuple(vec![Value::Float(m)]),
+                },
+                // The SUM overflowed, even if the mean would not have. The
+                // price of computing it exactly rather than promoting first.
+                Some(Err(_)) => {
+                    self.record_runtime_error(format!("integer overflow in gpu.{spelling}"), span)
+                }
+                None => Value::EnumVariant {
+                    enum_name: "Option".to_string(),
+                    variant: "None".to_string(),
+                    data: EnumData::Unit,
+                },
+            };
         }
 
         let folded = if unsigned {

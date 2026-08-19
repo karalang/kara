@@ -1233,6 +1233,71 @@ fn gpu_u32_overflow_traps_at_its_own_boundary() {
 }
 
 #[test]
+fn gpu_integer_mean_promotes_on_every_surface() {
+    // The decision, end to end: an integer mean PROMOTES like `Stats.mean`
+    // (1.5, not 1), and promotes to f64 because the integer sum it divides is
+    // exact.
+    assert_gpu_reduce_matches_interp(
+        "reduce_int_mean",
+        "fn main() {\n\
+        \x20   let v: Vec[i32] = [1, 2];\n\
+        \x20   let m = gpu.mean(v);\n\
+        \x20   match m {\n\
+        \x20       Some(x) => println(f\"{x}\"),\n\
+        \x20       None => println(\"empty\"),\n\
+        \x20   }\n\
+        }\n",
+        "1.5",
+    );
+
+    // THE discriminating fixture: both elements sit above 2^24, so promoting
+    // the ELEMENTS to f32 first — which is what a GPU promote-then-sum would
+    // have to do — quantises each one before the sum. Widening the finished
+    // integer sum to f64 instead is lossless, so the whole operation rounds
+    // exactly once and lands on the true mean.
+    assert_gpu_reduce_matches_interp(
+        "reduce_int_mean_above_2_24",
+        "fn main() {\n\
+        \x20   let v: Vec[i32] = [16777217, 16777219];\n\
+        \x20   let m = gpu.mean(v);\n\
+        \x20   match m {\n\
+        \x20       Some(x) => println(f\"{x}\"),\n\
+        \x20       None => println(\"empty\"),\n\
+        \x20   }\n\
+        }\n",
+        "16777218",
+    );
+
+    // Unsigned, with a sum above 2^31 — so the widen has to be UNSIGNED or
+    // the mean comes back negative. Chosen to fit u32: 4294967292 / 2.
+    assert_gpu_reduce_matches_interp(
+        "reduce_int_mean_unsigned",
+        "fn main() {\n\
+        \x20   let v: Vec[u32] = [2147483647, 2147483645];\n\
+        \x20   let m = gpu.mean(v);\n\
+        \x20   match m {\n\
+        \x20       Some(x) => println(f\"{x}\"),\n\
+        \x20       None => println(\"empty\"),\n\
+        \x20   }\n\
+        }\n",
+        "2147483646",
+    );
+
+    assert_gpu_reduce_matches_interp(
+        "reduce_int_mean_empty",
+        "fn main() {\n\
+        \x20   let v: Vec[i32] = [];\n\
+        \x20   let m = gpu.mean(v);\n\
+        \x20   match m {\n\
+        \x20       Some(x) => println(f\"{x}\"),\n\
+        \x20       None => println(\"empty\"),\n\
+        \x20   }\n\
+        }\n",
+        "empty",
+    );
+}
+
+#[test]
 fn gpu_integer_overflow_traps_on_every_surface() {
     // The decision itself, end to end. WGSL has no trapping arithmetic — its
     // integer ops are DEFINED to wrap — so the shader computes an overflow

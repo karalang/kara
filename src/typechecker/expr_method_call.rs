@@ -3488,24 +3488,6 @@ impl<'a> super::TypeChecker<'a> {
         };
         let is_int = elem_spelling != "f32";
 
-        // `mean` over integers is a SEPARATE decision, not a widening: is the
-        // mean of `[1, 2]` the truncated `1` or the exact `1.5`? Both are
-        // defensible and they are different functions. Inheriting one by
-        // accident is precisely what the integer-overflow rule was written to
-        // stop, so this refuses until the question is answered on its own
-        // terms.
-        if is_int && matches!(op, ReduceOp::Mean) {
-            self.type_error(
-                "error[E_GPU_REDUCE_BUFFER]: `gpu.mean` over `Vec[i32]` is not wired up — an \
-                 integer mean must first decide whether it truncates (`i32`) or promotes \
-                 (`f32`); convert the buffer to `Vec[f32]` to get the promoting one"
-                    .to_string(),
-                args[0].value.span,
-                TypeErrorKind::TypeMismatch,
-            );
-            return gpu_reduce_result_ty(op, elem);
-        }
-
         let emitted = if is_int {
             // Record the element SPELLING for codegen, which cannot see it: a
             // `Vec`'s data pointer is opaque at the LLVM level. It decides two
@@ -4269,6 +4251,24 @@ pub(crate) fn gpu_reduce_result_ty(op: ReduceOp, elem: Type) -> Type {
     // NOTE: fallibility is a property of the OP, not the element type. An
     // integer `min` is `Option[i32]` for the same reason a float one is
     // `Option[f32]` — an empty buffer has no minimum whatever it holds.
+    //
+    // `mean` is the one op whose PAYLOAD type is not the element type. An
+    // integer mean PROMOTES, matching `Stats.mean` (`[1, 2]` averages to 1.5,
+    // not 1), and it promotes to `f64` rather than `f32` because the integer
+    // sum it divides is exact and `f64` is wide enough to keep it that way —
+    // returning `f32` would throw away precision the computation actually has.
+    // A float buffer keeps its own width: an `f32` tree cannot justify an
+    // `f64` answer.
+    if matches!(op, ReduceOp::Mean) {
+        let payload = match elem {
+            Type::Float(_) => elem,
+            _ => Type::Float(FloatSize::F64),
+        };
+        return Type::Named {
+            name: "Option".to_string(),
+            args: vec![payload],
+        };
+    }
     match op {
         ReduceOp::Min | ReduceOp::Max | ReduceOp::Mean => Type::Named {
             name: "Option".to_string(),

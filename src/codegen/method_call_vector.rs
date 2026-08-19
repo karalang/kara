@@ -1841,6 +1841,17 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.build_unreachable().unwrap();
         self.builder.position_at_end(ok_bb);
 
+        // `mean` PROMOTES, matching `Stats.mean` — the mean of `[1, 2]` is 1.5,
+        // not 1 — and it promotes to f64 because the integer sum it divides is
+        // EXACT. Widening a finished i32/u32 sum to f64 is lossless (32 bits
+        // into a 53-bit mantissa), so the whole operation rounds exactly once,
+        // at the divide. Promoting the ELEMENTS first, as `Stats.mean` does,
+        // would be worse here: on a GPU that means f32, whose 24-bit mantissa
+        // loses whole integers above 16777216.
+        if spelling == "mean" {
+            return self.compile_gpu_int_mean(out, n, unsigned);
+        }
+
         // `sum` always has an answer (the empty case is 0), so the slot IS the
         // result — widened to the i64 carrier every integer travels in.
         if !matches!(spelling, "min" | "max") {
@@ -1884,6 +1895,75 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.position_at_end(merge_bb);
         Ok(self.build_option_some_via_phis(&[word], some_end_bb, none_bb, "gpu.imm"))
+    }
+
+    /// The tail of an integer `gpu.mean`: turn the exact 32-bit sum sitting in
+    /// `out` into `Option[f64]` (B-2026-08-19-13).
+    ///
+    /// Empty is `None` — the mean of nothing is not a number, and dividing by
+    /// zero would hand back a NaN that looks like an answer. Checked on the
+    /// LENGTH rather than on the sum, because a sum of 0 is a perfectly good
+    /// answer for a non-empty buffer.
+    ///
+    /// The widen is signed or unsigned to match the element type, and it is
+    /// LOSSLESS either way: 32 bits fit a 53-bit mantissa with room to spare.
+    /// So the only rounding in the whole operation is the single `fdiv`.
+    fn compile_gpu_int_mean(
+        &mut self,
+        out: PointerValue<'ctx>,
+        n: IntValue<'ctx>,
+        unsigned: bool,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let i32_t = self.context.i32_type();
+        let i64_t = self.context.i64_type();
+        let f64_t = self.context.f64_type();
+        let fn_val = self.current_fn.expect("gpu int mean in function");
+
+        let nonempty = self
+            .builder
+            .build_int_compare(IntPredicate::UGT, n, i64_t.const_zero(), "gpu.imean.ne")
+            .unwrap();
+        let some_bb = self.context.append_basic_block(fn_val, "gpu.imean.some");
+        let none_bb = self.context.append_basic_block(fn_val, "gpu.imean.none");
+        let merge_bb = self.context.append_basic_block(fn_val, "gpu.imean.merge");
+        self.builder
+            .build_conditional_branch(nonempty, some_bb, none_bb)
+            .unwrap();
+
+        self.builder.position_at_end(some_bb);
+        let sum = self
+            .builder
+            .build_load(i32_t, out, "gpu.imean.sum")
+            .unwrap()
+            .into_int_value();
+        let sum_f = if unsigned {
+            self.builder
+                .build_unsigned_int_to_float(sum, f64_t, "gpu.imean.sumf")
+                .unwrap()
+        } else {
+            self.builder
+                .build_signed_int_to_float(sum, f64_t, "gpu.imean.sumf")
+                .unwrap()
+        };
+        // The count is always non-negative, but it arrives as the i64 carrier,
+        // so a signed conversion is the honest one.
+        let n_f = self
+            .builder
+            .build_signed_int_to_float(n, f64_t, "gpu.imean.nf")
+            .unwrap();
+        let mean = self
+            .builder
+            .build_float_div(sum_f, n_f, "gpu.imean")
+            .unwrap();
+        let word = self.coerce_to_payload_words(mean.into(), 1)?[0];
+        let some_end_bb = self.builder.get_insert_block().unwrap();
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+        self.builder.position_at_end(none_bb);
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+        self.builder.position_at_end(merge_bb);
+        Ok(self.build_option_some_via_phis(&[word], some_end_bb, none_bb, "gpu.imean"))
     }
 
     /// Widen a 32-bit reduction result into Kāra's i64 integer carrier.
