@@ -41192,3 +41192,102 @@ fn test_with_provider_bound_is_checked_on_an_inferred_provider() {
         errors.iter().map(|e| &e.message).collect::<Vec<_>>()
     );
 }
+
+// ── B-2026-08-19-17 (b): ambiguous BARE variant names ──
+
+#[test]
+fn bare_variant_declared_by_two_user_enums_is_rejected() {
+    // B-2026-08-19-17. The scan in `resolve_identifier_type` picks a winner by
+    // sorting enum names — deterministic (its purpose) but an alphabetical
+    // tie-break nobody chose. The loser is not just deprioritized, it is
+    // unreachable: expression position has no type-direction, so there is no
+    // way to write the other enum bare. Reject instead of picking.
+    let errors = typecheck_errors(
+        "enum First { A, B }
+         enum Second { A, C }
+         fn main() { let x = A; }",
+    );
+    let amb = errors
+        .iter()
+        .find(|e| e.kind == TypeErrorKind::AmbiguousBareVariant)
+        .unwrap_or_else(|| {
+            panic!(
+                "expected AmbiguousBareVariant, got: {:?}",
+                errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+            )
+        });
+    assert!(
+        amb.message.contains("`First`") && amb.message.contains("`Second`"),
+        "diagnostic must name both declaring enums, got: {}",
+        amb.message,
+    );
+    assert!(
+        amb.message.contains("`First.A`") && amb.message.contains("`Second.A`"),
+        "diagnostic must offer both qualified forms, got: {}",
+        amb.message,
+    );
+}
+
+#[test]
+fn ambiguous_bare_variant_reports_once_not_as_a_cascade() {
+    // The resolved winner is returned after the diagnostic so inference keeps
+    // going; otherwise every downstream use of the binding adds an
+    // "expected X, found Error" of its own.
+    let errors = typecheck_errors(
+        "enum First { A, B }
+         enum Second { A, C }
+         impl First { fn tag(ref self) -> i64 { 1 } }
+         fn main() { let x = A; println(x.tag()); println(x.tag()); }",
+    );
+    assert_eq!(
+        errors
+            .iter()
+            .filter(|e| e.kind == TypeErrorKind::AmbiguousBareVariant)
+            .count(),
+        1,
+        "expected exactly one ambiguity diagnostic, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn bare_variant_in_pattern_position_stays_legal_when_names_collide() {
+    // Pattern position is scrutinee-typed and correct on every backend, so the
+    // rejection is EXPRESSION-position only. `match c { Less => … }` after
+    // `.cmp()` is idiomatic; rejecting bare arms would break it everywhere.
+    typecheck_ok(
+        "enum First { A, B }
+         enum Second { A, C }
+         fn main() {
+             let x = First.A;
+             match x { A => println(10), B => println(20), }
+             let y = Second.A;
+             match y { A => println(30), C => println(40), }
+         }",
+    );
+}
+
+#[test]
+fn user_enum_shadowing_a_stdlib_variant_name_is_not_ambiguous() {
+    // User-vs-stdlib has a DELIBERATE winner: B-2026-08-14-10's two-tier scan
+    // puts user-declared enums ahead of stdlib/prelude precisely so a user's
+    // `MyIoErr.Other` is not hijacked by the seeded `IoError.Other`. Only the
+    // user-vs-user tie-break is arbitrary, so only that one is rejected.
+    typecheck_ok(
+        "enum Mine { NotFound, X }
+         impl Mine { fn tag(ref self) -> i64 { 55 } }
+         fn main() { let x = NotFound; println(x.tag()); }",
+    );
+}
+
+#[test]
+fn builtin_pinned_constructors_are_not_ambiguous_against_a_user_enum() {
+    // `Some`/`None`/`Ok`/`Err` are pinned to their builtin owner so a user enum
+    // can never hijack a bare `None`. That is a chosen winner too, so a user
+    // enum declaring `None` must not turn every bare `None` into an error.
+    typecheck_ok(
+        "enum Cache { None, Warm }
+         fn take(o: Option[i64]) -> i64 { match o { Some(v) => v, None => -1, } }
+         fn main() { println(take(None)); println(take(Some(9))); }",
+    );
+}

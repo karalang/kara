@@ -364,6 +364,54 @@ impl<'a> super::TypeChecker<'a> {
     ///
     /// Only the bare form is affected. `Sink.None` goes through
     /// `resolve_path_type`, which names its enum explicitly and runs first.
+    /// B-2026-08-19-17 (b) — the USER-declared enums that declare `name` as a
+    /// variant, when two or more of them do.
+    ///
+    /// `resolve_identifier_type`'s scan below picks a winner among these by
+    /// sorting the enum names, which makes the answer deterministic (its whole
+    /// purpose — B-2026-08-14-10 replaced a `HashMap` scan that was a measured
+    /// coin flip on identical bytes) but leaves the user-vs-user tie-break
+    /// ALPHABETICAL, which nothing ever chose. The loser is not merely
+    /// deprioritized, it is unreachable by bare name: expression position has no
+    /// type-direction, so `let x: Second = A;`, `fn f() -> Second { A }` and
+    /// `want_second(A)` are all rejected with "expected 'Second', found
+    /// 'First'". So the author cannot express the losing enum bare even
+    /// deliberately, and picking silently is the worst of the available
+    /// behaviours.
+    ///
+    /// Returns the candidates sorted, for a stable diagnostic. `None` — no
+    /// diagnostic — for the two collisions the language resolves ON PURPOSE:
+    ///
+    /// - `Some` / `None` / `Ok` / `Err`, pinned to their builtin owner so a
+    ///   user enum cannot hijack a bare `None` (the scan does this explicitly).
+    /// - a user enum shadowing a stdlib/prelude one, which the two-tier sort
+    ///   decides in the user's favour on purpose — a user's `MyIoErr.Other`
+    ///   must not be hijacked by the seeded `IoError.Other`.
+    ///
+    /// Both of those have a defined winner that someone reasoned about; only
+    /// the user-vs-user case does not.
+    pub(super) fn ambiguous_user_variant_owners(&self, name: &str) -> Option<Vec<String>> {
+        if Self::builtin_variant_owner(name).is_some() || is_prelude_type_or_module_name(name) {
+            return None;
+        }
+        let mut owners: Vec<String> = self
+            .env
+            .enums
+            .iter()
+            .filter(|(enum_name, info)| {
+                !info.defining_stdlib_origin
+                    && !is_prelude_type_or_module_name(enum_name)
+                    && info.variants.iter().any(|(v, _)| v == name)
+            })
+            .map(|(enum_name, _)| enum_name.clone())
+            .collect();
+        if owners.len() < 2 {
+            return None;
+        }
+        owners.sort();
+        Some(owners)
+    }
+
     fn builtin_variant_owner(name: &str) -> Option<&'static str> {
         match name {
             "Some" | "None" => Some("Option"),

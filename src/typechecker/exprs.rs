@@ -3725,6 +3725,44 @@ impl<'a> super::TypeChecker<'a> {
                         .insert(SpanKey::from_span(&expr.span));
                 }
                 let ty = self.resolve_identifier_type(name, &expr.span);
+                // B-2026-08-19-17 (b) — a bare variant name that two or more
+                // USER enums declare is rejected rather than silently resolved
+                // to whichever the scan's alphabetical tie-break happens to
+                // reach. See `ambiguous_user_variant_owners` for why this is not
+                // a real choice the author can override, and for the two
+                // collisions that are deliberately still allowed.
+                //
+                // On THIS arm and not inside `resolve_identifier_type`, for the
+                // same reason B-2026-08-11-6 put the type-name-in-value-position
+                // diagnostic here: that helper is also the first-segment
+                // fallback for `resolve_path_type`, which calls it
+                // speculatively, so a hard error there fires on paths that go on
+                // to resolve fine.
+                //
+                // The resolved `ty` is returned unchanged afterwards. The
+                // program is already rejected, and letting inference continue
+                // with the winner keeps this to ONE diagnostic instead of a
+                // cascade of "expected X, found Error" at every downstream use.
+                if let Some(owners) = self.ambiguous_user_variant_owners(name) {
+                    let qualified = owners
+                        .iter()
+                        .map(|e| format!("`{e}.{name}`"))
+                        .collect::<Vec<_>>()
+                        .join(" or ");
+                    let declared = owners
+                        .iter()
+                        .map(|e| format!("`{e}`"))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    self.type_error(
+                        format!(
+                            "ambiguous variant name `{name}`: declared by {declared} — \
+                             write {qualified} to say which one"
+                        ),
+                        expr.span,
+                        crate::typechecker::TypeErrorKind::AmbiguousBareVariant,
+                    );
+                }
                 // A TYPE NAME where a value belongs (B-2026-08-11-6). Reaching
                 // `Type::Error` here means every real resolution failed —
                 // including the enum-variant, distinct-type and comptime-`Type`

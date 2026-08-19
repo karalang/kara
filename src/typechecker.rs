@@ -772,6 +772,19 @@ pub enum TypeErrorKind {
     /// `phase-4-interpreter.md` § "TypeChecker: implement full method
     /// resolution algorithm" item 4.
     AmbiguousMethod,
+    /// A BARE enum-variant name in expression position that two or more
+    /// USER-declared enums declare (`enum First { A }` + `enum Second { A }`,
+    /// then `let x = A;`). B-2026-08-19-17. The programmer must qualify it
+    /// (`First.A`).
+    ///
+    /// Deliberately NOT raised for the two collisions the language resolves on
+    /// purpose: a user enum shadowing a stdlib/prelude one (the user tier wins,
+    /// per B-2026-08-14-10's two-tier scan), and the builtin-pinned
+    /// constructors `Some`/`None`/`Ok`/`Err` (the builtin wins, so a user enum
+    /// cannot hijack a bare `None`). Only the user-vs-user tie-break — which
+    /// falls out of that scan as alphabetical, and which nothing ever chose —
+    /// is rejected.
+    AmbiguousBareVariant,
     /// Bare `method(args)` call appears in a synthesis position (no expected
     /// type) where the only candidate resolutions are trait associated
     /// functions. The typechecker cannot infer the target type — programmer
@@ -1116,6 +1129,7 @@ pub(crate) fn class_for_type_error_kind(
         // emit site. Backfill is incremental; each one is a small
         // follow-up commit naming the slot.
         TypeErrorKind::NonExhaustiveMatch
+        | TypeErrorKind::AmbiguousBareVariant
         | TypeErrorKind::UnsupportedNumericSuffix
         | TypeErrorKind::PrivateTypeInPublicSignature
         | TypeErrorKind::ConflictingImpl

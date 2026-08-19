@@ -1646,6 +1646,7 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::typechecker::TypeErrorKind::RefinementDomainTooWide => "W0238",
                 crate::typechecker::TypeErrorKind::CannotInferTypeParam => "E0238",
                 crate::typechecker::TypeErrorKind::AmbiguousMethod => "E0239",
+                crate::typechecker::TypeErrorKind::AmbiguousBareVariant => "E0279",
                 crate::typechecker::TypeErrorKind::ConflictingImpl => "E0240",
                 crate::typechecker::TypeErrorKind::NonExhaustiveCrossPackageLiteral => "E0241",
                 crate::typechecker::TypeErrorKind::NonExhaustiveCrossPackageMatch => "E0242",
