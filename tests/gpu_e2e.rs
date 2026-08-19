@@ -103,6 +103,32 @@ fn run_interp(src_path: &Path) -> String {
     String::from_utf8_lossy(&out.stdout).trim().to_string()
 }
 
+/// The DEFAULT `karac run` — the JIT lane, not `--interp`.
+///
+/// A separate helper because it exercises a different failure mode, and one
+/// this suite was blind to until it bit: the JIT runner's runtime rlib is
+/// built without the opt-in `gpu` feature, so a program reaching
+/// `karac_runtime_gpu_*` must be ROUTED to the interpreter by
+/// `program_uses_gpu_runtime`. Every reduction did reach it and none was
+/// routed — `gpu.sum` died with `Symbols not found:
+/// [ karac_runtime_gpu_reduce_f32 ]` under `karac run` while `karac build`
+/// answered correctly. Testing only `--interp` cannot see that, because
+/// `--interp` is precisely the lane the routing is supposed to select.
+fn run_default(src_path: &Path) -> String {
+    let out = karac()
+        .arg("run")
+        .arg(src_path)
+        .output()
+        .expect("spawn karac run");
+    assert!(
+        out.status.success(),
+        "`karac run` (JIT lane) failed — a GPU program must be ROUTED to the \
+         interpreter, not handed to a JIT that cannot resolve its symbols:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
 /// `Ok(stdout)`, or `Err(diagnostic)` when the program could not be built or
 /// the device refused to run it. The caller decides whether an error is a
 /// skip or a failure — only [`gpu_available`] treats it as "no adapter".
@@ -824,6 +850,18 @@ fn assert_gpu_reduce_matches_interp(tag: &str, body: &str, expected: &str) {
     assert_eq!(
         expected, gpu,
         "{tag}: both legs agree but not with the fixture"
+    );
+
+    // THE THIRD SURFACE. kara-katas/CLAUDE.md's A/B rule is `run` == `build`,
+    // and `run` means the DEFAULT lane, which is the JIT — not `--interp`.
+    // Checking only `--interp` against `build` leaves the lane most users
+    // actually take untested, and that is exactly where the reductions were
+    // broken: unrouted, they reached a JIT with no `karac_runtime_gpu_*`
+    // symbols and failed outright while both other surfaces agreed.
+    assert_eq!(
+        run_default(&src),
+        gpu,
+        "{tag}: `karac run` (JIT lane) diverged from `karac build`"
     );
 }
 

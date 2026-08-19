@@ -344,16 +344,48 @@ fn exit_code_of(status: &std::process::ExitStatus) -> i32 {
     1
 }
 
+/// The whole-buffer GPU reductions, which reach `karac_runtime_gpu_*` WITHOUT
+/// a `#[gpu]` kernel anywhere in the program.
+///
+/// `gpu.sum(v)` names no kernel — the operation is named instead, so its
+/// associativity is the compiler's guarantee rather than a user combiner's
+/// promise. That is the whole point of the surface, and it is exactly why
+/// [`program_declares_gpu_kernel`] cannot see these: there is no `#[gpu] fn`
+/// to find. Without this list a reduction program takes the JIT lane and dies
+/// with `Symbols not found: [ karac_runtime_gpu_reduce_f32 ]` while
+/// `karac build` runs it correctly — a run-vs-build divergence.
+#[cfg(feature = "llvm")]
+const GPU_REDUCTION_CALLS: &[&str] = &["gpu.sum(", "gpu.prod(", "gpu.min(", "gpu.max("];
+
+/// True when the program reaches the GPU runtime at all, and so must route to
+/// the tree-walk interpreter rather than the JIT.
+///
+/// Two ways to get there, and they need different detection:
+///
+///  * a `#[gpu]` kernel — a `#[gpu] fn`, top-level or an impl method — reached
+///    through `gpu.dispatch`. Detected on the AST. The kernel is a sound
+///    superset of an actual dispatch call: a `#[gpu]` fn is only reachable
+///    through dispatch, and a declared-but-never-dispatched kernel routes to
+///    the interpreter harmlessly (it runs every program).
+///  * a whole-buffer REDUCTION (`gpu.sum` and friends), which has no kernel to
+///    detect. Scanned in the source, like the Arrow IPC gate beside it — a
+///    false positive only routes a non-GPU program to the correct-if-slower
+///    interpreter.
+///
+/// Either way the JIT runner's runtime rlib is built WITHOUT the opt-in `gpu`
+/// feature (the heavy wgpu/Metal backend), so the LLJIT `dlsym` generator
+/// cannot resolve `karac_runtime_gpu_*` and `main` fails to materialize
+/// (B-2026-07-10-6). The AOT `karac build` path, which auto-selects
+/// `libkarac_runtime_gpu.a` and links the real backend, is unaffected.
+#[cfg(feature = "llvm")]
+pub(super) fn program_uses_gpu_runtime(program: &crate::ast::Program, source: &str) -> bool {
+    program_declares_gpu_kernel(program)
+        || GPU_REDUCTION_CALLS.iter().any(|call| source.contains(call))
+}
+
 /// True when the program declares a `#[gpu]` kernel — a `#[gpu] fn`, top-level
-/// or an impl method. Such a program's codegen emits `karac_runtime_gpu_*`
-/// calls (via `gpu.dispatch`) that the JIT runner's runtime rlib — built
-/// without the opt-in `gpu` feature — cannot resolve, so `karac run` routes it
-/// to the tree-walk interpreter instead of the JIT (B-2026-07-10-6). Detecting
-/// the kernel is a sound superset of detecting an actual `gpu.dispatch` call:
-/// a `#[gpu]` fn is only reachable through dispatch, and a declared-but-never-
-/// dispatched kernel routes to the interpreter harmlessly (it runs every
-/// program). The AOT `karac build` path, which auto-selects the gpu archive,
-/// is unaffected.
+/// or an impl method. The AST half of [`program_uses_gpu_runtime`]; see there
+/// for why a reduction needs the source-scan half as well.
 #[cfg(feature = "llvm")]
 pub(super) fn program_declares_gpu_kernel(program: &crate::ast::Program) -> bool {
     use crate::ast::{ImplItem, Item};
@@ -950,7 +982,7 @@ pub(super) fn cmd_run(
     // run envelopes and the cooperative `--timeout` deadline are interpreter-only
     // affordances the JIT one-shot doesn't provide, so those keep the
     // interpreter regardless. Compiled out on a non-`llvm` build (no JIT engine).
-    // B-2026-07-10-6 — route a `#[gpu]` / `gpu.dispatch` program to the
+    // B-2026-07-10-6 — route any program that reaches the GPU runtime to the
     // tree-walk interpreter (element-wise CPU) regardless of the JIT-default.
     // Its codegen emits `karac_runtime_gpu_*` calls, but the JIT runner's
     // runtime rlib is built WITHOUT the opt-in `gpu` feature (the heavy
@@ -960,8 +992,12 @@ pub(super) fn cmd_run(
     // correctly with no GPU dependency, so this closes the run-vs-build
     // divergence. The AOT `karac build` path (which auto-selects
     // libkarac_runtime_gpu.a and links the real backend) is unaffected.
+    //
+    // "Reaches the GPU runtime" is BOTH a `#[gpu]` kernel and a whole-buffer
+    // reduction — `gpu.sum(v)` names no kernel, so the AST check alone missed
+    // it and every reduction program died on the JIT lane.
     #[cfg(feature = "llvm")]
-    let program_uses_gpu = program_declares_gpu_kernel(&pipeline.parsed.program);
+    let program_uses_gpu = program_uses_gpu_runtime(&pipeline.parsed.program, &source);
     // Arrow IPC programs (`col.to_arrow_ipc()` / `Column.from_arrow_ipc(..)`)
     // route to the interpreter on the JIT lane — NOT because codegen lacks the
     // lowering (the `to_arrow_ipc` twins ship for all three receivers) but
