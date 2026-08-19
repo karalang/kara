@@ -1102,6 +1102,95 @@ jobs:
       - name: Runtime GPU unit tests (adapter selection + f32 map)
         run: cargo test -p karac-runtime --features gpu --lib gpu
 
+  # ── The MSL half of the GPU execution matrix ────────────────────────────
+  # Its Linux sibling `gpu-e2e` above FORCES lavapipe, so it drives
+  # naga -> SPIR-V only; macOS drives naga -> MSL. Those are different shader
+  # languages with different validation rules, so a lowering valid in one and
+  # not the other is invisible to a single lane — which is exactly the gap
+  # B-2026-08-19-9 found, after every #[gpu] increment to date had been
+  # validated on lavapipe alone.
+  #
+  # Viability was measured before this job was written, not assumed: a hosted
+  # macOS runner is headless (`system_profiler SPDisplaysDataType` prints
+  # NOTHING, so it is not a usable proxy for "is there a GPU"), yet wgpu still
+  # enumerates and dispatches on a Metal adapter. The whole job runs in ~8
+  # minutes including the Homebrew LLVM install and the gpu archive build.
+  #
+  # NON-REQUIRED until it has a green streak, mirroring `codegen-e2e-macos` and
+  # `memory-sanitizer`: a first-run macOS-toolchain or driver hiccup must not
+  # block the required gates.
+  gpu-e2e-macos:
+    name: GPU execution E2E (macOS arm64, Metal)
+    runs-on: macos-latest
+    env:
+      # A missing adapter must fail this job, not silently cover nothing — the
+      # whole point of the lane is that it EXECUTES shaders.
+      KARAC_REQUIRE_GPU_ADAPTER: "1"
+      # And a broken archive step must fail it too, rather than green-skipping
+      # the suite (the absent-archive half of B-2026-07-28-1).
+      KARAC_REQUIRE_RUNTIME_ARCHIVE: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install LLVM 18 (Homebrew)
+        run: |
+          brew install llvm@18
+          PREFIX="$(brew --prefix llvm@18)"
+          echo "LLVM_SYS_181_PREFIX=$PREFIX" >> "$GITHUB_ENV"
+          echo "DYLD_FALLBACK_LIBRARY_PATH=$PREFIX/lib" >> "$GITHUB_ENV"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: gpu-e2e-macos
+
+      # Only the gpu and full archives matter: a gpu.dispatch program
+      # references karac_runtime_gpu_*, which auto-selects the gpu archive, and
+      # the full archive is the fallback for anything else. The gpu build emits
+      # the canonical name, so it is renamed before the plain full build
+      # overwrites it (CLAUDE.md § "Four archives").
+      - name: Build runtime staticlib archives (gpu → full)
+        run: |
+          cargo rustc -p karac-runtime --release --features gpu --crate-type staticlib
+          cp target/release/libkarac_runtime.a target/release/libkarac_runtime_gpu.a
+          cargo rustc -p karac-runtime --release --crate-type staticlib
+
+      # Executes every landed kernel-body form (let / while+mut / for-range /
+      # match / value-if / statement-if / wrapping arithmetic) through naga's
+      # MSL backend and asserts interpreter == GPU == expected output.
+      #
+      # KARAC_GPU_BACKEND is deliberately NOT set: the suite's probe resolves a
+      # backend (explicit env, then the host's own device, then software), and
+      # leaving it unset is what selects Metal. Setting it to `cpu` here would
+      # ask for a DeviceType::Cpu adapter, which macOS never has, and every
+      # fixture would skip while this job reported green — B-2026-08-19-9
+      # exactly, reintroduced inside the job meant to prevent it.
+      - name: GPU execution E2E on Metal (interpreter-vs-device oracle)
+        run: cargo test --features llvm --test gpu_e2e
+
+      # The runtime's own GPU unit tests on a real device rather than a
+      # software rasterizer — including the 2D-grid dispatch past the 1D cap.
+      - name: Runtime GPU unit tests (Metal)
+        run: cargo test -p karac-runtime --features gpu --lib gpu
+
+      # A green run above is only meaningful if it EXECUTED. gpu_e2e's skips go
+      # to stderr and the suite still reports `ok`, so re-run it capturing
+      # output and assert no fixture skipped. This is the same hazard
+      # KARAC_REQUIRE_GPU_ADAPTER covers, held one level lower where a
+      # soft-skip could still hide — and the reason the whole lane exists.
+      - name: Assert the suite executed (no vacuous pass)
+        run: |
+          set -o pipefail
+          cargo test --features llvm --test gpu_e2e -- --nocapture 2>&1 | tee gpu.txt
+          skips=$(grep -c 'gpu_e2e: skipping' gpu.txt || true)
+          echo "gpu_e2e skip lines: $skips"
+          [ "$skips" -eq 0 ] || { echo "FAIL: the suite skipped $skips fixture(s)"; exit 1; }
+          grep -m1 'gpu_e2e: running on' gpu.txt || { echo "FAIL: no backend banner"; exit 1; }
+
   # ── Phase 6.3 Slice 7: flagship-demo benchmark regression gate ──────────
   # Builds the `ws_idle_holder` flagship demo (Demo 1) with `karac build`,
   # runs the Rust bench harness against it at a CI-appropriate load tier
