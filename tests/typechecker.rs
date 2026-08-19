@@ -37664,6 +37664,63 @@ fn gpu_sum_takes_exactly_one_buffer() {
 }
 
 #[test]
+fn gpu_dot_takes_two_f32_buffers_and_returns_a_scalar() {
+    typecheck_ok(
+        "fn main() {\n\
+        \x20   let a: Vec[f32] = [1.0, 2.0];\n\
+        \x20   let b: Vec[f32] = [3.0, 4.0];\n\
+        \x20   let d: f32 = gpu.dot(a, b);\n\
+        }",
+    );
+
+    // Not an `Option`: unlike min/max, a dot product over an empty buffer HAS
+    // an answer — the additive identity — so there is nothing to signal.
+    let errs = typecheck_errors(
+        "fn main() {\n\
+        \x20   let a: Vec[f32] = [1.0];\n\
+        \x20   let b: Vec[f32] = [2.0];\n\
+        \x20   let d: Option[f32] = gpu.dot(a, b);\n\
+        }",
+    );
+    assert!(!errs.is_empty(), "`gpu.dot` is a bare f32, not an Option");
+}
+
+#[test]
+fn gpu_dot_rejects_a_wrong_arity_or_element_type() {
+    for (src, needle) in [
+        (
+            "fn main() { let a: Vec[f32] = [1.0]; let d = gpu.dot(a); }",
+            "E_GPU_REDUCE_ARITY",
+        ),
+        (
+            "fn main() { let a: Vec[f32] = [1.0]; let d = gpu.dot(a, a, a); }",
+            "E_GPU_REDUCE_ARITY",
+        ),
+        // The SECOND buffer is checked too, and against its own span — a
+        // one-sided check would let `gpu.dot(f32s, i32s)` reach a shader that
+        // reads the wrong element type.
+        (
+            "fn main() { let a: Vec[f32] = [1.0]; let b: Vec[i32] = [1]; let d = gpu.dot(a, b); }",
+            "E_GPU_REDUCE_BUFFER",
+        ),
+        (
+            "fn main() { let a: Vec[i32] = [1]; let b: Vec[f32] = [1.0]; let d = gpu.dot(a, b); }",
+            "E_GPU_REDUCE_BUFFER",
+        ),
+        (
+            "fn main() { let a: Vec[f32] = [1.0]; let d = gpu.dot(a, 1.0); }",
+            "E_GPU_REDUCE_BUFFER",
+        ),
+    ] {
+        let errs = typecheck_errors(src);
+        assert!(
+            errs.iter().any(|e| e.to_string().contains(needle)),
+            "expected {needle} for {src}, got: {errs:?}"
+        );
+    }
+}
+
+#[test]
 fn gpu_min_max_return_option_not_a_bare_float() {
     // `sum`/`prod` always have an answer — the empty buffer is the identity.
     // `min`/`max` do not, so they return `Option[f32]`, the same shape

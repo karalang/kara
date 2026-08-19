@@ -55,6 +55,29 @@ pub fn tree_reduce_f32(xs: &[f32], op: ReduceOp) -> Option<f32> {
     Some(tree_fold_f32(xs, combine, identity))
 }
 
+/// The CPU twin of `gpu.dot(a, b)` — **the definition of what a GPU dot
+/// product MEANS** (B-2026-08-19-13). `None` iff the lengths differ.
+///
+/// Deliberately expressed as "multiply, then [`tree_reduce_f32`] the
+/// products", because that IS the guarantee: `gpu.dot(a, b)` and
+/// `gpu.sum(a * b)` are the same number, in the same tree order, to the last
+/// bit. The device earns that equality structurally rather than by
+/// coincidence — its level-0 shader forms the product on load and then runs
+/// the identical halving tree, and every level after that is the ordinary sum
+/// shader, so after level 0 the two paths are literally the same computation.
+///
+/// The fusion is a device-traffic optimization (no `n`-element product buffer
+/// is ever written), not a semantic one. Writing the twin as a separate
+/// hand-rolled fold would let the two drift apart silently; writing it this
+/// way makes drift impossible to express.
+pub fn tree_dot_f32(a: &[f32], b: &[f32]) -> Option<f32> {
+    if a.len() != b.len() {
+        return None;
+    }
+    let products: Vec<f32> = a.iter().zip(b).map(|(x, y)| x * y).collect();
+    tree_reduce_f32(&products, ReduceOp::Sum)
+}
+
 /// One GPU-expressible reduction as data: its combining function and the
 /// identity that pads a short chunk.
 type Combiner = (fn(f32, f32) -> f32, f32);
@@ -441,6 +464,48 @@ mod tests {
         assert_eq!(tree_reduce_f32(&[1.0], ReduceOp::Mean), None);
         assert_eq!(tree_reduce_f32(&[1.0], ReduceOp::Argmin), None);
         assert_eq!(tree_reduce_f32(&[1.0], ReduceOp::Median), None);
+    }
+
+    #[test]
+    fn tree_dot_is_exactly_the_tree_sum_of_the_products() {
+        // The guarantee `gpu.dot` ships: it is `gpu.sum(a * b)`, not merely
+        // close to it. Checked across all three regimes — inside one
+        // workgroup, one partial chunk, and two full levels of folding —
+        // because the device earns the equality only if its fused level-0
+        // shader chunks exactly like the unfused one.
+        for n in [3usize, 64, 65, 4096] {
+            let a: Vec<f32> = (0..n).map(|i| 0.5 + (i % 7) as f32).collect();
+            let b: Vec<f32> = (0..n).map(|i| 1.5 - (i % 3) as f32).collect();
+            let products: Vec<f32> = a.iter().zip(&b).map(|(x, y)| x * y).collect();
+            assert_eq!(
+                tree_dot_f32(&a, &b),
+                tree_reduce_f32(&products, ReduceOp::Sum),
+                "n={n}"
+            );
+        }
+
+        // Empty is the additive identity, like an empty sum.
+        assert_eq!(tree_dot_f32(&[], &[]), Some(0.0));
+
+        // And the ORDER still matters, so this is not vacuously true of any
+        // implementation: 4096 tenths through the tree of trees give
+        // 409.6000061, where a left fold drifts elsewhere.
+        let ones = vec![1.0f32; 4096];
+        let tenths = vec![0.1f32; 4096];
+        let tree = tree_dot_f32(&tenths, &ones).unwrap();
+        let left: f32 = tenths.iter().zip(&ones).map(|(x, y)| x * y).sum();
+        assert_ne!(tree.to_bits(), left.to_bits(), "order must be observable");
+        assert_eq!(tree, tree_reduce_f32(&tenths, ReduceOp::Sum).unwrap());
+    }
+
+    #[test]
+    fn tree_dot_refuses_mismatched_lengths_rather_than_truncating() {
+        // Truncating to the shorter buffer (Rust's `zip`) would silently
+        // answer a question nobody asked. The runtime entry point traps on the
+        // same condition, so the two surfaces refuse the same programs rather
+        // than merely agreeing on the ones they accept.
+        assert_eq!(tree_dot_f32(&[1.0, 2.0, 3.0], &[4.0, 5.0]), None);
+        assert_eq!(tree_dot_f32(&[], &[1.0]), None);
     }
 
     #[test]

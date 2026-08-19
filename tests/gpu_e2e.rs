@@ -936,6 +936,69 @@ fn gpu_sum_agrees_bit_for_bit_past_one_workgroup() {
 }
 
 #[test]
+fn gpu_dot_equals_the_sum_of_the_products_on_the_device() {
+    // The guarantee the two-shader design exists to hold. `dot`'s level-0
+    // shader forms the product on load and then runs the SAME halving tree the
+    // sum shader runs, and every level after it IS the sum shader — so the two
+    // are the same number to the last bit rather than merely close. 4096
+    // tenths is two full fold levels and a value where the order is
+    // observable, so a `dot` that folded its partials some other way would
+    // land somewhere else.
+    assert_gpu_reduce_matches_interp(
+        "reduce_dot_vs_sum",
+        "fn main() {\n\
+        \x20   let mut a: Vec[f32] = [];\n\
+        \x20   let mut b: Vec[f32] = [];\n\
+        \x20   let mut p: Vec[f32] = [];\n\
+        \x20   for i in 0..4096 {\n\
+        \x20       let x: f32 = 0.1;\n\
+        \x20       let y: f32 = 1.0;\n\
+        \x20       a.push(x)\n\
+        \x20       b.push(y)\n\
+        \x20       p.push(x * y)\n\
+        \x20   }\n\
+        \x20   println(f\"{gpu.dot(a, b)}\")\n\
+        \x20   println(f\"{gpu.sum(p)}\")\n\
+        }\n",
+        "409.6000061035156\n409.6000061035156",
+    );
+
+    assert_gpu_reduce_matches_interp(
+        "reduce_dot_small",
+        "fn main() {\n\
+        \x20   let a: Vec[f32] = [1.0, 2.0, 3.0];\n\
+        \x20   let b: Vec[f32] = [4.0, 5.0, 6.0];\n\
+        \x20   println(f\"{gpu.dot(a, b)}\")\n\
+        }\n",
+        "32",
+    );
+
+    // 65 is the first length that spills into a second chunk, so the level-0
+    // shader's own padding is exercised before any fold runs.
+    assert_gpu_reduce_matches_interp(
+        "reduce_dot_spill",
+        "fn main() {\n\
+        \x20   let mut a: Vec[f32] = [];\n\
+        \x20   let mut b: Vec[f32] = [];\n\
+        \x20   for i in 0..65 { a.push(2.0) b.push(3.0) }\n\
+        \x20   println(f\"{gpu.dot(a, b)}\")\n\
+        }\n",
+        "390",
+    );
+
+    // Empty needs no device: the additive identity, like an empty sum.
+    assert_gpu_reduce_matches_interp(
+        "reduce_dot_empty",
+        "fn main() {\n\
+        \x20   let a: Vec[f32] = [];\n\
+        \x20   let b: Vec[f32] = [];\n\
+        \x20   println(f\"{gpu.dot(a, b)}\")\n\
+        }\n",
+        "0",
+    );
+}
+
+#[test]
 fn gpu_min_max_agree_with_the_interpreter_including_nan() {
     // NaN is the reason min/max needed a hand-written combine rather than
     // WGSL's `min` builtin: the builtin returns `e1` unless `e2 < e1`, and

@@ -34752,6 +34752,68 @@ fn gpu_sum_and_prod_compute_the_obvious_small_cases() {
 }
 
 #[test]
+fn gpu_dot_is_the_sum_of_the_products() {
+    let out = run_no_errors(
+        "fn main() {\n\
+        \x20   let a: Vec[f32] = [1.0, 2.0, 3.0];\n\
+        \x20   let b: Vec[f32] = [4.0, 5.0, 6.0];\n\
+        \x20   println(f\"{gpu.dot(a, b)}\")\n\
+        }",
+    );
+    assert_eq!(out.trim(), "32");
+
+    // Empty is the additive identity, like an empty sum.
+    let out = run_no_errors(
+        "fn main() {\n\
+        \x20   let a: Vec[f32] = [];\n\
+        \x20   let b: Vec[f32] = [];\n\
+        \x20   println(f\"{gpu.dot(a, b)}\")\n\
+        }",
+    );
+    assert_eq!(out.trim(), "0");
+
+    // The guarantee, at a length that needs two full fold levels: `dot(a, b)`
+    // and `sum(a * b)` are the same number, in the same tree order.
+    let out = run_no_errors(
+        "fn main() {\n\
+        \x20   let mut a: Vec[f32] = [];\n\
+        \x20   let mut b: Vec[f32] = [];\n\
+        \x20   let mut p: Vec[f32] = [];\n\
+        \x20   for i in 0..4096 {\n\
+        \x20       let x: f32 = 0.1;\n\
+        \x20       let y: f32 = 1.0;\n\
+        \x20       a.push(x)\n\
+        \x20       b.push(y)\n\
+        \x20       p.push(x * y)\n\
+        \x20   }\n\
+        \x20   println(f\"{gpu.dot(a, b)}\")\n\
+        \x20   println(f\"{gpu.sum(p)}\")\n\
+        }",
+    );
+    let lines: Vec<&str> = out.trim().lines().collect();
+    assert_eq!(lines, ["409.6000061035156", "409.6000061035156"]);
+}
+
+#[test]
+fn gpu_dot_refuses_mismatched_lengths() {
+    // Truncating to the shorter buffer would silently answer a question
+    // nobody asked. The compiled path traps on the same condition with the
+    // same two lengths named.
+    let errs = runtime_errors(
+        "fn main() {\n\
+        \x20   let a: Vec[f32] = [1.0, 2.0, 3.0];\n\
+        \x20   let b: Vec[f32] = [4.0, 5.0];\n\
+        \x20   println(f\"{gpu.dot(a, b)}\")\n\
+        }",
+    );
+    let joined = format!("{errs:?}");
+    assert!(
+        joined.contains("equal length") && joined.contains("3 vs 2"),
+        "expected a refusal naming both lengths, got: {joined}"
+    );
+}
+
+#[test]
 fn gpu_min_max_return_option_and_ignore_nan() {
     // `min`/`max` are `Option[f32]`, matching `Stats.min` / `Vec.min`: an
     // empty buffer has no extremum, and answering with the shader's +inf

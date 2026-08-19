@@ -987,6 +987,15 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
         }
+        // `gpu.dot(a, b)` reads TWO buffers and needs two shaders, so it has
+        // its own lowering rather than a wider `compile_gpu_reduce`.
+        if method == "dot" {
+            if let ExprKind::Identifier(name) = &object.kind {
+                if name == "gpu" && !self.variables.contains_key("gpu") {
+                    return self.compile_gpu_dot(args);
+                }
+            }
+        }
         // GPU-SLIP-4b: `gpu.upload(vec)` moves a SoA `Vec[S]` to a resident device
         // buffer, yielding a `GpuBuffer[S]` handle value `{i64 handle, i64 n}`;
         // `gpu.download(buf)` moves the handle back to a host AoS `Vec[S]`. Same

@@ -628,6 +628,164 @@ async fn dispatch_multi_bytes_async(
     readback(device, queue, &output_bufs, &sizes)
 }
 
+/// One level-0 `gpu.dot` dispatch: two input buffers in, ONE partials buffer
+/// out (B-2026-08-19-13).
+///
+/// Distinct from [`dispatch_multi_bytes_async`] only in the output count —
+/// that path allocates one output per input, which is right for an
+/// element-wise map and wrong for a reduction. Here the shader declares
+/// `a` at `@binding(0)`, `b` at `@binding(1)` and `output` at `@binding(2)`,
+/// so exactly one output buffer is created and the bind group matches the
+/// layout wgpu derives from the shader.
+///
+/// The output is allocated at the INPUT's byte length, like the sum path, and
+/// the caller keeps only the `ceil(n / WORKGROUP)` slots the workgroups
+/// actually wrote.
+async fn dispatch_dot_bytes_async(
+    wgsl: &str,
+    a: &[u8],
+    b: &[u8],
+    elem_size: usize,
+) -> Option<Vec<u8>> {
+    let ctx = gpu_context()?;
+    let device = &ctx.device;
+    let queue = &ctx.queue;
+
+    let input_bufs: Vec<wgpu::Buffer> = [a, b]
+        .iter()
+        .map(|bytes| {
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("gpu-dot-input"),
+                contents: bytes,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            })
+        })
+        .collect();
+    let out_sizes = [a.len() as u64];
+    let output_bufs = run_compute(
+        device,
+        queue,
+        wgsl,
+        &input_bufs,
+        &out_sizes,
+        &[],
+        a.len() / elem_size,
+    );
+    let mut outs = readback(device, queue, &output_bufs, &out_sizes)?;
+    outs.pop()
+}
+
+/// C entry point for `gpu.dot(a, b)` — the fused multiply-then-sum reduction
+/// (B-2026-08-19-13).
+///
+/// Takes TWO shaders. Level 0 is the dot kernel: it multiplies the buffers
+/// element-wise on load and reduces each workgroup's chunk, leaving one
+/// partial per workgroup. Every level after that is a plain SUM over those
+/// partials, which is the ordinary reduction shader — a dot product is a map
+/// fused into the first level of a sum, and only the first level has two
+/// buffers to read.
+///
+/// Passing the sum shader in rather than re-deriving it here is what makes
+/// `gpu.dot(a, b)` and `gpu.sum(a * b)` agree bit-for-bit: after level 0 they
+/// are literally the same computation on the same values, in the same tree
+/// order. The alternative — a second dot-shaped fold over the partials, with
+/// `b` implicitly all-ones — would be a second code path that could drift.
+///
+/// The fused form is also the reason `dot` is its own entry point rather than
+/// sugar: no `n`-element product buffer is ever written, so device traffic is
+/// halved against a map-then-reduce.
+///
+/// **Mismatched lengths trap.** A dot product over buffers of different
+/// lengths is not defined, and the two plausible salvages are both wrong for
+/// Kāra: truncating to the shorter (Rust's `zip`) silently answers a question
+/// nobody asked, and zero-extending invents data. Kāra checks rather than
+/// wraps on integer overflow for the same reason, so this aborts with both
+/// lengths named. The check lives HERE, at the one place that knows both, so
+/// no `b[i]` read can run past its buffer.
+///
+/// # Safety
+///
+/// Both `*_wgsl_ptr`/`_len` pairs a valid UTF-8 shader; `a_ptr` points to
+/// `n_a` and `b_ptr` to `n_b` valid `f32` values. Aborts on no available GPU
+/// adapter (no CPU fallback), same as every other entry point here.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_gpu_dot_f32(
+    dot_wgsl_ptr: *const u8,
+    dot_wgsl_len: usize,
+    sum_wgsl_ptr: *const u8,
+    sum_wgsl_len: usize,
+    a_ptr: *const f32,
+    n_a: usize,
+    b_ptr: *const f32,
+    n_b: usize,
+) -> f32 {
+    unsafe {
+        if n_a != n_b {
+            crate::fatal::write_stderr(b"panic: gpu.dot requires buffers of equal length (");
+            crate::fatal::write_stderr(n_a.to_string().as_bytes());
+            crate::fatal::write_stderr(b" vs ");
+            crate::fatal::write_stderr(n_b.to_string().as_bytes());
+            crate::fatal::write_stderr(b")\n");
+            std::process::abort();
+        }
+        let n = n_a;
+        // The empty dot product is 0 — the additive identity, and no device is
+        // needed to know it.
+        if n == 0 {
+            return 0.0;
+        }
+        // Must match the shaders' `@workgroup_size` and
+        // `reduce_kernel::GPU_REDUCE_WIDTH`.
+        const WORKGROUP: usize = 64;
+
+        let Ok(dot_wgsl) =
+            std::str::from_utf8(std::slice::from_raw_parts(dot_wgsl_ptr, dot_wgsl_len))
+        else {
+            crate::fatal::write_stderr(b"panic: gpu.dot shader is not valid UTF-8\n");
+            std::process::abort();
+        };
+        let Ok(sum_wgsl) =
+            std::str::from_utf8(std::slice::from_raw_parts(sum_wgsl_ptr, sum_wgsl_len))
+        else {
+            crate::fatal::write_stderr(b"panic: gpu.dot fold shader is not valid UTF-8\n");
+            std::process::abort();
+        };
+
+        let elem_size = std::mem::size_of::<f32>();
+        let byte_len = n * elem_size;
+        let a = std::slice::from_raw_parts(a_ptr as *const u8, byte_len);
+        let b = std::slice::from_raw_parts(b_ptr as *const u8, byte_len);
+
+        // LEVEL 0: fused multiply + per-workgroup reduce.
+        let Some(output) = pollster::block_on(dispatch_dot_bytes_async(dot_wgsl, a, b, elem_size))
+        else {
+            crate::fatal::write_stderr(
+                b"panic: gpu.dot found no available GPU adapter (no CPU fallback)\n",
+            );
+            std::process::abort();
+        };
+        let mut count = n.div_ceil(WORKGROUP);
+        let mut level = output[..count * elem_size].to_vec();
+
+        // LEVELS 1+: the ordinary sum fold, identical to `gpu.sum`'s.
+        while count > 1 {
+            let Some(output) =
+                pollster::block_on(dispatch_bytes_async(sum_wgsl, &level, elem_size))
+            else {
+                crate::fatal::write_stderr(
+                    b"panic: gpu.dot found no available GPU adapter (no CPU fallback)\n",
+                );
+                std::process::abort();
+            };
+            let partials = count.div_ceil(WORKGROUP);
+            level = output[..partials * elem_size].to_vec();
+            count = partials;
+        }
+
+        f32::from_le_bytes([level[0], level[1], level[2], level[3]])
+    }
+}
+
 /// Bind a kernel over N group input buffers already resident on the device and
 /// dispatch it, returning N fresh output buffers left **resident** on the GPU
 /// (`STORAGE | COPY_SRC | COPY_DST` — ready to be the next dispatch's input or to
@@ -639,12 +797,20 @@ async fn dispatch_multi_bytes_async(
 /// layout. `uniforms` are the raw scalar-uniform bytes (one storage buffer each,
 /// bound after the in/out buffers). Only submits — never waits; a following
 /// `readback` or next dispatch orders after it on the same queue.
+///
+/// `out_sizes` is the OUTPUT buffers' byte lengths, and is deliberately
+/// separate from the inputs rather than derived from them. An element-wise SoA
+/// or stencil kernel has one output per input and passes the same slice; a
+/// REDUCTION does not — `gpu.dot` reads two buffers and writes one, so its
+/// output lands at `@binding(2)` and no fourth buffer is allocated for a
+/// binding the shader never declares (which wgpu would reject anyway, since
+/// the bind-group layout is derived from the shader).
 fn run_compute(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     wgsl: &str,
     input_bufs: &[wgpu::Buffer],
-    sizes: &[u64],
+    out_sizes: &[u64],
     uniforms: &[&[u8]],
     elem_count: usize,
 ) -> Vec<wgpu::Buffer> {
@@ -653,7 +819,7 @@ fn run_compute(
     // pool) rather than allocating fresh ones each dispatch — the per-substep
     // output allocation was the dominant per-dispatch CPU cost once the transfer
     // was gone (4c re-bench). A miss creates a new buffer.
-    let output_bufs: Vec<wgpu::Buffer> = sizes
+    let output_bufs: Vec<wgpu::Buffer> = out_sizes
         .iter()
         .map(|&sz| alloc_output_buffer(device, sz))
         .collect();
@@ -674,9 +840,13 @@ fn run_compute(
     // Cached compiled pipeline (GPU-SLIP-4a) — compiled once per distinct shader.
     let pipeline = compute_pipeline(device, wgsl);
     let bind_group_layout = pipeline.get_bind_group_layout(0);
-    // Inputs at binding 0..n, outputs at n..2n, uniforms at 2n..2n+u.
+    // Inputs at binding 0..n_in, outputs at n_in..n_in+n_out, uniforms after
+    // both. Counted from the OUTPUT buffers rather than assuming one per
+    // input — a reduction has fewer (`gpu.dot` is 2 in, 1 out), and hardcoding
+    // `2 * n_buffers` here would silently misplace its uniforms.
+    let n_out = output_bufs.len();
     let mut entries: Vec<wgpu::BindGroupEntry> =
-        Vec::with_capacity(n_buffers * 2 + uniform_bufs.len());
+        Vec::with_capacity(n_buffers + n_out + uniform_bufs.len());
     for (i, buf) in input_bufs.iter().enumerate() {
         entries.push(wgpu::BindGroupEntry {
             binding: i as u32,
@@ -691,7 +861,7 @@ fn run_compute(
     }
     for (i, buf) in uniform_bufs.iter().enumerate() {
         entries.push(wgpu::BindGroupEntry {
-            binding: (2 * n_buffers + i) as u32,
+            binding: (n_buffers + n_out + i) as u32,
             resource: buf.as_entire_binding(),
         });
     }
@@ -1243,6 +1413,37 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
 }
 "#;
 
+    /// The `gpu.dot` level-0 shader, as `karac`'s emitter generates it
+    /// (`gpu_wgsl::emit_dot_kernel("f32")`). Two inputs, ONE output — the
+    /// binding shape a reduction needs and an element-wise map does not.
+    const DOT_KERNEL_WGSL: &str = r#"
+@group(0) @binding(0) var<storage, read>       a:      array<f32>;
+@group(0) @binding(1) var<storage, read>       b:      array<f32>;
+@group(0) @binding(2) var<storage, read_write> output: array<f32>;
+
+var<workgroup> scratch: array<f32, 64>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(local_invocation_id) lid: vec3<u32>,
+        @builtin(workgroup_id) wid: vec3<u32>,
+        @builtin(global_invocation_id) gid: vec3<u32>) {
+    let t = lid.x;
+    let i = gid.x;
+    if (i < arrayLength(&a)) { scratch[t] = a[i] * b[i]; } else { scratch[t] = 0.0; }
+    workgroupBarrier();
+
+    var stride: u32 = 32u;
+    loop {
+        if (stride == 0u) { break; }
+        if (t < stride) { scratch[t] = scratch[t] + scratch[t + stride]; }
+        workgroupBarrier();
+        stride = stride / 2u;
+    }
+
+    if (t == 0u) { output[wid.x] = scratch[0]; }
+}
+"#;
+
     /// The float `min` reduction shader, as `karac`'s emitter generates it
     /// (`gpu_wgsl::emit_reduce_kernel(ReduceOp::Min, "f32")`). Copied here so
     /// the NaN and ±∞ behaviour can be proven against a real device without
@@ -1429,6 +1630,84 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
                 all_nan.iter().copied().fold(f32::INFINITY, f32::min)
             );
         }
+    }
+
+    #[test]
+    fn dot_entry_point_equals_the_sum_of_the_products() {
+        // The guarantee the whole two-shader design exists to hold:
+        // `gpu.dot(a, b)` IS `gpu.sum(a * b)`, to the last bit. It holds
+        // structurally rather than by luck — after level 0 the two paths run
+        // the identical sum shader over identical partials — and this checks
+        // it on a real device rather than trusting the argument.
+        //
+        // Lengths chosen to cover all three regimes: inside one workgroup, one
+        // partial chunk, and two full levels of folding.
+        for n in [3usize, 64, 65, 200, 4096] {
+            let a: Vec<f32> = (0..n).map(|i| 0.5 + (i % 7) as f32).collect();
+            let b: Vec<f32> = (0..n).map(|i| 1.5 - (i % 3) as f32).collect();
+
+            // Probe with the skippable helper first: the entry points abort on
+            // an adapterless host by design.
+            if dispatch_f32_map(SUM_REDUCE_WGSL, &a).is_none() {
+                eprintln!("gpu-dot: no GPU adapter available — skipping");
+                return;
+            }
+
+            let dot = unsafe {
+                karac_runtime_gpu_dot_f32(
+                    DOT_KERNEL_WGSL.as_ptr(),
+                    DOT_KERNEL_WGSL.len(),
+                    SUM_REDUCE_WGSL.as_ptr(),
+                    SUM_REDUCE_WGSL.len(),
+                    a.as_ptr(),
+                    a.len(),
+                    b.as_ptr(),
+                    b.len(),
+                )
+            };
+
+            let products: Vec<f32> = a.iter().zip(&b).map(|(x, y)| x * y).collect();
+            let summed = unsafe {
+                karac_runtime_gpu_reduce_f32(
+                    SUM_REDUCE_WGSL.as_ptr(),
+                    SUM_REDUCE_WGSL.len(),
+                    products.as_ptr(),
+                    products.len(),
+                    0.0,
+                )
+            };
+            assert_eq!(
+                dot.to_bits(),
+                summed.to_bits(),
+                "n={n}: gpu.dot != gpu.sum of the products"
+            );
+
+            // And both agree with the CPU twin's grouping — the fused level-0
+            // shader must chunk exactly like the unfused one.
+            assert_eq!(
+                dot.to_bits(),
+                tree_sum_multi_f32(&products).to_bits(),
+                "n={n}"
+            );
+        }
+    }
+
+    #[test]
+    fn dot_entry_point_is_zero_for_an_empty_buffer() {
+        // Needs no device: the empty dot product is the additive identity.
+        let got = unsafe {
+            karac_runtime_gpu_dot_f32(
+                DOT_KERNEL_WGSL.as_ptr(),
+                DOT_KERNEL_WGSL.len(),
+                SUM_REDUCE_WGSL.as_ptr(),
+                SUM_REDUCE_WGSL.len(),
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+            )
+        };
+        assert_eq!(got, 0.0);
     }
 
     #[test]

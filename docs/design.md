@@ -10161,6 +10161,33 @@ fn update_all(world: mut ref World) with writes(GpuBuffer[positions]) writes(Gpu
 
 Layout groups (Feature 1) map directly to GPU buffers — `group physics { position, velocity }` corresponds to a single GPU buffer, so the compiler can generate efficient bulk transfers.
 
+#### Whole-buffer reductions
+
+`gpu.dispatch` is map-shaped: `N` inputs in, `N` outputs out. A **reduction** collapses a buffer to one value, which no dispatch can express, so the reductions are named operations of their own:
+
+```
+let s   = gpu.sum(buf)        // f32
+let p   = gpu.prod(buf)       // f32
+let lo  = gpu.min(buf)        // Option[f32] — None iff the buffer is empty
+let hi  = gpu.max(buf)        // Option[f32]
+let d   = gpu.dot(a, b)       // f32 — traps if the lengths differ
+```
+
+They take a `Vec[f32]` rather than a kernel, and that is the design, not a shortcut. A user-supplied combiner would have to be **associative** for a tree reduction to mean anything, and nothing in the language can check associativity — a non-associative combiner would produce a plausible, order-dependent, irreproducible number. Naming the operation moves that obligation to the compiler, where it is discharged once.
+
+**The reduction order is language semantics, not an implementation detail.** A GPU reduction is a tree; a CPU fold is a line; `f32` addition is not associative, so the two genuinely disagree — 64 copies of `0.1` sum to `6.400000` as a tree and `6.399996` as a left fold. Kāra therefore **specifies** the tree order and the interpreter reproduces it exactly, so `karac run` and `karac build` agree bit-for-bit rather than within an epsilon:
+
+> Pad the buffer to the workgroup width with the operation's identity, then halve — `s[t] = s[t] OP s[t + stride]` for stride 32, 16, 8, 4, 2, 1. A buffer longer than one workgroup is reduced in workgroup-wide chunks, and the resulting partials are reduced the same way, recursively.
+
+Two consequences worth stating plainly:
+
+- A long reduction is a **tree of trees**, and the grouping is observable in `f32`. `gpu.sum` over 4096 elements is not the same number a flat 4096-wide tree would give, nor a left fold. That is fine — it is specified — but it means the answer is a property of the language, not of the device.
+- `min`/`max` are **NaN-ignoring** (`min(x, NaN) == min(NaN, x) == x`), matching `f32::min`. A NaN-propagating min is fine in a left fold and broken in a tree: the halving would decide which side a NaN lands on, so the answer would depend on the buffer length. NaN-ignoring min is associative, so every grouping agrees. `sum`/`prod` cannot make that promise — which is exactly why their grouping is part of the specified result.
+
+`gpu.dot(a, b)` is `gpu.sum(a * b)`, to the last bit. It is a separate operation only because the product is formed **on load** inside the reduction's first level, so no `n`-element intermediate is ever written — a device-traffic win, not a semantic difference.
+
+The reductions are `f32`-only. Integer reductions are not a mechanical widening: an integer reduction can overflow, and Kāra traps where WGSL wraps, so the arithmetic-overflow rule (§ Arithmetic Overflow) has to be settled at the reduction's own surface rather than inherited from the kernel-body rule.
+
 ### Cross-target Compilation
 
 A Kāra source tree often compiles to more than one target in a single build — the canonical case is server-side rendering (SSR) where a `components` module compiles for both `native` (server renders initial HTML) and `wasm_browser` (client hydrates and handles events). This subsection specifies how the compiler decides which items exist on which target and how the effect system enforces target correctness without `#[cfg]`-spam.

@@ -859,6 +859,64 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
+    /// `gpu.dot(a, b)` under the interpreter (B-2026-08-19-13).
+    ///
+    /// Runs the products through the SAME tree order the sum reduction uses,
+    /// because that is what the device does: its level-0 shader forms the
+    /// product on load and then runs the identical halving tree, and every
+    /// later level is the ordinary sum shader. `gpu.dot(a, b)` and
+    /// `gpu.sum(a * b)` are therefore the same number on both surfaces.
+    fn eval_gpu_dot(&mut self, args: &[CallArg], span: &Span) -> Value {
+        if args.len() != 2 {
+            return self.record_runtime_error(
+                format!("gpu.dot expects two buffers (found {})", args.len()),
+                span,
+            );
+        }
+        let mut buffers: Vec<Vec<f32>> = Vec::with_capacity(2);
+        for arg in args.iter().take(2) {
+            let Value::Array(rc) = self.eval_expr_inner(&arg.value) else {
+                return self
+                    .record_runtime_error("gpu.dot buffers must be Vec of f32".to_string(), span);
+            };
+            let elems = rc.read().unwrap().clone();
+            let mut xs: Vec<f32> = Vec::with_capacity(elems.len());
+            for v in &elems {
+                match v {
+                    Value::Float(f) => xs.push(*f as f32),
+                    // Same reasoning as `eval_gpu_reduce`: routing an integer
+                    // through the f32 core loses precision above 2^24. The
+                    // typechecker rejects non-f32 buffers, so this is
+                    // unreachable from checked code and stays loud for
+                    // `karac run`, which bypasses typecheck.
+                    _ => {
+                        return self.record_runtime_error(
+                            "gpu.dot buffer element must be f32".to_string(),
+                            span,
+                        )
+                    }
+                }
+            }
+            buffers.push(xs);
+        }
+
+        // Mismatched lengths trap here exactly as they do in the runtime entry
+        // point — truncating to the shorter buffer would silently answer a
+        // question nobody asked, and the two surfaces must refuse the same
+        // programs, not just agree on the ones they accept.
+        match crate::reduce_kernel::tree_dot_f32(&buffers[0], &buffers[1]) {
+            Some(r) => Value::Float(r as f64),
+            None => self.record_runtime_error(
+                format!(
+                    "gpu.dot requires buffers of equal length ({} vs {})",
+                    buffers[0].len(),
+                    buffers[1].len()
+                ),
+                span,
+            ),
+        }
+    }
+
     fn eval_gpu_dispatch(&mut self, args: &[CallArg], span: &Span) -> Value {
         if args.len() < 2 {
             return self.record_runtime_error(
@@ -957,6 +1015,7 @@ impl<'a> super::Interpreter<'a> {
                 ("gpu", "prod") => return self.eval_gpu_reduce(args, span, ReduceOp::Prod, "prod"),
                 ("gpu", "min") => return self.eval_gpu_reduce(args, span, ReduceOp::Min, "min"),
                 ("gpu", "max") => return self.eval_gpu_reduce(args, span, ReduceOp::Max, "max"),
+                ("gpu", "dot") => return self.eval_gpu_dot(args, span),
                 // `gpu.upload` / `gpu.download` (resident device buffers) are
                 // compiled-only: the tree-walk interpreter has no device-buffer
                 // model. A clean diagnostic, not the `variable 'gpu' not found`

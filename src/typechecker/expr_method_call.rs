@@ -1094,6 +1094,11 @@ impl<'a> super::TypeChecker<'a> {
             if module == "gpu" && method == "max" {
                 return self.infer_gpu_reduce(args, span, ReduceOp::Max, "max");
             }
+            // `dot` is the one reduction that reads TWO buffers, so it has its
+            // own inference rather than a wider `infer_gpu_reduce`.
+            if module == "gpu" && method == "dot" {
+                return self.infer_gpu_dot(args, span);
+            }
         }
 
         // Critical sections (design.md § Critical sections):
@@ -3496,6 +3501,92 @@ impl<'a> super::TypeChecker<'a> {
         let result = gpu_reduce_result_ty(op, elem);
         self.record_expr_type(span, &result);
         result
+    }
+
+    /// `gpu.dot(a, b)` — the fused multiply-then-sum reduction
+    /// (B-2026-08-19-13).
+    ///
+    /// Separate from [`Self::infer_gpu_reduce`] because it is the only
+    /// reduction that reads two buffers, and because it needs TWO shaders
+    /// recorded rather than one: a level-0 kernel that forms the product on
+    /// load, and the ordinary SUM kernel that folds the per-workgroup partials
+    /// afterwards. Reusing the sum kernel for every later level is what makes
+    /// `gpu.dot(a, b)` and `gpu.sum(a * b)` the same number to the last bit —
+    /// after level 0 they are the same computation.
+    ///
+    /// The two shaders are keyed on the two ARGUMENT spans (level-0 kernel on
+    /// `a`'s, fold kernel on `b`'s) because `gpu_dispatch_wgsl` holds one
+    /// shader per span and the two arguments are distinct source positions
+    /// even when they name the same variable. Codegen reads them back the same
+    /// way.
+    fn infer_gpu_dot(&mut self, args: &[CallArg], span: &Span) -> Type {
+        let f32_ty = Type::Float(FloatSize::F32);
+        if args.len() != 2 {
+            self.type_error(
+                format!(
+                    "error[E_GPU_REDUCE_ARITY]: `gpu.dot` takes exactly two buffers — \
+                     `gpu.dot(a, b)` (found {} argument(s))",
+                    args.len()
+                ),
+                *span,
+                TypeErrorKind::WrongNumberOfArgs,
+            );
+            return f32_ty;
+        }
+
+        // Both buffers must be `Vec[f32]`. Inferred independently so a wrong
+        // second argument is reported against ITS OWN span.
+        for arg in args.iter().take(2) {
+            let ty = self.infer_expr(&arg.value);
+            let ok = matches!(
+                &ty,
+                Type::Named { name, args: ta }
+                    if name == "Vec" && ta.len() == 1 && ta[0] == Type::Float(FloatSize::F32)
+            );
+            if !ok {
+                self.type_error(
+                    format!(
+                        "error[E_GPU_REDUCE_BUFFER]: `gpu.dot` takes two `Vec[f32]` buffers \
+                         (found `{}`) — the GPU reductions cover f32 only",
+                        crate::typechecker::types::type_display(&ty)
+                    ),
+                    arg.value.span,
+                    TypeErrorKind::TypeMismatch,
+                );
+                return f32_ty;
+            }
+        }
+
+        // Equal lengths are a RUNTIME condition — nothing in the type system
+        // carries a Vec's length — so the runtime entry point traps on a
+        // mismatch rather than truncating to the shorter buffer.
+        let level0 = crate::gpu_wgsl::emit_dot_kernel("f32");
+        let fold = crate::gpu_wgsl::emit_reduce_kernel(ReduceOp::Sum, "f32");
+        match (level0, fold) {
+            (Ok(dot_wgsl), Ok(sum_wgsl)) => {
+                self.gpu_dispatch_wgsl.insert(
+                    SpanKey(args[0].value.span.offset, args[0].value.span.length),
+                    dot_wgsl,
+                );
+                self.gpu_dispatch_wgsl.insert(
+                    SpanKey(args[1].value.span.offset, args[1].value.span.length),
+                    sum_wgsl,
+                );
+            }
+            (Err(e), _) | (_, Err(e)) => {
+                self.type_error(
+                    format!(
+                        "error[E_GPU_REDUCE_KERNEL]: cannot lower `gpu.dot` to a GPU shader — {}",
+                        e.reason()
+                    ),
+                    args[0].value.span,
+                    TypeErrorKind::TypeMismatch,
+                );
+            }
+        }
+
+        self.record_expr_type(span, &f32_ty);
+        f32_ty
     }
 
     fn infer_gpu_dispatch(&mut self, args: &[CallArg], span: &Span) -> Type {

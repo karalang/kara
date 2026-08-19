@@ -12068,6 +12068,45 @@ impl<'ctx> super::Codegen<'ctx> {
             .add_function("karac_runtime_gpu_reduce_f32", fn_ty, None)
     }
 
+    /// Lazily declare `karac_runtime_gpu_dot_f32(dot_wgsl_ptr: ptr,
+    /// dot_wgsl_len: i64, sum_wgsl_ptr: ptr, sum_wgsl_len: i64, a_ptr: ptr,
+    /// n_a: i64, b_ptr: ptr, n_b: i64) -> f32` — the fused multiply-then-sum
+    /// reduction (B-2026-08-19-13).
+    ///
+    /// TWO shaders, because a dot product is a map fused into the FIRST level
+    /// of a sum: level 0 forms the product on load and reduces each
+    /// workgroup's chunk, and every level after that folds the partials with
+    /// the ordinary sum kernel. Handing the runtime both is what makes
+    /// `gpu.dot(a, b)` and `gpu.sum(a * b)` bit-identical rather than merely
+    /// close.
+    ///
+    /// BOTH lengths are passed. Nothing in the type system carries a Vec's
+    /// length, so equal lengths are a runtime condition, and the entry point
+    /// is the one place that can see both and refuse.
+    pub(super) fn gpu_dot_f32_fn(&self) -> FunctionValue<'ctx> {
+        if let Some(f) = self.module.get_function("karac_runtime_gpu_dot_f32") {
+            return f;
+        }
+        let i64_t = self.context.i64_type();
+        let f32_t = self.context.f32_type();
+        let ptr_t = self.context.ptr_type(AddressSpace::default());
+        let fn_ty = f32_t.fn_type(
+            &[
+                ptr_t.into(),
+                i64_t.into(),
+                ptr_t.into(),
+                i64_t.into(),
+                ptr_t.into(),
+                i64_t.into(),
+                ptr_t.into(),
+                i64_t.into(),
+            ],
+            false,
+        );
+        self.module
+            .add_function("karac_runtime_gpu_dot_f32", fn_ty, None)
+    }
+
     /// Lazily declare `karac_runtime_gpu_dispatch_soa` — CG-4 / GPU-LBM-3's
     /// struct-SoA dispatch entry. Signature `(wgsl_ptr, wgsl_len, n_groups,
     /// in_ptrs, group_strides, n_fields, field_group, field_src, field_dst,

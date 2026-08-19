@@ -355,7 +355,7 @@ fn exit_code_of(status: &std::process::ExitStatus) -> i32 {
 /// with `Symbols not found: [ karac_runtime_gpu_reduce_f32 ]` while
 /// `karac build` runs it correctly — a run-vs-build divergence.
 #[cfg(feature = "llvm")]
-const GPU_REDUCTION_CALLS: &[&str] = &["gpu.sum(", "gpu.prod(", "gpu.min(", "gpu.max("];
+const GPU_REDUCTION_CALLS: &[&str] = &["gpu.sum(", "gpu.prod(", "gpu.min(", "gpu.max(", "gpu.dot("];
 
 /// True when the program reaches the GPU runtime at all, and so must route to
 /// the tree-walk interpreter rather than the JIT.

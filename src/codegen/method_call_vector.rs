@@ -8,7 +8,7 @@
 use crate::ast::*;
 
 use inkwell::types::BasicTypeEnum;
-use inkwell::values::BasicValueEnum;
+use inkwell::values::{BasicValueEnum, IntValue, PointerValue};
 use inkwell::AddressSpace;
 use inkwell::IntPredicate;
 
@@ -1650,7 +1650,6 @@ impl<'ctx> super::Codegen<'ctx> {
             })?;
 
         let i64_t = self.context.i64_type();
-        let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let wgsl_len = i64_t.const_int(wgsl.len() as u64, false);
         let wgsl_ptr = self
             .builder
@@ -1658,45 +1657,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .map_err(|e| format!("baking gpu.{spelling} shader constant failed: {e}"))?
             .as_pointer_value();
 
-        // Spill + scalar `struct_gep` rather than an aggregate load +
-        // `extractvalue`, which mis-lowers the pointer field to null under
-        // arm64-Linux ASan — the same hazard the dispatch path documents.
-        let buf_val = self.compile_expr(&args[0].value)?;
-        let sv = buf_val.into_struct_value();
-        let vec_ty = sv.get_type();
-        let spill = self.builder.build_alloca(vec_ty, "gpu.rbuf").unwrap();
-        self.builder.build_store(spill, sv).unwrap();
-        let data_field = self
-            .builder
-            .build_struct_gep(vec_ty, spill, 0, "gpu.rdata.p")
-            .unwrap();
-        let data = self
-            .builder
-            .build_load(ptr_ty, data_field, "gpu.rdata")
-            .unwrap()
-            .into_pointer_value();
-        let len_field = self
-            .builder
-            .build_struct_gep(vec_ty, spill, 1, "gpu.rlen.p")
-            .unwrap();
-        let n = self
-            .builder
-            .build_load(i64_t, len_field, "gpu.rn")
-            .unwrap()
-            .into_int_value();
-
-        // A fresh owned temp (`gpu.sum([..])`) has no binding to drop it, so
-        // register it the same way the dispatch path does.
-        let is_fresh_temp = matches!(
-            args[0].value.kind,
-            ExprKind::ArrayLiteral { .. } | ExprKind::PrefixCollectionLiteral { .. }
-        );
-        if is_fresh_temp && self.llvm_ty_is_vec_struct(buf_val.get_type()) {
-            self.materialize_owned_temp(
-                buf_val,
-                (args[0].value.span.offset, args[0].value.span.length),
-            );
-        }
+        let (data, n) = self.read_gpu_reduce_buffer(&args[0].value)?;
 
         // karac_runtime_gpu_reduce_f32(wgsl_ptr, wgsl_len, in_ptr, n,
         // identity) -> f32. The identity is passed rather than baked into the
@@ -1765,6 +1726,129 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.position_at_end(merge_bb);
         Ok(self.build_option_some_via_phis(&[word], some_end_bb, none_bb, "gpu.mm"))
+    }
+
+    /// Read a reduction argument's `Vec` down to `{data, len}`.
+    ///
+    /// Spill + scalar `struct_gep` rather than an aggregate load +
+    /// `extractvalue`, which mis-lowers the pointer field to null under
+    /// arm64-Linux ASan — the same hazard the dispatch path documents.
+    ///
+    /// Also registers a fresh owned temp (`gpu.sum([..])`, `gpu.dot([..], b)`)
+    /// for cleanup: a literal argument has no binding to drop it.
+    fn read_gpu_reduce_buffer(
+        &mut self,
+        arg: &Expr,
+    ) -> Result<(PointerValue<'ctx>, IntValue<'ctx>), String> {
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let buf_val = self.compile_expr(arg)?;
+        let sv = buf_val.into_struct_value();
+        let vec_ty = sv.get_type();
+        let spill = self.builder.build_alloca(vec_ty, "gpu.rbuf").unwrap();
+        self.builder.build_store(spill, sv).unwrap();
+        let data_field = self
+            .builder
+            .build_struct_gep(vec_ty, spill, 0, "gpu.rdata.p")
+            .unwrap();
+        let data = self
+            .builder
+            .build_load(ptr_ty, data_field, "gpu.rdata")
+            .unwrap()
+            .into_pointer_value();
+        let len_field = self
+            .builder
+            .build_struct_gep(vec_ty, spill, 1, "gpu.rlen.p")
+            .unwrap();
+        let n = self
+            .builder
+            .build_load(i64_t, len_field, "gpu.rn")
+            .unwrap()
+            .into_int_value();
+
+        let is_fresh_temp = matches!(
+            arg.kind,
+            ExprKind::ArrayLiteral { .. } | ExprKind::PrefixCollectionLiteral { .. }
+        );
+        if is_fresh_temp && self.llvm_ty_is_vec_struct(buf_val.get_type()) {
+            self.materialize_owned_temp(buf_val, (arg.span.offset, arg.span.length));
+        }
+        Ok((data, n))
+    }
+
+    /// `gpu.dot(a, b)` — the fused multiply-then-sum reduction
+    /// (B-2026-08-19-13).
+    ///
+    /// Bakes TWO shaders: the level-0 kernel that forms the product on load
+    /// (recorded by the typechecker against `a`'s span) and the ordinary sum
+    /// kernel that folds the per-workgroup partials (against `b`'s). Reusing
+    /// the sum kernel past level 0 is what makes `gpu.dot(a, b)` and
+    /// `gpu.sum(a * b)` bit-identical: after the first level they are the same
+    /// computation over the same values.
+    ///
+    /// Both lengths are passed through. Equal lengths are a runtime condition
+    /// — no Vec carries its length in the type — so the entry point traps on a
+    /// mismatch rather than reading `b` past its end.
+    pub(super) fn compile_gpu_dot(
+        &mut self,
+        args: &[CallArg],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        if args.len() != 2 {
+            return Err(format!(
+                "gpu.dot expects two buffers, found {} argument(s)",
+                args.len()
+            ));
+        }
+        let i64_t = self.context.i64_type();
+
+        // Two shaders, keyed on the two argument spans — the same channel and
+        // the same keying the typechecker wrote them with.
+        let mut baked = Vec::with_capacity(2);
+        for (idx, label) in [(0usize, "gpu.dot.wgsl"), (1usize, "gpu.dot.fold.wgsl")] {
+            let key = (args[idx].value.span.offset, args[idx].value.span.length);
+            let wgsl = self
+                .accel
+                .gpu_dispatch_wgsl
+                .get(&key)
+                .cloned()
+                .ok_or_else(|| {
+                    "internal error: no WGSL recorded for `gpu.dot` — the typechecker intercept \
+                     must run before codegen"
+                        .to_string()
+                })?;
+            let len = i64_t.const_int(wgsl.len() as u64, false);
+            let ptr = self
+                .builder
+                .build_global_string_ptr(&wgsl, label)
+                .map_err(|e| format!("baking gpu.dot shader constant failed: {e}"))?
+                .as_pointer_value();
+            baked.push((ptr, len));
+        }
+
+        let (a_data, a_n) = self.read_gpu_reduce_buffer(&args[0].value)?;
+        let (b_data, b_n) = self.read_gpu_reduce_buffer(&args[1].value)?;
+
+        let dot_fn = self.gpu_dot_f32_fn();
+        let out = self
+            .builder
+            .build_call(
+                dot_fn,
+                &[
+                    baked[0].0.into(),
+                    baked[0].1.into(),
+                    baked[1].0.into(),
+                    baked[1].1.into(),
+                    a_data.into(),
+                    a_n.into(),
+                    b_data.into(),
+                    b_n.into(),
+                ],
+                "gpu.dotted",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic();
+        Ok(out)
     }
 
     pub(super) fn compile_gpu_dispatch(

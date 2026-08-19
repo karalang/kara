@@ -1027,6 +1027,67 @@ pub fn emit_reduce_kernel(op: ReduceOp, elem: &str) -> Result<String, WgslError>
     ))
 }
 
+/// Emit the `gpu.dot(a, b)` level-0 shader: multiply the two buffers
+/// element-wise on load, then run the SAME halving tree `emit_reduce_kernel`
+/// emits for a sum (B-2026-08-19-13).
+///
+/// **This is one level, not the whole reduction.** It leaves one partial per
+/// workgroup, and the host folds those with the plain SUM shader — a dot
+/// product is a map fused into the first level of a sum, and only the first
+/// level knows about two buffers. Reusing the sum shader for every later level
+/// is what keeps the two paths from drifting: `gpu.dot(a, b)` and
+/// `gpu.sum(a * b)` agree bit-for-bit by construction, because after level 0
+/// they ARE the same computation.
+///
+/// The two inputs sit at `@binding(0)` and `@binding(1)`, the partials at
+/// `@binding(2)` — the runtime's dispatch binds inputs first, then outputs, so
+/// a 2-in/1-out kernel lands exactly there.
+///
+/// Multiplying on load rather than in a separate map dispatch is the point:
+/// it halves the device traffic (no `n`-element intermediate is ever written)
+/// and is why `dot` is worth its own entry point instead of being sugar for
+/// `sum(zip_mul(a, b))`.
+pub fn emit_dot_kernel(elem: &str) -> Result<String, WgslError> {
+    if elem != "f32" {
+        return Err(WgslError::UnsupportedSignature(format!(
+            "GPU `dot` over `{elem}` is not supported yet — the reduction entry point is f32-only"
+        )));
+    }
+    let width = GPU_REDUCE_WIDTH;
+    let half = width / 2;
+    Ok(format!(
+        "@group(0) @binding(0) var<storage, read>       a:      array<{elem}>;\n\
+         @group(0) @binding(1) var<storage, read>       b:      array<{elem}>;\n\
+         @group(0) @binding(2) var<storage, read_write> output: array<{elem}>;\n\
+         \n\
+         var<workgroup> scratch: array<{elem}, {width}>;\n\
+         \n\
+         @compute @workgroup_size({width})\n\
+         fn main(@builtin(local_invocation_id) lid: vec3<u32>,\n\
+         \x20       @builtin(workgroup_id) wid: vec3<u32>,\n\
+         \x20       @builtin(global_invocation_id) gid: vec3<u32>) {{\n\
+         \x20   let t = lid.x;\n\
+         \x20   let i = gid.x;\n\
+         \x20   // The ONLY difference from the sum shader: the product is\n\
+         \x20   // formed on load, so no n-element intermediate is written.\n\
+         \x20   if (i < arrayLength(&a)) {{ scratch[t] = a[i] * b[i]; }} else {{ scratch[t] = 0.0; }}\n\
+         \x20   workgroupBarrier();\n\
+         \n\
+         \x20   var stride: u32 = {half}u;\n\
+         \x20   loop {{\n\
+         \x20       if (stride == 0u) {{ break; }}\n\
+         \x20       if (t < stride) {{ scratch[t] = scratch[t] + scratch[t + stride]; }}\n\
+         \x20       workgroupBarrier();\n\
+         \x20       stride = stride / 2u;\n\
+         \x20   }}\n\
+         \n\
+         \x20   // One partial per workgroup; the host folds them with the\n\
+         \x20   // plain SUM shader, which is what makes dot and sum agree.\n\
+         \x20   if (t == 0u) {{ output[wid.x] = scratch[0]; }}\n\
+         }}\n"
+    ))
+}
+
 /// The three pieces `emit_reduce_kernel` needs for one op: any helper-function
 /// PRELUDE, the COMBINE expression folding `scratch[t]` with
 /// `scratch[t + stride]`, and the IDENTITY that pads a short chunk.
@@ -3955,6 +4016,57 @@ mod tests {
             let err = emit_reduce_kernel(op, "f32").unwrap_err();
             let msg = format!("{err:?}");
             assert!(msg.contains("not supported yet"), "{msg}");
+        }
+    }
+
+    #[test]
+    fn dot_kernel_is_the_sum_kernel_with_the_product_formed_on_load() {
+        // The design claim, checked against the two shaders rather than
+        // asserted in a comment: everything after the load is byte-identical
+        // to the sum kernel, which is why `gpu.dot(a, b)` and
+        // `gpu.sum(a * b)` agree bit-for-bit.
+        let dot = emit_dot_kernel("f32").unwrap();
+        let sum = emit_reduce_kernel(ReduceOp::Sum, "f32").unwrap();
+
+        // Two inputs and ONE output — the binding shape a reduction needs and
+        // an element-wise map does not. The runtime binds inputs first, then
+        // outputs, so the partials land at `@binding(2)`.
+        assert!(dot.contains("@binding(0) var<storage, read>       a:      array<f32>;"));
+        assert!(dot.contains("@binding(1) var<storage, read>       b:      array<f32>;"));
+        assert!(dot.contains("@binding(2) var<storage, read_write> output: array<f32>;"));
+
+        // The one substantive difference: the product is formed on load, so no
+        // n-element intermediate is ever written.
+        assert!(dot.contains(
+            "if (i < arrayLength(&a)) { scratch[t] = a[i] * b[i]; } else { scratch[t] = 0.0; }"
+        ));
+        assert!(sum.contains(
+            "if (i < arrayLength(&input)) { scratch[t] = input[i]; } else { scratch[t] = 0.0; }"
+        ));
+
+        // Everything after the load is shared, verbatim.
+        for shared in [
+            "var<workgroup> scratch: array<f32, 64>;",
+            "@compute @workgroup_size(64)",
+            "var stride: u32 = 32u;",
+            "if (t < stride) { scratch[t] = scratch[t] + scratch[t + stride]; }",
+            "workgroupBarrier();",
+            "stride = stride / 2u;",
+            "if (t == 0u) { output[wid.x] = scratch[0]; }",
+        ] {
+            assert!(dot.contains(shared), "dot missing `{shared}`:\n{dot}");
+            assert!(sum.contains(shared), "sum missing `{shared}`:\n{sum}");
+        }
+    }
+
+    #[test]
+    fn dot_kernel_refuses_non_f32_elements() {
+        // The runtime entry point is f32-only, and an integer routed through
+        // it would lose precision above 2^24 — the same reason the reduction
+        // typechecker is narrower than the reduction emitter.
+        for elem in ["i32", "u32", "f16"] {
+            let err = emit_dot_kernel(elem).unwrap_err();
+            assert!(format!("{err:?}").contains("f32-only"), "{elem}");
         }
     }
 
