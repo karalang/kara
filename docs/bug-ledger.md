@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 262 | 0 |
 | leak | 185 | 0 |
-| run-vs-build | 137 | 2 |
+| run-vs-build | 137 | 1 |
 | double-free | 133 | 0 |
 | codegen-gap | 119 | 0 |
 | missing-feature | 119 | 2 |
@@ -111,8 +111,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 945 | 3 |
-| typecheck | 211 | 2 |
-| interp | 159 | 2 |
+| typecheck | 211 | 1 |
+| interp | 159 | 1 |
 | ownership | 60 | 0 |
 | other | 58 | 0 |
 | autopar | 49 | 0 |
@@ -124,14 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 5 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1368 surfaced · 4 open · 1345 fixed · 7 wontfix** (2026-05-20 → 2026-08-19). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1368 surfaced · 3 open · 1346 fixed · 7 wontfix** (2026-05-20 → 2026-08-19). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-19-13 | 2026-08-19 | typecheck+codegen+runtime | medium | GPU reductions still lack the Arg family (argmin / argmax), the two-pass statistics (var / std), prefix-sum and tiled matmul; and INTEGER reductions are blocked on an overflow rule rather than on effort. `sum`/`prod`/`min`/`max`/`mean`/`dot` over `Vec[f32]` have shipped. | docs/spikes/gpu-llvm-offload-assessment.md; src/gpu_wgsl.rs::emit_reduce_kernel; src/reduce_kernel.rs::tree_reduce_f32 |
-| B-2026-08-19-17 | 2026-08-19 | typecheck+interp | medium | A BARE AMBIGUOUS UNIT VARIANT PICKS A DIFFERENT ENUM IN EACH BACKEND: with `enum First { A, B }` and `enum Second { A, C }`, `let x = A; x.tag()` prints First's answer under `karac build` and Second's under `karac run`. No diagnostic on either side -- and the spec does not say what a bare ambiguous variant name should mean. | src/interpreter.rs::register_items (Item::EnumDef arm, bare `env.define(variant.name)`); src/interpreter/eval_expr.rs (ExprKind::Path last-segment fallback); typechecker bare-variant resolution |
 | B-2026-08-19-19 | 2026-08-19 | codegen | medium | A 128-bit scalar cannot be carried in an ENUM PAYLOAD: an Option/Result payload word is 64 bits and `i128`/`u128` needs two, which the pack/unpack machinery has no case for. Refused loudly at type-check for now (`Option[i128]`, `Result[i128, E]`, and `checked_*` which returns `Option[Self]`); everything else about 128-bit works. | src/codegen/call_dispatch.rs::coerce_to_payload_words; src/codegen/calls.rs::rebuild_value_from_payload_words; src/codegen/control_flow_match.rs::reconstruct_payload_value; src/codegen/declarations.rs::{llvm_type_word_count,payload_word_count_for_type_expr}; docs/spikes/oversized-enum-payload.md; the guards in src/typechecker/lowering.rs and src/typechecker/method_numeric.rs |
 | B-2026-08-19-20 | 2026-08-19 | interp+codegen | medium | The `Stats` empty-slice refusals present DIFFERENTLY on the two legs: the interpreter raw-`panic!`s (Rust backtrace, exit 101) where `karac build` emits a clean Kara panic with a source span (exit 1). Affects mean / median / variance / stddev. Separately, `Stats.stddev([])` reports itself as `Stats.variance()` on BOTH legs. | src/interpreter/helpers.rs::eval_stats_fn (the four empty-slice guards); docs/design.md § Statistical reductions |
 
@@ -151,9 +150,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1368 surfaced
 
 </details>
 
-### Fixed (1345)
+### Fixed (1346)
 
-<details><summary>1345 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1346 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -12342,6 +12341,24 @@ That mattered because `eval_expr`'s `ExprKind::Path` arm tries `env.get("First.A
 The bare binding is deliberately kept. The pattern matcher classifies a bare PascalCase identifier as a unit-variant pattern only when `env.get(name)` returns a unit `EnumVariant` (documented at the `Ordering` registration); dropping it would turn every bare match arm into a catch-all binding, which is bug-ledger B-2026-06-30-14.
 
 VERIFIED on all four surfaces -- `run --interp`, `run` (JIT), `build`, and `KARAC_AUTO_PAR=0 build` -- across six programs: colliding unit variants direct and through a let, colliding tuple variants, colliding struct variants, and the unambiguous bare-name case. All agree and all are correct. Four regression tests in tests/interpreter.rs, including one pinning that non-unit variants keep working (they were always correct -- constructed at call sites where the enum name is in hand) and one pinning the bare-name path against the B-2026-06-30-14 regression. |
+| B-2026-08-19-17 | typecheck+interp | medium | A BARE AMBIGUOUS UNIT VARIANT PICKED A DIFFERENT ENUM IN EACH BACKEND -- `karac build` printed First's answer and `karac run` printed Second's, with… | FIXED by a94038e (a) + 15b8dc7 (b), in two parts, deliberately separable.
+
+(a) INTERPRETER COMPLIANCE -- the actual bug, zero breakage. `register_items` binds a bare variant name by plain last-write-wins, so the later-declared enum owned `env["A"]` for the whole program. The typechecker does not resolve it that way and codegen follows the typechecker, so the interpreter was the odd one out. Rather than reimplement the precedence in a second place -- two copies of a rule is exactly how these backends drifted apart -- `retag_bare_unit_variant` reads the enum the typechecker already recorded in `expr_types` for that span and adopts it. Agreement is then true by construction; this is the same channel B-2026-08-13-8 used to hand codegen's winning impl to the interpreter. It is silent when the value is not a unit variant, when `expr_types` has no entry (it is sparse), or when the enum already matches, so the non-colliding case costs one map lookup.
+
+(b) REJECT THE AMBIGUITY -- the language change. A bare variant name declared by two or more USER enums is now `E0279 AmbiguousBareVariant`, naming both enums and offering both qualified forms. Scoped precisely to the case with no chosen winner; three collisions that DO have one are deliberately still accepted:
+  - user enum shadowing a stdlib/prelude one -- the two-tier scan favours the user on purpose, so `MyIoErr.Other` is not hijacked by the seeded `IoError.Other`;
+  - `Some` / `None` / `Ok` / `Err`, pinned to their builtin owner so a user enum cannot capture a bare `None`;
+  - PATTERN position, which is scrutinee-typed and correct on every backend -- `match c { Less => ... }` after `.cmp()` is idiomatic and must keep working.
+
+The diagnostic sits on the bare-identifier arm of `infer_expr`, not inside `resolve_identifier_type`, for the reason B-2026-08-11-6 recorded when it put the type-name-in-value-position diagnostic in the same place: that helper is also the speculative first-segment fallback for `resolve_path_type`, so a hard error inside it fires on paths that go on to resolve fine. The resolved winner is returned after the diagnostic, so an ambiguous name costs ONE error instead of a cascade of "expected X, found Error" at every downstream use.
+
+WHY REJECTING COSTS NOTHING THE AUTHOR COULD HAVE WRITTEN. Expression position has no type-direction at all: `let x: Second = A;`, `fn f() -> Second { A }` and `want_second(A)` are ALL rejected today with "expected 'Second', found 'First'". The losing enum is not merely deprioritized, it is unreachable by bare name even deliberately. So the choice was never the author's to make, and picking one silently was the worst of the available behaviours.
+
+MEASURED BREAKAGE: none. The full suite is 122 targets / 9288 passing with (b) in place -- no test in the repo uses a colliding bare variant in expression position. The programs (b) newly rejects are exactly those that were already either divergent or correct only by coincidence (when the alphabetical winner happened to also be the last declared).
+
+FORWARD-COMPATIBLE: an error can later be relaxed into type-directed resolution without breaking anyone, whereas blessing a winner now would make changing it a breaking change.
+
+VERIFIED on all four surfaces (`run --interp`, `run`, `build`, `KARAC_AUTO_PAR=0 build`) across eight programs; 7 new tests (5 typechecker, 2 interpreter); both clippy legs and fmt clean. |
 | B-2026-08-19-18 | cli+codegen | high | `karac run` FAILED on every GPU reduction program while `karac build` answered correctly — `JIT session error: Symbols not found: [ karac_runtime_gpu… | FIXED by ba484b53. `program_declares_gpu_kernel` is now one half of `program_uses_gpu_runtime`; the other half is a source scan for the reduction spellings (`gpu.sum(`, `gpu.prod(`, `gpu.min(`, `gpu.max(`, `gpu.dot(`), the same cheap form the Arrow IPC gate beside it already uses. A false positive only routes a non-GPU program to the correct-if-slower interpreter, so the scan is safe to keep broad.
 
 THE TEST HOLE MATTERED MORE THAN THE BUG. `tests/gpu_e2e.rs` compared `karac run --interp` against `karac build` — and `--interp` is PRECISELY the lane the routing is supposed to select, so the comparison ran straight through the defect and reported green. The A/B rule in kara-katas/CLAUDE.md is `run` == `build`, and `run` means the DEFAULT lane, which has been the JIT since LLJIT slice 6c. `assert_gpu_reduce_matches_interp` now asserts all three surfaces agree (`run --interp`, `run`, `build`). Reverting the one-line detection makes it fail with the original symbol error, so the new leg is not vacuous — checked.
