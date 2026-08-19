@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 262 | 0 |
 | leak | 185 | 0 |
 | double-free | 133 | 0 |
-| run-vs-build | 132 | 2 |
+| run-vs-build | 133 | 2 |
 | codegen-gap | 119 | 0 |
 | missing-feature | 113 | 3 |
 | diagnostics | 83 | 0 |
@@ -112,19 +112,19 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | codegen | 939 | 4 |
 | typecheck | 204 | 3 |
-| interp | 155 | 2 |
+| interp | 155 | 1 |
 | ownership | 60 | 0 |
 | other | 56 | 1 |
 | autopar | 49 | 0 |
-| cli | 46 | 0 |
+| cli | 47 | 1 |
 | parser | 27 | 1 |
-| runtime | 23 | 1 |
+| runtime | 24 | 2 |
 | resolver | 20 | 0 |
 | effect | 7 | 0 |
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1354 surfaced · 7 open · 1329 fixed · 7 wontfix** (2026-05-20 → 2026-08-19). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1355 surfaced · 7 open · 1330 fixed · 7 wontfix** (2026-05-20 → 2026-08-19). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (7)
 
@@ -132,11 +132,11 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1354 surfaced
 |---|---|---|---|---|---|
 | B-2026-08-18-40 | 2026-08-18 | typecheck+codegen | low | A `#[gpu]` KERNEL BODY COULD NOT LOOP, BIND A LOCAL, OR BRANCH ON A VALUE — it had to be a SINGLE EXPRESSION. All four increments LANDED 2026-08-18: immutable `let`, `while` + mutable locals + assignment, `for`-over-range, and value `match`. Reductions, accumulators, nested counted loops and table lookups now compile AND run (each verified on lavapipe against the interpreter). REMAINDER SPLIT OUT AS B-2026-08-18-49: statement-form `if` is unsupported (and a value-`if` branch cannot hold a local) — wider than this row's original "locals inside an `if` branch" wording, which understated it. | docs/implementation_checklist/phase-10-targets.md § GPU codegen cluster (CG-1…CG-7); the slice-0 scope decision is docs/spikes/gpu-wgsl-slice0.md. Not a regression — an unlifted slice-0 floor. Sibling of the CG-5 assessment (docs/spikes/gpu-llvm-offload-assessment.md finding 4), which is where it surfaced. |
 | B-2026-08-19-1 | 2026-08-19 | codegen+runtime | high | A `#[gpu]` kernel SILENTLY DROPS Kara's checked-integer-arithmetic semantics: the same expression that TRAPS under `--interp` (and on CPU) WRAPS on the GPU, and division by zero returns a plausible number instead of failing. Three measured divergences, all silent wrong answers rather than crashes. This breaks the repo's own non-negotiable A/B rule (`run` == `build`) and voids, inside kernels, the overflow-checking guarantee BENCHMARKS.md leans on when framing Kara-vs-Rust as an equal-safety tie. | — |
-| B-2026-08-19-2 | 2026-08-19 | interp | low | `karac run --interp prog | head` dumps a Rust panic + backtrace on SIGPIPE; the JIT and the AOT binary exit silently | — |
 | B-2026-08-19-3 | 2026-08-19 | parser+codegen | low | MULTI-BOUND `effect resource` declarations do not parse: `effect resource UserDB: DatabaseProvider + HealthCheckable;` -> "Expected Semicolon, found Plus", spec'd normatively at design.md:7216 under "Multiple trait bounds are allowed on a resource declaration:" (:7213), with semantics attached at :7217 ("Any provider passed to `with_provider` must implement all declared bounds plus `Send + Sync`"). | src/parser/items_effects.rs::parse_effect_resource_tail vs design.md:7216 (prose at :7213, semantics at :7217); src/codegen/provider_state.rs::provider_resource_traits and its nine readers |
 | B-2026-08-19-4 | 2026-08-19 | typecheck | medium | `with_provider[R](p, ...)` NEVER CHECKS that `p` implements the resource's declared provider trait. A struct with a matching method but no `impl Trait for U` passes resolve, typecheck and effectcheck, then fails in CODEGEN with a message blaming the vtable -- design.md:7217 requires the opposite ("Any provider passed to `with_provider` must implement all declared bounds plus `Send + Sync`"). | design.md:7217; src/typechecker/env_build.rs::collect_user_resource_override_types; the codegen message at src/codegen/provider.rs ("no impl found for `T::m`") |
 | B-2026-08-19-5 | 2026-08-19 | other | low | The codegen E2E harness (`tests/codegen.rs::run_program_capturing_inner`) runs resolve + typecheck but NOT the effect checker, so a test can pin behaviour for a program `karac build` REFUSES. Its `assert_check_clean` gate is named for the whole check phase and covers two thirds of it. | tests/codegen.rs::run_program_capturing_inner; tests/common's assert_check_clean; cf. B-2026-08-11-34 (the prepare_for_resolve drift this gate was hardened against) |
 | B-2026-08-19-6 | 2026-08-19 | typecheck+interp+codegen | medium | `i128` / `u128` are CARRIED AS 64-BIT and wrap there silently: `let a: i128 = 9223372036854775807; a.wrapping_add(1)` prints `-9223372036854775808` instead of `9223372036854775808`. The types parse, type-check and run — they are simply not the width they claim, so any value above the 64-bit range is silently wrong rather than rejected. | — |
+| B-2026-08-19-7 | 2026-08-19 | runtime+cli | low | `karac run` (JIT) IGNORES A CLOSED READER ENTIRELY: with `| head -2` it runs the whole program to completion, discarding every failed write, then exits 0 — while the AOT binary for the same source dies at the first broken write with status 141. MEASURED on a 2,000,000-line program: 541 ms with the pipe closed after two lines vs 547 ms writing everything to /dev/null (statistically identical), against 5 ms for the AOT binary. 100x the work here, and unbounded for a long-running program. | roadmap.md |
 
 ### Wontfix (7)
 
@@ -154,9 +154,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1354 surfaced
 
 </details>
 
-### Fixed (1329)
+### Fixed (1330)
 
-<details><summary>1329 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1330 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -12127,6 +12127,23 @@ MEASURED BOTH WAYS on a host with no GPU archive:
 THE MATCHER IS PINNED BY ITS OWN TEST, because the whole value of a four-way split is that the new arm catches EXACTLY the absent archive: one careless `contains` would hand `Broken`'s cases a skip and reopen the hole the file exists to close. `probe_classifier_matches_only_the_absent_gpu_archive` asserts the driver's real wording classifies as `NoArchive`, and that four things do NOT — a no-adapter host, a shader the backend rejected, a runtime fault, and a DIFFERENT optional archive's message (regex), whose near-identical phrasing is the likeliest way a future widening goes wrong. It also asserts the two predicates are disjoint, so arm order in `gpu_probe` cannot silently decide an outcome. Verified non-vacuous: widening the matcher to `contains("not found") || contains("failed")` fails it on the no-adapter case. Pure-string, so it runs on any host — which matters, since a host with no adapter is exactly where the classifier decides everything.
 
 SCOPE NOTE: this does not make the GPU tests run anywhere they did not before, and it is not a substitute for building the archive. It restores the property every other archive-gated suite already has — that an opt-in artifact's absence is a skip, and that one flag turns every such skip into a failure. |
+| B-2026-08-19-2 | interp | low | `karac run --interp prog \| head` dumps a Rust panic + backtrace on SIGPIPE; the JIT and the AOT binary exit silently | FIXED by 17af4e8. `write_stdout` no longer writes through `println!`. It writes to a locked stdout and, on `ErrorKind::BrokenPipe`, exits 141 (`128 + SIGPIPE`) without a message — reproducing what the kernel does to a native binary. Every other io error still panics: a full disk or a closed terminal is a real failure the user needs told about, and only the reader-went-away case is normal enough to be silent.
+
+THE ROW'S DIAGNOSIS OF THE MECHANISM WAS EXACTLY RIGHT and is worth restating because it is the whole reason the three surfaces differ: an AOT binary IS the process, so it inherits the default SIGPIPE disposition and the kernel kills it; `karac` is a Rust program, and Rust sets SIGPIPE to SIG_IGN at startup, so inside the interpreter the signal never arrives and the write reports EPIPE instead. Exiting abruptly without running destructors is the faithful part, not the lossy part — a signal death runs none either.
+
+TWO CORRECTIONS TO THE ROW'S MEASUREMENTS, both found by re-measuring rather than by reading:
+
+1. THE EXIT STATUS DIVERGES THREE WAYS, not zero. The row says "the pipeline exit code is 0 in all three cases (head's), so nothing downstream notices" — true of `$?` after the pipeline, but `PIPESTATUS[0]` (what any harness checking the producer reads) showed three different answers:
+       karac run --interp   ->  101   (Rust panic)
+       karac run (JIT)      ->  0     (claims success)
+       AOT binary           ->  141   (128 + SIGPIPE, correct)
+   So this was never only-cosmetic. The interpreter now reports 141, matching the AOT reference exactly.
+
+2. THE STDERR VOLUME IS 55 LINES HERE, not 21 — a backtrace-verbosity difference between environments, not a behaviour difference. Recorded so a future reader does not think the shape changed.
+
+A THIRD SURFACE IS STILL WRONG, filed separately rather than folded in: the JIT does not merely report the wrong status, it IGNORES the closed reader entirely and runs the program to completion. Measured on a 2,000,000-line program: 541 ms with the pipe closed after two lines versus 547 ms writing everything to /dev/null — statistically identical — while the AOT binary dies in 5 ms. That is 100x the work here and unbounded for a long-running program, and it is a different defect in a different component (the runtime's write path plus `cmd_run`'s status handling), so it gets its own row.
+
+GATED by `interp_broken_pipe_exits_quietly_like_a_native_binary`, which spawns `karac run --interp`, reads a little, drops the read end, and asserts stderr is EMPTY and the status is 141. It asserts on stderr and status rather than stdout deliberately: how much output arrives before the reader closes is a scheduling race, and pinning it would make the test flaky for a property it is not about. Verified red before the fix (the panic report is the failure) and green after. |
 
 </details>
 
