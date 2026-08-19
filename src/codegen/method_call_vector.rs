@@ -1693,15 +1693,16 @@ impl<'ctx> super::Codegen<'ctx> {
         };
 
         // `sum`/`prod` always have an answer, so the call IS the result.
-        if !matches!(spelling, "min" | "max") {
+        if !matches!(spelling, "min" | "max" | "mean") {
             return Ok(call_reduce(self));
         }
 
-        // `min`/`max` return `Option[f32]`: an empty buffer has no extremum.
-        // Guarded HERE rather than in the runtime because the runtime's empty
-        // short-circuit returns the identity, and ±∞ is exactly the plausible
-        // wrong answer this family must not produce. Same branch-and-phi shape
-        // as `stats_minmax`, which answers `None` for the same reason.
+        // `min`/`max`/`mean` return `Option[f32]`: an empty buffer has no
+        // extremum and no mean. Guarded HERE rather than in the runtime
+        // because the runtime's empty short-circuit returns the identity, and
+        // ±∞ (or `0.0 / 0`, NaN) is exactly the plausible wrong answer this
+        // family must not produce. Same branch-and-phi shape as
+        // `stats_minmax`, which refuses the same input for the same reason.
         let i64_t = self.context.i64_type();
         let fn_val = self.current_fn.expect("gpu reduce in function");
         let nonempty = self
@@ -1717,6 +1718,24 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.position_at_end(some_bb);
         let reduced = call_reduce(self);
+        // `mean` is the tree sum divided ONCE, on the host, after the fold has
+        // converged — a shader cannot know it is running the last level, so a
+        // division inside it would divide once per level. That is the whole of
+        // the operation beyond `sum`: no shader of its own, one `fdiv`. It
+        // also makes `gpu.mean(v)` and `gpu.sum(v) / (v.len() as f32)` the
+        // same number to the last bit, which the twin relies on.
+        let reduced = if spelling == "mean" {
+            let n_f32 = self
+                .builder
+                .build_signed_int_to_float(n, f32_t, "gpu.mean.n")
+                .unwrap();
+            self.builder
+                .build_float_div(reduced.into_float_value(), n_f32, "gpu.mean")
+                .unwrap()
+                .into()
+        } else {
+            reduced
+        };
         let word = self.coerce_to_payload_words(reduced, 1)?[0];
         let some_end_bb = self.builder.get_insert_block().unwrap();
         self.builder.build_unconditional_branch(merge_bb).unwrap();

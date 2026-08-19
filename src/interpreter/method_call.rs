@@ -823,11 +823,12 @@ impl<'a> super::Interpreter<'a> {
             }
         }
 
-        // `min`/`max` of an empty buffer is `None`, not a number — the same
-        // answer `Stats.min` and `Vec.min` give. Checked BEFORE the fold
-        // because the fold would happily return the padding identity (+inf),
-        // which is a plausible wrong answer rather than an obvious one.
-        let fallible = matches!(op, ReduceOp::Min | ReduceOp::Max);
+        // `min`/`max`/`mean` of an empty buffer is `None`, not a number — the
+        // same refusal `Stats.min` and `Vec.min` give, and the same one
+        // `Stats.mean` gives by trapping. Checked BEFORE the fold because the
+        // fold would happily return the padding identity (+inf) or `0.0 / 0`
+        // (NaN), both plausible wrong answers rather than obvious ones.
+        let fallible = matches!(op, ReduceOp::Min | ReduceOp::Max | ReduceOp::Mean);
         if fallible && xs.is_empty() {
             return Value::EnumVariant {
                 enum_name: "Option".to_string(),
@@ -840,7 +841,15 @@ impl<'a> super::Interpreter<'a> {
         // tree, beyond it a tree of per-workgroup partials — the same
         // recursion the multi-dispatch runtime performs, so the two surfaces
         // agree bit-for-bit rather than one refusing what the other answers.
-        match crate::reduce_kernel::tree_reduce_f32(&xs, op) {
+        // `mean` is the specified tree sum divided once, on the host — see
+        // `reduce_kernel::tree_mean_f32` for why the division cannot live in
+        // the shader.
+        let folded = if matches!(op, ReduceOp::Mean) {
+            crate::reduce_kernel::tree_mean_f32(&xs)
+        } else {
+            crate::reduce_kernel::tree_reduce_f32(&xs, op)
+        };
+        match folded {
             // `f32 as f64` is exact (every f32 is an f64), so widening to the
             // interpreter's carrier cannot change the answer the GPU computed.
             Some(r) if fallible => Value::EnumVariant {
@@ -1015,6 +1024,7 @@ impl<'a> super::Interpreter<'a> {
                 ("gpu", "prod") => return self.eval_gpu_reduce(args, span, ReduceOp::Prod, "prod"),
                 ("gpu", "min") => return self.eval_gpu_reduce(args, span, ReduceOp::Min, "min"),
                 ("gpu", "max") => return self.eval_gpu_reduce(args, span, ReduceOp::Max, "max"),
+                ("gpu", "mean") => return self.eval_gpu_reduce(args, span, ReduceOp::Mean, "mean"),
                 ("gpu", "dot") => return self.eval_gpu_dot(args, span),
                 // `gpu.upload` / `gpu.download` (resident device buffers) are
                 // compiled-only: the tree-walk interpreter has no device-buffer

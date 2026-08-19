@@ -936,6 +936,59 @@ fn gpu_sum_agrees_bit_for_bit_past_one_workgroup() {
 }
 
 #[test]
+fn gpu_mean_equals_the_sum_over_the_count_on_the_device() {
+    // Mean has no shader of its own — it runs the SUM kernel unchanged and the
+    // host divides once, after the fold converges. (A shader cannot know it is
+    // running the last level, so a division inside it would divide once per
+    // level.) 4096 tenths is two full fold levels and a value where the tree
+    // order is observable, so a mean that divided per level, or folded some
+    // other way, would land somewhere else.
+    assert_gpu_reduce_matches_interp(
+        "reduce_mean_vs_sum",
+        "fn main() {\n\
+        \x20   let mut v: Vec[f32] = [];\n\
+        \x20   let mut p: Vec[f32] = [];\n\
+        \x20   for i in 0..4096 { v.push(0.1) p.push(0.1) }\n\
+        \x20   let m = gpu.mean(v);\n\
+        \x20   match m {\n\
+        \x20       Some(x) => println(f\"{x}\"),\n\
+        \x20       None => println(\"empty\"),\n\
+        \x20   }\n\
+        \x20   println(f\"{gpu.sum(p) / 4096.0}\")\n\
+        }\n",
+        "0.10000000149011612\n0.10000000149011612",
+    );
+
+    assert_gpu_reduce_matches_interp(
+        "reduce_mean_small",
+        "fn main() {\n\
+        \x20   let v: Vec[f32] = [1.0, 2.0, 3.0];\n\
+        \x20   let m = gpu.mean(v);\n\
+        \x20   match m {\n\
+        \x20       Some(x) => println(f\"{x}\"),\n\
+        \x20       None => println(\"empty\"),\n\
+        \x20   }\n\
+        }\n",
+        "2",
+    );
+
+    // Empty never reaches a device: decided entirely by codegen's branch, and
+    // `0.0 / 0` is NaN if that branch is wrong.
+    assert_gpu_reduce_matches_interp(
+        "reduce_mean_empty",
+        "fn main() {\n\
+        \x20   let v: Vec[f32] = [];\n\
+        \x20   let m = gpu.mean(v);\n\
+        \x20   match m {\n\
+        \x20       Some(x) => println(f\"{x}\"),\n\
+        \x20       None => println(\"empty\"),\n\
+        \x20   }\n\
+        }\n",
+        "empty",
+    );
+}
+
+#[test]
 fn gpu_dot_equals_the_sum_of_the_products_on_the_device() {
     // The guarantee the two-shader design exists to hold. `dot`'s level-0
     // shader forms the product on load and then runs the SAME halving tree the

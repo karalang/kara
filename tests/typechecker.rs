@@ -37640,6 +37640,39 @@ fn gpu_sum_takes_exactly_one_buffer() {
 }
 
 #[test]
+fn gpu_mean_returns_option_and_shares_the_reduction_diagnostics() {
+    // Fallible for the same reason min/max are: the mean of an empty buffer
+    // is not a number, and `0.0 / 0` (NaN) is the plausible-looking value that
+    // would propagate silently. Making it a signature difference rather than a
+    // documented special case is what forces the caller to see it.
+    typecheck_ok(
+        "fn main() {\n\
+        \x20   let buf: Vec[f32] = [1.0, 2.0];\n\
+        \x20   let m: Option[f32] = gpu.mean(buf);\n\
+        }",
+    );
+    let errs = typecheck_errors("fn main() { let b: Vec[f32] = [1.0]; let m: f32 = gpu.mean(b); }");
+    assert!(
+        !errs.is_empty(),
+        "`gpu.mean` must not typecheck as a bare f32"
+    );
+
+    // One inference path with sum/prod/min/max, so the refusals cannot drift.
+    let errs = typecheck_errors("fn main() { let b: Vec[i32] = [1, 2]; let m = gpu.mean(b); }");
+    assert!(
+        errs.iter()
+            .any(|e| e.to_string().contains("cover f32 only")),
+        "expected the f32-only refusal, got: {errs:?}"
+    );
+    let errs = typecheck_errors("fn main() { let b: Vec[f32] = [1.0]; let m = gpu.mean(b, b); }");
+    assert!(
+        errs.iter()
+            .any(|e| e.to_string().contains("E_GPU_REDUCE_ARITY")),
+        "expected an arity error, got: {errs:?}"
+    );
+}
+
+#[test]
 fn gpu_dot_takes_two_f32_buffers_and_returns_a_scalar() {
     typecheck_ok(
         "fn main() {\n\

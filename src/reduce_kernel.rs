@@ -55,6 +55,34 @@ pub fn tree_reduce_f32(xs: &[f32], op: ReduceOp) -> Option<f32> {
     Some(tree_fold_f32(xs, combine, identity))
 }
 
+/// The CPU twin of `gpu.mean(buf)` — **the definition of what a GPU mean
+/// MEANS** (B-2026-08-19-13). `None` iff the buffer is empty.
+///
+/// Deliberately "the specified tree sum, divided by the count, once". Not a
+/// compensated mean, not a higher-precision accumulation: exactly
+/// `tree_reduce_f32(xs, Sum) / n`, in `f32`, so `gpu.mean(v)` and
+/// `gpu.sum(v) / (v.len() as f32)` are the same number to the last bit. Mean
+/// therefore inherits the sum's specified grouping and adds exactly ONE
+/// further rounding, which is the whole of its precision story.
+///
+/// The division happens on the HOST, after the fold has converged — never in
+/// the shader. A shader cannot know it is running the last level of the tree,
+/// so a per-dispatch division would divide once per level. That is why `mean`
+/// needs no shader of its own: it reuses the sum kernel unchanged, and the
+/// only new thing in the whole operation is one `f32` divide.
+///
+/// Empty is `None` rather than `0.0 / 0 == NaN`. The mean of nothing is not a
+/// number, and NaN is precisely the plausible-looking value that propagates
+/// silently through everything downstream — the same reasoning that makes
+/// `min`/`max` fallible here.
+pub fn tree_mean_f32(xs: &[f32]) -> Option<f32> {
+    if xs.is_empty() {
+        return None;
+    }
+    let sum = tree_reduce_f32(xs, ReduceOp::Sum)?;
+    Some(sum / xs.len() as f32)
+}
+
 /// The CPU twin of `gpu.dot(a, b)` — **the definition of what a GPU dot
 /// product MEANS** (B-2026-08-19-13). `None` iff the lengths differ.
 ///
@@ -464,6 +492,49 @@ mod tests {
         assert_eq!(tree_reduce_f32(&[1.0], ReduceOp::Mean), None);
         assert_eq!(tree_reduce_f32(&[1.0], ReduceOp::Argmin), None);
         assert_eq!(tree_reduce_f32(&[1.0], ReduceOp::Median), None);
+    }
+
+    #[test]
+    fn tree_mean_is_the_tree_sum_divided_once() {
+        // Mean's entire precision story: the SPECIFIED tree sum, divided by
+        // the count, in f32, once. Not compensated, not accumulated wider —
+        // so `gpu.mean(v)` and `gpu.sum(v) / n` are the same number to the
+        // last bit, and mean inherits the sum's grouping rather than having
+        // one of its own.
+        for n in [1usize, 3, 64, 65, 4096] {
+            let xs: Vec<f32> = (0..n).map(|i| 0.5 + (i % 7) as f32).collect();
+            let sum = tree_reduce_f32(&xs, ReduceOp::Sum).unwrap();
+            assert_eq!(
+                tree_mean_f32(&xs).map(f32::to_bits),
+                Some((sum / n as f32).to_bits()),
+                "n={n}"
+            );
+        }
+
+        // Exact where arithmetic is exact, so this is not merely
+        // self-consistent: 64 twos average to 2.
+        assert_eq!(tree_mean_f32(&[2.0f32; 64]), Some(2.0));
+        assert_eq!(tree_mean_f32(&[1.0, 2.0, 3.0]), Some(2.0));
+
+        // And the ORDER is still observable through the mean: 4096 tenths sum
+        // to 409.6000061 as a tree of trees, so the mean carries that.
+        let tenths = vec![0.1f32; 4096];
+        let mean = tree_mean_f32(&tenths).unwrap();
+        let left_fold_mean: f32 = tenths.iter().sum::<f32>() / 4096.0;
+        assert_ne!(
+            mean.to_bits(),
+            left_fold_mean.to_bits(),
+            "the tree order must reach the mean, not be washed out by it"
+        );
+    }
+
+    #[test]
+    fn tree_mean_of_an_empty_buffer_is_none_not_nan() {
+        // `0.0 / 0` is NaN, which is precisely the plausible-looking value
+        // that propagates silently through everything downstream. `Stats.mean`
+        // refuses this input by trapping; the GPU family refuses it the way
+        // its own siblings do.
+        assert_eq!(tree_mean_f32(&[]), None);
     }
 
     #[test]

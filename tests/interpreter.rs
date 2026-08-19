@@ -34752,6 +34752,55 @@ fn gpu_sum_and_prod_compute_the_obvious_small_cases() {
 }
 
 #[test]
+fn gpu_mean_is_the_sum_divided_by_the_count() {
+    let out = run_no_errors(
+        "fn main() {\n\
+        \x20   let v: Vec[f32] = [1.0, 2.0, 3.0];\n\
+        \x20   let m = gpu.mean(v);\n\
+        \x20   match m {\n\
+        \x20       Some(x) => println(f\"{x}\"),\n\
+        \x20       None => println(\"empty\"),\n\
+        \x20   }\n\
+        }",
+    );
+    assert_eq!(out.trim(), "2");
+
+    // The mean of nothing is not a number. `0.0 / 0` would be NaN — the
+    // plausible-looking value that propagates silently — so the answer is
+    // `None`, the same refusal min/max give and `Stats.mean` gives by trapping.
+    let out = run_no_errors(
+        "fn main() {\n\
+        \x20   let v: Vec[f32] = [];\n\
+        \x20   let m = gpu.mean(v);\n\
+        \x20   match m {\n\
+        \x20       Some(x) => println(f\"{x}\"),\n\
+        \x20       None => println(\"empty\"),\n\
+        \x20   }\n\
+        }",
+    );
+    assert_eq!(out.trim(), "empty");
+
+    // The guarantee, at a length that needs two full fold levels: mean is the
+    // SPECIFIED tree sum divided once, so it inherits the sum's grouping
+    // rather than having one of its own.
+    let out = run_no_errors(
+        "fn main() {\n\
+        \x20   let mut v: Vec[f32] = [];\n\
+        \x20   let mut p: Vec[f32] = [];\n\
+        \x20   for i in 0..4096 { v.push(0.1) p.push(0.1) }\n\
+        \x20   let m = gpu.mean(v);\n\
+        \x20   match m {\n\
+        \x20       Some(x) => println(f\"{x}\"),\n\
+        \x20       None => println(\"empty\"),\n\
+        \x20   }\n\
+        \x20   println(f\"{gpu.sum(p) / 4096.0}\")\n\
+        }",
+    );
+    let lines: Vec<&str> = out.trim().lines().collect();
+    assert_eq!(lines, ["0.10000000149011612", "0.10000000149011612"]);
+}
+
+#[test]
 fn gpu_dot_is_the_sum_of_the_products() {
     let out = run_no_errors(
         "fn main() {\n\

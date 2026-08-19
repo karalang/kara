@@ -10170,8 +10170,11 @@ let s   = gpu.sum(buf)        // f32
 let p   = gpu.prod(buf)       // f32
 let lo  = gpu.min(buf)        // Option[f32] — None iff the buffer is empty
 let hi  = gpu.max(buf)        // Option[f32]
+let mu  = gpu.mean(buf)       // Option[f32]
 let d   = gpu.dot(a, b)       // f32 — traps if the lengths differ
 ```
+
+The fallible ones are fallible because the answer genuinely does not exist, not because the implementation is awkward: an empty buffer has no minimum, no maximum and no mean. Returning the shader's padding identity (`+inf`) or `0.0 / 0` (`NaN`) would be a plausible-looking value that propagates silently through everything downstream, which is the failure mode this whole family is built to avoid. `sum`/`prod`/`dot` are total — the empty case is the identity (`0`, `1`, `0`) — so they return a bare `f32`.
 
 They take a `Vec[f32]` rather than a kernel, and that is the design, not a shortcut. A user-supplied combiner would have to be **associative** for a tree reduction to mean anything, and nothing in the language can check associativity — a non-associative combiner would produce a plausible, order-dependent, irreproducible number. Naming the operation moves that obligation to the compiler, where it is discharged once.
 
@@ -10184,7 +10187,10 @@ Two consequences worth stating plainly:
 - A long reduction is a **tree of trees**, and the grouping is observable in `f32`. `gpu.sum` over 4096 elements is not the same number a flat 4096-wide tree would give, nor a left fold. That is fine — it is specified — but it means the answer is a property of the language, not of the device.
 - `min`/`max` are **NaN-ignoring** (`min(x, NaN) == min(NaN, x) == x`), matching `f32::min`. A NaN-propagating min is fine in a left fold and broken in a tree: the halving would decide which side a NaN lands on, so the answer would depend on the buffer length. NaN-ignoring min is associative, so every grouping agrees. `sum`/`prod` cannot make that promise — which is exactly why their grouping is part of the specified result.
 
-`gpu.dot(a, b)` is `gpu.sum(a * b)`, to the last bit. It is a separate operation only because the product is formed **on load** inside the reduction's first level, so no `n`-element intermediate is ever written — a device-traffic win, not a semantic difference.
+Two operations are defined in terms of `sum` rather than having a tree of their own, and both equalities are exact:
+
+- `gpu.dot(a, b)` is `gpu.sum(a * b)`, to the last bit. It is a separate operation only because the product is formed **on load** inside the reduction's first level, so no `n`-element intermediate is ever written — a device-traffic win, not a semantic difference.
+- `gpu.mean(buf)` is `gpu.sum(buf) / n`, to the last bit: the specified tree sum, divided by the count, in `f32`, **once**. Not compensated, not accumulated wider. So `mean` inherits the sum's grouping rather than having one of its own, and adds exactly one further rounding — that is the whole of its precision story. The division happens on the host after the fold converges, never in the shader: a shader cannot know it is running the last level of the tree, so a division inside it would divide once per level.
 
 The reductions are `f32`-only. Integer reductions are not a mechanical widening: an integer reduction can overflow, and Kāra traps where WGSL wraps, so the arithmetic-overflow rule (§ Arithmetic Overflow) has to be settled at the reduction's own surface rather than inherited from the kernel-body rule.
 

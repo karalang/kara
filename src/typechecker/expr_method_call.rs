@@ -1094,6 +1094,12 @@ impl<'a> super::TypeChecker<'a> {
             if module == "gpu" && method == "max" {
                 return self.infer_gpu_reduce(args, span, ReduceOp::Max, "max");
             }
+            // `mean` is `sum / n`: same shader, same tree, one host-side
+            // divide afterwards. Fallible for the same reason min/max are —
+            // the mean of nothing is not a number.
+            if module == "gpu" && method == "mean" {
+                return self.infer_gpu_reduce(args, span, ReduceOp::Mean, "mean");
+            }
             // `dot` is the one reduction that reads TWO buffers, so it has its
             // own inference rather than a wider `infer_gpu_reduce`.
             if module == "gpu" && method == "dot" {
@@ -3478,7 +3484,7 @@ impl<'a> super::TypeChecker<'a> {
             return gpu_reduce_result_ty(op, Type::Float(FloatSize::F32));
         };
 
-        match crate::gpu_wgsl::emit_reduce_kernel(op, elem_spelling) {
+        match crate::gpu_wgsl::emit_reduce_kernel(gpu_reduce_shader_op(op), elem_spelling) {
             Ok(wgsl) => {
                 self.gpu_dispatch_wgsl.insert(
                     SpanKey(args[0].value.span.offset, args[0].value.span.length),
@@ -4129,10 +4135,25 @@ impl<'a> super::TypeChecker<'a> {
 /// which already answer `None` there.
 pub(crate) fn gpu_reduce_result_ty(op: ReduceOp, elem: Type) -> Type {
     match op {
-        ReduceOp::Min | ReduceOp::Max => Type::Named {
+        ReduceOp::Min | ReduceOp::Max | ReduceOp::Mean => Type::Named {
             name: "Option".to_string(),
             args: vec![elem],
         },
         _ => elem,
+    }
+}
+
+/// The reduction whose SHADER implements `op`.
+///
+/// Usually `op` itself. The exception is `Mean`, which has no tree-shaped
+/// shader of its own and never will: a shader cannot know it is running the
+/// last level of the fold, so dividing inside it would divide once per level.
+/// `Mean` runs the `Sum` kernel unchanged and the host divides once, after the
+/// fold converges — so the surface op and the shader op come apart here for
+/// the first time, and this is the one place that knows it.
+fn gpu_reduce_shader_op(op: ReduceOp) -> ReduceOp {
+    match op {
+        ReduceOp::Mean => ReduceOp::Sum,
+        other => other,
     }
 }

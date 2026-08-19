@@ -980,7 +980,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // extended by B-2026-08-19-13) — whole-buffer reductions, which return
         // ONE value rather than a buffer. Same `gpu`-not-a-local guard as
         // dispatch.
-        if matches!(method, "sum" | "prod" | "min" | "max") {
+        if matches!(method, "sum" | "prod" | "min" | "max" | "mean") {
             if let ExprKind::Identifier(name) = &object.kind {
                 if name == "gpu" && !self.variables.contains_key("gpu") {
                     return self.compile_gpu_reduce(args, method);
