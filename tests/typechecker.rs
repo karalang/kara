@@ -37486,12 +37486,26 @@ fn gpu_sum_returns_the_element_type_not_a_vec() {
         \x20   let s: f32 = gpu.sum(buf);\n\
         }",
     );
-    typecheck_ok(
-        "fn main() {\n\
-        \x20   let buf: Vec[i32] = [1, 2];\n\
-        \x20   let s: i32 = gpu.prod(buf);\n\
-        }",
-    );
+}
+
+#[test]
+fn gpu_sum_rejects_integer_buffers_in_slice_1() {
+    // Deliberately narrower than the emitter, which can produce i32/u32
+    // reduction shaders. The runtime entry point is f32-only, so an integer
+    // buffer would lose precision above 2^24 (`[16777217, 1]` summing to
+    // 16777216) — and an integer reduction can overflow, where WGSL wraps and
+    // Kara traps. That decision belongs to its own slice.
+    for src in [
+        "fn main() { let b: Vec[i32] = [1, 2]; let s = gpu.sum(b); }",
+        "fn main() { let b: Vec[u32] = [1, 2]; let s = gpu.prod(b); }",
+    ] {
+        let errs = typecheck_errors(src);
+        assert!(
+            errs.iter()
+                .any(|e| e.to_string().contains("slice 1 covers f32 only")),
+            "expected the f32-only refusal for {src}, got: {errs:?}"
+        );
+    }
 }
 
 #[test]

@@ -3430,16 +3430,27 @@ impl<'a> super::TypeChecker<'a> {
                 return Type::Float(FloatSize::F32);
             }
         };
+        // Slice 1 is **f32-only**, deliberately narrower than the emitter,
+        // which can also produce i32/u32 reduction shaders. Two reasons, both
+        // correctness rather than effort:
+        //
+        //  * the runtime entry point is `karac_runtime_gpu_reduce_f32`, and an
+        //    integer buffer routed through it would lose precision above 2^24
+        //    — `[16777217, 1]` summing to 16777216 is exactly the plausible
+        //    wrong number this family must not produce;
+        //  * an integer reduction can OVERFLOW, and WGSL wraps where Kāra
+        //    traps — the same divergence B-2026-08-19-1 just closed for kernel
+        //    bodies. Integer reductions need that decision made explicitly,
+        //    not inherited by accident.
         let Some(elem_spelling) = (match &elem {
             Type::Float(FloatSize::F32) => Some("f32"),
-            Type::Int(IntSize::I32) => Some("i32"),
-            Type::UInt(UIntSize::U32) => Some("u32"),
             _ => None,
         }) else {
             self.type_error(
                 format!(
-                    "error[E_GPU_REDUCE_BUFFER]: `gpu.{spelling}` element must be f32, i32 or \
-                     u32 (found `{}`) — these are the WGSL-native 4-byte scalars",
+                    "error[E_GPU_REDUCE_BUFFER]: `gpu.{spelling}` takes a `Vec[f32]` (found \
+                     `Vec[{}]`) — slice 1 covers f32 only; integer reductions need their own \
+                     overflow rule and are not wired up yet",
                     crate::typechecker::types::type_display(&elem)
                 ),
                 args[0].value.span,

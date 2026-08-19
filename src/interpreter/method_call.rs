@@ -808,10 +808,15 @@ impl<'a> super::Interpreter<'a> {
         for v in &elems {
             match v {
                 Value::Float(f) => xs.push(*f as f32),
-                Value::Int(i) => xs.push(*i as f32),
+                // NOT `Value::Int(i) => *i as f32`. Slice 1 is f32-only, and
+                // routing an integer through the f32 core silently loses
+                // precision above 2^24 — `[16777217, 1]` would sum to
+                // 16777216. The typechecker rejects integer buffers, so this
+                // arm is unreachable from checked code; it stays loud for
+                // `karac run`, which bypasses typecheck.
                 _ => {
                     return self.record_runtime_error(
-                        format!("gpu.{spelling} buffer element is not numeric"),
+                        format!("gpu.{spelling} buffer element must be f32"),
                         span,
                     )
                 }
