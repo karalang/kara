@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 133 | 0 |
 | run-vs-build | 133 | 1 |
 | codegen-gap | 119 | 0 |
-| missing-feature | 114 | 4 |
+| missing-feature | 114 | 3 |
 | diagnostics | 83 | 0 |
 | false-positive | 80 | 0 |
 | perf | 77 | 0 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 940 | 3 |
-| typecheck | 205 | 3 |
+| typecheck | 205 | 2 |
 | interp | 156 | 1 |
 | ownership | 60 | 0 |
 | other | 56 | 1 |
@@ -124,15 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 5 | 1 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1356 surfaced · 6 open · 1332 fixed · 7 wontfix** (2026-05-20 → 2026-08-19). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1356 surfaced · 5 open · 1333 fixed · 7 wontfix** (2026-05-20 → 2026-08-19). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-18-40 | 2026-08-18 | typecheck+codegen | low | A `#[gpu]` KERNEL BODY COULD NOT LOOP, BIND A LOCAL, OR BRANCH ON A VALUE — it had to be a SINGLE EXPRESSION. All four increments LANDED 2026-08-18: immutable `let`, `while` + mutable locals + assignment, `for`-over-range, and value `match`. Reductions, accumulators, nested counted loops and table lookups now compile AND run (each verified on lavapipe against the interpreter). REMAINDER SPLIT OUT AS B-2026-08-18-49: statement-form `if` is unsupported (and a value-`if` branch cannot hold a local) — wider than this row's original "locals inside an `if` branch" wording, which understated it. | docs/implementation_checklist/phase-10-targets.md § GPU codegen cluster (CG-1…CG-7); the slice-0 scope decision is docs/spikes/gpu-wgsl-slice0.md. Not a regression — an unlifted slice-0 floor. Sibling of the CG-5 assessment (docs/spikes/gpu-llvm-offload-assessment.md finding 4), which is where it surfaced. |
 | B-2026-08-19-3 | 2026-08-19 | parser+codegen | low | MULTI-BOUND `effect resource` declarations do not parse: `effect resource UserDB: DatabaseProvider + HealthCheckable;` -> "Expected Semicolon, found Plus", spec'd normatively at design.md:7216 under "Multiple trait bounds are allowed on a resource declaration:" (:7213), with semantics attached at :7217 ("Any provider passed to `with_provider` must implement all declared bounds plus `Send + Sync`"). | src/parser/items_effects.rs::parse_effect_resource_tail vs design.md:7216 (prose at :7213, semantics at :7217); src/codegen/provider_state.rs::provider_resource_traits and its nine readers |
-| B-2026-08-19-4 | 2026-08-19 | typecheck | medium | `with_provider[R](p, ...)` NEVER CHECKS that `p` implements the resource's declared provider trait. A struct with a matching method but no `impl Trait for U` passes resolve, typecheck and effectcheck, then fails in CODEGEN with a message blaming the vtable -- design.md:7217 requires the opposite ("Any provider passed to `with_provider` must implement all declared bounds plus `Send + Sync`"). | design.md:7217; src/typechecker/env_build.rs::collect_user_resource_override_types; the codegen message at src/codegen/provider.rs ("no impl found for `T::m`") |
 | B-2026-08-19-5 | 2026-08-19 | other | low | The codegen E2E harness (`tests/codegen.rs::run_program_capturing_inner`) runs resolve + typecheck but NOT the effect checker, so a test can pin behaviour for a program `karac build` REFUSES. Its `assert_check_clean` gate is named for the whole check phase and covers two thirds of it. | tests/codegen.rs::run_program_capturing_inner; tests/common's assert_check_clean; cf. B-2026-08-11-34 (the prepare_for_resolve drift this gate was hardened against) |
 | B-2026-08-19-7 | 2026-08-19 | runtime+cli | low | `karac run` (JIT) IGNORES A CLOSED READER ENTIRELY: with `| head -2` it runs the whole program to completion, discarding every failed write, then exits 0 — while the AOT binary for the same source dies at the first broken write with status 141. MEASURED on a 2,000,000-line program: 541 ms with the pipe closed after two lines vs 547 ms writing everything to /dev/null (statistically identical), against 5 ms for the AOT binary. 100x the work here, and unbounded for a long-running program. | roadmap.md |
 | B-2026-08-19-8 | 2026-08-19 | lexer+typecheck+interp+codegen | medium | IMPLEMENT 128-bit integers for real: `i128` / `u128` are specified normatively in design.md as v1 primitives (all four overflow method families, the widening-cast table, the primitive-numeric lists, Portable SIMD elements) and the compiler now REJECTS them, because no runtime carrier is 128 bits wide. Deleting design.md's 'Implementation status — 128-bit integers are NOT YET IMPLEMENTED' note is the definition of done. | docs/design.md § checked_*/wrapping_*/saturating_*/overflowing_* method families (the status note — deleting it is done); src/typechecker.rs::reject_128bit; src/interpreter/value.rs::Value::Int; src/codegen/method_call.rs (the i64-carrier comment + the `bits >= 64` reduction guard) |
@@ -153,9 +152,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1356 surfaced
 
 </details>
 
-### Fixed (1332)
+### Fixed (1333)
 
-<details><summary>1332 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1333 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -12202,6 +12201,27 @@ TWO CORRECTIONS TO THE ROW'S MEASUREMENTS, both found by re-measuring rather tha
 A THIRD SURFACE IS STILL WRONG, filed separately rather than folded in: the JIT does not merely report the wrong status, it IGNORES the closed reader entirely and runs the program to completion. Measured on a 2,000,000-line program: 541 ms with the pipe closed after two lines versus 547 ms writing everything to /dev/null — statistically identical — while the AOT binary dies in 5 ms. That is 100x the work here and unbounded for a long-running program, and it is a different defect in a different component (the runtime's write path plus `cmd_run`'s status handling), so it gets its own row.
 
 GATED by `interp_broken_pipe_exits_quietly_like_a_native_binary`, which spawns `karac run --interp`, reads a little, drops the read end, and asserts stderr is EMPTY and the status is 141. It asserts on stderr and status rather than stdout deliberately: how much output arrives before the reader closes is a scheduling race, and pinning it would make the test flaky for a property it is not about. Verified red before the fix (the panic report is the failure) and green after. |
+| B-2026-08-19-4 | typecheck | medium | `with_provider[R](p, ...)` NEVER CHECKS that `p` implements the resource's declared provider trait | FIXED by f472db3. `check_provider_satisfies_declared_bound`, called from the `with_provider[R](provider, closure)` arm in `typechecker/expr_call.rs`, looks the resource's declared provider trait up in `user_effect_resources` and asks `type_satisfies_bound` whether the provider's type implements it. The diagnostic names the provider type, the trait, the declaration that imposed it, and the impl to add — at the `with_provider` call site rather than at a vtable.
+
+    before:  karac check -> "All checks passed."   karac run/build -> "codegen failed:
+             R.method dispatch: no impl found for `DatabaseProvider::q` -- at least one
+             `impl DatabaseProvider for U` must exist to populate the vtable"
+    after :  error[typecheck]: provider of type 'NotADb' does not implement
+             `DatabaseProvider`, the provider trait declared by
+             `effect resource UserDB: DatabaseProvider;` -- add
+             `impl DatabaseProvider for NotADb { ... }`
+
+ONE ADDITION TO THE ROW'S MEASUREMENT: `karac run --interp` ACCEPTED the program and printed 15, dispatching the inherent method. So this was not only a failure surfaced at the wrong phase — it was a live run-vs-build divergence, with the interpreter answering and both compiled backends refusing. That strengthens the case for checking it statically rather than improving the codegen message.
+
+CHECKED FROM THE INFERRED TYPE, NOT A SYNTACTIC RECOVERY, which is where this departs from the row's proposed shape. The row suggested reusing `env_build::collect_user_resource_override_types`' `provider_type_name` walk, which recognises struct-literal, let-bound and constructor-call providers; that pass needs a syntactic walk because it runs BEFORE inference. The `with_provider` arm in `expr_call.rs` already computes `provider_ty = self.infer_expr(provider_expr)` for the cross-task-safety check sitting two lines above, so the type is simply in hand — no new recovery, no new false-negative surface, and shapes the syntactic walk cannot see are covered for free. A regression test pins one: a provider arriving as a CALL'S RETURN VALUE (`with_provider[UserDB](make(), ...)`) is caught, and would not have been.
+
+The row's worry about false positives ("diagnose only when the provider type IS statically recoverable") therefore does not arise — inference either has a concrete type or it does not, and the two cases where it does not are declined explicitly: `Type::Error` (the expression already reported its own problem, and a bound complaint on top would name a type the author never wrote) and `Type::TypeParam` (a generic provider's obligation belongs to its own bound list, which `validate_all_bounds` already checks at the declaration).
+
+SILENT ON A BARE RESOURCE, per design.md § "Trait bound is optional": `effect resource Latency;` declares no bound, so there is nothing to satisfy.
+
+NOT DONE, and named in the row already: design.md:7217 also requires `Send + Sync`. There is no marker-trait machinery on this path today, and the declared-bound half is the useful slice; the `Send + Sync` obligation stays unchecked.
+
+Three regression tests — reject, accept, and the inferred-provider shape — plus the full suite green, which is the part that matters for a NEW error: every `with_provider` user in `examples/` (db_pipeline, cartographer, parallax, phase0) still typechecks. |
 | B-2026-08-19-6 | typecheck+interp+codegen | medium | `i128` / `u128` are CARRIED AS 64-BIT and wrap there silently: `let a: i128 = 9223372036854775807; a.wrapping_add(1)` prints `-9223372036854775808` i… | FIXED by b62cd33. `i128` / `u128` are now REJECTED as runtime value types, at the point the type is named, with a diagnostic that names this row.
 
 THE WRONGNESS IS THE CARRIER, NOT ONE METHOD — which is why the fix is not where the row was filed. The row was written against `wrapping_*`, where it was noticed. Measured across the family before choosing the shape, on `a: i128 = i64::MAX`:
