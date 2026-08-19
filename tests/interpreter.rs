@@ -34752,6 +34752,78 @@ fn gpu_sum_and_prod_compute_the_obvious_small_cases() {
 }
 
 #[test]
+fn gpu_integer_reductions_trap_on_overflow() {
+    // The rule: integer GPU reductions trap, exactly as `v.sum()` over a
+    // `Vec[i32]` already does. Wrapping would turn a trap into a wrong answer
+    // the moment a reduction moved to the GPU.
+    let errs = runtime_errors(
+        "fn main() {\n\
+        \x20   let v: Vec[i32] = [2147483647, 1];\n\
+        \x20   println(f\"{gpu.sum(v)}\")\n\
+        }",
+    );
+    assert!(
+        format!("{errs:?}").contains("integer overflow"),
+        "expected an overflow trap, got: {errs:?}"
+    );
+}
+
+#[test]
+fn gpu_integer_reduction_trapping_follows_the_tree_order() {
+    // THE consequence of specifying the order: overflow is a property of the
+    // INTERMEDIATE sums, and a tree forms different intermediates than a line.
+    // This buffer overflows under a left fold (MAX + MAX first) and survives
+    // under the specified tree, which pairs each MAX with a -MAX before they
+    // ever meet each other. Documented in design.md — a user swapping
+    // `v.sum()` for `gpu.sum(v)` on integer data is not making a pure
+    // speedup swap.
+    let out = run_no_errors(
+        "fn main() {\n\
+        \x20   let v: Vec[i32] = [2147483647, 2147483647, -2147483647, -2147483647];\n\
+        \x20   println(f\"{gpu.sum(v)}\")\n\
+        }",
+    );
+    assert_eq!(out.trim(), "0");
+}
+
+#[test]
+fn gpu_integer_sum_min_max_agree_with_the_obvious_answers() {
+    let out = run_no_errors(
+        "fn main() {\n\
+        \x20   let v: Vec[i32] = [3, 1, 2];\n\
+        \x20   println(f\"{gpu.sum(v)}\")\n\
+        }",
+    );
+    assert_eq!(out.trim(), "6");
+
+    // `min`/`max` are `Option[i32]` — fallibility is a property of the OP, not
+    // of the element type: an empty buffer has no minimum whatever it holds.
+    let out = run_no_errors(
+        "fn main() {\n\
+        \x20   let v: Vec[i32] = [-5, 40, 2];\n\
+        \x20   let m = gpu.max(v);\n\
+        \x20   match m {\n\
+        \x20       Some(x) => println(f\"{x}\"),\n\
+        \x20       None => println(\"empty\"),\n\
+        \x20   }\n\
+        }",
+    );
+    assert_eq!(out.trim(), "40");
+
+    let out = run_no_errors(
+        "fn main() {\n\
+        \x20   let v: Vec[i32] = [];\n\
+        \x20   let m = gpu.min(v);\n\
+        \x20   match m {\n\
+        \x20       Some(x) => println(f\"{x}\"),\n\
+        \x20       None => println(\"empty\"),\n\
+        \x20   }\n\
+        }",
+    );
+    assert_eq!(out.trim(), "empty");
+}
+
+#[test]
 fn gpu_mean_is_the_sum_divided_by_the_count() {
     let out = run_no_errors(
         "fn main() {\n\

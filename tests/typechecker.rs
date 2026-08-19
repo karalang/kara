@@ -37675,23 +37675,19 @@ fn gpu_sum_returns_the_element_type_not_a_vec() {
 }
 
 #[test]
-fn gpu_sum_rejects_integer_buffers() {
-    // Deliberately narrower than the emitter, which can produce i32/u32
-    // reduction shaders. The runtime entry point is f32-only, so an integer
-    // buffer would lose precision above 2^24 (`[16777217, 1]` summing to
-    // 16777216) — and an integer reduction can overflow, where WGSL wraps and
-    // Kara traps. That decision belongs to its own slice.
-    for src in [
-        "fn main() { let b: Vec[i32] = [1, 2]; let s = gpu.sum(b); }",
-        "fn main() { let b: Vec[u32] = [1, 2]; let s = gpu.prod(b); }",
-    ] {
-        let errs = typecheck_errors(src);
-        assert!(
-            errs.iter()
-                .any(|e| e.to_string().contains("cover f32 only")),
-            "expected the f32-only refusal for {src}, got: {errs:?}"
-        );
-    }
+fn gpu_sum_accepts_i32_now_that_the_overflow_rule_is_settled() {
+    // This test used to assert the OPPOSITE. Integer `sum` was refused while
+    // the overflow question was open — WGSL wraps where Kāra traps — and the
+    // refusal was correct only for as long as the answer was undecided. It is
+    // decided now (trap, design.md § Integer reductions overflow-check), so
+    // the buffer is legal and the trap is a runtime condition.
+    typecheck_ok("fn main() { let b: Vec[i32] = [1, 2]; let s = gpu.sum(b); }");
+
+    // What is still refused, and why, is covered by
+    // `gpu_integer_reductions_refuse_what_has_not_been_decided` — each of
+    // those is a DECISION not yet made rather than an implementation gap.
+    let errs = typecheck_errors("fn main() { let b: Vec[u32] = [1, 2]; let s = gpu.prod(b); }");
+    assert!(!errs.is_empty(), "u32 is not wired up yet");
 }
 
 #[test]
@@ -37728,6 +37724,57 @@ fn gpu_sum_takes_exactly_one_buffer() {
 }
 
 #[test]
+fn gpu_integer_reductions_are_accepted_for_the_ops_whose_overflow_rule_is_settled() {
+    // `sum`/`min`/`max` over `Vec[i32]` are legal now that integer reductions
+    // trap (design.md § Integer reductions overflow-check). Fallibility is a
+    // property of the OP, not the element type.
+    typecheck_ok(
+        "fn main() {\n\
+        \x20   let b: Vec[i32] = [1, 2];\n\
+        \x20   let s: i32 = gpu.sum(b);\n\
+        \x20   let lo: Option[i32] = gpu.min(b);\n\
+        \x20   let hi: Option[i32] = gpu.max(b);\n\
+        }",
+    );
+}
+
+#[test]
+fn gpu_integer_reductions_refuse_what_has_not_been_decided() {
+    // Each refusal is a DECISION not yet made, not an implementation gap, and
+    // each says which decision. Inheriting any of them by accident is exactly
+    // what the integer-overflow rule was written to prevent.
+    for (src, needle) in [
+        // A checked multiply needs a widening intermediate WGSL lacks.
+        (
+            "fn main() { let b: Vec[i32] = [1, 2]; let p = gpu.prod(b); }",
+            "widening multiply",
+        ),
+        // Truncate or promote? Two defensible answers, two different functions.
+        (
+            "fn main() { let b: Vec[i32] = [1, 2]; let m = gpu.mean(b); }",
+            "truncates",
+        ),
+        // u32 would travel through an i32-typed runtime slot; sign confusion
+        // there is the plausible-wrong-number failure this family must avoid.
+        (
+            "fn main() { let b: Vec[u32] = [1, 2]; let s = gpu.sum(b); }",
+            "`Vec[f32]` or a `Vec[i32]`",
+        ),
+        // dot over integers would need the same checked multiply.
+        (
+            "fn main() { let b: Vec[i32] = [1, 2]; let d = gpu.dot(b, b); }",
+            "E_GPU_REDUCE_BUFFER",
+        ),
+    ] {
+        let errs = typecheck_errors(src);
+        assert!(
+            errs.iter().any(|e| e.to_string().contains(needle)),
+            "expected `{needle}` for {src}, got: {errs:?}"
+        );
+    }
+}
+
+#[test]
 fn gpu_mean_returns_option_and_shares_the_reduction_diagnostics() {
     // Fallible for the same reason min/max are: the mean of an empty buffer
     // is not a number, and `0.0 / 0` (NaN) is the plausible-looking value that
@@ -37746,11 +37793,12 @@ fn gpu_mean_returns_option_and_shares_the_reduction_diagnostics() {
     );
 
     // One inference path with sum/prod/min/max, so the refusals cannot drift.
+    // `mean` over integers refuses for its OWN reason — truncate or promote is
+    // an unanswered question, not a missing implementation.
     let errs = typecheck_errors("fn main() { let b: Vec[i32] = [1, 2]; let m = gpu.mean(b); }");
     assert!(
-        errs.iter()
-            .any(|e| e.to_string().contains("cover f32 only")),
-        "expected the f32-only refusal, got: {errs:?}"
+        errs.iter().any(|e| e.to_string().contains("truncates")),
+        "expected the integer-mean refusal, got: {errs:?}"
     );
     let errs = typecheck_errors("fn main() { let b: Vec[f32] = [1.0]; let m = gpu.mean(b, b); }");
     assert!(
@@ -37850,11 +37898,15 @@ fn gpu_min_max_return_option_not_a_bare_float() {
 fn gpu_min_max_share_the_reduction_diagnostics() {
     // One inference path, so the arity and element-type refusals cannot drift
     // between the four spellings.
-    let errs = typecheck_errors("fn main() { let b: Vec[i32] = [1, 2]; let m = gpu.min(b); }");
+    // `min` over `Vec[i32]` is legal — it cannot overflow, so it needed no
+    // decision at all — and it is `Option[i32]`, because fallibility is a
+    // property of the OP rather than of the element type.
+    typecheck_ok("fn main() { let b: Vec[i32] = [1, 2]; let m: Option[i32] = gpu.min(b); }");
+    let errs = typecheck_errors("fn main() { let b: Vec[f64] = [1.0]; let m = gpu.min(b); }");
     assert!(
         errs.iter()
-            .any(|e| e.to_string().contains("cover f32 only")),
-        "expected the f32-only refusal, got: {errs:?}"
+            .any(|e| e.to_string().contains("E_GPU_REDUCE_BUFFER")),
+        "expected a buffer-type refusal, got: {errs:?}"
     );
     let errs = typecheck_errors("fn main() { let b: Vec[f32] = [1.0]; let m = gpu.max(b, b); }");
     assert!(

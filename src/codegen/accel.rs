@@ -69,6 +69,13 @@ pub(crate) struct Accel<'ctx> {
     /// `Program.gpu_dispatch_wgsl` (spike slice-0c). `compile_method_call`
     /// bakes the shader as a constant and calls `karac_runtime_gpu_f32_map`.
     pub(crate) gpu_dispatch_wgsl: HashMap<(usize, usize), String>,
+    /// Buffer-argument spans of `gpu.<reduce>` calls over an INTEGER element
+    /// type — the plain-data hint that selects the CHECKED integer runtime
+    /// entry point (which traps on overflow) over the float one. Codegen
+    /// cannot re-derive it: a `Vec`'s data pointer is opaque at the LLVM
+    /// level, so nothing in the emitted types tells `Vec[i32]` from
+    /// `Vec[f32]`. See `ast::GpuReduceIntBuffersTable`.
+    pub(crate) gpu_reduce_int_buffers: std::collections::HashSet<(usize, usize)>,
     /// Per-expression Tensor type info (element TypeExpr + static dims),
     /// keyed by `(span.offset, span.length)`. Populated from
     /// `Program.tensor_typed_exprs` (lowering pass, from

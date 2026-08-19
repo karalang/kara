@@ -3455,27 +3455,29 @@ impl<'a> super::TypeChecker<'a> {
                 return gpu_reduce_result_ty(op, Type::Float(FloatSize::F32));
             }
         };
-        // The reduction surface is **f32-only**, deliberately narrower than the emitter,
-        // which can also produce i32/u32 reduction shaders. Two reasons, both
-        // correctness rather than effort:
+        // The element set: `f32` for every op, plus `i32`/`u32` for the ops
+        // whose overflow question is settled (design.md § Integer reductions
+        // overflow-check). Integers route to the CHECKED emitter, which
+        // carries a device-side overflow flag — the unchecked float tree would
+        // wrap where Kāra traps.
         //
-        //  * the runtime entry point is `karac_runtime_gpu_reduce_f32`, and an
-        //    integer buffer routed through it would lose precision above 2^24
-        //    — `[16777217, 1]` summing to 16777216 is exactly the plausible
-        //    wrong number this family must not produce;
-        //  * an integer reduction can OVERFLOW, and WGSL wraps where Kāra
-        //    traps — the same divergence B-2026-08-19-1 just closed for kernel
-        //    bodies. Integer reductions need that decision made explicitly,
-        //    not inherited by accident.
-        let Some(elem_spelling) = (match &elem {
+        // `u32` is NOT here yet, deliberately. The runtime entry point is
+        // byte-transparent (it moves values without interpreting them, and the
+        // shader does the interpreting), so unsigned is mechanical rather than
+        // hard — but its identity and result would travel through an
+        // `i32`-typed slot, and sign confusion in that slot is exactly the
+        // plausible-wrong-number failure this family must not have. It gets
+        // its own slice.
+        let elem_spelling = match &elem {
             Type::Float(FloatSize::F32) => Some("f32"),
+            Type::Int(IntSize::I32) => Some("i32"),
             _ => None,
-        }) else {
+        };
+        let Some(elem_spelling) = elem_spelling else {
             self.type_error(
                 format!(
-                    "error[E_GPU_REDUCE_BUFFER]: `gpu.{spelling}` takes a `Vec[f32]` (found \
-                     `Vec[{}]`) — the GPU reductions cover f32 only; integer reductions need \
-                     their own overflow rule and are not wired up yet",
+                    "error[E_GPU_REDUCE_BUFFER]: `gpu.{spelling}` takes a `Vec[f32]` or a \
+                     `Vec[i32]` (found `Vec[{}]`)",
                     crate::typechecker::types::type_display(&elem)
                 ),
                 args[0].value.span,
@@ -3483,8 +3485,40 @@ impl<'a> super::TypeChecker<'a> {
             );
             return gpu_reduce_result_ty(op, Type::Float(FloatSize::F32));
         };
+        let is_int = elem_spelling != "f32";
 
-        match crate::gpu_wgsl::emit_reduce_kernel(gpu_reduce_shader_op(op), elem_spelling) {
+        // `mean` over integers is a SEPARATE decision, not a widening: is the
+        // mean of `[1, 2]` the truncated `1` or the exact `1.5`? Both are
+        // defensible and they are different functions. Inheriting one by
+        // accident is precisely what the integer-overflow rule was written to
+        // stop, so this refuses until the question is answered on its own
+        // terms.
+        if is_int && matches!(op, ReduceOp::Mean) {
+            self.type_error(
+                "error[E_GPU_REDUCE_BUFFER]: `gpu.mean` over `Vec[i32]` is not wired up — an \
+                 integer mean must first decide whether it truncates (`i32`) or promotes \
+                 (`f32`); convert the buffer to `Vec[f32]` to get the promoting one"
+                    .to_string(),
+                args[0].value.span,
+                TypeErrorKind::TypeMismatch,
+            );
+            return gpu_reduce_result_ty(op, elem);
+        }
+
+        let emitted = if is_int {
+            // Record the element kind for codegen, which cannot see it: a
+            // `Vec`'s data pointer is opaque at the LLVM level, and the
+            // integer path is a different runtime entry point with a different
+            // signature (it can trap). Keyed on the same span as the shader.
+            self.gpu_reduce_int_buffers.insert(SpanKey(
+                args[0].value.span.offset,
+                args[0].value.span.length,
+            ));
+            crate::gpu_wgsl::emit_int_reduce_kernel(gpu_reduce_shader_op(op), elem_spelling)
+        } else {
+            crate::gpu_wgsl::emit_reduce_kernel(gpu_reduce_shader_op(op), elem_spelling)
+        };
+        match emitted {
             Ok(wgsl) => {
                 self.gpu_dispatch_wgsl.insert(
                     SpanKey(args[0].value.span.offset, args[0].value.span.length),
@@ -4134,6 +4168,9 @@ impl<'a> super::TypeChecker<'a> {
 /// produce. They return `Option[elem]`, matching `Stats.min` and `Vec.min`,
 /// which already answer `None` there.
 pub(crate) fn gpu_reduce_result_ty(op: ReduceOp, elem: Type) -> Type {
+    // NOTE: fallibility is a property of the OP, not the element type. An
+    // integer `min` is `Option[i32]` for the same reason a float one is
+    // `Option[f32]` — an empty buffer has no minimum whatever it holds.
     match op {
         ReduceOp::Min | ReduceOp::Max | ReduceOp::Mean => Type::Named {
             name: "Option".to_string(),

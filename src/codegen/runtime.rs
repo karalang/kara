@@ -12068,6 +12068,39 @@ impl<'ctx> super::Codegen<'ctx> {
             .add_function("karac_runtime_gpu_reduce_f32", fn_ty, None)
     }
 
+    /// Lazily declare `karac_runtime_gpu_reduce_i32(wgsl_ptr: ptr,
+    /// wgsl_len: i64, in_ptr: ptr, n: i64, identity: i32, out: ptr)` — the
+    /// CHECKED integer reduction entry (B-2026-08-19-13).
+    ///
+    /// Returns a STATUS (`0` ok, `1` overflow) and writes the value through
+    /// `out`, unlike the float entry which returns its value directly. The
+    /// integer path can fail, and the failure is raised HERE as Kāra's own
+    /// panic rather than inside the runtime — so `gpu.sum` over an
+    /// overflowing `Vec[i32]` reports the same `integer overflow` message,
+    /// exit code and source span that `v.sum()` already does, instead of a
+    /// bare SIGABRT with no span.
+    pub(super) fn gpu_reduce_i32_fn(&self) -> FunctionValue<'ctx> {
+        if let Some(f) = self.module.get_function("karac_runtime_gpu_reduce_i32") {
+            return f;
+        }
+        let i32_t = self.context.i32_type();
+        let i64_t = self.context.i64_type();
+        let ptr_t = self.context.ptr_type(AddressSpace::default());
+        let fn_ty = i32_t.fn_type(
+            &[
+                ptr_t.into(),
+                i64_t.into(),
+                ptr_t.into(),
+                i64_t.into(),
+                i32_t.into(),
+                ptr_t.into(),
+            ],
+            false,
+        );
+        self.module
+            .add_function("karac_runtime_gpu_reduce_i32", fn_ty, None)
+    }
+
     /// Lazily declare `karac_runtime_gpu_dot_f32(dot_wgsl_ptr: ptr,
     /// dot_wgsl_len: i64, sum_wgsl_ptr: ptr, sum_wgsl_len: i64, a_ptr: ptr,
     /// n_a: i64, b_ptr: ptr, n_b: i64) -> f32` — the fused multiply-then-sum

@@ -1659,6 +1659,14 @@ impl<'ctx> super::Codegen<'ctx> {
 
         let (data, n) = self.read_gpu_reduce_buffer(&args[0].value)?;
 
+        // INTEGER buffers take a different entry point entirely — one that can
+        // TRAP. Selected from the typechecker's plain-data hint, because
+        // nothing in the LLVM types distinguishes `Vec[i32]` from `Vec[f32]`
+        // here (data pointers are opaque).
+        if self.accel.gpu_reduce_int_buffers.contains(&key) {
+            return self.compile_gpu_reduce_int(spelling, wgsl_ptr, wgsl_len, data, n);
+        }
+
         // karac_runtime_gpu_reduce_f32(wgsl_ptr, wgsl_len, in_ptr, n,
         // identity) -> f32. The identity is passed rather than baked into the
         // runtime because an EMPTY buffer short-circuits before any dispatch,
@@ -1745,6 +1753,133 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.position_at_end(merge_bb);
         Ok(self.build_option_some_via_phis(&[word], some_end_bb, none_bb, "gpu.mm"))
+    }
+
+    /// The INTEGER arm of `compile_gpu_reduce` (B-2026-08-19-13).
+    ///
+    /// A different runtime entry point, not a different constant: the integer
+    /// reduction can TRAP on overflow, so it returns void and writes through
+    /// an out-slot, and the abort happens inside the runtime the moment any
+    /// workgroup raises its overflow flag. Kāra traps on integer overflow, and
+    /// `v.sum()` over a `Vec[i32]` already fails on the same condition — a
+    /// wrapping GPU sum would be a plausible wrong number where the CPU
+    /// refused.
+    ///
+    /// The identity is the operation's own and is also what pads a short
+    /// chunk, so a real `i32::MAX` element cannot be beaten by the padding.
+    fn compile_gpu_reduce_int(
+        &mut self,
+        spelling: &str,
+        wgsl_ptr: PointerValue<'ctx>,
+        wgsl_len: IntValue<'ctx>,
+        data: PointerValue<'ctx>,
+        n: IntValue<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let i32_t = self.context.i32_type();
+        let i64_t = self.context.i64_type();
+        let identity = match spelling {
+            "min" => i32_t.const_int(i32::MAX as u64, false),
+            "max" => i32_t.const_int(i32::MIN as u64, false),
+            _ => i32_t.const_int(0, false),
+        };
+        let out = self.builder.build_alloca(i32_t, "gpu.ireduce.out").unwrap();
+        let reduce_fn = self.gpu_reduce_i32_fn();
+        let status = self
+            .builder
+            .build_call(
+                reduce_fn,
+                &[
+                    wgsl_ptr.into(),
+                    wgsl_len.into(),
+                    data.into(),
+                    n.into(),
+                    identity.into(),
+                    out.into(),
+                ],
+                "gpu.ireduce.status",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+
+        // The trap. Raised HERE rather than inside the runtime so it is Kāra's
+        // own panic — same `integer overflow` message, exit code and source
+        // span that `v.sum()` over a `Vec[i32]` already produces for the
+        // identical condition. A runtime-side abort would be a bare SIGABRT
+        // with no span: a worse diagnostic for the same failure.
+        let fn_for_trap = self.current_fn.expect("gpu int reduce in function");
+        let overflowed = self
+            .builder
+            .build_int_compare(
+                IntPredicate::NE,
+                status,
+                i32_t.const_zero(),
+                "gpu.ireduce.ovf",
+            )
+            .unwrap();
+        let trap_bb = self
+            .context
+            .append_basic_block(fn_for_trap, "gpu.ireduce.trap");
+        let ok_bb = self
+            .context
+            .append_basic_block(fn_for_trap, "gpu.ireduce.ok");
+        self.builder
+            .build_conditional_branch(overflowed, trap_bb, ok_bb)
+            .unwrap();
+        self.builder.position_at_end(trap_bb);
+        self.emit_panic("integer overflow");
+        self.builder.build_unreachable().unwrap();
+        self.builder.position_at_end(ok_bb);
+
+        // `sum` always has an answer (the empty case is 0), so the slot IS the
+        // result — widened to the i64 carrier every integer travels in.
+        if !matches!(spelling, "min" | "max") {
+            let v = self
+                .builder
+                .build_load(i32_t, out, "gpu.isum")
+                .unwrap()
+                .into_int_value();
+            return Ok(self
+                .builder
+                .build_int_s_extend(v, i64_t, "gpu.isum.ext")
+                .unwrap()
+                .into());
+        }
+
+        // `min`/`max` are `Option[i32]`: an empty buffer has no extremum, and
+        // the fold would otherwise return the padding identity — `i32::MAX`,
+        // a plausible wrong answer. Same branch-and-phi shape as the float arm.
+        let fn_val = self.current_fn.expect("gpu int reduce in function");
+        let nonempty = self
+            .builder
+            .build_int_compare(IntPredicate::UGT, n, i64_t.const_zero(), "gpu.imm.ne")
+            .unwrap();
+        let some_bb = self.context.append_basic_block(fn_val, "gpu.imm.some");
+        let none_bb = self.context.append_basic_block(fn_val, "gpu.imm.none");
+        let merge_bb = self.context.append_basic_block(fn_val, "gpu.imm.merge");
+        self.builder
+            .build_conditional_branch(nonempty, some_bb, none_bb)
+            .unwrap();
+
+        self.builder.position_at_end(some_bb);
+        let v = self
+            .builder
+            .build_load(i32_t, out, "gpu.imm")
+            .unwrap()
+            .into_int_value();
+        let word = self
+            .builder
+            .build_int_s_extend(v, i64_t, "gpu.imm.ext")
+            .unwrap();
+        let some_end_bb = self.builder.get_insert_block().unwrap();
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+        self.builder.position_at_end(none_bb);
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+        self.builder.position_at_end(merge_bb);
+        Ok(self.build_option_some_via_phis(&[word], some_end_bb, none_bb, "gpu.imm"))
     }
 
     /// Read a reduction argument's `Vec` down to `{data, len}`.

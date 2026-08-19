@@ -804,6 +804,15 @@ impl<'a> super::Interpreter<'a> {
         };
         let elems = rc.read().unwrap().clone();
 
+        // Integer or float buffer, decided from the ELEMENTS. An empty buffer
+        // is genuinely ambiguous here — `Value::Array` carries no element type
+        // and the interpreter has no expr-type table — but it is not
+        // observable in the answer: `sum`/`prod` return identities that print
+        // the same either way, and `min`/`max`/`mean` return `None` regardless.
+        if matches!(elems.first(), Some(Value::Int(_))) {
+            return self.eval_gpu_reduce_int(&elems, span, op, spelling);
+        }
+
         let mut xs: Vec<f32> = Vec::with_capacity(elems.len());
         for v in &elems {
             match v {
@@ -863,6 +872,74 @@ impl<'a> super::Interpreter<'a> {
             // unreachable from any program, loud if that ever changes.
             None => self.record_runtime_error(
                 format!("gpu.{spelling} is not an expressible GPU reduction"),
+                span,
+            ),
+        }
+    }
+
+    /// The INTEGER arm of `gpu.sum` / `gpu.min` / `gpu.max`
+    /// (B-2026-08-19-13).
+    ///
+    /// Split from the float arm because the two differ in more than a carrier
+    /// type: an integer reduction can OVERFLOW, and Kāra traps rather than
+    /// wrapping. The twin reproduces the trap POINTS as well as the values, so
+    /// `karac run` and `karac build` agree about which programs fail — see
+    /// `reduce_kernel::tree_reduce_i32`, where the tree order is what decides
+    /// whether a given buffer overflows at all.
+    fn eval_gpu_reduce_int(
+        &mut self,
+        elems: &[Value],
+        span: &Span,
+        op: ReduceOp,
+        spelling: &str,
+    ) -> Value {
+        let mut xs: Vec<i32> = Vec::with_capacity(elems.len());
+        for v in elems {
+            let Value::Int(i) = v else {
+                return self.record_runtime_error(
+                    format!("gpu.{spelling} buffer elements must all be i32"),
+                    span,
+                );
+            };
+            // Defensive: the typechecker proves `Vec[i32]`, so an out-of-range
+            // element cannot reach here from checked code. `karac run`
+            // bypasses typecheck, so it stays loud rather than truncating.
+            let Ok(v32) = i32::try_from(*i) else {
+                return self.record_runtime_error(
+                    format!("gpu.{spelling} buffer element {i} does not fit in i32"),
+                    span,
+                );
+            };
+            xs.push(v32);
+        }
+
+        // Empty `min`/`max` is `None`, checked before the fold for the same
+        // reason the float arm does it: the fold would return the padding
+        // identity (i32::MAX / i32::MIN), a plausible wrong answer.
+        let fallible = matches!(op, ReduceOp::Min | ReduceOp::Max);
+        if fallible && xs.is_empty() {
+            return Value::EnumVariant {
+                enum_name: "Option".to_string(),
+                variant: "None".to_string(),
+                data: EnumData::Unit,
+            };
+        }
+
+        match crate::reduce_kernel::tree_reduce_i32(&xs, op) {
+            Some(Ok(r)) if fallible => Value::EnumVariant {
+                enum_name: "Option".to_string(),
+                variant: "Some".to_string(),
+                data: EnumData::Tuple(vec![Value::Int(r as i128)]),
+            },
+            Some(Ok(r)) => Value::Int(r as i128),
+            // Kāra traps on integer overflow. Wrapping here would hand back a
+            // plausible wrong number and disagree with `v.sum()`, which
+            // already fails on the same condition.
+            Some(Err(_)) => {
+                self.record_runtime_error(format!("integer overflow in gpu.{spelling}"), span)
+            }
+            None => self.record_runtime_error(
+                format!("gpu.{spelling} is not an expressible integer GPU reduction"),
                 span,
             ),
         }

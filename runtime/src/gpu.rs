@@ -726,10 +726,14 @@ async fn dispatch_checked_int_async(
 /// instead. Both refuse the same programs — which is what matters — they just
 /// stop at slightly different points inside a dispatch nobody can observe.
 ///
-/// The result is written through `out` rather than returned, because the
-/// return slot carries the OVERFLOW indication: `1` on success, `0` never
-/// occurs (an overflow aborts rather than returning). Kept as a status return
-/// so a future non-aborting variant has somewhere to put the answer.
+/// **Overflow is REPORTED, not aborted.** The return value is `0` on success
+/// and `1` on overflow, and the value goes through `out`. That split exists so
+/// codegen can raise Kāra's OWN panic at the call site — same `integer
+/// overflow` message, same exit code, same source span as `v.sum()` over a
+/// `Vec[i32]`. Aborting from in here would produce a bare `SIGABRT` with no
+/// span, which is a worse diagnostic than the CPU path gives for the identical
+/// condition. (The adapter-missing and UTF-8 paths still abort: those are
+/// environment failures with no Kāra-level meaning.)
 ///
 /// # Safety
 ///
@@ -744,13 +748,13 @@ pub unsafe extern "C" fn karac_runtime_gpu_reduce_i32(
     n: usize,
     identity: i32,
     out: *mut i32,
-) {
+) -> i32 {
     unsafe {
         // Empty reduction is the operation's identity and needs no device —
         // and cannot overflow, so there is nothing to check.
         if n == 0 {
             *out = identity;
-            return;
+            return 0;
         }
         const WORKGROUP: usize = 64;
 
@@ -783,8 +787,7 @@ pub unsafe extern "C" fn karac_runtime_gpu_reduce_i32(
                 .chunks_exact(4)
                 .any(|w| u32::from_le_bytes([w[0], w[1], w[2], w[3]]) != 0)
             {
-                crate::fatal::write_stderr(b"panic: integer overflow in GPU reduction\n");
-                std::process::abort();
+                return 1;
             }
             level = values[..partials * elem_size].to_vec();
             count = partials;
@@ -794,6 +797,7 @@ pub unsafe extern "C" fn karac_runtime_gpu_reduce_i32(
         }
 
         *out = i32::from_le_bytes([level[0], level[1], level[2], level[3]]);
+        0
     }
 }
 
@@ -1885,7 +1889,7 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
                 return;
             }
             let mut got = 0i32;
-            unsafe {
+            let status = unsafe {
                 karac_runtime_gpu_reduce_i32(
                     INT_SUM_REDUCE_WGSL.as_ptr(),
                     INT_SUM_REDUCE_WGSL.len(),
@@ -1893,15 +1897,16 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
                     xs.len(),
                     0,
                     &mut got,
-                );
-            }
+                )
+            };
+            assert_eq!(status, 0, "n={n}: no overflow expected");
             let want: i32 = xs.iter().sum();
             assert_eq!(got, want, "n={n}");
         }
 
         // Empty needs no device and cannot overflow.
         let mut got = 99i32;
-        unsafe {
+        let status = unsafe {
             karac_runtime_gpu_reduce_i32(
                 INT_SUM_REDUCE_WGSL.as_ptr(),
                 INT_SUM_REDUCE_WGSL.len(),
@@ -1909,9 +1914,42 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
                 0,
                 0,
                 &mut got,
-            );
-        }
+            )
+        };
+        assert_eq!(status, 0);
         assert_eq!(got, 0, "empty integer sum is the additive identity");
+    }
+
+    #[test]
+    fn int_sum_entry_point_reports_overflow_instead_of_aborting() {
+        // The entry point RETURNS the overflow rather than aborting, so
+        // codegen can raise Kāra's own panic at the call site — same message,
+        // exit code and span `v.sum()` gives for the identical condition. An
+        // abort in here would be a bare SIGABRT with no span, and would also
+        // make this very test impossible to write.
+        let xs = [i32::MAX, 1];
+        if pollster::block_on(dispatch_checked_int_async(
+            INT_SUM_REDUCE_WGSL,
+            bytemuck_i32(&xs).as_slice(),
+            4,
+        ))
+        .is_none()
+        {
+            eprintln!("gpu-int-ovf: no GPU adapter available — skipping");
+            return;
+        }
+        let mut got = 0i32;
+        let status = unsafe {
+            karac_runtime_gpu_reduce_i32(
+                INT_SUM_REDUCE_WGSL.as_ptr(),
+                INT_SUM_REDUCE_WGSL.len(),
+                xs.as_ptr(),
+                xs.len(),
+                0,
+                &mut got,
+            )
+        };
+        assert_eq!(status, 1, "i32::MAX + 1 must report overflow");
     }
 
     fn bytemuck_i32(xs: &[i32]) -> Vec<u8> {

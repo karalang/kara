@@ -936,6 +936,135 @@ fn gpu_sum_agrees_bit_for_bit_past_one_workgroup() {
 }
 
 #[test]
+fn gpu_integer_reductions_agree_with_the_interpreter() {
+    assert_gpu_reduce_matches_interp(
+        "reduce_int_sum",
+        "fn main() {\n\
+        \x20   let v: Vec[i32] = [3, 1, 2];\n\
+        \x20   println(f\"{gpu.sum(v)}\")\n\
+        }\n",
+        "6",
+    );
+
+    // Multi-workgroup, with a partial trailing chunk so the integer padding is
+    // exercised on a real device.
+    assert_gpu_reduce_matches_interp(
+        "reduce_int_sum_multi",
+        "fn main() {\n\
+        \x20   let mut v: Vec[i32] = [];\n\
+        \x20   for i in 0..4096 { v.push(((i % 11) - 5) as i32) }\n\
+        \x20   println(f\"{gpu.sum(v)}\")\n\
+        }\n",
+        "-14",
+    );
+
+    // `min`/`max` are `Option[i32]`: fallibility is a property of the OP, not
+    // of the element type.
+    assert_gpu_reduce_matches_interp(
+        "reduce_int_max",
+        "fn main() {\n\
+        \x20   let v: Vec[i32] = [-5, 40, 2];\n\
+        \x20   let m = gpu.max(v);\n\
+        \x20   match m {\n\
+        \x20       Some(x) => println(f\"{x}\"),\n\
+        \x20       None => println(\"empty\"),\n\
+        \x20   }\n\
+        }\n",
+        "40",
+    );
+    // ALL-NEGATIVE max: the case a wrong identity would fail. Padding with 0
+    // instead of i32::MIN would answer 0 here — a plausible number that is not
+    // in the buffer at all.
+    assert_gpu_reduce_matches_interp(
+        "reduce_int_max_all_negative",
+        "fn main() {\n\
+        \x20   let v: Vec[i32] = [-5, -40, -2];\n\
+        \x20   let m = gpu.max(v);\n\
+        \x20   match m {\n\
+        \x20       Some(x) => println(f\"{x}\"),\n\
+        \x20       None => println(\"empty\"),\n\
+        \x20   }\n\
+        }\n",
+        "-2",
+    );
+    assert_gpu_reduce_matches_interp(
+        "reduce_int_min_empty",
+        "fn main() {\n\
+        \x20   let v: Vec[i32] = [];\n\
+        \x20   let m = gpu.min(v);\n\
+        \x20   match m {\n\
+        \x20       Some(x) => println(f\"{x}\"),\n\
+        \x20       None => println(\"empty\"),\n\
+        \x20   }\n\
+        }\n",
+        "empty",
+    );
+
+    // The order-dependent case from design.md: this buffer overflows under a
+    // left fold and SURVIVES under the specified tree, which pairs each MAX
+    // with a -MAX before they ever meet each other. Checked on the device, so
+    // the shader's grouping is what is being verified, not just the twin's.
+    assert_gpu_reduce_matches_interp(
+        "reduce_int_order_survives",
+        "fn main() {\n\
+        \x20   let v: Vec[i32] = [2147483647, 2147483647, -2147483647, -2147483647];\n\
+        \x20   println(f\"{gpu.sum(v)}\")\n\
+        }\n",
+        "0",
+    );
+}
+
+#[test]
+fn gpu_integer_overflow_traps_on_every_surface() {
+    // The decision itself, end to end. WGSL has no trapping arithmetic — its
+    // integer ops are DEFINED to wrap — so the shader computes an overflow
+    // flag and folds it through the tree, the runtime reports it, and codegen
+    // raises Kāra's own panic at the call site. All three surfaces must refuse
+    // this program; a wrapping GPU sum would silently answer i32::MIN where
+    // `v.sum()` already fails.
+    let Some(backend) = gpu_or_skip() else { return };
+    let tag = "reduce_int_overflow";
+    let dir = scratch(tag);
+    let src = dir.join(format!("{tag}.kara"));
+    std::fs::write(
+        &src,
+        "fn main() {\n\
+        \x20   let v: Vec[i32] = [2147483647, 1];\n\
+        \x20   println(f\"{gpu.sum(v)}\")\n\
+        }\n",
+    )
+    .expect("write fixture source");
+
+    // The COMPILED leg: the trap is Kāra's own panic, raised at the call site
+    // with a span — not the runtime's bare abort. Same shape `v.sum()` gives
+    // for the identical condition.
+    let err = build_and_run_on_gpu(&dir, &src, tag, backend)
+        .expect_err("an overflowing integer reduction must not succeed");
+    assert!(
+        err.contains("integer overflow"),
+        "compiled leg must trap with `integer overflow`, got: {err}"
+    );
+
+    // Both interpreter lanes: `karac run` (routed) and explicit `--interp`.
+    for args in [vec!["run"], vec!["run", "--interp"]] {
+        let out = karac()
+            .args(&args)
+            .arg(&src)
+            .output()
+            .expect("spawn karac run");
+        assert!(
+            !out.status.success(),
+            "`karac {args:?}` must fail on an overflowing integer reduction"
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("integer overflow"),
+            "`karac {args:?}` must say `integer overflow`, got: {stderr}"
+        );
+    }
+}
+
+#[test]
 fn gpu_mean_equals_the_sum_over_the_count_on_the_device() {
     // Mean has no shader of its own — it runs the SUM kernel unchanged and the
     // host divides once, after the fold converges. (A shader cannot know it is

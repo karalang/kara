@@ -359,6 +359,20 @@ pub type StatsElemTypesTable = std::collections::HashMap<(usize, usize), TypeExp
 /// codegen-containment invariant).
 pub type GpuDispatchWgslTable = std::collections::HashMap<(usize, usize), String>;
 
+/// Set by the lowering pass from `TypeCheckResult.gpu_reduce_int_buffers`.
+/// The set of `gpu.<reduce>(buffer)` BUFFER-argument spans whose element type
+/// is an integer.
+///
+/// One bit, but codegen cannot re-derive it: a `Vec`'s data pointer is opaque
+/// at the LLVM level, so nothing in the emitted types distinguishes a
+/// `Vec[i32]` from a `Vec[f32]` at the call site. The integer path is a
+/// different runtime entry point with a different signature (it can TRAP on
+/// overflow), so getting this wrong is not a performance question — it picks
+/// the wrong ABI. A plain-data hint keeps the decision in the typechecker,
+/// where the element type is known, without an LLVM type crossing the
+/// boundary (the codegen-containment invariant).
+pub type GpuReduceIntBuffersTable = std::collections::HashSet<(usize, usize)>;
+
 /// `TaskHandle[T].join()` MethodCall span → the result type `T`. Lets codegen
 /// size the join out-slot and the cross-task result memcpy for a non-scalar
 /// `T` (a `Vec`/`String`/struct return from `spawn`); without it the join
@@ -786,6 +800,9 @@ pub struct Program {
     /// empty otherwise. `gpu.dispatch` kernel-arg span → generated WGSL shader
     /// text (spike slice-0c). See [`GpuDispatchWgslTable`].
     pub gpu_dispatch_wgsl: GpuDispatchWgslTable,
+    /// Set by the lowering pass from `TypeCheckResult.gpu_reduce_int_buffers`;
+    /// empty otherwise. See [`GpuReduceIntBuffersTable`].
+    pub gpu_reduce_int_buffers: GpuReduceIntBuffersTable,
     /// Set by the lowering pass from `TypeCheckResult.task_join_return_types`;
     /// empty otherwise. `TaskHandle[T].join()` result types for codegen's
     /// cross-task result-transfer sizing (non-scalar spawn returns).

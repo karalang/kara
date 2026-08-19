@@ -1533,6 +1533,10 @@ pub struct TypeCheckResult {
     /// no entry — it runs the kernel element-wise on the CPU. Keyed on the
     /// kernel argument's span (a leaf, never aliased by the outer call span).
     pub gpu_dispatch_wgsl: FxHashMap<SpanKey, String>,
+    /// Buffer-argument spans of `gpu.<reduce>` calls over an INTEGER element
+    /// type. Codegen reads it to pick the checked integer runtime entry point
+    /// (which can trap on overflow) over the float one.
+    pub gpu_reduce_int_buffers: rustc_hash::FxHashSet<SpanKey>,
     /// Bare-call dispatch resolutions: span of a `Call(Identifier(name))` →
     /// resolved target type name (e.g. `"Wrapper"`). Populated when expected-
     /// type inference resolves a bare associated-function call to a concrete
@@ -2018,6 +2022,7 @@ pub struct TypeChecker<'a> {
     /// `gpu.dispatch` kernel-arg span → generated WGSL (slice-0c). See the
     /// public copy on `TypeCheckResult`.
     pub(super) gpu_dispatch_wgsl: FxHashMap<SpanKey, String>,
+    pub(super) gpu_reduce_int_buffers: rustc_hash::FxHashSet<SpanKey>,
     /// `TaskHandle[T].join()` MethodCall span → result type `T`. See the
     /// public copy on `TypeCheckResult` for the full rationale.
     pub(super) task_join_return_types: FxHashMap<SpanKey, TypeExpr>,
@@ -2299,6 +2304,7 @@ impl<'a> TypeChecker<'a> {
             channel_elem_types: FxHashMap::default(),
             stats_elem_types: FxHashMap::default(),
             gpu_dispatch_wgsl: FxHashMap::default(),
+            gpu_reduce_int_buffers: rustc_hash::FxHashSet::default(),
             task_join_return_types: FxHashMap::default(),
             user_effect_resources: FxHashMap::default(),
             resource_key_types: FxHashMap::default(),
@@ -2522,6 +2528,7 @@ impl<'a> TypeChecker<'a> {
             channel_elem_types: self.channel_elem_types,
             stats_elem_types: self.stats_elem_types,
             gpu_dispatch_wgsl: self.gpu_dispatch_wgsl,
+            gpu_reduce_int_buffers: self.gpu_reduce_int_buffers,
             task_join_return_types: self.task_join_return_types,
             bare_assoc_fn_targets: self.bare_assoc_fn_targets,
             path_call_method_dispatch: self.path_call_method_dispatch,
