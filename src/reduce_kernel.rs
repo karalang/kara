@@ -17,6 +17,61 @@
 //! the `Value`-shaped glue (min/max over `Value`, `Value → f64`) stays in the
 //! interpreter.
 
+/// Width of one GPU reduction workgroup — the shader's `@workgroup_size`, its
+/// `scratch` array length, and the padding width of [`tree_reduce_f32`].
+///
+/// Defined HERE rather than in the emitter because all three must be the same
+/// number: the tree order is language semantics (see [`tree_reduce_f32`]), and
+/// a width that differed between the shader and its CPU twin would change the
+/// answer while every individual piece still looked correct.
+pub const GPU_REDUCE_WIDTH: usize = 64;
+
+/// The CPU twin of the GPU tree reduction — **the definition of what a
+/// `gpu.sum` / `gpu.prod` MEANS**, not merely a fallback (B-2026-08-19-10).
+///
+/// A GPU reduction is a tree and a CPU fold is a line. `f32` addition is not
+/// associative, so the two genuinely disagree: 64 copies of `0.1` sum to
+/// `6.400000` here and `6.399996` under `xs.iter().sum()`. Kāra specifies the
+/// tree order and this function reproduces it exactly, so `karac run` and
+/// `karac build` agree bit-for-bit rather than within an epsilon — which is
+/// what keeps the A/B rule (kara-katas/CLAUDE.md, "a run/build divergence is a
+/// compiler bug") intact for a feature that could easily have broken it.
+///
+/// The order, matching the emitted shader step for step: pad to
+/// [`GPU_REDUCE_WIDTH`] with `identity`, then halve —
+/// `s[t] = s[t] OP s[t + stride]` for stride 32, 16, 8, 4, 2, 1.
+///
+/// Slice 1 is single-workgroup only, so `xs.len() <= GPU_REDUCE_WIDTH`; longer
+/// inputs are rejected before reaching here (the runtime entry point aborts
+/// rather than returning a partial answer).
+///
+/// Incidentally the more ACCURATE order: pairing keeps partial sums at similar
+/// magnitudes instead of repeatedly adding a small value to a growing one.
+pub fn tree_reduce_f32(xs: &[f32], op: ReduceOp) -> Option<f32> {
+    let (combine, identity): (fn(f32, f32) -> f32, f32) = match op {
+        ReduceOp::Sum => (|a, b| a + b, 0.0),
+        ReduceOp::Prod => (|a, b| a * b, 1.0),
+        // Everything else needs more than one associative pass — see
+        // `gpu_wgsl::emit_reduce_kernel`, which refuses the same set.
+        _ => return None,
+    };
+    if xs.len() > GPU_REDUCE_WIDTH {
+        return None;
+    }
+    let mut scratch = [identity; GPU_REDUCE_WIDTH];
+    for (slot, &x) in scratch.iter_mut().zip(xs) {
+        *slot = x;
+    }
+    let mut stride = GPU_REDUCE_WIDTH / 2;
+    while stride > 0 {
+        for t in 0..stride {
+            scratch[t] = combine(scratch[t], scratch[t + stride]);
+        }
+        stride /= 2;
+    }
+    Some(scratch[0])
+}
+
 /// A statistical reduction, independent of container shape, element source
 /// (contiguous / Arrow-nullable / slice), and backend.
 ///
@@ -284,6 +339,51 @@ pub fn quantile_linear_sorted(sorted: &[f64], pos: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
+    // ── GPU tree reduction (B-2026-08-19-10) ────────────────────────────
+
+    #[test]
+    fn tree_reduce_matches_the_shader_order_not_a_left_fold() {
+        // The whole reason this function exists. 64 copies of 0.1: a left fold
+        // drifts to 6.399996, the tree gives 6.400000, and the GPU computes the
+        // tree — so the interpreter must too, or `karac run` and `karac build`
+        // print different numbers for the same program.
+        let xs = [0.1f32; 64];
+        let tree = tree_reduce_f32(&xs, ReduceOp::Sum).unwrap();
+        let left: f32 = xs.iter().fold(0.0, |a, b| a + b);
+        assert_ne!(tree, left, "0.1 x 64 must expose the order difference");
+        // Pinned against the value measured on lavapipe.
+        assert_eq!(tree.to_bits(), 6.4f32.to_bits(), "tree sum of 0.1 x 64");
+        // And the tree is the more accurate of the two.
+        assert!((tree - 6.4).abs() < (left - 6.4).abs());
+    }
+
+    #[test]
+    fn tree_reduce_pads_with_the_identity_per_op() {
+        // A short buffer is padded to the workgroup width, so the identity has
+        // to be the operation's own: padding a product with 0.0 would return 0
+        // for every input shorter than 64.
+        assert_eq!(tree_reduce_f32(&[1.0, 2.0, 3.0], ReduceOp::Sum), Some(6.0));
+        assert_eq!(
+            tree_reduce_f32(&[2.0, 3.0, 4.0], ReduceOp::Prod),
+            Some(24.0)
+        );
+        // Empty reduces to the identity, not to None.
+        assert_eq!(tree_reduce_f32(&[], ReduceOp::Sum), Some(0.0));
+        assert_eq!(tree_reduce_f32(&[], ReduceOp::Prod), Some(1.0));
+    }
+
+    #[test]
+    fn tree_reduce_refuses_past_one_workgroup_and_the_multipass_ops() {
+        // Slice 1 is single-workgroup; a longer buffer must not silently return
+        // the first 64 elements' answer.
+        let long = vec![1.0f32; GPU_REDUCE_WIDTH + 1];
+        assert_eq!(tree_reduce_f32(&long, ReduceOp::Sum), None);
+        // Same refusal set as the emitter, so the two cannot disagree about
+        // which ops exist.
+        assert_eq!(tree_reduce_f32(&[1.0], ReduceOp::Mean), None);
+        assert_eq!(tree_reduce_f32(&[1.0], ReduceOp::Min), None);
+    }
+
     use super::*;
 
     fn scalar(o: ReduceOutcome) -> f64 {

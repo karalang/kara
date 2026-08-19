@@ -35,7 +35,7 @@ use crate::ast::{
     BinOp, Block, CallArg, CompoundOp, Expr, ExprKind, Function, Param, PatternKind, Stmt,
     StmtKind, TypeExpr, TypeKind, UnaryOp,
 };
-use crate::reduce_kernel::ReduceOp;
+use crate::reduce_kernel::{ReduceOp, GPU_REDUCE_WIDTH};
 use std::collections::{HashMap, HashSet};
 
 /// Why a `#[gpu]` kernel could not be lowered to slice-0 WGSL. Every variant
@@ -1005,14 +1005,17 @@ pub fn emit_reduce_kernel(op: ReduceOp, elem: &str) -> Result<String, WgslError>
             )))
         }
     };
-    let half = WORKGROUP_SIZE / 2;
+    // One width, defined in `reduce_kernel` — the shader, its scratch array
+    // and the CPU twin's padding must agree or the answer changes.
+    let width = GPU_REDUCE_WIDTH;
+    let half = width / 2;
     Ok(format!(
         "@group(0) @binding(0) var<storage, read>       input:  array<{elem}>;\n\
          @group(0) @binding(1) var<storage, read_write> output: array<{elem}>;\n\
          \n\
-         var<workgroup> scratch: array<{elem}, {WORKGROUP_SIZE}>;\n\
+         var<workgroup> scratch: array<{elem}, {width}>;\n\
          \n\
-         @compute @workgroup_size({WORKGROUP_SIZE})\n\
+         @compute @workgroup_size({width})\n\
          fn main(@builtin(local_invocation_id) lid: vec3<u32>,\n\
          \x20       @builtin(global_invocation_id) gid: vec3<u32>) {{\n\
          \x20   let t = lid.x;\n\
