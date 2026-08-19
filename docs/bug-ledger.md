@@ -92,11 +92,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 262 | 0 |
+| miscompile | 263 | 0 |
 | leak | 185 | 0 |
-| run-vs-build | 138 | 1 |
+| run-vs-build | 139 | 2 |
 | double-free | 133 | 0 |
-| missing-feature | 122 | 3 |
+| missing-feature | 122 | 2 |
 | codegen-gap | 119 | 0 |
 | diagnostics | 83 | 0 |
 | false-positive | 82 | 0 |
@@ -110,21 +110,21 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 946 | 2 |
+| codegen | 947 | 2 |
 | typecheck | 214 | 2 |
-| interp | 161 | 2 |
+| interp | 162 | 2 |
 | ownership | 60 | 0 |
 | other | 58 | 0 |
 | autopar | 49 | 0 |
 | cli | 48 | 0 |
-| parser | 28 | 1 |
+| parser | 28 | 0 |
 | runtime | 26 | 1 |
 | resolver | 20 | 0 |
 | effect | 7 | 0 |
-| lexer | 6 | 1 |
+| lexer | 6 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1373 surfaced · 4 open · 1350 fixed · 7 wontfix** (2026-05-20 → 2026-08-19). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1375 surfaced · 4 open · 1352 fixed · 7 wontfix** (2026-05-20 → 2026-08-19). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (4)
 
@@ -132,8 +132,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1373 surfaced
 |---|---|---|---|---|---|
 | B-2026-08-19-13 | 2026-08-19 | typecheck+codegen+runtime | medium | GPU reductions still lack the two-pass statistics (var / std), prefix-sum and tiled matmul; integer `prod` / `mean` / `dot` and an integer Arg family each await their own decision. `sum`/`prod`/`min`/`max`/`mean`/`dot`/`argmin`/`argmax` over `Vec[f32]` and `sum`/`min`/`max` over `Vec[i32]` and `Vec[u32]` have shipped. | docs/spikes/gpu-llvm-offload-assessment.md; src/gpu_wgsl.rs::emit_reduce_kernel; src/reduce_kernel.rs::tree_reduce_f32 |
 | B-2026-08-19-22 | 2026-08-19 | typecheck | medium | `String` has no O(1) indexed character access — first/last char requires `chars().collect()` into a `Vec[char]` (an allocation) or a full iterator walk, so `w[0]`/`w[-1]` has no constant-time spelling | — |
-| B-2026-08-19-23 | 2026-08-19 | lexer+parser+interp | medium | The UPPER HALF of `u128` (values above `i128::MAX`) is unreachable end-to-end: the interpreter's value carrier is a signed `i128`, so such a value is stored as a negative bit pattern. `340282366920938463463374607431768211455u128` is REJECTED at parse; a value reached by arithmetic (`0u128.wrapping_sub(1u128)`) prints `-1` under `karac run --interp` while `karac build` prints the correct 3.4e38 — a run-vs-build divergence. `-170141183460469231731687303715884105728i128` (i128::MIN) is rejected for the same reason: its magnitude `2^127` exceeds `i128::MAX`. | src/parser/exprs.rs::parse_prefix (the i64::MIN unary-minus fold, which the 128-bit case needs a sibling of); src/parser/exprs.rs IntegerOutOfRange arm (`i128::try_from(m)`); src/interpreter/eval_ops.rs::type_is_unsigned64; src/interpreter/eval_ops.rs::span_int_bounds (the U128 ceiling and its comment); src/interpreter/value.rs::Value::Int |
 | B-2026-08-19-25 | 2026-08-19 | interp+codegen | medium | `Stats.sum` / `Stats.prod` over i64 RAW-`panic!` on integer overflow under `karac run` (Rust backtrace, exit 101) where `karac build` traps cleanly (`integer overflow`, exit 1) -- the last raw panic left in `eval_stats_fn_int`, and the two legs also word the message differently. | src/interpreter/helpers.rs::eval_stats_fn_int (the `run` closure's overflow panic); src/codegen/stats.rs (the AOT twin's trap text) |
+| B-2026-08-19-27 | 2026-08-19 | interp | medium | The interpreter renders an UNSIGNED value with its SIGNED reading whenever it is nested in a container or an enum payload: `println(o)` on an `Option[u64]` holding `u64::MAX` prints `Some(-1)` under `karac run --interp`, and `println(v)` on a `Vec[u64]` prints `[-1, 5]`, while both compiled backends print the values correctly. Not a 128-bit bug — it reproduces identically on `u64` and predates 128-bit entirely. | src/interpreter/*::display_render (the recursive renderer); src/interpreter/method_call.rs (the scalar `to_string` arm, which already does this correctly via `span_unsigned_int_width`); src/interpreter/eval_ops.rs::span_unsigned_int_width |
 
 ### Wontfix (7)
 
@@ -151,9 +151,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1373 surfaced
 
 </details>
 
-### Fixed (1350)
+### Fixed (1352)
 
-<details><summary>1350 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1352 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -12393,7 +12393,29 @@ VERIFIED on both legs for all five functions and both element axes: identical me
 | B-2026-08-19-21 | typecheck | medium | Set/SortedSet `contains` and `remove`, and both `binary_search` arms, REJECTED a borrowed needle — `s.contains(w)` for a `w: ref String` failed with… | Named the rule once as `peel_probe_ref` in `src/typechecker.rs` instead of inlining the peel a fifth time, with the owning-vs-probing distinction written down — that distinction IS the rule, and re-deriving it per site is how the first six sites were missed. Split `"contains" | "remove"` out of the `insert` arm in both `stdlib_map.rs` set arms (hashed and sorted) and applied the peel there; applied it to both `binary_search` arms in `stdlib_seq.rs`. The peel is for the ASSIGNABILITY comparison only — the three numeric coercion checks keep the raw type, so a borrowed numeric needle behaves exactly as before and no coercion is recorded against a reference. 
 
 VERIFIED: all six sites accept a ref; `Vec.contains`/`Map.contains_key` unchanged; `Set.insert(ref)` and `SortedSet.insert(ref)` still correctly REJECT, so the ownership requirement survives where the spec really asks for it. The B-2026-08-14-1 narrowing guards on the same arms still fire (`Set[u8]` + a `300i64` VARIABLE is still rejected for contains, insert and remove alike) — note the guard probe must use a variable, not a literal, as that test's own doc-comment warns, since a literal is range-checked by a different path. |
+| B-2026-08-19-23 | lexer+parser+interp | medium | The UPPER HALF of `u128` (values above `i128::MAX`) is unreachable end-to-end: the interpreter's value carrier is a signed `i128`, so such a value is… | FIXED by d0b8bdf. The row's own hypothesis — "the carrier must grow an unsigned half" — was wrong, and measuring first is what showed it. The carrier model was already right: an unsigned value is held as its two's-complement bit pattern, sign-extended into the signed carrier, which is how `u64` past `i64::MAX` has always ridden a signed `i64`. What was missing is that every CONSUMER of that model had 64 baked in, from the era when `u64` was the only unsigned width whose top half did not fit. No new variant, no carrier change.
+
+FRONT END. The literal could not be written: a `u128` magnitude in `(i128::MAX, u128::MAX]` had no positive form, and `i128::MIN`'s magnitude `2^127` is one past `i128::MAX` so `Neg(Integer(n))` could not carry it either. The `u128` band now takes the wrapped bit pattern the 64-bit band has always used; `i128::MIN` gets the unary-minus fold `i64::MIN` has had since B-2026-08-06-13. The out-of-range message for a 128-bit suffix no longer advises adding a `u64` suffix.
+
+Range-checking that literal needed a SEAM, not a wider bound: no `(min, max)` pair of `i128` can express `u128`, so raising the ceiling was never going to work. `check_int_literal_fits` now takes the literal's own suffix; a `u128`-suffixed literal is accepted on the strength of the lexer having parsed its magnitude with `u128::from_str_radix`, while a genuine negative — which never carries the suffix, because a unary minus makes it `Neg(Integer(n))` — still has to clear `min`. `-1u128`, `-1i128` and `let x: u128 = -1` are rejected exactly as before, asserted by `a_negative_still_cannot_initialize_u128`.
+
+INTERPRETER. The bool `span_type_is_unsigned64` became `span_unsigned_int_width` returning `Some(64)` / `Some(128)` / `None`, and every one of its ~17 consumers now dispatches on the width: the ordered comparisons, division, remainder, `>>`, the add/sub/mul overflow boundary (a new `eval_binary_u128` mirroring `eval_binary_u64`), `to_string` / `println` / f-strings, and the `sort` / `min` / `max` comparators for `Vec`, `Column` and `Tensor`. The 64-bit-only predicate was DELETED rather than kept alongside, so the assumption cannot quietly return. Before this: `2e38 > 5` answered false, `2e38 / 3` trapped as "integer overflow", `u128::MAX` printed `-1`, and a `Vec[u128]` sorted its largest elements first.
+
+CODEGEN needed four fixes, three of them 128-bit gaps rather than signedness ones, and all found by running the probe rather than by reading:
+  - `type_to_type_expr` had no 128-bit arms, so a 128-bit type round-tripped as `TypeKind::Error`. That is why `println(o)` on an `Option[i128]` was refused with "bind a struct literal to a `let` first" — about a plain variable. Found by instrumenting the display registration after five minutes of reading the display lists had produced nothing; the trace printed `pte=Error` immediately.
+  - `emit_display_fn_for_type` had no 128-bit arm and PANICKED the compiler ("type_name 'u128' not yet supported") on `println` of a `Vec[u128]`.
+  - `rebuild_value_from_payload_words` zero-extended word 0 for anything wider than a word, keeping the LOW half — the same defect B-2026-08-19-19 fixed in the sibling match-arm reconstruction, here in the Display reconstruction. 2^100's low word is zero, so it would have rendered `Some(0)`.
+  - the `Vec` sort thunk, the `karac_sortcmp_<T>` family and the element-comparison helper listed the unsigned widths by name without `u128`.
+
+Also fixed here because it is the same hardcoded 64: `span_int_width` had no 128-bit arms, so `1i128 << 100` was rejected against a 64-bit bound, and `shift_at_width` computed on a `u64` carrier where a 128-bit result cannot exist.
+
+REGRESSION CAUGHT AND FIXED IN FLIGHT. Widening `truncate_to_width` to a 128-bit carrier silently changed how a `u64` at or above 2^63 is encoded (zero-extended positive instead of wrapped negative), and the existing `test_interp_u64_*` tests caught it via the `narrow_to_i64` hard check. That encoding is load-bearing — `eval_binary_u64`, `literal_as_i128` and the `%llu` display path all assume the wrapped form — so the 64-bit arm is now explicit and every width below 128 behaves as it did. Worth remembering: widening a carrier helper is not a no-op for the widths it already served.
+
+VERIFICATION. Byte-identical across `karac build`, that build with `KARAC_AUTO_PAR=0`, `karac run` (JIT) and `karac run --interp`, over display, comparison, div/rem, shift, arithmetic, bit ops, the overflow-aware method families, enum payloads, casts, struct fields, function parameters and returns, `Vec` elements, sorting, and both literal boundaries. Every asserted literal is above `i128::MAX`, where a signed reading flips the SIGN rather than merely losing precision — `u128::MAX` reads as `-1`. Tests: `the_128bit_literal_boundaries_are_writable` and `a_negative_still_cannot_initialize_u128` (tests/typechecker.rs); `the_upper_half_of_u128_is_correct_in_the_interpreter`, `a_u128_vec_sorts_by_magnitude` and `shifts_run_at_the_values_own_width` (tests/interpreter.rs); `e2e_upper_half_of_u128_end_to_end`, `e2e_128bit_shift_amounts_reach_the_full_width` and `e2e_128bit_display_inside_containers_and_payloads` (tests/codegen.rs). Gates: fmt, both clippy legs, default suite (106 targets), codegen 3079 and memory_sanitizer 1130 under KARAC_REQUIRE_RUNTIME_ARCHIVE=1.
+
+SPLIT OUT, both found by this row's measurement and neither belonging to it: B-2026-08-19-26 (a shift takes its width and signedness from the AMOUNT — a silent miscompile on plain `i64`, fixed in bb3eeb7) and B-2026-08-19-27 (the interpreter's `display_render` renders a nested unsigned value signed; reproduces identically on `u64`, so it predates 128-bit entirely). |
 | B-2026-08-19-24 | typecheck | medium | TYPE-DIRECTED BARE UNIT-VARIANT RESOLUTION: when the context names an enum, a bare variant name now means THAT enum's variant (`let x: Second = A;`,… | ff300ce |
+| B-2026-08-19-26 | codegen | high | SILENT MISCOMPILE on plain 64-bit code: a shift took its WIDTH and its SIGNEDNESS from the shift AMOUNT rather than from the value | FIXED by bb3eeb7. See detail — shifts now take width and signedness from the left operand, with the amount range-checked at its own width before being coerced to the value's type. |
 
 </details>
 
