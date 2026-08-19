@@ -875,6 +875,31 @@ pub struct AssocTypeBinding {
 
 // ── Effect Declarations ──────────────────────────────────────────
 
+/// One trait bound on an `effect resource` declaration — the `A` in
+/// `effect resource R: A;`, or either of the two in `effect resource R: A + B;`
+/// (design.md:7216).
+#[derive(Debug, Clone)]
+pub struct ProviderBound {
+    /// The trait's bare name, which is what every consumer but the
+    /// typechecker needs.
+    pub name: String,
+    /// Span of the trait identifier itself, so a diagnostic about the bound
+    /// points at the bound rather than at the whole declaration.
+    pub name_span: Span,
+    /// `: Provider[Request]` — the bound's GENERIC ARGUMENTS (design.md:6071).
+    /// `None` for a plain `: Trait` bound.
+    ///
+    /// These are not decoration. A generic provider trait declared without its
+    /// argument is unusable, not merely imprecise: `effect resource RequestCh:
+    /// Channel;` against `trait Channel[T]` parses, and then every
+    /// `RequestCh.send(v)` fails with "expected 'T', found 'i64'" — naming a
+    /// type parameter the user never wrote, because nothing ever bound it.
+    /// `resource_dispatch_signature` substitutes these into the trait method's
+    /// signature, which is the binding that diagnostic was missing
+    /// (B-2026-08-18-41).
+    pub args: Option<Vec<GenericArg>>,
+}
+
 #[derive(Debug, Clone)]
 pub struct EffectResourceDecl {
     pub span: Span,
@@ -890,25 +915,24 @@ pub struct EffectResourceDecl {
     /// design.md is this key. Parsing it as type parameters is what made
     /// `[user_id: i64]` fail the Type-class naming rule.
     pub key_param: Option<ResourceKeyParam>,
-    pub provider_trait: Option<String>,
-    /// `effect resource C: Provider[Request];` — the provider trait's GENERIC
-    /// ARGUMENTS (design.md:6071). `None` for a plain `: Trait` bound and for a
-    /// bare resource; `provider_trait` still carries the bare name, which is
-    /// what every consumer but the typechecker needs.
+    /// The declared provider trait bounds, in source order.
     ///
-    /// These are not decoration. A generic provider trait declared without its
-    /// argument is unusable, not merely imprecise: `effect resource RequestCh:
-    /// Channel;` against `trait Channel[T]` parses, and then every
-    /// `RequestCh.send(v)` fails with "expected 'T', found 'i64'" — naming a
-    /// type parameter the user never wrote, because nothing ever bound it.
-    /// `resource_dispatch_signature` substitutes these into the trait method's
-    /// signature, which is the binding that diagnostic was missing
-    /// (B-2026-08-18-41).
-    pub provider_trait_args: Option<Vec<GenericArg>>,
-    /// Span of the `provider_trait` identifier itself, so a diagnostic about
-    /// the trait points at the trait rather than at the whole declaration.
-    /// `None` exactly when `provider_trait` is `None`.
-    pub provider_trait_span: Option<Span>,
+    /// EMPTY for a bare resource (`effect resource Latency;`). ONE entry for
+    /// the common `effect resource UserDB: DatabaseProvider;`. TWO OR MORE for
+    /// the multi-bound form design.md:7216 specifies normatively —
+    /// `effect resource UserDB: DatabaseProvider + HealthCheckable;` — under
+    /// "Multiple trait bounds are allowed on a resource declaration:" with
+    /// semantics attached at :7217 ("Any provider passed to `with_provider`
+    /// must implement all declared bounds plus `Send + Sync`").
+    ///
+    /// This was three parallel `Option` fields (`provider_trait`,
+    /// `provider_trait_args`, `provider_trait_span`) until B-2026-08-19-3. A
+    /// `Vec` rather than "first bound plus extras" because NO consumer wants
+    /// only the first: the resolver existence-checks each, the effect checker
+    /// seeds the union of their methods, the typechecker checks each bound's
+    /// generic arity and that the provider implements every one, and codegen
+    /// lays their methods out end-to-end in one vtable.
+    pub provider_bounds: Vec<ProviderBound>,
     /// Phase-10 target gate: when this declaration is an alias-renamed
     /// clone of a gated-stdlib HOST resource (`import std.web.Display
     /// as Screen;` in single-file mode), the canonical host name

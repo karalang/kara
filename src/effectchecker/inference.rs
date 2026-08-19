@@ -194,13 +194,17 @@ impl<'a> super::EffectChecker<'a> {
                 Item::EffectResource(r) => r,
                 _ => continue,
             };
-            let Some(ref trait_name) = r.provider_trait else {
-                continue;
-            };
-            let Some(methods) = trait_methods.get(trait_name) else {
-                continue;
-            };
-            for m in methods {
+            // The UNION of every declared bound's methods (design.md:7216 —
+            // a provider must implement all of them, so every one of their
+            // methods is reachable as `R.method(...)`). One bound is the
+            // common case and iterates once; a bare resource iterates zero
+            // times. B-2026-08-19-3.
+            for m in r
+                .provider_bounds
+                .iter()
+                .filter_map(|b| trait_methods.get(&b.name))
+                .flatten()
+            {
                 let verb = match m.self_param {
                     SelfParam::Ref => EffectVerbKind::Reads,
                     SelfParam::MutRef | SelfParam::Owned => EffectVerbKind::Writes,

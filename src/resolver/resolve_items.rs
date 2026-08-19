@@ -565,25 +565,27 @@ impl<'a> super::Resolver<'a> {
     /// to something trait-like" needs the same import-following the
     /// typechecker does for trait bounds; that is a separate change.
     fn resolve_effect_resource_def(&mut self, r: &EffectResourceDecl) {
-        let Some(trait_name) = &r.provider_trait else {
-            // A bare `effect resource R;` declares no provider contract —
-            // legal, and the common form in the stdlib's host resources.
-            return;
-        };
-        if self.table.lookup(trait_name).is_none() {
-            let span = r.provider_trait_span.unwrap_or(r.span);
-            self.error_undefined_type(trait_name, span);
-        }
-        // `: Provider[Request]` — the ARGUMENTS are types too, and get the same
-        // existence check the trait name gets (B-2026-08-18-41). Without it an
-        // unknown argument is silently accepted for a resource that is never
-        // called, and surfaces as "expected 'Nonexistent', found 'i64'" at the
-        // first call site for one that is — a mismatch diagnostic for what is
-        // really an undefined type.
-        if let Some(args) = &r.provider_trait_args {
-            for arg in args {
-                if let GenericArg::Type(te) = arg {
-                    self.resolve_type_expr(te);
+        // Each bound gets the same treatment — a bare `effect resource R;`
+        // declares no provider contract (legal, and the common form in the
+        // stdlib's host resources), so an empty list is simply an empty loop.
+        // The multi-bound form `: A + B` (design.md:7216, B-2026-08-19-3)
+        // existence-checks every bound rather than only the first: a typo in
+        // the second is exactly as undefined as one in the first.
+        for bound in &r.provider_bounds {
+            if self.table.lookup(&bound.name).is_none() {
+                self.error_undefined_type(&bound.name, bound.name_span);
+            }
+            // `: Provider[Request]` — the ARGUMENTS are types too, and get the
+            // same existence check the trait name gets (B-2026-08-18-41).
+            // Without it an unknown argument is silently accepted for a
+            // resource that is never called, and surfaces as "expected
+            // 'Nonexistent', found 'i64'" at the first call site for one that
+            // is — a mismatch diagnostic for what is really an undefined type.
+            if let Some(args) = &bound.args {
+                for arg in args {
+                    if let GenericArg::Type(te) = arg {
+                        self.resolve_type_expr(te);
+                    }
                 }
             }
         }

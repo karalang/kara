@@ -21228,6 +21228,70 @@ fn main() {
         }
     }
 
+    #[test]
+    fn e2e_multi_bound_provider_resource() {
+        // `effect resource UserDB: DatabaseProvider + HealthCheckable;` — the
+        // MULTI-BOUND form (B-2026-08-19-3, design.md:7216, prose at :7213).
+        // The parser stopped at the `+` with "Expected Semicolon, found Plus".
+        //
+        // End-to-end is the whole point: dispatch is ONE vtable pointer per
+        // `ProviderFrame` and `R.method(..)` indexes it by `position()`, so the
+        // two bounds' methods have to be laid out end-to-end in ONE vtable
+        // keyed by the RESOURCE (`@VT_InMemoryDB_UserDB`) — a fix that widened
+        // the declaration but left dispatch keyed on a single trait would find
+        // no vtable, or index the wrong slot and call `lookup` for `healthy`.
+        // Both methods are called, and from DIFFERENT bounds, so a wrong slot
+        // index shows up as a wrong answer rather than a crash.
+        if let Some(out) = run_program(
+            "trait DatabaseProvider { fn lookup(ref self, id: i64) -> i64; }\n\
+             trait HealthCheckable { fn healthy(ref self) -> bool; }\n\
+             effect resource UserDB: DatabaseProvider + HealthCheckable;\n\
+             struct InMemoryDB { offset: i64 }\n\
+             impl DatabaseProvider for InMemoryDB {\n\
+                 fn lookup(ref self, id: i64) -> i64 { id + self.offset }\n\
+             }\n\
+             impl HealthCheckable for InMemoryDB {\n\
+                 fn healthy(ref self) -> bool { self.offset > 0 }\n\
+             }\n\
+             fn fetch(id: i64) -> i64 with reads(UserDB) { UserDB.lookup(id) }\n\
+             fn check() -> bool with reads(UserDB) { UserDB.healthy() }\n\
+             fn main() {\n\
+                 with_provider[UserDB](InMemoryDB { offset: 100 }, || {\n\
+                     println(f\"{fetch(7)} {check()}\");\n\
+                 });\n\
+             }",
+        ) {
+            assert_eq!(out, "107 true\n");
+        }
+    }
+
+    /// A SECOND resource bound to the same single trait still shares the
+    /// trait-keyed `@VT_<U>_<T>` vtable — the multi-bound pass must not have
+    /// turned every resource into its own vtable. design.md's own "two
+    /// resources can share one trait" note (§ Why two declarations) is the
+    /// program shape here.
+    #[test]
+    fn e2e_two_resources_share_one_single_bound_vtable() {
+        if let Some(out) = run_program(
+            "trait Counter { fn get(ref self) -> i64; }\n\
+             effect resource Ctr: Counter;\n\
+             effect resource Audit: Counter;\n\
+             struct InMem { n: i64 }\n\
+             impl Counter for InMem { fn get(ref self) -> i64 { self.n } }\n\
+             fn a() -> i64 with reads(Ctr) { Ctr.get() }\n\
+             fn b() -> i64 with reads(Audit) { Audit.get() }\n\
+             fn main() {\n\
+                 with_provider[Ctr](InMem { n: 40 }, || {\n\
+                     with_provider[Audit](InMem { n: 2 }, || {\n\
+                         println(f\"{a() + b()}\");\n\
+                     });\n\
+                 });\n\
+             }",
+        ) {
+            assert_eq!(out, "42\n");
+        }
+    }
+
     // ── `providers { R => v } in { body }` block form (B-2026-07-31-9) ──
     //
     // The block sugar compiled to NOTHING: `compile_expr` had no

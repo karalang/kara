@@ -7024,10 +7024,14 @@ impl<'ctx> Codegen<'ctx> {
                     .provider_resource_ids
                     .insert(decl.name.clone(), next_resource_id);
                 next_resource_id += 1;
-                if let Some(trait_name) = &decl.provider_trait {
-                    self.provider_state
-                        .provider_resource_traits
-                        .insert(decl.name.clone(), trait_name.clone());
+                if !decl.provider_bounds.is_empty() {
+                    self.provider_state.provider_resource_traits.insert(
+                        decl.name.clone(),
+                        decl.provider_bounds
+                            .iter()
+                            .map(|b| b.name.clone())
+                            .collect(),
+                    );
                 }
             }
         }

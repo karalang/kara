@@ -1882,6 +1882,15 @@ fn test_self_param_variants() {
     parse_ok("impl Foo { fn c(mut ref self) { } }");
 }
 
+/// The declared provider trait names of an `effect resource`, in source
+/// order. One bound is the common case; `: A + B` (design.md:7216) yields two.
+fn bound_names(e: &karac::ast::EffectResourceDecl) -> Vec<&str> {
+    e.provider_bounds
+        .iter()
+        .map(|b| b.name.as_str())
+        .collect::<Vec<_>>()
+}
+
 // ── 2.3: Effects Syntax ──────────────────────────────────────────
 
 #[test]
@@ -1889,7 +1898,7 @@ fn test_effect_resource_decl() {
     let prog = parse_ok("effect resource UserDB: DatabaseProvider;");
     if let Item::EffectResource(e) = &prog.items[0] {
         assert_eq!(e.name, "UserDB");
-        assert_eq!(e.provider_trait, Some("DatabaseProvider".to_string()));
+        assert_eq!(bound_names(e), vec!["DatabaseProvider"]);
     }
 }
 
@@ -1898,7 +1907,7 @@ fn test_effect_resource_no_provider() {
     let prog = parse_ok("effect resource UserDB;");
     if let Item::EffectResource(e) = &prog.items[0] {
         assert_eq!(e.name, "UserDB");
-        assert!(e.provider_trait.is_none());
+        assert!(e.provider_bounds.is_empty());
     }
 }
 
@@ -1921,7 +1930,7 @@ fn test_effect_resource_partition_key() {
     assert_eq!(e.name, "UserDB");
     let key = e.key_param.as_ref().expect("a partition key");
     assert_eq!(key.name, "user_id");
-    assert!(e.provider_trait.is_none());
+    assert!(e.provider_bounds.is_empty());
 }
 
 /// The bare `resource R;` shorthand takes the same path — the two spellings
@@ -1938,7 +1947,7 @@ fn test_bare_resource_shorthand_takes_a_partition_key() {
         e.key_param.as_ref().map(|k| k.name.as_str()),
         Some("user_id")
     );
-    assert_eq!(e.provider_trait, Some("DatabaseProvider".to_string()));
+    assert_eq!(bound_names(e), vec!["DatabaseProvider"]);
 }
 
 /// The key is a BINDING name, so it is Value-class. Naming it `T` is the
@@ -1974,9 +1983,9 @@ fn test_effect_resource_generic_provider_bound() {
         panic!("expected an effect resource, got {:?}", prog.items[0]);
     };
     assert_eq!(e.name, "RequestCh");
-    assert_eq!(e.provider_trait.as_deref(), Some("Channel"));
-    let args = e
-        .provider_trait_args
+    assert_eq!(bound_names(e), vec!["Channel"]);
+    let args = e.provider_bounds[0]
+        .args
         .as_ref()
         .expect("the bound's generic arguments");
     assert_eq!(args.len(), 1);
@@ -1996,11 +2005,11 @@ fn test_effect_resource_plain_bound_has_no_generic_args() {
     let Item::EffectResource(e) = &prog.items[0] else {
         panic!("expected an effect resource, got {:?}", prog.items[0]);
     };
-    assert_eq!(e.provider_trait.as_deref(), Some("DatabaseProvider"));
+    assert_eq!(bound_names(e), vec!["DatabaseProvider"]);
     assert!(
-        e.provider_trait_args.is_none(),
+        e.provider_bounds[0].args.is_none(),
         "a plain bound must record no argument list, got {:?}",
-        e.provider_trait_args
+        e.provider_bounds[0].args
     );
 }
 
@@ -2016,12 +2025,68 @@ fn test_effect_resource_key_and_generic_bound_together() {
     };
     let key = e.key_param.as_ref().expect("a partition key");
     assert_eq!(key.name, "user_id");
-    assert_eq!(e.provider_trait.as_deref(), Some("Store"));
+    assert_eq!(bound_names(e), vec!["Store"]);
     assert_eq!(
-        e.provider_trait_args.as_ref().map(|a| a.len()),
+        e.provider_bounds[0].args.as_ref().map(|a| a.len()),
         Some(1),
         "the bound's argument list must survive alongside the key"
     );
+}
+
+/// B-2026-08-19-3 — MULTI-BOUND resource declarations, design.md:7216, spec'd
+/// normatively at :7213 ("Multiple trait bounds are allowed on a resource
+/// declaration:") with semantics attached at :7217 ("Any provider passed to
+/// `with_provider` must implement all declared bounds plus `Send + Sync`").
+/// The parser stopped at the `+` with "Expected Semicolon, found Plus".
+#[test]
+fn test_effect_resource_multi_bound() {
+    let prog = parse_ok("effect resource UserDB: DatabaseProvider + HealthCheckable;");
+    let Item::EffectResource(e) = &prog.items[0] else {
+        panic!("expected an effect resource, got {:?}", prog.items[0]);
+    };
+    assert_eq!(e.name, "UserDB");
+    assert_eq!(bound_names(e), vec!["DatabaseProvider", "HealthCheckable"]);
+}
+
+/// Three bounds, and the GENERIC form composes with the `+` join — each bound
+/// carries its own argument list, so `A[i64] + B` must not smear `[i64]` onto
+/// `B` or drop it.
+#[test]
+fn test_effect_resource_multi_bound_with_generic_args() {
+    let prog = parse_ok("effect resource Bus: Channel[Request] + Healthy + Traced;");
+    let Item::EffectResource(e) = &prog.items[0] else {
+        panic!("expected an effect resource, got {:?}", prog.items[0]);
+    };
+    assert_eq!(bound_names(e), vec!["Channel", "Healthy", "Traced"]);
+    assert_eq!(e.provider_bounds[0].args.as_ref().map(|a| a.len()), Some(1));
+    assert!(e.provider_bounds[1].args.is_none());
+    assert!(e.provider_bounds[2].args.is_none());
+}
+
+/// The partition key sits on the other side of the `:` and must survive the
+/// multi-bound join, exactly as it survives the generic one.
+#[test]
+fn test_effect_resource_key_and_multi_bound_together() {
+    let prog = parse_ok("effect resource UserDB[user_id: i64]: Store + Healthy;");
+    let Item::EffectResource(e) = &prog.items[0] else {
+        panic!("expected an effect resource, got {:?}", prog.items[0]);
+    };
+    assert_eq!(
+        e.key_param.as_ref().map(|k| k.name.as_str()),
+        Some("user_id")
+    );
+    assert_eq!(bound_names(e), vec!["Store", "Healthy"]);
+}
+
+/// The bare `resource R;` shorthand shares the same helper, so the multi-bound
+/// form cannot land on only one of the two spellings.
+#[test]
+fn test_bare_resource_shorthand_takes_multi_bounds() {
+    let prog = parse_ok("resource UserDB: Store + Healthy;");
+    let Item::EffectResource(e) = &prog.items[0] else {
+        panic!("expected an effect resource, got {:?}", prog.items[0]);
+    };
+    assert_eq!(bound_names(e), vec!["Store", "Healthy"]);
 }
 
 #[test]

@@ -7,7 +7,7 @@
 //! name inference, and the provider-method function type
 //! constructor.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::ast::*;
 
@@ -34,13 +34,17 @@ impl<'ctx> super::Codegen<'ctx> {
             .provider_state
             .provider_resource_traits
             .values()
+            .flatten()
             .cloned()
             .collect();
         if provider_traits.is_empty() {
             return;
         }
 
-        let ptr_type = self.context.ptr_type(AddressSpace::default());
+        // (trait, impl-target) pairs seen, so the multi-bound pass below can
+        // ask "which targets implement ALL of R's bounds?" without a second
+        // walk over the program.
+        let mut impl_targets: HashMap<String, HashSet<String>> = HashMap::new();
         for item in &program.items {
             let Item::ImplBlock(imp) = item else { continue };
             let Some(trait_path) = &imp.trait_name else {
@@ -55,6 +59,10 @@ impl<'ctx> super::Codegen<'ctx> {
             let Some(target_name) = impl_target_name(&imp.target_type) else {
                 continue;
             };
+            impl_targets
+                .entry(trait_name.clone())
+                .or_default()
+                .insert(target_name.clone());
             let Some(method_order) = self
                 .provider_state
                 .provider_trait_methods
@@ -63,34 +71,142 @@ impl<'ctx> super::Codegen<'ctx> {
             else {
                 continue;
             };
-
-            // Look up each method's compiled fn-ptr. Methods declared on
-            // the impl but absent from the trait (extras) are ignored —
-            // the vtable matches the trait's view. Trait methods missing
-            // from the impl emit a null fn-ptr; calling such a vtable
-            // slot would null-deref at runtime, but the typechecker
-            // rejects partial impls so this case shouldn't reach codegen.
-            let mut entries: Vec<inkwell::values::PointerValue<'ctx>> = Vec::new();
-            for method_name in &method_order {
-                let symbol = format!("{}.{}", target_name, method_name);
-                let entry = match self.module.get_function(&symbol) {
-                    Some(f) => f.as_global_value().as_pointer_value(),
-                    None => ptr_type.const_null(),
-                };
-                entries.push(entry);
-            }
-
-            let vtable_array_ty = ptr_type.array_type(entries.len() as u32);
-            let vtable_init = ptr_type.const_array(&entries);
-            let vt_name = format!("VT_{}_{}", target_name, trait_name);
-            let vt_global = self.module.add_global(vtable_array_ty, None, &vt_name);
-            vt_global.set_initializer(&vtable_init);
-            vt_global.set_linkage(Linkage::Internal);
-            vt_global.set_constant(true);
-            self.provider_state
-                .provider_vtables
-                .insert((target_name, trait_name), vt_global);
+            self.emit_one_provider_vtable(&target_name, &trait_name, &method_order);
         }
+
+        // MULTI-BOUND resources (`effect resource R: A + B;`, design.md:7216 /
+        // B-2026-08-19-3). Dispatch is one vtable + one method order per
+        // resource by construction — the `ProviderFrame` holds a single vtable
+        // pointer and `R.method(..)` indexes it by `position()` — so a
+        // two-bound resource gets ONE vtable whose slots are the two bounds'
+        // methods laid out end-to-end in declaration order, keyed by the
+        // RESOURCE name (`@VT_<U>_<R>`). That is the same `(U, key)` shape
+        // trait-less ambient resources already use, so no reader learns a new
+        // one. A single-bound resource keeps its `(U, T)` trait-keyed vtable
+        // and its `@VT_<U>_<T>` symbol untouched — and keeps sharing it across
+        // two resources bound to the same trait.
+        //
+        // Emitted only for targets that implement EVERY bound; a provider
+        // missing one is the typechecker's diagnostic
+        // (`check_provider_satisfies_declared_bound`), and emitting a vtable
+        // with null slots here would turn that into a runtime null-deref.
+        let mut multi: Vec<(String, Vec<String>)> = self
+            .provider_state
+            .provider_resource_traits
+            .iter()
+            .filter(|(_, bounds)| bounds.len() > 1)
+            .map(|(r, bounds)| (r.clone(), bounds.clone()))
+            .collect();
+        // `provider_resource_traits` is a HashMap, and the order globals are
+        // added to the module must not depend on its iteration order — two
+        // runs of the same program have to emit byte-identical IR.
+        multi.sort();
+        for (resource, bounds) in multi {
+            let Some(method_order) = self.provider_resource_method_order(&resource) else {
+                continue;
+            };
+            let mut targets: Vec<String> = match impl_targets.get(&bounds[0]) {
+                Some(t) => t.iter().cloned().collect(),
+                None => continue,
+            };
+            targets.retain(|u| {
+                bounds[1..]
+                    .iter()
+                    .all(|b| impl_targets.get(b).is_some_and(|s| s.contains(u)))
+            });
+            // Deterministic emission order — `impl_targets` is a HashSet, and
+            // the module's global order must not depend on its iteration.
+            targets.sort();
+            for target in targets {
+                self.emit_one_provider_vtable(&target, &resource, &method_order);
+            }
+        }
+    }
+
+    /// Emit one `@VT_<target>_<key>` array-of-fn-pointers global and record it
+    /// in `provider_vtables` under `(target, key)`. `key` is the trait name
+    /// for a single-bound resource and the resource name for a multi-bound
+    /// one; `method_order` pins the slot layout that `R.method(..)` dispatch
+    /// indexes by `position()`.
+    fn emit_one_provider_vtable(&mut self, target_name: &str, key: &str, method_order: &[String]) {
+        if self
+            .provider_state
+            .provider_vtables
+            .contains_key(&(target_name.to_string(), key.to_string()))
+        {
+            return;
+        }
+        let ptr_type = self.context.ptr_type(AddressSpace::default());
+        // Look up each method's compiled fn-ptr. Methods declared on
+        // the impl but absent from the trait (extras) are ignored —
+        // the vtable matches the trait's view. Trait methods missing
+        // from the impl emit a null fn-ptr; calling such a vtable
+        // slot would null-deref at runtime, but the typechecker
+        // rejects partial impls so this case shouldn't reach codegen.
+        let mut entries: Vec<inkwell::values::PointerValue<'ctx>> = Vec::new();
+        for method_name in method_order {
+            let symbol = format!("{}.{}", target_name, method_name);
+            let entry = match self.module.get_function(&symbol) {
+                Some(f) => f.as_global_value().as_pointer_value(),
+                None => ptr_type.const_null(),
+            };
+            entries.push(entry);
+        }
+
+        let vtable_array_ty = ptr_type.array_type(entries.len() as u32);
+        let vtable_init = ptr_type.const_array(&entries);
+        let vt_name = format!("VT_{}_{}", target_name, key);
+        let vt_global = self.module.add_global(vtable_array_ty, None, &vt_name);
+        vt_global.set_initializer(&vtable_init);
+        vt_global.set_linkage(Linkage::Internal);
+        vt_global.set_constant(true);
+        self.provider_state
+            .provider_vtables
+            .insert((target_name.to_string(), key.to_string()), vt_global);
+    }
+
+    /// The key a resource's vtable is stored under in `provider_vtables`: the
+    /// trait name when exactly one bound is declared (so `@VT_<U>_<T>` is
+    /// unchanged and shared by every resource bound to `T`), the RESOURCE name
+    /// when two or more are (`@VT_<U>_<R>`, holding the bounds' methods laid
+    /// out end-to-end). `None` for a resource with no declared bound — those
+    /// take the ambient path, which already keys on the resource name itself.
+    pub(super) fn provider_resource_vtable_key(&self, resource: &str) -> Option<String> {
+        let bounds = self.provider_state.provider_resource_traits.get(resource)?;
+        match bounds.len() {
+            0 => None,
+            1 => Some(bounds[0].clone()),
+            _ => Some(resource.to_string()),
+        }
+    }
+
+    /// The flat method order of a bound resource's vtable: the declared
+    /// bounds' method lists concatenated in declaration order. Equals
+    /// `provider_trait_methods[T]` exactly for the one-bound case, so dispatch
+    /// can read this uniformly. `None` when the resource declares no bound, or
+    /// when a bound's method order was never recorded (vtable emission and
+    /// dispatch out of sync — a codegen bug the caller reports).
+    ///
+    /// A method name declared by two bounds would make `position()` ambiguous;
+    /// the typechecker rejects that at the declaration
+    /// (`check_effect_resource_bound_overlap`), which is what lets this be a
+    /// flat list rather than a per-bound map at every dispatch site.
+    pub(super) fn provider_resource_method_order(&self, resource: &str) -> Option<Vec<String>> {
+        let bounds = self.provider_state.provider_resource_traits.get(resource)?;
+        if bounds.is_empty() {
+            return None;
+        }
+        let mut order = Vec::new();
+        for b in bounds {
+            order.extend(
+                self.provider_state
+                    .provider_trait_methods
+                    .get(b)?
+                    .iter()
+                    .cloned(),
+            );
+        }
+        Some(order)
     }
 
     /// Theme 6 sub-step 3: lower `with_provider[R](provider, ||body)`.
@@ -499,7 +615,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     resource
                 )
             })?;
-        let trait_name = self
+        let bounds = self
             .provider_state
             .provider_resource_traits
             .get(resource)
@@ -511,6 +627,13 @@ impl<'ctx> super::Codegen<'ctx> {
                     resource, resource
                 )
             })?;
+        // One vtable per resource: keyed by the trait for a single bound (so
+        // `@VT_<U>_<T>` is unchanged and shared), by the RESOURCE for a
+        // multi-bound `: A + B` declaration (B-2026-08-19-3).
+        let vtable_key = self
+            .provider_resource_vtable_key(resource)
+            .unwrap_or_else(|| resource.to_string());
+        let declared = bounds.join(" + ");
 
         // 2. Infer the provider's impl-target type and look up its vtable.
         let provider_type_name = self
@@ -526,13 +649,13 @@ impl<'ctx> super::Codegen<'ctx> {
         let vt_global = self
             .provider_state
             .provider_vtables
-            .get(&(provider_type_name.clone(), trait_name.clone()))
+            .get(&(provider_type_name.clone(), vtable_key.clone()))
             .copied()
             .ok_or_else(|| {
                 format!(
                     "with_provider[{}]: no vtable found for `impl {} for {}` — check that \
                      the impl exists and `effect resource {}: {}` is declared at the top level",
-                    resource, trait_name, provider_type_name, resource, trait_name
+                    resource, declared, provider_type_name, resource, declared
                 )
             })?;
 
@@ -1605,33 +1728,35 @@ impl<'ctx> super::Codegen<'ctx> {
         // NOT recorded in `user_ambient_resource_methods`: it falls through
         // to the ambient FFI-default path (`compile_ambient_resource_method`)
         // via `Ok(None)` so an unoverridden call gets the builtin behaviour.
-        let (method_order, (fn_type, impl_key)) = if let Some(trait_name) = self
+        let (method_order, (fn_type, impl_key)) = if let Some(bounds) = self
             .provider_state
             .provider_resource_traits
             .get(name)
             .cloned()
         {
-            let order = self
-                .provider_state
-                .provider_trait_methods
-                .get(&trait_name)
-                .cloned()
-                .ok_or_else(|| {
-                    format!(
-                        "R.method dispatch: provider trait '{}' has no recorded method order \
+            // The bounds' methods laid out end-to-end (one bound: exactly the
+            // trait's own order, unchanged). B-2026-08-19-3.
+            let order = self.provider_resource_method_order(name).ok_or_else(|| {
+                format!(
+                    "R.method dispatch: provider trait '{}' has no recorded method order \
                          (vtable emission and dispatch out of sync — codegen bug)",
-                        trait_name
-                    )
-                })?;
-            // Borrow the FunctionType from any impl of this trait method.
-            // All impls of the same trait share the same lowered signature.
-            let ft = self
-                .provider_method_fn_type(&trait_name, method)
+                    bounds.join(" + ")
+                )
+            })?;
+            // Borrow the FunctionType from any impl of this method — whichever
+            // bound declares it, since a name declared by two bounds is
+            // rejected at the declaration. All impls of the same trait share
+            // the same lowered signature.
+            let ft = bounds
+                .iter()
+                .find_map(|b| self.provider_method_fn_type(b, method))
                 .ok_or_else(|| {
                     format!(
                         "R.method dispatch: no impl found for `{}::{}` — at least one \
                      `impl {} for U` must exist to populate the vtable",
-                        trait_name, method, trait_name
+                        bounds.join(" + "),
+                        method,
+                        bounds.join(" + ")
                     )
                 })?;
             (order, ft)
@@ -1847,10 +1972,7 @@ impl<'ctx> super::Codegen<'ctx> {
             return None;
         }
         let trait_key = self
-            .provider_state
-            .provider_resource_traits
-            .get(resource)
-            .cloned()
+            .provider_resource_vtable_key(resource)
             .unwrap_or_else(|| resource.to_string());
         for (target, t) in self.provider_state.provider_vtables.keys() {
             if *t == trait_key {

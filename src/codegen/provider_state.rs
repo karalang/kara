@@ -33,11 +33,17 @@ pub(crate) struct ProviderState<'ctx> {
     /// integer flows through to runtime calls (`karac_provider_push`,
     /// `karac_provider_lookup`); the runtime is name-agnostic.
     pub(crate) provider_resource_ids: HashMap<String, u32>,
-    /// Resource name → trait name for resources declared as
-    /// `effect resource R: T`. Used to (1) drive vtable emission for
-    /// the impls of `T` and (2) resolve method indices at `R.method(...)`
-    /// call sites.
-    pub(crate) provider_resource_traits: HashMap<String, String>,
+    /// Resource name → the declared provider trait bounds, in source order,
+    /// for resources declared as `effect resource R: T` (one bound) or
+    /// `effect resource R: A + B` (design.md:7216, B-2026-08-19-3). Used to
+    /// (1) drive vtable emission for the impls of each bound and (2) resolve
+    /// method indices at `R.method(...)` call sites.
+    ///
+    /// A resource with NO bound is absent from the map entirely, not
+    /// present-with-an-empty-list: trait-*absence* is the discriminator that
+    /// routes a resource to the ambient runtime-stack path, and several
+    /// readers spell that as `contains_key`.
+    pub(crate) provider_resource_traits: HashMap<String, Vec<String>>,
     /// Trait name → ordered method-name list (source-declaration order
     /// from the `trait T { ... }` block). Vtables for `impl T for U`
     /// store fn ptrs in this same order; method dispatch resolves the

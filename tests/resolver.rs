@@ -5325,6 +5325,44 @@ fn effect_resource_without_provider_trait_is_legal() {
     resolve_ok("effect resource Thing;");
 }
 
+/// EVERY bound of a multi-bound declaration is existence-checked, not only the
+/// first (B-2026-08-19-3, design.md:7216). A typo in the second bound is
+/// exactly as undefined as one in the first, and the span must point at the
+/// bound that is wrong.
+#[test]
+fn effect_resource_undefined_trailing_bound_is_rejected() {
+    let src = "trait Provider { fn get(ref self) -> i64; }\n\
+               effect resource Thing: Provider + NoSuchTraitAnywhere;";
+    let errors = resolve_errors(src);
+    assert_eq!(
+        errors.len(),
+        1,
+        "expected exactly one error, got: {:?}",
+        errors.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+    );
+    assert!(
+        errors[0].message.contains("NoSuchTraitAnywhere"),
+        "message should name the missing trait: {}",
+        errors[0].message
+    );
+    let span = &errors[0].span;
+    assert_eq!(
+        &src[span.offset..span.offset + span.length],
+        "NoSuchTraitAnywhere",
+        "span should cover the offending bound only",
+    );
+}
+
+/// Both bounds defined — the multi-bound declaration resolves clean.
+#[test]
+fn effect_resource_with_defined_multi_bounds_resolves() {
+    resolve_ok(
+        "trait Provider { fn get(ref self) -> i64; }\n\
+         trait Healthy { fn ok(ref self) -> bool; }\n\
+         effect resource Thing: Provider + Healthy;",
+    );
+}
+
 /// An IMPORTED provider trait resolves through its import symbol. The check is
 /// deliberately existence-only for this reason: demanding `SymbolKind::Trait`
 /// would reject the cross-module spelling `examples/db_pipeline` relies on.

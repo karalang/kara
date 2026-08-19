@@ -697,14 +697,19 @@ impl super::Formatter {
             self.format_type_expr(&k.ty);
             self.write_str("]");
         }
-        if let Some(ref pt) = e.provider_trait {
-            self.write_str(": ");
-            self.write_ident(pt);
+        for (i, bound) in e.provider_bounds.iter().enumerate() {
+            // `: A + B` — every bound is rendered, joined by ` + `
+            // (design.md:7216, B-2026-08-19-3). Dropping the trailing ones
+            // would rewrite the declaration into a weaker contract, the same
+            // class of silent meaning-change as the dropped generic arguments
+            // below.
+            self.write_str(if i == 0 { ": " } else { " + " });
+            self.write_ident(&bound.name);
             // `: Provider[Request]` — without this the formatter silently
             // DROPPED the bound's generic arguments, rewriting a declaration
             // into a different (and, for a generic trait, ill-typed) one
             // (B-2026-08-18-41).
-            self.format_generic_args_opt(&e.provider_trait_args);
+            self.format_generic_args_opt(&bound.args);
         }
         self.write_str(";\n");
     }

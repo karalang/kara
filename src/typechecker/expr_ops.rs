@@ -924,9 +924,9 @@ impl<'a> super::TypeChecker<'a> {
             // (bugs.md). Unresolvable shapes (no trait, no statically
             // visible override) keep the pre-existing permissive
             // fallthrough so nothing that typechecked before is rejected.
-            if let Some(provider_trait) = self.user_effect_resources.get(type_name).cloned() {
+            if let Some(bounds) = self.user_effect_resources.get(type_name).cloned() {
                 if let Some((params, return_type)) =
-                    self.resource_dispatch_signature(type_name, provider_trait.as_deref(), member)
+                    self.resource_dispatch_signature(type_name, &bounds, member)
                 {
                     return Type::Function {
                         params,
@@ -1011,17 +1011,29 @@ impl<'a> super::TypeChecker<'a> {
     fn resource_dispatch_signature(
         &mut self,
         resource: &str,
-        provider_trait: Option<&str>,
+        bounds: &[crate::ast::ProviderBound],
         member: &str,
     ) -> Option<(Vec<Type>, Type)> {
-        match provider_trait {
-            Some(trait_name) => {
+        // A MULTI-BOUND resource (`: A + B`, design.md:7216) dispatches
+        // `R.method(..)` through whichever bound declares `method` — the union
+        // of the bounds' method sets is the resource's surface, since a
+        // provider must implement all of them. `check_effect_resource_bounds`
+        // rejects a name declared by two bounds at the DECLARATION, so at most
+        // one match survives here and "first that declares it" is also "the
+        // only one that declares it". B-2026-08-19-3.
+        let owner = bounds
+            .iter()
+            .find(|b| self.find_trait_method(&b.name, member).is_some())
+            .cloned();
+        match owner {
+            Some(bound) => {
+                let trait_name = bound.name.as_str();
                 // The resource's declared arguments, for the generic-bound form
                 // `effect resource RequestCh: Channel[i64];` (B-2026-08-18-41).
                 // Absent for every other resource, and the two branches below
                 // are deliberately gated on it so a plain `: Trait` bound
                 // lowers exactly as it did before this existed.
-                let declared_args = self.user_effect_resource_trait_args.get(resource).cloned();
+                let declared_args = bound.args.clone();
                 // The TRAIT's own generic params (`trait Channel[T]` -> ["T"]).
                 // These must be IN SCOPE when lowering, or `T` lowers to
                 // `Type::Named { name: "T" }` and no substitution can reach it
@@ -1080,6 +1092,13 @@ impl<'a> super::TypeChecker<'a> {
                 ))
             }
             None => {
+                // No bound declares `member`. For a BOUND resource that is a
+                // genuine miss (the caller falls through to the permissive
+                // path, as it did before multi-bounds existed); only a BARE
+                // `effect resource R;` reads a representative override impl.
+                if !bounds.is_empty() {
+                    return None;
+                }
                 let override_ty = self.user_resource_override_types.get(resource)?;
                 for imp in &self.env.impls {
                     if imp.trait_name.is_none() && imp.target_type == *override_ty {

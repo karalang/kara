@@ -88,35 +88,59 @@ impl super::Parser {
         let name_span = self.span_from(start);
         self.check_ident_class(&name, IdentClass::Type, "effect resource", name_span);
         let key_param = self.parse_optional_resource_key_param();
-        let mut provider_trait_span = None;
-        let mut provider_trait_args = None;
-        let provider_trait = if self.eat(&Token::Colon) {
+        let provider_bounds = self.parse_provider_bounds()?;
+        self.expect(&Token::Semicolon)?;
+        Some(Item::EffectResource(EffectResourceDecl {
+            span: self.span_from(start),
+            name,
+            key_param,
+            provider_bounds,
+            canonical_host_name: None,
+        }))
+    }
+
+    /// `: A`, `: Provider[Request]`, or `: A + B + C` after a resource name —
+    /// the declaration's provider trait BOUNDS, in source order. Returns an
+    /// empty `Vec` for a bare `effect resource R;`.
+    ///
+    /// The `+`-joined form is design.md:7216, spec'd normatively at :7213
+    /// ("Multiple trait bounds are allowed on a resource declaration:") with
+    /// semantics at :7217 ("Any provider passed to `with_provider` must
+    /// implement all declared bounds plus `Send + Sync`"). Before
+    /// B-2026-08-19-3 the parser stopped at the `+` with "Expected Semicolon,
+    /// found Plus"; the trailing bounds are carried through every phase rather
+    /// than dropped, since accepting syntax whose meaning is ignored would be
+    /// worse than not accepting it.
+    fn parse_provider_bounds(&mut self) -> Option<Vec<ProviderBound>> {
+        let mut bounds = Vec::new();
+        if !self.eat(&Token::Colon) {
+            return Some(bounds);
+        }
+        loop {
             let trait_start = self.current_span();
-            let t = self.expect_identifier()?;
-            provider_trait_span = Some(self.span_from(&trait_start));
+            let name = self.expect_identifier()?;
+            let name_span = self.span_from(&trait_start);
             // `: Provider[Request]` — the bound's generic arguments, spelled
             // exactly as any other trait bound spells them, and parsed by the
             // same helper (B-2026-08-18-41). Without this the parser stopped at
             // `[` with "Expected Semicolon, found LeftBracket", so the only way
             // to name a generic provider trait was to drop its argument — which
             // parses and then fails at every call site with "expected 'T'".
-            if self.check(&Token::LeftBracket) {
-                provider_trait_args = Some(self.parse_generic_type_args()?);
+            let args = if self.check(&Token::LeftBracket) {
+                Some(self.parse_generic_type_args()?)
+            } else {
+                None
+            };
+            bounds.push(ProviderBound {
+                name,
+                name_span,
+                args,
+            });
+            if !self.eat(&Token::Plus) {
+                break;
             }
-            Some(t)
-        } else {
-            None
-        };
-        self.expect(&Token::Semicolon)?;
-        Some(Item::EffectResource(EffectResourceDecl {
-            span: self.span_from(start),
-            name,
-            key_param,
-            provider_trait,
-            provider_trait_args,
-            provider_trait_span,
-            canonical_host_name: None,
-        }))
+        }
+        Some(bounds)
     }
 
     /// `[user_id: i64]` after a resource name — the PARTITION KEY of a

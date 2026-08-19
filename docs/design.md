@@ -7216,7 +7216,7 @@ with_provider[UserDB](InMemoryUserDB.new(), || {
 
 Multiple trait bounds are allowed on a resource declaration:
 
-```
+```kara
 effect resource UserDB: DatabaseProvider + HealthCheckable;
 ```
 

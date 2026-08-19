@@ -40699,6 +40699,123 @@ fn plain_provider_bound_is_unaffected() {
     );
 }
 
+// ── multi-bound `effect resource R: A + B;` (B-2026-08-19-3) ────────
+
+/// design.md:7216 allows `effect resource UserDB: DatabaseProvider +
+/// HealthCheckable;`. A call resolves through whichever bound declares the
+/// method — the resource's surface is the UNION of its bounds' methods, since
+/// :7217 requires the provider to implement all of them.
+#[test]
+fn multi_bound_resource_dispatches_through_either_bound() {
+    typecheck_ok(
+        r#"
+        trait DatabaseProvider { fn q(ref self, k: i64) -> i64; }
+        trait HealthCheckable { fn healthy(ref self) -> bool; }
+        effect resource UserDB: DatabaseProvider + HealthCheckable;
+        fn use_db(k: i64) -> i64 with reads(UserDB) { return UserDB.q(k); }
+        fn ping() -> bool with reads(UserDB) { return UserDB.healthy(); }
+        fn main() { use_db(1); ping(); }
+        "#,
+    );
+}
+
+/// EVERY bound's generic arity is checked, not only the first — the arity pass
+/// runs per bound.
+#[test]
+fn generic_arity_is_checked_on_a_trailing_bound_too() {
+    let errors = typecheck_errors(
+        r#"
+        trait Healthy { fn ok(ref self) -> bool; }
+        trait Channel[T] { fn send(ref self, v: T); }
+        effect resource Bus: Healthy + Channel;
+        fn main() { }
+        "#,
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("passes 0 generic arguments")
+                && e.message.contains("supply a type argument for 'T'")),
+        "expected the trailing bound's arity complaint; got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+/// A method name declared by TWO bounds is rejected AT THE DECLARATION.
+///
+/// design.md gives the multi-bound form no disambiguating syntax — there is no
+/// `R.(A::run)()` — so `R.run()` would have to pick a bound silently, and the
+/// pick decides both the typechecked signature and the vtable slot codegen
+/// indexes. Rejecting here is what lets every downstream phase treat the union
+/// of the bounds' methods as a flat list keyed by name.
+#[test]
+fn overlapping_method_names_across_bounds_are_rejected() {
+    let errors = typecheck_errors(
+        r#"
+        trait A { fn run(ref self) -> i64; }
+        trait B { fn run(ref self) -> i64; }
+        effect resource R: A + B;
+        fn main() { }
+        "#,
+    );
+    assert!(
+        errors.iter().any(|e| e.message.contains("both")
+            && e.message.contains("declare method 'run'")
+            && e.message.contains("ambiguous")),
+        "expected an ambiguity complaint at the declaration; got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+/// Distinct method names across bounds are fine — the overlap check must not
+/// fire on the ordinary case.
+#[test]
+fn distinct_method_names_across_bounds_are_accepted() {
+    typecheck_ok(
+        r#"
+        trait A { fn run(ref self) -> i64; }
+        trait B { fn stop(ref self) -> i64; }
+        effect resource R: A + B;
+        fn main() { }
+        "#,
+    );
+}
+
+/// design.md:7217 — "Any provider passed to `with_provider` must implement all
+/// declared bounds". A provider implementing only the FIRST bound is exactly
+/// as unusable as one implementing neither: codegen builds the resource's
+/// vtable from both bounds' methods, so the missing one would be a null slot.
+#[test]
+fn with_provider_requires_every_declared_bound() {
+    let errors = typecheck_errors(
+        r#"
+        trait DatabaseProvider { fn q(ref self, k: i64) -> i64; }
+        trait HealthCheckable { fn healthy(ref self) -> bool; }
+        effect resource UserDB: DatabaseProvider + HealthCheckable;
+        struct Half { }
+        impl DatabaseProvider for Half { fn q(ref self, k: i64) -> i64 { return k; } }
+        fn use_db(k: i64) -> i64 with reads(UserDB) { return UserDB.q(k); }
+        fn main() {
+            with_provider[UserDB](Half { }, || { use_db(1); });
+        }
+        "#,
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("does not implement `HealthCheckable`")),
+        "expected the unsatisfied trailing bound to be named; got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+    assert!(
+        !errors
+            .iter()
+            .any(|e| e.message.contains("does not implement `DatabaseProvider`")),
+        "the SATISFIED bound must not be reported; got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
 // ── B-2026-08-19-4: with_provider's declared provider trait ─────
 
 /// design.md:7217 — "Any provider passed to `with_provider` must implement all

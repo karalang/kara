@@ -649,7 +649,7 @@ pub(super) fn cmd_test(filter: Option<String>, all: bool, interp: bool) {
         .iter()
         .flat_map(|m| m.items.iter())
         .filter_map(|it| match it {
-            crate::ast::Item::EffectResource(d) if d.provider_trait.is_some() => {
+            crate::ast::Item::EffectResource(d) if !d.provider_bounds.is_empty() => {
                 Some(d.name.as_str())
             }
             _ => None,

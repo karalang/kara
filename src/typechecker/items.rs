@@ -56,7 +56,7 @@ impl<'a> super::TypeChecker<'a> {
                     self.check_wasm_export_boundary(f);
                 }
                 Item::ImplBlock(imp) => self.check_impl_block(imp),
-                Item::EffectResource(r) => self.check_effect_resource_trait_arity(r),
+                Item::EffectResource(r) => self.check_effect_resource_bounds(r),
                 Item::TraitDef(t) => self.check_trait_def(t),
                 Item::ConstDecl(c) => self.check_const_decl(c),
                 Item::ModuleBinding(b) => self.check_module_binding(b),
@@ -2678,17 +2678,81 @@ impl<'a> super::TypeChecker<'a> {
     ///
     /// Reuses `WrongNumberOfArgs` rather than minting a kind for one shape;
     /// the message carries the specificity.
-    fn check_effect_resource_trait_arity(&mut self, r: &crate::ast::EffectResourceDecl) {
-        let Some(trait_name) = &r.provider_trait else {
+    fn check_effect_resource_bounds(&mut self, r: &crate::ast::EffectResourceDecl) {
+        self.check_effect_resource_bound_overlap(r);
+        for bound in &r.provider_bounds {
+            self.check_effect_resource_trait_arity(r, bound);
+        }
+    }
+
+    /// A method name declared by TWO of a multi-bound resource's bounds
+    /// (`effect resource R: A + B;` where both `A` and `B` declare `run`).
+    ///
+    /// design.md:7216 gives the multi-bound form no disambiguating syntax —
+    /// there is no `R.(A::run)()` — so `R.run()` would have to pick one bound
+    /// silently, and the pick would decide both the typechecked signature and
+    /// the vtable slot codegen indexes. Rejecting at the declaration is what
+    /// lets every downstream phase treat the union of the bounds' methods as a
+    /// flat list keyed by name: `resource_dispatch_signature` takes the first
+    /// bound declaring the name, and codegen lays the bounds' methods out
+    /// end-to-end and dispatches by `position()`. Both are correct exactly
+    /// because this check has already run. B-2026-08-19-3.
+    fn check_effect_resource_bound_overlap(&mut self, r: &crate::ast::EffectResourceDecl) {
+        if r.provider_bounds.len() < 2 {
             return;
-        };
+        }
+        // Method name -> the bound that first declared it. Reported at the
+        // SECOND bound's span, which is the one that introduced the clash.
+        let mut seen: HashMap<String, String> = HashMap::new();
+        for bound in &r.provider_bounds {
+            let Some(t) = self.find_trait_def(&bound.name) else {
+                continue;
+            };
+            let names: Vec<String> = t
+                .items
+                .iter()
+                .filter_map(|it| match it {
+                    TraitItem::Method(m) => Some(m.name.clone()),
+                    TraitItem::AssocType(_) => None,
+                })
+                .collect();
+            for name in names {
+                match seen.get(&name) {
+                    Some(first) if *first != bound.name => {
+                        self.type_error(
+                            format!(
+                                "effect resource '{}' declares bounds '{}' and '{}', which both \
+                                 declare method '{}' — `{}.{}(..)` would be ambiguous, and there \
+                                 is no syntax to disambiguate it; rename one method or split the \
+                                 resource",
+                                r.name, first, bound.name, name, r.name, name,
+                            ),
+                            bound.name_span,
+                            TypeErrorKind::AmbiguousMethod,
+                        );
+                    }
+                    Some(_) => {}
+                    None => {
+                        seen.insert(name, bound.name.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    fn check_effect_resource_trait_arity(
+        &mut self,
+        r: &crate::ast::EffectResourceDecl,
+        bound: &crate::ast::ProviderBound,
+    ) {
+        let trait_name = &bound.name;
         // An unknown trait is the RESOLVER's diagnostic (`resolve_effect_resource_def`);
         // reporting an arity against a trait that does not exist would bury it.
         let Some(t) = self.find_trait_def(trait_name) else {
             return;
         };
         let expected = Self::generic_param_names(&t.generic_params).len();
-        let found = r.provider_trait_args.as_ref().map_or(0, |a| a.len());
+        let found = bound.args.as_ref().map_or(0, |a| a.len());
         if found == expected {
             return;
         }
@@ -2719,7 +2783,7 @@ impl<'a> super::TypeChecker<'a> {
                 plural(expected),
                 fix,
             ),
-            r.provider_trait_span.unwrap_or(r.span),
+            bound.name_span,
             TypeErrorKind::WrongNumberOfArgs,
         );
     }

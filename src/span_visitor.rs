@@ -173,11 +173,11 @@ pub fn visit_item_spans(item: &Item, visit: &mut impl FnMut(&Span)) {
                 visit(&k.name_span);
                 visit_type(&k.ty, visit);
             }
-            if let Some(t) = &r.provider_trait_span {
-                visit(t);
-            }
-            if let Some(args) = &r.provider_trait_args {
-                visit_generic_args(args, visit);
+            for bound in &r.provider_bounds {
+                visit(&bound.name_span);
+                if let Some(args) = &bound.args {
+                    visit_generic_args(args, visit);
+                }
             }
         }
         Item::EffectGroup(g) => visit(&g.span),
@@ -1346,12 +1346,12 @@ pub fn visit_item_spans_mut(item: &mut Item, visit: &mut impl FnMut(&mut Span)) 
                 visit(&mut k.name_span);
                 visit_type_spans_mut(&mut k.ty, visit);
             }
-            if let Some(t) = &mut r.provider_trait_span {
-                visit(t);
-            }
-            if let Some(args) = &mut r.provider_trait_args {
-                for a in args.iter_mut() {
-                    visit_generic_arg_mut(a, visit);
+            for bound in r.provider_bounds.iter_mut() {
+                visit(&mut bound.name_span);
+                if let Some(args) = &mut bound.args {
+                    for a in args.iter_mut() {
+                        visit_generic_arg_mut(a, visit);
+                    }
                 }
             }
         }

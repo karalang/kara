@@ -471,28 +471,45 @@ impl<'a> super::TypeChecker<'a> {
         provider_ty: &Type,
         span: &Span,
     ) {
-        let Some(Some(trait_name)) = self.user_effect_resources.get(resource).cloned() else {
+        let Some(bounds) = self.user_effect_resources.get(resource).cloned() else {
             return;
         };
+        if bounds.is_empty() {
+            return;
+        }
         // An unresolved or already-broken provider type produced its own
         // diagnostic; a bound complaint on top would name a type the author
         // never wrote.
         if matches!(provider_ty, Type::Error | Type::TypeParam(_)) {
             return;
         }
-        if self.type_satisfies_bound(provider_ty, &trait_name) {
-            return;
+        // ALL declared bounds, not just the first — design.md:7217 says "all
+        // declared bounds", and a provider that implements `A` but not `B` is
+        // exactly as unusable as one that implements neither: codegen builds
+        // the resource's vtable from both bounds' methods (B-2026-08-19-3).
+        // Each unsatisfied bound gets its own diagnostic naming its own
+        // missing impl, since each needs its own `impl … for …` to fix.
+        let declared = bounds
+            .iter()
+            .map(|b| b.name.clone())
+            .collect::<Vec<_>>()
+            .join(" + ");
+        for bound in &bounds {
+            if self.type_satisfies_bound(provider_ty, &bound.name) {
+                continue;
+            }
+            let trait_name = &bound.name;
+            let shown = crate::typechecker::types::type_display(provider_ty);
+            self.type_error(
+                format!(
+                    "provider of type '{shown}' does not implement `{trait_name}`, a provider \
+                     trait declared by `effect resource {resource}: {declared};` — add \
+                     `impl {trait_name} for {shown} {{ ... }}`"
+                ),
+                *span,
+                TypeErrorKind::TraitBoundNotSatisfied,
+            );
         }
-        let shown = crate::typechecker::types::type_display(provider_ty);
-        self.type_error(
-            format!(
-                "provider of type '{shown}' does not implement `{trait_name}`, the provider \
-                 trait declared by `effect resource {resource}: {trait_name};` — add \
-                 `impl {trait_name} for {shown} {{ ... }}`"
-            ),
-            *span,
-            TypeErrorKind::TraitBoundNotSatisfied,
-        );
     }
 
     /// gate for committing a `with_provider` call to its closure's return

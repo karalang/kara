@@ -390,6 +390,23 @@ mod tests {
     }
 
     #[test]
+    fn multi_bound_provider_declaration_keeps_every_bound() {
+        // `effect resource UserDB: Store[Row] + Healthy;` (design.md:7216,
+        // B-2026-08-19-3). A formatter that renders only the first bound
+        // rewrites the declaration into a WEAKER contract — one the
+        // typechecker no longer requires the provider to satisfy — which is
+        // the same class of silent meaning-change as the dropped generic
+        // arguments below, not a cosmetic loss.
+        let out = fmt_ok("effect resource UserDB: Store[Row] + Healthy;\n");
+        assert!(
+            out.contains("Store[Row] + Healthy"),
+            "every bound must survive formatting:\n{out}"
+        );
+        let again = fmt_ok(&out);
+        assert_eq!(out, again, "second format pass must be a fixpoint");
+    }
+
+    #[test]
     fn generic_provider_bound_keeps_its_arguments() {
         // `effect resource C: Provider[Request];` — the bound's generic
         // arguments live in `provider_trait_args`, not in the trait NAME, so a

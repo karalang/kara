@@ -544,35 +544,61 @@ fn render_effect_resource(r: &EffectResourceDecl, filename: &str) -> String {
             None => "null".to_string(),
         },
     );
-    if let Some(p) = &r.provider_trait {
+    if let Some(first) = r.provider_bounds.first() {
         record.push(',');
-        write_kv(&mut record, "provider_trait", &json_string(p));
+        write_kv(&mut record, "provider_trait", &json_string(&first.name));
         // A generic bound's ARGUMENTS are part of the declared contract, not
         // decoration: `Channel[i64]` and `Channel[String]` are different
         // provider surfaces, and emitting only the bare name renders them
         // identical in the catalog (B-2026-08-18-41). Rendered as the source
         // spelling, matching how the catalog renders every other type.
-        if let Some(args) = &r.provider_trait_args {
+        if let Some(args) = &first.args {
             record.push(',');
-            let rendered = args
+            write_kv(
+                &mut record,
+                "provider_trait_args",
+                &json_string(&render_provider_bound_args(args)),
+            );
+        }
+        // A MULTI-BOUND declaration (`: A + B`, design.md:7216) says more than
+        // its first bound. `provider_trait` keeps naming the first so a
+        // single-bound record is byte-identical to before, and the full
+        // source spelling is emitted alongside it rather than dropped —
+        // silently rendering `: A + B` as `: A` would be a false claim
+        // (B-2026-08-19-3). Absent for the zero- and one-bound forms.
+        if r.provider_bounds.len() > 1 {
+            record.push(',');
+            let rendered = r
+                .provider_bounds
                 .iter()
-                .map(|a| match a {
-                    GenericArg::Type(t) => render_type_expr(t),
-                    GenericArg::Const(e) => render_expr(e),
-                    // Shape args are not legal on a provider bound (the
-                    // typechecker's arity check runs against the trait's type
-                    // params), but render something rather than panicking.
-                    GenericArg::Shape(_) => "_".to_string(),
+                .map(|b| match &b.args {
+                    Some(args) => format!("{}[{}]", b.name, render_provider_bound_args(args)),
+                    None => b.name.clone(),
                 })
                 .collect::<Vec<_>>()
-                .join(", ");
-            write_kv(&mut record, "provider_trait_args", &json_string(&rendered));
+                .join(" + ");
+            write_kv(&mut record, "provider_bounds", &json_string(&rendered));
         }
     }
     record.push(',');
     write_kv(&mut record, "span", &render_span_json(&r.span, filename));
     record.push('}');
     record
+}
+
+/// The comma-joined source spelling of a provider bound's generic arguments.
+fn render_provider_bound_args(args: &[GenericArg]) -> String {
+    args.iter()
+        .map(|a| match a {
+            GenericArg::Type(t) => render_type_expr(t),
+            GenericArg::Const(e) => render_expr(e),
+            // Shape args are not legal on a provider bound (the typechecker's
+            // arity check runs against the trait's type params), but render
+            // something rather than panicking.
+            GenericArg::Shape(_) => "_".to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn render_assoc_type_json(a: &AssocTypeDecl) -> String {

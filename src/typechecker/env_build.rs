@@ -155,13 +155,9 @@ impl<'a> super::TypeChecker<'a> {
                 Item::DistinctType(d) => self.env_add_distinct_type(d),
                 Item::EffectResource(r) => {
                     self.user_effect_resources
-                        .insert(r.name.clone(), r.provider_trait.clone());
+                        .insert(r.name.clone(), r.provider_bounds.clone());
                     if let Some(k) = &r.key_param {
                         self.resource_key_types.insert(r.name.clone(), k.ty.clone());
-                    }
-                    if let Some(args) = &r.provider_trait_args {
-                        self.user_effect_resource_trait_args
-                            .insert(r.name.clone(), args.clone());
                     }
                 }
                 _ => {}
@@ -217,7 +213,7 @@ impl<'a> super::TypeChecker<'a> {
     fn collect_user_resource_override_types(&mut self, items: &[Item]) {
         // Only trait-less user resources need a representative override;
         // trait-ful ones type their dispatch sites from the trait.
-        if !self.user_effect_resources.values().any(|t| t.is_none()) {
+        if !self.user_effect_resources.values().any(|b| b.is_empty()) {
             return;
         }
         let ctor_returns = collect_ctor_return_type_names(items);
@@ -284,7 +280,11 @@ impl<'a> super::TypeChecker<'a> {
                 if let Some((resource, provider_expr, closure_expr)) =
                     match_with_provider_call_shape(callee, args)
                 {
-                    if matches!(self.user_effect_resources.get(&resource), Some(None)) {
+                    if self
+                        .user_effect_resources
+                        .get(&resource)
+                        .is_some_and(|b| b.is_empty())
+                    {
                         if let Some(ty) = provider_type_name(provider_expr, bindings, ctor_returns)
                         {
                             self.user_resource_override_types
