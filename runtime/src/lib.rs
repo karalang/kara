@@ -459,6 +459,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         karac_secret_ct_eq,
         karac_float_cmp,
         karac_runtime_f64_to_str,
+        karac_runtime_i128_to_str,
         karac_vec_sort_by,
         karac_vec_sort_i64_8,
         karac_vec_reverse,
@@ -9043,6 +9044,53 @@ pub unsafe extern "C" fn karac_runtime_f64_to_str(val: f64, buf: *mut u8, buf_le
             // and `n <= bytes.len()`, and the regions don't overlap (distinct
             // allocations — a fresh `String` vs the caller's buffer). `unsafe fn`
             // body is itself an unsafe context (edition 2021).
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, n as usize);
+        }
+        n
+    }
+}
+
+/// Format a 128-bit integer the way Rust's `{}` does, into a caller-supplied
+/// buffer (B-2026-08-19-8 stage 4). Returns the byte length written.
+///
+/// The C `%lld` / `%llu` path reads only 64 bits, so an `i128` printed through
+/// it silently loses its top half — and the failure is not even conspicuous:
+/// `2^100` has an all-zero low word, so it printed `0`. This is the same
+/// arrangement `karac_runtime_f64_to_str` uses, and for the same reason: the
+/// interpreter formats with Rust's `Display` (its carrier is an i128 already),
+/// so routing AOT through Rust here is what makes the two surfaces agree.
+///
+/// The value arrives as two 64-bit WORDS rather than by value: passing an
+/// `i128` across the C ABI is not uniformly defined across the targets this
+/// runtime builds for, and codegen already splits 128-bit constants into
+/// little-endian words for `const_int_arbitrary_precision`.
+///
+/// # Safety
+/// `buf` must point to at least `buf_len` writable bytes (a stack buffer at the
+/// call site). A null `buf` or non-positive `buf_len` writes nothing and
+/// returns 0. The output is NOT NUL-terminated; the caller uses the returned
+/// length, matching `karac_runtime_f64_to_str`.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_i128_to_str(
+    lo: u64,
+    hi: u64,
+    is_signed: i32,
+    buf: *mut u8,
+    buf_len: i64,
+) -> i64 {
+    unsafe {
+        let raw: u128 = (u128::from(hi) << 64) | u128::from(lo);
+        let s = if is_signed != 0 {
+            format!("{}", raw as i128)
+        } else {
+            format!("{raw}")
+        };
+        let bytes = s.as_bytes();
+        let n = (bytes.len() as i64).min(buf_len.max(0));
+        if !buf.is_null() && n > 0 {
+            // SAFETY: as `karac_runtime_f64_to_str` — caller guarantees
+            // `buf_len` writable bytes, `n` is bounded by both lengths, and the
+            // regions are distinct allocations.
             std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, n as usize);
         }
         n

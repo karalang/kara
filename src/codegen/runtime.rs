@@ -11524,6 +11524,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     // above is for the integer path).
                     return self.format_f64_to_stack_buf(val.into_float_value());
                 }
+                // 128-bit takes the runtime formatter for the same reason the
+                // float path does: `%lld` reads 64 bits, so an i128 printed
+                // through snprintf loses its top half silently — `2^100` has an
+                // all-zero low word and printed `0` (B-2026-08-19-8 stage 4).
+                if let BasicValueEnum::IntValue(iv) = arg_val {
+                    if iv.get_type().get_bit_width() > 64 {
+                        return self.format_i128_to_stack_buf(iv, is_unsigned_int);
+                    }
+                }
                 let fmt_str = if is_unsigned_int {
                     self.builder
                         .build_global_string_ptr("%llu", "fst.fmt_u")
@@ -11975,6 +11984,30 @@ impl<'ctx> super::Codegen<'ctx> {
             .add_function("karac_runtime_f64_to_str", fn_ty, None)
     }
 
+    /// Lazily declare `karac_runtime_i128_to_str(lo: i64, hi: i64,
+    /// is_signed: i32, buf: ptr, buf_len: i64) -> i64` — the 128-bit integer
+    /// formatter (B-2026-08-19-8 stage 4), sibling of `f64_to_str_fn`.
+    pub(super) fn i128_to_str_fn(&self) -> FunctionValue<'ctx> {
+        if let Some(f) = self.module.get_function("karac_runtime_i128_to_str") {
+            return f;
+        }
+        let i64_t = self.context.i64_type();
+        let i32_t = self.context.i32_type();
+        let ptr_t = self.context.ptr_type(AddressSpace::default());
+        let fn_ty = i64_t.fn_type(
+            &[
+                i64_t.into(),
+                i64_t.into(),
+                i32_t.into(),
+                ptr_t.into(),
+                i64_t.into(),
+            ],
+            false,
+        );
+        self.module
+            .add_function("karac_runtime_i128_to_str", fn_ty, None)
+    }
+
     /// Lazily declare `karac_runtime_gpu_map(wgsl_ptr: ptr, wgsl_len: i64,
     /// in_ptr: ptr, n: i64, elem_size: i64) -> ptr` — the byte-oriented GPU
     /// dispatch entry point (spike slice-0c, `runtime/src/gpu.rs`). Runs the
@@ -12203,6 +12236,61 @@ impl<'ctx> super::Codegen<'ctx> {
                 f,
                 &[v.into(), buf_ptr.into(), i64_t.const_int(384, false).into()],
                 "f2s",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        (buf_ptr, len)
+    }
+
+    /// Format a 128-bit integer into a fresh stack buffer via the runtime,
+    /// returning `(ptr, len)` like [`Self::format_f64_to_stack_buf`].
+    ///
+    /// The value is split into little-endian 64-bit words for the call — see
+    /// the runtime entry point for why it is not passed by value. 48 bytes is
+    /// ample: the longest 128-bit rendering is `i128::MIN` at 40 characters.
+    pub(super) fn format_i128_to_stack_buf(
+        &mut self,
+        iv: IntValue<'ctx>,
+        is_unsigned: bool,
+    ) -> (PointerValue<'ctx>, IntValue<'ctx>) {
+        let i64_t = self.context.i64_type();
+        let i32_t = self.context.i32_type();
+        let ptr_t = self.context.ptr_type(AddressSpace::default());
+        let fn_val = self.current_fn.unwrap();
+        let i128_t = self.context.i128_type();
+        let lo = self
+            .builder
+            .build_int_truncate(iv, i64_t, "i128.lo")
+            .unwrap();
+        let shifted = self
+            .builder
+            .build_right_shift(iv, i128_t.const_int(64, false), false, "i128.sh")
+            .unwrap();
+        let hi = self
+            .builder
+            .build_int_truncate(shifted, i64_t, "i128.hi")
+            .unwrap();
+        let buf =
+            self.create_entry_alloca(fn_val, "ibuf", self.context.i8_type().array_type(48).into());
+        let buf_ptr = self
+            .builder
+            .build_pointer_cast(buf, ptr_t, "ibufp")
+            .unwrap();
+        let f = self.i128_to_str_fn();
+        let len = self
+            .builder
+            .build_call(
+                f,
+                &[
+                    lo.into(),
+                    hi.into(),
+                    i32_t.const_int(u64::from(!is_unsigned), false).into(),
+                    buf_ptr.into(),
+                    i64_t.const_int(48, false).into(),
+                ],
+                "i2s",
             )
             .unwrap()
             .try_as_basic_value()

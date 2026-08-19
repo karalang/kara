@@ -2792,6 +2792,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     | "u32"
                     | "u64"
                     | "usize"
+                    // 128-bit (B-2026-08-19-8 stage 4). Their absence made
+                    // `u.to_string()` on an `i128`/`u128` fall through method
+                    // dispatch entirely — a loud "no handler" codegen error,
+                    // not a wrong answer, but still a gap.
+                    | "i128"
+                    | "u128"
                     | "f32"
                     | "f64"
                     | "bool"

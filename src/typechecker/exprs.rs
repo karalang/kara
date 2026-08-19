@@ -3300,11 +3300,14 @@ impl<'a> super::TypeChecker<'a> {
     fn literal_as_i128(n: i128, sfx: Option<crate::token::IntSuffix>) -> i128 {
         use crate::token::IntSuffix;
         match sfx {
-            Some(IntSuffix::U8)
-            | Some(IntSuffix::U16)
-            | Some(IntSuffix::U32)
-            | Some(IntSuffix::U64)
-            | Some(IntSuffix::U128) => {
+            // `u128` is NOT in this list: a 128-bit-suffixed magnitude is
+            // stored POSITIVELY by the parser (B-2026-08-19-8 stage 3a),
+            // because `i128` has room for the whole `(i64::MAX, u64::MAX]`
+            // band and beyond. Applying the u64 wrap read-back to it would
+            // truncate — caught by this function's own debug assertion when a
+            // `u128` literal past `u64::MAX` first reached here.
+            Some(IntSuffix::U8) | Some(IntSuffix::U16) | Some(IntSuffix::U32)
+            | Some(IntSuffix::U64) => {
                 // The WRAPPED u64 bit pattern, unchanged by the i128 node
                 // (B-2026-08-19-8 stage 2). Widening `ExprKind::Integer` gave
                 // the literal room; it did NOT change how an unsigned magnitude

@@ -1741,6 +1741,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 } else {
                     int_val
                 };
+                // 128-bit goes through the runtime formatter before the
+                // snprintf path below can truncate it: `%lld` reads 64 bits, so
+                // an i128 loses its top half silently — `2^100` has an all-zero
+                // low word and printed `0` (B-2026-08-19-8 stage 4). Same
+                // routing the f-string path uses, so `println(x)` and
+                // `println(f"{x}")` agree.
+                if widened.get_type().get_bit_width() > 64 {
+                    let (bp, blen) = self.format_i128_to_stack_buf(widened, is_unsigned);
+                    self.emit_nul_safe_write(bp, blen, nl, false);
+                    return Ok(self.context.i64_type().const_zero().into());
+                }
                 // Render into a stack buffer via `snprintf`, then route the
                 // exact bytes through the console chokepoint (capture-aware)
                 // instead of `printf` — so an int `println` inside a parallel
