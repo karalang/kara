@@ -141,7 +141,45 @@ fn force_link_karac_runtime() -> usize {
     karac_runtime::__preserve_no_mangle_symbols()
 }
 
+/// Restore the SIGPIPE disposition a karac-compiled binary actually starts
+/// with — B-2026-08-19-7.
+///
+/// THE RUNNER'S JOB IS TO BE INDISTINGUISHABLE FROM AN AOT BINARY, and this is
+/// the one place where being a Rust program leaks through. A karac AOT binary's
+/// `main` bypasses Rust std's runtime init, so it inherits the DEFAULT SIGPIPE
+/// disposition: the kernel kills it at the first write to a closed pipe, which
+/// is why `./prog | head -2` ends in 4 ms with status 141. `karac_jit_runner`
+/// IS a Rust program, so `lang_start` installs `SIG_IGN` before any user code
+/// runs — and then the JIT'd program's `fwrite` gets `EPIPE`, which codegen's
+/// console wrapper discards, so the program runs to completion writing into a
+/// pipe nobody is reading. Measured on a 2,000,000-line program: 272 ms and
+/// exit 0 under the JIT against 4 ms and 141 for the AOT binary, and for a
+/// program that streams without end the JIT never stops at all.
+///
+/// WHY THIS IS SAFE FOR SERVERS, which is the obvious objection: the runtime
+/// already masks SIGPIPE for exactly the programs that need it, and does so
+/// from the network reactor's one-time init (`event_loop.rs`, `event_loops()`),
+/// not from process startup. So a socket-writing program re-installs `SIG_IGN`
+/// itself the moment it registers its first fd — under the JIT exactly as under
+/// AOT, through the same code path. This restores the AOT starting state and
+/// leaves that carve-out untouched; it does not introduce a disposition the
+/// AOT surface does not already have.
+#[cfg(unix)]
+fn restore_default_sigpipe() {
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+}
+
+#[cfg(not(unix))]
+fn restore_default_sigpipe() {}
+
 fn main() -> ExitCode {
+    // Before anything else, and before any path that runs user code: the
+    // oneshot, `--repl-mode` and `--test-batch` entries all execute JIT'd
+    // programs, so all three need the AOT signal disposition.
+    restore_default_sigpipe();
+
     // Belt-and-suspenders: ensure the runtime's `#[no_mangle]` symbol
     // graph is materialized in the process symbol table before the
     // JIT's process-symbol-search generator runs `dlsym`.

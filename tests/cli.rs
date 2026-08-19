@@ -3407,6 +3407,84 @@ fn interp_broken_pipe_exits_quietly_like_a_native_binary() {
 
 #[cfg(feature = "llvm")]
 #[test]
+fn jit_broken_pipe_stops_the_program_like_a_native_binary() {
+    // B-2026-08-19-7 — the JIT half of the row above, and a WORSE failure than
+    // the interpreter's was. The interpreter panicked: loud and wrong. The JIT
+    // was silent and wrong — it discarded the failed write and ran the program
+    // to completion, then reported success. Measured on a 2,000,000-line
+    // program before the fix: 272 ms with the reader closed after two lines
+    // against 260 ms writing everything to /dev/null (i.e. it did all the
+    // work), and exit 0, where the AOT binary died in 3 ms with status 141.
+    // For a program that streams without end it never stopped at all.
+    //
+    // ROOT CAUSE, and it is the same one seen from the other side: a karac AOT
+    // binary bypasses Rust std's runtime init and so inherits the DEFAULT
+    // SIGPIPE disposition, and the kernel kills it. `karac_jit_runner` IS a
+    // Rust program, so `lang_start` installed `SIG_IGN` before the JIT'd code
+    // ran; the emitted `fwrite` then got `EPIPE`, which codegen's console
+    // wrapper discards. The runner now restores `SIG_DFL` at the top of main.
+    //
+    // THIS TEST IS ABOUT TERMINATION as much as status, so it uses an UNBOUNDED
+    // program. A finite one would exit on its own and pass even fully broken;
+    // `while true` cannot, so a regression here hangs until the harness's
+    // timeout rather than passing quietly.
+    //
+    // Asserts on stderr and status, not stdout, for the same reason its sibling
+    // does: how much output lands before the reader closes is a scheduling race.
+    use std::process::{Command, Stdio};
+
+    let tmp = scratch_project("jit-broken-pipe");
+    write(
+        &tmp.join("forever.kara"),
+        "fn main() {\n\
+         \x20   let mut i = 0i64;\n\
+         \x20   while true {\n\
+         \x20       println(f\"tick {i}\");\n\
+         \x20       i = i + 1i64;\n\
+         \x20   }\n\
+         }\n",
+    );
+
+    let mut child = match Command::new(env!("CARGO_BIN_EXE_karac"))
+        .current_dir(&tmp)
+        .args(["run", "forever.kara"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("[jit-broken-pipe] could not spawn karac: {e} — skipping");
+            return;
+        }
+    };
+
+    // Read a little, then drop the read end — what `| head -3` does.
+    {
+        use std::io::Read;
+        let mut out = child.stdout.take().expect("piped stdout");
+        let mut buf = [0u8; 64];
+        let _ = out.read(&mut buf);
+    }
+
+    // If this blocks forever, that IS the regression.
+    let out = child.wait_with_output().expect("wait");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("panicked"),
+        "a closed reader must not produce a panic report; stderr was:\n{stderr}"
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(141),
+        "expected 128 + SIGPIPE — `karac run` must report what the AOT binary \
+         for the same source reports, which means cmd_run has to forward a \
+         signal death rather than collapse it to 1"
+    );
+}
+
+#[cfg(feature = "llvm")]
+#[test]
 fn test_stdin_lines_run_and_build_parity() {
     // phase-8 `Stdin.lines()` slice: `for line in stdin.lines()` iterates
     // standard input a line at a time under BOTH `karac run` (interpreter/JIT)

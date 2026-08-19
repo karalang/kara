@@ -303,12 +303,45 @@ pub(super) fn run_ir_via_jit_subprocess(ir: &str, program_argv: &[String]) -> i3
         .status();
     let _ = std::fs::remove_file(&ir_path);
     match status {
-        Ok(s) => s.code().unwrap_or(1),
+        Ok(s) => exit_code_of(&s),
         Err(e) => {
             eprintln!("error: could not spawn karac_jit_runner: {e}");
             1
         }
     }
+}
+
+/// The runner's exit status as a shell-visible code, INCLUDING a death by
+/// signal — B-2026-08-19-7.
+///
+/// `ExitStatus::code()` returns `None` on Unix when the child was killed by a
+/// signal, and the old `unwrap_or(1)` collapsed every such death to a generic
+/// failure. That matters here because a signal death is the CORRECT outcome for
+/// the most common case: `karac run prog | head -2` closes the reader, the
+/// kernel kills the runner with SIGPIPE, and the AOT binary for the same source
+/// reports 141. Reporting 1 instead would keep `karac run` diverging from
+/// `karac build` on the very status the sibling fix exists to align.
+///
+/// `128 + signal` is the shell's own convention (bash, dash, zsh) for
+/// reporting a signal death through `$?`, so this is the encoding any harness
+/// checking the producer's status already expects.
+///
+/// Gated on `llvm` because its only caller is the JIT path: without that
+/// feature there is no runner to spawn, the function is dead, and CI runs the
+/// DEFAULT clippy leg — which is where an ungated version fails.
+#[cfg(feature = "llvm")]
+fn exit_code_of(status: &std::process::ExitStatus) -> i32 {
+    if let Some(code) = status.code() {
+        return code;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if let Some(sig) = status.signal() {
+            return 128 + sig;
+        }
+    }
+    1
 }
 
 /// True when the program declares a `#[gpu]` kernel — a `#[gpu] fn`, top-level
