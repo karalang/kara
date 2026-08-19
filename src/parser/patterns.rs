@@ -16,6 +16,7 @@ use crate::lexer::IdentClass;
 use crate::token::{IntSuffix, Token};
 
 use super::{starts_upper, ParseError};
+use crate::ast::narrow_literal_to_i64;
 
 impl super::Parser {
     // ── Patterns ─────────────────────────────────────────────────
@@ -138,7 +139,7 @@ impl super::Parser {
             }
             &Token::Integer(n, sfx) => {
                 self.advance();
-                let lit = LiteralPattern::Integer(n, sfx);
+                let lit = LiteralPattern::Integer(narrow_literal_to_i64(n), sfx);
                 // Check for range pattern: `1..=10` or `1..`
                 if self.eat(&Token::DotDotEq) {
                     let end = self.parse_range_bound()?;
@@ -647,7 +648,7 @@ impl super::Parser {
         match *self.peek_token_ref() {
             Token::Integer(n, sfx) => {
                 self.advance();
-                Some(LiteralPattern::Integer(n, sfx))
+                Some(LiteralPattern::Integer(narrow_literal_to_i64(n), sfx))
             }
             Token::CharLiteral(c) => {
                 self.advance();

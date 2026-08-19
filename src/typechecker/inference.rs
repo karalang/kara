@@ -17,6 +17,7 @@ use super::const_eval::substitute_const_arg;
 use super::types::{
     type_display, types_compatible, ConstArg, ConstVarId, DimArg, SubstValue, Type, TypeVarId,
 };
+use crate::ast::narrow_literal_to_i64;
 
 /// Structural substitution of `Type::TypeParam(name)` → concrete type
 /// from `subs`. Callers build `subs` externally from concrete types and
@@ -474,7 +475,7 @@ pub(super) struct InstantiatedSignature {
 pub(super) fn substitute_const_idents_in_expr(expr: &Expr, subst: &HashMap<String, i64>) -> Expr {
     let new_kind = match &expr.kind {
         ExprKind::Identifier(name) => match subst.get(name) {
-            Some(&value) => ExprKind::Integer(value, None),
+            Some(&value) => ExprKind::Integer(value.into(), None),
             None => expr.kind.clone(),
         },
         ExprKind::Unary { op, operand } => ExprKind::Unary {
@@ -564,7 +565,7 @@ pub(super) fn is_literal_const_arg_expr(expr: &Expr) -> bool {
 /// `f[-1]()` call shape.
 pub(super) fn const_value_from_literal(expr: &Expr) -> Option<i64> {
     match &expr.kind {
-        ExprKind::Integer(n, _) => Some(*n),
+        ExprKind::Integer(n, _) => Some(narrow_literal_to_i64(*n)),
         ExprKind::Bool(b) => Some(*b as i64),
         ExprKind::CharLit(c) => Some(*c as i64),
         ExprKind::ByteLit(b) => Some(i64::from(*b)),
@@ -573,7 +574,7 @@ pub(super) fn const_value_from_literal(expr: &Expr) -> Option<i64> {
             operand,
         } => {
             if let ExprKind::Integer(n, _) = &operand.kind {
-                Some(-*n)
+                Some((-*n).try_into().unwrap())
             } else {
                 None
             }

@@ -8744,10 +8744,10 @@ impl<'ctx> super::Codegen<'ctx> {
             // and the desugared `Call` spellings are accepted.
             let ident_plus_lit = |a: &Expr, b_: &Expr| {
                 matches!((&a.kind, &base.kind), (ExprKind::Identifier(x), ExprKind::Identifier(y)) if x == y)
-                    && matches!(&b_.kind, ExprKind::Integer(c, _) if *c == k as i64)
+                    && matches!(&b_.kind, ExprKind::Integer(c, _) if *c == (k as i64).into())
             };
             let matches_offset = match (&idx_k.kind, base_lit) {
-                (ExprKind::Integer(c, _), Some(b)) => *c == b + k as i64,
+                (ExprKind::Integer(c, _), Some(b)) => *c == b + i128::from(k as i64),
                 (
                     ExprKind::Binary {
                         op: BinOp::Add,

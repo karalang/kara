@@ -258,12 +258,12 @@ fn is_self(expr: &Expr) -> bool {
 /// `range_bound_to_i128`). Returns `None` for anything else.
 fn refinement_const_int(expr: &Expr, env: &TypeEnv) -> Option<i128> {
     match &expr.kind {
-        ExprKind::Integer(n, _) => Some(*n as i128),
+        ExprKind::Integer(n, _) => Some(*n),
         ExprKind::Unary {
             op: UnaryOp::Neg,
             operand,
         } => match &operand.kind {
-            ExprKind::Integer(n, _) => (*n as i128).checked_neg(),
+            ExprKind::Integer(n, _) => n.checked_neg(),
             _ => None,
         },
         ExprKind::Identifier(name) => env

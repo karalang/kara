@@ -10,6 +10,7 @@
 use super::method_call::*;
 use crate::ast::*;
 
+use crate::ast::narrow_literal_to_i64;
 use inkwell::values::BasicValueEnum;
 
 impl<'ctx> super::Codegen<'ctx> {
@@ -709,7 +710,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         let overlapping = method == "windows";
                         if let Some(v) = self.try_compile_chunks_windows_collect(
                             &base,
-                            n,
+                            narrow_literal_to_i64(n),
                             overlapping,
                             call_span,
                         )? {
@@ -1255,7 +1256,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let st_i = format!("__st_{}_{}", uid, i);
             let stn_i = format!("__stn_{}_{}", uid, i);
             let i64_lit = |n: i64| Expr {
-                kind: ExprKind::Integer(n, Some(crate::token::IntSuffix::I64)),
+                kind: ExprKind::Integer(n.into(), Some(crate::token::IntSuffix::I64)),
                 span: *sp,
             };
             let bool_lit_e = |b: bool, sp: &crate::token::Span| Expr {
@@ -1683,7 +1684,7 @@ impl<'ctx> super::Codegen<'ctx> {
             span: *sp,
         };
         let i64_lit = |n: i64, sp: &crate::token::Span| Expr {
-            kind: ExprKind::Integer(n, Some(crate::token::IntSuffix::I64)),
+            kind: ExprKind::Integer(n.into(), Some(crate::token::IntSuffix::I64)),
             span: *sp,
         };
         let bool_lit = |b: bool, sp: &crate::token::Span| Expr {
@@ -2449,7 +2450,7 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp,
         };
         let i64_lit = |v: i64| Expr {
-            kind: ExprKind::Integer(v, Some(crate::token::IntSuffix::I64)),
+            kind: ExprKind::Integer(v.into(), Some(crate::token::IntSuffix::I64)),
             span: sp,
         };
         let bin = |op: BinOp, l: Expr, r: Expr| Expr {
@@ -3494,7 +3495,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// An `i64`-suffixed integer literal for synthesized fused-chain AST.
     pub(super) fn fused_i64_lit(n: i64, sp: &crate::token::Span) -> Expr {
         Expr {
-            kind: ExprKind::Integer(n, Some(crate::token::IntSuffix::I64)),
+            kind: ExprKind::Integer(n.into(), Some(crate::token::IntSuffix::I64)),
             span: *sp,
         }
     }
@@ -6302,7 +6303,7 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp,
         };
         let i64_lit = |v: i64| Expr {
-            kind: ExprKind::Integer(v, Some(crate::token::IntSuffix::I64)),
+            kind: ExprKind::Integer(v.into(), Some(crate::token::IntSuffix::I64)),
             span: sp,
         };
         let bin = |op: BinOp, l: Expr, r: Expr| Expr {
@@ -6552,7 +6553,7 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp,
         };
         let i64_lit = |n: i64| Expr {
-            kind: ExprKind::Integer(n, Some(crate::token::IntSuffix::I64)),
+            kind: ExprKind::Integer(n.into(), Some(crate::token::IntSuffix::I64)),
             span: sp,
         };
         let bin = |op: BinOp, l: Expr, r: Expr| Expr {

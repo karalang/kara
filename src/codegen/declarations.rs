@@ -21,6 +21,7 @@ use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, FunctionValue, Poi
 use inkwell::AddressSpace;
 
 use super::state::{EnumDropKind, EnumLayout, SharedTypeInfo, SoaGroup, SoaLayout};
+use crate::ast::narrow_literal_to_i64;
 
 /// Phase 6 line 17 slice 6: name of the compiler-recognised leaf
 /// parking primitive. Codegen overrides this function's state-machine
@@ -5776,7 +5777,7 @@ fn recognize_body_arg(
     network_yield: &CalleeNetworkYieldEffectTable,
 ) -> Option<BodyArg> {
     match &expr.kind {
-        ExprKind::Integer(n, _) => Some(BodyArg::IntLit(*n)),
+        ExprKind::Integer(n, _) => Some(BodyArg::IntLit(narrow_literal_to_i64(*n))),
         ExprKind::Identifier(name) if in_scope_names.contains(name) => {
             Some(BodyArg::Slot(name.clone()))
         }

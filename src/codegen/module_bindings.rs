@@ -61,6 +61,7 @@ use inkwell::types::BasicTypeEnum;
 use inkwell::values::{BasicValue, BasicValueEnum, GlobalValue};
 use inkwell::AddressSpace;
 
+use crate::ast::narrow_literal_to_i64;
 use crate::ast::*;
 
 /// Per-module-binding codegen state. Keyed by source-level binding
@@ -426,7 +427,7 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> Option<(BasicTypeEnum<'ctx>, BasicValueEnum<'ctx>)> {
         match &value.kind {
             ExprKind::Integer(n, sfx) => {
-                let v = self.const_int_for_suffix(*n, *sfx);
+                let v = self.const_int_for_suffix(narrow_literal_to_i64(*n), *sfx);
                 Some((v.get_type().into(), v.into()))
             }
             ExprKind::Float(f, sfx) => {
@@ -454,7 +455,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 operand,
             } => match &operand.kind {
                 ExprKind::Integer(n, sfx) => {
-                    let v = self.const_int_for_suffix(-*n, *sfx);
+                    let v = self.const_int_for_suffix((-*n).try_into().unwrap(), *sfx);
                     Some((v.get_type().into(), v.into()))
                 }
                 ExprKind::Float(f, sfx) => {

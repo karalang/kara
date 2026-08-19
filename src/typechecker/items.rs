@@ -22,6 +22,7 @@ use super::types::{
     type_display, type_is_fully_concrete, IntSize, ScrutineeMode, Type, UIntSize, VariantTypeInfo,
 };
 use super::{ConstEvalError, LocalTypeScope, TypeErrorKind};
+use crate::ast::narrow_literal_to_i64;
 
 impl<'a> super::TypeChecker<'a> {
     pub(super) fn check_items(&mut self) {
@@ -1213,7 +1214,7 @@ impl<'a> super::TypeChecker<'a> {
                         }
                     }
                 };
-                integer_to_const_value(*n, &ty, &expr.span)
+                integer_to_const_value(narrow_literal_to_i64(*n), &ty, &expr.span)
             }
             // B-2026-08-12-10 — FLOAT literals. Previously unhandled, so
             // `let b: PositivePrice = 2.5;` over `f64 where self > 0.0` fell to
@@ -2125,7 +2126,7 @@ impl<'a> super::TypeChecker<'a> {
         visiting: &mut Vec<&'e str>,
     ) -> Option<i64> {
         match &expr.kind {
-            ExprKind::Integer(v, _) => Some(*v),
+            ExprKind::Integer(v, _) => Some(narrow_literal_to_i64(*v)),
             ExprKind::Unary {
                 op: UnaryOp::Neg,
                 operand,

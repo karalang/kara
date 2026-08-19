@@ -50,6 +50,7 @@ use crate::token::Span;
 
 use super::kernel::{ContainerAccess, MapDest, MapKernelOp, MapOther, SortKey};
 use super::state::{TensorVarInfo, VarSlot};
+use crate::ast::narrow_literal_to_i64;
 
 /// The literal axis of `iter_axis(<n>)`, when it is one. Used only to keep
 /// the row view's STATIC dims; a runtime axis falls back to header loads,
@@ -406,7 +407,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     for d in &shape.dims {
                         match d {
                             ShapeDim::Const(e) => match &e.kind {
-                                ExprKind::Integer(v, _) => out.push(Some(*v)),
+                                ExprKind::Integer(v, _) => {
+                                    out.push(Some(narrow_literal_to_i64(*v)))
+                                }
                                 // Named dim param / const expr — runtime
                                 // (read from the header).
                                 _ => out.push(None),

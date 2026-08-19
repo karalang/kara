@@ -30,10 +30,35 @@ pub struct Expr {
     pub span: Span,
 }
 
+/// Narrow an AST integer LITERAL from the i128 node to `i64`, for a consumer
+/// that is not 128-bit ready.
+///
+/// STAGE-2 MARKER (B-2026-08-19-8), the sibling of the interpreter's
+/// `narrow_to_i64` one layer down. `ExprKind::Integer` carries i128 so a
+/// 128-bit literal has somewhere to live, but the LEXER still caps magnitudes
+/// at the i64/u64 thresholds and 128-bit is still rejected at type-check
+/// (B-2026-08-19-6) — so nothing reaches here that does not fit today.
+///
+/// A hard check rather than a bare cast, for the same reason as its sibling:
+/// every call site is a place stage 5 must revisit when the lexer's thresholds
+/// widen, and `grep -rn narrow_literal_to_i64 src/` is that worklist. A silent
+/// `as i64` would leave a dozen truncation points indistinguishable from
+/// ordinary code.
+pub fn narrow_literal_to_i64(n: i128) -> i64 {
+    match i64::try_from(n) {
+        Ok(v) => v,
+        Err(_) => panic!(
+            "internal error: 128-bit integer literal {n} reached an i64-only \
+             consumer. The AST literal node is i128 but this consumer is not \
+             128-bit ready yet (B-2026-08-19-8 stage 5)."
+        ),
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum ExprKind {
     // Literals
-    Integer(i64, Option<IntSuffix>),
+    Integer(i128, Option<IntSuffix>),
     Float(f64, Option<FloatSuffix>),
     CharLit(char),
     /// `b'A'` byte char literal — type `u8` (design.md § Byte and

@@ -500,20 +500,54 @@ impl<'a> Lexer<'a> {
             let text: String = self.token_text().chars().filter(|&c| c != '_').collect();
             let suffix = self.try_int_suffix();
             match text.parse::<i64>() {
-                Ok(v) => self.make_spanned(Token::Integer(v, suffix)),
+                Ok(v) => self.make_spanned(Token::Integer(v.into(), suffix)),
                 // Magnitude past i64::MAX but inside u64: hand it up rather
                 // than rejecting it here. Only the PARSER knows whether the
                 // preceding `-` is unary (making `9223372036854775808` the
                 // legal spelling of i64::MIN) or binary (making it an
                 // out-of-range error). B-2026-08-06-13.
                 Err(_) => match text.parse::<u64>() {
-                    Ok(m) => self.make_spanned(Token::IntegerOutOfRange(m, suffix)),
-                    Err(_) => {
-                        self.make_spanned(Token::Error("Invalid integer literal".to_string()))
-                    }
+                    Ok(m) => self.make_spanned(Token::IntegerOutOfRange(m.into(), suffix)),
+                    Err(_) => match Self::int_128_token(&text, 10, suffix) {
+                        Some(t) => self.make_spanned(t),
+                        None => {
+                            self.make_spanned(Token::Error("Invalid integer literal".to_string()))
+                        }
+                    },
                 },
             }
         }
+    }
+
+    /// A magnitude that fits neither `i64` nor `u64`, for the 128-bit widths
+    /// only (B-2026-08-19-8 stage 2).
+    ///
+    /// GATED ON AN EXPLICIT 128-BIT SUFFIX, and that is what keeps the change
+    /// inert for everything else. The `(i64::MAX, u64::MAX]` band above must
+    /// keep producing `IntegerOutOfRange`, because the parser encodes that band
+    /// as a WRAPPED bit pattern on the signed carrier and the typechecker reads
+    /// it back through the suffix; widening the threshold unconditionally would
+    /// reroute every `u64` literal into a different token kind and silently
+    /// change that encoding. An unsuffixed huge literal therefore still errors,
+    /// exactly as before — the existing diagnostic already tells the user to
+    /// add a suffix.
+    ///
+    /// The literal is representable but not yet USABLE: 128-bit remains
+    /// rejected at type-check (B-2026-08-19-6) until stage 5, so a program
+    /// containing one lexes and parses and then reports that. That ordering is
+    /// deliberate — the type must not become nameable before it works.
+    fn int_128_token(text: &str, radix: u32, suffix: Option<IntSuffix>) -> Option<Token> {
+        if !matches!(suffix, Some(IntSuffix::I128) | Some(IntSuffix::U128)) {
+            return None;
+        }
+        if let Ok(v) = i128::from_str_radix(text, radix) {
+            return Some(Token::Integer(v, suffix));
+        }
+        // Past `i128::MAX` but inside `u128`: same hand-it-to-the-parser shape
+        // the 64-bit band uses.
+        u128::from_str_radix(text, radix)
+            .ok()
+            .map(|m| Token::IntegerOutOfRange(m, suffix))
     }
 
     fn hex_number(&mut self) -> SpannedToken {
@@ -527,11 +561,14 @@ impl<'a> Lexer<'a> {
             .collect();
         let suffix = self.try_int_suffix();
         match i64::from_str_radix(&text, 16) {
-            Ok(v) => self.make_spanned(Token::Integer(v, suffix)),
+            Ok(v) => self.make_spanned(Token::Integer(v.into(), suffix)),
             // See the decimal arm — the parser folds a unary-minus magnitude.
             Err(_) => match u64::from_str_radix(&text, 16) {
-                Ok(m) => self.make_spanned(Token::IntegerOutOfRange(m, suffix)),
-                Err(_) => self.make_spanned(Token::Error("Invalid hex literal".to_string())),
+                Ok(m) => self.make_spanned(Token::IntegerOutOfRange(m.into(), suffix)),
+                Err(_) => match Self::int_128_token(&text, 16, suffix) {
+                    Some(t) => self.make_spanned(t),
+                    None => self.make_spanned(Token::Error("Invalid hex literal".to_string())),
+                },
             },
         }
     }
@@ -547,11 +584,14 @@ impl<'a> Lexer<'a> {
             .collect();
         let suffix = self.try_int_suffix();
         match i64::from_str_radix(&text, 2) {
-            Ok(v) => self.make_spanned(Token::Integer(v, suffix)),
+            Ok(v) => self.make_spanned(Token::Integer(v.into(), suffix)),
             // See the decimal arm — the parser folds a unary-minus magnitude.
             Err(_) => match u64::from_str_radix(&text, 2) {
-                Ok(m) => self.make_spanned(Token::IntegerOutOfRange(m, suffix)),
-                Err(_) => self.make_spanned(Token::Error("Invalid binary literal".to_string())),
+                Ok(m) => self.make_spanned(Token::IntegerOutOfRange(m.into(), suffix)),
+                Err(_) => match Self::int_128_token(&text, 2, suffix) {
+                    Some(t) => self.make_spanned(t),
+                    None => self.make_spanned(Token::Error("Invalid binary literal".to_string())),
+                },
             },
         }
     }
@@ -567,11 +607,14 @@ impl<'a> Lexer<'a> {
             .collect();
         let suffix = self.try_int_suffix();
         match i64::from_str_radix(&text, 8) {
-            Ok(v) => self.make_spanned(Token::Integer(v, suffix)),
+            Ok(v) => self.make_spanned(Token::Integer(v.into(), suffix)),
             // See the decimal arm — the parser folds a unary-minus magnitude.
             Err(_) => match u64::from_str_radix(&text, 8) {
-                Ok(m) => self.make_spanned(Token::IntegerOutOfRange(m, suffix)),
-                Err(_) => self.make_spanned(Token::Error("Invalid octal literal".to_string())),
+                Ok(m) => self.make_spanned(Token::IntegerOutOfRange(m.into(), suffix)),
+                Err(_) => match Self::int_128_token(&text, 8, suffix) {
+                    Some(t) => self.make_spanned(t),
+                    None => self.make_spanned(Token::Error("Invalid octal literal".to_string())),
+                },
             },
         }
     }

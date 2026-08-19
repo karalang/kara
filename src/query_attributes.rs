@@ -258,7 +258,7 @@ fn arg_to_record(a: &AttrArg) -> AttributeQueryArg {
 fn classify_value(kind: &ExprKind) -> AttributeQueryValue {
     match kind {
         ExprKind::StringLit(s) => AttributeQueryValue::String(s.clone()),
-        ExprKind::Integer(n, _) => AttributeQueryValue::Int(*n as i128),
+        ExprKind::Integer(n, _) => AttributeQueryValue::Int(*n),
         ExprKind::Bool(b) => AttributeQueryValue::Bool(*b),
         ExprKind::Path { segments, .. } => AttributeQueryValue::Path(segments.join(".")),
         ExprKind::Identifier(name) => AttributeQueryValue::Path(name.clone()),

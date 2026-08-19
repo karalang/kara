@@ -6,6 +6,7 @@
 //! visibly enforced at the file boundary — adding an `inkwell::`
 //! import to this file should never make sense.
 
+use crate::ast::narrow_literal_to_i64;
 use crate::ast::*;
 use crate::token::IntSuffix;
 
@@ -53,13 +54,13 @@ pub(super) fn const_value_from_literal_expr(expr: &Expr) -> Option<crate::prelud
             Some(IntSuffix::I8) => Some(ConstValue::I8(*n as i8)),
             Some(IntSuffix::I16) => Some(ConstValue::I16(*n as i16)),
             Some(IntSuffix::I32) => Some(ConstValue::I32(*n as i32)),
-            Some(IntSuffix::I64) => Some(ConstValue::I64(*n)),
+            Some(IntSuffix::I64) => Some(ConstValue::I64(narrow_literal_to_i64(*n))),
             Some(IntSuffix::U8) => Some(ConstValue::U8(*n as u8)),
             Some(IntSuffix::U16) => Some(ConstValue::U16(*n as u16)),
             Some(IntSuffix::U32) => Some(ConstValue::U32(*n as u32)),
             Some(IntSuffix::U64) => Some(ConstValue::U64(*n as u64)),
             Some(IntSuffix::I128) | Some(IntSuffix::U128) => None,
-            None => Some(ConstValue::I64(*n)),
+            None => Some(ConstValue::I64(narrow_literal_to_i64(*n))),
         },
         ExprKind::Bool(b) => Some(ConstValue::Bool(*b)),
         ExprKind::CharLit(c) => Some(ConstValue::Char(*c)),

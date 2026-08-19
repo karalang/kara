@@ -1376,7 +1376,7 @@ impl<'a> super::TypeChecker<'a> {
                 kind: TypeKind::Array {
                     element: Box::new(Self::type_to_type_expr(element)),
                     size: Box::new(Expr {
-                        kind: ExprKind::Integer(size.as_literal().unwrap_or(0), None),
+                        kind: ExprKind::Integer(size.as_literal().unwrap_or(0).into(), None),
                         span,
                     }),
                 },
@@ -1451,7 +1451,7 @@ impl<'a> super::TypeChecker<'a> {
     fn dim_arg_to_shape_dim(d: &DimArg, span: &Span) -> ShapeDim {
         match d {
             DimArg::Const(ConstArg::Literal(v)) => ShapeDim::Const(Box::new(Expr {
-                kind: ExprKind::Integer(*v, None),
+                kind: ExprKind::Integer((*v).into(), None),
                 span: *span,
             })),
             DimArg::Const(ConstArg::ConstParam(name)) => ShapeDim::Const(Box::new(Expr {

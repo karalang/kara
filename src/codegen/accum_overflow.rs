@@ -87,6 +87,7 @@
 //!   (`mut ref` argument, index-assign, nested closure). The scan fails closed
 //!   on every construct it does not explicitly understand.
 
+use crate::ast::narrow_literal_to_i64;
 use crate::ast::{BinOp, Block, Expr, ExprKind, Pattern, PatternKind, Stmt, StmtKind};
 use crate::resolver::SpanKey;
 use crate::token::Span;
@@ -276,7 +277,7 @@ fn binds_identifier(pattern: &Pattern) -> Option<&str> {
 /// The `i64` value of a bare integer literal expression.
 fn integer_literal(e: &Expr) -> Option<i64> {
     match &e.kind {
-        ExprKind::Integer(v, _) => Some(*v),
+        ExprKind::Integer(v, _) => Some(narrow_literal_to_i64(*v)),
         _ => None,
     }
 }

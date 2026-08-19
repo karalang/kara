@@ -17,6 +17,7 @@ use super::types::{
     type_display, ConstArg, DimArg, FloatSize, IntSize, SubstValue, Type, UIntSize,
 };
 use super::TypeErrorKind;
+use crate::ast::narrow_literal_to_i64;
 use crate::token::Span;
 
 impl<'a> super::TypeChecker<'a> {
@@ -525,7 +526,7 @@ impl<'a> super::TypeChecker<'a> {
             match dim {
                 crate::ast::ShapeDim::Const(expr) => match &expr.kind {
                     ExprKind::Integer(n, _) if *n >= 0 => {
-                        dims.push(DimArg::Const(ConstArg::Literal(*n)));
+                        dims.push(DimArg::Const(ConstArg::Literal(narrow_literal_to_i64(*n))));
                     }
                     ExprKind::Integer(n, _) => {
                         self.type_error(
@@ -625,7 +626,7 @@ impl<'a> super::TypeChecker<'a> {
         };
         let size: ConstArg = match &args[1] {
             GenericArg::Const(expr) => match &expr.kind {
-                ExprKind::Integer(n, _) if *n >= 0 => ConstArg::Literal(*n),
+                ExprKind::Integer(n, _) if *n >= 0 => ConstArg::Literal(narrow_literal_to_i64(*n)),
                 // Const generics slice 3 (fork G4): an `Identifier` whose
                 // name is a const-generic param in scope flows through
                 // as `ConstArg::ConstParam(name)` — the inference solver
@@ -754,7 +755,7 @@ impl<'a> super::TypeChecker<'a> {
                         );
                         return None;
                     }
-                    ConstArg::Literal(*n)
+                    ConstArg::Literal(narrow_literal_to_i64(*n))
                 }
                 ExprKind::Identifier(name) if generic_scope.contains(name) => {
                     ConstArg::ConstParam(name.clone())

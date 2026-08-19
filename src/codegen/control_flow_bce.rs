@@ -20,6 +20,7 @@
 use crate::ast::*;
 
 use super::state::{AssertedIndexBound, MonotoneDir, VarSlot};
+use crate::ast::narrow_literal_to_i64;
 
 impl<'ctx> super::Codegen<'ctx> {
     /// Walk a boolean expression that holds true at the entry to a body
@@ -1095,10 +1096,10 @@ fn guard_upper_bounded_counter(cond: &Expr) -> Option<(String, i64)> {
     if let ExprKind::Binary { op, left, right } = &cond.kind {
         return match (op, &left.kind, &right.kind) {
             (BinOp::Lt | BinOp::LtEq, ExprKind::Identifier(v), ExprKind::Integer(k, _)) => {
-                Some((v.clone(), *k))
+                Some((v.clone(), narrow_literal_to_i64(*k)))
             }
             (BinOp::Gt | BinOp::GtEq, ExprKind::Integer(k, _), ExprKind::Identifier(v)) => {
-                Some((v.clone(), *k))
+                Some((v.clone(), narrow_literal_to_i64(*k)))
             }
             _ => None,
         };
@@ -1114,10 +1115,10 @@ fn guard_upper_bounded_counter(cond: &Expr) -> Option<(String, i64)> {
         let (a, b) = (&args[0].value.kind, &args[1].value.kind);
         return match (segments[1].as_str(), a, b) {
             ("lt" | "le", ExprKind::Identifier(v), ExprKind::Integer(k, _)) => {
-                Some((v.clone(), *k))
+                Some((v.clone(), narrow_literal_to_i64(*k)))
             }
             ("gt" | "ge", ExprKind::Integer(k, _), ExprKind::Identifier(v)) => {
-                Some((v.clone(), *k))
+                Some((v.clone(), narrow_literal_to_i64(*k)))
             }
             _ => None,
         };

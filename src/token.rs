@@ -260,7 +260,7 @@ pub enum Token {
         /// The `name` field stores the bare identifier without the `r#` prefix.
         raw: bool,
     },
-    Integer(i64, Option<IntSuffix>),
+    Integer(i128, Option<IntSuffix>),
     /// A decimal / hex / binary / octal integer literal whose MAGNITUDE does
     /// not fit `i64` but does fit `u64`. B-2026-08-06-13.
     ///
@@ -271,7 +271,7 @@ pub enum Token {
     /// out-of-range error. That is what makes `i64::MIN` writable at all —
     /// its positive half is one past `i64::MAX`, so a plain `Neg(Integer(n))`
     /// with `n` positive can never represent it.
-    IntegerOutOfRange(u64, Option<IntSuffix>),
+    IntegerOutOfRange(u128, Option<IntSuffix>),
     Float(f64, Option<FloatSuffix>),
     CharLiteral(char),
     /// `b'A'` byte char literal — type `u8` (design.md § Byte and

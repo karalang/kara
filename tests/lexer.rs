@@ -1888,3 +1888,71 @@ fn suggest_name_for_class_returns_reachable_renames() {
         .expect("a snake_case name has a reachable Type rename");
     assert_eq!(classify_ident(&t), IdentClass::Type);
 }
+
+// ── 128-bit integer literals (B-2026-08-19-8 stage 2) ────────────
+
+/// A magnitude past `u64::MAX` lexes when it carries an explicit 128-bit
+/// suffix, in every radix.
+///
+/// The literal is REPRESENTABLE, not yet usable: `i128`/`u128` stay rejected at
+/// type-check (B-2026-08-19-6) until stage 5, so a program containing one lexes
+/// and parses and is then refused on the type. That ordering is the point — the
+/// type must not become nameable before it works.
+#[test]
+fn suffixed_128bit_magnitudes_lex() {
+    use karac::token::IntSuffix;
+    // 2^64 — one past the u64 band, so each radix exercises the new arm
+    // rather than the existing one.
+    const TWO64: i128 = 18446744073709551616;
+    for (src, want) in [
+        ("170141183460469231731687303715884105727i128", i128::MAX),
+        ("18446744073709551616i128", TWO64),
+        ("0x10000000000000000i128", TWO64),
+        (
+            "0b10000000000000000000000000000000000000000000000000000000000000000i128",
+            TWO64,
+        ),
+        ("0o2000000000000000000000i128", TWO64),
+    ] {
+        let toks = tokens_only(src);
+        assert!(
+            matches!(toks.first(), Some(Token::Integer(n, Some(IntSuffix::I128))) if *n == want),
+            "`{src}` should lex as a 128-bit Integer({want}), got {:?}",
+            toks.first()
+        );
+    }
+}
+
+/// The `(i64::MAX, u64::MAX]` band is UNTOUCHED — still `IntegerOutOfRange`,
+/// because the parser encodes that band as a wrapped bit pattern on the signed
+/// carrier and the typechecker reads it back through the suffix.
+///
+/// This is the test that would catch the tempting simplification: widening the
+/// lexer's thresholds unconditionally reroutes every `u64` literal into
+/// `Token::Integer` and silently changes that encoding.
+#[test]
+fn the_u64_band_still_lexes_as_out_of_range() {
+    use karac::token::IntSuffix;
+    let toks = tokens_only("18446744073709551615u64");
+    assert!(
+        matches!(
+            toks.first(),
+            Some(Token::IntegerOutOfRange(m, Some(IntSuffix::U64))) if *m == u64::MAX as u128
+        ),
+        "the u64 band must keep its own token kind, got {:?}",
+        toks.first()
+    );
+}
+
+/// An UNSUFFIXED magnitude past `u64::MAX` is still an error — nothing can
+/// represent it, since the default integer type is `i64` and the lexer cannot
+/// see a type annotation. Same rule the `u64` band already followed.
+#[test]
+fn unsuffixed_128bit_magnitudes_still_error() {
+    let toks = tokens_only("170141183460469231731687303715884105727");
+    assert!(
+        matches!(toks.first(), Some(Token::Error(_))),
+        "an unsuffixed 128-bit magnitude must not lex, got {:?}",
+        toks.first()
+    );
+}

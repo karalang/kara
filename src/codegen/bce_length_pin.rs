@@ -55,6 +55,7 @@
 //! fails closed (returns "no pin" / "unsafe") on any shape it does not fully
 //! understand, mirroring `borrow_elision.rs` and `presize.rs`.
 
+use crate::ast::narrow_literal_to_i64;
 use crate::ast::*;
 use crate::resolver::SpanKey;
 use rustc_hash::FxHashMap;
@@ -87,7 +88,7 @@ pub(crate) enum BoundOp {
 pub(crate) fn normalize_bound(expr: &Expr) -> Option<BoundTerm> {
     match &expr.kind {
         ExprKind::Identifier(n) => Some(BoundTerm::Ident(n.clone())),
-        ExprKind::Integer(k, _) => Some(BoundTerm::Int(*k)),
+        ExprKind::Integer(k, _) => Some(BoundTerm::Int(narrow_literal_to_i64(*k))),
         ExprKind::Binary { op, left, right } => {
             let bop = surface_bound_op(op)?;
             Some(BoundTerm::Bin(
@@ -2946,7 +2947,7 @@ pub(super) fn int_const_bindings(body: &Block) -> HashMap<String, i64> {
             if let StmtKind::Let { pattern, value, .. } = &s.kind {
                 if let PatternKind::Binding(n) = &pattern.kind {
                     if let ExprKind::Integer(v, _) = &value.kind {
-                        cand.insert(n.clone(), *v);
+                        cand.insert(n.clone(), narrow_literal_to_i64(*v));
                     }
                 }
             }
@@ -3434,7 +3435,7 @@ mod tests {
         }
         fn int(k: i64) -> Expr {
             Expr {
-                kind: ExprKind::Integer(k, None),
+                kind: ExprKind::Integer(k.into(), None),
                 span: Span::default(),
             }
         }

@@ -23,6 +23,7 @@ use super::helpers::{
     vec_inner_type_expr,
 };
 use super::state::{B2Role, ReturnSlot, SharedTypeInfo, VarSlot};
+use crate::ast::narrow_literal_to_i64;
 
 /// B-2026-08-08-3 — the `Type.method` keys (as the typechecker spells them in
 /// `method_callee_types`) whose result is unconditionally `i64`. Used to size a
@@ -3173,7 +3174,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         (ExprKind::Integer(k, _), false) => {
                             self.var_types
                                 .int_const_locals
-                                .insert(bind_name.clone(), *k);
+                                .insert(bind_name.clone(), narrow_literal_to_i64(*k));
                         }
                         _ => {
                             self.var_types.int_const_locals.remove(bind_name.as_str());

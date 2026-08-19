@@ -55,6 +55,7 @@ use inkwell::AddressSpace;
 use inkwell::IntPredicate;
 
 use super::state::{AssertedIndexBound, VarSlot};
+use crate::ast::narrow_literal_to_i64;
 
 /// `(runtime_captures, const_int_captures)` returned by
 /// `partition_const_int_captures`. The `const_int_captures` tuple
@@ -3681,7 +3682,7 @@ fn find_top_level_const_int_init(
                 let ExprKind::Integer(n, sfx) = &value.kind else {
                     return None;
                 };
-                found = Some((*n, *sfx));
+                found = Some((narrow_literal_to_i64(*n), *sfx));
             }
             StmtKind::Let {
                 is_mut: true,
@@ -3769,11 +3770,11 @@ fn modulo_arms_match(
     }
     let divisor = match &right.kind {
         ExprKind::Integer(n, _) => *n,
-        ExprKind::Identifier(name) => *const_int_lookup.get(name.as_str())?,
+        ExprKind::Identifier(name) => (*const_int_lookup.get(name.as_str())?).into(),
         _ => return None,
     };
     if divisor > 0 {
-        Some(divisor)
+        Some(narrow_literal_to_i64(divisor))
     } else {
         None
     }

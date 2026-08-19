@@ -2613,7 +2613,7 @@ impl<'a> Interpreter<'a> {
                             kind: ExprKind::Index {
                                 object: container.clone(),
                                 index: Box::new(Expr {
-                                    kind: ExprKind::Integer(narrow_to_i64(i), None),
+                                    kind: ExprKind::Integer(narrow_to_i64(i).into(), None),
                                     span: index.span,
                                 }),
                             },

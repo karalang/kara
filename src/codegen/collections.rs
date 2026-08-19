@@ -18,6 +18,7 @@ use inkwell::AddressSpace;
 
 use super::helpers::vec_inner_type_expr;
 use super::state::{AssertedIndexBound, SetOpFilter, SoaGroup, VarSlot};
+use crate::ast::narrow_literal_to_i64;
 
 impl<'ctx> super::Codegen<'ctx> {
     /// Compile method calls on `Set[T]` variables. `Set[T]` lowers to
@@ -6024,7 +6025,7 @@ impl<'ctx> super::Codegen<'ctx> {
 /// still range-check, never assuming sign.
 fn slice_bound_int_lit(e: &Expr) -> Option<i64> {
     match e.kind {
-        ExprKind::Integer(n, _) => Some(n),
+        ExprKind::Integer(n, _) => Some(narrow_literal_to_i64(n)),
         _ => None,
     }
 }

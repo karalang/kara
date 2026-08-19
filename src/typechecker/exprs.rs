@@ -3297,15 +3297,32 @@ impl<'a> super::TypeChecker<'a> {
     /// parser's out-of-range arm. A genuinely negative literal is
     /// `Neg(Integer(n))` with `n` positive — a different AST shape entirely,
     /// validated on its own path — so `-5u64` still reports correctly.
-    fn literal_as_i128(n: i64, sfx: Option<crate::token::IntSuffix>) -> i128 {
+    fn literal_as_i128(n: i128, sfx: Option<crate::token::IntSuffix>) -> i128 {
         use crate::token::IntSuffix;
         match sfx {
             Some(IntSuffix::U8)
             | Some(IntSuffix::U16)
             | Some(IntSuffix::U32)
             | Some(IntSuffix::U64)
-            | Some(IntSuffix::U128) => (n as u64) as i128,
-            _ => n as i128,
+            | Some(IntSuffix::U128) => {
+                // The WRAPPED u64 bit pattern, unchanged by the i128 node
+                // (B-2026-08-19-8 stage 2). Widening `ExprKind::Integer` gave
+                // the literal room; it did NOT change how an unsigned magnitude
+                // past i64::MAX is encoded, because the interpreter still
+                // represents unsigned runtime values the same wrapped way. The
+                // lexer's thresholds are likewise unchanged, so `n` always fits
+                // i64 here and the round-trip through `u64` is exact.
+                //
+                // Retiring the wrap is stage 5's business, together with the
+                // runtime representation it mirrors — doing it here would split
+                // the encoding between literal and value.
+                debug_assert!(
+                    i64::try_from(n).is_ok(),
+                    "unsigned literal payload {n} is wider than the wrap encoding assumes"
+                );
+                ((n as i64) as u64) as i128
+            }
+            _ => n,
         }
     }
 
@@ -3347,12 +3364,12 @@ impl<'a> super::TypeChecker<'a> {
     /// against their own suffix at synthesis.
     fn unsuffixed_int_literal_value(expr: &Expr) -> Option<i128> {
         match &expr.kind {
-            ExprKind::Integer(n, None) => Some(*n as i128),
+            ExprKind::Integer(n, None) => Some(*n),
             ExprKind::Unary {
                 op: UnaryOp::Neg,
                 operand,
             } => match &operand.kind {
-                ExprKind::Integer(n, None) => Some(-(*n as i128)),
+                ExprKind::Integer(n, None) => Some(-*n),
                 _ => None,
             },
             _ => None,
@@ -3382,7 +3399,7 @@ impl<'a> super::TypeChecker<'a> {
                 // unary minus is a positive magnitude by construction, so there
                 // is no bit pattern to recover, and `-5u64` must still report
                 // as negative.
-                ExprKind::Integer(n, Some(_)) => Some(-(*n as i128)),
+                ExprKind::Integer(n, Some(_)) => Some(-*n),
                 _ => None,
             },
             _ => None,
@@ -3770,7 +3787,7 @@ impl<'a> super::TypeChecker<'a> {
                 if matches!(op, UnaryOp::Neg) {
                     if let ExprKind::Integer(n, Some(sfx)) = &operand.kind {
                         let ty = self.type_from_int_suffix(Some(*sfx), operand.span);
-                        self.check_int_literal_fits(-(*n as i128), &ty, &expr.span);
+                        self.check_int_literal_fits(-*n, &ty, &expr.span);
                         // The negated value ruled; suppress the Integer arm's
                         // positive-operand check for this operand (`-128i8` —
                         // bare `128i8` is out of range, the negated form is
@@ -4056,7 +4073,7 @@ impl<'a> super::TypeChecker<'a> {
                                             }),
                                         ) = (dim, idx_expr)
                                         {
-                                            if *i < 0 || i >= d {
+                                            if *i < 0 || *i >= i128::from(*d) {
                                                 self.type_error(
                                                     format!(
                                                         "index {} out of bounds for dim {} \

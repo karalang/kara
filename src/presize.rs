@@ -237,7 +237,7 @@ fn add_const(e: &Expr, k: i64) -> Expr {
             op: BinOp::Add,
             left: Box::new(e.clone()),
             right: Box::new(Expr {
-                kind: ExprKind::Integer(k, None),
+                kind: ExprKind::Integer(k.into(), None),
                 span,
             }),
         },
@@ -310,7 +310,7 @@ fn fill_loop_ok(
     }
     // (c) Bound must be a small-or-variable quantity (no giant literal).
     if let ExprKind::Integer(k, _) = &bound.kind {
-        if *k < 0 || *k > MAX_LITERAL_BOUND {
+        if *k < 0 || *k > MAX_LITERAL_BOUND.into() {
             return false;
         }
     }

@@ -5648,7 +5648,7 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp,
         };
         let i64_lit = |n: i64| Expr {
-            kind: ExprKind::Integer(n, Some(crate::token::IntSuffix::I64)),
+            kind: ExprKind::Integer(n.into(), Some(crate::token::IntSuffix::I64)),
             span: sp,
         };
         let i64_ty = || TypeExpr {
@@ -6012,7 +6012,7 @@ impl<'ctx> super::Codegen<'ctx> {
             span: sp,
         };
         let i64_lit = |n: i64| Expr {
-            kind: ExprKind::Integer(n, Some(crate::token::IntSuffix::I64)),
+            kind: ExprKind::Integer(n.into(), Some(crate::token::IntSuffix::I64)),
             span: sp,
         };
         let i64_ty = || TypeExpr {

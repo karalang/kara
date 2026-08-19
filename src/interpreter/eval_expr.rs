@@ -47,7 +47,7 @@ impl<'a> super::Interpreter<'a> {
         }
         match &expr.kind {
             // Literals
-            ExprKind::Integer(i, _) => Value::Int((*i).into()),
+            ExprKind::Integer(i, _) => Value::Int(*i),
             // Suffixed narrow-float literals round to the target format's
             // precision at creation (B-2026-07-22-4): codegen materializes
             // `2.7bf16` as the bfloat constant 2.703125, so an interpreter
@@ -472,11 +472,11 @@ impl<'a> super::Interpreter<'a> {
                             kind: ExprKind::Range {
                                 start: Some(Box::new(Expr {
                                     span: index.span,
-                                    kind: ExprKind::Integer(lo, None),
+                                    kind: ExprKind::Integer(lo.into(), None),
                                 })),
                                 end: Some(Box::new(Expr {
                                     span: index.span,
-                                    kind: ExprKind::Integer(hi, None),
+                                    kind: ExprKind::Integer(hi.into(), None),
                                 })),
                                 inclusive: false,
                             },

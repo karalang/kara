@@ -26,6 +26,7 @@ use crate::token::Span;
 
 use super::types::{is_integer, is_numeric, type_display, ConstArg, DimArg, FloatSize, Type};
 use super::TypeErrorKind;
+use crate::ast::narrow_literal_to_i64;
 
 /// The dims of `shape` when every entry is a concrete literal, else
 /// `None` (a `?` / dim-param entry means the total element count isn't
@@ -1170,7 +1171,7 @@ impl<'a> super::TypeChecker<'a> {
             return IntArg::Bad;
         }
         match &expr.kind {
-            ExprKind::Integer(i, _) => IntArg::Literal(*i),
+            ExprKind::Integer(i, _) => IntArg::Literal(narrow_literal_to_i64(*i)),
             _ => IntArg::Runtime,
         }
     }

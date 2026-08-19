@@ -2076,7 +2076,7 @@ impl<'a> super::Interpreter<'a> {
                         ))
                     }
                 };
-                let shift = amt.rem_euclid(nn as i64) as usize;
+                let shift = amt.rem_euclid((nn as i64).into()) as usize;
                 let out: Vec<Value> = (0..nn)
                     .map(|i| {
                         let src = if method == "rotate_lanes_left" {

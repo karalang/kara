@@ -659,11 +659,11 @@ impl super::Parser {
                 // interpreter's Neg arm) sees a plain literal and needs no
                 // special case. B-2026-08-06-13.
                 if let &Token::IntegerOutOfRange(m, sfx) = self.peek_token_ref() {
-                    if m == (i64::MAX as u64) + 1 {
+                    if m == ((i64::MAX as u64) + 1).into() {
                         self.advance();
                         return Some(Expr {
                             span: self.span_from(&start),
-                            kind: ExprKind::Integer(i64::MIN, sfx),
+                            kind: ExprKind::Integer(i64::MIN.into(), sfx),
                         });
                     }
                 }
@@ -867,7 +867,7 @@ impl super::Parser {
                 ) {
                     return Some(Expr {
                         span: self.span_from(&start),
-                        kind: ExprKind::Integer(m as i64, sfx),
+                        kind: ExprKind::Integer((m as i64).into(), sfx),
                     });
                 }
                 let span = self.span_from(&start);

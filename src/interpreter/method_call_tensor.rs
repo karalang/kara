@@ -31,6 +31,7 @@ use super::helpers::minmax_value_reduce;
 use super::helpers::value_as_f64 as value_to_f64;
 use super::helpers::{value_compare, value_compare_u64};
 use super::value::narrow_to_i64;
+use crate::ast::narrow_literal_to_i64;
 use crate::interpreter::value::EnumData;
 
 /// Element-fill class for `Tensor.zeros` / `Tensor.ones` — the only
@@ -114,7 +115,7 @@ pub(super) fn tensor_static_dims(ty: &TypeExpr) -> Option<Vec<i64>> {
         let crate::ast::ExprKind::Integer(value, _) = &e.kind else {
             return None;
         };
-        out.push(*value);
+        out.push(narrow_literal_to_i64(*value));
     }
     Some(out)
 }

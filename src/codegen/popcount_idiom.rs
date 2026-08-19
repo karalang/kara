@@ -314,7 +314,7 @@ fn identifier_name(e: &Expr) -> Option<String> {
 }
 
 fn int_literal_is(e: &Expr, want: i128) -> bool {
-    matches!(&e.kind, ExprKind::Integer(v, _) if *v as i128 == want)
+    matches!(&e.kind, ExprKind::Integer(v, _) if *v == want)
 }
 
 /// `true` if the statement contains a `break` / `continue` / `return` anywhere.
@@ -651,7 +651,7 @@ fn main() {
             span: sp,
         };
         let int = |v: i64| E {
-            kind: EK::Integer(v, None),
+            kind: EK::Integer(v.into(), None),
             span: sp,
         };
         let arg = |v: E| crate::ast::CallArg {

@@ -59,6 +59,7 @@
 pub fn auto_par_enabled() -> bool {
     !matches!(std::env::var("KARAC_AUTO_PAR"), Ok(v) if v == "0")
 }
+use crate::ast::narrow_literal_to_i64;
 use crate::ast::{
     BinOp, Block, CompoundOp, Expr, ExprKind, Function, Item, PatternKind, Program, Stmt, StmtKind,
 };
@@ -403,7 +404,7 @@ pub(crate) fn const_eval_iter_count(end_expr: &Expr, lo_expr: Option<&Expr>) -> 
 /// sufficient. Pre- and post-lowering both leave Integer(n) untouched.
 pub(crate) fn const_eval_int_literal(expr: &Expr) -> Option<i64> {
     if let ExprKind::Integer(n, _) = expr.kind {
-        Some(n)
+        Some(narrow_literal_to_i64(n))
     } else {
         None
     }

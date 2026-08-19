@@ -90,6 +90,7 @@
 //! span check). `KARAC_DISJOINT_DEBUG=1` is its counterpart one phase later,
 //! on the codegen side.
 
+use crate::ast::narrow_literal_to_i64;
 use crate::ast::{
     assign_target_root, BinOp, Block, CompoundOp, Expr, ExprKind, MatchArm, Pattern, PatternKind,
     Stmt, StmtKind, UnaryOp,
@@ -942,7 +943,7 @@ impl Prover<'_> {
 
     fn build_form(&mut self, expr: &Expr) -> Result<IndexForm, DisjointDecline> {
         match &expr.kind {
-            ExprKind::Integer(n, _) => Ok(IndexForm::constant(*n)),
+            ExprKind::Integer(n, _) => Ok(IndexForm::constant(narrow_literal_to_i64(*n))),
             ExprKind::Identifier(name) => self.name_form(name),
             // A module-qualified path in an index position is a constant.
             ExprKind::Path { segments, .. } if segments.len() > 1 => {
@@ -2022,8 +2023,12 @@ fn increment_of(value: &Expr, counter: &str) -> Option<i64> {
         return None;
     };
     match (&left.kind, &right.kind) {
-        (ExprKind::Identifier(n), ExprKind::Integer(k, _)) if n == counter => Some(*k),
-        (ExprKind::Integer(k, _), ExprKind::Identifier(n)) if n == counter => Some(*k),
+        (ExprKind::Identifier(n), ExprKind::Integer(k, _)) if n == counter => {
+            Some(narrow_literal_to_i64(*k))
+        }
+        (ExprKind::Integer(k, _), ExprKind::Identifier(n)) if n == counter => {
+            Some(narrow_literal_to_i64(*k))
+        }
         _ => None,
     }
 }

@@ -95,7 +95,7 @@ fn test_i64_min_literal_folds_to_a_single_integer_node() {
         // The fold matters as much as the value: a surviving `Unary { Neg, .. }`
         // would re-negate i64::MIN downstream and overflow again.
         assert!(
-            matches!(value.kind, ExprKind::Integer(i64::MIN, _)),
+            matches!(value.kind, ExprKind::Integer(n, _) if n == i128::from(i64::MIN)),
             "`{src}` must fold to a single Integer(i64::MIN) node, got {:?}",
             value.kind
         );
@@ -150,8 +150,13 @@ fn test_unsigned_suffixed_upper_half_of_u64_parses_to_the_bit_pattern() {
         };
         match value.kind {
             ExprKind::Integer(n, Some(_)) => assert_eq!(
-                n, want,
-                "`{src}` must carry the wrapped bit pattern on the i64 carrier"
+                n,
+                i128::from(want),
+                "`{src}` must carry the wrapped u64 bit pattern. The AST literal \
+                 is i128 now (B-2026-08-19-8 stage 2), but the WRAP is still \
+                 how an unsigned magnitude past i64::MAX is represented — \
+                 widening the node did not change that encoding, and the \
+                 typechecker still reads it back through the suffix."
             ),
             ref other => panic!("`{src}` expected a suffixed Integer, got {other:?}"),
         }
