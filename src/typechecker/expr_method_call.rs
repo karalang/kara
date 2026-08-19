@@ -1105,6 +1105,14 @@ impl<'a> super::TypeChecker<'a> {
             if module == "gpu" && method == "dot" {
                 return self.infer_gpu_dot(args, span);
             }
+            // The Arg family reports an INDEX, so it needs two shaders and a
+            // result type unrelated to the element type.
+            if module == "gpu" && method == "argmin" {
+                return self.infer_gpu_arg(args, span, ReduceOp::Argmin, "argmin");
+            }
+            if module == "gpu" && method == "argmax" {
+                return self.infer_gpu_arg(args, span, ReduceOp::Argmax, "argmax");
+            }
         }
 
         // Critical sections (design.md § Critical sections):
@@ -3621,6 +3629,102 @@ impl<'a> super::TypeChecker<'a> {
 
         self.record_expr_type(span, &f32_ty);
         f32_ty
+    }
+
+    /// `gpu.argmin(buf)` / `gpu.argmax(buf)` — the INDEX of the extremum
+    /// (B-2026-08-19-13).
+    ///
+    /// Separate from [`Self::infer_gpu_reduce`] on two counts. The result type
+    /// is `Option[i64]` whatever the element type, because an index is not an
+    /// element — matching `Stats.argmin`, which says the same. And it needs
+    /// TWO shaders: a level-0 kernel that seeds every element as its own
+    /// candidate, and a fold kernel that takes the surviving candidate indices
+    /// and re-reads their values from the original buffer.
+    ///
+    /// The two are keyed on the BUFFER-argument span and the CALL span
+    /// respectively — one argument means the `gpu.dot` trick of using two
+    /// argument spans is unavailable, and those two spans are always distinct
+    /// (the call encloses its argument). Codegen reads them back the same way.
+    fn infer_gpu_arg(
+        &mut self,
+        args: &[CallArg],
+        span: &Span,
+        op: ReduceOp,
+        spelling: &str,
+    ) -> Type {
+        let result = Type::Named {
+            name: "Option".to_string(),
+            args: vec![Type::Int(IntSize::I64)],
+        };
+        if args.len() != 1 {
+            self.type_error(
+                format!(
+                    "error[E_GPU_REDUCE_ARITY]: `gpu.{spelling}` takes exactly one buffer — \
+                     `gpu.{spelling}(buffer)` (found {} argument(s))",
+                    args.len()
+                ),
+                *span,
+                TypeErrorKind::WrongNumberOfArgs,
+            );
+            return result;
+        }
+
+        let buf_ty = self.infer_expr(&args[0].value);
+        let elem = match &buf_ty {
+            Type::Named { name, args: ta } if name == "Vec" && ta.len() == 1 => ta[0].clone(),
+            _ => {
+                self.type_error(
+                    format!(
+                        "error[E_GPU_REDUCE_BUFFER]: `gpu.{spelling}` takes a `Vec[f32]` (found \
+                         `{}`)",
+                        crate::typechecker::types::type_display(&buf_ty)
+                    ),
+                    args[0].value.span,
+                    TypeErrorKind::TypeMismatch,
+                );
+                return result;
+            }
+        };
+        if !matches!(elem, Type::Float(FloatSize::F32)) {
+            self.type_error(
+                format!(
+                    "error[E_GPU_REDUCE_BUFFER]: `gpu.{spelling}` takes a `Vec[f32]` (found \
+                     `Vec[{}]`) — the arg reductions are f32-only; an integer one needs the \
+                     signed/unsigned compare wired through the pair tree",
+                    crate::typechecker::types::type_display(&elem)
+                ),
+                args[0].value.span,
+                TypeErrorKind::TypeMismatch,
+            );
+            return result;
+        }
+
+        let seed = crate::gpu_wgsl::emit_arg_kernel(op, "f32", false);
+        let fold = crate::gpu_wgsl::emit_arg_kernel(op, "f32", true);
+        match (seed, fold) {
+            (Ok(seed_wgsl), Ok(fold_wgsl)) => {
+                self.gpu_dispatch_wgsl.insert(
+                    SpanKey(args[0].value.span.offset, args[0].value.span.length),
+                    seed_wgsl,
+                );
+                self.gpu_dispatch_wgsl
+                    .insert(SpanKey(span.offset, span.length), fold_wgsl);
+            }
+            (Err(e), _) | (_, Err(e)) => {
+                self.type_error(
+                    format!(
+                        "error[E_GPU_REDUCE_KERNEL]: cannot lower `gpu.{spelling}` to a GPU \
+                         shader — {}",
+                        e.reason()
+                    ),
+                    args[0].value.span,
+                    TypeErrorKind::TypeMismatch,
+                );
+            }
+        }
+
+        self.record_expr_type(span, &result);
+        result
     }
 
     fn infer_gpu_dispatch(&mut self, args: &[CallArg], span: &Span) -> Type {

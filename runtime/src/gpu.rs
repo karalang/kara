@@ -801,6 +801,123 @@ pub unsafe extern "C" fn karac_runtime_gpu_reduce_i32(
     }
 }
 
+/// One `argmin`/`argmax` dispatch. `cand` is `None` at level 0 (every element
+/// is its own candidate) and the surviving indices thereafter
+/// (B-2026-08-19-13).
+///
+/// Always ONE output — a `u32` index per workgroup — regardless of the input
+/// count, which is what `run_compute`'s split input/output sizing exists for.
+/// The output is sized to the CANDIDATE count, not the buffer's, because that
+/// is what shrinks each level.
+async fn dispatch_arg_async(
+    wgsl: &str,
+    input: &[u8],
+    cand: Option<&[u8]>,
+    n_candidates: usize,
+) -> Option<Vec<u8>> {
+    let ctx = gpu_context()?;
+    let device = &ctx.device;
+    let queue = &ctx.queue;
+
+    let mut inputs: Vec<wgpu::Buffer> = Vec::with_capacity(2);
+    for bytes in std::iter::once(input).chain(cand) {
+        inputs.push(
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("gpu-arg-input"),
+                contents: bytes,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            }),
+        );
+    }
+    let out_sizes = [(n_candidates.max(1) * std::mem::size_of::<u32>()) as u64];
+    let output_bufs = run_compute(device, queue, wgsl, &inputs, &out_sizes, &[], n_candidates);
+    let mut outs = readback(device, queue, &output_bufs, &out_sizes)?;
+    outs.pop()
+}
+
+/// C entry point for `gpu.argmin(buffer)` / `gpu.argmax(buffer)` — the index
+/// of the extremum (B-2026-08-19-13).
+///
+/// Takes TWO shaders, like `gpu.dot`, but for a different reason. Level 0
+/// seeds every element as its own candidate; every level after that receives
+/// the surviving candidate INDICES and re-reads their values from the original
+/// buffer, which stays bound throughout. So indices are absolute at every
+/// level and no value is ever carried between dispatches — the host never
+/// ships values back and forth, and nothing can be lost in transit.
+///
+/// Returns the index, or `u32::MAX` for an empty buffer. The caller turns that
+/// into `None`: an empty buffer has no extremum, and `Stats.argmin` says the
+/// same.
+///
+/// # Safety
+///
+/// Both `*_wgsl_ptr`/`_len` pairs a valid UTF-8 shader; `in_ptr` points to `n`
+/// valid `f32` values. Aborts on no available GPU adapter (no CPU fallback),
+/// same as every other entry point here.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_gpu_arg_f32(
+    seed_wgsl_ptr: *const u8,
+    seed_wgsl_len: usize,
+    fold_wgsl_ptr: *const u8,
+    fold_wgsl_len: usize,
+    in_ptr: *const f32,
+    n: usize,
+) -> u32 {
+    unsafe {
+        // No extremum, and no device needed to know it.
+        if n == 0 {
+            return u32::MAX;
+        }
+        const WORKGROUP: usize = 64;
+
+        let Ok(seed_wgsl) =
+            std::str::from_utf8(std::slice::from_raw_parts(seed_wgsl_ptr, seed_wgsl_len))
+        else {
+            crate::fatal::write_stderr(b"panic: gpu arg-reduction shader is not valid UTF-8\n");
+            std::process::abort();
+        };
+        let Ok(fold_wgsl) =
+            std::str::from_utf8(std::slice::from_raw_parts(fold_wgsl_ptr, fold_wgsl_len))
+        else {
+            crate::fatal::write_stderr(
+                b"panic: gpu arg-reduction fold shader is not valid UTF-8\n",
+            );
+            std::process::abort();
+        };
+
+        let input = std::slice::from_raw_parts(in_ptr as *const u8, n * std::mem::size_of::<f32>());
+
+        // LEVEL 0: every element is its own candidate.
+        let Some(mut level) = pollster::block_on(dispatch_arg_async(seed_wgsl, input, None, n))
+        else {
+            crate::fatal::write_stderr(
+                b"panic: gpu arg-reduction found no available GPU adapter (no CPU fallback)\n",
+            );
+            std::process::abort();
+        };
+        let mut count = n.div_ceil(WORKGROUP);
+        level.truncate(count * std::mem::size_of::<u32>());
+
+        // LEVELS 1+: fold the surviving candidates, re-reading their values
+        // from the SAME input buffer.
+        while count > 1 {
+            let Some(next) =
+                pollster::block_on(dispatch_arg_async(fold_wgsl, input, Some(&level), count))
+            else {
+                crate::fatal::write_stderr(
+                    b"panic: gpu arg-reduction found no available GPU adapter (no CPU fallback)\n",
+                );
+                std::process::abort();
+            };
+            count = count.div_ceil(WORKGROUP);
+            level = next;
+            level.truncate(count * std::mem::size_of::<u32>());
+        }
+
+        u32::from_le_bytes([level[0], level[1], level[2], level[3]])
+    }
+}
+
 /// C entry point for `gpu.dot(a, b)` — the fused multiply-then-sum reduction
 /// (B-2026-08-19-13).
 ///
@@ -1539,6 +1656,102 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
 }
 "#;
 
+    /// The `argmin` level-0 and fold shaders, as `karac`'s emitter generates
+    /// them (`gpu_wgsl::emit_arg_kernel(ReduceOp::Argmin, "f32", fold)`).
+    /// Copied here so the pair-carrying tree, the NaN rule and the index
+    /// padding sentinel can be proven against a real device before any of the
+    /// compiler surface is built on them.
+    const ARGMIN_SEED_WGSL: &str = r#"
+@group(0) @binding(0) var<storage, read>       input:  array<f32>;
+@group(0) @binding(1) var<storage, read_write> output: array<u32>;
+
+var<workgroup> idxs: array<u32, 64>;
+
+// The combine, verbatim from `reduce_kernel::arg_takes_b`: a strictly
+// better value wins, an exact tie goes to the SMALLER index, and a NaN
+// loses to anything real (ties with another NaN, where the smaller
+// index survives). Lexicographic, therefore grouping-independent.
+fn takes_b(ia: u32, ib: u32) -> bool {
+    if (ib == 4294967295u) { return false; }
+    if (ia == 4294967295u) { return true; }
+    let a = input[ia];
+    let b = input[ib];
+    if (!(a == a)) { return (b == b); }
+    if (!(b == b)) { return false; }
+    return (b < a) || (b == a && ib < ia);
+}
+
+@compute @workgroup_size(64)
+fn main(@builtin(local_invocation_id) lid: vec3<u32>,
+        @builtin(workgroup_id) wid: vec3<u32>,
+        @builtin(global_invocation_id) gid: vec3<u32>) {
+    let t = lid.x;
+    let i = gid.x;
+    if (i < arrayLength(&input)) { idxs[t] = i; } else { idxs[t] = 4294967295u; }
+    workgroupBarrier();
+
+    var stride: u32 = 32u;
+    loop {
+        if (stride == 0u) { break; }
+        if (t < stride) {
+            if (takes_b(idxs[t], idxs[t + stride])) { idxs[t] = idxs[t + stride]; }
+        }
+        workgroupBarrier();
+        stride = stride / 2u;
+    }
+
+    // One surviving candidate per workgroup, as an ABSOLUTE index
+    // into `input` — so the next level can look its value up again.
+    if (t == 0u) { output[wid.x] = idxs[0]; }
+}
+"#;
+
+    const ARGMIN_FOLD_WGSL: &str = r#"
+@group(0) @binding(0) var<storage, read>       input:  array<f32>;
+@group(0) @binding(1) var<storage, read>       cand:   array<u32>;
+@group(0) @binding(2) var<storage, read_write> output: array<u32>;
+
+var<workgroup> idxs: array<u32, 64>;
+
+// The combine, verbatim from `reduce_kernel::arg_takes_b`: a strictly
+// better value wins, an exact tie goes to the SMALLER index, and a NaN
+// loses to anything real (ties with another NaN, where the smaller
+// index survives). Lexicographic, therefore grouping-independent.
+fn takes_b(ia: u32, ib: u32) -> bool {
+    if (ib == 4294967295u) { return false; }
+    if (ia == 4294967295u) { return true; }
+    let a = input[ia];
+    let b = input[ib];
+    if (!(a == a)) { return (b == b); }
+    if (!(b == b)) { return false; }
+    return (b < a) || (b == a && ib < ia);
+}
+
+@compute @workgroup_size(64)
+fn main(@builtin(local_invocation_id) lid: vec3<u32>,
+        @builtin(workgroup_id) wid: vec3<u32>,
+        @builtin(global_invocation_id) gid: vec3<u32>) {
+    let t = lid.x;
+    let i = gid.x;
+    if (i < arrayLength(&cand)) { idxs[t] = cand[i]; } else { idxs[t] = 4294967295u; }
+    workgroupBarrier();
+
+    var stride: u32 = 32u;
+    loop {
+        if (stride == 0u) { break; }
+        if (t < stride) {
+            if (takes_b(idxs[t], idxs[t + stride])) { idxs[t] = idxs[t + stride]; }
+        }
+        workgroupBarrier();
+        stride = stride / 2u;
+    }
+
+    // One surviving candidate per workgroup, as an ABSOLUTE index
+    // into `input` — so the next level can look its value up again.
+    if (t == 0u) { output[wid.x] = idxs[0]; }
+}
+"#;
+
     /// The checked `i32` sum shader, as `karac`'s emitter generates it
     /// (`gpu_wgsl::emit_int_reduce_kernel(ReduceOp::Sum, "i32")`). Copied here
     /// so the OVERFLOW FLAG can be proven against a real device before any of
@@ -1808,6 +2021,118 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
                 all_nan.iter().copied().fold(f32::INFINITY, f32::min)
             );
         }
+    }
+
+    #[test]
+    fn arg_entry_point_matches_the_cpu_twin_including_nan_and_ties() {
+        // The Arg family's two hard parts, on a real device: the tree carries
+        // (value, index) PAIRS rather than values, and the level-1+ shader
+        // re-reads values from the ORIGINAL buffer through the surviving
+        // candidate indices. Lengths cover one workgroup, a partial chunk, and
+        // two full fold levels.
+        let cases: Vec<(&str, Vec<f32>, u32)> = vec![
+            ("simple", vec![3.0, 1.0, 2.0], 1),
+            // Ties take the FIRST occurrence — a tie-break that depended on
+            // scratch position would drift with the grouping.
+            ("tie", vec![3.0, 1.0, 1.0, 5.0], 1),
+            // NaN always loses, from either side.
+            ("nan-first", vec![f32::NAN, 3.0, 1.0], 2),
+            ("nan-last", vec![3.0, 1.0, f32::NAN], 1),
+            // Nothing wins, so the leftmost survives.
+            ("all-nan", vec![f32::NAN; 3], 0),
+            // 65 is the first length needing a second chunk, so the winner
+            // lives in a workgroup that is 63/64 PADDING. If padding could
+            // win, this comes back as the sentinel instead of 64.
+            (
+                "spill",
+                {
+                    let mut v = vec![5.0f32; 65];
+                    v[64] = -3.0;
+                    v
+                },
+                64,
+            ),
+        ];
+        for (tag, input, want) in &cases {
+            if pollster::block_on(dispatch_arg_async(
+                ARGMIN_SEED_WGSL,
+                bytemuck_f32(input).as_slice(),
+                None,
+                input.len(),
+            ))
+            .is_none()
+            {
+                eprintln!("gpu-arg: no GPU adapter available — skipping");
+                return;
+            }
+            let got = unsafe {
+                karac_runtime_gpu_arg_f32(
+                    ARGMIN_SEED_WGSL.as_ptr(),
+                    ARGMIN_SEED_WGSL.len(),
+                    ARGMIN_FOLD_WGSL.as_ptr(),
+                    ARGMIN_FOLD_WGSL.len(),
+                    input.as_ptr(),
+                    input.len(),
+                )
+            };
+            assert_eq!(got, *want, "argmin {tag}");
+            assert_ne!(got, u32::MAX, "argmin {tag}: sentinel is never an answer");
+        }
+    }
+
+    #[test]
+    fn arg_entry_point_folds_two_full_levels() {
+        // 4096 elements is 64 workgroups then one — so the fold shader runs
+        // for real, re-reading values from the original buffer through the
+        // candidate indices rather than carrying them across the dispatch.
+        let mut input: Vec<f32> = (0..4096).map(|i| ((i * 37) % 101) as f32).collect();
+        input[3000] = -1.0;
+        if pollster::block_on(dispatch_arg_async(
+            ARGMIN_SEED_WGSL,
+            bytemuck_f32(&input).as_slice(),
+            None,
+            input.len(),
+        ))
+        .is_none()
+        {
+            eprintln!("gpu-arg-multi: no GPU adapter available — skipping");
+            return;
+        }
+        let got = unsafe {
+            karac_runtime_gpu_arg_f32(
+                ARGMIN_SEED_WGSL.as_ptr(),
+                ARGMIN_SEED_WGSL.len(),
+                ARGMIN_FOLD_WGSL.as_ptr(),
+                ARGMIN_FOLD_WGSL.len(),
+                input.as_ptr(),
+                input.len(),
+            )
+        };
+        assert_eq!(
+            got, 3000,
+            "the unique minimum, found across two fold levels"
+        );
+    }
+
+    #[test]
+    fn arg_entry_point_returns_the_sentinel_for_an_empty_buffer() {
+        // Needs no device: an empty buffer has no extremum. The caller turns
+        // the sentinel into `None`.
+        let got = unsafe {
+            karac_runtime_gpu_arg_f32(
+                ARGMIN_SEED_WGSL.as_ptr(),
+                ARGMIN_SEED_WGSL.len(),
+                ARGMIN_FOLD_WGSL.as_ptr(),
+                ARGMIN_FOLD_WGSL.len(),
+                std::ptr::null(),
+                0,
+            )
+        };
+        assert_eq!(got, u32::MAX);
+    }
+
+    fn bytemuck_f32(xs: &[f32]) -> Vec<u8> {
+        xs.iter().flat_map(|v| v.to_le_bytes()).collect()
     }
 
     #[test]

@@ -7,6 +7,20 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let op = args.get(1).map(String::as_str).unwrap_or("sum");
     let elem = args.get(2).map(String::as_str).unwrap_or("f32");
+    if let Some(aop) = op.strip_prefix("arg-") {
+        let (o, fold) = match aop {
+            "min" => (karac::reduce_kernel::ReduceOp::Argmin, false),
+            "max" => (karac::reduce_kernel::ReduceOp::Argmax, false),
+            "min-fold" => (karac::reduce_kernel::ReduceOp::Argmin, true),
+            "max-fold" => (karac::reduce_kernel::ReduceOp::Argmax, true),
+            other => panic!("unknown arg op {other}"),
+        };
+        println!(
+            "{}",
+            karac::gpu_wgsl::emit_arg_kernel(o, elem, fold).unwrap()
+        );
+        return;
+    }
     if let Some(iop) = op.strip_prefix("int-") {
         let iop = match iop {
             "sum" => karac::reduce_kernel::ReduceOp::Sum,

@@ -987,6 +987,15 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
         }
+        // The Arg family reports an INDEX, so it returns `Option[i64]`
+        // regardless of the element type and needs its own lowering.
+        if matches!(method, "argmin" | "argmax") {
+            if let ExprKind::Identifier(name) = &object.kind {
+                if name == "gpu" && !self.variables.contains_key("gpu") {
+                    return self.compile_gpu_arg(args, call_span);
+                }
+            }
+        }
         // `gpu.dot(a, b)` reads TWO buffers and needs two shaders, so it has
         // its own lowering rather than a wider `compile_gpu_reduce`.
         if method == "dot" {

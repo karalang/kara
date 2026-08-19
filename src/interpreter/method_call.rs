@@ -976,6 +976,63 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
+    /// `gpu.argmin(buf)` / `gpu.argmax(buf)` under the interpreter
+    /// (B-2026-08-19-13).
+    ///
+    /// The tree carries (value, index) pairs, and its combine — strictly
+    /// better value wins, exact tie goes to the smaller index, NaN always
+    /// loses — is lexicographic and therefore grouping-independent. So unlike
+    /// `sum`, this answers the same at every buffer length.
+    ///
+    /// Note the NaN rule DIFFERS from `Stats.argmin`, which is
+    /// position-dependent on NaN and so cannot be reproduced by a tree at all.
+    /// See `reduce_kernel::tree_arg_f32`.
+    fn eval_gpu_arg(
+        &mut self,
+        args: &[CallArg],
+        span: &Span,
+        want_max: bool,
+        spelling: &str,
+    ) -> Value {
+        if args.len() != 1 {
+            return self.record_runtime_error(
+                format!("gpu.{spelling} expects one buffer (found {})", args.len()),
+                span,
+            );
+        }
+        let Value::Array(rc) = self.eval_expr_inner(&args[0].value) else {
+            return self
+                .record_runtime_error(format!("gpu.{spelling} buffer must be a Vec of f32"), span);
+        };
+        let elems = rc.read().unwrap().clone();
+        let mut xs: Vec<f32> = Vec::with_capacity(elems.len());
+        for v in &elems {
+            match v {
+                Value::Float(f) => xs.push(*f as f32),
+                _ => {
+                    return self.record_runtime_error(
+                        format!("gpu.{spelling} buffer element must be f32"),
+                        span,
+                    )
+                }
+            }
+        }
+
+        match crate::reduce_kernel::tree_arg_f32(&xs, want_max) {
+            Some(i) => Value::EnumVariant {
+                enum_name: "Option".to_string(),
+                variant: "Some".to_string(),
+                data: EnumData::Tuple(vec![Value::Int(i as i128)]),
+            },
+            // Empty: no extremum. `Stats.argmin` says the same.
+            None => Value::EnumVariant {
+                enum_name: "Option".to_string(),
+                variant: "None".to_string(),
+                data: EnumData::Unit,
+            },
+        }
+    }
+
     /// `gpu.dot(a, b)` under the interpreter (B-2026-08-19-13).
     ///
     /// Runs the products through the SAME tree order the sum reduction uses,
@@ -1134,6 +1191,8 @@ impl<'a> super::Interpreter<'a> {
                 ("gpu", "max") => return self.eval_gpu_reduce(args, span, ReduceOp::Max, "max"),
                 ("gpu", "mean") => return self.eval_gpu_reduce(args, span, ReduceOp::Mean, "mean"),
                 ("gpu", "dot") => return self.eval_gpu_dot(args, span),
+                ("gpu", "argmin") => return self.eval_gpu_arg(args, span, false, "argmin"),
+                ("gpu", "argmax") => return self.eval_gpu_arg(args, span, true, "argmax"),
                 // `gpu.upload` / `gpu.download` (resident device buffers) are
                 // compiled-only: the tree-walk interpreter has no device-buffer
                 // model. A clean diagnostic, not the `variable 'gpu' not found`

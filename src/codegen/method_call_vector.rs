@@ -1960,6 +1960,115 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok((data, n))
     }
 
+    /// `gpu.argmin(buf)` / `gpu.argmax(buf)` — the INDEX of the extremum
+    /// (B-2026-08-19-13).
+    ///
+    /// Bakes TWO shaders: the level-0 kernel (recorded by the typechecker
+    /// against the BUFFER-argument span) and the fold kernel (against the CALL
+    /// span). One argument means the `gpu.dot` trick of keying on two argument
+    /// spans is unavailable, and the two spans here are always distinct — the
+    /// call encloses its argument.
+    ///
+    /// Returns `Option[i64]`: the runtime reports `u32::MAX` for an empty
+    /// buffer, and an index otherwise. The sentinel test is on the RETURNED
+    /// word rather than on the length, so there is exactly one place the
+    /// "no extremum" answer is decided.
+    pub(super) fn compile_gpu_arg(
+        &mut self,
+        args: &[CallArg],
+        call_span: &crate::token::Span,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        if args.len() != 1 {
+            return Err(format!(
+                "gpu.argmin/argmax expects one buffer, found {} argument(s)",
+                args.len()
+            ));
+        }
+        let i32_t = self.context.i32_type();
+        let i64_t = self.context.i64_type();
+
+        let mut baked = Vec::with_capacity(2);
+        for (key, label) in [
+            (
+                (args[0].value.span.offset, args[0].value.span.length),
+                "gpu.arg.seed.wgsl",
+            ),
+            ((call_span.offset, call_span.length), "gpu.arg.fold.wgsl"),
+        ] {
+            let wgsl = self
+                .accel
+                .gpu_dispatch_wgsl
+                .get(&key)
+                .cloned()
+                .ok_or_else(|| {
+                    "internal error: no WGSL recorded for `gpu.argmin`/`gpu.argmax` — the \
+                     typechecker intercept must run before codegen"
+                        .to_string()
+                })?;
+            let len = i64_t.const_int(wgsl.len() as u64, false);
+            let ptr = self
+                .builder
+                .build_global_string_ptr(&wgsl, label)
+                .map_err(|e| format!("baking gpu arg shader constant failed: {e}"))?
+                .as_pointer_value();
+            baked.push((ptr, len));
+        }
+
+        let (data, n) = self.read_gpu_reduce_buffer(&args[0].value)?;
+        let arg_fn = self.gpu_arg_f32_fn();
+        let idx = self
+            .builder
+            .build_call(
+                arg_fn,
+                &[
+                    baked[0].0.into(),
+                    baked[0].1.into(),
+                    baked[1].0.into(),
+                    baked[1].1.into(),
+                    data.into(),
+                    n.into(),
+                ],
+                "gpu.argidx",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+
+        // `u32::MAX` means "no extremum" — an empty buffer, the same answer
+        // `Stats.argmin` gives. Compared as a raw word, so the sentinel and
+        // the index share one representation and there is no second source of
+        // truth about emptiness.
+        let fn_val = self.current_fn.expect("gpu arg reduce in function");
+        let sentinel = i32_t.const_int(u32::MAX as u64, false);
+        let found = self
+            .builder
+            .build_int_compare(IntPredicate::NE, idx, sentinel, "gpu.arg.found")
+            .unwrap();
+        let some_bb = self.context.append_basic_block(fn_val, "gpu.arg.some");
+        let none_bb = self.context.append_basic_block(fn_val, "gpu.arg.none");
+        let merge_bb = self.context.append_basic_block(fn_val, "gpu.arg.merge");
+        self.builder
+            .build_conditional_branch(found, some_bb, none_bb)
+            .unwrap();
+
+        self.builder.position_at_end(some_bb);
+        // ZERO-extend: an index is unsigned, and a buffer long enough to reach
+        // 2^31 would otherwise report a negative position.
+        let word = self
+            .builder
+            .build_int_z_extend(idx, i64_t, "gpu.arg.ext")
+            .unwrap();
+        let some_end_bb = self.builder.get_insert_block().unwrap();
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+        self.builder.position_at_end(none_bb);
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+        self.builder.position_at_end(merge_bb);
+        Ok(self.build_option_some_via_phis(&[word], some_end_bb, none_bb, "gpu.arg"))
+    }
+
     /// `gpu.dot(a, b)` — the fused multiply-then-sum reduction
     /// (B-2026-08-19-13).
     ///

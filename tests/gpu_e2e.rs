@@ -1015,6 +1015,109 @@ fn gpu_integer_reductions_agree_with_the_interpreter() {
 }
 
 #[test]
+fn gpu_arg_reductions_agree_with_the_interpreter() {
+    // The Arg family is the one reduction whose tree carries (value, index)
+    // PAIRS, and whose fold level re-reads values from the ORIGINAL buffer
+    // through the surviving candidate indices. Both properties are only
+    // really exercised on a device.
+    assert_gpu_reduce_matches_interp(
+        "reduce_argmin_tie",
+        "fn main() {\n\
+        \x20   let v: Vec[f32] = [3.0, 1.0, 1.0, 5.0];\n\
+        \x20   let m = gpu.argmin(v);\n\
+        \x20   match m {\n\
+        \x20       Some(x) => println(f\"{x}\"),\n\
+        \x20       None => println(\"empty\"),\n\
+        \x20   }\n\
+        }\n",
+        "1",
+    );
+
+    assert_gpu_reduce_matches_interp(
+        "reduce_argmax_small",
+        "fn main() {\n\
+        \x20   let v: Vec[f32] = [3.0, 5.0, 5.0];\n\
+        \x20   let m = gpu.argmax(v);\n\
+        \x20   match m {\n\
+        \x20       Some(x) => println(f\"{x}\"),\n\
+        \x20       None => println(\"empty\"),\n\
+        \x20   }\n\
+        }\n",
+        "1",
+    );
+
+    // 65 elements: the winner sits alone in a chunk that is 63/64 PADDING. If
+    // padding could win, this comes back as the index sentinel rather than 64.
+    assert_gpu_reduce_matches_interp(
+        "reduce_argmin_padding",
+        "fn main() {\n\
+        \x20   let mut v: Vec[f32] = [];\n\
+        \x20   for i in 0..65 { v.push(5.0) }\n\
+        \x20   v[64] = -3.0;\n\
+        \x20   let m = gpu.argmin(v);\n\
+        \x20   match m {\n\
+        \x20       Some(x) => println(f\"{x}\"),\n\
+        \x20       None => println(\"empty\"),\n\
+        \x20   }\n\
+        }\n",
+        "64",
+    );
+
+    // Two full fold levels — the level-1 shader runs for real.
+    assert_gpu_reduce_matches_interp(
+        "reduce_argmin_multi",
+        "fn main() {\n\
+        \x20   let mut v: Vec[f32] = [];\n\
+        \x20   for i in 0..4096 { v.push(50.0) }\n\
+        \x20   v[3000] = -1.0;\n\
+        \x20   let m = gpu.argmin(v);\n\
+        \x20   match m {\n\
+        \x20       Some(x) => println(f\"{x}\"),\n\
+        \x20       None => println(\"empty\"),\n\
+        \x20   }\n\
+        }\n",
+        "3000",
+    );
+
+    assert_gpu_reduce_matches_interp(
+        "reduce_argmin_empty",
+        "fn main() {\n\
+        \x20   let v: Vec[f32] = [];\n\
+        \x20   let m = gpu.argmin(v);\n\
+        \x20   match m {\n\
+        \x20       Some(x) => println(f\"{x}\"),\n\
+        \x20       None => println(\"empty\"),\n\
+        \x20   }\n\
+        }\n",
+        "empty",
+    );
+
+    // NaN always loses, from either side — the rule that makes the combine
+    // associative and so lets the answer be grouping-independent.
+    for (tag, buf, want) in [
+        ("reduce_argmin_nan_first", "[nan, 3.0, 1.0]", "2"),
+        ("reduce_argmin_nan_last", "[3.0, 1.0, nan]", "1"),
+    ] {
+        assert_gpu_reduce_matches_interp(
+            tag,
+            &format!(
+                "fn main() {{\n\
+                \x20   let zero: f32 = 0.0;\n\
+                \x20   let nan: f32 = zero / zero;\n\
+                \x20   let v: Vec[f32] = {buf};\n\
+                \x20   let m = gpu.argmin(v);\n\
+                \x20   match m {{\n\
+                \x20       Some(x) => println(f\"{{x}}\"),\n\
+                \x20       None => println(\"empty\"),\n\
+                \x20   }}\n\
+                }}\n"
+            ),
+            want,
+        );
+    }
+}
+
+#[test]
 fn gpu_u32_reductions_are_unsigned_end_to_end() {
     // The whole u32 question in one place: above 2^31 the unsigned reading
     // differs from the signed one at EVERY step — the shader's compare, the

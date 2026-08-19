@@ -362,6 +362,8 @@ const GPU_REDUCTION_CALLS: &[&str] = &[
     "gpu.max(",
     "gpu.mean(",
     "gpu.dot(",
+    "gpu.argmin(",
+    "gpu.argmax(",
 ];
 
 /// True when the program reaches the GPU runtime at all, and so must route to

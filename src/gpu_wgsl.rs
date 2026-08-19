@@ -1027,6 +1027,122 @@ pub fn emit_reduce_kernel(op: ReduceOp, elem: &str) -> Result<String, WgslError>
     ))
 }
 
+/// Emit an `argmin`/`argmax` tree-reduction shader (B-2026-08-19-13).
+///
+/// The Arg family is the one reduction whose scratch holds PAIRS: an index
+/// alone cannot be compared and a value alone cannot be reported. That makes
+/// it a genuinely different shader rather than a different combine string —
+/// which is why it was deferred through four earlier slices.
+///
+/// **Two levels, two shaders, one index space.** `fold = false` emits the
+/// level-0 kernel, where every element is its own candidate (`idx = gid.x`).
+/// `fold = true` emits the kernel for every level after that, which takes the
+/// surviving candidate indices at `@binding(1)` and re-reads their values from
+/// the ORIGINAL buffer. Indices are therefore absolute at every level, and no
+/// value is ever carried between dispatches — nothing can be lost or rounded
+/// in transit, and the host never has to ship a second buffer of values back.
+///
+/// The combine is [`crate::reduce_kernel::arg_takes_b`]'s rule, verbatim:
+/// strictly better value wins; on an exact tie the SMALLER index wins; a NaN
+/// loses to anything real and ties with another NaN. That is a lexicographic
+/// order, hence a semilattice, hence grouping-independent — `argmin` can
+/// promise the same answer at every buffer length where `sum` cannot.
+///
+/// Padding is marked by the INDEX sentinel
+/// ([`crate::reduce_kernel::ARG_INVALID`]), never by a value. A value sentinel
+/// would have to be NaN to lose reliably, and NaN preservation is an OPTIONAL
+/// Vulkan feature — a device that flushed it would silently let padding win
+/// and report a nonexistent index.
+pub fn emit_arg_kernel(op: ReduceOp, elem: &str, fold: bool) -> Result<String, WgslError> {
+    if elem != "f32" {
+        return Err(WgslError::UnsupportedSignature(format!(
+            "GPU `argmin`/`argmax` over `{elem}` is not supported yet — the arg reductions are \
+             f32-only"
+        )));
+    }
+    let want_max = match op {
+        ReduceOp::Argmin => false,
+        ReduceOp::Argmax => true,
+        _ => {
+            return Err(WgslError::UnsupportedSignature(format!(
+                "`{op:?}` is not an arg reduction — `emit_arg_kernel` covers `argmin` and `argmax`"
+            )))
+        }
+    };
+    let strict = if want_max { ">" } else { "<" };
+    let invalid = format!("{}u", crate::reduce_kernel::ARG_INVALID);
+    let width = GPU_REDUCE_WIDTH;
+    let half = width / 2;
+
+    // Level 0 reads the buffer directly; the fold levels read the surviving
+    // candidates and look their values up in the same buffer.
+    let (candidates_binding, out_binding, seed) = if fold {
+        (
+            "@group(0) @binding(1) var<storage, read>       cand:   array<u32>;\n\
+             @group(0) @binding(2) var<storage, read_write> output: array<u32>;\n"
+                .to_string(),
+            2,
+            format!(
+                "\x20   if (i < arrayLength(&cand)) {{ idxs[t] = cand[i]; }} else {{ idxs[t] = {invalid}; }}"
+            ),
+        )
+    } else {
+        (
+            "@group(0) @binding(1) var<storage, read_write> output: array<u32>;\n".to_string(),
+            1,
+            format!(
+                "\x20   if (i < arrayLength(&input)) {{ idxs[t] = i; }} else {{ idxs[t] = {invalid}; }}"
+            ),
+        )
+    };
+    let _ = out_binding;
+
+    Ok(format!(
+        "@group(0) @binding(0) var<storage, read>       input:  array<{elem}>;\n\
+         {candidates_binding}\
+         \n\
+         var<workgroup> idxs: array<u32, {width}>;\n\
+         \n\
+         // The combine, verbatim from `reduce_kernel::arg_takes_b`: a strictly\n\
+         // better value wins, an exact tie goes to the SMALLER index, and a NaN\n\
+         // loses to anything real (ties with another NaN, where the smaller\n\
+         // index survives). Lexicographic, therefore grouping-independent.\n\
+         fn takes_b(ia: u32, ib: u32) -> bool {{\n\
+         \x20   if (ib == {invalid}) {{ return false; }}\n\
+         \x20   if (ia == {invalid}) {{ return true; }}\n\
+         \x20   let a = input[ia];\n\
+         \x20   let b = input[ib];\n\
+         \x20   if (!(a == a)) {{ return (b == b); }}\n\
+         \x20   if (!(b == b)) {{ return false; }}\n\
+         \x20   return (b {strict} a) || (b == a && ib < ia);\n\
+         }}\n\
+         \n\
+         @compute @workgroup_size({width})\n\
+         fn main(@builtin(local_invocation_id) lid: vec3<u32>,\n\
+         \x20       @builtin(workgroup_id) wid: vec3<u32>,\n\
+         \x20       @builtin(global_invocation_id) gid: vec3<u32>) {{\n\
+         \x20   let t = lid.x;\n\
+         \x20   let i = gid.x;\n\
+         {seed}\n\
+         \x20   workgroupBarrier();\n\
+         \n\
+         \x20   var stride: u32 = {half}u;\n\
+         \x20   loop {{\n\
+         \x20       if (stride == 0u) {{ break; }}\n\
+         \x20       if (t < stride) {{\n\
+         \x20           if (takes_b(idxs[t], idxs[t + stride])) {{ idxs[t] = idxs[t + stride]; }}\n\
+         \x20       }}\n\
+         \x20       workgroupBarrier();\n\
+         \x20       stride = stride / 2u;\n\
+         \x20   }}\n\
+         \n\
+         \x20   // One surviving candidate per workgroup, as an ABSOLUTE index\n\
+         \x20   // into `input` — so the next level can look its value up again.\n\
+         \x20   if (t == 0u) {{ output[wid.x] = idxs[0]; }}\n\
+         }}\n"
+    ))
+}
+
 /// Emit the CHECKED integer tree-reduction shader (B-2026-08-19-13).
 ///
 /// The integer sibling of [`emit_reduce_kernel`], and structurally different
@@ -4165,6 +4281,108 @@ mod tests {
             let err = emit_reduce_kernel(op, "f32").unwrap_err();
             let msg = format!("{err:?}");
             assert!(msg.contains("not supported yet"), "{msg}");
+        }
+    }
+
+    #[test]
+    fn arg_kernel_carries_indices_and_marks_padding_by_index() {
+        let seed = emit_arg_kernel(ReduceOp::Argmin, "f32", false).unwrap();
+        // The scratch holds INDICES, not values — an index alone cannot be
+        // compared, so the combine looks each one's value up in `input`.
+        assert!(
+            seed.contains("var<workgroup> idxs: array<u32, 64>;"),
+            "{seed}"
+        );
+        assert!(
+            !seed.contains("var<workgroup> vals"),
+            "no value scratch:\n{seed}"
+        );
+        assert!(seed.contains("let a = input[ia];"), "{seed}");
+
+        // Padding is marked by the INDEX sentinel, never by a value. A value
+        // sentinel would have to be NaN to lose reliably, and NaN preservation
+        // is an OPTIONAL Vulkan feature — a device that flushed it would let
+        // padding win and report a nonexistent index.
+        assert!(seed.contains("idxs[t] = 4294967295u;"), "{seed}");
+        assert!(
+            seed.contains("if (ib == 4294967295u) { return false; }"),
+            "{seed}"
+        );
+        assert!(
+            seed.contains("if (ia == 4294967295u) { return true; }"),
+            "{seed}"
+        );
+
+        // The combine: strictly better wins, exact tie goes to the SMALLER
+        // index, NaN loses to anything real.
+        assert!(
+            seed.contains("if (!(a == a)) { return (b == b); }"),
+            "{seed}"
+        );
+        assert!(seed.contains("if (!(b == b)) { return false; }"), "{seed}");
+        assert!(
+            seed.contains("return (b < a) || (b == a && ib < ia);"),
+            "{seed}"
+        );
+        let seed_max = emit_arg_kernel(ReduceOp::Argmax, "f32", false).unwrap();
+        assert!(
+            seed_max.contains("return (b > a) || (b == a && ib < ia);"),
+            "{seed_max}"
+        );
+    }
+
+    #[test]
+    fn arg_fold_kernel_rereads_values_from_the_original_buffer() {
+        // The level-1+ kernel takes the surviving candidate INDICES and looks
+        // their values up in the same `input` buffer, so indices stay absolute
+        // and no value ever crosses a dispatch boundary.
+        let seed = emit_arg_kernel(ReduceOp::Argmin, "f32", false).unwrap();
+        let fold = emit_arg_kernel(ReduceOp::Argmin, "f32", true).unwrap();
+
+        assert!(
+            !seed.contains("var<storage, read>       cand:"),
+            "level 0 has no candidate BUFFER (its prose mentions candidates):\n{seed}"
+        );
+        assert!(
+            seed.contains("if (i < arrayLength(&input)) { idxs[t] = i; }"),
+            "{seed}"
+        );
+
+        assert!(fold.contains("@binding(1) var<storage, read>       cand:   array<u32>;"));
+        assert!(fold.contains("@binding(2) var<storage, read_write> output: array<u32>;"));
+        assert!(
+            fold.contains("if (i < arrayLength(&cand)) { idxs[t] = cand[i]; }"),
+            "{fold}"
+        );
+        // Both still read values from `input`, which is what keeps the two
+        // levels comparing the same numbers.
+        assert!(fold.contains("let a = input[ia];"), "{fold}");
+
+        // Everything after the seed is shared, verbatim.
+        for shared in [
+            "var<workgroup> idxs: array<u32, 64>;",
+            "if (takes_b(idxs[t], idxs[t + stride])) { idxs[t] = idxs[t + stride]; }",
+            "if (t == 0u) { output[wid.x] = idxs[0]; }",
+        ] {
+            assert!(seed.contains(shared), "seed missing `{shared}`");
+            assert!(fold.contains(shared), "fold missing `{shared}`");
+        }
+    }
+
+    #[test]
+    fn arg_kernel_refuses_non_f32_and_non_arg_ops() {
+        for elem in ["i32", "u32", "f64"] {
+            let err = emit_arg_kernel(ReduceOp::Argmin, elem, false).unwrap_err();
+            assert!(format!("{err:?}").contains("f32-only"), "{elem}");
+        }
+        // The value reductions have their own emitters; routing one here would
+        // produce an index where a value was expected.
+        for op in [ReduceOp::Sum, ReduceOp::Min, ReduceOp::Mean] {
+            let err = emit_arg_kernel(op, "f32", false).unwrap_err();
+            assert!(
+                format!("{err:?}").contains("not an arg reduction"),
+                "{op:?}"
+            );
         }
     }
 

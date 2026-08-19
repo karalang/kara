@@ -10172,6 +10172,8 @@ let lo  = gpu.min(buf)        // Option[f32] — None iff the buffer is empty
 let hi  = gpu.max(buf)        // Option[f32]
 let mu  = gpu.mean(buf)       // Option[f32]
 let d   = gpu.dot(a, b)       // f32 — traps if the lengths differ
+let i   = gpu.argmin(buf)     // Option[i64] — the INDEX of the minimum
+let j   = gpu.argmax(buf)     // Option[i64]
 ```
 
 The fallible ones are fallible because the answer genuinely does not exist, not because the implementation is awkward: an empty buffer has no minimum, no maximum and no mean. Returning the shader's padding identity (`+inf`) or `0.0 / 0` (`NaN`) would be a plausible-looking value that propagates silently through everything downstream, which is the failure mode this whole family is built to avoid. `sum`/`prod`/`dot` are total — the empty case is the identity (`0`, `1`, `0`) — so they return a bare `f32`.
@@ -10189,7 +10191,11 @@ Two consequences worth stating plainly:
 
 Two operations are defined in terms of `sum` rather than having a tree of their own, and both equalities are exact:
 
-- `gpu.dot(a, b)` is `gpu.sum(a * b)`, to the last bit. It is a separate operation only because the product is formed **on load** inside the reduction's first level, so no `n`-element intermediate is ever written — a device-traffic win, not a semantic difference.
+- `gpu.argmin` / `gpu.argmax` report an **index**, so they yield `Option[i64]` whatever the element type. Ties take the **first** occurrence, matching `Stats.argmin`. Their tree carries (value, index) pairs and its combine is lexicographic — strictly better value wins, exact tie goes to the smaller index — which is a semilattice, so like `min`/`max` they are grouping-independent.
+
+They diverge from `Stats.argmin` on **NaN**, and necessarily. `Stats.argmin` seeds its running best with element 0 and displaces it only on a strict comparison, so a leading NaN is never displaced: `Stats.argmin([NaN, 3.0, 1.0])` is `0` while `Stats.argmin([3.0, 1.0, NaN])` is `1`. That position-dependence cannot survive a halving tree, where the grouping decides the positions. In `gpu.argmin` a NaN always loses, so the first buffer answers `2`; an all-NaN buffer answers `0`, since nothing ever wins and the leftmost survives.
+
+`gpu.dot(a, b)` is `gpu.sum(a * b)`, to the last bit. It is a separate operation only because the product is formed **on load** inside the reduction's first level, so no `n`-element intermediate is ever written — a device-traffic win, not a semantic difference.
 - `gpu.mean(buf)` is `gpu.sum(buf) / n`, to the last bit: the specified tree sum, divided by the count, in `f32`, **once**. Not compensated, not accumulated wider. So `mean` inherits the sum's grouping rather than having one of its own, and adds exactly one further rounding — that is the whole of its precision story. The division happens on the host after the fold converges, never in the shader: a shader cannot know it is running the last level of the tree, so a division inside it would divide once per level.
 
 ##### Integer reductions overflow-check, and the tree order decides when

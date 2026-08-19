@@ -154,6 +154,103 @@ fn one_workgroup_i32(
     Ok(scratch[0])
 }
 
+/// The index of the extremum a GPU `argmin`/`argmax` reports — **the
+/// definition of what `gpu.argmin(buf)` MEANS** (B-2026-08-19-13). `None` iff
+/// the buffer is empty.
+///
+/// A different shape from every other reduction here: the tree carries
+/// (value, index) PAIRS, because an index alone cannot be compared and a value
+/// alone cannot be reported. The combine is a lexicographic order — strictly
+/// better value wins; on an exact tie the SMALLER index wins — which makes it
+/// a proper semilattice and therefore tree-safe, so the answer is the same
+/// whatever the grouping. That is what lets `argmin` promise
+/// grouping-independence where `sum` cannot.
+///
+/// **NaN never wins, from either side.** This DIFFERS from `Stats.argmin`, and
+/// deliberately. That one seeds its running best with element 0 and displaces
+/// it only on a strict comparison, so a leading NaN is never displaced:
+/// `Stats.argmin([NaN, 3.0, 1.0])` is `0` while `Stats.argmin([3.0, 1.0,
+/// NaN])` is `1` — the answer depends on where the NaN sits. Position-
+/// dependence is exactly what a halving tree cannot reproduce, since the
+/// grouping decides the positions. Making NaN always lose restores
+/// associativity, at the cost of disagreeing with the CPU function on inputs
+/// containing NaN. Same trade, same reason, as `gpu.min`.
+///
+/// An ALL-NaN buffer reports index 0: no element ever wins, so the leftmost
+/// survives. Padding does not interfere — a padded slot is marked by the
+/// [`ARG_INVALID`] index sentinel rather than by a sentinel VALUE, so it can
+/// never beat a real element regardless of what is in its value slot. (A value
+/// sentinel would have had to be NaN to lose reliably, and NaN preservation is
+/// optional in Vulkan — the index sentinel needs no such guarantee.)
+pub fn tree_arg_f32(xs: &[f32], want_max: bool) -> Option<i64> {
+    if xs.is_empty() {
+        return None;
+    }
+    // Level 0: every element is its own candidate.
+    let mut level: Vec<u32> = (0..xs.len() as u32).collect();
+    while level.len() > 1 {
+        level = level
+            .chunks(GPU_REDUCE_WIDTH)
+            .map(|chunk| one_workgroup_arg(chunk, xs, want_max))
+            .collect();
+    }
+    Some(level[0] as i64)
+}
+
+/// The index sentinel marking a padded (non-existent) slot in an arg tree.
+///
+/// A slot is invalid iff its INDEX is this, never because of its value. That
+/// keeps the padding rule independent of float semantics: a value-based
+/// sentinel would have to be NaN to lose against everything, and NaN
+/// preservation is an OPTIONAL Vulkan feature, so a device that flushed it
+/// would silently let padding win.
+pub const ARG_INVALID: u32 = u32::MAX;
+
+/// One workgroup's halving tree over (value, index) pairs.
+fn one_workgroup_arg(candidates: &[u32], xs: &[f32], want_max: bool) -> u32 {
+    debug_assert!(candidates.len() <= GPU_REDUCE_WIDTH);
+    let mut idxs = [ARG_INVALID; GPU_REDUCE_WIDTH];
+    for (slot, &c) in idxs.iter_mut().zip(candidates) {
+        *slot = c;
+    }
+    let mut stride = GPU_REDUCE_WIDTH / 2;
+    while stride > 0 {
+        for t in 0..stride {
+            let (ia, ib) = (idxs[t], idxs[t + stride]);
+            if arg_takes_b(ia, ib, xs, want_max) {
+                idxs[t] = ib;
+            }
+        }
+        stride /= 2;
+    }
+    idxs[0]
+}
+
+/// Does the right-hand candidate beat the left-hand one? The whole combine
+/// rule in one place, so the shader has exactly one thing to reproduce.
+fn arg_takes_b(ia: u32, ib: u32, xs: &[f32], want_max: bool) -> bool {
+    if ib == ARG_INVALID {
+        return false;
+    }
+    if ia == ARG_INVALID {
+        return true;
+    }
+    let (a, b) = (xs[ia as usize], xs[ib as usize]);
+    if a.is_nan() {
+        // A NaN loses to anything real, and ties with another NaN — where the
+        // smaller index (the left one) survives.
+        return !b.is_nan();
+    }
+    if b.is_nan() {
+        return false;
+    }
+    let strictly_better = if want_max { b > a } else { b < a };
+    // Exact tie: the SMALLER index wins, matching `Stats.argmin`'s
+    // first-occurrence rule. `ib < ia` is possible because the fold levels
+    // carry absolute indices that are not in scratch order.
+    strictly_better || (b == a && ib < ia)
+}
+
 /// The `u32` sibling of [`tree_reduce_i32`] — same tree, same trap rule, same
 /// two-layer result (B-2026-08-19-13).
 ///
@@ -702,6 +799,84 @@ mod tests {
             Some(Err(IntFoldOverflow))
         );
         assert_eq!(left_fold(&b), Some(0), "left fold must survive {b:?}");
+    }
+
+    #[test]
+    fn tree_arg_takes_the_first_occurrence_on_a_tie() {
+        // Matches `Stats.argmin`'s first-occurrence rule, and that rule is
+        // what makes the combine a proper order rather than a coin flip: a
+        // tie broken by "whichever side the grouping happened to put first"
+        // would give different answers at different buffer lengths.
+        assert_eq!(tree_arg_f32(&[3.0, 1.0, 1.0, 5.0], false), Some(1));
+        assert_eq!(tree_arg_f32(&[3.0, 5.0, 5.0], true), Some(1));
+        assert_eq!(tree_arg_f32(&[7.0], false), Some(0));
+        assert_eq!(tree_arg_f32(&[], false), None);
+        assert_eq!(tree_arg_f32(&[], true), None);
+    }
+
+    #[test]
+    fn tree_arg_is_grouping_independent() {
+        // The property the lexicographic combine buys, and the one `sum`
+        // cannot have: the same answer at every length, across one workgroup,
+        // a partial chunk, and two full fold levels. A tie-break that
+        // depended on scratch position rather than absolute index would drift
+        // here.
+        for n in [1usize, 63, 64, 65, 128, 4096] {
+            let xs: Vec<f32> = (0..n).map(|i| ((i * 37) % 101) as f32).collect();
+            let want_min = xs
+                .iter()
+                .enumerate()
+                .min_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+                .map(|(i, _)| i as i64);
+            let want_max = xs
+                .iter()
+                .enumerate()
+                .max_by(|(ia, a), (ib, b)| a.partial_cmp(b).unwrap().then(ib.cmp(ia)))
+                .map(|(i, _)| i as i64);
+            assert_eq!(tree_arg_f32(&xs, false), want_min, "argmin n={n}");
+            assert_eq!(tree_arg_f32(&xs, true), want_max, "argmax n={n}");
+        }
+    }
+
+    #[test]
+    fn tree_arg_makes_nan_always_lose() {
+        // DIFFERS FROM `Stats.argmin`, deliberately. That one seeds its best
+        // with element 0 and displaces only on a strict comparison, so a
+        // LEADING NaN is never displaced — `Stats.argmin([NaN, 3.0, 1.0])` is
+        // 0 while `[3.0, 1.0, NaN]` is 1. Position-dependence cannot survive a
+        // halving tree, where the grouping decides the positions. Making NaN
+        // always lose restores associativity.
+        assert_eq!(tree_arg_f32(&[f32::NAN, 3.0, 1.0], false), Some(2));
+        assert_eq!(tree_arg_f32(&[3.0, 1.0, f32::NAN], false), Some(1));
+        assert_eq!(tree_arg_f32(&[f32::NAN, 3.0, 1.0], true), Some(1));
+
+        // All-NaN: nothing ever wins, so the leftmost survives.
+        assert_eq!(tree_arg_f32(&[f32::NAN; 3], false), Some(0));
+        assert_eq!(tree_arg_f32(&[f32::NAN; 3], true), Some(0));
+
+        // And a NaN past the first workgroup still loses — the padding rule
+        // and the NaN rule are independent.
+        let mut xs = vec![5.0f32; 200];
+        xs[70] = f32::NAN;
+        xs[150] = -1.0;
+        assert_eq!(tree_arg_f32(&xs, false), Some(150));
+    }
+
+    #[test]
+    fn tree_arg_padding_never_wins() {
+        // A padded slot is marked by the INDEX sentinel, not by a value, so it
+        // loses regardless of what a device leaves in the value slot. 65
+        // elements is one full workgroup plus a chunk of one, so the second
+        // chunk is 63/64 padding — if padding could win, the answer would come
+        // back as the sentinel rather than an index.
+        let mut xs = vec![5.0f32; 65];
+        xs[64] = -3.0;
+        assert_eq!(tree_arg_f32(&xs, false), Some(64));
+        let mut xs = vec![5.0f32; 65];
+        xs[64] = 9.0;
+        assert_eq!(tree_arg_f32(&xs, true), Some(64));
+        // The sentinel is never a legal answer.
+        assert_ne!(tree_arg_f32(&xs, true), Some(ARG_INVALID as i64));
     }
 
     #[test]

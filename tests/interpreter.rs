@@ -34752,6 +34752,74 @@ fn gpu_sum_and_prod_compute_the_obvious_small_cases() {
 }
 
 #[test]
+fn gpu_argmin_argmax_report_indices_with_first_occurrence_ties() {
+    let out = run_no_errors(
+        "fn main() {\n\
+        \x20   let v: Vec[f32] = [3.0, 1.0, 1.0, 5.0];\n\
+        \x20   let m = gpu.argmin(v);\n\
+        \x20   match m {\n\
+        \x20       Some(x) => println(f\"{x}\"),\n\
+        \x20       None => println(\"empty\"),\n\
+        \x20   }\n\
+        }",
+    );
+    assert_eq!(out.trim(), "1", "ties take the FIRST occurrence");
+
+    let out = run_no_errors(
+        "fn main() {\n\
+        \x20   let v: Vec[f32] = [];\n\
+        \x20   let m = gpu.argmax(v);\n\
+        \x20   match m {\n\
+        \x20       Some(x) => println(f\"{x}\"),\n\
+        \x20       None => println(\"empty\"),\n\
+        \x20   }\n\
+        }",
+    );
+    assert_eq!(out.trim(), "empty");
+
+    // Multi-workgroup: the winner lives past the first chunk, so the fold
+    // level has to re-read its value through the surviving candidate index.
+    let out = run_no_errors(
+        "fn main() {\n\
+        \x20   let mut v: Vec[f32] = [];\n\
+        \x20   for i in 0..200 { v.push(50.0) }\n\
+        \x20   v[137] = -1.0;\n\
+        \x20   let m = gpu.argmin(v);\n\
+        \x20   match m {\n\
+        \x20       Some(x) => println(f\"{x}\"),\n\
+        \x20       None => println(\"empty\"),\n\
+        \x20   }\n\
+        }",
+    );
+    assert_eq!(out.trim(), "137");
+}
+
+#[test]
+fn gpu_argmin_makes_nan_lose_unlike_stats_argmin() {
+    // A DELIBERATE difference from `Stats.argmin`, which is position-dependent
+    // on NaN — it seeds its best with element 0 and displaces only on a strict
+    // comparison, so `Stats.argmin([NaN, 3.0, 1.0])` is 0 while
+    // `[3.0, 1.0, NaN]` is 1. A halving tree cannot reproduce that, because
+    // the grouping decides the positions. Making NaN always lose restores
+    // associativity; `gpu.argmin` answers 2 for the first buffer.
+    for (buf, want) in [("[nan, 3.0, 1.0]", "2"), ("[3.0, 1.0, nan]", "1")] {
+        let out = run_no_errors(&format!(
+            "fn main() {{\n\
+            \x20   let zero: f32 = 0.0;\n\
+            \x20   let nan: f32 = zero / zero;\n\
+            \x20   let v: Vec[f32] = {buf};\n\
+            \x20   let m = gpu.argmin(v);\n\
+            \x20   match m {{\n\
+            \x20       Some(x) => println(f\"{{x}}\"),\n\
+            \x20       None => println(\"empty\"),\n\
+            \x20   }}\n\
+            }}"
+        ));
+        assert_eq!(out.trim(), want, "gpu.argmin {buf}");
+    }
+}
+
+#[test]
 fn gpu_u32_reductions_use_the_unsigned_rules_throughout() {
     // Above 2^31 the unsigned reading differs from the signed one at every
     // step: `4294967295` is `-1` as i32, so a signed compare answers max/min

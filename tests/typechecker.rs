@@ -37726,6 +37726,51 @@ fn gpu_sum_takes_exactly_one_buffer() {
 }
 
 #[test]
+fn gpu_arg_reductions_return_an_index_not_an_element() {
+    // `Option[i64]` whatever the element type — an index is not an element,
+    // and `Stats.argmin` says the same. Not `Option[f32]`, which is the shape
+    // `gpu.min` has.
+    typecheck_ok(
+        "fn main() {\n\
+        \x20   let b: Vec[f32] = [1.0, 2.0];\n\
+        \x20   let lo: Option[i64] = gpu.argmin(b);\n\
+        \x20   let hi: Option[i64] = gpu.argmax(b);\n\
+        }",
+    );
+    let errs = typecheck_errors(
+        "fn main() { let b: Vec[f32] = [1.0]; let m: Option[f32] = gpu.argmin(b); }",
+    );
+    assert!(
+        !errs.is_empty(),
+        "`gpu.argmin` yields an index, not a value"
+    );
+}
+
+#[test]
+fn gpu_arg_reductions_refuse_non_f32_and_wrong_arity() {
+    for (src, needle) in [
+        (
+            "fn main() { let b: Vec[i32] = [1, 2]; let m = gpu.argmin(b); }",
+            "arg reductions are f32-only",
+        ),
+        (
+            "fn main() { let b: Vec[f32] = [1.0]; let m = gpu.argmax(b, b); }",
+            "E_GPU_REDUCE_ARITY",
+        ),
+        (
+            "fn main() { let m = gpu.argmin(1.0); }",
+            "E_GPU_REDUCE_BUFFER",
+        ),
+    ] {
+        let errs = typecheck_errors(src);
+        assert!(
+            errs.iter().any(|e| e.to_string().contains(needle)),
+            "expected `{needle}` for {src}, got: {errs:?}"
+        );
+    }
+}
+
+#[test]
 fn gpu_integer_reductions_are_accepted_for_the_ops_whose_overflow_rule_is_settled() {
     // `sum`/`min`/`max` over `Vec[i32]` are legal now that integer reductions
     // trap (design.md § Integer reductions overflow-check). Fallibility is a
