@@ -88,6 +88,14 @@ pub const DISPATCH_X_SPAN: u32 = 65535 * WORKGROUP_SIZE;
 /// main` entry point — exactly the layout the runtime `dispatch_f32_map`
 /// expects.
 pub fn emit_kernel(func: &Function, helpers: &[&Function]) -> Result<String, WgslError> {
+    // Before anything is emitted: refuse trapping integer arithmetic, which
+    // WGSL cannot express (B-2026-08-19-1). Runs first so the diagnostic names
+    // the semantics problem rather than whatever the emitter would have
+    // complained about downstream.
+    reject_trapping_int_arith(func)?;
+    for h in helpers {
+        reject_trapping_int_arith(h)?;
+    }
     let param = kernel_param(func)?;
     let param_name = param.name().ok_or_else(|| {
         WgslError::UnsupportedSignature(
@@ -887,6 +895,19 @@ fn lower_expr(
             args,
             ..
         } => {
+            // Wrapping integer arithmetic lowers to the BARE INFIX OPERATOR —
+            // which is exactly what WGSL integer `+`/`-`/`*` already mean
+            // (overflow wraps; there is no trap to emit). B-2026-08-19-1: this
+            // is the spelling that lets a kernel say it means wraparound, now
+            // that bare `+` on integers is rejected here. The two directions
+            // matter together: without this arm the honest spelling would be
+            // refused while the silent one was accepted, which is the state the
+            // bug describes.
+            if let Some(op) = wrapping_infix_wgsl(method, args.len()) {
+                let lhs = lower_expr(object, resolve, helpers)?;
+                let rhs = lower_expr(&args[0].value, resolve, helpers)?;
+                return Ok(format!("({lhs} {op} {rhs})"));
+            }
             let builtin = math_intrinsic_wgsl(method, args.len()).ok_or_else(|| {
                 WgslError::UnsupportedBody(format!(
                     "method `.{method}()` is not supported in a GPU kernel body"
@@ -941,6 +962,275 @@ fn binop_str(op: &BinOp) -> Result<&'static str, WgslError> {
              (`and` / `or`) operators are supported in a GPU kernel"
                 .to_string(),
         )),
+    }
+}
+
+/// WGSL infix operator for a `wrapping_{add,sub,mul}` method call, or `None`
+/// for any other method.
+///
+/// WGSL integer arithmetic IS two's-complement wrapping — the spec defines
+/// overflow that way and offers no trapping form — so the wrapping family needs
+/// no helper function, just the operator. That equivalence is the whole reason
+/// this lowering is sound rather than approximate.
+fn wrapping_infix_wgsl(method: &str, argc: usize) -> Option<&'static str> {
+    if argc != 1 {
+        return None;
+    }
+    match method {
+        "wrapping_add" => Some("+"),
+        "wrapping_sub" => Some("-"),
+        "wrapping_mul" => Some("*"),
+        _ => None,
+    }
+}
+
+// ── Trapping integer arithmetic is not expressible on a GPU (B-2026-08-19-1) ──
+
+/// What a kernel expression evaluates to, as far as this pass can tell.
+///
+/// Three-valued on purpose: `Unknown` means "do not judge", and the pass only
+/// ever REJECTS on `Int`, so an incomplete judgment costs coverage rather than
+/// producing a false rejection.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum KTy {
+    Int,
+    Float,
+    Unknown,
+}
+
+/// Reject bare `+ - * / %` on integer operands in a `#[gpu]` body.
+///
+/// WGSL defines integer overflow as WRAPPING and division by zero as returning
+/// an implementation-defined value; there is no trapping form to emit. Kāra's
+/// `app`/`lib` profiles promise the opposite (design.md § Arithmetic Overflow:
+/// integer overflow traps), so lowering bare `+` silently changed a program's
+/// meaning on the device — measured, `x + 1` at `i32::MAX` traps under
+/// `--interp` and yields `-2147483648` on the GPU, and `100 / 0` yields `100`.
+///
+/// design.md is explicit that the overflow escape hatch must stay "narrow and
+/// local … never a project-wide `overflow-checks=off` switch, which would strip
+/// the guarantee invisibly". `#[gpu]` was exactly such an invisible switch. So
+/// the fix is not to weaken the guarantee but to make the kernel NAME the
+/// wrapping intent: `x.wrapping_add(1)`, which lowers to the same WGSL infix
+/// operator and is what the device does anyway.
+///
+/// Float arithmetic is untouched — IEEE ops do not trap, so f32 kernels (which
+/// is every shipped GPU example) are unaffected.
+fn reject_trapping_int_arith(func: &Function) -> Result<(), WgslError> {
+    let mut env: Vec<(&str, KTy)> = func
+        .params
+        .iter()
+        .filter_map(|p| p.name().map(|n| (n, kty_of_type(&p.ty))))
+        .collect();
+    check_block(&func.body, &mut env)
+}
+
+fn kty_of_type(ty: &TypeExpr) -> KTy {
+    match scalar_name(ty).as_deref() {
+        Some("i32" | "u32" | "i64" | "u64" | "i8" | "u8" | "i16" | "u16" | "usize") => KTy::Int,
+        Some("f32" | "f64") => KTy::Float,
+        _ => KTy::Unknown,
+    }
+}
+
+fn check_block<'a>(b: &'a Block, env: &mut Vec<(&'a str, KTy)>) -> Result<(), WgslError> {
+    let depth = env.len();
+    for st in &b.stmts {
+        match &st.kind {
+            StmtKind::Let {
+                pattern, ty, value, ..
+            } => {
+                check_expr(value, env)?;
+                if let PatternKind::Binding(name) = &pattern.kind {
+                    let t = match ty {
+                        Some(t) => kty_of_type(t),
+                        None => kty_of(value, env),
+                    };
+                    env.push((name.as_str(), t));
+                }
+            }
+            StmtKind::Assign { target, value } | StmtKind::CompoundAssign { target, value, .. } => {
+                check_expr(target, env)?;
+                check_expr(value, env)?;
+            }
+            StmtKind::Expr(e) => check_expr(e, env)?,
+            _ => {}
+        }
+    }
+    if let Some(t) = &b.final_expr {
+        check_expr(t, env)?;
+    }
+    env.truncate(depth);
+    Ok(())
+}
+
+fn check_expr<'a>(e: &'a Expr, env: &mut Vec<(&'a str, KTy)>) -> Result<(), WgslError> {
+    match &e.kind {
+        ExprKind::Binary { op, left, right } => {
+            check_expr(left, env)?;
+            check_expr(right, env)?;
+            let trapping = matches!(
+                op,
+                BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod
+            );
+            if trapping && (kty_of(left, env) == KTy::Int || kty_of(right, env) == KTy::Int) {
+                let (name, spelled) = match op {
+                    BinOp::Add => ("+", "wrapping_add"),
+                    BinOp::Sub => ("-", "wrapping_sub"),
+                    BinOp::Mul => ("*", "wrapping_mul"),
+                    BinOp::Div => ("/", ""),
+                    _ => ("%", ""),
+                };
+                return Err(WgslError::UnsupportedBody(if spelled.is_empty() {
+                    format!(
+                        "integer `{name}` is not allowed in a GPU kernel — Kāra traps on division \
+                         by zero, and WGSL has no trapping form (it returns an \
+                         implementation-defined value instead), so the same expression would mean \
+                         different things on CPU and GPU. Guard the divisor in the kernel, or keep \
+                         the division on the host."
+                    )
+                } else {
+                    format!(
+                        "integer `{name}` is not allowed in a GPU kernel — Kāra traps on overflow \
+                         and WGSL wraps, so the same expression would mean different things on CPU \
+                         and GPU. Write `a.{spelled}(b)` to say you mean wraparound (it lowers to \
+                         the same WGSL `{name}`), or use f32."
+                    )
+                }));
+            }
+            Ok(())
+        }
+        ExprKind::Unary { operand, .. } => check_expr(operand, env),
+        ExprKind::MethodCall { object, args, .. } => {
+            check_expr(object, env)?;
+            for a in args {
+                check_expr(&a.value, env)?;
+            }
+            Ok(())
+        }
+        ExprKind::Call { args, .. } => {
+            for a in args {
+                check_expr(&a.value, env)?;
+            }
+            Ok(())
+        }
+        ExprKind::Cast { expr, .. } => check_expr(expr, env),
+        ExprKind::Index { object, index } => {
+            check_expr(object, env)?;
+            check_expr(index, env)
+        }
+        ExprKind::FieldAccess { object, .. } => check_expr(object, env),
+        ExprKind::If {
+            condition,
+            then_block,
+            else_branch,
+        } => {
+            check_expr(condition, env)?;
+            check_block(then_block, env)?;
+            match else_branch {
+                Some(b) => check_expr(b, env),
+                None => Ok(()),
+            }
+        }
+        ExprKind::Block(b) => check_block(b, env),
+        ExprKind::While {
+            condition, body, ..
+        } => {
+            check_expr(condition, env)?;
+            check_block(body, env)
+        }
+        ExprKind::For { iterable, body, .. } => {
+            check_expr(iterable, env)?;
+            check_block(body, env)
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            check_expr(scrutinee, env)?;
+            for arm in arms {
+                check_expr(&arm.body, env)?;
+            }
+            Ok(())
+        }
+        ExprKind::Range { start, end, .. } => {
+            if let Some(s) = start {
+                check_expr(s, env)?;
+            }
+            if let Some(en) = end {
+                check_expr(en, env)?;
+            }
+            Ok(())
+        }
+        ExprKind::Return(Some(inner)) => check_expr(inner, env),
+        _ => Ok(()),
+    }
+}
+
+/// Best-effort type of a kernel expression. Only ever used to decide whether an
+/// arithmetic operand is an integer, so `Unknown` is always the safe answer.
+fn kty_of(e: &Expr, env: &[(&str, KTy)]) -> KTy {
+    match &e.kind {
+        ExprKind::Integer(..) => KTy::Int,
+        ExprKind::Float(..) => KTy::Float,
+        ExprKind::Identifier(n) => env
+            .iter()
+            .rev()
+            .find(|(k, _)| k == n)
+            .map(|(_, t)| *t)
+            .unwrap_or(KTy::Unknown),
+        ExprKind::Binary { op, left, right } => {
+            if matches!(
+                op,
+                BinOp::Eq
+                    | BinOp::NotEq
+                    | BinOp::Lt
+                    | BinOp::LtEq
+                    | BinOp::Gt
+                    | BinOp::GtEq
+                    | BinOp::And
+                    | BinOp::Or
+            ) {
+                return KTy::Unknown; // bool
+            }
+            match kty_of(left, env) {
+                KTy::Unknown => kty_of(right, env),
+                t => t,
+            }
+        }
+        ExprKind::Unary { operand, .. } => kty_of(operand, env),
+        ExprKind::Cast { ty, .. } => kty_of_type(ty),
+        // A math intrinsic (`sqrt`, `abs`, …) is float-valued; `wrapping_*`
+        // takes the receiver's type. Anything else is not judged.
+        ExprKind::MethodCall { object, method, .. } => {
+            if wrapping_infix_wgsl(method, 1).is_some() {
+                kty_of(object, env)
+            } else if math_intrinsic_wgsl(method, 1).is_some()
+                || math_intrinsic_wgsl(method, 2).is_some()
+            {
+                KTy::Float
+            } else {
+                KTy::Unknown
+            }
+        }
+        ExprKind::If {
+            then_block,
+            else_branch,
+            ..
+        } => {
+            if let Some(t) = &then_block.final_expr {
+                let t = kty_of(t, env);
+                if t != KTy::Unknown {
+                    return t;
+                }
+            }
+            match else_branch {
+                Some(b) => kty_of(b, env),
+                None => KTy::Unknown,
+            }
+        }
+        ExprKind::Block(b) => match &b.final_expr {
+            Some(t) => kty_of(t, env),
+            None => KTy::Unknown,
+        },
+        _ => KTy::Unknown,
     }
 }
 
@@ -2683,7 +2973,7 @@ mod tests {
     fn lowers_i32_kernel_over_i32_array() {
         // Integer scalars are WGSL-native (4-byte) — `array<i32>`, integer
         // literal preserved.
-        let func = parse_kernel("#[gpu]\nfn k(x: i32) -> i32 { x * 2 }\n");
+        let func = parse_kernel("#[gpu]\nfn k(x: i32) -> i32 { x.wrapping_mul(2) }\n");
         let wgsl = emit_kernel(&func, &[]).unwrap();
         assert!(wgsl.contains("input:  array<i32>;"), "{wgsl}");
         assert!(wgsl.contains("output: array<i32>;"), "{wgsl}");
@@ -2692,7 +2982,7 @@ mod tests {
 
     #[test]
     fn lowers_u32_kernel_over_u32_array() {
-        let func = parse_kernel("#[gpu]\nfn k(x: u32) -> u32 { x + 1 }\n");
+        let func = parse_kernel("#[gpu]\nfn k(x: u32) -> u32 { x.wrapping_add(1) }\n");
         let wgsl = emit_kernel(&func, &[]).unwrap();
         assert!(wgsl.contains("input:  array<u32>;"), "{wgsl}");
         assert!(wgsl.contains("output[i] = (input[i] + 1);"), "{wgsl}");
@@ -3199,7 +3489,7 @@ mod tests {
         let func = parse_kernel(
             "#[gpu]\nfn poly(x: f32) -> f32 {\n    let mut acc: f32 = 0.0;\n    \
              let mut n: i32 = 0;\n    while n < 4 {\n        acc = acc + x;\n        \
-             n = n + 1;\n    }\n    acc * 2.0\n}",
+             n = n.wrapping_add(1);\n    }\n    acc * 2.0\n}",
         );
         let wgsl = emit_kernel(&func, &[]).unwrap();
         assert!(wgsl.contains("var acc = 0.0;"), "{wgsl}");
@@ -3218,7 +3508,7 @@ mod tests {
         let func = parse_kernel(
             "#[gpu]\nfn poly(x: f32) -> f32 {\n    let mut acc: f32 = 0.0;\n    \
              let mut i: i32 = 0;\n    while i < 4 {\n        acc = acc + x;\n        \
-             i = i + 1;\n    }\n    acc\n}",
+             i = i.wrapping_add(1);\n    }\n    acc\n}",
         );
         let wgsl = emit_kernel(&func, &[]).unwrap();
         assert!(wgsl.contains("var i_k = 0;"), "{wgsl}");
@@ -3313,7 +3603,7 @@ mod tests {
             "#[gpu]\nfn poly(x: f32) -> f32 {\n    let mut acc: f32 = 0.0;\n    \
              let mut n: i32 = 0;\n    while n < 3 {\n        \
              if x > 2.0 {\n            acc = acc + x;\n        } else {\n            \
-             acc = acc - 1.0;\n        }\n        n = n + 1;\n    }\n    acc\n}",
+             acc = acc - 1.0;\n        }\n        n = n.wrapping_add(1);\n    }\n    acc\n}",
         );
         let wgsl = emit_kernel(&func, &[]).unwrap();
         assert!(wgsl.contains("if ((input[i] > 2.0)) {"), "{wgsl}");
@@ -3463,6 +3753,84 @@ mod tests {
         assert!(wgsl.contains("y = input[i];"), "{wgsl}");
     }
 
+    // ── Trapping integer arithmetic (B-2026-08-19-1) ────────────────────
+
+    #[test]
+    fn scalar_kernel_rejects_bare_integer_arithmetic() {
+        // The bug: this compiled, and silently WRAPPED on the device while
+        // trapping on CPU. Each operator names its own wrapping spelling.
+        for (body, op, spelled) in [
+            ("x + 1", "+", "wrapping_add"),
+            ("x - 1", "-", "wrapping_sub"),
+            ("x * 2", "*", "wrapping_mul"),
+        ] {
+            let func = parse_kernel(&format!("#[gpu]\nfn k(x: i32) -> i32 {{ {body} }}"));
+            let err = emit_kernel(&func, &[]).unwrap_err();
+            let msg = format!("{err:?}");
+            assert!(msg.contains(&format!("integer `{op}`")), "{msg}");
+            assert!(msg.contains(spelled), "{msg}");
+        }
+    }
+
+    #[test]
+    fn scalar_kernel_rejects_integer_division_without_offering_a_wrapping_form() {
+        // Division is NOT the same case: there is no `wrapping_div` that means
+        // what Kāra's `/` means, because the divergence is div-by-zero rather
+        // than overflow. The diagnostic must not invent a spelling.
+        let func = parse_kernel("#[gpu]\nfn k(x: i32) -> i32 { 100 / x }");
+        let err = emit_kernel(&func, &[]).unwrap_err();
+        let msg = format!("{err:?}");
+        assert!(msg.contains("division by zero"), "{msg}");
+        assert!(!msg.contains("wrapping_div"), "{msg}");
+    }
+
+    #[test]
+    fn scalar_kernel_accepts_wrapping_and_emits_the_same_infix() {
+        // The escape hatch lowers to EXACTLY the operator the bare form would
+        // have emitted — which is the proof that naming the intent costs
+        // nothing on the device, and that WGSL's `+` was always the wrapping
+        // one.
+        let bare = parse_kernel("#[gpu]\nfn k(x: f32) -> f32 { x + 1.0 }");
+        let bare_wgsl = emit_kernel(&bare, &[]).unwrap();
+        assert!(
+            bare_wgsl.contains("output[i] = (input[i] + 1.0);"),
+            "{bare_wgsl}"
+        );
+
+        let wrapped = parse_kernel("#[gpu]\nfn k(x: i32) -> i32 { x.wrapping_add(1) }");
+        let wrapped_wgsl = emit_kernel(&wrapped, &[]).unwrap();
+        assert!(
+            wrapped_wgsl.contains("output[i] = (input[i] + 1);"),
+            "{wrapped_wgsl}"
+        );
+    }
+
+    #[test]
+    fn scalar_kernel_leaves_float_arithmetic_alone() {
+        // f32 is every shipped GPU example, and IEEE ops do not trap — so the
+        // restriction must not touch them.
+        let func = parse_kernel(
+            "#[gpu]\nfn k(x: f32) -> f32 {\n    let y: f32 = x * 2.0 + 1.0;\n    y / 3.0\n}",
+        );
+        let wgsl = emit_kernel(&func, &[]).unwrap();
+        assert!(wgsl.contains("let y = ((input[i] * 2.0) + 1.0);"), "{wgsl}");
+    }
+
+    #[test]
+    fn scalar_kernel_for_range_counter_needs_no_wrapping_spelling() {
+        // The increment of a `for` counter is EMITTER-generated, not user
+        // arithmetic, so the idiomatic counted loop is unaffected. Only a
+        // `while` loop's hand-written `n = n + 1` has to name the intent —
+        // that asymmetry is the whole ergonomic cost of this rule, and it is
+        // worth pinning so a future change notices if `for` starts paying it.
+        let func = parse_kernel(
+            "#[gpu]\nfn k(x: f32) -> f32 {\n    let mut acc: f32 = 0.0;\n    \
+             for n in 0..4 { acc = acc + x; }\n    acc\n}",
+        );
+        let wgsl = emit_kernel(&func, &[]).unwrap();
+        assert!(wgsl.contains("for (var n = 0; n < 4; n = n + 1)"), "{wgsl}");
+    }
+
     #[test]
     fn scalar_kernel_body_rejection_message_lists_every_supported_form() {
         // The `_ =>` fallthrough message was written at increment 2 and went
@@ -3508,7 +3876,7 @@ mod tests {
         // Kāra's loop variable is immutable, even though WGSL needs a `var` to
         // carry the increment.
         let func = parse_kernel(
-            "#[gpu]\nfn poly(x: f32) -> f32 {\n    let mut acc: f32 = 0.0;\n    for n in 0..4 {\n        n = n + 1;\n    }\n    acc\n}",
+            "#[gpu]\nfn poly(x: f32) -> f32 {\n    let mut acc: f32 = 0.0;\n    for n in 0..4 {\n        n = n.wrapping_add(1);\n    }\n    acc\n}",
         );
         let err = emit_kernel(&func, &[]).unwrap_err();
         let msg = err.to_string();
@@ -3530,7 +3898,7 @@ mod tests {
     #[test]
     fn scalar_kernel_lowers_match_to_a_select_chain() {
         let func = parse_kernel(
-            "#[gpu]\nfn weight(x: i32) -> i32 {\n    let w: i32 = match x {\n        0 => 4,\n        1 | 2 => 2,\n        _ => 1,\n    };\n    w * 10\n}",
+            "#[gpu]\nfn weight(x: i32) -> i32 {\n    let w: i32 = match x {\n        0 => 4,\n        1 | 2 => 2,\n        _ => 1,\n    };\n    w.wrapping_mul(10)\n}",
         );
         let wgsl = emit_kernel(&func, &[]).unwrap();
         assert!(
@@ -3574,7 +3942,7 @@ mod tests {
     #[test]
     fn scalar_kernel_match_composes_inside_a_loop() {
         let func = parse_kernel(
-            "#[gpu]\nfn k(x: i32) -> i32 {\n    let mut acc: i32 = 0;\n    for n in 0..3 {\n        acc = acc + match x {\n            0 => 1,\n            _ => 2,\n        };\n    }\n    acc\n}",
+            "#[gpu]\nfn k(x: i32) -> i32 {\n    let mut acc: i32 = 0;\n    for n in 0..3 {\n        acc = acc.wrapping_add(match x {\n            0 => 1,\n            _ => 2,\n        });\n    }\n    acc\n}",
         );
         let wgsl = emit_kernel(&func, &[]).unwrap();
         assert!(
@@ -3635,7 +4003,7 @@ mod tests {
     fn scalar_kernel_rejects_a_while_body_that_produces_a_value() {
         let func = parse_kernel(
             "#[gpu]\nfn s(x: f32) -> f32 {\n    let mut n: i32 = 0;\n    \
-             while n < 2 {\n        n = n + 1;\n        x\n    }\n    x\n}",
+             while n < 2 {\n        n = n.wrapping_add(1);\n        x\n    }\n    x\n}",
         );
         let err = emit_kernel(&func, &[]).unwrap_err();
         let msg = err.to_string();

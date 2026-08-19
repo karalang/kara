@@ -56471,7 +56471,7 @@ fn weight(x: i32) -> i32 {
         1 | 2 => 2,
         _ => 1,
     };
-    w * 10
+    w.wrapping_mul(10)
 }
 
 fn main() {
@@ -56548,7 +56548,7 @@ fn poly(x: f32) -> f32 {
     let mut i: i32 = 0;
     while i < 4 {
         acc = acc + x;
-        i = i + 1;
+        i = i.wrapping_add(1);
     }
     acc * 2.0
 }

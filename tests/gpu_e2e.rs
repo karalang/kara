@@ -343,7 +343,7 @@ fn gpu_executes_while_loop_with_thread_index_shadowing_local() {
          fn k(x: f32) -> f32 {\n\
          \x20   let mut acc: f32 = 0.0;\n\
          \x20   let mut i: i32 = 0;\n\
-         \x20   while i < 3 { acc = acc + x; i = i + 1; }\n\
+         \x20   while i < 3 { acc = acc + x; i = i.wrapping_add(1); }\n\
          \x20   acc\n\
          }",
         "f32",
@@ -442,7 +442,7 @@ fn gpu_executes_statement_if_inside_a_loop() {
          \x20   let mut i: i32 = 0;\n\
          \x20   while i < 3 {\n\
          \x20       if x > 2.0 { acc = acc + x; } else { acc = acc - 1.0; }\n\
-         \x20       i = i + 1;\n\
+         \x20       i = i.wrapping_add(1);\n\
          \x20   }\n\
          \x20   acc\n\
          }",
@@ -610,4 +610,36 @@ fn probe_classifier_matches_only_the_absent_gpu_archive() {
     // And the two predicates are disjoint: nothing may satisfy both, or the
     // arm order in `gpu_probe` would silently decide the outcome.
     assert!(!is_no_adapter(real_driver_message));
+}
+
+// ── Wrapping integer arithmetic on the device (B-2026-08-19-1) ──────────────
+
+#[test]
+fn gpu_executes_wrapping_add_at_i32_boundary() {
+    // The whole point of the bug, executed: this exact program used to be
+    // written `x + 1`, which trapped under --interp and silently produced
+    // -2147483648 on the device. Bare `+` is now rejected; the named wrapping
+    // form is accepted AND agrees with the interpreter, so run == build holds
+    // at the boundary rather than only away from it.
+    //
+    // The first input is i32::MAX, so the fixture fails if either side stops
+    // wrapping — this is not a test that passes on well-behaved values.
+    assert_gpu_matches_interp(
+        "wrap_add",
+        "#[gpu]\nfn k(x: i32) -> i32 { x.wrapping_add(1) }",
+        "i32",
+        "2147483647, 1",
+        "-2147483648\n2",
+    );
+}
+
+#[test]
+fn gpu_executes_wrapping_mul_overflowing_i32() {
+    assert_gpu_matches_interp(
+        "wrap_mul",
+        "#[gpu]\nfn k(x: i32) -> i32 { x.wrapping_mul(x) }",
+        "i32",
+        "100000, 3",
+        "1410065408\n9",
+    );
 }

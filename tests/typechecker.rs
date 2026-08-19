@@ -5954,7 +5954,7 @@ fn an_immediately_invoked_closure_takes_its_param_types_from_the_call() {
 fn missing_mut_marker_carries_an_insertion_fix_it() {
     for (src, label) in [
         (
-            "fn bump(n: mut ref i64) { n = n + 1; }\n\
+            "fn bump(n: mut ref i64) { n = n.wrapping_add(1); }\n\
              fn main() { let c = 0; bump(c); println(c); }",
             "unlabeled",
         ),
@@ -5994,7 +5994,7 @@ fn missing_mut_marker_carries_an_insertion_fix_it() {
 #[test]
 fn invalid_mut_marker_keeps_its_deletion_fix_it() {
     let errors = typecheck_errors(
-        "fn bump(n: mut ref i64) { n = n + 1; }\n\
+        "fn bump(n: mut ref i64) { n = n.wrapping_add(1); }\n\
          fn outer(c: mut ref i64) { bump(mut c); }\n\
          fn main() { let mut c = 0; bump(mut c); println(c); }",
     );
@@ -14542,7 +14542,7 @@ fn test_string_chars_returns_iterator_char() {
         r#"fn f() -> i64 {
             let mut n = 0i64;
             for c in "abc".chars() {
-                if c == 'a' { n = n + 1; }
+                if c == 'a' { n = n.wrapping_add(1); }
             }
             n
         }"#,
@@ -14756,7 +14756,7 @@ fn test_string_bytes_returns_slice_u8() {
             let mut i = 0i64;
             while i < bs.len() {
                 let b: u8 = bs[i];
-                if b == ('b' as u32 as u8) { n = n + 1; }
+                if b == ('b' as u32 as u8) { n = n.wrapping_add(1); }
                 i = i + 1;
             }
             n
@@ -37375,7 +37375,7 @@ fn gpu_dispatch_rejects_unsupported_kernel_body() {
 fn gpu_dispatch_accepts_i32_and_u32_buffers() {
     typecheck_ok(
         "#[gpu]\n\
-         fn inc(x: i32) -> i32 { x + 1 }\n\
+         fn inc(x: i32) -> i32 { x.wrapping_add(1) }\n\
          fn main() {\n\
              let buf: Vec[i32] = [1, 2];\n\
              let out = gpu.dispatch(inc, buf);\n\
@@ -37383,7 +37383,7 @@ fn gpu_dispatch_accepts_i32_and_u32_buffers() {
     );
     typecheck_ok(
         "#[gpu]\n\
-         fn dbl(x: u32) -> u32 { x * 2 }\n\
+         fn dbl(x: u32) -> u32 { x.wrapping_mul(2) }\n\
          fn main() {\n\
              let buf: Vec[u32] = [1, 2];\n\
              let out = gpu.dispatch(dbl, buf);\n\
