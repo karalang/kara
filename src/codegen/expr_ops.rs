@@ -5782,6 +5782,39 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         let lv = lhs.into_int_value();
         let rv = rhs.into_int_value();
+        // SHIFTS harmonize the other way round, and must be handled before the
+        // symmetric rule below. Their operands are independently typed BY
+        // DESIGN — the amount is a `u32` whatever the value's width is — so
+        // "truncate the wider side" truncates the VALUE to the amount's 32
+        // bits. That is not a mixed-width literal, it is the shift's own
+        // shape, and the result was a silent miscompile on ordinary 64-bit
+        // code: `let a: i64 = 2^40; a << 1u32` printed 2199023255552 under
+        // `karac run` and 0 compiled, because the value became `i32 0` before
+        // the shift (B-2026-08-19-26). When the amount happened to be >= 32 it
+        // surfaced instead as a bogus "shift amount out of range" panic, since
+        // the width check then compared against the truncated width.
+        //
+        // The result width of a shift is the VALUE's, so the amount is what
+        // moves. Order matters: range-check the amount at its OWN width first
+        // — a `300u32` amount against an `i8` value must trap, and truncating
+        // it to i8 (44) beforehand would let it pass — then coerce it, which
+        // is lossless because a checked amount is smaller than the value's
+        // width. `compile_narrow_int_binop` intercepts the 8/16/32-bit cases
+        // ahead of this and widens both sides to i64, so what reaches here is
+        // a 64-bit-or-wider value.
+        if matches!(op, BinOp::Shl | BinOp::Shr) {
+            let bits = lv.get_type().get_bit_width();
+            self.emit_shift_amount_check(rv, bits);
+            let amt = self.coerce_int_to(rv, lv.get_type(), true);
+            let result = if matches!(op, BinOp::Shl) {
+                self.builder.build_left_shift(lv, amt, "shl").unwrap()
+            } else {
+                self.builder
+                    .build_right_shift(lv, amt, !is_unsigned, "shr")
+                    .unwrap()
+            };
+            return Ok(result.into());
+        }
         // Width harmonization: a legal mixed-width int pair is always
         // "narrow-typed operand × default-i64 literal" (two
         // differently-typed int VARS are a type error; the Q4 rule
@@ -5913,21 +5946,6 @@ impl<'ctx> super::Codegen<'ctx> {
             BinOp::BitAnd => self.builder.build_and(lv, rv, "bitand").unwrap(),
             BinOp::BitOr => self.builder.build_or(lv, rv, "bitor").unwrap(),
             BinOp::BitXor => self.builder.build_xor(lv, rv, "bitxor").unwrap(),
-            // The width here is the OPERAND's own LLVM width — 64 for the
-            // i64/u64/usize path that reaches this arm directly. A narrow
-            // shift never gets here: `compile_narrow_int_binop` intercepts it
-            // above so the check uses the declared width, not the carrier's.
-            // B-2026-08-06-7.
-            BinOp::Shl => {
-                self.emit_shift_amount_check(rv, lv.get_type().get_bit_width());
-                self.builder.build_left_shift(lv, rv, "shl").unwrap()
-            }
-            BinOp::Shr => {
-                self.emit_shift_amount_check(rv, lv.get_type().get_bit_width());
-                self.builder
-                    .build_right_shift(lv, rv, !is_unsigned, "shr")
-                    .unwrap()
-            }
             _ => return Err(format!("Unsupported binary op: {:?}", op)),
         };
         Ok(result.into())

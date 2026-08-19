@@ -634,10 +634,23 @@ impl<'ctx> super::Codegen<'ctx> {
                     // same side-tables the print path uses, including the
                     // synthetic `__karac_refine_self` binding registered from
                     // the refinement's base type.
-                    let result = if lhs.is_int_value()
-                        && rhs.is_int_value()
-                        && (self.expr_is_unsigned_int(left) || self.expr_is_unsigned_int(right))
-                    {
+                    //
+                    // A SHIFT consults only its LEFT operand. Its two operands
+                    // are independently typed — the amount is conventionally a
+                    // `u32` — so the `|| right` disjunct made every shift by an
+                    // unsigned amount an unsigned shift, and a negative value
+                    // then moved by `lshr` instead of `ashr`:
+                    // `(0i32 - 8i32) >> 1u32` compiled to 2147483644 while
+                    // `karac run` gave -4 (B-2026-08-19-26). For the symmetric
+                    // operators the disjunct is right — one unsigned operand
+                    // makes the pair unsigned — which is why the asymmetry has
+                    // to be spelled out rather than folded in.
+                    let unsigned_op = if matches!(op, BinOp::Shl | BinOp::Shr) {
+                        self.expr_is_unsigned_int(left)
+                    } else {
+                        self.expr_is_unsigned_int(left) || self.expr_is_unsigned_int(right)
+                    };
+                    let result = if lhs.is_int_value() && rhs.is_int_value() && unsigned_op {
                         self.compile_binop_typed(op, lhs, rhs, true)?
                     } else {
                         self.compile_binop(op, lhs, rhs)?
