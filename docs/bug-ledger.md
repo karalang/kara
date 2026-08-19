@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 185 | 0 |
 | run-vs-build | 137 | 1 |
 | double-free | 133 | 0 |
-| missing-feature | 121 | 3 |
+| missing-feature | 122 | 3 |
 | codegen-gap | 119 | 0 |
 | diagnostics | 83 | 0 |
 | false-positive | 82 | 0 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 945 | 2 |
-| typecheck | 213 | 2 |
+| typecheck | 214 | 2 |
 | interp | 160 | 2 |
 | ownership | 60 | 0 |
 | other | 58 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 6 | 1 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1371 surfaced · 4 open · 1348 fixed · 7 wontfix** (2026-05-20 → 2026-08-19). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1372 surfaced · 4 open · 1349 fixed · 7 wontfix** (2026-05-20 → 2026-08-19). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (4)
 
@@ -151,9 +151,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1371 surfaced
 
 </details>
 
-### Fixed (1348)
+### Fixed (1349)
 
-<details><summary>1348 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1349 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -12384,6 +12384,7 @@ REMAINDER, split out rather than buried here: the upper half of `u128` (values a
 | B-2026-08-19-21 | typecheck | medium | Set/SortedSet `contains` and `remove`, and both `binary_search` arms, REJECTED a borrowed needle — `s.contains(w)` for a `w: ref String` failed with… | Named the rule once as `peel_probe_ref` in `src/typechecker.rs` instead of inlining the peel a fifth time, with the owning-vs-probing distinction written down — that distinction IS the rule, and re-deriving it per site is how the first six sites were missed. Split `"contains" | "remove"` out of the `insert` arm in both `stdlib_map.rs` set arms (hashed and sorted) and applied the peel there; applied it to both `binary_search` arms in `stdlib_seq.rs`. The peel is for the ASSIGNABILITY comparison only — the three numeric coercion checks keep the raw type, so a borrowed numeric needle behaves exactly as before and no coercion is recorded against a reference. 
 
 VERIFIED: all six sites accept a ref; `Vec.contains`/`Map.contains_key` unchanged; `Set.insert(ref)` and `SortedSet.insert(ref)` still correctly REJECT, so the ownership requirement survives where the spec really asks for it. The B-2026-08-14-1 narrowing guards on the same arms still fire (`Set[u8]` + a `300i64` VARIABLE is still rejected for contains, insert and remove alike) — note the guard probe must use a variable, not a literal, as that test's own doc-comment warns, since a literal is range-checked by a different path. |
+| B-2026-08-19-24 | typecheck | medium | TYPE-DIRECTED BARE UNIT-VARIANT RESOLUTION: when the context names an enum, a bare variant name now means THAT enum's variant (`let x: Second = A;`,… | ff300ce |
 
 </details>
 
