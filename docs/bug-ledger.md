@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 262 | 0 |
 | leak | 185 | 0 |
-| run-vs-build | 135 | 1 |
+| run-vs-build | 136 | 1 |
 | double-free | 133 | 0 |
 | codegen-gap | 119 | 0 |
 | missing-feature | 118 | 2 |
@@ -110,13 +110,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 942 | 2 |
+| codegen | 943 | 2 |
 | typecheck | 211 | 3 |
 | interp | 158 | 2 |
 | ownership | 60 | 0 |
 | other | 58 | 0 |
 | autopar | 49 | 0 |
-| cli | 47 | 0 |
+| cli | 48 | 0 |
 | parser | 27 | 0 |
 | runtime | 26 | 1 |
 | resolver | 20 | 0 |
@@ -124,14 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 5 | 1 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1365 surfaced · 3 open · 1343 fixed · 7 wontfix** (2026-05-20 → 2026-08-19). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1366 surfaced · 3 open · 1344 fixed · 7 wontfix** (2026-05-20 → 2026-08-19). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-19-8 | 2026-08-19 | lexer+typecheck+interp+codegen | medium | IMPLEMENT 128-bit integers for real: `i128` / `u128` are specified normatively in design.md as v1 primitives (all four overflow method families, the widening-cast table, the primitive-numeric lists, Portable SIMD elements) and the compiler now REJECTS them, because no runtime carrier is 128 bits wide. Deleting design.md's 'Implementation status — 128-bit integers are NOT YET IMPLEMENTED' note is the definition of done. | docs/design.md § checked_*/wrapping_*/saturating_*/overflowing_* method families (the status note — deleting it is done); src/typechecker.rs::reject_128bit; src/interpreter/value.rs::Value::Int; src/codegen/method_call.rs (the i64-carrier comment + the `bits >= 64` reduction guard) |
-| B-2026-08-19-13 | 2026-08-19 | typecheck+codegen+runtime | medium | GPU reductions cover only `Sum` and `Prod` over `Vec[f32]`. min / max / argmin / argmax, mean / var / std, dot, prefix-sum and tiled matmul are still unwritable, and INTEGER reductions are blocked on an overflow rule rather than on effort. | docs/spikes/gpu-llvm-offload-assessment.md; src/gpu_wgsl.rs::emit_reduce_kernel; src/reduce_kernel.rs::tree_reduce_f32 |
+| B-2026-08-19-13 | 2026-08-19 | typecheck+codegen+runtime | medium | GPU reductions still lack the Arg family (argmin / argmax), the two-pass statistics (mean / var / std), prefix-sum and tiled matmul; and INTEGER reductions are blocked on an overflow rule rather than on effort. `sum`/`prod`/`min`/`max`/`dot` over `Vec[f32]` have shipped. | docs/spikes/gpu-llvm-offload-assessment.md; src/gpu_wgsl.rs::emit_reduce_kernel; src/reduce_kernel.rs::tree_reduce_f32 |
 | B-2026-08-19-17 | 2026-08-19 | typecheck+interp | medium | A BARE AMBIGUOUS UNIT VARIANT PICKS A DIFFERENT ENUM IN EACH BACKEND: with `enum First { A, B }` and `enum Second { A, C }`, `let x = A; x.tag()` prints First's answer under `karac build` and Second's under `karac run`. No diagnostic on either side -- and the spec does not say what a bare ambiguous variant name should mean. | src/interpreter.rs::register_items (Item::EnumDef arm, bare `env.define(variant.name)`); src/interpreter/eval_expr.rs (ExprKind::Path last-segment fallback); typechecker bare-variant resolution |
 
 ### Wontfix (7)
@@ -150,9 +150,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1365 surfaced
 
 </details>
 
-### Fixed (1343)
+### Fixed (1344)
 
-<details><summary>1343 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1344 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -12327,6 +12327,11 @@ That mattered because `eval_expr`'s `ExprKind::Path` arm tries `env.get("First.A
 The bare binding is deliberately kept. The pattern matcher classifies a bare PascalCase identifier as a unit-variant pattern only when `env.get(name)` returns a unit `EnumVariant` (documented at the `Ordering` registration); dropping it would turn every bare match arm into a catch-all binding, which is bug-ledger B-2026-06-30-14.
 
 VERIFIED on all four surfaces -- `run --interp`, `run` (JIT), `build`, and `KARAC_AUTO_PAR=0 build` -- across six programs: colliding unit variants direct and through a let, colliding tuple variants, colliding struct variants, and the unambiguous bare-name case. All agree and all are correct. Four regression tests in tests/interpreter.rs, including one pinning that non-unit variants keep working (they were always correct -- constructed at call sites where the enum name is in hand) and one pinning the bare-name path against the B-2026-06-30-14 regression. |
+| B-2026-08-19-18 | cli+codegen | high | `karac run` FAILED on every GPU reduction program while `karac build` answered correctly — `JIT session error: Symbols not found: [ karac_runtime_gpu… | FIXED by ba484b53. `program_declares_gpu_kernel` is now one half of `program_uses_gpu_runtime`; the other half is a source scan for the reduction spellings (`gpu.sum(`, `gpu.prod(`, `gpu.min(`, `gpu.max(`, `gpu.dot(`), the same cheap form the Arrow IPC gate beside it already uses. A false positive only routes a non-GPU program to the correct-if-slower interpreter, so the scan is safe to keep broad.
+
+THE TEST HOLE MATTERED MORE THAN THE BUG. `tests/gpu_e2e.rs` compared `karac run --interp` against `karac build` — and `--interp` is PRECISELY the lane the routing is supposed to select, so the comparison ran straight through the defect and reported green. The A/B rule in kara-katas/CLAUDE.md is `run` == `build`, and `run` means the DEFAULT lane, which has been the JIT since LLJIT slice 6c. `assert_gpu_reduce_matches_interp` now asserts all three surfaces agree (`run --interp`, `run`, `build`). Reverting the one-line detection makes it fail with the original symbol error, so the new leg is not vacuous — checked.
+
+GENERALIZABLE LESSON: any future opt-in runtime feature (the `gpu`, `regex` and `arrow` archives are all on this axis) needs its JIT-routing gate keyed on what the PROGRAM REACHES, not on a syntactic marker that happens to correlate with it today. And an A/B harness that pins only the fallback lane cannot see a routing bug at all. |
 
 </details>
 
