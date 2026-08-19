@@ -2417,9 +2417,7 @@ impl<'a> super::Interpreter<'a> {
                     // `saturating_*` / `overflowing_*` families use; the
                     // typechecker pins the argument to the receiver's type.
                     let w = self.overflow_arg_width(&args[0].value);
-                    return Value::Int(
-                        eval_wrapping_arith(method, narrow_to_i64(a), narrow_to_i64(b), w).into(),
-                    );
+                    return Value::Int(eval_wrapping_arith(method, a, b, w));
                 }
             }
         }
@@ -2440,7 +2438,7 @@ impl<'a> super::Interpreter<'a> {
                     // `MethodCall` aliases (`x.checked_mul(y).is_none()`).
                     let w = self.overflow_arg_width(&args[0].value);
                     if let Value::Int(b) = self.eval_expr_inner(&args[0].value) {
-                        return eval_overflow_arith(fam, op, narrow_to_i64(a), narrow_to_i64(b), w);
+                        return eval_overflow_arith(fam, op, a, b, w);
                     }
                 }
             }
@@ -2459,7 +2457,7 @@ impl<'a> super::Interpreter<'a> {
                 let base = *base;
                 if let Value::Int(exp) = self.eval_expr_inner(&args[0].value) {
                     let w = self.int_width_at(args_close_span);
-                    return self.eval_int_pow(narrow_to_i64(base), exp as u64, w, span);
+                    return self.eval_int_pow(base, exp as u64, w, span);
                 }
             }
         }
@@ -2517,9 +2515,7 @@ impl<'a> super::Interpreter<'a> {
         {
             if let Value::Int(n) = &obj {
                 let w = self.int_width_at(args_close_span);
-                return Value::Int(
-                    (eval_bit_intrinsic(method, narrow_to_i64(*n), w) as i64).into(),
-                );
+                return Value::Int(i128::from(eval_bit_intrinsic(method, *n, w)));
             }
         }
 
@@ -2613,7 +2609,7 @@ impl<'a> super::Interpreter<'a> {
         if args.is_empty() && matches!(method, "reverse_bits" | "swap_bytes") {
             if let Value::Int(n) = &obj {
                 let w = self.int_width_at(args_close_span);
-                return Value::Int(eval_bit_permute(method, narrow_to_i64(*n), w).into());
+                return Value::Int(eval_bit_permute(method, *n, w));
             }
         }
 
@@ -2630,9 +2626,7 @@ impl<'a> super::Interpreter<'a> {
                 }
                 if let Value::Int(amount) = amount {
                     let w = self.int_width_at(args_close_span);
-                    return Value::Int(
-                        eval_bit_rotate(method, narrow_to_i64(n), amount as u32, w).into(),
-                    );
+                    return Value::Int(eval_bit_rotate(method, n, amount as u32, w));
                 }
             }
         }
@@ -2681,7 +2675,7 @@ impl<'a> super::Interpreter<'a> {
                         return Value::Bool(digit.is_some());
                     }
                     return match digit {
-                        Some(d) => some_int(d as i64),
+                        Some(d) => some_int(i128::from(d)),
                         None => none_value(),
                     };
                 }
@@ -2868,6 +2862,13 @@ impl<'a> super::Interpreter<'a> {
             // 64-bit unsigned (u64 / usize) is handled by reinterpreting the
             // i64 bit pattern as u64 — full-range correct.
             Some(Type::UInt(UIntSize::U64)) | Some(Type::UInt(UIntSize::Usize)) => IntW::U(64),
+            // 128-bit (B-2026-08-19-8 stage 3b). Without these arms `i128` fell
+            // to the signed-64 default below, which is why every width-sensitive
+            // method answered for 64 bits in the interpreter while codegen
+            // (stage 3a) answered for 128 — a run-vs-build divergence waiting
+            // for the type to become nameable.
+            Some(Type::Int(IntSize::I128)) => IntW::S(128),
+            Some(Type::UInt(UIntSize::U128)) => IntW::U(128),
             // i64 / isize / unknown → signed 64-bit.
             _ => IntW::S(64),
         }
@@ -2879,18 +2880,14 @@ impl<'a> super::Interpreter<'a> {
     /// per-step trap. Square-and-multiply (O(log exp)); the intermediate squared
     /// base never overflows when the final result is in range (its exponent
     /// `2^k ≤ exp`), so checking it can't false-trap.
-    fn eval_int_pow(&mut self, base: i64, exp: u64, w: IntW, span: &Span) -> Value {
+    fn eval_int_pow(&mut self, base: i128, exp: u64, w: IntW, span: &Span) -> Value {
         let (signed, bits) = match w {
             IntW::S(b) => (true, b),
             IntW::U(b) => (false, b),
         };
-        let (lo, hi): (i128, i128) = if signed {
-            (-(1i128 << (bits - 1)), (1i128 << (bits - 1)) - 1)
-        } else {
-            (0, (1i128 << bits) - 1)
-        };
-        let base128: i128 = if signed {
-            base as i128
+        let (lo, hi) = width_bounds(signed, bits);
+        let base128: i128 = if signed || bits == 128 {
+            base
         } else {
             (base as u64) as i128
         };
@@ -2917,7 +2914,7 @@ impl<'a> super::Interpreter<'a> {
                 };
             }
         }
-        Value::Int((acc as i64).into())
+        Value::Int(acc)
     }
 }
 
@@ -2926,14 +2923,18 @@ impl<'a> super::Interpreter<'a> {
 /// `iN` values are sign-extended in the model, so the value is masked to the
 /// width's low bits before counting; `leading/trailing_zeros` count within the
 /// width (`bits` on a zero input).
-fn eval_bit_intrinsic(method: &str, n: i64, w: IntW) -> u32 {
+fn eval_bit_intrinsic(method: &str, n: i128, w: IntW) -> u32 {
     let bits = match w {
         IntW::S(b) | IntW::U(b) => b,
     };
-    let masked: u128 = if bits >= 64 {
-        (n as u64) as u128
-    } else {
-        ((n as u64) & ((1u64 << bits) - 1)) as u128
+    // `bits >= 64` used to mean "the carrier IS the width, take it whole". With
+    // the i128 carrier (B-2026-08-19-8) that is only true at 128, so 64 masks
+    // like any other narrow width — otherwise a 64-bit receiver would count the
+    // carrier's sign extension. `1u128 << 128` would overflow, hence the arm.
+    let masked: u128 = match bits {
+        128 => n as u128,
+        64 => (n as u64) as u128,
+        b => (n as u128) & ((1u128 << b) - 1),
     };
     match method {
         "count_ones" => masked.count_ones(),
@@ -2961,40 +2962,44 @@ fn eval_bit_intrinsic(method: &str, n: i64, w: IntW) -> u32 {
 /// for a signed narrow width, zero-extended otherwise. `reverse_bits` reverses
 /// the `bits` low bits; `swap_bytes` reverses the `bits/8` bytes (identity for
 /// `u8`/`i8`), matching Rust's `iN::{reverse_bits,swap_bytes}`.
-fn eval_bit_permute(method: &str, n: i64, w: IntW) -> i64 {
+fn eval_bit_permute(method: &str, n: i128, w: IntW) -> i128 {
     let (bits, signed) = match w {
         IntW::S(b) => (b, true),
         IntW::U(b) => (b, false),
     };
-    let masked: u64 = if bits >= 64 {
-        n as u64
-    } else {
-        (n as u64) & ((1u64 << bits) - 1)
+    // Widened from u64 to u128 (B-2026-08-19-8 stage 3b): the permutation has
+    // to happen in a word at least as wide as the receiver, and `bits` can now
+    // be 128. `1u128 << 128` would overflow, hence the explicit arm.
+    let masked: u128 = match bits {
+        128 => n as u128,
+        64 => (n as u64) as u128,
+        b => (n as u128) & ((1u128 << b) - 1),
     };
-    let permuted: u64 = match method {
-        // Reverse all 64 bits, then shift the meaningful `bits` back down.
+    let permuted: u128 = match method {
+        // Reverse all 128 bits, then shift the meaningful `bits` back down.
         "reverse_bits" => {
-            if bits >= 64 {
+            if bits >= 128 {
                 masked.reverse_bits()
             } else {
-                masked.reverse_bits() >> (64 - bits)
+                masked.reverse_bits() >> (128 - bits)
             }
         }
         "swap_bytes" => match bits {
-            16 => u64::from((masked as u16).swap_bytes()),
-            32 => u64::from((masked as u32).swap_bytes()),
-            64 => masked.swap_bytes(),
+            16 => u128::from((masked as u16).swap_bytes()),
+            32 => u128::from((masked as u32).swap_bytes()),
+            64 => u128::from((masked as u64).swap_bytes()),
+            128 => masked.swap_bytes(),
             // 8-bit (and any non-multiple-of-16 width) → identity.
             _ => masked,
         },
         _ => unreachable!("non-permute method routed to eval_bit_permute: {method}"),
     };
-    // Re-encode into the i64 model: sign-extend a signed narrow result whose
-    // width-top bit is set, so it round-trips like the other narrow-int values.
-    if signed && bits < 64 && (permuted & (1u64 << (bits - 1))) != 0 {
-        (permuted | !((1u64 << bits) - 1)) as i64
+    // Re-encode into the carrier: sign-extend a signed result whose width-top
+    // bit is set, so it round-trips like the other values of that width.
+    if signed && bits < 128 && (permuted & (1u128 << (bits - 1))) != 0 {
+        (permuted | !((1u128 << bits) - 1)) as i128
     } else {
-        permuted as i64
+        permuted as i128
     }
 }
 
@@ -3004,21 +3009,23 @@ fn eval_bit_permute(method: &str, n: i64, w: IntW) -> i64 {
 /// result is re-encoded like [`eval_bit_permute`] (sign-extended for a signed
 /// narrow width). Rotation is bit-level, so signedness only affects the final
 /// encoding, not the rotated bits.
-fn eval_bit_rotate(method: &str, n: i64, amount: u32, w: IntW) -> i64 {
+fn eval_bit_rotate(method: &str, n: i128, amount: u32, w: IntW) -> i128 {
     let (bits, signed) = match w {
         IntW::S(b) => (b, true),
         IntW::U(b) => (b, false),
     };
-    let masked: u64 = if bits >= 64 {
-        n as u64
-    } else {
-        (n as u64) & ((1u64 << bits) - 1)
+    // u128 for the same reason as `eval_bit_permute` (B-2026-08-19-8 stage 3b):
+    // the rotation word must be at least as wide as the receiver.
+    let masked: u128 = match bits {
+        128 => n as u128,
+        64 => (n as u64) as u128,
+        b => (n as u128) & ((1u128 << b) - 1),
     };
     let left = method == "rotate_left";
-    let rotated: u64 = match bits {
+    let rotated: u128 = match bits {
         8 => {
             let v = masked as u8;
-            u64::from(if left {
+            u128::from(if left {
                 v.rotate_left(amount)
             } else {
                 v.rotate_right(amount)
@@ -3026,7 +3033,7 @@ fn eval_bit_rotate(method: &str, n: i64, amount: u32, w: IntW) -> i64 {
         }
         16 => {
             let v = masked as u16;
-            u64::from(if left {
+            u128::from(if left {
                 v.rotate_left(amount)
             } else {
                 v.rotate_right(amount)
@@ -3034,7 +3041,15 @@ fn eval_bit_rotate(method: &str, n: i64, amount: u32, w: IntW) -> i64 {
         }
         32 => {
             let v = masked as u32;
-            u64::from(if left {
+            u128::from(if left {
+                v.rotate_left(amount)
+            } else {
+                v.rotate_right(amount)
+            })
+        }
+        64 => {
+            let v = masked as u64;
+            u128::from(if left {
                 v.rotate_left(amount)
             } else {
                 v.rotate_right(amount)
@@ -3048,10 +3063,10 @@ fn eval_bit_rotate(method: &str, n: i64, amount: u32, w: IntW) -> i64 {
             }
         }
     };
-    if signed && bits < 64 && (rotated & (1u64 << (bits - 1))) != 0 {
-        (rotated | !((1u64 << bits) - 1)) as i64
+    if signed && bits < 128 && (rotated & (1u128 << (bits - 1))) != 0 {
+        (rotated | !((1u128 << bits) - 1)) as i128
     } else {
-        rotated as i64
+        rotated as i128
     }
 }
 
@@ -3097,11 +3112,11 @@ fn parse_overflow_arith(method: &str) -> Option<(OvFam, OvOp)> {
     Some((fam, op))
 }
 
-fn some_int(v: i64) -> Value {
+fn some_int(v: i128) -> Value {
     Value::EnumVariant {
         enum_name: "Option".to_string(),
         variant: "Some".to_string(),
-        data: EnumData::Tuple(vec![Value::Int(v.into())]),
+        data: EnumData::Tuple(vec![Value::Int(v)]),
     }
 }
 
@@ -3123,15 +3138,17 @@ fn none_value() -> Value {
 /// into the width: mask to `bits`, and for a SIGNED width sign-extend the
 /// result so the interpreter's `Value::Int(i64)` carries the same bit pattern
 /// codegen's narrower LLVM integer would.
-fn eval_wrapping_arith(method: &str, a: i64, b: i64, w: IntW) -> i64 {
+fn eval_wrapping_arith(method: &str, a: i128, b: i128, w: IntW) -> i128 {
     let (signed, bits) = match w {
         IntW::S(b) => (true, b),
         IntW::U(b) => (false, b),
     };
-    // 64-bit: i64/u64 wrap identically on the two's-complement bit pattern, so
-    // the plain i64 op is already exact and the mask below would be a no-op
-    // shift of 64 (UB in Rust). Handled first for both reasons.
-    if bits == 64 {
+    // 128-bit: the carrier IS the width, so the plain i128 op is exact and the
+    // mask below would shift by 128 (UB). Signed and unsigned wrap identically
+    // on the two's-complement bit pattern at a given width, so one arm serves
+    // both — the same argument the 64-bit case has always made
+    // (B-2026-08-19-8 stage 3b).
+    if bits == 128 {
         return match method {
             "wrapping_add" => a.wrapping_add(b),
             "wrapping_sub" => a.wrapping_sub(b),
@@ -3139,7 +3156,17 @@ fn eval_wrapping_arith(method: &str, a: i64, b: i64, w: IntW) -> i64 {
             _ => unreachable!("caller matched the three wrapping methods"),
         };
     }
-    let (x, y) = (a as i128, b as i128);
+    // 64-bit: wrap on the i64 bit pattern, then widen back into the carrier.
+    if bits == 64 {
+        let (x, y) = (a as i64, b as i64);
+        return i128::from(match method {
+            "wrapping_add" => x.wrapping_add(y),
+            "wrapping_sub" => x.wrapping_sub(y),
+            "wrapping_mul" => x.wrapping_mul(y),
+            _ => unreachable!("caller matched the three wrapping methods"),
+        });
+    }
+    let (x, y) = (a, b);
     let raw = match method {
         "wrapping_add" => x.wrapping_add(y),
         "wrapping_sub" => x.wrapping_sub(y),
@@ -3147,21 +3174,66 @@ fn eval_wrapping_arith(method: &str, a: i64, b: i64, w: IntW) -> i64 {
         _ => unreachable!("caller matched the three wrapping methods"),
     };
     let masked = raw & ((1i128 << bits) - 1);
-    let reduced = if signed && (masked >> (bits - 1)) & 1 == 1 {
+    if signed && (masked >> (bits - 1)) & 1 == 1 {
         masked - (1i128 << bits) // set sign bit → negative in the width
     } else {
         masked
-    };
-    reduced as i64
+    }
+}
+
+/// Inclusive `(min, max)` of a width, in i128.
+///
+/// 128-bit needs its own arm because the shift form below (`1i128 << bits` /
+/// `1i128 << (bits - 1)`) overflows at that width (B-2026-08-19-8 stage 3b).
+/// `u128`'s ceiling is `i128::MAX`, not `u128::MAX`: the interpreter's carrier
+/// is a SIGNED i128, so the top half of u128 has no representation there yet —
+/// the same limit `narrow_oob` records, and a constraint stage 5 must lift
+/// before `u128` is spellable.
+fn width_bounds(signed: bool, bits: u32) -> (i128, i128) {
+    match (signed, bits) {
+        (true, 128) => (i128::MIN, i128::MAX),
+        (false, 128) => (0, i128::MAX),
+        (true, b) => (-(1i128 << (b - 1)), (1i128 << (b - 1)) - 1),
+        (false, b) => (0, (1i128 << b) - 1),
+    }
 }
 
 /// Evaluate one overflow-aware integer operation at the receiver's width.
 /// Operands arrive as the interpreter's i64-backed `Value::Int`; signed widths
 /// and 64-bit unsigned compute exactly (i128 / u64), narrow unsigned widths use
 /// their `[0, 2^bits)` bounds.
-fn eval_overflow_arith(fam: OvFam, op: OvOp, a: i64, b: i64, w: IntW) -> Value {
+fn eval_overflow_arith(fam: OvFam, op: OvOp, a: i128, b: i128, w: IntW) -> Value {
+    // 128-bit signed: the carrier IS the width, so i128's own overflowing ops
+    // are exact and the `1i128 << bits` bounds below would overflow
+    // (B-2026-08-19-8 stage 3b). Mirrors the 64-bit-unsigned branch's shape.
+    if let IntW::S(128) = w {
+        let (res, of) = match op {
+            OvOp::Add => a.overflowing_add(b),
+            OvOp::Sub => a.overflowing_sub(b),
+            OvOp::Mul => a.overflowing_mul(b),
+        };
+        return match fam {
+            OvFam::Checked => {
+                if of {
+                    none_value()
+                } else {
+                    some_int(res)
+                }
+            }
+            OvFam::Saturating => Value::Int(if of {
+                match op {
+                    OvOp::Sub => i128::MIN,
+                    _ => i128::MAX,
+                }
+            } else {
+                res
+            }),
+            OvFam::Overflowing => Value::Tuple(vec![Value::Int(res), Value::Bool(of)]),
+        };
+    }
     // 64-bit unsigned: reinterpret the two's-complement bits as u64 (full range).
     if let IntW::U(64) = w {
+        let (a, b) = (a as i64, b as i64);
         let (au, bu) = (a as u64, b as u64);
         let (res, of) = match op {
             OvOp::Add => au.overflowing_add(bu),
@@ -3173,7 +3245,7 @@ fn eval_overflow_arith(fam: OvFam, op: OvOp, a: i64, b: i64, w: IntW) -> Value {
                 if of {
                     none_value()
                 } else {
-                    some_int(res as i64)
+                    some_int(i128::from(res))
                 }
             }
             OvFam::Saturating => {
@@ -3198,22 +3270,10 @@ fn eval_overflow_arith(fam: OvFam, op: OvOp, a: i64, b: i64, w: IntW) -> Value {
         IntW::S(b) => (true, b),
         IntW::U(b) => (false, b),
     };
-    let (lo, hi): (i128, i128) = if signed {
-        (-(1i128 << (bits - 1)), (1i128 << (bits - 1)) - 1)
-    } else {
-        (0, (1i128 << bits) - 1)
-    };
+    let (lo, hi) = width_bounds(signed, bits);
     // Unsigned narrow values are stored non-negative; signed keep their sign.
-    let av = if signed {
-        a as i128
-    } else {
-        (a as u64) as i128
-    };
-    let bv = if signed {
-        b as i128
-    } else {
-        (b as u64) as i128
-    };
+    let av = if signed { a } else { (a as u64) as i128 };
+    let bv = if signed { b } else { (b as u64) as i128 };
     let r: i128 = match op {
         OvOp::Add => av + bv,
         OvOp::Sub => av - bv,
@@ -3223,7 +3283,7 @@ fn eval_overflow_arith(fam: OvFam, op: OvOp, a: i64, b: i64, w: IntW) -> Value {
     match fam {
         OvFam::Checked => {
             if in_range {
-                some_int(r as i64)
+                some_int(r)
             } else {
                 none_value()
             }

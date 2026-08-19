@@ -411,11 +411,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 I8 => (8, false),
                 I16 => (16, false),
                 I32 => (32, false),
-                I64 | I128 => (64, false),
+                I64 => (64, false),
+                // 128 was folded into the 64-bit arm here (B-2026-08-19-8
+                // stage 3b) — harmless while the type was unusable, wrong the
+                // moment it is not.
+                I128 => (128, false),
                 U8 => (8, true),
                 U16 => (16, true),
                 U32 => (32, true),
-                U64 | U128 => (64, true),
+                U64 => (64, true),
+                U128 => (128, true),
             };
         }
         (64, false)
@@ -3740,7 +3745,6 @@ impl<'ctx> super::Codegen<'ctx> {
             // to the i64-backed representation narrow integers flow in.
             let (bits, unsigned) = self.receiver_int_kind(object, call_span, "pow");
             let int_ty = self.int_type_for_bits(bits);
-            let i64_t = self.context.i64_type();
             let base_raw = self.compile_expr(object)?.into_int_value();
             let base = self.coerce_int_to(base_raw, int_ty, unsigned);
             let exp = self.compile_expr(&args[0].value)?.into_int_value();
@@ -3805,7 +3809,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_load(int_ty, acc_slot, "pow.result")
                 .unwrap()
                 .into_int_value();
-            let result = self.coerce_int_to(acc_final, i64_t, unsigned);
+            let result =
+                self.coerce_int_to(acc_final, self.int_carrier_type_for_bits(bits), unsigned);
             return Ok(result.into());
         }
 
@@ -3894,8 +3899,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap_basic()
                     .into_int_value()
             };
-            let i64_t = self.context.i64_type();
-            let res = self.coerce_int_to(permuted, i64_t, unsigned);
+            let res = self.coerce_int_to(permuted, self.int_carrier_type_for_bits(bits), unsigned);
             return Ok(res.into());
         }
 
@@ -3932,8 +3936,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .try_as_basic_value()
                 .unwrap_basic()
                 .into_int_value();
-            let i64_t = self.context.i64_type();
-            let res = self.coerce_int_to(rotated, i64_t, unsigned);
+            let res = self.coerce_int_to(rotated, self.int_carrier_type_for_bits(bits), unsigned);
             return Ok(res.into());
         }
 
@@ -4028,9 +4031,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 .builder
                 .build_left_shift(one, shift, "npot.pw")
                 .unwrap();
-            let i64_t = self.context.i64_type();
             // The result is a non-negative power of two in iN → zero-extend.
-            let res = self.coerce_int_to(pw, i64_t, true);
+            let res = self.coerce_int_to(pw, self.int_carrier_type_for_bits(bits), true);
             return Ok(res.into());
         }
 
@@ -4067,9 +4069,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap()
                 .into_int_value();
             let diff = self.builder.build_int_sub(hi, lo, "absd").unwrap();
-            let i64_t = self.context.i64_type();
             // The magnitude is non-negative in iN bits → always zero-extend.
-            let res = self.coerce_int_to(diff, i64_t, true);
+            let res = self.coerce_int_to(diff, self.int_carrier_type_for_bits(bits), true);
             return Ok(res.into());
         }
 
@@ -4090,7 +4091,6 @@ impl<'ctx> super::Codegen<'ctx> {
             if let Some((fam, op)) = fam_op {
                 let (bits, unsigned) = self.receiver_int_kind(object, call_span, method);
                 let int_ty = self.int_type_for_bits(bits);
-                let i64_t = self.context.i64_type();
 
                 let recv_raw = self.compile_expr(object)?.into_int_value();
                 let recv = self.coerce_int_to(recv_raw, int_ty, unsigned);
@@ -4134,7 +4134,11 @@ impl<'ctx> super::Codegen<'ctx> {
                             .unwrap();
 
                         self.builder.position_at_end(some_bb);
-                        let payload = self.coerce_int_to(wrapped, i64_t, unsigned);
+                        let payload = self.coerce_int_to(
+                            wrapped,
+                            self.int_carrier_type_for_bits(bits),
+                            unsigned,
+                        );
                         self.builder.build_unconditional_branch(merge_bb).unwrap();
 
                         self.builder.position_at_end(none_bb);
@@ -4194,7 +4198,8 @@ impl<'ctx> super::Codegen<'ctx> {
                             .build_select(ovf, bound, wrapped, "sat.res")
                             .unwrap()
                             .into_int_value();
-                        let res = self.coerce_int_to(sat, i64_t, unsigned);
+                        let res =
+                            self.coerce_int_to(sat, self.int_carrier_type_for_bits(bits), unsigned);
                         return Ok(res.into());
                     }
                 }

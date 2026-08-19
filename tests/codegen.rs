@@ -21192,6 +21192,44 @@ fn main() {
     }
 
     #[test]
+    fn e2e_chained_width_sensitive_int_methods() {
+        // CHAINED width-preserving int methods resolve their receiver width
+        // through the receiver itself, not the span-keyed table
+        // (B-2026-08-19-8 stage 3b).
+        //
+        // The parser aliases a chain's `MethodCall.span` to its receiver's, so
+        // `method_callee_types` holds ONE entry for the whole chain
+        // (B-2026-07-18-36) and the outer call used to fall through to
+        // `receiver_int_kind`'s 64-bit default. That default was invisible
+        // while every carrier was 64 bits wide, and wrong the moment one was
+        // not — an `i128` byte-swap chain round-tripped through a 64-bit swap
+        // and lost the top half while the same expression unchained was
+        // correct. `type_name_of_expr` now resolves a Self-returning int method
+        // to its receiver's type.
+        //
+        // Pinned at the NARROW widths because that is what this change puts at
+        // risk: 128-bit cannot be spelled until stage 5 lifts the type
+        // rejection, but every existing width now takes the new resolution
+        // path, and a mistake there would be a live miscompile today.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+             let a: i32 = 305419896i32;\n\
+             println(a.swap_bytes().swap_bytes());\n\
+             let b: i16 = 4660i16;\n\
+             println(b.swap_bytes().swap_bytes());\n\
+             let c: i32 = 1i32;\n\
+             println(c.rotate_left(8u32).rotate_right(8u32));\n\
+             let d: i64 = 7i64;\n\
+             println(d.wrapping_add(1i64).wrapping_sub(1i64));\n\
+             let e: u32 = 4294967295u32;\n\
+             println(e.reverse_bits().reverse_bits());\n\
+             }",
+        ) {
+            assert_eq!(out, "305419896\n4660\n1\n7\n4294967295\n");
+        }
+    }
+
+    #[test]
     fn e2e_generic_provider_trait_bound() {
         // `effect resource RequestCh: Channel[i64];` — a GENERIC provider trait
         // bound (B-2026-08-18-41, design.md:6071). The declaration did not

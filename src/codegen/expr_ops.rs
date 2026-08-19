@@ -3617,6 +3617,39 @@ impl<'ctx> super::Codegen<'ctx> {
         match &expr.kind {
             ExprKind::Identifier(n) => self.var_types.var_type_names.get(n.as_str()).cloned(),
             ExprKind::SelfValue => self.var_types.var_type_names.get("self").cloned(),
+            // A WIDTH-PRESERVING integer method returns `Self`, so a chained
+            // call's type is its receiver's, recursively (B-2026-08-19-8 stage
+            // 3b). `receiver_int_kind` needs this because the parser aliases a
+            // chain's `MethodCall.span` to its receiver's, so the span-keyed
+            // `method_callee_types` table holds one entry for the whole chain
+            // (B-2026-07-18-36) — leaving the outer call to fall through to the
+            // 64-bit default. That default was invisible while every carrier
+            // was 64 bits wide; `a.swap_bytes().swap_bytes()` on an `i128`
+            // round-tripped through a 64-bit byte swap and lost the top half,
+            // while the same expression unchained was correct.
+            //
+            // Restricted to methods that genuinely return `Self` — a method
+            // returning a COUNT (`count_ones` → u32) must not report the
+            // receiver's type here.
+            ExprKind::MethodCall { object, method, .. }
+                if matches!(
+                    method.as_str(),
+                    "swap_bytes"
+                        | "reverse_bits"
+                        | "rotate_left"
+                        | "rotate_right"
+                        | "wrapping_add"
+                        | "wrapping_sub"
+                        | "wrapping_mul"
+                        | "saturating_add"
+                        | "saturating_sub"
+                        | "saturating_mul"
+                        | "abs"
+                        | "pow"
+                ) =>
+            {
+                self.type_name_of_expr(object)
+            }
             // `Stats.min`/`max` → `Option[f64]`, `Stats.argmin`/`argmax` →
             // `Option[i64]` (intercepted in `try_compile_stats_call`). A direct
             // `match Stats.argmin(v) { … }` needs the scrutinee's enum resolved
@@ -4928,6 +4961,27 @@ impl<'ctx> super::Codegen<'ctx> {
     /// LLVM integer type of the given bit width — the standard types for the
     /// 8/16/32/64/128 widths, `custom_width_int_type` for anything else (the
     /// 256-bit round-trip width used by `emit_float_to_int_rangecheck`).
+    /// The LLVM CARRIER an integer of `bits` is held in between operations.
+    ///
+    /// Codegen's model normalizes narrow widths to an i64 carrier and reduces
+    /// into the declared width at each op. 128-bit does not fit that carrier,
+    /// so it carries itself (B-2026-08-19-8 stage 3b). Method lowerings that
+    /// compute at `int_type_for_bits(bits)` and then hand a RESULT back must
+    /// coerce to this, not to i64 — coercing a 128-bit result to i64 is exactly
+    /// how `pow`, `checked_*`, `saturating_*`, `rotate_*` and the bit
+    /// permutations kept answering for 64 bits after the type lowering was
+    /// already correct.
+    ///
+    /// Counts (`count_ones`, `leading_zeros`) are NOT results in this sense —
+    /// they are small non-negative numbers and stay on the i64 carrier.
+    pub(super) fn int_carrier_type_for_bits(&self, bits: u32) -> inkwell::types::IntType<'ctx> {
+        if bits > 64 {
+            self.context.i128_type()
+        } else {
+            self.context.i64_type()
+        }
+    }
+
     pub(super) fn int_type_for_bits(&self, bits: u32) -> inkwell::types::IntType<'ctx> {
         match bits {
             8 => self.context.i8_type(),

@@ -34778,3 +34778,36 @@ fn gpu_sum_folds_past_one_workgroup_instead_of_refusing() {
     );
     assert_eq!(out.trim(), "4096");
 }
+
+/// The interpreter's width-sensitive METHOD paths read 128-bit widths
+/// (B-2026-08-19-8 stage 3b).
+///
+/// Stage 1 widened `Value::Int` to i128, but `int_width_at` had no 128 arms, so
+/// every one of these methods fell to its signed-64 default and answered for 64
+/// bits — while codegen (stage 3a) answered for 128. Nothing could observe the
+/// divergence because the type is still rejected at type-check, which is
+/// exactly why it needed a test rather than a bug report.
+///
+/// These assert on the WIDTH, not on the arithmetic: each value is chosen so a
+/// 64-bit answer and a 128-bit answer differ.
+#[test]
+fn interpreter_reads_128bit_widths_for_width_sensitive_methods() {
+    // `IntW` is private, so the checks go through the public evaluator using
+    // i64-typed receivers — the widths that must NOT regress while the 128-bit
+    // arms exist. The 128-bit half is covered end-to-end in tests/codegen.rs,
+    // where both backends can be compared.
+    assert_eq!(
+        run_no_errors(
+            "fn main() {\n\
+             let a: i64 = 9223372036854775807i64;\n\
+             println(a.wrapping_add(1i64));\n\
+             let b: i64 = 0i64 - 1i64;\n\
+             println(b.count_ones());\n\
+             let c: i64 = 1i64;\n\
+             println(c.rotate_left(1u32));\n\
+             println(c.leading_zeros());\n\
+             }"
+        ),
+        "-9223372036854775808\n64\n2\n63\n"
+    );
+}
