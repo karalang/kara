@@ -92,14 +92,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 262 | 0 |
+| miscompile | 263 | 1 |
 | leak | 185 | 0 |
 | double-free | 133 | 0 |
 | run-vs-build | 133 | 0 |
 | codegen-gap | 119 | 0 |
-| missing-feature | 117 | 3 |
+| missing-feature | 118 | 2 |
 | diagnostics | 83 | 0 |
-| false-positive | 80 | 0 |
+| false-positive | 81 | 0 |
 | perf | 77 | 0 |
 | crash | 52 | 0 |
 | soundness | 51 | 0 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 942 | 2 |
-| typecheck | 208 | 3 |
+| typecheck | 211 | 3 |
 | interp | 156 | 1 |
 | ownership | 60 | 0 |
 | other | 58 | 0 |
@@ -124,15 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 5 | 1 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1361 surfaced · 3 open · 1339 fixed · 7 wontfix** (2026-05-20 → 2026-08-19). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1364 surfaced · 3 open · 1342 fixed · 7 wontfix** (2026-05-20 → 2026-08-19). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-19-8 | 2026-08-19 | lexer+typecheck+interp+codegen | medium | IMPLEMENT 128-bit integers for real: `i128` / `u128` are specified normatively in design.md as v1 primitives (all four overflow method families, the widening-cast table, the primitive-numeric lists, Portable SIMD elements) and the compiler now REJECTS them, because no runtime carrier is 128 bits wide. Deleting design.md's 'Implementation status — 128-bit integers are NOT YET IMPLEMENTED' note is the definition of done. | docs/design.md § checked_*/wrapping_*/saturating_*/overflowing_* method families (the status note — deleting it is done); src/typechecker.rs::reject_128bit; src/interpreter/value.rs::Value::Int; src/codegen/method_call.rs (the i64-carrier comment + the `bits >= 64` reduction guard) |
-| B-2026-08-19-11 | 2026-08-19 | typecheck | low | design.md:7223 requires a `with_provider` provider to implement `Send + Sync` on top of its declared bounds, and NOTHING checks it -- because neither trait exists in the compiler at all: `grep '"Send"' src/` and `grep '"Sync"' src/` are both EMPTY, so there is no auto-trait machinery to check against at any arity. | design.md:7223 (`with_provider` signature at :7225, `P: R.Provider + Send + Sync`); src/typechecker/expr_call.rs::check_provider_satisfies_declared_bound |
 | B-2026-08-19-13 | 2026-08-19 | typecheck+codegen+runtime | medium | GPU reductions cover only `Sum` and `Prod` over `Vec[f32]`. min / max / argmin / argmax, mean / var / std, dot, prefix-sum and tiled matmul are still unwritable, and INTEGER reductions are blocked on an overflow rule rather than on effort. | docs/spikes/gpu-llvm-offload-assessment.md; src/gpu_wgsl.rs::emit_reduce_kernel; src/reduce_kernel.rs::tree_reduce_f32 |
+| B-2026-08-19-16 | 2026-08-19 | typecheck | high | WHEN TWO ENUMS SHARE A VARIANT NAME, a method call on one dispatches to the OTHER's impl, silently and with no diagnostic: `First.A.tag()` returns `Second`'s answer. The value's TYPE is correct -- only impl selection is wrong -- so nothing downstream can catch it. | src/typechecker/types.rs::impl_table_key / receiver_for_method_lookup; repro above |
 
 ### Wontfix (7)
 
@@ -150,9 +150,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1361 surfaced
 
 </details>
 
-### Fixed (1339)
+### Fixed (1342)
 
-<details><summary>1339 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1342 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -12308,6 +12308,18 @@ Two things worth knowing that the row could not have anticipated:
 
   * The tree order is also the MORE ACCURATE one — pairing keeps partial sums at similar magnitudes — so specifying it costs nothing in precision.
   * An empty buffer never reaches a device, so the runtime has to be TOLD the identity; it was hardcoded to 0.0, which would have made `gpu.prod([])` print 0 under `karac build` and 1 under `karac run`. Found by writing the multi-workgroup fold, not by any reduction test that existed at the time. |
+| B-2026-08-19-11 | typecheck | low | design.md's `with_provider` signature demanded `Send + Sync`, a guarantee Kara had already DECIDED NOT TO SHIP under that name -- four stale spec lin… | FIXED by f4340ba. SPEC EDIT, as the row's own closing paragraph guessed it might be -- but for the opposite reason. The row expected the spec to be right and the compiler behind it; the truth is the compiler was right and the SPEC was four lines out of date.
+
+design.md now says, at every one of the five spots that touched this:
+
+- :7223 "must implement all declared bounds plus `Send + Sync`" -> "must implement all declared bounds, and its concrete type must be cross-task-safe", with a pointer to the enforcement paragraph and an explicit note that Kara has no Send/Sync auto-traits (item 61).
+- :7230 the signature itself: `P: R.Provider + Send + Sync` -> `P: R.Provider`. This is verbatim what docs/deferred.md's "Updated design shape" paragraph said the signature should be -- the decision was recorded in deferred.md on 2026-05-02 and never propagated into design.md, which is the authoritative document.
+- :7236 "`Send + Sync` is enforced at the call site ... the constraint is visible in `with_provider`'s signature" -> rewritten to say thread-safety is enforced structurally against the resolved concrete `P`, and is NOT a bound in the signature at all.
+- :7244 / :7245 the two bullets that described providers as "satisfying `Send + Sync`" / "satisfying `Sync`" -> cross-task-safety and concurrent-access wording.
+
+:7274 keeps its Send/Sync mentions on purpose: that paragraph is the one EXPLAINING the replacement, and its deferred.md cross-reference is the historical record. |
+| B-2026-08-19-14 | typecheck | high | NO `shared struct` OR `par struct` COULD SATISFY ANY TRAIT BOUND ANYWHERE -- `impl_table_key` had no `Type::Shared` arm, so `type_satisfies_bound` an… | f4340ba |
+| B-2026-08-19-15 | typecheck | medium | the `providers { R => p } in { . | f4340ba |
 
 </details>
 
