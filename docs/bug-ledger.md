@@ -103,7 +103,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | perf | 77 | 0 |
 | crash | 52 | 0 |
 | soundness | 51 | 0 |
-| other | 49 | 1 |
+| other | 49 | 0 |
 | use-after-free | 20 | 0 |
 
 ### By surface
@@ -114,7 +114,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | typecheck | 207 | 3 |
 | interp | 156 | 1 |
 | ownership | 60 | 0 |
-| other | 58 | 1 |
+| other | 58 | 0 |
 | autopar | 49 | 0 |
 | cli | 47 | 0 |
 | parser | 27 | 0 |
@@ -124,16 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 5 | 1 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1360 surfaced · 4 open · 1338 fixed · 7 wontfix** (2026-05-20 → 2026-08-19). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1360 surfaced · 3 open · 1338 fixed · 7 wontfix** (2026-05-20 → 2026-08-19). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-19-8 | 2026-08-19 | lexer+typecheck+interp+codegen | medium | IMPLEMENT 128-bit integers for real: `i128` / `u128` are specified normatively in design.md as v1 primitives (all four overflow method families, the widening-cast table, the primitive-numeric lists, Portable SIMD elements) and the compiler now REJECTS them, because no runtime carrier is 128 bits wide. Deleting design.md's 'Implementation status — 128-bit integers are NOT YET IMPLEMENTED' note is the definition of done. | docs/design.md § checked_*/wrapping_*/saturating_*/overflowing_* method families (the status note — deleting it is done); src/typechecker.rs::reject_128bit; src/interpreter/value.rs::Value::Int; src/codegen/method_call.rs (the i64-carrier comment + the `bits >= 64` reduction guard) |
 | B-2026-08-19-10 | 2026-08-19 | typecheck+codegen+runtime | medium | A GPU REDUCTION (N inputs -> 1 result) CANNOT BE WRITTEN AT ALL. `gpu.dispatch` is the entire user-facing GPU surface and it is map-shaped ([T] -> [U], one output per input); the WGSL emitter has ZERO workgroup-memory or barrier support. So sum / dot / min / max / argmax / prefix-sum / any tiled matmul have nowhere to go, which is most of what GPUs are bought for. | — |
 | B-2026-08-19-11 | 2026-08-19 | typecheck | low | design.md:7223 requires a `with_provider` provider to implement `Send + Sync` on top of its declared bounds, and NOTHING checks it -- because neither trait exists in the compiler at all: `grep '"Send"' src/` and `grep '"Sync"' src/` are both EMPTY, so there is no auto-trait machinery to check against at any arity. | design.md:7223 (`with_provider` signature at :7225, `P: R.Provider + Send + Sync`); src/typechecker/expr_call.rs::check_provider_satisfies_declared_bound |
-| B-2026-08-19-12 | 2026-08-19 | other | medium | 102 E2E harness sites build the auto-par / concurrency tables from a BARE `karac::effectcheck(&parsed.program)`, but `karac build` builds them from `effectcheck_with_typecheck_data` -- so effects that reach a caller through an INSTANCE METHOD are missing from the table the tests analyze, and the auto-par surface they exercise is not the one that ships. | — |
 
 ### Wontfix (7)
 
