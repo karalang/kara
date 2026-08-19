@@ -174,6 +174,40 @@ pub struct EffectError {
     pub replacement: Option<Box<crate::resolver::TextEdit>>,
 }
 
+/// Whether an effect diagnostic of this kind STOPS A BUILD.
+///
+/// The single classifier behind every gate that asks the question — the CLI's
+/// `has_fatal_effect_kind` (which `karac build` and `karac run` share) and the
+/// E2E harnesses' `assert_effects_clean`. It lives next to the enum on purpose:
+/// a new variant added above is fatal by default, and making it advisory is a
+/// deliberate edit to the `matches!` below rather than an omission somewhere
+/// else in the tree.
+///
+/// That placement is the lesson of two prior rows. B-2026-08-05-17 found
+/// `karac build` running the effect checker and then ignoring every finding,
+/// because the build gate simply lacked an effect arm — `check` rejected a
+/// program that `build` compiled and exited 0 on. B-2026-07-31-29 was the same
+/// shape one phase over, for ownership. Both were fixed by hoisting ONE
+/// predicate that every lane calls, and this is that predicate for effects,
+/// hoisted once more so the test harnesses cannot drift from the CLI either
+/// (B-2026-08-19-5).
+///
+/// Two kinds stay advisory, both by explicit design:
+///
+///   * [`EffectErrorKind::FfiLintHint`] — declared "never a compile error" at
+///     its definition; rendered as `note[effect]`.
+///   * [`EffectErrorKind::TargetGateViolation`] (E0411) — a target-AVAILABILITY
+///     finding, not a correctness bug, with its own target-aware abort in the
+///     build path. Routing it through this generic gate as well would make a
+///     NATIVE build reject the deliberate cross-target dev workflow `karac run`
+///     supports by design.
+pub fn kind_blocks_production(kind: &EffectErrorKind) -> bool {
+    !matches!(
+        kind,
+        EffectErrorKind::FfiLintHint | EffectErrorKind::TargetGateViolation
+    )
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum EffectErrorKind {
     MissingEffectDeclaration,

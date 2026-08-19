@@ -104,6 +104,11 @@ mod par_codegen_tests {
         parsed.program.callee_effectful = table;
         let ownership = karac::ownershipcheck(&parsed.program, &typed);
         super::common::assert_check_clean(&resolved, &typed, src);
+        // Effects are the THIRD phase of the same gate, and were simply
+        // absent — a test could pin behaviour for a program `karac build`
+        // refuses (B-2026-08-19-5). Runs after `lower`, threaded with the
+        // typechecker's tables, exactly as `Pipeline::run_all_checks` does.
+        super::common::assert_effects_clean_for(&parsed.program, &typed, src);
         super::common::assert_ownership_clean(&ownership, src);
         compile_to_ir(&parsed.program, Some(&ownership), None).expect("codegen failed")
     }
@@ -127,6 +132,11 @@ mod par_codegen_tests {
         let effects = karac::effectcheck(&parsed.program);
         let ownership = karac::ownershipcheck(&parsed.program, &typed);
         super::common::assert_check_clean(&resolved, &typed, src);
+        // Effects are the THIRD phase of the same gate, and were simply
+        // absent — a test could pin behaviour for a program `karac build`
+        // refuses (B-2026-08-19-5). Runs after `lower`, threaded with the
+        // typechecker's tables, exactly as `Pipeline::run_all_checks` does.
+        super::common::assert_effects_clean_for(&parsed.program, &typed, src);
         super::common::assert_ownership_clean(&ownership, src);
         let analysis = karac::concurrency_analyze_typed(&parsed.program, &effects, Some(&typed));
         compile_to_ir(&parsed.program, Some(&ownership), Some(&analysis)).expect("codegen failed")
@@ -1203,6 +1213,11 @@ fn main() {
         karac::lower(&mut parsed.program, &typed);
         let ownership = karac::ownershipcheck(&parsed.program, &typed);
         super::common::assert_check_clean(&resolved, &typed, src);
+        // Effects are the THIRD phase of the same gate, and were simply
+        // absent — a test could pin behaviour for a program `karac build`
+        // refuses (B-2026-08-19-5). Runs after `lower`, threaded with the
+        // typechecker's tables, exactly as `Pipeline::run_all_checks` does.
+        super::common::assert_effects_clean_for(&parsed.program, &typed, src);
         super::common::assert_ownership_clean(&ownership, src);
         let ir = compile_to_ir(&parsed.program, Some(&ownership), None)
             .expect("collect_all_vec must lower under karac build in slice 1b");
@@ -1249,6 +1264,11 @@ fn main() {
         karac::lower(&mut parsed.program, &typed);
         let ownership = karac::ownershipcheck(&parsed.program, &typed);
         super::common::assert_check_clean(&resolved, &typed, src);
+        // Effects are the THIRD phase of the same gate, and were simply
+        // absent — a test could pin behaviour for a program `karac build`
+        // refuses (B-2026-08-19-5). Runs after `lower`, threaded with the
+        // typechecker's tables, exactly as `Pipeline::run_all_checks` does.
+        super::common::assert_effects_clean_for(&parsed.program, &typed, src);
         super::common::assert_ownership_clean(&ownership, src);
         let ir = compile_to_ir(&parsed.program, Some(&ownership), None)
             .expect("inline-Result + f-string closure VALUES must lower to verifier-clean IR");
@@ -1287,6 +1307,11 @@ fn main() {
         karac::lower(&mut parsed.program, &typed);
         let ownership = karac::ownershipcheck(&parsed.program, &typed);
         super::common::assert_check_clean(&resolved, &typed, src);
+        // Effects are the THIRD phase of the same gate, and were simply
+        // absent — a test could pin behaviour for a program `karac build`
+        // refuses (B-2026-08-19-5). Runs after `lower`, threaded with the
+        // typechecker's tables, exactly as `Pipeline::run_all_checks` does.
+        super::common::assert_effects_clean_for(&parsed.program, &typed, src);
         super::common::assert_ownership_clean(&ownership, src);
         let ir = compile_to_ir(&parsed.program, Some(&ownership), None)
             .expect("collect_all must lower under karac build");
@@ -1418,6 +1443,11 @@ fn main() {
         let effects = karac::effectcheck(&parsed.program);
         let ownership = karac::ownershipcheck(&parsed.program, &typed);
         super::common::assert_check_clean(&resolved, &typed, src);
+        // Effects are the THIRD phase of the same gate, and were simply
+        // absent — a test could pin behaviour for a program `karac build`
+        // refuses (B-2026-08-19-5). Runs after `lower`, threaded with the
+        // typechecker's tables, exactly as `Pipeline::run_all_checks` does.
+        super::common::assert_effects_clean_for(&parsed.program, &typed, src);
         super::common::assert_ownership_clean(&ownership, src);
         // Thread type info so method-call network fan-out (A2b-2 Phase 2 Slice 2)
         // is enabled end-to-end, as the real CLI pipeline does.
@@ -2205,6 +2235,11 @@ fn main() {
         let effects = karac::effectcheck(&parsed.program);
         let ownership = karac::ownershipcheck(&parsed.program, &typed);
         super::common::assert_check_clean(&resolved, &typed, src);
+        // Effects are the THIRD phase of the same gate, and were simply
+        // absent — a test could pin behaviour for a program `karac build`
+        // refuses (B-2026-08-19-5). Runs after `lower`, threaded with the
+        // typechecker's tables, exactly as `Pipeline::run_all_checks` does.
+        super::common::assert_effects_clean_for(&parsed.program, &typed, src);
         super::common::assert_ownership_clean(&ownership, src);
         // Thread type info so method-call network fan-out (A2b-2 Phase 2 Slice 2)
         // is enabled end-to-end, as the real CLI pipeline does.
@@ -4734,6 +4769,11 @@ fn main() {
         let analysis = karac::concurrency_analyze(&parsed.program, &effects);
         let ownership = karac::ownershipcheck(&parsed.program, &typed);
         super::common::assert_check_clean(&resolved, &typed, src);
+        // Effects are the THIRD phase of the same gate, and were simply
+        // absent — a test could pin behaviour for a program `karac build`
+        // refuses (B-2026-08-19-5). Runs after `lower`, threaded with the
+        // typechecker's tables, exactly as `Pipeline::run_all_checks` does.
+        super::common::assert_effects_clean_for(&parsed.program, &typed, src);
         super::common::assert_ownership_clean(&ownership, src);
         let id = COUNTER.fetch_add(1, Ordering::Relaxed);
         let pid = std::process::id();

@@ -9530,3 +9530,66 @@ fn profile_attribute_delivers_the_allocation_free_guarantee() {
          pub fn frame(x: i64) -> i64 { x * 2 }",
     );
 }
+
+// ── Production-fatality classifier (B-2026-08-19-5) ──────────────────
+
+/// The two kinds that are ADVISORY in production, and nothing else.
+///
+/// Stated as an explicit pair rather than by re-deriving the predicate, so a
+/// variant added to `EffectErrorKind` cannot quietly join the advisory set: a
+/// new kind is fatal by default, and making it advisory has to change this list
+/// too. That default direction is what B-2026-08-05-17 was about — `karac build`
+/// ran the effect checker and then ignored every finding, so `check` rejected a
+/// program `build` compiled and exited 0 on.
+#[test]
+fn only_ffi_lint_hint_and_target_gate_are_advisory() {
+    use karac::effectchecker::kind_blocks_production;
+
+    assert!(!kind_blocks_production(&EffectErrorKind::FfiLintHint));
+    assert!(!kind_blocks_production(
+        &EffectErrorKind::TargetGateViolation
+    ));
+
+    for kind in [
+        EffectErrorKind::MissingEffectDeclaration,
+        EffectErrorKind::OverDeclaredEffect,
+        EffectErrorKind::CircularEffectGroup,
+        EffectErrorKind::UndefinedEffectGroup,
+        EffectErrorKind::EffectSubtypeViolation,
+        EffectErrorKind::ForbiddenEffectInContract,
+        EffectErrorKind::ProfileViolation,
+        EffectErrorKind::ImplExceedsTraitCeiling,
+        EffectErrorKind::TraitDefaultExceedsCeiling,
+    ] {
+        assert!(
+            kind_blocks_production(&kind),
+            "{kind:?} must be fatal — a correctness finding that stops a build"
+        );
+    }
+}
+
+/// The classifier agrees with the diagnostic the CLI actually emits.
+///
+/// The wrong-verb program from B-2026-08-19-5's repro: a PUBLIC function's
+/// effects are verified rather than inferred, so declaring `sends` for a call
+/// that reads is a hard error — and it must be classified fatal, since that is
+/// what makes the E2E harnesses' effect gate reject it.
+#[test]
+fn wrong_declared_verb_on_a_public_fn_is_fatal() {
+    let errors = effectcheck_errors(
+        "trait Channel { fn send(ref self, v: i64) -> i64; }\n\
+         effect resource RequestCh: Channel;\n\
+         pub fn push(v: i64) -> i64 with sends(RequestCh) { RequestCh.send(v) }",
+    );
+    let blocking: Vec<_> = errors
+        .iter()
+        .filter(|e| karac::effectchecker::kind_blocks_production(&e.kind))
+        .collect();
+    assert!(
+        blocking
+            .iter()
+            .any(|e| e.kind == EffectErrorKind::MissingEffectDeclaration),
+        "expected a BLOCKING missing-effect diagnostic; got: {:?}",
+        errors.iter().map(|e| (&e.kind, &e.message)).collect::<Vec<_>>()
+    );
+}

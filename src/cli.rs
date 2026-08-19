@@ -1501,11 +1501,12 @@ impl Pipeline {
     /// That check-vs-run split predates this fix and changing `check`'s exit
     /// code is a separate decision — `check` being the strictest lane is the
     /// safe direction for the Mend loop's gate. Recorded on B-2026-08-05-17.
+    ///
+    /// Hoisted into the library as `effectchecker::kind_blocks_production` so
+    /// the E2E harnesses' effect gate shares it verbatim rather than keeping a
+    /// second copy (B-2026-08-19-5); this stays as the CLI-side name.
     fn is_fatal_effect_kind(kind: &EffectErrorKind) -> bool {
-        !matches!(
-            kind,
-            EffectErrorKind::FfiLintHint | EffectErrorKind::TargetGateViolation
-        )
+        crate::effectchecker::kind_blocks_production(kind)
     }
 
     /// Comptime fold failures are fatal: a `comptime { ... }` block that
@@ -1567,9 +1568,11 @@ impl Pipeline {
     /// The single classification consulted by both `has_fatal_ownership_errors`
     /// (the build gate) and `total_errors` (the `check` exit code), so the two
     /// cannot drift apart again.
+    /// Hoisted into the library as `ownership::kind_blocks_production` for the
+    /// same reason as its effect twin (B-2026-08-19-5) — the E2E harnesses had
+    /// their own transcribed copy of this list.
     fn is_fatal_ownership_kind(kind: &crate::ownership::OwnershipErrorKind) -> bool {
-        use crate::ownership::OwnershipErrorKind as K;
-        !matches!(kind, K::RcFallbackNote | K::UseAfterMove)
+        crate::ownership::kind_blocks_production(kind)
     }
 
     fn total_errors(&self) -> usize {

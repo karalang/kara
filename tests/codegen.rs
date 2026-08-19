@@ -22541,6 +22541,11 @@ fn main() {
         karac::lower(&mut parsed.program, &typed);
         let ownership = karac::ownershipcheck(&parsed.program, &typed);
         super::common::assert_check_clean(&resolved, &typed, src);
+        // Effects are the THIRD phase of the same gate, and were simply
+        // absent — a test could pin behaviour for a program `karac build`
+        // refuses (B-2026-08-19-5). Runs after `lower`, threaded with the
+        // typechecker's tables, exactly as `Pipeline::run_all_checks` does.
+        super::common::assert_effects_clean_for(&parsed.program, &typed, src);
         super::common::assert_ownership_clean(&ownership, src);
 
         let id = std::process::id();
@@ -33840,6 +33845,11 @@ fn main() {
         // feeds codegen input production never reaches (that masked
         // B-2026-07-01-10 for weeks).
         super::common::assert_check_clean(&resolved, &typed, src);
+        // Effects are the THIRD phase of the same gate, and were simply
+        // absent — a test could pin behaviour for a program `karac build`
+        // refuses (B-2026-08-19-5). Runs after `lower`, threaded with the
+        // typechecker's tables, exactly as `Pipeline::run_all_checks` does.
+        super::common::assert_effects_clean_for(&parsed.program, &typed, src);
         super::common::assert_ownership_clean(&ownership, src);
 
         // W3.3 — LLJIT dispatch under env-var control. Routes the whole
@@ -36396,7 +36406,7 @@ unsafe extern "C" {
     fn puts(s: *const u8) -> i32 with writes(Console);
 }
 
-pub fn main() with writes(Console) {
+pub fn main() with writes(Console) blocks {
     let msg: ref CStr = c"hello, world";
     puts(msg.as_ptr());
     puts(c"literal receiver".as_ptr());
@@ -36478,7 +36488,7 @@ unsafe extern "C" {
     fn puts(s: *const u8) -> i32 with writes(Console);
 }
 
-pub fn main() with writes(Console) {
+pub fn main() with writes(Console) blocks {
     let s = "hello, " + "world";
     match s.to_cstring() {
         Ok(cs) => { puts(cs.as_ptr()); }
@@ -56002,6 +56012,11 @@ fn main() {
         karac::lower(&mut parsed.program, &typed);
         let ownership = karac::ownershipcheck(&parsed.program, &typed);
         super::common::assert_check_clean(&resolved, &typed, src);
+        // Effects are the THIRD phase of the same gate, and were simply
+        // absent — a test could pin behaviour for a program `karac build`
+        // refuses (B-2026-08-19-5). Runs after `lower`, threaded with the
+        // typechecker's tables, exactly as `Pipeline::run_all_checks` does.
+        super::common::assert_effects_clean_for(&parsed.program, &typed, src);
         super::common::assert_ownership_clean(&ownership, src);
         compile_to_ir(&parsed.program, Some(&ownership), None).expect("codegen failed")
     }
@@ -59712,6 +59727,11 @@ fn main() {
         // Ownership-loaded, same rationale as `run_program_capturing_inner`.
         let ownership = karac::ownershipcheck(&parsed.program, &typed);
         super::common::assert_check_clean(&resolved, &typed, src);
+        // Effects are the THIRD phase of the same gate, and were simply
+        // absent — a test could pin behaviour for a program `karac build`
+        // refuses (B-2026-08-19-5). Runs after `lower`, threaded with the
+        // typechecker's tables, exactly as `Pipeline::run_all_checks` does.
+        super::common::assert_effects_clean_for(&parsed.program, &typed, src);
         super::common::assert_ownership_clean(&ownership, src);
 
         let id = COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -64605,6 +64625,11 @@ fn main() {
         let effects = karac::effectcheck(&parsed.program);
         let ownership = karac::ownershipcheck(&parsed.program, &typed);
         super::common::assert_check_clean(&resolved, &typed, src);
+        // Effects are the THIRD phase of the same gate, and were simply
+        // absent — a test could pin behaviour for a program `karac build`
+        // refuses (B-2026-08-19-5). Runs after `lower`, threaded with the
+        // typechecker's tables, exactly as `Pipeline::run_all_checks` does.
+        super::common::assert_effects_clean_for(&parsed.program, &typed, src);
         super::common::assert_ownership_clean(&ownership, src);
         let analysis = karac::concurrency_analyze(&parsed.program, &effects);
 
@@ -68469,6 +68494,11 @@ fn main() {
             build_callee_purely_polymorphic_effects_set(&effects);
         let ownership = karac::ownershipcheck(&parsed.program, &typed);
         super::common::assert_check_clean(&resolved, &typed, src);
+        // Effects are the THIRD phase of the same gate, and were simply
+        // absent — a test could pin behaviour for a program `karac build`
+        // refuses (B-2026-08-19-5). Runs after `lower`, threaded with the
+        // typechecker's tables, exactly as `Pipeline::run_all_checks` does.
+        super::common::assert_effects_clean_for(&parsed.program, &typed, src);
         super::common::assert_ownership_clean(&ownership, src);
         let ir = compile_to_ir_with_coro_split(&parsed.program, None, None)
             .expect("coro split codegen failed");
@@ -94017,6 +94047,11 @@ fn main() {
         karac::lower(&mut parsed.program, &typed);
         let ownership = karac::ownershipcheck(&parsed.program, &typed);
         super::common::assert_check_clean(&resolved, &typed, src);
+        // Effects are the THIRD phase of the same gate, and were simply
+        // absent — a test could pin behaviour for a program `karac build`
+        // refuses (B-2026-08-19-5). Runs after `lower`, threaded with the
+        // typechecker's tables, exactly as `Pipeline::run_all_checks` does.
+        super::common::assert_effects_clean_for(&parsed.program, &typed, src);
         super::common::assert_ownership_clean(&ownership, src);
 
         let id = COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -94090,12 +94125,80 @@ fn main() {
         );
     }
 
+    /// The effect gate catches what `karac check` catches — B-2026-08-19-5.
+    ///
+    /// This is the row's own repro, and it is a test OF THE HARNESS rather than
+    /// of the compiler: before the gate existed, this exact program ran here and
+    /// the test passed, while `karac check` and `karac build` both exited 1 on
+    /// the identical source with "public function 'push' performs
+    /// reads(RequestCh) but does not declare it". A public function's effects
+    /// are VERIFIED rather than inferred, so the wrong verb is a hard error.
+    ///
+    /// Asserting the PANIC is the point: it pins that the suite which exercises
+    /// the most real binaries can no longer pin behaviour for a program no user
+    /// can compile. If the gate is ever removed or stops running, this test goes
+    /// green-by-not-panicking and fails.
+    #[test]
+    #[should_panic(expected = "[effect-gate]")]
+    fn effect_gate_rejects_public_fn_whose_declared_verb_is_wrong() {
+        let src = r#"
+trait Channel {
+    fn send(ref self, v: i64) -> i64;
+}
+
+effect resource RequestCh: Channel;
+
+pub fn push(v: i64) -> i64 with sends(RequestCh) {
+    RequestCh.send(v)
+}
+
+fn main() {
+    let _ = 0;
+}
+"#;
+        let _ = run_program(src);
+    }
+
+    /// The gate is no STRICTER than production either, which is the other half
+    /// of "mirror `karac build`" and the easier half to get wrong.
+    ///
+    /// `TargetGateViolation` (E0411) is an effect-checker finding that `karac
+    /// build` deliberately does NOT treat as fatal — it is a target-AVAILABILITY
+    /// result, and the cross-target dev workflow `karac run` supports depends on
+    /// a native build not rejecting it. A gate written as "any effect error"
+    /// would fail this program, deleting real coverage. Measured: this exact
+    /// source reaches codegen and runs, while `karac check` reports E0411.
+    #[test]
+    fn effect_gate_admits_the_advisory_target_gate_violation() {
+        let src = r#"
+effect resource Console;
+
+unsafe extern "C" {
+    fn puts(s: *const u8) -> i32 with writes(Console);
+}
+
+pub fn main() with writes(Console) blocks {
+    puts(c"advisory".as_ptr());
+}
+"#;
+        if let Some(out) = run_program(src) {
+            assert_eq!(out, "advisory\n");
+        }
+    }
+
     /// Case 2: an `extern "C-unwind"` export is rejected by the backend
     /// with a substrate-gate message (panic-unwind propagation needs the
     /// Phase-7 unwind substrate, which this backend lacks). The effect
     /// checker independently requires `with panics` here (tested in
     /// tests/effectchecker.rs), so the declaration is present and the
     /// rejection is purely the codegen gate.
+    ///
+    /// It is grandfathered past the effect gate (`EFFECT_GATE_GRANDFATHERED`):
+    /// under the default abort-only profile the effect checker ALSO rejects the
+    /// export outright (`ExternCUnwindRequiresUnwindProfile`) — a second, later
+    /// interaction than the `with panics` one this comment describes. That is
+    /// what makes the program unreachable in production and the test a
+    /// deliberate negative; gating it would delete the codegen coverage.
     #[test]
     fn extern_c_unwind_export_rejected_by_backend() {
         use karac::codegen::compile_to_object_with_options;
@@ -94107,6 +94210,11 @@ fn main() {
         karac::lower(&mut parsed.program, &typed);
         let ownership = karac::ownershipcheck(&parsed.program, &typed);
         super::common::assert_check_clean(&resolved, &typed, src);
+        // Effects are the THIRD phase of the same gate, and were simply
+        // absent — a test could pin behaviour for a program `karac build`
+        // refuses (B-2026-08-19-5). Runs after `lower`, threaded with the
+        // typechecker's tables, exactly as `Pipeline::run_all_checks` does.
+        super::common::assert_effects_clean_for(&parsed.program, &typed, src);
         super::common::assert_ownership_clean(&ownership, src);
         let obj = format!("/tmp/karac_ffi_cunwind_{}.o", std::process::id());
         let result = compile_to_object_with_options(

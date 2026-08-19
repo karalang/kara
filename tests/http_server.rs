@@ -107,6 +107,11 @@ mod http_server_tests {
         let _effects = karac::effectcheck(&parsed.program);
         let ownership = karac::ownershipcheck(&parsed.program, &typed);
         super::common::assert_check_clean(&resolved, &typed, src);
+        // Effects are the THIRD phase of the same gate, and were simply
+        // absent — a test could pin behaviour for a program `karac build`
+        // refuses (B-2026-08-19-5). Runs after `lower`, threaded with the
+        // typechecker's tables, exactly as `Pipeline::run_all_checks` does.
+        super::common::assert_effects_clean_for(&parsed.program, &typed, src);
         super::common::assert_ownership_clean(&ownership, src);
         let pid = std::process::id();
         let nanos = std::time::SystemTime::now()

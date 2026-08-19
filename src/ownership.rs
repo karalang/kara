@@ -470,6 +470,40 @@ pub struct OwnershipError {
     pub consume_span: Option<Span>,
 }
 
+/// Whether an ownership diagnostic of this kind STOPS A BUILD.
+///
+/// The ownership twin of [`crate::effectchecker::kind_blocks_production`], and
+/// the single classifier behind the CLI's `has_fatal_ownership_errors` and the
+/// E2E harnesses' `assert_ownership_clean`. Next to the enum for the same
+/// reason: a variant added above is fatal by default.
+///
+/// The rule is deliberately stated as an EXCLUSION rather than a list of fatal
+/// kinds. B-2026-07-31-29 had it the other way — only `ExclusiveBorrowAliasedArgs`
+/// was promoted, so every other kind was silently advisory at the CLI layer and
+/// `karac check` reported `error[ownership]` while `karac build` produced a
+/// binary and exited 0 for the same program.
+///
+/// Advisory, both because production is DOCUMENTED to accept them:
+///
+///   * [`OwnershipErrorKind::RcFallbackNote`] — "Performance note … Not
+///     blocking" at its definition; the RC it reports is inserted and correct.
+///     It rides `notes` rather than `errors` today, so it is listed for
+///     symmetry with the production gate rather than because it is reachable.
+///   * [`OwnershipErrorKind::UseAfterMove`] — codegen defensive-copies the
+///     reuse, so the binary is memory-safe, and the diagnostic carries a
+///     machine-applicable `.clone()` fix precisely because the program
+///     compiles and runs. Gating the suite on it would have made the
+///     ~1000-fixture memory suite structurally unable to contain a single test
+///     of the defensive-copy mechanism whose correctness that non-fatal status
+///     depends on — which is how B-2026-08-10-21 (that copy never existed for
+///     any heap type) survived undetected.
+pub fn kind_blocks_production(kind: &OwnershipErrorKind) -> bool {
+    !matches!(
+        kind,
+        OwnershipErrorKind::RcFallbackNote | OwnershipErrorKind::UseAfterMove
+    )
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum OwnershipErrorKind {
     UseAfterMove,

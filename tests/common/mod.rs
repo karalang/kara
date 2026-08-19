@@ -310,9 +310,13 @@ pub fn link_or_skip(result: Result<(), String>) -> Option<()> {
 ///
 /// `RcFallbackNote` is listed for symmetry with the production gate; it rides
 /// `notes` rather than `errors` today, so it is not reachable here.
+/// Delegates to the compiler's own classifier rather than restating it. This
+/// list used to be transcribed here, which is a drift hazard of exactly the
+/// kind the production gate's history warns about: the harness's job is to
+/// mirror `karac build`, and a mirror maintained by hand stops being one the
+/// first time a kind is added on one side only (B-2026-08-19-5).
 fn ownership_kind_blocks_production(kind: &karac::ownership::OwnershipErrorKind) -> bool {
-    use karac::ownership::OwnershipErrorKind as K;
-    !matches!(kind, K::RcFallbackNote | K::UseAfterMove)
+    karac::ownership::kind_blocks_production(kind)
 }
 
 pub fn assert_ownership_clean(ownership: &karac::ownership::OwnershipCheckResult, src: &str) {
@@ -405,6 +409,131 @@ pub const CHECK_GATE_GRANDFATHERED: &[&str] = &[
     //    delete the coverage rather than fix anything.
     "test_atomic_implicit_ordering_rejected_by_codegen",
 ];
+
+/// Run the effect checker the way `karac build` runs it, and gate on the result.
+///
+/// One helper rather than the call spelled out at each of the harnesses' ~25
+/// gate sites, for the reason `prepare_for_resolve` is one call shared with
+/// `cli.rs`: a hand-spelled mirror of a CLI phase drifts (B-2026-08-11-34 was
+/// exactly that, for the passes between parse and resolve).
+///
+/// Two details are load-bearing and are the reason a bare `karac::effectcheck`
+/// here would be WRONG rather than merely incomplete:
+///
+///   * It must run AFTER `lower`, matching `Pipeline::run_all_checks`
+///     (resolve → typecheck → lower → effectcheck → ownershipcheck).
+///   * It must be threaded with the typechecker's `method_callee_types` and
+///     `call_type_subs`. Without them, method-call sites miss the `with E` /
+///     Fn-slot / polymorphic-arg propagation paths the free-call form gets, and
+///     the checker reports effects the real build does not — false positives
+///     that would fail correct tests.
+pub fn effectcheck_as_build_does(
+    program: &karac::ast::Program,
+    typed: &karac::typechecker::TypeCheckResult,
+) -> karac::effectchecker::EffectCheckResult {
+    karac::effectcheck_with_typecheck_data(
+        program,
+        karac::effectchecker::PublicEffectsPolicy::default(),
+        karac::manifest::ProfileConfig::default(),
+        typed.method_callee_types.clone(),
+        typed.call_type_subs.clone(),
+    )
+}
+
+/// [`effectcheck_as_build_does`] + [`assert_effects_clean`], which is what
+/// every gate site wants.
+pub fn assert_effects_clean_for(
+    program: &karac::ast::Program,
+    typed: &karac::typechecker::TypeCheckResult,
+    src: &str,
+) {
+    let effects = effectcheck_as_build_does(program, typed);
+    assert_effects_clean(&effects, src);
+}
+
+/// Tests grandfathered past [`assert_effects_clean`]. Same contract and same
+/// matching rules as [`CHECK_GATE_GRANDFATHERED`]; the list exists to shrink.
+pub const EFFECT_GATE_GRANDFATHERED: &[&str] = &[
+    // ── DELIBERATE NEGATIVE TEST (tests/codegen.rs): asserts the CODEGEN-layer
+    //    rejection of an `extern "C-unwind"` EXPORT. The effect checker rejects
+    //    the same program first under the default abort-only profile
+    //    (`ExternCUnwindRequiresUnwindProfile`), so production never reaches the
+    //    codegen arm — which is the point of the test. Gating it would delete
+    //    the coverage rather than fix anything, exactly as for
+    //    `test_atomic_implicit_ordering_rejected_by_codegen` in
+    //    [`CHECK_GATE_GRANDFATHERED`].
+    "extern_c_unwind_export_rejected_by_backend",
+];
+
+/// Fail loudly when an E2E test program flunks the EFFECT checker.
+///
+/// The third phase of the same gate [`assert_check_clean`] is named for, and
+/// the one that was simply absent (B-2026-08-19-5). `karac build` refuses to
+/// reach codegen when the effect checker reports a fatal finding — `cli.rs`
+/// `has_fatal_errors` ORs `has_fatal_effect_errors` in — so a program that
+/// flunks it is input production never compiles, exactly as for resolve and
+/// typecheck.
+///
+/// FOUND by accident: an E2E test declared `pub fn push(v: i64) -> i64 with
+/// sends(RequestCh)` and passed here, while `karac check` and `karac build`
+/// both rejected the identical source with "public function 'push' performs
+/// reads(RequestCh) but does not declare it". A public function's effects are
+/// VERIFIED rather than inferred, so the wrong verb is a hard error — and this
+/// suite, which exercises more real binaries than any other, could not see it.
+///
+/// Fatality is classified by the compiler's own
+/// [`karac::effectchecker::kind_blocks_production`], not by a list restated
+/// here. That matters in the permissive direction: `FfiLintHint` and
+/// `TargetGateViolation` are advisory in production, so gating on "any effect
+/// error" would make the harness STRICTER than `karac build` and reject
+/// programs users can compile — the opposite failure, and a worse one, since
+/// it would delete real coverage (the cross-target `karac run` workflow that
+/// E0411 exists to support).
+pub fn assert_effects_clean(effects: &karac::effectchecker::EffectCheckResult, src: &str) {
+    let blocking: Vec<&karac::effectchecker::EffectError> = effects
+        .errors
+        .iter()
+        .filter(|e| karac::effectchecker::kind_blocks_production(&e.kind))
+        .collect();
+    if blocking.is_empty() {
+        return;
+    }
+    let thread = std::thread::current();
+    let test_name = thread.name().unwrap_or("<unnamed>");
+    if EFFECT_GATE_GRANDFATHERED.iter().any(|g| {
+        if let Some(prefix) = g.strip_suffix('*') {
+            let bare = test_name.rsplit("::").next().unwrap_or(test_name);
+            bare.starts_with(prefix)
+        } else {
+            test_name == *g || test_name.ends_with(&format!("::{g}"))
+        }
+    }) {
+        eprintln!(
+            "[effect-gate] {test_name}: {} blocking effect error(s) \
+             grandfathered — see EFFECT_GATE_GRANDFATHERED in \
+             tests/common/mod.rs",
+            blocking.len()
+        );
+        return;
+    }
+    let mut msg = format!(
+        "[effect-gate] test `{test_name}`: program fails the effect checker \
+         ({} blocking error(s)) — `karac build` exits 1 on this source, so \
+         codegen is being fed input it never sees in production. Fix the test \
+         program, or (for a latent compiler bug) file a docs/bug-ledger.jsonl \
+         entry and grandfather the test in tests/common/mod.rs:\n",
+        blocking.len()
+    );
+    for e in &blocking {
+        msg.push_str(&format!(
+            "  {}:{}: {} [{:?}]\n",
+            e.span.line, e.span.column, e.message, e.kind
+        ));
+    }
+    msg.push_str("program:\n");
+    msg.push_str(src);
+    panic!("{msg}");
+}
 
 /// Fail loudly when an E2E test program flunks `resolve` or `typecheck`.
 ///

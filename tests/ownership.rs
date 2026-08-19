@@ -12950,3 +12950,37 @@ fn loop_break_not_dominated_by_assignment_stays_uninitialized() {
         );
     }
 }
+
+// ── Production-fatality classifier (B-2026-08-19-5) ──────────────────
+
+/// The two kinds that are ADVISORY in production, and nothing else.
+///
+/// The ownership twin of `only_ffi_lint_hint_and_target_gate_are_advisory` in
+/// tests/effectchecker.rs, and stated the same way — as an explicit pair, so a
+/// new `OwnershipErrorKind` is fatal by default. B-2026-07-31-29 had this
+/// inverted: only `ExclusiveBorrowAliasedArgs` was promoted, so `karac check`
+/// reported `error[ownership]` while `karac build` produced a binary and
+/// exited 0 for the same program.
+#[test]
+fn only_rc_fallback_note_and_use_after_move_are_advisory() {
+    use karac::ownership::kind_blocks_production;
+    use karac::ownership::OwnershipErrorKind as K;
+
+    assert!(!kind_blocks_production(&K::RcFallbackNote));
+    assert!(!kind_blocks_production(&K::UseAfterMove));
+
+    for kind in [
+        K::OwnershipCycle,
+        K::NoRcViolation,
+        K::UseOfUninitialized,
+        K::ReassignToImmutable,
+        K::MutateImmutableBinding,
+        K::CaptureModeViolation,
+        K::ExclusiveBorrowAliasedArgs,
+    ] {
+        assert!(
+            kind_blocks_production(&kind),
+            "{kind:?} must be fatal — a real violation, not a hint"
+        );
+    }
+}
