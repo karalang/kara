@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 185 | 0 |
 | run-vs-build | 139 | 2 |
 | double-free | 133 | 0 |
-| missing-feature | 122 | 2 |
+| missing-feature | 122 | 1 |
 | codegen-gap | 119 | 0 |
 | diagnostics | 83 | 0 |
 | false-positive | 82 | 0 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 947 | 2 |
-| typecheck | 214 | 2 |
+| typecheck | 214 | 1 |
 | interp | 162 | 2 |
 | ownership | 60 | 0 |
 | other | 58 | 0 |
@@ -124,14 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 6 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1375 surfaced · 4 open · 1352 fixed · 7 wontfix** (2026-05-20 → 2026-08-19). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1375 surfaced · 3 open · 1352 fixed · 7 wontfix** (2026-05-20 → 2026-08-19). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-19-13 | 2026-08-19 | typecheck+codegen+runtime | medium | GPU reductions still lack the two-pass statistics (var / std), prefix-sum and tiled matmul; integer `prod` / `mean` / `dot` and an integer Arg family each await their own decision. `sum`/`prod`/`min`/`max`/`mean`/`dot`/`argmin`/`argmax` over `Vec[f32]` and `sum`/`min`/`max` over `Vec[i32]` and `Vec[u32]` have shipped. | docs/spikes/gpu-llvm-offload-assessment.md; src/gpu_wgsl.rs::emit_reduce_kernel; src/reduce_kernel.rs::tree_reduce_f32 |
-| B-2026-08-19-22 | 2026-08-19 | typecheck | medium | `String` has no O(1) indexed character access — first/last char requires `chars().collect()` into a `Vec[char]` (an allocation) or a full iterator walk, so `w[0]`/`w[-1]` has no constant-time spelling | — |
 | B-2026-08-19-25 | 2026-08-19 | interp+codegen | medium | `Stats.sum` / `Stats.prod` over i64 RAW-`panic!` on integer overflow under `karac run` (Rust backtrace, exit 101) where `karac build` traps cleanly (`integer overflow`, exit 1) -- the last raw panic left in `eval_stats_fn_int`, and the two legs also word the message differently. | src/interpreter/helpers.rs::eval_stats_fn_int (the `run` closure's overflow panic); src/codegen/stats.rs (the AOT twin's trap text) |
 | B-2026-08-19-27 | 2026-08-19 | interp | medium | The interpreter renders an UNSIGNED value with its SIGNED reading whenever it is nested in a container or an enum payload: `println(o)` on an `Option[u64]` holding `u64::MAX` prints `Some(-1)` under `karac run --interp`, and `println(v)` on a `Vec[u64]` prints `[-1, 5]`, while both compiled backends print the values correctly. Not a 128-bit bug — it reproduces identically on `u64` and predates 128-bit entirely. | src/interpreter/*::display_render (the recursive renderer); src/interpreter/method_call.rs (the scalar `to_string` arm, which already does this correctly via `span_unsigned_int_width`); src/interpreter/eval_ops.rs::span_unsigned_int_width |
 
