@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 262 | 0 |
 | leak | 185 | 0 |
 | double-free | 133 | 0 |
-| run-vs-build | 133 | 2 |
+| run-vs-build | 133 | 1 |
 | codegen-gap | 119 | 0 |
 | missing-feature | 113 | 3 |
 | diagnostics | 83 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 939 | 4 |
+| codegen | 939 | 3 |
 | typecheck | 204 | 3 |
 | interp | 155 | 1 |
 | ownership | 60 | 0 |
@@ -118,20 +118,19 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | autopar | 49 | 0 |
 | cli | 47 | 1 |
 | parser | 27 | 1 |
-| runtime | 24 | 2 |
+| runtime | 24 | 1 |
 | resolver | 20 | 0 |
 | effect | 7 | 0 |
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1355 surfaced · 7 open · 1330 fixed · 7 wontfix** (2026-05-20 → 2026-08-19). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1355 surfaced · 6 open · 1331 fixed · 7 wontfix** (2026-05-20 → 2026-08-19). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (7)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-18-40 | 2026-08-18 | typecheck+codegen | low | A `#[gpu]` KERNEL BODY COULD NOT LOOP, BIND A LOCAL, OR BRANCH ON A VALUE — it had to be a SINGLE EXPRESSION. All four increments LANDED 2026-08-18: immutable `let`, `while` + mutable locals + assignment, `for`-over-range, and value `match`. Reductions, accumulators, nested counted loops and table lookups now compile AND run (each verified on lavapipe against the interpreter). REMAINDER SPLIT OUT AS B-2026-08-18-49: statement-form `if` is unsupported (and a value-`if` branch cannot hold a local) — wider than this row's original "locals inside an `if` branch" wording, which understated it. | docs/implementation_checklist/phase-10-targets.md § GPU codegen cluster (CG-1…CG-7); the slice-0 scope decision is docs/spikes/gpu-wgsl-slice0.md. Not a regression — an unlifted slice-0 floor. Sibling of the CG-5 assessment (docs/spikes/gpu-llvm-offload-assessment.md finding 4), which is where it surfaced. |
-| B-2026-08-19-1 | 2026-08-19 | codegen+runtime | high | A `#[gpu]` kernel SILENTLY DROPS Kara's checked-integer-arithmetic semantics: the same expression that TRAPS under `--interp` (and on CPU) WRAPS on the GPU, and division by zero returns a plausible number instead of failing. Three measured divergences, all silent wrong answers rather than crashes. This breaks the repo's own non-negotiable A/B rule (`run` == `build`) and voids, inside kernels, the overflow-checking guarantee BENCHMARKS.md leans on when framing Kara-vs-Rust as an equal-safety tie. | — |
 | B-2026-08-19-3 | 2026-08-19 | parser+codegen | low | MULTI-BOUND `effect resource` declarations do not parse: `effect resource UserDB: DatabaseProvider + HealthCheckable;` -> "Expected Semicolon, found Plus", spec'd normatively at design.md:7216 under "Multiple trait bounds are allowed on a resource declaration:" (:7213), with semantics attached at :7217 ("Any provider passed to `with_provider` must implement all declared bounds plus `Send + Sync`"). | src/parser/items_effects.rs::parse_effect_resource_tail vs design.md:7216 (prose at :7213, semantics at :7217); src/codegen/provider_state.rs::provider_resource_traits and its nine readers |
 | B-2026-08-19-4 | 2026-08-19 | typecheck | medium | `with_provider[R](p, ...)` NEVER CHECKS that `p` implements the resource's declared provider trait. A struct with a matching method but no `impl Trait for U` passes resolve, typecheck and effectcheck, then fails in CODEGEN with a message blaming the vtable -- design.md:7217 requires the opposite ("Any provider passed to `with_provider` must implement all declared bounds plus `Send + Sync`"). | design.md:7217; src/typechecker/env_build.rs::collect_user_resource_override_types; the codegen message at src/codegen/provider.rs ("no impl found for `T::m`") |
 | B-2026-08-19-5 | 2026-08-19 | other | low | The codegen E2E harness (`tests/codegen.rs::run_program_capturing_inner`) runs resolve + typecheck but NOT the effect checker, so a test can pin behaviour for a program `karac build` REFUSES. Its `assert_check_clean` gate is named for the whole check phase and covers two thirds of it. | tests/codegen.rs::run_program_capturing_inner; tests/common's assert_check_clean; cf. B-2026-08-11-34 (the prepare_for_resolve drift this gate was hardened against) |
@@ -154,9 +153,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1355 surfaced
 
 </details>
 
-### Fixed (1330)
+### Fixed (1331)
 
-<details><summary>1330 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1331 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -12127,6 +12126,65 @@ MEASURED BOTH WAYS on a host with no GPU archive:
 THE MATCHER IS PINNED BY ITS OWN TEST, because the whole value of a four-way split is that the new arm catches EXACTLY the absent archive: one careless `contains` would hand `Broken`'s cases a skip and reopen the hole the file exists to close. `probe_classifier_matches_only_the_absent_gpu_archive` asserts the driver's real wording classifies as `NoArchive`, and that four things do NOT — a no-adapter host, a shader the backend rejected, a runtime fault, and a DIFFERENT optional archive's message (regex), whose near-identical phrasing is the likeliest way a future widening goes wrong. It also asserts the two predicates are disjoint, so arm order in `gpu_probe` cannot silently decide an outcome. Verified non-vacuous: widening the matcher to `contains("not found") || contains("failed")` fails it on the no-adapter case. Pure-string, so it runs on any host — which matters, since a host with no adapter is exactly where the classifier decides everything.
 
 SCOPE NOTE: this does not make the GPU tests run anywhere they did not before, and it is not a substitute for building the archive. It restores the property every other archive-gated suite already has — that an opt-in artifact's absence is a skip, and that one flag turns every such skip into a failure. |
+| B-2026-08-19-1 | codegen+runtime | high | A `#[gpu]` kernel SILENTLY DROPS Kara's checked-integer-arithmetic semantics: the same expression that TRAPS under `--interp` (and on CPU) WRAPS on t… | FIXED by 73aeb057 (groundwork) + 3e0eca75 (the fix).
+
+RESOLUTION: the "narrow escape hatch" option — the kernel must NAME the wraparound rather than
+get it silently. Chosen over emitting real checks in WGSL (per-op branching plus an out-of-band
+error-flag buffer and a dispatch ABI change) and over spec'ing a carve-out, because design.md
+§ Arithmetic Overflow already fixes the shape: the escape hatch stays "narrow and local … never a
+project-wide `overflow-checks=off` switch, which would strip the guarantee invisibly". `#[gpu]`
+was exactly such an invisible switch.
+
+TWO PARTS, and both were needed — before this the emitter REJECTED `.wrapping_add()` outright
+while accepting the silent `+`, so the honest spelling was the one that did not compile.
+
+1. `wrapping_add/sub/mul` widened from the 64-bit widths to every i64-representable width
+   (73aeb057). This was the blocking dependency and was not a gate widening: GPU element types
+   are i32/u32/f32 while the family existed only on i64/u64/usize — disjoint, so there was NO
+   way to spell wrapping arithmetic in a kernel at all. The original 64-bit restriction was
+   load-bearing. Codegen needed real work, and the first cut got both operand shapes wrong: a
+   narrow PARAMETER is a real LLVM i32 while a narrow LOCAL is an i64 carrier, so mixing them
+   emitted `add i32 %x, i64 1` and failed module verification; computing at i64 without reducing
+   gave 2147483648 for `i32::MAX.wrapping_add(1)`, no wrap at all. Both operands now widen to
+   i64, compute there (matching the i64-backed interpreter), then mask and sign-extend back into
+   the receiver's declared width — the `compile_narrow_int_binop` shape, except wrapping where
+   that one traps. Width comes from the existing `receiver_int_kind`, so no new side-table.
+
+2. The emitter now lowers `wrapping_*` to bare WGSL infix and REJECTS bare `+ - * / %` on integer
+   operands (3e0eca75). A test pins the equivalence: the wrapping spelling and the old bare
+   spelling emit byte-identical shader text, which is the proof that naming the intent costs
+   nothing on the device and that WGSL's `+` was always the wrapping one.
+
+DIVISION gets no wrapping spelling — its divergence is div-by-zero, not overflow — so that
+diagnostic points at guarding the divisor or keeping the division on the host, and a test asserts
+it never invents `wrapping_div`.
+
+SCOPE, measured rather than assumed. Float arithmetic is untouched (IEEE does not trap), which is
+every shipped GPU example. A `for`-over-range counter is untouched, because its increment is
+generated by the lowering rather than written by the user. The cost lands on a `while` loop's
+hand-written `n = n + 1`, which now reads `n = n.wrapping_add(1)`. That asymmetry is pinned by
+its own test so a future change notices if `for` starts paying it too.
+
+IMPLEMENTATION NOTE: a pre-pass over the kernel and its reachable helpers with a three-valued
+type judgment (Int/Float/Unknown) that only ever rejects on Int, so an incomplete judgment costs
+coverage rather than producing a false rejection. The typechecker's `expr_types` was not usable:
+item order decides whether a kernel body is typed before the dispatch site is checked, and the
+effectchecker's GPU gate — the other candidate home — carries no type information at all.
+
+VERIFIED BY EXECUTION on lavapipe. The three reported divergences are now compile errors; the
+named form runs and agrees with `--interp` at the boundary (`i32::MAX.wrapping_add(1)` =>
+-2147483648 on both, `100000.wrapping_mul(100000)` => 1410065408 on both). Two new gpu_e2e
+fixtures use boundary inputs specifically so they fail if either side stops wrapping.
+
+TEST CHURN: 11 kernels across four suites were incidentally using bare integer arithmetic and now
+name the intent. One correction recorded: a first pass replaced `n = n + 1` file-wide in
+tests/codegen.rs and broke an unrelated body-splitting test that needs the bare form — the
+non-unique-anchor pitfall kara-katas/CLAUDE.md warns about; redone scoped to `#[gpu]` regions.
+
+design.md § Arithmetic Overflow now states the rule.
+
+Gates: 83 gpu_wgsl unit, 15 gpu_e2e execution, 2304 typechecker, 3066 codegen, 1556 interpreter,
+425 effectchecker; fmt + clippy clean on both feature legs. |
 | B-2026-08-19-2 | interp | low | `karac run --interp prog \| head` dumps a Rust panic + backtrace on SIGPIPE; the JIT and the AOT binary exit silently | FIXED by 17af4e8. `write_stdout` no longer writes through `println!`. It writes to a locked stdout and, on `ErrorKind::BrokenPipe`, exits 141 (`128 + SIGPIPE`) without a message — reproducing what the kernel does to a native binary. Every other io error still panics: a full disk or a closed terminal is a real failure the user needs told about, and only the reader-went-away case is normal enough to be silent.
 
 THE ROW'S DIAGNOSIS OF THE MECHANISM WAS EXACTLY RIGHT and is worth restating because it is the whole reason the three surfaces differ: an AOT binary IS the process, so it inherits the default SIGPIPE disposition and the kernel kills it; `karac` is a Rust program, and Rust sets SIGPIPE to SIG_IGN at startup, so inside the interpreter the signal never arrives and the write reports EPIPE instead. Exiting abruptly without running destructors is the faithful part, not the lossy part — a signal death runs none either.
