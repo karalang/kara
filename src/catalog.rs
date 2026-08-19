@@ -547,6 +547,27 @@ fn render_effect_resource(r: &EffectResourceDecl, filename: &str) -> String {
     if let Some(p) = &r.provider_trait {
         record.push(',');
         write_kv(&mut record, "provider_trait", &json_string(p));
+        // A generic bound's ARGUMENTS are part of the declared contract, not
+        // decoration: `Channel[i64]` and `Channel[String]` are different
+        // provider surfaces, and emitting only the bare name renders them
+        // identical in the catalog (B-2026-08-18-41). Rendered as the source
+        // spelling, matching how the catalog renders every other type.
+        if let Some(args) = &r.provider_trait_args {
+            record.push(',');
+            let rendered = args
+                .iter()
+                .map(|a| match a {
+                    GenericArg::Type(t) => render_type_expr(t),
+                    GenericArg::Const(e) => render_expr(e),
+                    // Shape args are not legal on a provider bound (the
+                    // typechecker's arity check runs against the trait's type
+                    // params), but render something rather than panicking.
+                    GenericArg::Shape(_) => "_".to_string(),
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            write_kv(&mut record, "provider_trait_args", &json_string(&rendered));
+        }
     }
     record.push(',');
     write_kv(&mut record, "span", &render_span_json(&r.span, filename));

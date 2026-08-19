@@ -40432,3 +40432,143 @@ fn test_partition_key_literal_is_checked() {
         errors.iter().map(|e| &e.message).collect::<Vec<_>>()
     );
 }
+
+// ── Generic provider trait bounds (B-2026-08-18-41) ─────────────
+
+/// `effect resource RequestCh: Channel[i64];` binds the provider trait's own
+/// type parameter, so `RequestCh.send(v)` types against `i64` rather than
+/// against an unbound `T`.
+///
+/// PARSING THE FORM WAS NOT ENOUGH, and that is the whole substance of this
+/// fix. Accepting `Channel[i64]` and ignoring the argument left the trait
+/// method's `T` lowering to a plain named type that no substitution could
+/// reach — a strictly worse state than rejecting the syntax, because the
+/// declaration then looks correct and fails at the call site.
+#[test]
+fn generic_provider_bound_binds_the_traits_type_param() {
+    typecheck_ok(
+        r#"
+        trait Channel[T] { fn send(ref self, v: T) -> T; }
+        effect resource RequestCh: Channel[i64];
+        fn push(v: i64) -> i64 with sends(RequestCh) { return RequestCh.send(v); }
+        fn main() { push(1); }
+        "#,
+    );
+}
+
+/// The binding is by POSITION, not by coincidence: the same trait bound to
+/// `String` types the same call site against `String`, and rejects the `i64`
+/// that the sibling test above accepts. Without this pair, a substitution that
+/// simply erased `T` to something permissive would pass the test above.
+#[test]
+fn generic_provider_bound_binds_positionally_and_still_rejects() {
+    typecheck_ok(
+        r#"
+        trait Channel[T] { fn send(ref self, v: T) -> T; }
+        effect resource RequestCh: Channel[String];
+        fn push(v: String) -> String with sends(RequestCh) { return RequestCh.send(v); }
+        fn main() { push("x"); }
+        "#,
+    );
+    let errors = typecheck_errors(
+        r#"
+        trait Channel[T] { fn send(ref self, v: T) -> T; }
+        effect resource RequestCh: Channel[String];
+        fn push(v: i64) with sends(RequestCh) { RequestCh.send(v); }
+        fn main() { push(1); }
+        "#,
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("expected 'String'") && e.message.contains("found 'i64'")),
+        "the bound's argument must be what the call site is checked against; got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+/// A wrong ARGUMENT COUNT is reported at the declaration, in both directions.
+///
+/// The substitution zips, so without this check too many arguments are dropped
+/// and too few leave the trait's remaining parameters free to unify with
+/// anything — silently, in both cases. Reported at the declaration rather than
+/// at the dispatch site so the diagnostic points at the line that is wrong and
+/// fires even for a resource that is declared but never called.
+#[test]
+fn generic_provider_bound_arity_is_checked_at_the_declaration() {
+    let too_many = typecheck_errors(
+        r#"
+        trait Channel[T] { fn send(ref self, v: T); }
+        effect resource RequestCh: Channel[i64, bool];
+        fn main() { }
+        "#,
+    );
+    assert!(
+        too_many
+            .iter()
+            .any(|e| e.message.contains("passes 2 generic arguments")
+                && e.message.contains("declares 1 type parameter")),
+        "expected an arity complaint; got: {:?}",
+        too_many.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+
+    let too_few = typecheck_errors(
+        r#"
+        trait Pair[A, B] { fn mk(ref self, a: A, b: B) -> A; }
+        effect resource P: Pair[i64];
+        fn main() { }
+        "#,
+    );
+    assert!(
+        too_few
+            .iter()
+            .any(|e| e.message.contains("passes 1 generic argument")
+                && e.message.contains("declares 2 type parameters")),
+        "expected an arity complaint; got: {:?}",
+        too_few.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+/// OMITTING the argument list for a generic provider trait is the same arity
+/// error, and gets the fix named at the declaration.
+///
+/// This is the shape the row was filed about: `effect resource RequestCh:
+/// Channel;` parsed, and then every call site failed with "expected 'T', found
+/// 'i64'" — a complaint about a type parameter the user never wrote, arriving
+/// nowhere near the declaration that owed it an argument. It stayed that way
+/// because there was no other spelling; now that `Channel[i64]` exists, the
+/// omission has a fix to name.
+#[test]
+fn omitting_arguments_for_a_generic_provider_trait_is_reported_at_the_declaration() {
+    let errors = typecheck_errors(
+        r#"
+        trait Channel[T] { fn send(ref self, v: T); }
+        effect resource RequestCh: Channel;
+        fn main() { }
+        "#,
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("passes 0 generic arguments")
+                && e.message.contains("supply a type argument for 'T'")),
+        "expected the declaration-site complaint naming the fix; got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+/// A NON-generic provider trait is untouched by any of this: no arguments
+/// declared, none expected, no diagnostic. This is every resource in the
+/// corpus, and the branch that keeps it lowering exactly as it did before the
+/// generic form existed.
+#[test]
+fn plain_provider_bound_is_unaffected() {
+    typecheck_ok(
+        r#"
+        trait DatabaseProvider { fn q(ref self, k: i64) -> i64; }
+        effect resource UserDB: DatabaseProvider;
+        fn use_db(k: i64) -> i64 with reads(UserDB) { return UserDB.q(k); }
+        fn main() { use_db(1); }
+        "#,
+    );
+}

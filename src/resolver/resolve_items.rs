@@ -574,6 +574,19 @@ impl<'a> super::Resolver<'a> {
             let span = r.provider_trait_span.unwrap_or(r.span);
             self.error_undefined_type(trait_name, span);
         }
+        // `: Provider[Request]` — the ARGUMENTS are types too, and get the same
+        // existence check the trait name gets (B-2026-08-18-41). Without it an
+        // unknown argument is silently accepted for a resource that is never
+        // called, and surfaces as "expected 'Nonexistent', found 'i64'" at the
+        // first call site for one that is — a mismatch diagnostic for what is
+        // really an undefined type.
+        if let Some(args) = &r.provider_trait_args {
+            for arg in args {
+                if let GenericArg::Type(te) = arg {
+                    self.resolve_type_expr(te);
+                }
+            }
+        }
     }
 
     fn resolve_effect_group_def(&mut self, g: &EffectGroupDecl) {

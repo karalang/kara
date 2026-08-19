@@ -390,6 +390,36 @@ mod tests {
     }
 
     #[test]
+    fn generic_provider_bound_keeps_its_arguments() {
+        // `effect resource C: Provider[Request];` — the bound's generic
+        // arguments live in `provider_trait_args`, not in the trait NAME, so a
+        // formatter that renders only the name silently rewrote the declaration
+        // into a different one (B-2026-08-18-41). Same class as the
+        // dropped-`no_effect`-verbs case above: formatting must never be able
+        // to change what a declaration means.
+        //
+        // For a GENERIC provider trait the loss is not even cosmetic — the
+        // argument is the only thing that binds the trait's type parameter, so
+        // the reformatted source stops typechecking at every call site.
+        let out = fmt_ok("effect resource RequestCh: Channel[Request];");
+        assert!(
+            out.contains("effect resource RequestCh: Channel[Request];"),
+            "the bound's arguments must survive formatting:\n{out}"
+        );
+        let again = fmt_ok(&out);
+        assert_eq!(out, again, "second format pass must be a fixpoint");
+
+        // A plain bound gains no empty bracket pair — `Channel[]` would not
+        // re-parse.
+        let plain = fmt_ok("effect resource UserDB: DatabaseProvider;");
+        assert!(
+            plain.contains("effect resource UserDB: DatabaseProvider;"),
+            "a plain bound must render unchanged:\n{plain}"
+        );
+        assert!(!plain.contains("[]"), "no empty argument list:\n{plain}");
+    }
+
+    #[test]
     fn enum_explicit_discriminants_roundtrip() {
         // `= VALUE` is emitted after each payload with a single space on either
         // side of `=` (design.md § Explicit Discriminants on Payload Variants);

@@ -31,7 +31,7 @@ use super::inference::{resolve_type_var_top, resolve_type_vars};
 use super::types::{
     float_width_rank, is_integer, is_numeric, is_prelude_type_or_module_name,
     is_string_concat_operand, strip_refinement, type_display, types_compatible, ConstArg, DimArg,
-    IntSize, Type, UIntSize, VariantTypeInfo,
+    IntSize, SubstValue, Type, UIntSize, VariantTypeInfo,
 };
 use super::{FixIt, TypeErrorKind};
 
@@ -1016,9 +1016,33 @@ impl<'a> super::TypeChecker<'a> {
     ) -> Option<(Vec<Type>, Type)> {
         match provider_trait {
             Some(trait_name) => {
+                // The resource's declared arguments, for the generic-bound form
+                // `effect resource RequestCh: Channel[i64];` (B-2026-08-18-41).
+                // Absent for every other resource, and the two branches below
+                // are deliberately gated on it so a plain `: Trait` bound
+                // lowers exactly as it did before this existed.
+                let declared_args = self.user_effect_resource_trait_args.get(resource).cloned();
+                // The TRAIT's own generic params (`trait Channel[T]` -> ["T"]).
+                // These must be IN SCOPE when lowering, or `T` lowers to
+                // `Type::Named { name: "T" }` and no substitution can reach it
+                // -- `substitute_type_params` rewrites `Type::TypeParam` only.
+                // That is why binding the args alone was not enough.
+                //
+                // Collected only when the resource declared arguments. Adding
+                // them unconditionally would also change the UNBOUND case
+                // (`effect resource RequestCh: Channel;`), turning a `T` that
+                // today is a named type into a free type param -- a different
+                // unification result for a program this row is not about.
+                let trait_gp: Vec<String> = if declared_args.is_some() {
+                    self.find_trait_def(trait_name)
+                        .map(|t| Self::generic_param_names(&t.generic_params))
+                        .unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
                 // Clone the TypeExprs out first: `find_trait_method`
                 // borrows `self` and `lower_type_expr` needs `&mut self`.
-                let (param_tes, ret_te, method_gp) = {
+                let (param_tes, ret_te, mut method_gp) = {
                     let m = self.find_trait_method(trait_name, member)?;
                     (
                         m.params.iter().map(|p| p.ty.clone()).collect::<Vec<_>>(),
@@ -1026,6 +1050,7 @@ impl<'a> super::TypeChecker<'a> {
                         Self::generic_param_names(&m.generic_params),
                     )
                 };
+                method_gp.extend(trait_gp.iter().cloned());
                 let params: Vec<Type> = param_tes
                     .iter()
                     .map(|te| self.lower_type_expr(te, &method_gp))
@@ -1034,7 +1059,25 @@ impl<'a> super::TypeChecker<'a> {
                     .as_ref()
                     .map(|te| self.lower_type_expr(te, &method_gp))
                     .unwrap_or(Type::Unit);
-                Some((params, return_type))
+                // Bind the TRAIT's own generic params from the resource's
+                // declared arguments — `effect resource RequestCh:
+                // Channel[i64];` against `trait Channel[T]` makes `T` mean
+                // `i64` at every `RequestCh.send(v)` site. Without this the
+                // lowered signature still mentions `T`, which nothing binds,
+                // and the call fails with "expected 'T', found 'i64'" — naming
+                // a type parameter the user never wrote (B-2026-08-18-41).
+                // Empty for a non-generic bound, which is every other resource.
+                let subs = self.provider_trait_subs(&trait_gp, declared_args);
+                if subs.is_empty() {
+                    return Some((params, return_type));
+                }
+                Some((
+                    params
+                        .iter()
+                        .map(|t| super::inference::substitute_type_params(t, &subs))
+                        .collect(),
+                    super::inference::substitute_type_params(&return_type, &subs),
+                ))
             }
             None => {
                 let override_ty = self.user_resource_override_types.get(resource)?;
@@ -1048,6 +1091,39 @@ impl<'a> super::TypeChecker<'a> {
                 None
             }
         }
+    }
+
+    /// Substitution binding a provider trait's generic parameters to the
+    /// arguments the resource declared: `trait Channel[T]` +
+    /// `effect resource RequestCh: Channel[i64];` yields `{T -> i64}`.
+    ///
+    /// Empty -- and therefore a no-op at the call site -- when the resource
+    /// declared no arguments, which is every resource in the corpus today, or
+    /// when the trait's definition could not be found. Both cases leave the
+    /// pre-existing permissive behaviour rather than inventing a binding.
+    ///
+    /// ARITY IS NOT CHECKED HERE. `zip` truncates, so a wrong count would
+    /// degrade to binding the prefix; the count is verified once at the
+    /// declaration by [`Self::check_effect_resource_trait_arity`], which can
+    /// point a diagnostic at the declaration instead of firing once per
+    /// dispatch site -- and fires there even for a resource that is declared
+    /// but never called.
+    fn provider_trait_subs(
+        &mut self,
+        trait_gp: &[String],
+        declared_args: Option<Vec<crate::ast::GenericArg>>,
+    ) -> HashMap<String, SubstValue> {
+        let Some(args) = declared_args else {
+            return HashMap::new();
+        };
+        let mut subs = HashMap::new();
+        for (name, arg) in trait_gp.iter().zip(args.iter()) {
+            if let crate::ast::GenericArg::Type(te) = arg {
+                let ty = self.lower_type_expr(te, &[]);
+                subs.insert(name.clone(), SubstValue::Type(ty));
+            }
+        }
+        subs
     }
 
     /// True when `name` denotes a known Type-class identifier — a registered

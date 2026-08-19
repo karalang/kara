@@ -5990,3 +5990,42 @@ fn prelude_fn_arity_table_matches_the_typechecker() {
         );
     }
 }
+
+/// B-2026-08-18-41 — a generic provider bound's ARGUMENTS are types, and get
+/// the same existence check the trait name has always had.
+///
+/// Without it an unknown argument is accepted outright for a resource that is
+/// never called, and for one that is it surfaces at the first call site as
+/// "expected 'Nonexistent', found 'i64'" — a type-MISMATCH diagnostic for what
+/// is really an undefined type, pointing at the call instead of at the
+/// declaration that named it.
+#[test]
+fn generic_provider_bound_argument_types_must_exist() {
+    let errors = resolve_errors(
+        r#"
+        trait Channel[T] { fn send(ref self, v: T); }
+        effect resource RequestCh: Channel[Nonexistent];
+        fn main() { }
+        "#,
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("undefined type 'Nonexistent'")),
+        "expected an undefined-type complaint about the bound's argument; got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+/// The check does not fire on a LEGITIMATE argument — the guard against a fix
+/// that rejects every generic bound and calls the row closed.
+#[test]
+fn generic_provider_bound_with_a_known_argument_resolves() {
+    resolve_ok(
+        r#"
+        trait Channel[T] { fn send(ref self, v: T); }
+        effect resource RequestCh: Channel[i64];
+        fn main() { }
+        "#,
+    );
+}

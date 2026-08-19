@@ -56,6 +56,7 @@ impl<'a> super::TypeChecker<'a> {
                     self.check_wasm_export_boundary(f);
                 }
                 Item::ImplBlock(imp) => self.check_impl_block(imp),
+                Item::EffectResource(r) => self.check_effect_resource_trait_arity(r),
                 Item::TraitDef(t) => self.check_trait_def(t),
                 Item::ConstDecl(c) => self.check_const_decl(c),
                 Item::ModuleBinding(b) => self.check_module_binding(b),
@@ -2656,6 +2657,71 @@ impl<'a> super::TypeChecker<'a> {
         };
         self.local_scope.pop();
         ty
+    }
+
+    /// `effect resource C: Provider[Request];` — the bound's generic-argument
+    /// count must match the trait's declaration (B-2026-08-18-41).
+    ///
+    /// Checked at the DECLARATION rather than at each dispatch site for two
+    /// reasons: the diagnostic points at the declaration that is actually
+    /// wrong, and it fires for a resource that is declared but never called —
+    /// a dispatch-site check is silent for exactly the program that never
+    /// exercises the bound.
+    ///
+    /// A MISSING argument list counts as zero, which is what makes the bare
+    /// `effect resource RequestCh: Channel;` against `trait Channel[T]` an
+    /// error here. That form used to parse and then fail at every call site
+    /// with "expected 'T', found 'i64'" — a complaint naming a type parameter
+    /// the user never wrote, arriving nowhere near the declaration that owed it
+    /// an argument. Now that `Channel[i64]` is expressible, the omission has a
+    /// fix to name, so it is reported where the fix goes.
+    ///
+    /// Reuses `WrongNumberOfArgs` rather than minting a kind for one shape;
+    /// the message carries the specificity.
+    fn check_effect_resource_trait_arity(&mut self, r: &crate::ast::EffectResourceDecl) {
+        let Some(trait_name) = &r.provider_trait else {
+            return;
+        };
+        // An unknown trait is the RESOLVER's diagnostic (`resolve_effect_resource_def`);
+        // reporting an arity against a trait that does not exist would bury it.
+        let Some(t) = self.find_trait_def(trait_name) else {
+            return;
+        };
+        let expected = Self::generic_param_names(&t.generic_params).len();
+        let found = r.provider_trait_args.as_ref().map_or(0, |a| a.len());
+        if found == expected {
+            return;
+        }
+        let plural = |n: usize| if n == 1 { "" } else { "s" };
+        // Name the unbound parameters rather than showing a literal
+        // `Channel[T]` to write: `T` is the trait's own parameter name, not
+        // anything in scope at the declaration, so echoing it as code would be
+        // advice that does not compile.
+        let fix = if found == 0 {
+            let names = Self::generic_param_names(&t.generic_params)
+                .iter()
+                .map(|n| format!("'{}'", n))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("; supply a type argument for {}", names)
+        } else {
+            String::new()
+        };
+        self.type_error(
+            format!(
+                "effect resource '{}' passes {} generic argument{} to provider trait '{}', \
+                 which declares {} type parameter{}{}",
+                r.name,
+                found,
+                plural(found),
+                trait_name,
+                expected,
+                plural(expected),
+                fix,
+            ),
+            r.provider_trait_span.unwrap_or(r.span),
+            TypeErrorKind::WrongNumberOfArgs,
+        );
     }
 
     fn check_impl_block(&mut self, imp: &ImplBlock) {

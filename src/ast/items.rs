@@ -8,8 +8,8 @@
 use crate::token::Span;
 
 use super::{
-    Attribute, Block, Expr, ExprKind, GenericParams, PathExpr, Pattern, PatternKind, StmtKind,
-    TraitBound, TypeExpr, Visibility, WhereClause,
+    Attribute, Block, Expr, ExprKind, GenericArg, GenericParams, PathExpr, Pattern, PatternKind,
+    StmtKind, TraitBound, TypeExpr, Visibility, WhereClause,
 };
 
 // ── Item deprecation payload ─────────────────────────────────────
@@ -891,6 +891,20 @@ pub struct EffectResourceDecl {
     /// `[user_id: i64]` fail the Type-class naming rule.
     pub key_param: Option<ResourceKeyParam>,
     pub provider_trait: Option<String>,
+    /// `effect resource C: Provider[Request];` — the provider trait's GENERIC
+    /// ARGUMENTS (design.md:6071). `None` for a plain `: Trait` bound and for a
+    /// bare resource; `provider_trait` still carries the bare name, which is
+    /// what every consumer but the typechecker needs.
+    ///
+    /// These are not decoration. A generic provider trait declared without its
+    /// argument is unusable, not merely imprecise: `effect resource RequestCh:
+    /// Channel;` against `trait Channel[T]` parses, and then every
+    /// `RequestCh.send(v)` fails with "expected 'T', found 'i64'" — naming a
+    /// type parameter the user never wrote, because nothing ever bound it.
+    /// `resource_dispatch_signature` substitutes these into the trait method's
+    /// signature, which is the binding that diagnostic was missing
+    /// (B-2026-08-18-41).
+    pub provider_trait_args: Option<Vec<GenericArg>>,
     /// Span of the `provider_trait` identifier itself, so a diagnostic about
     /// the trait points at the trait rather than at the whole declaration.
     /// `None` exactly when `provider_trait` is `None`.

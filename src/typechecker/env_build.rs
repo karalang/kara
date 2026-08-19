@@ -159,6 +159,10 @@ impl<'a> super::TypeChecker<'a> {
                     if let Some(k) = &r.key_param {
                         self.resource_key_types.insert(r.name.clone(), k.ty.clone());
                     }
+                    if let Some(args) = &r.provider_trait_args {
+                        self.user_effect_resource_trait_args
+                            .insert(r.name.clone(), args.clone());
+                    }
                 }
                 _ => {}
             }

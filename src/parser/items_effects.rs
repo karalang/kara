@@ -89,10 +89,20 @@ impl super::Parser {
         self.check_ident_class(&name, IdentClass::Type, "effect resource", name_span);
         let key_param = self.parse_optional_resource_key_param();
         let mut provider_trait_span = None;
+        let mut provider_trait_args = None;
         let provider_trait = if self.eat(&Token::Colon) {
             let trait_start = self.current_span();
             let t = self.expect_identifier()?;
             provider_trait_span = Some(self.span_from(&trait_start));
+            // `: Provider[Request]` — the bound's generic arguments, spelled
+            // exactly as any other trait bound spells them, and parsed by the
+            // same helper (B-2026-08-18-41). Without this the parser stopped at
+            // `[` with "Expected Semicolon, found LeftBracket", so the only way
+            // to name a generic provider trait was to drop its argument — which
+            // parses and then fails at every call site with "expected 'T'".
+            if self.check(&Token::LeftBracket) {
+                provider_trait_args = Some(self.parse_generic_type_args()?);
+            }
             Some(t)
         } else {
             None
@@ -103,6 +113,7 @@ impl super::Parser {
             name,
             key_param,
             provider_trait,
+            provider_trait_args,
             provider_trait_span,
             canonical_host_name: None,
         }))

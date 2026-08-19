@@ -2004,6 +2004,19 @@ pub struct TypeChecker<'a> {
     /// parameters are in scope -- lowers it with the function's own generic
     /// parameters visible, and env build has no such scope.
     pub(super) resource_key_types: FxHashMap<String, crate::ast::TypeExpr>,
+    /// Resource name → the provider trait's GENERIC ARGUMENTS, for the
+    /// `effect resource C: Provider[Request];` form (B-2026-08-18-41).
+    /// Only resources that declare args appear; a plain `: Trait` bound is
+    /// absent, not present-and-empty.
+    ///
+    /// Kept beside `user_effect_resources` rather than folded into its value
+    /// because every other consumer of a provider bound wants the bare NAME
+    /// (the resolver existence-checks it, the effect checker seeds verbs from
+    /// its methods, codegen keys the vtable and its method order on it) and is
+    /// unaffected by the arguments. Only `resource_dispatch_signature` needs
+    /// them, to bind the trait's type parameters before lowering a method
+    /// signature.
+    pub(super) user_effect_resource_trait_args: FxHashMap<String, Vec<crate::ast::GenericArg>>,
     /// Trait-less user resource name → concrete override type name,
     /// recovered syntactically from `with_provider[R](provider, ...)`
     /// sites during env build (struct-literal, `let`-bound, or
@@ -2263,6 +2276,7 @@ impl<'a> TypeChecker<'a> {
             task_join_return_types: FxHashMap::default(),
             user_effect_resources: FxHashMap::default(),
             resource_key_types: FxHashMap::default(),
+            user_effect_resource_trait_args: FxHashMap::default(),
             user_resource_override_types: FxHashMap::default(),
             bare_assoc_fn_targets: FxHashMap::default(),
             path_call_method_dispatch: FxHashSet::default(),

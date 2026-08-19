@@ -1957,6 +1957,73 @@ fn test_effect_resource_key_name_must_be_value_class() {
     );
 }
 
+/// B-2026-08-18-41 — a GENERIC provider trait bound,
+/// `effect resource C: Provider[Request];` (design.md:6071). The parser
+/// stopped at `[` with "Expected Semicolon, found LeftBracket", so the only
+/// spelling available for a generic provider trait was to DROP its argument.
+///
+/// That workaround parses and is then unusable rather than merely imprecise:
+/// against `trait Channel[T]`, a bare `: Channel` makes every `RequestCh.send(v)`
+/// fail with "expected 'T', found 'i64'" — naming a type parameter the user
+/// never wrote, because nothing ever bound it. `Provider[Request]` is the only
+/// syntax that binds it.
+#[test]
+fn test_effect_resource_generic_provider_bound() {
+    let prog = parse_ok("effect resource RequestCh: Channel[Request];");
+    let Item::EffectResource(e) = &prog.items[0] else {
+        panic!("expected an effect resource, got {:?}", prog.items[0]);
+    };
+    assert_eq!(e.name, "RequestCh");
+    assert_eq!(e.provider_trait.as_deref(), Some("Channel"));
+    let args = e
+        .provider_trait_args
+        .as_ref()
+        .expect("the bound's generic arguments");
+    assert_eq!(args.len(), 1);
+    let GenericArg::Type(ty) = &args[0] else {
+        panic!("expected a type argument, got {:?}", args[0]);
+    };
+    assert_eq!(karac::formatter::render_type_expr(ty), "Request");
+}
+
+/// A PLAIN bound records no arguments — `None`, not `Some(vec![])`. The
+/// typechecker branches on exactly this to keep the pre-existing lowering for
+/// every resource that predates the generic form, so the distinction is
+/// load-bearing rather than cosmetic.
+#[test]
+fn test_effect_resource_plain_bound_has_no_generic_args() {
+    let prog = parse_ok("effect resource UserDB: DatabaseProvider;");
+    let Item::EffectResource(e) = &prog.items[0] else {
+        panic!("expected an effect resource, got {:?}", prog.items[0]);
+    };
+    assert_eq!(e.provider_trait.as_deref(), Some("DatabaseProvider"));
+    assert!(
+        e.provider_trait_args.is_none(),
+        "a plain bound must record no argument list, got {:?}",
+        e.provider_trait_args
+    );
+}
+
+/// The generic bound composes with the PARTITION KEY, which occupies the other
+/// `[...]` slot on the same declaration. Both are `[`-introduced and sit either
+/// side of the `:`, so a parser that confused them would silently swap their
+/// meanings; this pins that they stay distinct.
+#[test]
+fn test_effect_resource_key_and_generic_bound_together() {
+    let prog = parse_ok("effect resource UserDB[user_id: i64]: Store[Row];");
+    let Item::EffectResource(e) = &prog.items[0] else {
+        panic!("expected an effect resource, got {:?}", prog.items[0]);
+    };
+    let key = e.key_param.as_ref().expect("a partition key");
+    assert_eq!(key.name, "user_id");
+    assert_eq!(e.provider_trait.as_deref(), Some("Store"));
+    assert_eq!(
+        e.provider_trait_args.as_ref().map(|a| a.len()),
+        Some(1),
+        "the bound's argument list must survive alongside the key"
+    );
+}
+
 #[test]
 fn test_effect_group_decl() {
     let prog =

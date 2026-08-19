@@ -334,20 +334,21 @@ fn kara_blocks(text: &str) -> Vec<(usize, &str)> {
 /// substring of the offending line rather than a line number, so the entry
 /// survives edits elsewhere in the document and names WHY it is here.
 ///
-/// Both are separately filed. Keep this list at two entries: a new arrival is a
-/// real regression, and a departure means its row was fixed and the entry
-/// should go.
-const NON_TERMINATOR: &[(&str, &str)] = &[
-    // The parser accepts only `effect resource X;` and `effect resource X: Trait;`.
-    // design.md normatively specifies three richer forms it rejects -- a generic
-    // bound (this line), `A + B` multi-bounds (§ 7216) and parameterized
-    // resources (§ Parameterized Resources) -- so the `Expected Semicolon` here
-    // is the parser stopping at `[`, not a terminator.
-    (
-        "effect resource RequestCh: Channel[Request]",
-        "B-2026-08-18-41: effect-resource declaration forms the spec defines and the parser rejects",
-    ),
-];
+/// THE LIST IS EMPTY, and that is the intended resting state: every entry ever
+/// added has been retired by fixing the compiler rather than by keeping the
+/// exemption. A new arrival is a real regression to diagnose, not a line to
+/// append to. The sibling guard test below is what forces a stale entry out —
+/// it is vacuous while the list is empty and becomes load-bearing the moment
+/// anything is added.
+///
+/// The last entry was `effect resource RequestCh: Channel[Request]`, exempt
+/// because its `Expected Semicolon` was the parser stopping at `[` — a
+/// declaration form design.md specifies and the parser did not accept
+/// (B-2026-08-18-41). The generic provider bound now parses, which exposed a
+/// SECOND defect the first had been hiding: that line is also missing its
+/// terminator, and no terminator gate could see it while the parser was failing
+/// earlier on the same line. Both are fixed; the exemption goes.
+const NON_TERMINATOR: &[(&str, &str)] = &[];
 
 // REMOVED, and the removal is exactly what the sibling test below exists to
 // force. `matches!` was listed here because it surfaced as `Expected Semicolon,

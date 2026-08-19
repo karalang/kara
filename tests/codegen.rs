@@ -21191,6 +21191,43 @@ fn main() {
         }
     }
 
+    #[test]
+    fn e2e_generic_provider_trait_bound() {
+        // `effect resource RequestCh: Channel[i64];` — a GENERIC provider trait
+        // bound (B-2026-08-18-41, design.md:6071). The declaration did not
+        // parse at all ("Expected Semicolon, found LeftBracket"), so the only
+        // available spelling dropped the argument — and a generic provider
+        // trait named without its argument is unusable, not merely imprecise:
+        // every `RequestCh.send(v)` failed with "expected 'T', found 'i64'",
+        // naming a type parameter the user never wrote.
+        //
+        // The end-to-end path is what makes this more than a parser test: the
+        // trait's `T` has to be bound at typecheck AND the vtable has to
+        // dispatch to `impl Channel[i64] for Echo`, so a fix that satisfied the
+        // typechecker while leaving codegen keyed on the wrong thing fails
+        // here.
+        //
+        // `reads`, not `sends`: `push` is `pub`, so its declared effects are
+        // VERIFIED rather than inferred, and a `ref self` receiver seeds
+        // `reads(RequestCh)` at the dispatch. This harness does not run the
+        // effect checker, so `sends` passes here and `karac build` rejects it —
+        // the program is spelled the way the CLI would accept.
+        if let Some(out) = run_program(
+            "pub trait Channel[T] { fn send(ref self, v: T) -> T; }\n\
+             pub effect resource RequestCh: Channel[i64];\n\
+             pub struct Echo { bump: i64 }\n\
+             impl Channel[i64] for Echo { fn send(ref self, v: i64) -> i64 { v + self.bump } }\n\
+             pub fn push(v: i64) -> i64 with reads(RequestCh) { RequestCh.send(v) }\n\
+             fn main() {\n\
+                 with_provider[RequestCh](Echo { bump: 1 }, || {\n\
+                     println(f\"{push(41)}\");\n\
+                 });\n\
+             }",
+        ) {
+            assert_eq!(out, "42\n");
+        }
+    }
+
     // ── `providers { R => v } in { body }` block form (B-2026-07-31-9) ──
     //
     // The block sugar compiled to NOTHING: `compile_expr` had no

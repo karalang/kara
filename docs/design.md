@@ -6068,7 +6068,7 @@ fn try_recv(self, rx: Receiver[T]) -> Option[T]
 **Typical usage:**
 
 ```kara
-effect resource RequestCh: Channel[Request]
+effect resource RequestCh: Channel[Request];
 
 fn controller(rx: Receiver[Request]) {
     for req in rx.into_iter() {  // drains channel until senders are dropped

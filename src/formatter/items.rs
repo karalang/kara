@@ -700,6 +700,11 @@ impl super::Formatter {
         if let Some(ref pt) = e.provider_trait {
             self.write_str(": ");
             self.write_ident(pt);
+            // `: Provider[Request]` — without this the formatter silently
+            // DROPPED the bound's generic arguments, rewriting a declaration
+            // into a different (and, for a generic trait, ill-typed) one
+            // (B-2026-08-18-41).
+            self.format_generic_args_opt(&e.provider_trait_args);
         }
         self.write_str(";\n");
     }
