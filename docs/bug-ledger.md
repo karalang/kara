@@ -103,7 +103,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | perf | 77 | 0 |
 | crash | 52 | 0 |
 | soundness | 51 | 0 |
-| other | 48 | 1 |
+| other | 49 | 1 |
 | use-after-free | 20 | 0 |
 
 ### By surface
@@ -114,7 +114,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | typecheck | 207 | 3 |
 | interp | 156 | 1 |
 | ownership | 60 | 0 |
-| other | 57 | 1 |
+| other | 58 | 1 |
 | autopar | 49 | 0 |
 | cli | 47 | 0 |
 | parser | 27 | 0 |
@@ -124,16 +124,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 5 | 1 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1359 surfaced · 4 open · 1337 fixed · 7 wontfix** (2026-05-20 → 2026-08-19). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1360 surfaced · 4 open · 1338 fixed · 7 wontfix** (2026-05-20 → 2026-08-19). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-19-5 | 2026-08-19 | other | low | The codegen E2E harness (`tests/codegen.rs::run_program_capturing_inner`) runs resolve + typecheck but NOT the effect checker, so a test can pin behaviour for a program `karac build` REFUSES. Its `assert_check_clean` gate is named for the whole check phase and covers two thirds of it. | tests/codegen.rs::run_program_capturing_inner; tests/common's assert_check_clean; cf. B-2026-08-11-34 (the prepare_for_resolve drift this gate was hardened against) |
 | B-2026-08-19-8 | 2026-08-19 | lexer+typecheck+interp+codegen | medium | IMPLEMENT 128-bit integers for real: `i128` / `u128` are specified normatively in design.md as v1 primitives (all four overflow method families, the widening-cast table, the primitive-numeric lists, Portable SIMD elements) and the compiler now REJECTS them, because no runtime carrier is 128 bits wide. Deleting design.md's 'Implementation status — 128-bit integers are NOT YET IMPLEMENTED' note is the definition of done. | docs/design.md § checked_*/wrapping_*/saturating_*/overflowing_* method families (the status note — deleting it is done); src/typechecker.rs::reject_128bit; src/interpreter/value.rs::Value::Int; src/codegen/method_call.rs (the i64-carrier comment + the `bits >= 64` reduction guard) |
 | B-2026-08-19-10 | 2026-08-19 | typecheck+codegen+runtime | medium | A GPU REDUCTION (N inputs -> 1 result) CANNOT BE WRITTEN AT ALL. `gpu.dispatch` is the entire user-facing GPU surface and it is map-shaped ([T] -> [U], one output per input); the WGSL emitter has ZERO workgroup-memory or barrier support. So sum / dot / min / max / argmax / prefix-sum / any tiled matmul have nowhere to go, which is most of what GPUs are bought for. | — |
 | B-2026-08-19-11 | 2026-08-19 | typecheck | low | design.md:7223 requires a `with_provider` provider to implement `Send + Sync` on top of its declared bounds, and NOTHING checks it -- because neither trait exists in the compiler at all: `grep '"Send"' src/` and `grep '"Sync"' src/` are both EMPTY, so there is no auto-trait machinery to check against at any arity. | design.md:7223 (`with_provider` signature at :7225, `P: R.Provider + Send + Sync`); src/typechecker/expr_call.rs::check_provider_satisfies_declared_bound |
+| B-2026-08-19-12 | 2026-08-19 | other | medium | 102 E2E harness sites build the auto-par / concurrency tables from a BARE `karac::effectcheck(&parsed.program)`, but `karac build` builds them from `effectcheck_with_typecheck_data` -- so effects that reach a caller through an INSTANCE METHOD are missing from the table the tests analyze, and the auto-par surface they exercise is not the one that ships. | — |
 
 ### Wontfix (7)
 
@@ -151,9 +151,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1359 surfaced
 
 </details>
 
-### Fixed (1337)
+### Fixed (1338)
 
-<details><summary>1337 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1338 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -12237,6 +12237,25 @@ SILENT ON A BARE RESOURCE, per design.md § "Trait bound is optional": `effect r
 NOT DONE, and named in the row already: design.md:7217 also requires `Send + Sync`. There is no marker-trait machinery on this path today, and the declared-bound half is the useful slice; the `Send + Sync` obligation stays unchecked.
 
 Three regression tests — reject, accept, and the inferred-provider shape — plus the full suite green, which is the part that matters for a NEW error: every `with_provider` user in `examples/` (db_pipeline, cartographer, parallax, phase0) still typechecks. |
+| B-2026-08-19-5 | other | low | The codegen E2E harness (`tests/codegen.rs::run_program_capturing_inner`) runs resolve + typecheck but NOT the effect checker, so a test can pin beha… | FIXED by cde0a48. The E2E harnesses now run the effect checker and gate on it, so the invariant `assert_check_clean` is named for is the one enforced.
+
+THE ROW'S SHAPE OF FIX WAS RIGHT BUT ITS COST ESTIMATE WAS INVERTED. It expected "a handful of existing test sources" to need fixing and treated the wiring as routine. Measured across all six gated harnesses (14,156 tests): exactly THREE programs were caught, all of them in tests/codegen.rs -- par_codegen, memory_sanitizer, coro_e2e, disjoint_differential and http_server were already clean. The wiring, not the fallout, was the part with the real trap in it.
+
+THE TRAP: A NAIVE GATE IS STRICTER THAN PRODUCTION, WHICH IS THE WORSE FAILURE. `karac build` does not treat every effect diagnostic as fatal -- `FfiLintHint` and `TargetGateViolation` (E0411) are advisory by explicit design, the latter because a NATIVE build must not reject the cross-target dev workflow `karac run` supports. A gate written as "any effect error" therefore fails programs users can compile, and would have deleted real coverage: one of the three offenders carries a genuine E0411 alongside its real error, and two more tests in the suite carry E0411 alone. The gate classifies via the compiler's own predicate, so it admits exactly what production admits. An `effect_gate_admits_the_advisory_target_gate_violation` test pins that direction; without it the gate silently becomes a stricter-than-build filter the first time someone "simplifies" the classifier.
+
+A BARE `karac::effectcheck` WOULD ALSO HAVE BEEN WRONG, not merely incomplete. It must run AFTER `lower` (matching `Pipeline::run_all_checks`) and be threaded with the typechecker's `method_callee_types` + `call_type_subs`; without them, effects reaching a caller THROUGH AN INSTANCE METHOD are invisible -- the exact defect a different consumer already hit (tests/cli.rs `test_query_effects_resolves_instance_method_network_effect`: "inferred_effects came back [] even though build/test correctly propagate"). That would have produced false NEGATIVES, a gate that looks installed and catches nothing. It is one shared `effectcheck_as_build_does` helper for the same reason `prepare_for_resolve` is one call shared with cli.rs.
+
+THREE CLASSIFIERS WERE TRANSCRIBED, NOT SHARED -- the deeper defect under this row. `tests/common/mod.rs` kept its OWN copy of the ownership fatality list, and the CLI's effect and ownership classifiers were private to `cli.rs`. So the harness's claim to "mirror `karac build`" rested on three hand-maintained copies of the CLI's rules. Both classifiers are now `kind_blocks_production` in the library, next to their enums, with the CLI and the harness delegating: a variant added to either enum is FATAL BY DEFAULT and making it advisory is a deliberate edit at the definition rather than an omission somewhere else in the tree. That placement is the whole point -- B-2026-08-05-17 (build ignored every effect finding) and B-2026-07-31-29 (build ignored most ownership findings) were both this shape, and both were fixed by hoisting one predicate.
+
+THE THREE OFFENDERS, and they are two different populations:
+  * `test_e2e_cstr_as_ptr_feeds_libc_puts` and `test_e2e_string_to_cstring_as_ptr_feeds_libc_puts` -- STALE TEST PROGRAMS. `pub fn main() with writes(Console)` calls an `extern "C"` fn, which seeds `blocks` at the FFI boundary, and a PUBLIC function's effects are verified rather than inferred. Confirmed against the CLI on the identical source: `karac check` exits 1 with the same diagnostic. Fixed in the programs (`with writes(Console) blocks`); both then build and run correctly.
+  * `extern_c_unwind_export_rejected_by_backend` -- a DELIBERATE NEGATIVE TEST of the CODEGEN-layer `extern "C-unwind"` rejection. The effect checker rejects it first under the default abort-only profile, so production never reaches the codegen arm, and gating it would delete the coverage rather than fix anything. Grandfathered, exactly as `test_atomic_implicit_ordering_rejected_by_codegen` is on the check gate. Its doc comment was also corrected: it named the `with panics` interaction, but the one that actually fires is `ExternCUnwindRequiresUnwindProfile`.
+
+WIRED AT 23 SITES across `codegen`, `par_codegen`, `memory_sanitizer`, `coro_e2e`, `disjoint_differential` and `http_server` -- every site that already pairs `assert_check_clean` with `assert_ownership_clean`. The 24th `assert_check_clean` is the pre-`lower` one in `run_program_capturing_inner` and correctly has no effect twin, since effects must be checked after lowering.
+
+The row's guess that the sibling harnesses "share the omission" was correct, and they are fixed in the same change.
+
+PINNED BY the row's own repro as a `#[should_panic(expected = "[effect-gate]")]` test: the `pub fn push(v: i64) -> i64 with sends(RequestCh)` program that started this ran green here and exits 1 under `karac check`. Asserting the panic is what keeps the gate from being quietly removed -- if it stops running, that test goes green-by-not-panicking and fails. |
 | B-2026-08-19-6 | typecheck+interp+codegen | medium | `i128` / `u128` are CARRIED AS 64-BIT and wrap there silently: `let a: i128 = 9223372036854775807; a.wrapping_add(1)` prints `-9223372036854775808` i… | FIXED by b62cd33. `i128` / `u128` are now REJECTED as runtime value types, at the point the type is named, with a diagnostic that names this row.
 
 THE WRONGNESS IS THE CARRIER, NOT ONE METHOD — which is why the fix is not where the row was filed. The row was written against `wrapping_*`, where it was noticed. Measured across the family before choosing the shape, on `a: i128 = i64::MAX`:
