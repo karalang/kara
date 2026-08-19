@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 185 | 0 |
 | run-vs-build | 137 | 1 |
 | double-free | 133 | 0 |
-| missing-feature | 120 | 3 |
+| missing-feature | 121 | 3 |
 | codegen-gap | 119 | 0 |
 | diagnostics | 83 | 0 |
 | false-positive | 82 | 0 |
@@ -110,30 +110,30 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 945 | 3 |
+| codegen | 945 | 2 |
 | typecheck | 213 | 2 |
-| interp | 159 | 1 |
+| interp | 160 | 2 |
 | ownership | 60 | 0 |
 | other | 58 | 0 |
 | autopar | 49 | 0 |
 | cli | 48 | 0 |
-| parser | 27 | 0 |
+| parser | 28 | 1 |
 | runtime | 26 | 1 |
 | resolver | 20 | 0 |
 | effect | 7 | 0 |
-| lexer | 5 | 0 |
+| lexer | 6 | 1 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1370 surfaced · 4 open · 1347 fixed · 7 wontfix** (2026-05-20 → 2026-08-19). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1371 surfaced · 4 open · 1348 fixed · 7 wontfix** (2026-05-20 → 2026-08-19). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-19-13 | 2026-08-19 | typecheck+codegen+runtime | medium | GPU reductions still lack the Arg family (argmin / argmax), the two-pass statistics (var / std), prefix-sum and tiled matmul; and the integer surface is i32-only (`u32`, integer `prod`, integer `mean` and integer `dot` each await their own decision). `sum`/`prod`/`min`/`max`/`mean`/`dot` over `Vec[f32]` and `sum`/`min`/`max` over `Vec[i32]` have shipped. | docs/spikes/gpu-llvm-offload-assessment.md; src/gpu_wgsl.rs::emit_reduce_kernel; src/reduce_kernel.rs::tree_reduce_f32 |
-| B-2026-08-19-19 | 2026-08-19 | codegen | medium | A 128-bit scalar cannot be carried in an ENUM PAYLOAD: an Option/Result payload word is 64 bits and `i128`/`u128` needs two, which the pack/unpack machinery has no case for. Refused loudly at type-check for now (`Option[i128]`, `Result[i128, E]`, and `checked_*` which returns `Option[Self]`); everything else about 128-bit works. | src/codegen/call_dispatch.rs::coerce_to_payload_words; src/codegen/calls.rs::rebuild_value_from_payload_words; src/codegen/control_flow_match.rs::reconstruct_payload_value; src/codegen/declarations.rs::{llvm_type_word_count,payload_word_count_for_type_expr}; docs/spikes/oversized-enum-payload.md; the guards in src/typechecker/lowering.rs and src/typechecker/method_numeric.rs |
 | B-2026-08-19-20 | 2026-08-19 | interp+codegen | medium | The `Stats` empty-slice refusals present DIFFERENTLY on the two legs: the interpreter raw-`panic!`s (Rust backtrace, exit 101) where `karac build` emits a clean Kara panic with a source span (exit 1). Affects mean / median / variance / stddev. Separately, `Stats.stddev([])` reports itself as `Stats.variance()` on BOTH legs. | src/interpreter/helpers.rs::eval_stats_fn (the four empty-slice guards); docs/design.md § Statistical reductions |
 | B-2026-08-19-22 | 2026-08-19 | typecheck | medium | `String` has no O(1) indexed character access — first/last char requires `chars().collect()` into a `Vec[char]` (an allocation) or a full iterator walk, so `w[0]`/`w[-1]` has no constant-time spelling | — |
+| B-2026-08-19-23 | 2026-08-19 | lexer+parser+interp | medium | The UPPER HALF of `u128` (values above `i128::MAX`) is unreachable end-to-end: the interpreter's value carrier is a signed `i128`, so such a value is stored as a negative bit pattern. `340282366920938463463374607431768211455u128` is REJECTED at parse; a value reached by arithmetic (`0u128.wrapping_sub(1u128)`) prints `-1` under `karac run --interp` while `karac build` prints the correct 3.4e38 — a run-vs-build divergence. `-170141183460469231731687303715884105728i128` (i128::MIN) is rejected for the same reason: its magnitude `2^127` exceeds `i128::MAX`. | src/parser/exprs.rs::parse_prefix (the i64::MIN unary-minus fold, which the 128-bit case needs a sibling of); src/parser/exprs.rs IntegerOutOfRange arm (`i128::try_from(m)`); src/interpreter/eval_ops.rs::type_is_unsigned64; src/interpreter/eval_ops.rs::span_int_bounds (the U128 ceiling and its comment); src/interpreter/value.rs::Value::Int |
 
 ### Wontfix (7)
 
@@ -151,9 +151,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1370 surfaced
 
 </details>
 
-### Fixed (1347)
+### Fixed (1348)
 
-<details><summary>1347 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1348 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -12365,6 +12365,22 @@ VERIFIED on all four surfaces (`run --interp`, `run`, `build`, `KARAC_AUTO_PAR=0
 THE TEST HOLE MATTERED MORE THAN THE BUG. `tests/gpu_e2e.rs` compared `karac run --interp` against `karac build` — and `--interp` is PRECISELY the lane the routing is supposed to select, so the comparison ran straight through the defect and reported green. The A/B rule in kara-katas/CLAUDE.md is `run` == `build`, and `run` means the DEFAULT lane, which has been the JIT since LLJIT slice 6c. `assert_gpu_reduce_matches_interp` now asserts all three surfaces agree (`run --interp`, `run`, `build`). Reverting the one-line detection makes it fail with the original symbol error, so the new leg is not vacuous — checked.
 
 GENERALIZABLE LESSON: any future opt-in runtime feature (the `gpu`, `regex` and `arrow` archives are all on this axis) needs its JIT-routing gate keyed on what the PROGRAM REACHES, not on a syntactic marker that happens to correlate with it today. And an A/B harness that pins only the fallback lane cannot see a routing bug at all. |
+| B-2026-08-19-19 | codegen | medium | A 128-bit scalar cannot be carried in an ENUM PAYLOAD: an Option/Result payload word is 64 bits and `i128`/`u128` needs two, which the pack/unpack ma… | FIXED by 6716341. Root cause was one step before the packer, which is why five plausible fixes downstream of it all failed. `coerce_enum_payload_scalar` coerces a variant argument to the width its variant DECLARES; seeded `enum Option[T] { Some(T) }` declares `T`, which lowers to the all-i64 generic base. That base is a placeholder, not a target, so the i128 was narrowed to i64 before `coerce_to_payload_words` ever ran. The coercion is now skipped when the declared payload type is the enum's own generic parameter — a concretely declared payload (the B-2026-08-13-18 class-mismatch case it exists for) still coerces.
+
+With that removed the two halves are symmetric: `coerce_to_payload_words` splits a wider-than-a-word integer into little-endian words, and `reconstruct_payload_value` rejoins them. What tells the unpack the binding is 128 bits wide is `pattern_binding_types`, which had no entry at all — `method_callee_type_name`'s per-width list was missing its 128-bit arms, and its `_ => None` fallthrough made the omission invisible to the compiler.
+
+Lifting the refusal made three further 128-bit defects reachable for the first time:
+  - `checked_*` builds its `Option[Self]` inline via phis over i64 words, so a 128-bit result failed module verification ("PHI node operands are not the same type as the result"). It now routes through the same splitter the ordinary `Some(x)` path uses, so both producers of an `Option[i128]` emit the identical word pair.
+  - `wrapping_*` carried a stale per-width allowlist omitting the 128-bit arms — "no method 'wrapping_mul' on type 'i128'" — though both backends already handled the width.
+  - `saturating_*` was wrong in BOTH backends, differently. Codegen computed the signed bounds as `((1u128 << (bits - 1)) - 1) as u64`, whose cast truncates: at 128 bits SMAX came out `u64::MAX` and SMIN came out `0`. It now builds them by bit pattern (`all_ones >> 1`, then `+1`), correct at every width. The interpreter clamped by OPERATION (`sub` → MIN, else MAX) rather than by result sign, so an overflowing NEGATIVE product saturated to `i128::MAX`.
+
+Plus one run-vs-build divergence: every UNSIGNED 128-bit overflow-family call fell through to a generic tail whose `(a as u64) as i128` truncates the operand to 64 bits, so `(2^100 as u128).checked_mul(2)` answered `0` in the interpreter and 2^101 compiled. It now reinterprets the carrier's bits as `u128`, the same trick the 64-bit-unsigned branch plays with i64/u64.
+
+VERIFICATION. Byte-identical across all four surfaces — `karac build`, `karac build` with `KARAC_AUTO_PAR=0`, `karac run` (JIT), `karac run --interp` — on the seeded `Option`/`Result` (both arms), a user enum, a variant whose 128-bit field is followed by a 64-bit one (so the word cursor must advance by two), negatives, `u128`, arithmetic on the bound value, and `None`. Every asserted value is one a 64-bit answer gets wrong; 2^100 is used throughout because its low word is ZERO, which is what made the original bug print `0` rather than something visibly corrupt. Tests: `a_128bit_enum_payload_type_checks` (tests/typechecker.rs, replacing the refusal test), `e2e_128bit_enum_payload_round_trip` and `e2e_128bit_saturating_clamps_toward_the_result_sign` (tests/codegen.rs), and the interpreter twins `a_128bit_enum_payload_round_trips_in_the_interpreter` and `the_128bit_overflow_families_are_width_correct_in_the_interpreter` (tests/interpreter.rs). Gates: fmt, both clippy legs, default suite (106 targets), codegen 3074 and memory_sanitizer 1130 under KARAC_REQUIRE_RUNTIME_ARCHIVE=1.
+
+METHOD NOTE, since it reversed the outcome: five fixes read out of the code (word count, slot size, pack, unpack, match side) were all applied and all failed, and were reverted rather than shipped half-applied into machinery 3000+ codegen tests depend on. Tracing the actual IR found the real site in one step. Read the IR before reading more code.
+
+REMAINDER, split out rather than buried here: the upper half of `u128` (values above `i128::MAX`) and `i128::MIN`'s literal magnitude are still unreachable, because the interpreter's value carrier is a signed `i128`. Codegen is unaffected. Filed as B-2026-08-19-23. |
 | B-2026-08-19-21 | typecheck | medium | Set/SortedSet `contains` and `remove`, and both `binary_search` arms, REJECTED a borrowed needle — `s.contains(w)` for a `w: ref String` failed with… | Named the rule once as `peel_probe_ref` in `src/typechecker.rs` instead of inlining the peel a fifth time, with the owning-vs-probing distinction written down — that distinction IS the rule, and re-deriving it per site is how the first six sites were missed. Split `"contains" | "remove"` out of the `insert` arm in both `stdlib_map.rs` set arms (hashed and sorted) and applied the peel there; applied it to both `binary_search` arms in `stdlib_seq.rs`. The peel is for the ASSIGNABILITY comparison only — the three numeric coercion checks keep the raw type, so a borrowed numeric needle behaves exactly as before and no coercion is recorded against a reference. 
 
 VERIFIED: all six sites accept a ref; `Vec.contains`/`Map.contains_key` unchanged; `Set.insert(ref)` and `SortedSet.insert(ref)` still correctly REJECT, so the ownership requirement survives where the spec really asks for it. The B-2026-08-14-1 narrowing guards on the same arms still fire (`Set[u8]` + a `300i64` VARIABLE is still rejected for contains, insert and remove alike) — note the guard probe must use a variable, not a literal, as that test's own doc-comment warns, since a literal is range-checked by a different path. |

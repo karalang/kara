@@ -1096,7 +1096,7 @@ impl<'a> super::Interpreter<'a> {
             // ceiling is `i128::MAX`: the upper half of the range is stored as
             // a negative bit pattern that this check would reject and that
             // `println` renders with its signed reading. Tracked separately as
-            // B-2026-08-19-20 — it needs the carrier to grow an unsigned half,
+            // B-2026-08-19-23 — it needs the carrier to grow an unsigned half,
             // not a wider bound here.
             Type::Int(IntSize::I128) => (i128::MIN, i128::MAX),
             Type::UInt(UIntSize::U128) => (0, i128::MAX),
