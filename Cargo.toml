@@ -188,6 +188,11 @@ path = "examples/nvptx_probe.rs"
 required-features = ["llvm"]
 
 [[example]]
+name = "nvptx_body_probe"
+path = "examples/nvptx_body_probe.rs"
+required-features = ["llvm"]
+
+[[example]]
 name = "bench_frontend"
 path = "examples/bench_frontend.rs"
 
