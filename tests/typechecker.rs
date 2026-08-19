@@ -18340,6 +18340,94 @@ fn test_consuming_method_argument_still_demotes_closure_to_oncefn() {
     }
 }
 
+/// B-2026-08-19-21 — the missed siblings of B-2026-08-15-22.
+///
+/// That bug fixed `Vec`/`VecDeque`'s `contains` to accept a BORROWED needle, on
+/// the rule that a PROBE scans for its needle and never keeps it. The fix was
+/// inlined at the two arms it was reported against, so every other probe in the
+/// stdlib kept comparing the raw type and rejected `s.contains(w)` for a
+/// `w: ref String` with "expected 'String', found 'ref String'" — each one
+/// against its own written signature in design.md (`val: ref T` for the set
+/// `contains`/`remove`, `needle: ref T` for `binary_search`).
+///
+/// Surfaced by kata #288, whose counts-indexed solver asks
+/// `idx.words.contains(word)` for a `ref String` — the natural phrasing.
+#[test]
+fn stdlib_probes_accept_a_borrowed_needle() {
+    for (label, src) in [
+        (
+            "Set.contains",
+            "fn f(s: ref Set[String], w: ref String) -> bool { return s.contains(w); }",
+        ),
+        (
+            "SortedSet.contains",
+            "fn f(s: ref SortedSet[String], w: ref String) -> bool { return s.contains(w); }",
+        ),
+        (
+            "Set.remove",
+            "fn f(s: mut ref Set[String], w: ref String) -> bool { return s.remove(w); }",
+        ),
+        (
+            "SortedSet.remove",
+            "fn f(s: mut ref SortedSet[String], w: ref String) -> bool { return s.remove(w); }",
+        ),
+        (
+            "Vec.binary_search",
+            "fn f(v: ref Vec[String], w: ref String) -> Option[i64] { return v.binary_search(w); }",
+        ),
+        (
+            "Slice.binary_search",
+            "fn f(v: Slice[String], w: ref String) -> Option[i64] { return v.binary_search(w); }",
+        ),
+        // The two that already worked, kept here so a future refactor cannot
+        // regress them back out of line with the rest.
+        (
+            "Vec.contains",
+            "fn f(v: ref Vec[String], w: ref String) -> bool { return v.contains(w); }",
+        ),
+        (
+            "Map.contains_key",
+            "fn f(m: ref Map[String, i64], k: ref String) -> bool { return m.contains_key(k); }",
+        ),
+    ] {
+        // `typecheck_errors` asserts that errors EXIST, so it cannot express a
+        // clean-typecheck expectation; `typecheck_ok` is the positive helper.
+        let src = format!("{src}\nfn main() {{ println(\"x\"); }}\n");
+        let result = typecheck_ok(&src);
+        assert!(
+            result.errors.is_empty(),
+            "{label}: a probe must accept a borrowed needle, got {:?}",
+            result.errors
+        );
+    }
+}
+
+/// The other half of B-2026-08-19-21, and the reason the set arms had to be
+/// SPLIT rather than have the peel applied to the whole arm.
+///
+/// `insert` STORES its argument — design.md gives it `val: T`, owned — so it
+/// must keep rejecting a borrowed value. A fix that peeled for the shared
+/// `"contains" | "insert" | "remove"` arm would have silently admitted this.
+#[test]
+fn set_insert_still_requires_an_owned_value() {
+    for (label, src) in [
+        (
+            "Set.insert",
+            "fn f(s: mut ref Set[String], w: ref String) -> bool { return s.insert(w); }",
+        ),
+        (
+            "SortedSet.insert",
+            "fn f(s: mut ref SortedSet[String], w: ref String) -> bool { return s.insert(w); }",
+        ),
+    ] {
+        let src = format!("{src}\nfn main() {{ println(\"x\"); }}\n");
+        assert!(
+            !typecheck_errors(&src).is_empty(),
+            "{label}: insert adopts its argument and must reject a borrowed one"
+        );
+    }
+}
+
 #[test]
 fn test_subsume_function_into_oncefn_through_intermediate_let() {
     // Sub-step 3 admits the upward direction across multi-step flow: a

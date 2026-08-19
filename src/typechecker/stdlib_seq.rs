@@ -1157,7 +1157,11 @@ impl<'a> super::TypeChecker<'a> {
                     // an unconverted `Int` needle never matches a `Float`
                     // element.
                     self.record_float_coercion(&arg.value, &elem, &at);
-                    self.check_assignable(&elem, &at, arg.value.span);
+                    // B-2026-08-19-21 — `binary_search` is a PROBE (design.md
+                    // spells it `needle: ref T`), so it peels for the
+                    // assignability comparison exactly as `contains` does.
+                    let probe_at = crate::typechecker::peel_probe_ref(&at);
+                    self.check_assignable(&elem, &probe_at, arg.value.span);
                 }
                 // B-2026-08-11-7 — binary search is only meaningful over a
                 // total order (and over data sorted by it). Not named in the
@@ -1532,7 +1536,11 @@ impl<'a> super::TypeChecker<'a> {
                     // an unconverted `Int` needle never matches a `Float`
                     // element.
                     self.record_float_coercion(&arg.value, &elem, &at);
-                    self.check_assignable(&elem, &at, arg.value.span);
+                    // B-2026-08-19-21 — `binary_search` is a PROBE (design.md
+                    // spells it `needle: ref T`), so it peels for the
+                    // assignability comparison exactly as `contains` does.
+                    let probe_at = crate::typechecker::peel_probe_ref(&at);
+                    self.check_assignable(&elem, &probe_at, arg.value.span);
                 }
                 // B-2026-08-11-7 — binary search is only meaningful over a
                 // total order (and over data sorted by it). Not named in the

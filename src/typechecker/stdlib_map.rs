@@ -564,13 +564,37 @@ impl<'a> super::TypeChecker<'a> {
             // `Map.insert` rejected the same shape all along. Applied to
             // `SortedSet` too — same arms, same hole, and the sweep only
             // probed the hashed one.
-            "contains" | "insert" | "remove" => {
+            // `insert` STORES its argument, so its spec really is `val: T` and
+            // an owned value is required. `contains` and `remove` are PROBES —
+            // design.md gives both `val: ref T` — so they are split out below.
+            "insert" => {
                 for arg in args {
                     let at = self.infer_expr(&arg.value);
                     self.check_int_widening_coercion(&arg.value, &elem, &at);
                     // B-2026-08-14-12 — the float-narrowing sibling.
                     self.check_float_narrowing_coercion(&arg.value, &elem, &at);
                     self.check_assignable(&elem, &at, arg.value.span);
+                }
+                Type::Bool
+            }
+            // B-2026-08-19-21 — the missed siblings of B-2026-08-15-22. That
+            // bug fixed `Vec`/`VecDeque`'s `contains` to accept a BORROWED
+            // needle; the set arms kept comparing the raw type and so rejected
+            // `s.contains(w)` for a `w: ref String` with "expected 'String',
+            // found 'ref String'" — against a spec that says `val: ref T`.
+            // `remove` rides along: it uses the needle to find a slot and drops
+            // it, never storing it, so design.md gives it `val: ref T` too.
+            "contains" | "remove" => {
+                for arg in args {
+                    let at = self.infer_expr(&arg.value);
+                    // The numeric-coercion checks keep the RAW type, so a
+                    // borrowed numeric needle behaves exactly as before and no
+                    // coercion is recorded against a reference.
+                    self.check_int_widening_coercion(&arg.value, &elem, &at);
+                    // B-2026-08-14-12 — the float-narrowing sibling.
+                    self.check_float_narrowing_coercion(&arg.value, &elem, &at);
+                    let probe_at = crate::typechecker::peel_probe_ref(&at);
+                    self.check_assignable(&elem, &probe_at, arg.value.span);
                 }
                 Type::Bool
             }
@@ -980,13 +1004,37 @@ impl<'a> super::TypeChecker<'a> {
             // `Map.insert` rejected the same shape all along. Applied to
             // `SortedSet` too — same arms, same hole, and the sweep only
             // probed the hashed one.
-            "contains" | "insert" | "remove" => {
+            // `insert` STORES its argument, so its spec really is `val: T` and
+            // an owned value is required. `contains` and `remove` are PROBES —
+            // design.md gives both `val: ref T` — so they are split out below.
+            "insert" => {
                 for arg in args {
                     let at = self.infer_expr(&arg.value);
                     self.check_int_widening_coercion(&arg.value, &elem, &at);
                     // B-2026-08-14-12 — the float-narrowing sibling.
                     self.check_float_narrowing_coercion(&arg.value, &elem, &at);
                     self.check_assignable(&elem, &at, arg.value.span);
+                }
+                Type::Bool
+            }
+            // B-2026-08-19-21 — the missed siblings of B-2026-08-15-22. That
+            // bug fixed `Vec`/`VecDeque`'s `contains` to accept a BORROWED
+            // needle; the set arms kept comparing the raw type and so rejected
+            // `s.contains(w)` for a `w: ref String` with "expected 'String',
+            // found 'ref String'" — against a spec that says `val: ref T`.
+            // `remove` rides along: it uses the needle to find a slot and drops
+            // it, never storing it, so design.md gives it `val: ref T` too.
+            "contains" | "remove" => {
+                for arg in args {
+                    let at = self.infer_expr(&arg.value);
+                    // The numeric-coercion checks keep the RAW type, so a
+                    // borrowed numeric needle behaves exactly as before and no
+                    // coercion is recorded against a reference.
+                    self.check_int_widening_coercion(&arg.value, &elem, &at);
+                    // B-2026-08-14-12 — the float-narrowing sibling.
+                    self.check_float_narrowing_coercion(&arg.value, &elem, &at);
+                    let probe_at = crate::typechecker::peel_probe_ref(&at);
+                    self.check_assignable(&elem, &probe_at, arg.value.span);
                 }
                 Type::Bool
             }

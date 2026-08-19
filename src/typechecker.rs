@@ -329,6 +329,29 @@ pub(super) fn repr_arg_head_names(attributes: &[Attribute]) -> Vec<String> {
 /// FastPath }` printed `fast_path` under `--interp` and `FastPath` under
 /// `karac build`. One implementation, consulted by both, is what keeps that
 /// from drifting apart again.
+/// Peel one layer of `ref` / `mut ref` off a PROBE argument's type, for the
+/// assignability comparison only.
+///
+/// B-2026-08-15-22 established the rule for `Vec`/`VecDeque`'s `contains`: a
+/// probe SCANS for its needle and never keeps it, so a borrowed needle is
+/// exactly as usable as an owned one, and comparing the raw type rejects
+/// `v.contains(s)` for an `s: ref String`. That fix was inlined at the two
+/// sequence arms it was reported against, which left every other probe in the
+/// stdlib comparing raw types and rejecting the same shape — `Set.contains`,
+/// `SortedSet.contains`, both `remove`s, and both `binary_search`es, each one
+/// specified in design.md as taking `val: ref T` / `needle: ref T`.
+///
+/// Naming the rule once is the point: the next probe method added to the
+/// stdlib should reach for this rather than re-deriving the peel, and an
+/// OWNING method (`Set.insert`, whose spec really is `val: T`) must NOT call
+/// it — that distinction is the whole content of the rule.
+pub(crate) fn peel_probe_ref(ty: &Type) -> Type {
+    match ty {
+        Type::Ref(inner) | Type::MutRef(inner) => (**inner).clone(),
+        other => other.clone(),
+    }
+}
+
 pub(crate) fn has_display_snake_case(attributes: &[Attribute]) -> bool {
     for attr in attributes {
         if attr.is_bare("derive") {

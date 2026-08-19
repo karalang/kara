@@ -96,10 +96,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 185 | 0 |
 | run-vs-build | 137 | 1 |
 | double-free | 133 | 0 |
+| missing-feature | 120 | 3 |
 | codegen-gap | 119 | 0 |
-| missing-feature | 119 | 2 |
 | diagnostics | 83 | 0 |
-| false-positive | 81 | 0 |
+| false-positive | 82 | 0 |
 | perf | 77 | 0 |
 | crash | 52 | 0 |
 | soundness | 51 | 0 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 945 | 3 |
-| typecheck | 211 | 1 |
+| typecheck | 213 | 2 |
 | interp | 159 | 1 |
 | ownership | 60 | 0 |
 | other | 58 | 0 |
@@ -124,15 +124,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 5 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1368 surfaced · 3 open · 1346 fixed · 7 wontfix** (2026-05-20 → 2026-08-19). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1370 surfaced · 4 open · 1347 fixed · 7 wontfix** (2026-05-20 → 2026-08-19). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-19-13 | 2026-08-19 | typecheck+codegen+runtime | medium | GPU reductions still lack the Arg family (argmin / argmax), the two-pass statistics (var / std), prefix-sum and tiled matmul; and INTEGER reductions are blocked on an overflow rule rather than on effort. `sum`/`prod`/`min`/`max`/`mean`/`dot` over `Vec[f32]` have shipped. | docs/spikes/gpu-llvm-offload-assessment.md; src/gpu_wgsl.rs::emit_reduce_kernel; src/reduce_kernel.rs::tree_reduce_f32 |
 | B-2026-08-19-19 | 2026-08-19 | codegen | medium | A 128-bit scalar cannot be carried in an ENUM PAYLOAD: an Option/Result payload word is 64 bits and `i128`/`u128` needs two, which the pack/unpack machinery has no case for. Refused loudly at type-check for now (`Option[i128]`, `Result[i128, E]`, and `checked_*` which returns `Option[Self]`); everything else about 128-bit works. | src/codegen/call_dispatch.rs::coerce_to_payload_words; src/codegen/calls.rs::rebuild_value_from_payload_words; src/codegen/control_flow_match.rs::reconstruct_payload_value; src/codegen/declarations.rs::{llvm_type_word_count,payload_word_count_for_type_expr}; docs/spikes/oversized-enum-payload.md; the guards in src/typechecker/lowering.rs and src/typechecker/method_numeric.rs |
 | B-2026-08-19-20 | 2026-08-19 | interp+codegen | medium | The `Stats` empty-slice refusals present DIFFERENTLY on the two legs: the interpreter raw-`panic!`s (Rust backtrace, exit 101) where `karac build` emits a clean Kara panic with a source span (exit 1). Affects mean / median / variance / stddev. Separately, `Stats.stddev([])` reports itself as `Stats.variance()` on BOTH legs. | src/interpreter/helpers.rs::eval_stats_fn (the four empty-slice guards); docs/design.md § Statistical reductions |
+| B-2026-08-19-22 | 2026-08-19 | typecheck | medium | `String` has no O(1) indexed character access — first/last char requires `chars().collect()` into a `Vec[char]` (an allocation) or a full iterator walk, so `w[0]`/`w[-1]` has no constant-time spelling | — |
 
 ### Wontfix (7)
 
@@ -150,9 +151,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1368 surfaced
 
 </details>
 
-### Fixed (1346)
+### Fixed (1347)
 
-<details><summary>1346 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1347 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -12364,6 +12365,9 @@ VERIFIED on all four surfaces (`run --interp`, `run`, `build`, `KARAC_AUTO_PAR=0
 THE TEST HOLE MATTERED MORE THAN THE BUG. `tests/gpu_e2e.rs` compared `karac run --interp` against `karac build` — and `--interp` is PRECISELY the lane the routing is supposed to select, so the comparison ran straight through the defect and reported green. The A/B rule in kara-katas/CLAUDE.md is `run` == `build`, and `run` means the DEFAULT lane, which has been the JIT since LLJIT slice 6c. `assert_gpu_reduce_matches_interp` now asserts all three surfaces agree (`run --interp`, `run`, `build`). Reverting the one-line detection makes it fail with the original symbol error, so the new leg is not vacuous — checked.
 
 GENERALIZABLE LESSON: any future opt-in runtime feature (the `gpu`, `regex` and `arrow` archives are all on this axis) needs its JIT-routing gate keyed on what the PROGRAM REACHES, not on a syntactic marker that happens to correlate with it today. And an A/B harness that pins only the fallback lane cannot see a routing bug at all. |
+| B-2026-08-19-21 | typecheck | medium | Set/SortedSet `contains` and `remove`, and both `binary_search` arms, REJECTED a borrowed needle — `s.contains(w)` for a `w: ref String` failed with… | Named the rule once as `peel_probe_ref` in `src/typechecker.rs` instead of inlining the peel a fifth time, with the owning-vs-probing distinction written down — that distinction IS the rule, and re-deriving it per site is how the first six sites were missed. Split `"contains" | "remove"` out of the `insert` arm in both `stdlib_map.rs` set arms (hashed and sorted) and applied the peel there; applied it to both `binary_search` arms in `stdlib_seq.rs`. The peel is for the ASSIGNABILITY comparison only — the three numeric coercion checks keep the raw type, so a borrowed numeric needle behaves exactly as before and no coercion is recorded against a reference. 
+
+VERIFIED: all six sites accept a ref; `Vec.contains`/`Map.contains_key` unchanged; `Set.insert(ref)` and `SortedSet.insert(ref)` still correctly REJECT, so the ownership requirement survives where the spec really asks for it. The B-2026-08-14-1 narrowing guards on the same arms still fire (`Set[u8]` + a `300i64` VARIABLE is still rejected for contains, insert and remove alike) — note the guard probe must use a variable, not a literal, as that test's own doc-comment warns, since a literal is range-checked by a different path. |
 
 </details>
 
