@@ -92,10 +92,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 263 | 1 |
+| miscompile | 262 | 0 |
 | leak | 185 | 0 |
+| run-vs-build | 135 | 1 |
 | double-free | 133 | 0 |
-| run-vs-build | 133 | 0 |
 | codegen-gap | 119 | 0 |
 | missing-feature | 118 | 2 |
 | diagnostics | 83 | 0 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | codegen | 942 | 2 |
 | typecheck | 211 | 3 |
-| interp | 156 | 1 |
+| interp | 158 | 2 |
 | ownership | 60 | 0 |
 | other | 58 | 0 |
 | autopar | 49 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 5 | 1 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1364 surfaced · 3 open · 1342 fixed · 7 wontfix** (2026-05-20 → 2026-08-19). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1365 surfaced · 3 open · 1343 fixed · 7 wontfix** (2026-05-20 → 2026-08-19). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (3)
 
@@ -132,7 +132,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1364 surfaced
 |---|---|---|---|---|---|
 | B-2026-08-19-8 | 2026-08-19 | lexer+typecheck+interp+codegen | medium | IMPLEMENT 128-bit integers for real: `i128` / `u128` are specified normatively in design.md as v1 primitives (all four overflow method families, the widening-cast table, the primitive-numeric lists, Portable SIMD elements) and the compiler now REJECTS them, because no runtime carrier is 128 bits wide. Deleting design.md's 'Implementation status — 128-bit integers are NOT YET IMPLEMENTED' note is the definition of done. | docs/design.md § checked_*/wrapping_*/saturating_*/overflowing_* method families (the status note — deleting it is done); src/typechecker.rs::reject_128bit; src/interpreter/value.rs::Value::Int; src/codegen/method_call.rs (the i64-carrier comment + the `bits >= 64` reduction guard) |
 | B-2026-08-19-13 | 2026-08-19 | typecheck+codegen+runtime | medium | GPU reductions cover only `Sum` and `Prod` over `Vec[f32]`. min / max / argmin / argmax, mean / var / std, dot, prefix-sum and tiled matmul are still unwritable, and INTEGER reductions are blocked on an overflow rule rather than on effort. | docs/spikes/gpu-llvm-offload-assessment.md; src/gpu_wgsl.rs::emit_reduce_kernel; src/reduce_kernel.rs::tree_reduce_f32 |
-| B-2026-08-19-16 | 2026-08-19 | typecheck | high | WHEN TWO ENUMS SHARE A VARIANT NAME, a method call on one dispatches to the OTHER's impl, silently and with no diagnostic: `First.A.tag()` returns `Second`'s answer. The value's TYPE is correct -- only impl selection is wrong -- so nothing downstream can catch it. | src/typechecker/types.rs::impl_table_key / receiver_for_method_lookup; repro above |
+| B-2026-08-19-17 | 2026-08-19 | typecheck+interp | medium | A BARE AMBIGUOUS UNIT VARIANT PICKS A DIFFERENT ENUM IN EACH BACKEND: with `enum First { A, B }` and `enum Second { A, C }`, `let x = A; x.tag()` prints First's answer under `karac build` and Second's under `karac run`. No diagnostic on either side -- and the spec does not say what a bare ambiguous variant name should mean. | src/interpreter.rs::register_items (Item::EnumDef arm, bare `env.define(variant.name)`); src/interpreter/eval_expr.rs (ExprKind::Path last-segment fallback); typechecker bare-variant resolution |
 
 ### Wontfix (7)
 
@@ -150,9 +150,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1364 surfaced
 
 </details>
 
-### Fixed (1342)
+### Fixed (1343)
 
-<details><summary>1342 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1343 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -12320,6 +12320,13 @@ design.md now says, at every one of the five spots that touched this:
 :7274 keeps its Send/Sync mentions on purpose: that paragraph is the one EXPLAINING the replacement, and its deferred.md cross-reference is the historical record. |
 | B-2026-08-19-14 | typecheck | high | NO `shared struct` OR `par struct` COULD SATISFY ANY TRAIT BOUND ANYWHERE -- `impl_table_key` had no `Type::Shared` arm, so `type_satisfies_bound` an… | f4340ba |
 | B-2026-08-19-15 | typecheck | medium | the `providers { R => p } in { . | f4340ba |
+| B-2026-08-19-16 | interp | high | `First.A` EVALUATED TO A `Second` VALUE under `karac run` whenever two enums shared a unit-variant name -- user enums registered their unit variants… | FIXED by c88b51b. `register_items` now binds each user-enum unit variant under BOTH `First.A` and the bare `A`, which is what the two neighbouring registration paths already did -- the prelude `Ordering` / `MemoryOrdering` loop binds both spellings, and the baked-stdlib `Item::EnumDef` arm ~40 lines above binds the qualified one. User enums were the single path that bound only the bare name.
+
+That mattered because `eval_expr`'s `ExprKind::Path` arm tries `env.get("First.A")` first and, on a miss, falls back to the LAST SEGMENT ALONE. With no qualified key ever registered, every `First.A` in the language took that fallback and read `env["A"]` -- a slot both enums had written, last declaration winning.
+
+The bare binding is deliberately kept. The pattern matcher classifies a bare PascalCase identifier as a unit-variant pattern only when `env.get(name)` returns a unit `EnumVariant` (documented at the `Ordering` registration); dropping it would turn every bare match arm into a catch-all binding, which is bug-ledger B-2026-06-30-14.
+
+VERIFIED on all four surfaces -- `run --interp`, `run` (JIT), `build`, and `KARAC_AUTO_PAR=0 build` -- across six programs: colliding unit variants direct and through a let, colliding tuple variants, colliding struct variants, and the unambiguous bare-name case. All agree and all are correct. Four regression tests in tests/interpreter.rs, including one pinning that non-unit variants keep working (they were always correct -- constructed at call sites where the enum name is in hand) and one pinning the bare-name path against the B-2026-06-30-14 regression. |
 
 </details>
 
