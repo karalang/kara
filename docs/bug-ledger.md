@@ -97,43 +97,45 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 133 | 0 |
 | run-vs-build | 132 | 2 |
 | codegen-gap | 119 | 0 |
-| missing-feature | 111 | 2 |
+| missing-feature | 113 | 3 |
 | diagnostics | 83 | 0 |
 | false-positive | 80 | 0 |
 | perf | 77 | 0 |
 | crash | 52 | 0 |
 | soundness | 50 | 0 |
-| other | 46 | 0 |
+| other | 47 | 1 |
 | use-after-free | 20 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 937 | 2 |
-| typecheck | 202 | 1 |
+| codegen | 938 | 3 |
+| typecheck | 203 | 2 |
 | interp | 154 | 1 |
 | ownership | 60 | 0 |
-| other | 55 | 0 |
+| other | 56 | 1 |
 | autopar | 49 | 0 |
 | cli | 46 | 0 |
-| parser | 26 | 1 |
+| parser | 27 | 1 |
 | runtime | 23 | 1 |
 | resolver | 20 | 0 |
 | effect | 7 | 0 |
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1350 surfaced · 4 open · 1328 fixed · 7 wontfix** (2026-05-20 → 2026-08-19). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1353 surfaced · 6 open · 1329 fixed · 7 wontfix** (2026-05-20 → 2026-08-19). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-18-40 | 2026-08-18 | typecheck+codegen | low | A `#[gpu]` KERNEL BODY COULD NOT LOOP, BIND A LOCAL, OR BRANCH ON A VALUE — it had to be a SINGLE EXPRESSION. All four increments LANDED 2026-08-18: immutable `let`, `while` + mutable locals + assignment, `for`-over-range, and value `match`. Reductions, accumulators, nested counted loops and table lookups now compile AND run (each verified on lavapipe against the interpreter). REMAINDER SPLIT OUT AS B-2026-08-18-49: statement-form `if` is unsupported (and a value-`if` branch cannot hold a local) — wider than this row's original "locals inside an `if` branch" wording, which understated it. | docs/implementation_checklist/phase-10-targets.md § GPU codegen cluster (CG-1…CG-7); the slice-0 scope decision is docs/spikes/gpu-wgsl-slice0.md. Not a regression — an unlifted slice-0 floor. Sibling of the CG-5 assessment (docs/spikes/gpu-llvm-offload-assessment.md finding 4), which is where it surfaced. |
-| B-2026-08-18-41 | 2026-08-18 | parser | low | TWO `effect resource` declaration forms design.md specifies normatively do not parse: a GENERIC trait bound (`effect resource C: Provider[Request];` -> "Expected Semicolon, found LeftBracket", design.md:6071) and MULTI-BOUNDS (`effect resource UserDB: DatabaseProvider + HealthCheckable;` -> "found Plus", spec'd at design.md:7216 under the normative line "Multiple trait bounds are allowed on a resource declaration:" at :7213). The third form this row was filed with -- PARAMETERIZED resources, `effect resource UserDB[user_id: i64];` -- is FIXED (see below); only `effect resource X;`, `effect resource X: Trait;` and the parameterized form parse. | the `effect resource` declaration parser (src/parser.rs) vs design.md:6071, :7216 (multi-bound, prose at :7213) and design.md:7124 (§ Parameterized Resources, heading at :7121); allow-list entry in tests/design_md_code_blocks.rs NON_TERMINATOR |
 | B-2026-08-19-1 | 2026-08-19 | codegen+runtime | high | A `#[gpu]` kernel SILENTLY DROPS Kara's checked-integer-arithmetic semantics: the same expression that TRAPS under `--interp` (and on CPU) WRAPS on the GPU, and division by zero returns a plausible number instead of failing. Three measured divergences, all silent wrong answers rather than crashes. This breaks the repo's own non-negotiable A/B rule (`run` == `build`) and voids, inside kernels, the overflow-checking guarantee BENCHMARKS.md leans on when framing Kara-vs-Rust as an equal-safety tie. | — |
 | B-2026-08-19-2 | 2026-08-19 | interp | low | `karac run --interp prog | head` dumps a Rust panic + backtrace on SIGPIPE; the JIT and the AOT binary exit silently | — |
+| B-2026-08-19-3 | 2026-08-19 | parser+codegen | low | MULTI-BOUND `effect resource` declarations do not parse: `effect resource UserDB: DatabaseProvider + HealthCheckable;` -> "Expected Semicolon, found Plus", spec'd normatively at design.md:7216 under "Multiple trait bounds are allowed on a resource declaration:" (:7213), with semantics attached at :7217 ("Any provider passed to `with_provider` must implement all declared bounds plus `Send + Sync`"). | src/parser/items_effects.rs::parse_effect_resource_tail vs design.md:7216 (prose at :7213, semantics at :7217); src/codegen/provider_state.rs::provider_resource_traits and its nine readers |
+| B-2026-08-19-4 | 2026-08-19 | typecheck | medium | `with_provider[R](p, ...)` NEVER CHECKS that `p` implements the resource's declared provider trait. A struct with a matching method but no `impl Trait for U` passes resolve, typecheck and effectcheck, then fails in CODEGEN with a message blaming the vtable -- design.md:7217 requires the opposite ("Any provider passed to `with_provider` must implement all declared bounds plus `Send + Sync`"). | design.md:7217; src/typechecker/env_build.rs::collect_user_resource_override_types; the codegen message at src/codegen/provider.rs ("no impl found for `T::m`") |
+| B-2026-08-19-5 | 2026-08-19 | other | low | The codegen E2E harness (`tests/codegen.rs::run_program_capturing_inner`) runs resolve + typecheck but NOT the effect checker, so a test can pin behaviour for a program `karac build` REFUSES. Its `assert_check_clean` gate is named for the whole check phase and covers two thirds of it. | tests/codegen.rs::run_program_capturing_inner; tests/common's assert_check_clean; cf. B-2026-08-11-34 (the prepare_for_resolve drift this gate was hardened against) |
 
 ### Wontfix (7)
 
@@ -151,9 +153,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1350 surfaced
 
 </details>
 
-### Fixed (1328)
+### Fixed (1329)
 
-<details><summary>1328 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1329 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -11972,6 +11974,15 @@ NOT REPRODUCIBLE, checked in the same pass: the sibling `NestedBoxedEnumDrop` (a
 ASAN DOES NOT CATCH THE ORIGINAL DEFECT, which is worth recording before someone tries. The first ASAN run of the repro returned a wrong value and reported nothing, because the freed chunk is still mapped and the read lands inside it. The regression gate for the use-after-free is therefore an OUTPUT-VALUE assertion (tests/par_codegen.rs), with the ASAN fixture guarding only the "freed exactly once" half of the repair.
 
 LEAVES A LIVE REMAINDER, filed as B-2026-08-18-48 rather than buried here: if the joined binding is then MOVED into a by-value call, the move-out sentinel zeroes the parent's slot so the adopted drop no-ops, and a by-value enum parameter does not adopt the box — 2000/2000 boxes leak in a loop repro. That hole is older than this row and independent of it; sequentially the same program is clean only because the box never escapes a single function and LLVM deletes the allocation outright, so nothing was freeing it there either. Before this fix that program had a use-after-free instead of a leak, so the change is strictly an improvement, but it is not the whole story and the ASAN fixture deliberately uses a READING consumer and says so. |
+| B-2026-08-18-41 | parser | low | TWO `effect resource` declaration forms design.md specifies normatively do not parse: a GENERIC trait bound (`effect resource C: Provider[Request];`… | FIXED by 641d6df (the generic bound; see below for the multi-bound half). design.md:6071's `effect resource RequestCh: Channel[Request];` now parses, and -- the half that matters -- the argument MEANS something: the trait's own generic params are brought into scope when the method signature is lowered (otherwise `T` lowers to `Type::Named` and no substitution can reach it, since `substitute_type_params` rewrites `Type::TypeParam` only), then bound positionally from the declared args. Both steps are gated on the resource having declared arguments, so a plain `: Trait` bound lowers byte-identically to before.
+
+ARITY IS CHECKED AT THE DECLARATION, both directions -- the substitution zips, so too many args were dropped and too few left the trait's remaining params free to unify with anything. A MISSING argument list counts as zero, which gives this row's motivating diagnostic a home: `effect resource RequestCh: Channel;` against `trait Channel[T]` now reports at the declaration and names the fix rather than surfacing as "expected 'T', found 'i64'" at the first call site. The uniform rule was measured against the full corpus before adopting it -- nothing regressed, because no existing program declares a bare bound on a generic trait.
+
+CODEGEN NEEDED NOTHING: the vtable is keyed on the trait NAME and its method-declaration order, neither of which depends on the arguments. An E2E test dispatches through `impl Channel[i64] for Echo` to hold that claim rather than assert it. The formatter (which silently DROPPED the args, rewriting a declaration into one that no longer typechecks), the resolver (arg types now existence-checked), the catalog and the span walker are all plumbed.
+
+design.md's example gained its missing `;`, and the NON_TERMINATOR allow-list is now EMPTY. That entry had been masking a second defect: no terminator gate could see the missing `;` while the parser was failing earlier on the same line at `[`.
+
+MULTI-BOUNDS (`: A + B`) IS SPLIT OUT to B-2026-08-19-3 rather than left here, with a cost this row understated. It is not "a Vec and a union of the method sets": codegen resolves a resource to exactly ONE trait to pick ONE vtable and ONE method order, across nine call sites, so two bounds need per-bound vtables plus a method-to-bound map at every dispatch site. Separately measured and filed as B-2026-08-19-4: `with_provider` does not check that the provider implements the declared bound AT ALL, at arity 1 -- a program whose provider has a matching method but no `impl Trait for U` passes every check and dies in codegen blaming the vtable. That is a pre-existing hole the multi-bound work would inherit, not part of it. |
 | B-2026-08-18-42 | other | low | EIGHT occurrences across SEVEN lines in design.md's kara blocks use Rust MACRO syntax (`name!(...)`), which Kara does not have -- the parser rejects… | FIXED by 9b6e1b1. All eight sites corrected, and the two the row said needed "a language answer" got one each rather than a guess.
 
 `panic!` x 6 -> `panic(...)`. The row already measured this as the safe drop-in; `panic()` with no argument checks clean too, which the `panic!()` sites at design.md:556-557 need.
