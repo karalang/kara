@@ -96,25 +96,25 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 185 | 0 |
 | double-free | 133 | 0 |
 | run-vs-build | 132 | 2 |
-| codegen-gap | 118 | 0 |
+| codegen-gap | 119 | 0 |
 | missing-feature | 111 | 2 |
 | diagnostics | 83 | 0 |
 | false-positive | 80 | 0 |
 | perf | 77 | 0 |
 | crash | 52 | 0 |
 | soundness | 50 | 0 |
-| other | 47 | 1 |
+| other | 46 | 0 |
 | use-after-free | 20 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 936 | 2 |
+| codegen | 937 | 2 |
 | typecheck | 202 | 1 |
 | interp | 154 | 1 |
 | ownership | 60 | 0 |
-| other | 56 | 1 |
+| other | 55 | 0 |
 | autopar | 49 | 0 |
 | cli | 46 | 0 |
 | parser | 26 | 1 |
@@ -124,13 +124,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1350 surfaced · 5 open · 1327 fixed · 7 wontfix** (2026-05-20 → 2026-08-19). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1350 surfaced · 4 open · 1328 fixed · 7 wontfix** (2026-05-20 → 2026-08-19). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-18-35 | 2026-08-18 | other | low | `wasm_threads_animation_frames_recv_e2e` INTERMITTENTLY fails the whole suite with a node/V8 FATAL on module teardown, AFTER its own assertions have passed. The harness prints `RAF_OK elapsed=212.8ms` — the test body succeeded — and then node aborts with `# Fatal error in , line 0 / # Check failed: (location_) != nullptr.` inside `v8::internal::SourceTextModule::ExecuteAsyncModule`, so the test is recorded as failed and `cargo test` exits 101. Observed once in a full `--features llvm` run; the same commit re-run green (14,065 passed), and the test passes 3/3 in isolation. | roadmap.md |
 | B-2026-08-18-40 | 2026-08-18 | typecheck+codegen | low | A `#[gpu]` KERNEL BODY COULD NOT LOOP, BIND A LOCAL, OR BRANCH ON A VALUE — it had to be a SINGLE EXPRESSION. All four increments LANDED 2026-08-18: immutable `let`, `while` + mutable locals + assignment, `for`-over-range, and value `match`. Reductions, accumulators, nested counted loops and table lookups now compile AND run (each verified on lavapipe against the interpreter). REMAINDER SPLIT OUT AS B-2026-08-18-49: statement-form `if` is unsupported (and a value-`if` branch cannot hold a local) — wider than this row's original "locals inside an `if` branch" wording, which understated it. | docs/implementation_checklist/phase-10-targets.md § GPU codegen cluster (CG-1…CG-7); the slice-0 scope decision is docs/spikes/gpu-wgsl-slice0.md. Not a regression — an unlifted slice-0 floor. Sibling of the CG-5 assessment (docs/spikes/gpu-llvm-offload-assessment.md finding 4), which is where it surfaced. |
 | B-2026-08-18-41 | 2026-08-18 | parser | low | TWO `effect resource` declaration forms design.md specifies normatively do not parse: a GENERIC trait bound (`effect resource C: Provider[Request];` -> "Expected Semicolon, found LeftBracket", design.md:6071) and MULTI-BOUNDS (`effect resource UserDB: DatabaseProvider + HealthCheckable;` -> "found Plus", spec'd at design.md:7216 under the normative line "Multiple trait bounds are allowed on a resource declaration:" at :7213). The third form this row was filed with -- PARAMETERIZED resources, `effect resource UserDB[user_id: i64];` -- is FIXED (see below); only `effect resource X;`, `effect resource X: Trait;` and the parameterized form parse. | the `effect resource` declaration parser (src/parser.rs) vs design.md:6071, :7216 (multi-bound, prose at :7213) and design.md:7124 (§ Parameterized Resources, heading at :7121); allow-list entry in tests/design_md_code_blocks.rs NON_TERMINATOR |
 | B-2026-08-19-1 | 2026-08-19 | codegen+runtime | high | A `#[gpu]` kernel SILENTLY DROPS Kara's checked-integer-arithmetic semantics: the same expression that TRAPS under `--interp` (and on CPU) WRAPS on the GPU, and division by zero returns a plausible number instead of failing. Three measured divergences, all silent wrong answers rather than crashes. This breaks the repo's own non-negotiable A/B rule (`run` == `build`) and voids, inside kernels, the overflow-checking guarantee BENCHMARKS.md leans on when framing Kara-vs-Rust as an equal-safety tie. | — |
@@ -152,9 +151,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1350 surfaced
 
 </details>
 
-### Fixed (1327)
+### Fixed (1328)
 
-<details><summary>1327 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1328 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -11942,6 +11941,7 @@ CODEGEN — the fix is ONE rewrite, not three. Three separate places peel an ent
 INTERPRETER — map references resolve as a PLACE: a plain binding or a dotted field path (`h.buckets`, `self.buckets`). A dot cannot occur in a Kāra identifier nor in the `__`-prefixed synthetic names, so it unambiguously marks a path. Only value structs are walked: a `shared struct` field returns `None` and behaves exactly as before rather than being half-supported, since its fields carry interior mutability and the write would need to go through the cell. Resolving in place also removes the whole-map clone-and-write-back that `or_insert` performed on every call, including the local case.
 
 A DIVERGENCE THE FIX ITSELF EXPOSED, found by probing the sibling terminals rather than stopping at the filed repro: with the rest corrected, `and_modify` on a field gave `7 107` under codegen and `7 7` under `--interp` -- codegen applied the modification while the interpreter silently skipped it and left the `or_insert` default. That arm was still name-keyed. Both now agree with the local-map oracle. |
+| B-2026-08-18-35 | codegen | high | Multi-shot host producers (`every`, `animation_frames`) never unref their node timers, so a wasm program HANGS after completing its work — and the fo… | FIXED by 502d6279. The multi-shot host producers' node timers are now unref'd, and both test harnesses have had their `process.exit()` removed rather than rescheduled. The row was filed as an intermittent V8 teardown fatal; the cause is a user-facing hang underneath it. `std.web.time.every` (setInterval) and `animation_frames` (a setTimeout fallback outside a browser) re-arm forever and were never unref'd, so under node the producer's timer is the reason the process stays alive and a program that finishes its work and returns from `main` never exits — measured on a plain program with no harness: before, it printed its output and hung until killed at 10s; after, same output and exit 0 in 0s. Every harness using these producers force-exited to get out, and since the harnesses are async modules an inline `process.exit()` runs inside the module's own continuation, which is the frame V8 aborts in. The force-exit was load-bearing, so the teardown race could not be removed without first removing the need for it; `unref` restores the browser's meaning (feed the channel while the program runs, never be the reason it keeps running) and the browser rAF path is untouched. What replaces the force-exit is a bound, not an exit path: an unref'd 5s timer that cannot hold the loop open itself and so only fires if something else is, which keeps a future regression a failing test rather than a hung suite. Verified across 10 runs of the 71-test wasm E2E set with zero failures, zero skips and zero occurrences of the V8 signature, plus a full suite of 108 binaries / 14,157 tests. |
 | B-2026-08-18-36 | codegen | medium | A NESTED INDEXED READ through a struct field -- `h.buckets[3][1]` where `buckets: Map[i64, Vec[i64]]` -- fails codegen with "nested indexed read requ… | FIXED by ffb3f76. The nested-index lowering resolved a struct field's ELEMENT type through `vec_inner_type_expr`, which returns the FIRST generic argument. That is right for `Vec[T]` / `VecDeque[T]` and wrong for a map, whose element is the SECOND argument (the VALUE type) -- so the map case never got as far as a container arm and fell out to the "outer container must be a named variable" diagnostic. The head is now matched BEFORE the element type is resolved rather than after, which is the only ordering under which a map can supply its own element type.
 
 Reaching the entry then needed a Map lowering that is not keyed on a binding name. `lower_indexed_elem_ptr_map` resolved exactly three things from name-keyed side tables -- the slot holding the handle, the key LLVM type and the value LLVM type -- and everything after that is name-independent. A field has none of those registry entries but can supply all three from its declared type and its place-expression pointer, so the function splits at precisely that boundary: the named path keeps the lookups and delegates the rest to a new pointer-keyed twin, `lower_indexed_elem_ptr_map_at`. Same split B-2026-08-09-21 made for the Vec arm, and no second copy of the key-coercion and hash-probe logic to drift.
