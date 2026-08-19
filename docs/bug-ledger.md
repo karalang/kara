@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 133 | 0 |
 | run-vs-build | 130 | 0 |
 | codegen-gap | 118 | 0 |
-| missing-feature | 111 | 3 |
+| missing-feature | 111 | 2 |
 | diagnostics | 83 | 0 |
 | false-positive | 80 | 0 |
 | perf | 77 | 0 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 935 | 1 |
-| typecheck | 202 | 2 |
+| typecheck | 202 | 1 |
 | interp | 153 | 0 |
 | ownership | 60 | 0 |
 | other | 56 | 1 |
@@ -124,16 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1348 surfaced · 4 open · 1326 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1348 surfaced · 3 open · 1327 fixed · 7 wontfix** (2026-05-20 → 2026-08-18). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-18-35 | 2026-08-18 | other | low | `wasm_threads_animation_frames_recv_e2e` INTERMITTENTLY fails the whole suite with a node/V8 FATAL on module teardown, AFTER its own assertions have passed. The harness prints `RAF_OK elapsed=212.8ms` — the test body succeeded — and then node aborts with `# Fatal error in , line 0 / # Check failed: (location_) != nullptr.` inside `v8::internal::SourceTextModule::ExecuteAsyncModule`, so the test is recorded as failed and `cargo test` exits 101. Observed once in a full `--features llvm` run; the same commit re-run green (14,065 passed), and the test passes 3/3 in isolation. | roadmap.md |
 | B-2026-08-18-40 | 2026-08-18 | typecheck+codegen | low | A `#[gpu]` KERNEL BODY COULD NOT LOOP, BIND A LOCAL, OR BRANCH ON A VALUE — it had to be a SINGLE EXPRESSION. All four increments LANDED 2026-08-18: immutable `let`, `while` + mutable locals + assignment, `for`-over-range, and value `match`. Reductions, accumulators, nested counted loops and table lookups now compile AND run (each verified on lavapipe against the interpreter). REMAINDER SPLIT OUT AS B-2026-08-18-49: statement-form `if` is unsupported (and a value-`if` branch cannot hold a local) — wider than this row's original "locals inside an `if` branch" wording, which understated it. | docs/implementation_checklist/phase-10-targets.md § GPU codegen cluster (CG-1…CG-7); the slice-0 scope decision is docs/spikes/gpu-wgsl-slice0.md. Not a regression — an unlifted slice-0 floor. Sibling of the CG-5 assessment (docs/spikes/gpu-llvm-offload-assessment.md finding 4), which is where it surfaced. |
 | B-2026-08-18-41 | 2026-08-18 | parser | low | TWO `effect resource` declaration forms design.md specifies normatively do not parse: a GENERIC trait bound (`effect resource C: Provider[Request];` -> "Expected Semicolon, found LeftBracket", design.md:6071) and MULTI-BOUNDS (`effect resource UserDB: DatabaseProvider + HealthCheckable;` -> "found Plus", spec'd at design.md:7216 under the normative line "Multiple trait bounds are allowed on a resource declaration:" at :7213). The third form this row was filed with -- PARAMETERIZED resources, `effect resource UserDB[user_id: i64];` -- is FIXED (see below); only `effect resource X;`, `effect resource X: Trait;` and the parameterized form parse. | the `effect resource` declaration parser (src/parser.rs) vs design.md:6071, :7216 (multi-bound, prose at :7213) and design.md:7124 (§ Parameterized Resources, heading at :7121); allow-list entry in tests/design_md_code_blocks.rs NON_TERMINATOR |
-| B-2026-08-18-50 | 2026-08-18 | typecheck | low | A PARAMETERIZED RESOURCE'S PARTITION KEY IS NEVER TYPECHECKED against its declared type. `effect resource UserDB[user_id: i64];` records `i64`, and a use site `with writes(UserDB[name])` for a `String` binding is accepted with no diagnostic -- as is a keyed use of a resource that declares no key at all. design.md § Parameterized Resources additionally requires the key type to implement `Eq` (and `Hash + Eq` for the hash-partition path), "rejected at resource declaration with a clear diagnostic" (design.md:7180); nothing checks that either. | roadmap.md |
 
 ### Wontfix (7)
 
@@ -151,9 +150,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1348 surfaced
 
 </details>
 
-### Fixed (1326)
+### Fixed (1327)
 
-<details><summary>1326 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1327 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -12081,6 +12080,24 @@ cover the WGSL shape, the `select` fork, and the annotation diagnostic.
 
 Gates: fmt, clippy both legs, 78 gpu_wgsl unit tests, 12 gpu_e2e execution
 fixtures, 2294 typechecker, 3064 codegen. Zero test churn across both steps. |
+| B-2026-08-18-50 | typecheck | low | A PARAMETERIZED RESOURCE'S PARTITION KEY IS NEVER TYPECHECKED against its declared type | FIXED by ce92539. `check_effect_partition_keys`, called from `check_function` once the signature's parameters are bound, infers each `writes(R[k])` key expression and compares it to the type `effect resource R[key: T];` declared. The declaration form landed in B-2026-08-18-41 recording a type nothing read; this is what makes it mean something.
+
+THE HOOK'S PLACEMENT IS THE WHOLE DESIGN QUESTION and the row named it correctly: the key expression names a FUNCTION PARAMETER (`fn update(id: i64) -> i64 with writes(UserDB[id])`), so the check cannot live in the effect checker, which runs with no local scope at all. `check_function` binds the parameters a few lines earlier and both free functions and impl methods route through it, so one call site covers both -- verified with a method fixture rather than assumed.
+
+MISMATCH ONLY, deliberately, which is the row's "two directions, worth deciding together" resolved in favour of the one that breaks nothing. A keyed use of a resource that declares NO key stays silent, because until the declaration form parsed that was the only spelling available -- every parameterized program written so far declares bare and uses keyed, so erroring there would break all of them and needs a migration rather than a rider on this check. A mismatch is unreachable for a resource with no declared type, so the two rules do not interact.
+
+`Type::Error` keys are skipped: the expression has already produced its own diagnostic, and a second one would name a type the author never wrote.
+
+MEASURED, all four directions:
+    effect resource UserDB[user_id: i64];  writes(UserDB[name])  name: String  -> error, pointing at `name`
+    effect resource UserDB[user_id: i64];  writes(UserDB[id])    id: i64       -> All checks passed
+    effect resource UserDB[user_id: i64];  writes(UserDB["oops"])              -> error, pointing at the literal
+    effect resource UserDB;                writes(UserDB[name])  name: String  -> All checks passed (compat)
+Plus the same mismatch through an `impl` method. Five regression tests, one per direction.
+
+THE LITERAL CASE MATTERS MOST despite looking like the least interesting: `apply_parameterized_keys` records a conflict key ONLY for a compile-time literal and leaves everything else unproven-and-conservatively-conflicting, so a literal is the one key shape that actually changes what parallelizes. Getting its type wrong is therefore the mistake with real consequences, and it now has a diagnostic.
+
+STILL NOT REPORTED, and left that way on purpose: a keyless use of a resource that DOES declare a key, and the spec's `Eq` / `Hash + Eq` requirement on the key type at the declaration site (design.md:7180). The first is the migration direction above; the second wants trait-bound machinery at an item that has never had any, and is worth its own row if a real program ever declares a key type that cannot be hashed. |
 | B-2026-08-18-51 | other | medium | `tests/gpu_e2e.rs` FAILS THE WHOLE SUITE on any machine that has not built the OPTIONAL `libkarac_runtime_gpu.a` — six tests panic with a link error… | FIXED by 066b695. A FOURTH ARM on the probe's classifier, not a weakening of the third.
 
 `gpu_probe` sorted failures two ways — `is_no_adapter(err)` to a skippable `NoAdapter`, everything else to `Broken`, which panics unconditionally. `Broken`'s unconditional panic is right and stays: the file's own doc comment records why it exists, having watched a mutation that made the emitter produce invalid WGSL turn into all six fixtures soft-skipping and the suite reporting GREEN on a compiler that could not emit a single valid shader.
