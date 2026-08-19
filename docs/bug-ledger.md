@@ -97,12 +97,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 133 | 0 |
 | run-vs-build | 133 | 1 |
 | codegen-gap | 119 | 0 |
-| missing-feature | 113 | 3 |
+| missing-feature | 114 | 4 |
 | diagnostics | 83 | 0 |
 | false-positive | 80 | 0 |
 | perf | 77 | 0 |
 | crash | 52 | 0 |
-| soundness | 51 | 1 |
+| soundness | 51 | 0 |
 | other | 47 | 1 |
 | use-after-free | 20 | 0 |
 
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 939 | 3 |
-| typecheck | 204 | 3 |
-| interp | 155 | 1 |
+| codegen | 940 | 3 |
+| typecheck | 205 | 3 |
+| interp | 156 | 1 |
 | ownership | 60 | 0 |
 | other | 56 | 1 |
 | autopar | 49 | 0 |
@@ -121,10 +121,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | runtime | 24 | 1 |
 | resolver | 20 | 0 |
 | effect | 7 | 0 |
-| lexer | 4 | 0 |
+| lexer | 5 | 1 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1355 surfaced · 6 open · 1331 fixed · 7 wontfix** (2026-05-20 → 2026-08-19). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1356 surfaced · 6 open · 1332 fixed · 7 wontfix** (2026-05-20 → 2026-08-19). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (6)
 
@@ -134,8 +134,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1355 surfaced
 | B-2026-08-19-3 | 2026-08-19 | parser+codegen | low | MULTI-BOUND `effect resource` declarations do not parse: `effect resource UserDB: DatabaseProvider + HealthCheckable;` -> "Expected Semicolon, found Plus", spec'd normatively at design.md:7216 under "Multiple trait bounds are allowed on a resource declaration:" (:7213), with semantics attached at :7217 ("Any provider passed to `with_provider` must implement all declared bounds plus `Send + Sync`"). | src/parser/items_effects.rs::parse_effect_resource_tail vs design.md:7216 (prose at :7213, semantics at :7217); src/codegen/provider_state.rs::provider_resource_traits and its nine readers |
 | B-2026-08-19-4 | 2026-08-19 | typecheck | medium | `with_provider[R](p, ...)` NEVER CHECKS that `p` implements the resource's declared provider trait. A struct with a matching method but no `impl Trait for U` passes resolve, typecheck and effectcheck, then fails in CODEGEN with a message blaming the vtable -- design.md:7217 requires the opposite ("Any provider passed to `with_provider` must implement all declared bounds plus `Send + Sync`"). | design.md:7217; src/typechecker/env_build.rs::collect_user_resource_override_types; the codegen message at src/codegen/provider.rs ("no impl found for `T::m`") |
 | B-2026-08-19-5 | 2026-08-19 | other | low | The codegen E2E harness (`tests/codegen.rs::run_program_capturing_inner`) runs resolve + typecheck but NOT the effect checker, so a test can pin behaviour for a program `karac build` REFUSES. Its `assert_check_clean` gate is named for the whole check phase and covers two thirds of it. | tests/codegen.rs::run_program_capturing_inner; tests/common's assert_check_clean; cf. B-2026-08-11-34 (the prepare_for_resolve drift this gate was hardened against) |
-| B-2026-08-19-6 | 2026-08-19 | typecheck+interp+codegen | medium | `i128` / `u128` are CARRIED AS 64-BIT and wrap there silently: `let a: i128 = 9223372036854775807; a.wrapping_add(1)` prints `-9223372036854775808` instead of `9223372036854775808`. The types parse, type-check and run — they are simply not the width they claim, so any value above the 64-bit range is silently wrong rather than rejected. | — |
 | B-2026-08-19-7 | 2026-08-19 | runtime+cli | low | `karac run` (JIT) IGNORES A CLOSED READER ENTIRELY: with `| head -2` it runs the whole program to completion, discarding every failed write, then exits 0 — while the AOT binary for the same source dies at the first broken write with status 141. MEASURED on a 2,000,000-line program: 541 ms with the pipe closed after two lines vs 547 ms writing everything to /dev/null (statistically identical), against 5 ms for the AOT binary. 100x the work here, and unbounded for a long-running program. | roadmap.md |
+| B-2026-08-19-8 | 2026-08-19 | lexer+typecheck+interp+codegen | medium | IMPLEMENT 128-bit integers for real: `i128` / `u128` are specified normatively in design.md as v1 primitives (all four overflow method families, the widening-cast table, the primitive-numeric lists, Portable SIMD elements) and the compiler now REJECTS them, because no runtime carrier is 128 bits wide. Deleting design.md's 'Implementation status — 128-bit integers are NOT YET IMPLEMENTED' note is the definition of done. | docs/design.md § checked_*/wrapping_*/saturating_*/overflowing_* method families (the status note); src/typechecker.rs::reject_128bit; src/interpreter/value.rs::Value::Int |
 
 ### Wontfix (7)
 
@@ -153,9 +153,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1355 surfaced
 
 </details>
 
-### Fixed (1331)
+### Fixed (1332)
 
-<details><summary>1331 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1332 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -12202,6 +12202,24 @@ TWO CORRECTIONS TO THE ROW'S MEASUREMENTS, both found by re-measuring rather tha
 A THIRD SURFACE IS STILL WRONG, filed separately rather than folded in: the JIT does not merely report the wrong status, it IGNORES the closed reader entirely and runs the program to completion. Measured on a 2,000,000-line program: 541 ms with the pipe closed after two lines versus 547 ms writing everything to /dev/null — statistically identical — while the AOT binary dies in 5 ms. That is 100x the work here and unbounded for a long-running program, and it is a different defect in a different component (the runtime's write path plus `cmd_run`'s status handling), so it gets its own row.
 
 GATED by `interp_broken_pipe_exits_quietly_like_a_native_binary`, which spawns `karac run --interp`, reads a little, drops the read end, and asserts stderr is EMPTY and the status is 141. It asserts on stderr and status rather than stdout deliberately: how much output arrives before the reader closes is a scheduling race, and pinning it would make the test flaky for a property it is not about. Verified red before the fix (the panic report is the failure) and green after. |
+| B-2026-08-19-6 | typecheck+interp+codegen | medium | `i128` / `u128` are CARRIED AS 64-BIT and wrap there silently: `let a: i128 = 9223372036854775807; a.wrapping_add(1)` prints `-9223372036854775808` i… | FIXED by b62cd33. `i128` / `u128` are now REJECTED as runtime value types, at the point the type is named, with a diagnostic that names this row.
+
+THE WRONGNESS IS THE CARRIER, NOT ONE METHOD — which is why the fix is not where the row was filed. The row was written against `wrapping_*`, where it was noticed. Measured across the family before choosing the shape, on `a: i128 = i64::MAX`:
+
+    a.wrapping_add(1)     -> -9223372036854775808   (want  9223372036854775808)
+    a.saturating_add(1)   ->  9223372036854775807   (saturated at i64::MAX)
+    a.checked_add(1)      ->  None                  (want Some(2^63))
+    (-1i128).count_ones() ->  64                    (want 128)
+
+So `saturating_*`, `checked_*` and the bit intrinsics were silently wrong too. Fixing `wrapping_*` alone would have left three families and the intrinsics quietly wrong while looking addressed; a program that cannot NAME the type cannot observe any of them.
+
+THE ROW'S TITLE OVERSTATED THE BLAST RADIUS, and the correction matters for anyone reading this later. Not everything 128-bit was silent: checked arithmetic already TRAPPED at the 64-bit boundary ("integer overflow") rather than wrapping, shifts trapped, and an out-of-range literal was a parse error. Those are loud, and were never the bug. CONST EVALUATION IS GENUINELY 128-BIT — it computes in Rust `i128` at compile time and never reaches a runtime carrier — so `Array[T, 100i128 + 200i128]` and 128-bit const params keep working, untouched, and `test_const_eval_i128_arithmetic_resolves` passes unchanged. Only the runtime value type is rejected. Option (b) from this row (implement properly) was costed and declined for this slice: `Value::Int` has 480 occurrences in the interpreter alone, so a real 128-bit carrier is a sweeping change, not a bug fix.
+
+THREE ENTRY PATHS, because the first two leave a hole worth recording. The annotation (`let x: i128`) and the literal suffix (`let x = 1i128`, which has no `TypeExpr` for the annotation guard to see) are the obvious ones; casts fall out of the first. The third is the float conversion family — `(3.7f32).trunc_to_i128()` names the type in the METHOD NAME only, so unannotated it type-checked clean and produced a 64-bit carrier claiming to be 128. Diagnostics dedupe by source offset because `lower_type_expr` re-runs for a single annotation under generic instantiation and trial typing.
+
+design.md gets a STATUS NOTE, not a scope change (owner-directed). The spec normatively promises 128-bit in v1 — § `checked_*`/`wrapping_*`/`saturating_*`/`overflowing_*` families, the widening-cast table, the primitive-numeric lists, Portable SIMD element types — and rejecting the type without saying so would have traded a soundness bug for the spec/impl divergence class of B-2026-08-18-41. The promise stands; the note records that the compiler does not deliver it yet. Deleting that note is what "implement 128-bit" looks like, and B-2026-08-19-8 tracks it.
+
+FALLOUT, recorded rather than papered over. Four tests asserted the opposite and were REPLACED, not deleted: `test_integer_suffix_{i,u}128_accepted`, `test_const_eval_u128_literal_typechecks`, and the 128-bit lines of `test_float_to_int_conversion_methods_typecheck`. They pinned that 128-bit was NAMEABLE — true, and never in doubt — and read as pinning that it WORKED. `tests/simd_report.rs::require_simd_rejects_unsupported_128bit_element` used `Vector[i128, 4]`, design.md's own example of a lane type no vector unit supports; it no longer type-checks, so the test moves to `f16` (same `UnsupportedElement` classification, still spellable) and the classifier's `bits >= 128` arm is kept and unit-tested on `Type` values for when 128-bit lands. The `Vector` element-type diagnostic stopped advertising `i128` as permitted. No `.kara` file in examples/, stdlib/ or kara-katas uses either type — consistent with a type that never worked. |
 
 </details>
 
