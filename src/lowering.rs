@@ -242,10 +242,10 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
     // Sibling hint: which of those buffers hold INTEGERS. Codegen cannot
     // re-derive it (Vec data pointers are opaque) and it selects a different
     // runtime ABI, so it travels as plain data alongside the shader text.
-    program.gpu_reduce_int_buffers = tc
-        .gpu_reduce_int_buffers
+    program.gpu_reduce_int_elems = tc
+        .gpu_reduce_int_elems
         .iter()
-        .map(|k| (k.0, k.1))
+        .map(|(k, v)| ((k.0, k.1), v.clone()))
         .collect();
     // Forward the `TaskHandle[T].join()` result-type table so codegen sizes
     // the cross-task result transfer for a non-scalar `T` (a `Vec`/`String`/

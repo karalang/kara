@@ -10200,6 +10200,8 @@ An integer reduction can overflow where a float one saturates to infinity, and K
 
 `min` and `max` cannot overflow and are therefore unconditionally available over `i32`/`u32`.
 
+Signedness follows the element type all the way through — the shader's comparison, the overflow rule (a signed add overflows on a shared-sign-then-flip, an unsigned one on a carry), and the result's width. `gpu.sum` over a `Vec[u32]` containing `2147483647` and `1` yields `2147483648`; the same buffer typed `Vec[i32]` traps. The two are different functions, not the same function with a cast.
+
 **The consequence worth stating loudly: the specified tree order determines *whether* an integer reduction traps, not merely what it returns.** Overflow is a property of the intermediate sums, and a tree forms different intermediates than a line. Both directions are reachable — with `MAX = i32::MAX`:
 
 | buffer | tree (specified) | left fold |

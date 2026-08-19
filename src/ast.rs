@@ -359,19 +359,26 @@ pub type StatsElemTypesTable = std::collections::HashMap<(usize, usize), TypeExp
 /// codegen-containment invariant).
 pub type GpuDispatchWgslTable = std::collections::HashMap<(usize, usize), String>;
 
-/// Set by the lowering pass from `TypeCheckResult.gpu_reduce_int_buffers`.
-/// The set of `gpu.<reduce>(buffer)` BUFFER-argument spans whose element type
-/// is an integer.
+/// Set by the lowering pass from `TypeCheckResult.gpu_reduce_int_elems`. Maps
+/// a `gpu.<reduce>(buffer)` BUFFER-argument span to its INTEGER element
+/// spelling (`"i32"` / `"u32"`); float buffers have no entry.
 ///
-/// One bit, but codegen cannot re-derive it: a `Vec`'s data pointer is opaque
-/// at the LLVM level, so nothing in the emitted types distinguishes a
-/// `Vec[i32]` from a `Vec[f32]` at the call site. The integer path is a
-/// different runtime entry point with a different signature (it can TRAP on
-/// overflow), so getting this wrong is not a performance question — it picks
-/// the wrong ABI. A plain-data hint keeps the decision in the typechecker,
-/// where the element type is known, without an LLVM type crossing the
-/// boundary (the codegen-containment invariant).
-pub type GpuReduceIntBuffersTable = std::collections::HashSet<(usize, usize)>;
+/// Codegen cannot re-derive this: a `Vec`'s data pointer is opaque at the LLVM
+/// level, so nothing in the emitted types distinguishes `Vec[i32]` from
+/// `Vec[u32]` from `Vec[f32]` at the call site. It decides two things that are
+/// not performance questions:
+///
+///  * WHICH runtime entry point — the integer one can TRAP on overflow, so a
+///    float buffer routed to it (or vice versa) is the wrong ABI outright;
+///  * whether the 32-bit result ZERO- or SIGN-extends into Kāra's i64 carrier.
+///    A `u32` at or above 2^31 sign-extends to a negative i64, which is a
+///    plausible wrong number rather than a crash — precisely the failure mode
+///    this family exists to avoid.
+///
+/// The spelling rather than a bool because the second decision needs three
+/// states, and because a future `i64`/`u64` element would slot in without
+/// re-shaping the table.
+pub type GpuReduceIntElemsTable = std::collections::HashMap<(usize, usize), String>;
 
 /// `TaskHandle[T].join()` MethodCall span → the result type `T`. Lets codegen
 /// size the join out-slot and the cross-task result memcpy for a non-scalar
@@ -800,9 +807,9 @@ pub struct Program {
     /// empty otherwise. `gpu.dispatch` kernel-arg span → generated WGSL shader
     /// text (spike slice-0c). See [`GpuDispatchWgslTable`].
     pub gpu_dispatch_wgsl: GpuDispatchWgslTable,
-    /// Set by the lowering pass from `TypeCheckResult.gpu_reduce_int_buffers`;
-    /// empty otherwise. See [`GpuReduceIntBuffersTable`].
-    pub gpu_reduce_int_buffers: GpuReduceIntBuffersTable,
+    /// Set by the lowering pass from `TypeCheckResult.gpu_reduce_int_elems`;
+    /// empty otherwise. See [`GpuReduceIntElemsTable`].
+    pub gpu_reduce_int_elems: GpuReduceIntElemsTable,
     /// Set by the lowering pass from `TypeCheckResult.task_join_return_types`;
     /// empty otherwise. `TaskHandle[T].join()` result types for codegen's
     /// cross-task result-transfer sizing (non-scalar spawn returns).

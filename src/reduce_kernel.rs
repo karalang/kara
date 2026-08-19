@@ -106,6 +106,11 @@ pub fn tree_reduce_i32(xs: &[i32], op: ReduceOp) -> Option<Result<i32, IntFoldOv
 /// FAIL — which is the whole of the integer-reduction decision in one type.
 type CheckedCombiner = (fn(i32, i32) -> Option<i32>, i32);
 
+/// The unsigned sibling of [`CheckedCombiner`]. Separate because the failing
+/// combine is `u32::checked_add`, whose overflow condition (a carry) is not
+/// the signed one (a shared-sign-then-flip).
+type CheckedCombinerU = (fn(u32, u32) -> Option<u32>, u32);
+
 /// The recursion the multi-workgroup dispatch performs, at `i32` — the integer
 /// sibling of [`tree_fold_f32`], chunk for chunk.
 fn tree_fold_i32(
@@ -134,6 +139,68 @@ fn one_workgroup_i32(
     combine: fn(i32, i32) -> Option<i32>,
     identity: i32,
 ) -> Result<i32, IntFoldOverflow> {
+    debug_assert!(xs.len() <= GPU_REDUCE_WIDTH);
+    let mut scratch = [identity; GPU_REDUCE_WIDTH];
+    for (slot, &x) in scratch.iter_mut().zip(xs) {
+        *slot = x;
+    }
+    let mut stride = GPU_REDUCE_WIDTH / 2;
+    while stride > 0 {
+        for t in 0..stride {
+            scratch[t] = combine(scratch[t], scratch[t + stride]).ok_or(IntFoldOverflow)?;
+        }
+        stride /= 2;
+    }
+    Ok(scratch[0])
+}
+
+/// The `u32` sibling of [`tree_reduce_i32`] — same tree, same trap rule, same
+/// two-layer result (B-2026-08-19-13).
+///
+/// Separate from the signed twin rather than generic over it because the
+/// OVERFLOW CONDITION is genuinely different: a signed add overflows when the
+/// operands share a sign and the result does not, an unsigned one when it
+/// carries. `checked_add` encodes each correctly for its own type, and that is
+/// the whole reason both exist.
+///
+/// Note what is NOT different: the runtime entry point. It moves 4-byte words
+/// without interpreting them — `in_ptr` is cast straight to `*const u8` and
+/// `out` is written from raw little-endian bytes — so signedness never reaches
+/// it. The only place it matters on the compiled path is the widening of the
+/// 32-bit result into Kāra's i64 carrier, where `u32` needs a ZERO-extend; a
+/// sign-extend would report every value at or above 2^31 as negative.
+pub fn tree_reduce_u32(xs: &[u32], op: ReduceOp) -> Option<Result<u32, IntFoldOverflow>> {
+    let (combine, identity): CheckedCombinerU = match op {
+        ReduceOp::Sum => (u32::checked_add, 0),
+        ReduceOp::Min => (|a, b| Some(a.min(b)), u32::MAX),
+        ReduceOp::Max => (|a, b| Some(a.max(b)), u32::MIN),
+        _ => return None,
+    };
+    Some(tree_fold_u32(xs, combine, identity))
+}
+
+/// The recursion the multi-workgroup dispatch performs, at `u32`.
+fn tree_fold_u32(
+    xs: &[u32],
+    combine: fn(u32, u32) -> Option<u32>,
+    identity: u32,
+) -> Result<u32, IntFoldOverflow> {
+    if xs.len() <= GPU_REDUCE_WIDTH {
+        return one_workgroup_u32(xs, combine, identity);
+    }
+    let mut partials: Vec<u32> = Vec::with_capacity(xs.len().div_ceil(GPU_REDUCE_WIDTH));
+    for chunk in xs.chunks(GPU_REDUCE_WIDTH) {
+        partials.push(one_workgroup_u32(chunk, combine, identity)?);
+    }
+    tree_fold_u32(&partials, combine, identity)
+}
+
+/// One workgroup's halving tree at `u32`, failing on the first overflow.
+fn one_workgroup_u32(
+    xs: &[u32],
+    combine: fn(u32, u32) -> Option<u32>,
+    identity: u32,
+) -> Result<u32, IntFoldOverflow> {
     debug_assert!(xs.len() <= GPU_REDUCE_WIDTH);
     let mut scratch = [identity; GPU_REDUCE_WIDTH];
     for (slot, &x) in scratch.iter_mut().zip(xs) {
@@ -635,6 +702,62 @@ mod tests {
             Some(Err(IntFoldOverflow))
         );
         assert_eq!(left_fold(&b), Some(0), "left fold must survive {b:?}");
+    }
+
+    #[test]
+    fn tree_u32_carries_rather_than_sign_flips() {
+        // The unsigned overflow condition is a CARRY, not a sign flip — which
+        // is why this is a separate twin rather than a generic one. The i32
+        // rule would call `u32::MAX + 1` fine (no shared-sign-then-flip) and
+        // the u32 rule would miss `i32::MAX + 1`.
+        assert_eq!(
+            tree_reduce_u32(&[u32::MAX, 1], ReduceOp::Sum),
+            Some(Err(IntFoldOverflow))
+        );
+        // And the value an i32 tree would have TRAPPED on is perfectly fine
+        // here — 2^31 fits u32 with room to spare.
+        assert_eq!(
+            tree_reduce_u32(&[2147483647, 1], ReduceOp::Sum),
+            Some(Ok(2147483648))
+        );
+        assert_eq!(tree_reduce_u32(&[3, 1, 2], ReduceOp::Sum), Some(Ok(6)));
+        assert_eq!(tree_reduce_u32(&[], ReduceOp::Sum), Some(Ok(0)));
+    }
+
+    #[test]
+    fn tree_u32_min_max_span_the_full_unsigned_range() {
+        // The identities are the type bounds, so a real `u32::MAX` is still
+        // reachable as a max — the value a sign-extending result path would
+        // report as `-1`.
+        assert_eq!(
+            tree_reduce_u32(&[u32::MAX], ReduceOp::Max),
+            Some(Ok(u32::MAX))
+        );
+        assert_eq!(
+            tree_reduce_u32(&[u32::MAX], ReduceOp::Min),
+            Some(Ok(u32::MAX))
+        );
+        assert_eq!(tree_reduce_u32(&[0], ReduceOp::Max), Some(Ok(0)));
+        // Above 2^31 the unsigned ordering differs from the signed one: as
+        // i32 these bits are -1 and 1, so a signed compare would answer the
+        // other way round on BOTH.
+        assert_eq!(
+            tree_reduce_u32(&[u32::MAX, 1], ReduceOp::Max),
+            Some(Ok(u32::MAX))
+        );
+        assert_eq!(tree_reduce_u32(&[u32::MAX, 1], ReduceOp::Min), Some(Ok(1)));
+    }
+
+    #[test]
+    fn tree_u32_chunks_exactly_like_its_siblings() {
+        for n in [64usize, 65, 4096] {
+            let xs: Vec<u32> = (0..n).map(|i| (i % 11) as u32).collect();
+            let want: u32 = xs.iter().sum();
+            assert_eq!(tree_reduce_u32(&xs, ReduceOp::Sum), Some(Ok(want)), "n={n}");
+        }
+        // Same refusal set as every other tree.
+        assert_eq!(tree_reduce_u32(&[1], ReduceOp::Prod), None);
+        assert_eq!(tree_reduce_u32(&[1], ReduceOp::Mean), None);
     }
 
     #[test]

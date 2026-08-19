@@ -34752,6 +34752,48 @@ fn gpu_sum_and_prod_compute_the_obvious_small_cases() {
 }
 
 #[test]
+fn gpu_u32_reductions_use_the_unsigned_rules_throughout() {
+    // Above 2^31 the unsigned reading differs from the signed one at every
+    // step: `4294967295` is `-1` as i32, so a signed compare answers max/min
+    // backwards, and a signed widen reports the result as negative.
+    let out = run_no_errors(
+        "fn main() {\n\
+        \x20   let v: Vec[u32] = [4294967295, 1];\n\
+        \x20   let m = gpu.max(v);\n\
+        \x20   match m {\n\
+        \x20       Some(x) => println(f\"{x}\"),\n\
+        \x20       None => println(\"empty\"),\n\
+        \x20   }\n\
+        }",
+    );
+    assert_eq!(out.trim(), "4294967295");
+
+    // The OVERFLOW POINT differs too, and this is the case range-sniffing the
+    // values could never get right: `2147483647 + 1` traps as i32 and is
+    // perfectly ordinary as u32. Signedness has to come from the type, not
+    // from the data.
+    let out = run_no_errors(
+        "fn main() {\n\
+        \x20   let v: Vec[u32] = [2147483647, 1];\n\
+        \x20   println(f\"{gpu.sum(v)}\")\n\
+        }",
+    );
+    assert_eq!(out.trim(), "2147483648");
+
+    // And u32 still traps at ITS OWN boundary — a carry, not a sign flip.
+    let errs = runtime_errors(
+        "fn main() {\n\
+        \x20   let v: Vec[u32] = [4294967295, 1];\n\
+        \x20   println(f\"{gpu.sum(v)}\")\n\
+        }",
+    );
+    assert!(
+        format!("{errs:?}").contains("integer overflow"),
+        "u32 must trap on carry, got: {errs:?}"
+    );
+}
+
+#[test]
 fn gpu_integer_reductions_trap_on_overflow() {
     // The rule: integer GPU reductions trap, exactly as `v.sum()` over a
     // `Vec[i32]` already does. Wrapping would turn a trap into a wrong answer

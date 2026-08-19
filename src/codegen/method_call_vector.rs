@@ -1663,8 +1663,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // TRAP. Selected from the typechecker's plain-data hint, because
         // nothing in the LLVM types distinguishes `Vec[i32]` from `Vec[f32]`
         // here (data pointers are opaque).
-        if self.accel.gpu_reduce_int_buffers.contains(&key) {
-            return self.compile_gpu_reduce_int(spelling, wgsl_ptr, wgsl_len, data, n);
+        if let Some(elem) = self.accel.gpu_reduce_int_elems.get(&key).cloned() {
+            return self.compile_gpu_reduce_int(spelling, &elem, wgsl_ptr, wgsl_len, data, n);
         }
 
         // karac_runtime_gpu_reduce_f32(wgsl_ptr, wgsl_len, in_ptr, n,
@@ -1770,6 +1770,7 @@ impl<'ctx> super::Codegen<'ctx> {
     fn compile_gpu_reduce_int(
         &mut self,
         spelling: &str,
+        elem: &str,
         wgsl_ptr: PointerValue<'ctx>,
         wgsl_len: IntValue<'ctx>,
         data: PointerValue<'ctx>,
@@ -1777,9 +1778,17 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let i32_t = self.context.i32_type();
         let i64_t = self.context.i64_type();
-        let identity = match spelling {
-            "min" => i32_t.const_int(i32::MAX as u64, false),
-            "max" => i32_t.const_int(i32::MIN as u64, false),
+        let unsigned = elem == "u32";
+        // The identity's BITS, which is all the runtime carries: it copies the
+        // slot on the empty path and never interprets it, so `u32::MAX` riding
+        // in an `i32`-typed parameter is exact rather than lossy. (`min`/`max`
+        // discard it anyway — an empty buffer is `None` — so it only ever
+        // surfaces for `sum`, where it is 0 either way.)
+        let identity = match (spelling, unsigned) {
+            ("min", false) => i32_t.const_int(i32::MAX as u64, false),
+            ("max", false) => i32_t.const_int(i32::MIN as u64, false),
+            ("min", true) => i32_t.const_int(u32::MAX as u64, false),
+            ("max", true) => i32_t.const_int(0, false),
             _ => i32_t.const_int(0, false),
         };
         let out = self.builder.build_alloca(i32_t, "gpu.ireduce.out").unwrap();
@@ -1841,9 +1850,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap()
                 .into_int_value();
             return Ok(self
-                .builder
-                .build_int_s_extend(v, i64_t, "gpu.isum.ext")
-                .unwrap()
+                .widen_gpu_reduce_result(v, unsigned, "gpu.isum.ext")
                 .into());
         }
 
@@ -1868,10 +1875,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_load(i32_t, out, "gpu.imm")
             .unwrap()
             .into_int_value();
-        let word = self
-            .builder
-            .build_int_s_extend(v, i64_t, "gpu.imm.ext")
-            .unwrap();
+        let word = self.widen_gpu_reduce_result(v, unsigned, "gpu.imm.ext");
         let some_end_bb = self.builder.get_insert_block().unwrap();
         self.builder.build_unconditional_branch(merge_bb).unwrap();
 
@@ -1880,6 +1884,32 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.position_at_end(merge_bb);
         Ok(self.build_option_some_via_phis(&[word], some_end_bb, none_bb, "gpu.imm"))
+    }
+
+    /// Widen a 32-bit reduction result into Kāra's i64 integer carrier.
+    ///
+    /// **The one place signedness matters on this path.** The runtime entry
+    /// point is bit-transparent — it casts the input straight to `*const u8`
+    /// and writes the output from raw little-endian bytes, so a `u32` rides
+    /// through its `i32`-typed slots exactly. The shader does the interpreting
+    /// (`array<u32>` gives unsigned `min`/`max` and an unsigned carry check).
+    /// Only here does the 32-bit word have to become a 64-bit one, and a
+    /// SIGN-extend would report every `u32` at or above 2^31 as negative —
+    /// `gpu.max` of `[u32::MAX]` coming back as `-1`. A plausible wrong number
+    /// rather than a crash, which is the failure mode this family exists to
+    /// avoid.
+    fn widen_gpu_reduce_result(
+        &self,
+        v: IntValue<'ctx>,
+        unsigned: bool,
+        name: &str,
+    ) -> IntValue<'ctx> {
+        let i64_t = self.context.i64_type();
+        if unsigned {
+            self.builder.build_int_z_extend(v, i64_t, name).unwrap()
+        } else {
+            self.builder.build_int_s_extend(v, i64_t, name).unwrap()
+        }
     }
 
     /// Read a reduction argument's `Vec` down to `{data, len}`.

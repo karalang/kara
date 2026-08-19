@@ -3460,24 +3460,17 @@ impl<'a> super::TypeChecker<'a> {
         // overflow-check). Integers route to the CHECKED emitter, which
         // carries a device-side overflow flag — the unchecked float tree would
         // wrap where Kāra traps.
-        //
-        // `u32` is NOT here yet, deliberately. The runtime entry point is
-        // byte-transparent (it moves values without interpreting them, and the
-        // shader does the interpreting), so unsigned is mechanical rather than
-        // hard — but its identity and result would travel through an
-        // `i32`-typed slot, and sign confusion in that slot is exactly the
-        // plausible-wrong-number failure this family must not have. It gets
-        // its own slice.
         let elem_spelling = match &elem {
             Type::Float(FloatSize::F32) => Some("f32"),
             Type::Int(IntSize::I32) => Some("i32"),
+            Type::UInt(UIntSize::U32) => Some("u32"),
             _ => None,
         };
         let Some(elem_spelling) = elem_spelling else {
             self.type_error(
                 format!(
-                    "error[E_GPU_REDUCE_BUFFER]: `gpu.{spelling}` takes a `Vec[f32]` or a \
-                     `Vec[i32]` (found `Vec[{}]`)",
+                    "error[E_GPU_REDUCE_BUFFER]: `gpu.{spelling}` takes a `Vec[f32]`, \
+                     `Vec[i32]` or `Vec[u32]` (found `Vec[{}]`)",
                     crate::typechecker::types::type_display(&elem)
                 ),
                 args[0].value.span,
@@ -3506,14 +3499,15 @@ impl<'a> super::TypeChecker<'a> {
         }
 
         let emitted = if is_int {
-            // Record the element kind for codegen, which cannot see it: a
-            // `Vec`'s data pointer is opaque at the LLVM level, and the
-            // integer path is a different runtime entry point with a different
-            // signature (it can trap). Keyed on the same span as the shader.
-            self.gpu_reduce_int_buffers.insert(SpanKey(
-                args[0].value.span.offset,
-                args[0].value.span.length,
-            ));
+            // Record the element SPELLING for codegen, which cannot see it: a
+            // `Vec`'s data pointer is opaque at the LLVM level. It decides two
+            // things — the runtime entry point (the integer one can trap), and
+            // whether the 32-bit result zero- or sign-extends into the i64
+            // carrier. Keyed on the same span as the shader.
+            self.gpu_reduce_int_elems.insert(
+                SpanKey(args[0].value.span.offset, args[0].value.span.length),
+                elem_spelling.to_string(),
+            );
             crate::gpu_wgsl::emit_int_reduce_kernel(gpu_reduce_shader_op(op), elem_spelling)
         } else {
             crate::gpu_wgsl::emit_reduce_kernel(gpu_reduce_shader_op(op), elem_spelling)

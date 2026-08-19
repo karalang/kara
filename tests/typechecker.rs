@@ -37738,6 +37738,17 @@ fn gpu_integer_reductions_are_accepted_for_the_ops_whose_overflow_rule_is_settle
         \x20   let hi: Option[i32] = gpu.max(b);\n\
         }",
     );
+
+    // `u32` too — the result type follows the element type, so an unsigned
+    // buffer yields unsigned results rather than being promoted.
+    typecheck_ok(
+        "fn main() {\n\
+        \x20   let b: Vec[u32] = [1, 2];\n\
+        \x20   let s: u32 = gpu.sum(b);\n\
+        \x20   let lo: Option[u32] = gpu.min(b);\n\
+        \x20   let hi: Option[u32] = gpu.max(b);\n\
+        }",
+    );
 }
 
 #[test]
@@ -37756,11 +37767,11 @@ fn gpu_integer_reductions_refuse_what_has_not_been_decided() {
             "fn main() { let b: Vec[i32] = [1, 2]; let m = gpu.mean(b); }",
             "truncates",
         ),
-        // u32 would travel through an i32-typed runtime slot; sign confusion
-        // there is the plausible-wrong-number failure this family must avoid.
+        // u32 `prod` is refused for the SAME reason i32 `prod` is — the
+        // widening multiply — not because u32 is unsupported.
         (
-            "fn main() { let b: Vec[u32] = [1, 2]; let s = gpu.sum(b); }",
-            "`Vec[f32]` or a `Vec[i32]`",
+            "fn main() { let b: Vec[u32] = [1, 2]; let p = gpu.prod(b); }",
+            "widening multiply",
         ),
         // dot over integers would need the same checked multiply.
         (

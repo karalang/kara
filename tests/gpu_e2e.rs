@@ -1015,6 +1015,121 @@ fn gpu_integer_reductions_agree_with_the_interpreter() {
 }
 
 #[test]
+fn gpu_u32_reductions_are_unsigned_end_to_end() {
+    // The whole u32 question in one place: above 2^31 the unsigned reading
+    // differs from the signed one at EVERY step — the shader's compare, the
+    // overflow rule, and the widening of the 32-bit result into Kāra's i64
+    // carrier. The last one is the only place signedness reaches codegen (the
+    // runtime entry point moves raw 4-byte words and never interprets them),
+    // and a sign-extend there turns a large u32 into a negative i64.
+    //
+    // THIS fixture is the discriminating one: reverting the zero-extend makes
+    // it print 18446744071562067968. A `max` fixture alone would NOT catch it
+    // — the print path masks an Option payload back to 32 bits and hides the
+    // sign extension.
+    assert_gpu_reduce_matches_interp(
+        "reduce_u32_past_i32",
+        "fn main() {\n\
+        \x20   let v: Vec[u32] = [2147483647, 1];\n\
+        \x20   println(f\"{gpu.sum(v)}\")\n\
+        }\n",
+        "2147483648",
+    );
+
+    // The same buffer would have TRAPPED as `Vec[i32]`. Signedness comes from
+    // the type, which is why the interpreter reads it from the typechecker's
+    // hint rather than sniffing the values — a `Vec[u32]` of small values is
+    // indistinguishable from a `Vec[i32]` by inspection, and folding it with
+    // the signed rule would trap somewhere past 2^31 that the compiled path
+    // sails through. A run/build divergence reachable only on large data.
+    assert_gpu_reduce_matches_interp(
+        "reduce_u32_max_above_2_31",
+        "fn main() {\n\
+        \x20   let v: Vec[u32] = [4294967295, 1];\n\
+        \x20   let m = gpu.max(v);\n\
+        \x20   match m {\n\
+        \x20       Some(x) => {\n\
+        \x20           println(f\"{x}\")\n\
+        \x20           let halved: u32 = x / 2;\n\
+        \x20           println(f\"{halved}\")\n\
+        \x20       },\n\
+        \x20       None => println(\"empty\"),\n\
+        \x20   }\n\
+        }\n",
+        "4294967295\n2147483647",
+    );
+
+    // Unsigned `min` picks 1, where a signed compare would pick 4294967295
+    // (it reads as -1).
+    assert_gpu_reduce_matches_interp(
+        "reduce_u32_min_above_2_31",
+        "fn main() {\n\
+        \x20   let v: Vec[u32] = [4294967295, 1];\n\
+        \x20   let m = gpu.min(v);\n\
+        \x20   match m {\n\
+        \x20       Some(x) => println(f\"{x}\"),\n\
+        \x20       None => println(\"empty\"),\n\
+        \x20   }\n\
+        }\n",
+        "1",
+    );
+
+    // Multi-workgroup, so the unsigned shader is exercised past one dispatch.
+    assert_gpu_reduce_matches_interp(
+        "reduce_u32_multi",
+        "fn main() {\n\
+        \x20   let mut v: Vec[u32] = [];\n\
+        \x20   for i in 0..4096 { v.push((i % 11) as u32) }\n\
+        \x20   println(f\"{gpu.sum(v)}\")\n\
+        }\n",
+        "20466",
+    );
+}
+
+#[test]
+fn gpu_u32_overflow_traps_at_its_own_boundary() {
+    // u32 overflows on a CARRY, not a sign flip — the shader's check is
+    // `s < a` rather than the signed shared-sign-then-flip test. So it must
+    // trap here and NOT at 2^31, which the fixture above proves it sails
+    // through.
+    let Some(backend) = gpu_or_skip() else { return };
+    let tag = "reduce_u32_overflow";
+    let dir = scratch(tag);
+    let src = dir.join(format!("{tag}.kara"));
+    std::fs::write(
+        &src,
+        "fn main() {\n\
+        \x20   let v: Vec[u32] = [4294967295, 1];\n\
+        \x20   println(f\"{gpu.sum(v)}\")\n\
+        }\n",
+    )
+    .expect("write fixture source");
+
+    let err = build_and_run_on_gpu(&dir, &src, tag, backend)
+        .expect_err("an overflowing u32 reduction must not succeed");
+    assert!(
+        err.contains("integer overflow"),
+        "compiled leg must trap with `integer overflow`, got: {err}"
+    );
+
+    for args in [vec!["run"], vec!["run", "--interp"]] {
+        let out = karac()
+            .args(&args)
+            .arg(&src)
+            .output()
+            .expect("spawn karac run");
+        assert!(
+            !out.status.success(),
+            "`karac {args:?}` must fail on an overflowing u32 reduction"
+        );
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains("integer overflow"),
+            "`karac {args:?}` must say `integer overflow`"
+        );
+    }
+}
+
+#[test]
 fn gpu_integer_overflow_traps_on_every_surface() {
     // The decision itself, end to end. WGSL has no trapping arithmetic — its
     // integer ops are DEFINED to wrap — so the shader computes an overflow

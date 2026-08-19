@@ -810,7 +810,7 @@ impl<'a> super::Interpreter<'a> {
         // observable in the answer: `sum`/`prod` return identities that print
         // the same either way, and `min`/`max`/`mean` return `None` regardless.
         if matches!(elems.first(), Some(Value::Int(_))) {
-            return self.eval_gpu_reduce_int(&elems, span, op, spelling);
+            return self.eval_gpu_reduce_int(&elems, &args[0].value.span, span, op, spelling);
         }
 
         let mut xs: Vec<f32> = Vec::with_capacity(elems.len());
@@ -889,35 +889,32 @@ impl<'a> super::Interpreter<'a> {
     fn eval_gpu_reduce_int(
         &mut self,
         elems: &[Value],
+        buf_span: &Span,
         span: &Span,
         op: ReduceOp,
         spelling: &str,
     ) -> Value {
-        let mut xs: Vec<i32> = Vec::with_capacity(elems.len());
-        for v in elems {
-            let Value::Int(i) = v else {
-                return self.record_runtime_error(
-                    format!("gpu.{spelling} buffer elements must all be i32"),
-                    span,
-                );
-            };
-            // Defensive: the typechecker proves `Vec[i32]`, so an out-of-range
-            // element cannot reach here from checked code. `karac run`
-            // bypasses typecheck, so it stays loud rather than truncating.
-            let Ok(v32) = i32::try_from(*i) else {
-                return self.record_runtime_error(
-                    format!("gpu.{spelling} buffer element {i} does not fit in i32"),
-                    span,
-                );
-            };
-            xs.push(v32);
-        }
+        // SIGNEDNESS COMES FROM THE TYPECHECKER, not from the values. A
+        // `Value::Int` carries no width or sign, and inferring one from the
+        // range would be wrong in a way that only shows on big inputs: a
+        // `Vec[u32]` of small values looks exactly like a `Vec[i32]`, so it
+        // would be folded with the SIGNED overflow rule and trap somewhere
+        // past 2^31 that the compiled path sails through. A run/build
+        // divergence reachable only on large data is the worst shape this
+        // could take, so the element type is read from the same hint codegen
+        // reads. A missing entry means i32 — the only way to get here without
+        // one is `karac run` on a program that skipped typecheck.
+        let unsigned = self
+            .typecheck_result
+            .gpu_reduce_int_elems
+            .get(&crate::resolver::SpanKey(buf_span.offset, buf_span.length))
+            .is_some_and(|e| e == "u32");
 
+        let fallible = matches!(op, ReduceOp::Min | ReduceOp::Max);
         // Empty `min`/`max` is `None`, checked before the fold for the same
         // reason the float arm does it: the fold would return the padding
-        // identity (i32::MAX / i32::MIN), a plausible wrong answer.
-        let fallible = matches!(op, ReduceOp::Min | ReduceOp::Max);
-        if fallible && xs.is_empty() {
+        // identity, a plausible wrong answer.
+        if fallible && elems.is_empty() {
             return Value::EnumVariant {
                 enum_name: "Option".to_string(),
                 variant: "None".to_string(),
@@ -925,13 +922,47 @@ impl<'a> super::Interpreter<'a> {
             };
         }
 
-        match crate::reduce_kernel::tree_reduce_i32(&xs, op) {
+        let width = if unsigned { "u32" } else { "i32" };
+        let mut xs: Vec<i128> = Vec::with_capacity(elems.len());
+        for v in elems {
+            let Value::Int(i) = v else {
+                return self.record_runtime_error(
+                    format!("gpu.{spelling} buffer elements must all be {width}"),
+                    span,
+                );
+            };
+            // Defensive: the typechecker proves the width, so an out-of-range
+            // element cannot reach here from checked code. `karac run`
+            // bypasses typecheck, so it stays loud rather than truncating.
+            let fits = if unsigned {
+                u32::try_from(*i).is_ok()
+            } else {
+                i32::try_from(*i).is_ok()
+            };
+            if !fits {
+                return self.record_runtime_error(
+                    format!("gpu.{spelling} buffer element {i} does not fit in {width}"),
+                    span,
+                );
+            }
+            xs.push(*i);
+        }
+
+        let folded = if unsigned {
+            let u: Vec<u32> = xs.iter().map(|&i| i as u32).collect();
+            crate::reduce_kernel::tree_reduce_u32(&u, op).map(|r| r.map(|v| v as i128))
+        } else {
+            let i: Vec<i32> = xs.iter().map(|&i| i as i32).collect();
+            crate::reduce_kernel::tree_reduce_i32(&i, op).map(|r| r.map(|v| v as i128))
+        };
+
+        match folded {
             Some(Ok(r)) if fallible => Value::EnumVariant {
                 enum_name: "Option".to_string(),
                 variant: "Some".to_string(),
-                data: EnumData::Tuple(vec![Value::Int(r as i128)]),
+                data: EnumData::Tuple(vec![Value::Int(r)]),
             },
-            Some(Ok(r)) => Value::Int(r as i128),
+            Some(Ok(r)) => Value::Int(r),
             // Kāra traps on integer overflow. Wrapping here would hand back a
             // plausible wrong number and disagree with `v.sum()`, which
             // already fails on the same condition.
