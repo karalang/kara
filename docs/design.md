@@ -10192,7 +10192,24 @@ Two operations are defined in terms of `sum` rather than having a tree of their 
 - `gpu.dot(a, b)` is `gpu.sum(a * b)`, to the last bit. It is a separate operation only because the product is formed **on load** inside the reduction's first level, so no `n`-element intermediate is ever written — a device-traffic win, not a semantic difference.
 - `gpu.mean(buf)` is `gpu.sum(buf) / n`, to the last bit: the specified tree sum, divided by the count, in `f32`, **once**. Not compensated, not accumulated wider. So `mean` inherits the sum's grouping rather than having one of its own, and adds exactly one further rounding — that is the whole of its precision story. The division happens on the host after the fold converges, never in the shader: a shader cannot know it is running the last level of the tree, so a division inside it would divide once per level.
 
-The reductions are `f32`-only. Integer reductions are not a mechanical widening: an integer reduction can overflow, and Kāra traps where WGSL wraps, so the arithmetic-overflow rule (§ Arithmetic Overflow) has to be settled at the reduction's own surface rather than inherited from the kernel-body rule.
+##### Integer reductions overflow-check, and the tree order decides when
+
+An integer reduction can overflow where a float one saturates to infinity, and Kāra traps on integer overflow (§ Arithmetic Overflow) where WGSL is defined to wrap. That collision cannot be inherited from the kernel-body rule, because the kernel-body escape hatch is an *expression* spelling — `x.wrapping_add(y)` — and `gpu.sum(v)` has no `+` in the source to annotate.
+
+**The rule: integer reductions trap, exactly as their CPU counterparts do.** `v.sum()` over a `Vec[i32]` whose total exceeds `i32` already fails with `integer overflow` on both `karac run` and `karac build`; `gpu.sum(v)` does the same. Anything else would make moving a reduction to the GPU silently change a trap into a wrong answer, which is the divergence class the `#[gpu]` overflow rule was introduced to close.
+
+`min` and `max` cannot overflow and are therefore unconditionally available over `i32`/`u32`.
+
+**The consequence worth stating loudly: the specified tree order determines *whether* an integer reduction traps, not merely what it returns.** Overflow is a property of the intermediate sums, and a tree forms different intermediates than a line. Both directions are reachable — with `MAX = i32::MAX`:
+
+| buffer | tree (specified) | left fold |
+|---|---|---|
+| `[MAX, MAX, -MAX, -MAX]` | `0` | **traps** |
+| `[MAX, -MAX, MAX, -MAX]` | **traps** | `0` |
+
+So `gpu.sum(v)` and `v.sum()` over the same integer buffer may legitimately disagree about whether they fail. That is not a bug and not a divergence: they are different operations with different, specified evaluation orders, exactly as they are for `f32` values. It does mean that replacing `v.sum()` with `gpu.sum(v)` is **not** a pure speedup for integer data — it can introduce a trap that was not there, or remove one that was. Float reductions have no analogue of this, because float addition saturates rather than trapping.
+
+The interpreter twin reproduces the trap *points*, not just the final value, by running the same tree with checked operations — so the two surfaces agree on which programs fail as well as on what the surviving ones return.
 
 ### Cross-target Compilation
 

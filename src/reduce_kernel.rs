@@ -55,6 +55,100 @@ pub fn tree_reduce_f32(xs: &[f32], op: ReduceOp) -> Option<f32> {
     Some(tree_fold_f32(xs, combine, identity))
 }
 
+/// The CPU twin of an INTEGER GPU reduction — **the definition of what
+/// `gpu.sum(Vec[i32])` and friends mean, including which of them trap**
+/// (B-2026-08-19-13).
+///
+/// Two layers of failure, and they are different questions:
+///
+///  * `None` — the op has no single-shader tree form (the outer layer, same
+///    set [`tree_reduce_f32`] refuses).
+///  * `Some(Err(IntFoldOverflow))` — the op ran and OVERFLOWED. Integer
+///    reductions trap, exactly as `v.sum()` over a `Vec[i32]` already does on
+///    both surfaces; wrapping instead would turn a trap into a wrong answer
+///    the moment a reduction moved to the GPU (design.md § Integer reductions
+///    overflow-check).
+///
+/// **The tree order decides WHETHER it traps, not just what it returns.**
+/// Overflow is a property of the intermediate sums, and a tree forms different
+/// intermediates than a line — both directions are reachable, with
+/// `MAX = i32::MAX`:
+///
+/// | buffer | this tree | a left fold |
+/// |---|---|---|
+/// | `[MAX, MAX, -MAX, -MAX]` | `0` | overflows |
+/// | `[MAX, -MAX, MAX, -MAX]` | overflows | `0` |
+///
+/// So `gpu.sum(v)` and `v.sum()` may legitimately disagree about failing on
+/// the same integer buffer. That is specified behaviour, not a divergence —
+/// but it does mean swapping one for the other is not a pure speedup on
+/// integer data. Reproducing the trap POINTS here, rather than only the final
+/// value, is what keeps `karac run` and `karac build` agreeing about which
+/// programs fail.
+///
+/// `Min`/`Max` cannot overflow and never return `Err`.
+pub fn tree_reduce_i32(xs: &[i32], op: ReduceOp) -> Option<Result<i32, IntFoldOverflow>> {
+    let (combine, identity): CheckedCombiner = match op {
+        ReduceOp::Sum => (i32::checked_add, 0),
+        ReduceOp::Prod => (i32::checked_mul, 1),
+        // Infallible, but typed the same so one fold serves all four.
+        ReduceOp::Min => (|a, b| Some(a.min(b)), i32::MAX),
+        ReduceOp::Max => (|a, b| Some(a.max(b)), i32::MIN),
+        _ => return None,
+    };
+    Some(tree_fold_i32(xs, combine, identity))
+}
+
+/// One checked integer reduction as data: a combining function that reports
+/// overflow by returning `None`, and the identity that pads a short chunk.
+///
+/// The integer sibling of [`Combiner`], differing only in that its combine can
+/// FAIL — which is the whole of the integer-reduction decision in one type.
+type CheckedCombiner = (fn(i32, i32) -> Option<i32>, i32);
+
+/// The recursion the multi-workgroup dispatch performs, at `i32` — the integer
+/// sibling of [`tree_fold_f32`], chunk for chunk.
+fn tree_fold_i32(
+    xs: &[i32],
+    combine: fn(i32, i32) -> Option<i32>,
+    identity: i32,
+) -> Result<i32, IntFoldOverflow> {
+    if xs.len() <= GPU_REDUCE_WIDTH {
+        return one_workgroup_i32(xs, combine, identity);
+    }
+    let mut partials: Vec<i32> = Vec::with_capacity(xs.len().div_ceil(GPU_REDUCE_WIDTH));
+    for chunk in xs.chunks(GPU_REDUCE_WIDTH) {
+        partials.push(one_workgroup_i32(chunk, combine, identity)?);
+    }
+    tree_fold_i32(&partials, combine, identity)
+}
+
+/// One workgroup's halving tree at `i32`, failing on the first overflow.
+///
+/// Note it fails on the FIRST overflowing combine in the shader's own order,
+/// so a buffer that overflows at stride 32 never reaches stride 16 — the
+/// device does the same, because a lane that overflows raises the flag and the
+/// host stops at the end of that dispatch.
+fn one_workgroup_i32(
+    xs: &[i32],
+    combine: fn(i32, i32) -> Option<i32>,
+    identity: i32,
+) -> Result<i32, IntFoldOverflow> {
+    debug_assert!(xs.len() <= GPU_REDUCE_WIDTH);
+    let mut scratch = [identity; GPU_REDUCE_WIDTH];
+    for (slot, &x) in scratch.iter_mut().zip(xs) {
+        *slot = x;
+    }
+    let mut stride = GPU_REDUCE_WIDTH / 2;
+    while stride > 0 {
+        for t in 0..stride {
+            scratch[t] = combine(scratch[t], scratch[t + stride]).ok_or(IntFoldOverflow)?;
+        }
+        stride /= 2;
+    }
+    Ok(scratch[0])
+}
+
 /// The CPU twin of `gpu.mean(buf)` — **the definition of what a GPU mean
 /// MEANS** (B-2026-08-19-13). `None` iff the buffer is empty.
 ///
@@ -492,6 +586,102 @@ mod tests {
         assert_eq!(tree_reduce_f32(&[1.0], ReduceOp::Mean), None);
         assert_eq!(tree_reduce_f32(&[1.0], ReduceOp::Argmin), None);
         assert_eq!(tree_reduce_f32(&[1.0], ReduceOp::Median), None);
+    }
+
+    #[test]
+    fn tree_i32_traps_on_overflow_rather_than_wrapping() {
+        // Integer reductions trap, matching `v.sum()` over a `Vec[i32]`, which
+        // already fails with `integer overflow` on both surfaces. Wrapping
+        // would turn a trap into a wrong answer the moment a reduction moved
+        // to the GPU.
+        assert_eq!(
+            tree_reduce_i32(&[i32::MAX, 1], ReduceOp::Sum),
+            Some(Err(IntFoldOverflow))
+        );
+        assert_eq!(
+            tree_reduce_i32(&[i32::MAX, 2], ReduceOp::Prod),
+            Some(Err(IntFoldOverflow))
+        );
+        assert_eq!(tree_reduce_i32(&[3, 1, 2], ReduceOp::Sum), Some(Ok(6)));
+        assert_eq!(tree_reduce_i32(&[3, 1, 2], ReduceOp::Prod), Some(Ok(6)));
+        // Integer identities on empty, not the float ones.
+        assert_eq!(tree_reduce_i32(&[], ReduceOp::Sum), Some(Ok(0)));
+        assert_eq!(tree_reduce_i32(&[], ReduceOp::Prod), Some(Ok(1)));
+    }
+
+    #[test]
+    fn tree_order_decides_whether_an_integer_reduction_traps() {
+        // THE consequence of specifying the order, and the reason it is in
+        // design.md rather than only in a comment. Overflow is a property of
+        // the INTERMEDIATE sums, and a tree forms different intermediates than
+        // a line — so `gpu.sum(v)` and `v.sum()` can legitimately disagree
+        // about whether they fail on the same buffer. Both directions are
+        // reachable, which is what makes it a real semantic difference rather
+        // than the tree merely being more forgiving.
+        const MAX: i32 = i32::MAX;
+        let left_fold = |xs: &[i32]| xs.iter().try_fold(0i32, |a, &x| a.checked_add(x));
+
+        // Tree survives, left fold overflows: the tree pairs MAX with -MAX
+        // before it ever pairs MAX with MAX.
+        let a = [MAX, MAX, -MAX, -MAX];
+        assert_eq!(tree_reduce_i32(&a, ReduceOp::Sum), Some(Ok(0)));
+        assert_eq!(left_fold(&a), None, "left fold must overflow on {a:?}");
+
+        // And the other way: the tree pairs MAX with MAX at stride 2, where
+        // the left fold had already cancelled them.
+        let b = [MAX, -MAX, MAX, -MAX];
+        assert_eq!(
+            tree_reduce_i32(&b, ReduceOp::Sum),
+            Some(Err(IntFoldOverflow))
+        );
+        assert_eq!(left_fold(&b), Some(0), "left fold must survive {b:?}");
+    }
+
+    #[test]
+    fn tree_i32_min_max_never_overflow_and_span_the_full_range() {
+        // Min/max are unconditionally available over integers precisely
+        // because no combine can leave the range. The identities are the type
+        // bounds, so a real `i32::MAX` element is still reachable as a max and
+        // a real `i32::MIN` as a min — the integer analogue of padding the
+        // float tree with ±inf rather than a finite stand-in.
+        assert_eq!(
+            tree_reduce_i32(&[i32::MAX], ReduceOp::Max),
+            Some(Ok(i32::MAX))
+        );
+        assert_eq!(
+            tree_reduce_i32(&[i32::MIN], ReduceOp::Min),
+            Some(Ok(i32::MIN))
+        );
+        assert_eq!(
+            tree_reduce_i32(&[i32::MIN], ReduceOp::Max),
+            Some(Ok(i32::MIN))
+        );
+        assert_eq!(tree_reduce_i32(&[3, -7, 2], ReduceOp::Min), Some(Ok(-7)));
+        assert_eq!(tree_reduce_i32(&[3, -7, 2], ReduceOp::Max), Some(Ok(3)));
+    }
+
+    #[test]
+    fn tree_i32_chunks_exactly_like_the_float_twin() {
+        // The integer fold must reproduce the SAME grouping as the float one —
+        // a different chunking would change which buffers trap, not just the
+        // arithmetic. Checked across the three regimes.
+        for n in [64usize, 65, 4096] {
+            let xs: Vec<i32> = (0..n).map(|i| (i % 11) as i32 - 5).collect();
+            let want: i32 = xs.iter().sum();
+            assert_eq!(tree_reduce_i32(&xs, ReduceOp::Sum), Some(Ok(want)), "n={n}");
+            assert_eq!(
+                tree_reduce_i32(&xs, ReduceOp::Min),
+                Some(Ok(*xs.iter().min().unwrap())),
+                "n={n}"
+            );
+        }
+        // A long buffer whose TOTAL fits but whose per-chunk partials do not
+        // is still an overflow — the chunking is where it happens.
+        let spill: Vec<i32> = std::iter::repeat_n(i32::MAX / 32, 4096).collect();
+        assert_eq!(
+            tree_reduce_i32(&spill, ReduceOp::Sum),
+            Some(Err(IntFoldOverflow))
+        );
     }
 
     #[test]

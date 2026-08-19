@@ -675,6 +675,128 @@ async fn dispatch_dot_bytes_async(
     outs.pop()
 }
 
+/// One CHECKED integer reduction dispatch: one input buffer in, a partials
+/// buffer AND a per-workgroup overflow-flag buffer out (B-2026-08-19-13).
+///
+/// Two outputs from one input — the shape `run_compute`'s split input/output
+/// sizing exists for. The flags are `u32` regardless of the element type, so
+/// their buffer is sized independently of the values'.
+async fn dispatch_checked_int_async(
+    wgsl: &str,
+    input: &[u8],
+    elem_size: usize,
+) -> Option<(Vec<u8>, Vec<u8>)> {
+    let ctx = gpu_context()?;
+    let device = &ctx.device;
+    let queue = &ctx.queue;
+
+    let n = input.len() / elem_size;
+    let input_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("gpu-int-reduce-input"),
+        contents: input,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+    });
+    // Values keep the input's byte length (the caller slices off the partials
+    // it actually wrote); flags are one u32 per workgroup.
+    let out_sizes = [
+        input.len() as u64,
+        (n.div_ceil(64).max(1) * std::mem::size_of::<u32>()) as u64,
+    ];
+    let output_bufs = run_compute(device, queue, wgsl, &[input_buf], &out_sizes, &[], n);
+    let mut outs = readback(device, queue, &output_bufs, &out_sizes)?;
+    let flags = outs.pop()?;
+    let values = outs.pop()?;
+    Some((values, flags))
+}
+
+/// C entry point for the CHECKED integer reductions — `gpu.sum` / `gpu.min` /
+/// `gpu.max` over `Vec[i32]` / `Vec[u32]` (B-2026-08-19-13).
+///
+/// **Integer reductions trap on overflow**, matching `v.sum()` over a
+/// `Vec[i32]`, which already fails with `integer overflow` on both surfaces.
+/// WGSL has no trapping arithmetic — its integer ops are defined to wrap — so
+/// the shader computes the overflow bit itself and OR-folds it through the
+/// same halving tree as the value. This entry point ORs the per-workgroup bits
+/// at every level and aborts the moment any is set.
+///
+/// Note what "the moment any is set" means: the check happens at the END of
+/// each dispatch, so a buffer that overflows at some stride does not reach the
+/// next LEVEL, but the rest of its own level still runs. The CPU twin
+/// (`reduce_kernel::tree_reduce_i32`) fails at the first overflowing combine
+/// instead. Both refuse the same programs — which is what matters — they just
+/// stop at slightly different points inside a dispatch nobody can observe.
+///
+/// The result is written through `out` rather than returned, because the
+/// return slot carries the OVERFLOW indication: `1` on success, `0` never
+/// occurs (an overflow aborts rather than returning). Kept as a status return
+/// so a future non-aborting variant has somewhere to put the answer.
+///
+/// # Safety
+///
+/// `wgsl_ptr`/`wgsl_len` a valid UTF-8 shader; `in_ptr` points to `n` valid
+/// 4-byte elements; `out` is a writable 4-byte slot. Aborts on no available
+/// GPU adapter (no CPU fallback), same as every other entry point here.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_gpu_reduce_i32(
+    wgsl_ptr: *const u8,
+    wgsl_len: usize,
+    in_ptr: *const i32,
+    n: usize,
+    identity: i32,
+    out: *mut i32,
+) {
+    unsafe {
+        // Empty reduction is the operation's identity and needs no device —
+        // and cannot overflow, so there is nothing to check.
+        if n == 0 {
+            *out = identity;
+            return;
+        }
+        const WORKGROUP: usize = 64;
+
+        let Ok(wgsl) = std::str::from_utf8(std::slice::from_raw_parts(wgsl_ptr, wgsl_len)) else {
+            crate::fatal::write_stderr(b"panic: gpu integer reduction shader is not valid UTF-8\n");
+            std::process::abort();
+        };
+
+        let elem_size = std::mem::size_of::<i32>();
+        let mut level: Vec<u8> =
+            std::slice::from_raw_parts(in_ptr as *const u8, n * elem_size).to_vec();
+        let mut count = n;
+
+        loop {
+            let Some((values, flags)) =
+                pollster::block_on(dispatch_checked_int_async(wgsl, &level, elem_size))
+            else {
+                crate::fatal::write_stderr(
+                    b"panic: gpu integer reduction found no available GPU adapter \
+                      (no CPU fallback)\n",
+                );
+                std::process::abort();
+            };
+            let partials = count.div_ceil(WORKGROUP);
+            // Any workgroup that overflowed poisons the whole reduction. Kāra
+            // traps on integer overflow; wrapping here would hand back a
+            // plausible wrong number, which is the one outcome this family
+            // must never produce.
+            if flags[..partials * std::mem::size_of::<u32>()]
+                .chunks_exact(4)
+                .any(|w| u32::from_le_bytes([w[0], w[1], w[2], w[3]]) != 0)
+            {
+                crate::fatal::write_stderr(b"panic: integer overflow in GPU reduction\n");
+                std::process::abort();
+            }
+            level = values[..partials * elem_size].to_vec();
+            count = partials;
+            if count <= 1 {
+                break;
+            }
+        }
+
+        *out = i32::from_le_bytes([level[0], level[1], level[2], level[3]]);
+    }
+}
+
 /// C entry point for `gpu.dot(a, b)` — the fused multiply-then-sum reduction
 /// (B-2026-08-19-13).
 ///
@@ -1413,6 +1535,58 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
 }
 "#;
 
+    /// The checked `i32` sum shader, as `karac`'s emitter generates it
+    /// (`gpu_wgsl::emit_int_reduce_kernel(ReduceOp::Sum, "i32")`). Copied here
+    /// so the OVERFLOW FLAG can be proven against a real device before any of
+    /// the compiler surface is built on top of it.
+    ///
+    /// WGSL integer arithmetic is defined to WRAP and offers no overflow flag,
+    /// so the shader computes one: a signed add overflowed iff the operands
+    /// shared a sign and the result did not, which is
+    /// `((a ^ s) & (b ^ s)) < 0`. The bit is OR-folded through the same
+    /// halving tree as the value, so one overflowing lane at any stride
+    /// reaches lane 0 and then the host.
+    const INT_SUM_REDUCE_WGSL: &str = r#"
+@group(0) @binding(0) var<storage, read>       input:  array<i32>;
+@group(0) @binding(1) var<storage, read_write> output: array<i32>;
+@group(0) @binding(2) var<storage, read_write> flags:  array<u32>;
+
+var<workgroup> scratch: array<i32, 64>;
+var<workgroup> ovf: array<u32, 64>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(local_invocation_id) lid: vec3<u32>,
+        @builtin(workgroup_id) wid: vec3<u32>,
+        @builtin(global_invocation_id) gid: vec3<u32>) {
+    let t = lid.x;
+    let i = gid.x;
+    if (i < arrayLength(&input)) { scratch[t] = input[i]; } else { scratch[t] = 0; }
+    ovf[t] = 0u;
+    workgroupBarrier();
+
+    var stride: u32 = 32u;
+    loop {
+        if (stride == 0u) { break; }
+        if (t < stride) {
+            let a = scratch[t];
+            let b = scratch[t + stride];
+            let s = a + b;
+            scratch[t] = s;
+            // Signed add overflowed iff the operands shared a sign
+            // and the result did not. WGSL wraps by definition,
+            // so `s` is the wrapped value and this is exact.
+            ovf[t] = ovf[t] | ovf[t + stride] | select(0u, 1u, ((a ^ s) & (b ^ s)) < 0);
+        }
+        workgroupBarrier();
+        stride = stride / 2u;
+    }
+
+    // One partial AND one overflow bit per workgroup; the host ORs
+    // the bits and re-dispatches over the partials.
+    if (t == 0u) { output[wid.x] = scratch[0]; flags[wid.x] = ovf[0]; }
+}
+"#;
+
     /// The `gpu.dot` level-0 shader, as `karac`'s emitter generates it
     /// (`gpu_wgsl::emit_dot_kernel("f32")`). Two inputs, ONE output — the
     /// binding shape a reduction needs and an element-wise map does not.
@@ -1630,6 +1804,124 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
                 all_nan.iter().copied().fold(f32::INFINITY, f32::min)
             );
         }
+    }
+
+    #[test]
+    fn int_sum_shader_raises_the_overflow_flag_on_a_real_device() {
+        // The claim the whole integer-reduction decision rests on: a GPU can
+        // detect integer overflow even though WGSL cannot trap. Exercised
+        // through the dispatch helper rather than the C entry point, because
+        // that entry point ABORTS on overflow by design and an aborting
+        // process cannot be asserted about in-process.
+        let Some((values, flags)) = pollster::block_on(dispatch_checked_int_async(
+            INT_SUM_REDUCE_WGSL,
+            bytemuck_i32(&[3, 1, 2]).as_slice(),
+            4,
+        )) else {
+            eprintln!("gpu-int-sum: no GPU adapter available — skipping");
+            return;
+        };
+        assert_eq!(read_i32(&values, 0), 6, "3 + 1 + 2");
+        assert_eq!(read_u32(&flags, 0), 0, "no overflow on a small sum");
+
+        // Now overflow it. `[i32::MAX, 1]` is the minimal case, and the flag
+        // must come back set rather than the wrapped `i32::MIN` passing as an
+        // answer.
+        let (values, flags) = pollster::block_on(dispatch_checked_int_async(
+            INT_SUM_REDUCE_WGSL,
+            bytemuck_i32(&[i32::MAX, 1]).as_slice(),
+            4,
+        ))
+        .expect("adapter was available a moment ago");
+        assert_eq!(read_u32(&flags, 0), 1, "i32::MAX + 1 must raise the flag");
+        // The value IS the wrapped one — WGSL has no choice — which is exactly
+        // why the flag has to exist. Reading it without checking the flag is
+        // the failure mode being prevented.
+        assert_eq!(read_i32(&values, 0), i32::MIN);
+    }
+
+    #[test]
+    fn int_sum_flag_survives_every_stride_of_the_tree() {
+        // The bit is OR-folded through the halving tree, so an overflow at ANY
+        // stride has to reach lane 0 — not just one that happens at the last
+        // step. These two buffers overflow at different depths: the adjacent
+        // pair meets at stride 1 (after 63 zeros collapse), while the pair 32
+        // apart meets at the very first stride.
+        for (tag, pos) in [("stride-1", 1usize), ("stride-32", 32usize)] {
+            let mut xs = vec![0i32; 64];
+            xs[0] = i32::MAX;
+            xs[pos] = 1;
+            let Some((_, flags)) = pollster::block_on(dispatch_checked_int_async(
+                INT_SUM_REDUCE_WGSL,
+                bytemuck_i32(&xs).as_slice(),
+                4,
+            )) else {
+                eprintln!("gpu-int-sum-stride: no GPU adapter available — skipping");
+                return;
+            };
+            assert_eq!(
+                read_u32(&flags, 0),
+                1,
+                "overflow at {tag} must reach lane 0"
+            );
+        }
+    }
+
+    #[test]
+    fn int_sum_entry_point_matches_the_cpu_twin_across_workgroups() {
+        // The success path through the real C entry point, including the
+        // multi-level fold. Values chosen to stay well inside i32 so nothing
+        // aborts.
+        for n in [3usize, 64, 65, 4096] {
+            let xs: Vec<i32> = (0..n).map(|i| (i % 11) as i32 - 5).collect();
+            if pollster::block_on(dispatch_checked_int_async(
+                INT_SUM_REDUCE_WGSL,
+                bytemuck_i32(&xs).as_slice(),
+                4,
+            ))
+            .is_none()
+            {
+                eprintln!("gpu-int-sum-abi: no GPU adapter available — skipping");
+                return;
+            }
+            let mut got = 0i32;
+            unsafe {
+                karac_runtime_gpu_reduce_i32(
+                    INT_SUM_REDUCE_WGSL.as_ptr(),
+                    INT_SUM_REDUCE_WGSL.len(),
+                    xs.as_ptr(),
+                    xs.len(),
+                    0,
+                    &mut got,
+                );
+            }
+            let want: i32 = xs.iter().sum();
+            assert_eq!(got, want, "n={n}");
+        }
+
+        // Empty needs no device and cannot overflow.
+        let mut got = 99i32;
+        unsafe {
+            karac_runtime_gpu_reduce_i32(
+                INT_SUM_REDUCE_WGSL.as_ptr(),
+                INT_SUM_REDUCE_WGSL.len(),
+                std::ptr::null(),
+                0,
+                0,
+                &mut got,
+            );
+        }
+        assert_eq!(got, 0, "empty integer sum is the additive identity");
+    }
+
+    fn bytemuck_i32(xs: &[i32]) -> Vec<u8> {
+        xs.iter().flat_map(|v| v.to_le_bytes()).collect()
+    }
+    fn read_i32(b: &[u8], i: usize) -> i32 {
+        i32::from_le_bytes([b[i * 4], b[i * 4 + 1], b[i * 4 + 2], b[i * 4 + 3]])
+    }
+    fn read_u32(b: &[u8], i: usize) -> u32 {
+        u32::from_le_bytes([b[i * 4], b[i * 4 + 1], b[i * 4 + 2], b[i * 4 + 3]])
     }
 
     #[test]

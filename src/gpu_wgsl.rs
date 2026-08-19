@@ -1027,6 +1027,145 @@ pub fn emit_reduce_kernel(op: ReduceOp, elem: &str) -> Result<String, WgslError>
     ))
 }
 
+/// Emit the CHECKED integer tree-reduction shader (B-2026-08-19-13).
+///
+/// The integer sibling of [`emit_reduce_kernel`], and structurally different
+/// from it in one way: it carries a second output, `flags`, holding one
+/// per-workgroup overflow bit. Integer reductions TRAP where float ones
+/// saturate — `v.sum()` over a `Vec[i32]` already fails with `integer
+/// overflow` on both surfaces, and moving the reduction to a GPU must not
+/// silently turn that trap into a wrapped wrong answer (design.md § Integer
+/// reductions overflow-check).
+///
+/// WGSL has no overflow flag and no trapping arithmetic — its integer ops are
+/// *defined* to wrap — so the check is written out. For a signed add,
+/// `(a ^ s) & (b ^ s) < 0` is true exactly when the operands shared a sign and
+/// the result did not; for unsigned, the carry shows as `s < a`. The bit is
+/// then OR-folded through the SAME halving tree as the value, so a single
+/// overflowing lane at any stride reaches lane 0.
+///
+/// `min`/`max` cannot overflow, so they carry no `ovf` array and no per-step
+/// bookkeeping — lane 0 simply writes a zero flag. The `flags` binding is
+/// still declared for them, so every integer reduction has ONE dispatch shape
+/// and the host needs one readback path rather than two.
+///
+/// **`prod` is deliberately absent.** A checked multiply needs a widening
+/// intermediate that WGSL does not have, and the usual `s / a != b`
+/// substitute is unsound there: `i32::MIN / -1` is an indeterminate value in
+/// WGSL, so the check would misfire on exactly the input it exists to catch.
+/// Integer products also overflow after ~31 terms, so the operation has little
+/// real use at buffer scale. It refuses rather than guessing.
+pub fn emit_int_reduce_kernel(op: ReduceOp, elem: &str) -> Result<String, WgslError> {
+    let signed = match elem {
+        "i32" => true,
+        "u32" => false,
+        _ => {
+            return Err(WgslError::UnsupportedSignature(format!(
+                "checked integer GPU reduction over `{elem}` is not supported — the integer \
+                 reduction entry point covers i32 and u32"
+            )))
+        }
+    };
+    // `identity` pads a short chunk; `body` is the combine, which for `sum`
+    // also folds the overflow bit.
+    let (identity, body) = match (op, signed) {
+        (ReduceOp::Sum, true) => (
+            "0".to_string(),
+            "let a = scratch[t];\n\
+             \x20           let b = scratch[t + stride];\n\
+             \x20           let s = a + b;\n\
+             \x20           scratch[t] = s;\n\
+             \x20           // Signed add overflowed iff the operands shared a sign\n\
+             \x20           // and the result did not. WGSL wraps by definition,\n\
+             \x20           // so `s` is the wrapped value and this is exact.\n\
+             \x20           ovf[t] = ovf[t] | ovf[t + stride] | select(0u, 1u, ((a ^ s) & (b ^ s)) < 0);"
+                .to_string(),
+        ),
+        (ReduceOp::Sum, false) => (
+            "0u".to_string(),
+            "let a = scratch[t];\n\
+             \x20           let b = scratch[t + stride];\n\
+             \x20           let s = a + b;\n\
+             \x20           scratch[t] = s;\n\
+             \x20           // Unsigned add overflowed iff it carried, i.e. wrapped below\n\
+             \x20           // either operand.\n\
+             \x20           ovf[t] = ovf[t] | ovf[t + stride] | select(0u, 1u, s < a);"
+                .to_string(),
+        ),
+        // `-2147483648` is not writable as an i32 literal (unary minus applies
+        // to a value already out of range), hence the subtraction.
+        (ReduceOp::Min, true) => (
+            "2147483647".to_string(),
+            "scratch[t] = min(scratch[t], scratch[t + stride]);".to_string(),
+        ),
+        (ReduceOp::Max, true) => (
+            "-2147483647 - 1".to_string(),
+            "scratch[t] = max(scratch[t], scratch[t + stride]);".to_string(),
+        ),
+        (ReduceOp::Min, false) => (
+            "4294967295u".to_string(),
+            "scratch[t] = min(scratch[t], scratch[t + stride]);".to_string(),
+        ),
+        (ReduceOp::Max, false) => (
+            "0u".to_string(),
+            "scratch[t] = max(scratch[t], scratch[t + stride]);".to_string(),
+        ),
+        _ => {
+            return Err(WgslError::UnsupportedSignature(format!(
+                "checked integer GPU reduction `{op:?}` is not supported yet — the integer ops \
+                 are `sum`, `min` and `max`; `prod` needs a widening multiply WGSL does not have"
+            )))
+        }
+    };
+    let can_overflow = matches!(op, ReduceOp::Sum);
+    let ovf_decl = if can_overflow {
+        format!("var<workgroup> ovf: array<u32, {}>;\n", GPU_REDUCE_WIDTH)
+    } else {
+        String::new()
+    };
+    let ovf_init = if can_overflow {
+        "    ovf[t] = 0u;\n"
+    } else {
+        ""
+    };
+    let ovf_out = if can_overflow { "ovf[0]" } else { "0u" };
+
+    let width = GPU_REDUCE_WIDTH;
+    let half = width / 2;
+    Ok(format!(
+        "@group(0) @binding(0) var<storage, read>       input:  array<{elem}>;\n\
+         @group(0) @binding(1) var<storage, read_write> output: array<{elem}>;\n\
+         @group(0) @binding(2) var<storage, read_write> flags:  array<u32>;\n\
+         \n\
+         var<workgroup> scratch: array<{elem}, {width}>;\n\
+         {ovf_decl}\n\
+         @compute @workgroup_size({width})\n\
+         fn main(@builtin(local_invocation_id) lid: vec3<u32>,\n\
+         \x20       @builtin(workgroup_id) wid: vec3<u32>,\n\
+         \x20       @builtin(global_invocation_id) gid: vec3<u32>) {{\n\
+         \x20   let t = lid.x;\n\
+         \x20   let i = gid.x;\n\
+         \x20   if (i < arrayLength(&input)) {{ scratch[t] = input[i]; }} else {{ scratch[t] = {identity}; }}\n\
+         {ovf_init}\
+         \x20   workgroupBarrier();\n\
+         \n\
+         \x20   var stride: u32 = {half}u;\n\
+         \x20   loop {{\n\
+         \x20       if (stride == 0u) {{ break; }}\n\
+         \x20       if (t < stride) {{\n\
+         \x20           {body}\n\
+         \x20       }}\n\
+         \x20       workgroupBarrier();\n\
+         \x20       stride = stride / 2u;\n\
+         \x20   }}\n\
+         \n\
+         \x20   // One partial AND one overflow bit per workgroup; the host ORs\n\
+         \x20   // the bits and re-dispatches over the partials.\n\
+         \x20   if (t == 0u) {{ output[wid.x] = scratch[0]; flags[wid.x] = {ovf_out}; }}\n\
+         }}\n"
+    ))
+}
+
 /// Emit the `gpu.dot(a, b)` level-0 shader: multiply the two buffers
 /// element-wise on load, then run the SAME halving tree `emit_reduce_kernel`
 /// emits for a sum (B-2026-08-19-13).
@@ -1132,11 +1271,24 @@ fn reduce_combine_wgsl(op: ReduceOp, elem: &str) -> Result<(String, String, Stri
              }}\n"
         )
     };
+    // INTEGER ELEMENTS ARE NOT HANDLED HERE, deliberately. This emitter
+    // produces an UNCHECKED tree, which is correct for floats (they saturate)
+    // and wrong for integers (Kāra traps where WGSL wraps). Integer reductions
+    // go through `emit_int_reduce_kernel`, which carries the overflow flag —
+    // routing them here would silently produce the wrapped answer, which is
+    // the exact failure the integer-reduction rule exists to prevent. Refusing
+    // here rather than merely documenting it keeps the wrong shader
+    // unreachable.
+    if matches!(elem, "i32" | "u32") {
+        return Err(WgslError::UnsupportedSignature(format!(
+            "integer GPU reduction over `{elem}` must go through the CHECKED emitter \
+             (`emit_int_reduce_kernel`) — this one emits an unchecked tree, which would wrap \
+             where Kāra traps"
+        )));
+    }
     let (prelude, combine, identity) = match (op, elem) {
         (ReduceOp::Sum, "f32") => (String::new(), infix("+"), "0.0".to_string()),
-        (ReduceOp::Sum, "i32" | "u32") => (String::new(), infix("+"), "0".to_string()),
         (ReduceOp::Prod, "f32") => (String::new(), infix("*"), "1.0".to_string()),
-        (ReduceOp::Prod, "i32" | "u32") => (String::new(), infix("*"), "1".to_string()),
         (ReduceOp::Min, "f32") => (
             nan_ignoring("karac_min", "<"),
             call("karac_min"),
@@ -1147,12 +1299,6 @@ fn reduce_combine_wgsl(op: ReduceOp, elem: &str) -> Result<(String, String, Stri
             call("karac_max"),
             neg_inf.to_string(),
         ),
-        // `-2147483648` is not writable as an i32 literal (unary minus applies
-        // to a value already out of range), hence the subtraction.
-        (ReduceOp::Min, "i32") => (String::new(), call("min"), "2147483647".to_string()),
-        (ReduceOp::Max, "i32") => (String::new(), call("max"), "-2147483647 - 1".to_string()),
-        (ReduceOp::Min, "u32") => (String::new(), call("min"), "4294967295u".to_string()),
-        (ReduceOp::Max, "u32") => (String::new(), call("max"), "0u".to_string()),
         _ => {
             return Err(WgslError::UnsupportedSignature(format!(
                 "GPU reduction `{op:?}` over `{elem}` is not supported yet — the tree-shaped \
@@ -3993,9 +4139,12 @@ mod tests {
             "{prod_f}"
         );
 
-        let sum_i = emit_reduce_kernel(ReduceOp::Sum, "i32").unwrap();
+        // Integers come from the CHECKED emitter — this one refuses them.
+        let sum_i = emit_int_reduce_kernel(ReduceOp::Sum, "i32").unwrap();
         assert!(sum_i.contains("array<i32, 64>"), "{sum_i}");
         assert!(sum_i.contains("scratch[t] = 0;"), "{sum_i}");
+        let sum_u = emit_int_reduce_kernel(ReduceOp::Sum, "u32").unwrap();
+        assert!(sum_u.contains("scratch[t] = 0u;"), "{sum_u}");
     }
 
     #[test]
@@ -4100,17 +4249,91 @@ mod tests {
             "max pads with -inf:\n{max}"
         );
 
-        // Integers have no NaN, so they take the builtin and a finite identity.
-        let min_i = emit_reduce_kernel(ReduceOp::Min, "i32").unwrap();
+        // Integers have no NaN, so they take the builtin and a finite
+        // identity — but they come from the CHECKED emitter, because this one
+        // would emit a tree that wraps where Kāra traps.
+        let min_i = emit_int_reduce_kernel(ReduceOp::Min, "i32").unwrap();
         assert!(!min_i.contains("fn karac_min"), "{min_i}");
         assert!(min_i.contains("scratch[t] = min(scratch[t], scratch[t + stride]);"));
         assert!(min_i.contains("scratch[t] = 2147483647;"), "{min_i}");
-        let max_i = emit_reduce_kernel(ReduceOp::Max, "i32").unwrap();
+        let max_i = emit_int_reduce_kernel(ReduceOp::Max, "i32").unwrap();
         // `-2147483648` is not writable as an i32 literal — unary minus applies
         // to a value already out of range.
         assert!(min_i.contains("2147483647") && max_i.contains("-2147483647 - 1"));
-        let max_u = emit_reduce_kernel(ReduceOp::Max, "u32").unwrap();
+        let max_u = emit_int_reduce_kernel(ReduceOp::Max, "u32").unwrap();
         assert!(max_u.contains("scratch[t] = 0u;"), "{max_u}");
+    }
+
+    #[test]
+    fn float_emitter_refuses_integer_elements_outright() {
+        // The unchecked tree is CORRECT for floats (they saturate) and WRONG
+        // for integers (Kāra traps where WGSL wraps). Refusing here rather
+        // than merely documenting it is what keeps the wrong shader
+        // unreachable — this emitter used to accept i32/u32 and would have
+        // produced a silently-wrapping reduction the moment anything wired it
+        // up.
+        for elem in ["i32", "u32"] {
+            for op in [ReduceOp::Sum, ReduceOp::Min, ReduceOp::Max] {
+                let err = emit_reduce_kernel(op, elem).unwrap_err();
+                let msg = format!("{err:?}");
+                assert!(msg.contains("CHECKED emitter"), "{elem} {op:?}: {msg}");
+            }
+        }
+    }
+
+    #[test]
+    fn checked_int_emitter_carries_an_overflow_flag_only_where_it_can_overflow() {
+        // `sum` can overflow, so it declares the `ovf` scratch, folds the bit
+        // through the same halving tree as the value, and writes it out.
+        let sum_i = emit_int_reduce_kernel(ReduceOp::Sum, "i32").unwrap();
+        assert!(
+            sum_i.contains("var<workgroup> ovf: array<u32, 64>;"),
+            "{sum_i}"
+        );
+        assert!(
+            sum_i.contains(
+                "ovf[t] = ovf[t] | ovf[t + stride] | select(0u, 1u, ((a ^ s) & (b ^ s)) < 0);"
+            ),
+            "signed add overflow test:\n{sum_i}"
+        );
+        assert!(sum_i.contains("flags[wid.x] = ovf[0];"), "{sum_i}");
+        // Unsigned overflow is a carry, not a sign flip.
+        let sum_u = emit_int_reduce_kernel(ReduceOp::Sum, "u32").unwrap();
+        assert!(
+            sum_u.contains("ovf[t] = ovf[t] | ovf[t + stride] | select(0u, 1u, s < a);"),
+            "unsigned carry test:\n{sum_u}"
+        );
+
+        // `min`/`max` cannot overflow, so they carry NO per-step bookkeeping —
+        // but they still declare the `flags` binding and write a zero, so the
+        // host has one dispatch shape for every integer reduction.
+        for op in [ReduceOp::Min, ReduceOp::Max] {
+            let w = emit_int_reduce_kernel(op, "i32").unwrap();
+            assert!(
+                !w.contains("var<workgroup> ovf"),
+                "{op:?} needs no ovf:\n{w}"
+            );
+            assert!(w.contains("@binding(2) var<storage, read_write> flags:  array<u32>;"));
+            assert!(w.contains("flags[wid.x] = 0u;"), "{op:?}:\n{w}");
+        }
+    }
+
+    #[test]
+    fn checked_int_emitter_refuses_prod_and_non_32_bit_elements() {
+        // `prod` needs a widening intermediate WGSL does not have, and the
+        // usual `s / a != b` substitute is unsound there: `i32::MIN / -1` is
+        // indeterminate in WGSL, so the check would misfire on exactly the
+        // input it exists to catch. Refusing beats guessing.
+        let err = emit_int_reduce_kernel(ReduceOp::Prod, "i32").unwrap_err();
+        assert!(format!("{err:?}").contains("widening multiply"), "{err:?}");
+        // And the element set is the two 32-bit integer types.
+        for elem in ["f32", "i64", "u8"] {
+            let err = emit_int_reduce_kernel(ReduceOp::Sum, elem).unwrap_err();
+            assert!(
+                format!("{err:?}").contains("i32 and u32"),
+                "{elem}: {err:?}"
+            );
+        }
     }
 
     // ── Trapping integer arithmetic (B-2026-08-19-1) ────────────────────

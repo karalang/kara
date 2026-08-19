@@ -7,6 +7,20 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let op = args.get(1).map(String::as_str).unwrap_or("sum");
     let elem = args.get(2).map(String::as_str).unwrap_or("f32");
+    if let Some(iop) = op.strip_prefix("int-") {
+        let iop = match iop {
+            "sum" => karac::reduce_kernel::ReduceOp::Sum,
+            "prod" => karac::reduce_kernel::ReduceOp::Prod,
+            "min" => karac::reduce_kernel::ReduceOp::Min,
+            "max" => karac::reduce_kernel::ReduceOp::Max,
+            other => panic!("unknown int op {other}"),
+        };
+        println!(
+            "{}",
+            karac::gpu_wgsl::emit_int_reduce_kernel(iop, elem).unwrap()
+        );
+        return;
+    }
     if op == "dot" {
         println!("{}", karac::gpu_wgsl::emit_dot_kernel(elem).unwrap());
         return;
