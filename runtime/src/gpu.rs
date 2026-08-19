@@ -296,6 +296,77 @@ pub unsafe extern "C" fn karac_runtime_gpu_map(
     }
 }
 
+/// C entry point for `gpu.sum(buffer)` — a WHOLE-BUFFER REDUCTION returning a
+/// scalar (B-2026-08-19-10, slice 1).
+///
+/// Unlike [`karac_runtime_gpu_map`], the result is one value rather than a
+/// buffer, so the shader's convention is that lane 0 of the single workgroup
+/// writes the answer to `output[0]` and every other output slot is ignored.
+///
+/// **Slice 1 is single-workgroup only** — `n <= WORKGROUP` — because a
+/// multi-workgroup reduction needs a second pass over the per-workgroup
+/// partials (or an atomic), and that is the next slice. The caller is
+/// responsible for the bound; this entry point aborts rather than silently
+/// returning a partial sum, because a wrong-but-plausible number is the worst
+/// failure this family can have.
+///
+/// **The shader defines the summation order** (pad to the workgroup width with
+/// the identity, then halve), and the interpreter twin reproduces it exactly —
+/// a GPU tree reduction is not a left fold, and f32 addition is not
+/// associative, so the order is language semantics rather than an
+/// implementation detail. That is what lets `karac run` and `karac build`
+/// agree bit-for-bit instead of within an epsilon.
+///
+/// # Safety
+///
+/// `wgsl_ptr`/`wgsl_len` a valid UTF-8 shader; `in_ptr` points to `n` valid
+/// `f32` values. Aborts on no available GPU adapter (no CPU fallback), same as
+/// the map entry point.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_gpu_reduce_f32(
+    wgsl_ptr: *const u8,
+    wgsl_len: usize,
+    in_ptr: *const f32,
+    n: usize,
+) -> f32 {
+    unsafe {
+        // Empty reduction is the additive identity, and needs no device.
+        if n == 0 {
+            return 0.0;
+        }
+        // Must match the shader's `@workgroup_size` and its `scratch` array
+        // length — the emitter bakes the same number into both.
+        const WORKGROUP: usize = 64;
+        if n > WORKGROUP {
+            crate::fatal::write_stderr(
+                b"panic: gpu.sum slice-1 handles at most one workgroup of elements\n",
+            );
+            std::process::abort();
+        }
+
+        let wgsl_bytes = std::slice::from_raw_parts(wgsl_ptr, wgsl_len);
+        let Ok(wgsl) = std::str::from_utf8(wgsl_bytes) else {
+            crate::fatal::write_stderr(b"panic: gpu.sum shader is not valid UTF-8\n");
+            std::process::abort();
+        };
+
+        // Reuse the byte-oriented core the map entry point uses — the typed
+        // `dispatch_f32_map` wrapper is `#[cfg(test)]` and unavailable here.
+        let elem_size = std::mem::size_of::<f32>();
+        let input_bytes = std::slice::from_raw_parts(in_ptr as *const u8, n * elem_size);
+
+        let Some(output) = pollster::block_on(dispatch_bytes_async(wgsl, input_bytes, elem_size))
+        else {
+            crate::fatal::write_stderr(
+                b"panic: gpu.sum found no available GPU adapter (no CPU fallback)\n",
+            );
+            std::process::abort();
+        };
+        // Lane 0 wrote the reduced value to slot 0; the rest is scratch.
+        f32::from_le_bytes([output[0], output[1], output[2], output[3]])
+    }
+}
+
 /// C entry point for `gpu.dispatch(kernel, buffer)` over a **SoA `layout`-block
 /// buffer** — CG-4 (layout groups → coalesced GPU buffers).
 ///
@@ -1186,6 +1257,46 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
             tree_sum_f32(&input),
             "GPU tree order != CPU twin"
         );
+    }
+
+    #[test]
+    fn reduce_entry_point_matches_the_cpu_twin_through_the_c_abi() {
+        // Exercises `karac_runtime_gpu_reduce_f32` itself — the symbol codegen
+        // will call — rather than the `#[cfg(test)]` helper the other tests
+        // use. Catches anything wrong in the byte reinterpretation or the
+        // slot-0 readback that the typed helper would paper over.
+        let input: Vec<f32> = std::iter::repeat_n(0.1f32, 64).collect();
+        // Adapterless hosts abort inside the entry point by design, so probe
+        // first with the skippable helper and only then call the real one.
+        if dispatch_f32_map(SUM_REDUCE_WGSL, &input).is_none() {
+            eprintln!("gpu-reduce-abi: no GPU adapter available — skipping");
+            return;
+        }
+        let got = unsafe {
+            karac_runtime_gpu_reduce_f32(
+                SUM_REDUCE_WGSL.as_ptr(),
+                SUM_REDUCE_WGSL.len(),
+                input.as_ptr(),
+                input.len(),
+            )
+        };
+        assert_eq!(got, tree_sum_f32(&input), "C entry point != CPU twin");
+    }
+
+    #[test]
+    fn reduce_entry_point_returns_the_identity_for_an_empty_buffer() {
+        // Needs no device: an empty reduction is the additive identity, and
+        // returning it without dispatching is what keeps a GPU-less host from
+        // aborting on a program that never had any work to do.
+        let got = unsafe {
+            karac_runtime_gpu_reduce_f32(
+                SUM_REDUCE_WGSL.as_ptr(),
+                SUM_REDUCE_WGSL.len(),
+                std::ptr::null(),
+                0,
+            )
+        };
+        assert_eq!(got, 0.0);
     }
 
     #[test]
