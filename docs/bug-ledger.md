@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 136 | 1 |
 | double-free | 133 | 0 |
 | codegen-gap | 119 | 0 |
-| missing-feature | 119 | 3 |
+| missing-feature | 119 | 2 |
 | diagnostics | 83 | 0 |
 | false-positive | 81 | 0 |
 | perf | 77 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 944 | 3 |
-| typecheck | 211 | 3 |
-| interp | 158 | 2 |
+| codegen | 944 | 2 |
+| typecheck | 211 | 2 |
+| interp | 158 | 1 |
 | ownership | 60 | 0 |
 | other | 58 | 0 |
 | autopar | 49 | 0 |
@@ -121,16 +121,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | runtime | 26 | 1 |
 | resolver | 20 | 0 |
 | effect | 7 | 0 |
-| lexer | 5 | 1 |
+| lexer | 5 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1367 surfaced · 4 open · 1344 fixed · 7 wontfix** (2026-05-20 → 2026-08-19). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1367 surfaced · 3 open · 1345 fixed · 7 wontfix** (2026-05-20 → 2026-08-19). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-19-8 | 2026-08-19 | lexer+typecheck+interp+codegen | medium | IMPLEMENT 128-bit integers for real: `i128` / `u128` are specified normatively in design.md as v1 primitives (all four overflow method families, the widening-cast table, the primitive-numeric lists, Portable SIMD elements) and the compiler now REJECTS them, because no runtime carrier is 128 bits wide. Deleting design.md's 'Implementation status — 128-bit integers are NOT YET IMPLEMENTED' note is the definition of done. | docs/design.md § checked_*/wrapping_*/saturating_*/overflowing_* method families (the status note — deleting it is done); src/typechecker.rs::reject_128bit; src/interpreter/value.rs::Value::Int; src/codegen/method_call.rs (the i64-carrier comment + the `bits >= 64` reduction guard) |
 | B-2026-08-19-13 | 2026-08-19 | typecheck+codegen+runtime | medium | GPU reductions still lack the Arg family (argmin / argmax), the two-pass statistics (mean / var / std), prefix-sum and tiled matmul; and INTEGER reductions are blocked on an overflow rule rather than on effort. `sum`/`prod`/`min`/`max`/`dot` over `Vec[f32]` have shipped. | docs/spikes/gpu-llvm-offload-assessment.md; src/gpu_wgsl.rs::emit_reduce_kernel; src/reduce_kernel.rs::tree_reduce_f32 |
 | B-2026-08-19-17 | 2026-08-19 | typecheck+interp | medium | A BARE AMBIGUOUS UNIT VARIANT PICKS A DIFFERENT ENUM IN EACH BACKEND: with `enum First { A, B }` and `enum Second { A, C }`, `let x = A; x.tag()` prints First's answer under `karac build` and Second's under `karac run`. No diagnostic on either side -- and the spec does not say what a bare ambiguous variant name should mean. | src/interpreter.rs::register_items (Item::EnumDef arm, bare `env.define(variant.name)`); src/interpreter/eval_expr.rs (ExprKind::Path last-segment fallback); typechecker bare-variant resolution |
 | B-2026-08-19-19 | 2026-08-19 | codegen | medium | A 128-bit scalar cannot be carried in an ENUM PAYLOAD: an Option/Result payload word is 64 bits and `i128`/`u128` needs two, which the pack/unpack machinery has no case for. Refused loudly at type-check for now (`Option[i128]`, `Result[i128, E]`, and `checked_*` which returns `Option[Self]`); everything else about 128-bit works. | src/codegen/call_dispatch.rs::coerce_to_payload_words; src/codegen/calls.rs::rebuild_value_from_payload_words; src/codegen/control_flow_match.rs::reconstruct_payload_value; src/codegen/declarations.rs::{llvm_type_word_count,payload_word_count_for_type_expr}; docs/spikes/oversized-enum-payload.md; the guards in src/typechecker/lowering.rs and src/typechecker/method_numeric.rs |
@@ -151,9 +150,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1367 surfaced
 
 </details>
 
-### Fixed (1344)
+### Fixed (1345)
 
-<details><summary>1344 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1345 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -12295,6 +12294,20 @@ THE UNBOUNDED CASE IS THE ONE THAT MATTERED. `karac run prog | head -3` on a `wh
 GATED by `jit_broken_pipe_stops_the_program_like_a_native_binary` (tests/cli.rs, `#[cfg(feature = "llvm")]`), deliberately built on an UNBOUNDED program: a finite one exits on its own and would pass even fully broken, whereas `while true` cannot, so a regression hangs instead of passing quietly. Verified red before the fix — and the failure mode IS the hang, which is why the test asserts by completing at all. It also asserts status 141, which is what pins the `cmd_run` half: without that change the runner dies by signal and `code()` returns None, so `unwrap_or(1)` would report a generic failure.
 
 ONE CLIPPY NOTE for whoever touches this next: `exit_code_of` needs `#[cfg(feature = "llvm")]` because its only caller is inside the JIT path. Ungated it is dead code in the DEFAULT build, which is the leg CI runs — the exact trap CLAUDE.md documents, hit again here. |
+| B-2026-08-19-8 | lexer+typecheck+interp+codegen | medium | IMPLEMENT 128-bit integers for real: `i128` / `u128` are specified normatively in design.md as v1 primitives (all four overflow method families, the… | FIXED by 7561b5d (stage 5 of 5). 128-bit integers are usable: bindings, parameters, returns, struct fields, Vec/Map elements, the arithmetic and comparison surface, wrapping_*/saturating_*/overflowing_*, the bit intrinsics, casts, literals in every radix, and println / f-string / to_string formatting — all agreeing between karac run and karac build. Vector[i128, N] is spellable again and scalarizes, which is design.md § Portable SIMD's own worked example.
+
+THE FIVE STAGES, and what each actually cost against what this row first estimated:
+  1 (22b3bf3) interpreter carrier widened to i128. The row argued for a parallel Int128 variant; measurement reversed that — the variant produced 2 compile errors against 480 Value::Int sites, so ~478 catch-alls would have swallowed a 128-bit value silently, which is B-2026-08-19-6's own shape. Widening produced 229 compiler-identified sites. PERF GATE PASSED: interleaved A/B, -1.7%, ranges overlapping. It also exposed that the i64 carrier had been doing 64-bit overflow DETECTION for free, and that MIN % -1 needs an explicit width check because its result (0) fits.
+  2 (ebcd3ca) AST/token literals widened, lexer admits 128-bit magnitudes behind an explicit suffix. The gate is load-bearing: the (i64::MAX, u64::MAX] band must keep its own token kind or every u64 literal's wrapped encoding changes.
+  3a (b0c61ec) codegen. The row called this "the architectural stage" from 832 i64_type() occurrences; a vertical slice refuted it — widen_int_to_i64 returns its input unchanged at >= 64 bits, so the carrier is an AT-LEAST-i64 carrier and the arithmetic paths were already correct once the LLVM type was. Five changes, 88 lines.
+  3b (f536190) the method families, both backends. The divergence FLIPPED SIDES mid-fix: fixing the interpreter's width lookup left codegen wrong for the families that coerce a RESULT back to i64. Only running both surfaces found it.
+  4 (18522f8) runtime formatting. %lld read 64 bits and 2^100's low word is zero, so printing it produced "0" — a plausible wrong answer. First stage verified on printed DIGITS rather than boolean comparisons.
+
+ONE SHAPE REMAINS REFUSED and is split out to B-2026-08-19-19: a 128-bit ENUM PAYLOAD (Option[i128], Result[i128,E], and checked_* which returns Option[Self]). A payload word is 64 bits and a 128-bit scalar needs two. Unchecked it MISCOMPILES SILENTLY — Option[i128] holding 2^100 read back as 0 — so it is refused loudly rather than shipped. The fix was attempted, five sites deep, and REVERTED when the match arm still read 0: that means the model of the path was incomplete, and a half-applied change to machinery 3000+ codegen tests depend on is worse than none. The layers are written into that row.
+
+ALSO FIXED IN STAGE 5, found by exercising the newly-usable type: the interpreter PANICKED on a narrowing "as" cast (2^100 as i64) where codegen correctly truncated. design.md § numeric cast defines "as" as bitwise/truncating with no runtime check, so the interpreter was the wrong one.
+
+design.md's status note NARROWS to the remaining exception rather than disappearing; deleting it is what closing B-2026-08-19-19 looks like. The four tests B-2026-08-19-6 flipped are restored as their inverses, not deleted. |
 | B-2026-08-19-9 | other | medium | `tests/gpu_e2e.rs` PINNED `KARAC_GPU_BACKEND=cpu`, so all fourteen execution fixtures SKIPPED ON macOS — the project's primary dev machine — while re… | FIXED by 7c862b7d. `gpu_probe` now RESOLVES a backend — explicit `KARAC_GPU_BACKEND`, then the platform's default adapter, then a forced software one — instead of pinning `cpu` on every fixture, so the execution suite runs on Metal here and on lavapipe in a GPU-less container. The `NoAdapter`-only fallback and the no-fallback-when-forced rule were both verified (the first by mutating the emitter to produce invalid WGSL and confirming the `Broken` arm still panics on Metal), and the candidate order is pinned by a pure test that runs on GPU-less hosts. 16 passed / 0 skips on Metal, up from 15 passed / 14 skips. |
 | B-2026-08-19-10 | typecheck+codegen+runtime | medium | A GPU REDUCTION (N inputs -> 1 result) CANNOT BE WRITTEN AT ALL | FIXED by 63870ee0 (the last of three commits, 2026-08-19): the premise — "a GPU reduction cannot be written at all" — is now false.
 
