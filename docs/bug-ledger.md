@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 262 | 0 |
 | leak | 185 | 0 |
 | double-free | 133 | 0 |
-| run-vs-build | 133 | 1 |
+| run-vs-build | 133 | 0 |
 | codegen-gap | 119 | 0 |
 | missing-feature | 115 | 3 |
 | diagnostics | 83 | 0 |
@@ -116,23 +116,22 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | ownership | 60 | 0 |
 | other | 57 | 1 |
 | autopar | 49 | 0 |
-| cli | 47 | 1 |
+| cli | 47 | 0 |
 | parser | 27 | 1 |
-| runtime | 25 | 2 |
+| runtime | 25 | 1 |
 | resolver | 20 | 0 |
 | effect | 7 | 0 |
 | lexer | 5 | 1 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1358 surfaced · 5 open · 1335 fixed · 7 wontfix** (2026-05-20 → 2026-08-19). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1358 surfaced · 4 open · 1336 fixed · 7 wontfix** (2026-05-20 → 2026-08-19). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-19-3 | 2026-08-19 | parser+codegen | low | MULTI-BOUND `effect resource` declarations do not parse: `effect resource UserDB: DatabaseProvider + HealthCheckable;` -> "Expected Semicolon, found Plus", spec'd normatively at design.md:7216 under "Multiple trait bounds are allowed on a resource declaration:" (:7213), with semantics attached at :7217 ("Any provider passed to `with_provider` must implement all declared bounds plus `Send + Sync`"). | src/parser/items_effects.rs::parse_effect_resource_tail vs design.md:7216 (prose at :7213, semantics at :7217); src/codegen/provider_state.rs::provider_resource_traits and its nine readers |
 | B-2026-08-19-5 | 2026-08-19 | other | low | The codegen E2E harness (`tests/codegen.rs::run_program_capturing_inner`) runs resolve + typecheck but NOT the effect checker, so a test can pin behaviour for a program `karac build` REFUSES. Its `assert_check_clean` gate is named for the whole check phase and covers two thirds of it. | tests/codegen.rs::run_program_capturing_inner; tests/common's assert_check_clean; cf. B-2026-08-11-34 (the prepare_for_resolve drift this gate was hardened against) |
-| B-2026-08-19-7 | 2026-08-19 | runtime+cli | low | `karac run` (JIT) IGNORES A CLOSED READER ENTIRELY: with `| head -2` it runs the whole program to completion, discarding every failed write, then exits 0 — while the AOT binary for the same source dies at the first broken write with status 141. MEASURED on a 2,000,000-line program: 541 ms with the pipe closed after two lines vs 547 ms writing everything to /dev/null (statistically identical), against 5 ms for the AOT binary. 100x the work here, and unbounded for a long-running program. | roadmap.md |
 | B-2026-08-19-8 | 2026-08-19 | lexer+typecheck+interp+codegen | medium | IMPLEMENT 128-bit integers for real: `i128` / `u128` are specified normatively in design.md as v1 primitives (all four overflow method families, the widening-cast table, the primitive-numeric lists, Portable SIMD elements) and the compiler now REJECTS them, because no runtime carrier is 128 bits wide. Deleting design.md's 'Implementation status — 128-bit integers are NOT YET IMPLEMENTED' note is the definition of done. | docs/design.md § checked_*/wrapping_*/saturating_*/overflowing_* method families (the status note — deleting it is done); src/typechecker.rs::reject_128bit; src/interpreter/value.rs::Value::Int; src/codegen/method_call.rs (the i64-carrier comment + the `bits >= 64` reduction guard) |
 | B-2026-08-19-10 | 2026-08-19 | typecheck+codegen+runtime | medium | A GPU REDUCTION (N inputs -> 1 result) CANNOT BE WRITTEN AT ALL. `gpu.dispatch` is the entire user-facing GPU surface and it is map-shaped ([T] -> [U], one output per input); the WGSL emitter has ZERO workgroup-memory or barrier support. So sum / dot / min / max / argmax / prefix-sum / any tiled matmul have nowhere to go, which is most of what GPUs are bought for. | — |
 
@@ -152,9 +151,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1358 surfaced
 
 </details>
 
-### Fixed (1335)
+### Fixed (1336)
 
-<details><summary>1335 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1336 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -12241,6 +12240,27 @@ THREE ENTRY PATHS, because the first two leave a hole worth recording. The annot
 design.md gets a STATUS NOTE, not a scope change (owner-directed). The spec normatively promises 128-bit in v1 — § `checked_*`/`wrapping_*`/`saturating_*`/`overflowing_*` families, the widening-cast table, the primitive-numeric lists, Portable SIMD element types — and rejecting the type without saying so would have traded a soundness bug for the spec/impl divergence class of B-2026-08-18-41. The promise stands; the note records that the compiler does not deliver it yet. Deleting that note is what "implement 128-bit" looks like, and B-2026-08-19-8 tracks it.
 
 FALLOUT, recorded rather than papered over. Four tests asserted the opposite and were REPLACED, not deleted: `test_integer_suffix_{i,u}128_accepted`, `test_const_eval_u128_literal_typechecks`, and the 128-bit lines of `test_float_to_int_conversion_methods_typecheck`. They pinned that 128-bit was NAMEABLE — true, and never in doubt — and read as pinning that it WORKED. `tests/simd_report.rs::require_simd_rejects_unsupported_128bit_element` used `Vector[i128, 4]`, design.md's own example of a lane type no vector unit supports; it no longer type-checks, so the test moves to `f16` (same `UnsupportedElement` classification, still spellable) and the classifier's `bits >= 128` arm is kept and unit-tested on `Type` values for when 128-bit lands. The `Vector` element-type diagnostic stopped advertising `i128` as permitted. No `.kara` file in examples/, stdlib/ or kara-katas uses either type — consistent with a type that never worked. |
+| B-2026-08-19-7 | runtime+cli | low | `karac run` (JIT) IGNORES A CLOSED READER ENTIRELY: with `\| head -2` it runs the whole program to completion, discarding every failed write, then exi… | FIXED by 15a11aa. `karac_jit_runner` restores the DEFAULT SIGPIPE disposition at the top of `main`, before any path that runs user code, and `cmd_run` forwards a signal death as `128 + signal` instead of collapsing it to 1. All three surfaces now end a closed-reader run the same way: status 141, empty stderr.
+
+THE ROW'S "LIKELY FIX" WAS WRONG ABOUT THE LOCATION, and the correction is the useful part of this close. It proposed one shared helper over "the five `stdout().lock()` sites in `runtime/src/lib.rs`". Those five sites are all `BOUND_PORT=<n>` diagnostics emitted by the HTTP servers on bind — nothing to do with the program's output. A karac program's `println` never passes through Rust at all: codegen emits `__karac_write_console`, whose body is a direct libc `fwrite(data, 1, len, stdout)` for any non-parallel module (it routes through `karac_runtime_write_console` ONLY when the module contains a `karac_par_run` / `karac_par_reduce` site, so that par-branch writes can be captured and replayed in source order). A runtime-side write helper would therefore have missed every sequential program — which is to say, the entire reported case.
+
+THE ACTUAL DIVERGENCE IS ONE PROCESS PROPERTY, not a write path. A karac AOT binary's `main` bypasses Rust std's `lang_start`, so it inherits the default SIGPIPE disposition and the kernel kills it at the first write to a closed pipe. `karac_jit_runner` IS a Rust program, so `lang_start` installs `SIG_IGN` before the JIT'd code runs; the emitted `fwrite` then gets EPIPE, and codegen's wrapper discards the return value, so the program runs on. Restoring `SIG_DFL` in the runner makes the JIT'd process start in the same state an AOT binary starts in — which is the runner's whole job.
+
+WHY THIS DOES NOT BREAK SERVERS, the obvious objection, and it is already handled by the design rather than by this fix: the runtime masks SIGPIPE for exactly the programs that need it, from the network reactor's one-time init (`event_loop.rs`, `event_loops()`), NOT from process startup — deliberately network-scoped so compute-only binaries stay off that path. A socket-writing program therefore re-installs `SIG_IGN` itself the moment it registers its first fd, under the JIT exactly as under AOT, through the same code. VERIFIED rather than assumed: a `Server.serve` program under `karac run` survived 40 aborted client connections and was still answering afterwards.
+
+MEASUREMENTS, before -> after, on a 2,000,000-line program with the reader closed after two lines (`PIPESTATUS[0]`, not `$?` — the parent pipeline's status is `head`'s either way):
+
+    AOT binary          3 ms / 141      3 ms / 141   (the reference, unchanged)
+    karac run (JIT)   272 ms /   0    116 ms / 141
+    karac run --interp                 36 ms / 141   (fixed by the sibling)
+
+The JIT's remaining 116 ms is compile-plus-spawn, not program execution: the same program under the JIT writing everything to /dev/null takes 260 ms, so the closed-reader run is no longer doing the work.
+
+THE UNBOUNDED CASE IS THE ONE THAT MATTERED. `karac run prog | head -3` on a `while true` program did not terminate at all before this. It now ends in 108 ms with status 141.
+
+GATED by `jit_broken_pipe_stops_the_program_like_a_native_binary` (tests/cli.rs, `#[cfg(feature = "llvm")]`), deliberately built on an UNBOUNDED program: a finite one exits on its own and would pass even fully broken, whereas `while true` cannot, so a regression hangs instead of passing quietly. Verified red before the fix — and the failure mode IS the hang, which is why the test asserts by completing at all. It also asserts status 141, which is what pins the `cmd_run` half: without that change the runner dies by signal and `code()` returns None, so `unwrap_or(1)` would report a generic failure.
+
+ONE CLIPPY NOTE for whoever touches this next: `exit_code_of` needs `#[cfg(feature = "llvm")]` because its only caller is inside the JIT path. Ungated it is dead code in the DEFAULT build, which is the leg CI runs — the exact trap CLAUDE.md documents, hit again here. |
 | B-2026-08-19-9 | other | medium | `tests/gpu_e2e.rs` PINNED `KARAC_GPU_BACKEND=cpu`, so all fourteen execution fixtures SKIPPED ON macOS — the project's primary dev machine — while re… | FIXED by 7c862b7d. `gpu_probe` now RESOLVES a backend — explicit `KARAC_GPU_BACKEND`, then the platform's default adapter, then a forced software one — instead of pinning `cpu` on every fixture, so the execution suite runs on Metal here and on lavapipe in a GPU-less container. The `NoAdapter`-only fallback and the no-fallback-when-forced rule were both verified (the first by mutating the emitter to produce invalid WGSL and confirming the `Broken` arm still panics on Metal), and the candidate order is pinned by a pure test that runs on GPU-less hosts. 16 passed / 0 skips on Metal, up from 15 passed / 14 skips. |
 
 </details>
