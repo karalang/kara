@@ -6347,6 +6347,35 @@ impl<'ctx> super::Codegen<'ctx> {
             let key = (sub_pat.span.offset, sub_pat.span.length);
             if let Some(name) = self.pattern_state.pattern_binding_types.get(&key).cloned() {
                 match self.llvm_type_for_name(&name) {
+                    // Wider-than-64-bit payload (`Option[i128]`): the pack side
+                    // SPLIT the value across two payload words (lo, hi) because
+                    // a word is an i64 — `coerce_to_payload_words`' wide-int
+                    // arm. Rejoin them here. Reading word 0 alone bound the low
+                    // half, so `Some(2^100)` matched and then printed `0`
+                    // (B-2026-08-19-19). Symmetric with the pack split, and
+                    // reached only for a `>64`-bit surface name, so every
+                    // existing width is untouched.
+                    BasicTypeEnum::IntType(it) if it.get_bit_width() > 64 => {
+                        let lo = self
+                            .builder
+                            .build_int_z_extend(w, it, "pat.i128.lo")
+                            .unwrap();
+                        let joined = match field_words.get(1) {
+                            Some(hw) => {
+                                let hi = self
+                                    .builder
+                                    .build_int_z_extend(*hw, it, "pat.i128.hi")
+                                    .unwrap();
+                                let sh = self
+                                    .builder
+                                    .build_left_shift(hi, it.const_int(64, false), "pat.i128.shl")
+                                    .unwrap();
+                                self.builder.build_or(lo, sh, "pat.i128.or").unwrap()
+                            }
+                            None => lo,
+                        };
+                        return Ok(joined.into());
+                    }
                     BasicTypeEnum::IntType(it) if it.get_bit_width() < 64 => {
                         let narrowed = self
                             .builder

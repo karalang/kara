@@ -4150,11 +4150,29 @@ impl<'ctx> super::Codegen<'ctx> {
                             .unwrap();
 
                         self.builder.position_at_end(some_bb);
-                        let payload = self.coerce_int_to(
-                            wrapped,
-                            self.int_carrier_type_for_bits(bits),
-                            unsigned,
-                        );
+                        // `build_option_some_via_phis` phis i64 WORDS, so a
+                        // 128-bit result has to arrive already split — one
+                        // i128 operand made every phi fail module verification
+                        // ("PHI node operands are not the same type as the
+                        // result", B-2026-08-19-19). `coerce_to_payload_words`
+                        // is the same splitter the `Some(x)` construction path
+                        // uses, so both producers of an `Option[i128]` emit the
+                        // identical little-endian (lo, hi) word pair that the
+                        // match-arm unpack rejoins.
+                        let payload_words = if bits > 64 {
+                            let wide = self.coerce_int_to(
+                                wrapped,
+                                self.int_carrier_type_for_bits(bits),
+                                unsigned,
+                            );
+                            self.coerce_to_payload_words(wide.into(), bits.div_ceil(64) as usize)?
+                        } else {
+                            vec![self.coerce_int_to(
+                                wrapped,
+                                self.int_carrier_type_for_bits(bits),
+                                unsigned,
+                            )]
+                        };
                         self.builder.build_unconditional_branch(merge_bb).unwrap();
 
                         self.builder.position_at_end(none_bb);
@@ -4162,7 +4180,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
                         self.builder.position_at_end(merge_bb);
                         let agg = self.build_option_some_via_phis(
-                            &[payload],
+                            &payload_words,
                             some_bb,
                             none_bb,
                             "chk.opt",
@@ -4185,8 +4203,25 @@ impl<'ctx> super::Codegen<'ctx> {
                                 int_ty.const_all_ones()
                             }
                         } else {
-                            let smax = int_ty.const_int(((1u128 << (bits - 1)) - 1) as u64, false);
-                            let smin = int_ty.const_int((1u128 << (bits - 1)) as u64, false);
+                            // Build the signed bounds by BIT PATTERN, not by
+                            // computing them in `u128` and casting: `as u64`
+                            // truncates, so at `bits == 128` SMAX became
+                            // `u64::MAX` and SMIN became `0` — a saturating
+                            // i128 add clamped to 18446744073709551615
+                            // (B-2026-08-19-19). `all_ones >> 1` (logical) is
+                            // SMAX at every width, and `SMAX + 1` wraps to SMIN;
+                            // both fold to constants.
+                            let one_c = int_ty.const_int(1, false);
+                            let smax = self
+                                .builder
+                                .build_right_shift(
+                                    int_ty.const_all_ones(),
+                                    one_c,
+                                    false,
+                                    "sat.smax",
+                                )
+                                .unwrap();
+                            let smin = self.builder.build_int_add(smax, one_c, "sat.smin").unwrap();
                             let pick_max = if op == "mul" {
                                 let sa = self
                                     .builder

@@ -6590,6 +6590,28 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(te) = tys.get(idx) else {
             return val;
         };
+        // A payload declared as the enum's own GENERIC PARAMETER carries no
+        // width information — `enum Option[T] { Some(T) }` lowers `T` to the
+        // all-i64 generic base, which is a placeholder, not a target. Coercing
+        // to it NARROWS a wider payload: an `i128` in `Some(...)` was truncated
+        // to i64 here, before the packer ever saw it, and 2^100's low word is
+        // zero so `Option[i128]` printed `0` (B-2026-08-19-19).
+        //
+        // The coercion exists for CONCRETELY declared payload types — an int
+        // reaching an `f64` payload is a silent wrong value because the packer
+        // reinterprets rather than converts (B-2026-08-13-18). A generic
+        // parameter is exactly the case where there is nothing to convert to,
+        // so it is skipped and the value keeps its own width.
+        if let TypeKind::Path(p) = &te.kind {
+            if p.segments.len() == 1
+                && self
+                    .enum_generic_param_names(enum_name)
+                    .iter()
+                    .any(|g| g == &p.segments[0])
+            {
+                return val;
+            }
+        }
         let target = self.llvm_type_for_type_expr(te);
         if !(target.is_int_type() || target.is_float_type()) {
             return val;

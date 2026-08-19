@@ -3676,6 +3676,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     // Single-word primitives.
                     "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "usize"
                     | "isize" | "f32" | "f64" | "bool" | "char" | "Unit" => 1,
+                    // TWO words. `Option`'s payload area is 3 and `Result`'s 5,
+                    // so a 128-bit scalar fits INLINE — it must not be routed
+                    // to the oversize-boxing path, whose unpack mirror
+                    // recomputes `word_count > area` and would read it inline
+                    // anyway (B-2026-08-19-19).
+                    "i128" | "u128" => 2,
                     // Other path types: dispatch based on whether it's a
                     // user-defined struct / enum / shared type already
                     // registered. Order matters: shared types (RC pointers)
@@ -3758,9 +3764,13 @@ impl<'ctx> super::Codegen<'ctx> {
     /// own field count.
     pub(super) fn llvm_type_word_count(ty: BasicTypeEnum<'ctx>) -> usize {
         match ty {
-            BasicTypeEnum::IntType(_)
-            | BasicTypeEnum::FloatType(_)
-            | BasicTypeEnum::PointerType(_) => 1,
+            // An integer WIDER than a word costs more than one word
+            // (B-2026-08-19-19). This returned 1 for every `IntType`, so an
+            // `i128` payload claimed a single 64-bit slot and `coerce_to_i64`
+            // truncated it — and 2^100's low word is zero, so the loss printed
+            // as a plausible `0`.
+            BasicTypeEnum::IntType(it) => (it.get_bit_width() as usize).div_ceil(64).max(1),
+            BasicTypeEnum::FloatType(_) | BasicTypeEnum::PointerType(_) => 1,
             BasicTypeEnum::StructType(st) => (0..st.count_fields())
                 .map(|i| Self::llvm_type_word_count(st.get_field_type_at_index(i).unwrap()))
                 .sum(),

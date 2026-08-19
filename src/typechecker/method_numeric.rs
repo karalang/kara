@@ -263,13 +263,20 @@ impl<'a> super::TypeChecker<'a> {
         if matches!(method, "wrapping_add" | "wrapping_sub" | "wrapping_mul")
             && matches!(
                 receiver_for_lookup,
-                Type::Int(IntSize::I8 | IntSize::I16 | IntSize::I32 | IntSize::I64)
+                // The 128-bit widths belong here for the same reason every
+                // other width does — `eval_wrapping_arith` and codegen's
+                // `build_int_{add,sub,mul}` are both width-parameterized and
+                // already handle 128. They were simply missed when 128-bit
+                // landed, so `m.wrapping_mul(3i128)` reported "no method
+                // 'wrapping_mul' on type 'i128'" (B-2026-08-19-19).
+                Type::Int(IntSize::I8 | IntSize::I16 | IntSize::I32 | IntSize::I64 | IntSize::I128,)
                     | Type::UInt(
                         UIntSize::U8
                             | UIntSize::U16
                             | UIntSize::U32
                             | UIntSize::U64
-                            | UIntSize::Usize
+                            | UIntSize::U128
+                            | UIntSize::Usize,
                     )
             )
         {
@@ -378,35 +385,6 @@ impl<'a> super::TypeChecker<'a> {
             if (checked || saturating || overflowing)
                 && matches!(receiver_for_lookup, Type::Int(_) | Type::UInt(_))
             {
-                // `checked_*` returns `Option[Self]`, and a 128-bit payload
-                // does not fit an enum payload word (B-2026-08-19-19). The
-                // annotation guard in `lower_type_expr` cannot see this one —
-                // the `Option` is INFERRED here, never written — and without
-                // it the program reached codegen and failed module
-                // verification with a `phi i64` fed an i128, which is loud but
-                // is an internal LLVM message and a run-vs-build divergence
-                // (the interpreter answers correctly). `saturating_*` and
-                // `overflowing_*` return `Self` / a tuple, so they are fine.
-                if checked
-                    && matches!(
-                        receiver_for_lookup,
-                        Type::Int(IntSize::I128) | Type::UInt(UIntSize::U128)
-                    )
-                {
-                    let w = if matches!(receiver_for_lookup, Type::Int(IntSize::I128)) {
-                        "i128"
-                    } else {
-                        "u128"
-                    };
-                    self.type_error(
-                        format!(
-                            "`{method}` is not supported on `{w}` yet: it returns `Option[{w}]`, and an enum payload word is 64 bits — a 128-bit payload would be silently truncated. Use `wrapping_*` / `saturating_*` / `overflowing_*`, which return `{w}` directly, or compare against the bound. Tracked as B-2026-08-19-19"
-                        ),
-                        *span,
-                        TypeErrorKind::TypeMismatch,
-                    );
-                    return Some(Type::Error);
-                }
                 if args.len() != 1 {
                     self.type_error(
                         format!("{method} expects 1 argument, got {}", args.len()),

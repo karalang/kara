@@ -35036,8 +35036,11 @@ fn gpu_sum_folds_past_one_workgroup_instead_of_refusing() {
 /// Stage 1 widened `Value::Int` to i128, but `int_width_at` had no 128 arms, so
 /// every one of these methods fell to its signed-64 default and answered for 64
 /// bits — while codegen (stage 3a) answered for 128. Nothing could observe the
-/// divergence because the type is still rejected at type-check, which is
-/// exactly why it needed a test rather than a bug report.
+/// divergence because the type was still rejected at type-check at the time —
+/// which is exactly why it needed a test rather than a bug report. The
+/// rejection is gone (B-2026-08-19-19), so the 128-bit half is now observable;
+/// it is asserted end-to-end in tests/codegen.rs, where both backends can be
+/// compared against each other.
 ///
 /// These assert on the WIDTH, not on the arithmetic: each value is chosen so a
 /// 64-bit answer and a 128-bit answer differ.
@@ -35060,6 +35063,77 @@ fn interpreter_reads_128bit_widths_for_width_sensitive_methods() {
              }"
         ),
         "-9223372036854775808\n64\n2\n63\n"
+    );
+}
+
+/// A 128-bit scalar survives an enum-payload round trip in the INTERPRETER
+/// (B-2026-08-19-19). The codegen twin is `e2e_128bit_enum_payload_round_trip`;
+/// the pair is what makes `karac run` == `karac build` an assertion rather than
+/// a hope, and the payload path is where the two backends had every reason to
+/// disagree (codegen packs 64-bit words, the interpreter holds a whole i128).
+#[test]
+fn a_128bit_enum_payload_round_trips_in_the_interpreter() {
+    assert_eq!(
+        run_no_errors(
+            "enum Box128 { W(i128), Pair(i128, i64), Nothing }\n\
+             fn main() {\n\
+             let a: Option[i128] = Some(1267650600228229401496703205376i128);\n\
+             match a { Some(x) => println(x), None => println(\"none-a\") }\n\
+             let d: Result[i128, String] = Ok(-1267650600228229401496703205376i128);\n\
+             match d { Ok(x) => println(x), Err(e) => println(e) }\n\
+             let g: Box128 = Box128.Pair(1267650600228229401496703205376i128, 42i64);\n\
+             match g {\n\
+             Box128.W(x) => println(x),\n\
+             Box128.Pair(p, q) => { println(p) println(q) }\n\
+             Box128.Nothing => println(\"nb\"),\n\
+             }\n\
+             let i: Option[i128] = None;\n\
+             match i { Some(x) => println(x), None => println(\"none-i\") }\n\
+             }"
+        ),
+        "1267650600228229401496703205376\n\
+         -1267650600228229401496703205376\n\
+         1267650600228229401496703205376\n\
+         42\n\
+         none-i\n"
+    );
+}
+
+/// The overflow-aware families at 128 bits, in the interpreter
+/// (B-2026-08-19-19). Two defects lived here, both invisible until the
+/// type-check rejection was lifted:
+///
+///   - `saturating_*` clamped by OPERATION (`sub` → MIN, else MAX), so an
+///     overflowing NEGATIVE product saturated to `i128::MAX`. The rule is the
+///     sign of the true result, which is what codegen already did.
+///   - every UNSIGNED 128-bit case fell through to a generic tail whose
+///     `(a as u64) as i128` truncates the operand to 64 bits, so
+///     `(2^100 as u128).checked_mul(2)` answered `0` here and `2^101` compiled.
+#[test]
+fn the_128bit_overflow_families_are_width_correct_in_the_interpreter() {
+    assert_eq!(
+        run_no_errors(
+            "fn main() {\n\
+             let neg: i128 = -1267650600228229401496703205376i128;\n\
+             println(neg.saturating_mul(1000000000000i128));\n\
+             let mx: i128 = 170141183460469231731687303715884105727i128;\n\
+             println(mx.saturating_add(1i128));\n\
+             match mx.checked_add(1i128) { Some(v) => println(v), None => println(\"ovf\") }\n\
+             let u: u128 = 1267650600228229401496703205376u128;\n\
+             match u.checked_mul(2u128) { Some(v) => println(v), None => println(\"ovf\") }\n\
+             println(u.saturating_sub(1u128));\n\
+             println(u.wrapping_mul(3u128));\n\
+             let t = u.overflowing_add(1u128);\n\
+             println(t.0);\n\
+             }"
+        ),
+        "-170141183460469231731687303715884105728\n\
+         170141183460469231731687303715884105727\n\
+         ovf\n\
+         2535301200456458802993406410752\n\
+         1267650600228229401496703205375\n\
+         3802951800684688204490109616128\n\
+         1267650600228229401496703205377\n"
     );
 }
 

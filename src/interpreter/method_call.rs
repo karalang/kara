@@ -3388,15 +3388,67 @@ fn eval_overflow_arith(fam: OvFam, op: OvOp, a: i128, b: i128, w: IntW) -> Value
                     some_int(res)
                 }
             }
+            // Saturate toward the sign of the TRUE result, not by operation.
+            // On overflow `add`/`sub` force the sign of `a` (add overflows only
+            // with like-signed operands; sub only with unlike-signed ones), and
+            // `mul`'s sign is `sign(a) XOR sign(b)`. The old by-operation rule
+            // sent every overflowing `mul` to `MAX`, so
+            // `(-1.2e30).saturating_mul(1e12)` — a large NEGATIVE product —
+            // clamped to `i128::MAX` (B-2026-08-19-19). This is the same rule
+            // codegen's `saturating_` arm already documents and applies, and
+            // the narrow-width path below gets it for free by clamping an exact
+            // i128 result.
             OvFam::Saturating => Value::Int(if of {
-                match op {
-                    OvOp::Sub => i128::MIN,
-                    _ => i128::MAX,
+                let negative = match op {
+                    OvOp::Add | OvOp::Sub => a < 0,
+                    OvOp::Mul => (a < 0) != (b < 0),
+                };
+                if negative {
+                    i128::MIN
+                } else {
+                    i128::MAX
                 }
             } else {
                 res
             }),
             OvFam::Overflowing => Value::Tuple(vec![Value::Int(res), Value::Bool(of)]),
+        };
+    }
+    // 128-bit unsigned: reinterpret the carrier's bits as `u128` and use
+    // `u128`'s own overflowing ops — the same trick the 64-bit-unsigned branch
+    // below plays with `i64`/`u64`, and for the same reason (the carrier is
+    // signed, the width is not). Without it these fell through to the generic
+    // tail, whose `(a as u64) as i128` TRUNCATES an unsigned operand to 64
+    // bits: `(2^100 as u128).checked_mul(2)` answered `0` in the interpreter
+    // while codegen answered 2^101 — a run-vs-build divergence, reachable as
+    // soon as `checked_*` on 128-bit was unblocked (B-2026-08-19-19).
+    if let IntW::U(128) = w {
+        let (au, bu) = (a as u128, b as u128);
+        let (res, of) = match op {
+            OvOp::Add => au.overflowing_add(bu),
+            OvOp::Sub => au.overflowing_sub(bu),
+            OvOp::Mul => au.overflowing_mul(bu),
+        };
+        return match fam {
+            OvFam::Checked => {
+                if of {
+                    none_value()
+                } else {
+                    some_int(res as i128)
+                }
+            }
+            OvFam::Saturating => {
+                let s = if of {
+                    match op {
+                        OvOp::Sub => 0u128, // underflow → 0
+                        _ => u128::MAX,     // add/mul overflow → MAX
+                    }
+                } else {
+                    res
+                };
+                Value::Int(s as i128)
+            }
+            OvFam::Overflowing => Value::Tuple(vec![Value::Int(res as i128), Value::Bool(of)]),
         };
     }
     // 64-bit unsigned: reinterpret the two's-complement bits as u64 (full range).

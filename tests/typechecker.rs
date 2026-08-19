@@ -165,39 +165,41 @@ fn integer_suffix_128bit_is_accepted_as_a_runtime_type() {
     }
 }
 
-/// The one place 128-bit is still refused: an ENUM PAYLOAD
-/// (B-2026-08-19-19). A payload word is 64 bits and a 128-bit scalar needs two,
-/// which the pack/unpack machinery does not carry — left unchecked it
-/// MISCOMPILES SILENTLY (`Option[i128]` holding 2^100 read back as 0), so the
-/// refusal is loud and narrow rather than absent.
+/// A 128-bit scalar in an ENUM PAYLOAD type-checks (B-2026-08-19-19). This
+/// used to be a loud refusal: a payload word is 64 bits and a 128-bit scalar
+/// needs two, and before the pack/unpack machinery carried that shape an
+/// `Option[i128]` holding 2^100 read back as 0. The pack side now splits a
+/// wider-than-a-word scalar into little-endian words and the match-arm unpack
+/// rejoins them, so the refusal is gone.
 ///
-/// `checked_*` is caught separately because its `Option[Self]` is INFERRED,
-/// never written, so the annotation guard cannot see it.
+/// `checked_*` is listed separately because its `Option[Self]` is INFERRED,
+/// never written — it went through a second guard and needed its own unblocking
+/// (an i64 phi fed an i128 failed module verification).
 #[test]
-fn the_128bit_enum_payload_is_refused_loudly() {
+fn a_128bit_enum_payload_type_checks() {
     for src in [
         "fn main() { let o: Option[i128] = None; }",
         "fn main() { let o: Option[u128] = None; }",
+        "fn main() { let o: Option[i128] = Some(1267650600228229401496703205376i128); }",
         "fn f() -> Result[i128, String] { return Err(\"x\"); } fn main() { }",
+        "enum W { A(i128), B } fn main() { let w = W.A(5i128); }",
     ] {
-        let errs = typecheck_errors(src);
-        assert!(
-            errs.iter().any(|e| e.message.contains("B-2026-08-19-19")),
-            "expected the enum-payload refusal for {src:?}; got: {:?}",
-            errs.iter().map(|e| &e.message).collect::<Vec<_>>()
-        );
+        typecheck_ok(src);
     }
-    // `checked_*` returns `Option[Self]`; the sibling families return `Self` /
-    // a tuple and stay legal.
-    let errs = typecheck_errors("fn main() { let a: i128 = 5i128; let r = a.checked_add(1i128); }");
-    assert!(
-        errs.iter()
-            .any(|e| e.message.contains("checked_add") && e.message.contains("B-2026-08-19-19")),
-        "expected the checked_* refusal; got: {:?}",
-        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
-    );
-    typecheck_ok("fn main() { let a: i128 = 5i128; let r: i128 = a.saturating_add(1i128); }");
-    typecheck_ok("fn main() { let a: i128 = 5i128; let r: i128 = a.wrapping_add(1i128); }");
+    // The whole overflow-aware family, on both 128-bit signednesses. `checked_*`
+    // returns `Option[Self]` (the payload case); the others return `Self` / a
+    // tuple. `wrapping_*` additionally had a stale per-width allowlist that
+    // omitted the 128-bit arms — "no method 'wrapping_mul' on type 'i128'".
+    for src in [
+        "fn main() { let a: i128 = 5i128; let r = a.checked_add(1i128); }",
+        "fn main() { let a: u128 = 5u128; let r = a.checked_mul(2u128); }",
+        "fn main() { let a: i128 = 5i128; let r: i128 = a.saturating_add(1i128); }",
+        "fn main() { let a: i128 = 5i128; let r: i128 = a.wrapping_add(1i128); }",
+        "fn main() { let a: i128 = 5i128; let r: i128 = a.wrapping_mul(3i128); }",
+        "fn main() { let a: u128 = 5u128; let r: u128 = a.wrapping_sub(1u128); }",
+    ] {
+        typecheck_ok(src);
+    }
 }
 
 /// Every width that DOES have a real carrier stays accepted — the guard against

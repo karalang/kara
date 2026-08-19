@@ -1092,11 +1092,12 @@ impl<'a> super::Interpreter<'a> {
             // The 64-bit widths, which the i64 carrier used to check for free.
             Type::Int(IntSize::I64) => (i64::MIN as i128, i64::MAX as i128),
             Type::UInt(UIntSize::U64) | Type::UInt(UIntSize::Usize) => (0, u64::MAX as i128),
-            // 128-bit is still rejected at type-check (B-2026-08-19-6), so
-            // these arms are unreachable from source today. They are written
-            // out anyway so the table is complete when stage 5 lifts the
-            // rejection: the carrier is SIGNED, so `u128`'s usable ceiling is
-            // `i128::MAX` until the carrier itself grows an unsigned half.
+            // The carrier is SIGNED (`Value::Int(i128)`), so `u128`'s usable
+            // ceiling is `i128::MAX`: the upper half of the range is stored as
+            // a negative bit pattern that this check would reject and that
+            // `println` renders with its signed reading. Tracked separately as
+            // B-2026-08-19-20 — it needs the carrier to grow an unsigned half,
+            // not a wider bound here.
             Type::Int(IntSize::I128) => (i128::MIN, i128::MAX),
             Type::UInt(UIntSize::U128) => (0, i128::MAX),
             // Anything else (a generic param, a named type, a float result

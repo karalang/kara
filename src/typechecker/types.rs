@@ -956,10 +956,19 @@ pub(super) fn method_callee_type_name(ty: &Type) -> Option<String> {
         Type::Int(IntSize::I16) => Some("i16".to_string()),
         Type::Int(IntSize::I32) => Some("i32".to_string()),
         Type::Int(IntSize::I64) => Some("i64".to_string()),
+        // B-2026-08-19-19: the 128-bit arms were missing from this otherwise
+        // per-width list, and the `_ => None` fallthrough made the omission
+        // invisible to the compiler. The immediate consequence was in
+        // `record_pattern_inner_type`, whose scalar arm returns early when this
+        // yields `None` — so an `Option[i128]` payload binding got NO
+        // `pattern_binding_types` entry, codegen could not see the binding was
+        // 128 bits wide, and `Some(x) => println(x)` bound only the low word.
+        Type::Int(IntSize::I128) => Some("i128".to_string()),
         Type::UInt(UIntSize::U8) => Some("u8".to_string()),
         Type::UInt(UIntSize::U16) => Some("u16".to_string()),
         Type::UInt(UIntSize::U32) => Some("u32".to_string()),
         Type::UInt(UIntSize::U64) => Some("u64".to_string()),
+        Type::UInt(UIntSize::U128) => Some("u128".to_string()),
         Type::UInt(UIntSize::Usize) => Some("usize".to_string()),
         Type::Float(FloatSize::F32) => Some("f32".to_string()),
         Type::Float(FloatSize::F64) => Some("f64".to_string()),

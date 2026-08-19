@@ -8339,6 +8339,33 @@ impl<'ctx> super::Codegen<'ctx> {
                     out.push(self.coerce_to_i64(f)?);
                 }
             }
+            // A scalar WIDER than a word splits across words, little-endian
+            // (B-2026-08-19-19). The `_` arm below pushes one word, which for
+            // an i128 silently dropped the high half AND kept `out.len() ==
+            // num_words`, so neither the inline nor the boxing path noticed.
+            BasicValueEnum::IntValue(iv) if iv.get_type().get_bit_width() > 64 => {
+                let i64_t = self.context.i64_type();
+                let wide = iv.get_type();
+                out.push(
+                    self.builder
+                        .build_int_truncate(iv, i64_t, "pl.w.lo")
+                        .unwrap(),
+                );
+                let mut shifted = iv;
+                let mut remaining = wide.get_bit_width();
+                while remaining > 64 {
+                    shifted = self
+                        .builder
+                        .build_right_shift(shifted, wide.const_int(64, false), false, "pl.w.sh")
+                        .unwrap();
+                    out.push(
+                        self.builder
+                            .build_int_truncate(shifted, i64_t, "pl.w.hi")
+                            .unwrap(),
+                    );
+                    remaining -= 64;
+                }
+            }
             _ => {
                 out.push(self.coerce_to_i64(val)?);
             }

@@ -21244,6 +21244,117 @@ fn main() {
     }
 
     #[test]
+    fn e2e_128bit_enum_payload_round_trip() {
+        // A 128-bit scalar survives an ENUM PAYLOAD round trip
+        // (B-2026-08-19-19). A payload word is 64 bits, so the pack side has to
+        // split a 128-bit scalar into two little-endian words and the match-arm
+        // unpack has to rejoin them. Before that, the single-word fast path kept
+        // only the LOW half — and every value below is picked so that half is
+        // ZERO or misleading: 2^100's low 64 bits are 0, so the bug printed `0`
+        // rather than a visibly corrupt number.
+        //
+        // Covers all three payload producers: the seeded `Option` / `Result`,
+        // a user enum (including a variant whose 128-bit field is followed by a
+        // 64-bit one, so the word CURSOR has to advance by two), and
+        // `checked_*`, whose `Option[Self]` is built inline via phis rather
+        // than through the ordinary pack path.
+        if let Some(out) = run_program(
+            "enum Box128 { W(i128), Pair(i128, i64), Nothing }\n\
+             fn main() {\n\
+             let a: Option[i128] = Some(1267650600228229401496703205376i128);\n\
+             match a { Some(x) => println(x), None => println(\"none-a\") }\n\
+             let b: Option[i128] = Some(-1267650600228229401496703205376i128);\n\
+             match b { Some(x) => println(x), None => println(\"none-b\") }\n\
+             let c: Option[u128] = Some(170141183460469231731687303715884105727u128);\n\
+             match c { Some(x) => println(x), None => println(\"none-c\") }\n\
+             let d: Result[i128, String] = Ok(170141183460469231731687303715884105727i128);\n\
+             match d { Ok(x) => println(x), Err(e) => println(e) }\n\
+             let f: Box128 = Box128.W(-170141183460469231731687303715884105727i128);\n\
+             match f {\n\
+             Box128.W(x) => println(x),\n\
+             Box128.Pair(p, q) => println(p),\n\
+             Box128.Nothing => println(\"nb\"),\n\
+             }\n\
+             let g: Box128 = Box128.Pair(1267650600228229401496703205376i128, 42i64);\n\
+             match g {\n\
+             Box128.W(x) => println(x),\n\
+             Box128.Pair(p, q) => { println(p) println(q) }\n\
+             Box128.Nothing => println(\"nb\"),\n\
+             }\n\
+             let h: Option[i128] = Some(1267650600228229401496703205376i128);\n\
+             match h { Some(x) => println(x + 1i128), None => println(\"none-h\") }\n\
+             let i: Option[i128] = None;\n\
+             match i { Some(x) => println(x), None => println(\"none-i\") }\n\
+             let mx: i128 = 170141183460469231731687303715884105727i128;\n\
+             match mx.checked_add(1i128) { Some(v) => println(v), None => println(\"ovf\") }\n\
+             let m: i128 = 1267650600228229401496703205376i128;\n\
+             match m.checked_mul(2i128) { Some(v) => println(v), None => println(\"ovf\") }\n\
+             let uu: u128 = 1267650600228229401496703205376u128;\n\
+             match uu.checked_mul(2u128) { Some(v) => println(v), None => println(\"ovf\") }\n\
+             }",
+        ) {
+            assert_eq!(
+                out,
+                "1267650600228229401496703205376\n\
+                 -1267650600228229401496703205376\n\
+                 170141183460469231731687303715884105727\n\
+                 170141183460469231731687303715884105727\n\
+                 -170141183460469231731687303715884105727\n\
+                 1267650600228229401496703205376\n\
+                 42\n\
+                 1267650600228229401496703205377\n\
+                 none-i\n\
+                 ovf\n\
+                 2535301200456458802993406410752\n\
+                 2535301200456458802993406410752\n"
+            );
+        }
+    }
+
+    #[test]
+    fn e2e_128bit_saturating_clamps_toward_the_result_sign() {
+        // `saturating_*` at 128 bits clamps toward the sign of the TRUE result
+        // (B-2026-08-19-19). Two independent bugs met here, one per backend:
+        // codegen computed the bounds as `((1u128 << (bits - 1)) - 1) as u64`,
+        // whose cast TRUNCATES — at 128 bits SMAX came out `u64::MAX` and SMIN
+        // came out `0`; the interpreter clamped by OPERATION (`sub` → MIN,
+        // else MAX), which sends an overflowing NEGATIVE product to `MAX`.
+        //
+        // The negative-product case is what separates the two rules, so it is
+        // first. The narrow widths follow because the codegen fix changed how
+        // the bounds are built at EVERY width, not just 128.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+             let neg: i128 = -1267650600228229401496703205376i128;\n\
+             println(neg.saturating_mul(1000000000000i128));\n\
+             let mx: i128 = 170141183460469231731687303715884105727i128;\n\
+             println(mx.saturating_add(1i128));\n\
+             println(neg.saturating_sub(mx));\n\
+             println((127i8).saturating_add(1i8));\n\
+             println((-128i8).saturating_mul(2i8));\n\
+             println((-2147483648i32).saturating_mul(3i32));\n\
+             println((250u8).saturating_add(20u8));\n\
+             println((3u8).saturating_sub(10u8));\n\
+             let um: u128 = 1267650600228229401496703205376u128;\n\
+             println(um.saturating_sub(1u128));\n\
+             }",
+        ) {
+            assert_eq!(
+                out,
+                "-170141183460469231731687303715884105728\n\
+                 170141183460469231731687303715884105727\n\
+                 -170141183460469231731687303715884105728\n\
+                 127\n\
+                 -128\n\
+                 -2147483648\n\
+                 255\n\
+                 0\n\
+                 1267650600228229401496703205375\n"
+            );
+        }
+    }
+
+    #[test]
     fn e2e_chained_width_sensitive_int_methods() {
         // CHAINED width-preserving int methods resolve their receiver width
         // through the receiver itself, not the span-keyed table
