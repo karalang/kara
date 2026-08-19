@@ -19,6 +19,69 @@ use super::value::narrow_to_i64;
 use super::value::{primitive_const_to_value, EnumData, IteratorSource, OrdValue, Value};
 
 impl<'a> super::Interpreter<'a> {
+    /// B-2026-08-19-17 (a) — make a BARE unit-variant reference agree with the
+    /// enum the typechecker picked for this exact expression.
+    ///
+    /// `register_items` binds a bare variant name in the env by plain
+    /// last-write-wins, so when two enums declare the same unit-variant name
+    /// the later declaration owns `env["A"]` for the whole program. The
+    /// typechecker does NOT resolve it that way: B-2026-08-14-10 replaced its
+    /// own nondeterministic `HashMap` scan (a measured coin flip on identical
+    /// bytes) with a two-tier sorted scan — user-declared enums before
+    /// stdlib/prelude, each sorted by name — plus `builtin_variant_owner`
+    /// pinning `Some`/`None`/`Ok`/`Err` to the builtin so a user enum cannot
+    /// hijack a bare `None`. Codegen follows the typechecker. The interpreter
+    /// was the one backend that never got that order, so `karac run` and
+    /// `karac build` could hand out different enums for the same bare name.
+    ///
+    /// Rather than reimplement the precedence here — two copies of a rule is
+    /// how the backends drifted apart in the first place — read the answer the
+    /// typechecker already recorded for this span and adopt it. Agreement is
+    /// then true by construction, the same channel B-2026-08-13-8 used to hand
+    /// codegen's winning impl to the interpreter.
+    ///
+    /// Silent (returns `v` unchanged) when the value is not a unit variant,
+    /// when `expr_types` has no entry for the span (it is populated sparsely),
+    /// or when the recorded enum already matches — so the overwhelmingly common
+    /// non-colliding case costs one map lookup and nothing else.
+    fn retag_bare_unit_variant(&self, v: Value, span: &crate::token::Span) -> Value {
+        let Value::EnumVariant {
+            enum_name,
+            variant,
+            data: EnumData::Unit,
+        } = &v
+        else {
+            return v;
+        };
+        let Some(recorded) = self
+            .typecheck_result
+            .expr_types
+            .get(&SpanKey::from_span(span))
+        else {
+            return v;
+        };
+        let want = match recorded {
+            crate::typechecker::types::Type::Named { name, .. } => name,
+            _ => return v,
+        };
+        if want == enum_name {
+            return v;
+        }
+        // Prefer the qualified binding when one exists (every user enum has one
+        // since B-2026-08-19-16) — it is the exact value the enum registered,
+        // not a reconstruction. The prelude's `Option` binds only the bare
+        // `None`, so fall back to retagging in place; a unit variant carries no
+        // payload, so the enum name is the whole of the difference.
+        if let Some(qualified) = self.env.get(&format!("{}.{}", want, variant)) {
+            return qualified;
+        }
+        Value::EnumVariant {
+            enum_name: want.clone(),
+            variant: variant.clone(),
+            data: EnumData::Unit,
+        }
+    }
+
     /// B-2026-08-08-14 — upgrade a `weak` CONTAINER ELEMENT wherever a read
     /// surfaces one, so what user code observes is always an `Option[T]`,
     /// exactly as for a `weak` FIELD.
@@ -196,38 +259,42 @@ impl<'a> super::Interpreter<'a> {
                 self.eval_unary(op, val, &expr.span)
             }
 
-            ExprKind::Identifier(name) => self.env.get(name).unwrap_or_else(|| {
-                // A bare identifier that names a struct / enum / union, used in
-                // value position, is a `Type` pseudovalue (comptime reflection,
-                // substrate 2). It has no env binding — synthesize the
-                // `Value::TypeVal` so `MyType.fields()` etc. dispatch. The
-                // typechecker guarantees this only happens at comptime
-                // (`E_TYPE_VALUE_AT_RUNTIME` otherwise).
-                if self.is_known_type_name(name) {
-                    return Value::TypeVal(name.clone());
-                }
-                // B-2026-08-02-6 — was `unreachable!`, which panicked the
-                // interpreter with a Rust backtrace whose own message blamed
-                // the resolver. That message was correct (a builtin function
-                // name outside call position resolved fine and arrived here
-                // unbound; the resolver now rejects those), but the OUTCOME
-                // violated the never-panic rule, and this arm stays reachable
-                // from any future resolver hole of the same kind. Degrade to a
-                // structured runtime error: the user gets a span and a
-                // diagnostic, `--output=json` consumers can see it, and the
-                // "please report" framing says plainly that reaching here is a
-                // compiler bug rather than the program's fault.
-                let span = expr.span;
-                let name = name.clone();
-                self.record_runtime_error(
-                    format!(
-                        "internal: name '{name}' resolved but has no binding at run time. \
+            ExprKind::Identifier(name) => self
+                .env
+                .get(name)
+                .map(|v| self.retag_bare_unit_variant(v, &expr.span))
+                .unwrap_or_else(|| {
+                    // A bare identifier that names a struct / enum / union, used in
+                    // value position, is a `Type` pseudovalue (comptime reflection,
+                    // substrate 2). It has no env binding — synthesize the
+                    // `Value::TypeVal` so `MyType.fields()` etc. dispatch. The
+                    // typechecker guarantees this only happens at comptime
+                    // (`E_TYPE_VALUE_AT_RUNTIME` otherwise).
+                    if self.is_known_type_name(name) {
+                        return Value::TypeVal(name.clone());
+                    }
+                    // B-2026-08-02-6 — was `unreachable!`, which panicked the
+                    // interpreter with a Rust backtrace whose own message blamed
+                    // the resolver. That message was correct (a builtin function
+                    // name outside call position resolved fine and arrived here
+                    // unbound; the resolver now rejects those), but the OUTCOME
+                    // violated the never-panic rule, and this arm stays reachable
+                    // from any future resolver hole of the same kind. Degrade to a
+                    // structured runtime error: the user gets a span and a
+                    // diagnostic, `--output=json` consumers can see it, and the
+                    // "please report" framing says plainly that reaching here is a
+                    // compiler bug rather than the program's fault.
+                    let span = expr.span;
+                    let name = name.clone();
+                    self.record_runtime_error(
+                        format!(
+                            "internal: name '{name}' resolved but has no binding at run time. \
                          This is a compiler bug (the resolver should have rejected or bound \
                          it) — please report it with the source."
-                    ),
-                    &span,
-                )
-            }),
+                        ),
+                        &span,
+                    )
+                }),
 
             ExprKind::Path { segments, .. } => {
                 let full = segments.join(".");

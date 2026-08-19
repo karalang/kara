@@ -35072,3 +35072,50 @@ fn bare_unit_variant_still_resolves_when_unambiguous() {
         "42\n1\n"
     );
 }
+
+// ── B-2026-08-19-17 (a): interpreter follows the typechecker's variant pick ──
+
+#[test]
+fn bare_variant_resolution_matches_the_typechecker_not_declaration_order() {
+    // B-2026-08-19-17 (a). `register_items` binds a bare variant name by plain
+    // last-write-wins, so the LATER-declared enum owned `env["A"]`. The
+    // typechecker instead uses B-2026-08-14-10's two-tier sorted scan, and
+    // codegen follows the typechecker — so `karac run` and `karac build` handed
+    // out different enums for the same bare name (measured: build printed 1,
+    // run printed 2).
+    //
+    // Here `Alpha` is declared SECOND but wins the typechecker's sort, so
+    // last-write-wins and the real rule disagree. The interpreter must follow
+    // the typechecker.
+    //
+    // The program is only reachable because a user-vs-user collision is
+    // rejected in EXPRESSION position (B-2026-08-19-17 (b)) — this one resolves
+    // through a pattern, which stays scrutinee-typed and legal.
+    assert_eq!(
+        run("enum Zebra { A, B }
+             enum Alpha { A, C }
+             fn main() {
+                 let z = Zebra.A;
+                 match z { A => println(1), B => println(2), }
+                 let a = Alpha.A;
+                 match a { A => println(3), C => println(4), }
+             }"),
+        "1\n3\n"
+    );
+}
+
+#[test]
+fn user_enum_does_not_hijack_the_builtin_bare_none() {
+    // The typechecker pins `Some`/`None`/`Ok`/`Err` to their builtin owner so a
+    // user enum cannot capture a bare `None`. The interpreter's env had no such
+    // rule — the user enum registered after the prelude and simply overwrote
+    // `env["None"]`. Masked in most probes because a `match` arm compares only
+    // the VARIANT name, so a wrongly-tagged `Cache.None` still hits the `None`
+    // arm; the retag is what makes the value itself right.
+    assert_eq!(
+        run("enum Cache { None, Warm }
+             fn take(o: Option[i64]) -> i64 { match o { Some(v) => v, None => -1, } }
+             fn main() { println(take(None)); println(take(Some(9))); }"),
+        "-1\n9\n"
+    );
+}
