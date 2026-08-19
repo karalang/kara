@@ -202,6 +202,51 @@ fn a_128bit_enum_payload_type_checks() {
     }
 }
 
+/// The upper half of `u128` is writable as a LITERAL, and `i128::MIN` too
+/// (B-2026-08-19-23). Both sit past `i128::MAX`, which is where the parser's
+/// positive-magnitude path runs out of room:
+///
+///   - a `u128` magnitude in `(i128::MAX, u128::MAX]` now takes the wrapped bit
+///     pattern, the same encoding the `(i64::MAX, u64::MAX]` band has always
+///     used one width down, and the range check accepts it on the strength of
+///     the lexer having parsed it as a `u128` (no `(min, max)` pair of `i128`
+///     can express `u128`'s range, so it cannot be checked the usual way);
+///   - `i128::MIN`'s magnitude `2^127` exceeds `i128::MAX`, so `Neg(Integer(n))`
+///     cannot represent it and the unary minus is folded into the literal —
+///     the same trick `i64::MIN` has needed since B-2026-08-06-13.
+#[test]
+fn the_128bit_literal_boundaries_are_writable() {
+    for src in [
+        "fn main() { let m: u128 = 340282366920938463463374607431768211455u128; }",
+        "fn main() { let m: u128 = 170141183460469231731687303715884105728u128; }",
+        "fn main() { let n: i128 = -170141183460469231731687303715884105728i128; }",
+        "fn main() { let n: i128 = 170141183460469231731687303715884105727i128; }",
+    ] {
+        typecheck_ok(src);
+    }
+}
+
+/// The wrapped `u128` encoding must not become a hole through which a GENUINE
+/// negative reaches an unsigned type. A wrapped literal is negative in the
+/// carrier and legal; `-1` is negative and is not — and the two are told apart
+/// by the suffix, which only the wrapped form carries.
+#[test]
+fn a_negative_still_cannot_initialize_u128() {
+    for src in [
+        "fn main() { let x: u128 = -1; }",
+        "fn main() { let x: u128 = -1i128; }",
+        "fn main() { let x: u128 = -5u128; }",
+    ] {
+        let errs = typecheck_errors(src);
+        assert!(
+            errs.iter()
+                .any(|e| e.message.contains("negative integer literal")),
+            "expected the negative-into-unsigned rejection for {src:?}; got: {:?}",
+            errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+}
+
 /// Every width that DOES have a real carrier stays accepted — the guard against
 /// a rejection that over-reaches into the widths this is not about.
 #[test]

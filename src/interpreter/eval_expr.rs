@@ -247,8 +247,9 @@ impl<'a> super::Interpreter<'a> {
                 // (B-2026-07-04-8). Arithmetic / shift are result-typed u64 and
                 // autodetect on their own, but OR-ing the operand hint in is
                 // harmless and covers spans the result table missed.
-                let unsigned_hint = self.span_type_is_unsigned64(&left.span)
-                    || self.span_type_is_unsigned64(&right.span);
+                let unsigned_hint = self
+                    .span_unsigned_int_width(&left.span)
+                    .or_else(|| self.span_unsigned_int_width(&right.span));
                 self.eval_binary(op, l, r, &expr.span, unsigned_hint)
             }
             ExprKind::Unary { op, operand } => {

@@ -3295,7 +3295,7 @@ impl<'a> super::Interpreter<'a> {
                 // on `u64` / `usize`): the target's span carries the u64 type, so
                 // thread it as the hint (`stmt.span`'s recorded type may be Unit).
                 // B-2026-07-04-8.
-                let unsigned_hint = self.span_type_is_unsigned64(&target.span);
+                let unsigned_hint = self.span_unsigned_int_width(&target.span);
                 let result = self.eval_binary(&bin_op, current, rhs, &stmt.span, unsigned_hint);
                 // Route through `assign_to_place` so compound assignment works
                 // on field / index / nested targets (`o.count += 1`,
@@ -3529,8 +3529,9 @@ impl<'a> super::Interpreter<'a> {
                 // Operand-derived u64 hint (B-2026-07-04-8): comparisons lowered
                 // to `u64.lt(a, b)` type this call's result as `bool`, so recover
                 // operand signedness from the argument spans.
-                let unsigned_hint = self.span_type_is_unsigned64(&args[0].value.span)
-                    || self.span_type_is_unsigned64(&args[1].value.span);
+                let unsigned_hint = self
+                    .span_unsigned_int_width(&args[0].value.span)
+                    .or_else(|| self.span_unsigned_int_width(&args[1].value.span));
                 return Some(self.eval_binary(&op, lhs, rhs, span, unsigned_hint));
             }
         }

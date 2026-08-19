@@ -739,7 +739,7 @@ impl<'a> super::Interpreter<'a> {
                     while let Some(item) = self.iterator_step(&mut iter_val) {
                         acc = Some(match acc {
                             None => item,
-                            Some(a) => self.eval_binary(&op, a, item, span, false),
+                            Some(a) => self.eval_binary(&op, a, item, span, None),
                         });
                     }
                     let empty_default = if method == "product" { 1 } else { 0 };
@@ -780,7 +780,7 @@ impl<'a> super::Interpreter<'a> {
                             None => item,
                             Some(b) => {
                                 let wins =
-                                    self.eval_binary(&op, item.clone(), b.clone(), span, false);
+                                    self.eval_binary(&op, item.clone(), b.clone(), span, None);
                                 if matches!(wins, Value::Bool(true)) {
                                     item
                                 } else {

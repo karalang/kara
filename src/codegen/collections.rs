@@ -775,11 +775,14 @@ impl<'ctx> super::Codegen<'ctx> {
             TypeKind::Path(p) => p.segments.last().cloned().unwrap_or_default(),
             _ => String::new(),
         };
-        let is_uint = matches!(elem_name.as_str(), "u8" | "u16" | "u32" | "u64" | "usize");
+        let is_uint = matches!(
+            elem_name.as_str(),
+            "u8" | "u16" | "u32" | "u64" | "u128" | "usize"
+        );
         let is_int = is_uint
             || matches!(
                 elem_name.as_str(),
-                "i8" | "i16" | "i32" | "i64" | "isize" | "char" | "bool"
+                "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "char" | "bool"
             );
         // `"str"` is the typechecker-internal spelling of `String`
         // (`Type::Str` → `type_to_type_expr` → `path("str")`, the same aliasing
@@ -980,11 +983,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 TypeKind::Path(p) => p.segments.last().cloned().unwrap_or_default(),
                 _ => String::new(),
             };
-            let f_uint = matches!(fname.as_str(), "u8" | "u16" | "u32" | "u64" | "usize");
+            let f_uint = matches!(
+                fname.as_str(),
+                "u8" | "u16" | "u32" | "u64" | "u128" | "usize"
+            );
             let f_int = f_uint
                 || matches!(
                     fname.as_str(),
-                    "i8" | "i16" | "i32" | "i64" | "isize" | "char" | "bool"
+                    "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "char" | "bool"
                 );
             if f_int {
                 kinds.push(FieldCmp::Int { unsigned: f_uint });

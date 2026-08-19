@@ -373,8 +373,9 @@ impl<'ctx> super::Codegen<'ctx> {
         elem_name: &str,
     ) -> Result<IntValue<'ctx>, String> {
         let i64_t = self.context.i64_type();
-        let is_uint = matches!(elem_name, "u8" | "u16" | "u32" | "u64" | "usize");
-        let is_int = is_uint || matches!(elem_name, "i8" | "i16" | "i32" | "i64" | "isize");
+        let is_uint = matches!(elem_name, "u8" | "u16" | "u32" | "u64" | "u128" | "usize");
+        let is_int =
+            is_uint || matches!(elem_name, "i8" | "i16" | "i32" | "i64" | "i128" | "isize");
         if is_int {
             let (BasicValueEnum::IntValue(a), BasicValueEnum::IntValue(b)) = (elem_val, needle_val)
             else {
@@ -6155,7 +6156,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // the interpreter's `Vec[uN].sort()`.
                     let unsigned = matches!(
                         self.vec_elem_type_name(var_name).as_deref(),
-                        Some("u8" | "u16" | "u32" | "u64" | "usize" | "uint")
+                        Some("u8" | "u16" | "u32" | "u64" | "u128" | "usize" | "uint")
                     );
                     self.emit_default_sort_thunk(elem_ty, unsigned)
                 } else if self.vec_elem_type_name(var_name).as_deref() == Some("String") {

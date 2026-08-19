@@ -666,6 +666,20 @@ impl super::Parser {
                             kind: ExprKind::Integer(i64::MIN.into(), sfx),
                         });
                     }
+                    // `i128::MIN` is the same shape one width up: its magnitude
+                    // `2^127` is one past `i128::MAX`, so `Neg(Integer(n))`
+                    // cannot represent it either and the positive half is
+                    // rejected before the minus is ever seen. Gated on the
+                    // `i128` suffix so the identical magnitude under `u128` —
+                    // where it is an ordinary positive value — is left to the
+                    // literal arm (B-2026-08-19-23).
+                    if m == (1u128 << 127) && matches!(sfx, Some(crate::token::IntSuffix::I128)) {
+                        self.advance();
+                        return Some(Expr {
+                            span: self.span_from(&start),
+                            kind: ExprKind::Integer(i128::MIN, sfx),
+                        });
+                    }
                 }
                 let operand = self.parse_expr_bp(24)?; // Unary has high precedence
                 Some(Expr {
@@ -838,7 +852,6 @@ impl super::Parser {
                 })
             }
             // A magnitude past i64::MAX that reached here WITHOUT a unary
-            // A magnitude past i64::MAX that reached here WITHOUT a unary
             // minus in front of it (the `Token::Minus` prefix arm folds that
             // case). B-2026-08-06-13.
             //
@@ -879,6 +892,20 @@ impl super::Parser {
                             kind: ExprKind::Integer(v, sfx),
                         });
                     }
+                    // Past `i128::MAX` but inside `u128` — the top half of the
+                    // range, `(i128::MAX, u128::MAX]`. The positive form above
+                    // has run out of room, so this band takes the SAME wrapped
+                    // bit pattern the 64-bit unsigned band takes below, for the
+                    // same reason: the carrier is signed and the value is not.
+                    // `u128::MAX` becomes `-1`, which is exactly how it is
+                    // represented at runtime, and the unsigned consumers read
+                    // the bits back at width 128 (B-2026-08-19-23).
+                    if matches!(sfx, Some(crate::token::IntSuffix::U128)) {
+                        return Some(Expr {
+                            span: self.span_from(&start),
+                            kind: ExprKind::Integer(m as i128, sfx),
+                        });
+                    }
                 }
                 if matches!(
                     sfx,
@@ -893,15 +920,28 @@ impl super::Parser {
                     });
                 }
                 let span = self.span_from(&start);
-                self.error_at(
-                    &format!(
+                // A 128-bit-suffixed magnitude that reached here is out of
+                // range for `i128`, not for `i64` — the generic message's
+                // "add a u64 suffix" advice is flatly wrong for it, and the
+                // only value in this band is `i128::MIN`'s magnitude, whose
+                // repair is the unary minus the `Token::Minus` arm folds.
+                let msg = if matches!(sfx, Some(crate::token::IntSuffix::I128)) {
+                    format!(
+                        "integer literal `{m}` is out of range for i128 \
+                         (max 170141183460469231731687303715884105727); write \
+                         `-170141183460469231731687303715884105728i128` for the \
+                         negative bound, or use the `u128` suffix for a value in \
+                         the upper half of u128"
+                    )
+                } else {
+                    format!(
                         "integer literal `{m}` is out of range for i64 \
                          (max 9223372036854775807); write `-9223372036854775808` \
                          for the negative bound, or add an unsigned suffix \
                          (`{m}u64`) for a value in the upper half of u64"
-                    ),
-                    span,
-                );
+                    )
+                };
+                self.error_at(&msg, span);
                 None
             }
             &Token::Float(n, sfx) => {

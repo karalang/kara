@@ -327,7 +327,7 @@ impl<'a> super::TypeChecker<'a> {
                 Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
                 other => other,
             };
-            if !self.check_int_literal_fits(value, ctx, &expr.span) {
+            if !self.check_int_literal_fits(value, ctx, &expr.span, None) {
                 self.record_expr_type(&expr.span, &Type::Error);
                 return Type::Error;
             }
@@ -344,12 +344,12 @@ impl<'a> super::TypeChecker<'a> {
         // require `as` at all is a separate design decision (see the ledger
         // entry). Returning early keeps this the single diagnostic (the
         // synthesis-time own-suffix check is skipped for the error case).
-        if let Some(value) = Self::suffixed_int_literal_value(expr) {
+        if let Some((value, sfx)) = Self::suffixed_int_literal_value(expr) {
             let ctx = match expected {
                 Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
                 other => other,
             };
-            if !self.check_int_literal_fits(value, ctx, &expr.span) {
+            if !self.check_int_literal_fits(value, ctx, &expr.span, sfx) {
                 self.record_expr_type(&expr.span, &Type::Error);
                 return Type::Error;
             }
@@ -1411,7 +1411,7 @@ impl<'a> super::TypeChecker<'a> {
                     let mut all_fit = true;
                     for e in elem_exprs {
                         if let Some(v) = Self::unsuffixed_int_literal_value(e) {
-                            all_fit &= self.check_int_literal_fits(v, elem, &e.span);
+                            all_fit &= self.check_int_literal_fits(v, elem, &e.span, None);
                         }
                         // B-2026-08-14-12 — and the same argument one step
                         // further: a literal element is range-checked above,
@@ -3311,7 +3311,15 @@ impl<'a> super::TypeChecker<'a> {
             Type::UInt(UIntSize::U16) => (0, u16::MAX as i128),
             Type::UInt(UIntSize::U32) => (0, u32::MAX as i128),
             Type::UInt(UIntSize::U64) => (0, u64::MAX as i128),
-            // A literal is an i64: only its sign can violate u128.
+            // `u128` is the one width no `(min, max)` pair of `i128` can
+            // express — its top half lives past `i128::MAX`. The ceiling here
+            // is therefore only the bound for a literal that is NOT `u128`-
+            // suffixed; a suffixed one is validated by `check_int_literal_fits`
+            // before this range is consulted, because the lexer already proved
+            // the magnitude fits `u128` and the parser stored the top half as a
+            // wrapped (negative) bit pattern this comparison would misread
+            // (B-2026-08-19-23). What is left for this row to catch is a
+            // genuine negative, which is what `min` does.
             Type::UInt(UIntSize::U128) => (0, i128::MAX),
             _ => return None,
         })
@@ -3371,7 +3379,32 @@ impl<'a> super::TypeChecker<'a> {
     /// surfaces DIVERGED (interp keeps the wide value, codegen truncates at
     /// its honest width): `let x: u8 = -1` printed -1 vs
     /// 18446744073709551615, `f(70000)` against `i16` printed 70000 vs 4464.
-    pub(super) fn check_int_literal_fits(&mut self, value: i128, ty: &Type, span: &Span) -> bool {
+    ///
+    /// `sfx` is the literal's OWN suffix when it has one (`None` for a bare
+    /// literal, and `None` for a negated one — a unary minus makes the value
+    /// genuinely negative regardless of what the operand was spelled). It is
+    /// needed for exactly one width: `u128` cannot be range-checked as an
+    /// `i128` pair, so a `u128`-suffixed literal is accepted on the strength of
+    /// the lexer having parsed its magnitude as a `u128`, while everything else
+    /// still has to clear `min` (B-2026-08-19-23).
+    pub(super) fn check_int_literal_fits(
+        &mut self,
+        value: i128,
+        ty: &Type,
+        span: &Span,
+        sfx: Option<crate::token::IntSuffix>,
+    ) -> bool {
+        // A `u128`-suffixed literal is valid by construction: the lexer parsed
+        // the magnitude with `u128::from_str_radix`, so it fits by definition,
+        // and the top half rides as a wrapped NEGATIVE bit pattern that the
+        // signed comparison below would reject as "negative literal cannot
+        // initialize unsigned type". The suffix also pins the literal's type,
+        // so the contextual check this shares a body with is vacuous for it.
+        if matches!(ty, Type::UInt(UIntSize::U128))
+            && matches!(sfx, Some(crate::token::IntSuffix::U128))
+        {
+            return true;
+        }
         let Some((min, max)) = Self::int_literal_range(ty) else {
             return true;
         };
@@ -3423,13 +3456,13 @@ impl<'a> super::TypeChecker<'a> {
     /// `let x: u64 = -5i64` (a negative into unsigned) and `let x: u32 =
     /// 5_000_000_000i64` (out of range) silently coerced — the exact holes the
     /// unsuffixed check at `check_expr` closes for bare literals.
-    fn suffixed_int_literal_value(expr: &Expr) -> Option<i128> {
+    fn suffixed_int_literal_value(expr: &Expr) -> Option<(i128, Option<crate::token::IntSuffix>)> {
         match &expr.kind {
             // B-2026-08-06-16: read through `literal_as_i128` rather than a
             // bare `as i128`, so an unsigned-suffixed literal carrying a
             // wrapped bit pattern (the upper half of u64) widens back to its
             // unsigned value instead of sign-extending to a negative one.
-            ExprKind::Integer(n, sfx @ Some(_)) => Some(Self::literal_as_i128(*n, *sfx)),
+            ExprKind::Integer(n, sfx @ Some(_)) => Some((Self::literal_as_i128(*n, *sfx), *sfx)),
             ExprKind::Unary {
                 op: UnaryOp::Neg,
                 operand,
@@ -3437,8 +3470,10 @@ impl<'a> super::TypeChecker<'a> {
                 // The negated form keeps the signed reading: the operand of a
                 // unary minus is a positive magnitude by construction, so there
                 // is no bit pattern to recover, and `-5u64` must still report
-                // as negative.
-                ExprKind::Integer(n, Some(_)) => Some(-*n),
+                // as negative. The suffix is deliberately dropped: `-1u128` is
+                // a genuine negative, not a wrapped pattern, and must clear the
+                // unsigned `min` like any other.
+                ExprKind::Integer(n, Some(_)) => Some((-*n, None)),
                 _ => None,
             },
             _ => None,
@@ -3692,7 +3727,12 @@ impl<'a> super::TypeChecker<'a> {
                     .neg_validated_suffixed_literal
                     .is_some_and(|k| k == (expr.span.offset, expr.span.length));
                 if sfx.is_some() && !neg_validated {
-                    self.check_int_literal_fits(Self::literal_as_i128(*n, *sfx), &ty, &expr.span);
+                    self.check_int_literal_fits(
+                        Self::literal_as_i128(*n, *sfx),
+                        &ty,
+                        &expr.span,
+                        *sfx,
+                    );
                 }
                 ty
             }
@@ -3864,7 +3904,7 @@ impl<'a> super::TypeChecker<'a> {
                 if matches!(op, UnaryOp::Neg) {
                     if let ExprKind::Integer(n, Some(sfx)) = &operand.kind {
                         let ty = self.type_from_int_suffix(Some(*sfx), operand.span);
-                        self.check_int_literal_fits(-*n, &ty, &expr.span);
+                        self.check_int_literal_fits(-*n, &ty, &expr.span, None);
                         // The negated value ruled; suppress the Integer arm's
                         // positive-operand check for this operand (`-128i8` —
                         // bare `128i8` is out of range, the negated form is

@@ -33,7 +33,7 @@ use crate::token::Span;
 // both are shared with `Tensor` in `super::helpers`.
 use super::helpers::minmax_value_reduce;
 use super::helpers::value_as_f64 as val_f64;
-use super::helpers::{value_compare, value_compare_u64};
+use super::helpers::{value_compare, value_compare_u128, value_compare_u64};
 
 /// Unwrap a scalar [`ReduceOutcome`] (the float-result reductions) into a
 /// `Value::Float`.
@@ -329,14 +329,16 @@ impl<'a> super::Interpreter<'a> {
         let Value::Column { data, valid } = obj else {
             return None;
         };
-        // Unsigned-64 element order for the ordering methods below
-        // (B-2026-07-04-8): a `u64` / `usize` element sorts by magnitude, so a
+        // Unsigned element order for the ordering methods below, at the
+        // element's own width (B-2026-07-04-8, B-2026-08-19-23): a `u64` / `usize` element sorts by magnitude, so a
         // value ≥ 2⁶³ orders after the positives instead of first as a negative.
         let ord_cmp: fn(&Value, &Value) -> std::cmp::Ordering =
-            if self.span_type_is_unsigned64(args_close_span) {
-                value_compare_u64
-            } else {
-                value_compare
+            match self.span_unsigned_int_width(args_close_span) {
+                Some(64) => value_compare_u64,
+                // Same one width up — a `u128` element past `i128::MAX` is a
+                // negative carrier value and would sort first (B-2026-08-19-23).
+                Some(128) => value_compare_u128,
+                _ => value_compare,
             };
         match method {
             "push" => {
@@ -504,7 +506,7 @@ impl<'a> super::Interpreter<'a> {
                 if self.pending_cf.is_some() {
                     return Some(Value::Unit);
                 }
-                Some(self.eval_binary(&BinOp::Sub, mx, mn, span, false))
+                Some(self.eval_binary(&BinOp::Sub, mx, mn, span, None))
             }
             // General left-fold over the valid slots (nulls skipped, in
             // order): thread `init` through `f(acc, elem)`. An empty /
@@ -769,7 +771,7 @@ impl<'a> super::Interpreter<'a> {
             "sum" => {
                 let mut acc = vals[0].clone();
                 for x in vals.into_iter().skip(1) {
-                    acc = self.eval_binary(&BinOp::Add, acc, x, span, false);
+                    acc = self.eval_binary(&BinOp::Add, acc, x, span, None);
                     if self.pending_cf.is_some() {
                         return Value::Unit;
                     }
@@ -779,7 +781,7 @@ impl<'a> super::Interpreter<'a> {
             "prod" => {
                 let mut acc = vals[0].clone();
                 for x in vals.into_iter().skip(1) {
-                    acc = self.eval_binary(&BinOp::Mul, acc, x, span, false);
+                    acc = self.eval_binary(&BinOp::Mul, acc, x, span, None);
                     if self.pending_cf.is_some() {
                         return Value::Unit;
                     }

@@ -4028,11 +4028,22 @@ impl<'ctx> super::Codegen<'ctx> {
                         .unwrap()
                         .into())
                 } else {
-                    Ok(self
+                    // WIDER than a word: the pack side split the value across
+                    // two little-endian words (`coerce_to_payload_words`), so
+                    // rejoin them. Zero-extending `w0` alone kept the LOW half
+                    // — `println(opt)` on an `Option[i128]` holding 2^100
+                    // rendered `Some(0)`, since that value's low word is zero.
+                    // Symmetric with the pack split and with
+                    // `reconstruct_payload_value`'s match-arm rejoin, which is
+                    // the other consumer of the same word pair
+                    // (B-2026-08-19-23).
+                    let lo = self.builder.build_int_z_extend(w0, it, "or.pl.lo").unwrap();
+                    let hi = self.builder.build_int_z_extend(w1, it, "or.pl.hi").unwrap();
+                    let sh = self
                         .builder
-                        .build_int_z_extend(w0, it, "or.pl.zx")
-                        .unwrap()
-                        .into())
+                        .build_left_shift(hi, it.const_int(64, false), "or.pl.shl")
+                        .unwrap();
+                    Ok(self.builder.build_or(lo, sh, "or.pl.join").unwrap().into())
                 }
             }
             BasicTypeEnum::FloatType(ft) => {

@@ -168,6 +168,25 @@ impl<'ctx> super::Codegen<'ctx> {
                 let v64 = self.builder.build_int_z_extend(v, i64_t, "v64").unwrap();
                 self.disp_append_snprintf(acc, "%llu", v64.into());
             }
+            // The 128-bit widths cannot ride the `%lld` / `%llu` arms above:
+            // both extend to i64 first, which truncates. They go through the
+            // runtime's own 128-bit formatter — the same one the scalar
+            // `println` path uses, so a `u128` renders identically whether it
+            // is printed directly or reached through a `Vec` / `Option`.
+            //
+            // Without an arm here `emit_display_fn_for_type` fell to its
+            // catch-all and PANICKED ("type_name 'u128' not yet supported"), so
+            // `println(v)` on a `Vec[i128]` aborted the compiler rather than
+            // compiling (B-2026-08-19-23).
+            "i128" | "u128" => {
+                let v = self
+                    .builder
+                    .build_load(ty, val_ptr, "v")
+                    .unwrap()
+                    .into_int_value();
+                let (buf_ptr, len) = self.format_i128_to_stack_buf(v, type_name == "u128");
+                self.emit_string_append_raw(acc, buf_ptr, len);
+            }
             "f32" | "f64" => {
                 // Render with Rust's shortest-round-trip `{}` (via the runtime
                 // formatter) so a struct's `Display` prints floats identically
@@ -1102,6 +1121,16 @@ impl<'ctx> super::Codegen<'ctx> {
                         | "u32"
                         | "u64"
                         | "usize"
+                        // The 128-bit widths are inline-displayable like any
+                        // other scalar — they occupy TWO payload words rather
+                        // than one, which the word rejoin in
+                        // `rebuild_value_from_payload_words` handles. Absent
+                        // here, `println(o)` on an `Option[i128]` fell through
+                        // to the struct-argument error path and reported
+                        // "bind a struct literal to a `let` first" about a
+                        // plain variable (B-2026-08-19-23).
+                        | "i128"
+                        | "u128"
                         | "f32"
                         | "f64"
                         | "bool"

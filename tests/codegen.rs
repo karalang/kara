@@ -21355,6 +21355,198 @@ fn main() {
     }
 
     #[test]
+    fn e2e_shift_runs_at_the_values_width_not_the_amounts() {
+        // B-2026-08-19-26 — a SILENT MISCOMPILE on ordinary 64-bit code, found
+        // while measuring 128-bit shifts.
+        //
+        // `compile_binop_typed` harmonizes a mixed-width int pair by truncating
+        // the WIDER side, on the reasoning that such a pair is always
+        // "narrow-typed operand x default-i64 literal". A shift is not that
+        // shape: its amount is a `u32` whatever the value's width is, so the
+        // rule truncated the VALUE to 32 bits. `let a: i64 = 2^40; a << 1u32`
+        // compiled to `shl i32 0, 1` and printed 0, while `karac run` printed
+        // 2199023255552 — no panic, no diagnostic, just a wrong answer. With an
+        // amount >= 32 it surfaced instead as a bogus "shift amount out of
+        // range" panic, because the width check then compared against 32.
+        //
+        // The SAME asymmetry cost the shift its signedness, one layer up: the
+        // raw-`Binary` path asked "is either operand unsigned?", which is right
+        // for `+`/`*`/`<` and wrong for a shift, so any shift by a `u32` amount
+        // became a LOGICAL shift. `(0i32 - 8i32) >> 1u32` compiled to
+        // 2147483644 against the interpreter's -4. The last two rows cover it.
+        //
+        // Every other value below is chosen so a 32-bit truncation is visible:
+        // each is a power of two at or above 2^40, whose low 32 bits are zero.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+             let a: i64 = 1099511627776i64;\n\
+             println(a << 1u32);\n\
+             println(a >> 1u32);\n\
+             let n: u32 = 1u32;\n\
+             println(a << n);\n\
+             let b: i64 = 1i64;\n\
+             println(b << 40u32);\n\
+             let c: u64 = 18446744073709551615u64;\n\
+             println(c >> 32u32);\n\
+             let d: i64 = 0i64 - 8i64;\n\
+             println(d >> 1u32);\n\
+             let e: i32 = 0i32 - 8i32;\n\
+             println(e >> 1u32);\n\
+             }",
+        ) {
+            assert_eq!(
+                out,
+                "2199023255552\n\
+                 549755813888\n\
+                 2199023255552\n\
+                 1099511627776\n\
+                 4294967295\n\
+                 -4\n\
+                 -4\n"
+            );
+        }
+    }
+
+    #[test]
+    fn e2e_128bit_shift_amounts_reach_the_full_width() {
+        // A 128-bit shift may move by up to 127 (B-2026-08-19-23). The
+        // interpreter's `span_int_width` had no 128-bit arms, so it answered
+        // "signed 64" and rejected any amount >= 64 as out of range; codegen
+        // rejected the same shifts for the separate reason above. `1i128 << 100`
+        // is unrepresentable in 64 bits, so a 64-bit answer cannot be right by
+        // accident.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+             let a: i128 = 1i128;\n\
+             println(a << 100u32);\n\
+             println(a << 127u32);\n\
+             let b: i128 = 1267650600228229401496703205376i128;\n\
+             println(b >> 100u32);\n\
+             let m: u128 = 340282366920938463463374607431768211455u128;\n\
+             println(m >> 100u32);\n\
+             println(m >> 127u32);\n\
+             }",
+        ) {
+            assert_eq!(
+                out,
+                "1267650600228229401496703205376\n\
+                 -170141183460469231731687303715884105728\n\
+                 1\n\
+                 268435455\n\
+                 1\n"
+            );
+        }
+    }
+
+    #[test]
+    fn e2e_upper_half_of_u128_end_to_end() {
+        // The top half of `u128` — every value past `i128::MAX`
+        // (B-2026-08-19-23). It was unwritable as a literal (the parser had no
+        // room for it in the positive-magnitude path) and, once reachable by
+        // arithmetic, printed with its signed reading under `karac run`.
+        //
+        // The literals here are all above `i128::MAX`, so a signed reading
+        // flips the SIGN rather than merely losing precision — `u128::MAX`
+        // reads as `-1`. The comparison and division rows are the ones that
+        // silently returned a wrong ANSWER rather than a wrong rendering.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+             let m: u128 = 340282366920938463463374607431768211455u128;\n\
+             let h: u128 = 200000000000000000000000000000000000000u128;\n\
+             println(m);\n\
+             println(f\"{m}\");\n\
+             println(h > 5u128);\n\
+             println(h < 5u128);\n\
+             println(m >= h);\n\
+             println(h / 3u128);\n\
+             println(h % 7u128);\n\
+             println(m / 2u128);\n\
+             println(h - 5u128);\n\
+             println(m.count_ones());\n\
+             println(m.wrapping_add(1u128));\n\
+             println(m.saturating_add(1u128));\n\
+             let o: Option[u128] = Some(m);\n\
+             match o { Some(v) => println(v), None => println(\"none\") }\n\
+             println(m as u64);\n\
+             let n: i128 = -170141183460469231731687303715884105728i128;\n\
+             println(n);\n\
+             }",
+        ) {
+            assert_eq!(
+                out,
+                "340282366920938463463374607431768211455\n\
+                 340282366920938463463374607431768211455\n\
+                 true\n\
+                 false\n\
+                 true\n\
+                 66666666666666666666666666666666666666\n\
+                 4\n\
+                 170141183460469231731687303715884105727\n\
+                 199999999999999999999999999999999999995\n\
+                 128\n\
+                 0\n\
+                 340282366920938463463374607431768211455\n\
+                 340282366920938463463374607431768211455\n\
+                 18446744073709551615\n\
+                 -170141183460469231731687303715884105728\n"
+            );
+        }
+    }
+
+    #[test]
+    fn e2e_128bit_display_inside_containers_and_payloads() {
+        // Rendering a 128-bit scalar reached through a `Vec` / `Option` /
+        // `Result` (B-2026-08-19-23). Three separate defects met here:
+        //
+        //   - `type_to_type_expr` had no 128-bit arms, so the payload's
+        //     `TypeExpr` came back `TypeKind::Error` and the display
+        //     registration skipped the variable — `println(o)` on an
+        //     `Option[i128]` was then refused with "bind a struct literal to a
+        //     `let` first", about a plain variable;
+        //   - `emit_display_fn_for_type` had no 128-bit arm and PANICKED the
+        //     compiler ("type_name 'u128' not yet supported") for `Vec[u128]`;
+        //   - `rebuild_value_from_payload_words` zero-extended word 0 for any
+        //     type wider than a word, keeping the LOW half — and 2^100's low
+        //     word is zero, so `Some(2^100)` would have rendered `Some(0)`.
+        //
+        // The `u64` rows are here because they share every one of those paths.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+             let a: Option[i128] = Some(1267650600228229401496703205376i128);\n\
+             println(a);\n\
+             let b: Option[i128] = None;\n\
+             println(b);\n\
+             let c: Result[i128, String] = Ok(-1267650600228229401496703205376i128);\n\
+             println(c);\n\
+             let d: Option[u128] = Some(340282366920938463463374607431768211455u128);\n\
+             println(d);\n\
+             let e: Option[u64] = Some(18446744073709551615u64);\n\
+             println(e);\n\
+             let mut v: Vec[i128] = vec![];\n\
+             v.push(1267650600228229401496703205376i128);\n\
+             v.push(0i128 - 1i128);\n\
+             println(v);\n\
+             let mut w: Vec[u128] = vec![];\n\
+             w.push(340282366920938463463374607431768211455u128);\n\
+             w.push(5u128);\n\
+             w.sort();\n\
+             println(w);\n\
+             }",
+        ) {
+            assert_eq!(
+                out,
+                "Some(1267650600228229401496703205376)\n\
+                 None\n\
+                 Ok(-1267650600228229401496703205376)\n\
+                 Some(340282366920938463463374607431768211455)\n\
+                 Some(18446744073709551615)\n\
+                 [1267650600228229401496703205376, -1]\n\
+                 [5, 340282366920938463463374607431768211455]\n"
+            );
+        }
+    }
+
+    #[test]
     fn e2e_chained_width_sensitive_int_methods() {
         // CHAINED width-preserving int methods resolve their receiver width
         // through the receiver itself, not the span-keyed table

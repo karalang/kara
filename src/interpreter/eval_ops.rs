@@ -312,13 +312,16 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
+    /// `unsigned_hint` is the WIDTH at which the operands are unsigned, or
+    /// `None`. See [`eval_binary_unrounded`]'s parameter doc for why a bool no
+    /// longer suffices.
     pub(crate) fn eval_binary(
         &mut self,
         op: &BinOp,
         left: Value,
         right: Value,
         span: &Span,
-        unsigned_hint: bool,
+        unsigned_hint: Option<u32>,
     ) -> Value {
         let v = self.eval_binary_unrounded(op, left, right, span, unsigned_hint);
         self.round_float_to_span_width(v, span)
@@ -330,13 +333,16 @@ impl<'a> super::Interpreter<'a> {
         left: Value,
         right: Value,
         span: &Span,
-        // Caller-supplied "operands are unsigned 64-bit" hint. Needed only
-        // for comparison operators, whose *result* type at `span` is `bool`
-        // — so `span_type_is_unsigned64(span)` can't recover the operand
-        // signedness the way it can for arithmetic (whose result type IS the
-        // u64 operand type). Arithmetic / shift callers pass `false` and let
-        // the span autodetect below do the work. B-2026-07-04-8.
-        unsigned_hint: bool,
+        // Caller-supplied "the operands are unsigned, at THIS width" hint.
+        // Needed only for comparison operators, whose *result* type at `span`
+        // is `bool` — so `span_unsigned_int_width(span)` can't recover the
+        // operand signedness the way it can for arithmetic (whose result type
+        // IS the unsigned operand type). Arithmetic / shift callers pass `None`
+        // and let the span autodetect below do the work. B-2026-07-04-8; the
+        // width replaced a bare bool in B-2026-08-19-23, when `u128` became a
+        // second width needing the same reinterpretation and a bool could no
+        // longer say which one was meant.
+        unsigned_hint: Option<u32>,
     ) -> Value {
         let left_variant = left.variant_name();
         let right_variant = right.variant_name();
@@ -348,14 +354,29 @@ impl<'a> super::Interpreter<'a> {
         // the add/sub/mul overflow boundary) so `karac run` matches codegen's
         // `u{div,rem}` / `ugt` / `lshr` / `uadd.with.overflow` lowering. u8..u32
         // fit i64 non-negatively (signed == unsigned), so only 64-bit needs it.
-        if unsigned_hint || self.span_type_is_unsigned64(span) {
-            if let (Value::Int(a), Value::Int(b)) = (&left, &right) {
-                if let Some(v) =
-                    self.eval_binary_u64(op, narrow_to_i64(*a), narrow_to_i64(*b), span)
-                {
-                    return v;
+        match unsigned_hint.or_else(|| self.span_unsigned_int_width(span)) {
+            Some(64) => {
+                if let (Value::Int(a), Value::Int(b)) = (&left, &right) {
+                    if let Some(v) =
+                        self.eval_binary_u64(op, narrow_to_i64(*a), narrow_to_i64(*b), span)
+                    {
+                        return v;
+                    }
                 }
             }
+            // `u128` is the same model one width up: the carrier is signed, so
+            // the top half of the range rides as a negative bit pattern and the
+            // operators that differ have to read it back as `u128`. Without
+            // this the signed arms answered `200e36 > 5` with `false` and
+            // trapped `200e36 / 3` as "integer overflow" (B-2026-08-19-23).
+            Some(128) => {
+                if let (Value::Int(a), Value::Int(b)) = (&left, &right) {
+                    if let Some(v) = self.eval_binary_u128(op, *a, *b, span) {
+                        return v;
+                    }
+                }
+            }
+            _ => {}
         }
         match (op, left, right) {
             // Element-wise SIMD arithmetic on `Vector[T, N]` (design.md
@@ -368,7 +389,7 @@ impl<'a> super::Interpreter<'a> {
                 let lanes: Vec<Value> = a
                     .into_iter()
                     .zip(b)
-                    .map(|(x, y)| self.eval_binary(op, x, y, span, false))
+                    .map(|(x, y)| self.eval_binary(op, x, y, span, None))
                     .collect();
                 Value::Vector(lanes)
             }
@@ -619,14 +640,14 @@ impl<'a> super::Interpreter<'a> {
             // Shifts run at the operand's DECLARED width and trap on an
             // out-of-range amount — design.md § 2142. B-2026-08-06-7.
             (BinOp::Shl, Value::Int(a), Value::Int(b)) => {
-                match self.shift_at_width(true, narrow_to_i64(a), narrow_to_i64(b), span) {
-                    Some(v) => Value::Int(v.into()),
+                match self.shift_at_width(true, a, b, span) {
+                    Some(v) => Value::Int(v),
                     None => self.record_runtime_error("shift amount out of range", span),
                 }
             }
             (BinOp::Shr, Value::Int(a), Value::Int(b)) => {
-                match self.shift_at_width(false, narrow_to_i64(a), narrow_to_i64(b), span) {
-                    Some(v) => Value::Int(v.into()),
+                match self.shift_at_width(false, a, b, span) {
+                    Some(v) => Value::Int(v),
                     None => self.record_runtime_error("shift amount out of range", span),
                 }
             }
@@ -724,7 +745,7 @@ impl<'a> super::Interpreter<'a> {
         for slot in slots {
             match slot {
                 Some((l, r)) => {
-                    data.push(self.eval_binary(op, l, r, span, false));
+                    data.push(self.eval_binary(op, l, r, span, None));
                     if self.pending_cf.is_some() {
                         return None;
                     }
@@ -1143,6 +1164,13 @@ impl<'a> super::Interpreter<'a> {
             Type::UInt(UIntSize::U16) => (16, true),
             Type::UInt(UIntSize::U32) => (32, true),
             Type::UInt(UIntSize::U64) | Type::UInt(UIntSize::Usize) => (64, true),
+            // The 128-bit widths were missing, so every consumer of this
+            // function saw them as signed 64. The visible consequence was the
+            // SHIFT range check: `1i128 << 100` is legal, but `100 >= 64`
+            // rejected it as "shift amount out of range" on both backends
+            // (B-2026-08-19-23).
+            Type::Int(IntSize::I128) => (128, false),
+            Type::UInt(UIntSize::U128) => (128, true),
             _ => (64, false),
         }
     }
@@ -1161,81 +1189,105 @@ impl<'a> super::Interpreter<'a> {
     /// — a value an `i32` cannot represent — instead of the specified
     /// -2147483648. Codegen had the matching pair, the first leg as LLVM
     /// poison.
-    fn shift_at_width(&self, left: bool, a: i64, b: i64, span: &Span) -> Option<i64> {
+    fn shift_at_width(&self, left: bool, a: i128, b: i128, span: &Span) -> Option<i128> {
         let (bits, is_unsigned) = self.span_int_width(span);
-        if b < 0 || b >= bits as i64 {
+        if b < 0 || b >= bits as i128 {
             return None;
         }
         let sh = b as u32;
-        // Compute on the u64 carrier and re-narrow, so `<<` is a bit shift at
+        // Compute on the u128 carrier and re-narrow, so `<<` is a bit shift at
         // the declared width (bits shifted past it are dropped, and the
         // declared width's sign bit is whatever landed there). Truncation is
         // what makes the result representable in the declared type — the
         // invariant every other narrow arm maintains.
+        //
+        // The carrier here is `u128` rather than `u64` because a 128-bit shift
+        // has to be computable at all: at `u64` every amount ≥ 64 either
+        // overflowed the shift or was rejected outright, so `1i128 << 100` was
+        // unreachable (B-2026-08-19-23).
         let raw = if left {
-            (a as u64) << sh
+            (a as u128) << sh
         } else if is_unsigned {
-            (a as u64) >> sh
+            (a as u128) >> sh
         } else {
             // Arithmetic shift: sign-extend from the DECLARED width first, so
             // a narrow negative value smears its own sign bit rather than the
-            // i64 carrier's.
-            let sext = if bits == 64 {
+            // carrier's.
+            let sext = if bits == 128 {
                 a
             } else {
-                (a << (64 - bits)) >> (64 - bits)
+                (a << (128 - bits)) >> (128 - bits)
             };
-            (sext >> sh) as u64
+            (sext >> sh) as u128
         };
         Some(Self::truncate_to_width(raw, bits, is_unsigned))
     }
 
-    /// Reinterpret the low `bits` of a u64 carrier as a value of the declared
-    /// integer type, returned in the i64 carrier every `Value::Int` uses:
+    /// Reinterpret the low `bits` of a u128 carrier as a value of the declared
+    /// integer type, returned in the i128 carrier every `Value::Int` uses:
     /// sign-extended for a signed type, zero-extended for an unsigned one.
-    /// A 64-bit width is already the carrier's own shape and passes through.
-    fn truncate_to_width(raw: u64, bits: u32, is_unsigned: bool) -> i64 {
+    /// A 128-bit width is already the carrier's own shape and passes through.
+    fn truncate_to_width(raw: u128, bits: u32, is_unsigned: bool) -> i128 {
+        // At 128 bits the pattern IS the carrier, signed or not.
+        if bits >= 128 {
+            return raw as i128;
+        }
+        // At 64 the carrier encoding predates the i128 widening and is
+        // load-bearing: a `u64` at or above 2^63 is stored WRAPPED — the i64
+        // reinterpretation, sign-extended into the carrier — which is what
+        // `eval_binary_u64`'s `a as u64`, `literal_as_i128`'s read-back, and
+        // the `%llu` display path all assume. Zero-extending it here instead
+        // put a positive 2^63 in the carrier and the next `narrow_to_i64` on
+        // the u64 path panicked (caught by `test_interp_u64_*`). Only the
+        // 128-bit arm above is new; every width below behaves as it did.
         if bits >= 64 {
-            return raw as i64;
+            return ((raw as u64) as i64) as i128;
         }
-        let masked = raw & ((1u64 << bits) - 1);
+        let masked = raw & ((1u128 << bits) - 1);
         if is_unsigned {
-            masked as i64
+            masked as i128
         } else {
-            ((masked << (64 - bits)) as i64) >> (64 - bits)
+            ((masked << (128 - bits)) as i128) >> (128 - bits)
         }
     }
 
-    /// True when the type recorded at `span` is an unsigned 64-bit integer
-    /// (`u64` / `usize`), either directly or as the element of a container
-    /// (`Vec` / `Array` / `Slice` / `Vector` / `Column` / `Tensor` /
-    /// `Set` / `SortedSet`). Backs the interpreter's span-threaded
-    /// unsigned-64 model (B-2026-07-04-8): the i64-carrier `Value::Int` is
-    /// reinterpreted as `u64` at the compare / div / rem / shr / arithmetic /
-    /// print / sort sinks when the static type says so. Widths u8..u32 fit i64
-    /// non-negatively (signed == unsigned there), so only 64-bit unsignedness
-    /// needs the reinterpretation. Empty / unknown spans yield `false` (the
-    /// i64 default), matching `narrow_oob` — so `karac run`, which populates
-    /// `expr_types` sparsely, degrades gracefully to signed behavior.
-    pub(crate) fn span_type_is_unsigned64(&self, span: &Span) -> bool {
+    /// The WIDTH at which `span`'s type is unsigned, or `None` when it is
+    /// signed / not an integer / unrecorded. `Some(64)` for `u64` / `usize`,
+    /// `Some(128)` for `u128`.
+    ///
+    /// These are the two widths whose top half does not fit the signed carrier,
+    /// so they are the two that need the operators that differ — compare, div,
+    /// rem, `>>`, and the add/sub/mul overflow boundary — reinterpreted at
+    /// their own width. `u8`..`u32` fit non-negatively (signed == unsigned), so
+    /// they need nothing, which is why they are absent rather than forgotten.
+    ///
+    /// This replaced a bool-valued `span_type_is_unsigned64`, whose every
+    /// consumer then read the carrier back at 64 bits. That was invisible while
+    /// `u64` was the only unsigned width whose top half did not fit the
+    /// carrier; `u128` is a second, and reading one at 64 bits keeps the low
+    /// half — `u128::MAX` printed `-1`, sorted first, and compared as negative
+    /// (B-2026-08-19-23).
+    pub(crate) fn span_unsigned_int_width(&self, span: &Span) -> Option<u32> {
         let key = crate::resolver::SpanKey::from_span(span);
-        let Some(ty) = self.typecheck_result.expr_types.get(&key) else {
-            return false;
-        };
-        Self::type_is_unsigned64(ty)
+        let ty = self.typecheck_result.expr_types.get(&key)?;
+        Self::type_unsigned_int_width(ty)
     }
 
-    /// The type-level predicate behind [`span_type_is_unsigned64`], peeling one
-    /// container layer so a `Vec[u64]` / `Column[u64]` / … element counts.
-    pub(crate) fn type_is_unsigned64(ty: &crate::typechecker::types::Type) -> bool {
+    /// The type-level predicate behind [`span_unsigned_int_width`], peeling one
+    /// container layer so a `Vec[u64]` / `Column[u128]` / … element counts.
+    pub(crate) fn type_unsigned_int_width(ty: &crate::typechecker::types::Type) -> Option<u32> {
         use crate::typechecker::types::{Type, UIntSize};
-        fn is_u64(t: &Type) -> bool {
-            matches!(t, Type::UInt(UIntSize::U64) | Type::UInt(UIntSize::Usize))
+        fn width(t: &Type) -> Option<u32> {
+            match t {
+                Type::UInt(UIntSize::U64) | Type::UInt(UIntSize::Usize) => Some(64),
+                Type::UInt(UIntSize::U128) => Some(128),
+                _ => None,
+            }
         }
         match ty {
             Type::Array { element, .. }
             | Type::Vector { element, .. }
-            | Type::Slice { element, .. } => is_u64(element),
+            | Type::Slice { element, .. } => width(element),
             Type::Named { name, args }
                 if (name == "Vec"
                     || name == "Column"
@@ -1244,9 +1296,9 @@ impl<'a> super::Interpreter<'a> {
                     || name == "SortedSet")
                     && !args.is_empty() =>
             {
-                is_u64(&args[0])
+                width(&args[0])
             }
-            other => is_u64(other),
+            other => width(other),
         }
     }
 
@@ -1300,6 +1352,60 @@ impl<'a> super::Interpreter<'a> {
             _ => return None,
         };
         Some(Value::Int((v as i64).into()))
+    }
+
+    /// The `u128` sibling of [`eval_binary_u64`] — same model, same operator
+    /// set, one width up. `Value::Int`'s `i128` carrier holds a `u128` as its
+    /// two's-complement bit pattern, so every operator whose answer depends on
+    /// signedness has to reinterpret: the ordered comparisons, division and
+    /// remainder, the logical right shift, and the add/sub/mul overflow
+    /// boundary (a sum past `i128::MAX` that still fits `u128` must not
+    /// false-trap the way the signed `checked_*` arms would).
+    fn eval_binary_u128(&mut self, op: &BinOp, a: i128, b: i128, span: &Span) -> Option<Value> {
+        let (ua, ub) = (a as u128, b as u128);
+        let v: u128 = match op {
+            BinOp::Add => match ua.checked_add(ub) {
+                Some(v) => v,
+                None => return Some(self.record_integer_overflow(span)),
+            },
+            BinOp::Sub => match ua.checked_sub(ub) {
+                Some(v) => v,
+                None => return Some(self.record_integer_overflow(span)),
+            },
+            BinOp::Mul => match ua.checked_mul(ub) {
+                Some(v) => v,
+                None => return Some(self.record_integer_overflow(span)),
+            },
+            BinOp::Div => {
+                if ub == 0 {
+                    return Some(self.record_runtime_error("division by zero", span));
+                }
+                ua / ub
+            }
+            BinOp::Mod => {
+                if ub == 0 {
+                    return Some(self.record_runtime_error("division by zero", span));
+                }
+                ua % ub
+            }
+            // Logical (zero-filling) right shift, matching codegen's `lshr`.
+            // The amount is range-checked by the shift arm in
+            // `eval_binary_unrounded`, which runs before this dispatch only for
+            // the signed path — so guard here too rather than shifting by an
+            // out-of-range amount (`u128 >> 128` is UB in Rust).
+            BinOp::Shr => {
+                if !(0..128).contains(&b) {
+                    return Some(self.record_runtime_error("shift amount out of range", span));
+                }
+                ua >> b
+            }
+            BinOp::Lt => return Some(Value::Bool(ua < ub)),
+            BinOp::LtEq => return Some(Value::Bool(ua <= ub)),
+            BinOp::Gt => return Some(Value::Bool(ua > ub)),
+            BinOp::GtEq => return Some(Value::Bool(ua >= ub)),
+            _ => return None,
+        };
+        Some(Value::Int(v as i128))
     }
 
     pub(super) fn record_integer_overflow(&mut self, span: &Span) -> Value {

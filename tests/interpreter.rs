@@ -35247,6 +35247,113 @@ fn the_128bit_overflow_families_are_width_correct_in_the_interpreter() {
     );
 }
 
+/// The UPPER HALF of `u128` — every value past `i128::MAX` — works end to end
+/// (B-2026-08-19-23). `Value::Int`'s carrier is a signed `i128`, so those
+/// values ride as NEGATIVE bit patterns exactly as a `u64` past `i64::MAX`
+/// does; the difference was that every consumer of the "is this unsigned"
+/// predicate read the carrier back at 64 bits, because that predicate was a
+/// bool from a `u64`-only era. Reading a `u128` at 64 bits keeps the low half.
+///
+/// Every literal here is above `i128::MAX`, so a signed reading is not merely
+/// imprecise, it changes the answer's SIGN — `u128::MAX` reads as `-1`.
+#[test]
+fn the_upper_half_of_u128_is_correct_in_the_interpreter() {
+    assert_eq!(
+        run_no_errors(
+            "fn main() {\n\
+             let m: u128 = 340282366920938463463374607431768211455u128;\n\
+             let h: u128 = 200000000000000000000000000000000000000u128;\n\
+             println(m);\n\
+             println(f\"{m}\");\n\
+             println(m.to_string());\n\
+             println(h > 5u128);\n\
+             println(h < 5u128);\n\
+             println(m >= h);\n\
+             println(h / 3u128);\n\
+             println(h % 7u128);\n\
+             println(m / 2u128);\n\
+             println(m >> 100u32);\n\
+             println(h - 5u128);\n\
+             println(m.count_ones());\n\
+             }"
+        ),
+        "340282366920938463463374607431768211455\n\
+         340282366920938463463374607431768211455\n\
+         340282366920938463463374607431768211455\n\
+         true\n\
+         false\n\
+         true\n\
+         66666666666666666666666666666666666666\n\
+         4\n\
+         170141183460469231731687303715884105727\n\
+         268435455\n\
+         199999999999999999999999999999999999995\n\
+         128\n"
+    );
+}
+
+/// `Vec[u128].sort()` orders by MAGNITUDE (B-2026-08-19-23). The comparator is
+/// picked from the element type at the close-paren leaf; that selection was a
+/// bool, so a `u128` element got the signed comparator and everything past
+/// `i128::MAX` sorted ahead of the small values. The `u64` half is asserted
+/// alongside it because the same selector serves both and must not regress.
+#[test]
+fn a_u128_vec_sorts_by_magnitude() {
+    assert_eq!(
+        run_no_errors(
+            "fn main() {\n\
+             let mut a: Vec[u64] = vec![];\n\
+             a.push(18446744073709551615u64);\n\
+             a.push(5u64);\n\
+             a.sort();\n\
+             println(a[0]);\n\
+             let mut b: Vec[u128] = vec![];\n\
+             b.push(340282366920938463463374607431768211455u128);\n\
+             b.push(200000000000000000000000000000000000000u128);\n\
+             b.push(5u128);\n\
+             b.sort();\n\
+             println(b[0]);\n\
+             println(b[1]);\n\
+             println(b[2]);\n\
+             }"
+        ),
+        "5\n\
+         5\n\
+         200000000000000000000000000000000000000\n\
+         340282366920938463463374607431768211455\n"
+    );
+}
+
+/// A shift amount up to the operand's own width is legal, and the width is the
+/// VALUE's — not 64, and not the amount's (B-2026-08-19-23 / B-2026-08-19-26).
+/// `span_int_width` had no 128-bit arms, so `1i128 << 100` was rejected as
+/// "shift amount out of range" against a 64-bit bound. The 64-bit cases pin the
+/// widths that already worked; the codegen twin is where the interesting half
+/// of this lives, because there the VALUE was being truncated.
+#[test]
+fn shifts_run_at_the_values_own_width() {
+    assert_eq!(
+        run_no_errors(
+            "fn main() {\n\
+             let a: i128 = 1i128;\n\
+             println(a << 100u32);\n\
+             let b: i128 = 1267650600228229401496703205376i128;\n\
+             println(b >> 100u32);\n\
+             let c: i64 = 1099511627776i64;\n\
+             println(c << 1u32);\n\
+             println(c >> 1u32);\n\
+             let d: u64 = 18446744073709551615u64;\n\
+             println(d >> 32u32);\n\
+             }"
+        ),
+        "1267650600228229401496703205376\n\
+         1\n\
+         2199023255552\n\
+         549755813888\n\
+         4294967295\n"
+    );
+}
+
 // ── B-2026-08-19-16: qualified unit-variant paths across colliding enums ──
 
 #[test]

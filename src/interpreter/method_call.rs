@@ -2168,10 +2168,18 @@ impl<'a> super::Interpreter<'a> {
                 // exactly this reason (the same hatch `pow` uses); the
                 // receiver-span probe stays as the fallback for the shapes that
                 // are not aliased.
-                if self.span_type_is_unsigned64(args_close_span)
-                    || self.span_type_is_unsigned64(&object.span)
+                // The WIDTH matters, not just the fact of unsignedness: a
+                // `u128` past `i128::MAX` rides as a negative carrier value
+                // exactly as a `u64` past `i64::MAX` does, but reading it back
+                // at 64 bits keeps only the low half. `u128::MAX` printed `-1`
+                // before this looked at the width (B-2026-08-19-23).
+                match self
+                    .span_unsigned_int_width(args_close_span)
+                    .or_else(|| self.span_unsigned_int_width(&object.span))
                 {
-                    return Value::String(format!("{}", *n as u64));
+                    Some(64) => return Value::String(format!("{}", *n as u64)),
+                    Some(128) => return Value::String(format!("{}", *n as u128)),
+                    _ => {}
                 }
             }
             // All other Display-able values: render via the user-facing
@@ -2418,8 +2426,9 @@ impl<'a> super::Interpreter<'a> {
                     // `x.lt(y)` / `x.gt(y)` on `u64` / `usize` receivers: the call
                     // result is `bool`, so recover operand signedness from the
                     // receiver span. B-2026-07-04-8.
-                    let unsigned_hint = self.span_type_is_unsigned64(&object.span)
-                        || self.span_type_is_unsigned64(&args[0].value.span);
+                    let unsigned_hint = self
+                        .span_unsigned_int_width(&object.span)
+                        .or_else(|| self.span_unsigned_int_width(&args[0].value.span));
                     return self.eval_binary(&op, obj.clone(), rhs, span, unsigned_hint);
                 }
             }

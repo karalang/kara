@@ -1316,6 +1316,15 @@ impl<'a> super::TypeChecker<'a> {
             Type::UInt(UIntSize::U32) => path("u32", vec![]),
             Type::UInt(UIntSize::U64) => path("u64", vec![]),
             Type::UInt(UIntSize::Usize) => path("usize", vec![]),
+            // The 128-bit widths round-trip like every other scalar. Without
+            // these arms they fell to the `_ => Error` fallback below, and the
+            // resulting `TypeKind::Error` propagated as a payload / element /
+            // field type: `println(o)` on an `Option[i128]` was refused with
+            // "bind a struct literal to a `let` first" about a plain variable,
+            // because the display registration saw an Error payload rather than
+            // a scalar one (B-2026-08-19-23).
+            Type::Int(IntSize::I128) => path("i128", vec![]),
+            Type::UInt(UIntSize::U128) => path("u128", vec![]),
             // f16/bf16 included (B-2026-07-20-12): a tuple binding's recorded
             // `(f16, f16)` TypeExpr must lower its elements as `half`/`bfloat`,
             // not fall to the unknown-name i64 default.

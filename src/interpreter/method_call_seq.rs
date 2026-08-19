@@ -11,7 +11,7 @@ use std::sync::Arc;
 use crate::ast::*;
 use crate::token::Span;
 
-use super::helpers::{eval_http_get, value_compare, value_compare_u64};
+use super::helpers::{eval_http_get, value_compare, value_compare_u128, value_compare_u64};
 use super::value::narrow_to_i64;
 use super::value::{try_write_or_panic, EnumData, IteratorSource, OrdValue, Value};
 use crate::interpreter::deep_clone_value;
@@ -1382,10 +1382,10 @@ impl<'a> super::Interpreter<'a> {
                     // clobbers the receiver span, so element signedness comes
                     // from the element type the typechecker stashes at the
                     // non-aliased close-paren leaf.
-                    let cmp = if self.span_type_is_unsigned64(args_close_span) {
-                        value_compare_u64
-                    } else {
-                        value_compare
+                    let cmp = match self.span_unsigned_int_width(args_close_span) {
+                        Some(64) => value_compare_u64,
+                        Some(128) => value_compare_u128,
+                        _ => value_compare,
                     };
                     try_write_or_panic(rc, &label).sort_by(cmp);
                     return Some(Value::Unit);
@@ -1521,10 +1521,10 @@ impl<'a> super::Interpreter<'a> {
                     let mut v = rc.read().unwrap().clone();
                     // Unsigned order for `Vec[u64]` / `Vec[usize]` (B-2026-07-04-8);
                     // element signedness from the stashed close-paren leaf.
-                    let cmp = if self.span_type_is_unsigned64(args_close_span) {
-                        value_compare_u64
-                    } else {
-                        value_compare
+                    let cmp = match self.span_unsigned_int_width(args_close_span) {
+                        Some(64) => value_compare_u64,
+                        Some(128) => value_compare_u128,
+                        _ => value_compare,
                     };
                     v.sort_by(cmp);
                     return Some(Value::array_of(v));
@@ -1929,7 +1929,7 @@ impl<'a> super::Interpreter<'a> {
                 };
                 let mut acc = lanes.first().cloned()?;
                 for lane in lanes.into_iter().skip(1) {
-                    acc = self.eval_binary(&fold_op, acc, lane, span, false);
+                    acc = self.eval_binary(&fold_op, acc, lane, span, None);
                 }
                 Some(acc)
             }
@@ -1970,7 +1970,7 @@ impl<'a> super::Interpreter<'a> {
                         }
                     } else {
                         matches!(
-                            self.eval_binary(&cmp_op, acc.clone(), lane.clone(), span, false),
+                            self.eval_binary(&cmp_op, acc.clone(), lane.clone(), span, None),
                             Value::Bool(true)
                         )
                     };
@@ -1991,10 +1991,10 @@ impl<'a> super::Interpreter<'a> {
                 };
                 let mut acc: Option<Value> = None;
                 for (x, y) in lanes.into_iter().zip(rhs) {
-                    let prod = self.eval_binary(&BinOp::Mul, x, y, span, false);
+                    let prod = self.eval_binary(&BinOp::Mul, x, y, span, None);
                     acc = Some(match acc {
                         None => prod,
-                        Some(a) => self.eval_binary(&BinOp::Add, a, prod, span, false),
+                        Some(a) => self.eval_binary(&BinOp::Add, a, prod, span, None),
                     });
                 }
                 acc
@@ -2020,9 +2020,9 @@ impl<'a> super::Interpreter<'a> {
                 }
                 // c_lane = p*q - r*s
                 let comp = |me: &mut Self, p: Value, q: Value, r: Value, s: Value| -> Value {
-                    let pq = me.eval_binary(&BinOp::Mul, p, q, span, false);
-                    let rs = me.eval_binary(&BinOp::Mul, r, s, span, false);
-                    me.eval_binary(&BinOp::Sub, pq, rs, span, false)
+                    let pq = me.eval_binary(&BinOp::Mul, p, q, span, None);
+                    let rs = me.eval_binary(&BinOp::Mul, r, s, span, None);
+                    me.eval_binary(&BinOp::Sub, pq, rs, span, None)
                 };
                 let (a0, a1, a2) = (lanes[0].clone(), lanes[1].clone(), lanes[2].clone());
                 let (b0, b1, b2) = (rhs[0].clone(), rhs[1].clone(), rhs[2].clone());

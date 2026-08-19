@@ -71,6 +71,18 @@ pub(super) fn value_compare_u64(a: &Value, b: &Value) -> std::cmp::Ordering {
     }
 }
 
+/// The `u128` sibling of [`value_compare_u64`] — orders by the carrier's bits
+/// read as `u128`, so a `Vec[u128]` element past `i128::MAX` sorts after the
+/// small values instead of ahead of them as a negative `i128`. Selected by the
+/// same close-paren element-type probe, on the width rather than on a bare
+/// "is unsigned" (B-2026-08-19-23).
+pub(super) fn value_compare_u128(a: &Value, b: &Value) -> std::cmp::Ordering {
+    match (a, b) {
+        (Value::Int(x), Value::Int(y)) => (*x as u128).cmp(&(*y as u128)),
+        _ => value_compare(a, b),
+    }
+}
+
 pub(super) fn value_compare(a: &Value, b: &Value) -> std::cmp::Ordering {
     use std::cmp::Ordering;
     match (a, b) {

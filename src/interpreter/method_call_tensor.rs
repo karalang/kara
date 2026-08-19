@@ -29,7 +29,7 @@ use crate::token::Span;
 // bare element type — both shared with `Column` in `super::helpers`.
 use super::helpers::minmax_value_reduce;
 use super::helpers::value_as_f64 as value_to_f64;
-use super::helpers::{value_compare, value_compare_u64};
+use super::helpers::{value_compare, value_compare_u128, value_compare_u64};
 use super::value::narrow_to_i64;
 use crate::ast::narrow_literal_to_i64;
 use crate::interpreter::value::EnumData;
@@ -392,14 +392,16 @@ impl<'a> super::Interpreter<'a> {
         let Value::Tensor { dims, data, elem } = obj else {
             return None;
         };
-        // Unsigned-64 element order for the ordering methods below
-        // (B-2026-07-04-8): a `u64` / `usize` element ≥ 2⁶³ sorts by magnitude,
+        // Unsigned element order for the ordering methods below, at the
+        // element's own width (B-2026-07-04-8, B-2026-08-19-23): a `u64` / `usize` element ≥ 2⁶³ sorts by magnitude,
         // after the positives instead of first as a negative i64.
         let ord_cmp: fn(&Value, &Value) -> std::cmp::Ordering =
-            if self.span_type_is_unsigned64(args_close_span) {
-                value_compare_u64
-            } else {
-                value_compare
+            match self.span_unsigned_int_width(args_close_span) {
+                Some(64) => value_compare_u64,
+                // Same one width up — a `u128` element past `i128::MAX` is a
+                // negative carrier value and would sort first (B-2026-08-19-23).
+                Some(128) => value_compare_u128,
+                _ => value_compare,
             };
         match method {
             "shape" => Some(Value::Array(Arc::new(RwLock::new(
@@ -746,7 +748,7 @@ impl<'a> super::Interpreter<'a> {
                 a[fa as usize].clone(),
                 b[fb as usize].clone(),
                 span,
-                false,
+                None,
             );
             if self.pending_cf.is_some() {
                 return Value::Unit;
@@ -797,7 +799,7 @@ impl<'a> super::Interpreter<'a> {
             "range" => {
                 let mx = minmax_value_reduce(false, elems.clone());
                 let mn = minmax_value_reduce(true, elems);
-                self.eval_binary(&BinOp::Sub, mx, mn, span, false)
+                self.eval_binary(&BinOp::Sub, mx, mn, span, None)
             }
             "mean" => {
                 let s = self.tensor_fold_reduce(&BinOp::Add, elems, span);
@@ -815,7 +817,7 @@ impl<'a> super::Interpreter<'a> {
         let mut it = elems.into_iter();
         let mut acc = it.next().expect("non-empty");
         for x in it {
-            acc = self.eval_binary(op, acc, x, span, false);
+            acc = self.eval_binary(op, acc, x, span, None);
             if self.pending_cf.is_some() {
                 return Value::Unit;
             }
@@ -892,7 +894,7 @@ impl<'a> super::Interpreter<'a> {
             let inner_idx = f % inner;
             let outer_idx = f / (inner * n_axis);
             let r = outer_idx * inner + inner_idx;
-            acc[r] = self.eval_binary(&BinOp::Add, acc[r].clone(), v.clone(), span, false);
+            acc[r] = self.eval_binary(&BinOp::Add, acc[r].clone(), v.clone(), span, None);
             if self.pending_cf.is_some() {
                 return Value::Unit;
             }
