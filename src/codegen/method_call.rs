@@ -3606,19 +3606,51 @@ impl<'ctx> super::Codegen<'ctx> {
         // with no per-element overflow-trap side-exit is precisely what lets
         // LLVM auto-vectorize integer slice kernels (the trap branch is the
         // proven vectorization blocker — roadmap.md § Codegen Optimization).
-        // Typecheck restricts the receiver + arg to the 64-bit widths
-        // (i64/u64/usize), so the i64-backed operands wrap at the right width.
+        // Width handling (B-2026-08-19-1). The receiver may be any integer
+        // width now, and NEITHER operand can be assumed to already carry it:
+        // codegen's narrow-int model normalizes to an i64 carrier
+        // (`compile_narrow_int_binop`), while a narrow function PARAMETER is a
+        // real LLVM `i32`. Mixing the two is how the first cut of this widening
+        // produced `add i32 %x, i64 1` and failed module verification. So:
+        // normalize both sides to i64, do the arithmetic there (matching the
+        // interpreter, which is i64-backed), then reduce into the receiver's
+        // declared width — the same shape `compile_narrow_int_binop` uses,
+        // except this family WRAPS where that one traps.
         if matches!(method, "wrapping_add" | "wrapping_sub" | "wrapping_mul") && args.len() == 1 {
-            let lv = self.compile_expr(object)?.into_int_value();
-            let rv = self.compile_expr(&args[0].value)?.into_int_value();
-            let r = match method {
+            let (bits, is_unsigned) = self.receiver_int_kind(object, call_span, method);
+            let lv_raw = self.compile_expr(object)?;
+            let rv_raw = self.compile_expr(&args[0].value)?;
+            let lv = self.widen_int_to_i64(lv_raw, is_unsigned);
+            let rv = self.widen_int_to_i64(rv_raw, is_unsigned);
+            let wide = match method {
                 "wrapping_add" => self.builder.build_int_add(lv, rv, "wadd"),
                 "wrapping_sub" => self.builder.build_int_sub(lv, rv, "wsub"),
                 "wrapping_mul" => self.builder.build_int_mul(lv, rv, "wmul"),
-                _ => unreachable!(),
+                _ => unreachable!("outer matches! restricts to the three methods"),
             }
             .unwrap();
-            return Ok(r.into());
+            // 64-bit needs no reduction: the i64 carrier IS the width, and the
+            // masks below would shift by 64 (poison in LLVM, UB in Rust).
+            let reduced = if bits >= 64 {
+                wide
+            } else {
+                let i64_t = self.context.i64_type();
+                let mask = i64_t.const_int((1u64 << bits) - 1, false);
+                let masked = self.builder.build_and(wide, mask, "wmask").unwrap();
+                if is_unsigned {
+                    masked
+                } else {
+                    // Sign-extend out of the width: shift the sign bit up to
+                    // bit 63 and arithmetic-shift back, so the i64 carrier
+                    // holds the same value the narrower type would.
+                    let sh = i64_t.const_int((64 - bits) as u64, false);
+                    let up = self.builder.build_left_shift(masked, sh, "wshl").unwrap();
+                    self.builder
+                        .build_right_shift(up, sh, true, "wsar")
+                        .unwrap()
+                }
+            };
+            return Ok(reduced.into());
         }
 
         // Euclidean division / remainder on `i64` (typed in expr_method_call.rs,

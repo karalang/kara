@@ -95309,6 +95309,39 @@ fn main() { print(1); }"#,
         );
     }
 
+    // Narrow widths (B-2026-08-19-1). Two operand shapes have to agree, and the
+    // first cut of the widening got both wrong: a narrow function PARAMETER is
+    // a real LLVM `i32`, while a narrow LOCAL is normalized to an i64 carrier
+    // (`compile_narrow_int_binop`). Mixing them emitted `add i32 %x, i64 1` and
+    // failed module verification outright; computing at i64 without reducing
+    // gave 2147483648 for `i32::MAX.wrapping_add(1)` — no wrap at all.
+    #[test]
+    fn wrapping_arith_reduces_to_the_receiver_width() {
+        let out = run_program(
+            r#"
+fn w32(x: i32) -> i32 { return x.wrapping_add(1); }
+fn m32(x: i32) -> i32 { return x.wrapping_mul(100000); }
+fn main() {
+    print(w32(2147483647));
+    print(m32(100000));
+    let a: i32 = 2147483647;
+    print(a.wrapping_add(1));
+    let b: u32 = 4294967295;
+    print(b.wrapping_add(1));
+    let c: i8 = 127;
+    print(c.wrapping_add(1));
+    let d: i16 = -32768;
+    print(d.wrapping_sub(1));
+}
+"#,
+        );
+        // param i32, param i32 mul, local i32, local u32, local i8, local i16
+        assert_eq!(
+            out,
+            Some("-21474836481410065408-21474836480-12832767".to_string())
+        );
+    }
+
     #[test]
     fn e2e_wrapping_arithmetic_semantics() {
         // Two's-complement wraparound, no trap, on the 64-bit widths.

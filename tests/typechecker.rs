@@ -36068,15 +36068,38 @@ fn wrapping_arith_rejects_mismatched_arg_type() {
 }
 
 #[test]
-fn wrapping_arith_rejects_narrow_width() {
-    // Narrow widths are out of scope this slice → NoMethodFound, not silently
-    // accepted (would miscompile without width-masking).
-    let errs = typecheck_errors("fn main() { let a: i32 = 1; let _ = a.wrapping_add(2); }");
-    assert!(
-        !errs.is_empty(),
-        "i32.wrapping_add must not type-check yet (narrow widths deferred)"
-    );
+fn wrapping_arith_accepts_every_i64_representable_width() {
+    // Narrow widths were deferred in the original slice (they need width
+    // reduction that neither the i64-backed interpreter nor codegen's
+    // i64-carrier model performed). B-2026-08-19-1 forced the issue: a `#[gpu]`
+    // kernel's element types are i32/u32/f32, so while `wrapping_*` existed
+    // only on the 64-bit widths there was NO way to spell wrapping integer
+    // arithmetic in a kernel — while bare `+` silently wrapped on the device.
+    // Both backends now reduce into the receiver's declared width.
+    for src in [
+        "fn main() { let a: i8 = 1; let _ = a.wrapping_add(2); }",
+        "fn main() { let a: i16 = 1; let _ = a.wrapping_sub(2); }",
+        "fn main() { let a: i32 = 1; let _ = a.wrapping_mul(2); }",
+        "fn main() { let a: u8 = 1; let _ = a.wrapping_add(2); }",
+        "fn main() { let a: u16 = 1; let _ = a.wrapping_add(2); }",
+        "fn main() { let a: u32 = 1; let _ = a.wrapping_add(2); }",
+        "fn main() { let a: i64 = 1; let _ = a.wrapping_add(2); }",
+        "fn main() { let a: u64 = 1; let _ = a.wrapping_add(2); }",
+        "fn main() { let a: usize = 1; let _ = a.wrapping_add(2); }",
+    ] {
+        typecheck_ok(src);
+    }
 }
+
+// NOTE on 128-bit: an earlier draft of the test above had a sibling asserting
+// `i128`/`u128` are still REJECTED, on the theory that they are the one width
+// the widening deliberately leaves out. Measured: they type-check, and did so
+// before the widening too — `let a: i128 = 9223372036854775807;
+// a.wrapping_add(1)` prints `-9223372036854775808`, i.e. `i128` is carried as
+// an i64 and wraps at 64 bits. That is a pre-existing width defect independent
+// of this family, filed separately; asserting a boundary that does not exist
+// would have written a false claim into the suite, so no such test is kept
+// here.
 
 // ── Integer .pow(exp) + bit intrinsics ───────────────────────────────────
 

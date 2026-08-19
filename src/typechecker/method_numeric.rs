@@ -233,22 +233,44 @@ impl<'a> super::TypeChecker<'a> {
         // family): two's-complement wraparound with NO overflow trap, the
         // non-trapping sibling of the checked `+`/`-`/`*` path
         // (`emit_checked_int_arith`). Both operands and the result are the
-        // receiver's type. **Scoped to the 64-bit widths** (`i64` / `u64` /
-        // `usize`) in this slice: those are i64-backed end-to-end (interpreter
-        // `Value::Int(i64)`, codegen i64), so a bare wrap is exact. The narrow
-        // widths (`i8`..`i32` / `u8`..`u32`) need width-masking in both
-        // backends, and `i128`/`u128` are not yet i64-representable in the
-        // interpreter — both are a tracked follow-on (`NoMethodFound` fires for
-        // them until then). Backends: codegen `method_call.rs`
-        // (`build_int_{add,sub,mul}`), interpreter `method_call.rs` (Rust
-        // `i64::wrapping_*`). Primary motivation: a wrapping kernel body is
-        // straight-line (no per-element overflow-trap branch), which is what
-        // lets LLVM auto-vectorize integer slice kernels — see
-        // `roadmap.md` § Codegen Optimization.
+        // receiver's type.
+        //
+        // **Every width from `i8`/`u8` up to the 64-bit pair** (`i128`/`u128`
+        // remain out — they are not i64-representable in the interpreter, and
+        // `NoMethodFound` still fires for them). The narrow widths were
+        // originally excluded because they need width-masking; only the
+        // INTERPRETER actually did, since it is i64-backed, and it already
+        // recovers the receiver width for the `checked_*` / `saturating_*` /
+        // `overflowing_*` families via `overflow_arg_width`. Codegen needs
+        // nothing: `i32`/`u32` lower to a real LLVM `i32`
+        // (`types_lowering.rs`), so `build_int_add` wraps at the right width by
+        // construction.
+        //
+        // Widening was forced by B-2026-08-19-1: a `#[gpu]` kernel's element
+        // types are `i32` / `u32` / `f32`, and `wrapping_*` existed only on
+        // `i64` / `u64` / `usize` — disjoint sets, so there was NO way to spell
+        // wrapping integer arithmetic in a kernel, while bare `+` silently
+        // wrapped on the device. design.md § Arithmetic Overflow requires the
+        // escape hatch be named at the site; this is what makes naming it
+        // possible.
+        //
+        // Backends: codegen `method_call.rs` (`build_int_{add,sub,mul}`),
+        // interpreter `method_call.rs` (`eval_wrapping_arith`, masked to the
+        // receiver width). Secondary motivation, from the original slice: a
+        // wrapping kernel body is straight-line (no per-element overflow-trap
+        // branch), which is what lets LLVM auto-vectorize integer slice
+        // kernels — see `roadmap.md` § Codegen Optimization.
         if matches!(method, "wrapping_add" | "wrapping_sub" | "wrapping_mul")
             && matches!(
                 receiver_for_lookup,
-                Type::Int(IntSize::I64) | Type::UInt(UIntSize::U64) | Type::UInt(UIntSize::Usize)
+                Type::Int(IntSize::I8 | IntSize::I16 | IntSize::I32 | IntSize::I64)
+                    | Type::UInt(
+                        UIntSize::U8
+                            | UIntSize::U16
+                            | UIntSize::U32
+                            | UIntSize::U64
+                            | UIntSize::Usize
+                    )
             )
         {
             if args.len() != 1 {

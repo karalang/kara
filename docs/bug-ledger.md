@@ -102,7 +102,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 80 | 0 |
 | perf | 77 | 0 |
 | crash | 52 | 0 |
-| soundness | 50 | 0 |
+| soundness | 51 | 1 |
 | other | 47 | 1 |
 | use-after-free | 20 | 0 |
 
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 938 | 3 |
-| typecheck | 203 | 2 |
-| interp | 154 | 1 |
+| codegen | 939 | 4 |
+| typecheck | 204 | 3 |
+| interp | 155 | 2 |
 | ownership | 60 | 0 |
 | other | 56 | 1 |
 | autopar | 49 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 4 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1353 surfaced · 6 open · 1329 fixed · 7 wontfix** (2026-05-20 → 2026-08-19). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1354 surfaced · 7 open · 1329 fixed · 7 wontfix** (2026-05-20 → 2026-08-19). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -136,6 +136,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1353 surfaced
 | B-2026-08-19-3 | 2026-08-19 | parser+codegen | low | MULTI-BOUND `effect resource` declarations do not parse: `effect resource UserDB: DatabaseProvider + HealthCheckable;` -> "Expected Semicolon, found Plus", spec'd normatively at design.md:7216 under "Multiple trait bounds are allowed on a resource declaration:" (:7213), with semantics attached at :7217 ("Any provider passed to `with_provider` must implement all declared bounds plus `Send + Sync`"). | src/parser/items_effects.rs::parse_effect_resource_tail vs design.md:7216 (prose at :7213, semantics at :7217); src/codegen/provider_state.rs::provider_resource_traits and its nine readers |
 | B-2026-08-19-4 | 2026-08-19 | typecheck | medium | `with_provider[R](p, ...)` NEVER CHECKS that `p` implements the resource's declared provider trait. A struct with a matching method but no `impl Trait for U` passes resolve, typecheck and effectcheck, then fails in CODEGEN with a message blaming the vtable -- design.md:7217 requires the opposite ("Any provider passed to `with_provider` must implement all declared bounds plus `Send + Sync`"). | design.md:7217; src/typechecker/env_build.rs::collect_user_resource_override_types; the codegen message at src/codegen/provider.rs ("no impl found for `T::m`") |
 | B-2026-08-19-5 | 2026-08-19 | other | low | The codegen E2E harness (`tests/codegen.rs::run_program_capturing_inner`) runs resolve + typecheck but NOT the effect checker, so a test can pin behaviour for a program `karac build` REFUSES. Its `assert_check_clean` gate is named for the whole check phase and covers two thirds of it. | tests/codegen.rs::run_program_capturing_inner; tests/common's assert_check_clean; cf. B-2026-08-11-34 (the prepare_for_resolve drift this gate was hardened against) |
+| B-2026-08-19-6 | 2026-08-19 | typecheck+interp+codegen | medium | `i128` / `u128` are CARRIED AS 64-BIT and wrap there silently: `let a: i128 = 9223372036854775807; a.wrapping_add(1)` prints `-9223372036854775808` instead of `9223372036854775808`. The types parse, type-check and run — they are simply not the width they claim, so any value above the 64-bit range is silently wrong rather than rejected. | — |
 
 ### Wontfix (7)
 

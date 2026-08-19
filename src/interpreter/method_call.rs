@@ -2330,12 +2330,16 @@ impl<'a> super::Interpreter<'a> {
             if let Value::Int(a) = &obj {
                 let a = *a;
                 if let Value::Int(b) = self.eval_expr_inner(&args[0].value) {
-                    return Value::Int(match method {
-                        "wrapping_add" => a.wrapping_add(b),
-                        "wrapping_sub" => a.wrapping_sub(b),
-                        "wrapping_mul" => a.wrapping_mul(b),
-                        _ => unreachable!(),
-                    });
+                    // Wrap at the RECEIVER's width, not at i64 (B-2026-08-19-1).
+                    // The interpreter is i64-backed, so `(2147483647i32)
+                    // .wrapping_add(1)` would otherwise yield 2147483648 —
+                    // no wrap at all — and disagree with codegen, where `i32`
+                    // is a real LLVM `i32`. Width comes from the argument span
+                    // via the same `expr_types` lookup the `checked_*` /
+                    // `saturating_*` / `overflowing_*` families use; the
+                    // typechecker pins the argument to the receiver's type.
+                    let w = self.overflow_arg_width(&args[0].value);
+                    return Value::Int(eval_wrapping_arith(method, a, b, w));
                 }
             }
         }
@@ -3020,6 +3024,48 @@ fn none_value() -> Value {
         variant: "None".to_string(),
         data: EnumData::Unit,
     }
+}
+
+/// Two's-complement wraparound for `wrapping_{add,sub,mul}` at the receiver's
+/// width (B-2026-08-19-1).
+///
+/// Sibling of [`eval_overflow_arith`]: same i64-backed operands and the same
+/// width recovery, but this family never reports overflow — it defines it. The
+/// arithmetic is done in `i128` (exact for every width this reaches, since
+/// `i128`/`u128` receivers are rejected in the typechecker) and then reduced
+/// into the width: mask to `bits`, and for a SIGNED width sign-extend the
+/// result so the interpreter's `Value::Int(i64)` carries the same bit pattern
+/// codegen's narrower LLVM integer would.
+fn eval_wrapping_arith(method: &str, a: i64, b: i64, w: IntW) -> i64 {
+    let (signed, bits) = match w {
+        IntW::S(b) => (true, b),
+        IntW::U(b) => (false, b),
+    };
+    // 64-bit: i64/u64 wrap identically on the two's-complement bit pattern, so
+    // the plain i64 op is already exact and the mask below would be a no-op
+    // shift of 64 (UB in Rust). Handled first for both reasons.
+    if bits == 64 {
+        return match method {
+            "wrapping_add" => a.wrapping_add(b),
+            "wrapping_sub" => a.wrapping_sub(b),
+            "wrapping_mul" => a.wrapping_mul(b),
+            _ => unreachable!("caller matched the three wrapping methods"),
+        };
+    }
+    let (x, y) = (a as i128, b as i128);
+    let raw = match method {
+        "wrapping_add" => x.wrapping_add(y),
+        "wrapping_sub" => x.wrapping_sub(y),
+        "wrapping_mul" => x.wrapping_mul(y),
+        _ => unreachable!("caller matched the three wrapping methods"),
+    };
+    let masked = raw & ((1i128 << bits) - 1);
+    let reduced = if signed && (masked >> (bits - 1)) & 1 == 1 {
+        masked - (1i128 << bits) // set sign bit → negative in the width
+    } else {
+        masked
+    };
+    reduced as i64
 }
 
 /// Evaluate one overflow-aware integer operation at the receiver's width.
