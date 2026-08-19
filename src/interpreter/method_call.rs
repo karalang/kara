@@ -4,6 +4,7 @@
 //! Lives in a sibling `impl<'a> super::Interpreter<'a>` block.
 
 use crate::ast::*;
+use crate::reduce_kernel::ReduceOp;
 use crate::token::Span;
 use std::sync::{Arc, RwLock};
 
@@ -774,6 +775,65 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
+    /// `gpu.sum(buf)` / `gpu.prod(buf)` under the interpreter
+    /// (B-2026-08-19-10, slice 1).
+    ///
+    /// Runs the reduction on the CPU — but in the GPU's TREE ORDER, not a left
+    /// fold, so `karac run` and `karac build` print the same bits. That is the
+    /// whole point of specifying the order: `f32` addition is not associative,
+    /// and an interpreter that summed left-to-right would disagree with every
+    /// compiled run of the same program.
+    fn eval_gpu_reduce(
+        &mut self,
+        args: &[CallArg],
+        span: &Span,
+        op: ReduceOp,
+        spelling: &str,
+    ) -> Value {
+        if args.len() != 1 {
+            return self.record_runtime_error(
+                format!("gpu.{spelling} expects one buffer (found {})", args.len()),
+                span,
+            );
+        }
+        let Value::Array(rc) = self.eval_expr_inner(&args[0].value) else {
+            return self.record_runtime_error(
+                format!("gpu.{spelling} buffer must be a Vec of f32/i32/u32"),
+                span,
+            );
+        };
+        let elems = rc.read().unwrap().clone();
+
+        let mut xs: Vec<f32> = Vec::with_capacity(elems.len());
+        for v in &elems {
+            match v {
+                Value::Float(f) => xs.push(*f as f32),
+                Value::Int(i) => xs.push(*i as f32),
+                _ => {
+                    return self.record_runtime_error(
+                        format!("gpu.{spelling} buffer element is not numeric"),
+                        span,
+                    )
+                }
+            }
+        }
+
+        // Slice 1 is single-workgroup; a longer buffer is refused here exactly
+        // as the runtime entry point refuses it, so the two surfaces agree on
+        // what is expressible instead of one silently answering.
+        match crate::reduce_kernel::tree_reduce_f32(&xs, op) {
+            Some(r) => Value::Float(r as f64),
+            None => self.record_runtime_error(
+                format!(
+                    "gpu.{spelling} slice-1 handles at most {} elements (found {})",
+                    crate::reduce_kernel::GPU_REDUCE_WIDTH,
+                    xs.len()
+                ),
+                span,
+            ),
+        }
+    }
+
     fn eval_gpu_dispatch(&mut self, args: &[CallArg], span: &Span) -> Value {
         if args.len() < 2 {
             return self.record_runtime_error(
@@ -864,6 +924,12 @@ impl<'a> super::Interpreter<'a> {
                 ("ast", "item") => return self.eval_ast_item_builder(args, span),
                 ("compiler", "error") => return self.eval_compiler_error(args, span),
                 ("gpu", "dispatch") => return self.eval_gpu_dispatch(args, span),
+                // B-2026-08-19-10 slice 1: whole-buffer reductions. The
+                // interpreter uses the SAME TREE ORDER as the shader, so this
+                // is the definition of the result rather than an approximation
+                // of it — see `reduce_kernel::tree_reduce_f32`.
+                ("gpu", "sum") => return self.eval_gpu_reduce(args, span, ReduceOp::Sum, "sum"),
+                ("gpu", "prod") => return self.eval_gpu_reduce(args, span, ReduceOp::Prod, "prod"),
                 // `gpu.upload` / `gpu.download` (resident device buffers) are
                 // compiled-only: the tree-walk interpreter has no device-buffer
                 // model. A clean diagnostic, not the `variable 'gpu' not found`

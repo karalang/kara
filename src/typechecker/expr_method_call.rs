@@ -143,6 +143,7 @@ pub(crate) const SLICE_BUILTIN_METHODS: &[&str] = &[
     "to_vec",
     "windows",
 ];
+use crate::reduce_kernel::ReduceOp;
 use crate::resolver::{SpanKey, SymbolKind};
 use crate::token::Span;
 use std::collections::HashMap;
@@ -1070,6 +1071,18 @@ impl<'a> super::TypeChecker<'a> {
             }
             if module == "gpu" && method == "download" {
                 return self.infer_gpu_download(args, span);
+            }
+            // B-2026-08-19-10 slice 1: whole-buffer REDUCTIONS. Unlike
+            // `dispatch`, these return a SCALAR — the shape that made sum /
+            // prod / dot impossible to express while `dispatch` was the entire
+            // GPU surface. No kernel argument: the operation is named, so its
+            // associativity is ours to guarantee rather than the user's to
+            // promise (an arbitrary combiner cannot be checked for it).
+            if module == "gpu" && method == "sum" {
+                return self.infer_gpu_reduce(args, span, ReduceOp::Sum, "sum");
+            }
+            if module == "gpu" && method == "prod" {
+                return self.infer_gpu_reduce(args, span, ReduceOp::Prod, "prod");
             }
         }
 
@@ -3366,6 +3379,97 @@ impl<'a> super::TypeChecker<'a> {
                 vec_of(Type::Error)
             }
         }
+    }
+
+    /// `gpu.sum(buf)` / `gpu.prod(buf)` — a whole-buffer reduction returning a
+    /// SCALAR (B-2026-08-19-10, slice 1).
+    ///
+    /// Named rather than combiner-taking on purpose. A user-supplied fold would
+    /// have to be associative for a tree reduction to be meaningful, and
+    /// nothing in the language can check that — a non-associative combiner
+    /// would produce a plausible, order-dependent, irreproducible number. A
+    /// named op moves that obligation to us, where it is discharged once.
+    ///
+    /// The result is bit-for-bit reproducible across `karac run` and
+    /// `karac build` because both sides use the tree order specified in
+    /// [`crate::reduce_kernel::tree_reduce_f32`]; see that function for why the
+    /// order is language semantics rather than an implementation detail.
+    fn infer_gpu_reduce(
+        &mut self,
+        args: &[CallArg],
+        span: &Span,
+        op: ReduceOp,
+        spelling: &str,
+    ) -> Type {
+        if args.len() != 1 {
+            self.type_error(
+                format!(
+                    "error[E_GPU_REDUCE_ARITY]: `gpu.{spelling}` takes exactly one buffer — \
+                     `gpu.{spelling}(buffer)` (found {} argument(s))",
+                    args.len()
+                ),
+                *span,
+                TypeErrorKind::WrongNumberOfArgs,
+            );
+            return Type::Float(FloatSize::F32);
+        }
+
+        let buf_ty = self.infer_expr(&args[0].value);
+        let elem = match &buf_ty {
+            Type::Named { name, args: ta } if name == "Vec" && ta.len() == 1 => ta[0].clone(),
+            _ => {
+                self.type_error(
+                    format!(
+                        "error[E_GPU_REDUCE_BUFFER]: `gpu.{spelling}` takes a `Vec[f32]`, \
+                         `Vec[i32]` or `Vec[u32]` (found `{}`)",
+                        crate::typechecker::types::type_display(&buf_ty)
+                    ),
+                    args[0].value.span,
+                    TypeErrorKind::TypeMismatch,
+                );
+                return Type::Float(FloatSize::F32);
+            }
+        };
+        let Some(elem_spelling) = (match &elem {
+            Type::Float(FloatSize::F32) => Some("f32"),
+            Type::Int(IntSize::I32) => Some("i32"),
+            Type::UInt(UIntSize::U32) => Some("u32"),
+            _ => None,
+        }) else {
+            self.type_error(
+                format!(
+                    "error[E_GPU_REDUCE_BUFFER]: `gpu.{spelling}` element must be f32, i32 or \
+                     u32 (found `{}`) — these are the WGSL-native 4-byte scalars",
+                    crate::typechecker::types::type_display(&elem)
+                ),
+                args[0].value.span,
+                TypeErrorKind::TypeMismatch,
+            );
+            return elem;
+        };
+
+        match crate::gpu_wgsl::emit_reduce_kernel(op, elem_spelling) {
+            Ok(wgsl) => {
+                self.gpu_dispatch_wgsl.insert(
+                    SpanKey(args[0].value.span.offset, args[0].value.span.length),
+                    wgsl,
+                );
+            }
+            Err(e) => {
+                self.type_error(
+                    format!(
+                        "error[E_GPU_REDUCE_KERNEL]: cannot lower `gpu.{spelling}` to a GPU \
+                         shader — {}",
+                        e.reason()
+                    ),
+                    args[0].value.span,
+                    TypeErrorKind::TypeMismatch,
+                );
+            }
+        }
+
+        self.record_expr_type(span, &elem);
+        elem
     }
 
     fn infer_gpu_dispatch(&mut self, args: &[CallArg], span: &Span) -> Type {

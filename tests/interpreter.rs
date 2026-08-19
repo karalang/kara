@@ -34712,3 +34712,61 @@ fn value_int_carries_128_bits() {
     };
     assert_eq!(n, i128::MAX);
 }
+
+// ── gpu.sum / gpu.prod under the interpreter (B-2026-08-19-10) ─────────────
+
+#[test]
+fn gpu_sum_uses_the_gpu_tree_order_not_a_left_fold() {
+    // The decision this feature turns on. 64 copies of 0.1 sum to 6.400000
+    // under the GPU's tree and 6.399996 under a left fold; the interpreter
+    // must print the TREE value, or every compiled run of the same program
+    // disagrees with `karac run`.
+    let out = run_no_errors(
+        "fn main() {\n\
+        \x20   let mut v: Vec[f32] = [];\n\
+        \x20   for i in 0..64 { v.push(0.1) }\n\
+        \x20   println(f\"{gpu.sum(v)}\")\n\
+        }",
+    );
+    // f32 6.4 widened to f64 for printing.
+    assert_eq!(out.trim(), "6.400000095367432");
+}
+
+#[test]
+fn gpu_sum_and_prod_compute_the_obvious_small_cases() {
+    let out = run_no_errors(
+        "fn main() {\n\
+        \x20   let v: Vec[f32] = [1.0, 2.0, 3.0, 4.0];\n\
+        \x20   println(f\"{gpu.sum(v)}\")\n\
+        }",
+    );
+    assert_eq!(out.trim(), "10");
+
+    let out = run_no_errors(
+        "fn main() {\n\
+        \x20   let v: Vec[f32] = [2.0, 3.0, 4.0];\n\
+        \x20   println(f\"{gpu.prod(v)}\")\n\
+        }",
+    );
+    assert_eq!(out.trim(), "24");
+}
+
+#[test]
+fn gpu_sum_refuses_past_one_workgroup_rather_than_truncating() {
+    // Slice 1 is single-workgroup. Answering for the first 64 of 65 elements
+    // would be the worst possible failure for a reduction: plausible and
+    // wrong. The interpreter refuses exactly where the runtime entry point
+    // does, so the two surfaces agree on what is expressible.
+    let errs = runtime_errors(
+        "fn main() {\n\
+        \x20   let mut v: Vec[f32] = [];\n\
+        \x20   for i in 0..65 { v.push(1.0) }\n\
+        \x20   println(f\"{gpu.sum(v)}\")\n\
+        }",
+    );
+    let joined = format!("{errs:?}");
+    assert!(
+        joined.contains("at most 64 elements") && joined.contains("found 65"),
+        "expected a refusal naming the bound, got: {joined}"
+    );
+}

@@ -37474,6 +37474,59 @@ fn gpu_dispatch_rejects_unsupported_kernel_body() {
     );
 }
 
+// ── gpu.sum / gpu.prod whole-buffer reductions (B-2026-08-19-10) ────────────
+
+#[test]
+fn gpu_sum_returns_the_element_type_not_a_vec() {
+    // The shape that made reductions impossible while `dispatch` was the whole
+    // GPU surface: this returns a SCALAR.
+    typecheck_ok(
+        "fn main() {\n\
+        \x20   let buf: Vec[f32] = [1.0, 2.0];\n\
+        \x20   let s: f32 = gpu.sum(buf);\n\
+        }",
+    );
+    typecheck_ok(
+        "fn main() {\n\
+        \x20   let buf: Vec[i32] = [1, 2];\n\
+        \x20   let s: i32 = gpu.prod(buf);\n\
+        }",
+    );
+}
+
+#[test]
+fn gpu_sum_rejects_a_non_wgsl_element_type() {
+    let errs = typecheck_errors(
+        "fn main() {\n\
+        \x20   let buf: Vec[f64] = [1.0, 2.0];\n\
+        \x20   let s = gpu.sum(buf);\n\
+        }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.to_string().contains("E_GPU_REDUCE_BUFFER")),
+        "expected a reduce-buffer error, got: {errs:?}"
+    );
+}
+
+#[test]
+fn gpu_sum_takes_exactly_one_buffer() {
+    // No kernel argument — the operation is named so its associativity is the
+    // compiler's guarantee, not something a user combiner would have to
+    // promise and nothing could check.
+    let errs = typecheck_errors(
+        "fn main() {\n\
+        \x20   let buf: Vec[f32] = [1.0];\n\
+        \x20   let s = gpu.sum(buf, buf);\n\
+        }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.to_string().contains("E_GPU_REDUCE_ARITY")),
+        "expected an arity error, got: {errs:?}"
+    );
+}
+
 #[test]
 fn gpu_dispatch_accepts_i32_and_u32_buffers() {
     typecheck_ok(
