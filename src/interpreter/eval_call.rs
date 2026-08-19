@@ -25,6 +25,7 @@ use super::helpers::{
     eval_http_post, eval_stats_fn, eval_stats_fn_int, hex_decode, hex_encode, make_json_error,
     serde_json_to_kara_json, url_decode, url_encode,
 };
+use super::value::narrow_to_i64;
 use super::value::{EnumData, Value};
 
 impl<'a> super::Interpreter<'a> {
@@ -211,7 +212,7 @@ impl<'a> super::Interpreter<'a> {
                 _ => false,
             };
             if is_active_span {
-                return Value::Int(self.active_span_stack.last().copied().unwrap_or(0));
+                return Value::Int(self.active_span_stack.last().copied().unwrap_or(0).into());
             }
         }
 
@@ -289,7 +290,10 @@ impl<'a> super::Interpreter<'a> {
                         Some(Value::Int(n)) => n,
                         _ => 0,
                     };
-                    return super::method_call::numeric_try_from_value(n, &segments[0]);
+                    return super::method_call::numeric_try_from_value(
+                        narrow_to_i64(n),
+                        &segments[0],
+                    );
                 }
             }
         }
@@ -366,7 +370,7 @@ impl<'a> super::Interpreter<'a> {
                                     Ok(n) => Value::EnumVariant {
                                         enum_name: "Option".to_string(),
                                         variant: "Some".to_string(),
-                                        data: EnumData::Tuple(vec![Value::Int(n)]),
+                                        data: EnumData::Tuple(vec![Value::Int(n.into())]),
                                     },
                                     Err(_) => none(),
                                 };
@@ -1052,7 +1056,7 @@ impl<'a> super::Interpreter<'a> {
                         );
                     };
                     let ir = match self.eval_expr_inner(&arg.value) {
-                        Value::Int(n) => LazyExprIR::LitInt(n),
+                        Value::Int(n) => LazyExprIR::LitInt(narrow_to_i64(n)),
                         Value::Float(v) => LazyExprIR::LitFloat(v),
                         Value::String(s) => LazyExprIR::LitStr(s),
                         Value::Bool(b) => LazyExprIR::LitBool(b),
@@ -1253,7 +1257,7 @@ impl<'a> super::Interpreter<'a> {
                         let xs: Vec<i64> = elems
                             .iter()
                             .map(|v| match v {
-                                Value::Int(i) => *i,
+                                Value::Int(i) => narrow_to_i64(*i),
                                 Value::Float(f) => *f as i64,
                                 _ => 0,
                             })
@@ -2458,11 +2462,11 @@ impl<'a> super::Interpreter<'a> {
                     Some(Value::Int(r)) => r,
                     _ => return Some(Value::Bool(true)),
                 };
-                Some(Value::Bool(rank >= self.tracing_min_level))
+                Some(Value::Bool(rank >= self.tracing_min_level.into()))
             }
             "tracing_set_min_level" => {
                 if let Some(Value::Int(r)) = args.first().map(|a| self.eval_expr_inner(&a.value)) {
-                    self.tracing_min_level = r;
+                    self.tracing_min_level = narrow_to_i64(r);
                 }
                 Some(Value::Unit)
             }
@@ -2588,7 +2592,7 @@ impl<'a> super::Interpreter<'a> {
             return Value::Unit;
         }
 
-        self.active_span_stack.push(span_id);
+        self.active_span_stack.push(narrow_to_i64(span_id));
         let result = self.invoke_zero_arg_closure(closure, span);
         self.active_span_stack.pop();
         result

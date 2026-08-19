@@ -15,6 +15,7 @@ use std::collections::HashMap;
 
 use crate::token::Span;
 
+use super::value::narrow_to_i64;
 use super::{EnumData, Value};
 
 /// The one canonical quiet NaN a total-order float wrapper may hold: sign
@@ -544,7 +545,7 @@ pub(super) fn eval_stats_fn(name: &str, xs: &[f64], p: Option<f64>, span: &Span)
                 ReduceOp::Argmin
             };
             match reduce_f64(xs, op) {
-                ReduceOutcome::OptIndex(Some(i)) => stats_option_some(Value::Int(i)),
+                ReduceOutcome::OptIndex(Some(i)) => stats_option_some(Value::Int(i.into())),
                 _ => stats_option_none(),
             }
         }
@@ -563,7 +564,7 @@ pub(super) fn eval_stats_fn(name: &str, xs: &[f64], p: Option<f64>, span: &Span)
             let ReduceOutcome::I64Vec(idx) = reduce_f64(xs, ReduceOp::Argsort) else {
                 unreachable!("Argsort returns I64Vec")
             };
-            let elems: Vec<Value> = idx.into_iter().map(Value::Int).collect();
+            let elems: Vec<Value> = idx.into_iter().map(|v| Value::Int(v.into())).collect();
             Value::Array(std::sync::Arc::new(std::sync::RwLock::new(elems)))
         }
         _ => Value::Unit,
@@ -597,7 +598,7 @@ pub(super) fn eval_stats_fn_int(name: &str, xs: &[i64], p: Option<f64>, span: &S
                 ReduceOp::Prod
             };
             match run(op) {
-                ReduceOutcome::IntScalar(v) => Value::Int(v),
+                ReduceOutcome::IntScalar(v) => Value::Int(v.into()),
                 _ => unreachable!("int sum/prod returns IntScalar"),
             }
         }
@@ -627,7 +628,7 @@ pub(super) fn eval_stats_fn_int(name: &str, xs: &[i64], p: Option<f64>, span: &S
                 ReduceOp::Max
             };
             match run(op) {
-                ReduceOutcome::OptIntScalar(Some(v)) => stats_option_some(Value::Int(v)),
+                ReduceOutcome::OptIntScalar(Some(v)) => stats_option_some(Value::Int(v.into())),
                 _ => stats_option_none(),
             }
         }
@@ -658,7 +659,7 @@ pub(super) fn eval_stats_fn_int(name: &str, xs: &[i64], p: Option<f64>, span: &S
                 ReduceOp::Argmin
             };
             match run(op) {
-                ReduceOutcome::OptIndex(Some(i)) => stats_option_some(Value::Int(i)),
+                ReduceOutcome::OptIndex(Some(i)) => stats_option_some(Value::Int(i.into())),
                 _ => stats_option_none(),
             }
         }
@@ -671,7 +672,7 @@ pub(super) fn eval_stats_fn_int(name: &str, xs: &[i64], p: Option<f64>, span: &S
             let ReduceOutcome::I64Vec(v) = run(op) else {
                 unreachable!("int sort/argsort returns I64Vec")
             };
-            let elems: Vec<Value> = v.into_iter().map(Value::Int).collect();
+            let elems: Vec<Value> = v.into_iter().map(|v| Value::Int(v.into())).collect();
             Value::Array(std::sync::Arc::new(std::sync::RwLock::new(elems)))
         }
         _ => Value::Unit,
@@ -911,7 +912,10 @@ pub(super) fn url_decode(s: &str) -> Result<String, String> {
 }
 
 pub(super) fn decode_ok_bytes(bytes: Vec<u8>) -> Value {
-    let arr: Vec<Value> = bytes.into_iter().map(|b| Value::Int(b as i64)).collect();
+    let arr: Vec<Value> = bytes
+        .into_iter()
+        .map(|b| Value::Int((b as i64).into()))
+        .collect();
     Value::EnumVariant {
         enum_name: "Result".to_string(),
         variant: "Ok".to_string(),
@@ -985,7 +989,7 @@ pub(super) fn io_error_from_std(e: &std::io::Error) -> Value {
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) fn make_response(status: u16, body: String, headers: Vec<(String, String)>) -> Value {
     let mut fields = HashMap::new();
-    fields.insert("status".to_string(), Value::Int(status as i64));
+    fields.insert("status".to_string(), Value::Int((status as i64).into()));
     fields.insert("body".to_string(), Value::String(body));
     let header_pairs: Vec<Value> = headers
         .into_iter()
@@ -1093,7 +1097,7 @@ pub(super) fn serde_json_to_kara_json(v: &serde_json::Value) -> Value {
         // `.0` on re-stringify, no truncation past 2^53. A u64 beyond
         // i64::MAX falls to the f64 arm (documented lossy; the payload is i64).
         serde_json::Value::Number(n) => match n.as_i64() {
-            Some(i) => ("Int", EnumData::Tuple(vec![Value::Int(i)])),
+            Some(i) => ("Int", EnumData::Tuple(vec![Value::Int(i.into())])),
             None => (
                 "Number",
                 EnumData::Tuple(vec![Value::Float(n.as_f64().unwrap_or(0.0))]),
@@ -1176,7 +1180,9 @@ pub(super) fn kara_json_to_serde_json(v: &Value) -> serde_json::Value {
         // fractional part, no f64 rounding, so 2^53+1 survives exactly. A
         // float payload in the Int slot (defensive) truncates.
         "Int" => match payload.first() {
-            Some(Value::Int(i)) => serde_json::Value::Number(serde_json::Number::from(*i)),
+            Some(Value::Int(i)) => {
+                serde_json::Value::Number(serde_json::Number::from(narrow_to_i64(*i)))
+            }
             Some(Value::Float(f)) => serde_json::Value::Number(serde_json::Number::from(*f as i64)),
             _ => serde_json::Value::Null,
         },
@@ -1219,8 +1225,8 @@ pub(super) fn kara_json_to_serde_json(v: &Value) -> serde_json::Value {
 /// Build a `JsonError` struct value from `serde_json::Error`.
 pub(super) fn make_json_error(e: &serde_json::Error) -> Value {
     let mut fields = HashMap::new();
-    fields.insert("line".to_string(), Value::Int(e.line() as i64));
-    fields.insert("column".to_string(), Value::Int(e.column() as i64));
+    fields.insert("line".to_string(), Value::Int((e.line() as i64).into()));
+    fields.insert("column".to_string(), Value::Int((e.column() as i64).into()));
     fields.insert("message".to_string(), Value::String(e.to_string()));
     Value::Struct {
         name: "JsonError".to_string(),

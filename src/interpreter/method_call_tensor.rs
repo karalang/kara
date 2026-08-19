@@ -30,6 +30,7 @@ use crate::token::Span;
 use super::helpers::minmax_value_reduce;
 use super::helpers::value_as_f64 as value_to_f64;
 use super::helpers::{value_compare, value_compare_u64};
+use super::value::narrow_to_i64;
 use crate::interpreter::value::EnumData;
 
 /// Element-fill class for `Tensor.zeros` / `Tensor.ones` — the only
@@ -232,12 +233,12 @@ fn collect_tensor_literal_dims<'e>(
 /// to a tuple index). `None` when the value isn't an integer family.
 pub(super) fn index_components(idx: &Value) -> Option<Vec<i64>> {
     match idx {
-        Value::Int(i) => Some(vec![*i]),
+        Value::Int(i) => Some(vec![narrow_to_i64(*i)]),
         Value::Tuple(parts) => {
             let mut out = Vec::with_capacity(parts.len());
             for p in parts {
                 match p {
-                    Value::Int(i) => out.push(*i),
+                    Value::Int(i) => out.push(narrow_to_i64(*i)),
                     _ => return None,
                 }
             }
@@ -299,7 +300,7 @@ impl<'a> super::Interpreter<'a> {
                 let mut out = Vec::with_capacity(guard.len());
                 for v in guard.iter() {
                     match v {
-                        Value::Int(i) if *i >= 0 => out.push(*i),
+                        Value::Int(i) if *i >= 0 => out.push(narrow_to_i64(*i)),
                         Value::Int(i) => {
                             return Some(self.record_runtime_error(
                                 format!("tensor dim must be non-negative, got {}", i),
@@ -401,9 +402,9 @@ impl<'a> super::Interpreter<'a> {
             };
         match method {
             "shape" => Some(Value::Array(Arc::new(RwLock::new(
-                dims.iter().map(|&d| Value::Int(d)).collect(),
+                dims.iter().map(|&d| Value::Int(d.into())).collect(),
             )))),
-            "rank" => Some(Value::Int(dims.len() as i64)),
+            "rank" => Some(Value::Int((dims.len() as i64).into())),
             // Serialize to an Arrow IPC stream (`Vec[u8]`) as the canonical
             // `arrow.fixed_shape_tensor` extension — a single-row
             // FixedSizeList over the flattened values with the shape in the
@@ -596,7 +597,7 @@ impl<'a> super::Interpreter<'a> {
                     Some((i, _)) => Value::EnumVariant {
                         enum_name: "Option".to_string(),
                         variant: "Some".to_string(),
-                        data: EnumData::Tuple(vec![Value::Int(i as i64)]),
+                        data: EnumData::Tuple(vec![Value::Int((i as i64).into())]),
                     },
                     None => Value::EnumVariant {
                         enum_name: "Option".to_string(),
@@ -620,7 +621,10 @@ impl<'a> super::Interpreter<'a> {
                 let elems = data.read().unwrap();
                 let mut idxs: Vec<usize> = (0..elems.len()).collect();
                 idxs.sort_by(|&a, &b| ord_cmp(&elems[a], &elems[b]));
-                let out: Vec<Value> = idxs.into_iter().map(|i| Value::Int(i as i64)).collect();
+                let out: Vec<Value> = idxs
+                    .into_iter()
+                    .map(|i| Value::Int((i as i64).into()))
+                    .collect();
                 Some(Value::Array(Arc::new(RwLock::new(out))))
             }
             "sum_axis" | "mean_axis" => {
@@ -1022,7 +1026,7 @@ impl<'a> super::Interpreter<'a> {
         let mut new_dims: Vec<i64> = Vec::with_capacity(entries.len());
         for entry in entries {
             match self.eval_expr_inner(entry) {
-                Value::Int(v) if v >= 0 => new_dims.push(v),
+                Value::Int(v) if v >= 0 => new_dims.push(narrow_to_i64(v)),
                 Value::Int(v) => {
                     return self.record_runtime_error(
                         format!("reshape dim must be non-negative, got {}", v),
@@ -1271,7 +1275,7 @@ impl<'a> super::Interpreter<'a> {
         for i in 0..m {
             for j in 0..n {
                 if int_elems {
-                    let mut acc: i64 = 0;
+                    let mut acc: i128 = 0;
                     for p in 0..k {
                         let x = match &a[i * k + p] {
                             Value::Int(v) => *v,
@@ -1340,7 +1344,7 @@ impl<'a> super::Interpreter<'a> {
                 return self
                     .record_runtime_error("slice arguments must be integers".to_string(), span);
             };
-            *slot = v;
+            *slot = narrow_to_i64(v);
         }
         let [axis, start, end] = vals;
         let rank = dims.len();

@@ -19,6 +19,7 @@ use crate::ast::*;
 use crate::token::Span;
 
 use super::helpers::{io_err_value, io_error_from_std, io_ok};
+use super::value::narrow_to_i64;
 use super::value::Value;
 
 impl<'a> super::Interpreter<'a> {
@@ -97,9 +98,9 @@ impl<'a> super::Interpreter<'a> {
                     Ok(n) => {
                         let mut storage_guard = storage.write().unwrap();
                         for (i, &b) in byte_buf[..n].iter().enumerate() {
-                            storage_guard[start + i] = Value::Int(b as i64);
+                            storage_guard[start + i] = Value::Int((b as i64).into());
                         }
-                        Some(io_ok(Value::Int(n as i64)))
+                        Some(io_ok(Value::Int((n as i64).into())))
                     }
                     Err(e) => Some(io_err_value(io_error_from_std(&e))),
                 }
@@ -161,7 +162,7 @@ impl<'a> super::Interpreter<'a> {
                     guard.write(&bytes)
                 };
                 match write_result {
-                    Ok(n) => Some(io_ok(Value::Int(n as i64))),
+                    Ok(n) => Some(io_ok(Value::Int((n as i64).into()))),
                     Err(e) => Some(io_err_value(io_error_from_std(&e))),
                 }
             }
@@ -246,8 +247,8 @@ impl<'a> super::Interpreter<'a> {
                             }
                             SeekFrom::Start(offset as u64)
                         }
-                        "Current" => SeekFrom::Current(offset),
-                        "End" => SeekFrom::End(offset),
+                        "Current" => SeekFrom::Current(narrow_to_i64(offset)),
+                        "End" => SeekFrom::End(narrow_to_i64(offset)),
                         other => {
                             return Some(self.record_runtime_error(
                                 format!("File.seek: unknown SeekFrom variant '{other}'"),
@@ -270,7 +271,7 @@ impl<'a> super::Interpreter<'a> {
                     guard.seek(pos)
                 };
                 match seek_result {
-                    Ok(p) => Some(io_ok(Value::Int(p as i64))),
+                    Ok(p) => Some(io_ok(Value::Int((p as i64).into()))),
                     Err(e) => Some(io_err_value(io_error_from_std(&e))),
                 }
             }

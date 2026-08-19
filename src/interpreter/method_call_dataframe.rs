@@ -19,6 +19,7 @@
 
 use std::sync::{Arc, RwLock};
 
+use super::value::narrow_to_i64;
 use crate::ast::CallArg;
 use crate::interpreter::value::Value;
 use crate::token::Span;
@@ -264,7 +265,7 @@ impl<'a> super::Interpreter<'a> {
             }
             "width" => {
                 let cols = columns.read().unwrap();
-                Some(Value::Int(cols.len() as i64))
+                Some(Value::Int((cols.len() as i64).into()))
             }
             // Row count — every column's length (kept uniform by the
             // equal-length invariant); 0 for an empty table.
@@ -274,7 +275,7 @@ impl<'a> super::Interpreter<'a> {
                     Value::Column { valid, .. } => valid.read().unwrap().len(),
                     _ => 0,
                 });
-                Some(Value::Int(h as i64))
+                Some(Value::Int((h as i64).into()))
             }
             // A fresh table with only the named columns, in the given
             // order (subset / reorder; views share the source buffers).
@@ -500,7 +501,7 @@ impl<'a> super::Interpreter<'a> {
                     }
                 };
                 let mut new_ops = ops.as_ref().clone();
-                new_ops.push(LazyOp::Limit(n));
+                new_ops.push(LazyOp::Limit(narrow_to_i64(n)));
                 Some(Value::LazyFrame {
                     source: Arc::clone(source),
                     ops: Arc::new(new_ops),
@@ -941,7 +942,7 @@ impl<'a> super::Interpreter<'a> {
 fn lazy_expr_ir_from_value(v: &Value) -> Result<crate::interpreter::value::LazyExprIR, String> {
     use crate::interpreter::value::LazyExprIR;
     Ok(match v {
-        Value::Int(n) => LazyExprIR::LitInt(*n),
+        Value::Int(n) => LazyExprIR::LitInt(narrow_to_i64(*n)),
         Value::Float(f) => LazyExprIR::LitFloat(*f),
         Value::String(s) => LazyExprIR::LitStr(s.clone()),
         Value::Bool(b) => LazyExprIR::LitBool(*b),
@@ -986,7 +987,7 @@ fn eval_lazy_scalar(
                 return Ok(None);
             }
             match &data.read().unwrap()[row] {
-                Value::Int(n) => Some(LazyScalar::I(*n)),
+                Value::Int(n) => Some(LazyScalar::I(narrow_to_i64(*n))),
                 Value::Float(f) => Some(LazyScalar::F(*f)),
                 Value::String(s) => Some(LazyScalar::S(s.clone())),
                 Value::Bool(b) => Some(LazyScalar::B(*b)),
@@ -1333,7 +1334,7 @@ fn eval_lazy_plan(
                     for row in 0..height {
                         match eval_lazy_scalar(inner, &cur, row)? {
                             Some(LazyScalar::I(v)) => {
-                                data.push(Value::Int(v));
+                                data.push(Value::Int(v.into()));
                                 validv.push(true);
                             }
                             Some(LazyScalar::F(v)) => {
@@ -1700,7 +1701,7 @@ fn eval_lazy_group_by(
                     valid.push(false);
                 }
                 (_, LazySortKey::I(v)) => {
-                    data.push(Value::Int(*v));
+                    data.push(Value::Int((*v).into()));
                     valid.push(true);
                 }
                 (_, LazySortKey::F(v)) => {
@@ -1817,7 +1818,7 @@ fn eval_lazy_agg(
         }
     }
     if matches!(op, LazyAggOp::Count) {
-        return Ok((Value::Int(count), true));
+        return Ok((Value::Int(count.into()), true));
     }
     if !strs.is_empty() {
         if !ints.is_empty() || !floats.is_empty() {
@@ -1847,7 +1848,7 @@ fn eval_lazy_agg(
     Ok(match op {
         LazyAggOp::Sum => {
             if all_int {
-                (Value::Int(ints.iter().sum()), true)
+                (Value::Int(ints.iter().sum::<i64>().into()), true)
             } else {
                 (Value::Float(vals.iter().sum()), true)
             }
@@ -1858,7 +1859,7 @@ fn eval_lazy_agg(
         ),
         LazyAggOp::Min => {
             if all_int {
-                (Value::Int(*ints.iter().min().unwrap()), true)
+                (Value::Int((*ints.iter().min().unwrap()).into()), true)
             } else {
                 (
                     Value::Float(vals.iter().cloned().fold(f64::INFINITY, f64::min)),
@@ -1868,7 +1869,7 @@ fn eval_lazy_agg(
         }
         LazyAggOp::Max => {
             if all_int {
-                (Value::Int(*ints.iter().max().unwrap()), true)
+                (Value::Int((*ints.iter().max().unwrap()).into()), true)
             } else {
                 (
                     Value::Float(vals.iter().cloned().fold(f64::NEG_INFINITY, f64::max)),
@@ -2595,7 +2596,7 @@ pub(super) fn parse_csv_to_dataframe(text: &str) -> Result<Value, String> {
                 }
                 Some(s) => {
                     data.push(if all_i64 {
-                        Value::Int(s.parse::<i64>().unwrap())
+                        Value::Int(s.parse::<i64>().unwrap().into())
                     } else if all_f64 {
                         Value::Float(s.parse::<f64>().unwrap())
                     } else {

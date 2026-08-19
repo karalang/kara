@@ -1037,7 +1037,7 @@ impl<'a> super::Interpreter<'a> {
         // Project the scrutinee value into a sortable scalar key (i128 to
         // accommodate i64 + char in the same comparison space).
         let key: i128 = match value {
-            Value::Int(n) => *n as i128,
+            Value::Int(n) => *n,
             Value::Char(c) => (*c as u32) as i128,
             _ => return false,
         };
@@ -1052,7 +1052,7 @@ impl<'a> super::Interpreter<'a> {
                 RangeBound::Literal(_) => None,
                 RangeBound::Path { segments, .. } if segments.len() == 1 => {
                     match self.env.get(&segments[0]) {
-                        Some(Value::Int(n)) => Some(n as i128),
+                        Some(Value::Int(n)) => Some(n),
                         Some(Value::Char(c)) => Some((c as u32) as i128),
                         _ => None,
                     }
@@ -1085,7 +1085,7 @@ impl<'a> super::Interpreter<'a> {
 
     fn literal_to_value(&self, lit: &LiteralPattern) -> Value {
         match lit {
-            LiteralPattern::Integer(i, _) => Value::Int(*i),
+            LiteralPattern::Integer(i, _) => Value::Int((*i).into()),
             LiteralPattern::Float(f, _) => Value::Float(*f),
             LiteralPattern::String(s) => Value::String(s.clone()),
             LiteralPattern::Char(c) => Value::Char(*c),

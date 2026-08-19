@@ -68,9 +68,12 @@ impl<'a> super::Interpreter<'a> {
                                         );
                                         mf.insert(
                                             "start".to_string(),
-                                            Value::Int(m.start() as i64),
+                                            Value::Int((m.start() as i64).into()),
                                         );
-                                        mf.insert("end".to_string(), Value::Int(m.end() as i64));
+                                        mf.insert(
+                                            "end".to_string(),
+                                            Value::Int((m.end() as i64).into()),
+                                        );
                                         Value::EnumVariant {
                                             enum_name: "Option".to_string(),
                                             variant: "Some".to_string(),
@@ -117,9 +120,12 @@ impl<'a> super::Interpreter<'a> {
                                         );
                                         mf.insert(
                                             "start".to_string(),
-                                            Value::Int(m.start() as i64),
+                                            Value::Int((m.start() as i64).into()),
                                         );
-                                        mf.insert("end".to_string(), Value::Int(m.end() as i64));
+                                        mf.insert(
+                                            "end".to_string(),
+                                            Value::Int((m.end() as i64).into()),
+                                        );
                                         Value::Struct {
                                             name: "Match".to_string(),
                                             fields: mf,

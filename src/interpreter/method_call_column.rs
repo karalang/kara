@@ -79,7 +79,10 @@ fn none_value() -> Value {
 /// `DataFrame.to_arrow_ipc`, hence `pub(super)`).
 pub(super) fn bytes_to_value(bytes: Vec<u8>) -> Value {
     Value::Array(Arc::new(RwLock::new(
-        bytes.into_iter().map(|b| Value::Int(b as i64)).collect(),
+        bytes
+            .into_iter()
+            .map(|b| Value::Int((b as i64).into()))
+            .collect(),
     )))
 }
 
@@ -350,14 +353,14 @@ impl<'a> super::Interpreter<'a> {
                 valid.write().unwrap().push(false);
                 Some(Value::Unit)
             }
-            "len" => Some(Value::Int(valid.read().unwrap().len() as i64)),
+            "len" => Some(Value::Int((valid.read().unwrap().len() as i64).into())),
             "null_count" => {
                 let n = valid.read().unwrap().iter().filter(|&&v| !v).count();
-                Some(Value::Int(n as i64))
+                Some(Value::Int((n as i64).into()))
             }
             "valid_count" => {
                 let n = valid.read().unwrap().iter().filter(|&&v| v).count();
-                Some(Value::Int(n as i64))
+                Some(Value::Int((n as i64).into()))
             }
             "is_null" => {
                 let arg = args.first()?;
@@ -690,7 +693,7 @@ impl<'a> super::Interpreter<'a> {
                     Some((i, _)) => Value::EnumVariant {
                         enum_name: "Option".to_string(),
                         variant: "Some".to_string(),
-                        data: EnumData::Tuple(vec![Value::Int(i as i64)]),
+                        data: EnumData::Tuple(vec![Value::Int((i as i64).into())]),
                     },
                     None => Value::EnumVariant {
                         enum_name: "Option".to_string(),
@@ -732,7 +735,7 @@ impl<'a> super::Interpreter<'a> {
                 pairs.sort_by(|a, b| ord_cmp(&a.1, &b.1));
                 let idxs: Vec<Value> = pairs
                     .into_iter()
-                    .map(|(i, _)| Value::Int(i as i64))
+                    .map(|(i, _)| Value::Int((i as i64).into()))
                     .collect();
                 Some(Value::Array(Arc::new(RwLock::new(idxs))))
             }

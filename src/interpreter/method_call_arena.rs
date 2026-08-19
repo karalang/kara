@@ -23,6 +23,7 @@ use std::collections::HashMap;
 use crate::ast::*;
 use crate::token::Span;
 
+use super::value::narrow_to_i64;
 use super::value::Value;
 
 impl<'a> super::Interpreter<'a> {
@@ -36,7 +37,7 @@ impl<'a> super::Interpreter<'a> {
         self.arena_table.insert(handle, Vec::new());
 
         let mut fields = HashMap::new();
-        fields.insert("handle_id".to_string(), Value::Int(handle));
+        fields.insert("handle_id".to_string(), Value::Int(handle.into()));
         Some(Value::Struct {
             name: "Arena".to_string(),
             fields,
@@ -139,7 +140,7 @@ impl<'a> super::Interpreter<'a> {
             .get(&handle)
             .map(|v| v.len() as i64)
             .unwrap_or(0);
-        Some(Value::Int(n))
+        Some(Value::Int(n.into()))
     }
 }
 
@@ -153,7 +154,7 @@ fn arena_handle(obj: &Value) -> Option<i64> {
         return None;
     }
     match fields.get("handle_id") {
-        Some(Value::Int(h)) => Some(*h),
+        Some(Value::Int(h)) => Some(narrow_to_i64(*h)),
         _ => None,
     }
 }
@@ -173,7 +174,7 @@ fn unpack_arena_ref(obj: Value) -> Option<(i64, i64)> {
         Some(Value::Int(i)) => *i,
         _ => return None,
     };
-    Some((handle, index))
+    Some((narrow_to_i64(handle), narrow_to_i64(index)))
 }
 
 fn unpack_arena_checkpoint(obj: Value) -> Option<(i64, i64)> {
@@ -191,15 +192,15 @@ fn unpack_arena_checkpoint(obj: Value) -> Option<(i64, i64)> {
         Some(Value::Int(m)) => *m,
         _ => return None,
     };
-    Some((handle, mark))
+    Some((narrow_to_i64(handle), narrow_to_i64(mark)))
 }
 
 // ── Kāra-value constructors ───────────────────────────────────────
 
 fn arena_ref(handle: i64, index: i64) -> Value {
     let mut fields = HashMap::new();
-    fields.insert("arena_handle_id".to_string(), Value::Int(handle));
-    fields.insert("index".to_string(), Value::Int(index));
+    fields.insert("arena_handle_id".to_string(), Value::Int(handle.into()));
+    fields.insert("index".to_string(), Value::Int(index.into()));
     Value::Struct {
         name: "ArenaRef".to_string(),
         fields,
@@ -208,8 +209,8 @@ fn arena_ref(handle: i64, index: i64) -> Value {
 
 fn arena_checkpoint(handle: i64, mark: i64) -> Value {
     let mut fields = HashMap::new();
-    fields.insert("arena_handle_id".to_string(), Value::Int(handle));
-    fields.insert("mark".to_string(), Value::Int(mark));
+    fields.insert("arena_handle_id".to_string(), Value::Int(handle.into()));
+    fields.insert("mark".to_string(), Value::Int(mark.into()));
     Value::Struct {
         name: "ArenaCheckpoint".to_string(),
         fields,

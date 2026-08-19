@@ -30,6 +30,7 @@ use std::collections::HashMap;
 use crate::ast::*;
 use crate::token::Span;
 
+use super::value::narrow_to_i64;
 use super::value::{EnumData, Value};
 
 impl<'a> super::Interpreter<'a> {
@@ -44,7 +45,7 @@ impl<'a> super::Interpreter<'a> {
         self.once_table.insert(handle, None);
 
         let mut fields = HashMap::new();
-        fields.insert("handle_id".to_string(), Value::Int(handle));
+        fields.insert("handle_id".to_string(), Value::Int(handle.into()));
         Some(Value::Struct {
             name: type_name.to_string(),
             fields,
@@ -160,7 +161,7 @@ fn once_handle(obj: &Value) -> Option<i64> {
         return None;
     }
     match fields.get("handle_id") {
-        Some(Value::Int(h)) => Some(*h),
+        Some(Value::Int(h)) => Some(narrow_to_i64(*h)),
         _ => None,
     }
 }

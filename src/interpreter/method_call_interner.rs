@@ -23,6 +23,7 @@ use std::collections::HashMap;
 use crate::ast::*;
 use crate::token::Span;
 
+use super::value::narrow_to_i64;
 use super::value::Value;
 
 impl<'a> super::Interpreter<'a> {
@@ -37,7 +38,7 @@ impl<'a> super::Interpreter<'a> {
             .insert(handle, (Vec::new(), HashMap::new()));
 
         let mut fields = HashMap::new();
-        fields.insert("handle_id".to_string(), Value::Int(handle));
+        fields.insert("handle_id".to_string(), Value::Int(handle.into()));
         Some(Value::Struct {
             name: "Interner".to_string(),
             fields,
@@ -83,7 +84,7 @@ impl<'a> super::Interpreter<'a> {
                 fresh
             }
         };
-        Some(Value::Int(id))
+        Some(Value::Int(id.into()))
     }
 
     /// `interner.resolve(sym) -> ref String` — hand back the interned
@@ -112,7 +113,7 @@ impl<'a> super::Interpreter<'a> {
             .get(&handle)
             .map(|(strings, _)| strings.len() as i64)
             .unwrap_or(0);
-        Some(Value::Int(n))
+        Some(Value::Int(n.into()))
     }
 }
 
@@ -126,7 +127,7 @@ fn interner_handle(obj: &Value) -> Option<i64> {
         return None;
     }
     match fields.get("handle_id") {
-        Some(Value::Int(h)) => Some(*h),
+        Some(Value::Int(h)) => Some(narrow_to_i64(*h)),
         _ => None,
     }
 }

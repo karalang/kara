@@ -84,7 +84,7 @@ impl<'a> super::Interpreter<'a> {
                         if let ExprKind::Identifier(name) = &buf_arg.value.kind {
                             self.env.set(name, Value::String(s));
                         }
-                        Some(io_ok(Value::Int(n as i64)))
+                        Some(io_ok(Value::Int((n as i64).into())))
                     }
                     Err(e) => Some(io_err_value(io_error_from_std(&e))),
                 }
@@ -136,9 +136,9 @@ impl<'a> super::Interpreter<'a> {
                     Ok(n) => {
                         let mut storage_guard = storage.write().unwrap();
                         for (i, &b) in byte_buf[..n].iter().enumerate() {
-                            storage_guard[start + i] = Value::Int(b as i64);
+                            storage_guard[start + i] = Value::Int((b as i64).into());
                         }
-                        Some(io_ok(Value::Int(n as i64)))
+                        Some(io_ok(Value::Int((n as i64).into())))
                     }
                     Err(e) => Some(io_err_value(io_error_from_std(&e))),
                 }
@@ -173,8 +173,10 @@ impl<'a> super::Interpreter<'a> {
                 match fill_result {
                     Ok(bytes) => {
                         let len = bytes.len();
-                        let storage: Vec<Value> =
-                            bytes.into_iter().map(|b| Value::Int(b as i64)).collect();
+                        let storage: Vec<Value> = bytes
+                            .into_iter()
+                            .map(|b| Value::Int((b as i64).into()))
+                            .collect();
                         Some(io_ok(Value::Slice {
                             storage: Arc::new(RwLock::new(storage)),
                             start: 0,

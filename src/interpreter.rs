@@ -62,7 +62,10 @@ use value::{
     try_write_or_panic, upgrade_weak_to_option, EnumData, FieldCell, OrdValue, SharedStructInner,
     ERROR_TRACE_MAX_DEPTH,
 };
-pub use value::{ErrorTraceFrame, RuntimeError, TestOutcome, Value};
+// `narrow_to_i64` is re-exported because consumers OUTSIDE the interpreter
+// (comptime folding, the formatter) also read integers out of the i128 carrier
+// and need the same checked narrowing (B-2026-08-19-8 stage 1).
+pub use value::{narrow_to_i64, ErrorTraceFrame, RuntimeError, TestOutcome, Value};
 
 /// Outcome of evaluating one contract predicate (design.md § Contracts
 /// rule 2). The two failure modes are reported as distinct fault
@@ -2610,7 +2613,7 @@ impl<'a> Interpreter<'a> {
                             kind: ExprKind::Index {
                                 object: container.clone(),
                                 index: Box::new(Expr {
-                                    kind: ExprKind::Integer(i, None),
+                                    kind: ExprKind::Integer(narrow_to_i64(i), None),
                                     span: index.span,
                                 }),
                             },

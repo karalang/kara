@@ -187,7 +187,7 @@ impl<'a> super::Interpreter<'a> {
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_secs() as i64)
                     .unwrap_or(0);
-                Value::Int(secs)
+                Value::Int(secs.into())
             }
             // wasm32 (the browser playground): `SystemTime::now()` panics
             // (`sys/time/unsupported`), which would trap the whole wasm
@@ -208,7 +208,7 @@ impl<'a> super::Interpreter<'a> {
                 x ^= x >> 7;
                 x ^= x << 17;
                 self.rand_state = x;
-                Value::Int(x as i64)
+                Value::Int((x as i64).into())
             }
             ("Env", "args") => {
                 // The PROGRAM's argv as `Vec[String]`, element 0 the program

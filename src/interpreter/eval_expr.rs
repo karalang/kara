@@ -15,6 +15,7 @@ use crate::ast::*;
 use crate::resolver::SpanKey;
 
 use super::exec::{add_pattern_bindings, collect_free_idents_expr, ControlFlow};
+use super::value::narrow_to_i64;
 use super::value::{primitive_const_to_value, EnumData, IteratorSource, OrdValue, Value};
 
 impl<'a> super::Interpreter<'a> {
@@ -46,7 +47,7 @@ impl<'a> super::Interpreter<'a> {
         }
         match &expr.kind {
             // Literals
-            ExprKind::Integer(i, _) => Value::Int(*i),
+            ExprKind::Integer(i, _) => Value::Int((*i).into()),
             // Suffixed narrow-float literals round to the target format's
             // precision at creation (B-2026-07-22-4): codegen materializes
             // `2.7bf16` as the bfloat constant 2.703125, so an interpreter
@@ -78,7 +79,7 @@ impl<'a> super::Interpreter<'a> {
             ExprKind::CharLit(c) => Value::Char(*c),
             // `b'X'` evaluates as a u8 via the shared `Value::Int(i64)` carrier
             // (the typechecker has already classified the value as u8).
-            ExprKind::ByteLit(b) => Value::Int(i64::from(*b)),
+            ExprKind::ByteLit(b) => Value::Int(i128::from(*b)),
             ExprKind::StringLit(s) => Value::String(s.clone()),
             ExprKind::MultiStringLit(s) => Value::String(s.clone()),
             // `c"..."` — bytes exclude the trailing NUL (a codegen-level
@@ -113,7 +114,7 @@ impl<'a> super::Interpreter<'a> {
                                 // fallback keeps eval total.
                                 if let Ok(fs) = crate::format_spec::FormatSpec::parse(spec_raw) {
                                     let formatted = match &v {
-                                        Value::Int(i) => fs.apply_int(*i),
+                                        Value::Int(i) => fs.apply_int(narrow_to_i64(*i)),
                                         Value::Float(f) => fs.apply_float(*f),
                                         Value::String(s) => fs.apply_str(s),
                                         other => fs.apply_str(&self.display_render(other)),
@@ -242,7 +243,7 @@ impl<'a> super::Interpreter<'a> {
                     if let Some(code) =
                         crate::prelude::lookup_exitcode_const(&segments[0], &segments[1])
                     {
-                        return Value::Int(code as i64);
+                        return Value::Int((code as i64).into());
                     }
                 }
                 // Type-parameter dispatch: `T.method` where `T` is bound to a
@@ -396,7 +397,7 @@ impl<'a> super::Interpreter<'a> {
                     // `Value::Int(0 / 1)`. Mirrors the typechecker /
                     // codegen sibling intercepts.
                     if let Some(code) = crate::prelude::lookup_exitcode_const(name, field) {
-                        return Value::Int(code as i64);
+                        return Value::Int((code as i64).into());
                     }
                 }
                 let obj = self.eval_expr_inner(object);
@@ -1856,14 +1857,14 @@ impl<'a> super::Interpreter<'a> {
 pub(super) fn cast_value(val: Value, target: &str) -> Value {
     let int_from = |i: i64| -> Value {
         match target {
-            "i8" => Value::Int(i as i8 as i64),
-            "i16" => Value::Int(i as i16 as i64),
-            "i32" => Value::Int(i as i32 as i64),
-            "i64" | "isize" | "int" => Value::Int(i),
-            "u8" => Value::Int((i as u8) as i64),
-            "u16" => Value::Int((i as u16) as i64),
-            "u32" => Value::Int((i as u32) as i64),
-            "u64" | "usize" | "uint" => Value::Int(i),
+            "i8" => Value::Int((i as i8 as i64).into()),
+            "i16" => Value::Int((i as i16 as i64).into()),
+            "i32" => Value::Int((i as i32 as i64).into()),
+            "i64" | "isize" | "int" => Value::Int(i.into()),
+            "u8" => Value::Int(((i as u8) as i64).into()),
+            "u16" => Value::Int(((i as u16) as i64).into()),
+            "u32" => Value::Int(((i as u32) as i64).into()),
+            "u64" | "usize" | "uint" => Value::Int(i.into()),
             "f16" => Value::Float(round_f64_via_f16(i as f64)),
             "bf16" => Value::Float(round_f64_via_bf16(i as f64)),
             "f32" => Value::Float(i as f32 as f64),
@@ -1874,7 +1875,7 @@ pub(super) fn cast_value(val: Value, target: &str) -> Value {
             // codegen, which yields the character, not its codepoint. `from_u32`
             // is total on 0..=255; the fallback is unreachable for a u8 source.
             "char" => Value::Char(char::from_u32(i as u32).unwrap_or('\u{FFFD}')),
-            _ => Value::Int(i),
+            _ => Value::Int(i.into()),
         }
     };
     let float_from = |f: f64| -> Value {
@@ -1886,19 +1887,19 @@ pub(super) fn cast_value(val: Value, target: &str) -> Value {
             "bf16" => Value::Float(round_f64_via_bf16(f)),
             "f32" => Value::Float(f as f32 as f64),
             "f64" | "float" => Value::Float(f),
-            "i8" => Value::Int(f as i8 as i64),
-            "i16" => Value::Int(f as i16 as i64),
-            "i32" => Value::Int(f as i32 as i64),
-            "i64" | "isize" | "int" => Value::Int(f as i64),
-            "u8" => Value::Int((f as u8) as i64),
-            "u16" => Value::Int((f as u16) as i64),
-            "u32" => Value::Int((f as u32) as i64),
-            "u64" | "usize" | "uint" => Value::Int(f as u64 as i64),
+            "i8" => Value::Int((f as i8 as i64).into()),
+            "i16" => Value::Int((f as i16 as i64).into()),
+            "i32" => Value::Int((f as i32 as i64).into()),
+            "i64" | "isize" | "int" => Value::Int((f as i64).into()),
+            "u8" => Value::Int(((f as u8) as i64).into()),
+            "u16" => Value::Int(((f as u16) as i64).into()),
+            "u32" => Value::Int(((f as u32) as i64).into()),
+            "u64" | "usize" | "uint" => Value::Int((f as u64 as i64).into()),
             _ => Value::Float(f),
         }
     };
     match val {
-        Value::Int(i) => int_from(i),
+        Value::Int(i) => int_from(narrow_to_i64(i)),
         Value::Float(f) => float_from(f),
         Value::Bool(b) => int_from(b as i64),
         Value::Char(c) => int_from(c as u32 as i64),

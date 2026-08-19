@@ -252,9 +252,60 @@ impl TensorElemWidth {
     }
 }
 
+/// Narrow the i128 integer carrier to `i64` for a consumer that is not
+/// 128-bit-ready yet.
+///
+/// STAGE-1 MARKER (B-2026-08-19-8). `Value::Int` carries i128, but 128-bit is
+/// still REJECTED at type-check (B-2026-08-19-6) until codegen's own i64
+/// carrier and the lexer catch up — so every value reaching an i64-only
+/// consumer today genuinely fits, and the `debug_assert` proves that on every
+/// test run rather than assuming it.
+///
+/// Each call site is also a place stage 3/5 must revisit once values can
+/// exceed i64: `grep -rn narrow_to_i64 src/` is that worklist. Written as a
+/// named helper rather than a bare `as i64` precisely so the worklist exists —
+/// a plain cast would leave 100+ silent truncation points indistinguishable
+/// from ordinary code, which is the mistake B-2026-08-19-6 was made of.
+///
+/// A HARD check, not a `debug_assert`. The cheaper form would let a release
+/// build truncate silently if the staging reasoning above is ever wrong, and
+/// silent truncation of an integer is the exact defect this whole line of work
+/// exists to remove. One `try_from` against tree-walk dispatch cost is not
+/// worth trading that for; the stage-1 benchmark is what says whether that
+/// judgement holds.
+#[inline]
+pub fn narrow_to_i64(n: i128) -> i64 {
+    match i64::try_from(n) {
+        Ok(v) => v,
+        Err(_) => panic!(
+            "internal error: 128-bit value {n} reached an i64-only consumer. \
+             The `Value::Int` carrier is i128 but this consumer is not 128-bit \
+             ready yet (B-2026-08-19-8 stage 3/5)."
+        ),
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Value {
-    Int(i64),
+    /// Every integer width's runtime carrier (B-2026-08-19-8 stage 1).
+    ///
+    /// WIDENED FROM `i64` deliberately, and the alternative is worth recording:
+    /// a parallel `Int128(i128)` variant produced only TWO compiler errors
+    /// against 480 `Value::Int` sites, because all but two of those matches
+    /// carry a catch-all — so a 128-bit value would have fallen through ~478
+    /// arms in silence. That is the exact shape of B-2026-08-19-6, where
+    /// 128-bit was admitted to the type system with nothing enforcing that the
+    /// value paths kept up. Widening costs more edits and has no silent path:
+    /// every site that cares about the width is a compile error.
+    ///
+    /// Carrying i128 does NOT grow `Value` — it is already 184 bytes because of
+    /// the `String` variant.
+    ///
+    /// The carrier is wider than any width it currently serves: 128-bit is
+    /// still REJECTED at type-check (B-2026-08-19-6) until the codegen carrier
+    /// and the lexer catch up, so nothing puts an out-of-i64-range value in
+    /// here yet. That is intentional staging, not an oversight.
+    Int(i128),
     Float(f64),
     Bool(bool),
     Char(char),
@@ -1409,10 +1460,10 @@ pub(crate) fn try_write_or_panic<'a>(
 pub(crate) fn primitive_const_to_value(cv: &crate::prelude::ConstValue) -> Value {
     use crate::prelude::ConstValue::*;
     match cv {
-        I8(v) => Value::Int(*v as i64),
-        I16(v) => Value::Int(*v as i64),
-        I32(v) => Value::Int(*v as i64),
-        I64(v) => Value::Int(*v),
+        I8(v) => Value::Int((*v as i64).into()),
+        I16(v) => Value::Int((*v as i64).into()),
+        I32(v) => Value::Int((*v as i64).into()),
+        I64(v) => Value::Int((*v).into()),
         // Const generics slice 2b: i128 / u128 coercion to Value::Int(i64)
         // is lossy — values that overflow i64 are silently truncated.
         // The slice 2 plan's hard-stop fallback acknowledged this:
@@ -1423,13 +1474,13 @@ pub(crate) fn primitive_const_to_value(cv: &crate::prelude::ConstValue) -> Value
         // primitive-table coercion for `i128.MAX` / `i128.MIN` style
         // associated constants — none are defined in PRIMITIVE_CONSTS
         // for the 128-bit widths.
-        I128(v) => Value::Int(*v as i64),
-        U8(v) => Value::Int(*v as i64),
-        U16(v) => Value::Int(*v as i64),
-        U32(v) => Value::Int(*v as i64),
-        U64(v) => Value::Int(*v as i64),
-        U128(v) => Value::Int(*v as i64),
-        Usize(v) => Value::Int(*v as i64),
+        I128(v) => Value::Int((*v as i64).into()),
+        U8(v) => Value::Int((*v as i64).into()),
+        U16(v) => Value::Int((*v as i64).into()),
+        U32(v) => Value::Int((*v as i64).into()),
+        U64(v) => Value::Int((*v as i64).into()),
+        U128(v) => Value::Int((*v as i64).into()),
+        Usize(v) => Value::Int((*v as i64).into()),
         F32(v) => Value::Float(*v as f64),
         F64(v) => Value::Float(*v),
         Bool(b) => Value::Bool(*b),

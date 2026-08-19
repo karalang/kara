@@ -11,6 +11,7 @@
 use crate::ast::*;
 use crate::token::Span;
 
+use super::value::narrow_to_i64;
 use super::value::{EnumData, IteratorSource, IteratorStep, Value};
 
 impl<'a> super::Interpreter<'a> {
@@ -634,7 +635,7 @@ impl<'a> super::Interpreter<'a> {
                     while self.iterator_step(&mut iter_val).is_some() {
                         n += 1;
                     }
-                    return Some(Value::Int(n));
+                    return Some(Value::Int(n.into()));
                 }
             }
             "collect" => {
@@ -940,7 +941,7 @@ impl<'a> super::Interpreter<'a> {
                             return Some(Value::EnumVariant {
                                 enum_name: "Option".to_string(),
                                 variant: "Some".to_string(),
-                                data: EnumData::Tuple(vec![Value::Int(idx)]),
+                                data: EnumData::Tuple(vec![Value::Int(idx.into())]),
                             });
                         }
                         idx += 1;
@@ -1078,6 +1079,7 @@ impl<'a> super::Interpreter<'a> {
                         return Some(none);
                     }
                     let mut iter_val = obj;
+                    let n = narrow_to_i64(n);
                     let mut idx: i64 = 0;
                     while let Some(item) = self.iterator_step(&mut iter_val) {
                         if idx == n {

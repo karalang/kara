@@ -52,6 +52,7 @@
 use std::time::{Duration, Instant};
 
 use crate::ast::*;
+use crate::interpreter::narrow_to_i64;
 use crate::interpreter::{Interpreter, Value};
 use crate::resolver::SpanKey;
 use crate::token::{FloatSuffix, IntSuffix, Span};
@@ -1141,7 +1142,7 @@ pub(crate) fn to_snake_case(name: &str) -> String {
 /// have no constant literal form in slice 2.
 fn value_to_expr(value: &Value, ty: Option<&Type>, span: &Span) -> Result<Expr, String> {
     let kind = match value {
-        Value::Int(n) => ExprKind::Integer(*n, int_suffix(ty)),
+        Value::Int(n) => ExprKind::Integer(narrow_to_i64(*n), int_suffix(ty)),
         Value::Float(f) => ExprKind::Float(*f, float_suffix(ty)),
         Value::Bool(b) => ExprKind::Bool(*b),
         Value::Char(c) => ExprKind::CharLit(*c),

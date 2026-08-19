@@ -11,6 +11,7 @@ use super::eval_expr::cast_value;
 use super::exec::ControlFlow;
 use super::helpers::{kara_json_to_serde_json, value_compare};
 use super::pascal_to_snake;
+use super::value::narrow_to_i64;
 use super::value::{try_write_or_panic, EnumData, Value};
 
 /// Host CPU-feature probe for the interpreter's `cpu.supports(name)` — the
@@ -155,7 +156,7 @@ pub(super) fn result_ok(v: Value) -> Value {
 /// be one of the integer type names; the single arg is evaluated here.
 pub(super) fn numeric_try_from_value(n: i64, target: &str) -> Value {
     if crate::numeric_conv::fits_in_target(n as i128, target) {
-        result_ok(Value::Int(n))
+        result_ok(Value::Int(n.into()))
     } else {
         Value::EnumVariant {
             enum_name: "Result".to_string(),
@@ -823,7 +824,7 @@ impl<'a> super::Interpreter<'a> {
             for i in 0..elems.len() {
                 let mut call_args = Vec::with_capacity(2 + uniforms.len());
                 call_args.push(buffer.clone());
-                call_args.push(Value::Int(i as i64));
+                call_args.push(Value::Int((i as i64).into()));
                 call_args.extend(uniforms.iter().cloned());
                 out.push(self.call_function(&kernel_name, &call_args));
             }
@@ -1163,7 +1164,7 @@ impl<'a> super::Interpreter<'a> {
                                 }
                             } else {
                                 match lane {
-                                    Value::Float(f) => Value::Int(f as i64),
+                                    Value::Float(f) => Value::Int((f as i64).into()),
                                     other => other,
                                 }
                             }
@@ -1238,7 +1239,7 @@ impl<'a> super::Interpreter<'a> {
                                 Ok(n) => Value::EnumVariant {
                                     enum_name: "Option".to_string(),
                                     variant: "Some".to_string(),
-                                    data: EnumData::Tuple(vec![Value::Int(n)]),
+                                    data: EnumData::Tuple(vec![Value::Int(n.into())]),
                                 },
                                 Err(_) => Value::EnumVariant {
                                     enum_name: "Option".to_string(),
@@ -1303,7 +1304,7 @@ impl<'a> super::Interpreter<'a> {
                                     return Value::EnumVariant {
                                         enum_name: "Option".to_string(),
                                         variant: "Some".to_string(),
-                                        data: EnumData::Tuple(vec![Value::Int(n)]),
+                                        data: EnumData::Tuple(vec![Value::Int(n.into())]),
                                     };
                                 }
                             }
@@ -1319,7 +1320,7 @@ impl<'a> super::Interpreter<'a> {
                     let mut cp_opt: Option<i64> = None;
                     if let Some(arg) = args.first() {
                         if let Value::Int(cp) = self.eval_expr_inner(&arg.value) {
-                            cp_opt = Some(cp);
+                            cp_opt = Some(narrow_to_i64(cp));
                         }
                     }
                     let cp = cp_opt.unwrap_or(0);
@@ -1337,7 +1338,7 @@ impl<'a> super::Interpreter<'a> {
                         None => Value::EnumVariant {
                             enum_name: "Result".to_string(),
                             variant: "Err".to_string(),
-                            data: EnumData::Tuple(vec![Value::Int(cp)]),
+                            data: EnumData::Tuple(vec![Value::Int(cp.into())]),
                         },
                     };
                 }
@@ -1355,7 +1356,7 @@ impl<'a> super::Interpreter<'a> {
                         Some(Value::Int(n)) => n,
                         _ => 0,
                     };
-                    return numeric_try_from_value(n, target);
+                    return numeric_try_from_value(narrow_to_i64(n), target);
                 }
                 if let Some(result) = self.dispatch_lowered_op(method, args, span) {
                     return result;
@@ -2104,9 +2105,13 @@ impl<'a> super::Interpreter<'a> {
         if method == "abs" && args.is_empty() {
             match &obj {
                 Value::Int(n) => {
+                    // `narrow_oob` as well as `checked_abs`: the carrier is i128
+                    // now, so `(i64::MIN).abs()` no longer overflows it and the
+                    // declared width is the only thing that still says this
+                    // traps (B-2026-08-19-8 stage 1).
                     return match n.checked_abs() {
-                        Some(a) => Value::Int(a),
-                        None => self.record_runtime_error("integer overflow".to_string(), span),
+                        Some(a) if !self.narrow_oob(a, span) => Value::Int(a),
+                        _ => self.record_runtime_error("integer overflow".to_string(), span),
                     };
                 }
                 Value::Float(f) => return Value::Float(f.abs()),
@@ -2307,8 +2312,10 @@ impl<'a> super::Interpreter<'a> {
         // as a float. Unsigned values are stored two's-complement in `Int`.
         if args.is_empty() {
             match (&obj, method) {
-                (Value::Float(f), "to_bits") => return Value::Int(f.to_bits() as i64),
-                (Value::Float(f), "to_bits32") => return Value::Int((*f as f32).to_bits() as i64),
+                (Value::Float(f), "to_bits") => return Value::Int((f.to_bits() as i64).into()),
+                (Value::Float(f), "to_bits32") => {
+                    return Value::Int(((*f as f32).to_bits() as i64).into())
+                }
                 (Value::Int(b), "bits_as_f64") => return Value::Float(f64::from_bits(*b as u64)),
                 (Value::Int(b), "bits_as_f32") => {
                     return Value::Float(f32::from_bits(*b as u32) as f64)
@@ -2339,7 +2346,9 @@ impl<'a> super::Interpreter<'a> {
                     // `saturating_*` / `overflowing_*` families use; the
                     // typechecker pins the argument to the receiver's type.
                     let w = self.overflow_arg_width(&args[0].value);
-                    return Value::Int(eval_wrapping_arith(method, a, b, w));
+                    return Value::Int(
+                        eval_wrapping_arith(method, narrow_to_i64(a), narrow_to_i64(b), w).into(),
+                    );
                 }
             }
         }
@@ -2360,7 +2369,7 @@ impl<'a> super::Interpreter<'a> {
                     // `MethodCall` aliases (`x.checked_mul(y).is_none()`).
                     let w = self.overflow_arg_width(&args[0].value);
                     if let Value::Int(b) = self.eval_expr_inner(&args[0].value) {
-                        return eval_overflow_arith(fam, op, a, b, w);
+                        return eval_overflow_arith(fam, op, narrow_to_i64(a), narrow_to_i64(b), w);
                     }
                 }
             }
@@ -2379,7 +2388,7 @@ impl<'a> super::Interpreter<'a> {
                 let base = *base;
                 if let Value::Int(exp) = self.eval_expr_inner(&args[0].value) {
                     let w = self.int_width_at(args_close_span);
-                    return self.eval_int_pow(base, exp as u64, w, span);
+                    return self.eval_int_pow(narrow_to_i64(base), exp as u64, w, span);
                 }
             }
         }
@@ -2400,14 +2409,25 @@ impl<'a> super::Interpreter<'a> {
                     if b == 0 {
                         return self.record_runtime_error("division by zero", span);
                     }
+                    // `rem_euclid` of MIN by -1 is 0 — fits every width, so
+                    // the result range check below cannot see the overflow.
+                    if self.div_overflows_at_width(a, b, &object.span) {
+                        return self.record_integer_overflow(span);
+                    }
                     let r = if method == "div_euclid" {
                         a.checked_div_euclid(b)
                     } else {
                         a.checked_rem_euclid(b)
                     };
+                    // Same carrier-widening caveat as `abs` above: MIN/-1 only
+                    // overflows the DECLARED width now, not the i128 carrier.
+                    // Width comes from the RECEIVER's span, the same source the
+                    // `checked_*` family above uses — the call span's recorded
+                    // type is the method's result, which is not what bounds the
+                    // receiver's width.
                     return match r {
-                        Some(v) => Value::Int(v),
-                        None => self.record_integer_overflow(span),
+                        Some(v) if !self.narrow_oob(v, &object.span) => Value::Int(v),
+                        _ => self.record_integer_overflow(span),
                     };
                 }
             }
@@ -2426,7 +2446,9 @@ impl<'a> super::Interpreter<'a> {
         {
             if let Value::Int(n) = &obj {
                 let w = self.int_width_at(args_close_span);
-                return Value::Int(eval_bit_intrinsic(method, *n, w) as i64);
+                return Value::Int(
+                    (eval_bit_intrinsic(method, narrow_to_i64(*n), w) as i64).into(),
+                );
             }
         }
 
@@ -2476,7 +2498,7 @@ impl<'a> super::Interpreter<'a> {
                     // m ≤ 2^(bits-1), so the u128 next-power-of-two fits the width.
                     (m as u128).next_power_of_two() as u64
                 };
-                return Value::Int(result as i64);
+                return Value::Int((result as i64).into());
             }
         }
 
@@ -2499,23 +2521,15 @@ impl<'a> super::Interpreter<'a> {
                         IntW::S(x) => (x, true),
                         IntW::U(x) => (x, false),
                     };
-                    let av: i128 = if signed {
-                        a as i128
-                    } else {
-                        (a as u64) as i128
-                    };
-                    let bv: i128 = if signed {
-                        b as i128
-                    } else {
-                        (b as u64) as i128
-                    };
+                    let av: i128 = if signed { a } else { (a as u64) as i128 };
+                    let bv: i128 = if signed { b } else { (b as u64) as i128 };
                     let diff: u128 = (av - bv).unsigned_abs();
                     let masked: u64 = if bits >= 64 {
                         diff as u64
                     } else {
                         (diff as u64) & ((1u64 << bits) - 1)
                     };
-                    return Value::Int(masked as i64);
+                    return Value::Int((masked as i64).into());
                 }
             }
         }
@@ -2528,7 +2542,7 @@ impl<'a> super::Interpreter<'a> {
         if args.is_empty() && matches!(method, "reverse_bits" | "swap_bytes") {
             if let Value::Int(n) = &obj {
                 let w = self.int_width_at(args_close_span);
-                return Value::Int(eval_bit_permute(method, *n, w));
+                return Value::Int(eval_bit_permute(method, narrow_to_i64(*n), w).into());
             }
         }
 
@@ -2545,7 +2559,9 @@ impl<'a> super::Interpreter<'a> {
                 }
                 if let Value::Int(amount) = amount {
                     let w = self.int_width_at(args_close_span);
-                    return Value::Int(eval_bit_rotate(method, n, amount as u32, w));
+                    return Value::Int(
+                        eval_bit_rotate(method, narrow_to_i64(n), amount as u32, w).into(),
+                    );
                 }
             }
         }
@@ -2687,10 +2703,10 @@ impl<'a> super::Interpreter<'a> {
                         (FloatToIntFamily::Checked, ConvOutcome::Value(v)) => Value::EnumVariant {
                             enum_name: "Option".to_string(),
                             variant: "Some".to_string(),
-                            data: EnumData::Tuple(vec![Value::Int(v as i64)]),
+                            data: EnumData::Tuple(vec![Value::Int((v as i64).into())]),
                         },
                         (FloatToIntFamily::Checked, ConvOutcome::None) => make_none(),
-                        (_, ConvOutcome::Value(v)) => Value::Int(v as i64),
+                        (_, ConvOutcome::Value(v)) => Value::Int((v as i64).into()),
                         (_, ConvOutcome::Panic) => {
                             self.record_runtime_error("float-to-int out of range".to_string(), span)
                         }
@@ -2830,7 +2846,7 @@ impl<'a> super::Interpreter<'a> {
                 };
             }
         }
-        Value::Int(acc as i64)
+        Value::Int((acc as i64).into())
     }
 }
 
@@ -3014,7 +3030,7 @@ fn some_int(v: i64) -> Value {
     Value::EnumVariant {
         enum_name: "Option".to_string(),
         variant: "Some".to_string(),
-        data: EnumData::Tuple(vec![Value::Int(v)]),
+        data: EnumData::Tuple(vec![Value::Int(v.into())]),
     }
 }
 
@@ -3098,9 +3114,11 @@ fn eval_overflow_arith(fam: OvFam, op: OvOp, a: i64, b: i64, w: IntW) -> Value {
                 } else {
                     res
                 };
-                Value::Int(s as i64)
+                Value::Int((s as i64).into())
             }
-            OvFam::Overflowing => Value::Tuple(vec![Value::Int(res as i64), Value::Bool(of)]),
+            OvFam::Overflowing => {
+                Value::Tuple(vec![Value::Int((res as i64).into()), Value::Bool(of)])
+            }
         };
     }
 
@@ -3139,7 +3157,7 @@ fn eval_overflow_arith(fam: OvFam, op: OvOp, a: i64, b: i64, w: IntW) -> Value {
                 none_value()
             }
         }
-        OvFam::Saturating => Value::Int(r.clamp(lo, hi) as i64),
+        OvFam::Saturating => Value::Int((r.clamp(lo, hi) as i64).into()),
         OvFam::Overflowing => {
             // Wrap into the width's value set, then back to signed range if signed.
             let modulus = 1i128 << bits;
@@ -3147,7 +3165,10 @@ fn eval_overflow_arith(fam: OvFam, op: OvOp, a: i64, b: i64, w: IntW) -> Value {
             if signed && wrapped > hi {
                 wrapped -= modulus;
             }
-            Value::Tuple(vec![Value::Int(wrapped as i64), Value::Bool(!in_range)])
+            Value::Tuple(vec![
+                Value::Int((wrapped as i64).into()),
+                Value::Bool(!in_range),
+            ])
         }
     }
 }

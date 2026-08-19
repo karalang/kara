@@ -20,6 +20,7 @@ use std::collections::HashMap;
 use crate::ast::*;
 use crate::token::Span;
 
+use super::value::narrow_to_i64;
 use super::value::{EnumData, Value};
 use super::SemEntry;
 
@@ -40,13 +41,13 @@ impl<'a> super::Interpreter<'a> {
         self.semaphore_table.insert(
             handle,
             SemEntry {
-                available: permits,
-                max: permits,
+                available: narrow_to_i64(permits),
+                max: narrow_to_i64(permits),
             },
         );
 
         let mut fields = HashMap::new();
-        fields.insert("handle_id".to_string(), Value::Int(handle));
+        fields.insert("handle_id".to_string(), Value::Int(handle.into()));
         Some(Value::Struct {
             name: "Semaphore".to_string(),
             fields,
@@ -105,7 +106,7 @@ fn semaphore_handle(obj: &Value) -> Option<i64> {
         return None;
     }
     match fields.get("handle_id") {
-        Some(Value::Int(h)) => Some(*h),
+        Some(Value::Int(h)) => Some(narrow_to_i64(*h)),
         _ => None,
     }
 }

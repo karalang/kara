@@ -18,6 +18,7 @@ use std::collections::{HashMap, VecDeque};
 use crate::ast::*;
 use crate::token::Span;
 
+use super::value::narrow_to_i64;
 use super::value::{EnumData, Value};
 use super::BoundedChannelEntry;
 
@@ -48,14 +49,14 @@ impl<'a> super::Interpreter<'a> {
         self.bounded_channel_table.insert(
             handle,
             BoundedChannelEntry {
-                capacity,
+                capacity: narrow_to_i64(capacity),
                 fail_fast,
                 queue: VecDeque::new(),
             },
         );
 
         let mut fields = HashMap::new();
-        fields.insert("handle_id".to_string(), Value::Int(handle));
+        fields.insert("handle_id".to_string(), Value::Int(handle.into()));
         Some(Value::Struct {
             name: "BoundedChannel".to_string(),
             fields,
@@ -111,7 +112,7 @@ fn bounded_channel_handle(obj: &Value) -> Option<i64> {
         return None;
     }
     match fields.get("handle_id") {
-        Some(Value::Int(h)) => Some(*h),
+        Some(Value::Int(h)) => Some(narrow_to_i64(*h)),
         _ => None,
     }
 }

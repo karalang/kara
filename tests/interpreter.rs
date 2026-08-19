@@ -34588,3 +34588,127 @@ fn test_nested_index_with_a_faulting_inner_index_reports_the_real_error() {
         "3\n"
     );
 }
+
+// ── The i128 value carrier (B-2026-08-19-8 stage 1) ──────────────
+
+/// Every integer width still traps on overflow after `Value::Int` widened from
+/// `i64` to `i128`.
+///
+/// THIS IS THE TEST THE WIDENING EXISTS FOR. While the carrier was an i64, a
+/// 64-bit overflow was caught by the CARRIER itself — `checked_add` on the
+/// carrier returned `None` — and `narrow_oob` only range-checked the narrow
+/// widths (i8..i32, u8..u32), explicitly documented as "a no-op for
+/// i64/u64/usize/isize". Widening the carrier silently removed that:
+/// `i64::MAX + 1` simply fits in an i128. The width now comes from the
+/// declared type for EVERY width, not just the narrow ones.
+///
+/// A 64-bit case belongs here for each arithmetic operator, because each has
+/// its own arm and the old carrier covered all of them for free.
+#[test]
+fn i64_overflow_still_traps_with_the_i128_carrier() {
+    for (expr, what) in [
+        ("9223372036854775807i64 + 1i64", "add"),
+        ("(-9223372036854775807i64 - 1i64) - 1i64", "sub"),
+        ("9223372036854775807i64 * 2i64", "mul"),
+    ] {
+        let errors = runtime_errors(&format!("fn main() {{ let x: i64 = {expr}; println(x); }}"));
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("integer overflow")),
+            "expected an integer-overflow trap for {what} ({expr}), got: {:?}",
+            errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+}
+
+/// `MIN / -1` and `MIN % -1` trap, and the SECOND of those is the one a result
+/// range-check cannot catch.
+///
+/// `MIN % -1` is `0` — it fits every width — so nothing about the result says
+/// "overflow". The i64 carrier used to report it anyway, because the
+/// intermediate division overflowed the carrier itself; `checked_rem` returned
+/// `None`. With a wider carrier the operation succeeds and returns 0, so the
+/// case is now an explicit width check (`div_overflows_at_width`).
+///
+/// The `%` half had NO test before this one — it was found by reasoning about
+/// what the carrier had been doing for free, not by a failure. `div_euclid` /
+/// `rem_euclid` are the same pair one level up and were covered.
+#[test]
+fn min_div_and_rem_by_negative_one_trap() {
+    for op in ["/", "%"] {
+        let errors = runtime_errors(&format!(
+            "fn main() {{ let m: i64 = -9223372036854775807i64 - 1i64; \
+             let n: i64 = 0i64 - 1i64; println(m {op} n); }}"
+        ));
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("integer overflow")),
+            "expected a MIN {op} -1 overflow trap, got: {:?}",
+            errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+}
+
+/// The narrow widths keep trapping exactly as before — the guard against a
+/// carrier change that fixes the 64-bit case by breaking the case that already
+/// worked.
+#[test]
+fn narrow_widths_still_trap_with_the_i128_carrier() {
+    for (ty, expr) in [
+        ("i8", "127i8 + 1i8"),
+        ("i16", "32767i16 + 1i16"),
+        ("i32", "2147483647i32 + 1i32"),
+        ("u8", "255u8 + 1u8"),
+        ("u16", "65535u16 + 1u16"),
+        ("u32", "4294967295u32 + 1u32"),
+    ] {
+        let errors = runtime_errors(&format!(
+            "fn main() {{ let x: {ty} = {expr}; println(x); }}"
+        ));
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("integer overflow")),
+            "expected an integer-overflow trap for {ty} ({expr}), got: {:?}",
+            errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+}
+
+/// Ordinary arithmetic is unchanged — values, signs and division semantics all
+/// survive the carrier swap. Cheap, and it would catch a sign-extension or
+/// truncation slip in the 200-odd conversion sites the widening touched.
+#[test]
+fn ordinary_integer_arithmetic_is_unchanged_by_the_carrier() {
+    assert_eq!(
+        run_no_errors(
+            "fn main() {\n\
+             let a: i64 = 9223372036854775807i64;\n\
+             let b: i64 = 0i64 - 9223372036854775807i64 - 1i64;\n\
+             println(a);\n\
+             println(b);\n\
+             println(0i64 - 7i64 / 2i64);\n\
+             println(0i64 - 7i64 % 2i64);\n\
+             println(6i64 * 7i64);\n\
+             }"
+        ),
+        "9223372036854775807\n-9223372036854775808\n-3\n-1\n42\n"
+    );
+}
+
+/// The carrier is 128 bits wide, pinned at compile time.
+///
+/// Stages 2-5 of B-2026-08-19-8 build on this; a well-meaning "nothing needs
+/// i128 yet, narrow it back to i64" would silently undo stage 1 and re-open
+/// B-2026-08-19-6's class of defect. This fails to COMPILE if the carrier
+/// narrows, which is the loudest available signal.
+#[test]
+fn value_int_carries_128_bits() {
+    let v = karac::interpreter::Value::Int(i128::MAX);
+    let karac::interpreter::Value::Int(n) = v else {
+        panic!("expected Value::Int");
+    };
+    assert_eq!(n, i128::MAX);
+}

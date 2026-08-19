@@ -18,6 +18,7 @@ use std::process::Command as StdCommand;
 use crate::ast::*;
 use crate::token::Span;
 
+use super::value::narrow_to_i64;
 use super::value::{EnumData, Value};
 
 impl<'a> super::Interpreter<'a> {
@@ -88,7 +89,7 @@ impl<'a> super::Interpreter<'a> {
                 let pid = child.id() as i64;
                 self.child_table.insert(pid, child);
                 let mut child_fields = HashMap::new();
-                child_fields.insert("pid".to_string(), Value::Int(pid));
+                child_fields.insert("pid".to_string(), Value::Int(pid.into()));
                 Some(result_ok(Value::Struct {
                     name: "Child".to_string(),
                     fields: child_fields,
@@ -216,14 +217,20 @@ impl<'a> super::Interpreter<'a> {
             _ => return None,
         };
         let read: Option<std::io::Result<String>> = match name.as_str() {
-            "ChildStdout" => self.child_stdout_table.remove(&pid).map(|mut h| {
-                let mut buf = String::new();
-                h.read_to_string(&mut buf).map(|_| buf)
-            }),
-            "ChildStderr" => self.child_stderr_table.remove(&pid).map(|mut h| {
-                let mut buf = String::new();
-                h.read_to_string(&mut buf).map(|_| buf)
-            }),
+            "ChildStdout" => self
+                .child_stdout_table
+                .remove(&narrow_to_i64(pid))
+                .map(|mut h| {
+                    let mut buf = String::new();
+                    h.read_to_string(&mut buf).map(|_| buf)
+                }),
+            "ChildStderr" => self
+                .child_stderr_table
+                .remove(&narrow_to_i64(pid))
+                .map(|mut h| {
+                    let mut buf = String::new();
+                    h.read_to_string(&mut buf).map(|_| buf)
+                }),
             _ => return None,
         };
         match read {
@@ -254,7 +261,7 @@ impl<'a> super::Interpreter<'a> {
             // than falling through.
             _ => return Some(result_err(io_not_found())),
         };
-        match self.child_stdin_table.get_mut(&pid) {
+        match self.child_stdin_table.get_mut(&narrow_to_i64(pid)) {
             Some(h) => match h.write_all(data.as_bytes()) {
                 Ok(()) => Some(result_ok(Value::Unit)),
                 Err(e) => Some(result_err(io_error_variant_from(&e))),
@@ -279,7 +286,7 @@ impl<'a> super::Interpreter<'a> {
             _ => return None,
         };
         // Dropping the handle (whether present or not) closes the fd.
-        self.child_stdin_table.remove(&pid);
+        self.child_stdin_table.remove(&narrow_to_i64(pid));
         Some(result_ok(Value::Unit))
     }
 }
@@ -296,7 +303,7 @@ enum StdStream {
 /// `ChildStderr` / `ChildStdin`) carrying the owning child's pid.
 fn child_stream_handle(struct_name: &str, pid: i64) -> Value {
     let mut fields = HashMap::new();
-    fields.insert("pid".to_string(), Value::Int(pid));
+    fields.insert("pid".to_string(), Value::Int(pid.into()));
     Value::Struct {
         name: struct_name.to_string(),
         fields,
@@ -313,7 +320,7 @@ fn child_pid(obj: &Value) -> Option<i64> {
         return None;
     }
     match fields.get("pid") {
-        Some(Value::Int(p)) => Some(*p),
+        Some(Value::Int(p)) => Some(narrow_to_i64(*p)),
         _ => None,
     }
 }
@@ -454,7 +461,7 @@ fn exit_status_value(status: std::process::ExitStatus) -> Value {
     let code = status.code().unwrap_or(-1) as i64;
     let success = status.success();
     let mut fields = HashMap::new();
-    fields.insert("code".to_string(), Value::Int(code));
+    fields.insert("code".to_string(), Value::Int(code.into()));
     fields.insert("success".to_string(), Value::Bool(success));
     Value::Struct {
         name: "ExitStatus".to_string(),

@@ -109,7 +109,7 @@ impl<'a> super::Interpreter<'a> {
                         guard.write(&bytes)
                     };
                     match write_result {
-                        Ok(n) => Some(io_ok(Value::Int(n as i64))),
+                        Ok(n) => Some(io_ok(Value::Int((n as i64).into()))),
                         Err(e) => Some(io_err_value(io_error_from_std(&e))),
                     }
                 }

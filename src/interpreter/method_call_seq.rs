@@ -12,6 +12,7 @@ use crate::ast::*;
 use crate::token::Span;
 
 use super::helpers::{eval_http_get, value_compare, value_compare_u64};
+use super::value::narrow_to_i64;
 use super::value::{try_write_or_panic, EnumData, IteratorSource, OrdValue, Value};
 use crate::interpreter::deep_clone_value;
 
@@ -92,18 +93,18 @@ impl<'a> super::Interpreter<'a> {
         match method {
             "len" => {
                 return Some(match &obj {
-                    Value::Array(rc) => Value::Int(rc.read().unwrap().len() as i64),
-                    Value::Slice { len, .. } => Value::Int(*len as i64),
-                    Value::String(s) => Value::Int(s.len() as i64),
+                    Value::Array(rc) => Value::Int((rc.read().unwrap().len() as i64).into()),
+                    Value::Slice { len, .. } => Value::Int((*len as i64).into()),
+                    Value::String(s) => Value::Int((s.len() as i64).into()),
                     // `CStr.len()` / `CString.len()` — source byte count,
                     // excluding the trailing NUL (design.md § C-String
                     // Literals). Both carry NUL-excluded bytes.
-                    Value::CStr(b) => Value::Int(b.len() as i64),
-                    Value::CString(b) => Value::Int(b.len() as i64),
-                    Value::Map(m) => Value::Int(m.len() as i64),
-                    Value::SortedSet(s) => Value::Int(s.len() as i64),
-                    Value::SortedMap(m) => Value::Int(m.len() as i64),
-                    Value::Set(s) => Value::Int(s.len() as i64),
+                    Value::CStr(b) => Value::Int((b.len() as i64).into()),
+                    Value::CString(b) => Value::Int((b.len() as i64).into()),
+                    Value::Map(m) => Value::Int((m.len() as i64).into()),
+                    Value::SortedSet(s) => Value::Int((s.len() as i64).into()),
+                    Value::SortedMap(m) => Value::Int((m.len() as i64).into()),
+                    Value::Set(s) => Value::Int((s.len() as i64).into()),
                     // Note: Map also handled via Map.len() match above
                     _ => unreachable!(
                         "len() receiver at {}:{} was Value::{}; \
@@ -157,8 +158,11 @@ impl<'a> super::Interpreter<'a> {
                 // (the return type is read-only `Slice[u8]`).
                 return Some(match &obj {
                     Value::String(s) => {
-                        let items: Vec<Value> =
-                            s.as_bytes().iter().map(|b| Value::Int(*b as i64)).collect();
+                        let items: Vec<Value> = s
+                            .as_bytes()
+                            .iter()
+                            .map(|b| Value::Int((*b as i64).into()))
+                            .collect();
                         let len = items.len();
                         Value::Slice {
                             storage: Arc::new(std::sync::RwLock::new(items)),
@@ -284,7 +288,7 @@ impl<'a> super::Interpreter<'a> {
                     let (start, end) = match args {
                         [a] => {
                             if let Value::Int(start) = self.eval_expr_inner(&a.value) {
-                                (start, len)
+                                (narrow_to_i64(start), len)
                             } else {
                                 return None;
                             }
@@ -293,7 +297,7 @@ impl<'a> super::Interpreter<'a> {
                             let sa = self.eval_expr_inner(&a.value);
                             let sb = self.eval_expr_inner(&b.value);
                             if let (Value::Int(start), Value::Int(end)) = (sa, sb) {
-                                (start, end)
+                                (narrow_to_i64(start), narrow_to_i64(end))
                             } else {
                                 return None;
                             }
@@ -328,7 +332,7 @@ impl<'a> super::Interpreter<'a> {
                 // `len()`'s O(1) byte count. Codegen routes through
                 // `karac_runtime_string_char_count`.
                 if let Value::String(s) = &obj {
-                    return Some(Value::Int(s.chars().count() as i64));
+                    return Some(Value::Int((s.chars().count() as i64).into()));
                 }
                 return None;
             }
@@ -379,7 +383,7 @@ impl<'a> super::Interpreter<'a> {
                             Some(b) => Value::EnumVariant {
                                 enum_name: "Option".to_string(),
                                 variant: "Some".to_string(),
-                                data: EnumData::Tuple(vec![Value::Int(b as i64)]),
+                                data: EnumData::Tuple(vec![Value::Int((b as i64).into())]),
                             },
                             None => Value::EnumVariant {
                                 enum_name: "Option".to_string(),
@@ -435,10 +439,10 @@ impl<'a> super::Interpreter<'a> {
                         let sb = self.eval_expr_inner(&b.value);
                         if let (Value::Int(start), Value::Int(end)) = (sa, sb) {
                             let len = s.len() as i64;
-                            if start < 0 || start > len {
+                            if start < 0 || start > len.into() {
                                 return Some(Value::String(String::new()));
                             }
-                            let end = end.clamp(start, len);
+                            let end = end.clamp(start, len.into());
                             let bytes = &s.as_bytes()[start as usize..end as usize];
                             return Some(Value::String(
                                 String::from_utf8_lossy(bytes).into_owned(),
@@ -852,7 +856,8 @@ impl<'a> super::Interpreter<'a> {
                 // `String.bytes()` above (the return type is read-only
                 // `Slice[u8]`, so the copy is unobservable).
                 if let Value::CStr(ref b) = obj {
-                    let items: Vec<Value> = b.iter().map(|b| Value::Int(*b as i64)).collect();
+                    let items: Vec<Value> =
+                        b.iter().map(|b| Value::Int((*b as i64).into())).collect();
                     let len = items.len();
                     return Some(Value::Slice {
                         storage: Arc::new(std::sync::RwLock::new(items)),
@@ -863,7 +868,8 @@ impl<'a> super::Interpreter<'a> {
                 }
                 // `CString.as_bytes()` — same NUL-excluded byte view as `CStr`.
                 if let Value::CString(ref b) = obj {
-                    let items: Vec<Value> = b.iter().map(|b| Value::Int(*b as i64)).collect();
+                    let items: Vec<Value> =
+                        b.iter().map(|b| Value::Int((*b as i64).into())).collect();
                     let len = items.len();
                     return Some(Value::Slice {
                         storage: Arc::new(std::sync::RwLock::new(items)),
@@ -1175,7 +1181,7 @@ impl<'a> super::Interpreter<'a> {
                             Ok(i) => Value::EnumVariant {
                                 enum_name: "Option".to_string(),
                                 variant: "Some".to_string(),
-                                data: EnumData::Tuple(vec![Value::Int(i as i64)]),
+                                data: EnumData::Tuple(vec![Value::Int((i as i64).into())]),
                             },
                             Err(_) => Value::EnumVariant {
                                 enum_name: "Option".to_string(),
@@ -1474,7 +1480,7 @@ impl<'a> super::Interpreter<'a> {
                         _ => "<value>".to_string(),
                     };
                     let mut head = rc.read().unwrap().clone();
-                    let at = i.clamp(0, head.len() as i64) as usize;
+                    let at = i.clamp(0, (head.len() as i64).into()) as usize;
                     let tail = head.split_off(at);
                     *try_write_or_panic(rc, &label) = head;
                     return Some(Value::array_of(tail));
@@ -1886,7 +1892,7 @@ impl<'a> super::Interpreter<'a> {
                             } else {
                                 x.to_bits() as i64
                             };
-                            Value::Int(bits)
+                            Value::Int(bits.into())
                         }
                         other => other,
                     })

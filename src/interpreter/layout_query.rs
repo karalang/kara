@@ -115,7 +115,7 @@ impl<'a> super::Interpreter<'a> {
         span: &Span,
     ) -> Value {
         match self.offset_of_value(ty, field_path) {
-            Ok(offset) => Value::Int(offset as i64),
+            Ok(offset) => Value::Int((offset as i64).into()),
             Err(msg) => self.record_runtime_error(msg, span),
         }
     }
@@ -126,9 +126,9 @@ impl<'a> super::Interpreter<'a> {
     pub(crate) fn eval_layout_query(&mut self, name: &str, ty: &TypeExpr, span: &Span) -> Value {
         match self.field_layout(ty, 0) {
             Ok(sa) => Value::Int(if name == "size_of" {
-                sa.size as i64
+                (sa.size as i64).into()
             } else {
-                sa.align as i64
+                (sa.align as i64).into()
             }),
             Err(msg) => self.record_runtime_error(msg, span),
         }

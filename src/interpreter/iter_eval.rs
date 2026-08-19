@@ -72,7 +72,7 @@ impl<'a> super::Interpreter<'a> {
                         }
                     }
                     IteratorStep::Enumerate(idx) => {
-                        item = Value::Tuple(vec![Value::Int(*idx as i64), item]);
+                        item = Value::Tuple(vec![Value::Int((*idx as i64).into()), item]);
                         *idx += 1;
                     }
                     IteratorStep::Take(remaining) => {

@@ -57,6 +57,7 @@ use arrow_ipc::reader::StreamReader;
 use arrow_ipc::writer::StreamWriter;
 use arrow_schema::{DataType, Field, Schema};
 
+use super::value::narrow_to_i64;
 use super::value::Value;
 
 /// One parsed column from an Arrow batch: `(name, data cells, validity mask)` —
@@ -100,7 +101,7 @@ fn col_to_arrow(data: &[Value], valid: &[bool]) -> (DataType, Arc<dyn Array>) {
     match infer_kind(data, valid) {
         ColKind::Int64 => {
             let vals = data.iter().zip(valid.iter()).map(|(v, &ok)| match (ok, v) {
-                (true, Value::Int(n)) => Some(*n),
+                (true, Value::Int(n)) => Some(narrow_to_i64(*n)),
                 // A float slot in an inferred-Int64 column would only arise from
                 // a genuinely mixed column, which the typechecker forbids;
                 // coerce defensively rather than drop the value silently.
@@ -315,7 +316,7 @@ fn arrow_to_col(col: &dyn Array) -> Result<(Vec<Value>, Vec<bool>), String> {
                     data.push(Value::Unit);
                     valid.push(false);
                 } else {
-                    data.push($ctor(arr.value(i)));
+                    data.push($ctor(arr.value(i).into()));
                     valid.push(true);
                 }
             }
@@ -326,11 +327,11 @@ fn arrow_to_col(col: &dyn Array) -> Result<(Vec<Value>, Vec<bool>), String> {
     if let Some(a) = any.downcast_ref::<Int64Array>() {
         collect_col!(a, Value::Int);
     } else if let Some(a) = any.downcast_ref::<Int32Array>() {
-        collect_col!(a, |x| Value::Int(i64::from(x)));
+        collect_col!(a, |x: i64| Value::Int(i128::from(x)));
     } else if let Some(a) = any.downcast_ref::<Float64Array>() {
         collect_col!(a, Value::Float);
     } else if let Some(a) = any.downcast_ref::<Float32Array>() {
-        collect_col!(a, |x| Value::Float(f64::from(x)));
+        collect_col!(a, |x: f32| Value::Float(f64::from(x)));
     } else if let Some(a) = any.downcast_ref::<StringArray>() {
         collect_col!(a, |x: &str| Value::String(x.to_string()));
     } else if let Some(a) = any.downcast_ref::<LargeStringArray>() {

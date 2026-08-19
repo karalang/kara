@@ -29,6 +29,7 @@ use crate::ast::*;
 use crate::token::Span;
 
 use super::exec::ControlFlow;
+use super::value::narrow_to_i64;
 use super::value::{EnumData, Value};
 use super::PoolEntry;
 
@@ -63,8 +64,8 @@ impl<'a> super::Interpreter<'a> {
             handle,
             PoolEntry {
                 create_fn,
-                max_connections,
-                max_waiters,
+                max_connections: narrow_to_i64(max_connections),
+                max_waiters: narrow_to_i64(max_waiters),
                 slots: Vec::new(),
                 active_count: 0,
                 health_check: None,
@@ -74,7 +75,7 @@ impl<'a> super::Interpreter<'a> {
         );
 
         let mut pool_fields = HashMap::new();
-        pool_fields.insert("handle_id".to_string(), Value::Int(handle));
+        pool_fields.insert("handle_id".to_string(), Value::Int(handle.into()));
         Some(Value::Struct {
             name: "Pool".to_string(),
             fields: pool_fields,
@@ -294,7 +295,7 @@ fn pool_handle(obj: &Value) -> Option<i64> {
         return None;
     }
     match fields.get("handle_id") {
-        Some(Value::Int(h)) => Some(*h),
+        Some(Value::Int(h)) => Some(narrow_to_i64(*h)),
         _ => None,
     }
 }
@@ -319,15 +320,15 @@ fn unpack_pooled_connection(obj: Value) -> Option<(i64, i64, Value)> {
         _ => 0,
     };
     let val = fields.remove("val")?;
-    Some((handle, conn_id, val))
+    Some((narrow_to_i64(handle), narrow_to_i64(conn_id), val))
 }
 
 // ── Kāra-value constructors ───────────────────────────────────────
 
 fn pooled_connection(pool_handle: i64, conn_id: i64, val: Value) -> Value {
     let mut fields = HashMap::new();
-    fields.insert("pool_handle_id".to_string(), Value::Int(pool_handle));
-    fields.insert("conn_id".to_string(), Value::Int(conn_id));
+    fields.insert("pool_handle_id".to_string(), Value::Int(pool_handle.into()));
+    fields.insert("conn_id".to_string(), Value::Int(conn_id.into()));
     fields.insert("val".to_string(), val);
     Value::Struct {
         name: "PooledConnection".to_string(),

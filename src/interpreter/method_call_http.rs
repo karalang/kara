@@ -7,6 +7,7 @@ use crate::ast::*;
 use crate::token::Span;
 
 use super::helpers::{eval_http_builder_send, eval_http_get, eval_http_post};
+use super::value::narrow_to_i64;
 use super::value::{EnumData, Value};
 
 /// Fresh `RequestBuilder` for `Client.request(method, url)` — the inline
@@ -192,7 +193,7 @@ impl<'a> super::Interpreter<'a> {
                             &get_str("url"),
                             &headers,
                             &get_str("body"),
-                            timeout_ms,
+                            narrow_to_i64(timeout_ms),
                         ));
                     }
                 }
@@ -286,9 +287,11 @@ impl<'a> super::Interpreter<'a> {
                 {
                     if name == "Response" {
                         let bytes: Vec<Value> = match fields.get("body") {
-                            Some(Value::String(s)) => {
-                                s.as_bytes().iter().map(|b| Value::Int(*b as i64)).collect()
-                            }
+                            Some(Value::String(s)) => s
+                                .as_bytes()
+                                .iter()
+                                .map(|b| Value::Int((*b as i64).into()))
+                                .collect(),
                             _ => Vec::new(),
                         };
                         return Some(Value::Array(std::sync::Arc::new(std::sync::RwLock::new(

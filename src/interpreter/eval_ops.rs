@@ -15,6 +15,7 @@ use std::sync::{Arc, RwLock};
 use crate::ast::*;
 use crate::token::Span;
 
+use super::value::narrow_to_i64;
 use super::value::{EnumData, TensorElemWidth, Value};
 
 impl<'a> super::Interpreter<'a> {
@@ -349,7 +350,9 @@ impl<'a> super::Interpreter<'a> {
         // fit i64 non-negatively (signed == unsigned), so only 64-bit needs it.
         if unsigned_hint || self.span_type_is_unsigned64(span) {
             if let (Value::Int(a), Value::Int(b)) = (&left, &right) {
-                if let Some(v) = self.eval_binary_u64(op, *a, *b, span) {
+                if let Some(v) =
+                    self.eval_binary_u64(op, narrow_to_i64(*a), narrow_to_i64(*b), span)
+                {
                     return v;
                 }
             }
@@ -423,14 +426,19 @@ impl<'a> super::Interpreter<'a> {
                 self.eval_column_scalar_binop(op, &data, &valid, scalar, true, span)
             }
 
-            // Arithmetic (Int). Computed at i64; when the typechecker types
-            // the operation as a *narrow* integer (`u8`..`u32`/`i8`..`i32`),
-            // the result is range-checked against that width and traps
-            // `integer overflow` if it does not fit (design.md § Integer
-            // overflow — real fixed-width types). `narrow_oob` is a no-op for
-            // i64/u64/usize/isize and non-narrow result types, preserving the
-            // existing i64-overflow behavior. Codegen mirrors this in
-            // `compile_narrow_int_binop`.
+            // Arithmetic (Int). Computed in the i128 CARRIER, then range-checked
+            // against the width the typechecker assigned at this span, which
+            // traps `integer overflow` if the result does not fit (design.md
+            // § Integer overflow — real fixed-width types). Codegen mirrors
+            // this in `compile_narrow_int_binop`.
+            //
+            // EVERY width is checked, i64 included (B-2026-08-19-8 stage 1).
+            // It used to be only the narrow ones, because the carrier was
+            // itself an i64 and `checked_add` on it caught the 64-bit case for
+            // free. Widening the carrier silently removed that — `i64::MAX + 1`
+            // simply fits in i128 — so the 64-bit widths are explicit arms in
+            // `narrow_oob` now. This is the whole reason the carrier change is
+            // not a pure refactor.
             (BinOp::Add, Value::Int(a), Value::Int(b)) => match a.checked_add(b) {
                 Some(v) if !self.narrow_oob(v, span) => Value::Int(v),
                 _ => self.record_integer_overflow(span),
@@ -447,6 +455,9 @@ impl<'a> super::Interpreter<'a> {
                 if b == 0 {
                     return self.record_runtime_error("division by zero", span);
                 }
+                if self.div_overflows_at_width(a, b, span) {
+                    return self.record_integer_overflow(span);
+                }
                 match a.checked_div(b) {
                     Some(v) if !self.narrow_oob(v, span) => Value::Int(v),
                     _ => self.record_integer_overflow(span),
@@ -455,6 +466,11 @@ impl<'a> super::Interpreter<'a> {
             (BinOp::Mod, Value::Int(a), Value::Int(b)) => {
                 if b == 0 {
                     return self.record_runtime_error("division by zero", span);
+                }
+                // `%` needs the explicit width check, not just the range
+                // check: `MIN % -1` is 0, which fits every width.
+                if self.div_overflows_at_width(a, b, span) {
+                    return self.record_integer_overflow(span);
                 }
                 match a.checked_rem(b) {
                     Some(v) if !self.narrow_oob(v, span) => Value::Int(v),
@@ -603,14 +619,14 @@ impl<'a> super::Interpreter<'a> {
             // Shifts run at the operand's DECLARED width and trap on an
             // out-of-range amount — design.md § 2142. B-2026-08-06-7.
             (BinOp::Shl, Value::Int(a), Value::Int(b)) => {
-                match self.shift_at_width(true, a, b, span) {
-                    Some(v) => Value::Int(v),
+                match self.shift_at_width(true, narrow_to_i64(a), narrow_to_i64(b), span) {
+                    Some(v) => Value::Int(v.into()),
                     None => self.record_runtime_error("shift amount out of range", span),
                 }
             }
             (BinOp::Shr, Value::Int(a), Value::Int(b)) => {
-                match self.shift_at_width(false, a, b, span) {
-                    Some(v) => Value::Int(v),
+                match self.shift_at_width(false, narrow_to_i64(a), narrow_to_i64(b), span) {
+                    Some(v) => Value::Int(v.into()),
                     None => self.record_runtime_error("shift amount out of range", span),
                 }
             }
@@ -993,8 +1009,8 @@ impl<'a> super::Interpreter<'a> {
         for item in rest {
             let Value::Int(n) = item else { return None };
             bounds = Some(match bounds {
-                None => (*n, *n + 1),
-                Some((lo, _)) => (lo, *n + 1),
+                None => (narrow_to_i64(*n), narrow_to_i64(*n + 1)),
+                Some((lo, _)) => (lo, narrow_to_i64(*n + 1)),
             });
         }
         Some(bounds.unwrap_or((0, 0)))
@@ -1019,11 +1035,38 @@ impl<'a> super::Interpreter<'a> {
     /// `i8`..`i32`). A no-op (false) for `i64`/`u64`/`usize`/`isize`, non-
     /// narrow, and untyped spans — so only genuinely narrow-typed arithmetic
     /// is range-checked. Codegen mirrors this in `compile_narrow_int_binop`.
-    fn narrow_oob(&self, v: i64, span: &Span) -> bool {
+    pub(super) fn narrow_oob(&self, v: i128, span: &Span) -> bool {
+        let (lo, hi) = self.span_int_bounds(span);
+        v < lo || v > hi
+    }
+
+    /// Would a division-family op on `(a, b)` overflow the DECLARED width?
+    ///
+    /// `MIN / -1` overflows every signed width, and for `%` / `rem_euclid` the
+    /// RESULT is `0` — which fits — so range-checking the result cannot see it
+    /// (B-2026-08-19-8 stage 1). While the carrier was an i64 this was free:
+    /// `checked_rem` on the carrier returned `None` because the intermediate
+    /// division overflowed the carrier itself. A wider carrier computes it
+    /// happily, so the case is explicit now. Matches Rust's
+    /// `i64::checked_rem` / `checked_rem_euclid`, and codegen's `sdiv`/`srem`
+    /// trap pair.
+    pub(super) fn div_overflows_at_width(&self, a: i128, b: i128, span: &Span) -> bool {
+        b == -1 && a == self.span_int_bounds(span).0
+    }
+
+    /// Inclusive `(min, max)` of the integer type the typechecker assigned at
+    /// `span`, defaulting to i64's range. See [`Self::narrow_oob`].
+    fn span_int_bounds(&self, span: &Span) -> (i128, i128) {
         use crate::typechecker::types::{IntSize, Type, UIntSize};
         let key = crate::resolver::SpanKey::from_span(span);
+        // A span with no recorded type degrades to the i64 default rather than
+        // to "no check" (B-2026-08-19-8 stage 1). `karac run` populates
+        // `expr_types` sparsely, and while the carrier WAS an i64 those spans
+        // still trapped, because the carrier overflowed on its own. Returning
+        // false here now would silently drop overflow detection for exactly
+        // the spans the typechecker did not annotate.
         let Some(ty) = self.typecheck_result.expr_types.get(&key) else {
-            return false;
+            return (i64::MIN as i128, i64::MAX as i128);
         };
         // B-2026-07-01-3: element-wise `Column[T] ⊕ x` / `Tensor[T, S] ⊕ x`
         // recurses through the scalar arms with the CONTAINER expression's
@@ -1039,16 +1082,28 @@ impl<'a> super::Interpreter<'a> {
             }
             other => other,
         };
-        let (lo, hi): (i64, i64) = match ty {
+        match ty {
             Type::Int(IntSize::I8) => (-128, 127),
             Type::Int(IntSize::I16) => (-32768, 32767),
             Type::Int(IntSize::I32) => (-2_147_483_648, 2_147_483_647),
             Type::UInt(UIntSize::U8) => (0, 255),
             Type::UInt(UIntSize::U16) => (0, 65_535),
             Type::UInt(UIntSize::U32) => (0, 4_294_967_295),
-            _ => return false,
-        };
-        v < lo || v > hi
+            // The 64-bit widths, which the i64 carrier used to check for free.
+            Type::Int(IntSize::I64) => (i64::MIN as i128, i64::MAX as i128),
+            Type::UInt(UIntSize::U64) | Type::UInt(UIntSize::Usize) => (0, u64::MAX as i128),
+            // 128-bit is still rejected at type-check (B-2026-08-19-6), so
+            // these arms are unreachable from source today. They are written
+            // out anyway so the table is complete when stage 5 lifts the
+            // rejection: the carrier is SIGNED, so `u128`'s usable ceiling is
+            // `i128::MAX` until the carrier itself grows an unsigned half.
+            Type::Int(IntSize::I128) => (i128::MIN, i128::MAX),
+            Type::UInt(UIntSize::U128) => (0, i128::MAX),
+            // Anything else (a generic param, a named type, a float result
+            // type) keeps the i64 default rather than skipping the check, for
+            // the same reason the missing-type branch above does.
+            _ => (i64::MIN as i128, i64::MAX as i128),
+        }
     }
 
     /// The DECLARED bit width of the integer type the typechecker assigned at
@@ -1243,7 +1298,7 @@ impl<'a> super::Interpreter<'a> {
             BinOp::GtEq => return Some(Value::Bool(ua >= ub)),
             _ => return None,
         };
-        Some(Value::Int(v as i64))
+        Some(Value::Int((v as i64).into()))
     }
 
     pub(super) fn record_integer_overflow(&mut self, span: &Span) -> Value {

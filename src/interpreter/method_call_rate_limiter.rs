@@ -22,6 +22,7 @@ use std::time::Instant;
 use crate::ast::*;
 use crate::token::Span;
 
+use super::value::narrow_to_i64;
 use super::value::Value;
 use super::RateLimiterEntry;
 #[cfg(not(target_arch = "wasm32"))]
@@ -55,7 +56,7 @@ impl<'a> super::Interpreter<'a> {
         );
 
         let mut fields = std::collections::HashMap::new();
-        fields.insert("handle_id".to_string(), Value::Int(handle));
+        fields.insert("handle_id".to_string(), Value::Int(handle.into()));
         Some(Value::Struct {
             name: "RateLimiter".to_string(),
             fields,
@@ -134,7 +135,7 @@ fn rate_limiter_handle(obj: &Value) -> Option<i64> {
         return None;
     }
     match fields.get("handle_id") {
-        Some(Value::Int(h)) => Some(*h),
+        Some(Value::Int(h)) => Some(narrow_to_i64(*h)),
         _ => None,
     }
 }
