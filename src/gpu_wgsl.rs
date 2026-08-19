@@ -35,6 +35,7 @@ use crate::ast::{
     BinOp, Block, CallArg, CompoundOp, Expr, ExprKind, Function, Param, PatternKind, Stmt,
     StmtKind, TypeExpr, TypeKind, UnaryOp,
 };
+use crate::reduce_kernel::ReduceOp;
 use std::collections::{HashMap, HashSet};
 
 /// Why a `#[gpu]` kernel could not be lowered to slice-0 WGSL. Every variant
@@ -963,6 +964,73 @@ fn binop_str(op: &BinOp) -> Result<&'static str, WgslError> {
                 .to_string(),
         )),
     }
+}
+
+/// Emit the single-workgroup tree-reduction shader for `gpu.sum(buf)`
+/// (B-2026-08-19-10, slice 1).
+///
+/// **This function defines language semantics, not just codegen.** A GPU
+/// reduction is a TREE, a CPU fold is a LINE, and `f32` addition is not
+/// associative — so the two disagree on real inputs (64 copies of `0.1` give
+/// `6.400000` here and `6.399996` under a left fold). Kāra specifies the tree
+/// order and the interpreter reproduces it, so `karac run` and `karac build`
+/// agree bit-for-bit rather than within an epsilon; the alternative would have
+/// been an epsilon-tolerant oracle, which weakens the A/B rule that
+/// kara-katas/CLAUDE.md calls non-negotiable.
+///
+/// The order the interpreter twin must match exactly: pad to
+/// [`WORKGROUP_SIZE`] with the operation's identity, then halve —
+/// `s[t] = s[t] OP s[t + stride]` for stride 32, 16, 8, 4, 2, 1. Lane 0 writes
+/// the result to `output[0]`; the rest of the buffer is scratch.
+///
+/// Slice 1 is **single-workgroup only** — the runtime entry point rejects a
+/// longer buffer rather than returning a partial answer. A multi-workgroup
+/// reduction needs a second pass over the per-workgroup partials, and this
+/// shader is the per-workgroup half of it, so it is a prefix of the eventual
+/// shape rather than something to throw away.
+pub fn emit_reduce_kernel(op: ReduceOp, elem: &str) -> Result<String, WgslError> {
+    // Only the associative folds have a single-shader tree form. `Mean` needs a
+    // count division, `Var`/`Std` need two passes, and the Ord family needs an
+    // index alongside the value — each is its own slice, and saying so beats
+    // emitting a shader that silently computes the wrong statistic.
+    let (infix, identity) = match (op, elem) {
+        (ReduceOp::Sum, "f32") => ("+", "0.0"),
+        (ReduceOp::Sum, "i32" | "u32") => ("+", "0"),
+        (ReduceOp::Prod, "f32") => ("*", "1.0"),
+        (ReduceOp::Prod, "i32" | "u32") => ("*", "1"),
+        _ => {
+            return Err(WgslError::UnsupportedSignature(format!(
+                "GPU reduction `{op:?}` over `{elem}` is not supported yet — slice 1 covers \
+                 `sum` and `prod` over f32/i32/u32"
+            )))
+        }
+    };
+    let half = WORKGROUP_SIZE / 2;
+    Ok(format!(
+        "@group(0) @binding(0) var<storage, read>       input:  array<{elem}>;\n\
+         @group(0) @binding(1) var<storage, read_write> output: array<{elem}>;\n\
+         \n\
+         var<workgroup> scratch: array<{elem}, {WORKGROUP_SIZE}>;\n\
+         \n\
+         @compute @workgroup_size({WORKGROUP_SIZE})\n\
+         fn main(@builtin(local_invocation_id) lid: vec3<u32>,\n\
+         \x20       @builtin(global_invocation_id) gid: vec3<u32>) {{\n\
+         \x20   let t = lid.x;\n\
+         \x20   let i = gid.x;\n\
+         \x20   if (i < arrayLength(&input)) {{ scratch[t] = input[i]; }} else {{ scratch[t] = {identity}; }}\n\
+         \x20   workgroupBarrier();\n\
+         \n\
+         \x20   var stride: u32 = {half}u;\n\
+         \x20   loop {{\n\
+         \x20       if (stride == 0u) {{ break; }}\n\
+         \x20       if (t < stride) {{ scratch[t] = scratch[t] {infix} scratch[t + stride]; }}\n\
+         \x20       workgroupBarrier();\n\
+         \x20       stride = stride / 2u;\n\
+         \x20   }}\n\
+         \n\
+         \x20   if (t == 0u) {{ output[0] = scratch[0]; }}\n\
+         }}\n"
+    ))
 }
 
 /// WGSL infix operator for a `wrapping_{add,sub,mul}` method call, or `None`
@@ -3751,6 +3819,70 @@ mod tests {
         assert!(wgsl.contains("y = a;"), "{wgsl}");
         assert!(wgsl.contains("y = b;"), "{wgsl}");
         assert!(wgsl.contains("y = input[i];"), "{wgsl}");
+    }
+
+    // ── GPU reductions (B-2026-08-19-10) ────────────────────────────────
+
+    #[test]
+    fn reduce_kernel_matches_the_hand_validated_shader() {
+        // `runtime/src/gpu.rs`'s SUM_REDUCE_WGSL was written by hand and proven
+        // on lavapipe BEFORE any of this existed. The generator must reproduce
+        // it, because that constant is what the tree order was validated
+        // against — if they drift, the runtime test is no longer testing the
+        // shader the compiler emits.
+        let wgsl = emit_reduce_kernel(ReduceOp::Sum, "f32").unwrap();
+        for needle in [
+            "var<workgroup> scratch: array<f32, 64>;",
+            "@compute @workgroup_size(64)",
+            "if (i < arrayLength(&input)) { scratch[t] = input[i]; } else { scratch[t] = 0.0; }",
+            "workgroupBarrier();",
+            "var stride: u32 = 32u;",
+            "if (t < stride) { scratch[t] = scratch[t] + scratch[t + stride]; }",
+            "stride = stride / 2u;",
+            "if (t == 0u) { output[0] = scratch[0]; }",
+        ] {
+            assert!(wgsl.contains(needle), "missing `{needle}` in:\n{wgsl}");
+        }
+    }
+
+    #[test]
+    fn reduce_kernel_uses_the_right_identity_per_op_and_type() {
+        // The identity is not decoration: a `prod` that padded with 0.0 would
+        // return 0 for every buffer shorter than the workgroup.
+        let sum_f = emit_reduce_kernel(ReduceOp::Sum, "f32").unwrap();
+        assert!(sum_f.contains("scratch[t] = 0.0;"), "{sum_f}");
+        assert!(
+            sum_f.contains("scratch[t] + scratch[t + stride]"),
+            "{sum_f}"
+        );
+
+        let prod_f = emit_reduce_kernel(ReduceOp::Prod, "f32").unwrap();
+        assert!(prod_f.contains("scratch[t] = 1.0;"), "{prod_f}");
+        assert!(
+            prod_f.contains("scratch[t] * scratch[t + stride]"),
+            "{prod_f}"
+        );
+
+        let sum_i = emit_reduce_kernel(ReduceOp::Sum, "i32").unwrap();
+        assert!(sum_i.contains("array<i32, 64>"), "{sum_i}");
+        assert!(sum_i.contains("scratch[t] = 0;"), "{sum_i}");
+    }
+
+    #[test]
+    fn reduce_kernel_refuses_the_ops_that_need_more_than_one_pass() {
+        // Mean needs a count division, Var/Std need two passes, the Ord family
+        // needs an index alongside the value. Refusing beats emitting a shader
+        // that silently computes a different statistic.
+        for op in [
+            ReduceOp::Mean,
+            ReduceOp::Var { bessel: false },
+            ReduceOp::Min,
+            ReduceOp::Argmax,
+        ] {
+            let err = emit_reduce_kernel(op, "f32").unwrap_err();
+            let msg = format!("{err:?}");
+            assert!(msg.contains("not supported yet"), "{msg}");
+        }
     }
 
     // ── Trapping integer arithmetic (B-2026-08-19-1) ────────────────────
