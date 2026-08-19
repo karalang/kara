@@ -1743,14 +1743,30 @@ impl<'a> Interpreter<'a> {
                     for variant in &e.variants {
                         match &variant.kind {
                             VariantKind::Unit => {
-                                self.env.define(
-                                    variant.name.clone(),
-                                    Value::EnumVariant {
-                                        enum_name: e.name.clone(),
-                                        variant: variant.name.clone(),
-                                        data: EnumData::Unit,
-                                    },
-                                );
+                                let value = Value::EnumVariant {
+                                    enum_name: e.name.clone(),
+                                    variant: variant.name.clone(),
+                                    data: EnumData::Unit,
+                                };
+                                // B-2026-08-19-16 — bind the QUALIFIED name as
+                                // well as the bare one. `eval_expr`'s Path arm
+                                // tries `env.get("First.A")` first and falls back
+                                // to the LAST segment alone; with only the bare
+                                // key registered, two enums sharing a variant
+                                // name both wrote `env["A"]` and the
+                                // later-declared one won, so `First.A` evaluated
+                                // to a `Second` value. The static type stayed
+                                // `First` and the pattern matcher compares only
+                                // the variant name, so every downstream check
+                                // agreed — but method dispatch reads
+                                // `enum_name` off the value and called the wrong
+                                // impl. The baked-stdlib arm above and the
+                                // prelude `Ordering` loop already register both
+                                // spellings; user enums were the one path that
+                                // did not.
+                                self.env
+                                    .define(format!("{}.{}", e.name, variant.name), value.clone());
+                                self.env.define(variant.name.clone(), value);
                             }
                             _ => {
                                 // Tuple/struct variants are handled at call sites

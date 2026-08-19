@@ -34811,3 +34811,85 @@ fn interpreter_reads_128bit_widths_for_width_sensitive_methods() {
         "-9223372036854775808\n64\n2\n63\n"
     );
 }
+
+// ── B-2026-08-19-16: qualified unit-variant paths across colliding enums ──
+
+#[test]
+fn qualified_unit_variant_path_picks_its_own_enum() {
+    // B-2026-08-19-16. `register_items` bound user-enum unit variants under
+    // the BARE name only, and `eval_expr`'s Path arm falls back to the last
+    // segment when the qualified key misses. So two enums sharing a variant
+    // name both wrote `env["A"]`, the later declaration won, and `First.A`
+    // evaluated to a `Second` value — which method dispatch then read
+    // `enum_name` off, calling the wrong impl.
+    //
+    // Everything else agreed, which is what made it silent: the static type
+    // was `First`, and the pattern matcher compares only the variant name.
+    assert_eq!(
+        run("enum First { A, B }
+             enum Second { A, B }
+             impl First { fn tag(ref self) -> i64 { 1 } }
+             impl Second { fn tag(ref self) -> i64 { 2 } }
+             fn main() {
+                 println(First.A.tag());
+                 println(Second.A.tag());
+             }"),
+        "1\n2\n"
+    );
+}
+
+#[test]
+fn qualified_unit_variant_through_a_let_binding() {
+    // Same defect reached through a binding rather than a direct path — the
+    // wrong `enum_name` travels with the value, so the call site is not what
+    // matters.
+    assert_eq!(
+        run("enum First { A, B }
+             enum Second { A, B }
+             impl First { fn tag(ref self) -> i64 { 4 } }
+             impl Second { fn tag(ref self) -> i64 { 5 } }
+             fn main() {
+                 let d = First.A;
+                 println(d.tag());
+             }"),
+        "4\n"
+    );
+}
+
+#[test]
+fn colliding_tuple_and_struct_variants_keep_their_enum() {
+    // The non-unit variants were ALREADY correct — they are constructed at
+    // call sites where the enum name is in hand, never through the bare-name
+    // env binding. Pinned so a future refactor of variant construction cannot
+    // regress them into the unit variants' old behaviour.
+    assert_eq!(
+        run("enum First { W(i64), X }
+             enum Second { W(i64), X }
+             impl First { fn tag(ref self) -> i64 { 1 } }
+             impl Second { fn tag(ref self) -> i64 { 2 } }
+             fn main() {
+                 println(First.W(7).tag());
+                 println(Second.W(7).tag());
+             }"),
+        "1\n2\n"
+    );
+}
+
+#[test]
+fn bare_unit_variant_still_resolves_when_unambiguous() {
+    // The fix ADDS the qualified binding; the bare one stays, because the
+    // pattern matcher classifies a bare PascalCase identifier as a unit-variant
+    // pattern only when `env.get(name)` returns a unit `EnumVariant` (see the
+    // `Ordering` registration comment in `register_items`). Both the expression
+    // and the match arm must keep working.
+    assert_eq!(
+        run("enum Only { A, B }
+             impl Only { fn tag(ref self) -> i64 { 42 } }
+             fn main() {
+                 let x = A;
+                 println(x.tag());
+                 match x { A => println(1), B => println(2), }
+             }"),
+        "42\n1\n"
+    );
+}
