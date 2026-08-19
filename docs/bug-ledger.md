@@ -97,24 +97,24 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 133 | 0 |
 | run-vs-build | 133 | 1 |
 | codegen-gap | 119 | 0 |
-| missing-feature | 114 | 3 |
+| missing-feature | 114 | 2 |
 | diagnostics | 83 | 0 |
 | false-positive | 80 | 0 |
 | perf | 77 | 0 |
 | crash | 52 | 0 |
 | soundness | 51 | 0 |
-| other | 47 | 1 |
+| other | 48 | 1 |
 | use-after-free | 20 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 940 | 3 |
-| typecheck | 205 | 2 |
+| codegen | 940 | 2 |
+| typecheck | 205 | 1 |
 | interp | 156 | 1 |
 | ownership | 60 | 0 |
-| other | 56 | 1 |
+| other | 57 | 1 |
 | autopar | 49 | 0 |
 | cli | 47 | 1 |
 | parser | 27 | 1 |
@@ -124,13 +124,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 5 | 1 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1356 surfaced · 5 open · 1333 fixed · 7 wontfix** (2026-05-20 → 2026-08-19). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1357 surfaced · 4 open · 1335 fixed · 7 wontfix** (2026-05-20 → 2026-08-19). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-18-40 | 2026-08-18 | typecheck+codegen | low | A `#[gpu]` KERNEL BODY COULD NOT LOOP, BIND A LOCAL, OR BRANCH ON A VALUE — it had to be a SINGLE EXPRESSION. All four increments LANDED 2026-08-18: immutable `let`, `while` + mutable locals + assignment, `for`-over-range, and value `match`. Reductions, accumulators, nested counted loops and table lookups now compile AND run (each verified on lavapipe against the interpreter). REMAINDER SPLIT OUT AS B-2026-08-18-49: statement-form `if` is unsupported (and a value-`if` branch cannot hold a local) — wider than this row's original "locals inside an `if` branch" wording, which understated it. | docs/implementation_checklist/phase-10-targets.md § GPU codegen cluster (CG-1…CG-7); the slice-0 scope decision is docs/spikes/gpu-wgsl-slice0.md. Not a regression — an unlifted slice-0 floor. Sibling of the CG-5 assessment (docs/spikes/gpu-llvm-offload-assessment.md finding 4), which is where it surfaced. |
 | B-2026-08-19-3 | 2026-08-19 | parser+codegen | low | MULTI-BOUND `effect resource` declarations do not parse: `effect resource UserDB: DatabaseProvider + HealthCheckable;` -> "Expected Semicolon, found Plus", spec'd normatively at design.md:7216 under "Multiple trait bounds are allowed on a resource declaration:" (:7213), with semantics attached at :7217 ("Any provider passed to `with_provider` must implement all declared bounds plus `Send + Sync`"). | src/parser/items_effects.rs::parse_effect_resource_tail vs design.md:7216 (prose at :7213, semantics at :7217); src/codegen/provider_state.rs::provider_resource_traits and its nine readers |
 | B-2026-08-19-5 | 2026-08-19 | other | low | The codegen E2E harness (`tests/codegen.rs::run_program_capturing_inner`) runs resolve + typecheck but NOT the effect checker, so a test can pin behaviour for a program `karac build` REFUSES. Its `assert_check_clean` gate is named for the whole check phase and covers two thirds of it. | tests/codegen.rs::run_program_capturing_inner; tests/common's assert_check_clean; cf. B-2026-08-11-34 (the prepare_for_resolve drift this gate was hardened against) |
 | B-2026-08-19-7 | 2026-08-19 | runtime+cli | low | `karac run` (JIT) IGNORES A CLOSED READER ENTIRELY: with `| head -2` it runs the whole program to completion, discarding every failed write, then exits 0 — while the AOT binary for the same source dies at the first broken write with status 141. MEASURED on a 2,000,000-line program: 541 ms with the pipe closed after two lines vs 547 ms writing everything to /dev/null (statistically identical), against 5 ms for the AOT binary. 100x the work here, and unbounded for a long-running program. | roadmap.md |
@@ -152,9 +151,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1356 surfaced
 
 </details>
 
-### Fixed (1333)
+### Fixed (1335)
 
-<details><summary>1333 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1335 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -11973,6 +11972,7 @@ NOT REPRODUCIBLE, checked in the same pass: the sibling `NestedBoxedEnumDrop` (a
 ASAN DOES NOT CATCH THE ORIGINAL DEFECT, which is worth recording before someone tries. The first ASAN run of the repro returned a wrong value and reported nothing, because the freed chunk is still mapped and the read lands inside it. The regression gate for the use-after-free is therefore an OUTPUT-VALUE assertion (tests/par_codegen.rs), with the ASAN fixture guarding only the "freed exactly once" half of the repair.
 
 LEAVES A LIVE REMAINDER, filed as B-2026-08-18-48 rather than buried here: if the joined binding is then MOVED into a by-value call, the move-out sentinel zeroes the parent's slot so the adopted drop no-ops, and a by-value enum parameter does not adopt the box — 2000/2000 boxes leak in a loop repro. That hole is older than this row and independent of it; sequentially the same program is clean only because the box never escapes a single function and LLVM deletes the allocation outright, so nothing was freeing it there either. Before this fix that program had a use-after-free instead of a leak, so the change is strictly an improvement, but it is not the whole story and the ASAN fixture deliberately uses a READING consumer and says so. |
+| B-2026-08-18-40 | typecheck+codegen | low | A `#[gpu]` KERNEL BODY COULD NOT LOOP, BIND A LOCAL, OR BRANCH ON A VALUE — it had to be a SINGLE EXPRESSION | FIXED across four increments — 7e373aa9 (immutable `let` locals), f700fabf (`while` + `let mut` + assignment and compound assignment), 34800a15 (`for` over an exclusive or inclusive range), 6a41f79c (value `match` as a nested `select` chain) — which together take a `#[gpu]` kernel body from a single expression to a statement sequence. Reductions, accumulators, nested counted loops and table lookups compile and run. The remainder was split out as B-2026-08-18-49 (statement-form `if`, itself since fixed) rather than tracked here. |
 | B-2026-08-18-41 | parser | low | TWO `effect resource` declaration forms design.md specifies normatively do not parse: a GENERIC trait bound (`effect resource C: Provider[Request];`… | FIXED by 641d6df (the generic bound; see below for the multi-bound half). design.md:6071's `effect resource RequestCh: Channel[Request];` now parses, and -- the half that matters -- the argument MEANS something: the trait's own generic params are brought into scope when the method signature is lowered (otherwise `T` lowers to `Type::Named` and no substitution can reach it, since `substitute_type_params` rewrites `Type::TypeParam` only), then bound positionally from the declared args. Both steps are gated on the resource having declared arguments, so a plain `: Trait` bound lowers byte-identically to before.
 
 ARITY IS CHECKED AT THE DECLARATION, both directions -- the substitution zips, so too many args were dropped and too few left the trait's remaining params free to unify with anything. A MISSING argument list counts as zero, which gives this row's motivating diagnostic a home: `effect resource RequestCh: Channel;` against `trait Channel[T]` now reports at the declaration and names the fix rather than surfacing as "expected 'T', found 'i64'" at the first call site. The uniform rule was measured against the full corpus before adopting it -- nothing regressed, because no existing program declares a bare bound on a generic trait.
@@ -12240,6 +12240,7 @@ THREE ENTRY PATHS, because the first two leave a hole worth recording. The annot
 design.md gets a STATUS NOTE, not a scope change (owner-directed). The spec normatively promises 128-bit in v1 — § `checked_*`/`wrapping_*`/`saturating_*`/`overflowing_*` families, the widening-cast table, the primitive-numeric lists, Portable SIMD element types — and rejecting the type without saying so would have traded a soundness bug for the spec/impl divergence class of B-2026-08-18-41. The promise stands; the note records that the compiler does not deliver it yet. Deleting that note is what "implement 128-bit" looks like, and B-2026-08-19-8 tracks it.
 
 FALLOUT, recorded rather than papered over. Four tests asserted the opposite and were REPLACED, not deleted: `test_integer_suffix_{i,u}128_accepted`, `test_const_eval_u128_literal_typechecks`, and the 128-bit lines of `test_float_to_int_conversion_methods_typecheck`. They pinned that 128-bit was NAMEABLE — true, and never in doubt — and read as pinning that it WORKED. `tests/simd_report.rs::require_simd_rejects_unsupported_128bit_element` used `Vector[i128, 4]`, design.md's own example of a lane type no vector unit supports; it no longer type-checks, so the test moves to `f16` (same `UnsupportedElement` classification, still spellable) and the classifier's `bits >= 128` arm is kept and unit-tested on `Type` values for when 128-bit lands. The `Vector` element-type diagnostic stopped advertising `i128` as permitted. No `.kara` file in examples/, stdlib/ or kara-katas uses either type — consistent with a type that never worked. |
+| B-2026-08-19-9 | other | medium | `tests/gpu_e2e.rs` PINNED `KARAC_GPU_BACKEND=cpu`, so all fourteen execution fixtures SKIPPED ON macOS — the project's primary dev machine — while re… | FIXED by 7c862b7d. `gpu_probe` now RESOLVES a backend — explicit `KARAC_GPU_BACKEND`, then the platform's default adapter, then a forced software one — instead of pinning `cpu` on every fixture, so the execution suite runs on Metal here and on lavapipe in a GPU-less container. The `NoAdapter`-only fallback and the no-fallback-when-forced rule were both verified (the first by mutating the emitter to produce invalid WGSL and confirming the `Broken` arm still panics on Metal), and the candidate order is pinned by a pure test that runs on GPU-less hosts. 16 passed / 0 skips on Metal, up from 15 passed / 14 skips. |
 
 </details>
 
