@@ -156,6 +156,9 @@ impl<'a> super::TypeChecker<'a> {
                 Item::EffectResource(r) => {
                     self.user_effect_resources
                         .insert(r.name.clone(), r.provider_trait.clone());
+                    if let Some(k) = &r.key_param {
+                        self.resource_key_types.insert(r.name.clone(), k.ty.clone());
+                    }
                 }
                 _ => {}
             }

@@ -1994,6 +1994,16 @@ pub struct TypeChecker<'a> {
     /// never populate (bugs.md "untyped `let` from an effect-resource
     /// method call").
     pub(super) user_effect_resources: FxHashMap<String, Option<String>>,
+    /// Declared PARTITION KEY type per parameterized `effect resource`
+    /// (`effect resource UserDB[user_id: i64];` -> `UserDB` -> `i64`), keyed by
+    /// resource name. Absent for the unparameterized declarations, which is
+    /// most of them. B-2026-08-18-50.
+    ///
+    /// Held as the written `TypeExpr` rather than a lowered `Type` because the
+    /// consumer -- `check_effect_partition_keys`, run once the signature's
+    /// parameters are in scope -- lowers it with the function's own generic
+    /// parameters visible, and env build has no such scope.
+    pub(super) resource_key_types: FxHashMap<String, crate::ast::TypeExpr>,
     /// Trait-less user resource name → concrete override type name,
     /// recovered syntactically from `with_provider[R](provider, ...)`
     /// sites during env build (struct-literal, `let`-bound, or
@@ -2252,6 +2262,7 @@ impl<'a> TypeChecker<'a> {
             gpu_dispatch_wgsl: FxHashMap::default(),
             task_join_return_types: FxHashMap::default(),
             user_effect_resources: FxHashMap::default(),
+            resource_key_types: FxHashMap::default(),
             user_resource_override_types: FxHashMap::default(),
             bare_assoc_fn_targets: FxHashMap::default(),
             path_call_method_dispatch: FxHashSet::default(),

@@ -40335,3 +40335,100 @@ fn impls_whose_targets_differ_only_inside_const_args_are_rejected() {
          fn main() { }",
     );
 }
+
+// ── B-2026-08-18-50: parameterized-resource partition keys ──────
+
+/// A `writes(R[k])` key is checked against the type `R`'s declaration gave it.
+///
+/// Before this, `effect resource UserDB[user_id: i64];` recorded `i64` and a
+/// `String`-keyed use was accepted with no diagnostic — the declaration form
+/// (B-2026-08-18-41) parsed but meant nothing.
+#[test]
+fn test_partition_key_type_mismatch_is_reported() {
+    let errors = typecheck_errors(
+        "effect resource UserDB[user_id: i64];\n\
+         fn update(name: String) -> i64 with writes(UserDB[name]) {\n\
+             return name.len();\n\
+         }\n",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("partition key for `UserDB`")
+                && e.message.contains("'String'")
+                && e.message.contains("'i64'")),
+        "expected a partition-key mismatch; got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+/// The matching key is silent — the check must not fire on the shape the spec's
+/// own § Parameterized Resources example uses.
+#[test]
+fn test_partition_key_matching_type_is_accepted() {
+    typecheck_ok(
+        "effect resource UserDB[user_id: i64];\n\
+         fn update(id: i64) -> i64 with writes(UserDB[id]) {\n\
+             return id + 1;\n\
+         }\n",
+    );
+}
+
+/// THE COMPATIBILITY CASE, and the reason the check is a mismatch-only rule.
+///
+/// Until the declaration form parsed, a bare `effect resource UserDB;` used
+/// with a key was the ONLY spelling available, so every parameterized program
+/// written so far looks like this. A keyed use of an unparameterized resource
+/// stays silent; making it an error is a migration, not a rider on this check.
+#[test]
+fn test_keyed_use_of_an_unparameterized_resource_stays_silent() {
+    typecheck_ok(
+        "effect resource UserDB;\n\
+         fn update(name: String) -> i64 with writes(UserDB[name]) {\n\
+             return name.len();\n\
+         }\n",
+    );
+}
+
+/// Impl methods take the same path — the check sits in `check_function`, which
+/// both free functions and methods route through, and a method's key names a
+/// method parameter just the same.
+#[test]
+fn test_partition_key_is_checked_on_impl_methods() {
+    let errors = typecheck_errors(
+        "effect resource UserDB[user_id: i64];\n\
+         struct Svc { n: i64 }\n\
+         impl Svc {\n\
+             fn touch(ref self, who: String) -> i64 with writes(UserDB[who]) {\n\
+                 return who.len();\n\
+             }\n\
+         }\n",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("partition key for `UserDB`")),
+        "expected a partition-key mismatch on the method; got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+/// A literal key is checked too — it is also the only shape
+/// `apply_parameterized_keys` can prove distinct, so getting its type wrong is
+/// the case that most deserves a diagnostic.
+#[test]
+fn test_partition_key_literal_is_checked() {
+    let errors = typecheck_errors(
+        "effect resource UserDB[user_id: i64];\n\
+         fn touch() -> i64 with writes(UserDB[\"oops\"]) {\n\
+             return 1;\n\
+         }\n",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("partition key for `UserDB`")),
+        "expected a partition-key mismatch on the literal; got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}

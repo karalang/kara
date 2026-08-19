@@ -1612,6 +1612,71 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// Typecheck each `writes(R[k])` partition key in an effect clause against
+    /// the type `effect resource R[key: T];` declared for it. B-2026-08-18-50.
+    ///
+    /// SILENT WHEN THE RESOURCE DECLARES NO KEY, which is deliberate and is the
+    /// whole compatibility story. Until the declaration form parsed
+    /// (B-2026-08-18-41) every parameterized program in the corpus declared its
+    /// resource BARE and used it keyed, because that was the only spelling that
+    /// worked — so making a keyed use of an unparameterized resource an error
+    /// would break every one of them. That direction needs a migration, not a
+    /// rider on this check; only the type MISMATCH is reported here, and a
+    /// mismatch is unreachable for a resource that declares no type.
+    ///
+    /// A WRONG KEY IS NEVER A WRONG ANSWER TODAY, which is why this is a
+    /// diagnostic rather than a soundness fix: `apply_parameterized_keys`
+    /// records a conflict key only for a compile-time literal and leaves
+    /// everything else `None` = unproven = conservatively conflicting, so an
+    /// ill-typed key degrades to the safe side. What it costs is silence — a
+    /// partition keyed on the wrong variable serializes more than the author
+    /// intended and nothing says so.
+    fn check_effect_partition_keys(&mut self, effects: Option<&EffectList>, gp: &[String]) {
+        let Some(list) = effects else {
+            return;
+        };
+        for item in &list.items {
+            let EffectItem::Verb(verb) = item else {
+                continue;
+            };
+            for res in &verb.resources {
+                let Some(key_expr) = &res.param else {
+                    continue;
+                };
+                // The resource is named by its last path segment, matching how
+                // `apply_parameterized_keys` joins and compares them.
+                let Some(name) = res.path.last() else {
+                    continue;
+                };
+                let Some(declared_te) = self.resource_key_types.get(name).cloned() else {
+                    continue;
+                };
+                let declared = self.lower_type_expr(&declared_te, gp);
+                let actual = self.infer_expr(key_expr);
+                // `Type::Error` means the key expression already produced its
+                // own diagnostic; a second one about the key would name a type
+                // the author never wrote.
+                if matches!(actual, Type::Error)
+                    || crate::typechecker::types::types_compatible(&actual, &declared)
+                {
+                    continue;
+                }
+                let (want, got) = (
+                    crate::typechecker::types::type_display(&declared),
+                    crate::typechecker::types::type_display(&actual),
+                );
+                self.type_error(
+                    format!(
+                        "partition key for `{name}` has type '{got}', but \
+                         `effect resource {name}[...]` declares its key as '{want}'"
+                    ),
+                    key_expr.span,
+                    TypeErrorKind::TypeMismatch,
+                );
+            }
+        }
+    }
+
     fn check_function(
         &mut self,
         f: &Function,
@@ -1688,6 +1753,16 @@ impl<'a> super::TypeChecker<'a> {
             self.check_param_irrefutable(param, &ty);
             self.bind_pattern_types(&param.pattern, &ty);
         }
+
+        // B-2026-08-18-50 — the PARTITION KEY of every `writes(R[k])` in this
+        // signature, checked against the type `R`'s declaration gave it.
+        //
+        // HERE, and not in the effect checker, because the key expression names
+        // a FUNCTION PARAMETER (`fn update(id: i64) -> i64 with
+        // writes(UserDB[id])`) and this is the first point where the parameters
+        // are bound. Effect verification runs later, in a phase with no local
+        // scope at all.
+        self.check_effect_partition_keys(f.effects.as_ref(), &gp);
 
         // Validate inline bounds and where clause (merged — both apply)
         self.validate_all_bounds(&f.generic_params, &f.where_clause, &gp);
