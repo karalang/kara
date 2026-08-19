@@ -5193,9 +5193,8 @@ impl<'a> super::TypeChecker<'a> {
             ExprKind::Providers { bindings, body } => {
                 // Provider values are plain expressions; infer their types
                 // for side effects (diagnostics, subexpression typing). The
-                // block's type is the body's type. Full provider-trait
-                // conformance — verifying each provider implements the
-                // resource's declared `ProviderTrait` — remains deferred.
+                // block's type is the body's type. Provider-trait
+                // conformance is checked below, as in the call form.
                 //
                 // Phase 6 line 170 slice 3c — cross-task-safe check on the
                 // concrete provider type. A `with_provider[R](p, || …)`
@@ -5209,6 +5208,17 @@ impl<'a> super::TypeChecker<'a> {
                 // the historical "Send + Sync on the provider type" deferral
                 // (the closed enumeration is the v1 mechanism, no auto-trait
                 // infrastructure to wait on).
+                //
+                // B-2026-08-19-15 — the declared-provider-trait check runs
+                // here too. `providers { R => p } in { … }` DESUGARS to
+                // `with_provider[R](p, || …)` (design.md § Provider-Rooted
+                // Resources), so a provider that does not implement `R`'s
+                // declared bound is exactly as broken in this form: codegen
+                // builds the same resource vtable from the same bound's
+                // methods either way. B-2026-08-19-4 wired the check into the
+                // call form only, which left the block form — the shape the
+                // spec's own examples use for multi-resource setup — silently
+                // accepting a provider implementing nothing at all.
                 for b in bindings {
                     let provider_ty = self.infer_expr(&b.value);
                     if let Err(path) =
@@ -5222,6 +5232,11 @@ impl<'a> super::TypeChecker<'a> {
                             &b.resource_span,
                         );
                     }
+                    self.check_provider_satisfies_declared_bound(
+                        &b.resource,
+                        &provider_ty,
+                        &b.resource_span,
+                    );
                 }
                 self.infer_block(body)
             }

@@ -465,7 +465,7 @@ impl<'a> super::TypeChecker<'a> {
     /// optional"), and a generic provider's obligation belongs to its own
     /// bound list, which `validate_all_bounds` already checks at the
     /// declaration.
-    fn check_provider_satisfies_declared_bound(
+    pub(super) fn check_provider_satisfies_declared_bound(
         &mut self,
         resource: &str,
         provider_ty: &Type,

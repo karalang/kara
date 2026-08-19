@@ -556,6 +556,17 @@ pub(super) fn impl_table_key(ty: &Type) -> Option<(String, Vec<Type>)> {
         // impls. Method resolution consults this first, then the base
         // (phase-9 step 2, §1C). Non-generic at v1, so no args.
         Type::Refinement { name, .. } => Some((name.clone(), Vec::new())),
+        // B-2026-08-19-14. A `shared struct S` / `par struct S` value carries
+        // `Type::Shared(S)`, not `Type::Named { name: "S" }` — the two render
+        // identically but are deliberately distinct so consumers can match
+        // shared-ness off the type. Without this arm the key is `None` and
+        // `type_satisfies_bound` answers `false` for EVERY trait, so no
+        // shared/par struct could satisfy any bound anywhere — while
+        // `receiver_for_method_lookup` (below) already collapsed the same
+        // wrapper for method calls, so `s.go()` resolved and `run[T: Doer](s)`
+        // did not. Shared structs are non-generic at v1, so there are no args
+        // to carry (see `Type::Shared`'s own doc).
+        Type::Shared(name) => Some((name.clone(), Vec::new())),
         Type::Ref(inner) | Type::MutRef(inner) => impl_table_key(inner),
         _ => None,
     }

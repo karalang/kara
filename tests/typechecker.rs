@@ -28904,6 +28904,127 @@ fn with_provider_provider_with_raw_pointer_field_rejected() {
     );
 }
 
+// ── B-2026-08-19-14 / -15: shared-and-par impl lookup + the block form ──
+
+#[test]
+fn shared_struct_satisfies_a_trait_bound() {
+    // B-2026-08-19-14. A `shared struct` value carries `Type::Shared(S)`,
+    // not `Type::Named { S }`. `impl_table_key` had no arm for it, so the
+    // key came back `None` and `type_satisfies_bound` answered `false` for
+    // EVERY trait — no shared struct could satisfy any bound anywhere.
+    // The tell was a self-contradicting diagnostic: "`ShS` does not
+    // implement `Doer`; trait `Doer` is implemented by: ShS".
+    typecheck_ok(
+        "trait Doer { fn go(ref self) -> i64; }
+         shared struct ShS { a: i64 }
+         impl Doer for ShS { fn go(ref self) -> i64 { 2 } }
+         fn run[T: Doer](p: ref T) -> i64 { p.go() }
+         fn main() { let s = ShS { a: 1 }; println(run(s)); }",
+    );
+}
+
+#[test]
+fn par_struct_satisfies_a_trait_bound() {
+    // Twin of the above: `par struct` shares the `Type::Shared` carrier,
+    // so it was equally unable to satisfy a bound.
+    typecheck_ok(
+        "trait Doer { fn go(ref self) -> i64; }
+         par struct ParS { a: i64 }
+         impl Doer for ParS { fn go(ref self) -> i64 { 3 } }
+         fn run[T: Doer](p: ref T) -> i64 { p.go() }
+         fn main() { let s = ParS { a: 1 }; println(run(s)); }",
+    );
+}
+
+#[test]
+fn method_call_and_trait_bound_agree_on_a_shared_struct() {
+    // The asymmetry that hid B-2026-08-19-14 for so long:
+    // `receiver_for_method_lookup` collapsed `Type::Shared(S)` to the
+    // nominal name, so `s.go()` always resolved — only the BOUND path
+    // failed. Pin both halves in one program so they cannot drift apart
+    // again.
+    typecheck_ok(
+        "trait Doer { fn go(ref self) -> i64; }
+         shared struct ShS { a: i64 }
+         impl Doer for ShS { fn go(ref self) -> i64 { 2 } }
+         fn run[T: Doer](p: ref T) -> i64 { p.go() }
+         fn main() {
+             let s = ShS { a: 1 };
+             println(s.go());
+             println(run(s));
+         }",
+    );
+}
+
+#[test]
+fn with_provider_par_struct_provider_accepted() {
+    // The catch-22 B-2026-08-19-14 produced on the provider surface
+    // specifically. A `shared struct` provider is rejected by the
+    // cross-task check with a fix-it that says "replace with the `par`
+    // form" — and following that fix-it landed on "ParDB does not
+    // implement DbProvider" from `check_provider_satisfies_declared_bound`,
+    // because the bound path could not see through `Type::Shared`. The
+    // compiler's own suggested repair produced a program it rejected, so
+    // there was NO way to write a reference-semantics provider.
+    typecheck_ok(
+        "trait DbProvider { fn query(ref self, n: i64) -> i64; }
+         effect resource UserDB: DbProvider;
+         par struct ParDB { data: i64 }
+         impl DbProvider for ParDB { fn query(ref self, n: i64) -> i64 { self.data + n } }
+         fn main() {
+             with_provider[UserDB](ParDB { data: 100 }, || {
+                 println(UserDB.query(5));
+             });
+         }",
+    );
+}
+
+#[test]
+fn providers_block_rejects_provider_missing_declared_trait() {
+    // B-2026-08-19-15. `providers { R => p } in { … }` desugars to
+    // `with_provider[R](p, || …)`, but B-2026-08-19-4 wired the
+    // declared-bound check into the call form ONLY. The block form — the
+    // shape design.md's own multi-resource examples use — accepted a
+    // provider implementing nothing at all.
+    let errors = typecheck_errors(
+        "trait DbProvider { fn query(ref self, n: i64) -> i64; }
+         effect resource UserDB: DbProvider;
+         struct NotAProvider { data: i64 }
+         fn main() {
+             providers { UserDB => NotAProvider { data: 100 } } in {
+                 println(UserDB.query(5));
+             }
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::TraitBoundNotSatisfied
+                && e.message.contains("does not implement `DbProvider`")
+                && e.message.contains("UserDB")),
+        "providers-block form should reject a provider missing the declared bound, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn providers_block_accepts_provider_implementing_declared_trait() {
+    // Companion to the above — the check must not fire on a conforming
+    // provider, including a `par struct` one (B-2026-08-19-14 again, on
+    // the block surface).
+    typecheck_ok(
+        "trait DbProvider { fn query(ref self, n: i64) -> i64; }
+         effect resource UserDB: DbProvider;
+         par struct ParDB { data: i64 }
+         impl DbProvider for ParDB { fn query(ref self, n: i64) -> i64 { self.data + n } }
+         fn main() {
+             providers { UserDB => ParDB { data: 100 } } in {
+                 println(UserDB.query(5));
+             }
+         }",
+    );
+}
+
 // ── Phase 6 line 170 slice 4: E_NOT_CROSS_TASK multi-line shape ────
 //
 // design.md § Structured Concurrency Lifetime Guarantees specifies the
