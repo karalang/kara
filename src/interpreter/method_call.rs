@@ -2216,7 +2216,17 @@ impl<'a> super::Interpreter<'a> {
             // All other Display-able values: render via the user-facing
             // renderer (declaration-order struct fields, recursing into
             // containers) so `.to_string()` matches `println` and codegen.
-            return Value::String(self.display_render(&obj));
+            //
+            // The receiver's static type goes with it (B-2026-08-19-27) so a
+            // nested unsigned integer is read at its own width, the same way
+            // the scalar arm above reads one. `args_close_span` FIRST for the
+            // reason given there: the parser aliases a `MethodCall`'s span to
+            // its receiver's, so `expr_types` at `object.span` holds this
+            // call's `Str` result rather than the receiver's type.
+            let recv_ty = self
+                .span_expr_type(args_close_span)
+                .or_else(|| self.span_expr_type(&object.span));
+            return Value::String(self.display_render_typed(&obj, recv_ty.as_ref()));
         }
 
         // Category dispatchers — each returns `Some(Value)` if `method`

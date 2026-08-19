@@ -1600,10 +1600,19 @@ impl<'ctx> super::Codegen<'ctx> {
                     "i8" | "i16"
                         | "i32"
                         | "i64"
+                        // B-2026-08-19-23 widened three sibling lists to the
+                        // 128-bit widths and missed this one, so a `u128` field
+                        // in a `#[derive(Display)]` struct still refused to
+                        // compile ("whose Display is not yet supported"). The
+                        // leaf path behind it routes through
+                        // `emit_display_fn_for_type`, which that row DID give a
+                        // 128-bit arm, so the names are all that was missing.
+                        | "i128"
                         | "u8"
                         | "u16"
                         | "u32"
                         | "u64"
+                        | "u128"
                         | "usize"
                         | "f32"
                         | "f64"

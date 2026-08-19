@@ -1267,6 +1267,14 @@ impl<'a> super::Interpreter<'a> {
     /// carrier; `u128` is a second, and reading one at 64 bits keeps the low
     /// half — `u128::MAX` printed `-1`, sorted first, and compared as negative
     /// (B-2026-08-19-23).
+    /// The type the typechecker recorded at `span`, cloned. `None` for an
+    /// unrecorded span — `karac run` populates `expr_types` sparsely, so every
+    /// consumer must degrade gracefully rather than assume a hit.
+    pub(crate) fn span_expr_type(&self, span: &Span) -> Option<crate::typechecker::Type> {
+        let key = crate::resolver::SpanKey::from_span(span);
+        self.typecheck_result.expr_types.get(&key).cloned()
+    }
+
     pub(crate) fn span_unsigned_int_width(&self, span: &Span) -> Option<u32> {
         let key = crate::resolver::SpanKey::from_span(span);
         let ty = self.typecheck_result.expr_types.get(&key)?;

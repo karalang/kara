@@ -35,7 +35,7 @@ mod exprs;
 mod fields;
 mod gpu_call_graph;
 mod gpu_safe;
-mod inference;
+pub(crate) mod inference;
 mod items;
 mod lowering;
 mod method_column_analytics;

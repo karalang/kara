@@ -67,7 +67,31 @@ impl<'a> super::Interpreter<'a> {
     /// stays for debug / diagnostic contexts. Codegen renders structs in the
     /// same declaration order (see `synth_display.rs`), so the two backends
     /// agree.
-    pub(crate) fn display_render(&self, v: &Value) -> String {
+    /// Render a value the way the user-facing surfaces do — `print`/`println`,
+    /// `.to_string()`, and f-string interpolation — with the value's STATIC
+    /// TYPE threaded alongside it, peeled one layer per level of the recursion.
+    ///
+    /// B-2026-08-19-27. Rendering an integer needs its type, because the
+    /// interpreter holds an unsigned value as its two's-complement bit pattern
+    /// in a signed carrier — a `u64` at or above 2^63, or a `u128` above
+    /// `i128::MAX`, is a NEGATIVE `Value::Int`. The scalar `to_string` arm has
+    /// always known this and consults the receiver's span. This renderer never
+    /// did: it walks `Value`s structurally, so every nested integer was
+    /// formatted signed and `println(o)` on an `Option[u64]` holding `u64::MAX`
+    /// printed `Some(-1)` while both compiled backends printed the value. The
+    /// divergence covered every container and payload shape — `Vec`, tuple,
+    /// `Map`, struct field, enum payload, and any nesting of them.
+    ///
+    /// `ty` is `None` when the caller has no static type to offer (a `Value`
+    /// reached from a context with no span, and the recursive positions whose
+    /// parent type was itself unknown). That degrades to exactly the previous
+    /// behaviour — signed — so an unresolved type is never worse than before.
+    pub(crate) fn display_render_typed(
+        &self,
+        v: &Value,
+        ty: Option<&crate::typechecker::Type>,
+    ) -> String {
+        use crate::typechecker::Type;
         match v {
             Value::Struct { name, fields } => {
                 // std.secret: never render a `Secret[T]`'s wrapped value in a
@@ -94,30 +118,38 @@ impl<'a> super::Interpreter<'a> {
                     .get(name)
                     .map(|si| si.fields.iter().map(|(n, _, _)| n.clone()).collect())
                     .unwrap_or_else(|| fields.keys().cloned().collect());
+                let field_tys = self.struct_field_display_types(name, ty);
                 let body = order
                     .iter()
                     .filter_map(|fname| {
-                        fields
-                            .get(fname)
-                            .map(|fv| format!("{}: {}", fname, self.display_render(fv)))
+                        fields.get(fname).map(|fv| {
+                            let fty = field_tys.get(fname);
+                            format!("{}: {}", fname, self.display_render_typed(fv, fty))
+                        })
                     })
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("{} {{ {} }}", name, body)
             }
             Value::Tuple(vals) => {
+                let elem_tys: Option<&Vec<Type>> = match ty {
+                    Some(Type::Tuple(ts)) => Some(ts),
+                    _ => None,
+                };
                 let body = vals
                     .iter()
-                    .map(|x| self.display_render(x))
+                    .enumerate()
+                    .map(|(i, x)| self.display_render_typed(x, elem_tys.and_then(|ts| ts.get(i))))
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("({})", body)
             }
             Value::Array(rc) => {
+                let elem = Self::display_element_type(ty);
                 let vals = rc.read().unwrap();
                 let body = vals
                     .iter()
-                    .map(|x| self.display_render(x))
+                    .map(|x| self.display_render_typed(x, elem))
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("[{}]", body)
@@ -128,19 +160,34 @@ impl<'a> super::Interpreter<'a> {
                 len,
                 ..
             } => {
+                let elem = Self::display_element_type(ty);
                 let vals = storage.read().unwrap();
                 let body = vals[*start..*start + *len]
                     .iter()
-                    .map(|x| self.display_render(x))
+                    .map(|x| self.display_render_typed(x, elem))
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("[{}]", body)
             }
             Value::Map(entries) => {
+                // `Map[K, V]` / `SortedMap[K, V]` — both K and V can be an
+                // unsigned scalar, so both sides peel.
+                let (kt, vt) = match ty {
+                    Some(Type::Named { name, args })
+                        if (name == "Map" || name == "SortedMap") && args.len() == 2 =>
+                    {
+                        (Some(&args[0]), Some(&args[1]))
+                    }
+                    _ => (None, None),
+                };
                 let body = entries
                     .iter()
                     .map(|(k, val)| {
-                        format!("{}: {}", self.display_render(k), self.display_render(val))
+                        format!(
+                            "{}: {}",
+                            self.display_render_typed(k, kt),
+                            self.display_render_typed(val, vt)
+                        )
                     })
                     .collect::<Vec<_>>()
                     .join(", ");
@@ -159,9 +206,13 @@ impl<'a> super::Interpreter<'a> {
             } => match data {
                 EnumData::Unit => variant.clone(),
                 EnumData::Tuple(vals) => {
+                    let ptys = self.variant_payload_display_types(enum_name, variant, ty);
                     let body = vals
                         .iter()
-                        .map(|x| self.display_render(x))
+                        .enumerate()
+                        .map(|(i, x)| {
+                            self.display_render_typed(x, ptys.as_ref().and_then(|(_, t)| t.get(i)))
+                        })
                         .collect::<Vec<_>>()
                         .join(", ");
                     format!("{}({})", variant, body)
@@ -179,19 +230,129 @@ impl<'a> super::Interpreter<'a> {
                             _ => None,
                         })
                         .unwrap_or_else(|| fields.keys().cloned().collect());
+                    let ptys = self.variant_payload_display_types(enum_name, variant, ty);
                     let body = order
                         .iter()
                         .filter_map(|fname| {
-                            fields
-                                .get(fname)
-                                .map(|fv| format!("{}: {}", fname, self.display_render(fv)))
+                            fields.get(fname).map(|fv| {
+                                let fty = ptys.as_ref().and_then(|(names, t)| {
+                                    names.iter().position(|n| n == fname).and_then(|i| t.get(i))
+                                });
+                                format!("{}: {}", fname, self.display_render_typed(fv, fty))
+                            })
                         })
                         .collect::<Vec<_>>()
                         .join(", ");
                     format!("{} {{ {} }}", variant, body)
                 }
             },
+            // The one leaf that depends on its type. An unsigned value at a
+            // width whose top half does not fit the signed carrier is held as a
+            // negative bit pattern, so the signed `Display` prints the wrong
+            // reading — `-1` for `u64::MAX`. Narrower unsigned widths fit
+            // non-negatively, so signed and unsigned coincide and they are
+            // absent from `type_unsigned_int_width` rather than forgotten.
+            Value::Int(n) => match ty.and_then(Self::type_unsigned_int_width) {
+                Some(64) => format!("{}", *n as u64),
+                Some(128) => format!("{}", *n as u128),
+                _ => format!("{}", v),
+            },
             other => format!("{}", other),
+        }
+    }
+
+    /// Declared field types for `struct_name`, with the struct's generic
+    /// parameters substituted from the concrete `ty` when there is one — so a
+    /// `Wrap[u64]`'s `T` field renders as a `u64`, not as an unresolved param.
+    /// Empty when the struct is unknown.
+    fn struct_field_display_types(
+        &self,
+        struct_name: &str,
+        ty: Option<&crate::typechecker::Type>,
+    ) -> std::collections::HashMap<String, crate::typechecker::Type> {
+        let Some(si) = self.typecheck_result.struct_info.get(struct_name) else {
+            return std::collections::HashMap::new();
+        };
+        let subs = Self::display_type_subs(&si.generic_params, ty);
+        si.fields
+            .iter()
+            .map(|(n, t, _)| {
+                (
+                    n.clone(),
+                    crate::typechecker::inference::substitute_type_params(t, &subs),
+                )
+            })
+            .collect()
+    }
+
+    /// Declared payload types for `enum_name::variant` — the field NAMES (empty
+    /// for a tuple variant) and their types, with the enum's generic parameters
+    /// substituted from the concrete `ty`. That substitution is what makes the
+    /// seeded generics work: `Option`'s `Some` declares a bare `T`, so without
+    /// it an `Option[u64]` payload carries no width at all.
+    #[allow(clippy::type_complexity)]
+    fn variant_payload_display_types(
+        &self,
+        enum_name: &str,
+        variant: &str,
+        ty: Option<&crate::typechecker::Type>,
+    ) -> Option<(Vec<String>, Vec<crate::typechecker::Type>)> {
+        use crate::typechecker::VariantTypeInfo;
+        let ei = self.typecheck_result.enum_info.get(enum_name)?;
+        let (_, vt) = ei.variants.iter().find(|(n, _)| n == variant)?;
+        let subs = Self::display_type_subs(&ei.generic_params, ty);
+        let sub = |t: &crate::typechecker::Type| {
+            crate::typechecker::inference::substitute_type_params(t, &subs)
+        };
+        Some(match vt {
+            VariantTypeInfo::Unit => (Vec::new(), Vec::new()),
+            VariantTypeInfo::Tuple(ts) => (Vec::new(), ts.iter().map(sub).collect()),
+            VariantTypeInfo::Struct(fs) => (
+                fs.iter().map(|(n, _)| n.clone()).collect(),
+                fs.iter().map(|(_, t)| sub(t)).collect(),
+            ),
+        })
+    }
+
+    /// Positional generic substitution from a concrete `Named` type onto a
+    /// declaration's parameter list. Empty when either side is missing, which
+    /// leaves `substitute_type_params` a no-op and the rendering signed —
+    /// the same degradation as an unknown type.
+    fn display_type_subs(
+        params: &[String],
+        ty: Option<&crate::typechecker::Type>,
+    ) -> std::collections::HashMap<String, crate::typechecker::SubstValue> {
+        use crate::typechecker::{SubstValue, Type};
+        let mut subs = std::collections::HashMap::new();
+        if let Some(Type::Named { args, .. }) = ty {
+            for (p, a) in params.iter().zip(args.iter()) {
+                subs.insert(p.clone(), SubstValue::Type(a.clone()));
+            }
+        }
+        subs
+    }
+
+    /// The element type of a sequence type, for the `Array` / `Slice` arms.
+    /// Covers every spelling those two `Value`s can carry — `Vec[T]` and the
+    /// sorted/set family arrive as `Named`, fixed arrays and slices as their
+    /// own variants.
+    fn display_element_type(
+        ty: Option<&crate::typechecker::Type>,
+    ) -> Option<&crate::typechecker::Type> {
+        use crate::typechecker::Type;
+        match ty? {
+            Type::Array { element, .. }
+            | Type::Vector { element, .. }
+            | Type::Slice { element, .. } => Some(element),
+            Type::Named { name, args }
+                if matches!(
+                    name.as_str(),
+                    "Vec" | "VecDeque" | "Set" | "SortedSet" | "Column" | "Tensor"
+                ) && !args.is_empty() =>
+            {
+                Some(&args[0])
+            }
+            _ => None,
         }
     }
 
@@ -226,9 +387,19 @@ impl<'a> super::Interpreter<'a> {
             // Render through the unified `to_string` dispatch so `println(x)`
             // honors a user `impl Display` (built-in types fall through to
             // `display_render` inside that dispatch). GAP-W4.
-            match self.eval_method_call(&arg.value, "to_string", &[], span, span) {
+            // `args_close_span` is the ARGUMENT's span, not the `println`
+            // call's. The dispatch uses that span to recover the RECEIVER's
+            // type — for a real `x.to_string()` the close paren is the only
+            // leaf the parser has not aliased to the receiver — and passing the
+            // call's span instead resolved it to the call's own `Unit`, a hit
+            // that shadowed the correct fallback. That is why `println(o)` on
+            // an `Option[u64]` still rendered signed after the renderer learned
+            // to take a type (B-2026-08-19-27).
+            match self.eval_method_call(&arg.value, "to_string", &[], span, &arg.value.span) {
                 Value::String(s) => s,
-                other => self.display_render(&other),
+                other => {
+                    self.display_render_typed(&other, self.span_expr_type(&arg.value.span).as_ref())
+                }
             }
         } else {
             String::new()

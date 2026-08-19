@@ -180,11 +180,17 @@ impl<'a> super::Interpreter<'a> {
                                         Value::Int(i) => fs.apply_int(narrow_to_i64(*i)),
                                         Value::Float(f) => fs.apply_float(*f),
                                         Value::String(s) => fs.apply_str(s),
-                                        other => fs.apply_str(&self.display_render(other)),
+                                        other => fs.apply_str(&self.display_render_typed(
+                                            other,
+                                            self.span_expr_type(&e.span).as_ref(),
+                                        )),
                                     };
                                     result.push_str(&formatted);
                                 } else {
-                                    result.push_str(&self.display_render(&v));
+                                    result.push_str(&self.display_render_typed(
+                                        &v,
+                                        self.span_expr_type(&e.span).as_ref(),
+                                    ));
                                 }
                                 continue;
                             }
@@ -195,10 +201,21 @@ impl<'a> super::Interpreter<'a> {
                             // exactly as an explicit `.to_string()` would;
                             // built-in types fall through to `display_render`
                             // inside that dispatch. GAP-W4.
-                            match self.eval_method_call(e, "to_string", &[], &expr.span, &expr.span)
-                            {
+                            // The interpolated expression's OWN span is the
+                            // `args_close_span`, not the f-string's — same
+                            // reason as the `println` router: that span is what
+                            // the dispatch reads the receiver's type from, and
+                            // the f-string's own span resolves to `Str`, a hit
+                            // that shadows it. Without this an unsigned value
+                            // interpolated into an f-string rendered signed
+                            // while `println` of the same value did not
+                            // (B-2026-08-19-27).
+                            match self.eval_method_call(e, "to_string", &[], &expr.span, &e.span) {
                                 Value::String(s) => result.push_str(&s),
-                                other => result.push_str(&self.display_render(&other)),
+                                other => result.push_str(&self.display_render_typed(
+                                    &other,
+                                    self.span_expr_type(&e.span).as_ref(),
+                                )),
                             }
                         }
                     }

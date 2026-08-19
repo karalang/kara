@@ -33,7 +33,7 @@ use crate::ast::narrow_literal_to_i64;
 /// (consumed by slice 2's evaluator + slice 4's codegen).
 ///
 /// Unsolved params pass through unchanged.
-pub(super) fn substitute_type_params(ty: &Type, subs: &HashMap<String, SubstValue>) -> Type {
+pub(crate) fn substitute_type_params(ty: &Type, subs: &HashMap<String, SubstValue>) -> Type {
     match ty {
         Type::TypeParam(name) => subs
             .get(name)

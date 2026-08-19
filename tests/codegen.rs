@@ -21547,6 +21547,88 @@ fn main() {
     }
 
     #[test]
+    fn e2e_nested_unsigned_display_matches_the_interpreter() {
+        // The compiled twin of `a_nested_unsigned_value_renders_at_its_own_width`
+        // (tests/interpreter.rs), B-2026-08-19-27.
+        //
+        // Codegen was already CORRECT here — it renders each field through a
+        // synthesized Display fn that knows the static type — and the
+        // interpreter's recursive renderer was not, because it walks `Value`s
+        // with no type context. That made this a run-vs-build divergence with a
+        // right answer already on one side, so these expected strings are
+        // literally what `karac build` printed before the interpreter was
+        // changed. Asserting them on BOTH backends is what stops the pair
+        // drifting apart again.
+        //
+        // `#[derive(Display)]` on a struct with a `u128` field is included
+        // because that field type was still refused at this layer after
+        // B-2026-08-19-23 widened three sibling lists and missed this one.
+        //
+        // The bare `println` of each `Option[T]` precedes the `Vec[Option[T]]`
+        // that follows it deliberately: standalone, `println` of a
+        // `Vec[Option[T]]` PANICS codegen ("type_name 'T' not yet supported")
+        // because the element display asks `Option` for its payload type and
+        // gets the undesugared parameter, and only an earlier bare `Option[T]`
+        // render seeds the concrete fn in the cache. That order-dependence is
+        // pre-existing and filed as B-2026-08-19-28; the ordering here is what
+        // real programs look like, not a workaround for this test.
+        if let Some(out) = run_program(
+            "#[derive(Display)]\n\
+             struct Pair { pub u: u128, pub v: u64 }\n\
+             fn main() {\n\
+             let big: u64 = 18446744073709551615u64;\n\
+             let o: Option[u64] = Some(big);\n\
+             println(o);\n\
+             let r: Result[u64, String] = Ok(big);\n\
+             println(r);\n\
+             let mut v: Vec[u64] = vec![];\n\
+             v.push(big);\n\
+             v.push(5u64);\n\
+             println(v);\n\
+             let t = (big, 5i64);\n\
+             println(t);\n\
+             let mut vo: Vec[Option[u64]] = vec![];\n\
+             vo.push(Some(big));\n\
+             vo.push(None);\n\
+             println(vo);\n\
+             let mut mp: Map[String, u64] = Map.new();\n\
+             mp.insert(\"k\", big);\n\
+             println(mp);\n\
+             println(f\"{o} {v}\");\n\
+             let m: u128 = 340282366920938463463374607431768211455u128;\n\
+             let p = Pair { u: m, v: big };\n\
+             println(p);\n\
+             let ou: Option[u128] = Some(m);\n\
+             println(ou);\n\
+             let mut vv: Vec[Option[u128]] = vec![];\n\
+             vv.push(Some(m));\n\
+             println(vv);\n\
+             let s: Option[i64] = Some(0i64 - 1i64);\n\
+             println(s);\n\
+             let mut n8: Vec[u8] = vec![];\n\
+             n8.push(200u8);\n\
+             println(n8);\n\
+             }",
+        ) {
+            assert_eq!(
+                out,
+                "Some(18446744073709551615)\n\
+                 Ok(18446744073709551615)\n\
+                 [18446744073709551615, 5]\n\
+                 (18446744073709551615, 5)\n\
+                 [Some(18446744073709551615), None]\n\
+                 {k: 18446744073709551615}\n\
+                 Some(18446744073709551615) [18446744073709551615, 5]\n\
+                 Pair { u: 340282366920938463463374607431768211455, v: 18446744073709551615 }\n\
+                 Some(340282366920938463463374607431768211455)\n\
+                 [Some(340282366920938463463374607431768211455)]\n\
+                 Some(-1)\n\
+                 [200]\n"
+            );
+        }
+    }
+
+    #[test]
     fn e2e_chained_width_sensitive_int_methods() {
         // CHAINED width-preserving int methods resolve their receiver width
         // through the receiver itself, not the span-keyed table

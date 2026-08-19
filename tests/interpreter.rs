@@ -35420,6 +35420,160 @@ fn shifts_run_at_the_values_own_width() {
     );
 }
 
+/// An unsigned value NESTED in a container or enum payload renders at its own
+/// width (B-2026-08-19-27). The interpreter holds an unsigned value as its
+/// two's-complement bit pattern in a signed carrier, so a `u64` at or above
+/// 2^63 is a NEGATIVE `Value::Int`. The scalar `to_string` arm has always
+/// consulted the receiver's type to read it back; the recursive renderer never
+/// did — it walks `Value`s structurally — so every nested integer printed
+/// signed and `println(o)` on an `Option[u64]` holding `u64::MAX` printed
+/// `Some(-1)` while both compiled backends printed the value.
+///
+/// The renderer now takes the static type and peels one layer per level. Every
+/// shape below diverged before the fix; the expected strings are exactly what
+/// `karac build` produces, so this is an A/B assertion, not a guess.
+#[test]
+fn a_nested_unsigned_value_renders_at_its_own_width() {
+    assert_eq!(
+        run_no_errors(
+            "fn main() {\n\
+             let big: u64 = 18446744073709551615u64;\n\
+             let o: Option[u64] = Some(big);\n\
+             println(o);\n\
+             let r: Result[u64, String] = Ok(big);\n\
+             println(r);\n\
+             let mut v: Vec[u64] = vec![];\n\
+             v.push(big);\n\
+             v.push(5u64);\n\
+             println(v);\n\
+             let t = (big, 5i64);\n\
+             println(t);\n\
+             let mut vo: Vec[Option[u64]] = vec![];\n\
+             vo.push(Some(big));\n\
+             vo.push(None);\n\
+             println(vo);\n\
+             let mut mp: Map[String, u64] = Map.new();\n\
+             mp.insert(\"k\", big);\n\
+             println(mp);\n\
+             println(f\"{o} {v}\");\n\
+             }"
+        ),
+        "Some(18446744073709551615)\n\
+         Ok(18446744073709551615)\n\
+         [18446744073709551615, 5]\n\
+         (18446744073709551615, 5)\n\
+         [Some(18446744073709551615), None]\n\
+         {k: 18446744073709551615}\n\
+         Some(18446744073709551615) [18446744073709551615, 5]\n"
+    );
+}
+
+/// The same for `u128`, whose top half sits past `i128::MAX`, plus a struct
+/// field and a `Map` whose VALUE is itself a container — the deepest nesting
+/// the peel has to survive (B-2026-08-19-27).
+#[test]
+fn a_nested_u128_renders_at_its_own_width() {
+    assert_eq!(
+        run_no_errors(
+            "#[derive(Display)]\n\
+             struct Pair { pub u: u128, pub v: u64 }\n\
+             fn main() {\n\
+             let m: u128 = 340282366920938463463374607431768211455u128;\n\
+             let big: u64 = 18446744073709551615u64;\n\
+             let o: Option[u128] = Some(m);\n\
+             println(o);\n\
+             let mut v: Vec[u128] = vec![];\n\
+             v.push(m);\n\
+             v.push(5u128);\n\
+             println(v);\n\
+             let p = Pair { u: m, v: big };\n\
+             println(p);\n\
+             let mut vv: Vec[Option[u128]] = vec![];\n\
+             vv.push(Some(m));\n\
+             println(vv);\n\
+             let mut mp: Map[String, Vec[u64]] = Map.new();\n\
+             let mut inner: Vec[u64] = vec![];\n\
+             inner.push(big);\n\
+             mp.insert(\"k\", inner);\n\
+             println(mp);\n\
+             }"
+        ),
+        "Some(340282366920938463463374607431768211455)\n\
+         [340282366920938463463374607431768211455, 5]\n\
+         Pair { u: 340282366920938463463374607431768211455, v: 18446744073709551615 }\n\
+         [Some(340282366920938463463374607431768211455)]\n\
+         {k: [18446744073709551615]}\n"
+    );
+}
+
+/// The peel resolves a GENERIC declaration's parameter from the concrete type
+/// (B-2026-08-19-27). This is what makes the seeded `Option` work at all — its
+/// `Some` declares a bare `T`, carrying no width — so a user-defined generic
+/// exercises the same substitution through a path with nothing seeded about it.
+/// Codegen cannot render a generic struct's Display at all (a separate,
+/// pre-existing gap that refuses `Cell[i64]` just as readily), so this asserts
+/// against the values rather than against a compiled twin.
+#[test]
+fn the_display_peel_substitutes_generic_parameters() {
+    assert_eq!(
+        run_no_errors(
+            "#[derive(Display)]\n\
+             struct Cell[T] { pub val: T }\n\
+             #[derive(Display)]\n\
+             enum MyOpt[T] { Has(T), Empty }\n\
+             fn main() {\n\
+             let c: Cell[u64] = Cell { val: 18446744073709551615u64 };\n\
+             println(c);\n\
+             let c2: Cell[u128] = Cell { val: 340282366920938463463374607431768211455u128 };\n\
+             println(c2);\n\
+             let e: MyOpt[u64] = MyOpt.Has(18446744073709551615u64);\n\
+             println(e);\n\
+             }"
+        ),
+        "Cell { val: 18446744073709551615 }\n\
+         Cell { val: 340282366920938463463374607431768211455 }\n\
+         Has(18446744073709551615)\n"
+    );
+}
+
+/// The counterweight: SIGNED and narrow-unsigned values must render exactly as
+/// they did. The peel changes the reading only for the two widths whose top
+/// half does not fit the carrier, so a negative `i64` in an `Option` has to stay
+/// negative — the failure mode of over-applying this fix is turning every `-1`
+/// into 18446744073709551615.
+#[test]
+fn the_display_peel_leaves_signed_and_narrow_values_alone() {
+    assert_eq!(
+        run_no_errors(
+            "fn main() {\n\
+             let s: Option[i64] = Some(0i64 - 1i64);\n\
+             println(s);\n\
+             let mut si: Vec[i64] = vec![];\n\
+             si.push(0i64 - 7i64);\n\
+             println(si);\n\
+             let mut n8: Vec[u8] = vec![];\n\
+             n8.push(200u8);\n\
+             println(n8);\n\
+             let tn = (0i64 - 3i64, 4i32);\n\
+             println(tn);\n\
+             let f: Option[f64] = Some(1.5);\n\
+             println(f);\n\
+             let st: Option[String] = Some(\"hi\");\n\
+             println(st);\n\
+             let b: Option[bool] = Some(true);\n\
+             println(b);\n\
+             }"
+        ),
+        "Some(-1)\n\
+         [-7]\n\
+         [200]\n\
+         (-3, 4)\n\
+         Some(1.5)\n\
+         Some(hi)\n\
+         Some(true)\n"
+    );
+}
+
 // ── B-2026-08-19-16: qualified unit-variant paths across colliding enums ──
 
 #[test]
