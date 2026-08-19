@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 263 | 0 |
 | leak | 185 | 0 |
-| run-vs-build | 139 | 2 |
+| run-vs-build | 139 | 1 |
 | double-free | 133 | 0 |
 | missing-feature | 122 | 1 |
 | codegen-gap | 119 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 947 | 2 |
+| codegen | 947 | 1 |
 | typecheck | 214 | 1 |
-| interp | 162 | 2 |
+| interp | 162 | 1 |
 | ownership | 60 | 0 |
 | other | 58 | 0 |
 | autopar | 49 | 0 |
@@ -124,14 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 6 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1375 surfaced · 3 open · 1352 fixed · 7 wontfix** (2026-05-20 → 2026-08-19). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1375 surfaced · 2 open · 1353 fixed · 7 wontfix** (2026-05-20 → 2026-08-19). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-19-13 | 2026-08-19 | typecheck+codegen+runtime | medium | GPU reductions still lack the two-pass statistics (var / std), prefix-sum and tiled matmul; integer `prod` / `dot` are blocked on WGSL lacking a widening multiply, and the Arg family is f32-only. `sum`/`prod`/`min`/`max`/`mean`/`dot`/`argmin`/`argmax` over `Vec[f32]` and `sum`/`min`/`max`/`mean` over `Vec[i32]` and `Vec[u32]` have shipped. | docs/spikes/gpu-llvm-offload-assessment.md; src/gpu_wgsl.rs::emit_reduce_kernel; src/reduce_kernel.rs::tree_reduce_f32 |
-| B-2026-08-19-25 | 2026-08-19 | interp+codegen | medium | `Stats.sum` / `Stats.prod` over i64 RAW-`panic!` on integer overflow under `karac run` (Rust backtrace, exit 101) where `karac build` traps cleanly (`integer overflow`, exit 1) -- the last raw panic left in `eval_stats_fn_int`, and the two legs also word the message differently. | src/interpreter/helpers.rs::eval_stats_fn_int (the `run` closure's overflow panic); src/codegen/stats.rs (the AOT twin's trap text) |
 | B-2026-08-19-27 | 2026-08-19 | interp | medium | The interpreter renders an UNSIGNED value with its SIGNED reading whenever it is nested in a container or an enum payload: `println(o)` on an `Option[u64]` holding `u64::MAX` prints `Some(-1)` under `karac run --interp`, and `println(v)` on a `Vec[u64]` prints `[-1, 5]`, while both compiled backends print the values correctly. Not a 128-bit bug — it reproduces identically on `u64` and predates 128-bit entirely. | src/interpreter/*::display_render (the recursive renderer); src/interpreter/method_call.rs (the scalar `to_string` arm, which already does this correctly via `span_unsigned_int_width`); src/interpreter/eval_ops.rs::span_unsigned_int_width |
 
 ### Wontfix (7)
@@ -150,9 +149,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1375 surfaced
 
 </details>
 
-### Fixed (1352)
+### Fixed (1353)
 
-<details><summary>1352 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1353 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -12414,6 +12413,20 @@ VERIFICATION. Byte-identical across `karac build`, that build with `KARAC_AUTO_P
 
 SPLIT OUT, both found by this row's measurement and neither belonging to it: B-2026-08-19-26 (a shift takes its width and signedness from the AMOUNT — a silent miscompile on plain `i64`, fixed in bb3eeb7) and B-2026-08-19-27 (the interpreter's `display_render` renders a nested unsigned value signed; reproduces identically on `u64`, so it predates 128-bit entirely). |
 | B-2026-08-19-24 | typecheck | medium | TYPE-DIRECTED BARE UNIT-VARIANT RESOLUTION: when the context names an enum, a bare variant name now means THAT enum's variant (`let x: Second = A;`,… | ff300ce |
+| B-2026-08-19-25 | interp+codegen | medium | `Stats.sum` / `Stats.prod` over i64 raw-`panic!`ed on integer overflow under `karac run` (Rust backtrace, exit 101) where `karac build` trapped clean… | FIXED by 1833be5.
+
+Unlike the empty-input refusals of B-2026-08-19-20 -- knowable before dispatch and therefore pre-checkable at the call site -- overflow is only discovered INSIDE the fold. So `eval_stats_fn_int` now returns `Result<Value, String>` and the caller reports the `Err` through `record_runtime_error`. That is the refactor this row was split off for: it touches all seven match arms rather than moving a guard.
+
+THE MESSAGE DECISION REVERSES THIS ROW'S OWN RECOMMENDATION, on measurement. The row argued codegen should learn the function name, since the interpreter said `integer overflow in Stats.sum()` where codegen said bare `integer overflow`, and reasoned that "naming the function is more useful than not". Measured first: a plain `let b = a + 1;` past `i64::MAX` prints
+
+  interp: runtime error: integer overflow   at plain_ovf.kara:3:13
+  build:  panic at plain_ovf.kara:3:13 in main: integer overflow
+
+-- bare `integer overflow` on BOTH legs, span carrying the location. That is the house convention for every arithmetic trap in the language, and the two legs already agree on it. Teaching codegen a Stats-specific wording would have made Stats the single trap that words itself differently, so the INTERPRETER moves to match instead and codegen is untouched. A test now asserts the two messages are character-identical, so they cannot drift.
+
+A TEST WAS ASSERTING THE BUG. `tests/interpreter.rs::test_stats_i64_sum_overflow_traps` wrapped the call in `std::panic::catch_unwind` and REQUIRED a Rust panic, failing if the program returned normally. That encoded the defect as the contract. Rewritten rather than deleted, carrying a note on what changed and why: the trap still fires, it now arrives as a runtime error with a span.
+
+VERIFIED: both overflow shapes (`sum` and `prod`) report `integer overflow` at exit 1 on both legs; non-overflow reductions (`sum`/`prod`/`median`/`sort`) return byte-identical results across `run --interp` and `build` after the `Result` conversion. Full `--features llvm` suite 124 targets / 14331 passing; the six failures are another session's in-flight 128-bit work and were confirmed failing with this change REVERTED. Both clippy legs and fmt clean. |
 | B-2026-08-19-26 | codegen | high | SILENT MISCOMPILE on plain 64-bit code: a shift took its WIDTH and its SIGNEDNESS from the shift AMOUNT rather than from the value | FIXED by bb3eeb7. See detail — shifts now take width and signedness from the left operand, with the amount range-checked at its own width before being coerced to the value's type. |
 
 </details>
