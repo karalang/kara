@@ -888,7 +888,11 @@ Resolution archive: [`brainstorming/archive/v69_go_parity_gaps.md § Gap 4`](../
     - Browser (WASM target) → WebGPU API
     Vulkan and DX12 are APIs, not hardware — an NVIDIA GPU on Linux uses Vulkan by default and is fully utilized. No `--target` flag needed. The same compiled binary runs on all wgpu-supported platforms. Build normally: `karac build`.
 
+    > **Portability caveat — this claim is asserted, not yet demonstrated (CG-7).** Every `gpu.dispatch` run on record used one of exactly two adapters: **Metal** on the M5 Pro dev box, and **lavapipe**, a *software* Vulkan adapter, on Linux (now a CI lane). No Kāra GPU program has executed on a **discrete hardware adapter** — NVIDIA/AMD/Intel dGPU over Vulkan, or DX12 on Windows. So the sentence above is the design intent and is very likely true, but the multi-adapter selection order, per-device limits, and non-unified-memory transfer costs behind it are untested. See the CG-7 entry in [`implementation_checklist/phase-10-targets.md`](implementation_checklist/phase-10-targets.md); it is blocked on access to a discrete-GPU host, not on compiler work.
+
   - **CUDA path:** `#[gpu]` functions compile to PTX via LLVM's NVPTX backend. Requires an explicit target flag: `karac build --target cuda`. NVIDIA hardware only. Use this path when you need NVIDIA-specific libraries (cuBLAS, cuDNN) or are squeezing out the last bit of NVIDIA-specific performance. For general GPU compute on NVIDIA hardware, the wgpu/Vulkan path already works — CUDA is not required just to run on an NVIDIA GPU.
+
+    > **NOT BUILT — and the approach is not settled.** This paragraph specifies the *intent*; no NVPTX codegen exists yet (tracker item CG-5). Before implementing it, read [`spikes/gpu-llvm-offload-assessment.md`](spikes/gpu-llvm-offload-assessment.md), which prices the options against the 2026-08 rustc/LLVM-Offload paper and records what was measured rather than assumed. Headlines: device codegen is **not** the expensive half — our stock LLVM 18 already emits real `.visible .entry` PTX and gfx90a HSA (`examples/nvptx_probe.rs`) — the cost sits in the host launch path; the LLVM-Offload runtime is a *third* option beyond the CUDA Driver shim assumed here, buying AMD as well; feeding wgpu with LLVM-emitted SPIR-V to keep Metal and the browser is **measured impossible** (the two ends speak different SPIR-V dialects); and the recommendation is to pick no host runtime until a hardware-free spike answers whether `codegen` can lower a real kernel body to NVPTX. Note also this path is the **only** route to `f64` on the GPU, since WGSL has none.
 
   **Runtime GPU selection:**
 
@@ -910,7 +914,7 @@ Resolution archive: [`brainstorming/archive/v69_go_parity_gaps.md § Gap 4`](../
   - [x] Layout groups → GPU buffers: `group physics { position, velocity }` maps to a single GPU buffer with coalesced access
   - [x] `GpuSafe` type checking: reject heap types (`String`, `Vec[T]`, etc.) in `#[gpu]` call graphs (already specified in design.md)
   - [x] Effect enforcement: reject `allocates(Heap)`, `panics`, I/O effects in `#[gpu]` call graphs (via existing effect checker)
-  - [ ] CUDA path: NVPTX codegen for `--target cuda` builds
+  - [ ] CUDA path: NVPTX codegen for `--target cuda` builds — **assessed, not decided**: see [`spikes/gpu-llvm-offload-assessment.md`](spikes/gpu-llvm-offload-assessment.md) (CG-5)
   - [x] `KARAC_GPU` / `KARAC_GPU_BACKEND` environment variable handling
 - [ ] **FPGA bitstreams (future goal):** As described in design.md Feature 7; not yet designed in detail
 - [x] **Atomic RMW operations:** `swap`, `compare_exchange`, `fetch_add`, `fetch_and`, `fetch_or` on `Atomic[T]` — shipped (2026-06-04/05; v1 originally shipped `load`/`store` only)
