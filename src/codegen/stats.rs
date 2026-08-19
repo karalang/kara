@@ -142,9 +142,11 @@ impl<'ctx> super::Codegen<'ctx> {
             "sum" => self.stats_fold(data, len, false, is_int),
             "prod" => self.stats_fold(data, len, true, is_int),
             "mean" => self.stats_mean(data, len, is_int)?.into(),
-            "variance" => self.stats_variance(data, len, is_int)?.into(),
+            "variance" => self
+                .stats_variance(data, len, is_int, "Stats.variance")?
+                .into(),
             "stddev" => {
-                let var = self.stats_variance(data, len, is_int)?;
+                let var = self.stats_variance(data, len, is_int, "Stats.stddev")?;
                 self.column_sqrt_f64(var).into()
             }
             "median" => self.stats_median(data, len, is_int)?.into(),
@@ -301,18 +303,26 @@ impl<'ctx> super::Codegen<'ctx> {
     /// ([`emit_sum_f64_and_count`](super::Codegen::emit_sum_f64_and_count) +
     /// [`emit_variance_from`](super::Codegen::emit_variance_from) with
     /// `bessel: false` for the ÷ n population form) over a dense `f64` access.
+    ///
+    /// `caller` names the function the USER wrote, because `stddev` is lowered
+    /// as `sqrt(variance)` and would otherwise inherit this guard's message —
+    /// B-2026-08-19-20: `Stats.stddev([])` reported itself as
+    /// `Stats.variance() called on empty slice` under `karac build` while the
+    /// interpreter said `Stats.stddev()`, so the two legs named different
+    /// functions for one program.
     fn stats_variance(
         &mut self,
         data: PointerValue<'ctx>,
         len: IntValue<'ctx>,
         is_int: bool,
+        caller: &str,
     ) -> Result<FloatValue<'ctx>, String> {
         let i64_t = self.context.i64_type();
         let nonempty = self
             .builder
             .build_int_compare(IntPredicate::UGT, len, i64_t.const_zero(), "stats.var.ne")
             .unwrap();
-        self.emit_column_guard(nonempty, "Stats.variance() called on empty slice")?;
+        self.emit_column_guard(nonempty, &format!("{caller}() called on empty slice"))?;
         let access = self.stats_access(data, len, is_int);
         let (sum, cnt) = self.emit_sum_f64_and_count(&access)?;
         self.emit_variance_from(&access, sum, cnt, false)

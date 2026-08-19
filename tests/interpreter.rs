@@ -35375,3 +35375,75 @@ fn user_enum_does_not_hijack_the_builtin_bare_none() {
         "-1\n9\n"
     );
 }
+
+// ── B-2026-08-19-20: Stats refusals are runtime errors, not raw panics ──
+
+#[test]
+fn stats_empty_refusals_are_runtime_errors_not_panics() {
+    // B-2026-08-19-20. `eval_stats_fn` used `panic!` for the empty-input
+    // refusals, so `karac run` printed a Rust backtrace naming
+    // `src/interpreter/helpers.rs` and exited 101, while `karac build` printed
+    // a Kara-level panic with a source span and exited 1 — a run-vs-build
+    // divergence on the one case a caller is most likely to hit from real data,
+    // and a violation of the standing rule that phases emit structured
+    // diagnostics rather than panicking.
+    //
+    // Reaching `runtime_errors` at all is the assertion: a `panic!` would
+    // unwind the test process instead of returning here.
+    for (call, want) in [
+        ("Stats.mean(v)", "Stats.mean() called on empty slice"),
+        (
+            "Stats.variance(v)",
+            "Stats.variance() called on empty slice",
+        ),
+        ("Stats.stddev(v)", "Stats.stddev() called on empty slice"),
+        ("Stats.median(v)", "Stats.median() called on empty slice"),
+        (
+            "Stats.percentile(v, 50.0)",
+            "Stats.percentile() called on empty slice",
+        ),
+    ] {
+        let src = format!("fn main() {{ let v: Vec[f64] = []; println({call}); }}");
+        let errors = runtime_errors(&src);
+        assert!(
+            errors.iter().any(|e| e.message.contains(want)),
+            "expected a runtime error containing {want:?} for {call}, got: {:?}",
+            errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+        );
+    }
+}
+
+#[test]
+fn stats_empty_refusals_cover_the_i64_element_axis_too() {
+    // The int dispatcher is a separate function with its own guards, so the
+    // policy is consulted once at the shared call site rather than duplicated —
+    // otherwise the two element axes can drift apart on the message, which is
+    // exactly how the `stddev` half of this bug reached codegen.
+    for (call, want) in [
+        ("Stats.mean(v)", "Stats.mean() called on empty slice"),
+        ("Stats.median(v)", "Stats.median() called on empty slice"),
+    ] {
+        let src = format!("fn main() {{ let v: Vec[i64] = []; println({call}); }}");
+        let errors = runtime_errors(&src);
+        assert!(
+            errors.iter().any(|e| e.message.contains(want)),
+            "expected a runtime error containing {want:?} for {call}, got: {:?}",
+            errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+        );
+    }
+}
+
+#[test]
+fn stats_percentile_out_of_range_is_a_runtime_error() {
+    // The same dispatcher's other refusal, on the same channel.
+    let errors = runtime_errors(
+        "fn main() { let v: Vec[f64] = [1.0]; println(Stats.percentile(v, 150.0)); }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("p must be in [0, 100]")),
+        "expected the percentile range refusal, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}

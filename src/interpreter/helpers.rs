@@ -450,7 +450,53 @@ pub(super) fn value_discriminant(v: &Value) -> u8 {
 
 // ── Stats stdlib helpers ─────────────────────────────────────────────────────
 
-pub(super) fn eval_stats_fn(name: &str, xs: &[f64], p: Option<f64>, span: &Span) -> Value {
+/// Message for the internal-invariant `unreachable!`s that replaced the
+/// `Stats.*` refusal `panic!`s. Reaching one means a caller dispatched without
+/// first consulting [`stats_trap_message`] — a compiler bug, not a user error,
+/// which is exactly the distinction the old `panic!`s blurred: they printed a
+/// Rust backtrace and exited 101 for an ordinary empty-input mistake, while
+/// `karac build` printed a clean Kara panic with a span and exited 1.
+const STATS_TRAP_PRECHECKED: &str =
+    "Stats refusal reached the dispatcher; the call site must pre-check via stats_trap_message";
+
+/// B-2026-08-19-20 — the single source of truth for which `Stats.*` calls
+/// REFUSE their input, and what they say when they do.
+///
+/// Returns the user-facing message (no span; `record_runtime_error` attaches
+/// that) or `None` when the call is fine. Consulted by the interpreter's call
+/// site BEFORE dispatching, so the refusal travels through the ordinary
+/// runtime-error channel instead of a raw `panic!`.
+///
+/// It exists as one function rather than as guards inside the two dispatchers
+/// because those dispatchers are free functions with no access to the error
+/// channel, and because the policy is worth reading in one place: `sum`/`prod`
+/// return the identity on empty, `min`/`max`/`arg*` return `None`,
+/// `sort`/`argsort` return empty, and only these five refuse. Both the f64 and
+/// the i64 dispatcher are covered by the same call, so the two element axes
+/// cannot drift apart on the message.
+pub(super) fn stats_trap_message(name: &str, is_empty: bool, p: Option<f64>) -> Option<String> {
+    match name {
+        "Stats.mean" | "Stats.variance" | "Stats.stddev" | "Stats.median" if is_empty => {
+            let m = name.strip_prefix("Stats.").unwrap_or(name);
+            Some(format!("Stats.{m}() called on empty slice"))
+        }
+        "Stats.percentile" => {
+            if is_empty {
+                return Some("Stats.percentile() called on empty slice".to_string());
+            }
+            let pv = p.unwrap_or(f64::NAN);
+            if !(0.0..=100.0).contains(&pv) {
+                return Some(format!(
+                    "Stats.percentile() p must be in [0, 100], got {pv}"
+                ));
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+pub(super) fn eval_stats_fn(name: &str, xs: &[f64], p: Option<f64>) -> Value {
     use crate::reduce_kernel::{quantile_linear_sorted, reduce_f64, ReduceOp, ReduceOutcome};
 
     // The `Stats.*` slice is population-form variance/stddev (÷ n), distinct
@@ -470,37 +516,25 @@ pub(super) fn eval_stats_fn(name: &str, xs: &[f64], p: Option<f64>, span: &Span)
         "Stats.prod" => float(reduce_f64(xs, ReduceOp::Prod)),
         "Stats.mean" => {
             if xs.is_empty() {
-                panic!(
-                    "Stats.mean() called on empty slice at {}:{}",
-                    span.line, span.column
-                );
+                unreachable!("{}", STATS_TRAP_PRECHECKED);
             }
             float(reduce_f64(xs, ReduceOp::Mean))
         }
         "Stats.variance" => {
             if xs.is_empty() {
-                panic!(
-                    "Stats.variance() called on empty slice at {}:{}",
-                    span.line, span.column
-                );
+                unreachable!("{}", STATS_TRAP_PRECHECKED);
             }
             float(reduce_f64(xs, ReduceOp::Var { bessel: false }))
         }
         "Stats.stddev" => {
             if xs.is_empty() {
-                panic!(
-                    "Stats.stddev() called on empty slice at {}:{}",
-                    span.line, span.column
-                );
+                unreachable!("{}", STATS_TRAP_PRECHECKED);
             }
             float(reduce_f64(xs, ReduceOp::Std { bessel: false }))
         }
         "Stats.median" => {
             if xs.is_empty() {
-                panic!(
-                    "Stats.median() called on empty slice at {}:{}",
-                    span.line, span.column
-                );
+                unreachable!("{}", STATS_TRAP_PRECHECKED);
             }
             float(reduce_f64(xs, ReduceOp::Median))
         }
@@ -518,17 +552,11 @@ pub(super) fn eval_stats_fn(name: &str, xs: &[f64], p: Option<f64>, span: &Span)
         // slice or `p` out of range traps, mirroring the other f64 reductions.
         "Stats.percentile" => {
             if xs.is_empty() {
-                panic!(
-                    "Stats.percentile() called on empty slice at {}:{}",
-                    span.line, span.column
-                );
+                unreachable!("{}", STATS_TRAP_PRECHECKED);
             }
             let p = p.unwrap_or(f64::NAN);
             if !(0.0..=100.0).contains(&p) {
-                panic!(
-                    "Stats.percentile() p must be in [0, 100], got {} at {}:{}",
-                    p, span.line, span.column
-                );
+                unreachable!("{}", STATS_TRAP_PRECHECKED);
             }
             let ReduceOutcome::F64Vec(sorted) = reduce_f64(xs, ReduceOp::Sort) else {
                 unreachable!("Sort returns F64Vec")
@@ -604,11 +632,7 @@ pub(super) fn eval_stats_fn_int(name: &str, xs: &[i64], p: Option<f64>, span: &S
         }
         "Stats.mean" | "Stats.variance" | "Stats.stddev" | "Stats.median" => {
             if xs.is_empty() {
-                let m = name.strip_prefix("Stats.").unwrap_or(name);
-                panic!(
-                    "Stats.{}() called on empty slice at {}:{}",
-                    m, span.line, span.column
-                );
+                unreachable!("{}", STATS_TRAP_PRECHECKED);
             }
             let op = match name {
                 "Stats.mean" => ReduceOp::Mean,
@@ -634,17 +658,11 @@ pub(super) fn eval_stats_fn_int(name: &str, xs: &[i64], p: Option<f64>, span: &S
         }
         "Stats.percentile" => {
             if xs.is_empty() {
-                panic!(
-                    "Stats.percentile() called on empty slice at {}:{}",
-                    span.line, span.column
-                );
+                unreachable!("{}", STATS_TRAP_PRECHECKED);
             }
             let p = p.unwrap_or(f64::NAN);
             if !(0.0..=100.0).contains(&p) {
-                panic!(
-                    "Stats.percentile() p must be in [0, 100], got {} at {}:{}",
-                    p, span.line, span.column
-                );
+                unreachable!("{}", STATS_TRAP_PRECHECKED);
             }
             let ReduceOutcome::I64Vec(sorted) = run(ReduceOp::Sort) else {
                 unreachable!("int Sort returns I64Vec")

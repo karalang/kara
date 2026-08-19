@@ -1253,6 +1253,20 @@ impl<'a> super::Interpreter<'a> {
                         },
                         None => None,
                     };
+                    // B-2026-08-19-20 — refusals go through the ordinary
+                    // runtime-error channel, so `karac run` reports an empty
+                    // `Stats.mean()` the way `karac build` does (a Kara-level
+                    // diagnostic with a span, exit 1) instead of a raw
+                    // `panic!` with a Rust backtrace and exit 101. Both element
+                    // axes consult the one policy function, so int and f64
+                    // cannot drift apart on the message.
+                    if let Some(msg) = crate::interpreter::helpers::stats_trap_message(
+                        &path_str,
+                        elems.is_empty(),
+                        p,
+                    ) {
+                        return self.record_runtime_error(msg, span);
+                    }
                     if int_mode {
                         let xs: Vec<i64> = elems
                             .iter()
@@ -1272,7 +1286,7 @@ impl<'a> super::Interpreter<'a> {
                             _ => 0.0,
                         })
                         .collect();
-                    return eval_stats_fn(&path_str, &xs, p, span);
+                    return eval_stats_fn(&path_str, &xs, p);
                 }
                 // `String.from_utf8(bytes: Vec[u8]) -> Result[String, Utf8Error]`.
                 // UTF-8-validating String constructor. Error variant mapping

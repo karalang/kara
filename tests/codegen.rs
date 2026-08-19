@@ -90318,6 +90318,29 @@ fn main() {
         }
     }
 
+    #[test]
+    fn test_e2e_stats_stddev_empty_names_stddev_not_variance() {
+        // B-2026-08-19-20. `stddev` lowers as `sqrt(variance)`, so it went
+        // through `stats_variance`'s guard and reported `Stats.variance()
+        // called on empty slice` — while the interpreter, which dispatches
+        // `stddev` on its own, said `Stats.stddev()`. One program, two legs,
+        // two different function names in the refusal.
+        let captured = run_program_capturing(
+            "fn main() {\n\
+                 let v: Vec[f64] = vec![];\n\
+                 println(Stats.stddev(v));\n\
+             }\n",
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout.contains("Stats.stddev() called on empty slice"),
+                "stddev must name itself, not variance; got stdout={:?} stderr={:?}",
+                c.stdout,
+                c.stderr
+            );
+        }
+    }
+
     // ── Stats over i64 elements (S5 — the non-f64 element axis) ──────
 
     #[test]
