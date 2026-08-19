@@ -15,8 +15,12 @@ commitment.
 > **Updated 2026-08-18 (later, same day).** Added **finding 6** and **Option 4**
 > — whether a SPIRV-enabled LLVM could feed the wgpu launcher we already ship,
 > keeping Metal and the browser. Measured answer: no, the two ends speak
-> different SPIR-V dialects. Also marked **finding 4 historical**: the
-> single-expression kernel-body floor it documents was lifted the same day.
+> different SPIR-V dialects. Added **finding 7**, which counts how much of
+> `gpu_wgsl.rs` a second backend could actually share (near half, not most) and
+> concludes AGAINST a shared kernel IR. Marked **finding 4 historical**: the
+> single-expression kernel-body floor it documents was lifted the same day. The
+> architectural read now states plainly that none of this is a one-way door —
+> the backends coexist, and the binding is per artifact.
 
 > **Sourcing caveat.** `phoronix.com`, `arxiv.org`, `news.ycombinator.com` and
 > `rust-lang.github.io` are all blocked by this container's egress proxy. The
@@ -180,6 +184,46 @@ addressing model, capabilities, entry-point decoration — which is a compiler
 project of its own, not a build flag. Recorded because this option *reads* as
 the obvious best of both worlds and is the one a reviewer will reach for first.
 
+**7. A second kernel backend would share LESS of `gpu_wgsl.rs` than its shape
+suggests — which is an argument FOR reusing `codegen`, not for a shared kernel
+IR.** Counted over the 2,335 production lines of `src/gpu_wgsl.rs` (1,319
+further lines are tests), splitting each top-level item by whether it produces
+WGSL *text*:
+
+| | lines |
+|---|---|
+| backend-**agnostic** (AST→`KStmt` walker, `Scope` rename/shadow machinery, `KStmt` model, helper call-graph walk, validation) | **618** |
+| backend-**specific** (three emitters + their three expression lowerers, helper/struct printing) | **657** |
+
+Near parity — so "write the hard part once, print it twice" does **not** hold
+for the file as a whole.
+
+It *does* hold for the scalar **statement** layer that B-2026-08-18-40/-49 grew:
+406 agnostic lines against `emit_stmts`'s 119, a 3.4× ratio. That is the layer
+where a shared IR would pay, and it is genuinely IR-shaped — `KStmt` is now
+`Bind` / `Assign` / `While` / `ForRange` / `If` / `DeclareVar`, with every hard
+part (the `i`→`i_k` rename that keeps `input[i]` correct, per-branch scoping,
+the value-vs-statement fork, the diagnostics) on the agnostic side.
+
+But the *expression* layer defeats it: the scalar, SoA and stencil emitters each
+carry their own AST→WGSL-text lowering (`lower_expr` 79, `lower_soa_expr` 95,
+`lower_stencil_expr` 119), and none of that is reusable by an LLVM backend.
+
+**The conclusion runs opposite to the intuition.** A shared kernel IR feeding
+both a WGSL printer and an LLVM builder would retire ~400 lines of duplication
+and forfeit the "free coverage" argument — because an NVPTX path that goes
+through `KStmt` no longer inherits `codegen`'s expression lowering, and `KStmt`
+models strictly less of the language than `codegen` already handles. Reusing
+`codegen` wholesale keeps the duplication but makes the second backend nearly
+free *and* more capable than the first. **Prefer reuse over a shared IR**; the
+duplication is asymmetric in our favour, since the bespoke emitter (WGSL) is the
+one already written and the cheap one (LLVM) is the one still to come.
+
+*Correction:* an earlier informal reading of this quoted the 3.4× statement-layer
+ratio as if it described the file, concluding a second backend would cost "the
+119-line half." Counting the whole file gives near parity. The narrow number was
+real but not generalisable, and the generalisation inverted the recommendation.
+
 ## The architectural read
 
 The decision splits into two *independent* axes, and conflating them is the
@@ -188,6 +232,26 @@ main way to get this wrong:
 - **(A) How device code is produced** — WGSL text (today) vs LLVM IR → PTX/HSA.
 - **(B) How a kernel is launched** — wgpu (today) vs a thin CUDA Driver API
   shim vs the LLVM Offload runtime.
+
+**This is not a one-way door, and the options below should not be read as
+"pick a lane."** The choice binds *per artifact*, not per language:
+
+- **At the product level there is no exclusivity.** `karac` can ship both — WGSL
+  by default, PTX under `--target cuda` — the same way it already ships native,
+  wasm and wasm-threads backends side by side. CG-5 is specified as a *second*
+  backend, never a replacement, and WGSL stays mandatory for the browser
+  regardless of what else lands.
+- **What genuinely is forced is per-target.** One artifact cannot span both:
+  there is no PTX in a browser, and no `f64` in WGSL. So the binding happens at
+  build time for a chosen device, which is a far weaker constraint than choosing
+  once for the language.
+- **The real recurring cost is therefore not "which backend" but "two
+  emitters."** Finding 7 measures that cost and concludes it is worth paying —
+  the second backend is the cheap one, provided it reuses `codegen` rather than
+  routing through a shared kernel IR.
+
+The one thing genuinely unavailable is a *single* artifact serving both worlds,
+which is what Option 4's SPIR-V bridge would have bought (finding 6).
 
 The paper's contribution is mostly **(B)** plus rustc integration. For us the
 interesting leverage is **(A)**, for a reason specific to Kāra:
