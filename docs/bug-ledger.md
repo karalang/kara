@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 262 | 0 |
 | leak | 185 | 0 |
-| run-vs-build | 137 | 1 |
+| run-vs-build | 138 | 1 |
 | double-free | 133 | 0 |
 | missing-feature | 122 | 3 |
 | codegen-gap | 119 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 945 | 2 |
+| codegen | 946 | 2 |
 | typecheck | 214 | 2 |
-| interp | 160 | 2 |
+| interp | 161 | 2 |
 | ownership | 60 | 0 |
 | other | 58 | 0 |
 | autopar | 49 | 0 |
@@ -124,16 +124,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 6 | 1 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1372 surfaced · 4 open · 1349 fixed · 7 wontfix** (2026-05-20 → 2026-08-19). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1373 surfaced · 4 open · 1350 fixed · 7 wontfix** (2026-05-20 → 2026-08-19). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-19-13 | 2026-08-19 | typecheck+codegen+runtime | medium | GPU reductions still lack the two-pass statistics (var / std), prefix-sum and tiled matmul; integer `prod` / `mean` / `dot` and an integer Arg family each await their own decision. `sum`/`prod`/`min`/`max`/`mean`/`dot`/`argmin`/`argmax` over `Vec[f32]` and `sum`/`min`/`max` over `Vec[i32]` and `Vec[u32]` have shipped. | docs/spikes/gpu-llvm-offload-assessment.md; src/gpu_wgsl.rs::emit_reduce_kernel; src/reduce_kernel.rs::tree_reduce_f32 |
-| B-2026-08-19-20 | 2026-08-19 | interp+codegen | medium | The `Stats` empty-slice refusals present DIFFERENTLY on the two legs: the interpreter raw-`panic!`s (Rust backtrace, exit 101) where `karac build` emits a clean Kara panic with a source span (exit 1). Affects mean / median / variance / stddev. Separately, `Stats.stddev([])` reports itself as `Stats.variance()` on BOTH legs. | src/interpreter/helpers.rs::eval_stats_fn (the four empty-slice guards); docs/design.md § Statistical reductions |
 | B-2026-08-19-22 | 2026-08-19 | typecheck | medium | `String` has no O(1) indexed character access — first/last char requires `chars().collect()` into a `Vec[char]` (an allocation) or a full iterator walk, so `w[0]`/`w[-1]` has no constant-time spelling | — |
 | B-2026-08-19-23 | 2026-08-19 | lexer+parser+interp | medium | The UPPER HALF of `u128` (values above `i128::MAX`) is unreachable end-to-end: the interpreter's value carrier is a signed `i128`, so such a value is stored as a negative bit pattern. `340282366920938463463374607431768211455u128` is REJECTED at parse; a value reached by arithmetic (`0u128.wrapping_sub(1u128)`) prints `-1` under `karac run --interp` while `karac build` prints the correct 3.4e38 — a run-vs-build divergence. `-170141183460469231731687303715884105728i128` (i128::MIN) is rejected for the same reason: its magnitude `2^127` exceeds `i128::MAX`. | src/parser/exprs.rs::parse_prefix (the i64::MIN unary-minus fold, which the 128-bit case needs a sibling of); src/parser/exprs.rs IntegerOutOfRange arm (`i128::try_from(m)`); src/interpreter/eval_ops.rs::type_is_unsigned64; src/interpreter/eval_ops.rs::span_int_bounds (the U128 ceiling and its comment); src/interpreter/value.rs::Value::Int |
+| B-2026-08-19-25 | 2026-08-19 | interp+codegen | medium | `Stats.sum` / `Stats.prod` over i64 RAW-`panic!` on integer overflow under `karac run` (Rust backtrace, exit 101) where `karac build` traps cleanly (`integer overflow`, exit 1) -- the last raw panic left in `eval_stats_fn_int`, and the two legs also word the message differently. | src/interpreter/helpers.rs::eval_stats_fn_int (the `run` closure's overflow panic); src/codegen/stats.rs (the AOT twin's trap text) |
 
 ### Wontfix (7)
 
@@ -151,9 +151,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1372 surfaced
 
 </details>
 
-### Fixed (1349)
+### Fixed (1350)
 
-<details><summary>1349 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1350 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -12381,6 +12381,15 @@ VERIFICATION. Byte-identical across all four surfaces — `karac build`, `karac 
 METHOD NOTE, since it reversed the outcome: five fixes read out of the code (word count, slot size, pack, unpack, match side) were all applied and all failed, and were reverted rather than shipped half-applied into machinery 3000+ codegen tests depend on. Tracing the actual IR found the real site in one step. Read the IR before reading more code.
 
 REMAINDER, split out rather than buried here: the upper half of `u128` (values above `i128::MAX`) and `i128::MIN`'s literal magnitude are still unreachable, because the interpreter's value carrier is a signed `i128`. Codegen is unaffected. Filed as B-2026-08-19-23. |
+| B-2026-08-19-20 | interp+codegen | medium | `Stats.*` empty-input refusals presented DIFFERENTLY on the two legs -- the interpreter raw-`panic!`ed (Rust backtrace, exit 101) where `karac build`… | FIXED by 9298b98.
+
+(1) THE PRESENTATION SPLIT. Refusals now travel the interpreter's ordinary runtime-error channel (`record_runtime_error`): a span-carrying diagnostic with an error return trace, exit 1, matching `karac build`. Previously `karac run` printed `thread '<unnamed>' panicked at src/interpreter/helpers.rs:491` plus a full Rust backtrace and exited 101 -- compiler internals surfacing for an ordinary empty-input mistake, and a different exit code for any harness keying on one.
+
+(2) THE `stddev` MISLABEL, WHICH THIS ROW HAD BACKWARDS -- see the correction in `detail`. It was a codegen-only defect and therefore a THIRD divergence, not shared wrong text. `stats_variance` now takes the caller-facing name so `stddev` names itself.
+
+ONE POLICY FUNCTION, NOT DUPLICATED GUARDS. `stats_trap_message` is now the single source of truth for which calls refuse and what they say, consulted once at the shared call site before dispatch. The f64 and i64 dispatchers are separate functions, and letting each carry its own copy of the message is exactly how the `stddev` half drifted into codegen in the first place. The in-dispatcher `panic!`s became `unreachable!` naming the missing pre-check, so a genuine internal-invariant violation (a future caller dispatching without pre-checking) stays loud while the user-facing panic is gone.
+
+VERIFIED on both legs for all five functions and both element axes: identical messages, exit 1 on both, interpreter output carrying `at <file>:<line>:<col>`. Tests: 3 in tests/interpreter.rs (the five refusals as runtime errors, the i64 axis, the percentile range) and 1 codegen E2E pinning that `stddev` names itself rather than `variance`. |
 | B-2026-08-19-21 | typecheck | medium | Set/SortedSet `contains` and `remove`, and both `binary_search` arms, REJECTED a borrowed needle — `s.contains(w)` for a `w: ref String` failed with… | Named the rule once as `peel_probe_ref` in `src/typechecker.rs` instead of inlining the peel a fifth time, with the owning-vs-probing distinction written down — that distinction IS the rule, and re-deriving it per site is how the first six sites were missed. Split `"contains" | "remove"` out of the `insert` arm in both `stdlib_map.rs` set arms (hashed and sorted) and applied the peel there; applied it to both `binary_search` arms in `stdlib_seq.rs`. The peel is for the ASSIGNABILITY comparison only — the three numeric coercion checks keep the raw type, so a borrowed numeric needle behaves exactly as before and no coercion is recorded against a reference. 
 
 VERIFIED: all six sites accept a ref; `Vec.contains`/`Map.contains_key` unchanged; `Set.insert(ref)` and `SortedSet.insert(ref)` still correctly REJECT, so the ownership requirement survives where the spec really asks for it. The B-2026-08-14-1 narrowing guards on the same arms still fire (`Set[u8]` + a `300i64` VARIABLE is still rejected for contains, insert and remove alike) — note the guard probe must use a variable, not a literal, as that test's own doc-comment warns, since a literal is range-checked by a different path. |
