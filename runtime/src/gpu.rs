@@ -1112,6 +1112,113 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 
+    /// Single-workgroup tree reduction (B-2026-08-19-10, slice 1).
+    ///
+    /// The first shader in the repo to use `var<workgroup>` and
+    /// `workgroupBarrier()` — the emitter has neither, which is exactly why a
+    /// reduction cannot be written in Kāra today. Validated here as raw WGSL
+    /// first, because THIS SHADER DEFINES THE SUMMATION ORDER, and the
+    /// interpreter twin has to reproduce it bit-for-bit: a GPU tree reduction
+    /// is not a left fold, and f32 addition is not associative, so the order
+    /// is semantics rather than an implementation detail.
+    ///
+    /// Order: pad to the workgroup width with the identity, then halve —
+    /// `s[t] += s[t + stride]` for stride 32, 16, 8, 4, 2, 1. Deterministic,
+    /// and cheap to reproduce on the CPU.
+    const SUM_REDUCE_WGSL: &str = r#"
+@group(0) @binding(0) var<storage, read>       input:  array<f32>;
+@group(0) @binding(1) var<storage, read_write> output: array<f32>;
+
+var<workgroup> scratch: array<f32, 64>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(local_invocation_id) lid: vec3<u32>,
+        @builtin(global_invocation_id) gid: vec3<u32>) {
+    let t = lid.x;
+    let i = gid.x;
+    // Out-of-range lanes contribute the additive identity, so the tree is a
+    // full 64 wide regardless of input length.
+    if (i < arrayLength(&input)) { scratch[t] = input[i]; } else { scratch[t] = 0.0; }
+    workgroupBarrier();
+
+    var stride: u32 = 32u;
+    loop {
+        if (stride == 0u) { break; }
+        if (t < stride) { scratch[t] = scratch[t] + scratch[t + stride]; }
+        workgroupBarrier();
+        stride = stride / 2u;
+    }
+
+    if (t == 0u) { output[0] = scratch[0]; }
+}
+"#;
+
+    /// The CPU twin of [`SUM_REDUCE_WGSL`] — same padding, same halving order.
+    fn tree_sum_f32(xs: &[f32]) -> f32 {
+        let mut scratch = [0.0f32; 64];
+        for (t, slot) in scratch.iter_mut().enumerate() {
+            *slot = xs.get(t).copied().unwrap_or(0.0);
+        }
+        let mut stride = 32usize;
+        while stride > 0 {
+            for t in 0..stride {
+                scratch[t] += scratch[t + stride];
+            }
+            stride /= 2;
+        }
+        scratch[0]
+    }
+
+    #[test]
+    fn sums_an_f32_buffer_with_a_workgroup_tree_reduction() {
+        // n <= 64 dispatches exactly one workgroup, which is slice 1's scope.
+        let input: Vec<f32> = (1..=64).map(|i| i as f32).collect();
+        let Some(output) = dispatch_f32_map(SUM_REDUCE_WGSL, &input) else {
+            eprintln!("gpu-reduce: no GPU adapter available — skipping");
+            return;
+        };
+        // 1..=64 sums to 2080 exactly in f32, so this leg is order-independent
+        // and catches a shader that is simply wrong.
+        assert_eq!(output[0], 2080.0, "tree sum of 1..=64");
+        // The order-DEPENDENT leg: the CPU twin must agree bit-for-bit.
+        assert_eq!(
+            output[0],
+            tree_sum_f32(&input),
+            "GPU tree order != CPU twin"
+        );
+    }
+
+    #[test]
+    fn tree_sum_differs_from_a_left_fold_and_is_closer_to_the_truth() {
+        // Why the order is SPECIFIED rather than incidental. Sixty-four copies
+        // of 0.1: a left fold drifts to 6.399996, the tree gives 6.400000 —
+        // and the tree is the more accurate answer, because pairing keeps the
+        // partial sums at similar magnitudes instead of repeatedly adding a
+        // tiny value to a growing one.
+        //
+        // (A first draft of this test used 1e9 followed by 1.0s, on the theory
+        // that the big value would swamp the small ones. It does — in BOTH
+        // orders, since index 0 pairs with index 32 on the very first tree
+        // step. The test passed vacuously by asserting a difference that was
+        // not there, which is why the inputs here were computed rather than
+        // guessed.)
+        let input: Vec<f32> = std::iter::repeat_n(0.1f32, 64).collect();
+        let left: f32 = input.iter().fold(0.0, |a, b| a + b);
+        let tree = tree_sum_f32(&input);
+        assert_ne!(left, tree, "0.1 x 64 must expose the order difference");
+        assert!(
+            (tree - 6.4f32).abs() < (left - 6.4f32).abs(),
+            "the tree order should be the more accurate one: tree={tree}, left={left}"
+        );
+
+        let Some(output) = dispatch_f32_map(SUM_REDUCE_WGSL, &input) else {
+            eprintln!("gpu-reduce-order: no GPU adapter available — skipping");
+            return;
+        };
+        assert_eq!(output[0], tree, "GPU must match the TREE");
+        assert_ne!(output[0], left, "GPU must not match the left fold");
+    }
+
     #[test]
     fn doubles_an_f32_buffer_on_the_gpu() {
         let input: Vec<f32> = (0..256).map(|i| i as f32).collect();
