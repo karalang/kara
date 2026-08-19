@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 133 | 0 |
 | run-vs-build | 133 | 0 |
 | codegen-gap | 119 | 0 |
-| missing-feature | 116 | 3 |
+| missing-feature | 117 | 3 |
 | diagnostics | 83 | 0 |
 | false-positive | 80 | 0 |
 | perf | 77 | 0 |
@@ -110,29 +110,29 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 941 | 2 |
-| typecheck | 207 | 3 |
+| codegen | 942 | 2 |
+| typecheck | 208 | 3 |
 | interp | 156 | 1 |
 | ownership | 60 | 0 |
 | other | 58 | 0 |
 | autopar | 49 | 0 |
 | cli | 47 | 0 |
 | parser | 27 | 0 |
-| runtime | 25 | 1 |
+| runtime | 26 | 1 |
 | resolver | 20 | 0 |
 | effect | 7 | 0 |
 | lexer | 5 | 1 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1360 surfaced · 3 open · 1338 fixed · 7 wontfix** (2026-05-20 → 2026-08-19). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1361 surfaced · 3 open · 1339 fixed · 7 wontfix** (2026-05-20 → 2026-08-19). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-19-8 | 2026-08-19 | lexer+typecheck+interp+codegen | medium | IMPLEMENT 128-bit integers for real: `i128` / `u128` are specified normatively in design.md as v1 primitives (all four overflow method families, the widening-cast table, the primitive-numeric lists, Portable SIMD elements) and the compiler now REJECTS them, because no runtime carrier is 128 bits wide. Deleting design.md's 'Implementation status — 128-bit integers are NOT YET IMPLEMENTED' note is the definition of done. | docs/design.md § checked_*/wrapping_*/saturating_*/overflowing_* method families (the status note — deleting it is done); src/typechecker.rs::reject_128bit; src/interpreter/value.rs::Value::Int; src/codegen/method_call.rs (the i64-carrier comment + the `bits >= 64` reduction guard) |
-| B-2026-08-19-10 | 2026-08-19 | typecheck+codegen+runtime | medium | A GPU REDUCTION (N inputs -> 1 result) CANNOT BE WRITTEN AT ALL. `gpu.dispatch` is the entire user-facing GPU surface and it is map-shaped ([T] -> [U], one output per input); the WGSL emitter has ZERO workgroup-memory or barrier support. So sum / dot / min / max / argmax / prefix-sum / any tiled matmul have nowhere to go, which is most of what GPUs are bought for. | — |
 | B-2026-08-19-11 | 2026-08-19 | typecheck | low | design.md:7223 requires a `with_provider` provider to implement `Send + Sync` on top of its declared bounds, and NOTHING checks it -- because neither trait exists in the compiler at all: `grep '"Send"' src/` and `grep '"Sync"' src/` are both EMPTY, so there is no auto-trait machinery to check against at any arity. | design.md:7223 (`with_provider` signature at :7225, `P: R.Provider + Send + Sync`); src/typechecker/expr_call.rs::check_provider_satisfies_declared_bound |
+| B-2026-08-19-13 | 2026-08-19 | typecheck+codegen+runtime | medium | GPU reductions cover only `Sum` and `Prod` over `Vec[f32]`. min / max / argmin / argmax, mean / var / std, dot, prefix-sum and tiled matmul are still unwritable, and INTEGER reductions are blocked on an overflow rule rather than on effort. | docs/spikes/gpu-llvm-offload-assessment.md; src/gpu_wgsl.rs::emit_reduce_kernel; src/reduce_kernel.rs::tree_reduce_f32 |
 
 ### Wontfix (7)
 
@@ -150,9 +150,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1360 surfaced
 
 </details>
 
-### Fixed (1338)
+### Fixed (1339)
 
-<details><summary>1338 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1339 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -12295,6 +12295,19 @@ GATED by `jit_broken_pipe_stops_the_program_like_a_native_binary` (tests/cli.rs,
 
 ONE CLIPPY NOTE for whoever touches this next: `exit_code_of` needs `#[cfg(feature = "llvm")]` because its only caller is inside the JIT path. Ungated it is dead code in the DEFAULT build, which is the leg CI runs — the exact trap CLAUDE.md documents, hit again here. |
 | B-2026-08-19-9 | other | medium | `tests/gpu_e2e.rs` PINNED `KARAC_GPU_BACKEND=cpu`, so all fourteen execution fixtures SKIPPED ON macOS — the project's primary dev machine — while re… | FIXED by 7c862b7d. `gpu_probe` now RESOLVES a backend — explicit `KARAC_GPU_BACKEND`, then the platform's default adapter, then a forced software one — instead of pinning `cpu` on every fixture, so the execution suite runs on Metal here and on lavapipe in a GPU-less container. The `NoAdapter`-only fallback and the no-fallback-when-forced rule were both verified (the first by mutating the emitter to produce invalid WGSL and confirming the `Broken` arm still panics on Metal), and the candidate order is pinned by a pure test that runs on GPU-less hosts. 16 passed / 0 skips on Metal, up from 15 passed / 14 skips. |
+| B-2026-08-19-10 | typecheck+codegen+runtime | medium | A GPU REDUCTION (N inputs -> 1 result) CANNOT BE WRITTEN AT ALL | FIXED by 63870ee0 (the last of three commits, 2026-08-19): the premise — "a GPU reduction cannot be written at all" — is now false.
+
+  * `gpu.sum(buf)` / `gpu.prod(buf)` are a surface form, reusing the existing `ReduceOp` vocabulary rather than inventing a second one. Typechecker, interpreter, codegen and runtime are all wired; `karac_runtime_gpu_reduce_f32` is the scalar-returning entrypoint item 1 of the sketch asked for.
+  * The emitter grew `var<workgroup>` + `workgroupBarrier()` (item 2) — its first construct with no expression-level Kara counterpart, as predicted.
+  * Two-stage tree reduction (item 3), BOTH stages: each dispatch collapses every workgroup's 64-wide chunk to one partial at `output[workgroup_id]`, and the host re-dispatches the same shader over the partials until one value remains. Any length, not the single-workgroup slice the sketch was willing to settle for.
+  * Verified on lavapipe through `tests/gpu_e2e.rs` (item 4) with real AOT binaries: 64-, 65-, 4096-element and empty fixtures, each asserting interpreter == GPU bit-for-bit.
+
+THE ALTERNATIVE THE ROW ASKED TO PRICE FIRST WAS PRICED FIRST, AND THE ROW'S OWN RECOMMENDATION WAS TAKEN. The tree order is now specified and the INTERPRETER changed to match, rather than the oracle tolerating an epsilon. So the A/B rule holds bit-exactly for f32 reductions instead of being weakened for them: `reduce_kernel::tree_reduce_f32` reproduces the shader step for step (pad to 64 with the op's identity, halve at strides 32..1), and a buffer past one workgroup recurses through the same chunking the host dispatch performs — a TREE OF TREES whose grouping is observable in f32 and therefore part of the specified answer. Sixty-four copies of 0.1 sum to 6.400000 on both legs where a left fold gives 6.399996; 4096 copies give 409.6000061035156 on both.
+
+Two things worth knowing that the row could not have anticipated:
+
+  * The tree order is also the MORE ACCURATE one — pairing keeps partial sums at similar magnitudes — so specifying it costs nothing in precision.
+  * An empty buffer never reaches a device, so the runtime has to be TOLD the identity; it was hardcoded to 0.0, which would have made `gpu.prod([])` print 0 under `karac build` and 1 under `karac run`. Found by writing the multi-workgroup fold, not by any reduction test that existed at the time. |
 
 </details>
 
