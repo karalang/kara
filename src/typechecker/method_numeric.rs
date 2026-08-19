@@ -184,6 +184,14 @@ impl<'a> super::TypeChecker<'a> {
         // then — `karac build` errors loudly rather than miscompiling).
         if args.is_empty() && matches!(receiver_for_lookup, Type::Float(_)) {
             if let Some((family, target, _, _)) = crate::numeric_conv::parse_float_to_int(method) {
+                // `(3.7f32).trunc_to_i128()` names a 128-bit type through the
+                // METHOD NAME, with no annotation or literal suffix for the
+                // other two guards to catch -- and its result is a 64-bit
+                // carrier claiming to be 128 (B-2026-08-19-6). Rejected here so
+                // the unannotated call is not the one hole left open.
+                if target == "i128" || target == "u128" {
+                    self.reject_128bit(target == "i128", *span);
+                }
                 if let Some(int_ty) = self.primitive_type(target) {
                     return Some(match family {
                         crate::numeric_conv::FloatToIntFamily::Checked => Type::Named {

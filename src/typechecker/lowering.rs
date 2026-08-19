@@ -72,6 +72,15 @@ impl<'a> super::TypeChecker<'a> {
                         }
                     }
                 }
+                // 128-bit integers are a width fiction at runtime; see
+                // `reject_128bit` for the measurements and the rationale for
+                // rejecting at the name rather than per-operation.
+                // (B-2026-08-19-6)
+                match lowered {
+                    Type::Int(IntSize::I128) => self.reject_128bit(true, ty.span),
+                    Type::UInt(UIntSize::U128) => self.reject_128bit(false, ty.span),
+                    _ => {}
+                }
                 lowered
             }
             TypeKind::Tuple(types) => Type::Tuple(
@@ -693,10 +702,14 @@ impl<'a> super::TypeChecker<'a> {
     /// phase-7 line 289 sub-slices):
     ///   - `N` must be a *positive* (`> 0`) lane count — a zero-lane SIMD
     ///     vector has no native representation. (`Array` permits `N == 0`.)
-    ///   - `T` must be a primitive numeric type (`i8`…`i128`, `u8`…`u64`,
+    ///   - `T` must be a primitive numeric type (`i8`…`i64`, `u8`…`u64`,
     ///     `f32`/`f64`). `usize` is excluded per design.md § Portable SIMD
     ///     ("`usize` is not a permitted element type"). A non-numeric `T`
-    ///     emits a focused diagnostic.
+    ///     emits a focused diagnostic. 128-bit lanes are excluded for a
+    ///     different reason — `i128`/`u128` are rejected as runtime types
+    ///     outright (B-2026-08-19-6), so `Vector[i128, N]` never reaches this
+    ///     check; the classifier's `bits >= 128` arm in `simd_report` is kept
+    ///     (and unit-tested on `Type` values) for when 128-bit lands.
     pub(super) fn lower_vector_type(
         &mut self,
         generic_args: &Option<Vec<GenericArg>>,
@@ -721,7 +734,7 @@ impl<'a> super::TypeChecker<'a> {
             self.type_error(
                 format!(
                     "Vector element type must be a primitive numeric type \
-                     (i8..i128, u8..u64, f32, f64); got {}",
+                     (i8..i64, u8..u64, f32, f64); got {}",
                     type_display(&element_ty)
                 ),
                 *span,

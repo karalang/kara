@@ -2017,6 +2017,13 @@ pub struct TypeChecker<'a> {
     /// them, to bind the trait's type parameters before lowering a method
     /// signature.
     pub(super) user_effect_resource_trait_args: FxHashMap<String, Vec<crate::ast::GenericArg>>,
+    /// Source offsets that have already produced the "128-bit not supported"
+    /// diagnostic (B-2026-08-19-6). `lower_type_expr` runs more than once for
+    /// the same annotation -- generic instantiation and trial typing both
+    /// re-lower -- and the user wrote the type once, so the diagnostic is
+    /// deduped by the offset it points at. Offset rather than `Span` because
+    /// `Span` is deliberately `PartialEq`-only, not `Hash`.
+    pub(super) reported_128bit_offsets: rustc_hash::FxHashSet<usize>,
     /// Trait-less user resource name → concrete override type name,
     /// recovered syntactically from `with_provider[R](provider, ...)`
     /// sites during env build (struct-literal, `let`-bound, or
@@ -2277,6 +2284,7 @@ impl<'a> TypeChecker<'a> {
             user_effect_resources: FxHashMap::default(),
             resource_key_types: FxHashMap::default(),
             user_effect_resource_trait_args: FxHashMap::default(),
+            reported_128bit_offsets: rustc_hash::FxHashSet::default(),
             user_resource_override_types: FxHashMap::default(),
             bare_assoc_fn_targets: FxHashMap::default(),
             path_call_method_dispatch: FxHashSet::default(),
@@ -3792,13 +3800,60 @@ impl<'a> TypeChecker<'a> {
         Type::Error
     }
 
+    /// Report `i128` / `u128` as not-yet-supported (B-2026-08-19-6), once per
+    /// source offset.
+    ///
+    /// 128-bit integers are a WIDTH FICTION at runtime: both backends carry
+    /// every integer in a 64-bit slot -- the interpreter in `Value::Int(i64)`,
+    /// codegen in its i64 carrier -- so an `i128` is an `i64` wearing a wider
+    /// name, and every width-sensitive operation answers for 64 bits without
+    /// saying so. Measured: `wrapping_add` wraps at 2^63, `saturating_add`
+    /// saturates at `i64::MAX`, `checked_add` reports `None` where the declared
+    /// width has room to spare, and `count_ones()` on `-1i128` returns 64
+    /// rather than 128.
+    ///
+    /// Rejected at the point the type is NAMED rather than per-operation
+    /// because the wrongness belongs to the carrier, not to any one method:
+    /// fixing `wrapping_*` alone would leave the other three families and the
+    /// bit intrinsics quietly wrong while looking addressed. A program that
+    /// cannot name the type cannot observe any of them.
+    ///
+    /// Deduped by source offset -- `lower_type_expr` re-runs for the same
+    /// annotation under generic instantiation and trial typing, and the user
+    /// wrote the type once. Keyed on `offset` because `Span` is deliberately
+    /// `PartialEq`-only, not `Hash`.
+    pub(super) fn reject_128bit(&mut self, signed: bool, span: Span) {
+        if !self.reported_128bit_offsets.insert(span.offset) {
+            return;
+        }
+        let (name, widest) = if signed {
+            ("i128", "i64")
+        } else {
+            ("u128", "u64")
+        };
+        self.type_error(
+            format!(
+                "`{name}` is not supported yet: both backends carry integers in a 64-bit slot, so a `{name}` value would silently answer for 64 bits (`wrapping_add` wraps at 2^63, `count_ones()` on `-1` returns 64). Use `{widest}` for now — 128-bit support is tracked as B-2026-08-19-6"
+            ),
+            span,
+            TypeErrorKind::TypeMismatch,
+        );
+    }
+
     /// Map a lexer-provided integer suffix to the concrete `Type` it denotes.
     /// `None` defaults to `i64`. `I128` / `U128` route to
     /// `IntSize::I128` / `UIntSize::U128` (added 2026-05-11 alongside
     /// const generics slice 2b — `IntSize`/`UIntSize` carry the 128-bit
     /// variants now; downstream consumers should handle them through
     /// the standard arms).
-    fn type_from_int_suffix(&mut self, sfx: Option<IntSuffix>, _span: Span) -> Type {
+    fn type_from_int_suffix(&mut self, sfx: Option<IntSuffix>, span: Span) -> Type {
+        // A suffixed 128-bit literal names the type just as an annotation does
+        // -- `let x = 1i128;` has no `TypeExpr` for `lower_type_expr` to catch.
+        match sfx {
+            Some(IntSuffix::I128) => self.reject_128bit(true, span),
+            Some(IntSuffix::U128) => self.reject_128bit(false, span),
+            _ => {}
+        }
         match sfx {
             None => Type::Int(IntSize::I64),
             Some(IntSuffix::I8) => Type::Int(IntSize::I8),
