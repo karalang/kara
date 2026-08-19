@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 133 | 0 |
 | run-vs-build | 133 | 0 |
 | codegen-gap | 119 | 0 |
-| missing-feature | 115 | 3 |
+| missing-feature | 116 | 3 |
 | diagnostics | 83 | 0 |
 | false-positive | 80 | 0 |
 | perf | 77 | 0 |
@@ -110,30 +110,30 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 941 | 3 |
-| typecheck | 206 | 2 |
+| codegen | 941 | 2 |
+| typecheck | 207 | 3 |
 | interp | 156 | 1 |
 | ownership | 60 | 0 |
 | other | 57 | 1 |
 | autopar | 49 | 0 |
 | cli | 47 | 0 |
-| parser | 27 | 1 |
+| parser | 27 | 0 |
 | runtime | 25 | 1 |
 | resolver | 20 | 0 |
 | effect | 7 | 0 |
 | lexer | 5 | 1 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1358 surfaced · 4 open · 1336 fixed · 7 wontfix** (2026-05-20 → 2026-08-19). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1359 surfaced · 4 open · 1337 fixed · 7 wontfix** (2026-05-20 → 2026-08-19). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-19-3 | 2026-08-19 | parser+codegen | low | MULTI-BOUND `effect resource` declarations do not parse: `effect resource UserDB: DatabaseProvider + HealthCheckable;` -> "Expected Semicolon, found Plus", spec'd normatively at design.md:7216 under "Multiple trait bounds are allowed on a resource declaration:" (:7213), with semantics attached at :7217 ("Any provider passed to `with_provider` must implement all declared bounds plus `Send + Sync`"). | src/parser/items_effects.rs::parse_effect_resource_tail vs design.md:7216 (prose at :7213, semantics at :7217); src/codegen/provider_state.rs::provider_resource_traits and its nine readers |
 | B-2026-08-19-5 | 2026-08-19 | other | low | The codegen E2E harness (`tests/codegen.rs::run_program_capturing_inner`) runs resolve + typecheck but NOT the effect checker, so a test can pin behaviour for a program `karac build` REFUSES. Its `assert_check_clean` gate is named for the whole check phase and covers two thirds of it. | tests/codegen.rs::run_program_capturing_inner; tests/common's assert_check_clean; cf. B-2026-08-11-34 (the prepare_for_resolve drift this gate was hardened against) |
 | B-2026-08-19-8 | 2026-08-19 | lexer+typecheck+interp+codegen | medium | IMPLEMENT 128-bit integers for real: `i128` / `u128` are specified normatively in design.md as v1 primitives (all four overflow method families, the widening-cast table, the primitive-numeric lists, Portable SIMD elements) and the compiler now REJECTS them, because no runtime carrier is 128 bits wide. Deleting design.md's 'Implementation status — 128-bit integers are NOT YET IMPLEMENTED' note is the definition of done. | docs/design.md § checked_*/wrapping_*/saturating_*/overflowing_* method families (the status note — deleting it is done); src/typechecker.rs::reject_128bit; src/interpreter/value.rs::Value::Int; src/codegen/method_call.rs (the i64-carrier comment + the `bits >= 64` reduction guard) |
 | B-2026-08-19-10 | 2026-08-19 | typecheck+codegen+runtime | medium | A GPU REDUCTION (N inputs -> 1 result) CANNOT BE WRITTEN AT ALL. `gpu.dispatch` is the entire user-facing GPU surface and it is map-shaped ([T] -> [U], one output per input); the WGSL emitter has ZERO workgroup-memory or barrier support. So sum / dot / min / max / argmax / prefix-sum / any tiled matmul have nowhere to go, which is most of what GPUs are bought for. | — |
+| B-2026-08-19-11 | 2026-08-19 | typecheck | low | design.md:7223 requires a `with_provider` provider to implement `Send + Sync` on top of its declared bounds, and NOTHING checks it -- because neither trait exists in the compiler at all: `grep '"Send"' src/` and `grep '"Sync"' src/` are both EMPTY, so there is no auto-trait machinery to check against at any arity. | design.md:7223 (`with_provider` signature at :7225, `P: R.Provider + Send + Sync`); src/typechecker/expr_call.rs::check_provider_satisfies_declared_bound |
 
 ### Wontfix (7)
 
@@ -151,9 +151,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1358 surfaced
 
 </details>
 
-### Fixed (1336)
+### Fixed (1337)
 
-<details><summary>1336 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1337 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -12201,6 +12201,21 @@ TWO CORRECTIONS TO THE ROW'S MEASUREMENTS, both found by re-measuring rather tha
 A THIRD SURFACE IS STILL WRONG, filed separately rather than folded in: the JIT does not merely report the wrong status, it IGNORES the closed reader entirely and runs the program to completion. Measured on a 2,000,000-line program: 541 ms with the pipe closed after two lines versus 547 ms writing everything to /dev/null — statistically identical — while the AOT binary dies in 5 ms. That is 100x the work here and unbounded for a long-running program, and it is a different defect in a different component (the runtime's write path plus `cmd_run`'s status handling), so it gets its own row.
 
 GATED by `interp_broken_pipe_exits_quietly_like_a_native_binary`, which spawns `karac run --interp`, reads a little, drops the read end, and asserts stderr is EMPTY and the status is 141. It asserts on stderr and status rather than stdout deliberately: how much output arrives before the reader closes is a scheduling race, and pinning it would make the test flaky for a property it is not about. Verified red before the fix (the panic report is the failure) and green after. |
+| B-2026-08-19-3 | parser+codegen | low | MULTI-BOUND `effect resource` declarations do not parse: `effect resource UserDB: DatabaseProvider + HealthCheckable;` -> "Expected Semicolon, found… | FIXED by c151f7b. `effect resource UserDB: DatabaseProvider + HealthCheckable;` parses, and every phase carries all of the bounds rather than the first.
+
+THE ROW'S COST ESTIMATE WAS TOO HIGH, and the reason is worth recording because it was reasoned from the wrong invariant. The row said two bounds means "two vtables per provider and a method-to-BOUND resolution at every dispatch site", from the observation that `provider_resource_traits` is `HashMap<String, String>` read at nine sites. But the 1:1 that actually binds is not resource-to-trait -- it is RESOURCE-TO-VTABLE, because `ProviderFrame` holds exactly one vtable pointer and `R.method(..)` indexes it by `position()`. Two bounds therefore need one vtable whose slots are the two bounds' methods laid out END-TO-END, not two vtables with a per-site map. Dispatch stays 1:1 and no call site learns anything new.
+
+THE SHAPE WAS ALREADY IN THE CODEBASE. `provider_vtables` is keyed `(impl-target, KEY)` where KEY is a trait name for trait-ful resources and the RESOURCE NAME for trait-less ambient ones, and `provider_method_impl_key` already spelled the fallback as `traits.get(r).unwrap_or(r)`. So a multi-bound resource takes the resource-keyed form the ambient path had been using all along (`@VT_<U>_<R>`), and a SINGLE-bound resource keeps its trait-keyed `@VT_<U>_<T>` untouched -- which also keeps two resources bound to one trait SHARING one vtable, the many-to-many relation design.md § "Why two declarations" leans on. An E2E test holds that sharing rather than asserting it.
+
+REPRESENTATION FIRST, as the row asked. `provider_trait` / `provider_trait_args` / `provider_trait_span` -- three parallel `Option` fields -- became one `provider_bounds: Vec<ProviderBound>`. A Vec rather than "first bound plus extras" because NO consumer wants only the first: the resolver existence-checks each bound and its arguments, the effect checker seeds the union of their methods, the typechecker checks each bound's generic arity and that the provider implements EVERY one (design.md:7217), the formatter and catalog render all of them, and codegen concatenates their method lists. Every one of those was a one-bound loop already; each took a `for`.
+
+ONE NEW RULE, at the declaration: a method name declared by TWO bounds is rejected. design.md gives the multi-bound form no disambiguating syntax -- there is no `R.(A::run)()` -- so `R.run()` would have to pick a bound silently, and the pick decides both the typechecked signature and the vtable slot. Rejecting there is exactly what lets the union be a FLAT list keyed by name downstream, which is why the dispatch redesign the row feared is not needed. `effect resource R: A + B;` where both declare `run` now names both bounds and the clashing method at the second bound's span.
+
+WHAT MOVED IN THE ADJACENT ROW'S CHECK. `check_provider_satisfies_declared_bound` (B-2026-08-19-4) checked one bound; it now checks all, one diagnostic per unsatisfied bound, each naming its own missing `impl`. A provider that implements `A` but not `B` is exactly as unusable as one implementing neither -- the vtable would carry a null slot.
+
+design.md:7216's example moved from a bare ``` fence to a ```kara one, so the block gate covers it now that it parses. The `Send + Sync` half of :7217 is NOT implemented and is not claimed to be; nothing checks `Send`/`Sync` on a provider at arity 1 either.
+
+VERIFIED on all four surfaces with a two-bound program dispatching to BOTH bounds (`UserDB.lookup(7)` from bound 1, `UserDB.healthy()` from bound 2, so a wrong slot index is a wrong ANSWER, not a crash): `karac run --interp`, `karac run` (LLJIT), `karac build`, and `KARAC_AUTO_PAR=0 karac build` all print `lookup: 107` / `healthy: true`. |
 | B-2026-08-19-4 | typecheck | medium | `with_provider[R](p, ...)` NEVER CHECKS that `p` implements the resource's declared provider trait | FIXED by f472db3. `check_provider_satisfies_declared_bound`, called from the `with_provider[R](provider, closure)` arm in `typechecker/expr_call.rs`, looks the resource's declared provider trait up in `user_effect_resources` and asks `type_satisfies_bound` whether the provider's type implements it. The diagnostic names the provider type, the trait, the declaration that imposed it, and the impl to add — at the `with_provider` call site rather than at a vtable.
 
     before:  karac check -> "All checks passed."   karac run/build -> "codegen failed:
