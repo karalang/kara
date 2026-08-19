@@ -441,6 +441,60 @@ impl<'a> super::TypeChecker<'a> {
 
     /// True when `ty` (recursively, through the substitution map) contains
     /// no unresolved inference vars, unbound type params, or `Error` — the
+    /// design.md:7217 — "Any provider passed to `with_provider` must implement
+    /// all declared bounds". Nothing checked it. B-2026-08-19-4.
+    ///
+    /// A struct carrying an INHERENT method of the right name and shape, but no
+    /// `impl Trait for U`, passed resolve, typecheck and effectcheck, then died
+    /// in codegen with a message about the vtable — an implementation detail,
+    /// naming neither the `with_provider` line that supplied the wrong provider
+    /// nor the trait the author forgot to implement. `--interp` accepted the
+    /// same program and printed an answer, so it was also a live run-vs-build
+    /// divergence rather than only a phase-ordering problem.
+    ///
+    /// CHECKED FROM THE INFERRED TYPE, not from a syntactic guess. The row
+    /// proposed reusing `env_build`'s `provider_type_name` recovery, which
+    /// walks `let` bindings and constructor calls to name the provider's type;
+    /// that pass needs it because it runs before inference. Here inference has
+    /// already produced `provider_ty`, so every shape it types is covered —
+    /// including the ones the syntactic walk cannot see (a provider returned by
+    /// a method, read out of a field, or handed in as a parameter).
+    ///
+    /// SILENT ON A BARE RESOURCE and on a type parameter. A resource with no
+    /// declared trait has no bound to satisfy (design.md § "Trait bound is
+    /// optional"), and a generic provider's obligation belongs to its own
+    /// bound list, which `validate_all_bounds` already checks at the
+    /// declaration.
+    fn check_provider_satisfies_declared_bound(
+        &mut self,
+        resource: &str,
+        provider_ty: &Type,
+        span: &Span,
+    ) {
+        let Some(Some(trait_name)) = self.user_effect_resources.get(resource).cloned() else {
+            return;
+        };
+        // An unresolved or already-broken provider type produced its own
+        // diagnostic; a bound complaint on top would name a type the author
+        // never wrote.
+        if matches!(provider_ty, Type::Error | Type::TypeParam(_)) {
+            return;
+        }
+        if self.type_satisfies_bound(provider_ty, &trait_name) {
+            return;
+        }
+        let shown = crate::typechecker::types::type_display(provider_ty);
+        self.type_error(
+            format!(
+                "provider of type '{shown}' does not implement `{trait_name}`, the provider \
+                 trait declared by `effect resource {resource}: {trait_name};` — add \
+                 `impl {trait_name} for {shown} {{ ... }}`"
+            ),
+            *span,
+            TypeErrorKind::TraitBoundNotSatisfied,
+        );
+    }
+
     /// gate for committing a `with_provider` call to its closure's return
     /// type (B-2026-07-31-20). Conservative on unknown container shapes
     /// (defaults to concrete for leaf scalars and unmodeled variants).
@@ -614,6 +668,11 @@ impl<'a> super::TypeChecker<'a> {
                         &provider_expr.span,
                     );
                 }
+                self.check_provider_satisfies_declared_bound(
+                    &resource,
+                    &provider_ty,
+                    &provider_expr.span,
+                );
                 // B-2026-07-31-20 — type the with_provider call itself.
                 // `with_provider` has no ordinary env signature the generic
                 // dispatch can resolve (it is a recognized form), so the

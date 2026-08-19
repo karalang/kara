@@ -40698,3 +40698,78 @@ fn plain_provider_bound_is_unaffected() {
         "#,
     );
 }
+
+// ── B-2026-08-19-4: with_provider's declared provider trait ─────
+
+/// design.md:7217 — "Any provider passed to `with_provider` must implement all
+/// declared bounds". Nothing checked it, so a struct with a matching INHERENT
+/// method but no `impl Trait for U` passed every static phase and died in
+/// codegen with a message about the vtable.
+#[test]
+fn test_with_provider_rejects_a_provider_missing_the_declared_trait() {
+    let errors = typecheck_errors(
+        "trait DatabaseProvider { fn q(ref self, k: i64) -> i64; }\n\
+         effect resource UserDB: DatabaseProvider;\n\
+         struct NotADb { n: i64 }\n\
+         impl NotADb { fn q(ref self, k: i64) -> i64 { return k + self.n; } }\n\
+         fn lookup(k: i64) -> i64 with reads(UserDB) { return UserDB.q(k); }\n\
+         fn main() {\n\
+             let p = NotADb { n: 10 };\n\
+             with_provider[UserDB](p, || { println(lookup(5).to_string()); });\n\
+         }\n",
+    );
+    assert!(
+        errors.iter().any(
+            |e| e.message.contains("does not implement `DatabaseProvider`")
+                && e.message.contains("NotADb")
+        ),
+        "expected a provider-bound complaint naming the trait and the type; got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+/// The conforming provider must stay silent — this is the shape every real
+/// `with_provider` user in `examples/` has.
+#[test]
+fn test_with_provider_accepts_a_conforming_provider() {
+    typecheck_ok(
+        "trait DatabaseProvider { fn q(ref self, k: i64) -> i64; }\n\
+         effect resource UserDB: DatabaseProvider;\n\
+         struct RealDb { n: i64 }\n\
+         impl DatabaseProvider for RealDb { fn q(ref self, k: i64) -> i64 { return k + self.n; } }\n\
+         fn lookup(k: i64) -> i64 with reads(UserDB) { return UserDB.q(k); }\n\
+         fn main() {\n\
+             let p = RealDb { n: 10 };\n\
+             with_provider[UserDB](p, || { println(lookup(5).to_string()); });\n\
+         }\n",
+    );
+}
+
+/// THE SHAPE A SYNTACTIC RECOVERY WOULD MISS, and the reason this check reads
+/// the INFERRED type instead.
+///
+/// The row proposed reusing `env_build`'s `provider_type_name`, which walks
+/// `let` bindings and constructor calls because that pass runs before
+/// inference. A provider handed over as a call's return value is invisible to
+/// that walk; inference has already typed it here, so it is caught like any
+/// other.
+#[test]
+fn test_with_provider_bound_is_checked_on_an_inferred_provider() {
+    let errors = typecheck_errors(
+        "trait DatabaseProvider { fn q(ref self, k: i64) -> i64; }\n\
+         effect resource UserDB: DatabaseProvider;\n\
+         struct NotADb { n: i64 }\n\
+         fn make() -> NotADb { return NotADb { n: 1 }; }\n\
+         fn lookup(k: i64) -> i64 with reads(UserDB) { return UserDB.q(k); }\n\
+         fn main() {\n\
+             with_provider[UserDB](make(), || { println(lookup(5).to_string()); });\n\
+         }\n",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("does not implement `DatabaseProvider`")),
+        "a provider arriving from a call return must still be checked; got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
