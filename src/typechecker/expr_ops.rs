@@ -364,6 +364,72 @@ impl<'a> super::TypeChecker<'a> {
     ///
     /// Only the bare form is affected. `Sink.None` goes through
     /// `resolve_path_type`, which names its enum explicitly and runs first.
+    /// `true` when `name` is bound as an ordinary value — a local, a function
+    /// or a constant — and therefore is not an enum-variant reference at all.
+    ///
+    /// Mirrors the order `resolve_identifier_type` already uses: local scope,
+    /// then functions, then constants, and only then the variant scan. Both the
+    /// ambiguity diagnostic and the type-directed resolution consult this, so
+    /// neither can start disagreeing with that order.
+    fn name_shadows_variant(&self, name: &str) -> bool {
+        self.local_scope.lookup(name).is_some()
+            || self.env.functions.contains_key(name)
+            || self.env.constants.contains_key(name)
+    }
+
+    /// Type-directed resolution of a BARE unit-variant name against the type the
+    /// context expects (`let x: Second = A;`, `fn f() -> Second { A }`,
+    /// `want_second(A)`).
+    ///
+    /// Synthesis position has no expected type and must still reject an
+    /// ambiguous bare name (B-2026-08-19-17 (b)); this is the checking-position
+    /// counterpart, and it is what makes that rejection a narrow one rather
+    /// than a dead end — before this, the losing enum of a collision was
+    /// unreachable by bare name in EVERY position, annotation included.
+    ///
+    /// Returns the expected type itself on a match, so a generic enum keeps the
+    /// context's instantiation (`Option[i64]`, not a fresh `Option[?T]`).
+    ///
+    /// Declines, leaving the ordinary path to run, when:
+    /// - the name is bound as a local, function or constant — a real binding
+    ///   always wins over a variant name, exactly as `resolve_identifier_type`
+    ///   orders them, so `let A = 5; let x: First = A;` still means the local;
+    /// - the expected type is not a named enum declaring `name`;
+    /// - the variant is not a UNIT variant. A bare tuple variant is a
+    ///   constructor FUNCTION, not a value of the enum, so `let x: First = W;`
+    ///   must keep failing; `W(7)` is a call and never reaches here.
+    pub(super) fn bare_variant_from_expected(&self, name: &str, expected: &Type) -> Option<Type> {
+        // `Some` / `None` / `Ok` / `Err` are pinned to their builtin owner by
+        // the variant scan, so they are never the user-vs-user case this
+        // serves — and `check_expr` has dedicated arms for them (the weak-slot
+        // `None` coercion, the `Some(..)`/`Ok(..)`/`Err(..)` constructor
+        // checks) that resolving here would sit above and skip. Measured: with
+        // them included, a `weak T` field initialised to `None` bypassed
+        // `karac_weak_downgrade` and the self-host parser miscompiled into a
+        // double free.
+        if Self::builtin_variant_owner(name).is_some() {
+            return None;
+        }
+        if self.name_shadows_variant(name) {
+            return None;
+        }
+        let Type::Named {
+            name: enum_name, ..
+        } = expected
+        else {
+            return None;
+        };
+        let info = self.env.enums.get(enum_name)?;
+        let is_unit = info
+            .variants
+            .iter()
+            .any(|(v, kind)| v == name && matches!(kind, VariantTypeInfo::Unit));
+        if !is_unit {
+            return None;
+        }
+        Some(expected.clone())
+    }
+
     /// B-2026-08-19-17 (b) — the USER-declared enums that declare `name` as a
     /// variant, when two or more of them do.
     ///
@@ -394,6 +460,17 @@ impl<'a> super::TypeChecker<'a> {
         if Self::builtin_variant_owner(name).is_some() || is_prelude_type_or_module_name(name) {
             return None;
         }
+        // A real binding of that name is not a variant reference at all, so
+        // there is nothing ambiguous about it. `resolve_identifier_type` checks
+        // locals and constants BEFORE it ever reaches the variant scan, and the
+        // caller runs after that resolution — so without this guard a perfectly
+        // ordinary `let A = 77; println(A);` was reported as an ambiguous
+        // variant whenever two enums happened to declare an `A`. Kept here
+        // rather than at the call site so this helper and
+        // `bare_variant_from_expected` cannot drift on which names count.
+        if self.name_shadows_variant(name) {
+            return None;
+        }
         let mut owners: Vec<String> = self
             .env
             .enums
@@ -412,7 +489,7 @@ impl<'a> super::TypeChecker<'a> {
         Some(owners)
     }
 
-    fn builtin_variant_owner(name: &str) -> Option<&'static str> {
+    pub(super) fn builtin_variant_owner(name: &str) -> Option<&'static str> {
         match name {
             "Some" | "None" => Some("Option"),
             "Ok" | "Err" => Some("Result"),

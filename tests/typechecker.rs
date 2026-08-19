@@ -41433,3 +41433,151 @@ fn builtin_pinned_constructors_are_not_ambiguous_against_a_user_enum() {
          fn main() { println(take(None)); println(take(Some(9))); }",
     );
 }
+
+// ── B-2026-08-19-24: type-directed bare unit-variant resolution ──
+
+#[test]
+fn expected_type_resolves_a_bare_variant_in_every_checking_position() {
+    // B-2026-08-19-24. The checking-position counterpart to -17 (b)'s
+    // synthesis-position rejection: when the context names an enum, a bare
+    // variant name means THAT enum's variant. Before this, the losing enum of a
+    // collision was unreachable by bare name everywhere — even with an explicit
+    // annotation — so the fix an author would reach for did not work.
+    //
+    // One program covering annotation, argument, return, struct field,
+    // `Array[T, N]` element and both `if`/`else` branches.
+    typecheck_ok(
+        "enum First { A, B }
+         enum Second { A, C }
+         impl Second { fn tag(ref self) -> i64 { 2 } }
+         fn takes(x: Second) -> i64 { x.tag() }
+         struct H { s: Second }
+         fn ret() -> Second { A }
+         fn main() {
+             let annot: Second = A;
+             let arg = takes(A);
+             let r = ret();
+             let field = H { s: A };
+             let arr: Array[Second, 1] = [A];
+             let cond: Second = if true { A } else { C };
+             println(annot.tag() + arg + r.tag() + field.s.tag() + arr[0].tag() + cond.tag());
+         }",
+    );
+}
+
+#[test]
+fn expected_type_picks_the_other_enum_of_a_colliding_pair() {
+    // The point of the feature: the SAME bare name resolves to a different enum
+    // per context, with no qualification.
+    typecheck_ok(
+        "enum First { A, B }
+         enum Second { A, C }
+         impl First { fn tag(ref self) -> i64 { 1 } }
+         impl Second { fn tag(ref self) -> i64 { 2 } }
+         fn main() {
+             let f: First = A;
+             let s: Second = A;
+             println(f.tag() + s.tag());
+         }",
+    );
+}
+
+#[test]
+fn a_local_binding_still_beats_a_variant_name_of_the_expected_enum() {
+    // Regression guard, and the bug this feature's first cut introduced: the
+    // ambiguity diagnostic fired on `let A = 77; println(A);` because it ran
+    // after resolution without asking whether the name resolved to a LOCAL.
+    // `resolve_identifier_type` checks locals and constants before the variant
+    // scan; both the diagnostic and the type-directed arm must honour that, so
+    // here `A` is the i64 local and the mismatch is i64-vs-First, not an
+    // ambiguity.
+    let errors = typecheck_errors(
+        "enum First { A, B }
+         enum Second { A, C }
+         fn main() { let A = 77; let x: First = A; }",
+    );
+    assert!(
+        errors
+            .iter()
+            .all(|e| e.kind != TypeErrorKind::AmbiguousBareVariant),
+        "a local named `A` is not a variant reference, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("expected 'First', found 'i64'")),
+        "expected the local's own type mismatch, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn a_local_named_like_a_colliding_variant_is_not_diagnosed_at_all() {
+    // The plain form of the same regression — no expected type in sight.
+    typecheck_ok(
+        "enum First { A, B }
+         enum Second { A, C }
+         fn main() { let A = 77; println(A); }",
+    );
+}
+
+#[test]
+fn expected_type_does_not_resolve_a_bare_tuple_variant() {
+    // A bare tuple variant is a constructor FUNCTION, not a value of the enum,
+    // so an expected enum type must not turn `W` into one. `W(7)` is a call and
+    // never reaches the checking arm.
+    let errors = typecheck_errors(
+        "enum First { W(i64), B }
+         fn main() { let x: First = W; }",
+    );
+    assert!(
+        !errors.is_empty(),
+        "a bare tuple-variant name in value position must still be rejected",
+    );
+}
+
+#[test]
+fn synthesis_position_still_requires_qualification() {
+    // Type-direction relaxes only where a context exists. With none, -17 (b)'s
+    // rejection stands — that pairing is the whole design.
+    let errors = typecheck_errors(
+        "enum First { A, B }
+         enum Second { A, C }
+         fn main() { let x = A; }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::AmbiguousBareVariant),
+        "unannotated `let x = A;` must still be ambiguous, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn type_direction_does_not_intercept_the_builtin_option_constructors() {
+    // B-2026-08-19-24, the sharp edge of putting this arm FIRST in `check_expr`.
+    // `None` is a unit variant of `Option`, so an unrestricted rule fired on
+    // every `let x: Option[T] = None` in the language — above the weak-slot
+    // coercion arm, which lowers a `None` into a `weak T` field through
+    // `karac_weak_downgrade`, and above the `Some(..)`/`Ok(..)`/`Err(..)`
+    // constructor checks.
+    //
+    // Skipping the weak coercion is not a type error, it is a REPRESENTATION
+    // error: a weak pointer and a strong `Option` differ in layout and refcount
+    // semantics, and the self-host parser miscompiled into `double free or
+    // corruption` at run time. `tests/selfhost_parser_items.rs` is what caught
+    // it; this pins the shape directly so the next change to this arm fails
+    // here first, in a second, instead of in an E2E binary.
+    typecheck_ok(
+        "shared struct Node { v: i64 }
+         struct Holder { w: weak Node }
+         fn take(o: Option[i64]) -> i64 { match o { Some(v) => v, None => -1, } }
+         fn main() {
+             let h = Holder { w: None };
+             let a: Option[i64] = None;
+             println(take(a) + take(Some(3)) + take(None));
+         }",
+    );
+}

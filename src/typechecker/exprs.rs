@@ -278,6 +278,42 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     pub(super) fn check_expr(&mut self, expr: &Expr, expected: &Type) -> Type {
+        // B-2026-08-19-24 — type-directed bare unit-variant resolution. When
+        // the context names an enum, a bare variant name means THAT enum's
+        // variant: `let x: Second = A;`, `fn f() -> Second { A }`,
+        // `want_second(A)`.
+        //
+        // This is the checking-position counterpart to B-2026-08-19-17 (b),
+        // which rejects an ambiguous bare name in SYNTHESIS position (`let x =
+        // A;`) where nothing can disambiguate it. Together they make the rule
+        // uniform: the context decides when it can, and you are asked to
+        // qualify only when it genuinely cannot. Before this, the losing enum
+        // of a collision was unreachable by bare name in every position — even
+        // `let x: Second = A;` was rejected with "expected 'Second', found
+        // 'First'", so the annotation the author reached for did not help.
+        //
+        // Runs FIRST so it beats the fallthrough to `infer_expr`, which would
+        // resolve the name context-free and emit (b)'s ambiguity error for a
+        // name the context has in fact just resolved. `record_expr_type` is
+        // what carries the decision to the backends: the interpreter reads it
+        // back for a bare variant (B-2026-08-19-17 (a)) and codegen types the
+        // expression from it, so both follow the context for free.
+        //
+        // Running FIRST is also why `Some`/`None`/`Ok`/`Err` are excluded (in
+        // `bare_variant_from_expected`) rather than merely deprioritised.
+        // MEASURED: with them included this arm sat above the weak-slot
+        // coercion below — which lowers a `None` into a `weak T` field through
+        // `karac_weak_downgrade` — and above the `Some(..)`/`Ok(..)`/`Err(..)`
+        // constructor checks. Intercepting `None` skipped that coercion, and a
+        // weak pointer and a strong `Option` differ in representation and
+        // refcount semantics, so the self-host parser miscompiled into `double
+        // free or corruption` at run time rather than into any type error.
+        if let ExprKind::Identifier(name) = &expr.kind {
+            if let Some(ty) = self.bare_variant_from_expected(name, expected) {
+                self.record_expr_type(&expr.span, &ty);
+                return ty;
+            }
+        }
         // B-2026-07-02-7: an UNSUFFIXED integer literal (bare or negated) at
         // a narrow-int-typed position must fit that type's range — `let x:
         // i8 = 200`, `f(70000)` against `i16`, `S { b: 300 }` against `u8`,
