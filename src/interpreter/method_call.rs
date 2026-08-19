@@ -823,17 +823,17 @@ impl<'a> super::Interpreter<'a> {
             }
         }
 
-        // Slice 1 is single-workgroup; a longer buffer is refused here exactly
-        // as the runtime entry point refuses it, so the two surfaces agree on
-        // what is expressible instead of one silently answering.
+        // Any length: up to one workgroup's width this is a single halving
+        // tree, beyond it a tree of per-workgroup partials — the same
+        // recursion the multi-dispatch runtime performs, so the two surfaces
+        // agree bit-for-bit rather than one refusing what the other answers.
         match crate::reduce_kernel::tree_reduce_f32(&xs, op) {
             Some(r) => Value::Float(r as f64),
+            // Only the ops that need more than one associative pass land
+            // here, and `gpu.sum` / `gpu.prod` are the only spellings routed
+            // in — unreachable from any program, loud if that ever changes.
             None => self.record_runtime_error(
-                format!(
-                    "gpu.{spelling} slice-1 handles at most {} elements (found {})",
-                    crate::reduce_kernel::GPU_REDUCE_WIDTH,
-                    xs.len()
-                ),
+                format!("gpu.{spelling} is not an expressible GPU reduction"),
                 span,
             ),
         }

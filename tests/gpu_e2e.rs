@@ -864,3 +864,52 @@ fn gpu_sum_and_prod_agree_on_small_buffers() {
         "24",
     );
 }
+
+#[test]
+fn gpu_sum_agrees_bit_for_bit_past_one_workgroup() {
+    // A buffer longer than one workgroup is a TREE OF TREES: the first
+    // dispatch leaves one partial per workgroup and the host re-dispatches the
+    // same shader over those. 4096 copies of 0.1 is two full levels — 64
+    // chunks of 64, then one chunk of 64 — and the grouping is observable in
+    // f32, so the interpreter has to reproduce the CHUNKING, not merely "a
+    // tree". 6.4 (one chunk) times 64 is exact, which is why the answer lands
+    // on 409.6000061035156 rather than drifting.
+    assert_gpu_reduce_matches_interp(
+        "reduce_sum_multi",
+        "fn main() {\n\
+        \x20   let mut v: Vec[f32] = [];\n\
+        \x20   for i in 0..4096 { v.push(0.1) }\n\
+        \x20   println(f\"{gpu.sum(v)}\")\n\
+        }\n",
+        "409.6000061035156",
+    );
+
+    // 65 is the first length that needs a second chunk at all, and the one a
+    // truncating implementation would answer 64.0 for.
+    assert_gpu_reduce_matches_interp(
+        "reduce_sum_spill",
+        "fn main() {\n\
+        \x20   let mut v: Vec[f32] = [];\n\
+        \x20   for i in 0..65 { v.push(1.0) }\n\
+        \x20   println(f\"{gpu.sum(v)}\")\n\
+        }\n",
+        "65",
+    );
+}
+
+#[test]
+fn gpu_prod_of_an_empty_buffer_is_one_on_both_legs() {
+    // The one input that never reaches a device: the runtime short-circuits
+    // before touching an adapter, so it has to be TOLD the identity. A
+    // hardcoded 0.0 there would print 0 under `karac build` and 1 under
+    // `karac run` — a run/build divergence on the cheapest possible program,
+    // and one no GPU-having host would catch any sooner than a GPU-less one.
+    assert_gpu_reduce_matches_interp(
+        "reduce_prod_empty",
+        "fn main() {\n\
+        \x20   let v: Vec[f32] = [];\n\
+        \x20   println(f\"{gpu.prod(v)}\")\n\
+        }\n",
+        "1",
+    );
+}

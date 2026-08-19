@@ -41,23 +41,62 @@ pub const GPU_REDUCE_WIDTH: usize = 64;
 /// [`GPU_REDUCE_WIDTH`] with `identity`, then halve —
 /// `s[t] = s[t] OP s[t + stride]` for stride 32, 16, 8, 4, 2, 1.
 ///
-/// Slice 1 is single-workgroup only, so `xs.len() <= GPU_REDUCE_WIDTH`; longer
-/// inputs are rejected before reaching here (the runtime entry point aborts
-/// rather than returning a partial answer).
+/// Handles any length: up to [`GPU_REDUCE_WIDTH`] is one workgroup's tree,
+/// beyond that the buffer is chunked into per-workgroup partials which are
+/// then folded the same way — the recursion the multi-workgroup dispatch
+/// performs. See [`tree_fold_f32`].
 ///
 /// Incidentally the more ACCURATE order: pairing keeps partial sums at similar
 /// magnitudes instead of repeatedly adding a small value to a growing one.
 pub fn tree_reduce_f32(xs: &[f32], op: ReduceOp) -> Option<f32> {
-    let (combine, identity): (fn(f32, f32) -> f32, f32) = match op {
-        ReduceOp::Sum => (|a, b| a + b, 0.0),
-        ReduceOp::Prod => (|a, b| a * b, 1.0),
-        // Everything else needs more than one associative pass — see
-        // `gpu_wgsl::emit_reduce_kernel`, which refuses the same set.
-        _ => return None,
-    };
-    if xs.len() > GPU_REDUCE_WIDTH {
-        return None;
+    // `None` for everything that needs more than one associative pass — see
+    // `gpu_wgsl::emit_reduce_kernel`, which refuses the same set.
+    let (combine, identity) = reduce_combiner_f32(op)?;
+    Some(tree_fold_f32(xs, combine, identity))
+}
+
+/// One GPU-expressible reduction as data: its combining function and the
+/// identity that pads a short chunk.
+type Combiner = (fn(f32, f32) -> f32, f32);
+
+/// The [`Combiner`] for a GPU-expressible reduction, or `None` for the ops
+/// that need more than one associative pass.
+fn reduce_combiner_f32(op: ReduceOp) -> Option<Combiner> {
+    match op {
+        ReduceOp::Sum => Some((|a, b| a + b, 0.0)),
+        ReduceOp::Prod => Some((|a, b| a * b, 1.0)),
+        _ => None,
     }
+}
+
+/// The recursion the multi-workgroup dispatch performs, reproduced exactly.
+///
+/// Each workgroup reduces its own [`GPU_REDUCE_WIDTH`]-wide chunk to one
+/// partial (`output[workgroup_id]`), and the host then folds the partials by
+/// dispatching the SAME shader over them — so a long buffer is a TREE OF
+/// TREES, and the shape of that tree is fixed by the chunking. Reproducing it
+/// here is what keeps a 4096-element `gpu.sum` bit-identical between
+/// `karac run` and `karac build`, exactly as the single-workgroup case is.
+///
+/// Note this is not the same number a flat 4096-wide tree would give, nor a
+/// left fold: the grouping is observable in f32. That is fine — it is
+/// *specified* — but it does mean the width is part of the language's answer,
+/// which is why [`GPU_REDUCE_WIDTH`] lives here rather than in the emitter.
+fn tree_fold_f32(xs: &[f32], combine: fn(f32, f32) -> f32, identity: f32) -> f32 {
+    if xs.len() <= GPU_REDUCE_WIDTH {
+        return one_workgroup_f32(xs, combine, identity);
+    }
+    let partials: Vec<f32> = xs
+        .chunks(GPU_REDUCE_WIDTH)
+        .map(|c| one_workgroup_f32(c, combine, identity))
+        .collect();
+    tree_fold_f32(&partials, combine, identity)
+}
+
+/// One workgroup's halving tree: pad to [`GPU_REDUCE_WIDTH`] with `identity`,
+/// then `s[t] = s[t] OP s[t + stride]` for stride 32, 16, 8, 4, 2, 1.
+fn one_workgroup_f32(xs: &[f32], combine: fn(f32, f32) -> f32, identity: f32) -> f32 {
+    debug_assert!(xs.len() <= GPU_REDUCE_WIDTH);
     let mut scratch = [identity; GPU_REDUCE_WIDTH];
     for (slot, &x) in scratch.iter_mut().zip(xs) {
         *slot = x;
@@ -69,7 +108,7 @@ pub fn tree_reduce_f32(xs: &[f32], op: ReduceOp) -> Option<f32> {
         }
         stride /= 2;
     }
-    Some(scratch[0])
+    scratch[0]
 }
 
 /// A statistical reduction, independent of container shape, element source
@@ -373,15 +412,50 @@ mod tests {
     }
 
     #[test]
-    fn tree_reduce_refuses_past_one_workgroup_and_the_multipass_ops() {
-        // Slice 1 is single-workgroup; a longer buffer must not silently return
-        // the first 64 elements' answer.
+    fn tree_reduce_refuses_only_the_multipass_ops() {
+        // Length is no longer a limit — a buffer past one workgroup folds
+        // through the multi-dispatch recursion instead of being refused.
         let long = vec![1.0f32; GPU_REDUCE_WIDTH + 1];
-        assert_eq!(tree_reduce_f32(&long, ReduceOp::Sum), None);
-        // Same refusal set as the emitter, so the two cannot disagree about
-        // which ops exist.
+        assert_eq!(tree_reduce_f32(&long, ReduceOp::Sum), Some(65.0));
+        // What IS still refused: the same set the emitter refuses, so the two
+        // cannot disagree about which ops exist.
         assert_eq!(tree_reduce_f32(&[1.0], ReduceOp::Mean), None);
         assert_eq!(tree_reduce_f32(&[1.0], ReduceOp::Min), None);
+    }
+
+    #[test]
+    fn tree_reduce_folds_a_long_buffer_as_a_tree_of_trees() {
+        // The GROUPING is the answer, not merely "a tree": 4096 elements is 64
+        // workgroups collapsing to 64 partials, then one workgroup over those.
+        // In f32 that is a different number from a flat 4096-wide tree and
+        // from a left fold, so the twin has to reproduce the chunking exactly
+        // — otherwise `karac run` and `karac build` disagree on long buffers
+        // while still agreeing on short ones, which is the worst way to be
+        // wrong (it passes every small test).
+        let xs = vec![0.1f32; 4096];
+        let got = tree_reduce_f32(&xs, ReduceOp::Sum).unwrap();
+
+        let partials: Vec<f32> = xs
+            .chunks(GPU_REDUCE_WIDTH)
+            .map(|c| tree_reduce_f32(c, ReduceOp::Sum).unwrap())
+            .collect();
+        assert_eq!(partials.len(), 64);
+        let expected = tree_reduce_f32(&partials, ReduceOp::Sum).unwrap();
+        assert_eq!(got.to_bits(), expected.to_bits(), "chunk-then-fold");
+
+        // Order-independent leg, so a twin that agreed with itself but not
+        // with arithmetic would still fail: 4096 tenths is 409.6.
+        assert!((got - 409.6).abs() < 0.01, "got {got}");
+
+        // A partial chunk is padded with the identity, not dropped: 65 ones
+        // is one full workgroup plus a chunk of one.
+        let odd = vec![1.0f32; GPU_REDUCE_WIDTH + 1];
+        assert_eq!(tree_reduce_f32(&odd, ReduceOp::Sum), Some(65.0));
+        let odd_prod = vec![2.0f32; GPU_REDUCE_WIDTH + 1];
+        assert_eq!(
+            tree_reduce_f32(&odd_prod, ReduceOp::Prod),
+            Some(2.0f32.powi(65))
+        );
     }
 
     use super::*;

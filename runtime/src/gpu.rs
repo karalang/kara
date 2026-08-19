@@ -300,15 +300,17 @@ pub unsafe extern "C" fn karac_runtime_gpu_map(
 /// scalar (B-2026-08-19-10, slice 1).
 ///
 /// Unlike [`karac_runtime_gpu_map`], the result is one value rather than a
-/// buffer, so the shader's convention is that lane 0 of the single workgroup
-/// writes the answer to `output[0]` and every other output slot is ignored.
+/// buffer, so the shader's convention is that lane 0 of each workgroup writes
+/// that workgroup's partial to `output[workgroup_id]` and every other output
+/// slot is ignored.
 ///
-/// **Slice 1 is single-workgroup only** — `n <= WORKGROUP` — because a
-/// multi-workgroup reduction needs a second pass over the per-workgroup
-/// partials (or an atomic), and that is the next slice. The caller is
-/// responsible for the bound; this entry point aborts rather than silently
-/// returning a partial sum, because a wrong-but-plausible number is the worst
-/// failure this family can have.
+/// **Any length.** Each dispatch collapses every workgroup's `WORKGROUP`-wide
+/// chunk to one partial at `output[workgroup_id]`, so re-dispatching the same
+/// shader over those partials converges — a buffer longer than one workgroup
+/// is a TREE OF TREES, and the grouping is part of the answer (see the loop
+/// below). `identity` is the operation's own (`0.0` for a sum, `1.0` for a
+/// product): the shader pads a short chunk with it, and it is also the answer
+/// for an empty buffer, which needs no device at all.
 ///
 /// **The shader defines the summation order** (pad to the workgroup width with
 /// the identity, then halve), and the interpreter twin reproduces it exactly —
@@ -328,21 +330,19 @@ pub unsafe extern "C" fn karac_runtime_gpu_reduce_f32(
     wgsl_len: usize,
     in_ptr: *const f32,
     n: usize,
+    identity: f32,
 ) -> f32 {
     unsafe {
-        // Empty reduction is the additive identity, and needs no device.
+        // Empty reduction is the operation's identity, and needs no device.
+        // It must be the OP's identity, not `0.0`: an empty `gpu.prod` is 1,
+        // and the interpreter twin says so — returning 0 here would be a
+        // run/build divergence on the one input that never reaches a device.
         if n == 0 {
-            return 0.0;
+            return identity;
         }
-        // Must match the shader's `@workgroup_size` and its `scratch` array
-        // length — the emitter bakes the same number into both.
+        // Must match the shader's `@workgroup_size`, its `scratch` array
+        // length, and `reduce_kernel::GPU_REDUCE_WIDTH`.
         const WORKGROUP: usize = 64;
-        if n > WORKGROUP {
-            crate::fatal::write_stderr(
-                b"panic: gpu.sum slice-1 handles at most one workgroup of elements\n",
-            );
-            std::process::abort();
-        }
 
         let wgsl_bytes = std::slice::from_raw_parts(wgsl_ptr, wgsl_len);
         let Ok(wgsl) = std::str::from_utf8(wgsl_bytes) else {
@@ -350,20 +350,37 @@ pub unsafe extern "C" fn karac_runtime_gpu_reduce_f32(
             std::process::abort();
         };
 
-        // Reuse the byte-oriented core the map entry point uses — the typed
-        // `dispatch_f32_map` wrapper is `#[cfg(test)]` and unavailable here.
         let elem_size = std::mem::size_of::<f32>();
-        let input_bytes = std::slice::from_raw_parts(in_ptr as *const u8, n * elem_size);
+        let mut level: Vec<u8> =
+            std::slice::from_raw_parts(in_ptr as *const u8, n * elem_size).to_vec();
+        let mut count = n;
 
-        let Some(output) = pollster::block_on(dispatch_bytes_async(wgsl, input_bytes, elem_size))
-        else {
-            crate::fatal::write_stderr(
-                b"panic: gpu.sum found no available GPU adapter (no CPU fallback)\n",
-            );
-            std::process::abort();
-        };
-        // Lane 0 wrote the reduced value to slot 0; the rest is scratch.
-        f32::from_le_bytes([output[0], output[1], output[2], output[3]])
+        // MULTI-WORKGROUP FOLD. Each dispatch reduces every workgroup's chunk
+        // to one partial at `output[workgroup_id]`, so a pass over `count`
+        // elements yields `ceil(count / WORKGROUP)` partials. Re-dispatching
+        // the SAME shader over those partials converges to one value.
+        //
+        // The chunking is what makes the answer deterministic — and it is
+        // observable: a 4096-element sum is a tree of trees, not a flat
+        // 4096-wide tree, and in f32 those differ. `reduce_kernel`'s twin
+        // reproduces this recursion exactly, which is what keeps run == build
+        // for long buffers as well as short ones.
+        while count > 1 {
+            let Some(output) = pollster::block_on(dispatch_bytes_async(wgsl, &level, elem_size))
+            else {
+                crate::fatal::write_stderr(
+                    b"panic: gpu.sum found no available GPU adapter (no CPU fallback)\n",
+                );
+                std::process::abort();
+            };
+            let partials = count.div_ceil(WORKGROUP);
+            // Keep only the slots the workgroups actually wrote; the rest of
+            // the output buffer is scratch from the previous level.
+            level = output[..partials * elem_size].to_vec();
+            count = partials;
+        }
+
+        f32::from_le_bytes([level[0], level[1], level[2], level[3]])
     }
 }
 
@@ -1204,6 +1221,7 @@ var<workgroup> scratch: array<f32, 64>;
 
 @compute @workgroup_size(64)
 fn main(@builtin(local_invocation_id) lid: vec3<u32>,
+        @builtin(workgroup_id) wid: vec3<u32>,
         @builtin(global_invocation_id) gid: vec3<u32>) {
     let t = lid.x;
     let i = gid.x;
@@ -1220,11 +1238,25 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
         stride = stride / 2u;
     }
 
-    if (t == 0u) { output[0] = scratch[0]; }
+    // Each workgroup writes ITS OWN partial; the host folds them.
+    if (t == 0u) { output[wid.x] = scratch[0]; }
 }
 "#;
 
-    /// The CPU twin of [`SUM_REDUCE_WGSL`] — same padding, same halving order.
+    /// The CPU twin of the multi-dispatch fold: chunk into workgroup-wide
+    /// pieces, reduce each with [`tree_sum_f32`], recurse on the partials.
+    /// Mirrors `karac_runtime_gpu_reduce_f32`'s `while count > 1` loop, and
+    /// `karac`'s own `reduce_kernel::tree_fold_f32`.
+    fn tree_sum_multi_f32(xs: &[f32]) -> f32 {
+        if xs.len() <= 64 {
+            return tree_sum_f32(xs);
+        }
+        let partials: Vec<f32> = xs.chunks(64).map(tree_sum_f32).collect();
+        tree_sum_multi_f32(&partials)
+    }
+
+    /// The CPU twin of ONE workgroup of [`SUM_REDUCE_WGSL`] — same padding,
+    /// same halving order.
     fn tree_sum_f32(xs: &[f32]) -> f32 {
         let mut scratch = [0.0f32; 64];
         for (t, slot) in scratch.iter_mut().enumerate() {
@@ -1278,6 +1310,7 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
                 SUM_REDUCE_WGSL.len(),
                 input.as_ptr(),
                 input.len(),
+                0.0,
             )
         };
         assert_eq!(got, tree_sum_f32(&input), "C entry point != CPU twin");
@@ -1285,18 +1318,70 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
 
     #[test]
     fn reduce_entry_point_returns_the_identity_for_an_empty_buffer() {
-        // Needs no device: an empty reduction is the additive identity, and
+        // Needs no device: an empty reduction is the operation's identity, and
         // returning it without dispatching is what keeps a GPU-less host from
         // aborting on a program that never had any work to do.
+        //
+        // Both identities, because the empty case is the one input that never
+        // reaches the shader: if this returned a hardcoded 0.0, an empty
+        // `gpu.prod` would print 0 under `karac build` and 1 under `karac run`
+        // — a run/build divergence on the cheapest possible program.
+        for identity in [0.0f32, 1.0f32] {
+            let got = unsafe {
+                karac_runtime_gpu_reduce_f32(
+                    SUM_REDUCE_WGSL.as_ptr(),
+                    SUM_REDUCE_WGSL.len(),
+                    std::ptr::null(),
+                    0,
+                    identity,
+                )
+            };
+            assert_eq!(got, identity);
+        }
+    }
+
+    #[test]
+    fn reduce_entry_point_folds_a_multi_workgroup_buffer() {
+        // The whole point of the multi-dispatch loop: 4096 elements is 64
+        // workgroups on the first pass, then one on the second. A shader that
+        // wrote `output[0]` instead of `output[wid.x]` would have every
+        // workgroup race on one slot and the answer would be a single chunk's
+        // — 64.0 here rather than 4096.0.
+        let input: Vec<f32> = vec![1.0f32; 4096];
+        if dispatch_f32_map(SUM_REDUCE_WGSL, &input).is_none() {
+            eprintln!("gpu-reduce-multi: no GPU adapter available — skipping");
+            return;
+        }
         let got = unsafe {
             karac_runtime_gpu_reduce_f32(
                 SUM_REDUCE_WGSL.as_ptr(),
                 SUM_REDUCE_WGSL.len(),
-                std::ptr::null(),
-                0,
+                input.as_ptr(),
+                input.len(),
+                0.0,
             )
         };
-        assert_eq!(got, 0.0);
+        // Order-independent leg: 4096 ones sum exactly however you group them.
+        assert_eq!(got, 4096.0, "multi-workgroup sum of 4096 ones");
+
+        // Order-DEPENDENT leg: 0.1s, where the grouping is observable. The
+        // tree of trees is not the same number as a flat tree or a left fold,
+        // and the CPU twin has to reproduce the chunking, not just "a tree".
+        let drifty: Vec<f32> = vec![0.1f32; 4096];
+        let got = unsafe {
+            karac_runtime_gpu_reduce_f32(
+                SUM_REDUCE_WGSL.as_ptr(),
+                SUM_REDUCE_WGSL.len(),
+                drifty.as_ptr(),
+                drifty.len(),
+                0.0,
+            )
+        };
+        assert_eq!(
+            got.to_bits(),
+            tree_sum_multi_f32(&drifty).to_bits(),
+            "multi-workgroup GPU fold != CPU twin"
+        );
     }
 
     #[test]

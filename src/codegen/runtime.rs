@@ -12004,11 +12004,16 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     /// Lazily declare `karac_runtime_gpu_reduce_f32(wgsl_ptr: ptr,
-    /// wgsl_len: i64, in_ptr: ptr, n: i64) -> f32` — the whole-buffer
-    /// reduction entry (B-2026-08-19-10, slice 1).
+    /// wgsl_len: i64, in_ptr: ptr, n: i64, identity: f32) -> f32` — the
+    /// whole-buffer reduction entry (B-2026-08-19-10, slice 1).
     ///
     /// Unlike the map entry it returns a VALUE, not a buffer pointer, which is
     /// the shape `gpu.sum` needed and `gpu.dispatch` could never provide.
+    ///
+    /// `identity` is the operation's own — `0.0` for a sum, `1.0` for a
+    /// product. The runtime needs it because an EMPTY buffer never reaches the
+    /// shader (no device is touched at all), so the entry point has to know
+    /// the answer rather than assume zero.
     pub(super) fn gpu_reduce_f32_fn(&self) -> FunctionValue<'ctx> {
         if let Some(f) = self.module.get_function("karac_runtime_gpu_reduce_f32") {
             return f;
@@ -12017,7 +12022,13 @@ impl<'ctx> super::Codegen<'ctx> {
         let f32_t = self.context.f32_type();
         let ptr_t = self.context.ptr_type(AddressSpace::default());
         let fn_ty = f32_t.fn_type(
-            &[ptr_t.into(), i64_t.into(), ptr_t.into(), i64_t.into()],
+            &[
+                ptr_t.into(),
+                i64_t.into(),
+                ptr_t.into(),
+                i64_t.into(),
+                f32_t.into(),
+            ],
             false,
         );
         self.module

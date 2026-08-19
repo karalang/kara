@@ -1693,13 +1693,27 @@ impl<'ctx> super::Codegen<'ctx> {
             );
         }
 
-        // karac_runtime_gpu_reduce_f32(wgsl_ptr, wgsl_len, in_ptr, n) -> f32.
+        // karac_runtime_gpu_reduce_f32(wgsl_ptr, wgsl_len, in_ptr, n,
+        // identity) -> f32. The identity is passed rather than baked into the
+        // runtime because an EMPTY buffer short-circuits before any dispatch,
+        // and `gpu.prod([])` is 1 where `gpu.sum([])` is 0 — the interpreter
+        // twin says so, and this is the one input no shader ever sees.
+        let identity =
+            self.context
+                .f32_type()
+                .const_float(if spelling == "prod" { 1.0 } else { 0.0 });
         let reduce_fn = self.gpu_reduce_f32_fn();
         let out = self
             .builder
             .build_call(
                 reduce_fn,
-                &[wgsl_ptr.into(), wgsl_len.into(), data.into(), n.into()],
+                &[
+                    wgsl_ptr.into(),
+                    wgsl_len.into(),
+                    data.into(),
+                    n.into(),
+                    identity.into(),
+                ],
                 "gpu.reduced",
             )
             .unwrap()

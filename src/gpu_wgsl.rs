@@ -966,7 +966,7 @@ fn binop_str(op: &BinOp) -> Result<&'static str, WgslError> {
     }
 }
 
-/// Emit the single-workgroup tree-reduction shader for `gpu.sum(buf)`
+/// Emit the tree-reduction shader for `gpu.sum(buf)` / `gpu.prod(buf)`
 /// (B-2026-08-19-10, slice 1).
 ///
 /// **This function defines language semantics, not just codegen.** A GPU
@@ -980,14 +980,16 @@ fn binop_str(op: &BinOp) -> Result<&'static str, WgslError> {
 ///
 /// The order the interpreter twin must match exactly: pad to
 /// [`WORKGROUP_SIZE`] with the operation's identity, then halve —
-/// `s[t] = s[t] OP s[t + stride]` for stride 32, 16, 8, 4, 2, 1. Lane 0 writes
-/// the result to `output[0]`; the rest of the buffer is scratch.
+/// `s[t] = s[t] OP s[t + stride]` for stride 32, 16, 8, 4, 2, 1. Lane 0 of
+/// each workgroup writes THAT workgroup's partial to `output[workgroup_id]`.
 ///
-/// Slice 1 is **single-workgroup only** — the runtime entry point rejects a
-/// longer buffer rather than returning a partial answer. A multi-workgroup
-/// reduction needs a second pass over the per-workgroup partials, and this
-/// shader is the per-workgroup half of it, so it is a prefix of the eventual
-/// shape rather than something to throw away.
+/// **One dispatch is one level of the tree, not the whole reduction.** A
+/// buffer longer than one workgroup leaves `ceil(n / WORKGROUP_SIZE)` partials
+/// behind, and the host re-dispatches this same shader over them until one
+/// value remains. So a long reduction is a TREE OF TREES whose grouping is
+/// observable in `f32` — which is why the width is fixed in `reduce_kernel`
+/// alongside the twin rather than chosen here, and why the twin recurses the
+/// same way (`reduce_kernel::tree_fold_f32`).
 pub fn emit_reduce_kernel(op: ReduceOp, elem: &str) -> Result<String, WgslError> {
     // Only the associative folds have a single-shader tree form. `Mean` needs a
     // count division, `Var`/`Std` need two passes, and the Ord family needs an
@@ -1017,6 +1019,7 @@ pub fn emit_reduce_kernel(op: ReduceOp, elem: &str) -> Result<String, WgslError>
          \n\
          @compute @workgroup_size({width})\n\
          fn main(@builtin(local_invocation_id) lid: vec3<u32>,\n\
+         \x20       @builtin(workgroup_id) wid: vec3<u32>,\n\
          \x20       @builtin(global_invocation_id) gid: vec3<u32>) {{\n\
          \x20   let t = lid.x;\n\
          \x20   let i = gid.x;\n\
@@ -1031,7 +1034,10 @@ pub fn emit_reduce_kernel(op: ReduceOp, elem: &str) -> Result<String, WgslError>
          \x20       stride = stride / 2u;\n\
          \x20   }}\n\
          \n\
-         \x20   if (t == 0u) {{ output[0] = scratch[0]; }}\n\
+         \x20   // Each workgroup writes ITS OWN partial. With one workgroup that
+         \x20   // is slot 0 and the answer; with several the host folds the
+         \x20   // partials by dispatching this same shader over them.
+         \x20   if (t == 0u) {{ output[wid.x] = scratch[0]; }}\n\
          }}\n"
     ))
 }
@@ -3842,7 +3848,7 @@ mod tests {
             "var stride: u32 = 32u;",
             "if (t < stride) { scratch[t] = scratch[t] + scratch[t + stride]; }",
             "stride = stride / 2u;",
-            "if (t == 0u) { output[0] = scratch[0]; }",
+            "if (t == 0u) { output[wid.x] = scratch[0]; }",
         ] {
             assert!(wgsl.contains(needle), "missing `{needle}` in:\n{wgsl}");
         }

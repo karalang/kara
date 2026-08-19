@@ -34752,21 +34752,29 @@ fn gpu_sum_and_prod_compute_the_obvious_small_cases() {
 }
 
 #[test]
-fn gpu_sum_refuses_past_one_workgroup_rather_than_truncating() {
-    // Slice 1 is single-workgroup. Answering for the first 64 of 65 elements
-    // would be the worst possible failure for a reduction: plausible and
-    // wrong. The interpreter refuses exactly where the runtime entry point
-    // does, so the two surfaces agree on what is expressible.
-    let errs = runtime_errors(
+fn gpu_sum_folds_past_one_workgroup_instead_of_refusing() {
+    // A buffer longer than one workgroup used to be refused; it now folds
+    // through the multi-dispatch recursion the runtime performs — chunk into
+    // workgroup-wide pieces, reduce each, reduce the partials. 65 elements is
+    // the first length that needs a second chunk, and the answer must be 65,
+    // not the 64 a truncating implementation would print.
+    let out = run_no_errors(
         "fn main() {\n\
         \x20   let mut v: Vec[f32] = [];\n\
         \x20   for i in 0..65 { v.push(1.0) }\n\
         \x20   println(f\"{gpu.sum(v)}\")\n\
         }",
     );
-    let joined = format!("{errs:?}");
-    assert!(
-        joined.contains("at most 64 elements") && joined.contains("found 65"),
-        "expected a refusal naming the bound, got: {joined}"
+    assert_eq!(out.trim(), "65");
+
+    // Two full levels: 4096 elements is 64 workgroups, then one over the
+    // partials.
+    let out = run_no_errors(
+        "fn main() {\n\
+        \x20   let mut v: Vec[f32] = [];\n\
+        \x20   for i in 0..4096 { v.push(1.0) }\n\
+        \x20   println(f\"{gpu.sum(v)}\")\n\
+        }",
     );
+    assert_eq!(out.trim(), "4096");
 }
