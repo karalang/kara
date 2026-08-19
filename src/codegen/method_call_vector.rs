@@ -1605,6 +1605,109 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `malloc`'d buffer as an owned `Vec[f32]` of the same length. The result
     /// buffer is exactly `n` f32s (element-wise maps preserve length), so
     /// `len == cap == n` and the binding's own scope drop frees it.
+    /// `gpu.sum(buf)` / `gpu.prod(buf)` — a whole-buffer reduction lowering to
+    /// a SCALAR (B-2026-08-19-10, slice 1).
+    ///
+    /// Same prologue as [`Self::compile_gpu_dispatch`] — bake the WGSL the
+    /// typechecker recorded, read `{data, len}` off the `Vec` — but the call
+    /// returns an `f32` value instead of a buffer pointer, so there is no
+    /// result `Vec` to build and nothing to free on the way out.
+    ///
+    /// The result is bit-identical to the interpreter's, because both run the
+    /// tree order fixed in `reduce_kernel::tree_reduce_f32`. That is the
+    /// property the whole slice exists to preserve.
+    pub(super) fn compile_gpu_reduce(
+        &mut self,
+        args: &[CallArg],
+        spelling: &str,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        if args.len() != 1 {
+            return Err(format!(
+                "gpu.{spelling} expects one buffer, found {} argument(s)",
+                args.len()
+            ));
+        }
+
+        // WGSL baked by the typechecker, keyed on the BUFFER-argument span —
+        // `gpu.sum` has no kernel argument, so arg 0 is the buffer and the key
+        // is the same expression the typechecker used.
+        let key = (args[0].value.span.offset, args[0].value.span.length);
+        let wgsl = self
+            .accel
+            .gpu_dispatch_wgsl
+            .get(&key)
+            .cloned()
+            .ok_or_else(|| {
+                format!(
+                    "internal error: no WGSL recorded for `gpu.{spelling}` — the typechecker \
+                     intercept must run before codegen"
+                )
+            })?;
+
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let wgsl_len = i64_t.const_int(wgsl.len() as u64, false);
+        let wgsl_ptr = self
+            .builder
+            .build_global_string_ptr(&wgsl, "gpu.reduce.wgsl")
+            .map_err(|e| format!("baking gpu.{spelling} shader constant failed: {e}"))?
+            .as_pointer_value();
+
+        // Spill + scalar `struct_gep` rather than an aggregate load +
+        // `extractvalue`, which mis-lowers the pointer field to null under
+        // arm64-Linux ASan — the same hazard the dispatch path documents.
+        let buf_val = self.compile_expr(&args[0].value)?;
+        let sv = buf_val.into_struct_value();
+        let vec_ty = sv.get_type();
+        let spill = self.builder.build_alloca(vec_ty, "gpu.rbuf").unwrap();
+        self.builder.build_store(spill, sv).unwrap();
+        let data_field = self
+            .builder
+            .build_struct_gep(vec_ty, spill, 0, "gpu.rdata.p")
+            .unwrap();
+        let data = self
+            .builder
+            .build_load(ptr_ty, data_field, "gpu.rdata")
+            .unwrap()
+            .into_pointer_value();
+        let len_field = self
+            .builder
+            .build_struct_gep(vec_ty, spill, 1, "gpu.rlen.p")
+            .unwrap();
+        let n = self
+            .builder
+            .build_load(i64_t, len_field, "gpu.rn")
+            .unwrap()
+            .into_int_value();
+
+        // A fresh owned temp (`gpu.sum([..])`) has no binding to drop it, so
+        // register it the same way the dispatch path does.
+        let is_fresh_temp = matches!(
+            args[0].value.kind,
+            ExprKind::ArrayLiteral { .. } | ExprKind::PrefixCollectionLiteral { .. }
+        );
+        if is_fresh_temp && self.llvm_ty_is_vec_struct(buf_val.get_type()) {
+            self.materialize_owned_temp(
+                buf_val,
+                (args[0].value.span.offset, args[0].value.span.length),
+            );
+        }
+
+        // karac_runtime_gpu_reduce_f32(wgsl_ptr, wgsl_len, in_ptr, n) -> f32.
+        let reduce_fn = self.gpu_reduce_f32_fn();
+        let out = self
+            .builder
+            .build_call(
+                reduce_fn,
+                &[wgsl_ptr.into(), wgsl_len.into(), data.into(), n.into()],
+                "gpu.reduced",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic();
+        Ok(out)
+    }
+
     pub(super) fn compile_gpu_dispatch(
         &mut self,
         args: &[CallArg],

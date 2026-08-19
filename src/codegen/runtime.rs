@@ -12003,6 +12003,27 @@ impl<'ctx> super::Codegen<'ctx> {
             .add_function("karac_runtime_gpu_map", fn_ty, None)
     }
 
+    /// Lazily declare `karac_runtime_gpu_reduce_f32(wgsl_ptr: ptr,
+    /// wgsl_len: i64, in_ptr: ptr, n: i64) -> f32` — the whole-buffer
+    /// reduction entry (B-2026-08-19-10, slice 1).
+    ///
+    /// Unlike the map entry it returns a VALUE, not a buffer pointer, which is
+    /// the shape `gpu.sum` needed and `gpu.dispatch` could never provide.
+    pub(super) fn gpu_reduce_f32_fn(&self) -> FunctionValue<'ctx> {
+        if let Some(f) = self.module.get_function("karac_runtime_gpu_reduce_f32") {
+            return f;
+        }
+        let i64_t = self.context.i64_type();
+        let f32_t = self.context.f32_type();
+        let ptr_t = self.context.ptr_type(AddressSpace::default());
+        let fn_ty = f32_t.fn_type(
+            &[ptr_t.into(), i64_t.into(), ptr_t.into(), i64_t.into()],
+            false,
+        );
+        self.module
+            .add_function("karac_runtime_gpu_reduce_f32", fn_ty, None)
+    }
+
     /// Lazily declare `karac_runtime_gpu_dispatch_soa` — CG-4 / GPU-LBM-3's
     /// struct-SoA dispatch entry. Signature `(wgsl_ptr, wgsl_len, n_groups,
     /// in_ptrs, group_strides, n_fields, field_group, field_src, field_dst,

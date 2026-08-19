@@ -800,3 +800,67 @@ fn gpu_executes_wrapping_mul_overflowing_i32() {
         "1410065408\n9",
     );
 }
+
+// ── Whole-buffer reductions (B-2026-08-19-10, slice 1) ─────────────────────
+
+/// Reduction fixtures need their own harness: `gpu.sum(buf)` takes no kernel,
+/// and its result is a SCALAR rather than a buffer to iterate.
+fn assert_gpu_reduce_matches_interp(tag: &str, body: &str, expected: &str) {
+    let Some(backend) = gpu_or_skip() else { return };
+
+    let dir = scratch(tag);
+    let src = dir.join(format!("{tag}.kara"));
+    std::fs::write(&src, body).expect("write fixture source");
+
+    let interp = run_interp(&src);
+    let gpu =
+        build_and_run_on_gpu(&dir, &src, tag, backend).unwrap_or_else(|e| panic!("{tag}: {e}"));
+
+    assert_eq!(
+        interp, gpu,
+        "{tag}: GPU reduction DIVERGED from the interpreter — the tree order is \
+         specified precisely so these agree bit-for-bit"
+    );
+    assert_eq!(
+        expected, gpu,
+        "{tag}: both legs agree but not with the fixture"
+    );
+}
+
+#[test]
+fn gpu_sum_agrees_with_the_interpreter_bit_for_bit() {
+    // THE fixture for the tree-order decision. 64 copies of 0.1 sum to
+    // 6.400000 under the GPU's tree and 6.399996 under a left fold, so this
+    // passes only if the interpreter reproduces the SHADER's order rather than
+    // the obvious one. An epsilon-tolerant oracle would have accepted both and
+    // proved nothing.
+    assert_gpu_reduce_matches_interp(
+        "reduce_sum_order",
+        "fn main() {\n\
+        \x20   let mut v: Vec[f32] = [];\n\
+        \x20   for i in 0..64 { v.push(0.1) }\n\
+        \x20   println(f\"{gpu.sum(v)}\")\n\
+        }\n",
+        "6.400000095367432",
+    );
+}
+
+#[test]
+fn gpu_sum_and_prod_agree_on_small_buffers() {
+    assert_gpu_reduce_matches_interp(
+        "reduce_sum_small",
+        "fn main() {\n\
+        \x20   let v: Vec[f32] = [1.0, 2.0, 3.0, 4.0];\n\
+        \x20   println(f\"{gpu.sum(v)}\")\n\
+        }\n",
+        "10",
+    );
+    assert_gpu_reduce_matches_interp(
+        "reduce_prod_small",
+        "fn main() {\n\
+        \x20   let v: Vec[f32] = [2.0, 3.0, 4.0];\n\
+        \x20   println(f\"{gpu.prod(v)}\")\n\
+        }\n",
+        "24",
+    );
+}
