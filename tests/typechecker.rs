@@ -133,77 +133,71 @@ fn test_float_suffix_f32_ok() {
     typecheck_ok("fn main() { let x: f32 = 1.5f32; }");
 }
 
-/// B-2026-08-19-6 — a 128-bit RUNTIME value is rejected, and this test
-/// deliberately REPLACES a pair that asserted the opposite.
+/// B-2026-08-19-8 stage 5 — 128-bit RUNTIME values work, and this test replaces
+/// the one that asserted the opposite.
 ///
-/// The retired tests (`test_integer_suffix_{i,u}128_accepted`, 2026-05-11)
-/// recorded that `IntSize::I128` had been added to unblock const generics and
-/// that `let x: i128 = 1i128;` type-checked. It did — but only the const-eval
-/// half of that work was real. No runtime carrier was ever widened: both
-/// backends hold every integer in a 64-bit slot, so the accepted `i128` was an
-/// `i64` wearing a wider name, and every width-sensitive operation answered for
-/// 64 bits in silence. Measured before the fix:
+/// B-2026-08-19-6 rejected `i128`/`u128` outright because both backends carried
+/// every integer in a 64-bit slot, so the declared width was a fiction that
+/// every width-sensitive operation answered for in silence. Stages 1-4 built the
+/// carrier: the interpreter's `Value::Int` is i128, the AST/token literals are
+/// i128, codegen emits real `i128` IR, and the runtime formats it. The
+/// rejection is gone.
 ///
-///     let a: i128 = 9223372036854775807;   // i64::MAX
-///     a.wrapping_add(1)    -> -9223372036854775808   (want  9223372036854775808)
-///     a.saturating_add(1)  ->  9223372036854775807   (saturated at i64::MAX)
-///     a.checked_add(1)     ->  None                  (want Some(2^63))
-///     (-1i128).count_ones() -> 64                    (want 128)
-///
-/// So the old tests were pinning that the type is NAMEABLE, which was never in
-/// doubt, and not that it WORKS, which it does not. Accepting the annotation is
-/// what made the wrongness reachable.
+/// The shapes here are the ones the rejection used to name, so this is a direct
+/// inverse of the retired test.
 #[test]
-fn integer_suffix_128bit_is_rejected_as_a_runtime_type() {
+fn integer_suffix_128bit_is_accepted_as_a_runtime_type() {
     for src in [
         "fn main() { let x: i128 = 1i128; }",
         "fn main() { let x: u128 = 1u128; }",
-        // The annotation alone, and the suffix alone: `let x = 1i128;` has no
-        // `TypeExpr` at all, so it needs its own guard and gets one.
         "fn main() { let x: i128 = 1; }",
         "fn main() { let x = 1i128; }",
         "fn main() { let x = 1u128; }",
-        // Signature and field positions, which is where a 128-bit value would
-        // otherwise cross a function boundary uncaught.
         "fn f(a: i128) { } fn main() { }",
         "fn f() -> u128 { return 0u128; } fn main() { }",
         "struct S { v: i128 } fn main() { }",
-        // `as` casts name the type too.
         "fn main() { let a: i64 = 1; let b = a as i128; }",
+        // The magnitudes that only a real 128-bit type can hold.
+        "fn main() { let x: i128 = 170141183460469231731687303715884105727i128; }",
+        "fn main() { let x: i128 = 18446744073709551616i128; }",
     ] {
-        let errs = typecheck_errors(src);
-        assert!(
-            errs.iter()
-                .any(|e| e.message.contains("is not supported yet")
-                    && e.message.contains("B-2026-08-19-6")),
-            "expected the 128-bit rejection for {src:?}; got: {:?}",
-            errs.iter().map(|e| &e.message).collect::<Vec<_>>()
-        );
+        typecheck_ok(src);
     }
 }
 
-/// The diagnostic fires ONCE per place the user named the type, not once per
-/// time the annotation happens to be lowered.
+/// The one place 128-bit is still refused: an ENUM PAYLOAD
+/// (B-2026-08-19-19). A payload word is 64 bits and a 128-bit scalar needs two,
+/// which the pack/unpack machinery does not carry — left unchecked it
+/// MISCOMPILES SILENTLY (`Option[i128]` holding 2^100 read back as 0), so the
+/// refusal is loud and narrow rather than absent.
 ///
-/// `lower_type_expr` re-runs for the same annotation under generic
-/// instantiation and trial typing, so an undeduped check reports the same
-/// `i128` two or three times. Deduping is by source offset, which is also what
-/// keeps the two guards (annotation and literal suffix) from double-reporting a
-/// single `let x: i128 = 1i128;` — there the two spans genuinely differ, so
-/// both fire, which is correct: the user named the type twice.
+/// `checked_*` is caught separately because its `Option[Self]` is INFERRED,
+/// never written, so the annotation guard cannot see it.
 #[test]
-fn the_128bit_rejection_is_not_reported_twice_for_one_annotation() {
-    let errs = typecheck_errors("fn f(a: i128) -> i128 { return a; } fn main() { }");
-    let n = errs
-        .iter()
-        .filter(|e| e.message.contains("is not supported yet"))
-        .count();
-    assert_eq!(
-        n,
-        2,
-        "expected exactly one diagnostic per named type (param + return), got {n}: {:?}",
+fn the_128bit_enum_payload_is_refused_loudly() {
+    for src in [
+        "fn main() { let o: Option[i128] = None; }",
+        "fn main() { let o: Option[u128] = None; }",
+        "fn f() -> Result[i128, String] { return Err(\"x\"); } fn main() { }",
+    ] {
+        let errs = typecheck_errors(src);
+        assert!(
+            errs.iter().any(|e| e.message.contains("B-2026-08-19-19")),
+            "expected the enum-payload refusal for {src:?}; got: {:?}",
+            errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+    // `checked_*` returns `Option[Self]`; the sibling families return `Self` /
+    // a tuple and stay legal.
+    let errs = typecheck_errors("fn main() { let a: i128 = 5i128; let r = a.checked_add(1i128); }");
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("checked_add") && e.message.contains("B-2026-08-19-19")),
+        "expected the checked_* refusal; got: {:?}",
         errs.iter().map(|e| &e.message).collect::<Vec<_>>()
     );
+    typecheck_ok("fn main() { let a: i128 = 5i128; let r: i128 = a.saturating_add(1i128); }");
+    typecheck_ok("fn main() { let a: i128 = 5i128; let r: i128 = a.wrapping_add(1i128); }");
 }
 
 /// Every width that DOES have a real carrier stays accepted — the guard against
@@ -16352,35 +16346,26 @@ fn test_float_to_int_conversion_methods_typecheck() {
              let c: i64 = (3.7f64).trunc_to_i64();
              let d: Option[i32] = (3.7f64).checked_to_i32();
              let e: i16 = (3.7f32).saturating_to_i16();
+             let f: u128 = (3.7f64).saturating_to_u128();
              let g: usize = (3.7f64).saturating_to_usize();
-             let _ = (a, b, c, d, e, g);
+             let h: i128 = (3.7f32).trunc_to_i128();
+             let _ = (a, b, c, d, e, f, g, h);
          }",
     );
 }
 
-/// The 128-bit members of the same four families are REJECTED (B-2026-08-19-6),
-/// and they are the reason the guard cannot live only on annotations and
-/// literal suffixes.
-///
-/// `let h = (3.7f32).trunc_to_i128();` names `i128` in the METHOD NAME and
-/// nowhere else: no `TypeExpr` for the annotation guard, no suffix for the
-/// literal guard. Unannotated, it type-checked clean and produced a 64-bit
-/// carrier claiming to be 128 — the one hole left after the other two guards
-/// were in place, which is why the conversion table gets its own check.
+/// The 128-bit members of the same four families work now
+/// (B-2026-08-19-8 stage 5). They were rejected while the carrier was a
+/// fiction; `trunc_to_i128` names its target in the METHOD NAME only, so it
+/// needed its own guard then and needs none now.
 #[test]
-fn float_to_128bit_conversion_methods_are_rejected() {
+fn float_to_128bit_conversion_methods_typecheck() {
     for src in [
-        "fn main() { let _ = (3.7f64).saturating_to_u128(); }",
-        "fn main() { let _ = (3.7f32).trunc_to_i128(); }",
-        "fn main() { let _ = (3.7f64).wrapping_to_i128(); }",
-        "fn main() { let _ = (3.7f64).checked_to_u128(); }",
+        "fn main() { let _: u128 = (3.7f64).saturating_to_u128(); }",
+        "fn main() { let _: i128 = (3.7f32).trunc_to_i128(); }",
+        "fn main() { let _: i128 = (3.7f64).wrapping_to_i128(); }",
     ] {
-        let errs = typecheck_errors(src);
-        assert!(
-            errs.iter().any(|e| e.message.contains("B-2026-08-19-6")),
-            "expected the 128-bit rejection for {src:?}; got: {:?}",
-            errs.iter().map(|e| &e.message).collect::<Vec<_>>()
-        );
+        typecheck_ok(src);
     }
 }
 
@@ -19887,19 +19872,10 @@ fn test_const_eval_i128_arithmetic_resolves() {
 
 #[test]
 fn test_const_eval_u128_literal_typechecks() {
-    // Const generics slice 2b originally asserted `let x: u128 = 42u128;`
-    // type-checks. That is a RUNTIME binding, and B-2026-08-19-6 rejects it —
-    // the 64-bit carrier makes the declared width a fiction. What slice 2b
-    // actually needed was the COMPILE-TIME half, which is unaffected and is
-    // covered by `test_const_eval_i128_arithmetic_resolves` below: const-eval
-    // computes in Rust `i128`, so a const-generic argument has genuine 128-bit
-    // range and never reaches a runtime carrier.
-    let errs = typecheck_errors("fn main() { let x: u128 = 42u128; }");
-    assert!(
-        errs.iter().any(|e| e.message.contains("B-2026-08-19-6")),
-        "expected the 128-bit runtime rejection; got: {:?}",
-        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
-    );
+    // Const generics slice 2b's original assertion, restored: B-2026-08-19-6
+    // rejected this binding while the runtime carrier was a fiction, and
+    // B-2026-08-19-8 stages 1-4 made it real.
+    typecheck_ok("fn main() { let x: u128 = 42u128; }");
 }
 
 #[test]

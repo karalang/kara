@@ -21192,6 +21192,58 @@ fn main() {
     }
 
     #[test]
+    fn e2e_128bit_integers_end_to_end() {
+        // 128-bit works from source (B-2026-08-19-8 stage 5) — the type is no
+        // longer rejected, so this is the first test that can exercise it
+        // through the ordinary pipeline rather than a probe build.
+        //
+        // Every value here is chosen so a 64-bit answer differs: 2^100 cannot
+        // be represented at all, and its LOW WORD IS ZERO, which is what made
+        // the pre-stage-4 truncation print `0` rather than something obviously
+        // wrong. `count_ones` on 2^100 is 1 and on `-1i128` is 128 — the figure
+        // from B-2026-08-19-6's original report, which returned 64.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+             let a: i128 = 1267650600228229401496703205376i128;\n\
+             println(a);\n\
+             println(a * 2i128);\n\
+             println(a / 7i128);\n\
+             println(a.wrapping_add(1i128));\n\
+             println(a.saturating_add(1i128));\n\
+             println(a.count_ones());\n\
+             let n: i128 = 0i128 - 1i128;\n\
+             println(n.count_ones());\n\
+             let p: i128 = 2i128;\n\
+             println(p.pow(100u32));\n\
+             println(f\"{a}\");\n\
+             println(a.to_string());\n\
+             let mx: i128 = 170141183460469231731687303715884105727i128;\n\
+             println(mx);\n\
+             println(a.swap_bytes().swap_bytes());\n\
+             let u: u128 = 18446744073709551616u128;\n\
+             println(u);\n\
+             }",
+        ) {
+            assert_eq!(
+                out,
+                "1267650600228229401496703205376\n\
+                 2535301200456458802993406410752\n\
+                 181092942889747057356671886482\n\
+                 1267650600228229401496703205377\n\
+                 1267650600228229401496703205377\n\
+                 1\n\
+                 128\n\
+                 1267650600228229401496703205376\n\
+                 1267650600228229401496703205376\n\
+                 1267650600228229401496703205376\n\
+                 170141183460469231731687303715884105727\n\
+                 1267650600228229401496703205376\n\
+                 18446744073709551616\n"
+            );
+        }
+    }
+
+    #[test]
     fn e2e_chained_width_sensitive_int_methods() {
         // CHAINED width-preserving int methods resolve their receiver width
         // through the receiver itself, not the span-keyed table

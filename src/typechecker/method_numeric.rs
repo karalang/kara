@@ -184,14 +184,6 @@ impl<'a> super::TypeChecker<'a> {
         // then — `karac build` errors loudly rather than miscompiling).
         if args.is_empty() && matches!(receiver_for_lookup, Type::Float(_)) {
             if let Some((family, target, _, _)) = crate::numeric_conv::parse_float_to_int(method) {
-                // `(3.7f32).trunc_to_i128()` names a 128-bit type through the
-                // METHOD NAME, with no annotation or literal suffix for the
-                // other two guards to catch -- and its result is a 64-bit
-                // carrier claiming to be 128 (B-2026-08-19-6). Rejected here so
-                // the unannotated call is not the one hole left open.
-                if target == "i128" || target == "u128" {
-                    self.reject_128bit(target == "i128", *span);
-                }
                 if let Some(int_ty) = self.primitive_type(target) {
                     return Some(match family {
                         crate::numeric_conv::FloatToIntFamily::Checked => Type::Named {
@@ -386,6 +378,35 @@ impl<'a> super::TypeChecker<'a> {
             if (checked || saturating || overflowing)
                 && matches!(receiver_for_lookup, Type::Int(_) | Type::UInt(_))
             {
+                // `checked_*` returns `Option[Self]`, and a 128-bit payload
+                // does not fit an enum payload word (B-2026-08-19-19). The
+                // annotation guard in `lower_type_expr` cannot see this one —
+                // the `Option` is INFERRED here, never written — and without
+                // it the program reached codegen and failed module
+                // verification with a `phi i64` fed an i128, which is loud but
+                // is an internal LLVM message and a run-vs-build divergence
+                // (the interpreter answers correctly). `saturating_*` and
+                // `overflowing_*` return `Self` / a tuple, so they are fine.
+                if checked
+                    && matches!(
+                        receiver_for_lookup,
+                        Type::Int(IntSize::I128) | Type::UInt(UIntSize::U128)
+                    )
+                {
+                    let w = if matches!(receiver_for_lookup, Type::Int(IntSize::I128)) {
+                        "i128"
+                    } else {
+                        "u128"
+                    };
+                    self.type_error(
+                        format!(
+                            "`{method}` is not supported on `{w}` yet: it returns `Option[{w}]`, and an enum payload word is 64 bits — a 128-bit payload would be silently truncated. Use `wrapping_*` / `saturating_*` / `overflowing_*`, which return `{w}` directly, or compare against the bound. Tracked as B-2026-08-19-19"
+                        ),
+                        *span,
+                        TypeErrorKind::TypeMismatch,
+                    );
+                    return Some(Type::Error);
+                }
                 if args.len() != 1 {
                     self.type_error(
                         format!("{method} expects 1 argument, got {}", args.len()),

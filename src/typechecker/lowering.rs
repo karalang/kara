@@ -46,6 +46,39 @@ impl<'a> super::TypeChecker<'a> {
         match &ty.kind {
             TypeKind::Path(path) => {
                 let lowered = self.lower_path_type(path, generic_scope);
+                // 128-bit is not carried in an ENUM PAYLOAD yet
+                // (B-2026-08-19-8 / B-2026-08-19-19). Everything else about
+                // `i128`/`u128` works — locals, params, returns, struct fields,
+                // `Vec`, `Map`, arithmetic, formatting — but an enum payload
+                // word is 64 bits, and a scalar wider than one word is a shape
+                // the pack/unpack machinery has never had to carry. Left
+                // unchecked it MISCOMPILES SILENTLY: `Option[i128]` holding
+                // 2^100 read back as 0, because the pack side took the
+                // one-word scalar fast path and kept only the low half.
+                //
+                // A loud, narrow refusal is the honest state until the payload
+                // path grows a two-word scalar case. It also takes `checked_*`
+                // on 128-bit with it, since that family returns `Option[Self]`.
+                if let Type::Named { name, args } = &lowered {
+                    if matches!(name.as_str(), "Option" | "Result") {
+                        for a in args {
+                            let bad = match a {
+                                Type::Int(IntSize::I128) => Some("i128"),
+                                Type::UInt(UIntSize::U128) => Some("u128"),
+                                _ => None,
+                            };
+                            if let Some(w) = bad {
+                                self.type_error(
+                                    format!(
+                                        "`{w}` is not supported inside `{name}` yet: an enum payload word is 64 bits and a 128-bit scalar needs two, which the payload packing does not carry — it would be silently truncated. `{w}` works everywhere else (bindings, parameters, returns, struct fields, `Vec`, arithmetic, printing). This also affects `checked_*`, which returns `Option[Self]`. Tracked as B-2026-08-19-19"
+                                    ),
+                                    ty.span,
+                                    TypeErrorKind::TypeMismatch,
+                                );
+                            }
+                        }
+                    }
+                }
                 // Slice 1b: opaque foreign types declared via `unsafe extern
                 // "ABI" { type Foo; }` have no known size and cannot appear
                 // by value. `parent_is_ref` is `true` only when the
@@ -72,15 +105,6 @@ impl<'a> super::TypeChecker<'a> {
                             );
                         }
                     }
-                }
-                // 128-bit integers are a width fiction at runtime; see
-                // `reject_128bit` for the measurements and the rationale for
-                // rejecting at the name rather than per-operation.
-                // (B-2026-08-19-6)
-                match lowered {
-                    Type::Int(IntSize::I128) => self.reject_128bit(true, ty.span),
-                    Type::UInt(UIntSize::U128) => self.reject_128bit(false, ty.span),
-                    _ => {}
                 }
                 lowered
             }
@@ -703,14 +727,14 @@ impl<'a> super::TypeChecker<'a> {
     /// phase-7 line 289 sub-slices):
     ///   - `N` must be a *positive* (`> 0`) lane count — a zero-lane SIMD
     ///     vector has no native representation. (`Array` permits `N == 0`.)
-    ///   - `T` must be a primitive numeric type (`i8`…`i64`, `u8`…`u64`,
+    ///   - `T` must be a primitive numeric type (`i8`…`i128`, `u8`…`u128`,
     ///     `f32`/`f64`). `usize` is excluded per design.md § Portable SIMD
     ///     ("`usize` is not a permitted element type"). A non-numeric `T`
-    ///     emits a focused diagnostic. 128-bit lanes are excluded for a
-    ///     different reason — `i128`/`u128` are rejected as runtime types
-    ///     outright (B-2026-08-19-6), so `Vector[i128, N]` never reaches this
-    ///     check; the classifier's `bits >= 128` arm in `simd_report` is kept
-    ///     (and unit-tested on `Type` values) for when 128-bit lands.
+    ///     emits a focused diagnostic. 128-bit lanes ARE permitted again
+    ///     (B-2026-08-19-8 stage 5) and classify as `UnsupportedElement` —
+    ///     no target has a 128-bit-lane ALU, so `Vector[i128, N]` compiles to
+    ///     the scalar fallback, which is design.md § Portable SIMD's own
+    ///     worked example.
     pub(super) fn lower_vector_type(
         &mut self,
         generic_args: &Option<Vec<GenericArg>>,
@@ -735,7 +759,7 @@ impl<'a> super::TypeChecker<'a> {
             self.type_error(
                 format!(
                     "Vector element type must be a primitive numeric type \
-                     (i8..i64, u8..u64, f32, f64); got {}",
+                     (i8..i128, u8..u128, f32, f64); got {}",
                     type_display(&element_ty)
                 ),
                 *span,

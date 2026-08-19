@@ -1855,16 +1855,27 @@ impl<'a> super::Interpreter<'a> {
 /// mis-casts; this guard just prevents an interpreter panic when the
 /// AST shape carries something the runtime doesn't recognize.
 pub(super) fn cast_value(val: Value, target: &str) -> Value {
-    let int_from = |i: i64| -> Value {
+    // Takes the i128 CARRIER and TRUNCATES to the target width
+    // (B-2026-08-19-8 stage 5). `as` is defined as a bitwise/truncating
+    // conversion with no runtime check (design.md § numeric cast), so a
+    // 128-bit source narrowing to i64 keeps the low 64 bits — codegen already
+    // did exactly that, while the interpreter reached `narrow_to_i64` and
+    // PANICKED on any value that did not fit. `2^100 as i64` is 0 on both
+    // surfaces now.
+    let int_from = |i: i128| -> Value {
         match target {
-            "i8" => Value::Int((i as i8 as i64).into()),
-            "i16" => Value::Int((i as i16 as i64).into()),
-            "i32" => Value::Int((i as i32 as i64).into()),
-            "i64" | "isize" | "int" => Value::Int(i.into()),
+            "i8" => Value::Int((i as i8).into()),
+            "i16" => Value::Int((i as i16).into()),
+            "i32" => Value::Int((i as i32).into()),
+            "i64" | "isize" | "int" => Value::Int((i as i64).into()),
             "u8" => Value::Int(((i as u8) as i64).into()),
             "u16" => Value::Int(((i as u16) as i64).into()),
             "u32" => Value::Int(((i as u32) as i64).into()),
-            "u64" | "usize" | "uint" => Value::Int(i.into()),
+            "u64" | "usize" | "uint" => Value::Int(((i as u64) as i64).into()),
+            // 128-bit targets are the carrier's own width — no truncation.
+            // `u128` keeps the bit pattern, matching how every other unsigned
+            // width rides the signed carrier.
+            "i128" | "u128" => Value::Int(i),
             "f16" => Value::Float(round_f64_via_f16(i as f64)),
             "bf16" => Value::Float(round_f64_via_bf16(i as f64)),
             "f32" => Value::Float(i as f32 as f64),
@@ -1875,7 +1886,7 @@ pub(super) fn cast_value(val: Value, target: &str) -> Value {
             // codegen, which yields the character, not its codepoint. `from_u32`
             // is total on 0..=255; the fallback is unreachable for a u8 source.
             "char" => Value::Char(char::from_u32(i as u32).unwrap_or('\u{FFFD}')),
-            _ => Value::Int(i.into()),
+            _ => Value::Int(i),
         }
     };
     let float_from = |f: f64| -> Value {
@@ -1895,14 +1906,16 @@ pub(super) fn cast_value(val: Value, target: &str) -> Value {
             "u16" => Value::Int(((f as u16) as i64).into()),
             "u32" => Value::Int(((f as u32) as i64).into()),
             "u64" | "usize" | "uint" => Value::Int((f as u64 as i64).into()),
+            "i128" => Value::Int(f as i128),
+            "u128" => Value::Int(f as u128 as i128),
             _ => Value::Float(f),
         }
     };
     match val {
-        Value::Int(i) => int_from(narrow_to_i64(i)),
+        Value::Int(i) => int_from(i),
         Value::Float(f) => float_from(f),
-        Value::Bool(b) => int_from(b as i64),
-        Value::Char(c) => int_from(c as u32 as i64),
+        Value::Bool(b) => int_from(b as i128),
+        Value::Char(c) => int_from(c as u32 as i128),
         other => other,
     }
 }

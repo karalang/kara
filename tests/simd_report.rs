@@ -95,22 +95,17 @@ fn require_simd_rejects_non_power_of_two_lanes() {
 
 #[test]
 fn require_simd_rejects_unsupported_element() {
-    // An element type with no SIMD lane representation → Scalar even with a
-    // power-of-two lane count.
+    // 128-bit integer lanes have no SIMD ALU on any target → Scalar even with a
+    // power-of-two lane count. This is design.md § Portable SIMD's own worked
+    // example of the scalar fallback.
     //
-    // Was `Vector[i128, 4]` until B-2026-08-19-6 rejected `i128`/`u128` as
-    // runtime types: a 128-bit vector no longer type-checks, so this test's
-    // own helper (which asserts a clean typecheck before analysing) could not
-    // reach the SIMD classifier at all. `f16` is the same classification —
-    // `scalar_reason` returns `UnsupportedElement` for both — and is still
-    // spellable, so the `#[require_simd]` path keeps its source-level
-    // coverage. The 128-bit arm of `scalar_reason` is retained and unit-tested
-    // directly on `Type` values in `src/simd_report.rs`
-    // (`classify_scalar_unsupported_element`), which is where it stays honest
-    // until 128-bit has a real carrier.
+    // Briefly moved to `f16` while B-2026-08-19-6 rejected `i128` as a runtime
+    // type (the test's helper asserts a clean typecheck before analysing, so a
+    // 128-bit vector could not reach the classifier at all). B-2026-08-19-8
+    // stage 5 restored the type, so the spec's own example is testable again.
     let src = r#"
         #[require_simd]
-        fn wide(a: Vector[f16, 4], b: Vector[f16, 4]) -> Vector[f16, 4] {
+        fn wide(a: Vector[i128, 4], b: Vector[i128, 4]) -> Vector[i128, 4] {
             a + b
         }
         fn main() {}
@@ -118,7 +113,7 @@ fn require_simd_rejects_unsupported_element() {
     let errs = require_errors(src);
     assert!(
         !errs.is_empty(),
-        "expected a require_simd rejection for the Vector[f16, 4] add"
+        "expected a require_simd rejection for the Vector[i128, 4] add"
     );
     assert!(
         errs.iter()

@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 136 | 1 |
 | double-free | 133 | 0 |
 | codegen-gap | 119 | 0 |
-| missing-feature | 118 | 2 |
+| missing-feature | 119 | 3 |
 | diagnostics | 83 | 0 |
 | false-positive | 81 | 0 |
 | perf | 77 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 943 | 2 |
+| codegen | 944 | 3 |
 | typecheck | 211 | 3 |
 | interp | 158 | 2 |
 | ownership | 60 | 0 |
@@ -124,15 +124,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 5 | 1 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1366 surfaced · 3 open · 1344 fixed · 7 wontfix** (2026-05-20 → 2026-08-19). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1367 surfaced · 4 open · 1344 fixed · 7 wontfix** (2026-05-20 → 2026-08-19). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-19-8 | 2026-08-19 | lexer+typecheck+interp+codegen | medium | IMPLEMENT 128-bit integers for real: `i128` / `u128` are specified normatively in design.md as v1 primitives (all four overflow method families, the widening-cast table, the primitive-numeric lists, Portable SIMD elements) and the compiler now REJECTS them, because no runtime carrier is 128 bits wide. Deleting design.md's 'Implementation status — 128-bit integers are NOT YET IMPLEMENTED' note is the definition of done. | docs/design.md § checked_*/wrapping_*/saturating_*/overflowing_* method families (the status note — deleting it is done); src/typechecker.rs::reject_128bit; src/interpreter/value.rs::Value::Int; src/codegen/method_call.rs (the i64-carrier comment + the `bits >= 64` reduction guard) |
 | B-2026-08-19-13 | 2026-08-19 | typecheck+codegen+runtime | medium | GPU reductions still lack the Arg family (argmin / argmax), the two-pass statistics (mean / var / std), prefix-sum and tiled matmul; and INTEGER reductions are blocked on an overflow rule rather than on effort. `sum`/`prod`/`min`/`max`/`dot` over `Vec[f32]` have shipped. | docs/spikes/gpu-llvm-offload-assessment.md; src/gpu_wgsl.rs::emit_reduce_kernel; src/reduce_kernel.rs::tree_reduce_f32 |
 | B-2026-08-19-17 | 2026-08-19 | typecheck+interp | medium | A BARE AMBIGUOUS UNIT VARIANT PICKS A DIFFERENT ENUM IN EACH BACKEND: with `enum First { A, B }` and `enum Second { A, C }`, `let x = A; x.tag()` prints First's answer under `karac build` and Second's under `karac run`. No diagnostic on either side -- and the spec does not say what a bare ambiguous variant name should mean. | src/interpreter.rs::register_items (Item::EnumDef arm, bare `env.define(variant.name)`); src/interpreter/eval_expr.rs (ExprKind::Path last-segment fallback); typechecker bare-variant resolution |
+| B-2026-08-19-19 | 2026-08-19 | codegen | medium | A 128-bit scalar cannot be carried in an ENUM PAYLOAD: an Option/Result payload word is 64 bits and `i128`/`u128` needs two, which the pack/unpack machinery has no case for. Refused loudly at type-check for now (`Option[i128]`, `Result[i128, E]`, and `checked_*` which returns `Option[Self]`); everything else about 128-bit works. | src/codegen/call_dispatch.rs::coerce_to_payload_words; src/codegen/calls.rs::rebuild_value_from_payload_words; src/codegen/control_flow_match.rs::reconstruct_payload_value; src/codegen/declarations.rs::{llvm_type_word_count,payload_word_count_for_type_expr}; docs/spikes/oversized-enum-payload.md; the guards in src/typechecker/lowering.rs and src/typechecker/method_numeric.rs |
 
 ### Wontfix (7)
 
