@@ -3335,6 +3335,76 @@ fn test_build_project_lists_discovered_modules() {
 // (test_e2e_fs_read_lines_splits_file_into_vec + siblings) and
 // tests/memory_sanitizer.rs::asan_fs_read_lines_vec_string_elements_freed.
 
+#[test]
+fn interp_broken_pipe_exits_quietly_like_a_native_binary() {
+    // B-2026-08-19-2 — `karac run --interp prog | head` used to spill a Rust
+    // panic report naming `karac::interpreter::builtin::write_stdout` and exit
+    // 101, which reads as a compiler crash rather than as the reader having
+    // gone away.
+    //
+    // The AOT binary is the reference: it inherits the default `SIGPIPE`
+    // disposition, so the kernel kills it silently with status 141. `karac` is
+    // a Rust program and Rust sets `SIGPIPE` to `SIG_IGN` at startup, so the
+    // interpreter sees `EPIPE` from the write instead and has to reproduce that
+    // ending itself.
+    //
+    // Asserts on STDERR and STATUS, not stdout: how much of the output arrives
+    // before the reader closes is a scheduling race, and pinning it would make
+    // this test flaky for a property it is not about.
+    use std::process::{Command, Stdio};
+
+    let tmp = scratch_project("broken-pipe");
+    write(
+        &tmp.join("chatty.kara"),
+        "fn main() {\n\
+         \x20   let mut i = 0i64;\n\
+         \x20   while i < 200000i64 {\n\
+         \x20       println(f\"line {i}\");\n\
+         \x20       i = i + 1i64;\n\
+         \x20   }\n\
+         }\n",
+    );
+
+    let mut child = match Command::new(env!("CARGO_BIN_EXE_karac"))
+        .current_dir(&tmp)
+        .args(["run", "--interp", "chatty.kara"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("[broken-pipe] could not spawn karac: {e} — skipping");
+            return;
+        }
+    };
+
+    // Read a little, then DROP the read end. That is what `| head -2` does, and
+    // it is what makes the interpreter's next write fail.
+    {
+        use std::io::Read;
+        let mut out = child.stdout.take().expect("piped stdout");
+        let mut buf = [0u8; 64];
+        let _ = out.read(&mut buf);
+    }
+
+    let out = child.wait_with_output().expect("wait");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("panicked"),
+        "a closed reader must not produce a panic report; stderr was:\n{stderr}"
+    );
+    assert!(
+        stderr.is_empty(),
+        "a closed reader must be silent; stderr was:\n{stderr}"
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(141),
+        "expected 128 + SIGPIPE, the status a native binary exits with"
+    );
+}
+
 #[cfg(feature = "llvm")]
 #[test]
 fn test_stdin_lines_run_and_build_parity() {

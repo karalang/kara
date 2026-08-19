@@ -255,10 +255,49 @@ impl<'a> super::Interpreter<'a> {
             } else {
                 output.push(s.to_string());
             }
-        } else if newline {
-            println!("{}", s);
         } else {
-            print!("{}", s);
+            Self::write_program_stdout(s, newline);
+        }
+    }
+
+    /// The interpreter's one real write to the program's stdout.
+    ///
+    /// NOT `println!` — B-2026-08-19-2. That macro panics when the write
+    /// fails, and the write fails routinely: `karac run --interp prog | head`
+    /// closes the reader after a couple of lines, and the next write returns
+    /// `BrokenPipe`. The panic then spilled 55 lines of Rust backtrace naming
+    /// `karac::interpreter::builtin::write_stdout`, which reads as a compiler
+    /// crash rather than as the reader having gone away, and exited 101.
+    ///
+    /// WHY THE INTERPRETER AND NOT THE OTHER BACKENDS: an AOT binary is the
+    /// process, so it inherits the default `SIGPIPE` disposition and the kernel
+    /// kills it — silently, with status 141. `karac` is a Rust program, and
+    /// Rust sets `SIGPIPE` to `SIG_IGN` at startup, so inside the interpreter
+    /// the signal never arrives and the write reports `EPIPE` instead.
+    ///
+    /// So this reproduces what the kernel would have done: exit 141
+    /// (`128 + SIGPIPE`) without a message. Skipping destructors is not a
+    /// shortcut — a signal death runs none either, so the abrupt exit is the
+    /// faithful part rather than the lossy part.
+    ///
+    /// Every OTHER io error is left to `expect`. A full disk or a closed
+    /// terminal is a real failure the user needs told about; only the
+    /// reader-went-away case is normal enough to be silent.
+    fn write_program_stdout(s: &str, newline: bool) {
+        use std::io::Write;
+        let stdout = std::io::stdout();
+        let mut lock = stdout.lock();
+        let res = if newline {
+            writeln!(lock, "{s}")
+        } else {
+            write!(lock, "{s}").and_then(|()| lock.flush())
+        };
+        match res {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {
+                std::process::exit(141);
+            }
+            Err(e) => panic!("failed printing to stdout: {e}"),
         }
     }
 
