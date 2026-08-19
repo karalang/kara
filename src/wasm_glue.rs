@@ -1753,6 +1753,24 @@ async function runThreaded(hostImpls = {}, opts = {}) {
     // takes (i32 ptr, i32 val_ptr, i64 elem_size) — a unit channel sends 0
     // bytes, so val_ptr=0, elem_size=0n. After the send we drop the sender
     // ref the producer cloned for us, closing the channel.
+    // A MULTI-SHOT host producer models a PAGE-LIFETIME event source. In a
+    // browser the page keeps itself alive and the producer is never the reason
+    // the tab is open; node has no page, so a re-arming timer becomes the
+    // reason the PROCESS stays up. It was: a program that finished its work and
+    // returned from `main` hung forever under node, and every test harness
+    // using one called `process.exit()` to get out — which is also what made
+    // B-2026-08-18-35 possible, since force-exiting from an async module's own
+    // continuation is the frame V8 aborts in.
+    //
+    // `unref` restores the browser's meaning: feed the channel for as long as
+    // the program runs, but never be the reason it keeps running. The primary
+    // worker stays ref'd, so frames keep arriving while the guest is alive, and
+    // node leaves on its own once the guest is done. Browsers return a number
+    // from `setInterval`/`setTimeout` with no `unref`, hence the guard.
+    const unrefHostTimer = (h) => {
+      if (h && typeof h.unref === "function") h.unref();
+      return h;
+    };
     builtinHostImpls["__kara_timer_after"] = (chPtr, ms) => {
       const ptr = Number(chPtr);
       setTimeout(() => {
@@ -1770,11 +1788,11 @@ async function runThreaded(hostImpls = {}, opts = {}) {
     // lifetime (never dropped, unlike __kara_timer_after's single fire).
     builtinHostImpls["__kara_timer_every"] = (chPtr, ms) => {
       const ptr = Number(chPtr);
-      setInterval(() => {
+      unrefHostTimer(setInterval(() => {
         if (Number(serviceInstance.exports.karac_runtime_channel_pending(ptr)) === 0) {
           serviceInstance.exports.karac_runtime_channel_send(ptr, 0, 0n);
         }
-      }, Number(ms));
+      }, Number(ms)));
     };
     // __kara_animation_frames(chPtr: i64 [BigInt]) -> (): a MULTI-SHOT
     // requestAnimationFrame loop. Each frame, if the worker has drained the
@@ -1789,7 +1807,7 @@ async function runThreaded(hostImpls = {}, opts = {}) {
       const ptr = Number(chPtr);
       const raf = globalThis.requestAnimationFrame
         ? globalThis.requestAnimationFrame.bind(globalThis)
-        : (cb) => setTimeout(cb, 16);
+        : (cb) => unrefHostTimer(setTimeout(cb, 16));
       const tick = () => {
         if (Number(serviceInstance.exports.karac_runtime_channel_pending(ptr)) === 0) {
           serviceInstance.exports.karac_runtime_channel_send(ptr, 0, 0n);

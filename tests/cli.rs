@@ -20874,25 +20874,19 @@ if (elapsed < 25) {
   process.exit(1);
 }
 console.log("RAF_OK elapsed=" + elapsed.toFixed(1) + "ms");
-// `animation_frames` is MULTI-SHOT: the host rAF loop re-arms forever (correct
-// for a browser — the page runs until closed), so node's event loop never
-// drains on its own. Force-exit now that the assertions passed, else this
-// harness hangs and the test's `node` subprocess never returns.
+// B-2026-08-18-35 — NO force-exit. The host producer's timer is `unref`'d, so
+// node drains and leaves once the guest is done; calling `process.exit()` here
+// would run inside this async module's own continuation, which is the frame V8
+// aborts in (`Check failed: (location_) != nullptr` in ExecuteAsyncModule).
 //
-// B-2026-08-18-35 — exit from a LATER MACROTASK, not from here. This module is
-// an ASYNC module (the top-level `await` above), so calling `process.exit()`
-// inline runs it inside the module's own continuation, which is the frame V8
-// aborts in: `Check failed: (location_) != nullptr` in
-// `SourceTextModule::ExecuteAsyncModule`, after this line's assertions have
-// already passed. Deferring by a timer lets the module finish evaluating and
-// its promise settle first; the process then exits from a plain timer callback.
-//
-// HONEST STATUS: mechanism-motivated, NOT verified against the failure. The
-// flake did not reproduce here in 32 isolated runs of this test nor 24 parallel
-// runs of the whole wasm suite, so this is reasoning from the V8 signature, not
-// a measured before/after. It changes no assertion — every check above has run
-// by this point — and the rAF loop re-arms every ~16ms, so exit stays prompt.
-setTimeout(() => process.exit(0), 0);
+// The timer below is a BOUND, not the exit path. Being unref'd it cannot hold
+// the loop open itself, so it only ever fires if something ELSE is — i.e. if
+// the producer starts holding the process open again. That turns a silent
+// regression back into a failing test rather than a hung suite.
+setTimeout(() => {
+  console.error("FAIL: node did not exit on its own — a host producer is holding the event loop open");
+  process.exit(3);
+}, 5000).unref();
 "#,
     )
     .unwrap();
@@ -20996,10 +20990,19 @@ if (elapsed < 25) {
   process.exit(1);
 }
 console.log("EVERY_OK elapsed=" + elapsed.toFixed(1) + "ms");
-// `every` is MULTI-SHOT: the host setInterval re-arms forever, so node's event
-// loop never drains on its own. Force-exit now that the assertions passed, else
-// this harness hangs and the test's `node` subprocess never returns.
-process.exit(0);
+// B-2026-08-18-35 — NO force-exit. The host producer's timer is `unref`'d, so
+// node drains and leaves once the guest is done; calling `process.exit()` here
+// would run inside this async module's own continuation, which is the frame V8
+// aborts in (`Check failed: (location_) != nullptr` in ExecuteAsyncModule).
+//
+// The timer below is a BOUND, not the exit path. Being unref'd it cannot hold
+// the loop open itself, so it only ever fires if something ELSE is — i.e. if
+// the producer starts holding the process open again. That turns a silent
+// regression back into a failing test rather than a hung suite.
+setTimeout(() => {
+  console.error("FAIL: node did not exit on its own — a host producer is holding the event loop open");
+  process.exit(3);
+}, 5000).unref();
 "#,
     )
     .unwrap();
