@@ -23,14 +23,20 @@
 //! the case where both legs are wrong the same way (i.e. the fixture author
 //! misunderstood the semantics).
 //!
-//! # How it runs without a GPU
+//! # Which device it runs on
 //!
-//! `mesa-vulkan-drivers` provides **lavapipe**, a software Vulkan
-//! implementation, so `KARAC_GPU_BACKEND=cpu` runs the real naga + Vulkan
-//! pipeline on a GPU-less machine — CI runners included. This is also the
-//! first automated coverage of CG-6's `KARAC_GPU_BACKEND=cpu` leg, which was
-//! deferred as "Linux-container territory" when the rest of CG-6 landed on
-//! Metal.
+//! The probe RESOLVES a backend rather than pinning one (B-2026-08-19-9): an
+//! explicit `KARAC_GPU_BACKEND` wins, then the platform's default adapter, then
+//! a forced software one. So macOS runs these fixtures on **Metal** (naga →
+//! MSL) and a GPU-less Linux box runs them on **lavapipe** (naga → SPIR-V),
+//! which is worth more than either alone — the two exercise different naga
+//! backends, so a lowering that is only valid in one shader language fails in
+//! exactly one lane.
+//!
+//! On Linux, `mesa-vulkan-drivers` provides lavapipe, so the real naga + Vulkan
+//! pipeline runs on a GPU-less machine, CI runners included. That is also the
+//! automated coverage of CG-6's `KARAC_GPU_BACKEND=cpu` leg, which was deferred
+//! as "Linux-container territory" when the rest of CG-6 landed on Metal.
 //!
 //! # No vacuous passes
 //!
@@ -100,7 +106,12 @@ fn run_interp(src_path: &Path) -> String {
 /// `Ok(stdout)`, or `Err(diagnostic)` when the program could not be built or
 /// the device refused to run it. The caller decides whether an error is a
 /// skip or a failure — only [`gpu_available`] treats it as "no adapter".
-fn build_and_run_on_gpu(dir: &Path, src_path: &Path, stem: &str) -> Result<String, String> {
+fn build_and_run_on_gpu(
+    dir: &Path,
+    src_path: &Path,
+    stem: &str,
+    backend: &Backend,
+) -> Result<String, String> {
     let built = karac()
         .arg("build")
         .arg(src_path)
@@ -125,8 +136,16 @@ fn build_and_run_on_gpu(dir: &Path, src_path: &Path, stem: &str) -> Result<Strin
             bin.display()
         ));
     }
-    let out = Command::new(&bin)
-        .env("KARAC_GPU_BACKEND", "cpu")
+    let mut run = Command::new(&bin);
+    match backend {
+        Some(b) => run.env("KARAC_GPU_BACKEND", b),
+        // Unset rather than absent-by-accident: the parent `cargo test` process
+        // may itself have been run with `KARAC_GPU_BACKEND` exported, and a
+        // child inherits it. Leaving it to chance would silently ignore the
+        // backend the probe resolved.
+        None => run.env_remove("KARAC_GPU_BACKEND"),
+    };
+    let out = run
         .current_dir(dir)
         .output()
         .expect("spawn built GPU binary");
@@ -141,10 +160,64 @@ fn build_and_run_on_gpu(dir: &Path, src_path: &Path, stem: &str) -> Result<Strin
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
+/// Which adapter every fixture runs on, resolved once by the probe.
+///
+/// `None` leaves `KARAC_GPU_BACKEND` unset, so the runtime takes the platform's
+/// preferred device — Metal on macOS, a real Vulkan/DX device elsewhere.
+/// `Some("cpu")` forces a software adapter (lavapipe / WARP).
+type Backend = Option<String>;
+
+/// The backends to try, in order, given whatever `KARAC_GPU_BACKEND` holds.
+///
+/// Pure so it can be pinned by a test on a host with no GPU at all — which is
+/// exactly the host where getting this order wrong costs the most, since there
+/// nothing else in this file asserts anything.
+///
+/// An explicit value is honored verbatim and NOT retried: someone forcing the
+/// software lane on a host that HAS a device means it (it is how a CI job pins
+/// lavapipe), and silently falling back to the real GPU would report a pass for
+/// a lane that never ran.
+fn backend_candidates(forced: Option<String>) -> Vec<Backend> {
+    match forced {
+        Some(b) => vec![Some(b)],
+        None => vec![None, Some("cpu".to_string())],
+    }
+}
+
+/// Why no device was reached, phrased for what was actually TRIED.
+///
+/// Forcing `KARAC_GPU_BACKEND` suppresses the fallback, so on a macOS box with
+/// a working Metal device `=cpu` legitimately finds nothing. Reporting that as
+/// "this host has no adapter" would be false, and false in the direction that
+/// makes someone go looking for a driver problem they do not have.
+/// Pure in its input for the same reason [`backend_candidates`] is: a test that
+/// read the ambient `KARAC_GPU_BACKEND` would pass or fail depending on how the
+/// suite was invoked.
+fn no_adapter_reason(forced: Option<String>) -> String {
+    match forced {
+        Some(b) => format!(
+            "KARAC_GPU_BACKEND={b} is set, so only that backend was tried and no adapter \
+             matched it. Unset it to use whatever device this host has"
+        ),
+        None => "this host offers neither a default adapter nor a software one (on \
+                 Linux, `mesa-vulkan-drivers` provides lavapipe)"
+            .to_string(),
+    }
+}
+
+/// Human wording for a resolved [`Backend`], for the one-line banner.
+fn backend_label(backend: &Backend) -> &str {
+    match backend {
+        None => "the platform's default adapter",
+        Some(_) => "a forced software (CPU) adapter",
+    }
+}
+
 /// Why the probe kernel could not run — the distinction that decides whether
 /// a failure may be skipped.
 enum Probe {
-    Ready,
+    /// A device is there, reached via this backend.
+    Ready(Backend),
     /// The host genuinely has no device. Skippable.
     NoAdapter(String),
     /// The optional `libkarac_runtime_gpu.a` has not been built on this host, so
@@ -182,7 +255,27 @@ fn is_missing_gpu_archive(err: &str) -> bool {
     err.contains("needs the GPU runtime archive") && err.contains("libkarac_runtime_gpu.a")
 }
 
-/// Probe once per test binary: build and run the most trivial possible kernel.
+/// Probe once per test binary: build and run the most trivial possible kernel,
+/// and settle which adapter the rest of the fixtures use.
+///
+/// B-2026-08-19-9 — THE BACKEND IS RESOLVED, NOT PINNED. Every fixture used to
+/// run under a hardcoded `KARAC_GPU_BACKEND=cpu`, which asks for a
+/// `DeviceType::Cpu` adapter. macOS has none (Apple ships no software Metal
+/// device), so on the project's own primary dev machine all fourteen execution
+/// fixtures took the `NoAdapter` skip while an Apple M5 Pro sat one
+/// `request_adapter` call away — the suite reported `ok` in 1.4s having
+/// executed nothing. That is the vacuous pass this file's header was written
+/// to close, reintroduced by the mechanism meant to make it portable.
+///
+/// The order is: an explicit `KARAC_GPU_BACKEND` from the caller wins, then the
+/// platform's default device, then a forced software adapter. So macOS runs on
+/// Metal, a GPU-less Linux box still lands on lavapipe, and pinning the
+/// software lane is one env var away.
+///
+/// THE FALLBACK IS REACHED ONLY FROM `NoAdapter`, which is what keeps `Broken`
+/// meaningful. Retrying on any failure would let a host with a working device
+/// mask a genuinely broken shader as a skip — the exact hole the four-way split
+/// exists to prevent.
 fn gpu_probe() -> &'static Probe {
     static PROBE: OnceLock<Probe> = OnceLock::new();
     PROBE.get_or_init(|| {
@@ -193,12 +286,23 @@ fn gpu_probe() -> &'static Probe {
             program("#[gpu]\nfn k(x: f32) -> f32 { x }", "f32", "1.0"),
         )
         .expect("write probe source");
-        match build_and_run_on_gpu(&dir, &src, "probe") {
-            Ok(_) => Probe::Ready,
-            Err(why) if is_missing_gpu_archive(&why) => Probe::NoArchive(why),
-            Err(why) if is_no_adapter(&why) => Probe::NoAdapter(why),
-            Err(why) => Probe::Broken(why),
+
+        let candidates = backend_candidates(std::env::var("KARAC_GPU_BACKEND").ok());
+
+        let mut last_no_adapter = None;
+        for backend in candidates {
+            match build_and_run_on_gpu(&dir, &src, "probe", &backend) {
+                Ok(_) => {
+                    eprintln!("gpu_e2e: running on {}", backend_label(&backend));
+                    return Probe::Ready(backend);
+                }
+                // No point asking a second adapter for an archive that is absent.
+                Err(why) if is_missing_gpu_archive(&why) => return Probe::NoArchive(why),
+                Err(why) if is_no_adapter(&why) => last_no_adapter = Some(why),
+                Err(why) => return Probe::Broken(why),
+            }
         }
+        Probe::NoAdapter(last_no_adapter.expect("loop only exits here via a no-adapter error"))
     })
 }
 
@@ -228,9 +332,9 @@ fn gpu_probe() -> &'static Probe {
 /// by default, fatal under `KARAC_REQUIRE_RUNTIME_ARCHIVE=1`, which is what
 /// CI's archive-building jobs set. `Broken` keeps its unconditional panic for
 /// what it was written for — the emitter producing a shader that will not run.
-fn gpu_or_skip() -> Option<()> {
+fn gpu_or_skip() -> Option<&'static Backend> {
     match gpu_probe() {
-        Probe::Ready => Some(()),
+        Probe::Ready(backend) => Some(backend),
         Probe::Broken(why) => panic!(
             "the GPU probe kernel — `fn k(x: f32) -> f32 {{ x }}`, the simplest kernel \
              expressible — failed on a host that HAS a working adapter. That is a \
@@ -263,22 +367,24 @@ fn gpu_or_skip() -> Option<()> {
         Probe::NoAdapter(why) => {
             if std::env::var("KARAC_REQUIRE_GPU_ADAPTER").as_deref() == Ok("1") {
                 panic!(
-                    "no usable GPU adapter and KARAC_REQUIRE_GPU_ADAPTER=1 forbids the \
-                     soft-skip, so this suite would otherwise report green while executing \
-                     no shader at all. On Linux install a software Vulkan implementation \
-                     (`sudo apt-get install -y mesa-vulkan-drivers`, which provides \
-                     lavapipe) and build the opt-in GPU archive (CLAUDE.md § Commands):\n\
+                    "no usable GPU adapter ({}) and KARAC_REQUIRE_GPU_ADAPTER=1 forbids \
+                     the soft-skip, so this suite would otherwise report green while \
+                     executing no shader at all. On Linux install a software Vulkan \
+                     implementation (`sudo apt-get install -y mesa-vulkan-drivers`, which \
+                     provides lavapipe) and build the opt-in GPU archive \
+                     (CLAUDE.md § Commands):\n\
                      \x20 cargo rustc -p karac-runtime --release --features gpu \
                      --crate-type staticlib\n\
                      \x20 cp target/release/libkarac_runtime.a \
                      target/release/libkarac_runtime_gpu.a\n\n\
-                     probe failure:\n{why}"
+                     probe failure:\n{why}",
+                    no_adapter_reason(std::env::var("KARAC_GPU_BACKEND").ok())
                 );
             }
             eprintln!(
-                "gpu_e2e: skipping — no usable GPU adapter (install mesa-vulkan-drivers \
-                 and build libkarac_runtime_gpu.a; set KARAC_REQUIRE_GPU_ADAPTER=1 to make \
-                 this a failure).\nprobe failure:\n{why}"
+                "gpu_e2e: skipping — {}. Set KARAC_REQUIRE_GPU_ADAPTER=1 to make this a \
+                 failure.\nprobe failure:\n{why}",
+                no_adapter_reason(std::env::var("KARAC_GPU_BACKEND").ok())
             );
             None
         }
@@ -293,14 +399,15 @@ fn assert_gpu_matches_interp(
     literals: &str,
     expected: &str,
 ) {
-    let Some(()) = gpu_or_skip() else { return };
+    let Some(backend) = gpu_or_skip() else { return };
 
     let dir = scratch(tag);
     let src = dir.join(format!("{tag}.kara"));
     std::fs::write(&src, program(kernel, elem_ty, literals)).expect("write fixture source");
 
     let interp = run_interp(&src);
-    let gpu = build_and_run_on_gpu(&dir, &src, tag).unwrap_or_else(|e| panic!("{tag}: {e}"));
+    let gpu =
+        build_and_run_on_gpu(&dir, &src, tag, backend).unwrap_or_else(|e| panic!("{tag}: {e}"));
 
     assert_eq!(
         interp, gpu,
@@ -610,6 +717,56 @@ fn probe_classifier_matches_only_the_absent_gpu_archive() {
     // And the two predicates are disjoint: nothing may satisfy both, or the
     // arm order in `gpu_probe` would silently decide the outcome.
     assert!(!is_no_adapter(real_driver_message));
+}
+
+/// B-2026-08-19-9 — the backend order, pinned.
+///
+/// This suite spent its whole existence hardcoding `KARAC_GPU_BACKEND=cpu`,
+/// which asks for a `DeviceType::Cpu` adapter. macOS has none, so on the
+/// project's primary dev machine every execution fixture took the `NoAdapter`
+/// skip while an Apple M5 Pro sat one `request_adapter` away, and the suite
+/// reported `ok` having run no shader at all. Re-pinning it is a one-line
+/// change that looks harmless and silently un-runs fourteen tests on a whole
+/// platform, so the order is asserted rather than left to review.
+///
+/// Kept pure, like the classifier test above, so it runs on GPU-less hosts —
+/// where it is the only thing standing between this file and a vacuous green.
+#[test]
+fn backend_order_prefers_the_hosts_own_device() {
+    assert_eq!(
+        backend_candidates(None),
+        vec![None, Some("cpu".to_string())],
+        "with nothing forced, the host's OWN device must be tried FIRST: preferring the \
+         software adapter is what made this suite skip everything on macOS, and preferring \
+         it again would do so silently"
+    );
+
+    // Forcing a backend must not fall back — a fallback would report a pass for
+    // a lane that never ran, which is the same vacuity in the other direction.
+    assert_eq!(
+        backend_candidates(Some("cpu".to_string())),
+        vec![Some("cpu".to_string())],
+        "an explicit KARAC_GPU_BACKEND must be honored verbatim with no fallback"
+    );
+
+    // The reason text follows what was actually TRIED. Both arguments are
+    // passed explicitly rather than read from the environment: this test must
+    // give the same answer however the suite was invoked, and reading the
+    // ambient value is what made an earlier draft fail under
+    // `KARAC_GPU_BACKEND=cpu`.
+    let unforced = no_adapter_reason(None);
+    assert!(
+        unforced.contains("neither a default adapter nor a software one"),
+        "unforced: {unforced}"
+    );
+    // A forced-lane skip on a machine that HAS a GPU must not read as "this
+    // host has no adapter" — that sends someone after a driver problem they do
+    // not have.
+    let forced = no_adapter_reason(Some("cpu".to_string()));
+    assert!(
+        forced.contains("KARAC_GPU_BACKEND=cpu is set") && forced.contains("Unset it"),
+        "forced: {forced}"
+    );
 }
 
 // ── Wrapping integer arithmetic on the device (B-2026-08-19-1) ──────────────
