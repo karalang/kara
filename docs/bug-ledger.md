@@ -94,14 +94,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 263 | 0 |
 | leak | 185 | 0 |
-| run-vs-build | 139 | 1 |
+| run-vs-build | 139 | 0 |
 | double-free | 133 | 0 |
-| missing-feature | 122 | 1 |
+| missing-feature | 123 | 2 |
 | codegen-gap | 119 | 0 |
 | diagnostics | 83 | 0 |
 | false-positive | 82 | 0 |
 | perf | 77 | 0 |
-| crash | 52 | 0 |
+| crash | 53 | 1 |
 | soundness | 51 | 0 |
 | other | 49 | 0 |
 | use-after-free | 20 | 0 |
@@ -110,28 +110,29 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 947 | 1 |
+| codegen | 948 | 2 |
 | typecheck | 214 | 1 |
-| interp | 162 | 1 |
+| interp | 162 | 0 |
 | ownership | 60 | 0 |
 | other | 58 | 0 |
 | autopar | 49 | 0 |
 | cli | 48 | 0 |
-| parser | 28 | 0 |
+| parser | 29 | 1 |
 | runtime | 26 | 1 |
 | resolver | 20 | 0 |
 | effect | 7 | 0 |
 | lexer | 6 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1375 surfaced · 2 open · 1353 fixed · 7 wontfix** (2026-05-20 → 2026-08-19). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1377 surfaced · 3 open · 1354 fixed · 7 wontfix** (2026-05-20 → 2026-08-19). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-19-13 | 2026-08-19 | typecheck+codegen+runtime | medium | GPU reductions still lack the two-pass statistics (var / std), prefix-sum and tiled matmul; integer `prod` / `dot` are blocked on WGSL lacking a widening multiply, and the Arg family is f32-only. `sum`/`prod`/`min`/`max`/`mean`/`dot`/`argmin`/`argmax` over `Vec[f32]` and `sum`/`min`/`max`/`mean` over `Vec[i32]` and `Vec[u32]` have shipped. | docs/spikes/gpu-llvm-offload-assessment.md; src/gpu_wgsl.rs::emit_reduce_kernel; src/reduce_kernel.rs::tree_reduce_f32 |
-| B-2026-08-19-27 | 2026-08-19 | interp | medium | The interpreter renders an UNSIGNED value with its SIGNED reading whenever it is nested in a container or an enum payload: `println(o)` on an `Option[u64]` holding `u64::MAX` prints `Some(-1)` under `karac run --interp`, and `println(v)` on a `Vec[u64]` prints `[-1, 5]`, while both compiled backends print the values correctly. Not a 128-bit bug — it reproduces identically on `u64` and predates 128-bit entirely. | src/interpreter/*::display_render (the recursive renderer); src/interpreter/method_call.rs (the scalar `to_string` arm, which already does this correctly via `span_unsigned_int_width`); src/interpreter/eval_ops.rs::span_unsigned_int_width |
+| B-2026-08-19-28 | 2026-08-19 | codegen | medium | `println(v)` on a `Vec[Option[T]]` PANICS the compiler — `emit_display_fn_for_type: type_name 'T' not yet supported` — unless an earlier bare `Option[T]` render happened to seed the display-fn cache. ORDER-DEPENDENT: the identical program compiles when a `println(o)` on a plain `Option[T]` precedes it, so deleting an unrelated print can break a build. | src/codegen/synth_display.rs::emit_display_fn_for_type (the panicking catch-all); src/codegen/synth_display.rs::emit_vec_display_fn_te; src/codegen/synth_display.rs::display_fn_cache (the seeding that hides it) |
+| B-2026-08-19-29 | 2026-08-19 | parser | low | `usize` is missing from the parser's unsigned-suffix list for the out-of-range literal band, so `18446744073709551615usize` is REJECTED ("out of range for i64 … add an unsigned suffix") while the byte-identical `18446744073709551615u64` is accepted. `usize` is 64-bit, so the whole upper half of its range is unwritable as a literal. | src/parser/exprs.rs (the `IntegerOutOfRange` arm's unsigned-suffix match); src/typechecker/exprs.rs::int_literal_range (which already handles Usize); src/typechecker/exprs.rs::literal_as_i128 |
 
 ### Wontfix (7)
 
@@ -149,9 +150,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1375 surfaced
 
 </details>
 
-### Fixed (1353)
+### Fixed (1354)
 
-<details><summary>1353 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1354 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -12428,6 +12429,21 @@ A TEST WAS ASSERTING THE BUG. `tests/interpreter.rs::test_stats_i64_sum_overflow
 
 VERIFIED: both overflow shapes (`sum` and `prod`) report `integer overflow` at exit 1 on both legs; non-overflow reductions (`sum`/`prod`/`median`/`sort`) return byte-identical results across `run --interp` and `build` after the `Result` conversion. Full `--features llvm` suite 124 targets / 14331 passing; the six failures are another session's in-flight 128-bit work and were confirmed failing with this change REVERTED. Both clippy legs and fmt clean. |
 | B-2026-08-19-26 | codegen | high | SILENT MISCOMPILE on plain 64-bit code: a shift took its WIDTH and its SIGNEDNESS from the shift AMOUNT rather than from the value | FIXED by bb3eeb7. See detail — shifts now take width and signedness from the left operand, with the amount range-checked at its own width before being coerced to the value's type. |
+| B-2026-08-19-27 | interp | medium | The interpreter renders an UNSIGNED value with its SIGNED reading whenever it is nested in a container or an enum payload: `println(o)` on an `Option… | FIXED by d888846. The renderer now takes the value's static type alongside it and peels one layer per level of its recursion: struct field types from `struct_info`, tuple elements positionally, sequence elements from the container's type argument, `Map` keys and values from K and V, and enum payloads from `enum_info`. The leaf `Value::Int` arm reads the carrier as `u64` / `u128` when the type says unsigned at that width, reusing `type_unsigned_int_width` — the same predicate B-2026-08-19-23 introduced for the operator paths, now serving the renderer too.
+
+GENERIC SUBSTITUTION IS THE LOAD-BEARING PART, not an extra. `Option`'s `Some` declares a bare `T` and `Result`'s arms declare `T`/`E`, so a payload type read straight from `enum_info` carries no width at all; the concrete type (`Option[u64]`) has to be substituted positionally onto the declaration's `generic_params` first. That single mechanism covers the seeded generics and user-defined ones alike — verified against a user `struct Cell[T]` and `enum MyOpt[T]`, which have nothing seeded about them. The typechecker's own `substitute_type_params` was widened from `pub(super)` to `pub(crate)` and reused rather than duplicating substitution logic that could drift.
+
+TWO CALLERS WERE PASSING THE WRONG SPAN, and finding that took instrumentation after the renderer change alone failed to fix `println`. `println(x)` and f-string interpolation both dispatch through `to_string`, and both handed it the ENCLOSING call's span as the receiver-type hint. That span resolves to `Unit` (the `println` call) and `Str` (the f-string) — real types, so they were HITS, and the hit shadowed the `object.span` fallback that held the right answer. The trace printed `close=Some("Unit") obj=Some("Option[u64]") -> Some("Unit")` and the cause was immediate. Both now pass the argument's own span, which is what that parameter means and is strictly more accurate for the scalar arm that already consulted it.
+
+`None` remains a valid type argument and renders exactly as before, so an unresolved type is never worse than the previous behaviour. Every caller now supplies one, which left the untyped entry point dead; it was DELETED rather than kept as a wrapper — the same choice B-2026-08-19-23 made with the 64-bit-only predicate — so the type-less path cannot silently return.
+
+ALSO FIXED HERE, a missed site from B-2026-08-19-23: `display_field_is_leaf` (src/codegen/synth_display.rs) lists the widths a `#[derive(Display)]` struct field may have and had not been widened, so a `u128` field refused to compile with "whose Display is not yet supported" even though `emit_display_fn_for_type` behind it had already gained its 128-bit arm.
+
+VERIFICATION. Codegen was already correct on every shape, which made it an exact oracle: the expected strings in the tests are what `karac build` printed before the interpreter was touched. Byte-identical across `karac build`, that build with `KARAC_AUTO_PAR=0`, `karac run` (JIT) and `karac run --interp` over `Option`, `Result`, `Vec`, tuple, `Map`, struct field, `Vec[Option[T]]`, `Map[String, Vec[T]]`, at both `u64` and `u128`. Tests: `a_nested_unsigned_value_renders_at_its_own_width`, `a_nested_u128_renders_at_its_own_width`, `the_display_peel_substitutes_generic_parameters`, `the_display_peel_leaves_signed_and_narrow_values_alone` (tests/interpreter.rs) and the compiled twin `e2e_nested_unsigned_display_matches_the_interpreter` (tests/codegen.rs). Gates: fmt, both clippy legs, default suite (106 targets), codegen 3080 and memory_sanitizer 1130 under KARAC_REQUIRE_RUNTIME_ARCHIVE=1.
+
+THE COUNTERWEIGHT TEST IS THE IMPORTANT ONE. The failure mode of over-applying this fix is turning every `-1` into 18446744073709551615, so `the_display_peel_leaves_signed_and_narrow_values_alone` pins `Option[i64]`, `Vec[i64]`, `Vec[u8]`, a negative tuple, `f64`, `String` and `bool` to their existing rendering. The peel changes the reading only for the two widths whose top half does not fit the signed carrier.
+
+SPLIT OUT, found by this row's measurement: B-2026-08-19-28 (a `println` of a `Vec[Option[T]]` PANICS codegen unless an earlier bare `Option[T]` render happens to have seeded the display-fn cache — order-dependent, confirmed pre-existing on a clean `main` build) and B-2026-08-19-29 (`usize` is missing from the parser's unsigned-suffix list for the out-of-range literal band, so `18446744073709551615usize` is rejected while the identical `u64` literal is accepted). |
 
 </details>
 
