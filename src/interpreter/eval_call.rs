@@ -1276,7 +1276,16 @@ impl<'a> super::Interpreter<'a> {
                                 _ => 0,
                             })
                             .collect();
-                        return eval_stats_fn_int(&path_str, &xs, p, span);
+                        // B-2026-08-19-25 — the overflow trap comes back as
+                        // `Err` (it is only discovered inside the fold, unlike
+                        // the empty-input refusals pre-checked above) and is
+                        // reported on the same channel, so `karac run` matches
+                        // `karac build`'s `integer overflow` at exit 1 instead
+                        // of a Rust backtrace at exit 101.
+                        return match eval_stats_fn_int(&path_str, &xs, p) {
+                            Ok(v) => v,
+                            Err(msg) => self.record_runtime_error(msg, span),
+                        };
                     }
                     let xs: Vec<f64> = elems
                         .iter()

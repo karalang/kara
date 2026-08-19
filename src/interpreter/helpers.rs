@@ -13,8 +13,6 @@
 
 use std::collections::HashMap;
 
-use crate::token::Span;
-
 use super::value::narrow_to_i64;
 use super::{EnumData, Value};
 
@@ -620,16 +618,23 @@ pub(super) fn eval_stats_fn(name: &str, xs: &[f64], p: Option<f64>) -> Value {
 /// `argmin`/`argmax`/`argsort` compare at i64 (no lossy float round-trip
 /// above 2⁵³). The float statistics (`mean`/`variance`/`stddev`/`median`/
 /// `percentile`) promote to `f64` — same trap policy as the f64 surface.
-pub(super) fn eval_stats_fn_int(name: &str, xs: &[i64], p: Option<f64>, span: &Span) -> Value {
+///
+/// B-2026-08-19-25 — returns `Result` so the OVERFLOW trap can travel the
+/// interpreter's runtime-error channel rather than `panic!`. Unlike the
+/// empty-input refusals (which are knowable before dispatch and are pre-checked
+/// by [`stats_trap_message`] at the call site), overflow is only discovered
+/// inside the fold, so the error has to come back out through the return type.
+///
+/// The message is the bare `integer overflow` that `+`/`*` already produce on
+/// BOTH legs — measured, not assumed: a plain `a + 1` past `i64::MAX` prints
+/// `integer overflow` under `--interp` and under `karac build` alike, with the
+/// span carrying the location. Naming the function here instead would have made
+/// `Stats` the one arithmetic trap in the language that words itself
+/// differently.
+pub(super) fn eval_stats_fn_int(name: &str, xs: &[i64], p: Option<f64>) -> Result<Value, String> {
     use crate::reduce_kernel::{quantile_linear_sorted_i64, reduce_i64, ReduceOp, ReduceOutcome};
 
-    let run = |op: ReduceOp| match reduce_i64(xs, op) {
-        Ok(o) => o,
-        Err(_) => panic!(
-            "integer overflow in {}() at {}:{}",
-            name, span.line, span.column
-        ),
-    };
+    let run = |op: ReduceOp| reduce_i64(xs, op).map_err(|_| "integer overflow".to_string());
     match name {
         "Stats.sum" | "Stats.prod" => {
             let op = if name == "Stats.sum" {
@@ -637,8 +642,8 @@ pub(super) fn eval_stats_fn_int(name: &str, xs: &[i64], p: Option<f64>, span: &S
             } else {
                 ReduceOp::Prod
             };
-            match run(op) {
-                ReduceOutcome::IntScalar(v) => Value::Int(v.into()),
+            match run(op)? {
+                ReduceOutcome::IntScalar(v) => Ok(Value::Int(v.into())),
                 _ => unreachable!("int sum/prod returns IntScalar"),
             }
         }
@@ -652,8 +657,8 @@ pub(super) fn eval_stats_fn_int(name: &str, xs: &[i64], p: Option<f64>, span: &S
                 "Stats.stddev" => ReduceOp::Std { bessel: false },
                 _ => ReduceOp::Median,
             };
-            match run(op) {
-                ReduceOutcome::Scalar(f) => Value::Float(f),
+            match run(op)? {
+                ReduceOutcome::Scalar(f) => Ok(Value::Float(f)),
                 _ => unreachable!("int float-statistic returns Scalar"),
             }
         }
@@ -663,9 +668,9 @@ pub(super) fn eval_stats_fn_int(name: &str, xs: &[i64], p: Option<f64>, span: &S
             } else {
                 ReduceOp::Max
             };
-            match run(op) {
-                ReduceOutcome::OptIntScalar(Some(v)) => stats_option_some(Value::Int(v.into())),
-                _ => stats_option_none(),
+            match run(op)? {
+                ReduceOutcome::OptIntScalar(Some(v)) => Ok(stats_option_some(Value::Int(v.into()))),
+                _ => Ok(stats_option_none()),
             }
         }
         "Stats.percentile" => {
@@ -676,11 +681,11 @@ pub(super) fn eval_stats_fn_int(name: &str, xs: &[i64], p: Option<f64>, span: &S
             if !(0.0..=100.0).contains(&p) {
                 unreachable!("{}", STATS_TRAP_PRECHECKED);
             }
-            let ReduceOutcome::I64Vec(sorted) = run(ReduceOp::Sort) else {
+            let ReduceOutcome::I64Vec(sorted) = run(ReduceOp::Sort)? else {
                 unreachable!("int Sort returns I64Vec")
             };
             let pos = (p / 100.0) * (sorted.len() - 1) as f64;
-            Value::Float(quantile_linear_sorted_i64(&sorted, pos))
+            Ok(Value::Float(quantile_linear_sorted_i64(&sorted, pos)))
         }
         "Stats.argmin" | "Stats.argmax" => {
             let op = if name == "Stats.argmax" {
@@ -688,9 +693,9 @@ pub(super) fn eval_stats_fn_int(name: &str, xs: &[i64], p: Option<f64>, span: &S
             } else {
                 ReduceOp::Argmin
             };
-            match run(op) {
-                ReduceOutcome::OptIndex(Some(i)) => stats_option_some(Value::Int(i.into())),
-                _ => stats_option_none(),
+            match run(op)? {
+                ReduceOutcome::OptIndex(Some(i)) => Ok(stats_option_some(Value::Int(i.into()))),
+                _ => Ok(stats_option_none()),
             }
         }
         "Stats.sort" | "Stats.argsort" => {
@@ -699,13 +704,15 @@ pub(super) fn eval_stats_fn_int(name: &str, xs: &[i64], p: Option<f64>, span: &S
             } else {
                 ReduceOp::Argsort
             };
-            let ReduceOutcome::I64Vec(v) = run(op) else {
+            let ReduceOutcome::I64Vec(v) = run(op)? else {
                 unreachable!("int sort/argsort returns I64Vec")
             };
             let elems: Vec<Value> = v.into_iter().map(|v| Value::Int(v.into())).collect();
-            Value::Array(std::sync::Arc::new(std::sync::RwLock::new(elems)))
+            Ok(Value::Array(std::sync::Arc::new(std::sync::RwLock::new(
+                elems,
+            ))))
         }
-        _ => Value::Unit,
+        _ => Ok(Value::Unit),
     }
 }
 

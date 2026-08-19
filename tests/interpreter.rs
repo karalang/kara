@@ -13634,27 +13634,27 @@ fn test_stats_i64_empty_integer_identities() {
 
 #[test]
 fn test_stats_i64_sum_overflow_traps() {
-    let result = std::panic::catch_unwind(|| {
-        run("fn main() {\n\
+    // B-2026-08-19-25 — this test used to assert the trap arrived as a Rust
+    // `panic!`, caught with `catch_unwind`. That was the defect, not the
+    // contract: `karac run` exited 101 with a backtrace naming
+    // `src/interpreter/helpers.rs` where `karac build` printed a clean
+    // `integer overflow` at exit 1. The trap still happens — it now travels the
+    // runtime-error channel, so `run` returns normally and the error is
+    // recorded with a span.
+    let errors = runtime_errors(
+        "fn main() {\n\
              let big = 9223372036854775807;\n\
              let xs: Vec[i64] = vec![big, 1];\n\
              println(Stats.sum(xs));\n\
-         }")
-    });
-    match result {
-        Err(payload) => {
-            let msg = payload
-                .downcast_ref::<String>()
-                .cloned()
-                .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
-                .unwrap_or_default();
-            assert!(
-                msg.contains("integer overflow"),
-                "expected the overflow trap, got panic: {msg:?}"
-            );
-        }
-        Ok(out) => panic!("expected the checked-sum overflow trap, got output {out:?}"),
-    }
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("integer overflow")),
+        "expected the checked-sum overflow trap as a runtime error, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
 }
 
 // ── Encoding namespace (Base64 / Hex / Url) ───────────────────────
@@ -35618,5 +35618,75 @@ fn stats_percentile_out_of_range_is_a_runtime_error() {
             .any(|e| e.message.contains("p must be in [0, 100]")),
         "expected the percentile range refusal, got: {:?}",
         errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn stats_int_overflow_is_a_runtime_error_not_a_panic() {
+    // B-2026-08-19-25 — the last raw `panic!` in the Stats dispatchers.
+    // `sum`/`prod` over i64 are CHECKED folds, and the overflow trap used
+    // `panic!`, so `karac run` printed a Rust backtrace naming
+    // `src/interpreter/helpers.rs` and exited 101 where `karac build` printed a
+    // clean `integer overflow` at exit 1.
+    //
+    // Unlike the empty-input refusals (B-2026-08-19-20), overflow cannot be
+    // pre-checked at the call site — it is only discovered inside the fold — so
+    // the int dispatcher returns `Result` and the caller reports the `Err`.
+    //
+    // Reaching `runtime_errors` at all is the assertion: a `panic!` would
+    // unwind the test process instead of returning here.
+    for call in ["Stats.sum(v)", "Stats.prod(v)"] {
+        let src = format!(
+            "fn main() {{ let v: Vec[i64] = [9223372036854775807, 9223372036854775807]; println({call}); }}"
+        );
+        let errors = runtime_errors(&src);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("integer overflow")),
+            "expected an `integer overflow` runtime error for {call}, got: {:?}",
+            errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+        );
+    }
+}
+
+#[test]
+fn stats_int_overflow_message_matches_plain_arithmetic() {
+    // The message is deliberately the BARE `integer overflow` that `+`/`*`
+    // already produce on both legs, not a Stats-specific wording. Measured
+    // before choosing: a plain `a + 1` past i64::MAX prints `integer overflow`
+    // under `--interp` and under `karac build` alike. Naming the function here
+    // would have made Stats the one arithmetic trap in the language that words
+    // itself differently — and the span already says which call faulted.
+    let plain =
+        runtime_errors("fn main() { let a = 9223372036854775807; let b = a + 1; println(b); }");
+    let stats = runtime_errors(
+        "fn main() { let v: Vec[i64] = [9223372036854775807, 9223372036854775807]; println(Stats.sum(v)); }",
+    );
+    let msg_of = |es: &[karac::interpreter::RuntimeError]| {
+        es.iter()
+            .find(|e| e.message.contains("integer overflow"))
+            .map(|e| e.message.clone())
+    };
+    assert_eq!(
+        msg_of(&plain),
+        msg_of(&stats),
+        "Stats overflow must word itself exactly like plain arithmetic overflow",
+    );
+}
+
+#[test]
+fn stats_int_reductions_still_work_when_they_do_not_overflow() {
+    // The `Result` conversion touched every arm of the int dispatcher; pin that
+    // the ordinary paths still return values rather than errors.
+    assert_eq!(
+        run("fn main() {
+                 let v: Vec[i64] = [3, 1, 4, 1, 5];
+                 println(Stats.sum(v));
+                 println(Stats.prod(v));
+                 println(Stats.median(v));
+                 println(Stats.sort(v));
+             }"),
+        "14\n60\n3\n[1, 1, 3, 4, 5]\n"
     );
 }
