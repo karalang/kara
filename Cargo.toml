@@ -193,6 +193,11 @@ path = "examples/nvptx_body_probe.rs"
 required-features = ["llvm"]
 
 [[example]]
+name = "nvptx_kernel_spike"
+path = "examples/nvptx_kernel_spike.rs"
+required-features = ["llvm"]
+
+[[example]]
 name = "bench_frontend"
 path = "examples/bench_frontend.rs"
 

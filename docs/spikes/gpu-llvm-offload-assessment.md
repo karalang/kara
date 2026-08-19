@@ -21,6 +21,12 @@ commitment.
 > single-expression kernel-body floor it documents was lifted the same day. The
 > architectural read now states plainly that none of this is a one-way door —
 > the backends coexist, and the binding is per artifact.
+>
+> **Updated 2026-08-19: the recommended spike RAN.** Findings 8 and 9. A real
+> Kāra kernel body reaches NVPTX unchanged (6/6 shapes, loops and `match`
+> included), so the question gating every host-runtime option is answered
+> yes. One new cost surfaced: the i64-carrier integer model, harmless on a
+> CPU, would cost occupancy on a device.
 
 > **Sourcing caveat.** `phoronix.com`, `arxiv.org`, `news.ycombinator.com` and
 > `rust-lang.github.io` are all blocked by this container's egress proxy. The
@@ -224,6 +230,66 @@ ratio as if it described the file, concluding a second backend would cost "the
 119-line half." Counting the whole file gives near parity. The narrow number was
 real but not generalisable, and the generalisation inverted the recommendation.
 
+**8. A REAL Kāra kernel body lowers to NVPTX unchanged — 6/6 shapes reached
+PTX.** This is the question the recommendation below was written to answer, and
+it needed no GPU. `examples/nvptx_kernel_spike.rs` compiles a `#[gpu]` kernel
+through `codegen`'s ordinary lowering, lifts the emitted function out of the
+module, links it into a fresh `nvptx64-nvidia-cuda` module under a hand-written
+kernel wrapper (thread index, bounds check, load, call, store) plus
+`nvvm.annotations`, verifies, and emits assembly:
+
+| kernel shape | result |
+|---|---|
+| scalar map, locals, `for`-range accumulator, statement `if`, value `match`, wrapping accumulator | **all 6 verify and emit `.visible .entry`** |
+
+**Control flow came through for free, as predicted.** `for n in 0..4 { acc = acc + x; }`
+emits a genuine counted loop — condition, exit branch, `add.rn.f32`, counter
+increment, back-edge:
+
+```ptx
+$L__BB0_1:
+	setp.gt.s64 	%p1, %rd4, 3;
+	@%p1 bra 	$L__BB0_3;
+	add.rn.f32 	%f5, %f5, %f3;
+	add.s64 	%rd4, %rd4, 1;
+	bra.uni 	$L__BB0_1;
+```
+
+and a value `match` emits a real `setp`/`bra` chain. **Zero changes were needed
+to the body lowering** — the transplant is the evidence: the function codegen
+emitted for the native target dropped into an NVPTX module and compiled as-is.
+Everything that did need writing sits in the WRAPPER, which is the part a real
+backend generates anyway (address space 1 on the pointer params, the
+`llvm.nvvm.read.ptx.sreg.*` intrinsics, the `nvvm.annotations` entry marker).
+
+**Why this worked is not luck.** Finding 7's re-run shows every kernel shape
+that is LEGAL after B-2026-08-19-1 lowers to device-clean IR — no `karac_*`
+runtime calls, no unwind edges. The three shapes that still emit
+`__karac_panic_site_*` (bare integer `+`, bare `/`, a `while` counter using bare
+`+`) are exactly the three that fix made illegal. So the set of writable kernels
+and the set of NVPTX-lowerable kernels now coincide **by construction** — the
+effect gate proves no allocation/channels/host-I/O/explicit-panics, and the
+trapping-arithmetic rule removed the last implicit panic sites.
+
+**Method note:** the spike deliberately did NOT build a second `Codegen` against
+an NVPTX target machine, which would mean threading a target through a large
+stateful struct. Transplanting the emitted function is both cheaper and a
+stronger result: it demonstrates the body lowering is *target-independent*
+rather than merely *re-targetable*.
+
+**9. The i64-carrier model would cost real performance on a device.** An `i32`
+kernel's PTX uses 64-bit registers and ops throughout — `%rd`, `add.s64`,
+`setp.gt.s64` — because codegen normalizes narrow integers to an i64 carrier
+(finding 7's `compile_narrow_int_binop` model). That is invisible on a CPU,
+where 64-bit ALU ops cost the same as 32-bit. It is **not** invisible on a GPU,
+where 64-bit integer arithmetic is materially slower than 32-bit on every NVIDIA
+generation, and doubles register pressure — which directly reduces occupancy.
+Not a blocker and not a correctness issue, but any real NVPTX path wants narrow
+integers carried at their declared width, and that is a change in `codegen`'s
+integer model rather than in the GPU backend. Worth pricing before CG-5 is
+scheduled, since discovering it after the backend exists would be the expensive
+order.
+
 ## The architectural read
 
 The decision splits into two *independent* axes, and conflating them is the
@@ -357,6 +423,10 @@ that no amount of reading settles — is whether `codegen` can lower a *real Kā
 convention constraints force a separate lowering path. That single result
 decides whether Options 1 and 2 are contained slices or a second backend build,
 and it is independent of which launch API wins.
+
+> **THE SPIKE HAS RUN (2026-08-19) — see finding 8. Answer: yes, cleanly, with
+> no body changes at all.** The paragraph below is the original proposal, kept
+> for the record.
 
 So the proposed next step is a **scoped spike, ~1 session**: take the existing
 slice-0 kernel through `codegen`'s real expression lowering into an

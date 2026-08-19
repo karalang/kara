@@ -16,6 +16,15 @@
 //! mechanical (wrapper + address spaces + `nvvm.annotations`). If it is not,
 //! the finding is exactly what the spike was commissioned to produce.
 //!
+//! **Result (assessment finding 8): mechanical.** Every kernel shape that is
+//! LEGAL after B-2026-08-19-1 comes out device-clean here, and
+//! `nvptx_kernel_spike.rs` then took those same bodies to real PTX unchanged.
+//! The three rows below that still show `__karac_panic_site_*` — bare integer
+//! `+`, bare `/`, and a `while` counter using bare `+` — are exactly the three
+//! shapes that fix made illegal, so the coincidence is by construction rather
+//! than by luck. They are kept as the contrast that makes the clean rows mean
+//! something.
+//!
 //! Run: `cargo run --release --features llvm --example nvptx_body_probe`
 
 fn main() {
@@ -48,6 +57,18 @@ fn main() {
         (
             "overflow-checked add",
             "#[gpu]\nfn k(x: i32) -> i32 { x + 1 }",
+        ),
+        // Post-B-2026-08-19-1: bare integer arithmetic is no longer legal in a
+        // kernel, so the two rows above are what a kernel can no longer contain.
+        // These are what a valid integer kernel looks like now — and whether
+        // THEY are device-clean is the question that matters for CG-5.
+        (
+            "wrapping add (the legal form)",
+            "#[gpu]\nfn k(x: i32) -> i32 { x.wrapping_add(1) }",
+        ),
+        (
+            "wrapping mul + accumulator",
+            "#[gpu]\nfn k(x: i32) -> i32 {\n    let mut acc: i32 = 0;\n    for n in 0..4 { acc = acc.wrapping_add(x); }\n    acc\n}",
         ),
     ];
 
