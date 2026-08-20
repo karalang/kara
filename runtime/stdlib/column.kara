@@ -246,13 +246,22 @@ impl[T] Column[T] {
     }
 
     // **Sample** variance of the valid slots (Bessel `n-1`; the
-    // pandas-Series / SQL-`stddev` default). Requires ≥ 2 valid values.
+    // pandas-Series / SQL-`stddev` default). Requires ≥ 2 valid values,
+    // and TRAPS below that — sample variance of one observation is 0/0.
+    //
+    // NOT the same function as `Stats.variance`, which is the POPULATION
+    // (÷ n) form and answers `0.0` for a single element; `gpu.variance`
+    // follows `Stats`. The split is deliberate — `Column` is the dataframe
+    // surface (pandas `Series.var`, ddof=1), `Stats` the numeric-slice one
+    // (NumPy `np.var`, ddof=0). See design.md § Numerical Types,
+    // "Variance divisor".
     #[compiler_builtin]
     fn var(ref self) -> f64 {
         0.0
     }
 
-    // Sample standard deviation — `sqrt(var())`.
+    // Sample standard deviation — `sqrt(var())`, so ÷ n−1. `Stats.stddev`
+    // is the population form; see `var` above.
     #[compiler_builtin]
     fn std(ref self) -> f64 {
         0.0

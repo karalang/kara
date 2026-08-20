@@ -43,9 +43,17 @@ impl Stats {
     #[compiler_builtin]
     fn mean(xs: ref Slice[f64]) -> f64 { 0.0 }
 
+    /// POPULATION variance — divides by `n`, not `n - 1`. `Column.var` is
+    /// the SAMPLE (Bessel, ÷ n−1) form; the two are different functions
+    /// despite the near-identical names, and neither is convertible to the
+    /// other by reading it wrong. `Stats.variance` of a one-element slice
+    /// is `0.0` (where `Column.var` traps); an empty slice traps.
+    /// See design.md § Numerical Types, "Variance divisor".
     #[compiler_builtin]
     fn variance(xs: ref Slice[f64]) -> f64 { 0.0 }
 
+    /// POPULATION standard deviation — `sqrt(Stats.variance(xs))`, so ÷ n.
+    /// `Column.std` is the SAMPLE (÷ n−1) form. See `variance` above.
     #[compiler_builtin]
     fn stddev(xs: ref Slice[f64]) -> f64 { 0.0 }
 

@@ -2084,6 +2084,19 @@ There are no operations where the two conventions are unified automatically — 
 
 **`Tensor` is dense-only.** Tensors have no nullability option. Numerical computing (BLAS, SIMD, GPU kernels) assumes validity per element; nullability would be dead weight 99% of the time. Users needing a nullable numerical array use `Column[f64]` and convert to `Tensor` when they need dense numerical work.
 
+
+**Variance divisor — `Stats` is population, `Column` is sample, deliberately.** The two stat surfaces disagree on the denominator, and the disagreement is a commitment, not drift:
+
+| Call | Divisor | `n = 1` | `n = 0` |
+|---|---|---|---|
+| `Stats.variance(s)` / `Stats.stddev(s)` | `n` (**population**) | `0.0` | traps |
+| `col.var()` / `col.std()` | `n − 1` (**sample**, Bessel) | traps | traps |
+| `gpu.variance(v)` / `gpu.stddev(v)` | `n` (**population**) | `Some(0.0)` | `None` |
+
+Each surface matches the default of the ecosystem it is modeled on: `Stats.*` is a plain numeric-slice API in the shape of NumPy, whose `np.var` defaults to `ddof=0`; `Column`/`DataFrame` is the dataframe surface, in the shape of pandas, whose `Series.var` defaults to `ddof=1`. Unifying on either divisor would surprise one of the two audiences at the point where they are least likely to check — a variance that is silently off by `n/(n−1)` produces plausible numbers, not errors. `Column`'s sample form also explains why it **traps at `n = 1`** where `Stats` answers `0.0`: sample variance of one observation is `0/0`, undefined rather than zero.
+
+The real hazard is not the divisor but the near-homograph: `variance` and `var` read as the same word abbreviated. They are not the same function. Code that needs a specific convention should say which — `Stats.variance(col.valid_values())` for the population form of a column, or scale `Stats.variance` by `n/(n−1)` for the sample form of a slice. `gpu.variance` follows `Stats`, since it consumes a dense `Vec`, not a nullable column; there is deliberately no `gpu.var`, which would import the ambiguous short spelling into a third namespace.
+
 #### DataFrame — schema-bearing tables
 
 `DataFrame` is a table of named `Column`s with an associated schema. It carries column-name-to-type mappings at the schema level; individual columns carry their bitmap nulls. Row-oriented iteration produces struct views; column-oriented iteration is the common case for analytical workloads. Further detail lives in the Phase 11 stdlib plan.
@@ -10198,7 +10211,7 @@ Two operations are defined in terms of `sum` rather than having a tree of their 
 
 They diverge from `Stats.argmin` on **NaN**, and necessarily. `Stats.argmin` seeds its running best with element 0 and displaces it only on a strict comparison, so a leading NaN is never displaced: `Stats.argmin([NaN, 3.0, 1.0])` is `0` while `Stats.argmin([3.0, 1.0, NaN])` is `1`. That position-dependence cannot survive a halving tree, where the grouping decides the positions. In `gpu.argmin` a NaN always loses, so the first buffer answers `2`; an all-NaN buffer answers `0`, since nothing ever wins and the leftmost survives.
 
-`gpu.variance` / `gpu.stddev` are the **population** forms (÷ n), matching `Stats.variance` and `Stats.stddev`, so the two answer the same number on the same buffer. They are the only **two-pass** reductions: the mean has to exist before a single deviation can be formed, so the device runs a complete sum reduction, reads the mean back, and dispatches again with it as a uniform. Both passes go through the same sum tree, so the grouping caveat above is inherited rather than re-derived — and `gpu.stddev(v)` is exactly `gpu.variance(v)` rooted once at the end, not a separate accumulation.
+`gpu.variance` / `gpu.stddev` are the **population** forms (÷ n), matching `Stats.variance` and `Stats.stddev`, so the two answer the same number on the same buffer — and differing from `Column`'s `var` / `std`, which are the **sample** (÷ n−1) forms; see [Numerical Types](#numerical-types-tensor-column-dataframe) § "Variance divisor" for why the split is deliberate. They are the only **two-pass** reductions: the mean has to exist before a single deviation can be formed, so the device runs a complete sum reduction, reads the mean back, and dispatches again with it as a uniform. Both passes go through the same sum tree, so the grouping caveat above is inherited rather than re-derived — and `gpu.stddev(v)` is exactly `gpu.variance(v)` rooted once at the end, not a separate accumulation.
 
 `gpu.dot(a, b)` is `gpu.sum(a * b)`, to the last bit. It is a separate operation only because the product is formed **on load** inside the reduction's first level, so no `n`-element intermediate is ever written — a device-traffic win, not a semantic difference.
 - `gpu.mean(buf)` is `gpu.sum(buf) / n`, to the last bit: the specified tree sum, divided by the count, in `f32`, **once**. Not compensated, not accumulated wider. So `mean` inherits the sum's grouping rather than having one of its own, and adds exactly one further rounding — that is the whole of its precision story. The division happens on the host after the fold converges, never in the shader: a shader cannot know it is running the last level of the tree, so a division inside it would divide once per level.
