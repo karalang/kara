@@ -173,6 +173,8 @@ fn parse_run_command_from(args: &[String], file_idx: usize) -> Command {
             process::exit(1);
         } else if try_consume_lint_flag(args, &mut i, &mut lint_overrides) {
             // consumed
+        } else if arg.starts_with("--platform=") {
+            reject_platform_flag(arg, "run");
         } else if arg.starts_with('-') {
             eprintln!("error: unknown flag '{arg}'");
             process::exit(1);
@@ -269,6 +271,11 @@ fn parse_check_command(args: &[String]) -> Command {
     // `--target=` (singular) vs `--targets=` (plural) — see the project-mode
     // branch at the bottom of this parser.
     let mut target_is_singular = false;
+    // The THIRD axis (design.md § Platform-specific modules > Target
+    // selection): which `_linux` / `_macos` / `_windows` / `_wasm` files the
+    // walk keeps. `None` derives it from the compilation target exactly as
+    // before, which is the host for everything but `wasm_*`.
+    let mut platforms: Option<Vec<crate::walker::Platform>> = None;
     let mut concurrency_report = false;
     let mut simd_report = false;
     let mut lint_overrides = crate::lints::CliLintOverrides::default();
@@ -297,6 +304,8 @@ fn parse_check_command(args: &[String]) -> Command {
             // reaches for `check --target=wasm_wasi` to check the `_wasm`
             // half of a platform split (B-2026-08-20-25).
             target_is_singular = true;
+        } else if let Some(rest) = arg.strip_prefix("--platform=") {
+            platforms = Some(parse_platforms_arg(rest));
         } else if arg == "--concurrency-report" {
             concurrency_report = true;
         } else if parse_simd_report_flag(arg, &mut simd_report) {
@@ -335,19 +344,31 @@ fn parse_check_command(args: &[String]) -> Command {
             (Some(t), true) if t.len() == 1 => Some(t[0].clone()),
             _ => None,
         };
-        if profiles.is_some() || (targets.is_some() && single_target.is_none()) {
+        // `--profiles` is still a per-file matrix. The plural `--targets` is
+        // NOT any more: project mode sweeps it the same way it sweeps
+        // `--platform`, which is what makes a package's declared
+        // `[build].targets` mean something to `karac check`
+        // (B-2026-08-20-29 — before this it was silently checked once, under
+        // the default target, with the list ignored).
+        if profiles.is_some() {
             eprintln!(
-                "error: --profiles / --targets need a file argument \
-                 (they are per-file matrices; project-mode support is a follow-up)"
+                "error: --profiles needs a file argument \
+                 (it is a per-file matrix; project-mode support is a follow-up)"
             );
             process::exit(1);
         }
+        let target_sweep = match (&targets, target_is_singular) {
+            (Some(t), false) => Some(t.clone()),
+            _ => None,
+        };
         return Command::CheckProject {
             output,
             concurrency_report,
             simd_report,
             lint_overrides,
             target: single_target,
+            targets: target_sweep,
+            platforms,
         };
     };
     Command::Check {
@@ -355,10 +376,80 @@ fn parse_check_command(args: &[String]) -> Command {
         output,
         profiles,
         targets,
+        platforms,
         concurrency_report,
         simd_report,
         lint_overrides,
     }
+}
+
+/// `--platform=` on a command that EXECUTES or EMITS.
+///
+/// The flag selects which platform-suffixed files are read. Reading another
+/// OS's half is exactly the point on `check`; running or emitting it is not —
+/// v1 codegen targets the host triple, so a `--platform=macos` build on Linux
+/// would compile macOS-only source into a Linux artifact, and `run` would
+/// interpret it on the wrong OS. Name that rather than answering "unknown
+/// flag" (B-2026-08-20-29).
+fn reject_platform_flag(arg: &str, command: &str) -> ! {
+    eprintln!(
+        "error: --platform selects which platform-suffixed files are ANALYSED; \
+         `karac {command}` targets the host, so another OS's half cannot be \
+         {} here. Use `karac check {arg}` to type-check it, and a CI matrix on \
+         each host to produce artifacts.",
+        if command == "build" {
+            "emitted"
+        } else {
+            "executed"
+        }
+    );
+    process::exit(1);
+}
+
+/// Parse the `--platform=` value for `karac check`: one or more of the four
+/// OS-suffix platforms, or `all` for the coverage sweep.
+///
+/// `all` is the point of the flag. design.md's *Missing-platform rule* used to
+/// offer `karac check --target all` as "a compile-time guarantee that every
+/// target has coverage"; the text was corrected when it turned out no such
+/// command existed (B-2026-08-20-25), and this is the command
+/// (B-2026-08-20-29).
+fn parse_platforms_arg(spec: &str) -> Vec<crate::walker::Platform> {
+    use crate::walker::Platform;
+    const ALL: &[Platform] = &[
+        Platform::Linux,
+        Platform::Macos,
+        Platform::Windows,
+        Platform::Wasm,
+    ];
+    let spec = spec.trim();
+    if spec.is_empty() {
+        eprintln!(
+            "error: --platform requires at least one platform name \
+             (e.g. --platform=all or --platform=linux,macos)"
+        );
+        process::exit(1);
+    }
+    if spec == "all" {
+        return ALL.to_vec();
+    }
+    let mut out: Vec<Platform> = Vec::new();
+    for name in spec.split(',') {
+        let name = name.trim();
+        let Some(p) = Platform::from_suffix(name) else {
+            eprintln!(
+                "error: unknown platform '{name}'. Known platforms: linux, macos, \
+                 windows, wasm (or `all`)."
+            );
+            process::exit(1);
+        };
+        if out.contains(&p) {
+            eprintln!("error: duplicate platform '{name}' in --platform");
+            process::exit(1);
+        }
+        out.push(p);
+    }
+    out
 }
 
 /// Parse the `--targets=` value for `karac check` (phase-10
@@ -616,6 +707,8 @@ fn parse_build_command(args: &[String]) -> Command {
             process::exit(1);
         } else if try_consume_lint_flag(args, &mut i, &mut lint_overrides) {
             // consumed
+        } else if arg.starts_with("--platform=") {
+            reject_platform_flag(arg, "build");
         } else if arg.starts_with('-') {
             eprintln!("error: unknown flag '{arg}'");
             process::exit(1);

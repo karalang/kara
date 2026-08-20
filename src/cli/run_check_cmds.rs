@@ -1431,6 +1431,8 @@ pub(super) fn cmd_check_project(
     simd_report: bool,
     lint_overrides: crate::lints::CliLintOverrides,
     target: Option<&str>,
+    targets: Option<&[String]>,
+    platforms: Option<&[crate::walker::Platform]>,
 ) {
     // `--target=<v1 name>`, the singular spelling, means here what it means to
     // `karac build`: check for THIS target. It has to be applied before the
@@ -1461,7 +1463,41 @@ pub(super) fn cmd_check_project(
     }
     let mut lints = lint_overrides;
     lints.apply_manifest_lints(&mf.lints);
-    let pc = match super::build_cmds::package_check(&root, &lints, build_target) {
+
+    // `--platform=` names design.md's third axis directly instead of taking
+    // what the compilation target derives — which is the host for everything
+    // but `wasm_*`, and is therefore the reason the other half of a platform
+    // split cannot be checked from one machine (B-2026-08-20-29). More than
+    // one platform is a SWEEP: each is checked in full, under its own header,
+    // and any failure fails the command.
+    if let Some(platforms) = platforms {
+        if platforms.len() > 1 {
+            check_platform_sweep(&root, &lints, output, platforms);
+            return;
+        }
+    }
+
+    // The compilation-target axis, swept the same way. `--targets=` names it
+    // explicitly; absent that, a package's declared `[build].targets` does —
+    // which project mode used to parse and then quietly check once under the
+    // default target (B-2026-08-20-29).
+    let declared: Vec<String> = mf.build_targets.clone();
+    let target_sweep: Option<&[String]> = match (targets, target.is_some()) {
+        (Some(list), _) if list.len() > 1 => Some(list),
+        // An explicit singular `--target=` is a request for ONE target and
+        // outranks the manifest's list.
+        (None, false) if declared.len() > 1 => Some(&declared),
+        _ => None,
+    };
+    if let Some(list) = target_sweep {
+        check_target_sweep(&root, &lints, output, list, platforms);
+        return;
+    }
+
+    let platform = platforms
+        .and_then(|p| p.first().copied())
+        .unwrap_or_else(|| super::build_cmds::walk_platform_for_target(build_target));
+    let pc = match super::build_cmds::package_check_on(&root, &lints, platform) {
         Ok(pc) => pc,
         Err(e) => {
             emit_build_error(&e, output);
@@ -1511,6 +1547,221 @@ pub(super) fn cmd_check_project(
     }
 }
 
+/// `karac check --platform=all` (or any multi-platform list): check the package
+/// once per platform, each under its own header, and fail if any platform does.
+///
+/// This is the coverage guarantee design.md's *Missing-platform rule* used to
+/// promise and no command provided — the text was corrected when that was
+/// measured (B-2026-08-20-25) and this is the feature (B-2026-08-20-29). Before
+/// it, a `_macos` module could not be type-checked from a Linux box at all, so a
+/// break in it stayed invisible until a CI matrix reached a mac.
+///
+/// Diagnostics are NOT deduplicated across platforms, unlike the per-file target
+/// matrix. Platforms share every file that carries no suffix, so an error in one
+/// of those does repeat — but a platform sweep is asked in order to learn WHICH
+/// platform is broken, and a per-platform block answers that directly. The
+/// target matrix dedupes because its runs differ only in a handful of
+/// `#[target]`-gated items; the platform runs differ by whole files.
+fn check_platform_sweep(
+    root: &std::path::Path,
+    lints: &crate::lints::CliLintOverrides,
+    output: OutputMode,
+    platforms: &[crate::walker::Platform],
+) {
+    let mut failed: Vec<&'static str> = Vec::new();
+    for (i, platform) in platforms.iter().enumerate() {
+        let name = platform.as_suffix();
+        match output {
+            OutputMode::Jsonl => emit_jsonl_event(
+                "platform_start",
+                &format!("\"platform\":{}", json_string(name)),
+            ),
+            OutputMode::Json => {}
+            OutputMode::Text => {
+                if i > 0 {
+                    println!();
+                }
+                println!("── platform: {name} ──");
+            }
+        }
+        let pc = match super::build_cmds::package_check_on(root, lints, *platform) {
+            Ok(pc) => pc,
+            Err(e) => {
+                // A walk/tree failure is per-platform too: a package whose only
+                // entry file carries a suffix has no entry on other platforms.
+                emit_build_error(&e, output);
+                failed.push(name);
+                continue;
+            }
+        };
+        let errors = pc.error_count();
+        render_package_check(&pc, output, errors, Some(name));
+        if errors > 0 {
+            failed.push(name);
+        }
+        if let OutputMode::Jsonl = output {
+            emit_jsonl_event(
+                "platform_complete",
+                &format!(
+                    "\"platform\":{},\"success\":{},\"total_errors\":{}",
+                    json_string(name),
+                    errors == 0,
+                    errors,
+                ),
+            );
+        }
+    }
+    if !failed.is_empty() {
+        if let OutputMode::Text = output {
+            println!(
+                "\n{} of {} platform(s) failed: {}",
+                failed.len(),
+                platforms.len(),
+                failed.join(", ")
+            );
+        }
+        process::exit(1);
+    }
+    if let OutputMode::Text = output {
+        println!("\nAll {} platform(s) checked clean.", platforms.len());
+    }
+}
+
+/// `karac check --targets=<a,b>` in project mode, or a package whose manifest
+/// declares more than one `[build].targets` entry: check the package once per
+/// v1 compilation target.
+///
+/// The platform axis rides along — each target derives its own OS platform
+/// unless `--platform=` named one — so `--targets=native,wasm_wasi` checks the
+/// host's files under `native` and the `_wasm` files under `wasm_wasi`, which
+/// is the pair a package with a platform split most wants verified.
+fn check_target_sweep(
+    root: &std::path::Path,
+    lints: &crate::lints::CliLintOverrides,
+    output: OutputMode,
+    targets: &[String],
+    platforms: Option<&[crate::walker::Platform]>,
+) {
+    let mut failed: Vec<String> = Vec::new();
+    for (i, target) in targets.iter().enumerate() {
+        if let Err(e) = crate::target::set_active_target(target) {
+            eprintln!("error: {e}");
+            process::exit(1);
+        }
+        match output {
+            OutputMode::Jsonl => emit_jsonl_event(
+                "target_start",
+                &format!("\"target\":{}", json_string(target)),
+            ),
+            OutputMode::Json => {}
+            OutputMode::Text => {
+                if i > 0 {
+                    println!();
+                }
+                println!("── target: {target} ──");
+            }
+        }
+        let platform = platforms
+            .and_then(|p| p.first().copied())
+            .unwrap_or_else(|| super::build_cmds::walk_platform_for_target(target));
+        let errors = match super::build_cmds::package_check_on(root, lints, platform) {
+            Ok(pc) => {
+                let errors = pc.error_count();
+                render_package_check(&pc, output, errors, None);
+                errors
+            }
+            Err(e) => {
+                emit_build_error(&e, output);
+                1
+            }
+        };
+        if errors > 0 {
+            failed.push(target.clone());
+        }
+        if let OutputMode::Jsonl = output {
+            emit_jsonl_event(
+                "target_complete",
+                &format!(
+                    "\"target\":{},\"success\":{},\"total_errors\":{}",
+                    json_string(target),
+                    errors == 0,
+                    errors,
+                ),
+            );
+        }
+    }
+    if !failed.is_empty() {
+        if let OutputMode::Text = output {
+            println!(
+                "\n{} of {} target(s) failed: {}",
+                failed.len(),
+                targets.len(),
+                failed.join(", ")
+            );
+        }
+        process::exit(1);
+    }
+    if let OutputMode::Text = output {
+        println!("\nAll {} target(s) checked clean.", targets.len());
+    }
+}
+
+/// Render one [`PackageCheck`] in the requested output mode. Split out of
+/// `cmd_check_project` so the platform sweep renders each run identically to a
+/// single check — `platform` is `Some` only inside a sweep, where the text mode
+/// has already printed the header and must not repeat the summary line.
+fn render_package_check(
+    pc: &super::build_cmds::PackageCheck,
+    output: OutputMode,
+    errors: usize,
+    platform: Option<&str>,
+) {
+    match output {
+        OutputMode::Json => {
+            let mut diags: Vec<String> = Vec::new();
+            diags.extend(super::build_cmds::parse_errors_json(&pc.parse_errors));
+            diags.extend(super::build_cmds::type_warnings_json(&pc.type_warnings));
+            diags.extend(super::build_cmds::cycles_json(&pc.cycles, &pc.tree));
+            diags.extend(super::build_cmds::resolve_errors_json(&pc.resolve_errors));
+            diags.extend(super::build_cmds::type_errors_json(&pc.type_errors));
+            match platform {
+                Some(name) => println!(
+                    "{{\"platform\":{},\"diagnostics\":[{}]}}",
+                    json_string(name),
+                    diags.join(",")
+                ),
+                None => println!("{{\"diagnostics\":[{}]}}", diags.join(",")),
+            }
+        }
+        OutputMode::Jsonl => {
+            for e in super::build_cmds::parse_errors_jsonl(&pc.parse_errors) {
+                println!("{e}");
+            }
+            for e in super::build_cmds::cycles_jsonl(&pc.cycles, &pc.tree) {
+                println!("{e}");
+            }
+            for e in super::build_cmds::resolve_errors_jsonl(&pc.resolve_errors) {
+                println!("{e}");
+            }
+            for e in super::build_cmds::type_errors_jsonl(&pc.type_errors) {
+                println!("{e}");
+            }
+        }
+        OutputMode::Text => {
+            super::build_cmds::print_type_warnings_text(&pc.type_warnings);
+            super::build_cmds::print_parse_errors_text(&pc.parse_errors);
+            super::build_cmds::print_cycles_text(&pc.cycles, &pc.tree);
+            super::build_cmds::print_resolve_errors_text(&pc.resolve_errors);
+            super::build_cmds::print_type_errors_text(&pc.type_errors);
+            if errors == 0 {
+                println!("All checks passed.");
+            } else {
+                println!("\n{errors} error(s) found.");
+            }
+        }
+    }
+}
+
 /// `karac check <file>` where `<file>` is a member of a `kara.toml` package.
 ///
 /// Runs the WHOLE package through the module-aware pipeline (the same one
@@ -1528,36 +1779,41 @@ fn cmd_check_package_member(
     root: &std::path::Path,
     output: OutputMode,
     lint_overrides: &crate::lints::CliLintOverrides,
+    platform: Option<crate::walker::Platform>,
 ) -> bool {
     let mut lints = lint_overrides.clone();
     if let Ok(mf) = manifest::load_from_root(root) {
         lints.apply_manifest_lints(&mf.lints);
     }
-    let mut pc =
-        match super::build_cmds::package_check(root, &lints, crate::target::active_target()) {
-            Ok(pc) => pc,
-            Err(e) => {
-                // No package VIEW could be formed at all — most often a directory
-                // holding a `kara.toml` and modules but no `src/main.kara` /
-                // `src/lib.kara` entry. Several `examples/` packages are shaped
-                // that way, and `karac build` refuses them for the same reason.
-                //
-                // Fall back to the single-file check rather than failing: the
-                // caller asked about one file, and "this package has no entry
-                // point" is not an answer about that file. The single-file view is
-                // the blind one this function exists to replace, so say so once —
-                // narrowing silently would be the original bug wearing a new hat.
-                if output == OutputMode::Text {
-                    eprintln!(
-                        "note: checking `{filename}` on its own — the package at `{}` could \
+    // `--platform=` overrides what the compilation target derives, so a
+    // `_macos` member can be checked from any host (B-2026-08-20-29).
+    let platform = platform.unwrap_or_else(|| {
+        super::build_cmds::walk_platform_for_target(crate::target::active_target())
+    });
+    let mut pc = match super::build_cmds::package_check_on(root, &lints, platform) {
+        Ok(pc) => pc,
+        Err(e) => {
+            // No package VIEW could be formed at all — most often a directory
+            // holding a `kara.toml` and modules but no `src/main.kara` /
+            // `src/lib.kara` entry. Several `examples/` packages are shaped
+            // that way, and `karac build` refuses them for the same reason.
+            //
+            // Fall back to the single-file check rather than failing: the
+            // caller asked about one file, and "this package has no entry
+            // point" is not an answer about that file. The single-file view is
+            // the blind one this function exists to replace, so say so once —
+            // narrowing silently would be the original bug wearing a new hat.
+            if output == OutputMode::Text {
+                eprintln!(
+                    "note: checking `{filename}` on its own — the package at `{}` could \
                      not be assembled ({e}), so imports of sibling modules are not \
                      resolved here",
-                        root.display(),
-                    );
-                }
-                return false;
+                    root.display(),
+                );
             }
-        };
+            return false;
+        }
+    };
     let had_errors = pc.has_errors();
     let elsewhere = pc.restrict_to_file(std::path::Path::new(filename));
 
@@ -1615,11 +1871,13 @@ fn cmd_check_package_member(
     true
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn cmd_check(
     filename: &str,
     output: OutputMode,
     profiles: Option<Vec<crate::manifest::CompileProfile>>,
     targets: Option<Vec<String>>,
+    platforms: Option<Vec<crate::walker::Platform>>,
     concurrency_report: bool,
     simd_report: bool,
     lint_overrides: crate::lints::CliLintOverrides,
@@ -1631,6 +1889,22 @@ pub(super) fn cmd_check(
         eprintln!("error: --profiles and --targets are mutually exclusive");
         process::exit(1);
     }
+    // A platform SWEEP reports per platform, and a file-mode check reports one
+    // file — which may not even exist on every platform in the list. The sweep
+    // is a project-mode question, so say so rather than inventing a per-file
+    // rendering for it (B-2026-08-20-29).
+    let platform = match platforms.as_deref() {
+        Some([]) | None => None,
+        Some([one]) => Some(*one),
+        Some(many) => {
+            eprintln!(
+                "error: --platform with {} platforms is a package-wide sweep; drop the \
+                 file argument (`karac check --platform=all`) to run it",
+                many.len()
+            );
+            process::exit(1);
+        }
+    };
 
     // Resolver follow-up (m): when `karac check <file>` runs inside a project,
     // surface dependency-resolution diagnostics so a broken dep graph (cycle /
@@ -1712,7 +1986,7 @@ pub(super) fn cmd_check(
     // loop and every plain `karac check <file>` take, and the one that was
     // reporting invented type errors.
     if let Some(root) = package_root_of_member(filename) {
-        if cmd_check_package_member(filename, &root, output, &lint_overrides) {
+        if cmd_check_package_member(filename, &root, output, &lint_overrides, platform) {
             return;
         }
     }

@@ -190,6 +190,14 @@ pub enum Command {
         /// target-agnostic ones. `--targets=all` expands to the closed
         /// v1 set. Mutually exclusive with `profiles`.
         targets: Option<Vec<String>>,
+        /// Optional list of OS platforms whose `_linux` / `_macos` /
+        /// `_windows` / `_wasm` files the walk should keep — design.md §
+        /// Platform-specific modules > Target selection's THIRD axis, which
+        /// until B-2026-08-20-29 was derived-only. `None` keeps the
+        /// derivation (`wasm_*` → `_wasm`, everything else the host).
+        /// `--platform=all` sweeps every platform, which is how a split is
+        /// verified to cover every OS from one machine.
+        platforms: Option<Vec<crate::walker::Platform>>,
         /// `--concurrency-report` (Slice D, 2026-05-08): also emit the
         /// human-readable concurrency analysis to stdout after checks
         /// complete. Already runs `concurrencycheck()` via
@@ -346,6 +354,13 @@ pub enum Command {
         /// target. `None` leaves the process default (`native`). The plural
         /// `--targets=` is a per-file matrix and is refused in project mode.
         target: Option<String>,
+        /// `--targets=<a,b>` / `--targets=all` — the PLURAL spelling, a sweep
+        /// over v1 compilation targets. `None` consults the manifest's
+        /// `[build].targets`, which project mode used to parse and then ignore
+        /// (B-2026-08-20-29).
+        targets: Option<Vec<String>>,
+        /// `--platform=<os>` / `--platform=all` — see `Check.platforms`.
+        platforms: Option<Vec<crate::walker::Platform>>,
     },
     BuildProject {
         output: OutputMode,
@@ -791,6 +806,7 @@ pub fn execute(cmd: Command) {
             output,
             profiles,
             targets,
+            platforms,
             concurrency_report,
             simd_report,
             lint_overrides,
@@ -799,6 +815,7 @@ pub fn execute(cmd: Command) {
             output,
             profiles,
             targets,
+            platforms,
             concurrency_report,
             simd_report,
             lint_overrides,
@@ -846,12 +863,16 @@ pub fn execute(cmd: Command) {
             simd_report,
             lint_overrides,
             target,
+            targets,
+            platforms,
         } => cmd_check_project(
             output,
             concurrency_report,
             simd_report,
             lint_overrides,
             target.as_deref(),
+            targets.as_deref(),
+            platforms.as_deref(),
         ),
         Command::BuildProject {
             output,

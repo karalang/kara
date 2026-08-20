@@ -737,6 +737,7 @@ pub(super) fn cmd_build(
             output,
             None,
             None,
+            None,
             concurrency_report,
             simd_report,
             lint_overrides,
@@ -3017,8 +3018,25 @@ pub(super) fn package_check(
     lint_overrides: &crate::lints::CliLintOverrides,
     build_target: &str,
 ) -> Result<PackageCheck, String> {
+    package_check_on(root, lint_overrides, walk_platform_for_target(build_target))
+}
+
+/// [`package_check`] with the OS platform named explicitly rather than derived
+/// from the compilation target.
+///
+/// The derivation only ever answers `_wasm` or the host, so it is the ONLY
+/// thing standing between an author and the other half of a platform split:
+/// a `_macos` module cannot be reached from a Linux box, which is what
+/// `--platform=` overrides (B-2026-08-20-29). Everything downstream of the walk
+/// is platform-agnostic — the walker's suffix filter is the whole mechanism —
+/// so naming the platform here is the entire feature.
+pub(super) fn package_check_on(
+    root: &std::path::Path,
+    lint_overrides: &crate::lints::CliLintOverrides,
+    platform: walker::Platform,
+) -> Result<PackageCheck, String> {
     let walk_opts = WalkerOpts {
-        target: walk_platform_for_target(build_target),
+        target: platform,
         ..WalkerOpts::default()
     };
     let walked = walker::walk_project(root, walk_opts).map_err(|e| format!("{e}"))?;

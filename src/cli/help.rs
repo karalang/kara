@@ -13,7 +13,15 @@ COMMANDS:
                       Run an example from the examples/ directory.
                       Single-file examples: examples/<NAME>.kara
                       Project examples:     examples/<NAME>/src/main.kara
-    check <file>      Type-check without executing
+    check [file]      Type-check without executing. With no <file>, checks
+                      the whole project. `--platform=<linux|macos|windows|
+                      wasm>` picks which platform-suffixed files are read
+                      (default: `_wasm` under a wasm target, else the host);
+                      `--platform=all` sweeps every one, which is how a
+                      platform split is verified to cover every OS from a
+                      single machine. `--targets=<a,b>` / `--targets=all`
+                      sweeps v1 compilation targets, as does a manifest
+                      `[build] targets` list.
     build [file]      Compile (check + effects + ownership).
                       With no <file>, builds the current project: walks up
                       from CWD to find `kara.toml` and compiles every

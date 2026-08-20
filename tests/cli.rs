@@ -4604,8 +4604,12 @@ fn platform_file_replaces_its_shared_sibling_rather_than_merging() {
 /// `karac build`: check for that target, platform-suffix selection included.
 /// It used to be folded into the per-file `--targets=` matrix and refused
 /// with "need a file argument", so the spelling design.md points a reader at
-/// worked for `build` and not for `check` (B-2026-08-20-25). The PLURAL
-/// spelling stays refused — it really is a per-file matrix.
+/// worked for `build` and not for `check` (B-2026-08-20-25).
+///
+/// The PLURAL spelling used to stay refused, and this test pinned that. It is a
+/// sweep now (B-2026-08-20-29, the follow-up this row's own note asked for), so
+/// the last assertion checks the sweep instead of the refusal. The SINGULAR
+/// half is unchanged and is what the test is really about.
 #[test]
 fn project_check_honours_the_singular_target_flag() {
     let tmp = scratch_project("check-project-target");
@@ -4646,21 +4650,27 @@ fn project_check_honours_the_singular_target_flag() {
         "the wasm check must walk host_wasm.kara, losing `shared_only`: {wasm_all}"
     );
 
-    // The plural spelling is still a per-file matrix.
+    // The plural spelling sweeps every v1 target. This package fails under
+    // both wasm targets for the reason above, so the sweep must run all four,
+    // fail, and name which ones — not answer with a single verdict.
     let plural = karac_bin()
         .current_dir(&tmp)
         .args(["check", "--targets=all"])
         .output()
         .unwrap();
     let _ = std::fs::remove_dir_all(&tmp);
-    let plural_all = format!(
-        "{}{}",
-        String::from_utf8_lossy(&plural.stdout),
-        String::from_utf8_lossy(&plural.stderr)
-    );
+    let plural_out = String::from_utf8_lossy(&plural.stdout).into_owned();
+    let plural_all = format!("{plural_out}{}", String::from_utf8_lossy(&plural.stderr));
+    assert!(!plural.status.success(), "the wasm legs fail: {plural_all}");
+    for target in ["native", "wasm_browser", "wasm_wasi", "gpu"] {
+        assert!(
+            plural_out.contains(&format!("── target: {target} ──")),
+            "every target gets a block; missing {target} in: {plural_out}"
+        );
+    }
     assert!(
-        !plural.status.success() && plural_all.contains("need a file argument"),
-        "--targets= in project mode must still be refused: {plural_all}"
+        plural_out.contains("target(s) failed:") && plural_out.contains("wasm_wasi"),
+        "the summary names the failing targets: {plural_out}"
     );
 }
 
@@ -28544,4 +28554,255 @@ fn test_a_contested_member_reached_through_a_binding_chain() {
         eprintln!("skip: AOT build produced no binary (no runtime archive?)");
     }
     let _ = std::fs::remove_dir_all(&tmp);
+}
+
+// ── Cross-OS platform selection (B-2026-08-20-29) ───────────────
+
+/// A package with a platform split: `poller.kara` shared, `poller_<os>.kara`
+/// per OS. `broken` names the platform whose file carries a real error.
+fn platform_split_project(tag: &str, broken: Option<&str>) -> std::path::PathBuf {
+    let tmp = scratch_project(&format!("platform-{tag}"));
+    write(&tmp.join("kara.toml"), "[package]\nname = \"plat\"\n");
+    write(
+        &tmp.join("src/poller.kara"),
+        "pub fn name() -> String { return \"shared\"; }\n",
+    );
+    for os in ["linux", "macos", "windows", "wasm"] {
+        let body = if broken == Some(os) {
+            format!("pub fn name() -> String {{ return this_is_a_typo_{os}(); }}\n")
+        } else {
+            format!("pub fn name() -> String {{ return \"{os}\"; }}\n")
+        };
+        write(&tmp.join(format!("src/poller_{os}.kara")), &body);
+    }
+    write(
+        &tmp.join("src/main.kara"),
+        "import poller.name;\nfn main() { println(name()); }\n",
+    );
+    tmp
+}
+
+/// The bug: an error living only in a NON-HOST platform file is invisible to
+/// every command, because the walker only ever keeps the host's half (or
+/// `_wasm` under a wasm target). `--platform=` names that axis directly.
+#[test]
+fn test_a_non_host_platform_file_is_checkable() {
+    // Pick a platform that is definitely not the host, so the test means the
+    // same thing on every CI runner.
+    let other = if cfg!(target_os = "macos") {
+        "windows"
+    } else {
+        "macos"
+    };
+    let tmp = platform_split_project("non-host", Some(other));
+
+    let out = karac_bin().current_dir(&tmp).arg("check").output().unwrap();
+    assert!(
+        out.status.success(),
+        "the default check sees only the host's half, so it must pass: {}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .args(["check", &format!("--platform={other}")])
+        .output()
+        .unwrap();
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(
+        !out.status.success(),
+        "`--platform={other}` must reach that platform's file: {combined}"
+    );
+    assert!(
+        combined.contains(&format!("this_is_a_typo_{other}")),
+        "expected the {other} file's error, got: {combined}"
+    );
+}
+
+/// `--platform=all` is the coverage sweep design.md's *Missing-platform rule*
+/// describes: every platform checked, the failing one named.
+#[test]
+fn test_platform_all_sweeps_every_platform_and_names_the_failure() {
+    let tmp = platform_split_project("sweep", Some("windows"));
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .args(["check", "--platform=all"])
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let combined = format!("{stdout}{}", String::from_utf8_lossy(&out.stderr));
+
+    assert!(!out.status.success(), "a failing platform fails the sweep");
+    for os in ["linux", "macos", "windows", "wasm"] {
+        assert!(
+            stdout.contains(&format!("── platform: {os} ──")),
+            "every platform gets a block; missing {os} in: {stdout}"
+        );
+    }
+    assert!(
+        combined.contains("this_is_a_typo_windows"),
+        "the broken platform's error is reported: {combined}"
+    );
+    assert!(
+        stdout.contains("1 of 4 platform(s) failed: windows"),
+        "the summary names which platform failed: {stdout}"
+    );
+}
+
+/// The clean case has to be distinguishable from the failing one — a sweep that
+/// always exited 0 would be worthless.
+#[test]
+fn test_platform_all_passes_when_every_platform_is_clean() {
+    let tmp = platform_split_project("sweep-clean", None);
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .args(["check", "--platform=all"])
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "all platforms clean must exit 0: {stdout}"
+    );
+    assert!(
+        stdout.contains("All 4 platform(s) checked clean."),
+        "expected the clean summary, got: {stdout}"
+    );
+}
+
+/// `--platform` selects which files are ANALYSED. Running or emitting another
+/// OS's half is a different thing that v1 cannot do — codegen targets the host
+/// triple — so both refuse by name rather than answering `unknown flag`.
+#[test]
+fn test_platform_is_refused_by_build_and_run() {
+    let tmp = platform_split_project("refused", None);
+    for (args, verb) in [
+        (vec!["build", "--platform=macos"], "emitted"),
+        (vec!["run", "--platform=macos", "src/main.kara"], "executed"),
+    ] {
+        let out = karac_bin()
+            .current_dir(&tmp)
+            .args(args.clone())
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "{args:?} must be refused");
+        assert!(
+            stderr.contains(verb) && stderr.contains("karac check --platform=macos"),
+            "{args:?} must say why and point at check; got: {stderr}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// A sweep reports per platform; a file-mode check reports one file, which may
+/// not exist on every platform in the list. Say so instead of inventing a
+/// rendering for it.
+#[test]
+fn test_a_platform_sweep_is_refused_in_file_mode() {
+    let tmp = platform_split_project("file-mode", None);
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .args(["check", "--platform=all", "src/main.kara"])
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(
+        stderr.contains("package-wide sweep") && stderr.contains("drop the file argument"),
+        "expected the project-mode pointer, got: {stderr}"
+    );
+}
+
+#[test]
+fn test_unknown_platform_name_is_rejected() {
+    let tmp = platform_split_project("unknown", None);
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .args(["check", "--platform=solaris"])
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(
+        stderr.contains("unknown platform 'solaris'") && stderr.contains("linux, macos"),
+        "expected the known-platform list, got: {stderr}"
+    );
+}
+
+/// A package that declares `[build] targets` used to have that list parsed and
+/// then silently dropped in project mode — one pass, under the default target.
+/// The declared list now drives a sweep, so a `#[target]`-gated break is caught.
+#[test]
+fn test_project_mode_sweeps_the_manifests_declared_targets() {
+    let tmp = platform_split_project("manifest-targets", None);
+    write(
+        &tmp.join("kara.toml"),
+        "[package]\nname = \"plat\"\n\n[build]\ntargets = [\"native\", \"wasm_wasi\"]\n",
+    );
+    let out = karac_bin().current_dir(&tmp).arg("check").output().unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "clean package: {stdout}");
+    for target in ["native", "wasm_wasi"] {
+        assert!(
+            stdout.contains(&format!("── target: {target} ──")),
+            "the declared list must drive a per-target block; missing {target} in: {stdout}"
+        );
+    }
+
+    // `--targets=` says the same thing explicitly; project mode used to refuse
+    // it outright ("--profiles / --targets need a file argument").
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .args(["check", "--targets=native,wasm_wasi"])
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "explicit sweep: {stdout}");
+    assert!(
+        stdout.contains("All 2 target(s) checked clean."),
+        "{stdout}"
+    );
+}
+
+/// The singular `--target=` still means ONE target, and `--profiles` is still a
+/// per-file matrix — neither changed when the plural gained project-mode
+/// meaning.
+#[test]
+fn test_singular_target_and_profiles_keep_their_project_mode_behaviour() {
+    let tmp = platform_split_project("singular", None);
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .args(["check", "--target=wasm_wasi"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{stdout}");
+    assert!(
+        !stdout.contains("── target:"),
+        "one target is a single pass, not a matrix: {stdout}"
+    );
+
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .args(["check", "--profiles=all"])
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(
+        stderr.contains("--profiles needs a file argument"),
+        "expected the profiles refusal, got: {stderr}"
+    );
 }
