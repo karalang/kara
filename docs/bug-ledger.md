@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 265 | 0 |
+| miscompile | 266 | 0 |
 | leak | 185 | 0 |
 | run-vs-build | 139 | 0 |
 | double-free | 133 | 0 |
@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 119 | 0 |
 | false-positive | 86 | 0 |
 | diagnostics | 84 | 0 |
-| perf | 80 | 1 |
+| perf | 80 | 0 |
 | crash | 55 | 1 |
 | soundness | 51 | 0 |
 | other | 49 | 0 |
@@ -110,12 +110,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 953 | 2 |
+| codegen | 954 | 2 |
 | typecheck | 219 | 1 |
 | interp | 163 | 0 |
 | ownership | 60 | 0 |
 | other | 58 | 0 |
-| autopar | 53 | 1 |
+| autopar | 54 | 0 |
 | cli | 48 | 0 |
 | parser | 32 | 0 |
 | runtime | 27 | 1 |
@@ -124,15 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 6 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1392 surfaced · 3 open · 1369 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1393 surfaced · 2 open · 1371 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-19-13 | 2026-08-19 | typecheck+codegen+runtime | medium | GPU reductions still lack TILED MATMUL (2-D workgroup indexing the 1-D model lacks); integer `prod` / `dot` are blocked on WGSL lacking a widening multiply; and `variance` / `stddev` are f32-only (the integer form needs a decision, not just work — the deviations are formed on-device in f32, so `mean`'s promote-late trick does not carry over). A SAMPLE (÷ n-1) form is decided against rather than pending. Everything else has shipped: sum / prod / min / max / mean / dot / argmin / argmax / variance / stddev / prefix_sum over `Vec[f32]`, and sum / min / max / mean / argmin / argmax over `Vec[i32]` and `Vec[u32]`. | docs/spikes/gpu-llvm-offload-assessment.md; src/gpu_wgsl.rs::emit_reduce_kernel; src/reduce_kernel.rs::tree_reduce_f32 |
 | B-2026-08-20-5 | 2026-08-20 | codegen | high | `e2e_128bit_integers_end_to_end` produces EMPTY STDOUT on macOS arm64 only — the binary links and runs but prints nothing before the first `println`. Linux x86_64 and Linux arm64 both pass the same test. CI's `Codegen E2E (macOS arm64, LLVM 18)` lane has been red on `main` since the test landed. | tests/codegen.rs::e2e_128bit_integers_end_to_end (line ~21227); tests/codegen.rs::run_program_capturing (stdout-only discard); added by 7561b5d1 (B-2026-08-19-8 stage 5); CI job `Codegen E2E (macOS arm64, LLVM 18)` in .github/workflows/ci.yml |
-| B-2026-08-20-14 | 2026-08-20 | autopar | high | A `parallel_reduction` is REPORTED but never dispatched when the loop's induction variable is a REUSED binding (`i = 0` on an `i` declared earlier) rather than a fresh `let mut i = 0` — one token, 3.69x, and the concurrency report claims parallelism either way | — |
 
 ### Wontfix (7)
 
@@ -150,9 +149,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1392 surfaced
 
 </details>
 
-### Fixed (1369)
+### Fixed (1371)
 
-<details><summary>1369 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1371 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -12642,6 +12641,26 @@ SCOPE CORRECTION: the row understated this. It is a type-level hole, not a liter
 TESTS (tests/typechecker.rs): `a_float_is_rejected_at_every_integer_slot` walks every slot and both int widths; `an_integer_still_widens_into_every_float_slot` pins that the legal direction is unaffected. `the_literal_pattern_check_agrees_with_expression_position` had an explicit exception for `("i64", "5i64", "1.5")` recording that pattern position was stricter than expression position — with this fixed the two agree, so the exception is retired and the case moved into the agreement table.
 
 SELF-HOSTED TWIN. `selfhost_typechecker_matches_rust_typechecker` caught the divergence the moment the Rust rule landed: its corpus carried `fn ret_i64_from_float() -> i64 { 1.5 }` in the CLEAN group, pinning the old behaviour as correct. The self-hosted checker modelled all numerics as one coarse `NUM` category, which by construction cannot see this direction, so it was taught the same rule: `f32`/`f64` and float literals now carry their own category (5, FLOAT), `cats_compatible` became ASYMMETRIC (`expected`, `found`) so an int widens into a float slot but not the reverse, and every other consumer — comparison validity, arithmetic/bitwise operand checks, unary `-`/`~`, binary result inference — folds the two back together through a new `is_num` / `num_fold` / `num_join` trio, so the split is invisible everywhere except the assignment boundary. That keeps int-vs-float mixing legal in operand position exactly as the single NUM category did, while `1 + 1.5` now infers FLOAT so the assignment rule catches it too. The corpus entry moved from the clean group to the mismatch group. All seven selfhost oracles pass. |
+| B-2026-08-20-14 | autopar | high | A `parallel_reduction` is REPORTED but never dispatched when the loop's induction variable is a REUSED binding (`i = 0` on an `i` declared earlier) r… | FIXED by f620315. `preceding_stmt_init` (`src/par_cost.rs`) matched only `let mut k = <init>;` as the statement that carries a while-loop's counter init. A REUSED counter — `let mut i = 0` for an earlier loop, then a bare `i = 0;` before this one — took the `StmtKind::Assign` arm, which did not exist, so the shape declined as `WhileCounterInitNotFound` and the loop ran on one core. It now accepts both forms.
+
+WHY THE ASSIGNMENT FORM IS AS SAFE AS THE `let` FORM. The adjacency requirement is unchanged and is what carries the soundness: the init statement must be IMMEDIATELY before the loop, so nothing can observe or modify the counter in between and its prior value is dead — overwritten before any read. The two forms differ only in whether the binding was created at that statement or earlier. `CompoundAssign` (`i += 0`) is deliberately NOT accepted: it READS the prior value, so the counter is not dead on entry and the start bound would depend on whatever the previous loop left behind. The target must also be a bare identifier — `v[i] = 0` and `s.i = 0` are place expressions and never match.
+
+MEASURED on a 4-core Linux container, a 400k-iteration punch loop over a 64-step inner body, each variant against its own `KARAC_AUTO_PAR=0` build: the fresh-`let` variant 0.105 s -> 0.031 s and the REUSE variant, which previously did not dispatch at all, now 0.105 s -> 0.031 s as well. The two shapes are no longer distinguishable in either the report or the wall clock.
+
+ORDERING NOTE — A PRECONDITION HAD TO LAND FIRST. Widening this gate makes MORE while-shaped loops fan out, and while verifying that, the fan-out lowering turned out to leave the parent's counter at its INIT value after the loop (`println(i)` after a fanned-out `while i < n` printed 0 where the sequential build, the interpreter and the JIT all printed n). That is a silent wrong answer on the default build, and it would have been widened by this change rather than introduced by it, so it was filed and fixed separately as B-2026-08-20-15 and landed first (d361c11). Fixing this row on top of the un-fixed lowering would have traded a performance bug for a correctness one.
+
+TESTS: `a_reused_counter_initialized_by_assignment_is_a_counted_shape` and `a_compound_assignment_is_not_a_counter_init` (unit tests in `par_cost`) pin the shape decision in both directions; `e2e_a_reused_counter_loop_fans_out_and_agrees_with_sequential` (tests/par_codegen.rs) pins that the dispatched program computes what the sequential one does, counter included. The E2E asserts a VALUE rather than a wall-clock threshold, which would be flaky in CI; the fan-out itself is what the unit test pins. |
+| B-2026-08-20-15 | autopar+codegen | high | AUTO-PAR MISCOMPILE: after a fanned-out `while k < end { ...; k = k + 1; }` reduction, the parent's counter is left at its INIT value instead of `end… | FIXED by SHA_PLACEHOLDER. `Codegen::store_while_counter_final_value` (`src/codegen/reduce.rs`) writes `max(k_init, end)` into the parent's counter slot after the dispatch, on BOTH fan-out sites (the scalar reduction and the collect/tabulate one, which have separate tails).
+
+WHY `max` AND NOT A BARE STORE OF `end`: a loop that runs terminates exactly ON `end` (the step is 1, so the counter lands on the bound rather than past it), while a loop that never runs — `k_init >= end`, or a negative `end` — must leave the counter untouched. `max` covers both without a branch, and the never-runs case has its own test precisely so a future simplification to a bare store fails loudly.
+
+`k_init` is read back from the parent's own slot rather than recomputed from `lo_expr`: the init statement has already stored it, and the shape recognizer requires the init to be immediately adjacent to the loop, so nothing can have changed it since. The comparison is SIGNED, matching `clamp_iter_total_nonneg` — the same signed reading of the bounds decides how many iterations run, so the counter's landing point must be decided the same way.
+
+A `for` counter needs no write-back and gets none: it is loop-scoped, so `self.variables` has no entry for it and the helper is a no-op. That absence is the discriminator between the two shapes, so `LoopShape` needed no new field.
+
+TESTS (tests/par_codegen.rs, strict `assert_eq!` rather than the tolerant `if let Some(out)` idiom that green-skips on a missing archive): `e2e_while_counter_is_end_after_a_fanned_out_reduction`, `e2e_while_counter_with_a_nonzero_start_is_end_after_fan_out` and `e2e_while_counter_is_end_after_a_fanned_out_collect` all FAIL without the fix and pass with it; `e2e_while_counter_that_never_enters_the_loop_keeps_its_init` passes either way by design — it guards the `max`, not the write-back. Reaching the collect site took a `#[par_order_free]` body with real per-iteration work, since a bare push loop is recognized as `sequential_tabulate` and lowered inline; verified via `--concurrency-report` that the test program reports `fanned_out: true`.
+
+FIX SHA: d361c11 |
 
 </details>
 
