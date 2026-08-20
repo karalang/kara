@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 185 | 0 |
 | run-vs-build | 144 | 1 |
 | double-free | 133 | 0 |
-| missing-feature | 129 | 1 |
+| missing-feature | 129 | 0 |
 | codegen-gap | 120 | 1 |
 | diagnostics | 89 | 0 |
 | false-positive | 88 | 0 |
@@ -115,7 +115,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | interp | 167 | 1 |
 | ownership | 61 | 0 |
 | other | 59 | 0 |
-| cli | 55 | 1 |
+| cli | 55 | 0 |
 | autopar | 54 | 0 |
 | parser | 33 | 0 |
 | runtime | 27 | 0 |
@@ -124,13 +124,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 6 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1411 surfaced · 3 open · 1388 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1411 surfaced · 2 open · 1389 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-20-29 | 2026-08-20 | cli | low | THE NATIVE OS PLATFORMS ARE NOT SELECTABLE, so a `_macos` / `_windows` / `_linux` module can only be checked or built on that host, and no command verifies that a platform split covers every OS. `cmd_build_project` derives the walker's platform as `wasm_* -> Platform::Wasm`, everything else `Platform::host()` (now shared as `walk_platform_for_target`), and `kara.toml [build].target` -- a rustc-style overlay triple -- never touches it. So `_wasm` is reachable from any host and the three native suffixes are host-locked. design.md's *Missing-platform rule* used to promise exactly the missing guarantee (`karac check --target all` for "a compile-time guarantee that every target has coverage"); that text was corrected rather than the feature built (B-2026-08-20-25), and this row is the feature. | roadmap.md |
 | B-2026-08-20-32 | 2026-08-20 | interp | high | The TREE-WALK INTERPRETER's `.clone()` on a NESTED `Vec[Vec[T]]` is SHALLOW -- the inner Vecs are shared, so mutating the clone mutates the original; codegen (JIT, AOT and auto-par-off alike) deep-copies correctly, so the same five-line program prints a different answer under `--interp` | — |
 | B-2026-08-20-33 | 2026-08-20 | codegen | medium | A THREE-level index assignment (`a[i][j][k] = v` on a plain local `Vec[Vec[Vec[T]]]`) is rejected by codegen with `Index assignment target must be a variable`; the two-level form compiles, and the interpreter accepts both | — |
 
@@ -150,9 +149,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1411 surfaced
 
 </details>
 
-### Fixed (1388)
+### Fixed (1389)
 
-<details><summary>1388 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1389 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -13092,6 +13091,75 @@ is the shape every existing module-binding program is in. And a chain case
 (`import db;` + `db.conn.open()` + `db.pool.open()`), which is what the
 origin-table bug above showed up in. The 12 tests that shipped with
 B-2026-08-20-17 pass unchanged. |
+| B-2026-08-20-29 | cli | low | THE NATIVE OS PLATFORMS ARE NOT SELECTABLE, so a `_macos` / `_windows` / `_linux` module can only be checked or built on that host, and no command ve… | FIXED by 5079dbc.
+
+`karac check --platform=<os>` makes design.md's third axis selectable, and
+project mode now sweeps a declared target list instead of ignoring it.
+
+WHAT WAS WRONG. `walker::Platform` — which `_linux` / `_macos` / `_windows` /
+`_wasm` files a walk keeps — was derived and never named: `wasm_*` -> `Wasm`,
+everything else the host. So the other half of a platform split could not be
+reached from one machine, and an error living only there was invisible to EVERY
+command. Measured on a Linux box with a real typo in `poller_macos.kara`:
+`karac check`, `karac check --target=native`, `karac build` and even
+`karac check --targets=all` all reported clean.
+
+THE FLAG. `--platform=<linux|macos|windows|wasm>` overrides the derivation;
+`--platform=all` checks the package once per platform, each under its own
+header, and fails naming which platforms broke. Absent, nothing changes.
+
+Not folded into the v1 target list, per the row's own reasoning: `native` means
+"whatever host this is", and splitting it into linux/macos/windows would change
+what `#[target(native)]` gates. It is a third axis, so it gets its own flag.
+
+CHECK-ONLY, and the asymmetry is the point. ANALYSING another OS's half from any
+host is what makes a split maintainable; EMITTING it is not something v1 can do —
+codegen targets the host triple, so a cross-OS build would compile one OS's
+source into another's artifact. `karac build --platform=` and `karac run
+--platform=` refuse by name and point at `check`, rather than answering
+"unknown flag". A multi-platform list in FILE mode is refused too: a sweep
+reports per platform, a file-mode check reports one file, and that file may not
+exist on every platform in the list.
+
+Diagnostics are NOT deduped across platforms, unlike the per-file target matrix.
+Platforms share every unsuffixed file, so an error in one of those does repeat —
+but a sweep is asked in order to learn WHICH platform is broken, and a
+per-platform block answers that directly. The target matrix dedupes because its
+runs differ by a handful of `#[target]`-gated items; platform runs differ by
+whole files.
+
+THE SECOND HALF. Project-mode `karac check` now sweeps v1 compilation targets
+too — from `--targets=` or from a manifest `[build] targets` list. Same
+mechanism, `── target: X ──` blocks and a failure summary, with each target
+deriving its own platform unless `--platform=` named one. The singular
+`--target=` still means one target; `--profiles` is still refused as a per-file
+matrix.
+
+ROW CORRECTION. The row says `[build].targets` "is parsed and then ignored by
+`karac check`". Measured false in FILE mode -- `karac check src/main.kara` on a
+package declaring `targets = ["native", "wasm_wasi"]` runs both passes and prints
+both headers. The gap was PROJECT mode, where the list was parsed and silently
+dropped: one pass, default target, no indication the declared list existed. A
+silent drop rather than the refusal the plural flag gave, which is the worse of
+the two failures and the one this fixes.
+
+ONE PINNED TEST PROMOTED. `project_check_honours_the_singular_target_flag`
+asserted `--targets=all` in project mode was REFUSED ("need a file argument"),
+which was correct when B-2026-08-20-25 wrote it and named project-mode support a
+follow-up -- this row is that follow-up. Its last assertion now checks the sweep
+runs all four targets and names the failing ones; the singular half the test is
+really about is untouched.
+
+TESTS. Eight in `tests/cli.rs`, over a package with a shared `poller.kara` plus
+one file per OS: a non-host platform file is invisible to a default check and
+caught under `--platform=<that os>`; `--platform=all` blocks every platform and
+names the failure; the clean sweep exits 0 with its own summary (so a
+sweep that always passed could not hide); `build` and `run` refuse with the verb
+that fits each; a file-mode sweep is refused; an unknown platform name lists the
+known ones; a manifest `[build] targets` list drives per-target blocks and
+`--targets=` does the same explicitly; and the singular `--target=` / `--profiles`
+behaviours are pinned unchanged. The platform choice is exercised against a
+platform that is never the host, so the tests mean the same thing on every runner. |
 | B-2026-08-20-30 | cli | low | `karac explain E0223` and `E0227` REFUSE two codes users actually see, with a message that claims their family IS covered: "`karac explain` covers th… | FIXED by b01cd21. Both halves of the row were addressed, but the second one was answered NO on the merits rather than deferred, and the investigation found six more codes with the same defect that the row had not counted.
 
 HALF 1 -- CATALOGUE. `E0223` now carries a `module_graph` row and `E0227` a `manifest` row, under the phase that actually mints each. `karac explain E0223` answers `phase: module_graph / kind: CircularModuleDependency`; `E0227` answers `manifest / NotInsideKaraProject`. Both are pinned end-to-end by `test_explain_answers_for_the_two_codes_minted_outside_the_emitter`, which RUNS the two commands that mint them (a three-module import cycle, and `karac check` outside any package) before asking `explain` about the codes they printed -- the round trip, not a table lookup.
