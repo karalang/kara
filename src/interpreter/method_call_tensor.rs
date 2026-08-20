@@ -1292,25 +1292,28 @@ impl<'a> super::Interpreter<'a> {
                     }
                     out.push(Value::Int(acc));
                 } else {
+                    // ROUNDED AT EVERY STEP, not once at the end
+                    // (B-2026-08-20-20). Codegen accumulates in the ELEMENT
+                    // LLVM type — an f32 tensor multiplies and adds in f32,
+                    // rounding on each of the `k` steps — so accumulating in
+                    // f64 here and rounding the finished sum agrees only while
+                    // no intermediate rounding was lost, which is why the
+                    // original round-once fix looked right on every short
+                    // fixture. `elem.round` is the identity for F64, so the
+                    // f64 path is unchanged.
                     let mut acc: f64 = 0.0;
                     for p in 0..k {
-                        acc += num(&a[i * k + p]) * num(&b[p * n + j]);
+                        let prod = elem.round(num(&a[i * k + p]) * num(&b[p * n + j]));
+                        acc = elem.round(acc + prod);
                     }
                     out.push(Value::Float(acc));
                 }
             }
         }
-        // B-2026-08-05-31 — matmul PRODUCES values (sums of products) rather
-        // than moving them, so an f32 result must be rounded like the
-        // element-wise ops are, or a `Tensor[f32]` product drifts from
-        // codegen's f32 accumulation.
-        if elem == TensorElemWidth::F32 {
-            for v in out.iter_mut() {
-                if let Value::Float(f) = v {
-                    *v = Value::Float(elem.round(*f));
-                }
-            }
-        }
+        // B-2026-08-05-31 rounded the finished sum here; B-2026-08-20-20
+        // moved that into the accumulation loop above, where codegen does it.
+        // Nothing is left to round at this point — a trailing pass would be a
+        // no-op that reads as if the width were still being applied late.
         Value::Tensor {
             dims: Arc::new(vec![m as i64, n as i64]),
             data: Arc::new(RwLock::new(out)),

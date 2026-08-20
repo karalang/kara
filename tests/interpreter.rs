@@ -23237,6 +23237,35 @@ fn test_tensor_permute_transpose_and_rank3() {
 }
 
 #[test]
+fn test_tensor_matmul_f32_accumulates_at_element_width() {
+    // B-2026-08-20-20. `Tensor[f32].matmul` must accumulate IN f32, rounding
+    // on every one of the `k` steps, because that is what codegen's triple
+    // loop does (it accumulates in the element LLVM type). Accumulating in
+    // f64 and rounding the finished sum — B-2026-08-05-31's fix — agrees only
+    // while no intermediate rounding was lost, so it passed every short
+    // fixture and diverged on a long one.
+    //
+    // THE FIXTURE IS THE POINT: a row of `1.0` followed by 100 copies of
+    // `1e-8`, against a column of ones. Each `1e-8` is far below the f32 ulp
+    // at 1.0 (about 1.19e-7), so an f32 accumulator absorbs every one of them
+    // and the answer is exactly 1. An f64 accumulator adds them to each other
+    // first, reaching 1.000001, which IS distinguishable in f32 — it rounds to
+    // 1.0000009536743164, the value this test exists to keep from coming back.
+    //
+    // If this fails with 1.0000009536743164, the accumulation moved back to
+    // f64; `karac build` still answers 1, so the failure is a run-vs-build
+    // divergence, not a rounding preference.
+    let out = run_no_errors(
+        "fn main() {\n\
+        \x20   let a: Tensor[f32, [?, ?]] = Tensor.from([[1.0, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001, 0.00000001]]);\n\
+        \x20   let b: Tensor[f32, [?, ?]] = Tensor.from([[1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0]]);\n\
+        \x20   println(a.matmul(b)[0, 0]);\n\
+         }",
+    );
+    assert_eq!(out, "1\n");
+}
+
+#[test]
 fn test_tensor_matmul_and_transpose_values() {
     // B-2026-07-14-18 (was a phantom method pair). matmul:
     // [[1,2],[3,4]] @ [[5,6],[7,8]] = [[19,22],[43,50]]; non-square
