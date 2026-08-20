@@ -1851,6 +1851,10 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
 
 var<workgroup> idxs: array<u32, 64>;
 
+fn karac_is_nan(x: f32) -> bool {
+    return (bitcast<u32>(x) & 0x7fffffffu) > 0x7f800000u;
+}
+
 // The combine, verbatim from `reduce_kernel::arg_takes_b`: a strictly
 // better value wins, an exact tie goes to the SMALLER index, and a NaN
 // loses to anything real (ties with another NaN, where the smaller
@@ -1860,8 +1864,8 @@ fn takes_b(ia: u32, ib: u32) -> bool {
     if (ia == 4294967295u) { return true; }
     let a = input[ia];
     let b = input[ib];
-    if (!(a == a)) { return (b == b); }
-    if (!(b == b)) { return false; }
+    if (karac_is_nan(a)) { return !karac_is_nan(b); }
+    if (karac_is_nan(b)) { return false; }
     return (b < a) || (b == a && ib < ia);
 }
 
@@ -1897,6 +1901,10 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
 
 var<workgroup> idxs: array<u32, 64>;
 
+fn karac_is_nan(x: f32) -> bool {
+    return (bitcast<u32>(x) & 0x7fffffffu) > 0x7f800000u;
+}
+
 // The combine, verbatim from `reduce_kernel::arg_takes_b`: a strictly
 // better value wins, an exact tie goes to the SMALLER index, and a NaN
 // loses to anything real (ties with another NaN, where the smaller
@@ -1906,8 +1914,8 @@ fn takes_b(ia: u32, ib: u32) -> bool {
     if (ia == 4294967295u) { return true; }
     let a = input[ia];
     let b = input[ib];
-    if (!(a == a)) { return (b == b); }
-    if (!(b == b)) { return false; }
+    if (karac_is_nan(a)) { return !karac_is_nan(b); }
+    if (karac_is_nan(b)) { return false; }
     return (b < a) || (b == a && ib < ia);
 }
 
@@ -2039,9 +2047,12 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
 
 var<workgroup> scratch: array<f32, 64>;
 
+fn karac_is_nan(x: f32) -> bool {
+    return (bitcast<u32>(x) & 0x7fffffffu) > 0x7f800000u;
+}
 fn karac_min(a: f32, b: f32) -> f32 {
-    if (!(a == a)) { return b; }
-    if (!(b == b)) { return a; }
+    if (karac_is_nan(a)) { return b; }
+    if (karac_is_nan(b)) { return a; }
     return select(a, b, b < a);
 }
 
@@ -2062,6 +2073,9 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
         stride = stride / 2u;
     }
 
+    // Each workgroup writes ITS OWN partial. With one workgroup
+    // that is slot 0 and the answer; with several the host folds
+    // the partials by dispatching this same shader over them.
     if (t == 0u) { output[wid.x] = scratch[0]; }
 }
 "#;

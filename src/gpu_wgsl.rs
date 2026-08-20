@@ -1027,6 +1027,23 @@ pub fn emit_reduce_kernel(op: ReduceOp, elem: &str) -> Result<String, WgslError>
     ))
 }
 
+/// The NaN predicate every float reduction shares — a BIT-PATTERN test rather
+/// than `x != x` (B-2026-08-20-2).
+///
+/// **`x != x` does not survive Metal.** MSL is compiled with fast-math by
+/// default, which licenses the compiler to assume no NaN exists and fold
+/// `x == x` to `true` — silently deleting every guard written that way. It was
+/// measured, not theorised: `gpu.argmin([NaN, 3.0, 1.0])` answered `0` on
+/// Metal (the NaN won) where lavapipe and the interpreter agreed on `2`.
+///
+/// A float is NaN exactly when its exponent is all ones and its mantissa is
+/// non-zero, i.e. when its bits with the sign cleared exceed `+inf`'s. Integer
+/// arithmetic carries no fast-math licence, so this survives every backend —
+/// and `bitcast` is already proven on both, since the ±∞ identities use it.
+const NAN_PREDICATE_WGSL: &str = "fn karac_is_nan(x: f32) -> bool {\n\
+     \x20   return (bitcast<u32>(x) & 0x7fffffffu) > 0x7f800000u;\n\
+     }";
+
 /// Emit the level-0 shader of a `gpu.variance` / `gpu.stddev` second pass:
 /// square each element's deviation from the mean ON LOAD, then run the same
 /// halving sum tree (B-2026-08-19-13).
@@ -1163,10 +1180,16 @@ pub fn emit_arg_kernel(op: ReduceOp, elem: &str, fold: bool) -> Result<String, W
          // type. Lexicographic, therefore grouping-independent.\n"
     };
     let nan_guards = if elem == "f32" {
-        "\x20   if (!(a == a)) { return (b == b); }\n\
-         \x20   if (!(b == b)) { return false; }\n"
+        "\x20   if (karac_is_nan(a)) { return !karac_is_nan(b); }\n\
+         \x20   if (karac_is_nan(b)) { return false; }\n"
     } else {
         ""
+    };
+    // The NaN predicate is only declared where it is used.
+    let nan_fn = if elem == "f32" {
+        format!("\n{}\n", NAN_PREDICATE_WGSL)
+    } else {
+        String::new()
     };
     let invalid = format!("{}u", crate::reduce_kernel::ARG_INVALID);
     let width = GPU_REDUCE_WIDTH;
@@ -1200,6 +1223,7 @@ pub fn emit_arg_kernel(op: ReduceOp, elem: &str, fold: bool) -> Result<String, W
          {candidates_binding}\
          \n\
          var<workgroup> idxs: array<u32, {width}>;\n\
+         {nan_fn}\
          \n\
          {combine_doc}\
          fn takes_b(ia: u32, ib: u32) -> bool {{\n\
@@ -1474,9 +1498,10 @@ fn reduce_combine_wgsl(op: ReduceOp, elem: &str) -> Result<(String, String, Stri
     // UNORDERED form, which is not something to bet the semantics on.
     let nan_ignoring = |name: &str, cmp: &str| {
         format!(
-            "\nfn {name}(a: f32, b: f32) -> f32 {{\n\
-             \x20   if (!(a == a)) {{ return b; }}\n\
-             \x20   if (!(b == b)) {{ return a; }}\n\
+            "\n{NAN_PREDICATE_WGSL}\n\
+             fn {name}(a: f32, b: f32) -> f32 {{\n\
+             \x20   if (karac_is_nan(a)) {{ return b; }}\n\
+             \x20   if (karac_is_nan(b)) {{ return a; }}\n\
              \x20   return select(a, b, b {cmp} a);\n\
              }}\n"
         )
@@ -4410,10 +4435,22 @@ mod tests {
         // The combine: strictly better wins, exact tie goes to the SMALLER
         // index, NaN loses to anything real.
         assert!(
-            seed.contains("if (!(a == a)) { return (b == b); }"),
+            seed.contains("if (karac_is_nan(a)) { return !karac_is_nan(b); }"),
             "{seed}"
         );
-        assert!(seed.contains("if (!(b == b)) { return false; }"), "{seed}");
+        assert!(
+            seed.contains("if (karac_is_nan(b)) { return false; }"),
+            "{seed}"
+        );
+        // The predicate is a BIT test, not `x != x` — see B-2026-08-20-2.
+        assert!(
+            seed.contains("return (bitcast<u32>(x) & 0x7fffffffu) > 0x7f800000u;"),
+            "{seed}"
+        );
+        assert!(
+            !seed.contains("a == a"),
+            "no fast-math-foldable NaN test:\n{seed}"
+        );
         assert!(
             seed.contains("return (b < a) || (b == a && ib < ia);"),
             "{seed}"
@@ -4517,10 +4554,13 @@ mod tests {
         // Integers are totally ordered, so there is nothing for the NaN
         // guards to catch — and a shader that carried them would be describing
         // a case that cannot arise.
-        assert!(f.contains("if (!(a == a)) { return (b == b); }"), "{f}");
+        assert!(
+            f.contains("if (karac_is_nan(a)) { return !karac_is_nan(b); }"),
+            "{f}"
+        );
         for w in [&i, &u] {
             assert!(
-                !w.contains("a == a"),
+                !w.contains("karac_is_nan"),
                 "integer shader has no NaN guard:\n{w}"
             );
         }
@@ -4634,8 +4674,8 @@ mod tests {
             min.contains("fn karac_min(a: f32, b: f32) -> f32"),
             "float min must emit its own NaN-ignoring helper:\n{min}"
         );
-        assert!(min.contains("if (!(a == a)) { return b; }"), "{min}");
-        assert!(min.contains("if (!(b == b)) { return a; }"), "{min}");
+        assert!(min.contains("if (karac_is_nan(a)) { return b; }"), "{min}");
+        assert!(min.contains("if (karac_is_nan(b)) { return a; }"), "{min}");
         assert!(min.contains("scratch[t] = karac_min(scratch[t], scratch[t + stride]);"));
         // The identity is unreachable, not merely large: a real `f32::MAX`
         // element in a padded chunk would BEAT a finite stand-in.
