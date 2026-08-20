@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 265 | 1 |
+| miscompile | 265 | 0 |
 | leak | 185 | 0 |
 | run-vs-build | 139 | 0 |
 | double-free | 133 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 953 | 3 |
+| codegen | 953 | 2 |
 | typecheck | 218 | 4 |
 | interp | 163 | 0 |
 | ownership | 60 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 6 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1390 surfaced · 8 open · 1362 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1390 surfaced · 7 open · 1363 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (8)
+### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -136,7 +136,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1390 surfaced
 | B-2026-08-20-8 | 2026-08-20 | autopar | medium | `karac build --concurrency-report` prints the ANALYSIS label with no lowering verdict, so it claims `parallel_reduction` for a loop its own sibling query reports as `fanned_out: false` — the binary contains zero worker symbols | — |
 | B-2026-08-20-9 | 2026-08-20 | runtime+autopar | medium | Auto-par worker threads contend on ONE glibc malloc arena: any fan-out body that allocates per iteration pays a shared lock the sequential build never touches | — |
 | B-2026-08-20-10 | 2026-08-20 | typecheck | high | LITERAL PATTERNS ARE NEVER TYPECHECKED — `PatternKind::Literal` is an explicit "deferred" arm. `match n { 300i8 => .. }` on an `i8`, `99999i8`, a `5u64` pattern against an `i64` scrutinee, and a `true` pattern against an `i64` scrutinee are ALL accepted, and the last two MATCH. The identical literal in expression position is correctly rejected. | src/typechecker/patterns.rs (the `PatternKind::Literal(_) => {}` deferred arm); src/typechecker/exprs.rs::check_int_literal_fits (the existing range check, already suffix-aware); src/typechecker/patterns.rs::resolve_range_bound_value (the range-bound path that DOES resolve a type) |
-| B-2026-08-20-11 | 2026-08-20 | codegen | high | SILENT RUN-VS-BUILD MISCOMPILE: codegen does not compare an enum payload's LITERAL pattern at all — it matches on the tag alone. `match Some(5) { Some(7) => "hit", _ => "no" }` prints `hit` under `karac build` and `no` under `karac run`. Any `Some(<literal>)` arm fires for EVERY `Some(_)`. | src/codegen/control_flow_match.rs (variant-pattern arm test: tag compare with no payload compare); src/codegen/pattern_binding.rs (where the payload IS extracted, for the binding case); tests/codegen.rs::e2e_negative_literal_patterns_match (the MISS this row's existence keeps out of that test) |
 | B-2026-08-20-12 | 2026-08-20 | typecheck | low | A FLOAT literal pattern makes the following `_` arm report `warning[unreachable_arm]`: `match f { 1.5 => .., _ => .. }` warns that the wildcard is "fully covered by an earlier arm". The `_` is of course required — a single float literal covers one value — and the integer equivalent produces no warning. | src/exhaustive.rs::int_domain (no float domain); src/exhaustive.rs (usefulness/unreachable-arm computation for LiteralPattern::Float); src/typechecker (where warning[unreachable_arm] is emitted) |
 
 ### Wontfix (7)
@@ -155,9 +154,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1390 surfaced
 
 </details>
 
-### Fixed (1362)
+### Fixed (1363)
 
-<details><summary>1362 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1363 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -12560,6 +12559,17 @@ CAVEAT WORTH READING BEFORE THE NEXT CHANGE HERE. The parse error this removes w
 TWO MORE PRE-EXISTING DEFECTS found while measuring, each confirmed by reproducing on a clean `main` build:
   - B-2026-08-20-11 (high, miscompile): codegen does not compare an enum payload's literal AT ALL — it matches on the tag alone, so `match Some(5) { Some(7) => "hit", _ => "no" }` prints `hit` compiled and `no` interpreted. No negatives involved. Found only because this row's test asserts MISS arms; the hit-only version passes. The one miss this row's test does NOT assert is that shape, with a comment in place so the omission is not silent — asserting it would tie this regression test to that bug's fix.
   - B-2026-08-20-12 (low): a float literal pattern makes the following `_` arm report `unreachable_arm`. Positive floats do it too, so it is unrelated to sign. |
+| B-2026-08-20-11 | codegen | high | SILENT RUN-VS-BUILD MISCOMPILE: codegen does not compare an enum payload's LITERAL pattern at all — it matches on the tag alone | FIXED by 0109f38. ROOT CAUSE: `and_in_nested_variant_conditions` (src/codegen/control_flow_match.rs) admitted payload sub-patterns through exactly ONE key — `variant_pattern_enum_and_tag` — in both its early-return gate and its loop's `else { continue }`. A literal answers `None` there, so no payload was ever reconstructed and no test emitted: the arm compiled to the OUTER TAG COMPARISON ALONE. Same defect shape as the range-pattern and struct-field misses already fixed in `compile_pattern_condition` (B-2026-07-12-13) — a sub-pattern that discriminates, dropped on the floor, so the arm over-matches.
+
+FIX: a second admission key, `pattern_tests_payload_value` (true for Literal / RangePattern, recursing through Or / Tuple / Struct / AtBinding; false for Binding / Wildcard, which only NAME the payload). For a non-variant sub-pattern the rebuilt payload is handed back to `compile_pattern_condition`, so it reuses the same literal / range / tuple / struct / or / at-binding arms the top-level scrutinee gets — and recurses, so an arbitrarily nested test still lands. The nested-variant tag path is untouched.
+
+SCOPE WAS WIDER THAN FILED. The row described `Option[i64]` with an integer literal. Measured on a PRE-FIX build over 24 shapes, 12 were wrong, and the split is exact: every MISS arm was wrong, every HIT arm was right — which is precisely why it survived, since a hit-only test passes. Also affected: user enums (`Msg.Ping(9)` -> the `Ping(0)` arm), String payloads (`Named("yo")` -> the `Named("hi")` arm), tuple payloads (`Pair(1,3)` and `Pair(4,5)` -> the `Pair(1,2)` arm), struct-field literals, narrow i32/u8, nested Option-in-Option, `Result` Ok/Err, and at-bindings.
+
+TWO LATENT SUB-BUGS surfaced only once the payload was actually being tested — both unreachable before, because the test was skipped outright:
+  1. a String literal payload spans 3 words (vec shape); `pattern_payload_word_count`'s `_ => 1` default would have handed a bare i64 to the memcmp path. Added String arms to both `pattern_payload_word_count` and `pattern_payload_llvm_type`.
+  2. a FLOAT literal BINDS nothing, so the typechecker records no `pattern_binding_types` entry and the existing float bitcast — which is gated on that entry — could not fire. The raw i64 bit pattern reached the float compare, turning the over-match into an UNDER-match (`Some(1.5)` stopped matching `1.5`). Added a literal-driven arm that takes the width from the literal's own suffix. Caught only because the tests assert against the interpreter oracle rather than merely checking that the miss arms now miss.
+
+VERIFICATION: six regression tests in `tests/codegen.rs` (mod `enum_payload_literal_patterns_b_2026_08_20_11`), EVERY assert a MISS arm, using strict `assert_eq!(.., Some(..))` rather than the tolerant `if let Some(out)` so a missing runtime archive fails loudly instead of green-skipping the class again. All 24 shapes verified byte-identical across interp / JIT / default build / `KARAC_AUTO_PAR=0`. Gates: fmt clean, both clippy legs clean, default suite 106 targets green, llvm suite 108 targets green with 0 failures and 0 ASAN/LSan reports. |
 
 </details>
 
