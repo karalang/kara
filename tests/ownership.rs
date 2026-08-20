@@ -12984,3 +12984,100 @@ fn only_rc_fallback_note_and_use_after_move_are_advisory() {
         );
     }
 }
+
+// ── `gpu.*` whole-buffer ops borrow their buffers (B-2026-08-20-23) ──
+
+/// Two statistics over one `Vec` is the natural way to write this, and it drew
+/// `value 'v' moved here, used again here` for two READS. Every whole-buffer
+/// `gpu.*` reduction / scan / product copies its elements to the device and
+/// reads them back — the runtime entry points take `*const` throughout, and
+/// codegen only loads `{ptr, len}` out of the argument.
+///
+/// `ownership_ok` is the assertion: `UseAfterMove` lands in `result.errors`
+/// (it is non-fatal at the CLI, which is why the defect was easy to stop
+/// noticing), so a regression puts it right back in that vec.
+#[test]
+fn gpu_reductions_borrow_their_buffer_rather_than_consuming_it() {
+    // The row's own repro.
+    ownership_ok(
+        "fn main() {
+             let v: Vec[f32] = [1.0, 2.0, 3.0];
+             match gpu.min(v) { Some(x) => println(f\"{x}\"), None => println(\"e\") }
+             match gpu.max(v) { Some(x) => println(f\"{x}\"), None => println(\"e\") }
+         }",
+    );
+    // The shape that found it: `variance` and `stddev` of one buffer.
+    ownership_ok(
+        "fn main() {
+             let v: Vec[f32] = [1.0, 2.0, 3.0, 4.0];
+             match gpu.variance(v) { Some(a) => println(f\"{a}\"), None => println(\"e\") }
+             match gpu.stddev(v) { Some(b) => println(f\"{b}\"), None => println(\"e\") }
+         }",
+    );
+    // `dot` reads a SECOND buffer, so it exercises argument index 1 — and
+    // passing one binding in both positions is two borrows of the same place,
+    // which is legal precisely because neither is exclusive.
+    ownership_ok(
+        "fn main() {
+             let v: Vec[f32] = [1.0, 2.0, 3.0];
+             println(f\"{gpu.sum(v)}\");
+             println(f\"{gpu.dot(v, v)}\");
+             println(f\"{gpu.sum(v)}\");
+         }",
+    );
+    // The scan returns a NEW buffer and still only reads its input, so the
+    // input stays usable by the two Arg reductions afterwards.
+    ownership_ok(
+        "fn main() {
+             let v: Vec[f32] = [3.0, 1.0, 2.0];
+             let p = gpu.prefix_sum(v);
+             match gpu.argmin(v) { Some(i) => println(f\"{i}\"), None => println(\"e\") }
+             match gpu.argmax(v) { Some(j) => println(f\"{j}\"), None => println(\"e\") }
+             println(f\"{p.len()}\");
+         }",
+    );
+}
+
+/// The other side of the rule, which is what keeps the fix from being a
+/// blanket "any `.min` is a read": `gpu.upload` / `gpu.download` really do
+/// move ownership across the host/device boundary, and a USER method that
+/// happens to be named like a reduction keeps the consume default. The
+/// predicate matches on the `gpu` receiver as well as the method name.
+#[test]
+fn gpu_upload_and_a_user_named_min_still_consume() {
+    let errors = ownership_errors(
+        "struct P { x: f32 }
+         fn main() {
+             let v: Vec[P] = [P { x: 1.0 }];
+             let h = gpu.upload(v);
+             println(f\"{v.len()}\");
+             let w = gpu.download(h);
+             println(f\"{w.len()}\");
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e.kind, OwnershipErrorKind::UseAfterMove)),
+        "gpu.upload moves its Vec to the device — reuse must still be flagged: {errors:?}"
+    );
+
+    let errors = ownership_errors(
+        "struct Bag { n: i64 }
+         impl Bag {
+             pub fn min(ref self, other: Vec[f32]) -> i64 { return other.len(); }
+         }
+         fn main() {
+             let b = Bag { n: 1 };
+             let v: Vec[f32] = [1.0];
+             println(f\"{b.min(v)}\");
+             println(f\"{v.len()}\");
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e.kind, OwnershipErrorKind::UseAfterMove)),
+        "a user `.min` taking an OWNED Vec must keep the consume default: {errors:?}"
+    );
+}

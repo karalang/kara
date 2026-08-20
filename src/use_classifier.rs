@@ -1327,6 +1327,11 @@ impl<'a> UseClassifier<'a> {
         if is_tensor_borrow_arg_method_call(method_call) {
             return true;
         }
+        // The `gpu.*` whole-buffer family, for the same reason and by the same
+        // receiver-plus-name test the ownership twin uses (B-2026-08-20-23).
+        if crate::ownership::is_gpu_readonly_buffer_call(method_call) {
+            return true;
+        }
         // Trust the span-resolved modes whenever they carry an entry for THIS
         // arg position; only when the entry is missing (the chained-call span
         // collision resolved the inner call to a sibling with fewer params —

@@ -122,6 +122,12 @@ impl<'a> super::OwnershipChecker<'a> {
         if is_relational_method_call(method_call) {
             return true;
         }
+        // Every buffer argument of a whole-buffer `gpu.*` reduction / scan /
+        // product is READ, so two statistics over one `Vec` must not draw a
+        // move warning (B-2026-08-20-23).
+        if crate::ownership::is_gpu_readonly_buffer_call(method_call) {
+            return true;
+        }
         // Trust the span-resolved modes whenever they actually carry an entry
         // for THIS arg position. In a method chain the parser aliases every
         // call's span to the receiver's, so `method_callee_types` collides and

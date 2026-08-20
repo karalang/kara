@@ -123,6 +123,59 @@ pub(crate) fn arg_is_borrow_by_method_name(
     saw_borrow
 }
 
+/// Does this `gpu.<op>(…)` call READ its buffer arguments rather than consume
+/// them? (B-2026-08-20-23.)
+///
+/// Every whole-buffer `gpu.*` reduction, scan and product copies its elements
+/// to the device and reads them back: the runtime entry points take `*const`
+/// throughout (`karac_runtime_gpu_reduce_f32`, `_dot_f32`, `_prefix_sum_f32`,
+/// `_matmul_f32`, …), and codegen only ever loads `{ptr, len}` out of the
+/// argument — it frees a FRESH temp, and leaves a named binding alone. So `ref`
+/// describes them and the consume default did not: the natural
+///
+/// ```text
+/// match gpu.min(v) { ... }
+/// match gpu.max(v) { ... }
+/// ```
+///
+/// drew `value 'v' moved here, used again here` for two reads. Nothing
+/// miscompiled — the binding still got exactly one scope-end free — which is
+/// why this was a diagnostics defect and not a leak.
+///
+/// Matched on the RECEIVER as well as the name, unlike the tensor and
+/// relational predicates nearby: `gpu` is a resolver-reserved magic module, so
+/// `gpu.min` is unambiguous, and a user type with its own `.min(x)` taking an
+/// owned argument keeps the consume default it should have.
+///
+/// NOT listed, deliberately: `dispatch` (its buffer feeds a map that returns a
+/// fresh buffer), and `upload` / `download`, which really do move ownership
+/// across the host/device boundary.
+pub(crate) fn is_gpu_readonly_buffer_call(expr: &Expr) -> bool {
+    let ExprKind::MethodCall { object, method, .. } = &expr.kind else {
+        return false;
+    };
+    if !matches!(&object.kind, ExprKind::Identifier(n) if n == "gpu") {
+        return false;
+    }
+    matches!(
+        method.as_str(),
+        "sum"
+            | "prod"
+            | "min"
+            | "max"
+            | "mean"
+            | "variance"
+            | "stddev"
+            | "argmin"
+            | "argmax"
+            | "prefix_sum"
+            // The two that read a SECOND buffer, so the rule has to cover
+            // argument index 1 as well as 0.
+            | "dot"
+            | "matmul"
+    )
+}
+
 /// Per-binding capture mode for `par {}` block captures — phase-7
 /// codegen tracker line 227 (L227). Drives codegen's per-capture
 /// lowering in `emit_par_branch_fn`: `Copy` keeps the existing
