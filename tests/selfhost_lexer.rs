@@ -142,6 +142,11 @@ const CORPUS: &[&str] = &[
     // radix literals with a suffix, an exponent + suffix, and an unsuffixed
     // sanity case (must render bare `INT`/`FLOAT`, no trailing token).
     "1i16 2i128 3u16 4u128",
+    // B-2026-08-19-29 — `usize` joins the suffix set. Without an entry here the
+    // oracle passes vacuously on it: both lexers agree because neither is ever
+    // handed one. The bare `usize` identifier is included deliberately, since
+    // the port's scanner must consume the suffix ONLY when it trails a number.
+    "7usize 18446744073709551615usize usize",
     "0xffu8 0b1010i32 0o17u64 0xdeadi128",
     "1_000i64 1.5e3f64 2e10f32",
     // f16 / bf16 float suffixes (un-reserved in 09a2fc88 / B-2026-07-14-2); `bf16`
@@ -561,6 +566,7 @@ fn int_suffix_str(s: Option<IntSuffix>) -> &'static str {
         Some(IntSuffix::U32) => " u32",
         Some(IntSuffix::U64) => " u64",
         Some(IntSuffix::U128) => " u128",
+        Some(IntSuffix::Usize) => " usize",
     }
 }
 

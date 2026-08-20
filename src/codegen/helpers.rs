@@ -59,6 +59,9 @@ pub(super) fn const_value_from_literal_expr(expr: &Expr) -> Option<crate::prelud
             Some(IntSuffix::U16) => Some(ConstValue::U16(*n as u16)),
             Some(IntSuffix::U32) => Some(ConstValue::U32(*n as u32)),
             Some(IntSuffix::U64) => Some(ConstValue::U64(*n as u64)),
+            // `usize` is 64-bit here, so it folds through the same carrier
+            // as `u64` (B-2026-08-19-29).
+            Some(IntSuffix::Usize) => Some(ConstValue::U64(*n as u64)),
             Some(IntSuffix::I128) | Some(IntSuffix::U128) => None,
             None => Some(ConstValue::I64(narrow_literal_to_i64(*n))),
         },

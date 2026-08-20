@@ -966,6 +966,48 @@ fn test_integer_suffix_i128() {
 }
 
 #[test]
+fn test_integer_suffix_usize() {
+    // B-2026-08-19-29 — `usize` was absent from the lexer's suffix table, so
+    // `42usize` lexed as `42` followed by a stray `usize` IDENTIFIER
+    // ("Expected Semicolon, found Identifier"). It is a distinct type from
+    // `u64` (`UIntSize::Usize`), so it needs its own suffix rather than being
+    // aliased onto `u64`.
+    let tokens = tokens_only("42usize");
+    assert_eq!(tokens[0], Token::Integer(42, Some(IntSuffix::Usize)));
+}
+
+#[test]
+fn test_integer_suffix_usize_upper_half_is_out_of_range_token() {
+    // The whole upper half of the range reaches the parser as
+    // `IntegerOutOfRange` carrying the suffix, exactly as `u64` does — that is
+    // the band the parser's unsigned arm admits onto the signed carrier.
+    let tokens = tokens_only("18446744073709551615usize");
+    assert!(
+        matches!(
+            tokens.first(),
+            Some(Token::IntegerOutOfRange(m, Some(IntSuffix::Usize))) if *m == u64::MAX as u128
+        ),
+        "expected an out-of-range usize token, got {:?}",
+        tokens.first()
+    );
+}
+
+#[test]
+fn test_integer_suffix_usize_past_the_width_is_an_error_token() {
+    // The suffix widens what is WRITABLE, not what is representable: one past
+    // `usize::MAX` is still refused, and refused the same way `u64` refuses it
+    // (an `Error` token, so it never reaches the typechecker). Pinned here
+    // rather than in the typechecker suite because it is a LEX-level refusal —
+    // `typecheck_errors` asserts the program parses first.
+    let tokens = tokens_only("18446744073709551616usize");
+    assert!(
+        matches!(tokens.first(), Some(Token::Error(_))),
+        "expected an Error token past usize::MAX, got {:?}",
+        tokens.first()
+    );
+}
+
+#[test]
 fn test_integer_no_suffix() {
     let tokens = tokens_only("42");
     assert_eq!(tokens[0], Token::Integer(42, None));

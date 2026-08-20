@@ -4384,6 +4384,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     | crate::token::IntSuffix::U32
                     | crate::token::IntSuffix::U64
                     | crate::token::IntSuffix::U128
+                    | crate::token::IntSuffix::Usize
             ),
             ExprKind::Identifier(n) => self
                 .var_types

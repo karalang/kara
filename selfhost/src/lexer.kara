@@ -582,6 +582,12 @@ impl Lexer {
         if self.try_consume_suffix("i8") {
             return "i8".to_string();
         }
+        // `usize` is tried ahead of the `u*` widths for the same reason the
+        // Rust table lists it first: longest-first keeps the scan from
+        // stopping on a shorter match. (B-2026-08-19-29)
+        if self.try_consume_suffix("usize") {
+            return "usize".to_string();
+        }
         if self.try_consume_suffix("u128") {
             return "u128".to_string();
         }

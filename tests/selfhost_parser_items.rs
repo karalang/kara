@@ -242,6 +242,7 @@ fn int_suffix_lex(s: Option<IntSuffix>) -> &'static str {
         Some(IntSuffix::U32) => "u32",
         Some(IntSuffix::U64) => "u64",
         Some(IntSuffix::U128) => "u128",
+        Some(IntSuffix::Usize) => "usize",
     }
 }
 

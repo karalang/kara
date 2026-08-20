@@ -75,6 +75,7 @@ fn int_suffix_to_type(sfx: &Option<crate::token::IntSuffix>) -> Option<Type> {
         S::U32 => Type::UInt(UIntSize::U32),
         S::U64 => Type::UInt(UIntSize::U64),
         S::U128 => Type::UInt(UIntSize::U128),
+        S::Usize => Type::UInt(UIntSize::Usize),
     })
 }
 

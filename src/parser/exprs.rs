@@ -913,6 +913,12 @@ impl super::Parser {
                         | Some(crate::token::IntSuffix::U16)
                         | Some(crate::token::IntSuffix::U32)
                         | Some(crate::token::IntSuffix::U64)
+                        // B-2026-08-19-29 — `usize` is pointer-width, i.e. 64-bit
+                        // here, so the whole `(i64::MAX, u64::MAX]` band is
+                        // representable and rides the same signed carrier as
+                        // `u64`. Without this the author who wrote a correct
+                        // unsigned suffix was told to "add an unsigned suffix".
+                        | Some(crate::token::IntSuffix::Usize)
                 ) {
                     return Some(Expr {
                         span: self.span_from(&start),

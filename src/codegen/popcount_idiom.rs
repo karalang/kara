@@ -221,7 +221,7 @@ fn collect_suffixes(e: &Expr, signed: &mut bool, unsigned: &mut bool) {
     match &e.kind {
         ExprKind::Integer(_, Some(suf)) => match suf {
             S::I8 | S::I16 | S::I32 | S::I64 | S::I128 => *signed = true,
-            S::U8 | S::U16 | S::U32 | S::U64 | S::U128 => *unsigned = true,
+            S::U8 | S::U16 | S::U32 | S::U64 | S::U128 | S::Usize => *unsigned = true,
         },
         ExprKind::Binary { left, right, .. } => {
             collect_suffixes(left, signed, unsigned);

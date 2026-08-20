@@ -28,6 +28,12 @@ pub enum IntSuffix {
     U32,
     U64,
     U128,
+    /// `42usize` — pointer-width unsigned, 64-bit in Kāra. A DISTINCT type
+    /// from `u64` (`UIntSize::Usize`), which is why the suffix cannot simply
+    /// be lexed as `U64`: `let n: usize = 42u64` is a type mismatch, so
+    /// mapping it there would move the error rather than remove it
+    /// (B-2026-08-19-29).
+    Usize,
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]

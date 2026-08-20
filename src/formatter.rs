@@ -324,6 +324,7 @@ pub(super) fn int_suffix_str(s: IntSuffix) -> &'static str {
         IntSuffix::U32 => "u32",
         IntSuffix::U64 => "u64",
         IntSuffix::U128 => "u128",
+        IntSuffix::Usize => "usize",
     }
 }
 

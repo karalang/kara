@@ -41747,3 +41747,27 @@ fn type_direction_does_not_intercept_the_builtin_option_constructors() {
          }",
     );
 }
+
+#[test]
+fn usize_suffixed_literals_typecheck_across_the_whole_range() {
+    // B-2026-08-19-29. `usize` was missing from the lexer's suffix table AND
+    // from `IntSuffix` entirely, so `18446744073709551615usize` was rejected
+    // with "out of range for i64 … add an unsigned suffix (…u64)" — advice
+    // aimed at an author who had already written a correct unsigned suffix.
+    // The byte-identical `…u64` compiled fine.
+    //
+    // `usize` is pointer-width (64-bit here) and a DISTINCT type from `u64`,
+    // so it could not simply be lexed as `U64`: `let n: usize = 42u64` is a
+    // type mismatch, which would have moved the error rather than removed it.
+    for src in [
+        "fn main() { let x: usize = 42usize; println(x); }",
+        // the boundary the signed carrier turns over at
+        "fn main() { let x: usize = 9223372036854775808usize; println(x); }",
+        // the top of the range
+        "fn main() { let x: usize = 18446744073709551615usize; println(x); }",
+        // no annotation — the suffix alone carries the type
+        "fn main() { let x = 18446744073709551615usize; println(x); }",
+    ] {
+        typecheck_ok(src);
+    }
+}

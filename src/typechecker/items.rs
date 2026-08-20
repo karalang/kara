@@ -1206,6 +1206,7 @@ impl<'a> super::TypeChecker<'a> {
                     Some(IntSuffix::U64) => Type::UInt(UIntSize::U64),
                     Some(IntSuffix::I128) => Type::Int(IntSize::I128),
                     Some(IntSuffix::U128) => Type::UInt(UIntSize::U128),
+                    Some(IntSuffix::Usize) => Type::UInt(UIntSize::Usize),
                     None => {
                         if matches!(target_ty, Type::Int(_) | Type::UInt(_)) {
                             target_ty.clone()

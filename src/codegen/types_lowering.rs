@@ -833,7 +833,9 @@ impl<'ctx> super::Codegen<'ctx> {
             Some(IntSuffix::I8) | Some(IntSuffix::U8) => self.context.i8_type(),
             Some(IntSuffix::I16) | Some(IntSuffix::U16) => self.context.i16_type(),
             Some(IntSuffix::I32) | Some(IntSuffix::U32) => self.context.i32_type(),
-            Some(IntSuffix::I64) | Some(IntSuffix::U64) => self.context.i64_type(),
+            Some(IntSuffix::I64) | Some(IntSuffix::U64) | Some(IntSuffix::Usize) => {
+                self.context.i64_type()
+            }
             Some(IntSuffix::I128) | Some(IntSuffix::U128) => self.context.i128_type(),
         }
     }

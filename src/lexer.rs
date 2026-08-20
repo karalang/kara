@@ -388,6 +388,11 @@ impl<'a> Lexer<'a> {
             (b"i32", I32),
             (b"i16", I16),
             (b"i8", I8),
+            // `usize` before the `u*` widths: the scan takes the first
+            // match, and none of them is a prefix of "usize", but keeping the
+            // longest-first ordering of the table intact matters if a future
+            // width ever is.
+            (b"usize", Usize),
             (b"u128", U128),
             (b"u64", U64),
             (b"u32", U32),

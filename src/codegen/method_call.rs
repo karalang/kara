@@ -421,6 +421,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 U32 => (32, true),
                 U64 => (64, true),
                 U128 => (128, true),
+                // Pointer-width, 64-bit in Kāra (B-2026-08-19-29).
+                Usize => (64, true),
             };
         }
         (64, false)

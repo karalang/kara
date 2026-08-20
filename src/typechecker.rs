@@ -3844,6 +3844,7 @@ impl<'a> TypeChecker<'a> {
             Some(IntSuffix::U32) => Type::UInt(UIntSize::U32),
             Some(IntSuffix::U64) => Type::UInt(UIntSize::U64),
             Some(IntSuffix::U128) => Type::UInt(UIntSize::U128),
+            Some(IntSuffix::Usize) => Type::UInt(UIntSize::Usize),
         }
     }
 
