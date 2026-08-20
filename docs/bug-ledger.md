@@ -94,10 +94,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 268 | 0 |
 | leak | 185 | 0 |
-| run-vs-build | 143 | 0 |
+| run-vs-build | 144 | 1 |
 | double-free | 133 | 0 |
 | missing-feature | 129 | 1 |
-| codegen-gap | 119 | 0 |
+| codegen-gap | 120 | 1 |
 | diagnostics | 89 | 1 |
 | false-positive | 88 | 0 |
 | perf | 80 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 956 | 0 |
+| codegen | 957 | 1 |
 | typecheck | 219 | 0 |
-| interp | 166 | 0 |
+| interp | 167 | 1 |
 | ownership | 61 | 0 |
 | other | 59 | 0 |
 | cli | 55 | 2 |
@@ -124,14 +124,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 6 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1409 surfaced · 2 open · 1387 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1411 surfaced · 4 open · 1387 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-20-29 | 2026-08-20 | cli | low | THE NATIVE OS PLATFORMS ARE NOT SELECTABLE, so a `_macos` / `_windows` / `_linux` module can only be checked or built on that host, and no command verifies that a platform split covers every OS. `cmd_build_project` derives the walker's platform as `wasm_* -> Platform::Wasm`, everything else `Platform::host()` (now shared as `walk_platform_for_target`), and `kara.toml [build].target` -- a rustc-style overlay triple -- never touches it. So `_wasm` is reachable from any host and the three native suffixes are host-locked. design.md's *Missing-platform rule* used to promise exactly the missing guarantee (`karac check --target all` for "a compile-time guarantee that every target has coverage"); that text was corrected rather than the feature built (B-2026-08-20-25), and this row is the feature. | roadmap.md |
 | B-2026-08-20-31 | 2026-08-20 | cli | low | THE EFFECT (`E04xx`), OWNERSHIP (`E05xx`) AND PROVIDER-ESCAPE (`E0600`) BANDS ARE UNCATALOGUED, so `karac explain E0400` / `E0500` / `E0600` refuse 29 codes the compiler mints. Measured after B-2026-08-20-30: `code_table_catalogues_every_code_in_a_covered_band` now holds E01xx, E02xx/W02xx and E08xx at zero gaps and `unknown_code_message` disclaims these three by name, so this is an honest gap rather than a false claim -- but they are ordinary user-facing diagnostics (a missing effect declaration, a move-after-use, a provider escape) and an agent loop reading a `code` off `karac check --output=json` cannot look any of them up. | roadmap.md |
+| B-2026-08-20-32 | 2026-08-20 | interp | high | The TREE-WALK INTERPRETER's `.clone()` on a NESTED `Vec[Vec[T]]` is SHALLOW -- the inner Vecs are shared, so mutating the clone mutates the original; codegen (JIT, AOT and auto-par-off alike) deep-copies correctly, so the same five-line program prints a different answer under `--interp` | — |
+| B-2026-08-20-33 | 2026-08-20 | codegen | medium | A THREE-level index assignment (`a[i][j][k] = v` on a plain local `Vec[Vec[Vec[T]]]`) is rejected by codegen with `Index assignment target must be a variable`; the two-level form compiles, and the interpreter accepts both | — |
 
 ### Wontfix (7)
 
