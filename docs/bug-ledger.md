@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 133 | 0 |
 | missing-feature | 129 | 1 |
 | codegen-gap | 120 | 1 |
-| diagnostics | 89 | 1 |
+| diagnostics | 89 | 0 |
 | false-positive | 88 | 0 |
 | perf | 80 | 0 |
 | crash | 54 | 0 |
@@ -115,7 +115,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | interp | 167 | 1 |
 | ownership | 61 | 0 |
 | other | 59 | 0 |
-| cli | 55 | 2 |
+| cli | 55 | 1 |
 | autopar | 54 | 0 |
 | parser | 33 | 0 |
 | runtime | 27 | 0 |
@@ -124,14 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 6 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1411 surfaced · 4 open · 1387 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1411 surfaced · 3 open · 1388 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-20-29 | 2026-08-20 | cli | low | THE NATIVE OS PLATFORMS ARE NOT SELECTABLE, so a `_macos` / `_windows` / `_linux` module can only be checked or built on that host, and no command verifies that a platform split covers every OS. `cmd_build_project` derives the walker's platform as `wasm_* -> Platform::Wasm`, everything else `Platform::host()` (now shared as `walk_platform_for_target`), and `kara.toml [build].target` -- a rustc-style overlay triple -- never touches it. So `_wasm` is reachable from any host and the three native suffixes are host-locked. design.md's *Missing-platform rule* used to promise exactly the missing guarantee (`karac check --target all` for "a compile-time guarantee that every target has coverage"); that text was corrected rather than the feature built (B-2026-08-20-25), and this row is the feature. | roadmap.md |
-| B-2026-08-20-31 | 2026-08-20 | cli | low | THE EFFECT (`E04xx`), OWNERSHIP (`E05xx`) AND PROVIDER-ESCAPE (`E0600`) BANDS ARE UNCATALOGUED, so `karac explain E0400` / `E0500` / `E0600` refuse 29 codes the compiler mints. Measured after B-2026-08-20-30: `code_table_catalogues_every_code_in_a_covered_band` now holds E01xx, E02xx/W02xx and E08xx at zero gaps and `unknown_code_message` disclaims these three by name, so this is an honest gap rather than a false claim -- but they are ordinary user-facing diagnostics (a missing effect declaration, a move-after-use, a provider escape) and an agent loop reading a `code` off `karac check --output=json` cannot look any of them up. | roadmap.md |
 | B-2026-08-20-32 | 2026-08-20 | interp | high | The TREE-WALK INTERPRETER's `.clone()` on a NESTED `Vec[Vec[T]]` is SHALLOW -- the inner Vecs are shared, so mutating the clone mutates the original; codegen (JIT, AOT and auto-par-off alike) deep-copies correctly, so the same five-line program prints a different answer under `--interp` | — |
 | B-2026-08-20-33 | 2026-08-20 | codegen | medium | A THREE-level index assignment (`a[i][j][k] = v` on a plain local `Vec[Vec[Vec[T]]]`) is rejected by codegen with `Index assignment target must be a variable`; the two-level form compiles, and the interpreter accepts both | — |
 
@@ -151,9 +150,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1411 surfaced
 
 </details>
 
-### Fixed (1387)
+### Fixed (1388)
 
-<details><summary>1387 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1388 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -13116,6 +13115,23 @@ THE GUARD THAT MAKES IT STICK is `code_table_catalogues_every_code_in_a_covered_
 design.md's band rule was corrected in the same commit. It asserted flatly that "a phase must allocate from its own band" while five shipping codes did not -- the same false-claim shape as B-2026-08-20-25's E0226. It now states the allocation rule for NEW codes, names the invariant that actually matters (no number minted by two phases), lists all five exceptions with the reason they stay, and names both guards.
 
 LIVE REMAINDER, split to its own row: the effect (`E04xx`, 17 codes), ownership (`E05xx`, 11) and provider-escape (`E0600`) bands are still uncatalogued. The message now says so accurately, so this is a documented gap rather than a false claim -- but they are codes users see, and cataloguing them would let `COVERED_BANDS` claim the whole numeric space. |
+| B-2026-08-20-31 | cli | low | THE EFFECT (`E04xx`), OWNERSHIP (`E05xx`) AND PROVIDER-ESCAPE (`E0600`) BANDS ARE UNCATALOGUED, so `karac explain E0400` / `E0500` / `E0600` refuse 2… | FIXED by fb1f3ab. The row scoped this to 29 codes in three bands. It went further in one direction and less far in another, and both departures are worth recording.
+
+FURTHER: THE WHOLE NUMBERING IS NOW CLOSED, not just the three bands. The parse band turned out to be four codes behind a `ParseErrorKind::code` match, and it was the only thing standing between "three more bands" and "every numbered code answers" -- so leaving it out would have meant `unknown_code_message` still needing a caveat. Catalogued: parse E0001/E0002/E0003/E0005, the 17 effect codes E0400-E0416, `L0001` (the FFI lint hint), the 11 ownership codes E0500-E0512, the two ownership NOTES `N0503` / `N0507`, and `E0600` (provider escape). 35 rows. `COVERED_BANDS` is gone -- there is no prefix list left to keep in sync, because `code_table_catalogues_every_code_in_a_covered_band` now asserts that EVERY numbered code the emitter mints has a row.
+
+A SECOND MANIFESTATION THE ROW DID NOT PREDICT, and cataloguing alone would not have fixed: `karac explain N0503` did not say "uncatalogued", it said `unknown diagnostic class 'N0503'`. `classify_explain_name` (`src/cli/args.rs`) routed only `E` / `W` names to the code lookup, so the `N05xx` notes and `L0001` fell through to the CLASS arm and were rejected against the class list. `unknown_code_message`'s twin shape check had the same bug -- it would have called `L0001` "not a diagnostic code" at all. Both now accept any uppercase letter followed by digits, which cannot swallow a class name because every class has a non-digit after its first character. Pinned in `bare_explain_name_is_classified_by_shape`. THE LESSON: a lookup surface has TWO gates, the table and the parser that decides what to look up in, and a code catalogue is only reachable through the shape rule that routes to it.
+
+LESS FAR: THE CLASS BACKFILL IS SMALL, and deliberately so. The row proposed `class_for_effect_error_kind` / `class_for_ownership_error_kind` mirroring `class_for_type_error_kind`, and both now exist and are wired into `diag_json.rs` -- but they map only where the class's OWN DOCUMENTATION covers the kind, and that is 7 effect kinds of 21 and 6 ownership kinds of 21. The rest return `None` and render `OTHER`.
+
+That restraint is the point, not a shortfall. `class` is the field machine consumers ROUTE on -- it is only worth having because it is narrower than the message text -- so a wrong class is strictly worse than `OTHER`. Two concrete refusals: `OverDeclaredEffect` is the INVERSE of `EffectUndeclared` and would have been actively misleading under it; `RefCaptureEscapesScope` is a lifetime problem, and filing it under `OwnershipBorrowConflict` would tell a consumer the borrow checker found an overlap it did not find. Back-filling either means adding a class first.
+
+WHAT THE BACKFILL BOUGHT, measured rather than assumed. Three published classes were emitted by NOTHING before this: `EFFECT_UNDECLARED`, `EFFECT_CONFLICT`, `OWNERSHIP_MOVE_AFTER_USE`. `karac explain --class=OWNERSHIP_MOVE_AFTER_USE` described a family no diagnostic had ever claimed membership of. Now `E0400` carries EFFECT_UNDECLARED, `E0408` (a `writes` to module state inside `par {}`) carries EFFECT_CONFLICT, `E0500` carries OWNERSHIP_MOVE_AFTER_USE, `E0505` carries OWNERSHIP_USE_OF_UNINITIALIZED, `E0411` and `E0802` carry TARGET_INCOMPATIBLE (the class doc names "cross-target effect violations" outright), the three `extern` effect-row rules carry FFI_VIOLATION, and `L0001` carries LINT_WARNING. `test_ownership_diagnostic_carries_its_class_in_the_json_feed` compiles a real move-after-use and asserts the record, so this is verified on the wire and not only in the table.
+
+ONE FINDING ABOUT `OWNERSHIP_BORROW_CONFLICT` worth keeping: it is well populated -- slice, cross, closure-capture and aliased-args conflicts all map to it -- but every one of those is emitted under a SYMBOLIC `E_*` code, so the class has no numerically-coded members at all. That is why it looked empty from the catalogue's side.
+
+DRIFT GUARDS, since the catalogue now restates two more classifiers. `code_table_class_matches_the_effect_and_ownership_classifiers` holds the rows against `class_for_effect_error_kind` / `class_for_ownership_error_kind` the way `code_table_class_matches_typechecker` already held the typecheck rows. `code_table_catalogues_every_parse_code` enumerates `ParseErrorKind` and asserts the count, because a new variant is a compile error in `code()` but would be a SILENT omission from a hand-written list. The emitter scan was also widened past `E` / `W` to any uppercase prefix -- while it knew only the two error prefixes it was skipping `N0503`, `N0507` and `L0001` without a word, which is precisely the failure mode the guard exists to prevent.
+
+design.md's band list gained parse `E00xx`, `N05xx` and `E0600`, and now states that every numbered code is catalogued while the symbolic borrow-conflict family is deliberately outside the numbering. |
 
 </details>
 
