@@ -1118,6 +1118,187 @@ fn gpu_arg_reductions_agree_with_the_interpreter() {
 }
 
 #[test]
+fn gpu_matmul_agrees_with_tensor_matmul_bit_for_bit() {
+    // THE fixture for the tiling decision, and the one result in this family
+    // that is an EQUALITY rather than a specified difference. Every other op
+    // here had to pick a grouping the CPU does not use — `gpu.sum` is a tree
+    // where `v.sum()` is a line. A tiled matmul walks tiles in ascending `k`
+    // and the inner loop in ascending order within a tile, so the products
+    // accumulate in the naive order and `gpu.matmul(a, b)` IS `a.matmul(b)`.
+    //
+    // Asserted as `==` between the two, not against printed values: printing
+    // would compare to four decimals and pass on a near-miss, which is exactly
+    // what an accumulation-order bug looks like.
+    assert_gpu_reduce_matches_interp(
+        "matmul_equals_cpu",
+        "fn main() {\n\
+        \x20   let a: Tensor[f32, [?, ?]] = Tensor.from([[1.5, -2.25, 3.125], [0.5, 4.0, -1.75]]);\n\
+        \x20   let b: Tensor[f32, [?, ?]] = Tensor.from([[2.0, -0.5], [1.25, 3.0], [-4.5, 0.75]]);\n\
+        \x20   let g = gpu.matmul(a, b);\n\
+        \x20   let c = a.matmul(b);\n\
+        \x20   let mut same = true;\n\
+        \x20   for i in 0..2 {\n\
+        \x20       for j in 0..2 {\n\
+        \x20           if g[i, j] != c[i, j] { same = false; }\n\
+        \x20       }\n\
+        \x20   }\n\
+        \x20   println(f\"{same} {g[0, 0]} {g[1, 1]}\");\n\
+        }\n",
+        "true -13.875 10.4375",
+    );
+}
+
+#[test]
+fn gpu_matmul_crosses_every_tile_edge() {
+    // The tile is 16x16, so a matmul whose every dimension is a multiple of 16
+    // exercises NO padding at all — and padding is where a tiled kernel goes
+    // wrong. Each shape here is ragged in a different place:
+    //
+    //   17x1x1    m past the tile edge, k and n minimal
+    //   1x17x1    the CONTRACTION past the edge — the padded-tile case, and
+    //             the only one where a one-sided pad would show up
+    //   1x1x17    n past the edge
+    //   17x17x17  all three ragged at once
+    //
+    // Values are deliberately non-uniform: an all-ones matrix makes every
+    // grouping and every padding mistake agree, which is the fixture that
+    // proves nothing.
+    for (m, k, n) in [(17, 1, 1), (1, 17, 1), (1, 1, 17), (17, 17, 17)] {
+        let a: String = (0..m)
+            .map(|i| {
+                let row: Vec<String> = (0..k).map(|p| format!("{}.25", (i * k + p) % 7)).collect();
+                format!("[{}]", row.join(", "))
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let b: String = (0..k)
+            .map(|p| {
+                let row: Vec<String> = (0..n).map(|j| format!("-{}.5", (p * n + j) % 5)).collect();
+                format!("[{}]", row.join(", "))
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        assert_gpu_reduce_matches_interp(
+            &format!("matmul_tile_{m}x{k}x{n}"),
+            &format!(
+                "fn main() {{\n\
+                \x20   let a: Tensor[f32, [?, ?]] = Tensor.from([{a}]);\n\
+                \x20   let b: Tensor[f32, [?, ?]] = Tensor.from([{b}]);\n\
+                \x20   let g = gpu.matmul(a, b);\n\
+                \x20   let c = a.matmul(b);\n\
+                \x20   let mut same = true;\n\
+                \x20   for i in 0..{m} {{\n\
+                \x20       for j in 0..{n} {{\n\
+                \x20           if g[i, j] != c[i, j] {{ same = false; }}\n\
+                \x20       }}\n\
+                \x20   }}\n\
+                \x20   println(f\"{{same}} {{g.shape()[0]}} {{g.shape()[1]}}\");\n\
+                }}\n"
+            ),
+            &format!("true {m} {n}"),
+        );
+    }
+}
+
+#[test]
+fn gpu_matmul_needs_more_than_one_workgroup_per_side() {
+    // 40x40x40 puts THREE tiles on every axis, so the kernel runs a 3x3 grid
+    // of workgroups each looping over 3 contraction tiles — the first shape
+    // where the second `workgroupBarrier()` matters. Without it a fast lane
+    // stages tile t+1 over values a slow lane is still reading from tile t;
+    // the corruption is a race, so it needs real contention to appear and a
+    // single-tile fixture cannot produce it.
+    let n = 40;
+    let a: String = (0..n)
+        .map(|i| {
+            let row: Vec<String> = (0..n).map(|p| format!("{}.5", (i + p) % 9)).collect();
+            format!("[{}]", row.join(", "))
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let b: String = (0..n)
+        .map(|p| {
+            let row: Vec<String> = (0..n).map(|j| format!("-{}.25", (p * 3 + j) % 6)).collect();
+            format!("[{}]", row.join(", "))
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    assert_gpu_reduce_matches_interp(
+        "matmul_multi_workgroup",
+        &format!(
+            "fn main() {{\n\
+            \x20   let a: Tensor[f32, [?, ?]] = Tensor.from([{a}]);\n\
+            \x20   let b: Tensor[f32, [?, ?]] = Tensor.from([{b}]);\n\
+            \x20   let g = gpu.matmul(a, b);\n\
+            \x20   let c = a.matmul(b);\n\
+            \x20   let mut diffs = 0;\n\
+            \x20   for i in 0..{n} {{\n\
+            \x20       for j in 0..{n} {{\n\
+            \x20           if g[i, j] != c[i, j] {{ diffs = diffs + 1; }}\n\
+            \x20       }}\n\
+            \x20   }}\n\
+            \x20   println(f\"{{diffs}}\");\n\
+            }}\n"
+        ),
+        "0",
+    );
+}
+
+#[test]
+fn gpu_matmul_is_not_gpu_dot_of_the_row_and_column() {
+    // The consequence of the equality above, and the reason it is worth
+    // stating: `gpu.matmul` accumulates in the NAIVE order, while `gpu.dot`
+    // reduces with the halving TREE. Both compute the same mathematical dot
+    // product of row 0 with column 0, by different groupings, and f32 addition
+    // is not associative — so the two GPU ops legitimately disagree.
+    //
+    // The fixture prints which one it is rather than asserting inequality
+    // directly, so if the two orders ever converge this fails saying so
+    // instead of looking like a rounding regression.
+    //
+    // The values are the prefix-sum row's discriminating quartet: two 1.0s and
+    // two values far below the f32 ulp at 1.0. The tree pairs each 1.0 with a
+    // tiny value and loses both; the naive order adds the two tiny values to
+    // the running total after it has already reached 2.0, losing them as well
+    // — but the INTERMEDIATE roundings differ, which is what separates them.
+    assert_gpu_reduce_matches_interp(
+        "matmul_vs_dot_grouping",
+        "fn main() {\n\
+        \x20   let row: Vec[f32] = [1.0, 0.00000006, 1.0, 0.00000006];\n\
+        \x20   let ones: Vec[f32] = [1.0, 1.0, 1.0, 1.0];\n\
+        \x20   let a: Tensor[f32, [?, ?]] = Tensor.from([[1.0, 0.00000006, 1.0, 0.00000006]]);\n\
+        \x20   let b: Tensor[f32, [?, ?]] = Tensor.from([[1.0], [1.0], [1.0], [1.0]]);\n\
+        \x20   let mm = gpu.matmul(a, b)[0, 0];\n\
+        \x20   let dt = gpu.dot(row, ones);\n\
+        \x20   if mm == dt {\n\
+        \x20       println(\"agree\");\n\
+        \x20   } else {\n\
+        \x20       println(\"differ\");\n\
+        \x20   }\n\
+        }\n",
+        "differ",
+    );
+}
+
+#[test]
+fn gpu_matmul_empty_contraction_is_a_block_of_zeros() {
+    // `k == 0` is NOT the empty case: [m, 0] x [0, n] is an [m, n] block of
+    // zeros, because the empty sum is the additive identity. Distinct from
+    // every reduction here, where an empty input has no answer and returns
+    // `None` — a matmul over an empty contraction has a perfectly good answer.
+    assert_gpu_reduce_matches_interp(
+        "matmul_empty_contraction",
+        "fn main() {\n\
+        \x20   let a: Tensor[f32, [?, ?]] = Tensor.zeros([2, 0]);\n\
+        \x20   let b: Tensor[f32, [?, ?]] = Tensor.zeros([0, 3]);\n\
+        \x20   let g = gpu.matmul(a, b);\n\
+        \x20   println(f\"{g.shape()[0]} {g.shape()[1]} {g[0, 0]} {g[1, 2]}\");\n\
+        }\n",
+        "2 3 0 0",
+    );
+}
+
+#[test]
 fn gpu_prefix_sum_agrees_with_the_interpreter() {
     // The first GPU op whose result is a BUFFER, and the first that is not a
     // fold. Inclusive: out[i] is the sum THROUGH i.

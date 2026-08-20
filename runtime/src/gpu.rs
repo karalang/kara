@@ -1311,11 +1311,19 @@ pub unsafe extern "C" fn karac_runtime_gpu_matmul_f32(
     out_ptr: *mut f32,
 ) {
     unsafe {
-        // An empty product writes nothing and dispatches nothing. `k == 0`
-        // with non-empty m and n is NOT this case: it is an [m, n] block of
-        // zeros (the empty sum), and the shader's tile loop produces exactly
-        // that by never running — so it still dispatches.
+        // An empty product writes nothing and dispatches nothing.
         if m == 0 || n == 0 {
+            return;
+        }
+        // `k == 0` is a DIFFERENT case and does not reach the device: the
+        // answer is an [m, n] block of zeros (the empty sum), but the operand
+        // buffers are `m * 0` and `0 * n` bytes and wgpu rejects a zero-sized
+        // buffer outright — so dispatching would panic inside wgpu rather than
+        // produce it. The destination is `malloc`'d and therefore NOT already
+        // zero, so this writes the zeros rather than merely skipping the
+        // dispatch.
+        if k == 0 {
+            std::ptr::write_bytes(out_ptr as *mut u8, 0, m * n * std::mem::size_of::<f32>());
             return;
         }
         let Ok(wgsl) = std::str::from_utf8(std::slice::from_raw_parts(wgsl_ptr, wgsl_len)) else {

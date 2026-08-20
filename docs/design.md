@@ -10258,6 +10258,32 @@ They agree far more often than not — every uniform buffer agrees, and roughly 
 
 The interpreter twin reproduces the trap *points*, not just the final value, by running the same tree with checked operations — so the two surfaces agree on which programs fail as well as on what the surviving ones return.
 
+##### Tiled matmul — the one that agrees with the CPU
+
+`gpu.matmul(a, b)` multiplies two rank-2 `Tensor[f32]`s: `[m, k] × [k, n] → [m, n]`.
+
+It is the **only operation in this family that takes tensors rather than `Vec`s**, and it has to be. Every reduction above contracts a flat buffer to a scalar, so `Vec[f32]` says everything about its input. A matmul's meaning depends on a shape, and `m·k` values can be read as `[1, m·k]`, `[m, k]`, or any other factorisation. Passing the shape as extra integer arguments would let a caller state a shape the data does not have — and a wrong `k` does not fail, it reads real values from the wrong places. `Tensor[f32, [m, k]]` already carries the shape, checked, next to the data. The operand rules are `Tensor.matmul`'s, reused rather than restated, so the two surfaces accept exactly the same programs.
+
+It is also the **only operation in this family whose result equals its ordinary CPU counterpart bit-for-bit**:
+
+> **`gpu.matmul(a, b)` is `a.matmul(b)`, exactly, on every surface.**
+
+That is a promise rather than a coincidence, and it is the reverse of every other entry above. Each workgroup computes a `16×16` block of the output, walking the contraction in 16-wide steps: stage one tile of each operand into workgroup memory, barrier, accumulate 16 products, barrier, advance. Tiles are visited in ascending `k` and the inner loop runs in order within a tile, so the products accumulate in `k = 0, 1, 2, …` order — element for element, the order the naive triple loop uses. **Tiling changes where the operands are read from, not when they are added.** Contrast `gpu.sum`, whose halving tree is genuinely a different grouping from `v.sum()`'s line.
+
+The corollary is worth stating because it looks like a contradiction:
+
+> **`gpu.matmul` disagreeing with `gpu.dot` of the same row and column is correct.** `gpu.dot` reduces with the halving tree; `gpu.matmul` accumulates in the naive order. Both compute the same mathematical dot product, by different groupings, and `f32` addition is not associative.
+
+So the two GPU operations differ from each other while one of them matches the CPU exactly. Both facts follow from the same rule that has governed this whole family: the order is part of the specification, and each operation's order is whichever one its shader actually performs.
+
+**Accumulation is in `f32`, rounding at every step**, matching `Tensor.matmul` on both CPU surfaces. This is forced rather than chosen — WGSL has no `f64`, so a wider accumulator would put the device permanently out of reach of its own twin.
+
+The tile is `16×16` = 256 invocations, the portable `maxComputeInvocationsPerWorkgroup` floor; the 64-wide reduction workgroup is an unrelated number, a *line* of lanes where this is a *square*. At a ragged edge **both operand tiles are zero-padded at the same `k`**, so a padded lane contributes `0.0 × 0.0`. Padding one side only would let a real value meet a padded zero, and `inf × 0.0` is NaN — an output element poisoned by arithmetic that was never in the data.
+
+`k == 0` is not the empty case: `[m, 0] × [0, n]` is an `[m, n]` block of zeros, because the empty sum is the additive identity. Unlike the reductions, where an empty input genuinely has no answer, an empty contraction has a perfectly good one.
+
+`matmul` is **f32-only**, where `Tensor.matmul` also accepts integer elements. An integer matmul accumulates a sum of *products*, so it needs both the widening multiply WGSL lacks — the same wall `gpu.prod` and `gpu.dot` hit — and the overflow flag carried through every one of its `k` steps.
+
 ### Cross-target Compilation
 
 A Kāra source tree often compiles to more than one target in a single build — the canonical case is server-side rendering (SSR) where a `components` module compiles for both `native` (server renders initial HTML) and `wasm_browser` (client hydrates and handles events). This subsection specifies how the compiler decides which items exist on which target and how the effect system enforces target correctness without `#[cfg]`-spam.
