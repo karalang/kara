@@ -999,6 +999,15 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
         }
+        // The prefix sum's result is a BUFFER, so it neither returns an
+        // `Option` nor shares any of the reduce lowering.
+        if method == "prefix_sum" {
+            if let ExprKind::Identifier(name) = &object.kind {
+                if name == "gpu" && !self.variables.contains_key("gpu") {
+                    return self.compile_gpu_prefix_sum(args, call_span);
+                }
+            }
+        }
         // The Arg family reports an INDEX, so it returns `Option[i64]`
         // regardless of the element type and needs its own lowering.
         if matches!(method, "argmin" | "argmax") {

@@ -1013,6 +1013,44 @@ impl<'a> super::Interpreter<'a> {
     /// POPULATION form (÷ n), matching `Stats.variance` / `Stats.stddev`. Both
     /// passes go through the same sum tree the device uses, so the two agree
     /// bit-for-bit rather than within an epsilon.
+    /// `gpu.prefix_sum(buffer)` — the interpreter twin of the device's
+    /// three-phase scan (B-2026-08-19-13).
+    ///
+    /// Returns a `Vec[f32]`, not an `Option`: the prefix sums of an empty
+    /// buffer are the empty Vec, so there is nothing for `None` to mean.
+    ///
+    /// The whole of the semantics lives in `tree_prefix_sum_f32` — the
+    /// Hillis-Steele step order and the chunk recursion — so this is only the
+    /// `Value` glue, exactly as the fold twins are.
+    fn eval_gpu_prefix_sum(&mut self, args: &[CallArg], span: &Span) -> Value {
+        if args.len() != 1 {
+            return self.record_runtime_error(
+                format!("gpu.prefix_sum expects one buffer (found {})", args.len()),
+                span,
+            );
+        }
+        let Value::Array(rc) = self.eval_expr_inner(&args[0].value) else {
+            return self.record_runtime_error("gpu.prefix_sum buffer must be a Vec of f32", span);
+        };
+        let elems = rc.read().unwrap().clone();
+        let mut xs: Vec<f32> = Vec::with_capacity(elems.len());
+        for v in &elems {
+            match v {
+                Value::Float(f) => xs.push(*f as f32),
+                _ => {
+                    return self
+                        .record_runtime_error("gpu.prefix_sum buffer element must be f32", span)
+                }
+            }
+        }
+
+        let scanned: Vec<Value> = crate::reduce_kernel::tree_prefix_sum_f32(&xs)
+            .into_iter()
+            .map(|f| Value::Float(f as f64))
+            .collect();
+        Value::Array(std::sync::Arc::new(std::sync::RwLock::new(scanned)))
+    }
+
     fn eval_gpu_variance(
         &mut self,
         args: &[CallArg],
@@ -1334,6 +1372,7 @@ impl<'a> super::Interpreter<'a> {
                     return self.eval_gpu_variance(args, span, false, "variance")
                 }
                 ("gpu", "stddev") => return self.eval_gpu_variance(args, span, true, "stddev"),
+                ("gpu", "prefix_sum") => return self.eval_gpu_prefix_sum(args, span),
                 ("gpu", "argmin") => return self.eval_gpu_arg(args, span, false, "argmin"),
                 ("gpu", "argmax") => return self.eval_gpu_arg(args, span, true, "argmax"),
                 // `gpu.upload` / `gpu.download` (resident device buffers) are

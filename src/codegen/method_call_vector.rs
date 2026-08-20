@@ -2052,6 +2052,106 @@ impl<'ctx> super::Codegen<'ctx> {
     /// square root are applied HERE, because they are the parts the CPU twin
     /// has to mirror and because it lets one entry point serve both spellings.
     /// POPULATION form (÷ n), matching `Stats.variance` / `Stats.stddev`.
+    /// Lower `gpu.prefix_sum(buffer)` to a fresh owned `Vec[f32]`
+    /// (B-2026-08-19-13).
+    ///
+    /// **The only GPU lowering here that allocates a result buffer.** Every
+    /// reduction before it produced one value; `n` of them need storage, and
+    /// codegen is what owns it — the `Vec` returned from here is an ordinary
+    /// owned temporary that the caller's scope frees like any other, so
+    /// nothing about the ownership story is GPU-specific.
+    ///
+    /// Two shaders, keyed exactly as `gpu.variance` keys its pair: phase 1 on
+    /// the ARGUMENT span, phase 3 on the CALL span. Phase 2 needs none of its
+    /// own — the runtime runs the same two again over the chunk totals.
+    ///
+    /// No empty-buffer branch, and that is the point of returning a `Vec`
+    /// rather than an `Option`: `n = 0` allocates zero bytes, the runtime
+    /// returns without dispatching, and the result is the empty Vec. There is
+    /// no "no answer" case to guard.
+    pub(super) fn compile_gpu_prefix_sum(
+        &mut self,
+        args: &[CallArg],
+        call_span: &crate::token::Span,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        if args.len() != 1 {
+            return Err(format!(
+                "gpu.prefix_sum expects one buffer, found {} argument(s)",
+                args.len()
+            ));
+        }
+        let i64_t = self.context.i64_type();
+
+        let mut baked = Vec::with_capacity(2);
+        for (key, label) in [
+            (
+                (args[0].value.span.offset, args[0].value.span.length),
+                "gpu.scan.wgsl",
+            ),
+            ((call_span.offset, call_span.length), "gpu.scan.off.wgsl"),
+        ] {
+            let wgsl = self
+                .accel
+                .gpu_dispatch_wgsl
+                .get(&key)
+                .cloned()
+                .ok_or_else(|| {
+                    "internal error: no WGSL recorded for `gpu.prefix_sum` — the typechecker \
+                     intercept must run before codegen"
+                        .to_string()
+                })?;
+            let len = i64_t.const_int(wgsl.len() as u64, false);
+            let ptr = self
+                .builder
+                .build_global_string_ptr(&wgsl, label)
+                .map_err(|e| format!("baking gpu prefix-sum shader constant failed: {e}"))?
+                .as_pointer_value();
+            baked.push((ptr, len));
+        }
+
+        let (data, n) = self.read_gpu_reduce_buffer(&args[0].value)?;
+
+        // The destination: n four-byte elements, matching the `Vec[f32]` the
+        // typechecker promised. `alloc_or_panic(0)` on an empty buffer is the
+        // same no-op the regex `find_all` path already relies on.
+        let bytes = self
+            .builder
+            .build_int_mul(n, i64_t.const_int(4, false), "gpu.scan.bytes")
+            .unwrap();
+        let out = self
+            .builder
+            .build_call(
+                self.runtime_fns.alloc_or_panic_fn,
+                &[bytes.into()],
+                "gpu.scan.buf",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+
+        let scan_fn = self.gpu_prefix_sum_f32_fn();
+        self.builder
+            .build_call(
+                scan_fn,
+                &[
+                    baked[0].0.into(),
+                    baked[0].1.into(),
+                    baked[1].0.into(),
+                    baked[1].1.into(),
+                    data.into(),
+                    n.into(),
+                    out.into(),
+                ],
+                "",
+            )
+            .unwrap();
+
+        // Capacity is the length: this buffer is sized exactly once and never
+        // grown, so there is no slack to record.
+        Ok(self.build_vec_value(out, n, n))
+    }
+
     pub(super) fn compile_gpu_variance(
         &mut self,
         args: &[CallArg],

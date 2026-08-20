@@ -1115,6 +1115,13 @@ impl<'a> super::TypeChecker<'a> {
             if module == "gpu" && method == "stddev" {
                 return self.infer_gpu_variance(args, span, true, "stddev");
             }
+            // The one GPU op whose result is a BUFFER rather than a scalar,
+            // and the only one that is not a fold — so it neither returns
+            // `Option` (an empty prefix sum is the empty Vec, not "no
+            // answer") nor shares any of the reduce inference.
+            if module == "gpu" && method == "prefix_sum" {
+                return self.infer_gpu_prefix_sum(args, span);
+            }
             // The Arg family reports an INDEX, so it needs two shaders and a
             // result type unrelated to the element type.
             if module == "gpu" && method == "argmin" {
@@ -3814,6 +3821,86 @@ impl<'a> super::TypeChecker<'a> {
                 self.type_error(
                     format!(
                         "error[E_GPU_REDUCE_KERNEL]: cannot lower `gpu.{spelling}` to a GPU \
+                         shader — {}",
+                        e.reason()
+                    ),
+                    args[0].value.span,
+                    TypeErrorKind::TypeMismatch,
+                );
+            }
+        }
+
+        self.record_expr_type(span, &result);
+        result
+    }
+
+    /// Type `gpu.prefix_sum(buffer)` — an inclusive prefix sum
+    /// (B-2026-08-19-13).
+    ///
+    /// **`Vec[f32]`, not `Option[Vec[f32]]`.** Every fold in this family
+    /// returns an `Option` because an empty buffer genuinely has no sum /
+    /// extremum / mean to report. A prefix sum has no such hole: the prefix
+    /// sums of nothing are nothing, so the empty buffer maps to the empty Vec
+    /// and there is no case for `None` to carry.
+    ///
+    /// Two shaders, stashed the way `gpu.variance` stashes its pair: the
+    /// phase-1 scan keyed on the ARGUMENT span, the phase-3 offset kernel on
+    /// the CALL span. Phase 2 needs no shader of its own — it is the same two
+    /// run again over the chunk totals.
+    fn infer_gpu_prefix_sum(&mut self, args: &[CallArg], span: &Span) -> Type {
+        let f32_ty = Type::Float(FloatSize::F32);
+        let result = Type::Named {
+            name: "Vec".to_string(),
+            args: vec![f32_ty.clone()],
+        };
+        if args.len() != 1 {
+            self.type_error(
+                format!(
+                    "error[E_GPU_REDUCE_ARITY]: `gpu.prefix_sum` takes exactly one buffer — \
+                     `gpu.prefix_sum(buffer)` (found {} argument(s))",
+                    args.len()
+                ),
+                *span,
+                TypeErrorKind::WrongNumberOfArgs,
+            );
+            return result;
+        }
+
+        let buf_ty = self.infer_expr(&args[0].value);
+        let ok = matches!(
+            &buf_ty,
+            Type::Named { name, args: ta }
+                if name == "Vec" && ta.len() == 1 && ta[0] == Type::Float(FloatSize::F32)
+        );
+        if !ok {
+            self.type_error(
+                format!(
+                    "error[E_GPU_REDUCE_BUFFER]: `gpu.prefix_sum` takes a `Vec[f32]` (found \
+                     `{}`) — it is f32-only; an integer prefix sum has to carry an overflow \
+                     flag through every lane, not just the one that writes the result",
+                    crate::typechecker::types::type_display(&buf_ty)
+                ),
+                args[0].value.span,
+                TypeErrorKind::TypeMismatch,
+            );
+            return result;
+        }
+
+        let scan = crate::gpu_wgsl::emit_scan_kernel("f32");
+        let offset = crate::gpu_wgsl::emit_scan_offset_kernel("f32");
+        match (scan, offset) {
+            (Ok(scan_wgsl), Ok(offset_wgsl)) => {
+                self.gpu_dispatch_wgsl.insert(
+                    SpanKey(args[0].value.span.offset, args[0].value.span.length),
+                    scan_wgsl,
+                );
+                self.gpu_dispatch_wgsl
+                    .insert(SpanKey(span.offset, span.length), offset_wgsl);
+            }
+            (Err(e), _) | (_, Err(e)) => {
+                self.type_error(
+                    format!(
+                        "error[E_GPU_REDUCE_KERNEL]: cannot lower `gpu.prefix_sum` to a GPU \
                          shader — {}",
                         e.reason()
                     ),

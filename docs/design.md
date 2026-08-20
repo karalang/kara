@@ -10190,6 +10190,7 @@ let s2  = gpu.variance(buf)   // Option[f32] — population (÷ n)
 let sd  = gpu.stddev(buf)     // Option[f32]
 let i   = gpu.argmin(buf)     // Option[i64] — the INDEX of the minimum
 let j   = gpu.argmax(buf)     // Option[i64]
+let ps  = gpu.prefix_sum(buf) // Vec[f32] — inclusive; NOT a reduction
 ```
 
 The fallible ones are fallible because the answer genuinely does not exist, not because the implementation is awkward: an empty buffer has no minimum, no maximum and no mean. Returning the shader's padding identity (`+inf`) or `0.0 / 0` (`NaN`) would be a plausible-looking value that propagates silently through everything downstream, which is the failure mode this whole family is built to avoid. `sum`/`prod`/`dot` are total — the empty case is the identity (`0`, `1`, `0`) — so they return a bare `f32`.
@@ -10238,6 +10239,22 @@ Signedness follows the element type all the way through — the shader's compari
 | `[MAX, -MAX, MAX, -MAX]` | **traps** | `0` |
 
 So `gpu.sum(v)` and `v.sum()` over the same integer buffer may legitimately disagree about whether they fail. That is not a bug and not a divergence: they are different operations with different, specified evaluation orders, exactly as they are for `f32` values. It does mean that replacing `v.sum()` with `gpu.sum(v)` is **not** a pure speedup for integer data — it can introduce a trap that was not there, or remove one that was. Float reductions have no analogue of this, because float addition saturates rather than trapping.
+
+##### Prefix sum — the one that is not a fold
+
+`gpu.prefix_sum(buf)` is the odd member of this family: its result is a **buffer**, not a value. `out[i]` is the sum of `buf[0..=i]` — **inclusive**, matching NumPy's `cumsum`, C++'s `partial_sum` and Python's `itertools.accumulate`. It returns a bare `Vec[f32]`, with no `Option`: the prefix sums of an empty buffer are the empty buffer, so unlike `min`/`mean` there is no missing answer for `None` to carry.
+
+It is spelled `prefix_sum` rather than `scan` because **`scan` already means the iterator adapter** — a stateful map, as in Rust. Two unrelated operations under one name is the hazard the `variance`/`var` split is documented against elsewhere in this document; the language does not need a third instance of it.
+
+**Its order is specified, like every other order here, and it is a different order.** Within one workgroup-wide chunk, for stride 1, 2, 4, 8, 16, 32: every lane at or past `stride` adds the lane `stride` below it, with all lanes reading the values as they stood *before* the step (Hillis-Steele). Past one chunk, the chunks are scanned independently, their totals are prefix-summed by the same procedure one level up, and each chunk's exclusive offset is added back — so a long prefix sum is a **prefix sum of prefix sums**, the same self-similarity the reduction tree has.
+
+The consequence follows directly, and it is worth knowing before it is discovered:
+
+> **`gpu.prefix_sum(v)` ending in the total does not make that total `gpu.sum(v)`.** Both compute the sum of everything, by different groupings. For `[a, b, c, d]` the halving tree computes `(a+c) + (b+d)` while the scan's last lane computes `(a+b) + (c+d)`, and `f32` addition is not associative.
+
+They agree far more often than not — every uniform buffer agrees, and roughly 60% of random ones do — which is exactly why it is stated rather than left to be found. No choice of algorithm removes it: Blelloch's up-sweep does form precisely the reduction tree's total, but its down-sweep overwrites the root with the identity before any output exists, so that total never reaches the result. This is the same class of fact as the tree-of-trees grouping above: a property of the specified operation, not of the device, and identical under `karac run` and `karac build`.
+
+`prefix_sum` is **f32-only**. An integer prefix sum would have to carry the overflow flag described above through *every* lane rather than only the one that writes the result — a different shader, deferred until something needs it.
 
 The interpreter twin reproduces the trap *points*, not just the final value, by running the same tree with checked operations — so the two surfaces agree on which programs fail as well as on what the surviving ones return.
 

@@ -1118,6 +1118,97 @@ fn gpu_arg_reductions_agree_with_the_interpreter() {
 }
 
 #[test]
+fn gpu_prefix_sum_agrees_with_the_interpreter() {
+    // The first GPU op whose result is a BUFFER, and the first that is not a
+    // fold. Inclusive: out[i] is the sum THROUGH i.
+    assert_gpu_reduce_matches_interp(
+        "prefix_sum_small",
+        "fn main() {\n\
+        \x20   let v: Vec[f32] = [1.0, 2.0, 3.0, 4.0];\n\
+        \x20   println(f\"{gpu.prefix_sum(v)}\");\n\
+        }\n",
+        "[1, 3, 6, 10]",
+    );
+
+    // Empty in, empty out — and no `Option` anywhere. Every fold in this
+    // family returns `Option` because an empty buffer has no sum/extremum to
+    // report; a prefix sum has no such hole, so `Vec[f32]` is the honest type
+    // and there is no `None` case to write.
+    assert_gpu_reduce_matches_interp(
+        "prefix_sum_empty",
+        "fn main() {\n\
+        \x20   let v: Vec[f32] = [];\n\
+        \x20   let p = gpu.prefix_sum(v);\n\
+        \x20   println(f\"{p.len()}\");\n\
+        }\n",
+        "0",
+    );
+
+    // Negatives need no separate path, and the running total is allowed to
+    // go back down — a scan is not a monotone sequence.
+    assert_gpu_reduce_matches_interp(
+        "prefix_sum_negatives",
+        "fn main() {\n\
+        \x20   let v: Vec[f32] = [5.0, -5.0, 5.0, -5.0];\n\
+        \x20   println(f\"{gpu.prefix_sum(v)}\");\n\
+        }\n",
+        "[5, 0, 5, 0]",
+    );
+}
+
+#[test]
+fn gpu_prefix_sum_carries_the_offset_across_chunk_boundaries() {
+    // 4097 elements of 1.0 is past 64*64, so the per-chunk totals THEMSELVES
+    // need more than one workgroup and the host recursion runs twice. A
+    // single-level implementation is correct up to 4096 and wrong after —
+    // passing every short fixture, which is the failure shape this family
+    // keeps having to design against.
+    //
+    // All-ones makes every element its index plus one, so a missing or
+    // misindexed chunk offset shows up as a RESET at a 64-boundary rather
+    // than as a slightly wrong float. The probes straddle the first boundary
+    // and both ends.
+    assert_gpu_reduce_matches_interp(
+        "prefix_sum_recursive",
+        "fn main() {\n\
+        \x20   let mut v: Vec[f32] = [];\n\
+        \x20   for i in 0..4097 { v.push(1.0) }\n\
+        \x20   let p = gpu.prefix_sum(v);\n\
+        \x20   println(f\"{p.len()} {p[0]} {p[63]} {p[64]} {p[4095]} {p[4096]}\");\n\
+        }\n",
+        "4097 1 64 65 4096 4097",
+    );
+}
+
+#[test]
+fn gpu_prefix_sums_last_element_need_not_equal_gpu_sum() {
+    // SPECIFIED, not desirable — pinned end to end because it is the one
+    // observable consequence of a prefix sum not being a fold. Both numbers
+    // are "the total"; they group differently, and f32 addition is not
+    // associative. The halving tree computes (a+c) + (b+d); Hillis-Steele's
+    // last lane computes (a+b) + (c+d).
+    //
+    // The buffer is the smallest legible discriminator: 1.0, 1.0, 2^-24,
+    // 2^-23. The tree pairs each 1.0 with a tiny value and loses both, giving
+    // exactly 2; the scan adds the two tiny values to each other first, and
+    // their sum survives.
+    //
+    // If this ever prints "same", the two summation orders have converged and
+    // the docs on `tree_prefix_sum_f32` need re-deriving before the assertion
+    // is relaxed.
+    assert_gpu_reduce_matches_interp(
+        "prefix_sum_vs_sum",
+        "fn main() {\n\
+        \x20   let v: Vec[f32] = [1.0, 1.0, 0.00000005960464477539063, 0.0000001192092895507813];\n\
+        \x20   let p = gpu.prefix_sum(v);\n\
+        \x20   let total = gpu.sum(v);\n\
+        \x20   if p[3] == total { println(\"same\") } else { println(\"differ\") }\n\
+        }\n",
+        "differ",
+    );
+}
+
+#[test]
 fn gpu_variance_and_stddev_agree_with_the_interpreter() {
     // The first TWO-PASS reduction, and the first shader with a UNIFORM. Both
     // only really run on a device: the mean is produced by a complete sum

@@ -12133,6 +12133,38 @@ impl<'ctx> super::Codegen<'ctx> {
             .add_function("karac_runtime_gpu_sumsq_dev_f32", fn_ty, None)
     }
 
+    /// Lazily declare `karac_runtime_gpu_prefix_sum_f32(scan_wgsl_ptr: ptr,
+    /// scan_wgsl_len: i64, off_wgsl_ptr: ptr, off_wgsl_len: i64, in_ptr: ptr,
+    /// n: i64, out_ptr: ptr)` — the prefix sum's entry point
+    /// (B-2026-08-19-13).
+    ///
+    /// **The only GPU entry point here that returns nothing.** Its result is
+    /// `n` values, which cannot come back in a register, so the caller passes
+    /// the destination in. Codegen allocates it, because codegen is what owns
+    /// the resulting `Vec` and its freeing — allocating in the runtime would
+    /// move ownership across the FFI boundary for no gain.
+    pub(super) fn gpu_prefix_sum_f32_fn(&self) -> FunctionValue<'ctx> {
+        if let Some(f) = self.module.get_function("karac_runtime_gpu_prefix_sum_f32") {
+            return f;
+        }
+        let i64_t = self.context.i64_type();
+        let ptr_t = self.context.ptr_type(AddressSpace::default());
+        let fn_ty = self.context.void_type().fn_type(
+            &[
+                ptr_t.into(),
+                i64_t.into(),
+                ptr_t.into(),
+                i64_t.into(),
+                ptr_t.into(),
+                i64_t.into(),
+                ptr_t.into(),
+            ],
+            false,
+        );
+        self.module
+            .add_function("karac_runtime_gpu_prefix_sum_f32", fn_ty, None)
+    }
+
     /// Lazily declare `karac_runtime_gpu_arg_index(seed_wgsl_ptr: ptr,
     /// seed_wgsl_len: i64, fold_wgsl_ptr: ptr, fold_wgsl_len: i64,
     /// in_ptr: ptr, n: i64) -> i32` — the Arg family's entry point
