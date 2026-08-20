@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 133 | 0 |
 | missing-feature | 126 | 1 |
 | codegen-gap | 119 | 0 |
-| false-positive | 86 | 3 |
+| false-positive | 86 | 2 |
 | diagnostics | 84 | 1 |
 | perf | 80 | 2 |
 | crash | 55 | 1 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 953 | 2 |
-| typecheck | 219 | 4 |
+| typecheck | 219 | 3 |
 | interp | 163 | 0 |
 | ownership | 60 | 0 |
 | other | 58 | 0 |
@@ -124,15 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 6 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1392 surfaced · 8 open · 1364 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1392 surfaced · 7 open · 1365 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (8)
+### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-19-13 | 2026-08-19 | typecheck+codegen+runtime | medium | GPU reductions still lack TILED MATMUL (2-D workgroup indexing the 1-D model lacks); integer `prod` / `dot` are blocked on WGSL lacking a widening multiply; and `variance` / `stddev` are f32-only (the integer form needs a decision, not just work — the deviations are formed on-device in f32, so `mean`'s promote-late trick does not carry over). A SAMPLE (÷ n-1) form is decided against rather than pending. Everything else has shipped: sum / prod / min / max / mean / dot / argmin / argmax / variance / stddev / prefix_sum over `Vec[f32]`, and sum / min / max / mean / argmin / argmax over `Vec[i32]` and `Vec[u32]`. | docs/spikes/gpu-llvm-offload-assessment.md; src/gpu_wgsl.rs::emit_reduce_kernel; src/reduce_kernel.rs::tree_reduce_f32 |
 | B-2026-08-20-5 | 2026-08-20 | codegen | high | `e2e_128bit_integers_end_to_end` produces EMPTY STDOUT on macOS arm64 only — the binary links and runs but prints nothing before the first `println`. Linux x86_64 and Linux arm64 both pass the same test. CI's `Codegen E2E (macOS arm64, LLVM 18)` lane has been red on `main` since the test landed. | tests/codegen.rs::e2e_128bit_integers_end_to_end (line ~21227); tests/codegen.rs::run_program_capturing (stdout-only discard); added by 7561b5d1 (B-2026-08-19-8 stage 5); CI job `Codegen E2E (macOS arm64, LLVM 18)` in .github/workflows/ci.yml |
-| B-2026-08-20-6 | 2026-08-20 | typecheck | medium | A `u64` / `usize` match whose arms COVER THE WHOLE DOMAIN by two ranges is wrongly rejected as non-exhaustive: `match n { 0u64..=9223372036854775807u64 => .., 9223372036854775808u64..=18446744073709551615u64 => .. }` reports `pattern 9223372036854775808 not covered` — naming the very value the second arm starts at. The identical `u8` shape is accepted. | src/exhaustive.rs::int_domain (declared domain in unsigned space); src/exhaustive.rs (PatCtor::IntRange construction from LiteralPattern::Integer); src/parser/patterns.rs::pattern_int_on_carrier (where the wrap is applied); src/typechecker/exprs.rs::literal_as_i128 (the un-wrap precedent) |
 | B-2026-08-20-8 | 2026-08-20 | autopar | medium | `karac build --concurrency-report` prints the ANALYSIS label with no lowering verdict, so it claims `parallel_reduction` for a loop its own sibling query reports as `fanned_out: false` — the binary contains zero worker symbols | — |
 | B-2026-08-20-9 | 2026-08-20 | runtime+autopar | medium | Auto-par worker threads contend on ONE glibc malloc arena: any fan-out body that allocates per iteration pays a shared lock the sequential build never touches | — |
 | B-2026-08-20-12 | 2026-08-20 | typecheck | low | A FLOAT literal pattern makes the following `_` arm report `warning[unreachable_arm]`: `match f { 1.5 => .., _ => .. }` warns that the wildcard is "fully covered by an earlier arm". The `_` is of course required — a single float literal covers one value — and the integer equivalent produces no warning. | src/exhaustive.rs::int_domain (no float domain); src/exhaustive.rs (usefulness/unreachable-arm computation for LiteralPattern::Float); src/typechecker (where warning[unreachable_arm] is emitted) |
@@ -155,9 +154,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1392 surfaced
 
 </details>
 
-### Fixed (1364)
+### Fixed (1365)
 
-<details><summary>1364 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1365 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -12560,6 +12559,21 @@ CAVEAT WORTH READING BEFORE THE NEXT CHANGE HERE. The parse error this removes w
 TWO MORE PRE-EXISTING DEFECTS found while measuring, each confirmed by reproducing on a clean `main` build:
   - B-2026-08-20-11 (high, miscompile): codegen does not compare an enum payload's literal AT ALL — it matches on the tag alone, so `match Some(5) { Some(7) => "hit", _ => "no" }` prints `hit` compiled and `no` interpreted. No negatives involved. Found only because this row's test asserts MISS arms; the hit-only version passes. The one miss this row's test does NOT assert is that shape, with a comment in place so the omission is not silent — asserting it would tie this regression test to that bug's fix.
   - B-2026-08-20-12 (low): a float literal pattern makes the following `_` arm report `unreachable_arm`. Positive floats do it too, so it is unrelated to sign. |
+| B-2026-08-20-6 | typecheck | medium | A `u64` / `usize` match whose arms COVER THE WHOLE DOMAIN by two ranges is wrongly rejected as non-exhaustive: `match n { 0u64..=9223372036854775807u… | FIXED by 6b4d2b2. The pattern literal's payload is now un-wrapped at the two points where it becomes an interval — `lit_to_i128` (which also serves range bounds) and the singleton-literal lowering — so exhaustiveness reasons about the VALUE rather than the carrier's bit pattern.
+
+THE DIAGNOSIS WAS IN THE DIAGNOSTIC. The error named `9223372036854775808` as the uncovered witness — the exact value the second arm starts at — which is only possible if that arm's interval had landed somewhere else entirely. It had: an unsigned literal past its signed half rides the carrier as a WRAPPED two's-complement value (B-2026-08-20-1's encoding, chosen so a pattern and its scrutinee compare as identical bits, which is why matching always worked at RUNTIME), while `int_domain` speaks unsigned. The upper arm was `[-2^63, -1]`, which does not intersect `[0, 2^64)`, so the whole top half looked uncovered.
+
+SCOPE, measured before fixing: only `u64` / `usize`. `u8`/`u16`/`u32` have domains that fit the carrier positively and never wrapped; signed types were never affected; and the bug needed the upper half to COUNT TOWARD COVERAGE, so any match with a wildcard was fine. That is why it survived — the shapes that trigger it are exactly the ones nobody writes by accident.
+
+WHY UN-WRAP RATHER THAN WIDEN THE DOMAIN. Both were listed as candidates when this was filed. Un-wrapping keeps every value in ONE space — unsigned, positive, inside `i128` — so the split arithmetic needs no per-type reasoning about which space it is in, and it leaves the carrier encoding untouched. That encoding is depended on by the parser, the interpreter and codegen; widening the domain would have meant teaching the exhaustiveness arithmetic to work in a signed-wrapped space, which is the harder invariant to hold.
+
+ONE RULE, ONE DEFINITION. The un-wrap is the same one B-2026-08-20-10 added for the literal-pattern range check, promoted to `pub(crate)` and shared rather than copied. Two copies would be two places to forget it, and forgetting it is precisely how the carrier and the declared domain came to disagree.
+
+THE DIRECTION THAT MUST NOT MOVE. Removing a false positive is worth little if it introduces a false NEGATIVE, because that match would fall through at runtime with no arm to take — so the incomplete cases are asserted explicitly and still rejected with correct witnesses: lower-half-only reports 2^63, upper-half-only and a lone top-of-range literal both report 0, and a mid-domain gap is caught. The unreachable-arm lint still fires correctly on a genuinely covered arm.
+
+RUNTIME DISPATCH IS ASSERTED TOO, not just acceptance. The upper arm's bounds are negative on the carrier, so a comparison performed in the wrong space would send every value one way; the E2E test pins the two values either side of 2^63, byte-identical across `karac build`, that build with `KARAC_AUTO_PAR=0`, `karac run` (JIT) and `karac run --interp`.
+
+VERIFICATION. Tests: `an_unsigned_match_covering_its_whole_domain_is_exhaustive` (the fix, plus the narrow-width and signed controls that must not regress), `an_incomplete_unsigned_match_is_still_non_exhaustive` (the unsound direction, witnesses included) and `e2e_unsigned_whole_domain_match_dispatches` (tests/codegen.rs). Fallout swept as with B-2026-08-20-10 — every `.kara` file in both repos, 898 katas and 231 here, byte-identical error sets before and after. Gates: fmt, both clippy legs, default suite (106 targets), codegen 3094 and memory_sanitizer 1130 under KARAC_REQUIRE_RUNTIME_ARCHIVE=1. |
 | B-2026-08-20-10 | typecheck | high | LITERAL PATTERNS ARE NEVER TYPECHECKED — `PatternKind::Literal` is an explicit "deferred" arm | FIXED by b585059. The empty `PatternKind::Literal` arm now checks the literal against the scrutinee: class first, then range for the integer case, reusing `check_int_literal_fits` — the same helper the expression path calls.
 
 EXPRESSION POSITION WAS THE ORACLE, and choosing it is most of what made this tractable. `let n: T = <lit>;` already decides every one of these cases, so the check was built to AGREE with it rather than to invent rules, and the agreement is now asserted directly over both spellings (`the_literal_pattern_check_agrees_with_expression_position`) — if either side moves, that test fails instead of the gap silently reopening. Following the oracle is also what kept the check NARROW: an integer literal at a float scrutinee stays accepted (documented int→float widening), and so does an in-range suffix/width mismatch (`5u64` against an `i64`). Whether that last should require `as` is a separate open design question; answering it here would have rejected code that compiles today for reasons unrelated to this bug.
