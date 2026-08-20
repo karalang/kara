@@ -5388,6 +5388,7 @@ impl<'ctx> Codegen<'ctx> {
                 baked_display_enum_names: HashSet::new(),
                 display_option_result_types: HashMap::new(),
                 display_tuple_types: HashMap::new(),
+                display_generic_enum_types: HashMap::new(),
                 display_vec_types: HashMap::new(),
                 display_map_types: HashMap::new(),
                 display_set_types: HashMap::new(),
@@ -6925,6 +6926,7 @@ impl<'ctx> Codegen<'ctx> {
         self.contract_state.secret_inner_types = program.secret_inner_types.clone();
         self.display.display_option_result_types = program.display_option_result_types.clone();
         self.display.display_tuple_types = program.display_tuple_types.clone();
+        self.display.display_generic_enum_types = program.display_generic_enum_types.clone();
         self.display.display_vec_types = program.display_vec_types.clone();
         self.display.display_map_types = program.display_map_types.clone();
         self.display.display_set_types = program.display_set_types.clone();
@@ -8230,6 +8232,7 @@ impl<'ctx> Codegen<'ctx> {
         let mut t_secret_inner_types = tp.secret_inner_types.clone();
         let mut t_display_option_result_types = tp.display_option_result_types.clone();
         let mut t_display_tuple_types = tp.display_tuple_types.clone();
+        let mut t_display_generic_enum_types = tp.display_generic_enum_types.clone();
         let mut t_display_vec_types = tp.display_vec_types.clone();
         let mut t_pattern_binding_types = tp.pattern_binding_types.clone();
         let mut t_pattern_binding_inner_types = tp.pattern_binding_inner_types.clone();
@@ -8338,6 +8341,10 @@ impl<'ctx> Codegen<'ctx> {
                 std::mem::swap(
                     &mut self.display.display_tuple_types,
                     &mut t_display_tuple_types,
+                );
+                std::mem::swap(
+                    &mut self.display.display_generic_enum_types,
+                    &mut t_display_generic_enum_types,
                 );
                 std::mem::swap(
                     &mut self.display.display_vec_types,

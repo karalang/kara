@@ -2666,7 +2666,26 @@ impl<'ctx> super::Codegen<'ctx> {
         expr: &Expr,
         enum_name: &str,
     ) -> Result<(PointerValue<'ctx>, BasicValueEnum<'ctx>), String> {
-        let disp = self.emit_enum_display_fn(enum_name, &[]);
+        // A GENERIC enum needs its concrete arguments here: the Display fn is
+        // synthesized from the declaration, whose payload types are bare
+        // parameters, and rendering one panics ("type_name 'T' not yet
+        // supported"). The nested spellings get them from the element/field
+        // `TypeExpr` they already hold (B-2026-08-19-28); this DIRECT path has
+        // only the enum's base name, so the instantiation comes from the
+        // span-keyed table the lowering pass forwards — which covers a binding
+        // and a call result alike (B-2026-08-19-30). Empty for a non-generic
+        // enum and for any span the table does not carry, which is exactly the
+        // old behaviour.
+        let args: Vec<GenericArg> = self
+            .display
+            .display_generic_enum_types
+            .get(&(expr.span.offset, expr.span.length))
+            .and_then(|te| match &te.kind {
+                TypeKind::Path(p) => p.generic_args.clone(),
+                _ => None,
+            })
+            .unwrap_or_default();
+        let disp = self.emit_enum_display_fn(enum_name, &args);
         // Resolve the enum value's DATA pointer via `get_data_ptr`, not the raw
         // `variables[n].ptr` slot: for a `ref E` param (common when a generic
         // `fn f[E: Display](e: ref E)` monomorphizes to a payload enum) the slot

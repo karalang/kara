@@ -419,6 +419,22 @@ pub type DisplayOptionResultTypesTable = std::collections::HashMap<(usize, usize
 /// and a tuple call-result uniformly. Empty unless the lowering pass ran.
 pub type DisplayTupleTypesTable = std::collections::HashMap<(usize, usize), TypeExpr>;
 
+/// Set by the lowering pass from `TypeCheckResult.expr_types`: the full
+/// `TypeExpr` of every expression whose type is a GENERIC user enum
+/// (`MyOpt[i64]`), keyed by span.
+///
+/// Codegen renders a user enum through a Display fn synthesized from the
+/// enum's DECLARATION, which for a generic enum carries bare type parameters;
+/// B-2026-08-19-28 made that synthesizer take the concrete arguments, and this
+/// is how the DIRECT `println(e)` / `f"{e}"` / `e.to_string()` spellings supply
+/// them. Without it those panicked the compiler with `type_name 'T' not yet
+/// supported` (B-2026-08-19-30). Span-keyed so a binding and a call result are
+/// handled uniformly, exactly as the Option/Result and tuple tables are.
+///
+/// `Option` / `Result` are excluded — they have their own dedicated table and
+/// renderer — as are non-generic enums, which never needed substitution.
+pub type DisplayGenericEnumTypesTable = std::collections::HashMap<(usize, usize), TypeExpr>;
+
 /// Span → ELEMENT `TypeExpr` of every `Vec[T]`-typed expression. Lets codegen
 /// render a Vec that has no variable name to key on — a fresh literal
 /// (`println(vec![1, 2])`), a call result (`println(t.shape())`) — through the
@@ -830,6 +846,10 @@ pub struct Program {
     /// (`f"{t}"`, `println(t)`) via its element-wise Display fn, matching the
     /// interpreter (B-2026-07-18-14). See [`DisplayTupleTypesTable`].
     pub display_tuple_types: DisplayTupleTypesTable,
+    /// Set by the lowering pass: the full `TypeExpr` of every generic-user-enum
+    /// expression, keyed by span, so a direct `println(e)` can render it at its
+    /// instantiation. See [`DisplayGenericEnumTypesTable`].
+    pub display_generic_enum_types: DisplayGenericEnumTypesTable,
     /// Element type of every `Vec[T]`-typed expression, keyed by span, so a
     /// non-identifier Vec renders like a bound one. See
     /// [`DisplayVecTypesTable`].

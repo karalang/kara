@@ -47,6 +47,12 @@ pub(crate) struct Display<'ctx> {
     /// matching the interpreter's `(a, b)` format (B-2026-07-18-14). Covers both
     /// a tuple variable and a tuple call-result uniformly.
     pub(crate) display_tuple_types: HashMap<(usize, usize), TypeExpr>,
+    /// Full `TypeExpr` of every generic-user-enum expression, keyed by span —
+    /// populated from `Program.display_generic_enum_types`. Lets
+    /// `render_user_enum_display` pass the concrete generic arguments to the
+    /// Display synthesizer, which otherwise reads bare parameters off the
+    /// declaration and panics (B-2026-08-19-30).
+    pub(crate) display_generic_enum_types: HashMap<(usize, usize), TypeExpr>,
     /// ELEMENT `TypeExpr` of every `Vec[T]`-typed expression, keyed by span —
     /// populated from `Program.display_vec_types`. Lets
     /// `try_compile_vec_display` render a Vec with no variable name to key on

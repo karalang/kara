@@ -289,6 +289,32 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
             _ => None,
         })
         .collect();
+    // Forward the full `TypeExpr` of every GENERIC-user-enum expression, keyed
+    // by span, so codegen can render a direct `println(e)` / `f"{e}"` /
+    // `e.to_string()` at the enum's INSTANTIATION. The Display fn is
+    // synthesized from the enum's declaration, whose payload types are bare
+    // parameters for a generic enum; without the concrete arguments codegen
+    // panicked with `type_name 'T' not yet supported` (B-2026-08-19-30).
+    //
+    // `Option` / `Result` are excluded because the table above already serves
+    // them through a dedicated renderer, and non-generic enums are excluded
+    // because they have nothing to substitute — keeping this table to the rows
+    // that need it, and the two tables disjoint.
+    program.display_generic_enum_types = tc
+        .expr_types
+        .iter()
+        .filter_map(|(k, ty)| match ty {
+            Type::Named { name, args }
+                if !args.is_empty()
+                    && name != "Option"
+                    && name != "Result"
+                    && tc.enum_info.contains_key(name) =>
+            {
+                Some(((k.0, k.1), TypeChecker::type_to_type_expr(ty)))
+            }
+            _ => None,
+        })
+        .collect();
     // Forward the full anonymous-tuple `TypeExpr` of every tuple-typed
     // expression, keyed by span, so codegen can render a WHOLE tuple value in
     // an f-string / `println` (`f"{t}"`, `println(pair)`) via

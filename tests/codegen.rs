@@ -21740,6 +21740,72 @@ fn main() {
     }
 
     #[test]
+    fn e2e_generic_enum_display_direct_spellings() {
+        // B-2026-08-19-30 — the DIRECT half of the generic-enum Display gap.
+        //
+        // B-2026-08-19-28 taught the Display synthesizer to substitute a
+        // generic enum's parameters, but only the NESTED spellings could supply
+        // the arguments, because they hold the element / field `TypeExpr`. The
+        // direct `println(e)` path (`render_user_enum_display`) has only the
+        // enum's base name, so it still passed none and still panicked with
+        // `type_name 'T' not yet supported` — on `println`, on f-string
+        // interpolation, and on `.to_string()` alike. The instantiation now
+        // comes from a span-keyed table the lowering pass forwards, the same
+        // mechanism the Option/Result and tuple renderers already use.
+        //
+        // `Pair2` carries TWO parameters and a variant that uses only the
+        // first, so the substitution has to be positional and partial-arity
+        // tolerant rather than "swap the one type param". `MyOpt[String]` and
+        // `MyOpt[Vec[i64]]` are boxed payloads (the erased slot is one word),
+        // `MyOpt[u64]` puts an unsigned value past 2^63 through the same path,
+        // and `Plain` pins that a non-generic enum is untouched.
+        if let Some(out) = run_program(
+            "#[derive(Display)]\n\
+             enum MyOpt[T] { Has(T), Empty }\n\
+             #[derive(Display)]\n\
+             enum Pair2[A, B] { Both(A, B), Left(A), Neither }\n\
+             #[derive(Display)]\n\
+             enum Plain { X(i64), Y }\n\
+             fn main() {\n\
+             let a: MyOpt[i64] = MyOpt.Has(5i64);\n\
+             println(a);\n\
+             let b: MyOpt[String] = MyOpt.Has(\"hi\");\n\
+             println(b);\n\
+             let c: MyOpt[i64] = MyOpt.Empty;\n\
+             println(c);\n\
+             let d: MyOpt[u64] = MyOpt.Has(18446744073709551615u64);\n\
+             println(d);\n\
+             let e: Pair2[i64, String] = Pair2.Both(7i64, \"s\");\n\
+             println(e);\n\
+             let f: Pair2[String, i64] = Pair2.Left(\"q\");\n\
+             println(f);\n\
+             let g: Plain = Plain.X(3i64);\n\
+             println(g);\n\
+             let mut inner: Vec[i64] = vec![];\n\
+             inner.push(9i64);\n\
+             let h: MyOpt[Vec[i64]] = MyOpt.Has(inner);\n\
+             println(h);\n\
+             println(f\"{a} {b} {e}\");\n\
+             println(a.to_string());\n\
+             }",
+        ) {
+            assert_eq!(
+                out,
+                "Has(5)\n\
+                 Has(hi)\n\
+                 Empty\n\
+                 Has(18446744073709551615)\n\
+                 Both(7, s)\n\
+                 Left(q)\n\
+                 X(3)\n\
+                 Has([9])\n\
+                 Has(5) Has(hi) Both(7, s)\n\
+                 Has(5)\n"
+            );
+        }
+    }
+
+    #[test]
     fn e2e_chained_width_sensitive_int_methods() {
         // CHAINED width-preserving int methods resolve their receiver width
         // through the receiver itself, not the span-keyed table

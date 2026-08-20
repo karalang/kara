@@ -35667,6 +35667,40 @@ fn a_generic_enum_renders_at_its_instantiation() {
     );
 }
 
+/// The interpreter twin of `e2e_generic_enum_display_direct_spellings`
+/// (tests/codegen.rs), B-2026-08-19-30. The interpreter renders from the VALUE,
+/// so it was correct throughout and is the reference codegen was measured
+/// against; pinning it keeps the pair from drifting.
+#[test]
+fn a_generic_enum_renders_directly_at_its_instantiation() {
+    assert_eq!(
+        run_no_errors(
+            "#[derive(Display)]\n\
+             enum MyOpt[T] { Has(T), Empty }\n\
+             #[derive(Display)]\n\
+             enum Pair2[A, B] { Both(A, B), Left(A), Neither }\n\
+             fn main() {\n\
+             let a: MyOpt[i64] = MyOpt.Has(5i64);\n\
+             println(a);\n\
+             let b: MyOpt[String] = MyOpt.Has(\"hi\");\n\
+             println(b);\n\
+             let d: MyOpt[u64] = MyOpt.Has(18446744073709551615u64);\n\
+             println(d);\n\
+             let e: Pair2[i64, String] = Pair2.Both(7i64, \"s\");\n\
+             println(e);\n\
+             println(f\"{a} {b}\");\n\
+             println(a.to_string());\n\
+             }"
+        ),
+        "Has(5)\n\
+         Has(hi)\n\
+         Has(18446744073709551615)\n\
+         Both(7, s)\n\
+         Has(5) Has(hi)\n\
+         Has(5)\n"
+    );
+}
+
 // ── B-2026-08-19-16: qualified unit-variant paths across colliding enums ──
 
 #[test]
