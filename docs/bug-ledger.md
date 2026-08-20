@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 129 | 1 |
 | codegen-gap | 119 | 0 |
 | false-positive | 88 | 0 |
-| diagnostics | 88 | 2 |
+| diagnostics | 88 | 1 |
 | perf | 80 | 0 |
 | crash | 54 | 0 |
 | soundness | 51 | 0 |
@@ -113,7 +113,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen | 956 | 0 |
 | typecheck | 219 | 0 |
 | interp | 166 | 0 |
-| ownership | 61 | 1 |
+| ownership | 61 | 0 |
 | other | 59 | 0 |
 | autopar | 54 | 0 |
 | cli | 54 | 2 |
@@ -124,13 +124,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 6 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1408 surfaced · 3 open · 1385 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1408 surfaced · 2 open · 1386 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-20-23 | 2026-08-20 | ownership | low | every whole-buffer `gpu.*` reduction CONSUMES its buffer, so calling two of them on the same `Vec` warns `value moved here, used again here` -- but they only READ it | — |
 | B-2026-08-20-29 | 2026-08-20 | cli | low | THE NATIVE OS PLATFORMS ARE NOT SELECTABLE, so a `_macos` / `_windows` / `_linux` module can only be checked or built on that host, and no command verifies that a platform split covers every OS. `cmd_build_project` derives the walker's platform as `wasm_* -> Platform::Wasm`, everything else `Platform::host()` (now shared as `walk_platform_for_target`), and `kara.toml [build].target` -- a rustc-style overlay triple -- never touches it. So `_wasm` is reachable from any host and the three native suffixes are host-locked. design.md's *Missing-platform rule* used to promise exactly the missing guarantee (`karac check --target all` for "a compile-time guarantee that every target has coverage"); that text was corrected rather than the feature built (B-2026-08-20-25), and this row is the feature. | roadmap.md |
 | B-2026-08-20-30 | 2026-08-20 | cli | low | `karac explain E0223` and `E0227` REFUSE two codes users actually see, with a message that claims their family IS covered: "`karac explain` covers the resolve and typecheck families (E01xx, E02xx / W02xx, E08xx)" -- and both codes are E02xx. Measured on 9dfa7d8: a module cycle prints `error[E0223]: circular module dependency` and a command run outside a package reports `E0227`, yet neither is in `CODE_TABLE`, so `karac explain` answers `diagnostic code 'E0223' is not in the catalogue yet` for both. They are also both in the WRONG BAND -- `E0223` is minted by `print_cycles_text` (module-graph phase) and `E0227` by `ManifestError::code` (manifest phase), neither of which is the typechecker whose band E02xx is. | roadmap.md |
 
@@ -150,9 +149,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1408 surfaced
 
 </details>
 
-### Fixed (1385)
+### Fixed (1386)
 
-<details><summary>1385 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1386 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -12805,6 +12804,63 @@ TEST: `test_run_package_member_honours_an_aliased_import` (tests/cli.rs) fails w
 SOURCE NOTE: split out of B-2026-08-20-16, which fixed the ANALYSIS being file-scoped on the check and run paths. This was the one leg of that row's matrix left inconsistent afterwards, and it is downstream rather than the same defect — -16 was about which program gets analysed, this is about the flat program the run path then executes. |
 | B-2026-08-20-21 | interp | medium | `Tensor[f32].matmul` accumulates in f64 under `karac run --interp` and in f32 under `karac build`, so a long enough contraction gives DIFFERENT ANSWE… | 2f94bb1b |
 | B-2026-08-20-22 | interp | medium | `Tensor.from` under a `Tensor[f32, ...]` annotation narrows a bare float LITERAL but not a NEGATED one or a computed one, so `Tensor.from([-0.1])` ho… | 209a6607 |
+| B-2026-08-20-23 | ownership | low | every whole-buffer `gpu.*` reduction CONSUMES its buffer, so calling two of them on the same `Vec` warns `value moved here, used again here` -- but t… | FIXED by 06f0cca. The row's premise checked out on both halves — the ops really are read-only, and the effect really is diagnostics-only — so the fix is the `ref` classification it asked for, scoped by the `gpu` receiver rather than by method name.
+
+VERIFIED READ-ONLY AT BOTH LAYERS, not assumed:
+
+  * RUNTIME. `karac_runtime_gpu_reduce_f32` / `_reduce_i32` / `_dot_f32` /
+    `_dot_int` / `_prefix_sum_f32` / `_prefix_sum_int` / `_matmul_f32` /
+    `_matmul_int` / `_variance_int` / `_arg_index` all take their inputs as
+    `*const` and free nothing; the two that produce a buffer take a separate
+    `out_ptr: *mut`.
+
+  * CODEGEN. `read_gpu_reduce_buffer` spills the argument's Vec struct, loads
+    `{ptr, len}` out of it, and stops. Its ONLY ownership action is
+    `materialize_owned_temp` for a fresh `[…]` literal, so a named binding is
+    left entirely alone. `compile_gpu_matmul` does the same for its two tensor
+    operands.
+
+CONFIRMED DIAGNOSTICS-ONLY, which is what kept the severity low. `UseAfterMove`
+feeds `use_after_move_consume_sites`, which makes codegen deep-copy at the
+consume site — so the obvious worry was that the buffer was being copied per
+reduction and that the fix was really a perf win. It was not: the emitted IR for
+the row's repro is IDENTICAL before and after (233 lines in `main`, 5 memcpys,
+17 `karac_free_buf` calls, 0 deep copies), and `v` was freed exactly once either
+way. The warning was the whole defect.
+
+THE FIX is `ownership::is_gpu_readonly_buffer_call`, consulted by both
+`method_arg_is_borrow_position` twins (`ownership/borrow.rs` and
+`use_classifier.rs`) ahead of the resolved-key lookup, exactly where the
+relational and tensor predicates already sit. It covers `sum` / `prod` / `min` /
+`max` / `mean` / `variance` / `stddev` / `argmin` / `argmax` / `prefix_sum` /
+`dot` / `matmul`, at every argument index — `dot` and `matmul` read a SECOND
+buffer, so index 1 matters.
+
+MATCHED ON THE RECEIVER as well as the name, unlike the two predicates beside
+it. Those name-match because a chained call's span aliasing defeats the
+resolved-key lookup; `gpu` is a resolver-reserved magic module, so `gpu.min` is
+unambiguous and there is no reason to accept the collateral. A user type with
+its own `.min(other: Vec[f32])` keeps the consume default it should have —
+pinned by `gpu_upload_and_a_user_named_min_still_consume`, which also pins that
+`gpu.upload` / `gpu.download` still MOVE (they really do transfer ownership
+across the host/device boundary). `gpu.dispatch` is likewise untouched: its
+buffer feeds a map that returns a fresh buffer.
+
+ONE CORRECTION TO THE ROW: `gpu.matmul` was already silent, so the entry for it
+is a tightening rather than a fix. `is_tensor_borrow_arg_method_call`
+name-matches `"matmul"` with no receiver test, so `gpu.matmul(a, b)`'s
+arguments were riding the Tensor method's `ref` classification by coincidence
+of naming. Measured on the existing `gpu_e2e.rs` matmul fixture, which reuses
+both operands: clean before and after. It now resolves through the `gpu`
+predicate on its own terms.
+
+Regression coverage in `tests/ownership.rs`: the row's `min`/`max` repro, the
+`variance` + `stddev` shape that found it, `sum` + `dot(v, v)` + `sum` (argument
+index 1, and one binding in both positions — two borrows of the same place,
+legal because neither is exclusive), and `prefix_sum` followed by both Arg
+reductions. `ownership_ok` is the assertion, since `UseAfterMove` lands in
+`result.errors` even though the CLI treats it as non-fatal — which is exactly
+why this was easy to stop noticing. |
 | B-2026-08-20-24 | cli | high | Two modules of one package may not declare the same top-level name: `karac check` ACCEPTS the program and BOTH execution paths reject it | FIXED by 36efad6.
 
 `module_rename` (new) renames only what collides, at the two merge sites, and
