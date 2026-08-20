@@ -96,10 +96,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 185 | 0 |
 | run-vs-build | 139 | 0 |
 | double-free | 133 | 0 |
-| missing-feature | 126 | 1 |
+| missing-feature | 128 | 3 |
 | codegen-gap | 119 | 0 |
-| false-positive | 86 | 0 |
-| diagnostics | 84 | 0 |
+| false-positive | 87 | 1 |
+| diagnostics | 85 | 1 |
 | perf | 80 | 0 |
 | crash | 55 | 1 |
 | soundness | 51 | 0 |
@@ -116,22 +116,26 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | ownership | 60 | 0 |
 | other | 58 | 0 |
 | autopar | 54 | 0 |
-| cli | 48 | 0 |
-| parser | 32 | 0 |
+| cli | 50 | 2 |
+| parser | 33 | 1 |
 | runtime | 27 | 1 |
-| resolver | 20 | 0 |
+| resolver | 21 | 1 |
 | effect | 7 | 0 |
 | lexer | 6 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1393 surfaced · 2 open · 1371 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1397 surfaced · 6 open · 1371 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-19-13 | 2026-08-19 | typecheck+codegen+runtime | medium | GPU reductions still lack TILED MATMUL (2-D workgroup indexing the 1-D model lacks); integer `prod` / `dot` are blocked on WGSL lacking a widening multiply; and `variance` / `stddev` are f32-only (the integer form needs a decision, not just work — the deviations are formed on-device in f32, so `mean`'s promote-late trick does not carry over). A SAMPLE (÷ n-1) form is decided against rather than pending. Everything else has shipped: sum / prod / min / max / mean / dot / argmin / argmax / variance / stddev / prefix_sum over `Vec[f32]`, and sum / min / max / mean / argmin / argmax over `Vec[i32]` and `Vec[u32]`. | docs/spikes/gpu-llvm-offload-assessment.md; src/gpu_wgsl.rs::emit_reduce_kernel; src/reduce_kernel.rs::tree_reduce_f32 |
 | B-2026-08-20-5 | 2026-08-20 | codegen | high | `e2e_128bit_integers_end_to_end` produces EMPTY STDOUT on macOS arm64 only — the binary links and runs but prints nothing before the first `println`. Linux x86_64 and Linux arm64 both pass the same test. CI's `Codegen E2E (macOS arm64, LLVM 18)` lane has been red on `main` since the test landed. | tests/codegen.rs::e2e_128bit_integers_end_to_end (line ~21227); tests/codegen.rs::run_program_capturing (stdout-only discard); added by 7561b5d1 (B-2026-08-19-8 stage 5); CI job `Codegen E2E (macOS arm64, LLVM 18)` in .github/workflows/ci.yml |
+| B-2026-08-20-16 | 2026-08-20 | cli | high | `karac check <file>` and `karac run <file>` SILENTLY TRUNCATE a package member to a single file, producing both FALSE REJECTIONS and FALSE ACCEPTANCES -- while the sibling `karac build <file>` refuses the very same invocation with an accurate guard. Given a two-module package (src/main.kara + src/db/connection.kara), `karac build src/main.kara` says: "`src/main.kara` is a source file of the package at <root> -- a single-file `karac build` drops the package's sibling modules and produces a truncated binary. Build the whole package instead". `karac check src/main.kara` has NO such guard: it proceeds and reports `error[typecheck]: 'Connection' is not a struct` for an imported `pub struct` that the whole-package `karac build` compiles and the resulting binary prints correctly. The same truncation runs the other way too -- `import db.helpers.secret;` where `secret` is `private` in a DIFFERENT directory passes `karac check` clean and PRINTS 42 under `karac run`, while the whole-package build correctly refuses it with a well-formed `error[E0111]`. There is no whole-package check mode to fall back on: `karac check` with no file argument answers `error: missing file argument`. | roadmap.md |
+| B-2026-08-20-17 | 2026-08-20 | resolver | medium | MODULE-BINDING imports are unimplemented on every surface: `import db.connection;` and `import db;` bind nothing. design.md § Module System lists `import db.connection;` in its own import-form gallery ("bind the module itself as `connection`") and states the Binding rule explicitly: "The last segment of each imported path is bound in the current scope... The rule is UNIFORM for items and for sub-modules -- `import db.connection;` binds `connection` as a module reference (reach `Connection` as `connection.Connection`)." Measured on a real package: `import db.connection;` + `connection.open(4)` -> whole-package `karac build` fails `error[resolve]: multi-file resolve failed`, `karac run` fails `undefined name 'connection', did you mean 'Connection'?`, and single-file `karac check` PASSES (that last one is B-2026-08-20-16's truncation, not a working path). The top-level form `import db;` + `db.label()` behaves identically -> `undefined name 'db'`. So the four item-import forms all work and the two module-binding forms work nowhere. | roadmap.md |
+| B-2026-08-20-18 | 2026-08-20 | parser | medium | WILDCARD and NESTED-GROUP imports do not lex or parse, though design.md says both ship in v1. § Module System: "**Wildcard imports** (`import path.*;`) bring all `pub` items from the named module into scope. **Nested grouping** (`import a.{b.{c, d}, e};`) expands to flat imports before resolution -- `import a.{b.{c, d}, e}` is equivalent to `import a.b.c; import a.b.d; import a.e`. **Both are available in v1.**" Measured: `import db.connection.*;` -> `error[parse]: Expected identifier, found Star`; `import db.{connection.{open}, label};` -> `error[parse]: Expected RightBrace, found Dot`. Same on all three surfaces, since it fails at parse. The spec goes on to specify three wildcard PRECEDENCE rules in detail -- explicit import beats wildcard, two colliding wildcards defer the error to the use site as `E0226 AmbiguousWildcardImport`, prelude items lose to any import -- none of which is reachable, because the form the rules govern cannot be written. | roadmap.md |
+| B-2026-08-20-19 | 2026-08-20 | cli | low | E0223 (circular module dependency) prints a BARE one-line message -- no cycle path, no span, no suggestion -- while the data it needs is already computed and sitting in the value it discards. design.md § Module System: "Cycles emit `E0223 CircularModuleDependency` WITH A LISTING OF THE CYCLE PATH and a suggestion to extract shared items into a lower-layer module." Measured on a genuine two-module cycle (src/main.kara imports `db.label`, src/db.kara imports the hoisted `start`), the entire diagnostic is: `error[E0223]: circular module dependency`. No file:line, no module names, no help line. src/module.rs:753 documents the carrier as "A circular module dependency. `nodes` lists modules on the cycle in ..." -- so the path IS available; src/cli/build_cmds.rs:2905 just `eprintln!`s a constant string and drops it. | roadmap.md |
 
 ### Wontfix (7)
 
