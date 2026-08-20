@@ -46477,9 +46477,13 @@ fn main() {
             .as_deref(),
             Some("5\n6\n")
         );
-        // 5. CONTROL — the triple index stays a LOUD deferral (MR5 guard), not
-        // silently accepted and not a miscompile. Widening the field base was
-        // not an excuse to generalise that guard too.
+        // 5. The triple index. This case was added to pin the MR5 guard as a
+        // LOUD deferral, on the principle that widening the field base was not
+        // an excuse to generalise that guard too. B-2026-08-20-33 then
+        // generalised it deliberately, through a shared place resolver rather
+        // than a fourth hand-written base shape — so the case is INVERTED here
+        // rather than deleted: it is the one that pins where the boundary sits,
+        // and it now sits one level deeper.
         let triple = ir_result(
             "fn main() {\n\
                  let mut a: Vec[i64] = Vec.new();\n\
@@ -46492,11 +46496,8 @@ fn main() {
              }",
         );
         assert!(
-            triple
-                .as_ref()
-                .err()
-                .is_some_and(|e| e.contains("chained indexed reads")),
-            "triple index must stay a loud deferral, got {triple:?}"
+            triple.is_ok(),
+            "triple index must lower since B-2026-08-20-33, got {triple:?}"
         );
         // 6. Bounds checking survives the new path — the inner index goes
         // through the same checked helper the named-base path uses, so an OOB
@@ -46549,6 +46550,109 @@ fn main() {
             )
             .as_deref(),
             Some("100\n41\n")
+        );
+    }
+
+    /// B-2026-08-20-33 — a THREE-level index, read and write.
+    ///
+    /// `a[i][j][k] = v` was refused `Index assignment target must be a
+    /// variable` — a message that named the wrong thing, since the target IS a
+    /// variable, just reached through two indices. The read half was refused
+    /// separately as an explicit MR5 deferral. Two levels worked on both sides,
+    /// so the boundary was exactly one index deep.
+    ///
+    /// The fix is a shared recursive place resolver rather than a fourth
+    /// hand-written base shape. That is what the earlier siblings had each
+    /// added one of — B-2026-08-09-21 for a struct-FIELD base, B-2026-08-10-5
+    /// for a TUPLE-field base — and each still required whatever sat under it
+    /// to be a bare identifier, which is why a chained base fell through all of
+    /// them. Cases 4-6 below are the ones that prove it GENERALISED rather than
+    /// moved the boundary by one: depth four, a struct-field root at depth
+    /// three, and computed (non-literal) indices at every level.
+    #[test]
+    fn e2e_three_level_index_read_and_write() {
+        // 1. The row's own repro — the write half.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                 \x20   let mut d: Vec[Vec[Vec[i64]]] = [[[5]]];\n\
+                 \x20   d[0][0][0] = 42i64;\n\
+                 \x20   println(f\"{d[0][0][0]}\");\n\
+                 }\n"
+            )
+            .as_deref(),
+            Some("42\n")
+        );
+        // 2. The read half, which failed on the separate MR5 guard.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                 \x20   let deep: Vec[Vec[Vec[i64]]] = [[[5, 6]]];\n\
+                 \x20   println(f\"{deep[0][0][1]}\");\n\
+                 }\n"
+            )
+            .as_deref(),
+            Some("6\n")
+        );
+        // 3. Through a `mut ref` parameter — the store has to reach the
+        // caller's buffer, not a copy.
+        assert_eq!(
+            run_program(
+                "fn bump(d: mut ref Vec[Vec[Vec[i64]]]) {\n\
+                 \x20   d[0][0][0] = d[0][0][0] + 1i64;\n\
+                 }\n\
+                 fn main() {\n\
+                 \x20   let mut d: Vec[Vec[Vec[i64]]] = [[[5]]];\n\
+                 \x20   bump(mut d);\n\
+                 \x20   println(f\"{d[0][0][0]}\");\n\
+                 }\n"
+            )
+            .as_deref(),
+            Some("6\n")
+        );
+        // 4. DEPTH FOUR — the resolver recurses, so one more level costs
+        // nothing. A per-depth special case would fail here.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                 \x20   let mut d: Vec[Vec[Vec[Vec[i64]]]] = [[[[1]]]];\n\
+                 \x20   d[0][0][0][0] = 4i64;\n\
+                 \x20   println(f\"{d[0][0][0][0]}\");\n\
+                 }\n"
+            )
+            .as_deref(),
+            Some("4\n")
+        );
+        // 5. A struct-FIELD root at depth three — the B-2026-08-09-21 base
+        // shape one level deeper than that row could reach.
+        assert_eq!(
+            run_program(
+                "struct Grid { cells: Vec[Vec[Vec[i64]]] }\n\
+                 fn main() {\n\
+                 \x20   let mut g = Grid { cells: [[[9]]] };\n\
+                 \x20   g.cells[0][0][0] = 11i64;\n\
+                 \x20   println(f\"{g.cells[0][0][0]}\");\n\
+                 }\n"
+            )
+            .as_deref(),
+            Some("11\n")
+        );
+        // 6. COMPUTED indices at every level, and a neighbour left alone —
+        // constant-folding a literal index would pass cases 1-5 while getting
+        // this wrong.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                 \x20   let mut d: Vec[Vec[Vec[i64]]] = [[[0, 0]], [[0, 0]]];\n\
+                 \x20   let i: i64 = 1;\n\
+                 \x20   let j: i64 = 0;\n\
+                 \x20   let k: i64 = 1;\n\
+                 \x20   d[i][j][k] = 77i64;\n\
+                 \x20   println(f\"{d[1][0][1]} {d[0][0][0]}\");\n\
+                 }\n"
+            )
+            .as_deref(),
+            Some("77 0\n")
         );
     }
 

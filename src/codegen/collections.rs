@@ -5835,6 +5835,55 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // B-2026-08-20-33 — a CHAINED store base (`a[i][j][k] = v`), where the
+        // container being indexed is itself an index. The named-outer arm above
+        // requires a bare identifier and the struct-field arm requires a
+        // `FieldAccess`, so this third shape fell between them and hit the
+        // "must be a variable" gate with a message that named the wrong thing:
+        // the target IS a variable, just reached through two indices.
+        //
+        // Same normalise-and-recurse as the field arm, through the shared
+        // `container_place_name` resolver, so arbitrary depth costs one arm
+        // instead of one arm per depth. The read side lifted its matching MR5
+        // deferral through the same resolver.
+        if let ExprKind::Index {
+            object: outer,
+            index: outer_idx,
+        } = &object.kind
+        {
+            if matches!(outer.kind, ExprKind::Index { .. }) {
+                let mut scratch = Vec::new();
+                let resolved = self.container_place_name(outer, &mut scratch);
+                let out = match resolved {
+                    Ok(Some(base)) => {
+                        let nested_obj = Expr {
+                            kind: ExprKind::Index {
+                                object: Box::new(Expr {
+                                    kind: ExprKind::Identifier(base),
+                                    span: outer.span,
+                                }),
+                                index: outer_idx.clone(),
+                            },
+                            span: object.span,
+                        };
+                        Some(self.compile_index_store(
+                            &nested_obj,
+                            index,
+                            val,
+                            rhs_is_fresh,
+                            rhs_src,
+                        ))
+                    }
+                    Ok(None) => None,
+                    Err(e) => Some(Err(e)),
+                };
+                self.release_place_synths(scratch);
+                if let Some(result) = out {
+                    return result;
+                }
+            }
+        }
+
         // Field-access-rooted index store (`h.items[i] = v`,
         // `node.neighbors[i] = n`, incl. shared-struct receivers):
         // resolve the field's storage pointer via the FR-slice helper,

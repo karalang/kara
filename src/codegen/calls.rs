@@ -1187,8 +1187,34 @@ impl<'ctx> super::Codegen<'ctx> {
         inner_idx: &Expr,
         outer_idx: &Expr,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        // MR5 symmetric guard: chained `a[i][j][k]` not supported.
+        // A CHAINED base (`a[i][j][k]`), where the thing being indexed twice is
+        // itself an index. This was an MR5 deferral — "bind the intermediate
+        // element to a temporary first" — and the store side had the matching
+        // hole with a less helpful message (B-2026-08-20-33).
+        //
+        // Resolve the chain to a synth identifier and re-enter: everything
+        // below this point is name-keyed, so one normalisation buys arbitrary
+        // depth rather than a fourth hand-written base shape. Falls through to
+        // the original diagnostic when the chain cannot be resolved, so a shape
+        // that genuinely has no lowering still refuses rather than misbuilding.
         if matches!(inner_object.kind, ExprKind::Index { .. }) {
+            let mut scratch = Vec::new();
+            let resolved = self.container_place_name(inner_object, &mut scratch);
+            let out = match resolved {
+                Ok(Some(base)) => {
+                    let synth_expr = Expr {
+                        kind: ExprKind::Identifier(base),
+                        span: inner_object.span,
+                    };
+                    Some(self.compile_nested_index_read(&synth_expr, inner_idx, outer_idx))
+                }
+                Ok(None) => None,
+                Err(e) => Some(Err(e)),
+            };
+            self.release_place_synths(scratch);
+            if let Some(result) = out {
+                return result;
+            }
             return Err(
                 "codegen: chained indexed reads (`a[i][j][k]`) are deferred to v1.x; \
                  bind the intermediate element to a temporary first"
@@ -1729,6 +1755,121 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Slice MR: lower `outer[i]` for an outer Vec[T] receiver into an
     /// element pointer + element LLVM type. Bounds-checks against `len`
     /// (not `cap`). Mirrors `compile_vec_index`'s machinery.
+    /// Resolve a place expression that DENOTES A CONTAINER to a name the
+    /// name-keyed element-pointer helpers accept, registering a synthetic
+    /// identifier for every link that is not already a named variable
+    /// (B-2026-08-20-33).
+    ///
+    /// This is the general form of a trick the index paths had already
+    /// open-coded three times — once for a struct-FIELD base
+    /// (B-2026-08-09-21), once for a TUPLE-field base (B-2026-08-10-5), and
+    /// once inline for a named outer container. Each handled exactly one shape
+    /// of base and required whatever sat under it to be a bare identifier, so
+    /// `a[i][j][k]` — whose base is itself an index — fell through all three.
+    /// Recursing here subsumes the special cases instead of adding a fourth.
+    ///
+    /// Returns `Ok(None)` for a shape it cannot resolve, so each caller keeps
+    /// its own diagnostic rather than this widening turning a clean refusal
+    /// into a confusing one.
+    ///
+    /// TEARDOWN IS THE CALLER'S, and deliberately so: every synth registered
+    /// is appended to `scratch`, which the caller must hand to
+    /// [`Self::release_place_synths`] once the expression using the name has
+    /// been compiled. The registrations have to outlive the WHOLE chain —
+    /// releasing a link as soon as the next one resolved would unregister the
+    /// slot that next `lower_indexed_elem_ptr_*` call reads.
+    pub(super) fn container_place_name(
+        &mut self,
+        place: &Expr,
+        scratch: &mut Vec<String>,
+    ) -> Result<Option<String>, String> {
+        match &place.kind {
+            ExprKind::Identifier(name) => Ok(Some(name.clone())),
+            ExprKind::FieldAccess { object, field } => {
+                // `self.grid[i][j][k]` — same `SelfValue` normalisation the
+                // store-side field arm documents.
+                let self_ident;
+                let base: &Expr = if matches!(object.kind, ExprKind::SelfValue) {
+                    self_ident = Expr {
+                        kind: ExprKind::Identifier("self".to_string()),
+                        span: object.span,
+                    };
+                    &self_ident
+                } else {
+                    object
+                };
+                let Some((ptr, ll_ty, te)) =
+                    self.lower_field_access_ptr(base, field, "nested index expression")?
+                else {
+                    return Ok(None);
+                };
+                Ok(Some(self.bind_place_synth(ptr, ll_ty, &te, scratch)))
+            }
+            ExprKind::Index { object, index } => {
+                let Some(base) = self.container_place_name(object, scratch)? else {
+                    return Ok(None);
+                };
+                let Some(elem_te) = self
+                    .var_types
+                    .var_elem_type_exprs
+                    .get(base.as_str())
+                    .cloned()
+                else {
+                    return Ok(None);
+                };
+                let (elem_ptr, elem_ll_ty) =
+                    if self.var_types.vec_elem_types.contains_key(base.as_str()) {
+                        self.lower_indexed_elem_ptr_vec(&base, index)?
+                    } else if self.var_types.slice_elem_types.contains_key(base.as_str()) {
+                        self.lower_indexed_elem_ptr_slice(&base, index)?
+                    } else if let Some(slot) = self.variables.get(base.as_str()).copied() {
+                        if matches!(slot.ty, BasicTypeEnum::ArrayType(_)) {
+                            self.lower_indexed_elem_ptr_array(slot, index)?
+                        } else {
+                            return Ok(None);
+                        }
+                    } else {
+                        return Ok(None);
+                    };
+                Ok(Some(
+                    self.bind_place_synth(elem_ptr, elem_ll_ty, &elem_te, scratch),
+                ))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// Bind one resolved place to a fresh synth identifier and record it for
+    /// teardown. Shared tail of [`Self::container_place_name`]'s arms.
+    fn bind_place_synth(
+        &mut self,
+        ptr: PointerValue<'ctx>,
+        ll_ty: BasicTypeEnum<'ctx>,
+        te: &TypeExpr,
+        scratch: &mut Vec<String>,
+    ) -> String {
+        let synth = format!("__place_elem_{}", self.indexed_elem_counter);
+        self.indexed_elem_counter += 1;
+        self.variables
+            .insert(synth.clone(), VarSlot { ptr, ty: ll_ty });
+        self.register_var_from_type_expr(&synth, te);
+        scratch.push(synth.clone());
+        synth
+    }
+
+    /// Drop every registration [`Self::container_place_name`] made, innermost
+    /// last. Order matters only for readability — the names are unique — but
+    /// reversing keeps the teardown a mirror of the construction.
+    pub(super) fn release_place_synths(&mut self, scratch: Vec<String>) {
+        for synth in scratch.into_iter().rev() {
+            self.variables.remove(&synth);
+            self.var_types.vec_elem_types.remove(&synth);
+            self.var_types.slice_elem_types.remove(&synth);
+            self.var_types.var_elem_type_exprs.remove(&synth);
+            self.var_types.var_type_names.remove(&synth);
+        }
+    }
+
     pub(super) fn lower_indexed_elem_ptr_vec(
         &mut self,
         outer_name: &str,
