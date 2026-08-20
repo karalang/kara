@@ -1582,9 +1582,10 @@ pub(crate) fn stmt_writes_loop_var(stmt: &Stmt, loop_var: &str) -> bool {
     }
 }
 
-/// If `parent_body.stmts[stmt_index - 1]` is `let mut loop_var: T =
-/// <anything>;`, return the init expression. Caller decides how to
-/// translate the init into the worker's chunk-local shift:
+/// If `parent_body.stmts[stmt_index - 1]` initializes `loop_var` — either
+/// `let mut loop_var: T = <anything>;` or a plain re-assignment
+/// `loop_var = <anything>;` — return the init expression. Caller decides how
+/// to translate the init into the worker's chunk-local shift:
 ///   - `Integer(0)` → `lo_expr = None` (no shift math, current path).
 ///   - Non-zero int literal → `lo_expr = Some(literal)` (slice 3b.9 —
 ///     re-compile literal in the parent's par_reduce setup, free).
@@ -1593,30 +1594,64 @@ pub(crate) fn stmt_writes_loop_var(stmt: &Stmt, loop_var: &str) -> bool {
 ///     instead of re-evaluating the init expression, which would
 ///     double-evaluate side effects).
 ///
-/// Returns `None` if the preceding stmt isn't a let-mut binding of the
-/// loop var. Caller guarantees `stmt_index > 0`.
+/// **Both init forms, not just `let`** (B-2026-08-20-14). A counter REUSED
+/// across several loops in one function — `let mut i = 0` for the first loop,
+/// then a bare `i = 0;` before the next — is ordinary style, and kata #288's
+/// bench arrived at it without anyone trying. Accepting only the `let` form
+/// meant one token decided whether a loop fanned out at all, worth a measured
+/// 3.69x, with no diagnostic pointing at the declaration.
+///
+/// The adjacency requirement is what makes the assignment form as safe as the
+/// `let` form, and it is unchanged: the init statement must be IMMEDIATELY
+/// before the loop, so nothing can observe or modify the counter in between,
+/// and its prior value is dead — overwritten before any read. The two forms
+/// differ only in whether the binding was created here or earlier.
+///
+/// The assignment target must be the bare counter name. `v[i] = 0` and
+/// `s.i = 0` have a place-expression target, not an identifier, and never
+/// match — `assign_target_root` would report `v` / `s` there, but this reads
+/// the target directly so a field or index write cannot be mistaken for a
+/// counter init.
+///
+/// Returns `None` if the preceding stmt doesn't initialize the loop var.
+/// Caller guarantees `stmt_index > 0`.
 pub(crate) fn preceding_stmt_init(
     parent_body: &Block,
     stmt_index: usize,
     loop_var: &str,
 ) -> Option<Expr> {
     let prev = &parent_body.stmts[stmt_index - 1];
-    let StmtKind::Let {
-        pattern,
-        value,
-        is_mut: true,
-        ..
-    } = &prev.kind
-    else {
-        return None;
-    };
-    let PatternKind::Binding(name) = &pattern.kind else {
-        return None;
-    };
-    if name != loop_var {
-        return None;
+    match &prev.kind {
+        StmtKind::Let {
+            pattern,
+            value,
+            is_mut: true,
+            ..
+        } => {
+            let PatternKind::Binding(name) = &pattern.kind else {
+                return None;
+            };
+            if name != loop_var {
+                return None;
+            }
+            Some(value.clone())
+        }
+        // `i = 0;` on a binding declared earlier — the reuse form.
+        // `CompoundAssign` (`i += 0`) is deliberately NOT accepted: it reads
+        // the prior value, so the counter is not dead on entry and the
+        // resulting start bound would depend on whatever the previous loop
+        // left behind.
+        StmtKind::Assign { target, value } => {
+            let ExprKind::Identifier(name) = &target.kind else {
+                return None;
+            };
+            if name != loop_var {
+                return None;
+            }
+            Some(value.clone())
+        }
+        _ => None,
     }
-    Some(value.clone())
 }
 
 pub(crate) fn is_loop_var_plus_one(left: &Expr, right: &Expr, loop_var: &str) -> bool {
@@ -1688,6 +1723,93 @@ mod tests {
             Some(&shape.loop_var),
             Some(fn_name),
         )
+    }
+
+    /// A counter REUSED from an earlier loop — `i = 0;` on an `i` declared
+    /// further up — is a counted shape exactly as a fresh `let mut i = 0;` is
+    /// (B-2026-08-20-14). Before this, the assignment form declined as
+    /// `WhileCounterInitNotFound` and the loop silently ran on one core; the
+    /// kata-#288 bench hit it at a measured 3.69x.
+    #[test]
+    fn a_reused_counter_initialized_by_assignment_is_a_counted_shape() {
+        let src = "fn main() {\n    let mut total = 0;\n    let mut i = 0;\n                       while i < 4 {\n        total += i;\n        i += 1;\n    }\n                       i = 0;\n    while i < 1000 {\n        total += i;\n                           i += 1;\n    }\n    print(\"{total}\");\n}\n";
+        let result = crate::parse(src);
+        assert!(
+            result.errors.is_empty(),
+            "parse errors: {:?}",
+            result.errors
+        );
+        let f = result
+            .program
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Function(f) if f.name == "main" => Some(f.clone()),
+                _ => None,
+            })
+            .expect("main exists");
+        // The SECOND while loop is the one whose counter comes from an
+        // assignment; the first still uses the `let mut` form.
+        let whiles: Vec<usize> = f
+            .body
+            .stmts
+            .iter()
+            .enumerate()
+            .filter(|(_, st)| {
+                matches!(&st.kind, StmtKind::Expr(e) if matches!(e.kind, ExprKind::While { .. }))
+            })
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(whiles.len(), 2, "expected two while loops");
+        let StmtKind::Expr(second) = &f.body.stmts[whiles[1]].kind else {
+            unreachable!()
+        };
+        let shape = extract_loop_shape_explained(&f.body, whiles[1], second)
+            .expect("reused-counter while loop is a counted shape");
+        assert_eq!(shape.loop_var, "i");
+        // `i = 0;` normalizes exactly like `let mut i = 0;` does: literal zero
+        // start means no shift math in the worker.
+        assert!(shape.lo_expr.is_none(), "zero init must elide the shift");
+    }
+
+    /// A compound assignment is NOT an init. `i += 0;` reads the counter's
+    /// prior value, so it is not dead on entry and the start bound would
+    /// depend on whatever the previous loop left behind.
+    #[test]
+    fn a_compound_assignment_is_not_a_counter_init() {
+        let src = "fn main() {\n    let mut total = 0;\n    let mut i = 0;\n                       while i < 4 {\n        total += i;\n        i += 1;\n    }\n                       i += 0;\n    while i < 1000 {\n        total += i;\n                           i += 1;\n    }\n    print(\"{total}\");\n}\n";
+        let result = crate::parse(src);
+        assert!(
+            result.errors.is_empty(),
+            "parse errors: {:?}",
+            result.errors
+        );
+        let f = result
+            .program
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Function(f) if f.name == "main" => Some(f.clone()),
+                _ => None,
+            })
+            .expect("main exists");
+        let whiles: Vec<usize> = f
+            .body
+            .stmts
+            .iter()
+            .enumerate()
+            .filter(|(_, st)| {
+                matches!(&st.kind, StmtKind::Expr(e) if matches!(e.kind, ExprKind::While { .. }))
+            })
+            .map(|(i, _)| i)
+            .collect();
+        let StmtKind::Expr(second) = &f.body.stmts[whiles[1]].kind else {
+            unreachable!()
+        };
+        assert_eq!(
+            extract_loop_shape_explained(&f.body, whiles[1], second).err(),
+            Some(ShapeDecline::WhileCounterInitNotFound),
+        );
     }
 
     /// A statically tiny loop (trip count × body cost far under the dispatch

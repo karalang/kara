@@ -11967,6 +11967,47 @@ fn main() {
     }
 
     #[test]
+    fn e2e_a_reused_counter_loop_fans_out_and_agrees_with_sequential() {
+        // B-2026-08-20-14: the punch loop's counter is a REUSED binding —
+        // `i = 0i64;` on an `i` that already served the warm-up loop — rather
+        // than a fresh `let mut i = 0i64;`. One token used to decide whether
+        // the loop fanned out at all (measured 3.69x on kata #288), while
+        // `--concurrency-report` claimed `parallel_reduction` either way.
+        //
+        // The assertion is on the VALUE, not on wall-clock: a timing threshold
+        // would be flaky in CI. Fan-out is pinned separately by the shape unit
+        // test in `par_cost` (`a_reused_counter_initialized_by_assignment_is_
+        // a_counted_shape`); what this adds is that the dispatched program
+        // still computes what the sequential one does, counter included.
+        let src = r#"
+fn work(k: i64) -> i64 {
+    let mut t = 0i64;
+    let mut j = 0i64;
+    while j < 64i64 {
+        t = (t + (k * 7919i64 + j) % 977i64 * (j + 1i64)) % 1000003i64;
+        j = j + 1i64;
+    }
+    return t;
+}
+fn main() {
+    let mut total = 0i64;
+    let mut i = 0i64;
+    while i < 3i64 {
+        total = total + i;
+        i = i + 1i64;
+    }
+    i = 0i64;
+    while i < 200000i64 {
+        total = total + work(i);
+        i = i + 1i64;
+    }
+    println(f"{total} {i}");
+}
+"#;
+        assert_eq!(run_program(src).as_deref(), Some("101881034995 200000\n"));
+    }
+
+    #[test]
     fn e2e_while_counter_is_end_after_a_fanned_out_collect() {
         // The COLLECT dispatch is a second site with its own tail and needs
         // the same write-back as the scalar one. Reaching it takes more than a
