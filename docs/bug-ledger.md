@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 133 | 0 |
 | missing-feature | 128 | 0 |
 | codegen-gap | 119 | 0 |
-| false-positive | 88 | 0 |
+| false-positive | 89 | 1 |
 | diagnostics | 87 | 2 |
 | perf | 80 | 0 |
 | crash | 54 | 0 |
@@ -119,20 +119,21 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | cli | 52 | 0 |
 | parser | 33 | 0 |
 | runtime | 27 | 0 |
-| resolver | 22 | 0 |
+| resolver | 23 | 1 |
 | effect | 7 | 0 |
 | lexer | 6 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1405 surfaced · 3 open · 1382 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1406 surfaced · 4 open · 1382 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-20-23 | 2026-08-20 | ownership | low | every whole-buffer `gpu.*` reduction CONSUMES its buffer, so calling two of them on the same `Vec` warns `value moved here, used again here` -- but they only READ it | — |
 | B-2026-08-20-25 | 2026-08-20 | other | low | design.md assigns `E0226` to `ConflictingPlatformModule` (§ Platform-specific modules), which is the TYPECHECKER's band. `explain::tests::resolver_numeric_codes_live_in_the_resolve_band` fails any resolve-phase code outside E01xx/E08xx and `collision_render_names_every_phase` fails a code minted by two phases, so implementing this diagnostic under the number the spec gives it turns the suite red. The same number was, until B-2026-08-20-18, also spelled for `AmbiguousWildcardImport` (§ Module System); that one had to be allocated E0124 from the resolver band instead and the spec text corrected. This second E0226 is still in the document, unimplemented. | roadmap.md |
 | B-2026-08-20-26 | 2026-08-20 | codegen | high | B-2026-08-05-16'S NONDETERMINISM IS BACK, or was never fully fixed: its own regression test (`test_ir_shared_variant_name_resolves_to_scrutinee_enum_deterministically`) fails in ~6 of 8 FULL-SUITE runs on macOS arm64 — IR for identical source differs between compiles because a bare variant name shared by two enums still resolves against the unordered `enum_layouts` map. That row records the symptom as a NONDETERMINISTIC SEGV at -O0, so this is a live miscompile, not a flaky test. | tests/codegen.rs::test_ir_shared_variant_name_resolves_to_scrutinee_enum_deterministically; the `enum_layouts` lookup for bare variant patterns in src/codegen.rs; prior row B-2026-08-05-16 (fixed) whose regression test this is; found as the control arm of B-2026-08-20-5 |
+| B-2026-08-20-28 | 2026-08-20 | resolver | medium | A module binding's MEMBER ACCESS binds the bare member name in the importing module's scope, so two sources offering the same member name collide -- on `karac check`, before any flattening. Repro on eb9ad42: `src/conn.kara` = `pub fn open() -> i64 { return 1; }`, `src/pool.kara` = the same returning 2, `src/main.kara` = `import conn; import pool; fn main() { println(conn.open()); println(pool.open()); }` -> `error[E0101]: src/main.kara:6:13: 'open' is already defined in this scope (first defined at 5:13)`. Both spans point at USE SITES inside `main`'s body, not at a declaration. Mixed forms collide too: `import conn; import pool.open;` + `conn.open()` + `open()` is the same error. Two module bindings whose modules export DISJOINT names are fine (`conn.open()` + `pool.size()` passes on every surface), and repeating one member through one binding is fine (`conn.open()` twice, even in one expression, passes) -- so the collision is specifically two different sources offering one bare member name. | roadmap.md |
 
 ### Wontfix (7)
 
