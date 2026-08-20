@@ -92,16 +92,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 266 | 0 |
+| miscompile | 267 | 1 |
 | leak | 185 | 0 |
-| run-vs-build | 142 | 0 |
+| run-vs-build | 143 | 0 |
 | double-free | 133 | 0 |
 | missing-feature | 128 | 2 |
 | codegen-gap | 119 | 0 |
 | false-positive | 88 | 1 |
 | diagnostics | 87 | 2 |
 | perf | 80 | 0 |
-| crash | 55 | 1 |
+| crash | 54 | 0 |
 | soundness | 51 | 0 |
 | other | 49 | 0 |
 | use-after-free | 20 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 954 | 2 |
+| codegen | 955 | 2 |
 | typecheck | 219 | 1 |
 | interp | 165 | 0 |
 | ownership | 61 | 1 |
@@ -124,18 +124,18 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 6 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1403 surfaced · 6 open · 1377 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1404 surfaced · 6 open · 1378 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-19-13 | 2026-08-19 | typecheck+codegen+runtime | medium | GPU reductions: NO DECISIONS AND NO SEPARATE PROJECTS REMAIN. One item is open — integer `prod` / `dot` / `matmul` — and its recorded blocker ("WGSL has no widening multiply") is now KNOWN FALSE: `karac_mul_wide` is that primitive, shipped and device-verified, so they are ordinary work. Shipped: sum / prod / min / max / mean / dot / argmin / argmax / variance / stddev / prefix_sum over `Vec[f32]`; sum / min / max / mean / argmin / argmax / variance / stddev over `Vec[i32]` and `Vec[u32]`, the last of these EXACT via an integer shift and an emulated 64-bit accumulator; and a tiled `matmul` over rank-2 `Tensor[f32]` that equals `a.matmul(b)` bit-for-bit. | docs/spikes/gpu-llvm-offload-assessment.md; src/gpu_wgsl.rs::emit_reduce_kernel; src/reduce_kernel.rs::tree_reduce_f32 |
-| B-2026-08-20-5 | 2026-08-20 | codegen | high | `e2e_128bit_integers_end_to_end` produces EMPTY STDOUT on macOS arm64 only — the binary links and runs but prints nothing before the first `println`. Linux x86_64 and Linux arm64 both pass the same test. CI's `Codegen E2E (macOS arm64, LLVM 18)` lane has been red on `main` since the test landed. | tests/codegen.rs::e2e_128bit_integers_end_to_end (line ~21227); tests/codegen.rs::run_program_capturing (stdout-only discard); added by 7561b5d1 (B-2026-08-19-8 stage 5); CI job `Codegen E2E (macOS arm64, LLVM 18)` in .github/workflows/ci.yml |
 | B-2026-08-20-17 | 2026-08-20 | resolver | medium | MODULE-BINDING imports are unimplemented on every surface: `import db.connection;` and `import db;` bind nothing. design.md § Module System lists `import db.connection;` in its own import-form gallery ("bind the module itself as `connection`") and states the Binding rule explicitly: "The last segment of each imported path is bound in the current scope... The rule is UNIFORM for items and for sub-modules -- `import db.connection;` binds `connection` as a module reference (reach `Connection` as `connection.Connection`)." Measured on a real package: `import db.connection;` + `connection.open(4)` -> whole-package `karac build` fails `error[resolve]: multi-file resolve failed`, `karac run` fails `undefined name 'connection', did you mean 'Connection'?`, and single-file `karac check` PASSES (that last one is B-2026-08-20-16's truncation, not a working path). The top-level form `import db;` + `db.label()` behaves identically -> `undefined name 'db'`. So the four item-import forms all work and the two module-binding forms work nowhere. | roadmap.md |
 | B-2026-08-20-23 | 2026-08-20 | ownership | low | every whole-buffer `gpu.*` reduction CONSUMES its buffer, so calling two of them on the same `Vec` warns `value moved here, used again here` -- but they only READ it | — |
 | B-2026-08-20-24 | 2026-08-20 | cli | high | Two modules of one package may not declare the same top-level name: `karac check` ACCEPTS the program and BOTH execution paths reject it. Repro (no wildcards involved) -- `src/alpha.kara`: `pub fn common() -> i64 { return 1; } pub fn only_a() -> i64 { return 11; }`; `src/beta.kara`: the same with `common`/`only_b`; `src/main.kara`: `import alpha.only_a; import beta.only_b; fn main() { println(only_a()); println(only_b()); }` -- main never mentions `common`. Measured on 6aa26bb: `karac check src/main.kara` -> `All checks passed.`; `karac run src/main.kara` -> `error[resolve]: src/main.kara:1:5: 'common' is already defined in this scope (first defined at 1:5)`; `karac build` (llvm) -> `error[resolve]: multi-file resolve failed:`. design.md § Module System makes the two `common`s distinct ("all types, functions, and effect resources are namespaced by their module path"), so this rejects a legal -- and very ordinary -- program: any two modules with a `new`, `parse`, `size` or `run` collide. | roadmap.md |
 | B-2026-08-20-25 | 2026-08-20 | other | low | design.md assigns `E0226` to `ConflictingPlatformModule` (§ Platform-specific modules), which is the TYPECHECKER's band. `explain::tests::resolver_numeric_codes_live_in_the_resolve_band` fails any resolve-phase code outside E01xx/E08xx and `collision_render_names_every_phase` fails a code minted by two phases, so implementing this diagnostic under the number the spec gives it turns the suite red. The same number was, until B-2026-08-20-18, also spelled for `AmbiguousWildcardImport` (§ Module System); that one had to be allocated E0124 from the resolver band instead and the spec text corrected. This second E0226 is still in the document, unimplemented. | roadmap.md |
+| B-2026-08-20-26 | 2026-08-20 | codegen | high | B-2026-08-05-16'S NONDETERMINISM IS BACK, or was never fully fixed: its own regression test (`test_ir_shared_variant_name_resolves_to_scrutinee_enum_deterministically`) fails in ~6 of 8 FULL-SUITE runs on macOS arm64 — IR for identical source differs between compiles because a bare variant name shared by two enums still resolves against the unordered `enum_layouts` map. That row records the symptom as a NONDETERMINISTIC SEGV at -O0, so this is a live miscompile, not a flaky test. | tests/codegen.rs::test_ir_shared_variant_name_resolves_to_scrutinee_enum_deterministically; the `enum_layouts` lookup for bare variant patterns in src/codegen.rs; prior row B-2026-08-05-16 (fixed) whose regression test this is; found as the control arm of B-2026-08-20-5 |
 
 ### Wontfix (7)
 
@@ -153,9 +153,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1403 surfaced
 
 </details>
 
-### Fixed (1377)
+### Fixed (1378)
 
-<details><summary>1377 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1378 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -12545,6 +12545,7 @@ TWO GAPS FOUND WHILE MEASURING, both PRE-EXISTING (each confirmed by reproducing
   - B-2026-08-20-6: a `u64` match whose two range arms cover the whole domain is wrongly reported non-exhaustive, because the top-half bounds ride the carrier as negatives while `int_domain` speaks unsigned. Sound (it over-demands a wildcard) but it rejects correct code.
 
 WHAT THIS DOES NOT REACH: `i128::MIN` as a pattern still needs B-2026-08-20-7, since its magnitude is only expressible under a unary minus. Every other 128-bit literal is now a legal pattern. |
+| B-2026-08-20-5 | codegen | high | `karac run` (the DEFAULT executor) DIED ON ANY SIGNED 128-BIT MULTIPLY on macOS — `JIT session error: Symbols not found: [ ___muloti4 ]`, so nothing… | FIXED by 02f1b87d. `LLJITEngine::new` now publishes `__muloti4` into the main JITDylib as an absolute symbol, via a new `define_absolute_symbols` helper that applies the platform's global prefix so callers pass the plain name. The row's framing was wrong in two ways that are worth recording: the failure is JIT-ONLY, not Darwin-ABI, and it is USER-FACING, not test-infra. `karac run` — the default executor — died on any signed 128-bit multiply on Apple Silicon, printing a JIT symbol error instead of running; AOT was never affected and never could be, because it links compiler-rt itself. The cause is that the JIT resolves externals through `dlsym`, which sees only EXPORTED symbols, while compiler-rt builtins arrive from a static archive with LOCAL linkage — present in the image, invisible to a name lookup. Linux hides this completely because `dlsym(RTLD_DEFAULT)` also searches loaded shared objects and `libgcc_s.so.1` exports the whole builtin family, so both Linux lanes resolve it from libgcc and pass. Scope was measured rather than assumed — one program per operation with operands read back from a `Vec` so nothing constant-folds, across `* / % << >> + -`, `wrapping_`/`saturating_`/`checked_mul`, `pow`, `to_string` and comparison, on both `i128` and `u128` — and exactly one symbol is unresolvable: everything else the AArch64 backend expands inline, and unsigned multiply becomes `umulh` so the `u128` side needs no libcall at all. Verified by a control: the failing test fails 8/8 full-suite runs without the change and 0/8 with it, and overflow detection (the entire point of `__muloti4`, and the thing a wrong address or wrong symbol flags would silently corrupt) agrees between AOT and JIT in both directions and on negative operands. |
 | B-2026-08-20-7 | parser | high | A NEGATIVE integer literal cannot be a match pattern at ANY width: `match n { -5 => . | FIXED by 3cf5ff9. The pattern parser gained a unary-minus arm that FOLDS the sign into the literal, mirroring `parser/exprs.rs`'s `parse_prefix` rather than wrapping a negation around it. That distinction is what makes the two MIN magnitudes work: `i64::MIN` and `i128::MIN` have no positive form — each is one past its type's MAX — so they arrive as `IntegerOutOfRange` and exist only already-negated. `LiteralPattern::Integer` carries `i128` since B-2026-08-20-4, so every negative magnitude including `i128::MIN` fits.
 
 THE ROW UNDERSTATED THE POSITIONS. It named match arms and range bounds; measuring found the same failure in enum payloads (`Some(-5)`), or-alternatives (`-1 | -2`), tuple elements (`(-1, 2)`) and FLOATS (`-1.5`) — floats were not mentioned at all and fold on the same arm. All are fixed together because there is one dispatch point, not five.
