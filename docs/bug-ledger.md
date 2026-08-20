@@ -98,8 +98,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 133 | 0 |
 | missing-feature | 129 | 1 |
 | codegen-gap | 119 | 0 |
+| diagnostics | 89 | 1 |
 | false-positive | 88 | 0 |
-| diagnostics | 88 | 1 |
 | perf | 80 | 0 |
 | crash | 54 | 0 |
 | soundness | 51 | 0 |
@@ -115,8 +115,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | interp | 166 | 0 |
 | ownership | 61 | 0 |
 | other | 59 | 0 |
+| cli | 55 | 2 |
 | autopar | 54 | 0 |
-| cli | 54 | 2 |
 | parser | 33 | 0 |
 | runtime | 27 | 0 |
 | resolver | 23 | 0 |
@@ -124,14 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 6 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1408 surfaced · 2 open · 1386 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1409 surfaced · 2 open · 1387 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-20-29 | 2026-08-20 | cli | low | THE NATIVE OS PLATFORMS ARE NOT SELECTABLE, so a `_macos` / `_windows` / `_linux` module can only be checked or built on that host, and no command verifies that a platform split covers every OS. `cmd_build_project` derives the walker's platform as `wasm_* -> Platform::Wasm`, everything else `Platform::host()` (now shared as `walk_platform_for_target`), and `kara.toml [build].target` -- a rustc-style overlay triple -- never touches it. So `_wasm` is reachable from any host and the three native suffixes are host-locked. design.md's *Missing-platform rule* used to promise exactly the missing guarantee (`karac check --target all` for "a compile-time guarantee that every target has coverage"); that text was corrected rather than the feature built (B-2026-08-20-25), and this row is the feature. | roadmap.md |
-| B-2026-08-20-30 | 2026-08-20 | cli | low | `karac explain E0223` and `E0227` REFUSE two codes users actually see, with a message that claims their family IS covered: "`karac explain` covers the resolve and typecheck families (E01xx, E02xx / W02xx, E08xx)" -- and both codes are E02xx. Measured on 9dfa7d8: a module cycle prints `error[E0223]: circular module dependency` and a command run outside a package reports `E0227`, yet neither is in `CODE_TABLE`, so `karac explain` answers `diagnostic code 'E0223' is not in the catalogue yet` for both. They are also both in the WRONG BAND -- `E0223` is minted by `print_cycles_text` (module-graph phase) and `E0227` by `ManifestError::code` (manifest phase), neither of which is the typechecker whose band E02xx is. | roadmap.md |
+| B-2026-08-20-31 | 2026-08-20 | cli | low | THE EFFECT (`E04xx`), OWNERSHIP (`E05xx`) AND PROVIDER-ESCAPE (`E0600`) BANDS ARE UNCATALOGUED, so `karac explain E0400` / `E0500` / `E0600` refuse 29 codes the compiler mints. Measured after B-2026-08-20-30: `code_table_catalogues_every_code_in_a_covered_band` now holds E01xx, E02xx/W02xx and E08xx at zero gaps and `unknown_code_message` disclaims these three by name, so this is an honest gap rather than a false claim -- but they are ordinary user-facing diagnostics (a missing effect declaration, a move-after-use, a provider escape) and an agent loop reading a `code` off `karac check --output=json` cannot look any of them up. | roadmap.md |
 
 ### Wontfix (7)
 
@@ -149,9 +149,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1408 surfaced
 
 </details>
 
-### Fixed (1386)
+### Fixed (1387)
 
-<details><summary>1386 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1387 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -13091,6 +13091,29 @@ is the shape every existing module-binding program is in. And a chain case
 (`import db;` + `db.conn.open()` + `db.pool.open()`), which is what the
 origin-table bug above showed up in. The 12 tests that shipped with
 B-2026-08-20-17 pass unchanged. |
+| B-2026-08-20-30 | cli | low | `karac explain E0223` and `E0227` REFUSE two codes users actually see, with a message that claims their family IS covered: "`karac explain` covers th… | FIXED by b01cd21. Both halves of the row were addressed, but the second one was answered NO on the merits rather than deferred, and the investigation found six more codes with the same defect that the row had not counted.
+
+HALF 1 -- CATALOGUE. `E0223` now carries a `module_graph` row and `E0227` a `manifest` row, under the phase that actually mints each. `karac explain E0223` answers `phase: module_graph / kind: CircularModuleDependency`; `E0227` answers `manifest / NotInsideKaraProject`. Both are pinned end-to-end by `test_explain_answers_for_the_two_codes_minted_outside_the_emitter`, which RUNS the two commands that mint them (a three-module import cycle, and `karac check` outside any package) before asking `explain` about the codes they printed -- the round trip, not a table lookup.
+
+HALF 2 -- RENUMBER: NO, deliberately. The row asked for a decision and this is it. The band's ONE real benefit is that no number is minted by two phases, and a catalogue row delivers that directly: an uncatalogued code is invisible to `code_table_has_no_cross_phase_collisions`, which is precisely how four of the eight B-2026-07-27-14 collisions went unseen. Renumbering would additionally require INVENTING two new bands for two codes, and would break two shipping `code` values -- the exact property B-2026-07-27-14 was protecting. The numbers stay; the protection is now real rather than nominal. Recorded in design.md and on `CODE_TABLE` so the next reader does not re-litigate it.
+
+SIX MORE CODES WITH THE SAME DEFECT, found by auditing every code the emitter mints against the catalogue rather than trusting the row's count:
+
+  * `E0230 ImplExceedsTraitCeiling` and `E0231 TraitDefaultExceedsCeiling` -- EFFECT-checker codes sitting in the TYPECHECKER's band. Same CR-24 leftover class as E0223/E0227, and uncatalogued, so the collision guard could not see them either.
+  * `E0802 GpuEffectViolation` -- an effect-checker code in the shared `E08xx` target/GPU band. Correctly placed (that band is shared on purpose), just missing.
+  * `E0279 AmbiguousBareVariant`, `W0245` / `W0249` / `W0255` (the warning twins of `Deprecated` / `UnfulfilledLintExpectation` / `UnstableApi`), and `W0299` (the warning emitter's `_ =>` catch-all bucket) -- plain typecheck-band codes never added.
+
+Every one was a code a user could be handed and `karac explain` would refuse, WITH A MESSAGE NAMING THEIR FAMILY AS COVERED. All eight are catalogued and pinned by `test_explain_answers_for_every_code_in_a_band_it_claims`.
+
+THE ROOT CAUSE IS THE FRAMING, not any single missing row. The scope was stated by PHASE ("the resolve and typecheck families") while the lookup is by NUMBER -- and the two disagree exactly where a phase mints outside its own band, which is where every one of these lived. `E0230` is an effect code, so a phase-framed scope said "not covered" while its number sat in the middle of a band the message promised. `CODE_TABLE`'s scope doc and `unknown_code_message` are now both stated BY BAND: E01xx, E02xx/W02xx and E08xx in full, plus E0223 and E0227; E04xx, E05xx and E0600 explicitly disclaimed.
+
+THE GUARD THAT MAKES IT STICK is `code_table_catalogues_every_code_in_a_covered_band`. `code_table_catalogues_every_resolver_code` had pinned this for `resolve` ONLY, which is why the typecheck band -- the one the error message named first -- drifted eight codes out of date with no failing test. The new guard scans every numeric code literal in `diag_json.rs` (a separate scan from `emitted_codes`, which keys off `ResolveErrorKind::` / `TypeErrorKind::` on the line and therefore cannot see an `EffectErrorKind` arm or a bare `_ =>` fallthrough -- where four of the six were hiding) and asserts every one in a claimed band has a row. `the_two_out_of_emitter_codes_stay_catalogued_at_their_mint_sites` covers `E0223` / `E0227`, which the emitter scan cannot reach because neither is minted there.
+
+`SPEC_RESERVED` is now EMPTY, which is its goal state: a row in it is a code design.md names that the catalogue cannot answer for. It stays as a declared escape hatch for a code written into the spec before its diagnostic ships.
+
+design.md's band rule was corrected in the same commit. It asserted flatly that "a phase must allocate from its own band" while five shipping codes did not -- the same false-claim shape as B-2026-08-20-25's E0226. It now states the allocation rule for NEW codes, names the invariant that actually matters (no number minted by two phases), lists all five exceptions with the reason they stay, and names both guards.
+
+LIVE REMAINDER, split to its own row: the effect (`E04xx`, 17 codes), ownership (`E05xx`, 11) and provider-escape (`E0600`) bands are still uncatalogued. The message now says so accurately, so this is a documented gap rather than a false claim -- but they are codes users see, and cataloguing them would let `COVERED_BANDS` claim the whole numeric space. |
 
 </details>
 
