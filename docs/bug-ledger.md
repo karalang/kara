@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 133 | 0 |
 | missing-feature | 128 | 0 |
 | codegen-gap | 119 | 0 |
-| false-positive | 88 | 1 |
+| false-positive | 88 | 0 |
 | diagnostics | 87 | 2 |
 | perf | 80 | 0 |
 | crash | 54 | 0 |
@@ -116,7 +116,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | ownership | 61 | 1 |
 | other | 59 | 1 |
 | autopar | 54 | 0 |
-| cli | 52 | 1 |
+| cli | 52 | 0 |
 | parser | 33 | 0 |
 | runtime | 27 | 0 |
 | resolver | 22 | 0 |
@@ -124,14 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 6 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1405 surfaced · 4 open · 1381 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1405 surfaced · 3 open · 1382 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-20-23 | 2026-08-20 | ownership | low | every whole-buffer `gpu.*` reduction CONSUMES its buffer, so calling two of them on the same `Vec` warns `value moved here, used again here` -- but they only READ it | — |
-| B-2026-08-20-24 | 2026-08-20 | cli | high | Two modules of one package may not declare the same top-level name: `karac check` ACCEPTS the program and BOTH execution paths reject it. Repro (no wildcards involved) -- `src/alpha.kara`: `pub fn common() -> i64 { return 1; } pub fn only_a() -> i64 { return 11; }`; `src/beta.kara`: the same with `common`/`only_b`; `src/main.kara`: `import alpha.only_a; import beta.only_b; fn main() { println(only_a()); println(only_b()); }` -- main never mentions `common`. Measured on 6aa26bb: `karac check src/main.kara` -> `All checks passed.`; `karac run src/main.kara` -> `error[resolve]: src/main.kara:1:5: 'common' is already defined in this scope (first defined at 1:5)`; `karac build` (llvm) -> `error[resolve]: multi-file resolve failed:`. design.md § Module System makes the two `common`s distinct ("all types, functions, and effect resources are namespaced by their module path"), so this rejects a legal -- and very ordinary -- program: any two modules with a `new`, `parse`, `size` or `run` collide. | roadmap.md |
 | B-2026-08-20-25 | 2026-08-20 | other | low | design.md assigns `E0226` to `ConflictingPlatformModule` (§ Platform-specific modules), which is the TYPECHECKER's band. `explain::tests::resolver_numeric_codes_live_in_the_resolve_band` fails any resolve-phase code outside E01xx/E08xx and `collision_render_names_every_phase` fails a code minted by two phases, so implementing this diagnostic under the number the spec gives it turns the suite red. The same number was, until B-2026-08-20-18, also spelled for `AmbiguousWildcardImport` (§ Module System); that one had to be allocated E0124 from the resolver band instead and the spec text corrected. This second E0226 is still in the document, unimplemented. | roadmap.md |
 | B-2026-08-20-26 | 2026-08-20 | codegen | high | B-2026-08-05-16'S NONDETERMINISM IS BACK, or was never fully fixed: its own regression test (`test_ir_shared_variant_name_resolves_to_scrutinee_enum_deterministically`) fails in ~6 of 8 FULL-SUITE runs on macOS arm64 — IR for identical source differs between compiles because a bare variant name shared by two enums still resolves against the unordered `enum_layouts` map. That row records the symptom as a NONDETERMINISTIC SEGV at -O0, so this is a live miscompile, not a flaky test. | tests/codegen.rs::test_ir_shared_variant_name_resolves_to_scrutinee_enum_deterministically; the `enum_layouts` lookup for bare variant patterns in src/codegen.rs; prior row B-2026-08-05-16 (fixed) whose regression test this is; found as the control arm of B-2026-08-20-5 |
 
@@ -151,9 +150,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1405 surfaced
 
 </details>
 
-### Fixed (1381)
+### Fixed (1382)
 
-<details><summary>1381 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1382 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -12806,6 +12805,81 @@ TEST: `test_run_package_member_honours_an_aliased_import` (tests/cli.rs) fails w
 SOURCE NOTE: split out of B-2026-08-20-16, which fixed the ANALYSIS being file-scoped on the check and run paths. This was the one leg of that row's matrix left inconsistent afterwards, and it is downstream rather than the same defect — -16 was about which program gets analysed, this is about the flat program the run path then executes. |
 | B-2026-08-20-21 | interp | medium | `Tensor[f32].matmul` accumulates in f64 under `karac run --interp` and in f32 under `karac build`, so a long enough contraction gives DIFFERENT ANSWE… | 2f94bb1b |
 | B-2026-08-20-22 | interp | medium | `Tensor.from` under a `Tensor[f32, ...]` annotation narrows a bare float LITERAL but not a NEGATED one or a computed one, so `Tensor.from([-0.1])` ho… | 209a6607 |
+| B-2026-08-20-24 | cli | high | Two modules of one package may not declare the same top-level name: `karac check` ACCEPTS the program and BOTH execution paths reject it | FIXED by 36efad6.
+
+`module_rename` (new) renames only what collides, at the two merge sites, and
+both of them now call one helper.
+
+WHAT WAS WRONG. `build_super_program_for_run` (`karac run`, and `karac test`
+through it) and `run_multi_file_codegen` (`karac build`) concatenate every
+module's items into one `Program` and resolve it in a single scope. Nothing in
+that unit remembered which module an item came from, so two same-named
+declarations became a `SymbolTable::define` duplicate. Per-module analysis does
+not flatten, which is exactly why check and execute disagreed.
+
+THIS WAS A KNOWN DEFERRAL, not an oversight.
+`test_build_project_codegen_cross_module_collision_diagnostic` pinned the error
+with the comment "Symbol mangling is deferred to v2 (per the Theme 4 plan
+revision) ... Pins the no-silent-overwrite invariant." The invariant was worth
+keeping; the rejection was a stand-in for it. That test now checks the invariant
+directly -- both values come back, so neither declaration overwrote the other --
+and is renamed `..._resolves_to_both_items`.
+
+THE FIX. Every module that has to give up a name gets its declaration renamed
+(`alpha`'s `common` -> `common__alpha`, `db.conn`'s `open` -> `open__db_conn`),
+and every reference to it -- in that module and in the modules that import it --
+is rewritten to match. The rewrite reuses `import_alias`'s substitution walker,
+which existed to keep import ALIASES alive across the same merge; an alias and a
+rename are the same operation on the same AST, so they are applied as ONE
+substitution. Composing two passes would have the alias half produce a name the
+rename half no longer recognises. Import lookups go through `canonical_origin`,
+so a name reached via a `pub import` re-export lands on the DECLARING module's
+(possibly renamed) copy.
+
+WHAT IS DELIBERATELY LEFT ALONE.
+  * A program with no collision -- every program that already worked -- gets an
+    empty map and is copied unchanged.
+  * The root module. Its names are what a reader sees first, and one of them is
+    `main`, which codegen looks up by that exact spelling.
+  * Names that ARE linkage: a foreign import, a Kāra `extern "C"` export, or
+    anything carrying `#[unsafe(no_mangle)]` -- which `declare_function` already
+    records as the opt-out "future mangling passes" should honour, and this is
+    one. Verified with `nm`: the export keeps its symbol and the colliding
+    ordinary fn is the one that moves. Two `extern "C"` exports of one name keep
+    the duplicate error they always had, which is correct -- a program cannot
+    export two C symbols under one name.
+  * A module that also binds the name as a LOCAL, since the rewrite is
+    syntactic and a `let helper = …` would be rewritten along with the item.
+    This degrades gently rather than all-or-nothing: the collision breaks as soon
+    as one declarer moves, so the duplicate error survives only when every
+    declarer is guarded.
+
+NOT THE WHOLE MANGLING SCHEME. design.md § `#[unsafe(no_mangle)]` vs ABI
+describes mangling that also covers generics and changes emitted symbol names;
+neither is touched. This is the cross-module-collision half, at the source level
+where the collision actually bit.
+
+TWO SUPPORTING WIDENINGS. `import_alias::rewrite_item` grew the item forms an
+alias could never reach but a rename can -- type aliases, distinct types, layout
+collection types, effect clauses (a renamed `effect resource` is named by every
+`with reads(...)` that uses it), `requires` clauses, and extern signatures -- and
+`declared_names` grew the declaration forms it was missing, which also tightens
+the alias shadow guard it already fed.
+
+THE MERGE SITES HAD DRIFTED BEFORE: the alias repair landed in the build path
+with B-2026-07-29-14 and reached the run path only three weeks later with
+B-2026-08-20-20. Both now call `module_rename::flatten_module_items`, so there is
+one implementation to keep correct.
+
+TESTS. 7 declaration forms (fn, struct, enum, trait, const, type alias, effect
+resource), each under the interpreter, the LLJIT and AOT, with return values
+chosen so binding to the other module's copy prints the other number; the three
+import forms that reach a renamed item from outside (plain, `as` alias,
+`pub import` re-export); `KARAC_AUTO_PAR=0` parity for the effect-resource case,
+because auto-par reads exactly what a renamed resource feeds; and 6 planner tests
+covering the root rule, the path-derived replacement name, both guards, and the
+no-collision no-op. `karac test` shares the run path's merge and was verified on
+a colliding package. |
 | B-2026-08-20-27 | interp+codegen | high | an INTEGER `Tensor.matmul` never overflow-checks: `karac build` silently WRAPS and `karac run --interp` returns a value outside the element type -- w… | FIXED by beb4c419. |
 
 </details>
