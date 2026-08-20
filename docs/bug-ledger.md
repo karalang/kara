@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 133 | 0 |
 | missing-feature | 126 | 1 |
 | codegen-gap | 119 | 0 |
-| false-positive | 86 | 2 |
+| false-positive | 86 | 0 |
 | diagnostics | 84 | 0 |
 | perf | 80 | 2 |
 | crash | 55 | 1 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 953 | 2 |
-| typecheck | 219 | 3 |
+| typecheck | 219 | 1 |
 | interp | 163 | 0 |
 | ownership | 60 | 0 |
 | other | 58 | 0 |
@@ -124,17 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 6 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1392 surfaced · 6 open · 1366 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1392 surfaced · 4 open · 1368 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-19-13 | 2026-08-19 | typecheck+codegen+runtime | medium | GPU reductions still lack TILED MATMUL (2-D workgroup indexing the 1-D model lacks); integer `prod` / `dot` are blocked on WGSL lacking a widening multiply; and `variance` / `stddev` are f32-only (the integer form needs a decision, not just work — the deviations are formed on-device in f32, so `mean`'s promote-late trick does not carry over). A SAMPLE (÷ n-1) form is decided against rather than pending. Everything else has shipped: sum / prod / min / max / mean / dot / argmin / argmax / variance / stddev / prefix_sum over `Vec[f32]`, and sum / min / max / mean / argmin / argmax over `Vec[i32]` and `Vec[u32]`. | docs/spikes/gpu-llvm-offload-assessment.md; src/gpu_wgsl.rs::emit_reduce_kernel; src/reduce_kernel.rs::tree_reduce_f32 |
 | B-2026-08-20-5 | 2026-08-20 | codegen | high | `e2e_128bit_integers_end_to_end` produces EMPTY STDOUT on macOS arm64 only — the binary links and runs but prints nothing before the first `println`. Linux x86_64 and Linux arm64 both pass the same test. CI's `Codegen E2E (macOS arm64, LLVM 18)` lane has been red on `main` since the test landed. | tests/codegen.rs::e2e_128bit_integers_end_to_end (line ~21227); tests/codegen.rs::run_program_capturing (stdout-only discard); added by 7561b5d1 (B-2026-08-19-8 stage 5); CI job `Codegen E2E (macOS arm64, LLVM 18)` in .github/workflows/ci.yml |
 | B-2026-08-20-9 | 2026-08-20 | runtime+autopar | medium | Auto-par worker threads contend on ONE glibc malloc arena: any fan-out body that allocates per iteration pays a shared lock the sequential build never touches | — |
-| B-2026-08-20-12 | 2026-08-20 | typecheck | low | A FLOAT literal pattern makes the following `_` arm report `warning[unreachable_arm]`: `match f { 1.5 => .., _ => .. }` warns that the wildcard is "fully covered by an earlier arm". The `_` is of course required — a single float literal covers one value — and the integer equivalent produces no warning. | src/exhaustive.rs::int_domain (no float domain); src/exhaustive.rs (usefulness/unreachable-arm computation for LiteralPattern::Float); src/typechecker (where warning[unreachable_arm] is emitted) |
-| B-2026-08-20-13 | 2026-08-20 | typecheck | medium | A FLOAT literal is accepted at an INTEGER-annotated binding and the annotation is simply ignored: `let n: i64 = 1.5; println(n)` compiles and prints `1.5` on BOTH backends. The reverse (`let n: f64 = 5`) is the documented int-to-float widening and is fine; this direction has no rule behind it. | src/typechecker/exprs.rs::check_expr (where a suffixed/unsuffixed literal meets its contextual type); src/typechecker/exprs.rs::check_int_literal_fits (the integer half, which works); src/typechecker/patterns.rs::check_literal_pattern (the pattern-side check that deliberately departs from this behaviour); tests/typechecker.rs::the_literal_pattern_check_agrees_with_expression_position (the assertion that flags when this is fixed) |
 | B-2026-08-20-14 | 2026-08-20 | autopar | high | A `parallel_reduction` is REPORTED but never dispatched when the loop's induction variable is a REUSED binding (`i = 0` on an `i` declared earlier) rather than a fresh `let mut i = 0` — one token, 3.69x, and the concurrency report claims parallelism either way | — |
 
 ### Wontfix (7)
@@ -153,9 +151,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1392 surfaced
 
 </details>
 
-### Fixed (1366)
+### Fixed (1368)
 
-<details><summary>1366 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1368 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -12614,6 +12612,22 @@ TWO LATENT SUB-BUGS surfaced only once the payload was actually being tested —
   2. a FLOAT literal BINDS nothing, so the typechecker records no `pattern_binding_types` entry and the existing float bitcast — which is gated on that entry — could not fire. The raw i64 bit pattern reached the float compare, turning the over-match into an UNDER-match (`Some(1.5)` stopped matching `1.5`). Added a literal-driven arm that takes the width from the literal's own suffix. Caught only because the tests assert against the interpreter oracle rather than merely checking that the miss arms now miss.
 
 VERIFICATION: six regression tests in `tests/codegen.rs` (mod `enum_payload_literal_patterns_b_2026_08_20_11`), EVERY assert a MISS arm, using strict `assert_eq!(.., Some(..))` rather than the tolerant `if let Some(out)` so a missing runtime archive fails loudly instead of green-skipping the class again. All 24 shapes verified byte-identical across interp / JIT / default build / `KARAC_AUTO_PAR=0`. Gates: fmt clean, both clippy legs clean, default suite 106 targets green, llvm suite 108 targets green with 0 failures and 0 ASAN/LSan reports. |
+| B-2026-08-20-12 | typecheck | low | A FLOAT literal pattern makes the following `_` arm report `warning[unreachable_arm]`: `match f { 1.5 => .., _ => . | `src/exhaustive.rs` lowered every float literal pattern to `Pat::Wildcard`, so the usefulness algorithm saw `match f { 1.5 => .., _ => .. }` as a wildcard arm followed by a second wildcard arm and correctly (given that input) called the `_` arm unreachable. Float literals now lower to a real constructor, `PatCtor::Lit(PatLit::Float(bits))`, keyed on the IEEE-754 bit pattern so the variant can still derive `Eq`/`Hash` (which `f64` cannot). A float literal is therefore one value out of an unbounded domain: it never saturates the type, the trailing `_` stays useful, and a genuinely duplicated `1.5 => .. , 1.5 => ..` is now reported as unreachable where before it was invisible.
+
+Two edge cases are wrong in the SAFE direction — they can only MISS an unreachable-arm warning, never invent one — and are documented on the variant: `0.0` and `-0.0` have different bits but compare equal at runtime, and NaN has many bit patterns and compares unequal to itself (the lexer has no NaN literal syntax, so that half is unreachable in practice). Exact coverage needs a real float domain; under-reporting beats the over-reporting this replaced.
+
+The old comment claiming the wildcard lowering "only affects nested float literals" was false — the top-level case above is exactly what it broke — and has been corrected.
+
+TEST: `a_float_literal_pattern_covers_one_value_not_the_type` (tests/typechecker.rs) asserts the trailing `_` draws no warning and that a duplicate float arm does. |
+| B-2026-08-20-13 | typecheck | medium | A FLOAT literal is accepted at an INTEGER-annotated binding and the annotation is simply ignored: `let n: i64 = 1.5; println(n)` compiles and prints… | Root cause is in `src/typechecker/types.rs`: the numeric-compatibility table treats int↔float as implicitly convertible in BOTH directions ("pragmatic, bidirectional"), so an integer annotation accepted a float payload and then simply carried the float value through to runtime.
+
+Rather than cut that entry out — it is load-bearing for the legitimate int-to-float widening and is consulted from many call sites — the assignment gate is now narrowed at the one canonical place: `check_assignable` rejects `expected: Int|UInt` / `found: Float` up front, with a message that names the truncating `as` cast as the fix. Int-to-float widening is untouched.
+
+SCOPE CORRECTION: the row understated this. It is a type-level hole, not a literal-level one, and it fired at every assignment slot — `let`, function arguments, return position, struct-field initializers, at i32/u8 as well as i64 — and survived arithmetic (`s.x + 1` on a float-initialized integer field evaluated to `4.5`). All of those are covered by the new test.
+
+TESTS (tests/typechecker.rs): `a_float_is_rejected_at_every_integer_slot` walks every slot and both int widths; `an_integer_still_widens_into_every_float_slot` pins that the legal direction is unaffected. `the_literal_pattern_check_agrees_with_expression_position` had an explicit exception for `("i64", "5i64", "1.5")` recording that pattern position was stricter than expression position — with this fixed the two agree, so the exception is retired and the case moved into the agreement table.
+
+SELF-HOSTED TWIN. `selfhost_typechecker_matches_rust_typechecker` caught the divergence the moment the Rust rule landed: its corpus carried `fn ret_i64_from_float() -> i64 { 1.5 }` in the CLEAN group, pinning the old behaviour as correct. The self-hosted checker modelled all numerics as one coarse `NUM` category, which by construction cannot see this direction, so it was taught the same rule: `f32`/`f64` and float literals now carry their own category (5, FLOAT), `cats_compatible` became ASYMMETRIC (`expected`, `found`) so an int widens into a float slot but not the reverse, and every other consumer — comparison validity, arithmetic/bitwise operand checks, unary `-`/`~`, binary result inference — folds the two back together through a new `is_num` / `num_fold` / `num_join` trio, so the split is invisible everywhere except the assignment boundary. That keeps int-vs-float mixing legal in operand position exactly as the single NUM category did, while `1 + 1.5` now infers FLOAT so the assignment rule catches it too. The corpus entry moved from the clean group to the mismatch group. All seven selfhost oracles pass. |
 
 </details>
 
