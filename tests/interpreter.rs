@@ -35574,6 +35574,55 @@ fn the_display_peel_leaves_signed_and_narrow_values_alone() {
     );
 }
 
+/// The interpreter twin of `e2e_generic_enum_display_renders_at_its_instantiation`
+/// (tests/codegen.rs), B-2026-08-19-28.
+///
+/// The interpreter was already correct here — it renders from the VALUE, which
+/// carries its payload directly — so it is the reference the codegen fix was
+/// measured against. Pinning it is what stops the pair drifting: codegen had to
+/// learn to substitute a generic enum's parameters from the use site, and the
+/// expected strings below are what it must keep producing.
+#[test]
+fn a_generic_enum_renders_at_its_instantiation() {
+    assert_eq!(
+        run_no_errors(
+            "#[derive(Display)]\n\
+             enum MyOpt[T] { Has(T), Empty }\n\
+             fn main() {\n\
+             let mut a: Vec[Option[i64]] = vec![];\n\
+             a.push(Some(5i64));\n\
+             a.push(None);\n\
+             println(a);\n\
+             let mut b: Vec[Result[i64, String]] = vec![];\n\
+             b.push(Ok(5i64));\n\
+             b.push(Err(\"bad\"));\n\
+             println(b);\n\
+             let mut m: Map[String, Option[i64]] = Map.new();\n\
+             m.insert(\"k\", Some(5i64));\n\
+             println(m);\n\
+             let mut g: Vec[MyOpt[i64]] = vec![];\n\
+             g.push(MyOpt.Has(5i64));\n\
+             g.push(MyOpt.Empty);\n\
+             println(g);\n\
+             let mut h: Vec[MyOpt[String]] = vec![];\n\
+             h.push(MyOpt.Has(\"hello\"));\n\
+             println(h);\n\
+             let mut i: Vec[i64] = vec![];\n\
+             i.push(7i64);\n\
+             let mut v: Vec[MyOpt[Vec[i64]]] = vec![];\n\
+             v.push(MyOpt.Has(i));\n\
+             println(v);\n\
+             }"
+        ),
+        "[Some(5), None]\n\
+         [Ok(5), Err(bad)]\n\
+         {k: Some(5)}\n\
+         [Has(5), Empty]\n\
+         [Has(hello)]\n\
+         [Has([7])]\n"
+    );
+}
+
 // ── B-2026-08-19-16: qualified unit-variant paths across colliding enums ──
 
 #[test]

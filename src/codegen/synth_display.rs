@@ -1365,7 +1365,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 // form needed for nested/recursive field rendering).
                 if let Some(seg) = p.segments.last() {
                     if self.type_decls.enum_layouts.contains_key(seg) {
-                        return self.emit_enum_display_fn(seg);
+                        // Pass the use site's generic arguments so a generic
+                        // enum renders at its instantiation (B-2026-08-19-28).
+                        let args: Vec<GenericArg> = p.generic_args.clone().unwrap_or_default();
+                        return self.emit_enum_display_fn(seg, &args);
                     }
                     // Total-order float wrappers render as their INNER float
                     // (B-2026-08-11-8), so they must be pulled out before the
@@ -2008,12 +2011,71 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `emit_vec_display_body` reads elements without consuming. Format matches
     /// the interpreter's `Value::EnumVariant` Display: `Variant` /
     /// `Variant(f0, f1)` / `Variant { name: v }`.
-    pub(super) fn emit_enum_display_fn(&mut self, enum_name: &str) -> FunctionValue<'ctx> {
-        let cache_key = enum_name.to_string();
+    /// `args` are the enum's CONCRETE generic arguments at this use site, empty
+    /// for a non-generic enum.
+    ///
+    /// B-2026-08-19-28. Without them this rendered from the DECLARATION, so a
+    /// generic enum's payload type was the bare parameter (`T`) — which has no
+    /// layout and no renderer, and recursing on it panicked the compiler with
+    /// `type_name 'T' not yet supported`. That hit every generic enum reached
+    /// through a container or field: `println(v)` on a `Vec[Option[i64]]`, a
+    /// `Map` value, a struct field, and the user-defined generics too. The
+    /// seeded `Option`/`Result` appeared to work only because a bespoke
+    /// instantiation-aware path (`emit_option_display_te`) intercepts the
+    /// DIRECT `println(o)` spelling ahead of this function and happens to leave
+    /// a concrete fn in the cache that a later nested use then finds — which is
+    /// why the panic was order-dependent, and why deleting an unrelated
+    /// `println` could break a build.
+    ///
+    /// Substituting here fixes all of those in one place, rather than adding a
+    /// second special case for `Option`/`Result` and leaving user generics
+    /// broken. The substitution helper is the one the drop synthesizer already
+    /// uses for generic struct fields.
+    /// Replace a declaration's generic parameters with the use site's concrete
+    /// arguments. A no-op when `subst` is empty (a non-generic enum), so the
+    /// non-generic path allocates nothing extra.
+    fn display_subst_te(
+        te: &TypeExpr,
+        subst: &std::collections::HashMap<String, TypeExpr>,
+    ) -> TypeExpr {
+        if subst.is_empty() {
+            return te.clone();
+        }
+        crate::codegen::helpers::subst_type_params_in_type_expr(te, subst)
+    }
+
+    pub(super) fn emit_enum_display_fn(
+        &mut self,
+        enum_name: &str,
+        args: &[GenericArg],
+    ) -> FunctionValue<'ctx> {
+        // Per-INSTANTIATION identity: `MyOpt[i64]` and `MyOpt[String]` render
+        // differently, so they cannot share one fn. A non-generic enum keeps
+        // the bare name it has always had, so nothing about those changes.
+        let params = self.enum_generic_param_names(enum_name);
+        let mut subst: std::collections::HashMap<String, TypeExpr> =
+            std::collections::HashMap::new();
+        for (p, a) in params.iter().zip(args.iter()) {
+            if let GenericArg::Type(t) = a {
+                subst.insert(p.clone(), t.clone());
+            }
+        }
+        let suffix: String = if subst.is_empty() {
+            String::new()
+        } else {
+            params
+                .iter()
+                .map(|p| match subst.get(p) {
+                    Some(t) => format!("_{}", Self::display_mangle_te(t)),
+                    None => format!("_{p}"),
+                })
+                .collect()
+        };
+        let cache_key = format!("{enum_name}{suffix}");
         if let Some(&f) = self.display.display_fn_cache.get(&cache_key) {
             return f;
         }
-        let fn_name = format!("karac_display_{enum_name}");
+        let fn_name = format!("karac_display_{cache_key}");
         if let Some(f) = self.module.get_function(&fn_name) {
             self.display.display_fn_cache.insert(cache_key, f);
             return f;
@@ -2073,7 +2135,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .add_function(&fn_name, display_fn_ty, Some(Linkage::Internal));
         self.display
             .display_fn_cache
-            .insert(enum_name.to_string(), display_fn);
+            .insert(cache_key.clone(), display_fn);
 
         let entry_bb = self.context.append_basic_block(display_fn, "entry");
         self.builder.position_at_end(entry_bb);
@@ -2130,7 +2192,8 @@ impl<'ctx> super::Codegen<'ctx> {
                         if i > 0 {
                             self.disp_append_lit(acc, ", ");
                         }
-                        self.emit_enum_field_display(agg, &offsets, i, field_te, acc, display_fn);
+                        let field_te = Self::display_subst_te(field_te, &subst);
+                        self.emit_enum_field_display(agg, &offsets, i, &field_te, acc, display_fn);
                     }
                     self.disp_append_lit(acc, ")");
                 }
@@ -2141,7 +2204,8 @@ impl<'ctx> super::Codegen<'ctx> {
                             self.disp_append_lit(acc, ", ");
                         }
                         self.disp_append_lit(acc, &format!("{}: ", sf.name));
-                        self.emit_enum_field_display(agg, &offsets, i, &sf.ty, acc, display_fn);
+                        let field_te = Self::display_subst_te(&sf.ty, &subst);
+                        self.emit_enum_field_display(agg, &offsets, i, &field_te, acc, display_fn);
                     }
                     self.disp_append_lit(acc, " }");
                 }
@@ -2193,9 +2257,34 @@ impl<'ctx> super::Codegen<'ctx> {
         let w1 = word(self, 1);
         let w2 = word(self, 2);
         let field_ty = self.llvm_type_for_type_expr(field_te);
-        let field_val = self
-            .rebuild_value_from_payload_words(field_ty, w0, w1, w2)
-            .unwrap_or_else(|_| w0.into());
+        // OVERSIZED payload: the pack side heap-boxed it and stored the box
+        // pointer in word 0, because the variant's inline area is narrower than
+        // the value. That is the normal state for a GENERIC enum, whose layout
+        // is the erased base — `MyOpt[String]`'s `Has` has a one-word slot while
+        // a String is three. `word()` above zero-fills past `num`, so reading it
+        // inline rebuilt `{ptr, 0, 0}` and rendered an EMPTY string: `Has()`
+        // where the interpreter said `Has(x)`.
+        //
+        // The predicate and the recovery are the same ones the match-arm unpack
+        // uses (`reconstruct_payload_value`), so both sites agree about which
+        // payloads are boxed — it is a pure function of the static type
+        // (B-2026-08-19-28). Before this function learned to substitute generic
+        // parameters at all, this shape could not be reached: it panicked on the
+        // bare `T` instead.
+        let want = Self::llvm_type_word_count(field_ty);
+        let field_val = if want > num {
+            let ptr_ty = self.context.ptr_type(AddressSpace::default());
+            let box_ptr = self
+                .builder
+                .build_int_to_ptr(w0, ptr_ty, "enum.fbox.p")
+                .unwrap();
+            self.builder
+                .build_load(field_ty, box_ptr, "enum.fbox.ld")
+                .unwrap()
+        } else {
+            self.rebuild_value_from_payload_words(field_ty, w0, w1, w2)
+                .unwrap_or_else(|_| w0.into())
+        };
         let slot = self.create_entry_alloca(display_fn, "enum.field", field_val.get_type());
         self.builder.build_store(slot, field_val).unwrap();
         let field_disp = self.emit_display_fn_for_type_expr(field_te);
@@ -2577,7 +2666,7 @@ impl<'ctx> super::Codegen<'ctx> {
         expr: &Expr,
         enum_name: &str,
     ) -> Result<(PointerValue<'ctx>, BasicValueEnum<'ctx>), String> {
-        let disp = self.emit_enum_display_fn(enum_name);
+        let disp = self.emit_enum_display_fn(enum_name, &[]);
         // Resolve the enum value's DATA pointer via `get_data_ptr`, not the raw
         // `variables[n].ptr` slot: for a `ref E` param (common when a generic
         // `fn f[E: Display](e: ref E)` monomorphizes to a payload enum) the slot

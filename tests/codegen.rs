@@ -21629,6 +21629,117 @@ fn main() {
     }
 
     #[test]
+    fn e2e_generic_enum_display_renders_at_its_instantiation() {
+        // B-2026-08-19-28. `emit_enum_display_fn` rendered from the enum's
+        // DECLARATION, so a generic enum's payload type was the bare parameter
+        // `T` — which has no layout and no renderer, and recursing on it
+        // PANICKED the compiler ("type_name 'T' not yet supported").
+        //
+        // It hit every generic enum reached through a container or a field, on
+        // every render surface: `println` / f-string / `to_string` of a
+        // `Vec[Option[T]]`, `Vec[Result[T, E]]`, a `Map` value, a `Set`
+        // element, and user-defined generics alike. `Option` LOOKED fine only
+        // because a bespoke instantiation-aware path intercepts the direct
+        // `println(o)` spelling and leaves a concrete fn in the cache that a
+        // later nested use finds — so the panic was ORDER-DEPENDENT, and
+        // deleting an unrelated `println` could break a build. There is
+        // deliberately no such seeding print here.
+        //
+        // Two instantiations of one enum appear together because the cache was
+        // keyed on the bare enum name: without a per-instantiation key they
+        // would collide on whichever fn was emitted first.
+        if let Some(out) = run_program(
+            "#[derive(Display)]\n\
+             enum MyOpt[T] { Has(T), Empty }\n\
+             fn main() {\n\
+             let mut a: Vec[Option[i64]] = vec![];\n\
+             a.push(Some(5i64));\n\
+             a.push(None);\n\
+             println(a);\n\
+             let mut b: Vec[Result[i64, String]] = vec![];\n\
+             b.push(Ok(5i64));\n\
+             b.push(Err(\"bad\"));\n\
+             println(b);\n\
+             let mut m: Map[String, Option[i64]] = Map.new();\n\
+             m.insert(\"k\", Some(5i64));\n\
+             println(m);\n\
+             let mut s: Set[Option[i64]] = Set.new();\n\
+             s.insert(Some(5i64));\n\
+             println(s);\n\
+             let mut g: Vec[MyOpt[i64]] = vec![];\n\
+             g.push(MyOpt.Has(5i64));\n\
+             g.push(MyOpt.Empty);\n\
+             println(g);\n\
+             let mut h: Vec[MyOpt[String]] = vec![];\n\
+             h.push(MyOpt.Has(\"x\"));\n\
+             println(h);\n\
+             let mut f: Vec[Option[i64]] = vec![];\n\
+             f.push(Some(9i64));\n\
+             println(f\"{f}\");\n\
+             }",
+        ) {
+            assert_eq!(
+                out,
+                "[Some(5), None]\n\
+                 [Ok(5), Err(bad)]\n\
+                 {k: Some(5)}\n\
+                 Set{Some(5)}\n\
+                 [Has(5), Empty]\n\
+                 [Has(x)]\n\
+                 [Some(9)]\n"
+            );
+        }
+    }
+
+    #[test]
+    fn e2e_generic_enum_display_deboxes_an_oversized_payload() {
+        // The half of B-2026-08-19-28 that is a WRONG ANSWER rather than a
+        // panic, and only became reachable once the substitution above existed.
+        //
+        // A generic enum's layout is the ERASED base, so a payload wider than
+        // its inline area is heap-boxed with the box pointer in word 0 — the
+        // normal state for `MyOpt[String]`, whose `Has` slot is one word while a
+        // String is three. The display path read the slot INLINE and zero-filled
+        // past the area, rebuilding `{ptr, 0, 0}`: `Has()` with an empty string
+        // where the interpreter said `Has(x)`. It now applies the same debox the
+        // match-arm unpack does, keyed on the same static predicate, so the two
+        // sites agree about which payloads are boxed.
+        //
+        // `Vec[i64]` as a payload is the same shape one step further out — a
+        // three-word container inside the one-word erased slot.
+        if let Some(out) = run_program(
+            "#[derive(Display)]\n\
+             enum MyOpt[T] { Has(T), Empty }\n\
+             fn main() {\n\
+             let mut h: Vec[MyOpt[String]] = vec![];\n\
+             h.push(MyOpt.Has(\"hello\"));\n\
+             println(h);\n\
+             let mut i: Vec[i64] = vec![];\n\
+             i.push(7i64);\n\
+             let mut v: Vec[MyOpt[Vec[i64]]] = vec![];\n\
+             v.push(MyOpt.Has(i));\n\
+             println(v);\n\
+             let mut o: Vec[Option[String]] = vec![];\n\
+             o.push(Some(\"z\"));\n\
+             println(o);\n\
+             let mut n: Vec[Vec[Option[i64]]] = vec![];\n\
+             let mut inner: Vec[Option[i64]] = vec![];\n\
+             inner.push(Some(5i64));\n\
+             n.push(inner);\n\
+             println(n);\n\
+             }",
+        ) {
+            assert_eq!(
+                out,
+                "[Has(hello)]\n\
+                 [Has([7])]\n\
+                 [Some(z)]\n\
+                 [[Some(5)]]\n"
+            );
+        }
+    }
+
+    #[test]
     fn e2e_chained_width_sensitive_int_methods() {
         // CHAINED width-preserving int methods resolve their receiver width
         // through the receiver itself, not the span-keyed table
