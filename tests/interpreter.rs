@@ -11339,6 +11339,62 @@ fn test_vec_clone_independent_after_push() {
     assert_eq!(output, "3\n2\n");
 }
 
+/// A clone of a NESTED collection must copy the inner collections too, not
+/// bump their refcount (B-2026-08-20-32).
+///
+/// `Value::Array`/`Map`/`Set` are `Arc<RwLock<..>>`, so the clone arm's
+/// one-level copy left `Vec[Vec[T]]`'s inner Vecs shared: a write through the
+/// clone landed in the original. All three compiled surfaces deep-copy, so the
+/// same program printed a different answer under `--interp` — and because it
+/// ran to completion and printed something plausible, it was a silent wrong
+/// answer rather than a crash.
+///
+/// The FLAT case was always right, which is what made this a DEPTH bug rather
+/// than a broken `clone`; `test_vec_clone_independent_after_push` above covers
+/// that half and passed throughout.
+#[test]
+fn test_clone_of_a_nested_collection_is_deep_at_every_level() {
+    // Two levels — the row's own repro.
+    let output = run("fn main() {\n\
+             let orig: Vec[Vec[i64]] = [[1_i64, 1_i64], [1_i64, 1_i64]];\n\
+             let mut copy = orig.clone();\n\
+             copy[0][0] = 99_i64;\n\
+             println(orig[0][0]);\n\
+             println(copy[0][0]);\n\
+         }");
+    assert_eq!(output, "1\n99\n", "inner Vec of a Vec[Vec[T]] was shared");
+
+    // Three levels — the aliasing was at every depth, not just the first.
+    let output = run("fn main() {\n\
+             let orig: Vec[Vec[Vec[i64]]] = [[[1_i64]]];\n\
+             let mut copy = orig.clone();\n\
+             copy[0][0][0] = 42_i64;\n\
+             println(orig[0][0][0]);\n\
+             println(copy[0][0][0]);\n\
+         }");
+    assert_eq!(output, "1\n42\n", "depth-3 nesting was shared");
+}
+
+/// The same defect reached every container whose VALUES can be collections,
+/// not just `Vec` — `Map` / `Set` / `SortedMap` each cloned one level deep.
+/// The row only named `Vec[Vec[T]]`; these were found by reading the arm.
+#[test]
+fn test_clone_of_a_map_with_collection_values_is_deep() {
+    let output = run("fn main() {\n\
+             let mut m: Map[i64, Vec[i64]] = Map.new();\n\
+             m.insert(1_i64, [7_i64]);\n\
+             let cm = m.clone();\n\
+             let mut got = cm[1_i64];\n\
+             got[0] = 55_i64;\n\
+             println(m[1_i64][0]);\n\
+             println(got[0]);\n\
+         }");
+    assert_eq!(
+        output, "7\n55\n",
+        "a Map's Vec value was shared with the clone"
+    );
+}
+
 #[test]
 fn test_string_clone_preserves_value() {
     let output = run("fn main() {\n\

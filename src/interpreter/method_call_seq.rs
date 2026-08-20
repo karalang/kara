@@ -1773,29 +1773,37 @@ impl<'a> super::Interpreter<'a> {
                     }
                 }
                 match &obj {
-                    Value::Array(rc) => {
-                        // Deep copy — clone the inner Vec into a fresh
-                        // shared cell so the clone has independent
-                        // storage. Slice 3: this matches the v1
-                        // value-semantics rule that `arr.clone()`
-                        // produces a structurally independent array.
-                        return Some(Value::array_of(rc.read().unwrap().clone()));
-                    }
-                    Value::Slice {
-                        storage,
-                        start,
-                        len,
-                        ..
-                    } => {
-                        return Some(Value::array_of(
-                            storage.read().unwrap()[*start..*start + *len].to_vec(),
-                        ));
-                    }
+                    // `deep_clone_value`, for exactly the reason the struct /
+                    // enum arm above already gives: every one of these
+                    // variants can CONTAIN another collection, and a
+                    // collection `Value` is an `Arc<RwLock<..>>`, so copying
+                    // one level deep bumps the inner refcount instead of
+                    // copying the storage.
+                    //
+                    // Each arm here used to do that one level — `Array` cloned
+                    // the outer `Vec<Value>`, `Map` / `Set` / `SortedMap`
+                    // cloned the container — which is correct for a FLAT
+                    // collection and silently wrong for a nested one:
+                    // `let c = orig.clone(); c[0][0] = 99` wrote through to
+                    // `orig[0][0]` because both held the same inner `Array`
+                    // cell. All three compiled surfaces deep-copy, so the same
+                    // program printed a different answer under `--interp`
+                    // (B-2026-08-20-32).
+                    //
+                    // `deep_clone_value` preserves aliasing for the
+                    // reference-semantics variants a collection may hold
+                    // (`SharedStruct`, channels, `Atomic`), which is what
+                    // `shared struct`'s RC clone means — so this deepens the
+                    // copy exactly as far as value semantics reach and no
+                    // further.
+                    Value::Array(_)
+                    | Value::Slice { .. }
+                    | Value::Map(_)
+                    | Value::Set(_)
+                    | Value::SortedSet(_)
+                    | Value::SortedMap(_) => return Some(deep_clone_value(&obj)),
+                    // No interior mutability to share.
                     Value::String(s) => return Some(Value::String(s.clone())),
-                    Value::Map(m) => return Some(Value::Map(m.clone())),
-                    Value::Set(s) => return Some(Value::Set(s.clone())),
-                    Value::SortedSet(s) => return Some(Value::SortedSet(s.clone())),
-                    Value::SortedMap(m) => return Some(Value::SortedMap(m.clone())),
                     _ => {}
                 }
             }

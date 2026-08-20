@@ -6587,6 +6587,35 @@ fn main() {
         assert_eq!(out, "1 1 99 2 hi\nhi 1\npayload\n7\n");
     }
 
+    /// The COMPILED half of B-2026-08-20-32's parity pair. Codegen was always
+    /// right here — this is the leg the interpreter had to be brought back
+    /// into line with, so pinning it stops a future codegen change from
+    /// "fixing" the divergence in the wrong direction.
+    ///
+    /// The twin is `test_clone_of_a_nested_collection_is_deep_at_every_level`
+    /// in `tests/interpreter.rs`, and it asserts THE SAME STRING. Keep them
+    /// equal: the defect was that they disagreed while both looked reasonable
+    /// in isolation.
+    ///
+    /// Two levels rather than three because a three-level index ASSIGNMENT is
+    /// a separate open codegen gap (B-2026-08-20-33) — the interpreter twin
+    /// covers depth 3 on its own.
+    #[test]
+    fn e2e_clone_of_a_nested_collection_is_deep() {
+        let Some(out) = run_program(
+            "fn main() {\n\
+             \x20   let orig: Vec[Vec[i64]] = [[1, 1], [1, 1]];\n\
+             \x20   let mut copy = orig.clone();\n\
+             \x20   copy[0][0] = 99i64;\n\
+             \x20   println(orig[0][0]);\n\
+             \x20   println(copy[0][0]);\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "1\n99\n");
+    }
+
     /// The `Option[T]` half of B-2026-07-29-31. `Option[String]` was rejected
     /// at typecheck alongside the user types; `Option[i64]` too, so the gap was
     /// never payload-heap-specific. Codegen routes the heap payload through the
