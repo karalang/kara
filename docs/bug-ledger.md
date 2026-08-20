@@ -94,12 +94,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 266 | 0 |
 | leak | 185 | 0 |
-| run-vs-build | 142 | 1 |
+| run-vs-build | 142 | 0 |
 | double-free | 133 | 0 |
 | missing-feature | 128 | 3 |
 | codegen-gap | 119 | 0 |
 | false-positive | 87 | 0 |
-| diagnostics | 85 | 1 |
+| diagnostics | 85 | 0 |
 | perf | 80 | 0 |
 | crash | 55 | 1 |
 | soundness | 51 | 0 |
@@ -116,17 +116,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | ownership | 60 | 0 |
 | other | 58 | 0 |
 | autopar | 54 | 0 |
-| cli | 51 | 2 |
+| cli | 51 | 0 |
 | parser | 33 | 1 |
 | runtime | 27 | 1 |
-| resolver | 22 | 2 |
+| resolver | 22 | 1 |
 | effect | 7 | 0 |
 | lexer | 6 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1400 surfaced · 6 open · 1374 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1400 surfaced · 4 open · 1376 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,8 +134,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1400 surfaced
 | B-2026-08-20-5 | 2026-08-20 | codegen | high | `e2e_128bit_integers_end_to_end` produces EMPTY STDOUT on macOS arm64 only — the binary links and runs but prints nothing before the first `println`. Linux x86_64 and Linux arm64 both pass the same test. CI's `Codegen E2E (macOS arm64, LLVM 18)` lane has been red on `main` since the test landed. | tests/codegen.rs::e2e_128bit_integers_end_to_end (line ~21227); tests/codegen.rs::run_program_capturing (stdout-only discard); added by 7561b5d1 (B-2026-08-19-8 stage 5); CI job `Codegen E2E (macOS arm64, LLVM 18)` in .github/workflows/ci.yml |
 | B-2026-08-20-17 | 2026-08-20 | resolver | medium | MODULE-BINDING imports are unimplemented on every surface: `import db.connection;` and `import db;` bind nothing. design.md § Module System lists `import db.connection;` in its own import-form gallery ("bind the module itself as `connection`") and states the Binding rule explicitly: "The last segment of each imported path is bound in the current scope... The rule is UNIFORM for items and for sub-modules -- `import db.connection;` binds `connection` as a module reference (reach `Connection` as `connection.Connection`)." Measured on a real package: `import db.connection;` + `connection.open(4)` -> whole-package `karac build` fails `error[resolve]: multi-file resolve failed`, `karac run` fails `undefined name 'connection', did you mean 'Connection'?`, and single-file `karac check` PASSES (that last one is B-2026-08-20-16's truncation, not a working path). The top-level form `import db;` + `db.label()` behaves identically -> `undefined name 'db'`. So the four item-import forms all work and the two module-binding forms work nowhere. | roadmap.md |
 | B-2026-08-20-18 | 2026-08-20 | parser | medium | WILDCARD and NESTED-GROUP imports do not lex or parse, though design.md says both ship in v1. § Module System: "**Wildcard imports** (`import path.*;`) bring all `pub` items from the named module into scope. **Nested grouping** (`import a.{b.{c, d}, e};`) expands to flat imports before resolution -- `import a.{b.{c, d}, e}` is equivalent to `import a.b.c; import a.b.d; import a.e`. **Both are available in v1.**" Measured: `import db.connection.*;` -> `error[parse]: Expected identifier, found Star`; `import db.{connection.{open}, label};` -> `error[parse]: Expected RightBrace, found Dot`. Same on all three surfaces, since it fails at parse. The spec goes on to specify three wildcard PRECEDENCE rules in detail -- explicit import beats wildcard, two colliding wildcards defer the error to the use site as `E0226 AmbiguousWildcardImport`, prelude items lose to any import -- none of which is reachable, because the form the rules govern cannot be written. | roadmap.md |
-| B-2026-08-20-19 | 2026-08-20 | cli | low | E0223 (circular module dependency) prints a BARE one-line message -- no cycle path, no span, no suggestion -- while the data it needs is already computed and sitting in the value it discards. design.md § Module System: "Cycles emit `E0223 CircularModuleDependency` WITH A LISTING OF THE CYCLE PATH and a suggestion to extract shared items into a lower-layer module." Measured on a genuine two-module cycle (src/main.kara imports `db.label`, src/db.kara imports the hoisted `start`), the entire diagnostic is: `error[E0223]: circular module dependency`. No file:line, no module names, no help line. src/module.rs:753 documents the carrier as "A circular module dependency. `nodes` lists modules on the cycle in ..." -- so the path IS available; src/cli/build_cmds.rs:2905 just `eprintln!`s a constant string and drops it. | roadmap.md |
-| B-2026-08-20-20 | 2026-08-20 | cli+resolver | medium | `karac run <file>` rejects an ALIASED import of a sibling module -- `import db.connection.Pool as P;` then `P { size: 2 }` fails with `error[resolve]: undefined name 'P'`, while `karac check` and the whole-package `karac build` both accept it and the built binary runs | — |
 
 ### Wontfix (7)
 
@@ -153,9 +151,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1400 surfaced
 
 </details>
 
-### Fixed (1374)
+### Fixed (1376)
 
-<details><summary>1374 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1376 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -12684,6 +12682,42 @@ ONE LEG DID NOT GET FIXED HERE and is split into B-2026-08-20-20 rather than bur
 A FALLBACK THE FIRST DRAFT DID NOT HAVE, caught by `file_targeted_examples_check`: a directory can hold a `kara.toml` and modules but no `src/main.kara` / `src/lib.kara` entry (several `examples/` packages are shaped this way), so no package view can be formed at all. Failing there would have been a new way for `karac check` to refuse a file it used to accept, and "this package has no entry point" is not an answer about the file the caller asked about. It falls back to the single-file check and SAYS so — narrowing silently would be this same bug wearing a new hat.
 
 TESTS (tests/cli.rs): `test_check_package_member_sees_sibling_modules` (false rejection), `test_check_package_member_reports_a_private_cross_directory_import` and `test_run_package_member_refuses_a_private_cross_directory_import` (false acceptance, both surfaces) all fail without the fix. `test_run_package_member_still_runs_a_sound_package` pins that the run gate did not become a blanket refusal, `test_check_standalone_script_is_unaffected` pins that a script merely sitting near a manifest keeps the single-file path, and `test_check_with_no_file_checks_the_whole_package` covers the new project mode in both directions. |
+| B-2026-08-20-19 | cli | low | E0223 (circular module dependency) omits the FILES on the cycle from its TEXT render, though `--output=json` has always carried `cycle_files` | FIXED by 1f3d565. THE ROW'S PREMISE DID NOT REPRODUCE, and the title has been corrected to what was actually measured. The row states the entire diagnostic is `error[E0223]: circular module dependency` with "no file:line, no module names, no help line". Two of those three were already present and had been since the CLI was split into submodules (7a1757f) — `print_cycles_text` has always emitted three lines, and `git log -L` over the function shows it was never the bare form the row describes. Measured on this compiler across three cycle shapes (two-module, three-module, self-import) and on all three surfaces that can reach it (`karac build`, `karac check`, `karac check <file>`), the output was:
+
+    error[E0223]: circular module dependency
+      cycle: a → b → <crate root> → a
+      suggestion: extract the shared items into a lower-layer module that both ends of the cycle can depend on.
+
+so the MODULE NAMES and the HELP LINE — the two things design.md § Module System actually specifies ("a listing of the cycle path and a suggestion to extract shared items into a lower-layer module") — were both already delivered, and the spec quote the row cites was already satisfied. The `--output=json` emitter was richer still: it has carried `cycle_paths` AND `cycle_files` all along.
+
+Marked `fixed` rather than `invalid` because the third specific WAS true and is now addressed: the TEXT render carried no file reference. That is worth closing even though the spec does not demand it — a cycle is the one module diagnostic with no single span to point at, since the offending edge is spread across several files, so "which files" is the closest thing to "where do I go and look", and the reader was left to map dotted module paths back to paths on disk by hand. The JSON emitter already knew the answer.
+
+FIX: `print_cycles_text` (`src/cli/build_cmds.rs`) now lists the file behind each module on the cycle, between the path line and the suggestion:
+
+    error[E0223]: circular module dependency
+      cycle: a → b → <crate root> → a
+        a             <root>/src/a.kara
+        b             <root>/src/b.kara
+        <crate root>  <root>/src/main.kara
+      suggestion: extract the shared items into a lower-layer module that both ends of the cycle can depend on.
+
+TEST: `test_module_cycle_diagnostic_names_the_files_on_the_cycle` (tests/cli.rs) asserts the files, and ALSO asserts the dotted path and the suggestion — the two parts the row wrongly reported missing — so a future edit cannot quietly drop what was already right while satisfying what was added.
+
+WHY THIS MATTERS BEYOND ONE ROW: the row's severity and framing were built on an unverified reading of the source ("src/cli/build_cmds.rs:2905 just `eprintln!`s a constant string and drops it"), which does not match the code at that location on any commit in the history. A one-command reproduction would have caught it. Recording the refutation rather than quietly fixing something else keeps the ledger honest about what was and was not broken. |
+| B-2026-08-20-20 | cli+resolver | medium | `karac run <file>` rejects an ALIASED import of a sibling module -- `import db.connection.Pool as P;` then `P { size: 2 }` fails with `error[resolve]… | FIXED by 4f37cc1. `build_super_program_for_run` (`src/cli/run_check_cmds.rs`) now applies the same `crate::import_alias` substitution the BUILD path's merge applies, so an aliased import survives the flattening.
+
+THE FIX WAS ALREADY WRITTEN, ONE MERGE OVER. Both `karac run` and `karac build` execute a merged super-program: every non-synthetic module's items concatenated in emission order with the `import` declarations dropped. Dropping those declarations erases every ALIAS binding with them, and the build path learned that in B-2026-07-29-14 — `run_multi_file_codegen` canonicalizes each module's references to the imported items' real names (`declared_names` / `bound_value_names` / `alias_subst_for_module` / `rewrite_item`) before appending. The run path's merge, written for the same purpose, never got the same three lines. Two merges solving the same problem, one of which knew it.
+
+So this is not a new mechanism to design: the correct behaviour, the helper module, and the reason are all pre-existing, and the change is to call them from the second site. A module with no aliased import gets an empty substitution and is copied unchanged, so nothing outside the aliased case moves.
+
+VERIFIED on both the JIT and `--interp`, for an aliased TYPE and an aliased FUNCTION, each against `karac check <file>` and the whole-package `karac build`:
+    import db.connection.Pool as P;             -> was `error[resolve]: undefined name 'P'` under run; now prints 2, as check/build always accepted
+    import db.connection.{open as make, Connection}; -> now prints 9 on all four surfaces
+The substitution has to reach type positions (`let c: Connection = make(9)`) and call positions alike, which is why the test covers both.
+
+TEST: `test_run_package_member_honours_an_aliased_import` (tests/cli.rs) fails without the fix with the exact `undefined name 'P'` this row reported.
+
+SOURCE NOTE: split out of B-2026-08-20-16, which fixed the ANALYSIS being file-scoped on the check and run paths. This was the one leg of that row's matrix left inconsistent afterwards, and it is downstream rather than the same defect — -16 was about which program gets analysed, this is about the flat program the run path then executes. |
 | B-2026-08-20-21 | interp | medium | `Tensor[f32].matmul` accumulates in f64 under `karac run --interp` and in f32 under `karac build`, so a long enough contraction gives DIFFERENT ANSWE… | 2f94bb1b |
 | B-2026-08-20-22 | interp | medium | `Tensor.from` under a `Tensor[f32, ...]` annotation narrows a bare float LITERAL but not a NEGATED one or a computed one, so `Tensor.from([-0.1])` ho… | 209a6607 |
 
