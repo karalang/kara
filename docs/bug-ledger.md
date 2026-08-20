@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 268 | 0 |
 | leak | 185 | 0 |
-| run-vs-build | 144 | 1 |
+| run-vs-build | 144 | 0 |
 | double-free | 133 | 0 |
 | missing-feature | 129 | 0 |
 | codegen-gap | 120 | 1 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | codegen | 957 | 1 |
 | typecheck | 219 | 0 |
-| interp | 167 | 1 |
+| interp | 167 | 0 |
 | ownership | 61 | 0 |
 | other | 59 | 0 |
 | cli | 55 | 0 |
@@ -124,13 +124,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 6 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1412 surfaced · 3 open · 1389 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1412 surfaced · 2 open · 1390 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-20-32 | 2026-08-20 | interp | high | The TREE-WALK INTERPRETER's `.clone()` on a NESTED `Vec[Vec[T]]` is SHALLOW -- the inner Vecs are shared, so mutating the clone mutates the original; codegen (JIT, AOT and auto-par-off alike) deep-copies correctly, so the same five-line program prints a different answer under `--interp` | — |
 | B-2026-08-20-33 | 2026-08-20 | codegen | medium | A THREE-level index assignment (`a[i][j][k] = v` on a plain local `Vec[Vec[Vec[T]]]`) is rejected by codegen with `Index assignment target must be a variable`; the two-level form compiles, and the interpreter accepts both | — |
 | B-2026-08-20-34 | 2026-08-20 | runtime | medium | STACK EXHAUSTION in an AOT binary is a BARE SIGSEGV with EMPTY stderr -- no message, no hint, exit 139; Rust prints `thread 'main' has overflowed its stack` and Go names its stack limit, so Kara matches C (the unsafe baseline) on a diagnostic its safety positioning implies it should beat | — |
 
@@ -150,9 +149,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1412 surfaced
 
 </details>
 
-### Fixed (1389)
+### Fixed (1390)
 
-<details><summary>1389 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1390 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -13201,6 +13200,25 @@ ONE FINDING ABOUT `OWNERSHIP_BORROW_CONFLICT` worth keeping: it is well populate
 DRIFT GUARDS, since the catalogue now restates two more classifiers. `code_table_class_matches_the_effect_and_ownership_classifiers` holds the rows against `class_for_effect_error_kind` / `class_for_ownership_error_kind` the way `code_table_class_matches_typechecker` already held the typecheck rows. `code_table_catalogues_every_parse_code` enumerates `ParseErrorKind` and asserts the count, because a new variant is a compile error in `code()` but would be a SILENT omission from a hand-written list. The emitter scan was also widened past `E` / `W` to any uppercase prefix -- while it knew only the two error prefixes it was skipping `N0503`, `N0507` and `L0001` without a word, which is precisely the failure mode the guard exists to prevent.
 
 design.md's band list gained parse `E00xx`, `N05xx` and `E0600`, and now states that every numbered code is catalogued while the symbolic borrow-conflict family is deliberately outside the numbering. |
+| B-2026-08-20-32 | interp | high | The TREE-WALK INTERPRETER's `.clone()` on a NESTED `Vec[Vec[T]]` is SHALLOW -- the inner Vecs are shared, so mutating the clone mutates the original;… | FIXED by c6641a8. The row's diagnosis was exact and its repro reproduced verbatim; the fix is one dispatch change, and reading the arm turned up four more variants with the identical defect.
+
+THE MECHANISM. `Value::Array` / `Map` / `Set` / `SortedSet` / `SortedMap` are `Arc<RwLock<..>>`, so the `"clone"` arm's `rc.read().unwrap().clone()` copied the outer `Vec<Value>` while every element that was ITSELF a collection came across as a refcount bump. Correct for a flat collection, silently wrong for a nested one -- which is precisely why the flat case in the row's own notes passed while `Vec[Vec[T]]` did not.
+
+FOUR MORE VARIANTS THAN THE ROW NAMED. The row is titled on `Vec[Vec[T]]`, but `Map`, `Set`, `SortedSet` and `SortedMap` each had the same one-level copy, so a `Map[K, Vec[V]]`'s VALUES aliased too. Verified on a stashed baseline build before touching anything: `m={7} cm={7}` shared, `cm[1][0] = 55` made `m[1][0]` read 55. Fixed in the same arm, and covered by `test_clone_of_a_map_with_collection_values_is_deep`.
+
+THE FIX IS DISPATCH, NOT NEW LOGIC. `deep_clone_value` already existed and already did exactly the right thing at every depth -- and the struct / enum arm SIX LINES ABOVE already used it, with a comment giving this same reason ("the derived `Clone` bumps the `Arc<RwLock<..>>` of an `Array`/`Tensor` FIELD, so `let b = a.clone(); b.items.push(x)` would mutate `a` too -- value semantics demand independent storage"). The container arms simply never got the treatment their own neighbour documented. All six now route through it. It preserves aliasing for the reference-semantics variants a collection may hold (`SharedStruct`, channels, `Atomic`), so the copy deepens exactly as far as value semantics reach and no further -- `shared struct`'s RC clone still means what it means.
+
+VERIFIED AGAINST THE KATA THAT FOUND IT, not just the minimal repro. `leetcode/201-300/289-game-of-life/differential.kara` under `--interp`: 1800 cases, 0 mismatches, **0 invariant failures** -- the row measured `invariant failures 1` on the same file. The failing invariant was the only one asserting a DIFFERENCE (a blinker must differ after one step); the aliasing had made `step(osc)` mutate `blinker` so the two compared equal. The row's observation that stability-only oracles would have gone green on this is worth keeping: `a == b` is trivially true under aliasing, so every SAMENESS invariant passed vacuously.
+
+THE KATA'S COMPILED LEGS AGREE, so the parity claim is measured on the real workload and not only on the minimal fixture: `karac build` (auto-par default) and `KARAC_AUTO_PAR=0 karac build` each report the same 1800 cases / 0 mismatches / 0 invariant failures the interpreter now reports. Three surfaces, one answer.
+
+FOUR-SURFACE PARITY re-measured after the fix on a fixture covering nested Vec, a nested struct field, and the flat control: `interp`, `run` (JIT), `build`, and `KARAC_AUTO_PAR=0 build` all print `two=1 c2=99 h=3 ch=8 flat=1 f=77`. Before, only the interpreter differed.
+
+REGRESSION COVERAGE IS A PAIR THAT ASSERTS THE SAME STRING, deliberately: `test_clone_of_a_nested_collection_is_deep_at_every_level` (tests/interpreter.rs, depths 2 AND 3) and `e2e_clone_of_a_nested_collection_is_deep` (tests/codegen.rs, depth 2). Each names the other and says to keep them equal, because the defect was two legs disagreeing while each looked reasonable in isolation. Codegen was the leg that was RIGHT, so pinning it stops a future change from reconciling the divergence in the wrong direction.
+
+TWO CODEGEN GAPS MET WHILE BUILDING THE PARITY FIXTURE, both pre-existing and neither this row's: a THREE-level index assignment (`c3[0][0][0] = 42`) is rejected `Index assignment target must be a variable` -- that is B-2026-08-20-33, already open -- and a nested indexed READ through a Map (`m[1i64][0]`) is rejected `nested indexed read on 'm' -- outer is not a Vec/Slice/Array`. That is why the codegen twin covers depth 2 and the interpreter twin carries depth 3 alone; the reason is written into the test so nobody "simplifies" it back.
+
+NOT B-2026-06-18-9, as the row says: that was CODEGEN mis-building a shallow copy for a borrowed receiver. This is the INTERPRETER on an owned receiver, and codegen is the leg that was correct. |
 
 </details>
 
