@@ -103,35 +103,22 @@ pub(super) fn main_return_is_exitcode(program: &Program) -> bool {
 /// untouched.
 pub(super) fn build_super_program_for_run(tree: &ProgramTree) -> Program {
     let order = module::emission_order(tree);
+    // Flattening drops every `import` declaration and puts all modules in one
+    // scope, which breaks two things the tree-aware per-module passes got
+    // right: an ALIAS binding names nothing once its import is gone
+    // (B-2026-08-20-20), and two modules declaring the same top-level name
+    // collide (B-2026-08-20-24). `module_rename` repairs both, per module, in
+    // one substitution — and the BUILD path's merge calls the same helper, so
+    // the two cannot answer differently again.
+    let renames = crate::module_rename::plan(tree);
     let mut items: Vec<Item> = Vec::new();
     for &id in &order {
-        let m = &tree.modules[id];
-        if m.is_synthetic {
+        if tree.modules[id].is_synthetic {
             continue;
         }
-        // Dropping the `import` declarations erases every ALIAS binding with
-        // them — `import db.connection.{Pool as P};` leaves `P` naming nothing
-        // in the flat unit, so the flat resolve rejects a program the
-        // tree-aware per-module passes (and `karac build`) accept
-        // (B-2026-08-20-20). Canonicalize this module's references to the
-        // imported items' real names first, exactly as the BUILD path's merge
-        // has since B-2026-07-29-14 — the two merges were solving the same
-        // problem and only one of them knew it. A module with no aliased
-        // import gets an empty substitution and is copied unchanged.
-        let mut module_items: Vec<Item> = m
-            .items
-            .iter()
-            .filter(|it| !matches!(it, Item::Import(_)))
-            .cloned()
-            .collect();
-        let local_names = crate::import_alias::declared_names(&module_items);
-        let bound_values = crate::import_alias::bound_value_names(&mut module_items);
-        let alias_subst =
-            crate::import_alias::alias_subst_for_module(&m.imports, &local_names, &bound_values);
-        for item in &mut module_items {
-            crate::import_alias::rewrite_item(item, &alias_subst);
-        }
-        items.extend(module_items);
+        items.extend(crate::module_rename::flatten_module_items(
+            tree, id, &renames,
+        ));
     }
     // Gated baked-stdlib modules are synthetic, so the loop above skips them;
     // append the expansion of every gated import (deduped on the bound name),

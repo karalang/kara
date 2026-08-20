@@ -2599,3 +2599,192 @@ fn two_wildcards_reaching_one_item_are_not_ambiguous() {
     );
     assert!(resolve_module_errors(&built.tree, root).is_empty());
 }
+
+// ── Same-named items in two modules (B-2026-08-20-24) ───────────
+//
+// design.md § Module System namespaces every declaration by module path, so
+// two modules of one package may both declare a `common`. Per-module analysis
+// honours that; the two EXECUTION paths flatten every module into one scope,
+// where the names have to be made distinct first. `module_rename` is that step,
+// and both merge sites call it.
+
+/// Names declared by the flattened form of module `path`, sorted.
+fn flat_declared_names(tree: &ProgramTree, path: &[&str]) -> Vec<String> {
+    let id = module_id(tree, path);
+    let renames = karac::module_rename::plan(tree);
+    let items = karac::module_rename::flatten_module_items(tree, id, &renames);
+    let mut names: Vec<String> = items.iter().filter_map(declared_name).collect();
+    names.sort();
+    names
+}
+
+/// The module-scope name an item declares, if it declares one.
+fn declared_name(item: &karac::ast::Item) -> Option<String> {
+    use karac::ast::Item;
+    Some(match item {
+        Item::Function(f) => f.name.clone(),
+        Item::StructDef(s) => s.name.clone(),
+        Item::EnumDef(e) => e.name.clone(),
+        Item::TraitDef(t) => t.name.clone(),
+        Item::ConstDecl(c) => c.name.clone(),
+        Item::TypeAlias(t) => t.name.clone(),
+        Item::EffectResource(r) => r.name.clone(),
+        Item::ExternBlock(b) => {
+            return b.items.first().map(|i| match i {
+                karac::ast::ExternItem::Function(f) => f.name.clone(),
+                karac::ast::ExternItem::OpaqueType(o) => o.name.clone(),
+            })
+        }
+        _ => return None,
+    })
+}
+
+#[test]
+fn a_name_two_modules_declare_is_renamed_in_all_but_the_root() {
+    let d = ScratchDir::new("rename-collision");
+    d.write(
+        "src/main.kara",
+        "import alpha.a;\nimport beta.b;\nfn main() {}\n",
+    );
+    d.write(
+        "src/alpha.kara",
+        "fn common() -> i64 { return 1; }\npub fn a() -> i64 { return common(); }\n",
+    );
+    d.write(
+        "src/beta.kara",
+        "fn common() -> i64 { return 2; }\npub fn b() -> i64 { return common(); }\n",
+    );
+
+    let w = walked(d.root());
+    let built = build_program_tree(&w).expect("build tree");
+    assert_eq!(
+        flat_declared_names(&built.tree, &["alpha"]),
+        vec!["a".to_string(), "common__alpha".to_string()],
+    );
+    assert_eq!(
+        flat_declared_names(&built.tree, &["beta"]),
+        vec!["b".to_string(), "common__beta".to_string()],
+    );
+}
+
+/// The root module's names are what a reader of the program sees first, and
+/// one of them is `main` — codegen looks it up by that exact spelling.
+#[test]
+fn the_root_module_keeps_a_colliding_name() {
+    let d = ScratchDir::new("rename-root-wins");
+    d.write(
+        "src/main.kara",
+        "import alpha.a;\nfn common() -> i64 { return 99; }\nfn main() {}\n",
+    );
+    d.write(
+        "src/alpha.kara",
+        "fn common() -> i64 { return 1; }\npub fn a() -> i64 { return common(); }\n",
+    );
+
+    let w = walked(d.root());
+    let built = build_program_tree(&w).expect("build tree");
+    assert!(flat_declared_names(&built.tree, &[]).contains(&"common".to_string()));
+    assert_eq!(
+        flat_declared_names(&built.tree, &["alpha"]),
+        vec!["a".to_string(), "common__alpha".to_string()],
+    );
+}
+
+/// Nothing is renamed without a collision — which is every program that
+/// already worked, so this is the no-regression guard.
+#[test]
+fn a_program_with_distinct_names_is_flattened_unchanged() {
+    let d = ScratchDir::new("rename-noop");
+    d.write("src/main.kara", "import alpha.a;\nfn main() {}\n");
+    d.write(
+        "src/alpha.kara",
+        "fn helper() -> i64 { return 1; }\npub fn a() -> i64 { return helper(); }\n",
+    );
+
+    let w = walked(d.root());
+    let built = build_program_tree(&w).expect("build tree");
+    assert!(karac::module_rename::plan(&built.tree).is_empty());
+    assert_eq!(
+        flat_declared_names(&built.tree, &["alpha"]),
+        vec!["a".to_string(), "helper".to_string()],
+    );
+}
+
+/// The mangled name is derived from the module path, so two modules at
+/// different depths cannot mint the same replacement.
+#[test]
+fn the_replacement_name_follows_the_module_path() {
+    let d = ScratchDir::new("rename-nested");
+    d.write("src/main.kara", "fn main() {}\n");
+    d.write("src/db/conn.kara", "pub fn open() -> i64 { return 1; }\n");
+    d.write("src/db/pool.kara", "pub fn open() -> i64 { return 2; }\n");
+
+    let w = walked(d.root());
+    let built = build_program_tree(&w).expect("build tree");
+    assert_eq!(
+        flat_declared_names(&built.tree, &["db", "conn"]),
+        vec!["open__db_conn".to_string()],
+    );
+    assert_eq!(
+        flat_declared_names(&built.tree, &["db", "pool"]),
+        vec!["open__db_pool".to_string()],
+    );
+}
+
+/// A module that also binds the name as a LOCAL is left alone — the rewrite is
+/// syntactic, so renaming there could redirect the variable. One renameable
+/// declarer is enough to break the collision, so the program still builds.
+#[test]
+fn a_module_that_binds_the_name_locally_is_not_renamed() {
+    let d = ScratchDir::new("rename-shadow-guard");
+    d.write(
+        "src/main.kara",
+        "import alpha.a;\nimport beta.b;\nfn main() {}\n",
+    );
+    d.write(
+        "src/alpha.kara",
+        "fn helper() -> i64 { return 1; }\n\
+         pub fn a() -> i64 { return helper(); }\n\
+         pub fn unrelated() -> i64 { let helper = 5; return helper; }\n",
+    );
+    d.write(
+        "src/beta.kara",
+        "fn helper() -> i64 { return 2; }\npub fn b() -> i64 { return helper(); }\n",
+    );
+
+    let w = walked(d.root());
+    let built = build_program_tree(&w).expect("build tree");
+    assert!(
+        flat_declared_names(&built.tree, &["alpha"]).contains(&"helper".to_string()),
+        "alpha binds `helper` as a local, so its declaration keeps the name",
+    );
+    assert!(
+        flat_declared_names(&built.tree, &["beta"]).contains(&"helper__beta".to_string()),
+        "beta has no such local, so it is the one that moves",
+    );
+}
+
+/// An `extern` name IS its linkage — renaming it would retarget the symbol the
+/// program links against.
+#[test]
+fn a_foreign_symbol_is_never_renamed() {
+    let d = ScratchDir::new("rename-extern");
+    d.write("src/main.kara", "fn main() {}\n");
+    d.write(
+        "src/alpha.kara",
+        "unsafe extern \"C\" { fn abs(v: i32) -> i32; }\n",
+    );
+    d.write(
+        "src/beta.kara",
+        "unsafe extern \"C\" { fn abs(v: i32) -> i32; }\n",
+    );
+
+    let w = walked(d.root());
+    let built = build_program_tree(&w).expect("build tree");
+    for m in ["alpha", "beta"] {
+        assert!(
+            flat_declared_names(&built.tree, &[m]).contains(&"abs".to_string()),
+            "{m}'s foreign `abs` keeps its name",
+        );
+    }
+}

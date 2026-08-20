@@ -22,11 +22,12 @@
 //! honest lowering: after flattening, an alias has no declaration left to
 //! point at.
 //!
-//! Scope and blast radius: [`alias_subst_for_module`] returns an EMPTY map
-//! for a module with no aliased imports, and [`rewrite_item`] returns
-//! immediately on an empty map. Every program that does not use
-//! `import … as …` is therefore byte-identical to before — and every
-//! program that does was rejected outright.
+//! Scope and blast radius: [`rewrite_item`] returns immediately on an empty
+//! map, and `module_rename` — which owns the substitution now, folding the
+//! alias half together with its own renames — builds an empty one for a module
+//! with no aliased import and no renamed name. Every program that needs
+//! neither is therefore byte-identical to before, and every program that does
+//! was rejected outright.
 //!
 //! The walk reuses `desugar`'s substitution helpers (written for trait
 //! type-param substitution, and exhaustive over `ExprKind` / `StmtKind` /
@@ -57,48 +58,12 @@ use crate::desugar::{
     subst_block, subst_expr, subst_leading_type_name, subst_trait_bound, subst_type_expr,
     subst_where_constraint,
 };
-/// Build the `alias -> canonical name` substitution for one module.
-///
-/// `local_names` is the set of item names the module declares itself. An
-/// alias that collides with a local declaration is SKIPPED: the local
-/// declaration is what the module's own references bind to, and rewriting
-/// them to the import's target would silently redirect them. (The resolver
-/// reports the collision on its own terms; this pass must not paper over
-/// it.)
-pub(crate) fn alias_subst_for_module(
-    imports: &[ImportDecl],
-    local_names: &HashSet<String>,
-    bound_values: &HashSet<String>,
-) -> HashMap<String, TypeExpr> {
-    let mut subst = HashMap::new();
-    for imp in imports {
-        for item in &imp.items {
-            let Some(alias) = &item.alias else { continue };
-            if alias == &item.name || local_names.contains(alias) || bound_values.contains(alias) {
-                continue;
-            }
-            subst.insert(
-                alias.clone(),
-                TypeExpr {
-                    kind: TypeKind::Path(PathExpr {
-                        segments: vec![item.name.clone()],
-                        generic_args: None,
-                        span: item.span,
-                    }),
-                    span: item.span,
-                },
-            );
-        }
-    }
-    subst
-}
-
 /// Every name `items` binds as a VALUE anywhere — parameters, `let`
 /// patterns, closure params, match / if-let / while-let / for patterns.
 ///
-/// The second half of [`alias_subst_for_module`]'s shadow guard, and what
-/// makes rewriting a bare `Identifier` safe: if the module never binds the
-/// alias name as a value, an identifier spelling it cannot be a local.
+/// Half of `module_rename`'s shadow guard, and what makes rewriting a bare
+/// `Identifier` safe: if the module never binds the name as a value, an
+/// identifier spelling it cannot be a local.
 ///
 /// Conservative on purpose — a binding ANYWHERE in the module disables that
 /// alias's rewrite for the whole module. Over-approximating costs nothing
@@ -107,6 +72,25 @@ pub(crate) fn alias_subst_for_module(
 ///
 /// Takes `&mut` only to reuse the mutable child walk; it mutates nothing.
 pub(crate) fn bound_value_names(items: &mut [Item]) -> HashSet<String> {
+    collect_value_bindings(items, /* include_item_level */ true)
+}
+
+/// [`bound_value_names`] minus the names of module-level `const` / `let`
+/// ITEMS — every name bound by a parameter, `let`, closure parameter, or
+/// pattern, and nothing else.
+///
+/// This is the guard for renaming a module's OWN declaration (see
+/// `module_rename`), where the two sets differ in a way that matters:
+/// `bound_value_names` reports a `const LIMIT` as a value binding, which is
+/// true and is what an import alias needs to know, but a rename of that very
+/// declaration must not be disabled by the declaration itself. What has to
+/// block a rename is a LOCAL of the same name, which could otherwise be
+/// rewritten along with the references to the item.
+pub(crate) fn local_value_bindings(items: &mut [Item]) -> HashSet<String> {
+    collect_value_bindings(items, /* include_item_level */ false)
+}
+
+fn collect_value_bindings(items: &mut [Item], include_item_level: bool) -> HashSet<String> {
     let mut out = HashSet::new();
     for item in items {
         match item {
@@ -132,11 +116,15 @@ pub(crate) fn bound_value_names(items: &mut [Item]) -> HashSet<String> {
             }
             Item::TestCase(t) => collect_block_bindings(&mut t.body, &mut out),
             Item::ConstDecl(c) => {
-                out.insert(c.name.clone());
+                if include_item_level {
+                    out.insert(c.name.clone());
+                }
                 collect_expr_bindings(&mut c.value, &mut out);
             }
             Item::ModuleBinding(m) => {
-                out.insert(m.name.clone());
+                if include_item_level {
+                    out.insert(m.name.clone());
+                }
                 collect_expr_bindings(&mut m.value, &mut out);
             }
             _ => {}
@@ -265,8 +253,8 @@ fn collect_expr_bindings(e: &mut Expr, out: &mut HashSet<String>) {
     }
 }
 
-/// Names declared by `items` — the shadowing guard for
-/// [`alias_subst_for_module`].
+/// Names declared by `items` — `module_rename`'s shadowing guard, and the raw
+/// material for its collision search.
 pub(crate) fn declared_names(items: &[Item]) -> HashSet<String> {
     let mut out = HashSet::new();
     for item in items {
@@ -279,7 +267,29 @@ pub(crate) fn declared_names(items: &[Item]) -> HashSet<String> {
             Item::TraitAlias(t) => out.insert(t.name.clone()),
             Item::MarkerTrait(t) => out.insert(t.name.clone()),
             Item::ConstDecl(c) => out.insert(c.name.clone()),
-            _ => false,
+            Item::TypeAlias(t) => out.insert(t.name.clone()),
+            Item::DistinctType(d) => out.insert(d.name.clone()),
+            Item::EffectResource(r) => out.insert(r.name.clone()),
+            Item::EffectGroup(g) => out.insert(g.name.clone()),
+            Item::EffectVerbDecl(v) => out.insert(v.verb_name.clone()),
+            Item::ModuleBinding(m) => out.insert(m.name.clone()),
+            Item::LayoutDef(l) => out.insert(l.name.clone()),
+            Item::ExternFunction(e) => out.insert(e.name.clone()),
+            Item::ExternBlock(b) => {
+                for it in &b.items {
+                    match it {
+                        ExternItem::Function(f) => out.insert(f.name.clone()),
+                        ExternItem::OpaqueType(o) => out.insert(o.name.clone()),
+                    };
+                }
+                false
+            }
+            Item::ImplBlock(_)
+            | Item::UseDecl(_)
+            | Item::Import(_)
+            | Item::AliasDecl(_)
+            | Item::IndependentDecl(_)
+            | Item::TestCase(_) => false,
         };
     }
     out
@@ -381,20 +391,115 @@ pub(crate) fn rewrite_item(item: &mut Item, subst: &HashMap<String, TypeExpr>) {
             rewrite_expr(&mut m.value, subst);
         }
         Item::TestCase(t) => rewrite_block(&mut t.body, subst),
-        // No type or path reference an alias can reach.
-        Item::EffectResource(_)
-        | Item::EffectGroup(_)
-        | Item::EffectVerbDecl(_)
-        | Item::LayoutDef(_)
+        // The rest carry references an import ALIAS cannot reach — an alias
+        // names an imported item, and these positions could not mention one
+        // — but a module_rename CAN, because it renames a module's own
+        // declarations and every local reference to them has to follow.
+        Item::TypeAlias(t) => {
+            rewrite_generic_params(t.generic_params.as_mut(), subst);
+            t.ty = subst_type_expr(&t.ty, subst);
+            if let Some(r) = t.refinement.as_mut() {
+                rewrite_expr(r, subst);
+            }
+        }
+        Item::DistinctType(d) => {
+            rewrite_generic_params(d.generic_params.as_mut(), subst);
+            d.base_type = subst_type_expr(&d.base_type, subst);
+            if let Some(r) = d.refinement.as_mut() {
+                rewrite_expr(r, subst);
+            }
+        }
+        Item::EffectResource(r) => {
+            if let Some(k) = r.key_param.as_mut() {
+                k.ty = subst_type_expr(&k.ty, subst);
+            }
+            for b in &mut r.provider_bounds {
+                rewrite_provider_bound(b, subst);
+            }
+        }
+        Item::EffectGroup(g) => {
+            for term in &mut g.body {
+                match term {
+                    EffectGroupTerm::Verb(v) => rewrite_effect_verb(v, subst),
+                    EffectGroupTerm::GroupRef(name) => rewrite_name(name, subst),
+                }
+            }
+        }
+        Item::LayoutDef(l) => {
+            l.collection_type = subst_type_expr(&l.collection_type, subst);
+        }
+        Item::ExternFunction(f) => rewrite_extern_fn(f, subst),
+        Item::ExternBlock(b) => {
+            for it in &mut b.items {
+                if let ExternItem::Function(f) = it {
+                    rewrite_extern_fn(f, subst);
+                }
+            }
+        }
+        // No type or path reference either an alias or a rename can reach.
+        Item::EffectVerbDecl(_)
         | Item::UseDecl(_)
         | Item::Import(_)
         | Item::AliasDecl(_)
-        | Item::IndependentDecl(_)
-        | Item::ExternFunction(_)
-        | Item::ExternBlock(_)
-        | Item::TypeAlias(_)
-        | Item::DistinctType(_) => {}
+        | Item::IndependentDecl(_) => {}
     }
+}
+
+/// Rewrite a name in place when `subst` maps it to a single bare segment.
+/// The map's values are `TypeExpr`s because that is what the type-level
+/// substitution helpers consume; the name-shaped positions (effect resources,
+/// effect groups) only ever want the leading segment back out.
+fn rewrite_name(name: &mut String, subst: &HashMap<String, TypeExpr>) {
+    if let Some(TypeExpr {
+        kind: TypeKind::Path(p),
+        ..
+    }) = subst.get(name.as_str())
+    {
+        if p.segments.len() == 1 && p.generic_args.is_none() {
+            *name = p.segments[0].clone();
+        }
+    }
+}
+
+/// An effect clause names RESOURCES (`writes(Db)`) and effect GROUPS
+/// (`with io`), both of which are module-scoped declarations a rename can move.
+fn rewrite_effects(effects: Option<&mut EffectList>, subst: &HashMap<String, TypeExpr>) {
+    let Some(effects) = effects else { return };
+    for item in &mut effects.items {
+        match item {
+            EffectItem::Verb(v) => rewrite_effect_verb(v, subst),
+            EffectItem::Group(name) => rewrite_name(name, subst),
+            EffectItem::Polymorphic | EffectItem::Variable(_) => {}
+        }
+    }
+}
+
+fn rewrite_effect_verb(v: &mut EffectVerb, subst: &HashMap<String, TypeExpr>) {
+    for r in &mut v.resources {
+        rewrite_path_segments(&mut r.path, subst);
+        if let Some(p) = r.param.as_mut() {
+            rewrite_expr(p, subst);
+        }
+    }
+}
+
+fn rewrite_provider_bound(b: &mut ProviderBound, subst: &HashMap<String, TypeExpr>) {
+    rewrite_name(&mut b.name, subst);
+    for a in b.args.iter_mut().flatten() {
+        if let GenericArg::Type(t) = a {
+            *t = subst_type_expr(&*t, subst);
+        }
+    }
+}
+
+fn rewrite_extern_fn(f: &mut ExternFunction, subst: &HashMap<String, TypeExpr>) {
+    for p in &mut f.params {
+        p.ty = subst_type_expr(&p.ty, subst);
+    }
+    if let Some(rt) = f.return_type.take() {
+        f.return_type = Some(subst_type_expr(&rt, subst));
+    }
+    rewrite_effects(f.effects.as_mut(), subst);
 }
 
 fn rewrite_function(f: &mut Function, subst: &HashMap<String, TypeExpr>) {
@@ -405,6 +510,10 @@ fn rewrite_function(f: &mut Function, subst: &HashMap<String, TypeExpr>) {
     }
     if let Some(rt) = f.return_type.take() {
         f.return_type = Some(subst_type_expr(&rt, subst));
+    }
+    rewrite_effects(f.effects.as_mut(), subst);
+    for e in f.requires.iter_mut() {
+        rewrite_expr(e, subst);
     }
     rewrite_block(&mut f.body, subst);
 }
@@ -417,6 +526,10 @@ fn rewrite_trait_method(m: &mut TraitMethod, subst: &HashMap<String, TypeExpr>) 
     }
     if let Some(rt) = m.return_type.take() {
         m.return_type = Some(subst_type_expr(&rt, subst));
+    }
+    rewrite_effects(m.effects.as_mut(), subst);
+    for e in m.requires.iter_mut() {
+        rewrite_expr(e, subst);
     }
     if let Some(b) = m.body.as_mut() {
         rewrite_block(b, subst);
@@ -541,10 +654,10 @@ fn rewrite_expr_patterns(e: &mut Expr, subst: &HashMap<String, TypeExpr>) {
     // leaves alone because for its original trait-type-param use an
     // identifier is always a value, never a type (B-2026-07-29-23).
     //
-    // Safe unconditionally HERE because `alias_subst_for_module` has already
-    // dropped any alias that the module binds as a value anywhere — see
-    // `bound_value_names`. So an identifier matching a live alias cannot be a
-    // local variable, parameter, closure param, or pattern binding.
+    // Safe unconditionally HERE because the substitution's builder has already
+    // dropped any name the module binds as a value — see `bound_value_names`
+    // and `local_value_bindings`. So an identifier matching a live entry cannot
+    // be a local variable, parameter, closure param, or pattern binding.
     if let ExprKind::Identifier(n) = &mut e.kind {
         if let Some(TypeExpr {
             kind: TypeKind::Path(p),

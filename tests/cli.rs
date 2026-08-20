@@ -5674,38 +5674,55 @@ fn test_build_project_codegen_three_module_chain_runs() {
 
 #[cfg(feature = "llvm")]
 #[test]
-fn test_build_project_codegen_cross_module_collision_diagnostic() {
-    // Symbol mangling is deferred to v2 (per the Theme 4 plan revision);
-    // for now, cross-module function-name collisions fall out as a
-    // resolve-time error against the merged super-program. The
-    // diagnostic is structured (mentions the colliding name) but
-    // file-context is absent until the v2 follow-up adds per-module
-    // span threading. Pins the no-silent-overwrite invariant.
+fn test_build_project_codegen_cross_module_collision_resolves_to_both_items() {
+    // This test used to pin the OPPOSITE outcome. Cross-module name
+    // disambiguation was deferred to v2 (the Theme 4 plan revision), so a
+    // collision fell out as a resolve error against the merged super-program,
+    // and the test asserted that error — as a stand-in for the invariant that
+    // actually mattered, "no silent overwrite".
+    //
+    // `module_rename` lands the deferred half (B-2026-08-20-24): the two
+    // declarations are given distinct names in the flat unit and each module's
+    // references follow its own. The invariant is unchanged and now checked
+    // directly — neither item overwrote the other, because BOTH values come
+    // back. What is gone is the false rejection: `karac check` always accepted
+    // this program, and both executors now agree with it.
     let tmp = scratch_project("codegen-collision");
     write(
         &tmp.join("kara.toml"),
         "[package]\nname = \"collide_demo\"\n",
     );
-    write(&tmp.join("src/main.kara"), "fn main() {}\n");
+    write(
+        &tmp.join("src/main.kara"),
+        "import a.from_a;\nimport b.from_b;\nfn main() { println(from_a()); println(from_b()); }\n",
+    );
     write(
         &tmp.join("src/a.kara"),
-        "pub fn shared_name() -> i64 { 1 }\n",
+        "fn shared_name() -> i64 { 1 }\npub fn from_a() -> i64 { return shared_name(); }\n",
     );
     write(
         &tmp.join("src/b.kara"),
-        "pub fn shared_name() -> i64 { 2 }\n",
+        "fn shared_name() -> i64 { 2 }\npub fn from_b() -> i64 { return shared_name(); }\n",
     );
 
     let out = karac_bin().current_dir(&tmp).arg("build").output().unwrap();
-    let _ = std::fs::remove_dir_all(&tmp);
     assert!(
-        !out.status.success(),
-        "build should fail on cross-module collision",
+        out.status.success(),
+        "build failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
     );
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        stderr.contains("shared_name") && stderr.contains("already defined"),
-        "expected collision diagnostic naming `shared_name`; stderr={stderr}",
+    let exe = tmp.join("collide_demo");
+    let ran = exe.exists().then(|| Command::new(&exe).output().unwrap());
+    let _ = std::fs::remove_dir_all(&tmp);
+    let Some(run) = ran else {
+        eprintln!("skip: AOT build produced no binary (no runtime archive?)");
+        return;
+    };
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "1\n2\n",
+        "each module must reach its OWN `shared_name`",
     );
 }
 
@@ -27810,4 +27827,210 @@ fn test_ambiguous_wildcard_import_reports_e0124_at_the_use_site() {
         combined.contains("`alpha`") && combined.contains("`beta`"),
         "the diagnostic names both wildcard sources: {combined}"
     );
+}
+
+// ── Same-named items in two modules (B-2026-08-20-24) ───────────
+
+/// Every top-level declaration form, declared twice under one package, run on
+/// every surface. `karac check` always accepted these; both executors rejected
+/// them, because flattening put all modules in one scope.
+///
+/// The expected values are chosen so a wrong resolution is visible rather than
+/// merely unequal: each module's exported function returns a value derived from
+/// its OWN copy of the colliding declaration, so a reference that binds to the
+/// other module's copy prints the other number.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_same_named_items_in_two_modules_run_on_every_surface() {
+    struct Case {
+        tag: &'static str,
+        alpha: &'static str,
+        beta: &'static str,
+        expected: &'static str,
+    }
+    let cases = [
+        Case {
+            tag: "fn",
+            alpha: "fn common() -> i64 { return 1; }\npub fn a() -> i64 { return common(); }\n",
+            beta: "fn common() -> i64 { return 2; }\npub fn b() -> i64 { return common(); }\n",
+            expected: "1\n2\n",
+        },
+        Case {
+            tag: "struct",
+            alpha: "pub struct Node { pub v: i64 }\npub fn a() -> i64 { let n = Node { v: 1 }; return n.v; }\n",
+            beta: "pub struct Node { pub v: i64 }\npub fn b() -> i64 { let n = Node { v: 2 }; return n.v; }\n",
+            expected: "1\n2\n",
+        },
+        Case {
+            tag: "enum",
+            alpha: "pub enum State { On, Off }\npub fn a() -> i64 { let s = State.On; return match s { State.On => 1, State.Off => 0 }; }\n",
+            beta: "pub enum State { Up, Down }\npub fn b() -> i64 { let s = State.Up; return match s { State.Up => 2, State.Down => 0 }; }\n",
+            expected: "1\n2\n",
+        },
+        Case {
+            tag: "trait",
+            alpha: "pub trait Tag { fn tag(ref self) -> i64; }\npub struct A {}\nimpl Tag for A { fn tag(ref self) -> i64 { return 1; } }\npub fn a() -> i64 { let x = A {}; return x.tag(); }\n",
+            beta: "pub trait Tag { fn tag(ref self) -> i64; }\npub struct B {}\nimpl Tag for B { fn tag(ref self) -> i64 { return 2; } }\npub fn b() -> i64 { let x = B {}; return x.tag(); }\n",
+            expected: "1\n2\n",
+        },
+        Case {
+            tag: "const",
+            alpha: "pub const LIMIT: i64 = 1;\npub fn a() -> i64 { return LIMIT; }\n",
+            beta: "pub const LIMIT: i64 = 2;\npub fn b() -> i64 { return LIMIT; }\n",
+            expected: "1\n2\n",
+        },
+        Case {
+            tag: "type-alias",
+            alpha: "pub type Id = i64;\npub fn a() -> Id { let x: Id = 1; return x; }\n",
+            beta: "pub type Id = i64;\npub fn b() -> Id { let x: Id = 2; return x; }\n",
+            expected: "1\n2\n",
+        },
+        Case {
+            tag: "effect-resource",
+            alpha: "effect resource Db;\npub fn a() -> i64 with reads(Db) { return 1; }\n",
+            beta: "effect resource Db;\npub fn b() -> i64 with reads(Db) { return 2; }\n",
+            expected: "1\n2\n",
+        },
+    ];
+
+    for case in cases {
+        let tmp = scratch_project(&format!("module-collision-{}", case.tag));
+        write(&tmp.join("kara.toml"), "[package]\nname = \"coll\"\n");
+        write(&tmp.join("src/alpha.kara"), case.alpha);
+        write(&tmp.join("src/beta.kara"), case.beta);
+        write(
+            &tmp.join("src/main.kara"),
+            "import alpha.a;\nimport beta.b;\nfn main() { println(a()); println(b()); }\n",
+        );
+
+        let stdout_of = |args: &[&str]| -> Option<String> {
+            let out = karac_bin().current_dir(&tmp).args(args).output().ok()?;
+            out.status
+                .success()
+                .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+        };
+        assert_eq!(
+            stdout_of(&["run", "--interp", "src/main.kara"]).as_deref(),
+            Some(case.expected),
+            "{}: interpreter",
+            case.tag,
+        );
+        assert_eq!(
+            stdout_of(&["run", "src/main.kara"]).as_deref(),
+            Some(case.expected),
+            "{}: LLJIT `karac run`",
+            case.tag,
+        );
+        let exe = tmp.join("coll");
+        if stdout_of(&["build"]).is_some() && exe.exists() {
+            let out = Command::new(&exe).output().unwrap();
+            assert_eq!(
+                String::from_utf8_lossy(&out.stdout),
+                case.expected,
+                "{}: AOT",
+                case.tag,
+            );
+        } else {
+            eprintln!("skip: AOT build produced no binary (no runtime archive?)");
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+}
+
+/// The colliding name reached from OUTSIDE its module — imported plainly, under
+/// an `as` alias, and through a `pub import` re-export. Each has to land on the
+/// declaring module's copy, which is the one that moved.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_a_renamed_item_is_still_reachable_through_every_import_form() {
+    let tmp = scratch_project("module-collision-imports");
+    write(&tmp.join("kara.toml"), "[package]\nname = \"coll\"\n");
+    write(
+        &tmp.join("src/alpha.kara"),
+        "pub fn common() -> i64 { return 1; }\n",
+    );
+    write(
+        &tmp.join("src/beta.kara"),
+        "pub fn common() -> i64 { return 2; }\n",
+    );
+    write(&tmp.join("src/facade.kara"), "pub import alpha.common;\n");
+    write(
+        &tmp.join("src/main.kara"),
+        "import alpha.common;\n\
+         import beta.common as beta_common;\n\
+         import facade.common as via_facade;\n\
+         fn main() { println(common()); println(beta_common()); println(via_facade()); }\n",
+    );
+    let expected = "1\n2\n1\n";
+
+    let stdout_of = |args: &[&str]| -> Option<String> {
+        let out = karac_bin().current_dir(&tmp).args(args).output().ok()?;
+        out.status
+            .success()
+            .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+    };
+    assert_eq!(
+        stdout_of(&["run", "--interp", "src/main.kara"]).as_deref(),
+        Some(expected),
+        "interpreter",
+    );
+    assert_eq!(
+        stdout_of(&["run", "src/main.kara"]).as_deref(),
+        Some(expected),
+        "LLJIT `karac run`",
+    );
+    let exe = tmp.join("coll");
+    if stdout_of(&["build"]).is_some() && exe.exists() {
+        let out = Command::new(&exe).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), expected, "AOT");
+    } else {
+        eprintln!("skip: AOT build produced no binary (no runtime archive?)");
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// Auto-parallelisation reads the effect analysis, and a renamed `effect
+/// resource` is exactly the input that analysis keys on — so the default build
+/// and `KARAC_AUTO_PAR=0` have to agree.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_renamed_effect_resources_agree_under_auto_par() {
+    let tmp = scratch_project("module-collision-autopar");
+    write(&tmp.join("kara.toml"), "[package]\nname = \"coll\"\n");
+    write(
+        &tmp.join("src/alpha.kara"),
+        "effect resource Db;\npub fn a() -> i64 with reads(Db) { return 1; }\n",
+    );
+    write(
+        &tmp.join("src/beta.kara"),
+        "effect resource Db;\npub fn b() -> i64 with reads(Db) { return 2; }\n",
+    );
+    write(
+        &tmp.join("src/main.kara"),
+        "import alpha.a;\nimport beta.b;\nfn main() { println(a()); println(b()); }\n",
+    );
+    let expected = "1\n2\n";
+    let exe = tmp.join("coll");
+
+    for auto_par in [true, false] {
+        let cmd = karac_bin().current_dir(&tmp).arg("build");
+        let cmd = if auto_par {
+            cmd
+        } else {
+            cmd.env("KARAC_AUTO_PAR", "0")
+        };
+        let built = cmd.output().map(|o| o.status.success()).unwrap_or(false);
+        if !built || !exe.exists() {
+            eprintln!("skip: AOT build produced no binary (no runtime archive?)");
+            continue;
+        }
+        let out = Command::new(&exe).output().unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            expected,
+            "KARAC_AUTO_PAR={}",
+            if auto_par { "1" } else { "0" },
+        );
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
 }

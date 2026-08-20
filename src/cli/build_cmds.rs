@@ -1804,33 +1804,22 @@ pub(super) fn run_multi_file_codegen(
     // file-of-origin via `format_pipeline_errors`.
     let mut super_items: Vec<Item> = Vec::new();
     let mut span_table = crate::span_visitor::ModuleSpanTable::new();
+    // Flattening drops every `import` declaration and puts all modules in one
+    // scope, which breaks two things the tree-aware per-module passes got
+    // right: an ALIAS binding names nothing once its import is gone
+    // (B-2026-07-29-14), and two modules declaring the same top-level name
+    // collide (B-2026-08-20-24). `module_rename` repairs both, per module, in
+    // one substitution — and `karac run`'s merge calls the same helper, so the
+    // two cannot answer differently again. A module that needs neither is
+    // copied byte-identically.
+    let renames = crate::module_rename::plan(tree);
     for &id in &order {
         let m = &tree.modules[id];
         if m.is_synthetic {
             continue;
         }
         let module_idx = span_table.register_module(m.file.clone());
-        // Dropping the `import` declarations erases every ALIAS binding with
-        // them — `import doer.{Impl as Widget};` leaves `Widget` naming
-        // nothing in the flat unit, so the flat resolve/typecheck reject a
-        // program the tree-aware per-module passes accepted
-        // (B-2026-07-29-14). Canonicalize this module's references to the
-        // imported items' real names first. A module with no aliased import
-        // gets an empty substitution and is copied byte-identically.
-        let mut items: Vec<Item> = m
-            .items
-            .iter()
-            .filter(|it| !matches!(it, Item::Import(_)))
-            .cloned()
-            .collect();
-        let local_names = crate::import_alias::declared_names(&items);
-        let bound_values = crate::import_alias::bound_value_names(&mut items);
-        let alias_subst =
-            crate::import_alias::alias_subst_for_module(&m.imports, &local_names, &bound_values);
-        for item in &mut items {
-            crate::import_alias::rewrite_item(item, &alias_subst);
-        }
-        for item in items {
+        for item in crate::module_rename::flatten_module_items(tree, id, &renames) {
             span_table.record_item(module_idx, &item);
             super_items.push(item);
         }
