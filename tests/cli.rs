@@ -3584,6 +3584,246 @@ fn test_module_cycle_diagnostic_names_the_files_on_the_cycle() {
     }
 }
 
+// ── Module-binding imports (B-2026-08-20-17) ────────────────────
+//
+// design.md § Module System binds the last segment of an import path
+// UNIFORMLY for items and sub-modules — `import db.connection;` binds
+// `connection` as a module reference, reached as `connection.Connection`.
+// The four item forms shipped; the module form bound nothing anywhere:
+// `build` and `run` both answered `undefined name 'connection', did you mean
+// 'Connection'?` (a Levenshtein hit on a struct inside the very module
+// named), and `check` passed the same program.
+
+#[test]
+fn test_module_binding_import_reaches_the_module_s_items() {
+    let tmp = scratch_module_package(
+        "modbind-basic",
+        "import db.connection;\n\n\
+         fn main() {\n    let c = connection.open(7);\n\
+         \x20   let p = connection.Pool { size: 3 };\n\
+         \x20   println(f\"{c.id} {p.size}\");\n}\n",
+    );
+    let check = karac_bin()
+        .current_dir(&tmp)
+        .arg("check")
+        .arg("src/main.kara")
+        .output()
+        .unwrap();
+    let run = karac_bin()
+        .current_dir(&tmp)
+        .arg("run")
+        .arg("src/main.kara")
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(
+        check.status.success(),
+        "check: {}{}",
+        String::from_utf8_lossy(&check.stdout),
+        String::from_utf8_lossy(&check.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    assert!(
+        run.status.success(),
+        "run: {stdout}{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert!(stdout.contains("7 3"), "expected `7 3`, got: {stdout}");
+}
+
+#[test]
+fn test_module_binding_import_reaches_a_type_in_a_signature() {
+    // `connection.Connection` in a `pub fn` return type — the type position,
+    // which the expression rewrite alone would not cover.
+    let tmp = scratch_module_package(
+        "modbind-type-position",
+        "import db.connection;\n\n\
+         pub fn make() -> connection.Connection {\n\
+         \x20   return connection.open(8);\n}\n\n\
+         fn main() {\n    println(f\"{make().id}\");\n}\n",
+    );
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .arg("run")
+        .arg("src/main.kara")
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{stdout}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(stdout.contains('8'), "expected 8, got: {stdout}");
+}
+
+#[test]
+fn test_module_binding_import_reaches_a_nested_module() {
+    // `import db;` binds the top-level module, so its sub-module is reached
+    // through it: `db.connection.open(9)`. Two levels — the desugar iterates
+    // to a fixpoint rather than stripping one segment.
+    let tmp = scratch_module_package(
+        "modbind-chain",
+        "import db;\n\n\
+         fn main() {\n    let c = db.connection.open(9);\n\
+         \x20   println(f\"{c.id}\");\n}\n",
+    );
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .arg("run")
+        .arg("src/main.kara")
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{stdout}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(stdout.contains('9'), "expected 9, got: {stdout}");
+}
+
+#[test]
+fn test_module_binding_import_names_an_unknown_item() {
+    // The diagnostic half of the row. Reaching a name the module does not
+    // export used to draw `undefined name 'connection', did you mean
+    // 'Connection'?` — a suggestion pointing at a struct inside the module
+    // the user correctly named. It now reports the item, against the
+    // module's real export list, on the surface that used to pass silently.
+    let tmp = scratch_module_package(
+        "modbind-unknown-item",
+        "import db.connection;\n\n\
+         fn main() {\n    let c = connection.opne(4);\n    println(f\"{c.id}\");\n}\n",
+    );
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .arg("check")
+        .arg("src/main.kara")
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let all = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!out.status.success(), "check must reject it: {all}");
+    assert!(
+        all.contains("E0113") && all.contains("db.connection") && all.contains("open"),
+        "expected E0113 naming the module and suggesting `open`: {all}"
+    );
+}
+
+#[test]
+fn test_module_binding_import_enforces_visibility() {
+    // A `private` item reached through a module binding is E0111, exactly as
+    // it is when named directly by an item import.
+    let tmp = scratch_module_package(
+        "modbind-private",
+        "import db.helpers;\n\nfn main() {\n    println(f\"{helpers.secret()}\");\n}\n",
+    );
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .arg("run")
+        .arg("src/main.kara")
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let all = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!out.status.success(), "run must refuse it: {all}");
+    assert!(
+        all.contains("E0111") && all.contains("secret"),
+        "expected E0111 on `secret`: {all}"
+    );
+}
+
+#[test]
+fn test_module_binding_import_defers_to_a_local_of_the_same_name() {
+    // The shadow guard: a module never has a binding rewritten when it also
+    // binds that name as a value, because `connection.id` is then an
+    // ordinary field access and redirecting it would be a miscompile.
+    let tmp = scratch_module_package(
+        "modbind-shadow",
+        "import db.connection;\n\n\
+         struct Holder {\n    pub v: i64,\n}\n\n\
+         fn main() {\n    let connection = Holder { v: 11 };\n\
+         \x20   println(f\"{connection.v}\");\n}\n",
+    );
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .arg("run")
+        .arg("src/main.kara")
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{stdout}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(stdout.contains("11"), "expected 11, got: {stdout}");
+}
+
+#[test]
+fn test_module_binding_alongside_an_explicit_item_import_of_the_same_name() {
+    // The synthesized import must not collide with one the file already
+    // wrote. `import db.connection;` + `import db.connection.open;` reaches
+    // `open` two ways; synthesizing a second binding for it would be a
+    // spurious E0101 duplicate definition for a program that is not
+    // ambiguous at all.
+    let tmp = scratch_module_package(
+        "modbind-plus-item-import",
+        "import db.connection;\nimport db.connection.open;\n\n\
+         fn main() {\n    let a = open(1);\n    let b = connection.open(2);\n\
+         \x20   println(f\"{a.id} {b.id}\");\n}\n",
+    );
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .arg("run")
+        .arg("src/main.kara")
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{stdout}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(stdout.contains("1 2"), "expected `1 2`, got: {stdout}");
+}
+
+#[test]
+fn test_unused_module_binding_import_is_accepted() {
+    // Nothing is reached through the binding, so nothing is synthesized —
+    // and the declaration still resolves on its own terms.
+    let tmp = scratch_module_package(
+        "modbind-unused",
+        "import db.connection;\n\nfn main() {\n    println(\"quiet\");\n}\n",
+    );
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .arg("run")
+        .arg("src/main.kara")
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{stdout}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(stdout.contains("quiet"), "expected `quiet`, got: {stdout}");
+}
+
 #[test]
 fn test_check_standalone_script_is_unaffected() {
     // The widening is gated on membership of a package's `src/`. A script that

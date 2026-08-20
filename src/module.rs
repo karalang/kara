@@ -672,6 +672,26 @@ pub fn build_program_tree_with_deps(
         ));
     }
 
+    // B-2026-08-20-17: `import db.connection;` binds a MODULE, not an item.
+    // Desugar every such binding into item imports for exactly the names
+    // reached through it, so the rest of the compiler — which works in one
+    // flat namespace of item names — sees a shape it already handles. See
+    // [`crate::module_binding`] for why a desugar rather than a module
+    // namespace. Runs AFTER `#[target(...)]` filtering, for the same reason
+    // the wildcard expansion below does: a reference that only exists inside
+    // an item this target strips must not synthesize an import for a name
+    // that is gone. Runs BEFORE the span rebase, so the synthesized
+    // declarations travel with their module's offsets.
+    {
+        let known: std::collections::HashSet<ModulePath> = by_path.keys().cloned().collect();
+        for m in &mut modules {
+            if m.is_synthetic {
+                continue;
+            }
+            expand_module_binding_imports(m, &known);
+        }
+    }
+
     // #46: distinct `.kara` files each restart their byte offsets at 0, so
     // two modules can mint spans with identical `(offset, length)` SpanKeys.
     // The global `method_callee_types` side-table (and every other
@@ -979,6 +999,156 @@ fn wildcard_import_origin(
     Some((def_path, def_name))
 }
 
+/// B-2026-08-20-17: turn each module-binding `import` in `m` into item
+/// imports for the names actually reached through it.
+///
+/// `import db.connection;` binds `connection` as a MODULE reference —
+/// design.md § Module System states the rule as uniform with item imports.
+/// Nothing downstream of the resolver understands a module as a value, so the
+/// binding is lowered here: `connection.open(4)` becomes `open(4)` and a
+/// synthesized `import db.connection.{open};` is spliced in beside the
+/// original declaration. See [`crate::module_binding`] for the full rationale
+/// and the shadow guard.
+///
+/// The original declaration is kept. It resolves on its own terms (the
+/// `binds_submodule` arm of the resolver's `collect_import`) and it is what
+/// [`collect_import_edges`] draws the module-graph edge from — so an unused
+/// binding still records its dependency.
+fn expand_module_binding_imports(m: &mut Module, known: &std::collections::HashSet<ModulePath>) {
+    // Every name this module binds to a SUBMODULE, and where it came from.
+    let mut binds: HashMap<String, ModulePath> = HashMap::new();
+    // Target module path -> (index of the binding declaration, its `pub`,
+    // the per-segment spans of the full path).
+    let mut origin: HashMap<ModulePath, (usize, bool, Vec<crate::token::Span>)> = HashMap::new();
+    for (idx, item) in m.items.iter().enumerate() {
+        let Item::Import(imp) = item else { continue };
+        // A wildcard brings in a module's `pub` ITEMS, never its sub-modules
+        // (design.md § Wildcard imports), and it is expanded later anyway —
+        // see `expand_wildcard_imports`.
+        if imp.is_wildcard {
+            continue;
+        }
+        for it in &imp.items {
+            let mut full = imp.path.clone();
+            full.push(it.name.clone());
+            if !known.contains(&full) {
+                continue;
+            }
+            let bound = it.alias.clone().unwrap_or_else(|| it.name.clone());
+            let mut spans = imp.path_spans.clone();
+            spans.resize(full.len().saturating_sub(1), imp.span);
+            spans.push(it.span);
+            origin.insert(full.clone(), (idx, imp.is_pub, spans));
+            binds.insert(bound, full);
+        }
+    }
+    if binds.is_empty() {
+        return;
+    }
+    // Full paths already bound by a plain (un-aliased) item import.
+    let mut already_imported: std::collections::HashSet<ModulePath> =
+        std::collections::HashSet::new();
+    for item in &m.items {
+        let Item::Import(imp) = item else { continue };
+        if imp.is_wildcard {
+            continue;
+        }
+        for it in &imp.items {
+            if it.alias.is_some() {
+                continue;
+            }
+            let mut full = imp.path.clone();
+            full.push(it.name.clone());
+            already_imported.insert(full);
+        }
+    }
+    let shadowed = crate::module_binding::shadowed_names(&mut m.items);
+    binds.retain(|name, _| !shadowed.contains(name));
+    if binds.is_empty() {
+        return;
+    }
+
+    // Iterate to a fixpoint so a CHAIN resolves: `import db;` +
+    // `db.connection.open(5)` strips to `connection.open(5)` on the first
+    // pass, which is itself a module binding — one more pass turns it into
+    // `open(5)`. A name that names a submodule is re-bound rather than
+    // recorded as an item reference (there is no item to import), and each
+    // re-binding lengthens the module path, so the loop terminates.
+    let mut refs = crate::module_binding::ModuleRefs::new();
+    let mut round = binds;
+    while !round.is_empty() {
+        let found = crate::module_binding::strip_module_bindings(&mut m.items, &round);
+        let mut next: HashMap<String, ModulePath> = HashMap::new();
+        for (path, names) in found {
+            for (name, span) in names {
+                let mut full = path.clone();
+                full.push(name.clone());
+                if known.contains(&full) && !shadowed.contains(&name) && !origin.contains_key(&full)
+                {
+                    if let Some((idx, is_pub, spans)) = origin.get(&path).cloned() {
+                        let mut spans = spans;
+                        spans.push(span);
+                        origin.insert(full.clone(), (idx, is_pub, spans));
+                        next.insert(name, full);
+                        continue;
+                    }
+                }
+                // An identical un-aliased item import already in the file
+                // binds this name from this very module — synthesizing a
+                // second one would be a spurious E0101 duplicate definition.
+                if already_imported.contains(&full) {
+                    continue;
+                }
+                refs.entry(path.clone())
+                    .or_default()
+                    .entry(name)
+                    .or_insert(span);
+            }
+        }
+        round = next;
+    }
+
+    // Splice each synthesized declaration in after the one that bound its
+    // module, walking insertion points from the back so earlier indices stay
+    // valid.
+    let mut spliced: Vec<(usize, Item)> = Vec::new();
+    for (path, names) in refs {
+        let Some((idx, is_pub, path_spans)) = origin.get(&path) else {
+            continue;
+        };
+        let decl_span = *path_spans
+            .last()
+            .expect("path_spans always ends with the bound segment's span");
+        let items: Vec<ImportItem> = names
+            .into_iter()
+            .map(|(name, span)| ImportItem {
+                span,
+                name,
+                alias: None,
+            })
+            .collect();
+        spliced.push((
+            *idx,
+            Item::Import(ImportDecl {
+                span: decl_span,
+                is_pub: *is_pub,
+                is_wildcard: false,
+                path,
+                path_spans: path_spans.clone(),
+                items,
+            }),
+        ));
+    }
+    if spliced.is_empty() {
+        return;
+    }
+    spliced.sort_by(|a, b| b.0.cmp(&a.0));
+    for (idx, item) in spliced {
+        m.items.insert(idx + 1, item);
+    }
+    m.imports = extract_imports_from_items(&m.items);
+}
+
 /// Walk top-level items and gather every `import` declaration into a side
 /// table. The dependency-graph builder walks only these, while every
 /// downstream pass continues to iterate `Module.items` directly.
@@ -987,7 +1157,8 @@ fn extract_imports(program: &Program) -> Vec<ImportDecl> {
 }
 
 /// [`extract_imports`] over a bare item slice — used to refresh the side table
-/// after [`expand_wildcard_imports`] rewrites a module's import declarations.
+/// after [`expand_wildcard_imports`] or [`expand_module_binding_imports`]
+/// rewrites a module's import declarations.
 fn extract_imports_from_items(items: &[Item]) -> Vec<ImportDecl> {
     items
         .iter()

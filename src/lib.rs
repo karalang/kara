@@ -89,6 +89,7 @@ pub mod cross_task_safe;
 pub mod deque_head;
 pub mod map_entry_lint;
 pub mod module;
+pub mod module_binding;
 pub mod monomorphization;
 pub mod must_use_lint;
 pub mod numeric_conv;
