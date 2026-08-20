@@ -98,9 +98,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 133 | 0 |
 | missing-feature | 126 | 2 |
 | codegen-gap | 119 | 0 |
+| diagnostics | 84 | 1 |
 | false-positive | 83 | 1 |
-| diagnostics | 83 | 0 |
-| perf | 78 | 1 |
+| perf | 79 | 1 |
 | crash | 55 | 1 |
 | soundness | 51 | 0 |
 | other | 49 | 0 |
@@ -115,26 +115,27 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | interp | 163 | 0 |
 | ownership | 60 | 0 |
 | other | 58 | 0 |
-| autopar | 50 | 1 |
+| autopar | 52 | 2 |
 | cli | 48 | 0 |
 | parser | 32 | 1 |
-| runtime | 26 | 1 |
+| runtime | 27 | 2 |
 | resolver | 20 | 0 |
 | effect | 7 | 0 |
 | lexer | 6 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1385 surfaced · 5 open · 1360 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1387 surfaced · 6 open · 1361 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-19-13 | 2026-08-19 | typecheck+codegen+runtime | medium | GPU reductions still lack prefix-sum and tiled matmul (separate algorithms, not halving folds); integer `prod` / `dot` are blocked on WGSL lacking a widening multiply; and `variance` / `stddev` are f32-only. Everything else has shipped: sum / prod / min / max / mean / dot / argmin / argmax / variance / stddev over `Vec[f32]`, and sum / min / max / mean / argmin / argmax over `Vec[i32]` and `Vec[u32]`. | docs/spikes/gpu-llvm-offload-assessment.md; src/gpu_wgsl.rs::emit_reduce_kernel; src/reduce_kernel.rs::tree_reduce_f32 |
-| B-2026-08-20-3 | 2026-08-20 | autopar | high | AUTO-PAR (on by default) turns a `parallel_reduction` whose body does `chars().collect()` into a 2.55x PESSIMIZATION — 326 ms sequential becomes 831 ms parallel, with system time exploding 2.9 ms -> 812.8 ms (allocator contention); the same body without the collect parallelizes cleanly at 3.67 cores | — |
 | B-2026-08-20-5 | 2026-08-20 | codegen | high | `e2e_128bit_integers_end_to_end` produces EMPTY STDOUT on macOS arm64 only — the binary links and runs but prints nothing before the first `println`. Linux x86_64 and Linux arm64 both pass the same test. CI's `Codegen E2E (macOS arm64, LLVM 18)` lane has been red on `main` since the test landed. | tests/codegen.rs::e2e_128bit_integers_end_to_end (line ~21227); tests/codegen.rs::run_program_capturing (stdout-only discard); added by 7561b5d1 (B-2026-08-19-8 stage 5); CI job `Codegen E2E (macOS arm64, LLVM 18)` in .github/workflows/ci.yml |
 | B-2026-08-20-7 | 2026-08-20 | parser | high | A NEGATIVE integer literal cannot be a match pattern at ANY width: `match n { -5 => .. }` fails to parse with `Expected pattern, found Minus`. Affects every signed type — `-5`, `-5i32`, `-5i64`, `-5i128`, and `i64::MIN` / `i128::MIN` — so the entire negative half of every signed integer is unmatchable by literal. | src/parser/patterns.rs::parse_pattern (no `Token::Minus` arm); src/parser/patterns.rs::parse_literal_pattern (the range-bound entry, same gap); src/parser/exprs.rs::parse_prefix (the expression-side fold to mirror, including both MIN magnitudes) |
 | B-2026-08-20-6 | 2026-08-20 | typecheck | medium | A `u64` / `usize` match whose arms COVER THE WHOLE DOMAIN by two ranges is wrongly rejected as non-exhaustive: `match n { 0u64..=9223372036854775807u64 => .., 9223372036854775808u64..=18446744073709551615u64 => .. }` reports `pattern 9223372036854775808 not covered` — naming the very value the second arm starts at. The identical `u8` shape is accepted. | src/exhaustive.rs::int_domain (declared domain in unsigned space); src/exhaustive.rs (PatCtor::IntRange construction from LiteralPattern::Integer); src/parser/patterns.rs::pattern_int_on_carrier (where the wrap is applied); src/typechecker/exprs.rs::literal_as_i128 (the un-wrap precedent) |
+| B-2026-08-20-8 | 2026-08-20 | autopar | medium | `karac build --concurrency-report` prints the ANALYSIS label with no lowering verdict, so it claims `parallel_reduction` for a loop its own sibling query reports as `fanned_out: false` — the binary contains zero worker symbols | — |
+| B-2026-08-20-9 | 2026-08-20 | runtime+autopar | medium | Auto-par worker threads contend on ONE glibc malloc arena: any fan-out body that allocates per iteration pays a shared lock the sequential build never touches | — |
 
 ### Wontfix (7)
 
@@ -152,9 +153,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1385 surfaced
 
 </details>
 
-### Fixed (1360)
+### Fixed (1361)
 
-<details><summary>1360 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1361 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -12512,6 +12513,21 @@ Tests: two in tests/parser.rs (the three accepted shapes — literal, `usize`, a
 APPLIED TO BOTH FLOAT FAMILIES THAT HAD THE PATTERN, not just the one that failed: the Arg combine and `karac_min`/`karac_max`. min/max were PASSING on Metal, but by luck rather than by construction — the same fold applies to them, and the surviving `select(a, b, b < a)` merely happened to land on the right answer for the fixtures in the suite. Fixing only the observed failure would have left an identical latent bug one test away.
 
 WHAT THE FIX DOES NOT COVER, stated so nobody assumes more: with the guards working, no comparison ever sees a NaN operand, so the rest of each combine is fast-math-safe. But if a backend FLUSHES NaN on load rather than merely assuming it away, no shader-level test can help — that needs `shaderSignedZeroInfNanPreserveFloat32`, which this codebase cannot assert from here. |
+| B-2026-08-20-3 | autopar | high | AUTO-PAR (on by default) turns a `parallel_reduction` whose body does `chars().collect()` into a 2.55x PESSIMIZATION — 326 ms sequential becomes 831… | FIXED by df7bef9. ROOT CAUSE IS THE GROW CHAIN, NOT THE FAN-OUT. `chars().collect()` lowered to `Vec.new()` plus a push-per-char loop, so each collect cost 1 malloc + ~1.5 realloc + 1 free (measured with an LD_PRELOAD counter on probe G: malloc=1000002 avg 16B, realloc=1500000, free=1000001, for 1M rounds). Every `realloc` takes the glibc arena lock, and under auto-par that ONE lock is shared by all fan-out workers.
+
+THE LOWERING WAS NEVER AT FAULT — three measurements say so. (1) `KARAC_PAR_WORKERS` scales the damage monotonically and exactly: 1 worker 0.08s (identical to sequential, so dispatch itself is free), 2 workers 0.18s, 3 workers 0.22s, 4 workers 0.29s. (2) `KARAC_PAR_CHUNK_FACTOR` 1/2/4/8 changes nothing (0.28-0.34s, futex count flat) — not chunk dispatch. (3) Running the SAME parallel binary under `GLIBC_TUNABLES=glibc.malloc.tcache_count=0` drops futex calls 8923 -> 6 and runs it in 0.03s at 330% CPU — 2.4x FASTER than sequential. `strace -f -k` puts the 8923 futex waits in `__lll_lock_wait_private` inside libc `malloc`/`realloc`, called from `karac_realloc_or_panic` inside `__karac_reduce_worker_0`, all four threads blocking on one libc arena mutex address.
+
+So the row's two suggested remedies — decline the loop, or lower it differently — would both have forfeited a real 2.4x win. The fix is to stop generating the arena traffic.
+
+FIX. `src/presize.rs` gains one bound source: a `for I in SRC.chars()` / `SRC.bytes()` fill reserves `SRC.len()` up front, alongside the existing counted-while and for-range forms (`iterable_len_bound`). `SRC` must be a re-evaluable place expression, since the bound is a SECOND evaluation of it. Separately, `compile_chars_collect_to_vec` now runs `presize_block` on the block it synthesizes: that block is built at CODEGEN time and therefore never passed through `lowering`, where the pass normally runs — so without the explicit call the fused `collect()` and the hand-written loop would have diverged by 2.5x while compiling through different modules.
+
+THIS DOES NOT REOPEN THE 2026-07-09 DECLINE, and the boundary is asserted, not just described. `docs/spikes/collection-capacity-presizing.md` measured accumulator pre-sizing end-to-end and declined it because HEAP-element sources regress 20-30% (`Vec[String].iter().filter(..).collect()` at 0.72x), rejecting a source-element-type gate as too opaque and hardware-dependent to be a predictable firing rule. `chars`/`bytes` need no such gate — their element type is `char`/`u8` BY CONSTRUCTION, so the firing rule is the method name — and they sit in the POD column that same spike measured as a 1.16-1.17x win. `.iter()` stays declined, and since it is one method name away from the shapes that now fire, two tests hold the line: `presize::tests::declines_for_over_iter` and `presize_reservation::iter_fill_still_declines_per_the_spike`. The adaptor-collect accumulator is untouched and `e2e_collect_accumulator_is_not_presized_codegen` still passes.
+
+MEASURED (4-core container, same tree, before/after compilers built from it). Probe G: sequential 0.08s -> 0.03s; parallel 0.30s (200% CPU, sys 0.33s) -> 0.01s (~310% CPU, sys 0.00s). A 3.75x pessimization becomes a 3x win. Kata #288's real bench: reallocs 1,004,168 -> 23, wall 0.26-0.28s -> 0.21-0.22s (~1.22x), byte-identical output. Verified identical on all four surfaces (`run --interp`, `run` JIT, `build`, `KARAC_AUTO_PAR=0 build`), including a non-ASCII probe where byte length over-reserves against codepoint count (capacity is a hint, so that is memory, never output), an empty string (`with_capacity(0)` takes the documented null-buffer path), and a filtered fill that must NOT pre-size.
+
+TWO CORRECTIONS TO THE ROW. First, the row's headline framing of #288 as an allocator problem holds only for probe G; #288's own bench never fanned out at all, and now provably so: `nm` finds ZERO `reduce_worker` symbols in its binary both before and after. Second, that no-fan-out half is NOT a lowering bug and is not fixed here. `karac query concurrency` reports it honestly — `"fanned_out": false, "cost_gate": "declined_unshapeable_loop", "reason": "while-loop is not immediately preceded by its counter's `let mut k = lo;` init"` — i.e. a legitimate, explained decline. What misleads is `karac build --concurrency-report`, which prints the bare analysis label `parallel_reduction { op: +, accumulator: unique_count, line: 107 }` with no verdict, so the report claims a fan-out its own sibling query denies. That is the B-2026-07-29-29 / B-2026-08-05-13 defect class, fixed for the query and never for the report; split out as its own open row rather than buried here.
+
+The general remainder also stays open: reserving removes the reallocs from THIS shape, it does not give the runtime a thread-caching small-object allocator, so any other allocating auto-par body still contends on the shared arena. |
 | B-2026-08-20-4 | parser+typecheck+codegen+interp | medium | `LiteralPattern::Integer` holds an `i64`, so NO 128-bit literal can be a match pattern — `match n { 170141183460469231731687303715884105727i128 => . | FIXED by b4072bc. `LiteralPattern::Integer` now carries `i128`, matching `ExprKind::Integer`, so a literal means the same thing in pattern position as in expression position.
 
 THE ROW'S RISK ESTIMATE WAS INVERTED, and measuring is what showed it. It predicted "sixteen references across nine files" with `exhaustive.rs` needing the most care because "the range arithmetic there is where an i64 assumption would hide". Widening the node produced FIVE compile errors, all five in `parser/patterns.rs`. Every other consumer was already payload-generic or already working in `i128` — `exhaustive.rs` most of all: its range arithmetic runs in `i128` space already (`PatCtor::IntRange`), and `int_domain` deliberately returns `None` for the 128-bit widths so they route through the open-domain path that demands an explicit wildcard. That is imprecise but SOUND, it is documented in place, and it is unchanged by this. Verified rather than assumed: a `match` on `i128` with no wildcard is still correctly rejected, 128-bit range patterns hit and miss correctly, and the `u8`/`u64` domains still enumerate.
