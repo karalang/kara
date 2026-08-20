@@ -1265,11 +1265,7 @@ pub(super) fn cmd_build_project(
     // wrong half. Native builds keep the host platform; cross-triple native
     // selection is a separate concern that `host()` preserves unchanged.
     let walk_opts = WalkerOpts {
-        target: if is_wasm {
-            walker::Platform::Wasm
-        } else {
-            walker::Platform::host()
-        },
+        target: walk_platform_for_target(build_target),
         ..WalkerOpts::default()
     };
     let walked = match walker::walk_project(&root, walk_opts) {
@@ -2997,11 +2993,35 @@ impl PackageCheck {
 /// have no per-file span (a broken manifest, a mixed `main.kara`/`lib.kara`
 /// entry pair). Callers on the check/run paths treat those as fatal, matching
 /// `karac build`.
+/// The OS platform whose `_linux` / `_macos` / `_windows` / `_wasm` files a
+/// walk should keep, given a v1 compilation target. Only the wasm targets move
+/// it; every other target uses the host `karac` was built for. design.md
+/// § Platform-specific modules > Target selection states the same rule, and
+/// says plainly that the native platforms are therefore host-locked in v1
+/// (B-2026-08-20-25).
+///
+/// Extracted so `cmd_check_project` derives it the same way `cmd_build_project`
+/// does — a check that walked a different half of a platform split from the
+/// build it is supposed to predict would be the B-2026-08-20-16 divergence in
+/// a new place.
+pub(super) fn walk_platform_for_target(build_target: &str) -> walker::Platform {
+    if build_target == "wasm_wasi" || build_target == "wasm_browser" {
+        walker::Platform::Wasm
+    } else {
+        walker::Platform::host()
+    }
+}
+
 pub(super) fn package_check(
     root: &std::path::Path,
     lint_overrides: &crate::lints::CliLintOverrides,
+    build_target: &str,
 ) -> Result<PackageCheck, String> {
-    let walked = walker::walk_project(root, WalkerOpts::default()).map_err(|e| format!("{e}"))?;
+    let walk_opts = WalkerOpts {
+        target: walk_platform_for_target(build_target),
+        ..WalkerOpts::default()
+    };
+    let walked = walker::walk_project(root, walk_opts).map_err(|e| format!("{e}"))?;
     // Same lenient dep posture as the `karac run` super-program builder: a
     // dep-resolution failure proceeds without dependency modules rather than
     // failing the check of the local package.

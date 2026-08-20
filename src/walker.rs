@@ -26,11 +26,17 @@
 //!   on other targets only the shared file compiles. The walker resolves
 //!   this per-module-path.
 //!
-//! The walker does **not** parse file contents. It also does not enforce
-//! `E0226 ConflictingPlatformModule` — that diagnostic covers symbol-level
-//! conflicts between a platform file and a shared file that both survive
-//! target filtering, which is structurally impossible under the rules above
-//! but stays reserved for post-parse symbol checks.
+//! The walker does **not** parse file contents. There is also **no**
+//! symbol-level platform-collision diagnostic, and none is reserved: the
+//! rules above collapse each `(module path, role)` bucket to at most one
+//! file per target, so a platform file and a shared file can never both
+//! survive to the same target and a symbol declared in both cannot
+//! conflict. design.md drafted `E0226 ConflictingPlatformModule` for that
+//! condition; the number sits in the typechecker's band, the condition
+//! cannot arise, and the spec text was corrected rather than the code
+//! allocated (B-2026-08-20-25). The collision that IS real — two files
+//! surviving together under one module path — is
+//! [`WalkerError::DuplicateModule`], raised here.
 
 use crate::module::ModulePath;
 use std::collections::HashMap;
@@ -200,10 +206,13 @@ pub enum WalkerError {
 }
 
 impl WalkerError {
-    /// Diagnostic code, when one is assigned. Slice 3 introduces no new
-    /// codes — `E0226 ConflictingPlatformModule` is a post-parse symbol
-    /// check (see module doc-comment); walker-level errors share the
-    /// generic bucket until the diagnostic registry grows a `walker` phase.
+    /// Diagnostic code, when one is assigned. None is today: walker-level
+    /// errors share the generic bucket until the diagnostic registry grows
+    /// a phase that owns them. Numbering them is a live remainder rather
+    /// than a deferral — see B-2026-08-20-25's close, which established
+    /// that the one code design.md had drafted for this module
+    /// (`E0226 ConflictingPlatformModule`) named an unreachable condition
+    /// and belongs to no phase at all.
     pub fn code(&self) -> Option<&'static str> {
         None
     }

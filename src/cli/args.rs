@@ -266,6 +266,9 @@ fn parse_check_command(args: &[String]) -> Command {
     let mut output = OutputMode::Text;
     let mut profiles: Option<Vec<crate::manifest::CompileProfile>> = None;
     let mut targets: Option<Vec<String>> = None;
+    // `--target=` (singular) vs `--targets=` (plural) — see the project-mode
+    // branch at the bottom of this parser.
+    let mut target_is_singular = false;
     let mut concurrency_report = false;
     let mut simd_report = false;
     let mut lint_overrides = crate::lints::CliLintOverrides::default();
@@ -287,6 +290,13 @@ fn parse_check_command(args: &[String]) -> Command {
             // the one-target spelling of `--targets=`; `all` still works
             // through the same parser.
             targets = Some(parse_targets_arg(rest));
+            // …but remember WHICH spelling was written. In project mode the
+            // plural is a per-file matrix with no meaning yet, while the
+            // singular is what `karac build` takes to mean "compile for this
+            // target" — and a reader of design.md § Platform-specific modules
+            // reaches for `check --target=wasm_wasi` to check the `_wasm`
+            // half of a platform split (B-2026-08-20-25).
+            target_is_singular = true;
         } else if arg == "--concurrency-report" {
             concurrency_report = true;
         } else if parse_simd_report_flag(arg, &mut simd_report) {
@@ -316,9 +326,16 @@ fn parse_check_command(args: &[String]) -> Command {
         // argument", so a user told that a single-file check was unreliable on
         // a package member had nowhere to go.
         //
-        // `--profiles` / `--targets` are per-file matrices with no project-mode
-        // meaning yet; reject them here rather than silently ignoring them.
-        if profiles.is_some() || targets.is_some() {
+        // `--profiles` and the PLURAL `--targets` are per-file matrices with
+        // no project-mode meaning yet; reject them rather than silently
+        // ignoring them. The singular `--target=<name>` is a different
+        // request — the one `karac build` already honours — so it passes
+        // through as the project check's compilation target.
+        let single_target = match (&targets, target_is_singular) {
+            (Some(t), true) if t.len() == 1 => Some(t[0].clone()),
+            _ => None,
+        };
+        if profiles.is_some() || (targets.is_some() && single_target.is_none()) {
             eprintln!(
                 "error: --profiles / --targets need a file argument \
                  (they are per-file matrices; project-mode support is a follow-up)"
@@ -330,6 +347,7 @@ fn parse_check_command(args: &[String]) -> Command {
             concurrency_report,
             simd_report,
             lint_overrides,
+            target: single_target,
         };
     };
     Command::Check {

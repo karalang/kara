@@ -737,9 +737,11 @@ pub enum ResolveErrorKind {
     /// `E0124`, allocated from the resolver's own band. design.md § Module
     /// System wrote `E0226` for it, which is the TYPECHECKER's band (pinned by
     /// `explain::tests::resolver_numeric_codes_live_in_the_resolve_band`) and
-    /// was already spelled for a second, unrelated diagnostic in the same
-    /// document — `E0226 ConflictingPlatformModule`, § Platform-specific
-    /// modules. The spec text was corrected to E0124 when this landed.
+    /// was, at that time, also spelled for a second, unrelated diagnostic in
+    /// the same document — `E0226 ConflictingPlatformModule`,
+    /// § Platform-specific modules. The spec text was corrected to E0124 when
+    /// this landed; the other E0226 was struck from the spec rather than
+    /// renumbered, its condition being unreachable (B-2026-08-20-25).
     AmbiguousWildcardImport,
     /// `effect resource CompileTimeEnv;` or `effect resource CompileTimeHeap;`
     /// — these names are reserved for the deferred comptime feature (`E0114`).

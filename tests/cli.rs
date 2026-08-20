@@ -4537,6 +4537,133 @@ fn test_single_file_build_refuses_package_member() {
 /// `Platform::host()`). The "modules:" header is emitted right after the walk
 /// and before codegen, so this asserts the *selection* without depending on a
 /// wasm toolchain — the build itself may not complete in a minimal environment.
+/// design.md § Platform-specific modules, Collision rule: a platform file
+/// **replaces** its shared sibling rather than merging with it, so a symbol
+/// that exists only in the shared file is not reachable on the matching
+/// platform. That is the fact which makes a symbol-level platform collision
+/// impossible by construction — the condition design.md drafted
+/// `E0226 ConflictingPlatformModule` for and which cannot arise
+/// (B-2026-08-20-25).
+///
+/// Pinned end-to-end rather than at the walker, where
+/// `platform_file_overrides_shared_on_matching_target` already covers the
+/// file-selection half: what the spec now promises an author is the
+/// user-visible consequence — the shared file's other exports are gone, and
+/// the diagnostic says so with the platform file's real export list.
+///
+/// The platform file is named for the HOST, because the native OS platform is
+/// not selectable from the CLI (see the same section's *Target selection*):
+/// whichever host runs this test is the one whose suffix must win.
+#[test]
+fn platform_file_replaces_its_shared_sibling_rather_than_merging() {
+    let host_suffix = match std::env::consts::OS {
+        "macos" => "macos",
+        "windows" => "windows",
+        _ => "linux",
+    };
+    let tmp = scratch_project("platform-replaces-shared");
+    write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
+    write(
+        &tmp.join("src/main.kara"),
+        "import host.{run, shared_only};\nfn main() { run(); shared_only(); }\n",
+    );
+    // The shared file carries an extra export the platform file lacks.
+    write(
+        &tmp.join("src/host.kara"),
+        "pub fn run() {}\npub fn shared_only() {}\n",
+    );
+    write(
+        &tmp.join(format!("src/host_{host_suffix}.kara")),
+        "pub fn run() {}\n",
+    );
+
+    let out = karac_bin().current_dir(&tmp).arg("check").output().unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let all = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        !out.status.success(),
+        "the shared file's extra export must be unreachable once the platform \
+         file replaces it: {all}"
+    );
+    assert!(
+        all.contains("E0113") && all.contains("shared_only"),
+        "expected E0113 naming the missing item: {all}"
+    );
+    assert!(
+        all.contains("available: run"),
+        "the diagnostic must list the PLATFORM file's exports, which is what \
+         tells the author the shared sibling was replaced: {all}"
+    );
+}
+
+/// `karac check --target=<v1 name>` in PROJECT mode means what it means to
+/// `karac build`: check for that target, platform-suffix selection included.
+/// It used to be folded into the per-file `--targets=` matrix and refused
+/// with "need a file argument", so the spelling design.md points a reader at
+/// worked for `build` and not for `check` (B-2026-08-20-25). The PLURAL
+/// spelling stays refused — it really is a per-file matrix.
+#[test]
+fn project_check_honours_the_singular_target_flag() {
+    let tmp = scratch_project("check-project-target");
+    write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
+    write(
+        &tmp.join("src/main.kara"),
+        "import host.{run, shared_only};\nfn main() { run(); shared_only(); }\n",
+    );
+    write(
+        &tmp.join("src/host.kara"),
+        "pub fn run() {}\npub fn shared_only() {}\n",
+    );
+    write(&tmp.join("src/host_wasm.kara"), "pub fn run() {}\n");
+
+    // Default target: no `_wasm` selection, so the shared file supplies both.
+    let native = karac_bin().current_dir(&tmp).arg("check").output().unwrap();
+    assert!(
+        native.status.success(),
+        "native check should pass: {}{}",
+        String::from_utf8_lossy(&native.stdout),
+        String::from_utf8_lossy(&native.stderr)
+    );
+
+    // `--target=wasm_wasi` swaps in `host_wasm.kara`, which replaces the
+    // shared file — so its extra export goes away and check must say so.
+    let wasm = karac_bin()
+        .current_dir(&tmp)
+        .args(["check", "--target=wasm_wasi"])
+        .output()
+        .unwrap();
+    let wasm_all = format!(
+        "{}{}",
+        String::from_utf8_lossy(&wasm.stdout),
+        String::from_utf8_lossy(&wasm.stderr)
+    );
+    assert!(
+        !wasm.status.success() && wasm_all.contains("shared_only"),
+        "the wasm check must walk host_wasm.kara, losing `shared_only`: {wasm_all}"
+    );
+
+    // The plural spelling is still a per-file matrix.
+    let plural = karac_bin()
+        .current_dir(&tmp)
+        .args(["check", "--targets=all"])
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let plural_all = format!(
+        "{}{}",
+        String::from_utf8_lossy(&plural.stdout),
+        String::from_utf8_lossy(&plural.stderr)
+    );
+    assert!(
+        !plural.status.success() && plural_all.contains("need a file argument"),
+        "--targets= in project mode must still be refused: {plural_all}"
+    );
+}
+
 #[test]
 fn project_build_wasm_target_selects_wasm_platform_module() {
     let tmp = scratch_project("wasm-platform-select");

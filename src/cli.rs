@@ -341,6 +341,11 @@ pub enum Command {
         concurrency_report: bool,
         simd_report: bool,
         lint_overrides: crate::lints::CliLintOverrides,
+        /// `--target=<name>` — the SINGULAR spelling, meaning the same thing
+        /// it means to `karac build`: compile (here, check) for this v1
+        /// target. `None` leaves the process default (`native`). The plural
+        /// `--targets=` is a per-file matrix and is refused in project mode.
+        target: Option<String>,
     },
     BuildProject {
         output: OutputMode,
@@ -840,7 +845,14 @@ pub fn execute(cmd: Command) {
             concurrency_report,
             simd_report,
             lint_overrides,
-        } => cmd_check_project(output, concurrency_report, simd_report, lint_overrides),
+            target,
+        } => cmd_check_project(
+            output,
+            concurrency_report,
+            simd_report,
+            lint_overrides,
+            target.as_deref(),
+        ),
         Command::BuildProject {
             output,
             offline,

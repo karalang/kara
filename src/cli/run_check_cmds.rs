@@ -236,7 +236,8 @@ fn gate_run_on_package_check(root: &std::path::Path, output: OutputMode) {
     // surface its own diagnostic against the entry file, and this gate exists
     // to add errors the run path cannot see, never to invent a new way for
     // `karac run` to fail on a package the build handles.
-    let Ok(pc) = super::build_cmds::package_check(root, &lints) else {
+    let Ok(pc) = super::build_cmds::package_check(root, &lints, crate::target::active_target())
+    else {
         return;
     };
     if !pc.has_errors() {
@@ -1429,7 +1430,14 @@ pub(super) fn cmd_check_project(
     concurrency_report: bool,
     simd_report: bool,
     lint_overrides: crate::lints::CliLintOverrides,
+    target: Option<&str>,
 ) {
+    // `--target=<v1 name>`, the singular spelling, means here what it means to
+    // `karac build`: check for THIS target. It has to be applied before the
+    // walk, because the walk's platform-suffix filter is derived from it
+    // (`--target=wasm_*` selects `_wasm` files) — design.md § Platform-specific
+    // modules > Target selection, B-2026-08-20-25.
+    let build_target = resolve_build_target(target);
     let cwd = match std::env::current_dir() {
         Ok(d) => d,
         Err(e) => {
@@ -1453,7 +1461,7 @@ pub(super) fn cmd_check_project(
     }
     let mut lints = lint_overrides;
     lints.apply_manifest_lints(&mf.lints);
-    let pc = match super::build_cmds::package_check(&root, &lints) {
+    let pc = match super::build_cmds::package_check(&root, &lints, build_target) {
         Ok(pc) => pc,
         Err(e) => {
             emit_build_error(&e, output);
@@ -1525,30 +1533,31 @@ fn cmd_check_package_member(
     if let Ok(mf) = manifest::load_from_root(root) {
         lints.apply_manifest_lints(&mf.lints);
     }
-    let mut pc = match super::build_cmds::package_check(root, &lints) {
-        Ok(pc) => pc,
-        Err(e) => {
-            // No package VIEW could be formed at all — most often a directory
-            // holding a `kara.toml` and modules but no `src/main.kara` /
-            // `src/lib.kara` entry. Several `examples/` packages are shaped
-            // that way, and `karac build` refuses them for the same reason.
-            //
-            // Fall back to the single-file check rather than failing: the
-            // caller asked about one file, and "this package has no entry
-            // point" is not an answer about that file. The single-file view is
-            // the blind one this function exists to replace, so say so once —
-            // narrowing silently would be the original bug wearing a new hat.
-            if output == OutputMode::Text {
-                eprintln!(
-                    "note: checking `{filename}` on its own — the package at `{}` could \
+    let mut pc =
+        match super::build_cmds::package_check(root, &lints, crate::target::active_target()) {
+            Ok(pc) => pc,
+            Err(e) => {
+                // No package VIEW could be formed at all — most often a directory
+                // holding a `kara.toml` and modules but no `src/main.kara` /
+                // `src/lib.kara` entry. Several `examples/` packages are shaped
+                // that way, and `karac build` refuses them for the same reason.
+                //
+                // Fall back to the single-file check rather than failing: the
+                // caller asked about one file, and "this package has no entry
+                // point" is not an answer about that file. The single-file view is
+                // the blind one this function exists to replace, so say so once —
+                // narrowing silently would be the original bug wearing a new hat.
+                if output == OutputMode::Text {
+                    eprintln!(
+                        "note: checking `{filename}` on its own — the package at `{}` could \
                      not be assembled ({e}), so imports of sibling modules are not \
                      resolved here",
-                    root.display(),
-                );
+                        root.display(),
+                    );
+                }
+                return false;
             }
-            return false;
-        }
-    };
+        };
     let had_errors = pc.has_errors();
     let elsewhere = pc.restrict_to_file(std::path::Path::new(filename));
 

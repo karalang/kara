@@ -2435,7 +2435,7 @@ fn colliding_wildcards_are_not_an_error_until_the_name_is_used() {
     );
 }
 
-/// Rule 2's use-site half — `E0124 AmbiguousWildcardImport`. design.md spells
+/// Rule 2's use-site half — `E0124 AmbiguousWildcardImport`. design.md spelled
 /// the code `E0226`, which is the typechecker's band; the number was corrected
 /// in the spec when this landed (see `ResolveErrorKind::AmbiguousWildcardImport`).
 #[test]
