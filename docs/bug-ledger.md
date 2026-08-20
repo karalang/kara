@@ -92,14 +92,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 264 | 0 |
+| miscompile | 265 | 1 |
 | leak | 185 | 0 |
 | run-vs-build | 139 | 0 |
 | double-free | 133 | 0 |
-| missing-feature | 126 | 2 |
+| missing-feature | 126 | 1 |
 | codegen-gap | 119 | 0 |
+| false-positive | 85 | 3 |
 | diagnostics | 84 | 1 |
-| false-positive | 83 | 1 |
 | perf | 79 | 1 |
 | crash | 55 | 1 |
 | soundness | 51 | 0 |
@@ -110,32 +110,34 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 952 | 2 |
-| typecheck | 216 | 2 |
+| codegen | 953 | 3 |
+| typecheck | 218 | 4 |
 | interp | 163 | 0 |
 | ownership | 60 | 0 |
 | other | 58 | 0 |
 | autopar | 52 | 2 |
 | cli | 48 | 0 |
-| parser | 32 | 1 |
+| parser | 32 | 0 |
 | runtime | 27 | 2 |
 | resolver | 20 | 0 |
 | effect | 7 | 0 |
 | lexer | 6 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1387 surfaced · 6 open · 1361 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1390 surfaced · 8 open · 1362 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (8)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-19-13 | 2026-08-19 | typecheck+codegen+runtime | medium | GPU reductions still lack prefix-sum and tiled matmul (separate algorithms, not halving folds); integer `prod` / `dot` are blocked on WGSL lacking a widening multiply; and `variance` / `stddev` are f32-only. Everything else has shipped: sum / prod / min / max / mean / dot / argmin / argmax / variance / stddev over `Vec[f32]`, and sum / min / max / mean / argmin / argmax over `Vec[i32]` and `Vec[u32]`. | docs/spikes/gpu-llvm-offload-assessment.md; src/gpu_wgsl.rs::emit_reduce_kernel; src/reduce_kernel.rs::tree_reduce_f32 |
 | B-2026-08-20-5 | 2026-08-20 | codegen | high | `e2e_128bit_integers_end_to_end` produces EMPTY STDOUT on macOS arm64 only — the binary links and runs but prints nothing before the first `println`. Linux x86_64 and Linux arm64 both pass the same test. CI's `Codegen E2E (macOS arm64, LLVM 18)` lane has been red on `main` since the test landed. | tests/codegen.rs::e2e_128bit_integers_end_to_end (line ~21227); tests/codegen.rs::run_program_capturing (stdout-only discard); added by 7561b5d1 (B-2026-08-19-8 stage 5); CI job `Codegen E2E (macOS arm64, LLVM 18)` in .github/workflows/ci.yml |
-| B-2026-08-20-7 | 2026-08-20 | parser | high | A NEGATIVE integer literal cannot be a match pattern at ANY width: `match n { -5 => .. }` fails to parse with `Expected pattern, found Minus`. Affects every signed type — `-5`, `-5i32`, `-5i64`, `-5i128`, and `i64::MIN` / `i128::MIN` — so the entire negative half of every signed integer is unmatchable by literal. | src/parser/patterns.rs::parse_pattern (no `Token::Minus` arm); src/parser/patterns.rs::parse_literal_pattern (the range-bound entry, same gap); src/parser/exprs.rs::parse_prefix (the expression-side fold to mirror, including both MIN magnitudes) |
 | B-2026-08-20-6 | 2026-08-20 | typecheck | medium | A `u64` / `usize` match whose arms COVER THE WHOLE DOMAIN by two ranges is wrongly rejected as non-exhaustive: `match n { 0u64..=9223372036854775807u64 => .., 9223372036854775808u64..=18446744073709551615u64 => .. }` reports `pattern 9223372036854775808 not covered` — naming the very value the second arm starts at. The identical `u8` shape is accepted. | src/exhaustive.rs::int_domain (declared domain in unsigned space); src/exhaustive.rs (PatCtor::IntRange construction from LiteralPattern::Integer); src/parser/patterns.rs::pattern_int_on_carrier (where the wrap is applied); src/typechecker/exprs.rs::literal_as_i128 (the un-wrap precedent) |
 | B-2026-08-20-8 | 2026-08-20 | autopar | medium | `karac build --concurrency-report` prints the ANALYSIS label with no lowering verdict, so it claims `parallel_reduction` for a loop its own sibling query reports as `fanned_out: false` — the binary contains zero worker symbols | — |
 | B-2026-08-20-9 | 2026-08-20 | runtime+autopar | medium | Auto-par worker threads contend on ONE glibc malloc arena: any fan-out body that allocates per iteration pays a shared lock the sequential build never touches | — |
+| B-2026-08-20-10 | 2026-08-20 | typecheck | high | LITERAL PATTERNS ARE NEVER TYPECHECKED — `PatternKind::Literal` is an explicit "deferred" arm. `match n { 300i8 => .. }` on an `i8`, `99999i8`, a `5u64` pattern against an `i64` scrutinee, and a `true` pattern against an `i64` scrutinee are ALL accepted, and the last two MATCH. The identical literal in expression position is correctly rejected. | src/typechecker/patterns.rs (the `PatternKind::Literal(_) => {}` deferred arm); src/typechecker/exprs.rs::check_int_literal_fits (the existing range check, already suffix-aware); src/typechecker/patterns.rs::resolve_range_bound_value (the range-bound path that DOES resolve a type) |
+| B-2026-08-20-11 | 2026-08-20 | codegen | high | SILENT RUN-VS-BUILD MISCOMPILE: codegen does not compare an enum payload's LITERAL pattern at all — it matches on the tag alone. `match Some(5) { Some(7) => "hit", _ => "no" }` prints `hit` under `karac build` and `no` under `karac run`. Any `Some(<literal>)` arm fires for EVERY `Some(_)`. | src/codegen/control_flow_match.rs (variant-pattern arm test: tag compare with no payload compare); src/codegen/pattern_binding.rs (where the payload IS extracted, for the binding case); tests/codegen.rs::e2e_negative_literal_patterns_match (the MISS this row's existence keeps out of that test) |
+| B-2026-08-20-12 | 2026-08-20 | typecheck | low | A FLOAT literal pattern makes the following `_` arm report `warning[unreachable_arm]`: `match f { 1.5 => .., _ => .. }` warns that the wildcard is "fully covered by an earlier arm". The `_` is of course required — a single float literal covers one value — and the integer equivalent produces no warning. | src/exhaustive.rs::int_domain (no float domain); src/exhaustive.rs (usefulness/unreachable-arm computation for LiteralPattern::Float); src/typechecker (where warning[unreachable_arm] is emitted) |
 
 ### Wontfix (7)
 
@@ -153,9 +155,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1387 surfaced
 
 </details>
 
-### Fixed (1361)
+### Fixed (1362)
 
-<details><summary>1361 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1362 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -12545,6 +12547,19 @@ TWO GAPS FOUND WHILE MEASURING, both PRE-EXISTING (each confirmed by reproducing
   - B-2026-08-20-6: a `u64` match whose two range arms cover the whole domain is wrongly reported non-exhaustive, because the top-half bounds ride the carrier as negatives while `int_domain` speaks unsigned. Sound (it over-demands a wildcard) but it rejects correct code.
 
 WHAT THIS DOES NOT REACH: `i128::MIN` as a pattern still needs B-2026-08-20-7, since its magnitude is only expressible under a unary minus. Every other 128-bit literal is now a legal pattern. |
+| B-2026-08-20-7 | parser | high | A NEGATIVE integer literal cannot be a match pattern at ANY width: `match n { -5 => . | FIXED by 3cf5ff9. The pattern parser gained a unary-minus arm that FOLDS the sign into the literal, mirroring `parser/exprs.rs`'s `parse_prefix` rather than wrapping a negation around it. That distinction is what makes the two MIN magnitudes work: `i64::MIN` and `i128::MIN` have no positive form — each is one past its type's MAX — so they arrive as `IntegerOutOfRange` and exist only already-negated. `LiteralPattern::Integer` carries `i128` since B-2026-08-20-4, so every negative magnitude including `i128::MIN` fits.
+
+THE ROW UNDERSTATED THE POSITIONS. It named match arms and range bounds; measuring found the same failure in enum payloads (`Some(-5)`), or-alternatives (`-1 | -2`), tuple elements (`(-1, 2)`) and FLOATS (`-1.5`) — floats were not mentioned at all and fold on the same arm. All are fixed together because there is one dispatch point, not five.
+
+ONE NON-OBVIOUS PIECE: `starts_literal_pattern` had to accept `-` as well, and that is load-bearing rather than tidiness. It is the predicate that tells `lo..` apart from `lo..hi`, so without it `-10..=-1` parsed its start and then took the HALF-OPEN path — silently changing the pattern's meaning rather than failing.
+
+VERIFICATION. Byte-identical across `karac build`, that build with `KARAC_AUTO_PAR=0`, `karac run` (JIT) and `karac run --interp`, with MISS arms asserted beside every hit: a sign lost between the fold and the compare surfaces as an arm firing on the WRONG value, not as one failing to fire, so hit-only assertions would not have caught it. Exhaustiveness and the unreachable-arm lint were checked explicitly and handle negatives correctly — an `i8` partitioned by sign ranges is accepted, one missing its negative half is rejected naming a negative witness, and a duplicated negative arm is reported unreachable. Tests: `a_negative_literal_parses_as_a_pattern` and `a_bare_minus_in_pattern_position_is_a_diagnostic` (tests/parser.rs), `e2e_negative_literal_patterns_match` (tests/codegen.rs), and the twin `a_negative_literal_pattern_matches` (tests/interpreter.rs). Gates: fmt, both clippy legs, default suite (106 targets), codegen 3087 and memory_sanitizer 1130 under KARAC_REQUIRE_RUNTIME_ARCHIVE=1.
+
+CAVEAT WORTH READING BEFORE THE NEXT CHANGE HERE. The parse error this removes was the ONLY thing rejecting `match u64_val { -5 => .. }` — and it was an accident of syntax, never a type check. Literal patterns are not typechecked at all (`PatternKind::Literal` is a "deferred" arm), so `300i8` on an `i8`, and even a `true` pattern against an `i64` scrutinee, are accepted today and the latter MATCHES. This change adds negative literals to an already-unchecked surface rather than creating the hole; positives demonstrate every symptom. Filed with the evidence as B-2026-08-20-10 (high).
+
+TWO MORE PRE-EXISTING DEFECTS found while measuring, each confirmed by reproducing on a clean `main` build:
+  - B-2026-08-20-11 (high, miscompile): codegen does not compare an enum payload's literal AT ALL — it matches on the tag alone, so `match Some(5) { Some(7) => "hit", _ => "no" }` prints `hit` compiled and `no` interpreted. No negatives involved. Found only because this row's test asserts MISS arms; the hit-only version passes. The one miss this row's test does NOT assert is that shape, with a comment in place so the omission is not silent — asserting it would tie this regression test to that bug's fix.
+  - B-2026-08-20-12 (low): a float literal pattern makes the following `_` arm report `unreachable_arm`. Positive floats do it too, so it is unrelated to sign. |
 
 </details>
 
