@@ -28034,3 +28034,206 @@ fn test_renamed_effect_resources_agree_under_auto_par() {
     }
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+// ── Contested module-binding members (B-2026-08-20-28) ──────────
+//
+// `import conn;` + `conn.open()` desugars to `import conn.{open};` plus a
+// rewrite of the reference to bare `open`. That is only honest while nothing
+// else in the module answers to `open`. When something does, the bare name is
+// contested and the member is reached under an alias instead — otherwise the
+// synthesized import collides with the other binding of the name, or, worse,
+// the rewritten reference silently binds to it.
+
+/// Build a package with two member-sharing modules plus `main`, and return the
+/// stdout of every surface: `check`, `run --interp`, `run` (LLJIT), AOT.
+#[cfg(feature = "llvm")]
+fn module_binding_surfaces(tag: &str, main: &str) -> (bool, Vec<(String, String)>) {
+    let tmp = scratch_project(&format!("module-binding-{tag}"));
+    write(&tmp.join("kara.toml"), "[package]\nname = \"mb\"\n");
+    write(
+        &tmp.join("src/conn.kara"),
+        "pub fn open() -> i64 { return 1; }\npub struct Node { pub v: i64 }\n",
+    );
+    write(
+        &tmp.join("src/pool.kara"),
+        "pub fn open() -> i64 { return 2; }\npub struct Node { pub v: i64 }\n",
+    );
+    write(&tmp.join("src/main.kara"), main);
+
+    let run = |args: &[&str]| -> Option<String> {
+        let out = karac_bin().current_dir(&tmp).args(args).output().ok()?;
+        out.status
+            .success()
+            .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+    };
+    let checked = run(&["check", "src/main.kara"]).is_some();
+    let mut outs = Vec::new();
+    if let Some(o) = run(&["run", "--interp", "src/main.kara"]) {
+        outs.push(("interp".to_string(), o));
+    }
+    if let Some(o) = run(&["run", "src/main.kara"]) {
+        outs.push(("jit".to_string(), o));
+    }
+    let exe = tmp.join("mb");
+    if run(&["build"]).is_some() && exe.exists() {
+        let out = Command::new(&exe).output().unwrap();
+        outs.push((
+            "aot".to_string(),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+        ));
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+    (checked, outs)
+}
+
+/// The two shapes that were SILENT MISCOMPILES: every surface agreed, and every
+/// surface was wrong. `conn.open()` lowered to a bare `open`, which the module
+/// already answered — with a local closure in the first case, with a wildcard
+/// import in the second.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_a_contested_module_binding_member_is_not_captured() {
+    let cases = [
+        (
+            "local-closure",
+            "import conn;\n\
+             fn main() {\n\
+            \x20   let open = || 42;\n\
+            \x20   println(open());\n\
+            \x20   println(conn.open());\n\
+             }\n",
+            "42\n1\n",
+        ),
+        (
+            "wildcard",
+            "import conn;\nimport pool.*;\n\
+             fn main() { println(open()); println(conn.open()); }\n",
+            "2\n1\n",
+        ),
+        (
+            "local-value",
+            "import conn;\n\
+             fn main() { let open = 5; println(open); println(conn.open()); }\n",
+            "5\n1\n",
+        ),
+    ];
+    for (tag, main, expected) in cases {
+        let (checked, outs) = module_binding_surfaces(tag, main);
+        assert!(checked, "{tag}: `karac check` must accept the program");
+        assert!(!outs.is_empty(), "{tag}: no surface produced output");
+        for (surface, got) in outs {
+            assert_eq!(got, expected, "{tag}: {surface}");
+        }
+    }
+}
+
+/// The shapes that were a false `E0101` on a program `karac check` accepted:
+/// two bindings reaching one member name, a binding against a local
+/// declaration, and a binding against an explicit import of the same name from
+/// a different module. Types collide exactly as functions do.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_a_contested_module_binding_member_still_resolves() {
+    let cases = [
+        (
+            "two-bindings",
+            "import conn;\nimport pool;\n\
+             fn main() { println(conn.open()); println(pool.open()); }\n",
+            "1\n2\n",
+        ),
+        (
+            "local-fn",
+            "import conn;\n\
+             fn open() -> i64 { return 99; }\n\
+             fn main() { println(open()); println(conn.open()); }\n",
+            "99\n1\n",
+        ),
+        (
+            "explicit-import-elsewhere",
+            "import conn;\nimport pool.open;\n\
+             fn main() { println(conn.open()); println(open()); }\n",
+            "1\n2\n",
+        ),
+        (
+            "type-member",
+            "import conn;\nimport pool;\n\
+             fn main() {\n\
+            \x20   let a: conn.Node = conn.Node { v: 1 };\n\
+            \x20   let b: pool.Node = pool.Node { v: 2 };\n\
+            \x20   println(a.v);\n\
+            \x20   println(b.v);\n\
+             }\n",
+            "1\n2\n",
+        ),
+    ];
+    for (tag, main, expected) in cases {
+        let (checked, outs) = module_binding_surfaces(tag, main);
+        assert!(checked, "{tag}: `karac check` must accept the program");
+        assert!(!outs.is_empty(), "{tag}: no surface produced output");
+        for (surface, got) in outs {
+            assert_eq!(got, expected, "{tag}: {surface}");
+        }
+    }
+}
+
+/// An UNCONTESTED member keeps the bare lowering — the shape the desugar was
+/// written for, and the one every existing module-binding program is in.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_an_uncontested_module_binding_member_keeps_the_bare_name() {
+    let (checked, outs) = module_binding_surfaces(
+        "uncontested",
+        "import conn;\nfn main() { println(conn.open()); }\n",
+    );
+    assert!(checked);
+    assert!(!outs.is_empty());
+    for (surface, got) in outs {
+        assert_eq!(got, "1\n", "{surface}");
+    }
+}
+
+/// A CHAIN — `import db;` + `db.conn.open()` — walks two module segments before
+/// reaching an item, and the contested rewrite has to survive that. Both legs
+/// reach an `open`, so both are aliased.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_a_contested_member_reached_through_a_binding_chain() {
+    let tmp = scratch_project("module-binding-chain");
+    write(&tmp.join("kara.toml"), "[package]\nname = \"mb\"\n");
+    write(
+        &tmp.join("src/db.kara"),
+        "pub fn ping() -> i64 { return 0; }\n",
+    );
+    write(
+        &tmp.join("src/db/conn.kara"),
+        "pub fn open() -> i64 { return 1; }\n",
+    );
+    write(
+        &tmp.join("src/db/pool.kara"),
+        "pub fn open() -> i64 { return 2; }\n",
+    );
+    write(
+        &tmp.join("src/main.kara"),
+        "import db;\nfn main() { println(db.conn.open()); println(db.pool.open()); }\n",
+    );
+
+    let run = |args: &[&str]| -> Option<String> {
+        let out = karac_bin().current_dir(&tmp).args(args).output().ok()?;
+        out.status
+            .success()
+            .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+    };
+    assert_eq!(
+        run(&["run", "--interp", "src/main.kara"]).as_deref(),
+        Some("1\n2\n")
+    );
+    assert_eq!(run(&["run", "src/main.kara"]).as_deref(), Some("1\n2\n"));
+    let exe = tmp.join("mb");
+    if run(&["build"]).is_some() && exe.exists() {
+        let out = Command::new(&exe).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "1\n2\n", "AOT");
+    } else {
+        eprintln!("skip: AOT build produced no binary (no runtime archive?)");
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+}

@@ -1018,8 +1018,10 @@ fn expand_module_binding_imports(m: &mut Module, known: &std::collections::HashS
     // Every name this module binds to a SUBMODULE, and where it came from.
     let mut binds: HashMap<String, ModulePath> = HashMap::new();
     // Target module path -> (index of the binding declaration, its `pub`,
-    // the per-segment spans of the full path).
-    let mut origin: HashMap<ModulePath, (usize, bool, Vec<crate::token::Span>)> = HashMap::new();
+    // the per-segment spans of the full path). Seeded from the bindings the
+    // user actually wrote; each fixpoint run extends its OWN copy with the
+    // chain steps it walks.
+    let mut origin_seed: BindingOrigins = HashMap::new();
     for (idx, item) in m.items.iter().enumerate() {
         let Item::Import(imp) = item else { continue };
         // A wildcard brings in a module's `pub` ITEMS, never its sub-modules
@@ -1038,7 +1040,7 @@ fn expand_module_binding_imports(m: &mut Module, known: &std::collections::HashS
             let mut spans = imp.path_spans.clone();
             spans.resize(full.len().saturating_sub(1), imp.span);
             spans.push(it.span);
-            origin.insert(full.clone(), (idx, imp.is_pub, spans));
+            origin_seed.insert(full.clone(), (idx, imp.is_pub, spans));
             binds.insert(bound, full);
         }
     }
@@ -1068,16 +1070,109 @@ fn expand_module_binding_imports(m: &mut Module, known: &std::collections::HashS
         return;
     }
 
-    // Iterate to a fixpoint so a CHAIN resolves: `import db;` +
-    // `db.connection.open(5)` strips to `connection.open(5)` on the first
-    // pass, which is itself a module binding — one more pass turns it into
-    // `open(5)`. A name that names a submodule is re-bound rather than
-    // recorded as an item reference (there is no item to import), and each
-    // re-binding lengthens the module path, so the loop terminates.
+    // The rewrite is run twice in the uncommon case: once to learn WHICH bare
+    // names the bindings claim, and — if any of them is contested — again from
+    // a pristine copy with an alias for each contested one. Deciding up front
+    // is not possible: the contested set is derived from the references found,
+    // and finding them is what the rewrite does.
+    let pristine = m.items.clone();
+    let no_aliases = crate::module_binding::MemberAliases::new();
+    let (mut refs, mut origin) = run_binding_fixpoint(
+        m,
+        &binds,
+        &no_aliases,
+        known,
+        &shadowed,
+        &already_imported,
+        origin_seed.clone(),
+    );
+
+    let aliases = contested_member_aliases(m, &refs, &shadowed, &already_imported);
+    if !aliases.is_empty() {
+        // Re-run from scratch — items AND `origin`. A chain step is recorded in
+        // `origin` the first time it is walked and then refuses to re-bind a
+        // path the table already holds, so handing the second run the first's
+        // table would stop `db.conn.open()` after its first segment.
+        m.items = pristine;
+        (refs, origin) = run_binding_fixpoint(
+            m,
+            &binds,
+            &aliases,
+            known,
+            &shadowed,
+            &already_imported,
+            origin_seed,
+        );
+    }
+
+    // Splice each synthesized declaration in after the one that bound its
+    // module, walking insertion points from the back so earlier indices stay
+    // valid.
+    let mut spliced: Vec<(usize, Item)> = Vec::new();
+    for (path, names) in refs {
+        let Some((idx, is_pub, path_spans)) = origin.get(&path) else {
+            continue;
+        };
+        let decl_span = *path_spans
+            .last()
+            .expect("path_spans always ends with the bound segment's span");
+        let items: Vec<ImportItem> = names
+            .into_iter()
+            .map(|(name, span)| {
+                let alias = aliases.get(&(path.clone(), name.clone())).cloned();
+                ImportItem { span, name, alias }
+            })
+            .collect();
+        spliced.push((
+            *idx,
+            Item::Import(ImportDecl {
+                span: decl_span,
+                is_pub: *is_pub,
+                is_wildcard: false,
+                path,
+                path_spans: path_spans.clone(),
+                items,
+            }),
+        ));
+    }
+    if spliced.is_empty() {
+        return;
+    }
+    spliced.sort_by(|a, b| b.0.cmp(&a.0));
+    for (idx, item) in spliced {
+        m.items.insert(idx + 1, item);
+    }
+    m.imports = extract_imports_from_items(&m.items);
+}
+
+/// Where each bound module path came from: the index of the declaration that
+/// bound it, whether that declaration was `pub`, and the per-segment spans of
+/// the full path.
+type BindingOrigins = HashMap<ModulePath, (usize, bool, Vec<crate::token::Span>)>;
+
+/// Rewrite `m`'s module-binding references to a fixpoint, returning the item
+/// references found and the origin table the walk extended. Split out of [`expand_module_binding_imports`] because it
+/// runs twice when a bare name turns out to be contested.
+///
+/// The fixpoint resolves a CHAIN: `import db;` + `db.connection.open(5)` strips
+/// to `connection.open(5)` on the first pass, which is itself a module binding —
+/// one more pass turns it into `open(5)`. A name that names a submodule is
+/// re-bound rather than recorded as an item reference (there is no item to
+/// import), and each re-binding lengthens the module path, so it terminates.
+#[allow(clippy::too_many_arguments)]
+fn run_binding_fixpoint(
+    m: &mut Module,
+    binds: &HashMap<String, ModulePath>,
+    aliases: &crate::module_binding::MemberAliases,
+    known: &std::collections::HashSet<ModulePath>,
+    shadowed: &std::collections::HashSet<String>,
+    already_imported: &std::collections::HashSet<ModulePath>,
+    mut origin: BindingOrigins,
+) -> (crate::module_binding::ModuleRefs, BindingOrigins) {
     let mut refs = crate::module_binding::ModuleRefs::new();
-    let mut round = binds;
+    let mut round = binds.clone();
     while !round.is_empty() {
-        let found = crate::module_binding::strip_module_bindings(&mut m.items, &round);
+        let found = crate::module_binding::strip_module_bindings(&mut m.items, &round, aliases);
         let mut next: HashMap<String, ModulePath> = HashMap::new();
         for (path, names) in found {
             for (name, span) in names {
@@ -1107,46 +1202,102 @@ fn expand_module_binding_imports(m: &mut Module, known: &std::collections::HashS
         }
         round = next;
     }
+    (refs, origin)
+}
 
-    // Splice each synthesized declaration in after the one that bound its
-    // module, walking insertion points from the back so earlier indices stay
-    // valid.
-    let mut spliced: Vec<(usize, Item)> = Vec::new();
+/// Which members reached through a module binding must NOT take their bare name
+/// in the importing module, and what to call them instead.
+///
+/// The desugar's whole trick is that `conn.open()` becomes `open()` next to a
+/// synthesized `import conn.{open};`. That is only honest while nothing else in
+/// the module answers to `open`. When something else does, claiming the bare
+/// name is wrong in both directions — the synthesized import collides with the
+/// other binding of the name (a false `E0101` on a program `karac check`
+/// accepts), or the rewritten reference silently binds to it instead
+/// (B-2026-08-20-28 measured both, including `conn.open()` calling a local
+/// closure named `open` and printing its result on every surface).
+///
+/// So a member is contested, and gets an alias, when any of these holds:
+///
+/// 1. **two module bindings reach the same member name** — neither can have it;
+/// 2. **the module declares the name, or binds it as a value anywhere** — a
+///    `let open = …` captures the rewritten reference;
+/// 3. **an explicit import binds the name from a different module** — the user
+///    asked for that one, so the binding cannot take it;
+/// 4. **the module has any wildcard import.** The wildcard has not expanded
+///    yet, so what it supplies is unknown here; and a synthesized import
+///    outranks a wildcard by design.md's first precedence rule, which would let
+///    a name the user never wrote win over one they did. Deliberately
+///    over-approximate: a module mixing a binding with a wildcard gets an alias
+///    it may not have needed, which costs a mangled name in a diagnostic and
+///    nothing else.
+///
+/// Empty for a module where the bare names are free, which is the shape the
+/// desugar was written for and stays byte-identical.
+fn contested_member_aliases(
+    m: &Module,
+    refs: &crate::module_binding::ModuleRefs,
+    shadowed: &std::collections::HashSet<String>,
+    already_imported: &std::collections::HashSet<ModulePath>,
+) -> crate::module_binding::MemberAliases {
+    let has_wildcard = m
+        .items
+        .iter()
+        .any(|it| matches!(it, Item::Import(imp) if imp.is_wildcard));
+
+    // Bare member name -> the module paths that supply it through a binding.
+    let mut providers: HashMap<&String, Vec<&ModulePath>> = HashMap::new();
     for (path, names) in refs {
-        let Some((idx, is_pub, path_spans)) = origin.get(&path) else {
+        for name in names.keys() {
+            providers.entry(name).or_default().push(path);
+        }
+    }
+
+    // Every name the module binds through an ordinary import, and from where.
+    let mut explicit: HashMap<String, ModulePath> = HashMap::new();
+    for it in &m.items {
+        let Item::Import(imp) = it else { continue };
+        if imp.is_wildcard {
             continue;
-        };
-        let decl_span = *path_spans
-            .last()
-            .expect("path_spans always ends with the bound segment's span");
-        let items: Vec<ImportItem> = names
-            .into_iter()
-            .map(|(name, span)| ImportItem {
-                span,
-                name,
-                alias: None,
-            })
-            .collect();
-        spliced.push((
-            *idx,
-            Item::Import(ImportDecl {
-                span: decl_span,
-                is_pub: *is_pub,
-                is_wildcard: false,
-                path,
-                path_spans: path_spans.clone(),
-                items,
-            }),
-        ));
+        }
+        for ii in &imp.items {
+            let mut full = imp.path.clone();
+            full.push(ii.name.clone());
+            explicit.insert(ii.alias.clone().unwrap_or_else(|| ii.name.clone()), full);
+        }
     }
-    if spliced.is_empty() {
-        return;
+
+    let mut taken: std::collections::HashSet<String> = shadowed.clone();
+    taken.extend(explicit.keys().cloned());
+    taken.extend(providers.keys().map(|n| (*n).clone()));
+
+    let mut aliases = crate::module_binding::MemberAliases::new();
+    // Sorted so the minting order — and therefore any numeric tail — does not
+    // depend on hash iteration order.
+    let mut names: Vec<&String> = providers.keys().copied().collect();
+    names.sort();
+    for name in names {
+        let paths = providers[name].clone();
+        for path in paths {
+            let mut full = path.clone();
+            full.push(name.clone());
+            // An identical un-aliased import of this very item already binds
+            // the name; the reference lands on it and nothing is synthesized.
+            if already_imported.contains(&full) {
+                continue;
+            }
+            let contested = providers[name].len() > 1
+                || has_wildcard
+                || shadowed.contains(name)
+                || explicit.get(name).is_some_and(|bound| *bound != full);
+            if !contested {
+                continue;
+            }
+            let alias = crate::module_rename::qualified_name(name, path, &mut taken);
+            aliases.insert((path.clone(), name.clone()), alias);
+        }
     }
-    spliced.sort_by(|a, b| b.0.cmp(&a.0));
-    for (idx, item) in spliced {
-        m.items.insert(idx + 1, item);
-    }
-    m.imports = extract_imports_from_items(&m.items);
+    aliases
 }
 
 /// Walk top-level items and gather every `import` declaration into a side

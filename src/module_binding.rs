@@ -67,16 +67,25 @@ use crate::token::Span;
 /// referenced through it and the span of the first such reference.
 pub(crate) type ModuleRefs = HashMap<Vec<String>, BTreeMap<String, Span>>;
 
-/// Rewrite every `<bound>.NAME` reference in `items` to bare `NAME`.
+/// The local name a contested member is reached under, keyed by the module it
+/// came from and the name it has there — see [`strip_module_bindings`].
+pub(crate) type MemberAliases = HashMap<(Vec<String>, String), String>;
+
+/// Rewrite every `<bound>.NAME` reference in `items` to the local name it takes
+/// after the desugar: bare `NAME`, or the alias `aliases` gives it.
 ///
 /// `binds` maps a bound module-alias name to the module path it names.
-/// Returns, per module path, the names that were actually reached through it.
+/// Returns, per module path, the names that were actually reached through it —
+/// always under the name they have in the DECLARING module, which is what the
+/// synthesized import has to name.
 pub(crate) fn strip_module_bindings(
     items: &mut [Item],
     binds: &HashMap<String, Vec<String>>,
+    aliases: &MemberAliases,
 ) -> ModuleRefs {
     let mut s = Stripper {
         binds,
+        aliases,
         refs: ModuleRefs::new(),
     };
     if !binds.is_empty() {
@@ -97,6 +106,7 @@ pub(crate) fn shadowed_names(items: &mut [Item]) -> HashSet<String> {
 
 struct Stripper<'a> {
     binds: &'a HashMap<String, Vec<String>>,
+    aliases: &'a MemberAliases,
     refs: ModuleRefs,
 }
 
@@ -110,6 +120,16 @@ impl Stripper<'_> {
             .or_insert(span);
     }
 
+    /// Record the reference and answer with the local name it becomes — bare
+    /// `name`, or the alias minted for it because the bare name is contested.
+    fn resolved(&mut self, path: &[String], name: &str, span: Span) -> String {
+        self.note(path, name, span);
+        self.aliases
+            .get(&(path.to_vec(), name.to_string()))
+            .cloned()
+            .unwrap_or_else(|| name.to_string())
+    }
+
     /// Drop a leading segment naming a bound module: `["connection",
     /// "Connection"]` → `["Connection"]`. A single-segment path is left
     /// alone — a bare `connection` names no item.
@@ -121,7 +141,8 @@ impl Stripper<'_> {
             return;
         };
         segments.remove(0);
-        self.note(&path, &segments[0], span);
+        let bare = segments[0].clone();
+        segments[0] = self.resolved(&path, &bare, span);
     }
 
     // ── Items ────────────────────────────────────────────────────
@@ -492,13 +513,13 @@ impl Stripper<'_> {
                     return None;
                 };
                 let path = self.binds.get(recv)?.clone();
-                self.note(&path, method, object.span);
+                let local = self.resolved(&path, method, object.span);
                 let callee_kind = match turbofish.take() {
                     Some(tf) => ExprKind::Path {
-                        segments: vec![method.clone()],
+                        segments: vec![local],
                         generic_args: Some(tf.into_iter().map(GenericArg::Type).collect()),
                     },
-                    None => ExprKind::Identifier(method.clone()),
+                    None => ExprKind::Identifier(local),
                 };
                 Some(ExprKind::Call {
                     callee: Box::new(Expr {
@@ -513,8 +534,8 @@ impl Stripper<'_> {
                     return None;
                 };
                 let path = self.binds.get(recv)?.clone();
-                self.note(&path, field, object.span);
-                Some(ExprKind::Identifier(field.clone()))
+                let local = self.resolved(&path, field, object.span);
+                Some(ExprKind::Identifier(local))
             }
             _ => None,
         }

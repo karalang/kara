@@ -149,7 +149,7 @@ pub fn plan(tree: &ProgramTree) -> FlatRenames {
             if locals_of[&id].contains(name) || name_is_linkage(tree.module(id), name) {
                 continue; // see the module doc's two guards
             }
-            let fresh = mint(name, &tree.module(id).path, &mut taken);
+            let fresh = qualified_name(name, &tree.module(id).path, &mut taken);
             renames
                 .per_module
                 .entry(id)
@@ -193,13 +193,17 @@ fn has_no_mangle(attributes: &[Attribute]) -> bool {
     attributes.iter().any(|a| a.is_bare("no_mangle"))
 }
 
-/// Derive a free name for `name` as declared by the module at `path`.
+/// Derive a free name for `name` qualified by the module at `path`.
 ///
 /// `alpha`'s `common` becomes `common__alpha`, `db.conn`'s becomes
 /// `common__db_conn`. The suffix goes last so the leading character — which
 /// carries Kāra's Value-vs-Type naming class — is preserved. A derived name
 /// that is somehow taken gets a numeric tail rather than silently colliding.
-fn mint(name: &str, path: &[String], taken: &mut HashSet<String>) -> String {
+///
+/// Shared with `module_binding`, which needs the same "this name, from that
+/// module" spelling for a contested member alias. One formula so the two
+/// cannot drift into two conventions.
+pub(crate) fn qualified_name(name: &str, path: &[String], taken: &mut HashSet<String>) -> String {
     let suffix = if path.is_empty() {
         "root".to_string()
     } else {
