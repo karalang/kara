@@ -4167,6 +4167,51 @@ impl<'a> TypeChecker<'a> {
     }
 
     pub(super) fn check_assignable(&mut self, expected: &Type, found: &Type, span: Span) -> bool {
+        // B-2026-08-20-13 — a FLOAT never flows implicitly into an INTEGER
+        // slot. `types_compatible` treats any int/uint/float pair as
+        // compatible and says so explicitly ("bidirectional for compatibility
+        // checks"), which is right for the direction the comment names — an
+        // `i64` value into an `f64` parameter, the documented widening — but
+        // the rule is SYMMETRIC, so the lossy direction rode along with it and
+        // `let n: i64 = 1.5` compiled, printing `1.5`. The annotation was not
+        // merely unenforced, it was discarded: every downstream consumer that
+        // trusts the declared type (width for the range check, signedness for
+        // display and division, the LLVM type for codegen) then reasons about
+        // an integer over a float value, and `s.x + 1` on an `i64`-declared
+        // field yields `4.5`.
+        //
+        // Every other literal class was already rejected here (`bool`, `char`,
+        // `String`, and an out-of-range `i8`), so this closes the one gap in an
+        // otherwise complete check rather than adding a new kind of strictness.
+        //
+        // Sited at the ASSIGNMENT boundary, not in `types_compatible`, for the
+        // same reason B-2026-08-05-19 put the generic-argument layout rule
+        // here: `types_compatible` is also the unification predicate, where the
+        // symmetric numeric arm is load-bearing during inference. This gate
+        // only fires where a VALUE flows into a DECLARED slot — which is every
+        // check-mode position (`let`, argument, return, struct field), all of
+        // which funnelled through here and all of which accepted a float.
+        //
+        // An integral-valued float (`let n: i64 = 2.0`) is rejected too: the
+        // literal is still an `f64`, nothing in the language says a `.0` suffix
+        // means "integer", and accepting it would make the rule depend on the
+        // VALUE rather than the TYPE. `as` remains the way to convert.
+        if matches!(expected, Type::Int(_) | Type::UInt(_)) && matches!(found, Type::Float(_)) {
+            self.type_error_with_types(
+                format!(
+                    "expected '{}', found '{}'; a float does not implicitly \
+                     convert to an integer — use `as {}` to truncate",
+                    type_display(expected),
+                    type_display(found),
+                    type_display(expected),
+                ),
+                span,
+                TypeErrorKind::TypeMismatch,
+                expected,
+                found,
+            );
+            return false;
+        }
         // B-2026-07-15-3: a `ref` / `mut ref` SCALAR reads as its value type
         // in any value position (annotated let, argument passing, …) — the
         // same auto-deref arithmetic already performs

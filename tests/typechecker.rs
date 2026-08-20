@@ -378,6 +378,28 @@ fn type_errors_of(source: &str) -> Vec<TypeError> {
     typecheck(&parsed.program, &resolved).errors
 }
 
+/// Non-fatal typecheck diagnostics, rendered to strings. `UnreachableArm` from
+/// the Maranget reachability pass lands here rather than in `errors`, so a
+/// test about a spurious WARNING has to read this side (B-2026-08-20-12).
+fn type_warnings_of(source: &str) -> Vec<String> {
+    let parsed = parse(source);
+    assert!(
+        parsed.errors.is_empty(),
+        "expected a clean parse of {source:?}, got: {:?}",
+        parsed
+            .errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+    );
+    let resolved = resolve(&parsed.program);
+    typecheck(&parsed.program, &resolved)
+        .warnings
+        .iter()
+        .map(|w| w.to_string())
+        .collect()
+}
+
 /// The INVARIANT behind B-2026-08-20-10's fix, asserted directly: for the same
 /// literal and the same type, pattern position and expression position reach
 /// the same verdict. Expression position was the oracle the check was built
@@ -385,12 +407,14 @@ fn type_errors_of(source: &str) -> Vec<TypeError> {
 /// again — a future change to either side that breaks the correspondence fails
 /// here rather than silently reopening the gap.
 ///
-/// ONE DELIBERATE EXCEPTION, asserted as an exception so it cannot rot into an
-/// unnoticed inconsistency: a FLOAT literal at an INTEGER scrutinee. Expression
-/// position accepts `let n: i64 = 1.5` and binds a float to an `i64`-annotated
-/// name, printing `1.5` — a pre-existing defect filed as B-2026-08-20-13.
-/// Replicating it would mean accepting a pattern that can never match, so the
-/// pattern side is stricter and the expression side is what has to catch up.
+/// The one deliberate exception this test carried — a FLOAT literal at an
+/// INTEGER scrutinee, where expression position accepted `let n: i64 = 1.5`
+/// and bound a float to an `i64`-annotated name — is RETIRED. B-2026-08-20-13
+/// fixed the expression side, so the pattern side no longer has to be stricter
+/// than its own oracle and the case is an ordinary agreement row above. The
+/// exception mechanism did its job: it named the defect, predicted exactly
+/// which assertion would flip when it was fixed, and failed loudly here the
+/// moment it was.
 #[test]
 fn the_literal_pattern_check_agrees_with_expression_position() {
     for (ty, init, lit) in [
@@ -408,6 +432,11 @@ fn the_literal_pattern_check_agrees_with_expression_position() {
         ("u8", "5u8", "300"),
         ("u8", "5u8", "-1"),
         ("u64", "5u64", "18446744073709551615u64"),
+        // B-2026-08-20-13 — a float at an integer slot. This used to be the
+        // one row where the two positions DISAGREED (expression accepted,
+        // pattern rejected) and it lived in a pinned exception below; now that
+        // the expression side rejects too, it is an ordinary agreement row.
+        ("i64", "5i64", "1.5"),
     ] {
         let expr_src = format!("fn main() {{ let n: {ty} = {lit}; println(1) }}");
         let pat_src = format!(
@@ -421,12 +450,14 @@ fn the_literal_pattern_check_agrees_with_expression_position() {
              expression rejected={expr_rejected}, pattern rejected={pat_rejected}"
         );
     }
-    // The documented exception, pinned in both directions.
+    // The departure this test used to pin is RETIRED (B-2026-08-20-13). The
+    // expression side rejects a float at an integer slot now, so the two
+    // positions agree everywhere and the exception moved into the table above.
+    // Both halves stay asserted directly, since they are the shapes the
+    // agreement rests on.
     assert!(
-        type_errors_of("fn main() { let n: i64 = 1.5; println(1) }").is_empty(),
-        "expression position is expected to (wrongly) accept a float at an int \
-         binding — if this now fails, B-2026-08-20-13 was fixed and the pattern \
-         side's departure can be retired"
+        !type_errors_of("fn main() { let n: i64 = 1.5; println(1) }").is_empty(),
+        "a float at an integer binding must be rejected in expression position"
     );
     assert!(
         !type_errors_of(
@@ -434,6 +465,138 @@ fn the_literal_pattern_check_agrees_with_expression_position() {
         )
         .is_empty(),
         "a float literal pattern at an integer scrutinee must be rejected"
+    );
+    // The widening direction is unaffected: an INTEGER at a float slot stays
+    // accepted in both positions. Without this the fix above could have been
+    // "reject every int/float pair" and this test would not have noticed.
+    assert!(
+        type_errors_of("fn main() { let x: f64 = 5; println(1) }").is_empty(),
+        "an integer at a float binding is the documented widening and must be accepted"
+    );
+}
+
+/// B-2026-08-20-13 — a float never flows implicitly into an integer slot.
+///
+/// The row was filed as "a float LITERAL at an integer-annotated BINDING", but
+/// the hole is type-level, not literal-level: `types_compatible` treats any
+/// int/uint/float pair as compatible ("bidirectional for compatibility
+/// checks"), which is right for the widening direction the comment names and
+/// let the lossy direction ride along. So every check-mode position accepted
+/// it, for variables as well as literals. Each position below was measured
+/// accepting a float before the fix.
+#[test]
+fn a_float_is_rejected_at_every_integer_slot() {
+    for (label, src) in [
+        ("let, literal", "fn main() { let n: i64 = 1.5; println(n) }"),
+        (
+            "let, variable",
+            "fn main() { let f: f64 = 1.5; let n: i64 = f; println(n) }",
+        ),
+        (
+            "argument",
+            "fn takes(n: i64) -> i64 { return n; }\nfn main() { println(takes(2.5)) }",
+        ),
+        (
+            "return",
+            "fn r() -> i64 { return 1.5; }\nfn main() { println(r()) }",
+        ),
+        (
+            "struct field",
+            "struct S { x: i64 }\nfn main() { let s = S { x: 3.5 }; println(s.x) }",
+        ),
+        // Narrower widths take the same path — the gate is on the CLASS, not
+        // the width, so a fix keyed on `i64` alone would miss these.
+        ("i32", "fn main() { let n: i32 = 1.5; println(n) }"),
+        ("u8", "fn main() { let n: u8 = 3.9; println(n) }"),
+        // An integral-VALUED float is still an `f64`. Accepting it would make
+        // the rule depend on the value rather than the type.
+        (
+            "integral-valued",
+            "fn main() { let n: i64 = 2.0; println(n) }",
+        ),
+    ] {
+        assert!(
+            !type_errors_of(src).is_empty(),
+            "a float must not be accepted at an integer slot ({label}); src:\n{src}"
+        );
+    }
+}
+
+/// The other direction of B-2026-08-20-13: the documented int-to-float
+/// widening is untouched. Without these the fix could have been "reject every
+/// int/float pair" — which would compile and pass the rejection test above.
+#[test]
+fn an_integer_still_widens_into_every_float_slot() {
+    for (label, src) in [
+        ("let f64", "fn main() { let x: f64 = 5; println(x) }"),
+        ("let f32", "fn main() { let x: f32 = 2; println(x) }"),
+        (
+            "let from int variable",
+            "fn main() { let n: i64 = 3; let x: f64 = n; println(x) }",
+        ),
+        (
+            "argument",
+            "fn takes(x: f64) -> f64 { return x; }\nfn main() { println(takes(7)) }",
+        ),
+        (
+            "struct field",
+            "struct P { f: f64 }\nfn main() { let p = P { f: 9 }; println(p.f) }",
+        ),
+    ] {
+        assert!(
+            type_errors_of(src).is_empty(),
+            "an integer at a float slot is the documented widening ({label}); src:\n{src}\n\
+             errors: {:?}",
+            type_errors_of(src)
+        );
+    }
+}
+
+/// B-2026-08-20-12 — a float literal PATTERN covers one value, not the whole
+/// type, so it must not make a later arm unreachable.
+///
+/// `exhaustive.rs` lowered it to `Pat::Wildcard`, which covers the entire
+/// domain, so the `_` arm a float match REQUIRES was reported as "fully
+/// covered by an earlier arm". All three properties are asserted together
+/// because the obvious fixes break each other: dropping the arm entirely would
+/// silence the warning but also stop demanding the wildcard.
+#[test]
+fn a_float_literal_pattern_covers_one_value_not_the_type() {
+    // (1) The required `_` after a float literal is NOT unreachable.
+    let warns = type_warnings_of(
+        "fn main() { let f: f64 = 1.5; match f { 1.5 => println(1), _ => println(2), } }",
+    );
+    assert!(
+        !warns.iter().any(|w| w.contains("unreachable")),
+        "the `_` a float match requires must not be reported unreachable; got: {warns:?}"
+    );
+
+    // (2) A DUPLICATE float arm still is unreachable — the fix must not have
+    // simply stopped modelling float patterns.
+    let dup = type_warnings_of(
+        "fn main() { let f: f64 = 1.5; \
+         match f { 1.5 => println(1), 1.5 => println(2), _ => println(3), } }",
+    );
+    assert!(
+        dup.iter().any(|w| w.contains("unreachable")),
+        "a repeated float literal arm must still be reported unreachable; got: {dup:?}"
+    );
+
+    // (3) A float match with no wildcard is still non-exhaustive — a float
+    // literal must never act as a catch-all.
+    assert!(
+        !type_errors_of("fn main() { let f: f64 = 1.5; match f { 1.5 => println(1), } }")
+            .is_empty(),
+        "a float match without a wildcard must stay non-exhaustive"
+    );
+
+    // The integer control the row used: no warning either way.
+    let int_warns = type_warnings_of(
+        "fn main() { let n: i64 = 5; match n { 5 => println(1), _ => println(2), } }",
+    );
+    assert!(
+        !int_warns.iter().any(|w| w.contains("unreachable")),
+        "the integer equivalent must stay warning-free; got: {int_warns:?}"
     );
 }
 

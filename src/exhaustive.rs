@@ -385,6 +385,20 @@ enum PatCtor {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum PatLit {
     String(String),
+    /// A float literal pattern, keyed by its IEEE-754 BIT PATTERN so the
+    /// variant can derive `Eq`/`Hash` (which `f64` cannot). B-2026-08-20-12.
+    ///
+    /// Two edge cases this keying gets wrong, both in the SAFE direction —
+    /// it can miss an unreachable-arm warning, never invent one:
+    ///   - `0.0` and `-0.0` have different bits but compare EQUAL at runtime,
+    ///     so a `-0.0` arm after a `0.0` arm is dead and we will not say so.
+    ///   - NaN has many bit patterns and compares UNEQUAL to itself, so a NaN
+    ///     arm never matches at runtime whatever we model. (The lexer has no
+    ///     NaN literal syntax, so this is unreachable in practice.)
+    ///
+    /// Modelling exact float coverage needs a real float domain; until then
+    /// under-reporting beats the over-reporting this replaced.
+    Float(u64),
 }
 
 #[derive(Debug, Clone)]
@@ -637,12 +651,28 @@ fn lower_pattern(p: &Pattern, scrut_type: &Type, env: &TypeEnv) -> Pat {
                 ctor: PatCtor::Lit(PatLit::String(s.clone())),
                 args: vec![],
             },
-            // Float patterns lack an Eq/Hash story under f64 — slice 3's
-            // type-specific handling models them explicitly. Until then,
-            // collapse to wildcard. Float scrutinees are wildcard-required
-            // anyway, so this only affects nested float literals (which the
-            // is_top_level gate already keeps rare).
-            LiteralPattern::Float(_, _) => Pat::Wildcard,
+            // A float literal covers exactly ONE value, so it lowers to a
+            // non-catch-all `Lit` ctor keyed on the bit pattern.
+            //
+            // It used to collapse to `Pat::Wildcard` on the grounds that a
+            // wildcard is the conservative choice and float scrutinees demand
+            // a `_` arm anyway. That reasoning is backwards for REACHABILITY:
+            // a wildcard covers the whole domain, so every arm after a float
+            // literal looked redundant and `match f { 1.5 => .., _ => .. }`
+            // warned that the required `_` was "fully covered by an earlier
+            // arm" (B-2026-08-20-12). The accompanying claim that this only
+            // affected NESTED float literals was also wrong — the repro is a
+            // top-level scrutinee.
+            //
+            // A `Lit` ctor is right on both axes: it never acts as a
+            // catch-all, so a float scrutinee still requires a wildcard to be
+            // exhaustive (unchanged), and it covers only itself, so later arms
+            // stay reachable. Two textually identical float arms still
+            // correctly report the second as unreachable.
+            LiteralPattern::Float(f, _) => Pat::Ctor {
+                ctor: PatCtor::Lit(PatLit::Float(f.to_bits())),
+                args: vec![],
+            },
         },
         // Range patterns lower to an inclusive `IntRange` interval. Open
         // ends (`..=hi`, `lo..`) take the scrutinee type's domain bound;
@@ -1402,6 +1432,16 @@ fn render_ctor(ctor: &PatCtor, args: &[Pat], ty: &Type, env: &TypeEnv) -> String
         PatCtor::Bool(b) => b.to_string(),
         PatCtor::IntRange { lo, hi } => render_int_range(*lo, *hi, ty, env),
         PatCtor::Lit(PatLit::String(s)) => format!("{s:?}"),
+        PatCtor::Lit(PatLit::Float(bits)) => {
+            // Render the value, not the bits — this string reaches a user in a
+            // non-exhaustive-match witness.
+            let v = f64::from_bits(*bits);
+            if v.fract() == 0.0 && v.is_finite() {
+                format!("{v:.1}")
+            } else {
+                format!("{v}")
+            }
+        }
         PatCtor::Variant(name) => render_variant(name, args, ty, env),
         PatCtor::Tuple => render_tuple(args, ty, env),
         PatCtor::Struct(name) => render_struct(name, args, env),

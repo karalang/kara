@@ -42,11 +42,11 @@ use std::path::PathBuf;
 /// Complete programs — single- and multi-item — exercising each slice's checks
 /// and, crucially, the UNKNOWN carve-outs that must NOT false-positive.
 const CORPUS: &[&str] = &[
-    // ── clean: return type matches (with numeric leniency) ──
+    // ── clean: return type matches (with numeric leniency — an int widens
+    // into a float slot; the reverse is a mismatch, see below) ──
     "fn ok_unit() { }",
     "fn ret_i64() -> i64 { 1 }",
     "fn ret_f64_from_int() -> f64 { 1 }",
-    "fn ret_i64_from_float() -> i64 { 1.5 }",
     "fn ret_char() -> char { 'a' }",
     "fn ret_bool() -> bool { true }",
     "fn ret_str() -> String { \"hi\" }",
@@ -57,6 +57,9 @@ const CORPUS: &[&str] = &[
     "fn bad_char_from_int() -> char { 1 }",
     "fn bad_i64_from_bool() -> i64 { true }",
     "fn bad_str_from_int() -> String { 42 }",
+    // A float does NOT narrow into an integer return slot (B-2026-08-20-13);
+    // the widening direction two entries up stays clean.
+    "fn ret_i64_from_float() -> i64 { 1.5 }",
     // ── condition-not-bool (kind 1) at the cond span ──
     "fn cond_int() { if 1 { } }",
     "fn cond_char() { if 'c' { } }",

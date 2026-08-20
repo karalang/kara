@@ -4,13 +4,16 @@
 // core of `src/typechecker.rs` + `src/typechecker/*`:
 //
 //   * A coarse TYPE CATEGORY per expression — NUM / BOOL / CHAR / STR /
-//     UNKNOWN. All numeric types (every int width + f32/f64) collapse to ONE
-//     category (NUM), reproducing the seed's numeric-literal leniency exactly:
-//     `let x: i64 = 1.5` and `fn f() -> f64 { 1 }` are BOTH accepted, while
-//     `bool` / `char` / `String` must match their category (verified against
-//     `karac::typecheck`). UNKNOWN (structs, generics, calls, comparisons,
-//     Vec, …) is never flagged — Slice 1 only fires when BOTH sides land in the
-//     known primitive set, matching the seed on the curated corpus.
+//     UNKNOWN / FLOAT. Every int width collapses to ONE category (NUM) and
+//     `f32`/`f64` to another (FLOAT), reproducing the seed's numeric-literal
+//     leniency exactly and, since B-2026-08-20-13, its one limit: `fn f() ->
+//     f64 { 1 }` is accepted (an int widens into a float slot) while `let x:
+//     i64 = 1.5` is a mismatch (a float does NOT narrow into an integer slot).
+//     The two are otherwise interchangeable — see `is_num`. `bool` / `char` /
+//     `String` must match their category (verified against `karac::typecheck`).
+//     UNKNOWN (structs, generics, calls, comparisons, Vec, …) is never flagged
+//     — Slice 1 only fires when BOTH sides land in the known primitive set,
+//     matching the seed on the curated corpus.
 //   * A binding / parameter type ENVIRONMENT (Slice 2): a flat `Vec` of
 //     (name, category, scope) with the resolver's parent-chain scope machinery.
 //     Parameters bind to their declared-type category; an un-annotated
@@ -101,13 +104,20 @@ import ast.{
 };
 
 // ── Categories ──
-// 0 NUM   — every int width (i8..i128, u8..u128, usize) + f32/f64, and int /
-//           float literals. A single category: all numerics are mutually
-//           compatible at this layer (the seed's literal-coercion leniency).
+// 0 NUM   — every int width (i8..i128, u8..u128, usize) and int literals.
 // 1 BOOL  — `bool`, `true`/`false`.
 // 2 CHAR  — `char`, char literals.
 // 3 STR   — `String`, string / multi-string literals.
 // 4 UNKNOWN — anything else; never flagged.
+// 5 FLOAT — `f32`/`f64` and float literals.
+//
+// NUM and FLOAT are ONE category everywhere except assignment: `is_num` treats
+// them alike for operator validity and result inference, so int/float mixing
+// stays invisible to the operand checks exactly as the single old NUM category
+// made it. They separate only in `cats_compatible`, which is asymmetric — an
+// int widens into a float slot, a float does NOT narrow into an int slot
+// (B-2026-08-20-13). Splitting them is what lets this layer see that direction
+// at all; the seed gained the same rule at its own assignment boundary.
 
 // The inferred category of an expression plus the span to anchor a diagnostic.
 struct ExprInfo {
@@ -696,7 +706,7 @@ impl Checker {
             }
             Float(n) => {
                 let FloatLit { value, suffix, span } = n;
-                ExprInfo { category: 0, span: span }
+                ExprInfo { category: 5, span: span }
             }
             Bool(n) => {
                 let BoolLit { value, span } = n;
@@ -735,7 +745,8 @@ impl Checker {
                 // PRIMITIVE operands of DIFFERENT categories is InvalidBinaryOp
                 // (kind 9) at the whole binary-expr span. int-vs-float are both
                 // NUM here, so a numeric comparison never flags (the seed's
-                // `types_compatible(int, float)` is true); struct / enum / unknown
+                // `types_compatible(int, float)` is true — `cmp_bin_info` folds FLOAT
+                // back onto NUM for exactly that reason); struct / enum / unknown
                 // operands are skipped (the seed's Eq/Ord derive checks are out of
                 // this slice). The result category is BOOL either way.
                 let bi = bin_info(op, li.category, ri.category);
@@ -761,14 +772,14 @@ impl Checker {
                 // TypeMismatch (kind 0) at the RIGHT span. STRING operands are
                 // skipped (the `+`-concat exception makes them ambiguous in the
                 // coarse scheme), as are struct/enum (distinct-numeric types) and
-                // UNKNOWN — all under-reported, never falsely flagged. NUM+NUM is
-                // skipped too (int-vs-float mixing is invisible to a single NUM
-                // category).
+                // UNKNOWN — all under-reported, never falsely flagged. A numeric
+                // left with a numeric right is skipped too: int-vs-float mixing is
+                // legal in an OPERAND position, and `is_num` keeps it invisible here.
                 if bi.opk == 2 {
                     if li.category == 1 or li.category == 2 {
                         self.push_err(9, li.span.offset, li.span.length);
                     } else {
-                        if li.category == 0 {
+                        if is_num(li.category) {
                             if ri.category == 1 or ri.category == 2 {
                                 self.push_err(0, ri.span.offset, ri.span.length);
                             }
@@ -776,8 +787,10 @@ impl Checker {
                     }
                 }
                 // Bitwise `& | ^ << >>` require integer operands; a BOOL/CHAR LEFT
-                // is InvalidBinaryOp at the left span. (NUM left is skipped — the
-                // coarse NUM cannot tell an integer from a float.)
+                // is InvalidBinaryOp at the left span. A numeric left is skipped:
+                // FLOAT is distinguishable now, but flagging `1.5 & 1` here would
+                // ADD a diagnostic the seed's corpus does not pin, so this stays
+                // under-reported rather than newly divergent.
                 if bi.opk == 3 {
                     if li.category == 1 or li.category == 2 {
                         self.push_err(9, li.span.offset, li.span.length);
@@ -800,8 +813,8 @@ impl Checker {
                 let mut rc = 4;
                 match op {
                     Neg => {
-                        if oc == 0 {
-                            rc = 0;
+                        if is_num(oc) {
+                            rc = oc;
                         } else {
                             if oc != 4 {
                                 inv = true;
@@ -809,8 +822,8 @@ impl Checker {
                         }
                     }
                     BitNot => {
-                        if oc == 0 {
-                            rc = 0;
+                        if is_num(oc) {
+                            rc = oc;
                         } else {
                             if oc != 4 {
                                 inv = true;
@@ -1300,7 +1313,7 @@ fn cat_of_name(name: ref String) -> i64 {
         return 0;
     }
     if name == "f32" or name == "f64" {
-        return 0;
+        return 5;
     }
     if name == "bool" {
         return 1;
@@ -1380,13 +1393,27 @@ fn all_irref_fields(fields: Vec[StructFieldPat]) -> bool {
     ok
 }
 
-// Two KNOWN categories are compatible iff equal — NUM is a single category, so
-// i64 vs f64 (both NUM) is compatible, reproducing the seed's numeric leniency.
-// Struct (`STRUCT_BASE + i`) and enum (`ENUM_BASE + i`) categories are distinct
-// integers, so equality also gives struct/enum IDENTITY (P ≠ Q, Color ≠ Mood,
-// Color ≠ i64) — the enum-vs-X mismatch check (Slice 10).
-fn cats_compatible(a: i64, b: i64) -> bool {
-    a == b
+// Is `c` a numeric category — NUM (integers) or FLOAT? The operand-validity and
+// result-inference helpers use this so the int/float split stays invisible to
+// them, which is what the single old NUM category gave for free.
+fn is_num(c: i64) -> bool {
+    c == 0 or c == 5
+}
+
+// Is a value of category `found` assignable to a slot DECLARED as `expected`?
+// The argument order matters: this predicate is ASYMMETRIC. Equal categories
+// are compatible, and an int widens into a float slot (`let x: f64 = 1`, the
+// documented widening), but a float does NOT flow into an integer slot —
+// `let n: i64 = 1.5` is a TypeMismatch (B-2026-08-20-13), matching the rule the
+// seed enforces at `check_assignable`. Struct (`STRUCT_BASE + i`) and enum
+// (`ENUM_BASE + i`) categories are distinct integers, so equality also gives
+// struct/enum IDENTITY (P ≠ Q, Color ≠ Mood, Color ≠ i64) — the enum-vs-X
+// mismatch check (Slice 10).
+fn cats_compatible(expected: i64, found: i64) -> bool {
+    if expected == 5 and found == 0 {
+        return true;
+    }
+    expected == found
 }
 
 // The result category AND comparison-validity of a binary operator, computed
@@ -1432,23 +1459,38 @@ fn bin_info(op: BinOp, l: i64, r: i64) -> BinInfo {
 }
 
 // A comparison result: always BOOL; `bad` iff both operands are known primitives
-// (0-3) of DIFFERENT categories. Op class 0.
+// (0-3) of DIFFERENT categories. Op class 0. FLOAT is folded back to NUM first,
+// so `1 < 1.5` never flags (the seed's `types_compatible(int, float)` is true)
+// while `1.5 < true` still does — exactly what the single NUM category gave.
 fn cmp_bin_info(l: i64, r: i64) -> BinInfo {
     let mut bad = false;
-    if l <= 3 and r <= 3 {
-        if l != r {
+    let ln = num_fold(l);
+    let rn = num_fold(r);
+    if ln <= 3 and rn <= 3 {
+        if ln != rn {
             bad = true;
         }
     }
     BinInfo { rc: 1, bad: bad, opk: 0 }
 }
 
-// The result category of `+`: NUM + NUM → NUM, and — polymorphically — STR + STR
-// → STR (concat); anything else is UNKNOWN (an invalid-operand `+` has an Error
-// result in the seed, so it must not flow a spurious category downstream).
-fn add_result(l: i64, r: i64) -> i64 {
-    if l == 0 and r == 0 {
+// FLOAT folded back onto NUM, for the checks that must not see the split.
+fn num_fold(c: i64) -> i64 {
+    if c == 5 {
         return 0;
+    }
+    c
+}
+
+// The result category of `+`: numeric + numeric → numeric, and —
+// polymorphically — STR + STR → STR (concat); anything else is UNKNOWN (an
+// invalid-operand `+` has an Error result in the seed, so it must not flow a
+// spurious category downstream). A FLOAT operand makes the result FLOAT, so
+// `let n: i64 = 1 + 1.5` is caught by the assignment rule the same way the bare
+// float literal is.
+fn add_result(l: i64, r: i64) -> i64 {
+    if is_num(l) and is_num(r) {
+        return num_join(l, r);
     }
     if l == 3 and r == 3 {
         return 3;
@@ -1456,14 +1498,23 @@ fn add_result(l: i64, r: i64) -> i64 {
     4
 }
 
-// The result category of `- * / %` and the bitwise operators: NUM only when both
-// operands are NUM, else UNKNOWN (char/bool/string arithmetic is invalid, so it
-// yields no category — matching the seed's Error result).
+// The result category of `- * / %` and the bitwise operators: numeric only when
+// both operands are numeric, else UNKNOWN (char/bool/string arithmetic is
+// invalid, so it yields no category — matching the seed's Error result).
 fn num_result(l: i64, r: i64) -> i64 {
-    if l == 0 and r == 0 {
-        return 0;
+    if is_num(l) and is_num(r) {
+        return num_join(l, r);
     }
     4
+}
+
+// The result category of a numeric binary op: FLOAT if either side is FLOAT,
+// else NUM — the seed's int-to-float promotion.
+fn num_join(l: i64, r: i64) -> i64 {
+    if l == 5 or r == 5 {
+        return 5;
+    }
+    0
 }
 
 fn zero_span() -> Span {
