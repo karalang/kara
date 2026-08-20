@@ -92,13 +92,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 268 | 1 |
+| miscompile | 269 | 1 |
 | leak | 185 | 0 |
 | run-vs-build | 143 | 0 |
 | double-free | 133 | 0 |
 | missing-feature | 128 | 0 |
 | codegen-gap | 119 | 0 |
-| false-positive | 89 | 1 |
+| false-positive | 88 | 0 |
 | diagnostics | 87 | 2 |
 | perf | 80 | 0 |
 | crash | 54 | 0 |
@@ -119,21 +119,20 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | cli | 52 | 0 |
 | parser | 33 | 0 |
 | runtime | 27 | 0 |
-| resolver | 23 | 1 |
+| resolver | 23 | 0 |
 | effect | 7 | 0 |
 | lexer | 6 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1406 surfaced · 4 open · 1382 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1406 surfaced · 3 open · 1383 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-20-23 | 2026-08-20 | ownership | low | every whole-buffer `gpu.*` reduction CONSUMES its buffer, so calling two of them on the same `Vec` warns `value moved here, used again here` -- but they only READ it | — |
 | B-2026-08-20-25 | 2026-08-20 | other | low | design.md assigns `E0226` to `ConflictingPlatformModule` (§ Platform-specific modules), which is the TYPECHECKER's band. `explain::tests::resolver_numeric_codes_live_in_the_resolve_band` fails any resolve-phase code outside E01xx/E08xx and `collision_render_names_every_phase` fails a code minted by two phases, so implementing this diagnostic under the number the spec gives it turns the suite red. The same number was, until B-2026-08-20-18, also spelled for `AmbiguousWildcardImport` (§ Module System); that one had to be allocated E0124 from the resolver band instead and the spec text corrected. This second E0226 is still in the document, unimplemented. | roadmap.md |
 | B-2026-08-20-26 | 2026-08-20 | codegen | high | B-2026-08-05-16'S NONDETERMINISM IS BACK, or was never fully fixed: its own regression test (`test_ir_shared_variant_name_resolves_to_scrutinee_enum_deterministically`) fails in ~6 of 8 FULL-SUITE runs on macOS arm64 — IR for identical source differs between compiles because a bare variant name shared by two enums still resolves against the unordered `enum_layouts` map. That row records the symptom as a NONDETERMINISTIC SEGV at -O0, so this is a live miscompile, not a flaky test. | tests/codegen.rs::test_ir_shared_variant_name_resolves_to_scrutinee_enum_deterministically; the `enum_layouts` lookup for bare variant patterns in src/codegen.rs; prior row B-2026-08-05-16 (fixed) whose regression test this is; found as the control arm of B-2026-08-20-5 |
-| B-2026-08-20-28 | 2026-08-20 | resolver | medium | A module binding's MEMBER ACCESS binds the bare member name in the importing module's scope, so two sources offering the same member name collide -- on `karac check`, before any flattening. Repro on eb9ad42: `src/conn.kara` = `pub fn open() -> i64 { return 1; }`, `src/pool.kara` = the same returning 2, `src/main.kara` = `import conn; import pool; fn main() { println(conn.open()); println(pool.open()); }` -> `error[E0101]: src/main.kara:6:13: 'open' is already defined in this scope (first defined at 5:13)`. Both spans point at USE SITES inside `main`'s body, not at a declaration. Mixed forms collide too: `import conn; import pool.open;` + `conn.open()` + `open()` is the same error. Two module bindings whose modules export DISJOINT names are fine (`conn.open()` + `pool.size()` passes on every surface), and repeating one member through one binding is fine (`conn.open()` twice, even in one expression, passes) -- so the collision is specifically two different sources offering one bare member name. | roadmap.md |
 
 ### Wontfix (7)
 
@@ -151,9 +150,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1406 surfaced
 
 </details>
 
-### Fixed (1382)
+### Fixed (1383)
 
-<details><summary>1382 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1383 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -12882,6 +12881,67 @@ covering the root rule, the path-derived replacement name, both guards, and the
 no-collision no-op. `karac test` shares the run path's merge and was verified on
 a colliding package. |
 | B-2026-08-20-27 | interp+codegen | high | an INTEGER `Tensor.matmul` never overflow-checks: `karac build` silently WRAPS and `karac run --interp` returns a value outside the element type -- w… | FIXED by beb4c419. |
+| B-2026-08-20-28 | resolver | high | A module binding's MEMBER ACCESS claims the bare member name in the importing module, so anything else answering to that name either collides with it… | FIXED by c50c3fa.
+
+The desugar keeps the bare-name lowering, but only while the bare name is free.
+
+WHAT WAS WRONG. `import conn;` + `conn.open()` lowers to a synthesized
+`import conn.{open};` plus a rewrite of the reference to bare `open`
+(B-2026-08-20-17, and the right call -- every downstream pass works in one flat
+namespace of item names). The lowering is honest only while nothing else in the
+module answers to `open`. Nothing checked that. When something did, the qualifier
+was already gone, so the reference bound to whatever else held the name -- or the
+synthesized import collided with it.
+
+THE FIX. `contested_member_aliases` decides, per importing module, which
+binding-reached members may NOT take their bare name. A contested member is
+reached under a minted alias instead: `conn.open()` becomes `open__conn()` next
+to `import conn.{open as open__conn};`. Aliases are already carried correctly
+through per-module typecheck and through both flattened merges, so this buys the
+fix off machinery that works.
+
+A member is contested when any of these holds:
+
+  1. two module bindings reach the same member name -- neither can have it;
+  2. the module declares the name, or binds it as a value ANYWHERE -- a
+     `let open = …` captures the rewritten reference (miscompile 1);
+  3. an explicit import binds the name from a different module -- the user asked
+     for that one, so the binding cannot take it;
+  4. the module has any wildcard import. The wildcard has not expanded yet, so
+     what it supplies is unknown at this point, and a synthesized import
+     outranks a wildcard by design.md's first precedence rule -- which is how a
+     name the user never wrote won over one they did (miscompile 2).
+
+Rule 4 is deliberately over-approximate: a module mixing a binding with a
+wildcard gets an alias it may not have needed. That costs a mangled name in a
+diagnostic and nothing else, and it needs no export table for a module set that
+has not finished expanding.
+
+WHY TWO PASSES. The contested set is derived from the references the rewrite
+finds, and finding them IS the rewrite -- so it cannot be decided up front. The
+fixpoint therefore runs once to learn what the bindings reach, and, only when
+something is contested, again from a pristine copy of the module's items with
+the alias map. A program whose bare names are free runs it once and is
+byte-identical to before.
+
+Each run gets its OWN copy of the origin table. A chain step is recorded there
+the first time it is walked and then refuses to re-bind a path the table already
+holds, so handing the second run the first's table stopped `db.conn.open()`
+after its first segment -- caught by the chain test, which is why it is in the
+suite.
+
+The mangling formula is shared with `module_rename` (B-2026-08-20-24) as
+`qualified_name`: both need the same "this name, from that module" spelling, and
+one formula cannot drift into two conventions.
+
+TESTS. The two miscompiles and the three false-error shapes, plus the type
+member, each asserted across `karac check`, `run --interp`, `run` (LLJIT) and
+AOT -- with return values chosen so binding to the wrong source prints the wrong
+number. A guard that an UNCONTESTED member still lowers to the bare name, which
+is the shape every existing module-binding program is in. And a chain case
+(`import db;` + `db.conn.open()` + `db.pool.open()`), which is what the
+origin-table bug above showed up in. The 12 tests that shipped with
+B-2026-08-20-17 pass unchanged. |
 
 </details>
 
