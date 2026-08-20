@@ -1033,6 +1033,13 @@ impl<'a> super::Interpreter<'a> {
             return self.record_runtime_error("gpu.prefix_sum buffer must be a Vec of f32", span);
         };
         let elems = rc.read().unwrap().clone();
+
+        // INTEGER buffers take the CHECKED scan. Converting them to f32 would
+        // lose both precision above 2^24 and the trap.
+        if matches!(elems.first(), Some(Value::Int(_))) {
+            return self.eval_gpu_prefix_sum_int(&elems, &args[0].value.span, span);
+        }
+
         let mut xs: Vec<f32> = Vec::with_capacity(elems.len());
         for v in &elems {
             match v {
@@ -1289,6 +1296,67 @@ impl<'a> super::Interpreter<'a> {
                 ),
                 span,
             ),
+        }
+    }
+
+    /// The INTEGER arm of `gpu.prefix_sum` under the interpreter
+    /// (B-2026-08-19-13).
+    ///
+    /// Returns a `Vec` of the same element type — a prefix sum maps a buffer
+    /// to a buffer, so nothing promotes — and TRAPS on overflow, where the
+    /// float form cannot fail at all.
+    ///
+    /// Every element is an output here, so an overflow anywhere is an overflow
+    /// in the answer; `tree_prefix_sum_i32` checks each lane at each step
+    /// rather than only the value that lands in `out`.
+    fn eval_gpu_prefix_sum_int(&mut self, elems: &[Value], buf_span: &Span, span: &Span) -> Value {
+        let unsigned = self
+            .typecheck_result
+            .gpu_reduce_int_elems
+            .get(&crate::resolver::SpanKey(buf_span.offset, buf_span.length))
+            .is_some_and(|e| e == "u32");
+        let width = if unsigned { "u32" } else { "i32" };
+
+        let mut sx: Vec<i32> = Vec::with_capacity(elems.len());
+        let mut ux: Vec<u32> = Vec::with_capacity(elems.len());
+        for v in elems {
+            let Value::Int(i) = v else {
+                return self.record_runtime_error(
+                    format!("gpu.prefix_sum buffer elements must all be {width}"),
+                    span,
+                );
+            };
+            if unsigned {
+                let Ok(x) = u32::try_from(*i) else {
+                    return self.record_runtime_error(
+                        format!("gpu.prefix_sum buffer element {i} does not fit u32"),
+                        span,
+                    );
+                };
+                ux.push(x);
+            } else {
+                let Ok(x) = i32::try_from(*i) else {
+                    return self.record_runtime_error(
+                        format!("gpu.prefix_sum buffer element {i} does not fit i32"),
+                        span,
+                    );
+                };
+                sx.push(x);
+            }
+        }
+
+        let scanned = if unsigned {
+            crate::reduce_kernel::tree_prefix_sum_u32(&ux)
+                .map(|v| v.into_iter().map(|x| x as i128).collect::<Vec<_>>())
+        } else {
+            crate::reduce_kernel::tree_prefix_sum_i32(&sx)
+                .map(|v| v.into_iter().map(|x| x as i128).collect::<Vec<_>>())
+        };
+        match scanned {
+            Err(_) => self.record_runtime_error("integer overflow", span),
+            Ok(vals) => Value::Array(std::sync::Arc::new(std::sync::RwLock::new(
+                vals.into_iter().map(Value::Int).collect(),
+            ))),
         }
     }
 

@@ -12165,6 +12165,37 @@ impl<'ctx> super::Codegen<'ctx> {
             .add_function("karac_runtime_gpu_prefix_sum_f32", fn_ty, None)
     }
 
+    /// Lazily declare `karac_runtime_gpu_prefix_sum_int(scan_wgsl_ptr: ptr,
+    /// scan_wgsl_len: i64, off_wgsl_ptr: ptr, off_wgsl_len: i64, in_ptr: ptr,
+    /// n: i64, out_ptr: ptr) -> i32` — the INTEGER prefix sum
+    /// (B-2026-08-19-13).
+    ///
+    /// Returns a STATUS where the float sibling returns void: an integer scan
+    /// can overflow, and the trap is raised by the caller so it carries Kāra's
+    /// own message and span.
+    pub(super) fn gpu_prefix_sum_int_fn(&self) -> FunctionValue<'ctx> {
+        if let Some(f) = self.module.get_function("karac_runtime_gpu_prefix_sum_int") {
+            return f;
+        }
+        let i32_t = self.context.i32_type();
+        let i64_t = self.context.i64_type();
+        let ptr_t = self.context.ptr_type(AddressSpace::default());
+        let fn_ty = i32_t.fn_type(
+            &[
+                ptr_t.into(),
+                i64_t.into(),
+                ptr_t.into(),
+                i64_t.into(),
+                ptr_t.into(),
+                i64_t.into(),
+                ptr_t.into(),
+            ],
+            false,
+        );
+        self.module
+            .add_function("karac_runtime_gpu_prefix_sum_int", fn_ty, None)
+    }
+
     /// Lazily declare `karac_runtime_gpu_matmul_int(wgsl_ptr: ptr,
     /// wgsl_len: i64, a_ptr: ptr, b_ptr: ptr, m: i64, k: i64, n: i64,
     /// out_ptr: ptr) -> i32` — the INTEGER tiled matmul (B-2026-08-19-13).

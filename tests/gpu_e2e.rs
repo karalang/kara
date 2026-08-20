@@ -1390,6 +1390,116 @@ fn gpu_prefix_sums_last_element_need_not_equal_gpu_sum() {
 }
 
 #[test]
+fn gpu_integer_prefix_sum_scans_across_all_three_surfaces() {
+    assert_gpu_reduce_matches_interp(
+        "int_prefix_sum",
+        "fn main() {\n\
+        \x20   let v: Vec[i32] = [1 as i32, 2 as i32, 3 as i32, 4 as i32, 5 as i32];\n\
+        \x20   let p = gpu.prefix_sum(v);\n\
+        \x20   println(f\"{p[0]} {p[1]} {p[2]} {p[3]} {p[4]}\");\n\
+        \x20   let n: Vec[i32] = [5 as i32, -3 as i32, 2 as i32];\n\
+        \x20   let q = gpu.prefix_sum(n);\n\
+        \x20   println(f\"{q[0]} {q[1]} {q[2]}\");\n\
+        \x20   let u: Vec[u32] = [10u32, 20u32, 30u32];\n\
+        \x20   let r = gpu.prefix_sum(u);\n\
+        \x20   println(f\"{r[0]} {r[1]} {r[2]}\");\n\
+        \x20   let e: Vec[i32] = [];\n\
+        \x20   println(f\"{gpu.prefix_sum(e).len()}\");\n\
+        }\n",
+        "1 3 6 10 15\n5 2 4\n10 30 60\n0",
+    );
+
+    // 4097 is the load-bearing length: past 64*64 the chunk totals THEMSELVES
+    // need more than one workgroup, so a host loop written for a single level
+    // is correct up to 4096 and wrong after — passing every short fixture.
+    assert_gpu_reduce_matches_interp(
+        "int_prefix_sum_two_levels",
+        "fn main() {\n\
+        \x20   let mut v: Vec[i32] = [];\n\
+        \x20   for i in 0..4097 { v.push(1 as i32) }\n\
+        \x20   let p = gpu.prefix_sum(v);\n\
+        \x20   println(f\"{p[0]} {p[63]} {p[64]} {p[4095]} {p[4096]}\");\n\
+        }\n",
+        "1 64 65 4096 4097",
+    );
+}
+
+#[test]
+fn gpu_integer_prefix_sum_traps_in_every_phase() {
+    let Some(backend) = gpu_or_skip() else { return };
+
+    // PHASE 1 — the running total leaves i32 inside a single chunk's scan.
+    let dir = scratch("int_scan_phase1_overflow");
+    let src = dir.join("int_scan_phase1_overflow.kara");
+    std::fs::write(
+        &src,
+        "fn main() {\n\
+        \x20   let v: Vec[i32] = [2147483647 as i32, 1 as i32, 1 as i32];\n\
+        \x20   println(f\"{gpu.prefix_sum(v)[2]}\");\n\
+        }\n",
+    )
+    .expect("write fixture source");
+    let err = build_and_run_on_gpu(&dir, &src, "int_scan_phase1_overflow", backend)
+        .expect_err("a scan past i32 must trap, not wrap");
+    assert!(err.contains("integer overflow"), "phase 1: {err}");
+
+    // PHASE 3 — the OFFSET ADD, which is the step most easily forgotten:
+    // phases 1 and 2 look like the arithmetic and this one looks like
+    // bookkeeping, but `scanned[i] + offset` adds two real values. Chunk 0
+    // sums to i32::MAX and chunk 1's single element pushes it over, so
+    // NEITHER per-chunk scan overflows on its own.
+    let dir = scratch("int_scan_phase3_overflow");
+    let src = dir.join("int_scan_phase3_overflow.kara");
+    std::fs::write(
+        &src,
+        "fn main() {\n\
+        \x20   let mut v: Vec[i32] = [];\n\
+        \x20   v.push(2147483647 as i32);\n\
+        \x20   for i in 0..63 { v.push(0 as i32) }\n\
+        \x20   v.push(1 as i32);\n\
+        \x20   println(f\"{gpu.prefix_sum(v)[64]}\");\n\
+        }\n",
+    )
+    .expect("write fixture source");
+    let err = build_and_run_on_gpu(&dir, &src, "int_scan_phase3_overflow", backend)
+        .expect_err("an overflowing offset add must trap");
+    assert!(err.contains("integer overflow"), "phase 3: {err}");
+}
+
+#[test]
+fn gpu_integer_prefix_sum_traps_where_a_running_total_would_not() {
+    // THE SPECIFIED ORDER DECIDES WHETHER IT TRAPS, not merely what it
+    // returns — the scan's version of the fact design.md records for the
+    // integer reductions, and the reason `gpu.prefix_sum` is not
+    // interchangeable with a running total on integer data.
+    //
+    // Running totals here are -MAX, 0, MAX — all comfortably in range. The
+    // first Hillis-Steele step computes prev[2] + prev[1] = MAX + MAX.
+    //
+    // All three surfaces trap, because the interpreter reproduces the device's
+    // step order; that is what makes this specified behaviour rather than a
+    // divergence.
+    let Some(backend) = gpu_or_skip() else { return };
+    let dir = scratch("int_scan_window_overflow");
+    let src = dir.join("int_scan_window_overflow.kara");
+    std::fs::write(
+        &src,
+        "fn main() {\n\
+        \x20   let v: Vec[i32] = [-2147483647 as i32, 2147483647 as i32, 2147483647 as i32];\n\
+        \x20   let p = gpu.prefix_sum(v);\n\
+        \x20   println(f\"{p[0]} {p[1]} {p[2]}\");\n\
+        }\n",
+    )
+    .expect("write fixture source");
+    let err = build_and_run_on_gpu(&dir, &src, "int_scan_window_overflow", backend)
+        .expect_err("the Hillis-Steele window sum must trap here");
+    assert!(
+        err.contains("integer overflow"),
+        "the scan order's own trap: {err}"
+    );
+}
+
+#[test]
 fn gpu_integer_prod_traps_where_the_cpu_product_does() {
     // `v.product()` over a `Vec[i32]` already traps on overflow, so `gpu.prod`
     // inherits the contract rather than choosing one. The device does it with

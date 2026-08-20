@@ -1265,6 +1265,187 @@ fn scan_bytes(scan_wgsl: &str, off_wgsl: &str, input: &[u8], elem_size: usize) -
     ))
 }
 
+/// The CHECKED integer phase-1 scan dispatch: one input in, the scanned
+/// buffer, the per-chunk totals AND the per-workgroup overflow flags out
+/// (B-2026-08-19-13).
+///
+/// THREE outputs, where the float scan has two — the flags being the third —
+/// which is what `run_compute`'s independently-sized output list exists for.
+async fn dispatch_int_scan_async(
+    wgsl: &str,
+    input: &[u8],
+    elem_size: usize,
+) -> Option<(Vec<u8>, Vec<u8>, Vec<u8>)> {
+    let ctx = gpu_context()?;
+    let device = &ctx.device;
+    let queue = &ctx.queue;
+
+    let n = input.len() / elem_size;
+    let groups = n.div_ceil(64);
+
+    let input_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("gpu-int-scan-input"),
+        contents: input,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+    });
+    let out_sizes = [
+        input.len() as u64,
+        (groups * elem_size) as u64,
+        (groups * 4) as u64,
+    ];
+    let output_bufs = run_compute(device, queue, wgsl, &[input_buf], &out_sizes, &[], n);
+    let mut outs = readback(device, queue, &output_bufs, &out_sizes)?;
+    let flags = outs.pop()?;
+    let totals = outs.pop()?;
+    let scanned = outs.pop()?;
+    Some((scanned, totals, flags))
+}
+
+/// The CHECKED integer phase-3 offset dispatch: two inputs, the shifted
+/// buffer and the per-workgroup overflow flags out.
+async fn dispatch_int_scan_offset_async(
+    wgsl: &str,
+    scanned: &[u8],
+    offsets: &[u8],
+    elem_size: usize,
+) -> Option<(Vec<u8>, Vec<u8>)> {
+    let ctx = gpu_context()?;
+    let device = &ctx.device;
+    let queue = &ctx.queue;
+
+    let n = scanned.len() / elem_size;
+    let input_bufs: Vec<wgpu::Buffer> = [scanned, offsets]
+        .iter()
+        .map(|bytes| {
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("gpu-int-scan-offset-input"),
+                contents: bytes,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            })
+        })
+        .collect();
+    let groups = n.div_ceil(64);
+    let out_sizes = [scanned.len() as u64, (groups * 4) as u64];
+    let output_bufs = run_compute(device, queue, wgsl, &input_bufs, &out_sizes, &[], n);
+    let mut outs = readback(device, queue, &output_bufs, &out_sizes)?;
+    let flags = outs.pop()?;
+    let shifted = outs.pop()?;
+    Some((shifted, flags))
+}
+
+/// True if any workgroup raised its overflow flag.
+fn any_overflow(flags: &[u8]) -> bool {
+    flags
+        .chunks_exact(4)
+        .any(|w| u32::from_le_bytes([w[0], w[1], w[2], w[3]]) != 0)
+}
+
+/// The CHECKED integer sibling of [`scan_bytes`]. `None` on a device failure,
+/// `Some(None)` on overflow, `Some(Some(bytes))` on success.
+///
+/// **Recursive, and the flag has to propagate through EVERY level.** Phase 2
+/// is this same function one level up over the chunk totals, so a long prefix
+/// sum is a prefix sum OF PREFIX SUMS — an overflow while folding the totals
+/// is just as real as one in the elements, and a buffer past `64 * 64` reaches
+/// a second level where a single-level implementation would never look.
+fn scan_bytes_checked(
+    scan_wgsl: &str,
+    off_wgsl: &str,
+    input: &[u8],
+    elem_size: usize,
+) -> Option<Option<Vec<u8>>> {
+    let (scanned, totals, flags) =
+        pollster::block_on(dispatch_int_scan_async(scan_wgsl, input, elem_size))?;
+    if any_overflow(&flags) {
+        return Some(None);
+    }
+    if totals.len() <= elem_size {
+        // One chunk: the per-chunk scan IS the answer, nothing to shift by.
+        return Some(Some(scanned));
+    }
+    let Some(chunk_prefix) = scan_bytes_checked(scan_wgsl, off_wgsl, &totals, elem_size)? else {
+        return Some(None);
+    };
+    let (shifted, off_flags) = pollster::block_on(dispatch_int_scan_offset_async(
+        off_wgsl,
+        &scanned,
+        &chunk_prefix,
+        elem_size,
+    ))?;
+    if any_overflow(&off_flags) {
+        return Some(None);
+    }
+    Some(Some(shifted))
+}
+
+/// C entry point for an INTEGER `gpu.prefix_sum(buffer)` (B-2026-08-19-13).
+///
+/// **The only checked integer operation here whose every LANE holds a live
+/// output.** Each reduction converges to one value, so a lane above the stride
+/// holds a partial nobody reads and its overflow is irrelevant — `ovf[0]`
+/// after the fold is the whole story. A scan writes all `n` values, so an
+/// overflow in any lane is an overflow in the answer, and the emitted shader
+/// ORs the flag across the whole workgroup rather than reading lane 0.
+///
+/// Returns 0 on success (filling `out_ptr`) and 1 on overflow, matching the
+/// other checked integer entry points; the caller raises Kāra's own `integer
+/// overflow` panic so the message and span match a scalar overflow.
+///
+/// # Safety
+///
+/// Both `*_wgsl_ptr`/`_len` pairs a valid UTF-8 shader; `in_ptr` points to `n`
+/// valid 4-byte elements and `out_ptr` to space for `n` more, non-overlapping.
+/// Aborts on no available GPU adapter (no CPU fallback).
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_gpu_prefix_sum_int(
+    scan_wgsl_ptr: *const u8,
+    scan_wgsl_len: usize,
+    off_wgsl_ptr: *const u8,
+    off_wgsl_len: usize,
+    in_ptr: *const i32,
+    n: usize,
+    out_ptr: *mut i32,
+) -> i32 {
+    unsafe {
+        // Empty in, empty out, no dispatch — and no way to overflow.
+        if n == 0 {
+            return 0;
+        }
+        let Ok(scan_wgsl) =
+            std::str::from_utf8(std::slice::from_raw_parts(scan_wgsl_ptr, scan_wgsl_len))
+        else {
+            crate::fatal::write_stderr(
+                b"panic: gpu.prefix_sum integer scan shader is not valid UTF-8\n",
+            );
+            std::process::abort();
+        };
+        let Ok(off_wgsl) =
+            std::str::from_utf8(std::slice::from_raw_parts(off_wgsl_ptr, off_wgsl_len))
+        else {
+            crate::fatal::write_stderr(
+                b"panic: gpu.prefix_sum integer offset shader is not valid UTF-8\n",
+            );
+            std::process::abort();
+        };
+
+        let elem_size = std::mem::size_of::<i32>();
+        let input = std::slice::from_raw_parts(in_ptr as *const u8, n * elem_size);
+
+        let Some(outcome) = scan_bytes_checked(scan_wgsl, off_wgsl, input, elem_size) else {
+            crate::fatal::write_stderr(
+                b"panic: gpu.prefix_sum found no available GPU adapter (no CPU fallback)\n",
+            );
+            std::process::abort();
+        };
+        let Some(result) = outcome else {
+            return 1;
+        };
+
+        std::ptr::copy_nonoverlapping(result.as_ptr(), out_ptr as *mut u8, n * elem_size);
+        0
+    }
+}
+
 /// C entry point for `gpu.prefix_sum(buffer)` — an inclusive prefix sum
 /// (B-2026-08-19-13).
 ///

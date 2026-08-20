@@ -2138,6 +2138,52 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap_basic()
             .into_pointer_value();
 
+        // INTEGER buffers take the entry point that can TRAP.
+        let int_key = (args[0].value.span.offset, args[0].value.span.length);
+        if self.accel.gpu_reduce_int_elems.contains_key(&int_key) {
+            let scan_fn = self.gpu_prefix_sum_int_fn();
+            let status = self
+                .builder
+                .build_call(
+                    scan_fn,
+                    &[
+                        baked[0].0.into(),
+                        baked[0].1.into(),
+                        baked[1].0.into(),
+                        baked[1].1.into(),
+                        data.into(),
+                        n.into(),
+                        out.into(),
+                    ],
+                    "gpu.iscan.status",
+                )
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_int_value();
+            let i32_t = self.context.i32_type();
+            let fn_val = self.current_fn.expect("gpu.prefix_sum in function");
+            let overflowed = self
+                .builder
+                .build_int_compare(
+                    IntPredicate::NE,
+                    status,
+                    i32_t.const_zero(),
+                    "gpu.iscan.ovf",
+                )
+                .unwrap();
+            let trap_bb = self.context.append_basic_block(fn_val, "gpu.iscan.trap");
+            let ok_bb = self.context.append_basic_block(fn_val, "gpu.iscan.ok");
+            self.builder
+                .build_conditional_branch(overflowed, trap_bb, ok_bb)
+                .unwrap();
+            self.builder.position_at_end(trap_bb);
+            self.emit_panic("integer overflow");
+            self.builder.build_unreachable().unwrap();
+            self.builder.position_at_end(ok_bb);
+            return Ok(self.build_vec_value(out, n, n));
+        }
+
         let scan_fn = self.gpu_prefix_sum_f32_fn();
         self.builder
             .build_call(

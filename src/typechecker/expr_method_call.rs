@@ -3966,27 +3966,53 @@ impl<'a> super::TypeChecker<'a> {
         }
 
         let buf_ty = self.infer_expr(&args[0].value);
-        let ok = matches!(
-            &buf_ty,
-            Type::Named { name, args: ta }
-                if name == "Vec" && ta.len() == 1 && ta[0] == Type::Float(FloatSize::F32)
-        );
-        if !ok {
+        let elem = match &buf_ty {
+            Type::Named { name, args: ta } if name == "Vec" && ta.len() == 1 => ta[0].clone(),
+            _ => Type::Error,
+        };
+        let elem_spelling = match &elem {
+            Type::Float(FloatSize::F32) => Some("f32"),
+            Type::Int(IntSize::I32) => Some("i32"),
+            Type::UInt(UIntSize::U32) => Some("u32"),
+            _ => None,
+        };
+        let Some(elem_spelling) = elem_spelling else {
             self.type_error(
                 format!(
-                    "error[E_GPU_REDUCE_BUFFER]: `gpu.prefix_sum` takes a `Vec[f32]` (found \
-                     `{}`) — it is f32-only; an integer prefix sum has to carry an overflow \
-                     flag through every lane, not just the one that writes the result",
+                    "error[E_GPU_REDUCE_BUFFER]: `gpu.prefix_sum` takes a `Vec[f32]`, \
+                     `Vec[i32]` or `Vec[u32]` (found `{}`)",
                     crate::typechecker::types::type_display(&buf_ty)
                 ),
                 args[0].value.span,
                 TypeErrorKind::TypeMismatch,
             );
             return result;
+        };
+        let is_int = elem_spelling != "f32";
+        // The result is a `Vec` of the SAME element type — a prefix sum maps a
+        // buffer to a buffer, so nothing promotes.
+        let result = Type::Named {
+            name: "Vec".to_string(),
+            args: vec![elem.clone()],
+        };
+        if is_int {
+            self.gpu_reduce_int_elems.insert(
+                SpanKey(args[0].value.span.offset, args[0].value.span.length),
+                elem_spelling.to_string(),
+            );
         }
 
-        let scan = crate::gpu_wgsl::emit_scan_kernel("f32");
-        let offset = crate::gpu_wgsl::emit_scan_offset_kernel("f32");
+        let (scan, offset) = if is_int {
+            (
+                crate::gpu_wgsl::emit_int_scan_kernel(elem_spelling),
+                crate::gpu_wgsl::emit_int_scan_offset_kernel(elem_spelling),
+            )
+        } else {
+            (
+                crate::gpu_wgsl::emit_scan_kernel("f32"),
+                crate::gpu_wgsl::emit_scan_offset_kernel("f32"),
+            )
+        };
         match (scan, offset) {
             (Ok(scan_wgsl), Ok(offset_wgsl)) => {
                 self.gpu_dispatch_wgsl.insert(

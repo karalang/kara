@@ -915,6 +915,111 @@ pub fn tiled_matmul_int(
     Some(Ok(out))
 }
 
+/// The CPU twin of an INTEGER `gpu.prefix_sum` — **the definition of what
+/// `gpu.prefix_sum(Vec[i32])` MEANS, including which programs trap**
+/// (B-2026-08-19-13).
+///
+/// Same Hillis-Steele order as [`tree_prefix_sum_f32`], same three phases,
+/// same self-similar recursion. The one thing that genuinely differs is where
+/// overflow can be observed, and it is the reason this was tracked separately
+/// rather than folded into the float scan with a different combine:
+///
+/// **EVERY LANE HOLDS A LIVE OUTPUT, so every lane's overflow counts.** In a
+/// reduction only lane 0 survives — a lane above the stride holds a partial
+/// nobody reads, and its overflow is irrelevant. A scan writes all `n` values,
+/// so an overflow anywhere is an overflow in the ANSWER. A checked scan that
+/// reused the reduction's "flag lane 0" habit would silently drop overflows in
+/// the elements the caller actually asked for, which is the exact
+/// plausible-wrong-number shape this family exists to refuse.
+///
+/// **The PADDING lanes are not an exception, and must not be excluded.** A
+/// lane past the chunk's length starts at the identity, but the scan sweeps
+/// real values into it, so by the last step it holds the CHUNK TOTAL — which
+/// feeds phase 2 and therefore every later chunk's offset. Its overflow is a
+/// real overflow of a real quantity, just not one written to `out` directly.
+///
+/// Returns `Result`, not `Option`: the prefix sums of an empty buffer are the
+/// empty buffer, so there is no missing answer to report — only a possible
+/// trap. That asymmetry with the reductions is the same one the float scan
+/// has, for the same reason.
+pub fn tree_prefix_sum_i32(xs: &[i32]) -> Result<Vec<i32>, IntFoldOverflow> {
+    prefix_sum_checked(xs, |a, b| a.checked_add(b))
+}
+
+/// The unsigned sibling of [`tree_prefix_sum_i32`]. The order is identical;
+/// only the overflow condition differs (a carry rather than a sign flip),
+/// which `u32::checked_add` already encodes.
+pub fn tree_prefix_sum_u32(xs: &[u32]) -> Result<Vec<u32>, IntFoldOverflow> {
+    prefix_sum_checked(xs, |a, b| a.checked_add(b))
+}
+
+/// The shared three-phase scan, generic over the checked add.
+///
+/// Phase 2 is this same function one level up over the chunk totals — a long
+/// prefix sum is a prefix sum OF PREFIX SUMS, exactly as in the float twin, so
+/// an overflow at any level propagates by returning rather than by a flag the
+/// caller has to remember to test.
+fn prefix_sum_checked<T: Copy + Default>(
+    xs: &[T],
+    add: fn(T, T) -> Option<T>,
+) -> Result<Vec<T>, IntFoldOverflow> {
+    if xs.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut out: Vec<T> = Vec::with_capacity(xs.len());
+    let mut totals: Vec<T> = Vec::with_capacity(xs.len().div_ceil(GPU_REDUCE_WIDTH));
+    for chunk in xs.chunks(GPU_REDUCE_WIDTH) {
+        let scanned = one_workgroup_scan_checked(chunk, add)?;
+        totals.push(scanned[GPU_REDUCE_WIDTH - 1]);
+        out.extend_from_slice(&scanned[..chunk.len()]);
+    }
+    if totals.len() == 1 {
+        return Ok(out);
+    }
+    let chunk_prefix = prefix_sum_checked(&totals, add)?;
+    // Phase 3 — the offset add is checked too. It is the step most easily
+    // forgotten: phases 1 and 2 look like "the arithmetic", and this one looks
+    // like bookkeeping, but `scanned[i] + offset` is an ordinary addition of
+    // two real values and overflows exactly as readily.
+    for (c, chunk) in out.chunks_mut(GPU_REDUCE_WIDTH).enumerate().skip(1) {
+        let offset = chunk_prefix[c - 1];
+        for x in chunk.iter_mut() {
+            *x = add(*x, offset).ok_or(IntFoldOverflow)?;
+        }
+    }
+    Ok(out)
+}
+
+/// One workgroup's inclusive Hillis-Steele scan with a checked add, padded to
+/// [`GPU_REDUCE_WIDTH`] with the additive identity.
+///
+/// The `prev` copy is the shader's `workgroupBarrier()`, exactly as in
+/// [`one_workgroup_scan_f32`] — every lane must read the values as they stood
+/// BEFORE this step, or a low lane's new value feeds a high lane within the
+/// same step and double-counts.
+///
+/// Overflow is checked for EVERY lane at EVERY step, not only for the lane
+/// that ends up holding a written output: an intermediate that overflows has
+/// already destroyed the values that depend on it.
+fn one_workgroup_scan_checked<T: Copy + Default>(
+    xs: &[T],
+    add: fn(T, T) -> Option<T>,
+) -> Result<[T; GPU_REDUCE_WIDTH], IntFoldOverflow> {
+    let mut s = [T::default(); GPU_REDUCE_WIDTH];
+    for (slot, &x) in s.iter_mut().zip(xs) {
+        *slot = x;
+    }
+    let mut stride = 1;
+    while stride < GPU_REDUCE_WIDTH {
+        let prev = s;
+        for t in stride..GPU_REDUCE_WIDTH {
+            s[t] = add(prev[t], prev[t - stride]).ok_or(IntFoldOverflow)?;
+        }
+        stride *= 2;
+    }
+    Ok(s)
+}
+
 /// One workgroup's inclusive Hillis-Steele scan, zero-padded to
 /// [`GPU_REDUCE_WIDTH`]. The full width is returned because the caller wants
 /// both the scanned prefix AND the last lane, which is the chunk total.
@@ -2509,5 +2614,133 @@ mod tests {
             tree_variance_u32(&unsigned, false).unwrap().unwrap(),
             tree_variance_i32(&signed, false).unwrap().unwrap()
         );
+    }
+
+    /// The integer scan must agree with the f32 one on values f32 represents
+    /// exactly, and with an ordinary running total — three independent
+    /// derivations of the same answer.
+    ///
+    /// The agreement is over VALUES THAT FIT. It does NOT extend to the trap
+    /// set: see
+    /// `integer_prefix_sum_can_trap_where_a_running_total_does_not`, which
+    /// pins the buffer where the two genuinely part company.
+    #[test]
+    fn integer_prefix_sum_matches_the_float_twin_and_a_running_total() {
+        for n in [1usize, 7, 63, 64, 65, 200, 4096, 4097] {
+            let xs: Vec<i32> = (0..n).map(|i| (i % 7) as i32 - 3).collect();
+            let got = tree_prefix_sum_i32(&xs).unwrap();
+
+            let mut running = 0i32;
+            let want: Vec<i32> = xs
+                .iter()
+                .map(|&x| {
+                    running += x;
+                    running
+                })
+                .collect();
+            assert_eq!(got, want, "n={n}: integer scan is not a running total");
+
+            // Small integers are exact in f32, so the two scans must agree
+            // element for element despite the different carrier.
+            let as_f32: Vec<f32> = xs.iter().map(|&x| x as f32).collect();
+            let flt = tree_prefix_sum_f32(&as_f32);
+            let flt_i: Vec<i32> = flt.iter().map(|&f| f as i32).collect();
+            assert_eq!(got, flt_i, "n={n}: integer and f32 scans disagree");
+        }
+    }
+
+    /// **THE SPECIFIED ORDER DECIDES WHETHER AN INTEGER SCAN TRAPS, not
+    /// merely what it returns** — the prefix sum's version of the fact
+    /// [`tree_reduce_i32`] records for the reductions, and the reason
+    /// `gpu.prefix_sum` over integers is not interchangeable with a running
+    /// total.
+    ///
+    /// Hillis-Steele forms WINDOW SUMS that a sequential scan never does. With
+    /// `MAX = i32::MAX`, the buffer `[-MAX, MAX, MAX]` has running totals
+    /// `-MAX`, `0`, `MAX` — every one comfortably in range. The first
+    /// Hillis-Steele step computes `prev[2] + prev[1]`, which is `MAX + MAX`,
+    /// and traps.
+    ///
+    /// That is specified behaviour rather than a divergence: all three
+    /// surfaces trap on it, because the interpreter reproduces the same step
+    /// order the device runs. But it does mean replacing a running total with
+    /// `gpu.prefix_sum` is NOT a pure speedup on integer data — it can
+    /// introduce a trap that was not there.
+    #[test]
+    fn integer_prefix_sum_can_trap_where_a_running_total_does_not() {
+        const MAX: i32 = i32::MAX;
+        let xs = vec![-MAX, MAX, MAX];
+
+        // The sequential running total never leaves the range.
+        let mut running = 0i32;
+        for &x in &xs {
+            running = running
+                .checked_add(x)
+                .expect("every running total is in range");
+        }
+        assert_eq!(running, MAX);
+
+        // The specified scan order traps on the very same buffer.
+        assert_eq!(tree_prefix_sum_i32(&xs), Err(IntFoldOverflow));
+    }
+
+    /// The empty scan is the empty Vec — no `Option`, because the prefix sums
+    /// of nothing are nothing rather than a missing answer.
+    #[test]
+    fn integer_prefix_sum_empty_is_empty() {
+        assert_eq!(tree_prefix_sum_i32(&[]), Ok(Vec::new()));
+        assert_eq!(tree_prefix_sum_u32(&[]), Ok(Vec::new()));
+    }
+
+    /// An overflow anywhere in the scan traps, because every element is an
+    /// output — unlike a reduction, where only lane 0 survives and an
+    /// intermediate nobody reads may overflow harmlessly.
+    #[test]
+    fn integer_prefix_sum_traps_on_overflow() {
+        // The running total passes i32::MAX at the third element, which is
+        // out[2] — a value the caller receives.
+        let xs = vec![i32::MAX, 1, 1];
+        assert_eq!(tree_prefix_sum_i32(&xs), Err(IntFoldOverflow));
+        // Unsigned overflows by carry rather than by sign flip.
+        assert_eq!(tree_prefix_sum_u32(&[u32::MAX, 1]), Err(IntFoldOverflow));
+        // And a scan that stays in range does NOT trap, at the very edge.
+        assert_eq!(
+            tree_prefix_sum_i32(&[i32::MAX, -1]),
+            Ok(vec![i32::MAX, i32::MAX - 1])
+        );
+    }
+
+    /// **A PADDED LANE'S OVERFLOW IS REAL AND MUST TRAP.** A lane past the
+    /// chunk's length starts at the identity, but the scan sweeps real values
+    /// into it, so it ends up holding the CHUNK TOTAL — which feeds phase 2
+    /// and every later chunk's offset. Excluding padded lanes from the check
+    /// (the obvious "only real elements matter" shortcut) would drop exactly
+    /// this case.
+    ///
+    /// 65 elements: chunk 0 is full and sums to just under i32::MAX, chunk 1
+    /// holds one element that pushes the SECOND chunk's offset past the range.
+    #[test]
+    fn integer_prefix_sum_traps_when_a_chunk_total_overflows() {
+        let mut xs = vec![0i32; 65];
+        xs[0] = i32::MAX;
+        xs[64] = 1;
+        // out[64] = i32::MAX + 1, which does not fit.
+        assert_eq!(tree_prefix_sum_i32(&xs), Err(IntFoldOverflow));
+    }
+
+    /// The scan is self-similar — a long one is a prefix sum OF PREFIX SUMS —
+    /// so an overflow at the SECOND level (folding chunk totals) has to
+    /// propagate too. 4097 elements need more than one level of chunk totals,
+    /// which is the length that separates a correct implementation from one
+    /// that only handles a single level.
+    #[test]
+    fn integer_prefix_sum_traps_at_the_second_level() {
+        let mut xs = vec![1i32; 4097];
+        xs[0] = i32::MAX - 100;
+        assert_eq!(tree_prefix_sum_i32(&xs), Err(IntFoldOverflow));
+        // The same shape with room to spare does not trap, and is a running
+        // total to the last element.
+        let ok = vec![1i32; 4097];
+        assert_eq!(tree_prefix_sum_i32(&ok).unwrap()[4096], 4097);
     }
 }

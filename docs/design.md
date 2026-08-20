@@ -10194,7 +10194,7 @@ let s2  = gpu.variance(buf)   // Option[f32] — population (÷ n); Option[f64] 
 let sd  = gpu.stddev(buf)     // Option[f32]; Option[f64] over an integer buffer
 let i   = gpu.argmin(buf)     // Option[i64] — the INDEX of the minimum
 let j   = gpu.argmax(buf)     // Option[i64]
-let ps  = gpu.prefix_sum(buf) // Vec[f32] — inclusive; NOT a reduction
+let ps  = gpu.prefix_sum(buf) // Vec[f32] — inclusive; NOT a reduction; Vec[i32] / Vec[u32] too
 ```
 
 The fallible ones are fallible because the answer genuinely does not exist, not because the implementation is awkward: an empty buffer has no minimum, no maximum and no mean. Returning the shader's padding identity (`+inf`) or `0.0 / 0` (`NaN`) would be a plausible-looking value that propagates silently through everything downstream, which is the failure mode this whole family is built to avoid. `sum`/`prod`/`dot` are total — the empty case is the identity (`0`, `1`, `0`) — so they return a bare `f32`.
@@ -10219,6 +10219,21 @@ They diverge from `Stats.argmin` on **NaN**, and necessarily. `Stats.argmin` see
 `gpu.variance` / `gpu.stddev` are the **population** forms (÷ n), matching `Stats.variance` and `Stats.stddev`, so the two answer the same number on the same buffer — and differing from `Column`'s `var` / `std`, which are the **sample** (÷ n−1) forms; see [Numerical Types](#numerical-types-tensor-column-dataframe) § "Variance divisor" for why the split is deliberate. They are the only **two-pass** reductions: the mean has to exist before a single deviation can be formed, so the device runs a complete sum reduction, reads the mean back, and dispatches again with it as a uniform. Both passes go through the same sum tree, so the grouping caveat above is inherited rather than re-derived — and `gpu.stddev(v)` is exactly `gpu.variance(v)` rooted once at the end, not a separate accumulation.
 
 
+
+
+**`prefix_sum` works over `Vec[i32]` / `Vec[u32]` too, and it traps — but where it traps is the interesting part.**
+
+Every checked integer operation above it is a **reduction**: only lane 0 survives, a lane above the stride holds a partial nobody reads, and its overflow is irrelevant. A scan writes all `n` values, so an overflow in **any** lane is an overflow in the answer. The emitted shader therefore ORs the flag across the whole workgroup rather than reading lane 0 — inheriting the reduction's habit would silently drop overflows in exactly the elements the caller asked for. Padded lanes are checked as well: a lane past the buffer starts at the identity, but the scan sweeps real values into it, so it ends up holding the chunk total that phase 2 folds and every later chunk's offset depends on.
+
+The phase-3 offset add is checked too, and it is the step most easily forgotten — phases 1 and 2 look like *the arithmetic* while shifting a chunk looks like bookkeeping, but `scanned[i] + offset` adds two real values and is precisely where a long buffer's total finally leaves the range.
+
+**The specified order decides *whether* an integer scan traps, not merely what it returns.** This is the prefix sum's version of the fact recorded above for the reductions, and it is sharper here because Hillis-Steele forms **window sums** a sequential scan never does. With `MAX = i32::MAX`:
+
+| buffer | running total | `gpu.prefix_sum` |
+|---|---|---|
+| `[-MAX, MAX, MAX]` | `-MAX`, `0`, `MAX` — all in range | **traps** |
+
+The first Hillis-Steele step computes `prev[2] + prev[1]`, which is `MAX + MAX`. All three surfaces trap on it, because the interpreter reproduces the device's step order — so this is specified behaviour, not a divergence. It does mean that replacing a running total with `gpu.prefix_sum` is **not** a pure speedup on integer data: it can introduce a trap that was not there. Float scans have no analogue, because float addition saturates rather than trapping.
 
 **`prod`, `dot` and `matmul` work over `Vec[i32]` / `Vec[u32]` and rank-2 `Tensor[i32]` / `Tensor[u32]`, and they trap.** These were recorded for several revisions as *blocked on WGSL*, on the grounds that it has no widening multiply. That was true of the **intrinsic** and false of the capability: a `u32 × u32 → u64` product is four 16-bit partial products and two carries, which the emitted `karac_mul_wide` performs exactly. Once an exact wide product exists, "did this multiply overflow 32 bits?" is a question about the high word — which is how a hardware multiplier answers it too.
 

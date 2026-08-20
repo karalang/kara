@@ -1122,6 +1122,171 @@ pub fn emit_scan_kernel(elem: &str) -> Result<String, WgslError> {
     ))
 }
 
+/// Emit the CHECKED INTEGER phase-1 scan for `gpu.prefix_sum`
+/// (B-2026-08-19-13).
+///
+/// Same Hillis-Steele step order as [`emit_scan_kernel`], with one structural
+/// difference that is the whole reason this is a separate emitter rather than
+/// a combine string:
+///
+/// **THE OVERFLOW FLAG IS OR'D ACROSS EVERY LANE, not read from lane 0.**
+/// Every checked kernel above this one is a REDUCTION, where only lane 0
+/// survives and a lane above the stride holds a partial nobody reads — so
+/// `ovf[0]` after the fold is the whole story. A scan writes all `n` values,
+/// so an overflow in any lane is an overflow in the ANSWER. Inheriting the
+/// reduction's habit here would silently drop overflows in exactly the
+/// elements the caller asked for.
+///
+/// **Padded lanes are checked too, and that is not conservatism.** A lane past
+/// the buffer starts at the identity, but the scan sweeps real values into it,
+/// so by the last step it holds the CHUNK TOTAL — which phase 2 folds and
+/// every later chunk's offset depends on. Its overflow is a real overflow of a
+/// real quantity.
+///
+/// The two-barrier read/write split is [`emit_scan_kernel`]'s and is preserved
+/// exactly: read every addend first, barrier, then write. One barrier per step
+/// would let a low lane's new value reach a high lane within the same step,
+/// double-counting an element while still looking like a prefix sum.
+pub fn emit_int_scan_kernel(elem: &str) -> Result<String, WgslError> {
+    let (identity, add) = match elem {
+        "i32" => (
+            "0",
+            "let s = scratch[t] + addend;\n\
+             \x20           ovf[t] = ovf[t] | \
+             select(0u, 1u, ((scratch[t] ^ s) & (addend ^ s)) < 0);\n\
+             \x20           scratch[t] = s;",
+        ),
+        "u32" => (
+            "0u",
+            "let s = scratch[t] + addend;\n\
+             \x20           ovf[t] = ovf[t] | select(0u, 1u, s < scratch[t]);\n\
+             \x20           scratch[t] = s;",
+        ),
+        _ => {
+            return Err(WgslError::UnsupportedSignature(format!(
+                "checked integer GPU `prefix_sum` over `{elem}` is not supported — the \
+                 integer entry points cover i32 and u32"
+            )))
+        }
+    };
+    let width = GPU_REDUCE_WIDTH;
+    let last = width - 1;
+    Ok(format!(
+        "@group(0) @binding(0) var<storage, read>       input:   array<{elem}>;\n\
+         @group(0) @binding(1) var<storage, read_write> output:  array<{elem}>;\n\
+         @group(0) @binding(2) var<storage, read_write> totals:  array<{elem}>;\n\
+         @group(0) @binding(3) var<storage, read_write> flags:   array<u32>;\n\
+         \n\
+         var<workgroup> scratch: array<{elem}, {width}>;\n\
+         var<workgroup> ovf: array<u32, {width}>;\n\
+         \n\
+         @compute @workgroup_size({width})\n\
+         fn main(@builtin(local_invocation_id) lid: vec3<u32>,\n\
+         \x20       @builtin(workgroup_id) wid: vec3<u32>,\n\
+         \x20       @builtin(global_invocation_id) gid: vec3<u32>) {{\n\
+         \x20   let t = lid.x;\n\
+         \x20   let i = gid.x;\n\
+         \x20   ovf[t] = 0u;\n\
+         \x20   // Every lane loads, padding included — the scan reads across\n\
+         \x20   // the whole width, so an uninitialised lane would poison its\n\
+         \x20   // neighbours. 0 is the Sum identity.\n\
+         \x20   if (i < arrayLength(&input)) {{ scratch[t] = input[i]; }} else {{ scratch[t] = {identity}; }}\n\
+         \x20   workgroupBarrier();\n\
+         \n\
+         \x20   var stride: u32 = 1u;\n\
+         \x20   loop {{\n\
+         \x20       if (stride >= {width}u) {{ break; }}\n\
+         \x20       // READ first, for every lane, then barrier, then write.\n\
+         \x20       var addend: {elem} = {identity};\n\
+         \x20       if (t >= stride) {{ addend = scratch[t - stride]; }}\n\
+         \x20       workgroupBarrier();\n\
+         \x20       if (t >= stride) {{\n\
+         \x20           {add}\n\
+         \x20       }}\n\
+         \x20       workgroupBarrier();\n\
+         \x20       stride = stride * 2u;\n\
+         \x20   }}\n\
+         \n\
+         \x20   if (i < arrayLength(&input)) {{ output[i] = scratch[t]; }}\n\
+         \x20   if (t == {last}u) {{ totals[wid.x] = scratch[{last}]; }}\n\
+         \x20   workgroupBarrier();\n\
+         \x20   // ONE lane ORs the whole workgroup's flags. A scan's every\n\
+         \x20   // lane holds a live output, so `ovf[0]` alone would miss the\n\
+         \x20   // overflows that matter most.\n\
+         \x20   if (t == 0u) {{\n\
+         \x20       var any: u32 = 0u;\n\
+         \x20       var q: u32 = 0u;\n\
+         \x20       loop {{\n\
+         \x20           if (q >= {width}u) {{ break; }}\n\
+         \x20           any = any | ovf[q];\n\
+         \x20           q = q + 1u;\n\
+         \x20       }}\n\
+         \x20       flags[wid.x] = any;\n\
+         \x20   }}\n\
+         }}\n"
+    ))
+}
+
+/// Emit the CHECKED INTEGER phase 3 of `gpu.prefix_sum`: shift every chunk by
+/// the total of all chunks before it (B-2026-08-19-13).
+///
+/// **The offset add is checked, and it is the step most easily forgotten.**
+/// Phases 1 and 2 look like "the arithmetic" and this one looks like
+/// bookkeeping, but `scanned[i] + offset` adds two real values and overflows
+/// exactly as readily — it is where a long buffer's total finally exceeds the
+/// range, since that is the only place a late chunk meets an early chunk's
+/// sum.
+pub fn emit_int_scan_offset_kernel(elem: &str) -> Result<String, WgslError> {
+    let (identity, add) = match elem {
+        "i32" => (
+            "0",
+            "let s = scanned[i] + off;\n\
+             \x20   let bad = ((scanned[i] ^ s) & (off ^ s)) < 0;",
+        ),
+        "u32" => (
+            "0u",
+            "let s = scanned[i] + off;\n\
+             \x20   let bad = s < scanned[i];",
+        ),
+        _ => {
+            return Err(WgslError::UnsupportedSignature(format!(
+                "checked integer GPU `prefix_sum` over `{elem}` is not supported — the \
+                 integer entry points cover i32 and u32"
+            )))
+        }
+    };
+    let width = GPU_REDUCE_WIDTH;
+    Ok(format!(
+        "@group(0) @binding(0) var<storage, read>       scanned: array<{elem}>;\n\
+         @group(0) @binding(1) var<storage, read>       offsets: array<{elem}>;\n\
+         @group(0) @binding(2) var<storage, read_write> output:  array<{elem}>;\n\
+         @group(0) @binding(3) var<storage, read_write> flags:   array<u32>;\n\
+         \n\
+         @compute @workgroup_size({width})\n\
+         fn main(@builtin(global_invocation_id) gid: vec3<u32>,\n\
+         \x20       @builtin(workgroup_id) wid: vec3<u32>,\n\
+         \x20       @builtin(local_invocation_id) lid: vec3<u32>) {{\n\
+         \x20   let i = gid.x;\n\
+         \x20   // Lane 0 clears its workgroup's flag word before any lane can\n\
+         \x20   // set it. Without this a workgroup whose threads all return\n\
+         \x20   // early would leave the slot unwritten.\n\
+         \x20   if (lid.x == 0u) {{ flags[wid.x] = 0u; }}\n\
+         \x20   workgroupBarrier();\n\
+         \x20   if (i >= arrayLength(&scanned)) {{ return; }}\n\
+         \x20   let c = i / {width}u;\n\
+         \x20   // `offsets` is the INCLUSIVE prefix of the chunk totals, so\n\
+         \x20   // chunk c's EXCLUSIVE offset is one position back. Chunk 0\n\
+         \x20   // has nothing before it.\n\
+         \x20   var off: {elem} = {identity};\n\
+         \x20   if (c > 0u) {{ off = offsets[c - 1u]; }}\n\
+         \x20   {add}\n\
+         \x20   output[i] = s;\n\
+         \x20   // Any lane may raise it; the host ORs across workgroups.\n\
+         \x20   if (bad) {{ flags[wid.x] = 1u; }}\n\
+         }}\n"
+    ))
+}
+
 /// Emit phase 3 of `gpu.prefix_sum(buf)`: shift every chunk by the total of
 /// all chunks before it (B-2026-08-19-13).
 ///
