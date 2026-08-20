@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 185 | 0 |
 | run-vs-build | 139 | 0 |
 | double-free | 133 | 0 |
-| missing-feature | 123 | 2 |
+| missing-feature | 124 | 2 |
 | codegen-gap | 119 | 0 |
 | diagnostics | 83 | 0 |
 | false-positive | 82 | 0 |
@@ -117,21 +117,21 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | other | 58 | 0 |
 | autopar | 49 | 0 |
 | cli | 48 | 0 |
-| parser | 29 | 1 |
+| parser | 30 | 1 |
 | runtime | 26 | 1 |
 | resolver | 20 | 0 |
 | effect | 7 | 0 |
 | lexer | 6 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1378 surfaced · 2 open · 1356 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1379 surfaced · 2 open · 1357 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-19-13 | 2026-08-19 | typecheck+codegen+runtime | medium | GPU reductions still lack prefix-sum and tiled matmul (separate algorithms, not halving folds); integer `prod` / `dot` are blocked on WGSL lacking a widening multiply; and `variance` / `stddev` are f32-only. Everything else has shipped: sum / prod / min / max / mean / dot / argmin / argmax / variance / stddev over `Vec[f32]`, and sum / min / max / mean / argmin / argmax over `Vec[i32]` and `Vec[u32]`. | docs/spikes/gpu-llvm-offload-assessment.md; src/gpu_wgsl.rs::emit_reduce_kernel; src/reduce_kernel.rs::tree_reduce_f32 |
-| B-2026-08-19-29 | 2026-08-19 | parser | low | `usize` is missing from the parser's unsigned-suffix list for the out-of-range literal band, so `18446744073709551615usize` is REJECTED ("out of range for i64 … add an unsigned suffix") while the byte-identical `18446744073709551615u64` is accepted. `usize` is 64-bit, so the whole upper half of its range is unwritable as a literal. | src/parser/exprs.rs (the `IntegerOutOfRange` arm's unsigned-suffix match); src/typechecker/exprs.rs::int_literal_range (which already handles Usize); src/typechecker/exprs.rs::literal_as_i128 |
+| B-2026-08-20-1 | 2026-08-20 | parser | low | AN UPPER-HALF UNSIGNED LITERAL CANNOT BE A MATCH PATTERN for any width: `match n { 18446744073709551615u64 => .. }` fails with "Expected pattern, found IntegerOutOfRange". The expression parser has an unsigned band that admits these onto the signed carrier; the PATTERN parser has none. | src/parser/patterns.rs (no IntegerOutOfRange arm); src/parser/exprs.rs (the expression-side unsigned band it should mirror); src/exhaustive.rs |
 
 ### Wontfix (7)
 
@@ -149,9 +149,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1378 surfaced
 
 </details>
 
-### Fixed (1356)
+### Fixed (1357)
 
-<details><summary>1356 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1357 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -12456,6 +12456,21 @@ VERIFICATION. The interpreter was already correct throughout — it renders from
 STILL BROKEN, split out as B-2026-08-19-30: a BARE `println(e)` on a user-defined generic enum value. It takes a different entry point (`render_user_enum_display`), which receives only the enum's name, and codegen has no span-addressed table carrying a variable's full instantiation — so it needs a new side table rather than a call-site argument. Unchanged by this commit: it panicked before and panics now, with the same message.
 
 NOT A BUG, for the next reader: a struct FIELD whose type is `Option[T]` / `Vec[...]` is refused with a clean diagnostic, not a panic. That is the documented subtask-5 deferral in `display_field_is_leaf`, unrelated to this row. |
+| B-2026-08-19-29 | parser | low | `usize` was not an integer suffix ANYWHERE — absent from the lexer's suffix table and from `IntSuffix` itself — so `42usize` lexed as `42` plus a str… | FIXED by c7cf8c0.
+
+THE ROW'S CAUSE IS NOT RIGHT, and the correction changed the fix. It reports "one missing enum variant in a match" in `parser/exprs.rs`'s unsigned-suffix list. There was no variant to match on: `IntSuffix` is `I8..I128, U8..U128` with no `Usize`, and `lexer.rs`'s suffix table has no `usize` entry either. Measured: `fn main() { let n: usize = 42usize; }` fails with "Expected Semicolon, found Identifier { name: \"usize\" }" — it never lexed as a suffixed literal at all. The row's own repro (the u64::MAX magnitude) reaches a range error first, which is why it looked like a parser-list problem.
+
+ALIASING ONTO `U64` WOULD NOT WORK. `usize` is a distinct type (`UIntSize::Usize`), so `let n: usize = 42u64` is a mismatch — lexing the suffix as `U64` moves the error rather than removing it. The variant has to be real.
+
+SIXTEEN SITES, and which gate found each is the useful part:
+  - 5 in the DEFAULT build (formatter, resolver, two typechecker suffix→type maps, `type_from_int_suffix`) — non-exhaustive, so rustc named them.
+  - 4 more only under `--features llvm` (codegen const-folding, popcount signedness, width/signedness, LLVM int type). The default build was clean with all four missing.
+  - 3 more only when the llvm TEST targets compiled (`selfhost_lexer.rs`, `selfhost_parser.rs`, `selfhost_parser_items.rs`).
+  - 4 that NO build error could reach, found by grepping every `IntSuffix::U128` site and checking for a `Usize` sibling: `comptime.rs` and `const_eval.rs` (both `_ => None`, so a `usize` literal would silently type as nothing) and two codegen "is this suffix unsigned?" tests that would have read it as SIGNED. Probed before patching — the annotation-driven paths were already correct (`big > small`, `big / 2` behave unsigned), so these were latent, not active. Recorded as latent rather than claimed as a live miscompile.
+
+SELF-HOST. `selfhost/src/lexer.kara` has its own suffix scanner and `tests/selfhost_lexer.rs` diffs its stream against the Rust lexer's, so both sides learned `usize`. The oracle CORPUS had no `usize` input — it covers i16/i128/u16/u128 — so it would have agreed vacuously, neither lexer ever being handed the token they could disagree about. Added `7usize 18446744073709551615usize usize`, the bare identifier included because the port must consume the suffix only when it trails a number.
+
+VERIFIED on all four surfaces: `18446744073709551615usize`, `42usize` and the carrier-boundary `9223372036854775808usize` print identically under run --interp / run / build / KARAC_AUTO_PAR=0 build; `big > small` and `big / 2usize` behave unsigned on both legs. One past `usize::MAX` is still refused, the same way `u64` refuses it. 124 targets / 14347 passing under --features llvm; the 7 failures are another session's in-flight 128-bit / unsigned-display work, confirmed failing at commit a6f9427 which predates any of this. Both clippy legs and fmt clean. |
 | B-2026-08-19-30 | codegen | medium | A BARE `println(e)` on a user-defined GENERIC enum value PANICS the compiler — `emit_display_fn_for_type: type_name 'T' not yet supported` | FIXED by db463e5. The row's own analysis said this needed "a new side table rather than a call-site argument" and that an identifier-only patch would silently decline every other expression shape. The first half was right; the second was too pessimistic, and measuring first is what showed the difference.
 
 WHAT THE MEASUREMENT CHANGED. The row implied the non-binding shapes would be left silently unhandled. In fact `println(mk())` — a call result rendered without binding — fails with a CLEAN diagnostic ("bind a struct literal or call result to a `let` first") and fails identically for a NON-generic enum, so it is the pre-existing subtask-5 restriction, orthogonal to generics rather than a remainder of this row. That reframing is what made the scope finite: the shapes that differ between a generic and a non-generic enum are exactly the direct spellings of a BOUND value, and all three of them (`println(e)`, `f"{e}"`, `e.to_string()`) share one entry point.
