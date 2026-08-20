@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 133 | 0 |
 | missing-feature | 126 | 1 |
 | codegen-gap | 119 | 0 |
-| false-positive | 85 | 3 |
+| false-positive | 86 | 3 |
 | diagnostics | 84 | 1 |
 | perf | 79 | 1 |
 | crash | 55 | 1 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 953 | 2 |
-| typecheck | 218 | 4 |
+| typecheck | 219 | 4 |
 | interp | 163 | 0 |
 | ownership | 60 | 0 |
 | other | 58 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 6 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1390 surfaced · 7 open · 1363 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1391 surfaced · 7 open · 1364 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (7)
 
@@ -135,8 +135,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1390 surfaced
 | B-2026-08-20-6 | 2026-08-20 | typecheck | medium | A `u64` / `usize` match whose arms COVER THE WHOLE DOMAIN by two ranges is wrongly rejected as non-exhaustive: `match n { 0u64..=9223372036854775807u64 => .., 9223372036854775808u64..=18446744073709551615u64 => .. }` reports `pattern 9223372036854775808 not covered` — naming the very value the second arm starts at. The identical `u8` shape is accepted. | src/exhaustive.rs::int_domain (declared domain in unsigned space); src/exhaustive.rs (PatCtor::IntRange construction from LiteralPattern::Integer); src/parser/patterns.rs::pattern_int_on_carrier (where the wrap is applied); src/typechecker/exprs.rs::literal_as_i128 (the un-wrap precedent) |
 | B-2026-08-20-8 | 2026-08-20 | autopar | medium | `karac build --concurrency-report` prints the ANALYSIS label with no lowering verdict, so it claims `parallel_reduction` for a loop its own sibling query reports as `fanned_out: false` — the binary contains zero worker symbols | — |
 | B-2026-08-20-9 | 2026-08-20 | runtime+autopar | medium | Auto-par worker threads contend on ONE glibc malloc arena: any fan-out body that allocates per iteration pays a shared lock the sequential build never touches | — |
-| B-2026-08-20-10 | 2026-08-20 | typecheck | high | LITERAL PATTERNS ARE NEVER TYPECHECKED — `PatternKind::Literal` is an explicit "deferred" arm. `match n { 300i8 => .. }` on an `i8`, `99999i8`, a `5u64` pattern against an `i64` scrutinee, and a `true` pattern against an `i64` scrutinee are ALL accepted, and the last two MATCH. The identical literal in expression position is correctly rejected. | src/typechecker/patterns.rs (the `PatternKind::Literal(_) => {}` deferred arm); src/typechecker/exprs.rs::check_int_literal_fits (the existing range check, already suffix-aware); src/typechecker/patterns.rs::resolve_range_bound_value (the range-bound path that DOES resolve a type) |
 | B-2026-08-20-12 | 2026-08-20 | typecheck | low | A FLOAT literal pattern makes the following `_` arm report `warning[unreachable_arm]`: `match f { 1.5 => .., _ => .. }` warns that the wildcard is "fully covered by an earlier arm". The `_` is of course required — a single float literal covers one value — and the integer equivalent produces no warning. | src/exhaustive.rs::int_domain (no float domain); src/exhaustive.rs (usefulness/unreachable-arm computation for LiteralPattern::Float); src/typechecker (where warning[unreachable_arm] is emitted) |
+| B-2026-08-20-13 | 2026-08-20 | typecheck | medium | A FLOAT literal is accepted at an INTEGER-annotated binding and the annotation is simply ignored: `let n: i64 = 1.5; println(n)` compiles and prints `1.5` on BOTH backends. The reverse (`let n: f64 = 5`) is the documented int-to-float widening and is fine; this direction has no rule behind it. | src/typechecker/exprs.rs::check_expr (where a suffixed/unsuffixed literal meets its contextual type); src/typechecker/exprs.rs::check_int_literal_fits (the integer half, which works); src/typechecker/patterns.rs::check_literal_pattern (the pattern-side check that deliberately departs from this behaviour); tests/typechecker.rs::the_literal_pattern_check_agrees_with_expression_position (the assertion that flags when this is fixed) |
 
 ### Wontfix (7)
 
@@ -154,9 +154,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1390 surfaced
 
 </details>
 
-### Fixed (1363)
+### Fixed (1364)
 
-<details><summary>1363 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1364 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -12559,6 +12559,21 @@ CAVEAT WORTH READING BEFORE THE NEXT CHANGE HERE. The parse error this removes w
 TWO MORE PRE-EXISTING DEFECTS found while measuring, each confirmed by reproducing on a clean `main` build:
   - B-2026-08-20-11 (high, miscompile): codegen does not compare an enum payload's literal AT ALL — it matches on the tag alone, so `match Some(5) { Some(7) => "hit", _ => "no" }` prints `hit` compiled and `no` interpreted. No negatives involved. Found only because this row's test asserts MISS arms; the hit-only version passes. The one miss this row's test does NOT assert is that shape, with a comment in place so the omission is not silent — asserting it would tie this regression test to that bug's fix.
   - B-2026-08-20-12 (low): a float literal pattern makes the following `_` arm report `unreachable_arm`. Positive floats do it too, so it is unrelated to sign. |
+| B-2026-08-20-10 | typecheck | high | LITERAL PATTERNS ARE NEVER TYPECHECKED — `PatternKind::Literal` is an explicit "deferred" arm | FIXED by b585059. The empty `PatternKind::Literal` arm now checks the literal against the scrutinee: class first, then range for the integer case, reusing `check_int_literal_fits` — the same helper the expression path calls.
+
+EXPRESSION POSITION WAS THE ORACLE, and choosing it is most of what made this tractable. `let n: T = <lit>;` already decides every one of these cases, so the check was built to AGREE with it rather than to invent rules, and the agreement is now asserted directly over both spellings (`the_literal_pattern_check_agrees_with_expression_position`) — if either side moves, that test fails instead of the gap silently reopening. Following the oracle is also what kept the check NARROW: an integer literal at a float scrutinee stays accepted (documented int→float widening), and so does an in-range suffix/width mismatch (`5u64` against an `i64`). Whether that last should require `as` is a separate open design question; answering it here would have rejected code that compiles today for reasons unrelated to this bug.
+
+ONE DELIBERATE DEPARTURE, asserted as an exception so it cannot rot into an unnoticed inconsistency: a FLOAT literal at an INTEGER scrutinee is rejected here even though expression position accepts `let n: i64 = 1.5` and binds a float to an `i64`-annotated name. Replicating that would mean accepting a pattern that can never match. Filed as B-2026-08-20-13, and the assertion pinning the departure will begin failing when that row is fixed — which is the signal to retire it.
+
+TWO TRAPS, both found by measuring rather than by reading:
+  - REFINEMENT scrutinees must peel to their base. An integer literal against a `distinct type … where` over an integer is ordinary exhaustive-by-enumeration code, and the first draft rejected all of it — caught immediately by the existing bounded-refinement tests, which is the argument for running the suite before believing a new check is narrow. Both spellings peel (structural `Type::Refinement` and the nominal `distinct type` whose base lives in `env.distinct_bases`), matching how `refinement_finite_domain` resolves the same two forms for exhaustiveness. The predicate's own bounds are left to the refinement machinery rather than re-checked, so one mistake is not reported twice.
+  - An UPPER-HALF unsigned literal rides the pattern carrier WRAPPED, as a negative value (B-2026-08-20-1's encoding, chosen so a pattern and its scrutinee compare as identical bits). Range-checking it raw would present `18446744073709551615u64` as `-1` and reject a legal pattern, so the payload is un-wrapped first — the same carrier-vs-domain mismatch that makes B-2026-08-20-6 mis-report exhaustiveness, met here before it could bite.
+
+FALLOUT MEASURED, NOT ASSUMED. This is a false-positive removal, so its only possible harm is REJECTING code that compiles today — and that risk was flagged up front as unmeasured. Swept every `.kara` file in both repos: 898 katas (zero errors) and 231 files in this repo, comparing the full error set before and after. BYTE-IDENTICAL. No existing Kāra code relied on the unchecked surface, so the caution turned out to be unfounded; recording that is worth more than the caution was.
+
+VERIFICATION. Tests: `an_ill_typed_literal_pattern_is_rejected` (nine shapes, each with the expected message), `a_well_typed_literal_pattern_is_still_accepted` (the counterweight — twelve shapes that must not regress, including both carrier-wrapped unsigned cases, both MIN magnitudes, a borrowed scrutinee and range patterns), `a_literal_pattern_against_a_refinement_checks_its_base`, and `the_literal_pattern_check_agrees_with_expression_position` (the invariant). Gates: fmt, both clippy legs, default suite (106 targets), codegen 3093 and memory_sanitizer 1130 under KARAC_REQUIRE_RUNTIME_ARCHIVE=1.
+
+ALSO IN THIS COMMIT: the one MISS assertion held out of `e2e_negative_literal_patterns_match` is restored. `Some(5)` against a `Some(-5)` pattern was miscompiled when that test was written — codegen compared only the variant tag — which is B-2026-08-20-11, found by that same assert-the-misses discipline and fixed by another session in e66b71d. The held-out assertion and its stale pointer are both gone. |
 | B-2026-08-20-11 | codegen | high | SILENT RUN-VS-BUILD MISCOMPILE: codegen does not compare an enum payload's LITERAL pattern at all — it matches on the tag alone | FIXED by e66b71d. ROOT CAUSE: `and_in_nested_variant_conditions` (src/codegen/control_flow_match.rs) admitted payload sub-patterns through exactly ONE key — `variant_pattern_enum_and_tag` — in both its early-return gate and its loop's `else { continue }`. A literal answers `None` there, so no payload was ever reconstructed and no test emitted: the arm compiled to the OUTER TAG COMPARISON ALONE. Same defect shape as the range-pattern and struct-field misses already fixed in `compile_pattern_condition` (B-2026-07-12-13) — a sub-pattern that discriminates, dropped on the floor, so the arm over-matches.
 
 FIX: a second admission key, `pattern_tests_payload_value` (true for Literal / RangePattern, recursing through Or / Tuple / Struct / AtBinding; false for Binding / Wildcard, which only NAME the payload). For a non-variant sub-pattern the rebuilt payload is handed back to `compile_pattern_condition`, so it reuses the same literal / range / tuple / struct / or / at-binding arms the top-level scrutinee gets — and recurses, so an arbitrarily nested test still lands. The nested-variant tag path is untouched.
