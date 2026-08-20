@@ -230,7 +230,13 @@ fn main() {\n\
         "control must prove the disjoint-write loop; got:\n{ctl_out}"
     );
     assert!(
-        !ctl_out.contains("declined"),
+        // Match the FOOTER, not the bare word. B-2026-08-20-8 gave declined
+        // reductions a `cost_gate: declined_*` line, and this fixture contains
+        // one (`acc` is memory-bandwidth-bound) that is entirely unrelated to
+        // the disjoint-write footer this assertion is about — a substring test
+        // on "declined" conflated the two and failed on a correct report. The
+        // subject-side assertion below already used the precise string.
+        !ctl_out.contains("considered for disjoint-write fan-out and declined"),
         "the footer must NOT fire when every candidate was proven; got:\n{ctl_out}"
     );
 
@@ -256,4 +262,98 @@ fn main() {\n\
     );
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// B-2026-08-20-8 — the human `--concurrency-report` must state whether each
+/// reduction ACTUALLY fanned out, not just that a reduction was recognized.
+///
+/// The report printed `parallel_reduction { .. }` for every recognized
+/// reduction, opportunity and decline alike, while `karac query concurrency`
+/// on the SAME FILE reported `fanned_out: false` with a gate and a reason.
+/// Two tools, one file, opposite answers — and the report is the one a user
+/// reaches for first. That gap is what produced B-2026-08-20-3's incorrect
+/// framing: a session read `parallel_reduction` off the report, measured a
+/// 1.01x speedup, and went looking for a runtime bug in a loop that had never
+/// been dispatched.
+///
+/// Both surfaces now read `effect_graph::reduction_verdict_parts`, so they
+/// cannot disagree by construction. This asserts BOTH directions — a
+/// compute-heavy loop that clears the gates still reports `true` — so the test
+/// cannot pass by printing `false` unconditionally, which is exactly the
+/// failure the old code had in mirror image.
+#[test]
+fn test_report_states_whether_each_reduction_fanned_out() {
+    // Memory-bandwidth-bound: an indexed read per iteration and no substantial
+    // call, so the cost model declines it. A real opportunity, correctly
+    // rejected — the shape whose decline was invisible.
+    const DECLINED: &str = "\n\
+fn total(v: Slice[i64]) -> i64 {\n\
+    let mut total = 0i64;\n\
+    let n = v.len();\n\
+    let mut k = 0i64;\n\
+    while k < n { total = total + v[k]; k = k + 1; }\n\
+    return total;\n\
+}\n\
+fn main() {\n\
+    let mut d: Vec[i64] = Vec.new();\n\
+    for i in 0..64 { d.push(i); }\n\
+    println(f\"{total(d.as_slice())}\");\n\
+}\n";
+
+    // Substantial per-iteration call, so the same gates admit it.
+    const FANNED: &str = "\n\
+fn work(x: i64) -> i64 {\n\
+    let mut a = x;\n\
+    let mut i = 0i64;\n\
+    while i < 50 { a = a * 31 + i; i = i + 1; }\n\
+    return a;\n\
+}\n\
+fn hot() -> i64 {\n\
+    let mut total = 0i64;\n\
+    for k in 0..4000000 { total = total + work(k); }\n\
+    return total;\n\
+}\n\
+fn main() { println(f\"{hot()}\"); }\n";
+
+    let dir = std::env::temp_dir().join("karac_report_fanout_verdict_test");
+    std::fs::create_dir_all(&dir).unwrap();
+
+    // `karac check` carries the same `--concurrency-report` plumbing as
+    // `karac build` and does not need `--features llvm` (see the note in
+    // `test_no_concurrency_report_without_flag` above).
+    let report = |name: &str, src: &str| -> String {
+        let path = dir.join(name);
+        std::fs::write(&path, src).unwrap();
+        let out = Command::new(env!("CARGO_BIN_EXE_karac"))
+            .args(["check", "--concurrency-report", path.to_str().unwrap()])
+            .env_remove("KARAC_AUTO_PAR")
+            .output()
+            .expect("karac check --concurrency-report");
+        String::from_utf8_lossy(&out.stdout).to_string()
+    };
+
+    let declined = report("declined.kara", DECLINED);
+    assert!(
+        declined.contains("fanned_out: false"),
+        "a reduction the cost model declined must say so in the human report; \
+         got:\n{declined}"
+    );
+    assert!(
+        declined.contains("cost_gate: declined_memory_bound"),
+        "the decline must name the gate that rejected it, so the report answers \
+         \"why didn't my loop parallelize\" without a second tool; got:\n{declined}"
+    );
+
+    let fanned = report("fanned.kara", FANNED);
+    assert!(
+        fanned.contains("fanned_out: true"),
+        "a reduction that clears the gates must still report fanned out — \
+         without this the assertion above passes on a report that prints \
+         `false` unconditionally; got:\n{fanned}"
+    );
+    assert!(
+        !fanned.contains("cost_gate:"),
+        "a fan-out that happened needs no explanation; printing a gate line for \
+         it is the noise B-2026-08-01-33 warned about; got:\n{fanned}"
+    );
 }

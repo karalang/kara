@@ -83,7 +83,7 @@ pub fn render_concurrency_report(
     for item in &program.items {
         match item {
             Item::Function(f) => {
-                emitted_any |= render_function(&mut out, &f.name, f, analysis, effects);
+                emitted_any |= render_function(&mut out, &f.name, f, analysis, effects, program);
             }
             Item::ImplBlock(imp) => {
                 let Some(type_name) = impl_type_name(imp) else {
@@ -92,7 +92,7 @@ pub fn render_concurrency_report(
                 for impl_item in &imp.items {
                     if let ImplItem::Method(method) = impl_item {
                         let key = format!("{}.{}", type_name, method.name);
-                        if render_function(&mut out, &key, method, analysis, effects) {
+                        if render_function(&mut out, &key, method, analysis, effects, program) {
                             emitted_any = true;
                         }
                     }
@@ -126,6 +126,9 @@ fn render_function(
     func: &Function,
     analysis: &ConcurrencyAnalysis,
     effects: &EffectCheckResult,
+    // Needed only by `reduction_verdict_parts`: the cost gates read callee
+    // bodies out of the whole program to price a call in the loop body.
+    program: &Program,
 ) -> bool {
     let Some(decision) = analysis.function_decisions.get(decision_key) else {
         return false;
@@ -214,18 +217,52 @@ fn render_function(
     let mut sorted_reductions: Vec<&_> = reductions.iter().collect();
     sorted_reductions.sort_by_key(|r| r.loop_line);
     for red in sorted_reductions {
+        // B-2026-08-20-8 — the LABEL alone ("parallel_reduction") names the
+        // analyzer's OPPORTUNITY, not the lowering that was emitted. A loop
+        // the cost model declined still carries the label, so the report used
+        // to claim a fan-out for a loop whose binary contains no worker
+        // symbols, disagreeing with `karac query concurrency` on the same
+        // file. Route both surfaces through the one verdict definition and
+        // print what it says.
+        let (_lowering, fanned_out, gate, reason) = crate::effect_graph::reduction_verdict_parts(
+            red,
+            Some(func),
+            Some(program),
+            decision_key,
+        );
         let kind = if red.seq {
             "sequential_tabulate"
         } else {
             "parallel_reduction"
         };
         out.push_str(&format!(
-            "  {} {{ op: {}, accumulator: {}, line: {} }}\n",
+            "  {} {{ op: {}, accumulator: {}, line: {}, fanned_out: {} }}\n",
             kind,
             red.op.symbol(),
             red.accumulator,
             red.loop_line,
+            fanned_out,
         ));
+        // The reason is the actionable half — "why didn't my loop
+        // parallelize" is the question the report is read to answer — so it is
+        // printed whenever the answer is "it didn't". A fan-out that DID
+        // happen needs no explanation and stays a one-liner.
+        //
+        // This does NOT reopen B-2026-08-01-33's decision to keep decline
+        // REASONS out of the report. That decision is about declined
+        // DISJOINT-WRITE loops, an open-ended set the analyzer considers and
+        // rejects — listing each one's prose would bury the opportunities the
+        // report exists to show, so they keep their single aggregate line and
+        // defer to `karac query concurrency`. A reduction entry is the other
+        // shape: the analyzer already surfaced it as an opportunity and the
+        // report already prints a line for it, so the only question is whether
+        // that line tells the truth. Two lines on an entry that was going to be
+        // printed regardless is not the burial that decision guarded against.
+        // The declined-disjoint aggregate below is untouched.
+        if !fanned_out && !red.seq {
+            out.push_str(&format!("    cost_gate: {gate}\n"));
+            out.push_str(&format!("    reason: {reason}\n"));
+        }
     }
 
     // Loops over provably-disjoint indexed writes — the third fan-out shape.

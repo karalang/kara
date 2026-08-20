@@ -1,5 +1,7 @@
 function InMemoryMetrics.record (line 55):
-  parallel_reduction { op: +, accumulator: sum, line: 58 }
+  parallel_reduction { op: +, accumulator: sum, line: 58, fanned_out: false }
+    cost_gate: declined_variable_k_param_bound
+    reason: variable trip count with a cheap body and a parameter-referencing bound: the reusable-helper shape where per-call dispatch cost is unrecoverable
 function process_request (line 137):
   parallel_group {
     [138] record_a()  // writes(MetricsA)

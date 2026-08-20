@@ -256,6 +256,55 @@ pub(crate) fn reorder_opportunities_json(fc: &FunctionConcurrency) -> String {
 /// the question the query is for. Whether a *given execution* forks depends on
 /// the depth cap and the runtime's own cost gate, neither of which is a
 /// compile-time property.
+/// The lowering label and fan-out verdict for one loop reduction, as
+/// `(lowering, fanned_out, cost_gate, reason)`.
+///
+/// ONE DEFINITION, TWO CALLERS — `karac query concurrency`
+/// (`loop_reductions_json`) and the human `--concurrency-report`
+/// (`concurrency_report::render_function`). Extracted for B-2026-08-20-8:
+/// the query had been routed through the verdict twice already
+/// (B-2026-07-29-29, B-2026-08-05-13) while the report kept printing the bare
+/// pre-verdict label, so the two surfaces disagreed on the same file — the
+/// report said `parallel_reduction` for a loop the query correctly reported as
+/// `fanned_out: false`, and a reader who trusted the report went looking for a
+/// performance bug in a loop that never fanned out.
+///
+/// Both `seq` and the `KARAC_AUTO_PAR=0` arm short-circuit BEFORE the cost
+/// gates, because in each case no dispatch is emitted and a cost verdict would
+/// describe a binary that does not exist.
+pub(crate) fn reduction_verdict_parts(
+    r: &crate::concurrency::LoopReduction,
+    func: Option<&Function>,
+    program: Option<&Program>,
+    decision_key: &str,
+) -> (&'static str, bool, &'static str, &'static str) {
+    if !crate::par_cost::auto_par_enabled() {
+        // B-2026-08-05-13 — same reason as the disjoint-write path:
+        // `KARAC_AUTO_PAR=0` means no dispatch is emitted.
+        return (
+            "sequential",
+            false,
+            "declined_auto_par_disabled",
+            "auto-par disabled by KARAC_AUTO_PAR=0",
+        );
+    }
+    // A `seq` entry is the single-threaded push->in-place-store rewrite.
+    if r.seq {
+        return (
+            "sequential_tabulate",
+            false,
+            "n/a",
+            "lowered inline, single-threaded",
+        );
+    }
+    let verdict = match func {
+        Some(f) => reduction_loop_verdict(f, program, r, decision_key),
+        None => LoopVerdict::FunctionUnavailable,
+    };
+    let (fanned_out, gate, reason) = verdict.render();
+    ("parallel_fanout", fanned_out, gate, reason)
+}
+
 pub(crate) fn loop_reductions_json(
     fc: &FunctionConcurrency,
     func: Option<&Function>,
@@ -266,28 +315,8 @@ pub(crate) fn loop_reductions_json(
         .loop_reductions
         .iter()
         .map(|r| {
-            // A `seq` entry is the single-threaded push->in-place-store
-            // rewrite: no dispatch exists, so no gate applies.
-            let (lowering, fanned_out, gate, reason) = if !crate::par_cost::auto_par_enabled() {
-                // B-2026-08-05-13 — same reason as the disjoint-write path:
-                // `KARAC_AUTO_PAR=0` means no dispatch is emitted, so the cost
-                // verdict would describe a binary that does not exist.
-                (
-                    "sequential",
-                    false,
-                    "declined_auto_par_disabled",
-                    "auto-par disabled by KARAC_AUTO_PAR=0",
-                )
-            } else if r.seq {
-                ("sequential_tabulate", false, "n/a", "lowered inline, single-threaded")
-            } else {
-                let verdict = match func {
-                    Some(f) => reduction_loop_verdict(f, program, r, decision_key),
-                    None => LoopVerdict::FunctionUnavailable,
-                };
-                let (fanned_out, gate, reason) = verdict.render();
-                ("parallel_fanout", fanned_out, gate, reason)
-            };
+            let (lowering, fanned_out, gate, reason) =
+                reduction_verdict_parts(r, func, program, decision_key);
             format!(
                 "{{\"statement\":{},\"loop_line\":{},\"accumulator\":{},\"op\":{},\"lowering\":{},\"collect_tabulate\":{},\"fanned_out\":{},\"cost_gate\":{},\"reason\":{}}}",
                 r.stmt_index,
