@@ -44262,6 +44262,16 @@ fn row_scan() -> i64 {
     /// compiler emitted correct IR on roughly a third of runs. Compiling the
     /// same source repeatedly and demanding byte-identical IR tests the
     /// determinism directly, and fails as soon as any run picks the other enum.
+    ///
+    /// The failure message deliberately does NOT name a cause. It used to
+    /// assert one — "an unqualified variant name ... is resolving against
+    /// whichever the unordered enum_layouts map yields first" — and when this
+    /// test started failing ~6 of 8 full-suite runs, that sentence was read as
+    /// the diagnosis and filed as the miscompile returning (B-2026-08-20-26).
+    /// It had not: a sibling test was flipping the runtime-debug-metadata gate
+    /// on the PROCESS env while this one compiled, so the single differing
+    /// line was `@KARAC_SPAWN_SITES_ENABLED`. A repetition test can observe
+    /// that two compiles differ; it cannot observe why, so it should not say.
     #[test]
     fn test_ir_shared_variant_name_resolves_to_scrutinee_enum_deterministically() {
         const SRC: &str = r#"
@@ -44288,11 +44298,26 @@ fn main() {
         let first = ir_for(SRC);
         for i in 1..24 {
             let again = ir_for(SRC);
+            let differing: Vec<String> = first
+                .lines()
+                .zip(again.lines())
+                .filter(|(a, b)| a != b)
+                .take(8)
+                .map(|(a, b)| format!("\n  first: {a}\n  again: {b}"))
+                .collect();
             assert_eq!(
-                first, again,
-                "IR for the same source differed on compile {i} — an unqualified \
-                 variant name shared across two enums is resolving against \
-                 whichever the unordered enum_layouts map yields first"
+                first,
+                again,
+                "IR for the same source differed on compile {i}. Two causes \
+                 produce this, and the differing lines below tell them apart: \
+                 an unqualified variant name shared across two enums resolving \
+                 against whichever enum the unordered `enum_layouts` map yields \
+                 first (B-2026-08-05-16 — expect tag constants / payload word \
+                 offsets to move), or another test in this binary mutating a \
+                 codegen env gate on the PROCESS env mid-compile \
+                 (B-2026-08-20-26 — expect a single global's initializer to \
+                 flip). Differing lines:{}",
+                differing.join("")
             );
         }
     }
@@ -65461,6 +65486,48 @@ fn main() {
         );
     }
 
+    /// B-2026-08-20-26 — NO TEST IN THIS BINARY MAY MUTATE THE PROCESS ENV.
+    ///
+    /// Several codegen gates are read afresh at every `Codegen::new`
+    /// (`KARAC_RUNTIME_DEBUG_METADATA`, `KARAC_AUTO_PAR`,
+    /// `KARAC_STRIP_CONTRACTS`, `KARAC_DEBUG_INFO`, …). The environment is
+    /// process-global and cargo runs these ~3,000 tests on parallel threads,
+    /// so one test setting a gate changes what EVERY concurrently-compiling
+    /// peer emits. That is not a theoretical hazard: it made the determinism
+    /// gate for B-2026-08-05-16 fail ~6 of 8 full-suite runs, and the failure
+    /// was filed as that miscompile returning.
+    ///
+    /// The remedy is per-compile or per-thread overrides —
+    /// `compile_to_ir_with_contracts_stripped`, `compile_to_ir_with_debug_info`,
+    /// `pin_runtime_debug_metadata` — and this test is what keeps the next
+    /// env-mutating test from being written. It scans this file's own source.
+    ///
+    /// Setting env on a CHILD process (`Command::env`) is unaffected and
+    /// stays fine: it cannot be observed by a compile in this process.
+    #[test]
+    fn no_test_in_this_binary_mutates_the_process_env() {
+        // Built at runtime so this test's own source does not match itself.
+        let set = format!("std::env::{}_var(", "set");
+        let remove = format!("std::env::{}_var(", "remove");
+        let src = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/codegen.rs"),
+        )
+        .expect("read tests/codegen.rs");
+        let mut hits: Vec<(usize, &str)> = Vec::new();
+        for (i, line) in src.lines().enumerate() {
+            if line.contains(&set) || line.contains(&remove) {
+                hits.push((i + 1, line.trim()));
+            }
+        }
+        assert!(
+            hits.is_empty(),
+            "tests/codegen.rs mutates the process environment, which every \
+             concurrently-compiling test in this binary observes — use a \
+             per-compile or per-thread override instead (see this test's doc). \
+             Offending lines: {hits:?}"
+        );
+    }
+
     // ── Debugger Contract: SpawnSiteId metadata table ──
     //
     // Slice 3 of the four-piece Debugger Contract (`design.md § AI-First
@@ -65475,15 +65542,13 @@ fn main() {
     // Tests use IR-level string-grep — same precedent as
     // `test_repeat_literal_const_zero_uses_memset`.
     //
-    // Test isolation: `KARAC_RUNTIME_DEBUG_METADATA` is read at
-    // `Codegen::new` time. The disabled-via-env-var test below
-    // mutates the var, so all four spawn-site tests serialize on a
-    // shared mutex to avoid cross-test pollution under cargo's
-    // default parallel test execution. The lock is acquired at the
-    // top of each test and released on drop — env-var-touching tests
-    // restore prior state explicitly inside the critical section.
-
-    static SPAWN_SITE_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    // Test isolation: the gate is read at `Codegen::new` time, and these
+    // tests pin it per-thread through `karac::codegen::pin_runtime_debug_
+    // metadata` rather than by setting `KARAC_RUNTIME_DEBUG_METADATA`
+    // process-wide. They used to do the latter under a mutex shared only
+    // with each other, which left every OTHER concurrently-compiling test in
+    // this binary seeing the gate flip mid-compile (B-2026-08-20-26). The
+    // pin needs no lock: nothing outside the pinning thread observes it.
 
     /// Compile to IR with explicit source-text plumbing, threading
     /// the source through the new `source_text` parameter so
@@ -65512,9 +65577,6 @@ fn main() {
     fn test_spawn_site_metadata_emitted_for_par_blocks() {
         // Serialize against the env-var test below — see module
         // comment for rationale.
-        let _guard = SPAWN_SITE_ENV_LOCK
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
         // Two par blocks: first has 2 branches, second has 3. The
         // metadata table should pin both with their `worker_count`
         // values (2 and 3) and assign IDs 0 and 1 (matching the
@@ -65588,9 +65650,6 @@ fn main() {
     /// no `par {}` blocks.
     #[test]
     fn test_spawn_site_metadata_empty_when_no_par_blocks() {
-        let _guard = SPAWN_SITE_ENV_LOCK
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
         let ir = ir_for_with_source(
             r#"
 fn main() {
@@ -65620,31 +65679,29 @@ fn main() {
         );
     }
 
-    /// `KARAC_RUNTIME_DEBUG_METADATA=0` flips the gate off — all three
-    /// globals still emit, but `LEN = 0`, `ENABLED = false`, and the
-    /// array is empty regardless of how many `par {}` blocks the
-    /// program contains.
+    /// The runtime-debug-metadata gate off (`KARAC_RUNTIME_DEBUG_METADATA=0`,
+    /// or the per-thread pin used here) — all three globals still emit, but
+    /// `LEN = 0`, `ENABLED = false`, and the array is empty regardless of how
+    /// many `par {}` blocks the program contains.
     ///
-    /// Env-var test isolation: `KARAC_RUNTIME_DEBUG_METADATA` is read
-    /// once at `Codegen::new` time. We `set_var` before invoking
-    /// codegen, then `remove_var` immediately after to restore prior
-    /// state. Other tests in this file that don't set the var see the
-    /// dev default (true). Cargo runs tests in parallel by default —
-    /// the var name is unique to this test, so there is no collision
-    /// risk with peers, and the explicit unset prevents leaking state
-    /// to any later codegen helper that may run in the same process.
+    /// Test isolation: the gate is read once at `Codegen::new` time, so it
+    /// is pinned for THIS THREAD only. The earlier spelling set and unset
+    /// `KARAC_RUNTIME_DEBUG_METADATA` on the process env, reasoning that "the
+    /// var name is unique to this test, so there is no collision risk with
+    /// peers" — but the var is read by every `Codegen::new` in the process,
+    /// so the risk was with every concurrently-compiling test rather than
+    /// with peers naming the same var (B-2026-08-20-26).
     #[test]
-    fn test_spawn_site_metadata_disabled_via_env_var() {
+    fn test_spawn_site_metadata_disabled_when_gate_pinned_off() {
         // Acquire the shared lock so peer spawn-site tests don't
         // observe the var while the gate is flipped to "0".
-        let _guard = SPAWN_SITE_ENV_LOCK
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
         // Restore prior state on completion. Establishing the prior
         // value before the test is paranoid but cheap — most CI runs
         // start with the var unset.
-        let prior = std::env::var("KARAC_RUNTIME_DEBUG_METADATA").ok();
-        std::env::set_var("KARAC_RUNTIME_DEBUG_METADATA", "0");
+        // B-2026-08-20-26: pinned per-thread rather than by setting the
+        // process env, which every other concurrently-compiling test in this
+        // binary would have seen.
+        let _pin = karac::codegen::pin_runtime_debug_metadata(false);
         let ir = ir_for_with_source(
             r#"
 fn a() { println(1); }
@@ -65657,10 +65714,6 @@ fn main() {
 }
 "#,
         );
-        match prior {
-            Some(v) => std::env::set_var("KARAC_RUNTIME_DEBUG_METADATA", v),
-            None => std::env::remove_var("KARAC_RUNTIME_DEBUG_METADATA"),
-        }
 
         // Length zero, even though the program has one par block.
         assert!(
@@ -65695,9 +65748,6 @@ fn main() {
     /// `col` is at-or-after the `par` keyword.
     #[test]
     fn test_spawn_site_records_correct_source_location() {
-        let _guard = SPAWN_SITE_ENV_LOCK
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
         // Line layout (1-indexed):
         //   1: (blank — leading newline)
         //   2: fn a() { println(1); }
@@ -65747,21 +65797,19 @@ fn main() {
     //     `ACTIVE_FRAMES` registry against slice 3's `KARAC_SPAWN_SITES`.
     //   - `Runtime.list_tasks() -> Vec[TaskInfo]` — always empty in v1.
     //
-    // Tests share the slice-3 `SPAWN_SITE_ENV_LOCK` for env-var-touching
-    // serialization (the gate-off test below mutates the same
-    // `KARAC_RUNTIME_DEBUG_METADATA` var slice 3's tests touch).
+    // These pin the runtime-debug-metadata gate per-thread, like slice 3's
+    // tests above; neither touches the process env (B-2026-08-20-26).
 
     /// `has_debug_metadata()` returns `true` under the dev default
     /// (env var unset). Validates that slice 3's `KARAC_SPAWN_SITES_ENABLED = 1`
     /// flows through the runtime fn into the boolean returned to Kāra.
     #[test]
     fn test_has_debug_metadata_returns_true_when_gate_on() {
-        let _guard = SPAWN_SITE_ENV_LOCK
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
         // Make sure the var is unset so the dev default applies.
-        let prior = std::env::var("KARAC_RUNTIME_DEBUG_METADATA").ok();
-        std::env::remove_var("KARAC_RUNTIME_DEBUG_METADATA");
+        // B-2026-08-20-26: pinned per-thread rather than by unsetting the
+        // process env, which every other concurrently-compiling test in this
+        // binary would have seen.
+        let _pin = karac::codegen::pin_runtime_debug_metadata(true);
         let captured = run_program_capturing(
             r#"
 fn main() {
@@ -65774,9 +65822,6 @@ fn main() {
 }
 "#,
         );
-        if let Some(v) = prior {
-            std::env::set_var("KARAC_RUNTIME_DEBUG_METADATA", v);
-        }
         if let Some(c) = captured {
             assert_eq!(c.stdout.trim(), "1", "expected gate-on (true → 1)");
         }
@@ -65788,11 +65833,10 @@ fn main() {
     /// runtime fn.
     #[test]
     fn test_has_debug_metadata_returns_false_when_gate_off() {
-        let _guard = SPAWN_SITE_ENV_LOCK
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
-        let prior = std::env::var("KARAC_RUNTIME_DEBUG_METADATA").ok();
-        std::env::set_var("KARAC_RUNTIME_DEBUG_METADATA", "0");
+        // B-2026-08-20-26: pinned per-thread rather than by setting the
+        // process env, which every other concurrently-compiling test in this
+        // binary would have seen.
+        let _pin = karac::codegen::pin_runtime_debug_metadata(false);
         let captured = run_program_capturing(
             r#"
 fn main() {
@@ -65805,10 +65849,6 @@ fn main() {
 }
 "#,
         );
-        match prior {
-            Some(v) => std::env::set_var("KARAC_RUNTIME_DEBUG_METADATA", v),
-            None => std::env::remove_var("KARAC_RUNTIME_DEBUG_METADATA"),
-        }
         if let Some(c) = captured {
             assert_eq!(c.stdout.trim(), "0", "expected gate-off (false → 0)");
         }
@@ -65826,11 +65866,10 @@ fn main() {
     /// branch already finished — so we assert `>= 1` rather than `== 2`.
     #[test]
     fn test_list_par_blocks_inside_par_block_observes_self() {
-        let _guard = SPAWN_SITE_ENV_LOCK
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
-        let prior = std::env::var("KARAC_RUNTIME_DEBUG_METADATA").ok();
-        std::env::remove_var("KARAC_RUNTIME_DEBUG_METADATA");
+        // B-2026-08-20-26: pinned per-thread rather than by unsetting the
+        // process env, which every other concurrently-compiling test in this
+        // binary would have seen.
+        let _pin = karac::codegen::pin_runtime_debug_metadata(true);
         let captured = run_program_capturing(
             r#"
 fn check_par_blocks() {
@@ -65849,9 +65888,6 @@ fn main() {
 }
 "#,
         );
-        if let Some(v) = prior {
-            std::env::set_var("KARAC_RUNTIME_DEBUG_METADATA", v);
-        }
         if let Some(c) = captured {
             // Stdout has two lines (one per branch), order non-deterministic.
             // Find the line that's the par-block count and assert >= 1.
@@ -65884,11 +65920,10 @@ fn main() {
     /// registered, so `ACTIVE_FRAMES` is empty.
     #[test]
     fn test_list_par_blocks_outside_par_block_returns_empty() {
-        let _guard = SPAWN_SITE_ENV_LOCK
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
-        let prior = std::env::var("KARAC_RUNTIME_DEBUG_METADATA").ok();
-        std::env::remove_var("KARAC_RUNTIME_DEBUG_METADATA");
+        // B-2026-08-20-26: pinned per-thread rather than by unsetting the
+        // process env, which every other concurrently-compiling test in this
+        // binary would have seen.
+        let _pin = karac::codegen::pin_runtime_debug_metadata(true);
         let captured = run_program_capturing(
             r#"
 fn main() {
@@ -65897,9 +65932,6 @@ fn main() {
 }
 "#,
         );
-        if let Some(v) = prior {
-            std::env::set_var("KARAC_RUNTIME_DEBUG_METADATA", v);
-        }
         if let Some(c) = captured {
             assert_eq!(
                 c.stdout.trim(),
@@ -66751,18 +66783,18 @@ fn main() {
 
     #[test]
     fn test_enum_variant_name_collision_with_seeded_other_is_deterministic() {
-        // Hold the spawn-site env lock for the whole 20-iter loop. This test
-        // reads `KARAC_RUNTIME_DEBUG_METADATA` (via `compile_to_ir`'s
-        // `Codegen::new`) once per iteration; the `test_spawn_site_metadata_*`
-        // tests flip that var under `SPAWN_SITE_ENV_LOCK`. Without the lock a
-        // concurrent flip makes the `KARAC_SPAWN_SITES_ENABLED` gate read
-        // `true` on some iters and `false` on others, diverging the IR — a
-        // parallel-test env race (mac-stable, Linux-surfaced on the first CI
-        // run), NOT codegen non-determinism. The lock serialises this test
-        // against the env-mutating peers so the gate is stable across iters.
-        let _guard = SPAWN_SITE_ENV_LOCK
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
+        // This test reads the runtime-debug-metadata gate (via `compile_to_ir`'s
+        // `Codegen::new`) once per iteration. It used to hold
+        // `SPAWN_SITE_ENV_LOCK` across the loop, because the
+        // `test_spawn_site_metadata_*` tests flipped the gate's env var
+        // process-wide and a concurrent flip made `KARAC_SPAWN_SITES_ENABLED`
+        // read `true` on some iters and `false` on others — diverging the IR
+        // for identical source. That diagnosis was right, and the defence was
+        // the wrong shape: it protected the tests that knew to ask, and the
+        // determinism test added later (B-2026-08-05-16's regression gate) did
+        // not, so it inherited the race and its failures read as the
+        // enum-order miscompile returning (B-2026-08-20-26). Those tests now
+        // pin the gate per-thread instead, so no lock is needed here.
         // Regression gate for the 2026-05-25 codegen-suite intermittent
         // hang. Variant-name → enum-name lookups at four codegen sites
         // (constructor in `try_compile_enum_variant` + `try_unit_enum_variant`,

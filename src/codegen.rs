@@ -159,8 +159,8 @@ use driver::{
 };
 pub use driver::{
     link_executable, link_executable_exports, link_executable_with_sanitizer, link_native_library,
-    link_wasm_executable_threaded, print_target_cpu_listing, validate_target_cpu,
-    validate_target_features, NativeLibKind,
+    link_wasm_executable_threaded, pin_runtime_debug_metadata, print_target_cpu_listing,
+    validate_target_cpu, validate_target_features, NativeLibKind, RuntimeDebugMetadataPin,
 };
 use helpers::{
     impl_target_name, make_generic_impl_method_function, make_impl_method_function,

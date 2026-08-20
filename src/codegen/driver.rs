@@ -2076,17 +2076,71 @@ pub(super) fn apply_optimization_passes(
     Ok(())
 }
 
-/// Read the `KARAC_RUNTIME_DEBUG_METADATA` env var to decide whether
-/// `KARAC_SPAWN_SITES` (and friends) emit populated. Slice 3 of the
-/// Debugger Contract; see `Codegen::runtime_debug_metadata_enabled` for
-/// the field doc and `phase-8-stdlib-floor.md` § "Auto-Concurrency
+thread_local! {
+    /// Per-thread pin for the runtime-debug-metadata gate, consulted by
+    /// [`read_runtime_debug_metadata_env`] ahead of the env var. Set through
+    /// [`pin_runtime_debug_metadata`]; `None` means "read the env var".
+    static RUNTIME_DEBUG_METADATA_PIN: std::cell::Cell<Option<bool>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Pin the runtime-debug-metadata gate for every compile on THIS THREAD until
+/// the returned guard drops — the race-free counterpart to setting
+/// `KARAC_RUNTIME_DEBUG_METADATA`, in the same spirit as
+/// [`crate::codegen::compile_to_ir_with_contracts_stripped`] and
+/// [`crate::codegen::compile_to_ir_with_debug_info`].
+///
+/// B-2026-08-20-26: `KARAC_RUNTIME_DEBUG_METADATA` is read afresh at every
+/// `Codegen::new`, and the env is PROCESS-global. The three sibling gates
+/// (`KARAC_STRIP_CONTRACTS`, `KARAC_DEBUG_INFO`, `KARAC_STRIP_ERROR_TRACE`)
+/// each grew an explicit override precisely so a caller that needs one value
+/// does not impose it on everything else compiling at that moment; this gate
+/// was the one left without. Its tests set and unset the process env instead,
+/// under a mutex shared only with their own peers — so every OTHER test
+/// compiling concurrently in the same binary saw the gate flip underneath it,
+/// and the codegen suite's determinism test
+/// (`test_ir_shared_variant_name_resolves_to_scrutinee_enum_deterministically`)
+/// failed ~6 of 8 full-suite runs on one line of IR:
+/// `@KARAC_SPAWN_SITES_ENABLED`. Per-thread rather than per-call because the
+/// gate has to reach three compile lanes (IR, object, JIT) whose entry points
+/// already carry 6–9 positional parameters.
+///
+/// Nested pins restore the enclosing value on drop, so a guard can be taken
+/// around a block that itself pins.
+pub fn pin_runtime_debug_metadata(enabled: bool) -> RuntimeDebugMetadataPin {
+    let prior = RUNTIME_DEBUG_METADATA_PIN.with(|c| c.replace(Some(enabled)));
+    RuntimeDebugMetadataPin { prior }
+}
+
+/// RAII restore token from [`pin_runtime_debug_metadata`].
+#[must_use = "the pin lifts as soon as the guard drops"]
+pub struct RuntimeDebugMetadataPin {
+    prior: Option<bool>,
+}
+
+impl Drop for RuntimeDebugMetadataPin {
+    fn drop(&mut self) {
+        let prior = self.prior;
+        RUNTIME_DEBUG_METADATA_PIN.with(|c| c.set(prior));
+    }
+}
+
+/// Decide whether `KARAC_SPAWN_SITES` (and friends) emit populated. Slice 3
+/// of the Debugger Contract; see `Codegen::runtime_debug_metadata_enabled`
+/// for the field doc and `phase-8-stdlib-floor.md` § "Auto-Concurrency
 /// Codegen — Debugger Contract slice 3" for the spec.
+///
+/// A thread-local [`pin_runtime_debug_metadata`] wins when set; otherwise the
+/// `KARAC_RUNTIME_DEBUG_METADATA` env var decides:
 ///
 /// - `Ok("0")` → `false` (gate explicitly off).
 /// - `Ok(_)`   → `true` (any other value, including empty).
 /// - `Err(_)`  → `true` (dev default; profile-aware defaults land in
 ///   Phase 8.5 Track 2).
 pub(super) fn read_runtime_debug_metadata_env() -> bool {
+    if let Some(pinned) = RUNTIME_DEBUG_METADATA_PIN.with(|c| c.get()) {
+        return pinned;
+    }
     !matches!(std::env::var("KARAC_RUNTIME_DEBUG_METADATA"), Ok(v) if v == "0")
 }
 

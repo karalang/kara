@@ -5427,6 +5427,54 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(i64_t.const_int(0, false))
     }
 
+    /// Pick the enum that owns a bare `variant_name`, **without consulting
+    /// HashMap iteration order**, applying `accept` as an extra filter.
+    ///
+    /// Preference, in order:
+    ///   1. the match scrutinee's own enum, when it declares the variant —
+    ///      the `#39` rule the resolvers above already apply;
+    ///   2. the lexicographically-first user-declared enum;
+    ///   3. the lexicographically-first seeded built-in (`Option`, `Result`,
+    ///      `Json`, `TcpError`, …).
+    ///
+    /// B-2026-08-20-26: steps 2 and 3 used to be `get_or_insert` over an
+    /// `enum_layouts` iteration, i.e. "whichever the unordered map yields
+    /// first". When two USER enums share a variant name — which the scrutinee
+    /// hint normally resolves, but not on the paths that have no hint to
+    /// consult — that made a codegen decision a function of the per-process
+    /// HashMap seed. Ordering by name does not make an ambiguous case
+    /// *correct*, but it makes it REPRODUCIBLE, so a wrong pick fails the same
+    /// way on every run instead of hiding behind a seed.
+    pub(super) fn owning_enum_for_variant(
+        &self,
+        variant_name: &str,
+        mut accept: impl FnMut(&str, &super::state::EnumLayout<'ctx>) -> bool,
+    ) -> Option<&str> {
+        if let Some(hint) = self.pattern_state.match_scrutinee_enum_hint.as_deref() {
+            if let Some(l) = self.type_decls.enum_layouts.get(hint) {
+                if l.tags.contains_key(variant_name) && accept(hint, l) {
+                    return Some(hint);
+                }
+            }
+        }
+        let mut user_hit: Option<&str> = None;
+        let mut seed_hit: Option<&str> = None;
+        for (en, l) in &self.type_decls.enum_layouts {
+            if !l.tags.contains_key(variant_name) || !accept(en, l) {
+                continue;
+            }
+            let slot = if self.type_decls.seeded_enum_names.contains(en) {
+                &mut seed_hit
+            } else {
+                &mut user_hit
+            };
+            if slot.is_none_or(|seen| en.as_str() < seen) {
+                *slot = Some(en.as_str());
+            }
+        }
+        user_hit.or(seed_hit)
+    }
+
     /// Find the discriminant tag for a variant name across all registered enums.
     /// Prefers user-declared enums over the seeded built-ins (`Option`,
     /// `Result`, `Json`, `TcpError`, …) when the variant name collides
@@ -5436,18 +5484,12 @@ impl<'ctx> super::Codegen<'ctx> {
     /// that the match-dispatch site sometimes loaded the wrong enum's
     /// tag, sending all comparisons down the wildcard `_` arm.
     pub(super) fn enum_tag_for_variant(&self, variant_name: &str) -> Option<u64> {
-        let mut user_hit: Option<u64> = None;
-        let mut seed_hit: Option<u64> = None;
-        for (en, layout) in &self.type_decls.enum_layouts {
-            if let Some(&tag) = layout.tags.get(variant_name) {
-                if self.type_decls.seeded_enum_names.contains(en) {
-                    seed_hit.get_or_insert(tag);
-                } else {
-                    user_hit.get_or_insert(tag);
-                }
-            }
-        }
-        user_hit.or(seed_hit)
+        let en = self.owning_enum_for_variant(variant_name, |_, _| true)?;
+        self.type_decls
+            .enum_layouts
+            .get(en)
+            .and_then(|l| l.tags.get(variant_name))
+            .copied()
     }
 
     /// Resolve the tagged-union LLVM struct type for a *variant* sub-
@@ -5579,18 +5621,8 @@ impl<'ctx> super::Codegen<'ctx> {
         if self.struct_pattern_names_a_user_struct(pat) {
             return None;
         }
-        let mut user_hit: Option<String> = None;
-        let mut seed_hit: Option<String> = None;
-        for (en, l) in &self.type_decls.enum_layouts {
-            if l.tags.contains_key(variant_name) {
-                if self.type_decls.seeded_enum_names.contains(en) {
-                    seed_hit.get_or_insert_with(|| en.clone());
-                } else {
-                    user_hit.get_or_insert_with(|| en.clone());
-                }
-            }
-        }
-        user_hit.or(seed_hit)
+        self.owning_enum_for_variant(variant_name, |_, _| true)
+            .map(str::to_string)
     }
 
     /// Resolve `(enum llvm type, expected tag)` for a *variant* sub-pattern
@@ -5644,20 +5676,12 @@ impl<'ctx> super::Codegen<'ctx> {
         if self.struct_pattern_names_a_user_struct(pat) {
             return None;
         }
-        // Unqualified fallback: user-vs-seed preference, type + tag from the
-        // SAME layout (so a downstream tag compare stays self-consistent).
-        let mut user_hit: Option<(StructType<'ctx>, u64)> = None;
-        let mut seed_hit: Option<(StructType<'ctx>, u64)> = None;
-        for (en, l) in &self.type_decls.enum_layouts {
-            if let Some(&tag) = l.tags.get(variant_name) {
-                if self.type_decls.seeded_enum_names.contains(en) {
-                    seed_hit.get_or_insert((l.llvm_type, tag));
-                } else {
-                    user_hit.get_or_insert((l.llvm_type, tag));
-                }
-            }
-        }
-        user_hit.or(seed_hit)
+        // Unqualified fallback: user-vs-seed preference, name-ordered so the
+        // pick does not ride the map's seed, type + tag from the SAME layout
+        // (so a downstream tag compare stays self-consistent).
+        let en = self.owning_enum_for_variant(variant_name, |_, _| true)?;
+        let l = self.type_decls.enum_layouts.get(en)?;
+        Some((l.llvm_type, *l.tags.get(variant_name)?))
     }
 
     /// Resolve the per-field `(start_word, num_words)` payload offsets for
@@ -5673,33 +5697,21 @@ impl<'ctx> super::Codegen<'ctx> {
         scrut_struct_ty: Option<StructType<'ctx>>,
         num_patterns: usize,
     ) -> Vec<(usize, usize)> {
-        self.type_decls
-            .enum_layouts
-            .iter()
-            .find(|(_, l)| {
-                l.tags.contains_key(variant_name)
-                    && scrut_struct_ty
-                        .as_ref()
-                        .map(|t| &l.llvm_type == t)
-                        .unwrap_or(true)
-            })
-            .map(|(_, l)| l)
-            .or_else(|| {
-                let mut user_hit: Option<&super::state::EnumLayout<'ctx>> = None;
-                let mut seed_hit: Option<&super::state::EnumLayout<'ctx>> = None;
-                for (en, l) in &self.type_decls.enum_layouts {
-                    if l.tags.contains_key(variant_name) {
-                        if self.type_decls.seeded_enum_names.contains(en) {
-                            seed_hit.get_or_insert(l);
-                        } else {
-                            user_hit.get_or_insert(l);
-                        }
-                    }
-                }
-                user_hit.or(seed_hit)
-            })
-            .and_then(|l| l.field_word_offsets.get(variant_name).cloned())
-            .unwrap_or_else(|| (0..num_patterns).map(|i| (i, 1)).collect())
+        // Both passes go through the scrutinee-hint-preferred, name-ordered
+        // resolver. The first narrows by the scrutinee's LLVM struct type;
+        // that is NOT a unique key (two enums with identical layouts share one
+        // LLVM struct type), so it can still be ambiguous, and it used to be
+        // settled by `.find()` over the unordered map — the same seed-decided
+        // pick this function's twin in `bind_pattern_values` was taught to
+        // avoid in B-2026-08-05-16, and which its extraction here did not
+        // inherit (B-2026-08-20-26).
+        self.owning_enum_for_variant(variant_name, |_, l| {
+            scrut_struct_ty.as_ref().is_none_or(|t| &l.llvm_type == t)
+        })
+        .or_else(|| self.owning_enum_for_variant(variant_name, |_, _| true))
+        .and_then(|en| self.type_decls.enum_layouts.get(en))
+        .and_then(|l| l.field_word_offsets.get(variant_name).cloned())
+        .unwrap_or_else(|| (0..num_patterns).map(|i| (i, 1)).collect())
     }
 
     /// Does this payload sub-pattern impose a VALUE test, beyond whatever

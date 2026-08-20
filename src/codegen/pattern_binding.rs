@@ -1306,24 +1306,13 @@ impl<'ctx> super::Codegen<'ctx> {
                             .map(|(en, _)| en.clone())
                     })
                     .or_else(|| {
-                        // Type-match miss — fall back to variant-name
-                        // lookup, but prefer user-declared enums over
-                        // seeded built-ins (Option/Result/Json/TcpError)
-                        // when the name collides. Without this, HashMap
-                        // iteration order picks a seeded layout
-                        // non-deterministically.
-                        let mut user_hit: Option<String> = None;
-                        let mut seed_hit: Option<String> = None;
-                        for (en, l) in &self.type_decls.enum_layouts {
-                            if l.tags.contains_key(variant_name) {
-                                if self.type_decls.seeded_enum_names.contains(en) {
-                                    seed_hit.get_or_insert_with(|| en.clone());
-                                } else {
-                                    user_hit.get_or_insert_with(|| en.clone());
-                                }
-                            }
-                        }
-                        user_hit.or(seed_hit)
+                        // Type-match miss — fall back to variant-name lookup,
+                        // preferring user-declared enums over seeded built-ins
+                        // (Option/Result/Json/TcpError) when the name
+                        // collides, and ordering by name within each tier so
+                        // the pick is not the map's seed (B-2026-08-20-26).
+                        self.owning_enum_for_variant(variant_name, |_, _| true)
+                            .map(str::to_string)
                     });
                 let offsets: Vec<(usize, usize)> = matched_enum
                     .as_ref()
