@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | diagnostics | 83 | 0 |
 | false-positive | 82 | 0 |
 | perf | 78 | 1 |
-| crash | 54 | 0 |
+| crash | 55 | 1 |
 | soundness | 51 | 0 |
 | other | 49 | 0 |
 | use-after-free | 20 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 951 | 2 |
+| codegen | 952 | 3 |
 | typecheck | 215 | 2 |
 | interp | 163 | 1 |
 | ownership | 60 | 0 |
@@ -124,15 +124,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 6 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1382 surfaced · 3 open · 1359 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1383 surfaced · 4 open · 1359 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-19-13 | 2026-08-19 | typecheck+codegen+runtime | medium | GPU reductions still lack prefix-sum and tiled matmul (separate algorithms, not halving folds); integer `prod` / `dot` are blocked on WGSL lacking a widening multiply; and `variance` / `stddev` are f32-only. Everything else has shipped: sum / prod / min / max / mean / dot / argmin / argmax / variance / stddev over `Vec[f32]`, and sum / min / max / mean / argmin / argmax over `Vec[i32]` and `Vec[u32]`. | docs/spikes/gpu-llvm-offload-assessment.md; src/gpu_wgsl.rs::emit_reduce_kernel; src/reduce_kernel.rs::tree_reduce_f32 |
 | B-2026-08-20-3 | 2026-08-20 | autopar | high | AUTO-PAR (on by default) turns a `parallel_reduction` whose body does `chars().collect()` into a 2.55x PESSIMIZATION — 326 ms sequential becomes 831 ms parallel, with system time exploding 2.9 ms -> 812.8 ms (allocator contention); the same body without the collect parallelizes cleanly at 3.67 cores | — |
 | B-2026-08-20-4 | 2026-08-20 | parser+typecheck+codegen+interp | medium | `LiteralPattern::Integer` holds an `i64`, so NO 128-bit literal can be a match pattern — `match n { 170141183460469231731687303715884105727i128 => .. }` is rejected. Until B-2026-08-20-1 it did not merely fail, it PANICKED the compiler; that crash is gone, but the width is still unreachable in pattern position. | src/ast/patterns.rs:240 (`LiteralPattern::Integer(i64, ...)`); src/parser/patterns.rs (the diagnostic that stands in for it today); src/exhaustive.rs (range arithmetic that assumes i64) |
+| B-2026-08-20-5 | 2026-08-20 | codegen | high | `e2e_128bit_integers_end_to_end` produces EMPTY STDOUT on macOS arm64 only — the binary links and runs but prints nothing before the first `println`. Linux x86_64 and Linux arm64 both pass the same test. CI's `Codegen E2E (macOS arm64, LLVM 18)` lane has been red on `main` since the test landed. | tests/codegen.rs::e2e_128bit_integers_end_to_end (line ~21227); tests/codegen.rs::run_program_capturing (stdout-only discard); added by 7561b5d1 (B-2026-08-19-8 stage 5); CI job `Codegen E2E (macOS arm64, LLVM 18)` in .github/workflows/ci.yml |
 
 ### Wontfix (7)
 

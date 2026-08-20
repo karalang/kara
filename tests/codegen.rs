@@ -21202,7 +21202,7 @@ fn main() {
         // the pre-stage-4 truncation print `0` rather than something obviously
         // wrong. `count_ones` on 2^100 is 1 and on `-1i128` is 128 — the figure
         // from B-2026-08-19-6's original report, which returned 64.
-        if let Some(out) = run_program(
+        if let Some(run) = run_program_capturing(
             "fn main() {\n\
              let a: i128 = 1267650600228229401496703205376i128;\n\
              println(a);\n\
@@ -21224,8 +21224,14 @@ fn main() {
              println(u);\n\
              }",
         ) {
+            // B-2026-08-20-5: the macOS arm64 lane fails here with an EMPTY
+            // stdout — the binary links and runs but dies before the first
+            // `println`. `run_program` discards stderr and the exit status,
+            // so the failure reads as a bare `left: ""` and says nothing about
+            // whether the process faulted or exited cleanly. Capture both into
+            // the message so one CI run diagnoses it instead of confirming it.
             assert_eq!(
-                out,
+                run.stdout,
                 "1267650600228229401496703205376\n\
                  2535301200456458802993406410752\n\
                  181092942889747057356671886482\n\
@@ -21238,7 +21244,10 @@ fn main() {
                  1267650600228229401496703205376\n\
                  170141183460469231731687303715884105727\n\
                  1267650600228229401496703205376\n\
-                 18446744073709551616\n"
+                 18446744073709551616\n",
+                "128-bit end-to-end: exit status {:?}, stderr {:?}",
+                run.status,
+                run.stderr
             );
         }
     }
