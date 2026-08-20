@@ -29,17 +29,19 @@ use llvm_sys::orc2::lljit::{
     LLVMOrcCreateLLJIT, LLVMOrcCreateLLJITBuilder, LLVMOrcDisposeLLJIT,
     LLVMOrcLLJITAddLLVMIRModule, LLVMOrcLLJITAddLLVMIRModuleWithRT,
     LLVMOrcLLJITBuilderSetObjectLinkingLayerCreator, LLVMOrcLLJITGetDataLayoutStr,
-    LLVMOrcLLJITGetGlobalPrefix, LLVMOrcLLJITGetMainJITDylib, LLVMOrcLLJITGetTripleString,
-    LLVMOrcLLJITLookup, LLVMOrcLLJITRef,
+    LLVMOrcLLJITGetExecutionSession, LLVMOrcLLJITGetGlobalPrefix, LLVMOrcLLJITGetMainJITDylib,
+    LLVMOrcLLJITGetTripleString, LLVMOrcLLJITLookup, LLVMOrcLLJITRef,
 };
 use llvm_sys::orc2::LLVMOrcThreadSafeModuleRef;
 use llvm_sys::orc2::{
+    LLVMJITEvaluatedSymbol, LLVMJITSymbolFlags, LLVMOrcAbsoluteSymbols, LLVMOrcCSymbolMapPair,
     LLVMOrcCreateDynamicLibrarySearchGeneratorForProcess, LLVMOrcCreateNewThreadSafeContext,
     LLVMOrcCreateNewThreadSafeModule, LLVMOrcDefinitionGeneratorRef,
-    LLVMOrcDisposeThreadSafeContext, LLVMOrcExecutionSessionRef, LLVMOrcExecutorAddress,
-    LLVMOrcJITDylibAddGenerator, LLVMOrcJITDylibCreateResourceTracker, LLVMOrcObjectLayerRef,
-    LLVMOrcReleaseResourceTracker, LLVMOrcResourceTrackerRef, LLVMOrcResourceTrackerRemove,
-    LLVMOrcThreadSafeContextGetContext, LLVMOrcThreadSafeContextRef,
+    LLVMOrcDisposeThreadSafeContext, LLVMOrcExecutionSessionIntern, LLVMOrcExecutionSessionRef,
+    LLVMOrcExecutorAddress, LLVMOrcJITDylibAddGenerator, LLVMOrcJITDylibCreateResourceTracker,
+    LLVMOrcJITDylibDefine, LLVMOrcObjectLayerRef, LLVMOrcReleaseResourceTracker,
+    LLVMOrcResourceTrackerRef, LLVMOrcResourceTrackerRemove, LLVMOrcThreadSafeContextGetContext,
+    LLVMOrcThreadSafeContextRef,
 };
 use llvm_sys::prelude::{LLVMContextRef, LLVMModuleRef};
 use llvm_sys::target_machine::{
@@ -182,7 +184,118 @@ impl LLJITEngine {
             LLVMOrcJITDylibAddGenerator(main_jd, dg);
 
             let ts_ctx = LLVMOrcCreateNewThreadSafeContext();
-            Ok(Self { ts_ctx, jit })
+            let engine = Self { ts_ctx, jit };
+            engine.define_compiler_rt_builtins()?;
+            Ok(engine)
+        }
+    }
+
+    /// Publish the compiler-rt builtins JIT'd code can call but `dlsym` cannot
+    /// find — B-2026-08-20-5.
+    ///
+    /// WHY THE PROCESS GENERATOR IS NOT ENOUGH. It resolves through `dlsym`,
+    /// which only sees EXPORTED symbols. compiler-rt builtins reach the host
+    /// binary from a static archive with LOCAL linkage, so even once something
+    /// pulls them in they stay invisible to a name lookup. The address is
+    /// reachable from Rust, though, so handing it over directly works where
+    /// the export table cannot.
+    ///
+    /// WHY IT IS macOS-ONLY, and why it hid for so long: on Linux
+    /// `dlsym(RTLD_DEFAULT)` also searches loaded shared objects, and
+    /// `libgcc_s.so.1` exports the whole builtin family — so the JIT resolves
+    /// them from libgcc and nobody notices they were never linked in. macOS has
+    /// no equivalent shared library. Both Linux lanes pass while the macOS lane
+    /// fails, which reads like an arm64 lowering bug and is not one: Linux
+    /// arm64 passes too.
+    ///
+    /// SCOPE, measured rather than assumed — one program per operation with
+    /// operands read back from a `Vec` so nothing constant-folds, across
+    /// `* / % << >> + -`, `wrapping_`/`saturating_`/`checked_mul`, `pow`,
+    /// `to_string` and comparison, on both `i128` and `u128`: exactly ONE
+    /// symbol is unresolvable, `__muloti4`. Everything else the AArch64 backend
+    /// expands inline (unsigned multiply becomes `umulh`, so the `u128` side
+    /// never needs a libcall at all). The list is deliberately short for that
+    /// reason; add to it when a measurement says to, not on speculation.
+    ///
+    /// Kara checks integer overflow by default, so `a * b` on `i128` lowers to
+    /// `llvm.smul.with.overflow.i128` -> `__muloti4`. That makes this the
+    /// ORDINARY spelling rather than a corner case: before this fix `karac run`
+    /// — the DEFAULT executor — died on any signed 128-bit multiply on Apple
+    /// Silicon with a JIT symbol error instead of running.
+    ///
+    /// AOT was never affected: it links compiler-rt itself, and at its
+    /// optimization level the call is usually folded before reaching the linker
+    /// (the E2E binary for such a program contains no `__muloti4` at all).
+    fn define_compiler_rt_builtins(&self) -> Result<(), String> {
+        extern "C" {
+            /// `ti_int __muloti4(ti_int a, ti_int b, int *overflow)`.
+            fn __muloti4(a: i128, b: i128, overflow: *mut ::libc::c_int) -> i128;
+        }
+        // Taking the address is also what forces the linker to pull the builtin
+        // into the host binary in the first place — nothing else in this
+        // process references it.
+        let muloti4 = __muloti4 as *const () as usize;
+        self.define_absolute_symbols(&[("__muloti4", muloti4)])
+    }
+
+    /// Publish `(name, address)` pairs into the main JITDylib as absolute
+    /// symbols, so JIT'd code can call them by name.
+    ///
+    /// B-2026-08-20-5. The process-symbol generator installed in `new` resolves
+    /// externals with `dlsym`, which only sees symbols the host binary
+    /// EXPORTS. That covers the `karac_*` runtime surface, but it does not
+    /// cover compiler-rt BUILTINS: those are pulled out of a static archive by
+    /// the linker with LOCAL linkage, so they can be present in the image and
+    /// still be invisible to `dlsym`. Passing the address directly sidesteps
+    /// the export table entirely, which is the only reliable route when the
+    /// implementation we want is the one already linked in.
+    ///
+    /// `name` is the PLAIN symbol name (`__muloti4`); the JIT's global prefix
+    /// — `_` on Mach-O, nothing on ELF — is applied here so callers do not
+    /// have to know the platform's mangling.
+    ///
+    /// Defining a symbol the JITDylib already has is an error, so this is
+    /// meant to be called once per engine, before any module is added.
+    pub fn define_absolute_symbols(&self, syms: &[(&str, usize)]) -> Result<(), String> {
+        if syms.is_empty() {
+            return Ok(());
+        }
+        unsafe {
+            let es = LLVMOrcLLJITGetExecutionSession(self.jit);
+            let prefix = LLVMOrcLLJITGetGlobalPrefix(self.jit);
+            let mut pairs: Vec<LLVMOrcCSymbolMapPair> = Vec::with_capacity(syms.len());
+            for (name, addr) in syms {
+                let mangled = if prefix == 0 {
+                    (*name).to_string()
+                } else {
+                    format!("{}{}", prefix as u8 as char, name)
+                };
+                let c_name = CString::new(mangled)
+                    .map_err(|e| format!("symbol name is not a valid C string: {e}"))?;
+                // `Intern` returns an owned pool reference; `LLVMOrcAbsoluteSymbols`
+                // takes ownership of each entry, so there is nothing to release
+                // here on the success path.
+                let interned = LLVMOrcExecutionSessionIntern(es, c_name.as_ptr());
+                pairs.push(LLVMOrcCSymbolMapPair {
+                    Name: interned,
+                    Sym: LLVMJITEvaluatedSymbol {
+                        Address: *addr as LLVMOrcExecutorAddress,
+                        Flags: LLVMJITSymbolFlags {
+                            // Exported | Callable — what a function definition
+                            // reachable from JIT'd code has to advertise.
+                            GenericFlags: 1 | 2,
+                            TargetFlags: 0,
+                        },
+                    },
+                });
+            }
+            let mu = LLVMOrcAbsoluteSymbols(pairs.as_mut_ptr(), pairs.len());
+            let main_jd = LLVMOrcLLJITGetMainJITDylib(self.jit);
+            let err = LLVMOrcJITDylibDefine(main_jd, mu);
+            if !err.is_null() {
+                return Err(consume_error(err));
+            }
+            Ok(())
         }
     }
 
