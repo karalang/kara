@@ -12165,6 +12165,45 @@ impl<'ctx> super::Codegen<'ctx> {
             .add_function("karac_runtime_gpu_prefix_sum_f32", fn_ty, None)
     }
 
+    /// Lazily declare `karac_runtime_gpu_variance_int(dev_wgsl_ptr: ptr,
+    /// dev_wgsl_len: i64, fold_wgsl_ptr: ptr, fold_wgsl_len: i64, in_ptr: ptr,
+    /// n: i64, unsigned: i32, sqrt: i32, overflowed: ptr) -> f64` — the
+    /// INTEGER variance / stddev entry point (B-2026-08-19-13).
+    ///
+    /// Returns the finished statistic as `f64`, where the float sibling
+    /// returns a sum of squares for codegen to divide. The integer form's last
+    /// steps are `i128` arithmetic — `Σd = Σx - n·K`, then
+    /// `(n·Σd² - Σd²) / n²` — and doing them exactly is the entire point, so
+    /// they stay in the runtime rather than becoming 128-bit emitter code.
+    ///
+    /// `unsigned` and `sqrt` are passed as flags rather than baked into
+    /// separate symbols because the shader already differs per element type;
+    /// a second axis of symbol names would multiply the keep-list for nothing.
+    pub(super) fn gpu_variance_int_fn(&self) -> FunctionValue<'ctx> {
+        if let Some(f) = self.module.get_function("karac_runtime_gpu_variance_int") {
+            return f;
+        }
+        let i32_t = self.context.i32_type();
+        let i64_t = self.context.i64_type();
+        let ptr_t = self.context.ptr_type(AddressSpace::default());
+        let fn_ty = self.context.f64_type().fn_type(
+            &[
+                ptr_t.into(),
+                i64_t.into(),
+                ptr_t.into(),
+                i64_t.into(),
+                ptr_t.into(),
+                i64_t.into(),
+                i32_t.into(),
+                i32_t.into(),
+                ptr_t.into(),
+            ],
+            false,
+        );
+        self.module
+            .add_function("karac_runtime_gpu_variance_int", fn_ty, None)
+    }
+
     /// Lazily declare `karac_runtime_gpu_matmul_f32(wgsl_ptr: ptr,
     /// wgsl_len: i64, a_ptr: ptr, b_ptr: ptr, m: i64, k: i64, n: i64,
     /// out_ptr: ptr)` — the tiled matmul's entry point (B-2026-08-19-13).

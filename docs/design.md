@@ -10186,8 +10186,8 @@ let hi  = gpu.max(buf)        // Option[f32]
 let mu  = gpu.mean(buf)       // Option[f32]
 let d   = gpu.dot(a, b)       // f32 — traps if the lengths differ
 let a   = gpu.mean(buf)       // Option[f32]; Option[f64] over an integer buffer
-let s2  = gpu.variance(buf)   // Option[f32] — population (÷ n)
-let sd  = gpu.stddev(buf)     // Option[f32]
+let s2  = gpu.variance(buf)   // Option[f32] — population (÷ n); Option[f64] over an integer buffer
+let sd  = gpu.stddev(buf)     // Option[f32]; Option[f64] over an integer buffer
 let i   = gpu.argmin(buf)     // Option[i64] — the INDEX of the minimum
 let j   = gpu.argmax(buf)     // Option[i64]
 let ps  = gpu.prefix_sum(buf) // Vec[f32] — inclusive; NOT a reduction
@@ -10213,6 +10213,22 @@ Two operations are defined in terms of `sum` rather than having a tree of their 
 They diverge from `Stats.argmin` on **NaN**, and necessarily. `Stats.argmin` seeds its running best with element 0 and displaces it only on a strict comparison, so a leading NaN is never displaced: `Stats.argmin([NaN, 3.0, 1.0])` is `0` while `Stats.argmin([3.0, 1.0, NaN])` is `1`. That position-dependence cannot survive a halving tree, where the grouping decides the positions. In `gpu.argmin` a NaN always loses, so the first buffer answers `2`; an all-NaN buffer answers `0`, since nothing ever wins and the leftmost survives.
 
 `gpu.variance` / `gpu.stddev` are the **population** forms (÷ n), matching `Stats.variance` and `Stats.stddev`, so the two answer the same number on the same buffer — and differing from `Column`'s `var` / `std`, which are the **sample** (÷ n−1) forms; see [Numerical Types](#numerical-types-tensor-column-dataframe) § "Variance divisor" for why the split is deliberate. They are the only **two-pass** reductions: the mean has to exist before a single deviation can be formed, so the device runs a complete sum reduction, reads the mean back, and dispatches again with it as a uniform. Both passes go through the same sum tree, so the grouping caveat above is inherited rather than re-derived — and `gpu.stddev(v)` is exactly `gpu.variance(v)` rooted once at the end, not a separate accumulation.
+
+
+**Over an integer buffer, `variance` and `stddev` are EXACT, and return `Option[f64]`.** This is the one place in the family where the GPU is more accurate than the CPU, so it is worth saying why rather than only that.
+
+The obvious construction fails: forming `(x − mean)` on the device means forming it in `f32`, and `f32` represents integers exactly only to 2²⁴, so every element of a buffer centred above ~16.7 million is quantised before the subtraction happens. Measured, a buffer centred at 2²⁸ with a spread of ±100 reports a variance about 6% wrong — an ordinary `i32` range producing a plausible, silently incorrect number, which is the failure this family exists to prevent. `mean`'s promote-late trick does not rescue it, because the damage is done on the device rather than at the divide.
+
+Two changes make it exact instead:
+
+- **Shift by an integer, not by the mean.** `Var(x) = Var(x − K)` for any constant `K`, so the host sends `K = round(mean)` — an integer — and the device subtracts it in exact integer arithmetic. Nothing becomes a float at any point. The deviation's magnitude is then bounded by the data's **spread** rather than by its position on the number line, which is the dependency a variance ought to have.
+- **Square exactly.** WGSL has no widening-multiply *intrinsic*, but a `u32 × u32 → u64` product is four 16-bit partial products and two carries. So `d²` need not be a float either: it is an exact `u64`, tree-accumulated with carry.
+
+The whole computation is then exact until a single final rounding — `Σd² ` on the device, `Σd = Σx − n·K` on the host from the sum it already has, and `(n·Σd² − (Σd)²) / n²` formed as one integer numerator and rounded once into `f64`. That makes it **more accurate than `Stats.variance`**, which sums `f64` deviations and rounds at every step; the two may therefore differ in the last bit, and the GPU is the one that is right. Every other operation in this family treats the CPU as the reference, so this inversion is deliberate and narrow.
+
+Overflow is the only way it can fail. `Σd²` is a `u64`, so a buffer whose spread genuinely does not fit **traps**, exactly as an overflowing integer `gpu.sum` does — roughly `n · spread² > 1.8 × 10¹⁹`, which for a million elements means a spread past ~4.3 million. Note what does *not* trap: magnitude. A buffer of values within a few of `i32::MAX` has a tiny spread and computes cleanly.
+
+The unsigned form differs only in which exact sum feeds the mean; `K` travels to the device as two 32-bit words because `round(mean)` of a `u32` buffer can exceed `i32::MAX`, and a 32-bit shift would wrap on precisely the buffers this design exists to serve.
 
 `gpu.dot(a, b)` is `gpu.sum(a * b)`, to the last bit. It is a separate operation only because the product is formed **on load** inside the reduction's first level, so no `n`-element intermediate is ever written — a device-traffic win, not a semantic difference.
 - `gpu.mean(buf)` is `gpu.sum(buf) / n`, to the last bit: the specified tree sum, divided by the count, in `f32`, **once**. Not compensated, not accumulated wider. So `mean` inherits the sum's grouping rather than having one of its own, and adds exactly one further rounding — that is the whole of its precision story. The division happens on the host after the fold converges, never in the shader: a shader cannot know it is running the last level of the tree, so a division inside it would divide once per level.

@@ -3793,37 +3793,81 @@ impl<'a> super::TypeChecker<'a> {
         }
 
         let buf_ty = self.infer_expr(&args[0].value);
-        let ok = matches!(
-            &buf_ty,
-            Type::Named { name, args: ta }
-                if name == "Vec" && ta.len() == 1 && ta[0] == Type::Float(FloatSize::F32)
-        );
-        if !ok {
+        let elem = match &buf_ty {
+            Type::Named { name, args: ta } if name == "Vec" && ta.len() == 1 => ta[0].clone(),
+            _ => {
+                self.type_error(
+                    format!(
+                        "error[E_GPU_REDUCE_BUFFER]: `gpu.{spelling}` takes a `Vec[f32]`, \
+                         `Vec[i32]` or `Vec[u32]` (found `{}`)",
+                        crate::typechecker::types::type_display(&buf_ty)
+                    ),
+                    args[0].value.span,
+                    TypeErrorKind::TypeMismatch,
+                );
+                return result;
+            }
+        };
+        let elem_spelling = match &elem {
+            Type::Float(FloatSize::F32) => Some("f32"),
+            Type::Int(IntSize::I32) => Some("i32"),
+            Type::UInt(UIntSize::U32) => Some("u32"),
+            _ => None,
+        };
+        let Some(elem_spelling) = elem_spelling else {
             self.type_error(
                 format!(
-                    "error[E_GPU_REDUCE_BUFFER]: `gpu.{spelling}` takes a `Vec[f32]` (found \
-                     `{}`) — the two-pass statistics are f32-only; an integer form would have to \
-                     promote its deviations, which needs its own decision",
-                    crate::typechecker::types::type_display(&buf_ty)
+                    "error[E_GPU_REDUCE_BUFFER]: `gpu.{spelling}` takes a `Vec[f32]`, \
+                     `Vec[i32]` or `Vec[u32]` (found `Vec[{}]`)",
+                    crate::typechecker::types::type_display(&elem)
                 ),
                 args[0].value.span,
                 TypeErrorKind::TypeMismatch,
             );
             return result;
-        }
+        };
+        let is_int = elem_spelling != "f32";
 
-        let dev = crate::gpu_wgsl::emit_deviation_kernel("f32");
-        let sum = crate::gpu_wgsl::emit_reduce_kernel(ReduceOp::Sum, "f32");
-        match (dev, sum) {
-            (Ok(dev_wgsl), Ok(sum_wgsl)) => {
+        // AN INTEGER VARIANCE RETURNS `Option[f64]`, NOT `Option[f32]`, and the
+        // difference is not cosmetic: the integer path is EXACT (integer
+        // shift, exact `u64` squares, one rounding at the end), so an f32
+        // result would throw away precision the computation actually has.
+        // `gpu.mean` over an integer buffer already promotes the same way.
+        let result = if is_int {
+            Type::Named {
+                name: "Option".to_string(),
+                args: vec![Type::Float(FloatSize::F64)],
+            }
+        } else {
+            result
+        };
+
+        let emitted = if is_int {
+            // Codegen cannot see the element type through a `Vec`'s opaque
+            // data pointer, so the spelling is recorded on the same span the
+            // reductions use — it selects the runtime entry point, which for
+            // integers is the one that can trap.
+            self.gpu_reduce_int_elems.insert(
+                SpanKey(args[0].value.span.offset, args[0].value.span.length),
+                elem_spelling.to_string(),
+            );
+            crate::gpu_wgsl::emit_int_deviation_kernel(elem_spelling)
+                .map(|dev| (dev, crate::gpu_wgsl::emit_wide_fold_kernel()))
+        } else {
+            crate::gpu_wgsl::emit_deviation_kernel("f32").and_then(|dev| {
+                crate::gpu_wgsl::emit_reduce_kernel(ReduceOp::Sum, "f32").map(|sum| (dev, sum))
+            })
+        };
+        match emitted {
+            Ok((dev_wgsl, fold_wgsl)) => {
                 self.gpu_dispatch_wgsl.insert(
                     SpanKey(args[0].value.span.offset, args[0].value.span.length),
                     dev_wgsl,
                 );
                 self.gpu_dispatch_wgsl
-                    .insert(SpanKey(span.offset, span.length), sum_wgsl);
+                    .insert(SpanKey(span.offset, span.length), fold_wgsl);
             }
-            (Err(e), _) | (_, Err(e)) => {
+            Err(e) => {
                 self.type_error(
                     format!(
                         "error[E_GPU_REDUCE_KERNEL]: cannot lower `gpu.{spelling}` to a GPU \

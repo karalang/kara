@@ -1159,10 +1159,23 @@ impl<'a> super::Interpreter<'a> {
             );
         }
         let Value::Array(rc) = self.eval_expr_inner(&args[0].value) else {
-            return self
-                .record_runtime_error(format!("gpu.{spelling} buffer must be a Vec of f32"), span);
+            return self.record_runtime_error(
+                format!("gpu.{spelling} buffer must be a Vec of f32, i32 or u32"),
+                span,
+            );
         };
         let elems = rc.read().unwrap().clone();
+
+        // INTEGER OR FLOAT, decided from the elements — and the two take
+        // genuinely different routes rather than one converting to the other.
+        // The integer form is EXACT: an integer shift, exact `u64` squares,
+        // one rounding at the very end. Converting an integer buffer to f32
+        // and reusing the float twin would reintroduce precisely the
+        // quantisation the integer path was built to avoid.
+        if matches!(elems.first(), Some(Value::Int(_))) {
+            return self.eval_gpu_variance_int(&elems, &args[0].value.span, span, sqrt, spelling);
+        }
+
         let mut xs: Vec<f32> = Vec::with_capacity(elems.len());
         for v in &elems {
             match v {
@@ -1189,6 +1202,88 @@ impl<'a> super::Interpreter<'a> {
                 enum_name: "Option".to_string(),
                 variant: "Some".to_string(),
                 data: EnumData::Tuple(vec![Value::Float(v as f64)]),
+            },
+            None => Value::EnumVariant {
+                enum_name: "Option".to_string(),
+                variant: "None".to_string(),
+                data: EnumData::Unit,
+            },
+        }
+    }
+
+    /// The INTEGER arm of `gpu.variance` / `gpu.stddev` under the interpreter
+    /// (B-2026-08-19-13).
+    ///
+    /// Exact, matching the device: `tree_variance_i32` / `_u32` shift by an
+    /// integer `K`, accumulate `Σd²` exactly, and round once. Returns
+    /// `Option[f64]` rather than `Option[f32]` because the computation really
+    /// does have that much precision — the same promotion `gpu.mean` makes
+    /// over an integer buffer.
+    ///
+    /// Signedness comes from the TYPECHECKER's hint, not from the values, for
+    /// the reason spelled out in `eval_gpu_reduce_int`: a `Vec[u32]` of small
+    /// values is indistinguishable from a `Vec[i32]` at the `Value` level, and
+    /// guessing would produce a divergence visible only on large data.
+    fn eval_gpu_variance_int(
+        &mut self,
+        elems: &[Value],
+        buf_span: &Span,
+        span: &Span,
+        sqrt: bool,
+        spelling: &str,
+    ) -> Value {
+        let unsigned = self
+            .typecheck_result
+            .gpu_reduce_int_elems
+            .get(&crate::resolver::SpanKey(buf_span.offset, buf_span.length))
+            .is_some_and(|e| e == "u32");
+        let width = if unsigned { "u32" } else { "i32" };
+
+        let mut signed: Vec<i32> = Vec::with_capacity(elems.len());
+        let mut unsigned_xs: Vec<u32> = Vec::with_capacity(elems.len());
+        for v in elems {
+            let Value::Int(i) = v else {
+                return self.record_runtime_error(
+                    format!("gpu.{spelling} buffer elements must all be {width}"),
+                    span,
+                );
+            };
+            if unsigned {
+                let Ok(x) = u32::try_from(*i) else {
+                    return self.record_runtime_error(
+                        format!("gpu.{spelling} buffer element {i} does not fit u32"),
+                        span,
+                    );
+                };
+                unsigned_xs.push(x);
+            } else {
+                let Ok(x) = i32::try_from(*i) else {
+                    return self.record_runtime_error(
+                        format!("gpu.{spelling} buffer element {i} does not fit i32"),
+                        span,
+                    );
+                };
+                signed.push(x);
+            }
+        }
+
+        // Population form, so `bessel` is false — the sample form is decided
+        // against for this family (see the ledger row).
+        let folded = match (unsigned, sqrt) {
+            (true, true) => crate::reduce_kernel::tree_stddev_u32(&unsigned_xs, false),
+            (true, false) => crate::reduce_kernel::tree_variance_u32(&unsigned_xs, false),
+            (false, true) => crate::reduce_kernel::tree_stddev_i32(&signed, false),
+            (false, false) => crate::reduce_kernel::tree_variance_i32(&signed, false),
+        };
+        match folded {
+            // The squared deviations did not fit in `u64`. Traps, exactly as
+            // an overflowing integer `gpu.sum` does — an integer reduction
+            // that cannot represent its answer refuses rather than saturating.
+            Some(Err(_)) => self.record_runtime_error("integer overflow", span),
+            Some(Ok(v)) => Value::EnumVariant {
+                enum_name: "Option".to_string(),
+                variant: "Some".to_string(),
+                data: EnumData::Tuple(vec![Value::Float(v)]),
             },
             None => Value::EnumVariant {
                 enum_name: "Option".to_string(),

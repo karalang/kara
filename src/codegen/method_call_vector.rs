@@ -2195,8 +2195,20 @@ impl<'ctx> super::Codegen<'ctx> {
         }
 
         let (data, n) = self.read_gpu_reduce_buffer(&args[0].value)?;
-        let sumsq_fn = self.gpu_sumsq_dev_f32_fn();
         let fn_val = self.current_fn.expect("gpu variance in function");
+
+        // INTEGER buffers take a different entry point entirely — one that is
+        // EXACT and can TRAP. Selected from the typechecker's plain-data hint,
+        // because a `Vec`'s data pointer is opaque at the LLVM level and
+        // nothing here distinguishes `Vec[i32]` from `Vec[f32]`.
+        let int_key = (args[0].value.span.offset, args[0].value.span.length);
+        if let Some(elem) = self.accel.gpu_reduce_int_elems.get(&int_key).cloned() {
+            return self.compile_gpu_variance_int(
+                &elem, baked[0].0, baked[0].1, baked[1].0, baked[1].1, data, n, sqrt,
+            );
+        }
+
+        let sumsq_fn = self.gpu_sumsq_dev_f32_fn();
 
         // Empty has no variance — `None`, the answer every other GPU reduction
         // gives for an empty buffer. Guarded BEFORE the divide, which would
@@ -2264,6 +2276,107 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.position_at_end(merge_bb);
         Ok(self.build_option_some_via_phis(&[word], some_end_bb, none_bb, "gpu.var"))
+    }
+
+    /// Lower an INTEGER `gpu.variance` / `gpu.stddev` (B-2026-08-19-13).
+    ///
+    /// **Returns `Option[f64]`, not `Option[f32]`, and it is exact.** The
+    /// integer path shifts by an integer `K`, squares into a true `u64` via
+    /// the emitted widening multiply, and rounds once at the end — so an f32
+    /// result would discard precision the computation genuinely has.
+    /// `gpu.mean` over an integer buffer already promotes the same way, and
+    /// for the same reason.
+    ///
+    /// Traps on overflow of `Σd²`, which is the only way an integer variance
+    /// can fail, and raises the panic HERE rather than in the runtime so it
+    /// carries Kāra's own `integer overflow` message and source span — the
+    /// same reasoning as `compile_gpu_reduce_int`.
+    #[allow(clippy::too_many_arguments)]
+    fn compile_gpu_variance_int(
+        &mut self,
+        elem: &str,
+        dev_ptr: PointerValue<'ctx>,
+        dev_len: IntValue<'ctx>,
+        fold_ptr: PointerValue<'ctx>,
+        fold_len: IntValue<'ctx>,
+        data: PointerValue<'ctx>,
+        n: IntValue<'ctx>,
+        sqrt: bool,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let i32_t = self.context.i32_type();
+        let i64_t = self.context.i64_type();
+        let fn_val = self.current_fn.expect("gpu variance in function");
+
+        // Empty has no variance — `None`, guarded before the call so the
+        // runtime never divides by zero.
+        let nonempty = self
+            .builder
+            .build_int_compare(IntPredicate::UGT, n, i64_t.const_zero(), "gpu.ivar.ne")
+            .unwrap();
+        let some_bb = self.context.append_basic_block(fn_val, "gpu.ivar.some");
+        let none_bb = self.context.append_basic_block(fn_val, "gpu.ivar.none");
+        let merge_bb = self.context.append_basic_block(fn_val, "gpu.ivar.merge");
+        self.builder
+            .build_conditional_branch(nonempty, some_bb, none_bb)
+            .unwrap();
+
+        self.builder.position_at_end(some_bb);
+        let ovf_slot = self.create_entry_alloca(fn_val, "gpu.ivar.ovf", i32_t.into());
+        self.builder
+            .build_store(ovf_slot, i32_t.const_zero())
+            .unwrap();
+        let var_fn = self.gpu_variance_int_fn();
+        let unsigned = i32_t.const_int(u64::from(elem == "u32"), false);
+        let want_sqrt = i32_t.const_int(u64::from(sqrt), false);
+        let var = self
+            .builder
+            .build_call(
+                var_fn,
+                &[
+                    dev_ptr.into(),
+                    dev_len.into(),
+                    fold_ptr.into(),
+                    fold_len.into(),
+                    data.into(),
+                    n.into(),
+                    unsigned.into(),
+                    want_sqrt.into(),
+                    ovf_slot.into(),
+                ],
+                "gpu.ivar",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic();
+
+        let status = self
+            .builder
+            .build_load(i32_t, ovf_slot, "gpu.ivar.status")
+            .unwrap()
+            .into_int_value();
+        let overflowed = self
+            .builder
+            .build_int_compare(IntPredicate::NE, status, i32_t.const_zero(), "gpu.ivar.of")
+            .unwrap();
+        let trap_bb = self.context.append_basic_block(fn_val, "gpu.ivar.trap");
+        let ok_bb = self.context.append_basic_block(fn_val, "gpu.ivar.ok");
+        self.builder
+            .build_conditional_branch(overflowed, trap_bb, ok_bb)
+            .unwrap();
+        self.builder.position_at_end(trap_bb);
+        self.emit_panic("integer overflow");
+        self.builder.build_unreachable().unwrap();
+        self.builder.position_at_end(ok_bb);
+
+        let word = self.coerce_to_payload_words(var, 1)?[0];
+        let some_end_bb = self.builder.get_insert_block().unwrap();
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+        self.builder.position_at_end(none_bb);
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+        self.builder.position_at_end(merge_bb);
+        Ok(self.build_option_some_via_phis(&[word], some_end_bb, none_bb, "gpu.ivar"))
     }
 
     /// `gpu.argmin(buf)` / `gpu.argmax(buf)` — the INDEX of the extremum

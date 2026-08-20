@@ -1525,6 +1525,282 @@ pub fn emit_int_reduce_kernel(op: ReduceOp, elem: &str) -> Result<String, WgslEr
     ))
 }
 
+/// WGSL helpers for EXACT 64-bit integer arithmetic out of 32-bit parts, as a
+/// `vec2<u32>` of `(lo, hi)` (B-2026-08-19-13).
+///
+/// **This is the primitive that retires "blocked on WGSL" from the integer
+/// side of the reduction family.** That phrase meant WGSL has no widening
+/// multiply, which is true of the INTRINSIC and not of the capability: a
+/// `u32 × u32 → u64` product is four 16-bit partial products and two carries,
+/// and a `u64 + u64` is one add plus a carry test. Both are exact, both are
+/// device-portable, and both are validated against Rust's own `u64` on the
+/// device by `runtime/src/gpu.rs`'s `wgsl_can_multiply_32x32_into_an_exact_64_bit_product`.
+///
+/// The carry tests are the whole subtlety. WGSL's `u32` arithmetic WRAPS by
+/// definition, so `a + b < a` is exactly the carry-out — the same trick the
+/// unsigned branch of [`emit_int_reduce_kernel`] already uses. Nothing here
+/// relies on undefined behaviour or on a wider intermediate type existing.
+const WIDE_U64_WGSL: &str = "\
+fn karac_mul_wide(a: u32, b: u32) -> vec2<u32> {\n\
+\x20   // 32x32 -> 64 by 16-bit splitting. WGSL has no widening multiply, but\n\
+\x20   // each 16-bit half-product fits a u32 exactly, so the four partials\n\
+\x20   // recombine with explicit carries and nothing is lost.\n\
+\x20   let a_lo = a & 0xffffu;\n\
+\x20   let a_hi = a >> 16u;\n\
+\x20   let b_lo = b & 0xffffu;\n\
+\x20   let b_hi = b >> 16u;\n\
+\x20   let ll = a_lo * b_lo;\n\
+\x20   let lh = a_lo * b_hi;\n\
+\x20   let hl = a_hi * b_lo;\n\
+\x20   let hh = a_hi * b_hi;\n\
+\x20   // The two middle terms straddle bit 16 and their SUM can carry into\n\
+\x20   // bit 32, which is why `mid` needs a carry of its own rather than\n\
+\x20   // being folded straight in.\n\
+\x20   let mid = lh + hl;\n\
+\x20   let mid_carry = select(0u, 0x10000u, mid < lh);\n\
+\x20   let lo = ll + (mid << 16u);\n\
+\x20   let lo_carry = select(0u, 1u, lo < ll);\n\
+\x20   let hi = hh + (mid >> 16u) + mid_carry + lo_carry;\n\
+\x20   return vec2<u32>(lo, hi);\n\
+}\n\
+\n\
+fn karac_add_wide(a: vec2<u32>, b: vec2<u32>) -> vec2<u32> {\n\
+\x20   let lo = a.x + b.x;\n\
+\x20   // u32 addition wraps, so wrapping below an operand IS the carry-out.\n\
+\x20   let carry = select(0u, 1u, lo < a.x);\n\
+\x20   return vec2<u32>(lo, a.y + b.y + carry);\n\
+}\n\
+\n\
+fn karac_add_wide_overflowed(a: vec2<u32>, b: vec2<u32>, s: vec2<u32>) -> bool {\n\
+\x20   // The 64-bit sum overflowed iff the HIGH word wrapped. Testing the\n\
+\x20   // high word against `a.y` alone is not enough — the low carry can push\n\
+\x20   // it to exactly `a.y` — so the carry is folded in first.\n\
+\x20   let carry = select(0u, 1u, (a.x + b.x) < a.x);\n\
+\x20   return s.y < a.y || (b.y + carry) < b.y || (a.y + b.y + carry) < a.y;\n\
+}\n";
+
+/// Emit the squared-deviation kernel for an INTEGER `gpu.variance` /
+/// `gpu.stddev` (B-2026-08-19-13).
+///
+/// **The integer variance is EXACT, which is the reverse of what this feature
+/// was expected to deliver.** The recorded objection was that a `(x - mean)²`
+/// formed on-device in f32 quantises every element above 2²⁴, so `mean`'s
+/// promote-late trick could not carry over. Two changes remove it:
+///
+///  * **The shift is by an INTEGER.** `Var(x) = Var(x - K)`, so the host sends
+///    `K = round(mean)` and the device subtracts it in exact integer
+///    arithmetic — nothing is converted to a float at any point. The
+///    deviation's size is then bounded by the data's SPREAD rather than its
+///    position, which is the dependency a variance should have.
+///  * **The square is exact.** [`WIDE_U64_WGSL`]'s `karac_mul_wide` gives a
+///    true `u32 × u32 → u64`, so `d²` is not rounded either.
+///
+/// The deviation is taken as an unsigned MAGNITUDE (`|x - K|`) rather than a
+/// signed difference, which is not a shortcut: `x - K` can exceed `i32`'s
+/// range (an `i32::MIN` element against a positive `K`), while `|x - K|`
+/// always fits a `u32`, and the square does not care about the sign.
+/// Computing the magnitude by branching on the comparison, rather than
+/// negating, is what keeps that true at the very edge of the type.
+///
+/// Emits one `u64` partial and one overflow bit per workgroup, on the same
+/// flag channel [`emit_int_reduce_kernel`] uses — so the host folds partials
+/// and ORs flags exactly as it does for a checked integer sum, and an integer
+/// variance TRAPS on overflow like every other integer reduction here.
+pub fn emit_int_deviation_kernel(elem: &str) -> Result<String, WgslError> {
+    let to_i64 = match elem {
+        // `i32` is widened to a signed 64-bit compare against `K`; `u32` is
+        // already non-negative. Both end up as an unsigned magnitude.
+        "i32" => {
+            "let xv: i32 = input[i];\n\
+                  \x20       let big: bool = i64_ge_i32(xv, k_lo, k_hi);\n\
+                  \x20       let d: u32 = select(sub_i32_from_i64(k_lo, k_hi, xv), \
+                  sub_i64_from_i32(xv, k_lo, k_hi), big);"
+        }
+        "u32" => {
+            "let xv: u32 = input[i];\n\
+                  \x20       let big: bool = u64_le_u32(k_lo, k_hi, xv);\n\
+                  \x20       let d: u32 = select(sub_u32_from_u64(k_lo, k_hi, xv), \
+                  sub_u64_from_u32(xv, k_lo, k_hi), big);"
+        }
+        _ => {
+            return Err(WgslError::UnsupportedSignature(format!(
+                "integer GPU variance over `{elem}` is not supported — the integer reduction \
+                 entry points cover i32 and u32"
+            )))
+        }
+    };
+    let width = GPU_REDUCE_WIDTH;
+    let half = width / 2;
+    let helpers = int_deviation_helpers(elem);
+    Ok(format!(
+        "@group(0) @binding(0) var<storage, read>       input:  array<{elem}>;\n\
+         @group(0) @binding(1) var<storage, read_write> output: array<u32>;\n\
+         @group(0) @binding(2) var<storage, read_write> flags:  array<u32>;\n\
+         // K, the integer shift, as two u32 words (lo, hi) of a signed 64-bit\n\
+         // value. It arrives at 64 bits because `round(mean)` of a u32 buffer\n\
+         // can exceed i32, and a K that did not fit would defeat the whole\n\
+         // point of shifting.\n\
+         @group(0) @binding(3) var<storage, read>       shift:  array<u32>;\n\
+         \n\
+         {WIDE_U64_WGSL}\
+         {helpers}\
+         \n\
+         var<workgroup> scratch: array<vec2<u32>, {width}>;\n\
+         var<workgroup> ovf: array<u32, {width}>;\n\
+         \n\
+         @compute @workgroup_size({width})\n\
+         fn main(@builtin(local_invocation_id) lid: vec3<u32>,\n\
+         \x20       @builtin(workgroup_id) wid: vec3<u32>,\n\
+         \x20       @builtin(global_invocation_id) gid: vec3<u32>) {{\n\
+         \x20   let t = lid.x;\n\
+         \x20   let i = gid.x;\n\
+         \x20   let k_lo = shift[0];\n\
+         \x20   let k_hi = shift[1];\n\
+         \x20   ovf[t] = 0u;\n\
+         \x20   if (i < arrayLength(&input)) {{\n\
+         \x20       {to_i64}\n\
+         \x20       scratch[t] = karac_mul_wide(d, d);\n\
+         \x20   }} else {{\n\
+         \x20       // 0 is the Sum identity, and squaring it is still 0 — a\n\
+         \x20       // padded lane contributes nothing to either word.\n\
+         \x20       scratch[t] = vec2<u32>(0u, 0u);\n\
+         \x20   }}\n\
+         \x20   workgroupBarrier();\n\
+         \n\
+         \x20   var stride: u32 = {half}u;\n\
+         \x20   loop {{\n\
+         \x20       if (stride == 0u) {{ break; }}\n\
+         \x20       if (t < stride) {{\n\
+         \x20           let a = scratch[t];\n\
+         \x20           let b = scratch[t + stride];\n\
+         \x20           let s = karac_add_wide(a, b);\n\
+         \x20           scratch[t] = s;\n\
+         \x20           ovf[t] = ovf[t] | ovf[t + stride] | \
+         select(0u, 1u, karac_add_wide_overflowed(a, b, s));\n\
+         \x20       }}\n\
+         \x20       workgroupBarrier();\n\
+         \x20       stride = stride / 2u;\n\
+         \x20   }}\n\
+         \n\
+         \x20   // Two words per workgroup partial, plus its overflow bit.\n\
+         \x20   if (t == 0u) {{\n\
+         \x20       output[2u * wid.x] = scratch[0].x;\n\
+         \x20       output[2u * wid.x + 1u] = scratch[0].y;\n\
+         \x20       flags[wid.x] = ovf[0];\n\
+         \x20   }}\n\
+         }}\n"
+    ))
+}
+
+/// Emit the kernel that folds `u64` partials from
+/// [`emit_int_deviation_kernel`] — level 1 and above of the same reduction.
+///
+/// A separate shader because level 0 reads ELEMENTS and squares them while
+/// every level after reads 64-bit PARTIALS and only adds. Fusing them would
+/// need a mode flag in the shader, and a branch on it in every lane, to save
+/// one small emitter.
+pub fn emit_wide_fold_kernel() -> String {
+    let width = GPU_REDUCE_WIDTH;
+    let half = width / 2;
+    format!(
+        "@group(0) @binding(0) var<storage, read>       input:  array<u32>;\n\
+         @group(0) @binding(1) var<storage, read_write> output: array<u32>;\n\
+         @group(0) @binding(2) var<storage, read_write> flags:  array<u32>;\n\
+         \n\
+         {WIDE_U64_WGSL}\
+         \n\
+         var<workgroup> scratch: array<vec2<u32>, {width}>;\n\
+         var<workgroup> ovf: array<u32, {width}>;\n\
+         \n\
+         @compute @workgroup_size({width})\n\
+         fn main(@builtin(local_invocation_id) lid: vec3<u32>,\n\
+         \x20       @builtin(workgroup_id) wid: vec3<u32>,\n\
+         \x20       @builtin(global_invocation_id) gid: vec3<u32>) {{\n\
+         \x20   let t = lid.x;\n\
+         \x20   let i = gid.x;\n\
+         \x20   ovf[t] = 0u;\n\
+         \x20   // Two words per partial, so the element count is half the\n\
+         \x20   // array length.\n\
+         \x20   if (2u * i + 1u < arrayLength(&input)) {{\n\
+         \x20       scratch[t] = vec2<u32>(input[2u * i], input[2u * i + 1u]);\n\
+         \x20   }} else {{\n\
+         \x20       scratch[t] = vec2<u32>(0u, 0u);\n\
+         \x20   }}\n\
+         \x20   workgroupBarrier();\n\
+         \n\
+         \x20   var stride: u32 = {half}u;\n\
+         \x20   loop {{\n\
+         \x20       if (stride == 0u) {{ break; }}\n\
+         \x20       if (t < stride) {{\n\
+         \x20           let a = scratch[t];\n\
+         \x20           let b = scratch[t + stride];\n\
+         \x20           let s = karac_add_wide(a, b);\n\
+         \x20           scratch[t] = s;\n\
+         \x20           ovf[t] = ovf[t] | ovf[t + stride] | \
+         select(0u, 1u, karac_add_wide_overflowed(a, b, s));\n\
+         \x20       }}\n\
+         \x20       workgroupBarrier();\n\
+         \x20       stride = stride / 2u;\n\
+         \x20   }}\n\
+         \n\
+         \x20   if (t == 0u) {{\n\
+         \x20       output[2u * wid.x] = scratch[0].x;\n\
+         \x20       output[2u * wid.x + 1u] = scratch[0].y;\n\
+         \x20       flags[wid.x] = ovf[0];\n\
+         \x20   }}\n\
+         }}\n"
+    )
+}
+
+/// The element-specific half of [`emit_int_deviation_kernel`]: comparing an
+/// element against the 64-bit shift `K` and taking the unsigned magnitude of
+/// their difference.
+///
+/// Written at 64 bits on the `K` side throughout. `K` is `round(mean)`, which
+/// for a `u32` buffer can exceed `i32::MAX` and for an `i32` buffer is an
+/// ordinary signed value — so a 32-bit `K` would either overflow or need a
+/// sign convention that differs between the two element types.
+fn int_deviation_helpers(elem: &str) -> String {
+    if elem == "i32" {
+        "\n\
+         fn i64_ge_i32(x: i32, k_lo: u32, k_hi: u32) -> bool {\n\
+         \x20   // Sign-extend x to 64 bits and compare against K.\n\
+         \x20   let x_hi = select(0u, 0xffffffffu, x < 0);\n\
+         \x20   let xh = bitcast<i32>(x_hi);\n\
+         \x20   let kh = bitcast<i32>(k_hi);\n\
+         \x20   if (xh != kh) { return xh > kh; }\n\
+         \x20   return bitcast<u32>(x) >= k_lo;\n\
+         }\n\
+         \n\
+         fn sub_i64_from_i32(x: i32, k_lo: u32, k_hi: u32) -> u32 {\n\
+         \x20   // x - K, known non-negative and known to fit u32 (the caller\n\
+         \x20   // only reaches here when x >= K, and both are within i32 of\n\
+         \x20   // each other by construction — K lies inside the data range).\n\
+         \x20   return bitcast<u32>(x) - k_lo;\n\
+         }\n\
+         \n\
+         fn sub_i32_from_i64(k_lo: u32, k_hi: u32, x: i32) -> u32 {\n\
+         \x20   return k_lo - bitcast<u32>(x);\n\
+         }\n"
+        .to_string()
+    } else {
+        "\n\
+         fn u64_le_u32(k_lo: u32, k_hi: u32, x: u32) -> bool {\n\
+         \x20   if (k_hi != 0u) { return false; }\n\
+         \x20   return k_lo <= x;\n\
+         }\n\
+         \n\
+         fn sub_u64_from_u32(x: u32, k_lo: u32, k_hi: u32) -> u32 {\n\
+         \x20   return x - k_lo;\n\
+         }\n\
+         \n\
+         fn sub_u32_from_u64(k_lo: u32, k_hi: u32, x: u32) -> u32 {\n\
+         \x20   return k_lo - x;\n\
+         }\n"
+        .to_string()
+    }
+}
+
 /// Emit the tiled matrix-multiply kernel for `gpu.matmul(a, b)`
 /// (B-2026-08-19-13).
 ///

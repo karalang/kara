@@ -1390,6 +1390,135 @@ fn gpu_prefix_sums_last_element_need_not_equal_gpu_sum() {
 }
 
 #[test]
+fn gpu_integer_variance_is_exact_where_an_f32_deviation_would_not_be() {
+    // THE fixture for the integer-variance decision. Sixty-four values
+    // centred at 2³⁰ with a spread of ±100: forming `(x - mean)` in f32
+    // quantises every element (f32 is exact on integers only to 2²⁴), and the
+    // naive float path reports a variance several percent wrong. The integer
+    // path shifts by an INTEGER `K` and squares into an exact `u64`, so it
+    // reports the correctly-rounded value.
+    //
+    // The expected number is the exact rational variance — `Σ(n·x - Σx)² /
+    // n³` evaluated in exact integer arithmetic — so this fixture is an
+    // independent oracle rather than a snapshot of what the code does.
+    assert_gpu_reduce_matches_interp(
+        "int_variance_large",
+        "fn main() {\n\
+        \x20   let v: Vec[i32] = [1073741724, 1073741731, 1073741738, 1073741745, 1073741752, 1073741759, 1073741766, 1073741773, 1073741780, 1073741787, 1073741794, 1073741801, 1073741808, 1073741815, 1073741822, 1073741829, 1073741836, 1073741843, 1073741850, 1073741857, 1073741864, 1073741871, 1073741878, 1073741885, 1073741892, 1073741899, 1073741906, 1073741913, 1073741920, 1073741726, 1073741733, 1073741740, 1073741747, 1073741754, 1073741761, 1073741768, 1073741775, 1073741782, 1073741789, 1073741796, 1073741803, 1073741810, 1073741817, 1073741824, 1073741831, 1073741838, 1073741845, 1073741852, 1073741859, 1073741866, 1073741873, 1073741880, 1073741887, 1073741894, 1073741901, 1073741908, 1073741915, 1073741922, 1073741728, 1073741735, 1073741742, 1073741749, 1073741756, 1073741763];\n\
+        \x20   match gpu.variance(v) {\n\
+        \x20       Some(x) => println(f\"{x}\"),\n\
+        \x20       None => println(\"empty\"),\n\
+        \x20   }\n\
+        }\n",
+        "3633.038818359375",
+    );
+
+    // Translation invariance, end to end: the SAME spread at the origin must
+    // give the SAME variance. If the shift ever stops being exact this pair
+    // separates, which no single-magnitude fixture would reveal.
+    assert_gpu_reduce_matches_interp(
+        "int_variance_at_origin",
+        "fn main() {\n\
+        \x20   let v: Vec[i32] = [-100, -93, -86, -79, -72, -65, -58, -51, -44, -37, -30, -23, -16, -9, -2, 5, 12, 19, 26, 33, 40, 47, 54, 61, 68, 75, 82, 89, 96, -98, -91, -84, -77, -70, -63, -56, -49, -42, -35, -28, -21, -14, -7, 0, 7, 14, 21, 28, 35, 42, 49, 56, 63, 70, 77, 84, 91, 98, -96, -89, -82, -75, -68, -61];\n\
+        \x20   match gpu.variance(v) {\n\
+        \x20       Some(x) => println(f\"{x}\"),\n\
+        \x20       None => println(\"empty\"),\n\
+        \x20   }\n\
+        }\n",
+        "3633.038818359375",
+    );
+}
+
+#[test]
+fn gpu_integer_variance_handles_u32_past_the_signed_range() {
+    // A `u32` buffer centred at 3e9 — past `i32::MAX`, so `K = round(mean)`
+    // does not fit a signed 32-bit shift. The shift travels as two words for
+    // exactly this case; a 32-bit `K` would wrap here and the deviations would
+    // be measured from the wrong place.
+    assert_gpu_reduce_matches_interp(
+        "u32_variance_past_i32",
+        "fn main() {\n\
+        \x20   let v: Vec[u32] = [2999999900, 2999999907, 2999999914, 2999999921, 2999999928, 2999999935, 2999999942, 2999999949, 2999999956, 2999999963, 2999999970, 2999999977, 2999999984, 2999999991, 2999999998, 3000000005, 3000000012, 3000000019, 3000000026, 3000000033, 3000000040, 3000000047, 3000000054, 3000000061, 3000000068, 3000000075, 3000000082, 3000000089, 3000000096, 2999999902, 2999999909, 2999999916, 2999999923, 2999999930, 2999999937, 2999999944, 2999999951, 2999999958, 2999999965, 2999999972, 2999999979, 2999999986, 2999999993, 3000000000, 3000000007, 3000000014, 3000000021, 3000000028, 3000000035, 3000000042, 3000000049, 3000000056, 3000000063, 3000000070, 3000000077, 3000000084, 3000000091, 3000000098, 2999999904, 2999999911, 2999999918, 2999999925, 2999999932, 2999999939];\n\
+        \x20   match gpu.variance(v) {\n\
+        \x20       Some(x) => println(f\"{x}\"),\n\
+        \x20       None => println(\"empty\"),\n\
+        \x20   }\n\
+        }\n",
+        "3633.038818359375",
+    );
+}
+
+#[test]
+fn gpu_integer_stddev_is_the_root_of_the_integer_variance() {
+    // `gpu.stddev(v)` and `gpu.variance(v).sqrt()` must be the same number —
+    // one computation with one extra operation on the way out, not two
+    // computations that happen to agree.
+    assert_gpu_reduce_matches_interp(
+        "int_stddev_root",
+        "fn main() {\n\
+        \x20   let v: Vec[i32] = [1073741724, 1073741731, 1073741738, 1073741745, 1073741752, 1073741759, 1073741766, 1073741773, 1073741780, 1073741787, 1073741794, 1073741801, 1073741808, 1073741815, 1073741822, 1073741829, 1073741836, 1073741843, 1073741850, 1073741857, 1073741864, 1073741871, 1073741878, 1073741885, 1073741892, 1073741899, 1073741906, 1073741913, 1073741920, 1073741726, 1073741733, 1073741740, 1073741747, 1073741754, 1073741761, 1073741768, 1073741775, 1073741782, 1073741789, 1073741796, 1073741803, 1073741810, 1073741817, 1073741824, 1073741831, 1073741838, 1073741845, 1073741852, 1073741859, 1073741866, 1073741873, 1073741880, 1073741887, 1073741894, 1073741901, 1073741908, 1073741915, 1073741922, 1073741728, 1073741735, 1073741742, 1073741749, 1073741756, 1073741763];\n\
+        \x20   let w: Vec[i32] = [1073741724, 1073741731, 1073741738, 1073741745, 1073741752, 1073741759, 1073741766, 1073741773, 1073741780, 1073741787, 1073741794, 1073741801, 1073741808, 1073741815, 1073741822, 1073741829, 1073741836, 1073741843, 1073741850, 1073741857, 1073741864, 1073741871, 1073741878, 1073741885, 1073741892, 1073741899, 1073741906, 1073741913, 1073741920, 1073741726, 1073741733, 1073741740, 1073741747, 1073741754, 1073741761, 1073741768, 1073741775, 1073741782, 1073741789, 1073741796, 1073741803, 1073741810, 1073741817, 1073741824, 1073741831, 1073741838, 1073741845, 1073741852, 1073741859, 1073741866, 1073741873, 1073741880, 1073741887, 1073741894, 1073741901, 1073741908, 1073741915, 1073741922, 1073741728, 1073741735, 1073741742, 1073741749, 1073741756, 1073741763];\n\
+        \x20   match gpu.stddev(v) {\n\
+        \x20       Some(s) => match gpu.variance(w) {\n\
+        \x20           Some(x) => println(f\"{s == x.sqrt()}\"),\n\
+        \x20           None => println(\"empty\"),\n\
+        \x20       },\n\
+        \x20       None => println(\"empty\"),\n\
+        \x20   }\n\
+        }\n",
+        "true",
+    );
+}
+
+#[test]
+fn gpu_integer_variance_traps_when_the_squared_deviations_overflow() {
+    // `Σd²` is a `u64`, so a spread that genuinely does not fit TRAPS rather
+    // than saturating — the same contract an overflowing integer `gpu.sum`
+    // makes. Alternating i32::MIN / i32::MAX puts each d² near 2⁶², so the
+    // accumulator passes 2⁶⁴ within one workgroup.
+    //
+    // Checked on the GPU leg only: `assert_gpu_reduce_matches_interp` compares
+    // stdout, and a trapping program's output is on stderr with a non-zero
+    // exit. The interpreter parity for the trap is
+    // `reduce_kernel::tests::integer_variance_traps_when_the_squared_deviations_overflow`.
+    let Some(backend) = gpu_or_skip() else { return };
+    let dir = scratch("int_variance_overflow");
+    let src = dir.join("int_variance_overflow.kara");
+    let vals: Vec<String> = (0..64)
+        .map(|i| {
+            // `as i32` is required: a bare `2147483647` literal infers as
+            // i64, and the narrowing coercion is an error by design.
+            if i % 2 == 0 {
+                "(-2147483647 - 1) as i32".to_string()
+            } else {
+                "2147483647 as i32".to_string()
+            }
+        })
+        .collect();
+    std::fs::write(
+        &src,
+        format!(
+            "fn main() {{\n\
+            \x20   let v: Vec[i32] = [{}];\n\
+            \x20   match gpu.variance(v) {{\n\
+            \x20       Some(x) => println(f\"{{x}}\"),\n\
+            \x20       None => println(\"empty\"),\n\
+            \x20   }}\n\
+            }}\n",
+            vals.join(", ")
+        ),
+    )
+    .expect("write fixture source");
+
+    let err = build_and_run_on_gpu(&dir, &src, "int_variance_overflow", backend)
+        .expect_err("a Σd² past u64 must trap, not return a number");
+    assert!(
+        err.contains("integer overflow"),
+        "expected Kāra's own `integer overflow` panic, got: {err}"
+    );
+}
+
+#[test]
 fn gpu_variance_and_stddev_agree_with_the_interpreter() {
     // The first TWO-PASS reduction, and the first shader with a UNIFORM. Both
     // only really run on a device: the mean is produced by a complete sum

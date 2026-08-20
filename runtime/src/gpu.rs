@@ -871,6 +871,216 @@ async fn dispatch_deviation_async(
     outs.pop()
 }
 
+/// One squared-deviation dispatch: elements in, `u64` partials plus one
+/// overflow bit per workgroup out, `K` as a two-word uniform.
+///
+/// Shaped like [`dispatch_checked_int_async`] — two outputs sized
+/// independently — because it is the same contract: a checked integer
+/// reduction that can fail, not merely one that returns a number.
+async fn dispatch_int_deviation_async(
+    wgsl: &str,
+    input: &[u8],
+    elem_size: usize,
+    k: i64,
+) -> Option<(Vec<u8>, Vec<u8>)> {
+    let ctx = gpu_context()?;
+    let device = &ctx.device;
+    let queue = &ctx.queue;
+
+    let n = input.len() / elem_size;
+    let input_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("gpu-int-dev-input"),
+        contents: input,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+    });
+    // K travels as two u32 words. It is 64-bit because `round(mean)` of a u32
+    // buffer can exceed i32::MAX — a 32-bit shift would overflow on exactly
+    // the buffers this design exists to handle.
+    let mut shift = Vec::with_capacity(8);
+    shift.extend_from_slice(&((k as u64) as u32).to_le_bytes());
+    shift.extend_from_slice(&(((k as u64) >> 32) as u32).to_le_bytes());
+
+    let groups = n.div_ceil(64);
+    // Two u32 words per partial; one flag word per workgroup.
+    let out_sizes = [(groups * 8) as u64, (groups * 4) as u64];
+    let output_bufs = run_compute(device, queue, wgsl, &[input_buf], &out_sizes, &[&shift], n);
+    let mut outs = readback(device, queue, &output_bufs, &out_sizes)?;
+    let flags = outs.pop()?;
+    let values = outs.pop()?;
+    Some((values, flags))
+}
+
+/// Fold `u64` partials down to one, ORing the overflow flags — levels 1+ of
+/// the squared-deviation reduction.
+async fn dispatch_wide_fold_async(wgsl: &str, input: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
+    let ctx = gpu_context()?;
+    let device = &ctx.device;
+    let queue = &ctx.queue;
+
+    // Two words per element, so the element count is a quarter of the byte
+    // length rather than the usual eighth-of-nothing arithmetic.
+    let n = input.len() / 8;
+    let input_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("gpu-wide-fold-input"),
+        contents: input,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+    });
+    let groups = n.div_ceil(64);
+    let out_sizes = [(groups * 8) as u64, (groups * 4) as u64];
+    let output_bufs = run_compute(device, queue, wgsl, &[input_buf], &out_sizes, &[], n);
+    let mut outs = readback(device, queue, &output_bufs, &out_sizes)?;
+    let flags = outs.pop()?;
+    let values = outs.pop()?;
+    Some((values, flags))
+}
+
+/// C entry point for an INTEGER `gpu.variance(buffer)` / `gpu.stddev(buffer)`
+/// — returns the variance itself as `f64` (B-2026-08-19-13).
+///
+/// **Exact, where the float form is approximate, and that is the whole point
+/// of it existing separately.** `karac_runtime_gpu_sumsq_dev_f32` forms
+/// `(x - mean)` in f32, which quantises every element past 2²⁴; over an
+/// integer buffer centred at 2²⁸ that reports a variance ~6% wrong. This one
+/// never converts anything to a float: the host sends `K = round(mean)` as an
+/// integer, the device subtracts it exactly, squares it into a true `u64` via
+/// the emitted `karac_mul_wide`, and accumulates with carry.
+///
+/// **Returns the finished variance, where the float entry point returns a sum
+/// of squares.** That inversion is deliberate: the last steps here
+/// (`Σd = Σx - n·K`, then `(n·Σd² - Σd²) / n²`) must happen in `i128` to stay
+/// exact, and handing codegen a `u64` plus a shift to combine would put
+/// 128-bit arithmetic in the emitter for no gain. The population divisor is
+/// fixed because the sample form is decided against for this family.
+///
+/// `overflowed` is set when `Σd²` does not fit in `u64`, which is the only way
+/// this operation can fail. The caller traps, exactly as a checked integer
+/// `gpu.sum` does — an integer reduction that cannot represent its answer
+/// refuses rather than saturating.
+///
+/// # Safety
+///
+/// Both `*_wgsl_ptr`/`_len` pairs a valid UTF-8 shader; `in_ptr` points to `n`
+/// valid 4-byte elements; `overflowed` points to one writable `i32`. Aborts on
+/// no available GPU adapter (no CPU fallback), same as every other entry point
+/// here.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_gpu_variance_int(
+    dev_wgsl_ptr: *const u8,
+    dev_wgsl_len: usize,
+    fold_wgsl_ptr: *const u8,
+    fold_wgsl_len: usize,
+    in_ptr: *const u32,
+    n: usize,
+    unsigned: i32,
+    sqrt: i32,
+    overflowed: *mut i32,
+) -> f64 {
+    unsafe {
+        *overflowed = 0;
+        if n == 0 {
+            return 0.0;
+        }
+
+        // PHASE 1 IS ON THE HOST, deliberately. The exact sum needs more than
+        // 32 bits — sixty-four values near 2³⁰ already overflow an i32 fold —
+        // so a device phase 1 would need a THIRD kernel just to add integers
+        // widely. The buffer is already in host memory and is about to be
+        // copied to the device regardless, so one `i128` pass over it costs
+        // essentially nothing next to that transfer, and it is exact by
+        // construction. The interpreter twin sums the same way, so the two
+        // agree on `K` without either having to describe a tree.
+        let raw = std::slice::from_raw_parts(in_ptr, n);
+        let sum: i128 = if unsigned != 0 {
+            raw.iter().map(|&x| x as i128).sum()
+        } else {
+            raw.iter().map(|&x| x as i32 as i128).sum()
+        };
+        // Ties away from zero, matching `f64::round` and the twin. A different
+        // `K` would give a different Σd² — the same variance, but not the same
+        // intermediate, and the surfaces have to agree bit for bit.
+        let k = (sum as f64 / n as f64).round() as i64;
+        let Ok(dev_wgsl) =
+            std::str::from_utf8(std::slice::from_raw_parts(dev_wgsl_ptr, dev_wgsl_len))
+        else {
+            crate::fatal::write_stderr(
+                b"panic: gpu.variance integer deviation shader is not valid UTF-8\n",
+            );
+            std::process::abort();
+        };
+        let Ok(fold_wgsl) =
+            std::str::from_utf8(std::slice::from_raw_parts(fold_wgsl_ptr, fold_wgsl_len))
+        else {
+            crate::fatal::write_stderr(
+                b"panic: gpu.variance wide fold shader is not valid UTF-8\n",
+            );
+            std::process::abort();
+        };
+
+        let input = std::slice::from_raw_parts(in_ptr as *const u8, n * 4);
+
+        // LEVEL 0: shift, square, and reduce per workgroup — all exact.
+        let Some((values, flags)) =
+            pollster::block_on(dispatch_int_deviation_async(dev_wgsl, input, 4, k))
+        else {
+            crate::fatal::write_stderr(
+                b"panic: gpu.variance found no available GPU adapter (no CPU fallback)\n",
+            );
+            std::process::abort();
+        };
+        let mut count = n.div_ceil(64);
+        let mut any_ovf = flags[..count * 4]
+            .chunks_exact(4)
+            .any(|b| b != [0, 0, 0, 0]);
+        let mut level = values[..count * 8].to_vec();
+
+        // LEVELS 1+: fold the u64 partials, ORing overflow the whole way. A
+        // flag raised at any level is final — the host never "recovers" from
+        // an overflow by continuing, because every later partial is built on
+        // the wrapped value.
+        while count > 1 {
+            let Some((next, next_flags)) =
+                pollster::block_on(dispatch_wide_fold_async(fold_wgsl, &level))
+            else {
+                crate::fatal::write_stderr(
+                    b"panic: gpu.variance found no available GPU adapter (no CPU fallback)\n",
+                );
+                std::process::abort();
+            };
+            let partials = count.div_ceil(64);
+            any_ovf |= next_flags[..partials * 4]
+                .chunks_exact(4)
+                .any(|b| b != [0, 0, 0, 0]);
+            level = next[..partials * 8].to_vec();
+            count = partials;
+        }
+
+        if any_ovf {
+            *overflowed = 1;
+            return 0.0;
+        }
+        let s2 = u64::from_le_bytes([
+            level[0], level[1], level[2], level[3], level[4], level[5], level[6], level[7],
+        ]) as i128;
+
+        // Σd = Σx - n·K, exactly, with no second device pass: the host already
+        // holds Σx from phase 1, so the shift's first moment is arithmetic
+        // rather than a reduction.
+        let n_i = n as i128;
+        let s1 = sum - n_i * k as i128;
+        // `n·Σd² - (Σd)²` is n² times the population variance, EXACTLY. Formed
+        // as one i128 numerator and rounded ONCE on the way into f64, which is
+        // what makes this more accurate than `Stats.variance` — that one sums
+        // f64 deviations and rounds at every step.
+        let numerator = n_i * s2 - s1 * s1;
+        let var = numerator as f64 / (n_i * n_i) as f64;
+        if sqrt != 0 {
+            var.sqrt()
+        } else {
+            var
+        }
+    }
+}
+
 /// C entry point for `gpu.variance(buffer)` / `gpu.stddev(buffer)` — returns
 /// the SUM OF SQUARED DEVIATIONS (B-2026-08-19-13).
 ///
@@ -3043,6 +3253,123 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
         };
         assert_eq!(output[0], tree, "GPU must match the TREE");
         assert_ne!(output[0], left, "GPU must not match the left fold");
+    }
+
+    /// PROBE (B-2026-08-19-13, integer variance): can WGSL, which has only
+    /// 32-bit integers and no widening multiply, compute an EXACT `u32 x u32
+    /// -> u64` product and accumulate it without loss?
+    ///
+    /// The answer decides whether an integer `gpu.variance` can be exact or
+    /// only f32-approximate, so it is measured here rather than assumed. The
+    /// technique is the standard 16-bit split: four partial products, summed
+    /// with explicit carries.
+    ///
+    /// Each thread squares its input and writes the 64-bit result as two u32
+    /// words, which the host checks against `u64` arithmetic it does itself.
+    const WIDE_SQUARE_WGSL: &str = r#"
+@group(0) @binding(0) var<storage, read>       input:  array<u32>;
+@group(0) @binding(1) var<storage, read_write> output: array<u32>;
+
+// Exact 32x32 -> 64 unsigned multiply. WGSL has no widening multiply, so the
+// operands are split into 16-bit halves and the four partial products are
+// recombined with explicit carries. Returns (lo, hi).
+fn mul_wide(a: u32, b: u32) -> vec2<u32> {
+    let a_lo = a & 0xffffu;
+    let a_hi = a >> 16u;
+    let b_lo = b & 0xffffu;
+    let b_hi = b >> 16u;
+
+    let ll = a_lo * b_lo;
+    let lh = a_lo * b_hi;
+    let hl = a_hi * b_lo;
+    let hh = a_hi * b_hi;
+
+    // Middle terms land straddling bit 16; their sum can carry into bit 32,
+    // which is why `mid` needs its own carry rather than being folded in.
+    let mid = lh + hl;
+    let mid_carry = select(0u, 0x10000u, mid < lh);   // u32 wraparound = carry
+
+    let lo = ll + (mid << 16u);
+    let lo_carry = select(0u, 1u, lo < ll);
+
+    let hi = hh + (mid >> 16u) + mid_carry + lo_carry;
+    return vec2<u32>(lo, hi);
+}
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x;
+    if (i >= arrayLength(&input)) { return; }
+    let p = mul_wide(input[i], input[i]);
+    output[2u * i] = p.x;
+    output[2u * i + 1u] = p.y;
+}
+"#;
+
+    #[test]
+    fn wgsl_can_multiply_32x32_into_an_exact_64_bit_product() {
+        // Values chosen to exercise every carry path: zero, one, both halves
+        // set, the exact 16-bit boundary, and u32::MAX (whose square is the
+        // largest u64 a 32-bit squaring can produce).
+        let input: Vec<u32> = vec![
+            0,
+            1,
+            2,
+            0xffff,
+            0x10000,
+            0x10001,
+            0xffff_ffff,
+            0x7fff_ffff,
+            0x8000_0000,
+            123_456_789,
+            0xdead_beef,
+            0xffff_0000,
+        ];
+        let mut bytes = Vec::new();
+        for &x in &input {
+            bytes.extend_from_slice(&x.to_le_bytes());
+        }
+        // Two output words per input word, so the output buffer is twice the
+        // input's byte length.
+        let Some(out) = pollster::block_on(dispatch_wide_probe(WIDE_SQUARE_WGSL, &bytes)) else {
+            eprintln!("wide-mul probe: no GPU adapter available — skipping");
+            return;
+        };
+        let words: Vec<u32> = out
+            .chunks_exact(4)
+            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            .collect();
+        for (i, &x) in input.iter().enumerate() {
+            let got = (words[2 * i] as u64) | ((words[2 * i + 1] as u64) << 32);
+            let want = (x as u64) * (x as u64);
+            assert_eq!(got, want, "input {i} = {x:#x}: {got:#x} != {want:#x}");
+        }
+    }
+
+    /// One dispatch with an output buffer TWICE the input's size — the shape
+    /// [`dispatch_bytes_async`] cannot express, since it sizes the output from
+    /// the input.
+    async fn dispatch_wide_probe(wgsl: &str, input: &[u8]) -> Option<Vec<u8>> {
+        let ctx = gpu_context()?;
+        let device = &ctx.device;
+        let queue = &ctx.queue;
+        let in_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("wide-probe-input"),
+            contents: input,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        });
+        let out_sizes = [(input.len() * 2) as u64];
+        let bufs = run_compute(
+            device,
+            queue,
+            wgsl,
+            &[in_buf],
+            &out_sizes,
+            &[],
+            input.len() / 4,
+        );
+        let mut outs = readback(device, queue, &bufs, &out_sizes)?;
+        outs.pop()
     }
 
     #[test]

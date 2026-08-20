@@ -38219,7 +38219,9 @@ fn gpu_integer_mean_promotes_to_f64_rather_than_truncating() {
 }
 
 #[test]
-fn gpu_variance_and_stddev_are_option_f32_and_f32_only() {
+fn gpu_variance_and_stddev_promote_over_integer_buffers() {
+    // A float buffer keeps its own width: an f32 tree cannot justify an f64
+    // answer.
     typecheck_ok(
         "fn main() {\n\
         \x20   let b: Vec[f32] = [1.0, 2.0];\n\
@@ -38228,12 +38230,32 @@ fn gpu_variance_and_stddev_are_option_f32_and_f32_only() {
         }",
     );
 
+    // AN INTEGER BUFFER PROMOTES TO `Option[f64]`, and the promotion is
+    // earned rather than cosmetic (B-2026-08-19-13): the integer path shifts
+    // by an integer `K`, squares into an exact `u64`, and rounds once — so it
+    // genuinely has f64 precision, where an f32 result would discard it.
+    // `gpu.mean` over an integer buffer promotes the same way.
+    typecheck_ok(
+        "fn main() {\n\
+        \x20   let b: Vec[i32] = [1, 2];\n\
+        \x20   let v: Option[f64] = gpu.variance(b);\n\
+        \x20   let s: Option[f64] = gpu.stddev(b);\n\
+        }",
+    );
+    typecheck_ok(
+        "fn main() {\n\
+        \x20   let b: Vec[u32] = [1u32, 2u32];\n\
+        \x20   let v: Option[f64] = gpu.variance(b);\n\
+        }",
+    );
+
     for (src, needle) in [
-        // Integers would have to promote their deviations — the mean is
-        // fractional — and on a device that means f32. Its own decision.
+        // An i64 buffer is still rejected — WGSL has no 64-bit ELEMENT type,
+        // and the emulated 64-bit arithmetic that makes the integer variance
+        // exact operates on the ACCUMULATOR, not on the elements.
         (
-            "fn main() { let b: Vec[i32] = [1, 2]; let v = gpu.variance(b); }",
-            "f32-only",
+            "fn main() { let b: Vec[i64] = [1i64, 2i64]; let v = gpu.variance(b); }",
+            "E_GPU_REDUCE_BUFFER",
         ),
         (
             "fn main() { let b: Vec[f32] = [1.0]; let v = gpu.stddev(b, b); }",

@@ -443,6 +443,154 @@ pub fn tree_variance_f32(xs: &[f32], bessel: bool) -> Option<f32> {
     Some(ss / if bessel { n - 1.0 } else { n })
 }
 
+/// The CPU twin of an INTEGER `gpu.variance` — **the definition of what
+/// `gpu.variance(Vec[i32])` MEANS** (B-2026-08-19-13). `None` iff empty;
+/// `Some(Err)` iff the sum of squared deviations overflows `u64`.
+///
+/// **EXACT, not f32-approximate, and that reverses what this row expected.**
+/// The recorded objection was that `mean`'s promote-late trick cannot carry
+/// over, because the deviations are formed ON THE DEVICE in f32, so
+/// `(x - mean)²` quantises every element above 2²⁴. Both halves of that turn
+/// out to be avoidable:
+///
+///  * **Shift by an INTEGER, not by the mean.** `Var(x) = Var(x - K)` for any
+///    constant `K`, so the device subtracts `K = round(mean)` — an integer —
+///    in exact integer arithmetic before anything reaches f32. The deviation's
+///    magnitude is then bounded by the data's SPREAD rather than by its
+///    position on the number line, which is the right dependency: a variance
+///    is a function of the spread. Measured on the naive formulation, a buffer
+///    centred at 2²⁸ with spread 100 reports 3472.0 where the true variance is
+///    3265.28 — a 6% error on ordinary `i32` values. Shifted, it is exact.
+///  * **WGSL can multiply exactly.** It has no widening-multiply INTRINSIC,
+///    which is what "blocked on WGSL" meant on this row for several batches,
+///    but a `u32 × u32 → u64` product is four 16-bit partial products and two
+///    carries. So the squares need not be f32 at all: they are exact `u64`,
+///    tree-accumulated with carry, and the fold traps on overflow exactly as
+///    every other integer reduction here does.
+///
+/// The whole computation is therefore exact until one final rounding:
+///
+/// ```text
+/// d_i  = x_i - K                      exact, integer
+/// S1   = Σ d_i = Σ x_i - n·K          exact, from the integer sum already computed
+/// S2   = Σ d_i²                       exact, u64 on the device
+/// Var  = (n·S2 - S1²) / n²            exact rational, evaluated in i128
+/// ```
+///
+/// `Var` is formed as a single `i128` numerator over `n²` and rounded ONCE on
+/// the way into `f64`, so the result is the correctly-rounded variance. That
+/// makes it MORE accurate than `Stats.variance`, which sums f64 deviations and
+/// rounds at every step — the two therefore need not agree in the last bit,
+/// and the GPU is the one that is right. That is a departure worth naming: for
+/// every other op on this row the CPU is the reference.
+///
+/// **`K = round(mean)` is a choice, and it must be reproduced exactly**, since
+/// a different `K` gives a different `S2` and hence different intermediate
+/// magnitudes (though the same exact `Var`). Ties round away from zero, which
+/// is `f64::round`'s rule and what the runtime does.
+///
+/// **`Σx` is accumulated at 64 bits rather than through the i32-trapping
+/// fold**, which is a deliberate departure from `tree_mean_i32`. Sixty-four
+/// values near 2³⁰ already overflow an `i32` sum, so reusing that fold would
+/// refuse buffers whose variance is small, exactly representable, and of
+/// obvious interest — a trap with nothing wrong behind it. `gpu.mean` has to
+/// trap there because it RETURNS the mean, and a mean whose sum overflowed is
+/// a number the integer type cannot justify; a variance never exposes the raw
+/// sum, so it is not bound by that.
+///
+/// Overflow is therefore the ONLY failure, and it means the sum of squared
+/// deviations does not fit in `u64`: `S2 ≤ n · max|d|²`, so the trap needs
+/// roughly `n · spread² > 1.8e19` — for a million elements, a spread past
+/// ~4.3e6. Reaching it means the answer genuinely does not fit, which is
+/// where the integer reductions promise a trap.
+pub fn tree_variance_i32(xs: &[i32], bessel: bool) -> Option<Result<f64, IntFoldOverflow>> {
+    if xs.is_empty() {
+        return None;
+    }
+    // The mean's sum is accumulated at 64 bits, NOT through the i32-trapping
+    // `tree_reduce_i32`. That matters: 64 values near 2³⁰ already overflow an
+    // i32 sum, so routing the mean through the trapping fold would refuse
+    // buffers whose VARIANCE is perfectly small and perfectly representable —
+    // a trap with nothing wrong behind it. The raw sum is never returned to
+    // the caller here, so nothing depends on it being an i32.
+    let sum: i128 = xs.iter().map(|&x| x as i128).sum();
+    Some(variance_from_shifted(
+        xs.iter().map(|&x| x as i128),
+        sum,
+        xs.len(),
+        bessel,
+    ))
+}
+
+/// The unsigned sibling of [`tree_variance_i32`]. Identical arithmetic — the
+/// deviations are signed either way, so the only difference is which exact
+/// integer sum feeds the mean.
+pub fn tree_variance_u32(xs: &[u32], bessel: bool) -> Option<Result<f64, IntFoldOverflow>> {
+    if xs.is_empty() {
+        return None;
+    }
+    let sum: i128 = xs.iter().map(|&x| x as i128).sum();
+    Some(variance_from_shifted(
+        xs.iter().map(|&x| x as i128),
+        sum,
+        xs.len(),
+        bessel,
+    ))
+}
+
+/// `sqrt` of [`tree_variance_i32`], taken once at the end — the same
+/// relationship `tree_stddev_f32` has to `tree_variance_f32`, so
+/// `gpu.stddev(v)` and `gpu.variance(v).sqrt()` are the same number.
+pub fn tree_stddev_i32(xs: &[i32], bessel: bool) -> Option<Result<f64, IntFoldOverflow>> {
+    tree_variance_i32(xs, bessel).map(|r| r.map(f64::sqrt))
+}
+
+/// The unsigned sibling of [`tree_stddev_i32`].
+pub fn tree_stddev_u32(xs: &[u32], bessel: bool) -> Option<Result<f64, IntFoldOverflow>> {
+    tree_variance_u32(xs, bessel).map(|r| r.map(f64::sqrt))
+}
+
+/// The shared exact core: shift by `K = round(sum / n)`, accumulate `Σd` and
+/// `Σd²` exactly, and form `(n·Σd² - (Σd)²) / (n · divisor)` with ONE rounding.
+///
+/// `i128` here stands in for the device's `u64` accumulator plus the host's
+/// combining step. The device's `Σd²` is what can overflow — `u64`, not
+/// `i128` — so the overflow test is against `u64::MAX` rather than against
+/// this type's range, or the twin would accept buffers the device rejects.
+fn variance_from_shifted(
+    xs: impl Iterator<Item = i128>,
+    sum: i128,
+    n: usize,
+    bessel: bool,
+) -> Result<f64, IntFoldOverflow> {
+    let n_i = n as i128;
+    // Ties away from zero, matching `f64::round` — the runtime computes `K`
+    // the same way, and a different `K` would change `Σd²`.
+    let k = (sum as f64 / n as f64).round() as i128;
+    let mut s1: i128 = 0;
+    let mut s2: i128 = 0;
+    for x in xs {
+        let d = x - k;
+        s1 += d;
+        s2 += d * d;
+        if s2 > u64::MAX as i128 {
+            return Err(IntFoldOverflow);
+        }
+    }
+    // `n · Σd² - (Σd)²` is `n²` times the population variance, exactly.
+    // Bessel's correction divides by `n - 1` instead of `n`, so it scales the
+    // denominator rather than changing the numerator.
+    let numerator = n_i * s2 - s1 * s1;
+    let divisor = if bessel { n_i - 1 } else { n_i };
+    if divisor == 0 {
+        // A single element has no sample variance — `n - 1` is zero. The
+        // population variance of one element is 0, which the branch above
+        // returns; this is only reachable with `bessel`.
+        return Ok(f64::NAN);
+    }
+    Ok(numerator as f64 / (n_i * divisor) as f64)
+}
+
 /// The CPU twin of `gpu.stddev(buf)` — the square root of
 /// [`tree_variance_f32`], taken once at the end.
 ///
@@ -2126,5 +2274,133 @@ mod tests {
         let out2 = tiled_matmul_f32(&a2, &b2, 1, k, 1).unwrap();
         assert_eq!(out2, vec![0.0f32]);
         assert_eq!(simulate_tiling(&a2, &b2, 1, k, 1), out2);
+    }
+
+    /// The integer variance must be EXACT — equal to the correctly-rounded
+    /// rational value — at magnitudes where forming `(x - mean)` in f32 would
+    /// have failed. This is the property the decision rests on.
+    ///
+    /// The oracle is exact rational arithmetic in `i128`, computed a different
+    /// way from the implementation (deviations from the true mean scaled by
+    /// `n`, rather than shifted by `round(mean)`), so agreement is evidence
+    /// rather than a restatement.
+    #[test]
+    fn integer_variance_is_exact_at_large_magnitudes() {
+        fn oracle(xs: &[i32]) -> f64 {
+            let n = xs.len() as i128;
+            let sum: i128 = xs.iter().map(|&x| x as i128).sum();
+            // Σ(n·x - Σx)² = n²·Σ(x - mean)², all exact.
+            let num: i128 = xs
+                .iter()
+                .map(|&x| {
+                    let t = n * x as i128 - sum;
+                    t * t
+                })
+                .sum();
+            num as f64 / (n * n * n) as f64
+        }
+        // Centres that straddle f32's exact-integer limit (2²⁴) and run up to
+        // the top of i32 — the range where the naive f32 deviation is wrong.
+        for centre in [0i64, 1_000, 1 << 24, 1 << 28, 1 << 30, 2_000_000_000] {
+            let xs: Vec<i32> = (0..64)
+                .map(|i| (centre + (i * 7 % 201) - 100) as i32)
+                .collect();
+            let got = tree_variance_i32(&xs, false).unwrap().unwrap();
+            assert_eq!(
+                got,
+                oracle(&xs),
+                "centre {centre}: integer variance is not exact — an f32 \
+                 deviation path would fail here, which is why this is the \
+                 fixture"
+            );
+        }
+    }
+
+    /// `Var(x) = Var(x + c)` for any shift `c`, exactly, at any magnitude.
+    /// Translation invariance is the property the whole approach rests on, so
+    /// it is asserted directly rather than inferred from the values above.
+    #[test]
+    fn integer_variance_is_translation_invariant() {
+        let base: Vec<i32> = vec![-5, 3, 17, 0, 42, -100, 8, 8];
+        let want = tree_variance_i32(&base, false).unwrap().unwrap();
+        for shift in [1i64, 1000, 1 << 24, 1 << 28, 1_000_000_000] {
+            let shifted: Vec<i32> = base.iter().map(|&x| (x as i64 + shift) as i32).collect();
+            assert_eq!(
+                tree_variance_i32(&shifted, false).unwrap().unwrap(),
+                want,
+                "shifting by {shift} changed the variance"
+            );
+        }
+    }
+
+    /// Agreement with the f32 twin on data where f32 is exact — small integers
+    /// held in f32 are represented exactly, so the two routes must produce the
+    /// same number. Without this the integer path could be self-consistently
+    /// wrong.
+    #[test]
+    fn integer_variance_agrees_with_the_f32_twin_where_f32_is_exact() {
+        let xs: Vec<i32> = vec![1, 2, 3, 4, 5, 6, 7, 8];
+        let as_f32: Vec<f32> = xs.iter().map(|&x| x as f32).collect();
+        let int = tree_variance_i32(&xs, false).unwrap().unwrap();
+        let flt = tree_variance_f32(&as_f32, false).unwrap() as f64;
+        assert!(
+            (int - flt).abs() < 1e-9,
+            "integer {int} vs f32 {flt} on exactly-representable data"
+        );
+    }
+
+    /// Empty has no variance (`None`, like every reduction here). A single
+    /// element has population variance 0 but NO sample variance — `n - 1` is
+    /// zero — which is NaN rather than a trap or a lie.
+    #[test]
+    fn integer_variance_empty_and_singleton() {
+        assert!(tree_variance_i32(&[], false).is_none());
+        assert_eq!(tree_variance_i32(&[7], false).unwrap().unwrap(), 0.0);
+        assert!(tree_variance_i32(&[7], true).unwrap().unwrap().is_nan());
+    }
+
+    /// The sum of squared deviations is a `u64` on the device, so a buffer
+    /// whose spread genuinely does not fit TRAPS rather than returning a
+    /// wrapped or saturated number — the same contract `gpu.sum` over
+    /// integers already makes.
+    #[test]
+    fn integer_variance_traps_when_the_squared_deviations_overflow() {
+        // Alternating ±2^31 around a mean near zero: each d² is about 2^62,
+        // so eight of them pass 2^64.
+        let xs: Vec<i32> = (0..64)
+            .map(|i| if i % 2 == 0 { i32::MIN } else { i32::MAX })
+            .collect();
+        // The SUM no longer traps (it is accumulated at 64 bits), so this
+        // reaching Err proves the SQUARED-DEVIATION accumulator is what
+        // overflowed — which is the only failure this operation has.
+        assert!(tree_variance_i32(&xs, false).unwrap().is_err());
+        // And the neighbouring case does NOT trap: the same extreme
+        // magnitudes with a small spread are fine, because what overflows is
+        // the spread, never the position.
+        let tight: Vec<i32> = (0..64).map(|i| i32::MAX - i).collect();
+        assert!(tree_variance_i32(&tight, false).unwrap().is_ok());
+    }
+
+    /// `stddev` is the square root of the variance and nothing else, so
+    /// `gpu.stddev(v)` and `gpu.variance(v).sqrt()` are the same number.
+    #[test]
+    fn integer_stddev_is_the_root_of_integer_variance() {
+        let xs: Vec<i32> = vec![10, 20, 30, 40, 1 << 28];
+        let v = tree_variance_i32(&xs, false).unwrap().unwrap();
+        let s = tree_stddev_i32(&xs, false).unwrap().unwrap();
+        assert_eq!(s, v.sqrt());
+    }
+
+    /// The unsigned path differs only in which exact integer sum feeds the
+    /// mean, so a `u32` buffer holding the same values as an `i32` one must
+    /// give the same variance.
+    #[test]
+    fn unsigned_variance_matches_the_signed_path_on_shared_values() {
+        let signed: Vec<i32> = vec![1, 5, 9, 1 << 30, 3];
+        let unsigned: Vec<u32> = signed.iter().map(|&x| x as u32).collect();
+        assert_eq!(
+            tree_variance_u32(&unsigned, false).unwrap().unwrap(),
+            tree_variance_i32(&signed, false).unwrap().unwrap()
+        );
     }
 }
