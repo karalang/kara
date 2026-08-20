@@ -96,10 +96,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 185 | 0 |
 | run-vs-build | 143 | 0 |
 | double-free | 133 | 0 |
-| missing-feature | 128 | 0 |
+| missing-feature | 129 | 1 |
 | codegen-gap | 119 | 0 |
 | false-positive | 88 | 0 |
-| diagnostics | 87 | 2 |
+| diagnostics | 87 | 1 |
 | perf | 80 | 0 |
 | crash | 54 | 0 |
 | soundness | 51 | 0 |
@@ -114,9 +114,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | typecheck | 219 | 0 |
 | interp | 166 | 0 |
 | ownership | 61 | 1 |
-| other | 59 | 1 |
+| other | 59 | 0 |
 | autopar | 54 | 0 |
-| cli | 52 | 0 |
+| cli | 53 | 1 |
 | parser | 33 | 0 |
 | runtime | 27 | 0 |
 | resolver | 23 | 0 |
@@ -124,14 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 6 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1406 surfaced · 2 open · 1384 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1407 surfaced · 2 open · 1385 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-20-23 | 2026-08-20 | ownership | low | every whole-buffer `gpu.*` reduction CONSUMES its buffer, so calling two of them on the same `Vec` warns `value moved here, used again here` -- but they only READ it | — |
-| B-2026-08-20-25 | 2026-08-20 | other | low | design.md assigns `E0226` to `ConflictingPlatformModule` (§ Platform-specific modules), which is the TYPECHECKER's band. `explain::tests::resolver_numeric_codes_live_in_the_resolve_band` fails any resolve-phase code outside E01xx/E08xx and `collision_render_names_every_phase` fails a code minted by two phases, so implementing this diagnostic under the number the spec gives it turns the suite red. The same number was, until B-2026-08-20-18, also spelled for `AmbiguousWildcardImport` (§ Module System); that one had to be allocated E0124 from the resolver band instead and the spec text corrected. This second E0226 is still in the document, unimplemented. | roadmap.md |
+| B-2026-08-20-29 | 2026-08-20 | cli | low | THE NATIVE OS PLATFORMS ARE NOT SELECTABLE, so a `_macos` / `_windows` / `_linux` module can only be checked or built on that host, and no command verifies that a platform split covers every OS. `cmd_build_project` derives the walker's platform as `wasm_* -> Platform::Wasm`, everything else `Platform::host()` (now shared as `walk_platform_for_target`), and `kara.toml [build].target` -- a rustc-style overlay triple -- never touches it. So `_wasm` is reachable from any host and the three native suffixes are host-locked. design.md's *Missing-platform rule* used to promise exactly the missing guarantee (`karac check --target all` for "a compile-time guarantee that every target has coverage"); that text was corrected rather than the feature built (B-2026-08-20-25), and this row is the feature. | roadmap.md |
 
 ### Wontfix (7)
 
@@ -149,9 +149,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1406 surfaced
 
 </details>
 
-### Fixed (1384)
+### Fixed (1385)
 
-<details><summary>1384 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1385 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -12879,6 +12879,21 @@ because auto-par reads exactly what a renamed resource feeds; and 6 planner test
 covering the root rule, the path-derived replacement name, both guards, and the
 no-collision no-op. `karac test` shares the run path's merge and was verified on
 a colliding package. |
+| B-2026-08-20-25 | other | low | design.md's `E0226 ConflictingPlatformModule` (§ Platform-specific modules) names a condition that CANNOT ARISE, so the fix is to strike it rather th… | FIXED by c0e217e. Struck from the spec rather than renumbered, and the section's two neighbouring claims were corrected alongside it, because verifying the row's premise showed all three describe machinery that is not there.
+
+WHY NOT A RENUMBER. `walker::pick_for_target` partitions a `(module path, role)` bucket into target-matching platform files and shared files, and returns AT MOST ONE `WalkedModule`: the platform file wins on its own target and suppresses the shared file; off-target only the shared file compiles. Two files that really do survive together under one path (two shared, or two with the same suffix) are `WalkerError::DuplicateModule`, raised before any compiler phase. So the state `E0226 ConflictingPlatformModule` was reserved for -- "a symbol declared in both that survives to the same target" -- has no reachable spelling. Allocating it a resolver-band number, as B-2026-08-20-18 did for the OTHER E0226 (`AmbiguousWildcardImport` -> E0124), would have burned a code on a check that can never fire. `src/walker.rs`'s own module doc already said the condition was "structurally impossible ... but stays reserved"; this makes the spec agree and drops the reservation.
+
+MEASURED on a real package (Linux host): `src/host.kara` exporting `run` + `shared_only`, `src/host_wasm.kara` exporting only `run`. Under the default target the shared file supplies both; under `--target=wasm_wasi` the walker keeps `host_wasm.kara` alone and `import host.shared_only` is `error[E0113]: unknown item 'shared_only' in module 'host'; available: run`. The platform file REPLACES the shared file. design.md never said so, and it is the fact an author most needs: common helpers belong in a third module both files import, not in the shared file. The Collision rule now states it, and `tests/cli.rs::platform_file_replaces_its_shared_sibling_rather_than_merging` pins it end-to-end (the walker-level half was already covered by `platform_file_overrides_shared_on_matching_target`).
+
+TWO NEIGHBOURING SPEC CLAIMS, both false, corrected in the same pass:
+
+  * *Missing-platform rule* told authors who want "a compile-time guarantee that every target has coverage" to use `karac check --target all`. The flag is `--targets=`, it iterates the COMPILATION targets (`native`, `wasm_browser`, `wasm_wasi`, `gpu`) rather than the OS platform suffixes, and it takes a single file, so it cannot see a multi-file platform split at all. The text now says there is no such check in v1 and points at the CI matrix.
+
+  * *Target selection* said `karac` resolves the target as "`--target` CLI flag, then `kara.toml [build].target`, then the host OS". Three different things are called a target here and the paragraph conflated them: the v1 compilation target (`--target=<v1 name>`), the rustc-style manifest-overlay triple (`--target=<triple>`, else `[build].target`), and the OS platform driving suffix selection. Only the wasm arm of the first reaches the third (`cmd_build_project`: `wasm_* -> Platform::Wasm`, everything else `Platform::host()`); `[build].target` never does. So `_wasm` is reachable from any host and `_linux` / `_macos` / `_windows` are host-locked. The paragraph now separates the three and says which is selectable. § Manifest's parenthetical about `[build].target` was corrected to match.
+
+ONE CLI FIX, because the corrected text would otherwise point at a spelling that does not work: `karac check --target=<v1 name>` in PROJECT mode was folded into the per-file `--targets=` matrix and refused with "need a file argument", while `karac build --target=<v1 name>` accepted it. The singular spelling now passes through as the project check's compilation target, and — via the new `walk_platform_for_target`, extracted from `cmd_build_project` and shared with `package_check` — selects the same platform files the build would. A check that walked a different half of a platform split from the build it predicts would be B-2026-08-20-16's divergence in a new place. The PLURAL `--targets=` stays refused in project mode; it really is a per-file matrix. Pinned by `tests/cli.rs::project_check_honours_the_singular_target_flag`.
+
+NOT DONE, and split out as its own row: making the native OS platforms selectable at all. |
 | B-2026-08-20-26 | codegen | medium | A TEST BINARY MUTATING THE PROCESS ENV, not a miscompile: `test_ir_shared_variant_name_resolves_to_scrutinee_enum_deterministically` failed ~6 of 8 F… | FIXED by 3220697. The reported failure is real and reproducible; its attributed cause is not.
 
 WHAT WAS MEASURED (Linux x86, this container, at 01a8ff2):
