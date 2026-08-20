@@ -360,8 +360,73 @@ impl<'ctx> super::Codegen<'ctx> {
             lo_val,
             per_iter_cost,
         )?;
+        self.store_while_counter_final_value(&shape, end_val);
 
         Ok(Some(()))
+    }
+
+    /// Leave the parent's loop counter where the SEQUENTIAL loop would have
+    /// left it, after a fan-out replaced the loop.
+    ///
+    /// The `while k < end { …; k = k + 1; }` shape names a counter that
+    /// OUTLIVES the loop — it is an ordinary binding in the enclosing scope,
+    /// and `println(k)` after the loop is legal and meaningful. The fan-out
+    /// gives each worker its own `k` alloca and never touches the parent's, so
+    /// before this the parallel build left `k` at its INIT value while the
+    /// sequential build, the interpreter and the JIT all reported `end`:
+    ///
+    /// ```text
+    /// let mut i = 0i64;
+    /// while i < 4000000 { total = total + i % 7; i = i + 1; }
+    /// println(f"{i}")      // seq/interp: 4000000. auto-par build: 0.
+    /// ```
+    ///
+    /// A silent wrong answer on the default build, and a run-vs-build
+    /// divergence, so it is a miscompile rather than a missing optimisation.
+    ///
+    /// The value to restore is `max(k_init, end)`: a loop that runs terminates
+    /// exactly ON `end` (the step is 1, so the counter lands on the bound
+    /// rather than past it), and a loop that never runs — `k_init >= end`, or a
+    /// negative `end` — leaves `k` untouched at `k_init`. `max` covers both
+    /// without a branch. `k_init` is read back from the parent's own slot
+    /// rather than recomputed from `lo_expr`: the init statement has already
+    /// stored it, and the shape recognizer requires the init to be immediately
+    /// adjacent to the loop, so nothing can have changed it since.
+    ///
+    /// A `for k in lo..hi` counter is loop-SCOPED — it does not exist in the
+    /// enclosing scope, so `self.variables` has no entry and this is a no-op.
+    /// That absence is the discriminator between the two shapes; `LoopShape`
+    /// needs no extra field to record which one it came from.
+    fn store_while_counter_final_value(&self, shape: &LoopShape, end_val: IntValue<'ctx>) {
+        let Some(slot) = self.variables.get(&shape.loop_var).copied() else {
+            return;
+        };
+        let BasicTypeEnum::IntType(slot_ty) = slot.ty else {
+            return;
+        };
+        // Both callers gate `end_val`'s type against the loop variable's, so a
+        // mismatch here is unreachable; bail rather than emit a bad store.
+        if slot_ty != end_val.get_type() {
+            return;
+        }
+        let init = self
+            .builder
+            .build_load(slot_ty, slot.ptr, "k.init")
+            .unwrap()
+            .into_int_value();
+        // Signed compare, matching `clamp_iter_total_nonneg`: the same
+        // signed reading of the bounds decides how many iterations run, so
+        // the counter's landing point must be decided the same way.
+        let ran = self
+            .builder
+            .build_int_compare(IntPredicate::SGT, end_val, init, "k.loop.ran")
+            .unwrap();
+        let final_k = self
+            .builder
+            .build_select(ran, end_val, init, "k.final")
+            .unwrap()
+            .into_int_value();
+        self.builder.build_store(slot.ptr, final_k).unwrap();
     }
 
     /// The set of outer-scope variables the body reads, minus the
@@ -1645,6 +1710,7 @@ impl<'ctx> super::Codegen<'ctx> {
             per_iter_cost,
             tabulate_elem_size,
         )?;
+        self.store_while_counter_final_value(&shape, end_val);
 
         Ok(Some(()))
     }

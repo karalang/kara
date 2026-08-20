@@ -11898,6 +11898,113 @@ fn main() {
             Some("2 2 2 4 5 2")
         );
     }
+
+    // ── while-shaped counter survives fan-out ──
+    //
+    // A `while k < end { …; k = k + 1; }` counter is an ordinary binding in
+    // the enclosing scope, so reading it AFTER the loop is legal and the
+    // sequential build, the interpreter and the JIT all report `end`. The
+    // fan-out gives each worker its own `k` and used to leave the parent's at
+    // its INIT value — a silent wrong answer on the DEFAULT build.
+    //
+    // Strict `assert_eq!` on purpose: the tolerant `if let Some(out)` idiom
+    // green-skips when the archive is missing, which is exactly how a
+    // wrong-value regression would slip through unnoticed.
+
+    #[test]
+    fn e2e_while_counter_is_end_after_a_fanned_out_reduction() {
+        let src = r#"
+fn main() {
+    let mut total: i64 = 0;
+    let mut i = 0i64;
+    while i < 4000000 {
+        total = total + i % 7;
+        i = i + 1;
+    }
+    println(f"{total} {i}");
+}
+"#;
+        assert_eq!(run_program(src).as_deref(), Some("11999994 4000000\n"));
+    }
+
+    #[test]
+    fn e2e_while_counter_with_a_nonzero_start_is_end_after_fan_out() {
+        // `lo` is a non-zero literal, so the shape carries a `lo_expr` and the
+        // worker does shift math; the parent's counter must still land on the
+        // upper bound, not back on `lo`.
+        let src = r#"
+fn main() {
+    let mut total: i64 = 0;
+    let mut i = 100i64;
+    while i < 4000000 {
+        total = total + i % 7;
+        i = i + 1;
+    }
+    println(f"{total} {i}");
+}
+"#;
+        assert_eq!(run_program(src).as_deref(), Some("11999699 4000000\n"));
+    }
+
+    #[test]
+    fn e2e_while_counter_that_never_enters_the_loop_keeps_its_init() {
+        // `k_init >= end`: sequential semantics run zero iterations and leave
+        // the counter alone. Restoring `end` unconditionally would break this
+        // case, which is why the write-back is `max(k_init, end)` — the test
+        // exists to stop a future simplification to a bare store.
+        let src = r#"
+fn main() {
+    let mut total: i64 = 0;
+    let mut i = 9000000i64;
+    while i < 4000000 {
+        total = total + i % 7;
+        i = i + 1;
+    }
+    println(f"{total} {i}");
+}
+"#;
+        assert_eq!(run_program(src).as_deref(), Some("0 9000000\n"));
+    }
+
+    #[test]
+    fn e2e_while_counter_is_end_after_a_fanned_out_collect() {
+        // The COLLECT dispatch is a second site with its own tail and needs
+        // the same write-back as the scalar one. Reaching it takes more than a
+        // push loop: a bare `while { v.push(..) }` is recognized as a
+        // `sequential_tabulate` and lowered INLINE (which keeps the counter
+        // correct for free), so this body carries `#[par_order_free]` and
+        // enough per-iteration work to clear the cost gate. Verified via
+        // `--concurrency-report`: `parallel_reduction { op: collect,
+        // accumulator: parts, fanned_out: true }`.
+        let src = r#"
+fn work(k: i64) -> i64 {
+    let mut acc: Vec[i64] = Vec.new();
+    let mut i = 0i64;
+    while i < 400i64 {
+        acc.push((k * 31i64 + i) % 977i64);
+        i = i + 1i64;
+    }
+    let mut t = 0i64;
+    let mut j = 0i64;
+    while j < acc.len() {
+        t = (t + acc[j]) % 1000003i64;
+        j = j + 1i64;
+    }
+    t
+}
+fn main() {
+    let mut parts: Vec[i64] = Vec.new();
+    let mut k = 0i64;
+    #[par_order_free]
+    while k < 24i64 {
+        parts.push((k * 1000003i64 + work(k)) % 1000000007i64);
+        k = k + 1i64;
+    }
+    println(f"{parts.len()} {k}");
+}
+"#;
+        assert_eq!(run_program(src).as_deref(), Some("24 24\n"));
+    }
 }
 
 #[cfg(feature = "llvm")]
