@@ -158,18 +158,32 @@ struct CodeEntry {
 
 /// Diagnostic-code catalogue: `code → (phase, kind, class)`.
 ///
-/// **Scope.** Covers the two families whose codes an agent loop
-/// actually sees on a failing `karac check`: `typecheck` (the `E02xx`
-/// / `W02xx` band plus the `E08xx` target-gate strays) and `resolve`
-/// (the whole `E01xx` band). Codes minted by the parse / effect /
-/// ownership phases are not here yet; `explain` reports them as
+/// **Scope is by BAND, not by phase.** The table covers `E01xx`,
+/// `E02xx` / `W02xx`, `E08xx`, and the two loose numbers `E0223` /
+/// `E0227` — COMPLETELY, every code any emitter mints in them. The
+/// effect (`E04xx`), ownership (`E05xx`) and provider-escape (`E0600`)
+/// bands are not catalogued yet; `explain` reports those as
 /// uncatalogued rather than guessing.
 ///
-/// The resolve rows must stay COMPLETE, not merely representative: an
-/// absent row makes a collision invisible to
+/// The by-band framing is the B-2026-08-20-30 correction. The scope
+/// used to be stated by PHASE — "the typecheck and resolve families" —
+/// which reads as a promise about numbers, because a number is all a
+/// user has when they reach for `karac explain`. The two disagree
+/// exactly where a phase mints out of its own band, and several do:
+/// `E0230` / `E0231` are effect-checker codes in the typechecker's
+/// band, `E0802` is an effect-checker code in the shared target/GPU
+/// band, and `E0223` / `E0227` come from phases with no band at all.
+/// Each was a code a user could see and `explain` would refuse while
+/// its own error message claimed the family was covered.
+///
+/// COMPLETENESS is the property that matters, not coverage in the
+/// abstract: an absent row makes a collision invisible to
 /// `code_table_has_no_cross_phase_collisions`, which is exactly how
 /// four of the eight B-2026-07-27-14 collisions went unnoticed while
 /// the guard reported only four.
+/// `code_table_catalogues_every_code_in_a_covered_band` holds the
+/// whole covered range at zero gaps, so the next stray fails a test
+/// instead of reaching a user.
 ///
 /// **Source of truth.** Every row restates a `match err.kind` arm in
 /// `collect_diagnostics` (`src/cli.rs`) crossed with
@@ -179,12 +193,17 @@ struct CodeEntry {
 /// `code_table_class_matches_typechecker` test pins the rows that
 /// would otherwise drift silently.
 ///
-/// **One phase per band.** Each phase allocates from its own numeric
-/// band — resolve `E01xx`, typecheck `E02xx`/`W02xx`, ownership
-/// `E05xx` — so a code identifies exactly one diagnostic and the
-/// `code` field of a structured diagnostic is a usable key on its own.
-/// `E08xx` is deliberately shared across phases for target/GPU
-/// placement errors, but the numbers within it stay disjoint.
+/// **One phase per band, mostly.** Each phase allocates from its own
+/// numeric band — resolve `E01xx`, typecheck `E02xx`/`W02xx`, effect
+/// `E04xx`, ownership `E05xx` — so a code identifies exactly one
+/// diagnostic and the `code` field of a structured diagnostic is a
+/// usable key on its own. `E08xx` is deliberately shared across phases
+/// for target/GPU placement errors, but the numbers within it stay
+/// disjoint. Five rows sit outside their minting phase's band and stay
+/// there deliberately (see the sections for them below): renumbering a
+/// shipping code breaks every consumer keying on it, and the band's
+/// one real benefit — no two phases on one number — is delivered by
+/// the catalogue row plus the collision guard, not by the number.
 ///
 /// It was not always so: the resolver used to mint thirteen codes into
 /// the typechecker's `E02xx` band, eight of which landed on numbers the
@@ -394,6 +413,10 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
         "E0245",
         ty("Deprecated", Some(DiagnosticClass::LintWarning)),
     ),
+    (
+        "W0245",
+        ty("Deprecated", Some(DiagnosticClass::LintWarning)),
+    ),
     ("W0246", ty("MissingNonExhaustive", None)),
     (
         "E0247",
@@ -410,6 +433,13 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
             Some(DiagnosticClass::LintWarning),
         ),
     ),
+    (
+        "W0249",
+        ty(
+            "UnfulfilledLintExpectation",
+            Some(DiagnosticClass::LintWarning),
+        ),
+    ),
     ("E0250", ty("ModuleBindingEffectfulInit", None)),
     ("E0251", ty("ModuleBindingHeapType", None)),
     ("E0252", ty("ReassignToImmutableModuleBinding", None)),
@@ -417,6 +447,10 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
     ("E0254", ty("CrossTaskUnsafeCapture", None)),
     (
         "E0255",
+        ty("UnstableApi", Some(DiagnosticClass::LintWarning)),
+    ),
+    (
+        "W0255",
         ty("UnstableApi", Some(DiagnosticClass::LintWarning)),
     ),
     ("E0256", ty("InvalidRefinementPredicate", None)),
@@ -494,10 +528,46 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
             Some(DiagnosticClass::TypeMismatch),
         ),
     ),
+    ("E0279", ty("AmbiguousBareVariant", None)),
+    // The catch-all arm of the warning emitter: any `TypeErrorKind` that
+    // reaches the warning loop without a code of its own lands here, so this
+    // row names the bucket rather than one variant. A warning that deserves
+    // its own number should get one — `W0299` showing up in a report is the
+    // signal that it has not.
+    ("W0299", ty("<unclassified typecheck warning>", None)),
     ("E0801", ty("GpuNotSafe", None)),
     ("E0803", ty("ReprTransparentInvalid", None)),
     ("E0804", ty("DiscriminantInvalid", None)),
     ("E0805", ty("ExternSignatureInvalid", None)),
+    // ── effect, minted outside the effect band ──────────────────
+    //
+    // These three are effect-checker diagnostics that do not carry an `E04xx`
+    // number. `E0230` / `E0231` are the last of CR-24's allocations into the
+    // typechecker's band; `E0802` is deliberate — `E08xx` is the shared
+    // target/GPU placement band, and a GPU effect violation belongs there.
+    // They are catalogued under the phase that MINTS them, which is what makes
+    // `code_table_has_no_cross_phase_collisions` able to see them: an
+    // uncatalogued stray is exactly the shape that hid four of the eight
+    // B-2026-07-27-14 collisions.
+    ("E0230", eff("ImplExceedsTraitCeiling")),
+    ("E0231", eff("TraitDefaultExceedsCeiling")),
+    ("E0802", eff("GpuEffectViolation")),
+    // ── module graph / manifest ─────────────────────────────────
+    //
+    // The two codes minted outside the diagnostic emitter entirely: `E0223` by
+    // `print_cycles_text` (`src/cli/build_cmds.rs`) and `E0227` by
+    // `ManifestError::code` (`src/manifest.rs`). Both SHIP — a module cycle
+    // and a `karac check` run outside a package are ordinary user-facing
+    // failures — and both went uncatalogued, so `karac explain` refused two
+    // codes it was telling users it covered (B-2026-08-20-30).
+    //
+    // Their numbers stay where they are. Renumbering into a band that matches
+    // the minting phase would mean inventing two new bands for two codes AND
+    // breaking two shipping `code` values, and the band buys exactly one thing
+    // — collision protection — which the catalogue row and the guards below
+    // now provide directly.
+    ("E0223", mg("CircularModuleDependency")),
+    ("E0227", mf("NotInsideKaraProject")),
     // ── lint (non-`TypeErrorKind`) ──────────────────────────────
     //
     // Both halves of each pair are catalogued: the W code is what a default
@@ -549,6 +619,40 @@ const fn lint(kind: &'static str) -> CodeEntry {
     }
 }
 
+/// An effect-checker row. Effect diagnostics carry `class: None` in the JSON
+/// feed (`diag_json.rs` sets it literally), so the catalogue does too — the
+/// `EFFECT_UNDECLARED` / `EFFECT_CONFLICT` classes exist in
+/// [`DiagnosticClass`] but nothing applies them yet, and a row that claimed
+/// otherwise would disagree with the record an agent actually reads.
+const fn eff(kind: &'static str) -> CodeEntry {
+    CodeEntry {
+        phase: "effect",
+        kind,
+        class: None,
+    }
+}
+
+/// The module-graph phase, which mints exactly one code: `E0223`, from
+/// `print_cycles_text`. `phase: "module_graph"` matches the `phase` field the
+/// JSON emitter writes alongside it.
+const fn mg(kind: &'static str) -> CodeEntry {
+    CodeEntry {
+        phase: "module_graph",
+        kind,
+        class: None,
+    }
+}
+
+/// The manifest phase, which mints exactly one code: `E0227`, from
+/// `ManifestError::code`. `phase: "manifest"` matches the emitted record.
+const fn mf(kind: &'static str) -> CodeEntry {
+    CodeEntry {
+        phase: "manifest",
+        kind,
+        class: None,
+    }
+}
+
 const fn res(kind: &'static str, class: Option<DiagnosticClass>) -> CodeEntry {
     CodeEntry {
         phase: "resolve",
@@ -576,12 +680,13 @@ fn unknown_code_message(code: &str) -> String {
     if looks_like_a_code {
         format!(
             "diagnostic code '{code}' is not in the catalogue yet. \
-             `karac explain` covers the resolve and typecheck families \
-             (E01xx, E02xx / W02xx, E08xx); codes minted by the parse, \
-             effect, and ownership phases are not catalogued. Look the \
-             diagnostic up by class instead — `karac check --output=json` \
-             reports one in each record's `class` field, and \
-             `karac explain --class=NAME` explains it. Supported classes: {}.",
+             `karac explain` covers the E01xx, E02xx / W02xx and E08xx \
+             bands in full, plus E0223 and E0227; the effect (E04xx), \
+             ownership (E05xx) and provider-escape (E0600) bands are not \
+             catalogued. Look the diagnostic up by class instead — \
+             `karac check --output=json` reports one in each record's \
+             `class` field, and `karac explain --class=NAME` explains it. \
+             Supported classes: {}.",
             class_list(),
         )
     } else {
@@ -1182,28 +1287,131 @@ mod tests {
         );
     }
 
+    /// Bands [`CODE_TABLE`] claims COMPLETELY, as `(prefix, why)` pairs. A
+    /// code the emitter mints with one of these prefixes must have a row.
+    const COVERED_BANDS: &[&str] = &["E01", "E02", "W02", "E08"];
+
+    /// Every numeric code the diagnostic emitter mints, regardless of phase.
+    ///
+    /// [`emitted_codes`] above cannot serve here: it keys off the
+    /// `ResolveErrorKind::` / `TypeErrorKind::` text on the line, so it sees
+    /// nothing minted from an `EffectErrorKind` arm or from a bare `_ =>`
+    /// fallthrough — which is precisely where four of this guard's findings
+    /// were hiding (`E0230`, `E0231`, `E0802`, `W0299`).
+    fn emitted_numeric_codes() -> Vec<&'static str> {
+        const SRC: &str = include_str!("diag_json.rs");
+        // Byte-indexed on purpose: the file has multi-byte characters in its
+        // prose, and a char-boundary slice over a five-ASCII-byte window is
+        // both slower and a panic waiting to happen.
+        let b = SRC.as_bytes();
+        let mut out = Vec::new();
+        for i in 0..b.len().saturating_sub(6) {
+            if b[i] != b'"' || b[i + 6] != b'"' {
+                continue;
+            }
+            if !matches!(b[i + 1], b'E' | b'W') {
+                continue;
+            }
+            if !b[i + 2..i + 6].iter().all(|c| c.is_ascii_digit()) {
+                continue;
+            }
+            out.push(&SRC[i + 1..i + 6]);
+        }
+        out.sort_unstable();
+        out.dedup();
+        assert!(
+            out.len() > 100,
+            "the literal scan found only {} codes — the emitter's shape \
+             changed and this guard has gone blind",
+            out.len()
+        );
+        out
+    }
+
+    /// A band the catalogue claims must have NO uncatalogued members
+    /// (B-2026-08-20-30).
+    ///
+    /// `code_table_catalogues_every_resolver_code` pinned this for `resolve`
+    /// only, so the typecheck band — the one `explain`'s own error message
+    /// named first — drifted eight codes out of date without a failing test:
+    /// `E0230`, `E0231` (effect-minted, in the typechecker's band), `E0279`,
+    /// `W0245`, `W0249`, `W0255`, `W0299`, and `E0802` in the shared
+    /// target/GPU band. Every one of them was a code a user could be handed
+    /// and `karac explain` would refuse.
+    ///
+    /// Deliberately keyed on the BAND rather than the phase. A user reaching
+    /// for `explain` has a number, not a phase, and the phase framing is what
+    /// let an effect code inside `E02xx` look out of scope.
+    #[test]
+    fn code_table_catalogues_every_code_in_a_covered_band() {
+        let mut missing: Vec<&str> = emitted_numeric_codes()
+            .into_iter()
+            .filter(|code| COVERED_BANDS.iter().any(|b| code.starts_with(b)))
+            .filter(|code| !CODE_TABLE.iter().any(|(c, _)| c == code))
+            .collect();
+        missing.sort_unstable();
+        assert!(
+            missing.is_empty(),
+            "codes minted in a band CODE_TABLE claims to cover completely, \
+             with no row: {missing:?}. Either add the row (under the phase \
+             that MINTS it, which need not be the band's owner) or drop the \
+             band from COVERED_BANDS and from `unknown_code_message`."
+        );
+    }
+
+    /// The two codes minted outside the diagnostic emitter — `E0223` from
+    /// `print_cycles_text`, `E0227` from `ManifestError::code` — are invisible
+    /// to the scan above, so pin them directly: catalogued under the minting
+    /// phase, and still minted at the site the row names. Renumbering either
+    /// mint site without moving its catalogue row fails here.
+    #[test]
+    fn the_two_out_of_emitter_codes_stay_catalogued_at_their_mint_sites() {
+        for (code, phase, src, what) in [
+            (
+                "E0223",
+                "module_graph",
+                include_str!("build_cmds.rs"),
+                "print_cycles_text",
+            ),
+            (
+                "E0227",
+                "manifest",
+                include_str!("../manifest.rs"),
+                "ManifestError::code",
+            ),
+        ] {
+            assert!(
+                CODE_TABLE
+                    .iter()
+                    .any(|(c, e)| *c == code && e.phase == phase),
+                "{code} is not catalogued under phase `{phase}`"
+            );
+            assert!(
+                src.contains(code),
+                "{what} no longer mints {code} — move its CODE_TABLE row to \
+                 match, or drop it"
+            );
+        }
+    }
+
     /// design.md source, for the code-assignment lint below.
     const DESIGN_MD: &str = include_str!("../../docs/design.md");
 
     /// Codes design.md names that [`CODE_TABLE`] does not carry, each with the
     /// phase that mints it.
     ///
-    /// Both rows here SHIP but are minted outside the catalogue — `E0223` by
-    /// `print_cycles_text`, `E0227` by `ManifestError::code` — from phases the
-    /// catalogue has no band for. So `karac explain E0223` refuses a code users
-    /// actually see, with a message that claims the `E02xx` family IS covered.
-    /// They are also the last two survivors of CR-24's allocation of the whole
-    /// module-system family out of the typechecker's band (see
-    /// `docs/implementation_checklist/phase-4-interpreter.md`): B-2026-07-27-14
-    /// moved the three that had collided into `E01xx`, and B-2026-08-20-25
-    /// struck `E0226`. Renumbering these two is a user-visible change rather
-    /// than a spec correction, so it is its own row (B-2026-08-20-30). Listing
-    /// them keeps this lint honest about the remainder instead of passing
-    /// quietly over it.
-    const SPEC_RESERVED: &[(&str, &str, &str)] = &[
-        ("E0223", "CircularModuleDependency", "module_graph"),
-        ("E0227", "NotInsideKaraProject", "manifest"),
-    ];
+    /// EMPTY, and that is the goal state rather than a gap: a row here is a
+    /// code the spec names and the catalogue cannot answer for, which is a
+    /// defect waiting to be noticed. `E0223` and `E0227` sat here until
+    /// B-2026-08-20-30 catalogued them under their minting phases
+    /// (`module_graph` / `manifest`) instead of renumbering them.
+    ///
+    /// The list stays as a declared escape hatch. A code can legitimately be
+    /// written into design.md before its diagnostic ships, and reserving it
+    /// here — with the phase that will mint it — is better than either
+    /// inventing a `CODE_TABLE` row for a diagnostic that does not exist or
+    /// letting the lint below fail with no way to say "not yet."
+    const SPEC_RESERVED: &[(&str, &str, &str)] = &[];
 
     /// Codes design.md names ONLY to record that they were withdrawn. The prose
     /// has to keep the number — that is what stops it being re-allocated by

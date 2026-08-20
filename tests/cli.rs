@@ -10924,14 +10924,127 @@ fn test_explain_accepts_the_code_a_diagnostic_reports() {
 
 #[test]
 fn test_explain_uncatalogued_code_points_at_the_class_surface() {
-    // E0001 (parse) is deliberately outside the catalogue's resolve /
-    // typecheck coverage. The message must say so and redirect, not
-    // pretend the code is unknown gibberish.
+    // E0001 (parse) is deliberately outside the catalogue's covered bands.
+    // The message must say so and redirect, not pretend the code is unknown
+    // gibberish.
     let out = karac_bin().args(["explain", "E0001"]).output().unwrap();
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("not in the catalogue yet"), "got: {stderr}");
     assert!(stderr.contains("--class"), "got: {stderr}");
+}
+
+/// Both codes SHIP — the two assertions below run the commands that mint them
+/// — and both were refused by `karac explain` with a message that named their
+/// family as covered (B-2026-08-20-30). The end-to-end shape is what matters
+/// here: the number a user is handed by one command has to be a number the
+/// other command answers for.
+#[test]
+fn test_explain_answers_for_the_two_codes_minted_outside_the_emitter() {
+    let dir = std::env::temp_dir().join(format!(
+        "karac-cli-explain-out-of-emitter-{}-{}",
+        std::process::id(),
+        line!()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+
+    // E0227 — `karac check` outside any package.
+    let outside = karac_bin().current_dir(&dir).arg("check").output().unwrap();
+    let stderr = String::from_utf8_lossy(&outside.stderr);
+    assert!(
+        stderr.contains("E0227"),
+        "expected a run outside a package to mint E0227, got: {stderr}"
+    );
+
+    // E0223 — a three-module import cycle.
+    write(&dir.join("kara.toml"), "[package]\nname = \"cyc\"\n");
+    write(
+        &dir.join("src/main.kara"),
+        "import a.f;\nfn main() {\n    println(f\"{f()}\");\n}\npub fn z() -> i64 {\n    return 1;\n}\n",
+    );
+    write(
+        &dir.join("src/a.kara"),
+        "import b.g;\npub fn f() -> i64 {\n    return g();\n}\n",
+    );
+    write(
+        &dir.join("src/b.kara"),
+        "import z;\npub fn g() -> i64 {\n    return z();\n}\n",
+    );
+    let cycle = karac_bin().current_dir(&dir).arg("check").output().unwrap();
+    let stderr = String::from_utf8_lossy(&cycle.stderr);
+    assert!(
+        stderr.contains("E0223"),
+        "expected an import cycle to mint E0223, got: {stderr}"
+    );
+
+    for (code, phase, kind) in [
+        ("E0223", "module_graph", "CircularModuleDependency"),
+        ("E0227", "manifest", "NotInsideKaraProject"),
+    ] {
+        let out = karac_bin().args(["explain", code]).output().unwrap();
+        assert!(
+            out.status.success(),
+            "`karac explain {code}` refused a code the compiler mints: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(text.contains(&format!("phase: {phase}")), "got: {text}");
+        assert!(text.contains(kind), "got: {text}");
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The catalogue's own error message names the bands it covers COMPLETELY, so
+/// every code in one has to resolve. The unit guard
+/// `code_table_catalogues_every_code_in_a_covered_band` proves that against
+/// the emitter's source; this proves the CLI actually answers, for the sample
+/// that was missing before B-2026-08-20-30 — including two effect-checker
+/// codes that sit in the typechecker's band and one in the shared target/GPU
+/// band, which is exactly the shape a phase-framed scope let slip.
+#[test]
+fn test_explain_answers_for_every_code_in_a_band_it_claims() {
+    for (code, phase) in [
+        ("E0230", "effect"),
+        ("E0231", "effect"),
+        ("E0802", "effect"),
+        ("E0279", "typecheck"),
+        ("W0245", "typecheck"),
+        ("W0249", "typecheck"),
+        ("W0255", "typecheck"),
+        ("W0299", "typecheck"),
+    ] {
+        let out = karac_bin().args(["explain", code]).output().unwrap();
+        assert!(
+            out.status.success(),
+            "`karac explain {code}` refused a code inside a band the message \
+             claims to cover in full: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(text.contains(&format!("phase: {phase}")), "got: {text}");
+    }
+}
+
+/// The message must not go back to claiming coverage it does not have. The
+/// bands it disclaims are named, so a future catalogue widening that forgets
+/// to update the text fails here rather than misleading the next reader.
+#[test]
+fn test_explain_uncatalogued_message_names_the_bands_it_does_not_cover() {
+    let out = karac_bin().args(["explain", "E0500"]).output().unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    for fragment in ["E04xx", "E05xx", "E0600"] {
+        assert!(
+            stderr.contains(fragment),
+            "the uncatalogued message no longer names {fragment}: {stderr}"
+        );
+    }
+    assert!(
+        !stderr.contains("resolve and typecheck families"),
+        "the message is back to describing coverage by phase: {stderr}"
+    );
 }
 
 #[test]
