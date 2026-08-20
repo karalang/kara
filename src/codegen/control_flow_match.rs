@@ -5702,8 +5702,59 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap_or_else(|| (0..num_patterns).map(|i| (i, 1)).collect())
     }
 
-    /// AND into `cond` the inner-tag checks for any *variant* sub-pattern
-    /// of an outer variant — e.g. the inner `E.A` of `Result.Err(E.A(c))`.
+    /// Does this payload sub-pattern impose a VALUE test, beyond whatever
+    /// tag check its own shape implies? A `Binding` / `Wildcard` leaf only
+    /// names the payload, so it always matches and needs no test; a literal
+    /// or a range constrains the payload's value and MUST emit one.
+    ///
+    /// This is the gate that decides whether
+    /// `and_in_nested_variant_conditions` reconstructs a payload at all.
+    /// Before B-2026-08-20-11 that function keyed exclusively off
+    /// `variant_pattern_enum_and_tag`, so a non-variant sub-pattern was
+    /// invisible to it and `Some(7)` compiled to the OUTER TAG CHECK ALONE —
+    /// every `Some(_)` took the arm, silently, in the compiled binary only
+    /// (the interpreter compares properly). Same defect shape as the
+    /// range-pattern and struct-field misses already fixed in
+    /// `compile_pattern_condition` (B-2026-07-12-13): a sub-pattern that
+    /// discriminates, dropped on the floor, so the arm over-matches.
+    ///
+    /// Compound arms recurse because the test can be nested arbitrarily
+    /// deep — `Some((1, x))`, `Some(P { n: 3 })`, `Some(1 | 2)`,
+    /// `Some(v @ 5)` all carry one. Variant sub-patterns deliberately return
+    /// `false` here: their tag check is the caller's existing job, and
+    /// answering `true` would double-count them.
+    fn pattern_tests_payload_value(pat: &Pattern) -> bool {
+        match &pat.kind {
+            PatternKind::Literal(_) | PatternKind::RangePattern { .. } => true,
+            PatternKind::Or(ps) | PatternKind::Tuple(ps) => {
+                ps.iter().any(Self::pattern_tests_payload_value)
+            }
+            // A shorthand field (`S { x }`) carries no sub-pattern — it is a
+            // plain binding, so it tests nothing.
+            PatternKind::Struct { fields, .. } => fields.iter().any(|f| {
+                f.pattern
+                    .as_ref()
+                    .is_some_and(Self::pattern_tests_payload_value)
+            }),
+            PatternKind::AtBinding { pattern, .. } => Self::pattern_tests_payload_value(pattern),
+            _ => false,
+        }
+    }
+
+    /// AND into `cond` the discriminating tests carried by an outer
+    /// variant's payload sub-patterns. Two kinds, both reconstructed from
+    /// the same payload words:
+    ///
+    /// 1. a nested *variant* sub-pattern — the inner `E.A` of
+    ///    `Result.Err(E.A(c))` — contributes `inner.tag == expected`;
+    /// 2. a sub-pattern that tests the payload's VALUE — `Some(7)`,
+    ///    `Some(1..=5)`, `Some((1, x))` — is handed back to
+    ///    `compile_pattern_condition` (see `pattern_tests_payload_value`).
+    ///
+    /// Kind 2 was absent until B-2026-08-20-11: only the outer tag was
+    /// tested, so `Some(<literal>)` fired for every `Some(_)` in a compiled
+    /// binary while the interpreter got it right — a silent run-vs-build
+    /// miscompile.
     /// The outer-tag-only condition matches every `Result.Err(...)`
     /// regardless of the inner variant, so without this a
     /// `Result.Err(E.B)` value would wrongly take a `Result.Err(E.A(c))`
@@ -5730,10 +5781,9 @@ impl<'ctx> super::Codegen<'ctx> {
         let BasicValueEnum::StructValue(sv) = scrut else {
             return Ok(cond);
         };
-        if !sub_patterns
-            .iter()
-            .any(|p| self.variant_pattern_enum_and_tag(p).is_some())
-        {
+        if !sub_patterns.iter().any(|p| {
+            self.variant_pattern_enum_and_tag(p).is_some() || Self::pattern_tests_payload_value(p)
+        }) {
             return Ok(cond);
         }
         // Lazy gate (B-2026-07-15-5): the nested reconstruction may DEBOX
@@ -5759,9 +5809,13 @@ impl<'ctx> super::Codegen<'ctx> {
             sub_patterns.len(),
         );
         for (i, sub) in sub_patterns.iter().enumerate() {
-            let Some((_inner_ty, expected_tag)) = self.variant_pattern_enum_and_tag(sub) else {
+            let variant_tag = self.variant_pattern_enum_and_tag(sub).map(|(_, t)| t);
+            // Skip leaves that always match (`Some(x)`, `Some(_)`); reconstruct
+            // for a nested VARIANT (tag check, below) or for any sub-pattern
+            // that tests the payload's VALUE (B-2026-08-20-11).
+            if variant_tag.is_none() && !Self::pattern_tests_payload_value(sub) {
                 continue;
-            };
+            }
             let (start_word, num_words) = offsets.get(i).copied().unwrap_or((i, 1));
             let mut field_words: Vec<inkwell::values::IntValue<'ctx>> =
                 Vec::with_capacity(num_words);
@@ -5774,6 +5828,22 @@ impl<'ctx> super::Codegen<'ctx> {
                 field_words.push(w);
             }
             let inner = self.reconstruct_payload_value(sub, &field_words)?;
+            // Non-variant sub-pattern: the payload carries no tag of its own,
+            // so hand the rebuilt VALUE back to the general pattern-condition
+            // compiler. That reuses the same literal / range / tuple / struct /
+            // or / at-binding arms the top-level scrutinee gets, which is what
+            // makes `Some(7)`, `Some(1..=5)` and `Some("ok")` discriminate
+            // identically to their bare `7` / `1..=5` / `"ok"` forms — and it
+            // recurses, so an arbitrarily nested test still lands.
+            // B-2026-08-20-11.
+            let Some(expected_tag) = variant_tag else {
+                let value_cond = self.compile_pattern_condition(sub, inner)?;
+                inner_cond = self
+                    .builder
+                    .build_and(inner_cond, value_cond.into_int_value(), "ncond.valand")
+                    .unwrap();
+                continue;
+            };
             // The rebuilt inner value is the enum's `{ tag, payload... }`
             // struct; its tag is field 0. Compare against the
             // qualified-path-resolved expected tag.
@@ -5843,6 +5913,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 .iter()
                 .map(|p| self.pattern_payload_word_count(p))
                 .sum(),
+            // A STRING literal sub-pattern (`Some("ok")`) spans the same 3
+            // words as a String binding — the `_ => 1` default below would
+            // hand `reconstruct_payload_value` a single word and rebuild a
+            // bare i64 where `compile_pattern_condition`'s String arm expects
+            // a `{ ptr, len, cap }` struct to memcmp against. Every other
+            // literal (int / bool / char / float) really is one word.
+            // B-2026-08-20-11.
+            PatternKind::Literal(LiteralPattern::String(_)) => 3,
             // Nested enum-variant sub-pattern (`Option.Some(x)` as the
             // payload of another variant — `Option.Some(Option.Some(x))`,
             // `Wrap.W(Option.Some(x))`): the payload's natural width is the
@@ -6023,6 +6101,10 @@ impl<'ctx> super::Codegen<'ctx> {
     /// element's reconstructed aggregate.
     pub(super) fn pattern_payload_llvm_type(&self, pat: &Pattern) -> BasicTypeEnum<'ctx> {
         match &pat.kind {
+            // String-literal twin of `pattern_payload_word_count`'s arm: the
+            // debox load must read the `{ ptr, len, cap }` vec struct, not the
+            // i64 default. B-2026-08-20-11.
+            PatternKind::Literal(LiteralPattern::String(_)) => self.vec_struct_type().into(),
             PatternKind::Tuple(elems) => {
                 let elem_tys: Vec<BasicTypeEnum<'ctx>> = elems
                     .iter()
@@ -6343,6 +6425,28 @@ impl<'ctx> super::Codegen<'ctx> {
             // Width-64 names (`i64`/`u64`/`usize`) and non-int surfaces
             // resolve to a 64-bit or non-`IntType`, so they pass through
             // untouched.
+            // A FLOAT literal sub-pattern (`Some(1.5)`) BINDS nothing, so the
+            // typechecker records no `pattern_binding_types` entry and the
+            // recorded-name block below — which owns every other narrowing and
+            // the float bitcast — cannot fire. The raw i64 BIT PATTERN would
+            // then reach `compile_pattern_condition`'s float comparison and
+            // never equal the literal, turning the B-2026-08-20-11 over-match
+            // into an under-match. Take the width from the literal's own
+            // suffix instead; the body mirrors the recorded-name `FloatType`
+            // arm below (f64 bitcasts whole, narrower floats sit in the low
+            // bits and truncate first).
+            if let PatternKind::Literal(LiteralPattern::Float(_, sfx)) = &sub_pat.kind {
+                let ft = self.llvm_float_type_for_suffix(*sfx);
+                let bits_ty = self.float_bits_int_type(ft);
+                let src = if bits_ty.get_bit_width() == 64 {
+                    w
+                } else {
+                    self.builder
+                        .build_int_truncate(w, bits_ty, "pat.flit.tr")
+                        .unwrap()
+                };
+                return Ok(self.builder.build_bit_cast(src, ft, "pat.flit.bc").unwrap());
+            }
             let key = (sub_pat.span.offset, sub_pat.span.length);
             if let Some(name) = self.pattern_state.pattern_binding_types.get(&key).cloned() {
                 match self.llvm_type_for_name(&name) {

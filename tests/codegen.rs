@@ -97345,6 +97345,185 @@ fn main() {
         }
     }
 
+    mod enum_payload_literal_patterns_b_2026_08_20_11 {
+        //! B-2026-08-20-11 — a payload sub-pattern that tests a VALUE rather
+        //! than a tag was dropped entirely by codegen, so the arm matched on
+        //! the OUTER TAG ALONE: `match Some(5) { Some(7) => .., _ => .. }`
+        //! took the `Some(7)` arm. Silent, and build-only — the interpreter
+        //! compares properly — so it was invisible to anyone developing with
+        //! `karac run`.
+        //!
+        //! `and_in_nested_variant_conditions` keyed exclusively off
+        //! `variant_pattern_enum_and_tag`, both in its early-return gate and
+        //! via `else { continue }` in its loop. A literal / range / tuple /
+        //! struct / at-binding sub-pattern answers `None` there, so no payload
+        //! was ever reconstructed and no test emitted. The fix adds
+        //! `pattern_tests_payload_value` as a second admission key and hands
+        //! the rebuilt payload back to `compile_pattern_condition`.
+        //!
+        //! EVERY ASSERT BELOW IS A MISS ARM. Measured on a pre-fix build, all
+        //! of the hits already passed and all of the misses were wrong — a
+        //! hit-only test is vacuous for this bug, which is exactly why it
+        //! survived. Strict `assert_eq!(.., Some(..))` (not the tolerant
+        //! `if let Some(out)`) so a missing runtime archive fails loudly
+        //! instead of green-skipping the whole class again.
+        use super::run_program;
+
+        #[test]
+        fn e2e_option_integer_literal_payload_does_not_match_every_some() {
+            // The filed repro, both directions.
+            assert_eq!(
+                run_program(
+                    "fn cls(p: Option[i64]) -> String {\n\
+                         match p { Some(7) => \"seven\", Some(0) => \"zero\", _ => \"other\" }\n\
+                     }\n\
+                     fn main() {\n\
+                         println(cls(Some(5i64)));\n\
+                         println(cls(Some(7i64)));\n\
+                         println(cls(Some(0i64)));\n\
+                         println(cls(None));\n\
+                     }\n"
+                )
+                .as_deref(),
+                Some("other\nseven\nzero\nother\n"),
+                "Some(<int literal>) must compare the payload, not just the tag"
+            );
+        }
+
+        #[test]
+        fn e2e_payload_literal_across_every_scalar_kind() {
+            // char / bool / float / String each reconstruct differently:
+            // float needs a bitcast off the i64 payload word and String needs
+            // the 3-word vec shape, neither of which has a
+            // `pattern_binding_types` entry (a literal binds nothing).
+            assert_eq!(
+                run_program(
+                    "fn ch(p: Option[char]) -> String { match p { Some('a') => \"A\", _ => \"z\" } }\n\
+                     fn bo(p: Option[bool]) -> String { match p { Some(true) => \"T\", _ => \"F\" } }\n\
+                     fn fl(p: Option[f64]) -> String { match p { Some(1.5) => \"f\", _ => \"o\" } }\n\
+                     fn st(p: Option[String]) -> String { match p { Some(\"ok\") => \"OK\", _ => \"no\" } }\n\
+                     fn main() {\n\
+                         println(ch(Some('a'))); println(ch(Some('b')));\n\
+                         println(bo(Some(true))); println(bo(Some(false)));\n\
+                         println(fl(Some(1.5f64))); println(fl(Some(2.5f64)));\n\
+                         println(st(Some(\"ok\"))); println(st(Some(\"nope\")));\n\
+                     }\n"
+                )
+                .as_deref(),
+                Some("A\nz\nT\nF\nf\no\nOK\nno\n"),
+                "char / bool / float / String payload literals must all discriminate"
+            );
+        }
+
+        #[test]
+        fn e2e_payload_range_and_or_patterns_discriminate() {
+            assert_eq!(
+                run_program(
+                    "fn rng(p: Option[i64]) -> String { match p { Some(1..=5) => \"low\", _ => \"hi\" } }\n\
+                     fn orp(p: Option[i64]) -> String { match p { Some(1 | 2) => \"12\", _ => \"o\" } }\n\
+                     fn main() {\n\
+                         println(rng(Some(3i64))); println(rng(Some(9i64)));\n\
+                         println(orp(Some(2i64))); println(orp(Some(3i64)));\n\
+                     }\n"
+                )
+                .as_deref(),
+                Some("low\nhi\n12\no\n"),
+                "range and or- payload sub-patterns route through the same gate as literals"
+            );
+        }
+
+        #[test]
+        fn e2e_payload_literal_in_user_enum_tuple_struct_and_at_binding() {
+            // Compound payloads: a partially-literal tuple (`Pair(1, y)`), a
+            // struct field literal, and an at-binding. Pre-fix every one of
+            // these miss arms fell into the first literal arm.
+            assert_eq!(
+                run_program(
+                    "enum Msg { Ping(i64), Named(String), Pair(i64, i64), Nothing }\n\
+                     struct P { n: i64, m: i64 }\n\
+                     enum Holder { H(P) }\n\
+                     fn m1(v: Msg) -> String {\n\
+                         match v {\n\
+                             Msg.Ping(0) => \"ping0\",\n\
+                             Msg.Ping(n) => \"pingN\",\n\
+                             Msg.Named(\"hi\") => \"hi\",\n\
+                             Msg.Named(s) => \"namedN\",\n\
+                             Msg.Pair(1, 2) => \"p12\",\n\
+                             Msg.Pair(1, y) => \"p1y\",\n\
+                             Msg.Pair(x, y) => \"pXY\",\n\
+                             Msg.Nothing => \"none\",\n\
+                         }\n\
+                     }\n\
+                     fn m2(v: Holder) -> String {\n\
+                         match v { Holder.H(P { n: 1, m: _ }) => \"n1\", Holder.H(p) => \"nX\" }\n\
+                     }\n\
+                     fn at(v: Option[i64]) -> String { match v { Some(x @ 5) => \"at5\", _ => \"o\" } }\n\
+                     fn main() {\n\
+                         println(m1(Msg.Ping(0))); println(m1(Msg.Ping(9)));\n\
+                         println(m1(Msg.Named(\"hi\"))); println(m1(Msg.Named(\"yo\")));\n\
+                         println(m1(Msg.Pair(1,2))); println(m1(Msg.Pair(1,3))); println(m1(Msg.Pair(4,5)));\n\
+                         println(m1(Msg.Nothing));\n\
+                         println(m2(Holder.H(P { n: 1, m: 2 }))); println(m2(Holder.H(P { n: 7, m: 2 })));\n\
+                         println(at(Some(5i64))); println(at(Some(6i64)));\n\
+                     }\n"
+                )
+                .as_deref(),
+                Some("ping0\npingN\nhi\nnamedN\np12\np1y\npXY\nnone\nn1\nnX\nat5\no\n"),
+                "tuple / struct / at-binding payload literals must each emit their own test"
+            );
+        }
+
+        #[test]
+        fn e2e_payload_literal_narrow_ints_result_and_nested_option() {
+            // Narrow ints exercise the trunc path off the i64 payload word;
+            // Result and Option-in-Option confirm the fix is not Option-i64
+            // specific (the shape the row was filed against).
+            assert_eq!(
+                run_program(
+                    "fn narrow(v: Option[i32]) -> String { match v { Some(300) => \"a\", _ => \"o\" } }\n\
+                     fn byte(v: Option[u8]) -> String { match v { Some(200) => \"b\", _ => \"o\" } }\n\
+                     fn nested(v: Option[Option[i64]]) -> String {\n\
+                         match v { Some(Some(5)) => \"s5\", Some(Some(n)) => \"sn\", Some(None) => \"sN\", None => \"n\" }\n\
+                     }\n\
+                     fn resu(v: Result[i64, String]) -> String {\n\
+                         match v { Ok(1) => \"ok1\", Ok(n) => \"okN\", Err(\"bad\") => \"eb\", Err(e) => \"eN\" }\n\
+                     }\n\
+                     fn main() {\n\
+                         println(narrow(Some(300i32))); println(narrow(Some(7i32)));\n\
+                         println(byte(Some(200u8))); println(byte(Some(7u8)));\n\
+                         println(nested(Some(Some(5i64)))); println(nested(Some(Some(6i64))));\n\
+                         println(nested(Some(None))); println(nested(None));\n\
+                         println(resu(Ok(1i64))); println(resu(Ok(2i64)));\n\
+                         println(resu(Err(\"bad\"))); println(resu(Err(\"z\")));\n\
+                     }\n"
+                )
+                .as_deref(),
+                Some("a\no\nb\no\ns5\nsn\nsN\nn\nok1\nokN\neb\neN\n"),
+                "narrow-int, Result and nested-Option payload literals all discriminate"
+            );
+        }
+
+        #[test]
+        fn e2e_binding_and_wildcard_payloads_still_always_match() {
+            // The other direction: `pattern_tests_payload_value` must answer
+            // `false` for leaves that only NAME the payload, or the new gate
+            // would reconstruct (and test) where nothing should be tested.
+            assert_eq!(
+                run_program(
+                    "fn b(p: Option[i64]) -> String { match p { Some(x) => f\"got {x}\", None => \"none\" } }\n\
+                     fn w(p: Option[i64]) -> String { match p { Some(_) => \"some\", None => \"none\" } }\n\
+                     fn main() {\n\
+                         println(b(Some(5i64))); println(b(None));\n\
+                         println(w(Some(5i64))); println(w(None));\n\
+                     }\n"
+                )
+                .as_deref(),
+                Some("got 5\nnone\nsome\nnone\n"),
+                "binding / wildcard payloads must keep matching unconditionally"
+            );
+        }
+    }
+
     mod nested_enum_payload_patterns_b_2026_07_15_5 {
         //! B-2026-07-15-5 — nested enum-variant PATTERNS over heap-BOXED enum
         //! payloads. An inner `Option[i64]` value is 4 words; Option's seeded
