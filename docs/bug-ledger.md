@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 119 | 0 |
 | diagnostics | 83 | 0 |
 | false-positive | 82 | 0 |
-| perf | 77 | 0 |
+| perf | 78 | 1 |
 | crash | 54 | 0 |
 | soundness | 51 | 0 |
 | other | 49 | 0 |
@@ -115,7 +115,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | interp | 162 | 0 |
 | ownership | 60 | 0 |
 | other | 58 | 0 |
-| autopar | 49 | 0 |
+| autopar | 50 | 1 |
 | cli | 48 | 0 |
 | parser | 30 | 1 |
 | runtime | 26 | 1 |
@@ -124,14 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 6 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1380 surfaced · 2 open · 1358 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1381 surfaced · 3 open · 1358 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-19-13 | 2026-08-19 | typecheck+codegen+runtime | medium | GPU reductions still lack prefix-sum and tiled matmul (separate algorithms, not halving folds); integer `prod` / `dot` are blocked on WGSL lacking a widening multiply; and `variance` / `stddev` are f32-only. Everything else has shipped: sum / prod / min / max / mean / dot / argmin / argmax / variance / stddev over `Vec[f32]`, and sum / min / max / mean / argmin / argmax over `Vec[i32]` and `Vec[u32]`. | docs/spikes/gpu-llvm-offload-assessment.md; src/gpu_wgsl.rs::emit_reduce_kernel; src/reduce_kernel.rs::tree_reduce_f32 |
 | B-2026-08-20-1 | 2026-08-20 | parser | low | AN UPPER-HALF UNSIGNED LITERAL CANNOT BE A MATCH PATTERN for any width: `match n { 18446744073709551615u64 => .. }` fails with "Expected pattern, found IntegerOutOfRange". The expression parser has an unsigned band that admits these onto the signed carrier; the PATTERN parser has none. | src/parser/patterns.rs (no IntegerOutOfRange arm); src/parser/exprs.rs (the expression-side unsigned band it should mirror); src/exhaustive.rs |
+| B-2026-08-20-3 | 2026-08-20 | autopar | high | AUTO-PAR (on by default) turns a `parallel_reduction` whose body does `chars().collect()` into a 2.55x PESSIMIZATION — 326 ms sequential becomes 831 ms parallel, with system time exploding 2.9 ms -> 812.8 ms (allocator contention); the same body without the collect parallelizes cleanly at 3.67 cores | — |
 
 ### Wontfix (7)
 
