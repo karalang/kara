@@ -658,8 +658,8 @@ impl<'a> super::TypeChecker<'a> {
                 self.record_pattern_binding_borrow_mode(&pattern.span, mode, expected);
                 self.record_pattern_binding_surface_types(pattern, expected);
             }
-            PatternKind::Literal(_) => {
-                // Type checking of literal patterns deferred
+            PatternKind::Literal(lit) => {
+                self.check_literal_pattern(lit, expected, &pattern.span);
             }
             PatternKind::TupleVariant { path, patterns } => {
                 let variant_name = path.last().cloned().unwrap_or_default();
@@ -1079,6 +1079,151 @@ impl<'a> super::TypeChecker<'a> {
                     TypeErrorKind::TypeMismatch,
                 );
             }
+        }
+    }
+
+    /// Check one literal pattern against the scrutinee type.
+    ///
+    /// B-2026-08-20-10. This arm used to be an empty "type checking of literal
+    /// patterns deferred", so NO literal pattern was ever checked — against the
+    /// scrutinee's type or against its own range. `match n { true => .. }` on an
+    /// `i64` was accepted AND MATCHED, taking a silently wrong branch; `300i8`
+    /// on an `i8` was accepted as a dead arm; a `String` pattern against an
+    /// `i64` escaped to codegen and died there with an internal-sounding
+    /// "Binary op Eq" message instead of a diagnostic.
+    ///
+    /// EXPRESSION POSITION IS THE ORACLE: `let n: T = <lit>;` already decides
+    /// every one of these, so pattern position is made to agree rather than to
+    /// invent rules. That is what admits an integer literal at a float
+    /// scrutinee (the documented int→float widening) and what keeps a
+    /// suffix/width mismatch that is IN RANGE accepted (`5u64` against an
+    /// `i64`) — whether such a coercion should require `as` is a separate open
+    /// design question, and answering it here would reject code that compiles
+    /// today for reasons unrelated to this bug.
+    ///
+    /// The one deliberate departure from the oracle is a FLOAT literal at an
+    /// INTEGER scrutinee. Expression position accepts `let n: i64 = 1.5` and
+    /// binds a float to an `i64`-annotated name — a pre-existing defect filed
+    /// separately. Replicating it here would mean accepting a pattern that can
+    /// never match; the new check is the correct behaviour and the expression
+    /// side is what needs to catch up.
+    fn check_literal_pattern(&mut self, lit: &LiteralPattern, expected: &Type, span: &Span) {
+        // Peel a borrowed scrutinee — `match r { 5 => .. }` with `r: ref i64`
+        // compares the pointee, so the literal is checked against `i64`.
+        let expected = match expected {
+            Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
+            other => other,
+        };
+        // A REFINEMENT refines a base type, and a literal pattern against it is
+        // checking against that base: `match f { 1 => .., 2 => .. }` where
+        // `f: ValidFloor` (a `distinct type … where` over an integer) is
+        // ordinary, exhaustive-by-enumeration code. Both spellings peel — the
+        // structural `Type::Refinement` and the nominal `distinct type`, whose
+        // base lives in `env.distinct_bases` — matching how
+        // `refinement_finite_domain` resolves the same two forms for
+        // exhaustiveness. The predicate's own bounds are NOT re-checked here;
+        // the refinement machinery owns that, and duplicating it would report
+        // one mistake twice.
+        let peeled;
+        let expected = match expected {
+            Type::Refinement { base, .. } => base.as_ref(),
+            Type::Named { name, .. } => match self.env.distinct_bases.get(name) {
+                Some(base) => {
+                    peeled = base.clone();
+                    &peeled
+                }
+                None => expected,
+            },
+            other => other,
+        };
+        // An unresolved or already-errored scrutinee tells us nothing. Staying
+        // silent keeps this from turning one upstream error into several, which
+        // is the standing rule for every check that consumes an inferred type.
+        if matches!(
+            expected,
+            Type::Error | Type::TypeVar(_) | Type::TypeParam(_) | Type::Never
+        ) {
+            return;
+        }
+        let found = match lit {
+            LiteralPattern::Integer(n, sfx) => {
+                if matches!(expected, Type::Int(_) | Type::UInt(_)) {
+                    // Range-check exactly as the expression path does — same
+                    // helper, same suffix argument.
+                    //
+                    // The payload has to be UN-WRAPPED first. An unsigned
+                    // literal past its signed half rides the pattern carrier as
+                    // a negative two's-complement value (B-2026-08-20-1 chose
+                    // that so a pattern and its scrutinee compare as identical
+                    // bits), so handing `18446744073709551615u64` to the range
+                    // check raw would present it as `-1` and reject a perfectly
+                    // legal pattern — the same carrier-vs-domain mismatch that
+                    // makes B-2026-08-20-6 mis-report exhaustiveness.
+                    let value = Self::pattern_literal_as_checked_value(*n, *sfx);
+                    self.check_int_literal_fits(value, expected, span, *sfx);
+                    return;
+                }
+                // An integer literal at a float scrutinee is the documented
+                // implicit widening, accepted in expression position too.
+                if matches!(expected, Type::Float(_)) {
+                    return;
+                }
+                Type::Int(IntSize::I64)
+            }
+            LiteralPattern::Float(_, sfx) => {
+                if matches!(expected, Type::Float(_)) {
+                    return;
+                }
+                Self::type_from_float_suffix(*sfx)
+            }
+            LiteralPattern::Bool(_) => {
+                if matches!(expected, Type::Bool) {
+                    return;
+                }
+                Type::Bool
+            }
+            LiteralPattern::Char(_) => {
+                if matches!(expected, Type::Char) {
+                    return;
+                }
+                Type::Char
+            }
+            LiteralPattern::String(_) => {
+                if matches!(expected, Type::Str) {
+                    return;
+                }
+                Type::Str
+            }
+        };
+        self.type_error(
+            format!(
+                "expected '{}', found '{}'",
+                type_display(expected),
+                type_display(&found)
+            ),
+            *span,
+            TypeErrorKind::TypeMismatch,
+        );
+    }
+
+    /// A pattern literal's payload as the range check wants to read it: the
+    /// UNSIGNED value for an unsigned suffix, whose top half rides the carrier
+    /// wrapped. Mirrors `literal_as_i128` on the expression side.
+    fn pattern_literal_as_checked_value(n: i128, sfx: Option<crate::token::IntSuffix>) -> i128 {
+        use crate::token::IntSuffix;
+        match sfx {
+            Some(IntSuffix::U8)
+            | Some(IntSuffix::U16)
+            | Some(IntSuffix::U32)
+            | Some(IntSuffix::U64)
+            | Some(IntSuffix::Usize)
+                if n < 0 =>
+            {
+                ((n as i64) as u64) as i128
+            }
+            // `u128`'s top half has no wider signed form to expand into; the
+            // range check has its own early accept for that suffix.
+            _ => n,
         }
     }
 

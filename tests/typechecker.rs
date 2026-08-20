@@ -247,6 +247,196 @@ fn a_negative_still_cannot_initialize_u128() {
     }
 }
 
+/// Literal patterns are TYPECHECKED against the scrutinee (B-2026-08-20-10).
+/// The arm used to be an empty "type checking of literal patterns deferred", so
+/// none of these was caught: `true` against an `i64` scrutinee was accepted AND
+/// MATCHED — a silently wrong branch — `300i8` was accepted as a dead arm, and a
+/// `String` pattern escaped to codegen to die there with an internal-sounding
+/// "Binary op Eq" message instead of a diagnostic.
+///
+/// EXPRESSION POSITION IS THE ORACLE. Each of these is rejected by the
+/// corresponding `let n: T = <lit>;`, which is what `the_literal_pattern_check_
+/// agrees_with_expression_position` below pins directly.
+#[test]
+fn an_ill_typed_literal_pattern_is_rejected() {
+    for (src, want) in [
+        (
+            "fn main() { let n: i64 = 5i64; match n { true => println(1), _ => println(2), } }",
+            "expected 'i64', found 'bool'",
+        ),
+        (
+            "fn main() { let n: i64 = 5i64; match n { 'a' => println(1), _ => println(2), } }",
+            "expected 'i64', found 'char'",
+        ),
+        (
+            "fn main() { let b: bool = true; match b { 5 => println(1), _ => println(2), } }",
+            "expected 'bool', found 'i64'",
+        ),
+        (
+            "fn main() { let c: char = 'a'; match c { 5 => println(1), _ => println(2), } }",
+            "expected 'char', found 'i64'",
+        ),
+        (
+            "fn main() { let n: i64 = 5i64; match n { \"s\" => println(1), _ => println(2), } }",
+            "expected 'i64', found 'String'",
+        ),
+        (
+            "fn main() { let s: String = \"a\"; match s { 5 => println(1), _ => println(2), } }",
+            "expected 'String', found 'i64'",
+        ),
+        // out of range for the scrutinee — the same check the expression path runs
+        (
+            "fn main() { let n: i8 = 5i8; match n { 300i8 => println(1), _ => println(2), } }",
+            "out of range",
+        ),
+        (
+            "fn main() { let n: u8 = 5u8; match n { 300 => println(1), _ => println(2), } }",
+            "out of range",
+        ),
+        (
+            "fn main() { let n: u8 = 5u8; match n { -1 => println(1), _ => println(2), } }",
+            "negative integer literal",
+        ),
+    ] {
+        let errs = typecheck_errors(src);
+        assert!(
+            errs.iter().any(|e| e.message.contains(want)),
+            "expected {want:?} for {src:?}; got: {:?}",
+            errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+}
+
+/// The counterweight, and the reason this check is narrow rather than eager:
+/// everything expression position ACCEPTS has to stay accepted in pattern
+/// position too. Over-rejecting here would break compiling code for reasons
+/// unrelated to the bug.
+#[test]
+fn a_well_typed_literal_pattern_is_still_accepted() {
+    for src in [
+        // int literal at a float scrutinee — the documented implicit widening
+        "fn main() { let f: f64 = 1.5; match f { 5 => println(1), _ => println(2), } }",
+        // suffix / width mismatch that is IN RANGE — whether this should need
+        // `as` is a separate open design question, not this row's to answer
+        "fn main() { let n: i64 = 5i64; match n { 5u64 => println(1), _ => println(2), } }",
+        "fn main() { let n: u64 = 5u64; match n { 5i64 => println(1), _ => println(2), } }",
+        "fn main() { let n: i8 = 5i8; match n { 5i64 => println(1), _ => println(2), } }",
+        // an UPPER-HALF unsigned literal rides the pattern carrier WRAPPED, as a
+        // negative value. Range-checking it raw would read `18446744073709551615u64`
+        // as `-1` and reject a legal pattern, so the payload is un-wrapped first.
+        "fn main() { let n: u64 = 5u64; match n { 18446744073709551615u64 => println(1), _ => println(2), } }",
+        "fn main() { let n: u128 = 5u128; match n { 340282366920938463463374607431768211455u128 => println(1), _ => println(2), } }",
+        // negative literals against signed types, including both MIN magnitudes
+        "fn main() { let n: i64 = 5i64; match n { -5 => println(1), _ => println(2), } }",
+        "fn main() { let n: i64 = 5i64; match n { -9223372036854775808 => println(1), _ => println(2), } }",
+        // a borrowed scrutinee peels to its pointee
+        "fn f(r: ref i64) -> i64 { match r { 5 => return 1, _ => return 2, } } fn main() { }",
+        // range patterns keep their own bound resolution
+        "fn main() { let n: i64 = 5i64; match n { 0..=10 => println(1), _ => println(2), } }",
+        // char and bool at their own types
+        "fn main() { let c: char = 'a'; match c { 'a'..='z' => println(1), _ => println(2), } }",
+        "fn main() { let b: bool = true; match b { true => println(1), false => println(2), } }",
+    ] {
+        typecheck_ok(src);
+    }
+}
+
+/// A REFINEMENT scrutinee peels to its base before the literal is judged. An
+/// integer literal against a `distinct type … where` over an integer is
+/// ordinary, exhaustive-by-enumeration code — the shape the bounded-refinement
+/// tests already cover — and the first draft of this check rejected all of it.
+/// The predicate's own bounds stay the refinement machinery's business; this
+/// only resolves the base.
+#[test]
+fn a_literal_pattern_against_a_refinement_checks_its_base() {
+    typecheck_ok(
+        "distinct type Floor = i64 where self >= 0 and self <= 3;\n\
+         fn f(x: Floor) -> i64 { match x { 0 => return 10, 1 => return 11, 2 => return 12, 3 => return 13, } }\n\
+         fn main() { }",
+    );
+}
+
+/// Typecheck and return the errors, ASSERTING NOTHING about whether there are
+/// any. `typecheck_errors` requires at least one and `typecheck_ok` requires
+/// none, so neither can express "compare the two verdicts" — which is exactly
+/// what the agreement test below needs.
+fn type_errors_of(source: &str) -> Vec<TypeError> {
+    let parsed = parse(source);
+    if !parsed.errors.is_empty() {
+        // A parse failure is not a type verdict; surface it rather than
+        // silently reporting "no type errors".
+        panic!(
+            "expected a clean parse of {source:?}, got: {:?}",
+            parsed
+                .errors
+                .iter()
+                .map(|e| e.to_string())
+                .collect::<Vec<_>>()
+        );
+    }
+    let resolved = resolve(&parsed.program);
+    typecheck(&parsed.program, &resolved).errors
+}
+
+/// The INVARIANT behind B-2026-08-20-10's fix, asserted directly: for the same
+/// literal and the same type, pattern position and expression position reach
+/// the same verdict. Expression position was the oracle the check was built
+/// against, so pinning the agreement is what keeps the two from drifting apart
+/// again — a future change to either side that breaks the correspondence fails
+/// here rather than silently reopening the gap.
+///
+/// ONE DELIBERATE EXCEPTION, asserted as an exception so it cannot rot into an
+/// unnoticed inconsistency: a FLOAT literal at an INTEGER scrutinee. Expression
+/// position accepts `let n: i64 = 1.5` and binds a float to an `i64`-annotated
+/// name, printing `1.5` — a pre-existing defect filed as B-2026-08-20-13.
+/// Replicating it would mean accepting a pattern that can never match, so the
+/// pattern side is stricter and the expression side is what has to catch up.
+#[test]
+fn the_literal_pattern_check_agrees_with_expression_position() {
+    for (ty, init, lit) in [
+        ("i64", "5i64", "true"),
+        ("i64", "5i64", "'a'"),
+        ("bool", "true", "5"),
+        ("char", "'a'", "5"),
+        ("i64", "5i64", "\"s\""),
+        ("String", "\"a\"", "5"),
+        ("f64", "1.5", "5"),
+        ("i64", "5i64", "5u64"),
+        ("u64", "5u64", "5i64"),
+        ("i8", "5i8", "5i64"),
+        ("i8", "5i8", "300i8"),
+        ("u8", "5u8", "300"),
+        ("u8", "5u8", "-1"),
+        ("u64", "5u64", "18446744073709551615u64"),
+    ] {
+        let expr_src = format!("fn main() {{ let n: {ty} = {lit}; println(1) }}");
+        let pat_src = format!(
+            "fn main() {{ let n: {ty} = {init}; match n {{ {lit} => println(1), _ => println(2), }} }}"
+        );
+        let expr_rejected = !type_errors_of(&expr_src).is_empty();
+        let pat_rejected = !type_errors_of(&pat_src).is_empty();
+        assert_eq!(
+            expr_rejected, pat_rejected,
+            "pattern and expression position disagree on {lit} at {ty}: \
+             expression rejected={expr_rejected}, pattern rejected={pat_rejected}"
+        );
+    }
+    // The documented exception, pinned in both directions.
+    assert!(
+        type_errors_of("fn main() { let n: i64 = 1.5; println(1) }").is_empty(),
+        "expression position is expected to (wrongly) accept a float at an int \
+         binding — if this now fails, B-2026-08-20-13 was fixed and the pattern \
+         side's departure can be retired"
+    );
+    assert!(
+        !type_errors_of(
+            "fn main() { let n: i64 = 5i64; match n { 1.5 => println(1), _ => println(2), } }"
+        )
+        .is_empty(),
+        "a float literal pattern at an integer scrutinee must be rejected"
+    );
+}
+
 /// Every width that DOES have a real carrier stays accepted — the guard against
 /// a rejection that over-reaches into the widths this is not about.
 #[test]

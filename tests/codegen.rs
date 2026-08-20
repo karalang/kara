@@ -21889,12 +21889,12 @@ fn main() {
         // MIN magnitudes are the sharpest case — they have no positive form, so
         // they exist only as an already-negated literal.
         //
-        // One miss is deliberately NOT asserted here: `Some(5)` against a
-        // `Some(-5)` pattern. Codegen does not compare an enum payload's
-        // literal at all — it matches on the tag alone, so `Some(5)` also
-        // matches `Some(7)` — a pre-existing miscompile with no negatives
-        // involved, filed as B-2026-08-20-11 and covered by its own test there.
-        // Asserting it here would tie this row's regression test to that one.
+        // The `Some(5)` MISS was held out when this test was written: codegen
+        // then compared only the variant TAG, so any `Some(<literal>)` arm
+        // fired for every `Some(_)` (B-2026-08-20-11, found by this very
+        // discipline of asserting misses). That is fixed, so the assertion is
+        // restored — a negative literal in an enum payload now has to both
+        // fire on its own value and stay quiet on another.
         if let Some(out) = run_program(
             "fn sign(n: i64) -> String {\n\
              match n {\n\
@@ -21913,6 +21913,8 @@ fn main() {
              println(sign(0i64 - 99i64));\n\
              let o: Option[i64] = Some(0i64 - 5i64);\n\
              match o { Some(-5) => println(\"payload\"), _ => println(\"no\") }\n\
+             let q: Option[i64] = Some(5i64);\n\
+             match q { Some(-5) => println(\"payload\"), _ => println(\"no\") }\n\
              let t = (0i64 - 1i64, 2i64);\n\
              match t { (-1, 2) => println(\"tuple\"), _ => println(\"no\") }\n\
              let f: f64 = 0.0 - 1.5;\n\
@@ -21933,6 +21935,7 @@ fn main() {
                  one-or-two\n\
                  other\n\
                  payload\n\
+                 no\n\
                  tuple\n\
                  float\n\
                  no\n\
