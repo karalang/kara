@@ -92,12 +92,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 268 | 0 |
+| miscompile | 269 | 0 |
 | leak | 185 | 0 |
 | run-vs-build | 144 | 0 |
 | double-free | 133 | 0 |
 | missing-feature | 129 | 0 |
-| codegen-gap | 121 | 1 |
+| codegen-gap | 120 | 0 |
 | diagnostics | 90 | 0 |
 | false-positive | 88 | 0 |
 | perf | 80 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 958 | 1 |
+| codegen | 958 | 0 |
 | typecheck | 219 | 0 |
 | interp | 167 | 0 |
 | ownership | 61 | 0 |
@@ -124,13 +124,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 6 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1413 surfaced · 1 open · 1392 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1413 surfaced · 0 open · 1393 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (0)
 
-| id | date | surface | sev | title | tracker |
-|---|---|---|---|---|---|
-| B-2026-08-20-35 | 2026-08-20 | codegen | low | A NESTED INDEXED READ WHOSE OUTER CONTAINER IS A MAP (`m[k][i]` on a `Map[K, Vec[V]]`) is rejected by codegen with `codegen: nested indexed read on 'm' -- outer is not a Vec/Slice/Array`; the interpreter accepts it, so it is a run/build split. Measured on 5b6c33b, after B-2026-08-20-33 lifted the arbitrary-depth Vec/Slice/Array chain -- this shape is what is LEFT, and it is left because the element-pointer helpers the new resolver calls are all Vec/Slice/Array-shaped. | roadmap.md |
+_None — the ledger is fully drained._
 
 ### Wontfix (7)
 
@@ -148,9 +146,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1413 surfaced
 
 </details>
 
-### Fixed (1392)
+### Fixed (1393)
 
-<details><summary>1392 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1393 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -13279,6 +13277,35 @@ behaviour that made it a two-minute diagnosis.
 REGRESSION COVERAGE: `e2e_stack_overflow_reports_itself` (tests/codegen.rs) asserts the process fails, that stderr names the overflow, AND that the cause/remedy notes are present -- a bare "stack overflow" would still leave a reader guessing what to change. The fixture recurses WITHOUT allocating, so it faults in ~6 ms instead of churning the heap on the way down.
 
 SCOPE, unchanged from the row: the tree-walk interpreter is not affected (it does not recurse the native stack per Kāra frame deeply enough to fault on the same program), and this guard covers the MAIN thread, where a deep user recursion runs. Pool threads keep their own stacks and are not covered. |
+| B-2026-08-20-35 | codegen | high | A NESTED INDEX WHOSE OUTER CONTAINER IS A MAP: the READ (`m[k][i]` on a `Map[K, Vec[V]]`) is rejected `outer is not a Vec/Slice/Array`, and the WRITE… | FIXED by 16354f1. TWO CORRECTIONS TO THIS ROW, and I filed it, so both are mine. The row was wrong about the cause and wrong about the severity, in opposite directions.
+
+CORRECTION 1 -- THE PREMISE WAS FALSE. The row asserts "a Map element has no such pointer: the runtime hash map owns its slots and a lookup returns a VALUE, not a stable interior address", and reasons from there that widening would need a new lowering or a new runtime accessor. `lower_indexed_elem_ptr_map` HAS EXISTED SINCE B-2026-07-25-5. It calls `karac_map_lookup_slot`, which hands back the address of the value inside the map's `kv` buffer precisely so that a mutating method (`m[k].push(x)`) propagates. The indexed-RECEIVER path had the arm; the nested-READ path did not. So the fix is one dispatch line per site, not a new contract. I should have grepped for the helper before reasoning about whether it could exist.
+
+CORRECTION 2 -- THE WRITE HALF WAS A MISCOMPILE, NOT A REFUSAL. The row says "the compiler REFUSES rather than miscompiles" and rates it LOW on that basis. That is true of the read. It is FALSE of the write, which the row never tested in isolation: my repro put a nested read in the same program, so the read's refusal masked what the store did. Tested alone:
+
+    let mut m: Map[i64, Vec[i64]] = Map.new();
+    m.insert(1i64, [7i64, 8i64]);
+    m[1i64][0] = 55i64;
+    let row = m[1i64];
+    println(f"{row[0]}");
+
+    build : Built: m2          <- COMPILED CLEAN
+    run   : Segmentation fault, exit 139
+
+The cause is a type-shape confusion that reads as correct: `var_elem_type_exprs` holds a map's VALUE TypeExpr, so for `Map[K, Vec[V]]` it is `Vec[V]`, and the nested store's "is the outer a Vec of Vecs?" test -- `vec_inner_type_expr(...).is_some()` -- says YES for a Map. The map HANDLE was then handed to `compile_nested_vec_vec_index_store` and indexed as a Vec of Vecs. Severity should have been HIGH; a silent segfault on a natural spelling is the thing the ledger's own class vocabulary calls `miscompile`.
+
+Worth noting: the B-2026-08-20-34 stack guard landed hours earlier and correctly DECLINED this one -- exit 139, not 134 -- which is the negative half of that fix confirming itself on a real fault rather than a synthetic C harness.
+
+THE FIX, three sites:
+  * `compile_nested_index_read` gains the Map arm (`lower_indexed_elem_ptr_map`).
+  * `container_place_name` (the B-2026-08-20-33 resolver) gains the same arm, so a Map link anywhere in a chain resolves.
+  * `compile_index_store` EXCLUDES maps from the vec-of-vec test -- killing the miscompile -- and gains a Map arm that resolves through the bucket pointer and recurses.
+
+AND ONE MORE SHAPE THE ROW DID NOT CONTAIN, found because fixing the first three left it still refused: a `Vec[Map[K, V]]` (`vm[i][k] = v`). It matches NEITHER test -- the outer is a Vec, its element is not a Vec -- so it fell past both to the "must be a variable" gate. Rather than add a fourth predicate I generalised the B-2026-08-20-33 fallback: any index-rooted store target that every earlier arm declined now goes through `container_place_name`, which resolves the element's storage and lets the identifier-keyed store write with whatever shape the element actually has. Placement matters and is commented -- it sits AFTER the vec-of-vec and Map arms, so it cannot preempt the vec-of-vec store's element-release (B-2026-08-10-1) or the Map path.
+
+VERIFIED on all four surfaces (`--interp`, JIT, `build`, `KARAC_AUTO_PAR=0 build`), byte-identical: Map[K,Vec[V]] read and write with a sibling key asserted untouched; Map[K,Map[K,V]]; Vec[Map[K,V]]; and a Map reached through a struct FIELD. The write cases read back through the container, so a store into a temporary rather than the map's own storage fails them.
+
+ASAN clean, which is the gate that matters here: the store writes through a pointer into the map's `kv` buffer, so a wrong shape or a stray drop registration would be a heap corruption rather than a wrong number. |
 
 </details>
 
