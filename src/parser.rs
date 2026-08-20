@@ -204,6 +204,14 @@ pub struct Parser {
     /// disambiguate `break label expr`) work uniformly across both label
     /// kinds. Pushed at the entry to a labeled construct, popped on exit.
     pub(crate) loop_labels: Vec<(String, LabelKind)>,
+    /// Items produced by a single `parse_item` call beyond the first. Only
+    /// `import` fills this today: design.md defines nested grouping
+    /// (`import a.{b.{c, d}, e};`) as *equivalent to* three flat imports, and
+    /// three flat imports are three `Item::Import`s. `parse_item` returns one
+    /// `Item`, so the extras queue here and the item loop drains them before
+    /// its next `parse_item` call — the statement's decls therefore land in
+    /// `Program::items` contiguously and in source order.
+    pub(crate) pending_extra_items: Vec<Item>,
     /// Doc-comment text accumulated by the leading-`///` collection at the
     /// top of `parse_item`. Each item-construction site calls
     /// `Self::take_pending_doc` when filling the new node's `doc_comment`
@@ -302,6 +310,7 @@ impl Parser {
             loop_labels: Vec::new(),
             errors: Vec::new(),
             recursion_depth: 0,
+            pending_extra_items: Vec::new(),
             frozen_ok: false,
             frozen_consumed: false,
             frozen_self_consumed: false,
@@ -425,7 +434,10 @@ impl Parser {
         while !self.is_at_end() {
             let errs_before = self.errors.len();
             match self.parse_item() {
-                Some(item) => items.push(item),
+                Some(item) => {
+                    items.push(item);
+                    items.append(&mut self.pending_extra_items);
+                }
                 None if self.errors.len() == errs_before && !self.is_at_end() => {
                     // Non-item head with no diagnostic — a top-level
                     // statement. Parse it as one; a statement parse that

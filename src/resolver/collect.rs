@@ -1615,6 +1615,13 @@ impl<'a> super::Resolver<'a> {
             // `UnknownModule`), then still bind the names below so downstream
             // passes don't cascade `UndefinedName` (B-2026-07-18-25).
             self.report_bogus_single_file_std_import(imp);
+            if imp.is_wildcard {
+                // No tree, so there is nothing to enumerate — the names this
+                // wildcard would have bound stay unbound. Record that so the
+                // undefined-name channel can stay quiet rather than accuse a
+                // valid program (see `wildcard_hides_unresolved_names`).
+                self.unexpanded_wildcard_import = true;
+            }
             for item in &imp.items {
                 let bound = item.alias.clone().unwrap_or_else(|| item.name.clone());
                 let mut full = imp.path.clone();

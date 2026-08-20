@@ -124,6 +124,16 @@ pub struct ProgramTree {
     /// via `with_tree` so references to filtered items report "not
     /// available on target X".
     pub target_tombstones: std::collections::HashMap<String, String>,
+    /// Per-module fallout of design.md's second wildcard-precedence rule:
+    /// "two wildcards that both expose the same name are not an error at the
+    /// import site. The name becomes ambiguous and produces a compile error
+    /// **at the use site**". [`expand_wildcard_imports`] binds neither
+    /// candidate and records `name -> [module path, …]` here instead;
+    /// `Resolver::with_tree` adopts the importing module's entry and turns a
+    /// use of such a name into `E0124 AmbiguousWildcardImport` rather than
+    /// `E0100 undefined name`. Empty for every module without a collision.
+    pub wildcard_ambiguities:
+        std::collections::HashMap<ModuleId, std::collections::HashMap<String, Vec<String>>>,
 }
 
 impl ProgramTree {
@@ -409,9 +419,12 @@ pub fn build_program_tree_with_deps(
                             })
                             .cloned()
                             .collect();
-                        if kept.is_empty() {
+                        if kept.is_empty() && !d.is_wildcard {
                             None
                         } else {
+                            // A wildcard is still unexpanded here (the tree is
+                            // mid-build), so its empty `items` means "not yet
+                            // filled in", not "everything was deduped away".
                             Some(ImportDecl {
                                 items: kept,
                                 ..d.clone()
@@ -693,30 +706,290 @@ pub fn build_program_tree_with_deps(
         span_base = max_end + 1;
     }
 
-    let mut graph = ModuleGraph {
+    let graph = ModuleGraph {
         edges: Vec::new(),
         by_path,
     };
 
-    collect_import_edges(&modules, &mut graph);
+    let mut tree = ProgramTree {
+        modules,
+        root,
+        graph,
+        target_tombstones,
+        wildcard_ambiguities: std::collections::HashMap::new(),
+    };
 
-    Ok(BuildTreeOk {
-        tree: ProgramTree {
-            modules,
-            root,
-            graph,
-            target_tombstones,
-        },
-        parse_errors,
-    })
+    // design.md § Module System > Wildcard imports. Rewrite every
+    // `import path.*;` into the flat imports it stands for, now that the
+    // module set is complete and `#[target(...)]`-filtered items are already
+    // gone (so a wildcard cannot import a name that does not exist on this
+    // target). Everything downstream — the resolver, the typechecker's
+    // cross-module env build, the graph edges below — therefore sees only
+    // ordinary imports and needs no wildcard awareness of its own.
+    tree.wildcard_ambiguities = expand_wildcard_imports(&mut tree);
+
+    let ProgramTree {
+        ref modules,
+        ref mut graph,
+        ..
+    } = tree;
+    collect_import_edges(modules, graph);
+
+    Ok(BuildTreeOk { tree, parse_errors })
+}
+
+/// Expand every wildcard import in `tree` into the concrete flat imports it
+/// stands for, per design.md § Module System > Wildcard imports, and return
+/// the per-module wildcard-vs-wildcard ambiguities the expansion deferred to
+/// the use site (see [`ProgramTree::wildcard_ambiguities`]).
+///
+/// The three precedence rules are all decided here, where the whole module is
+/// visible at once — which is why this is a tree pass and not something the
+/// resolver does as it walks items in source order:
+///
+/// 1. **An explicit import always wins over a wildcard.** A name the importing
+///    module already binds — a local declaration, or an item/alias from a
+///    non-wildcard import — is dropped from the expansion, so the wildcard
+///    never reaches `SymbolTable::define` to collide with it. This holds no
+///    matter which of the two comes first in the file.
+/// 2. **Two wildcards exposing one name are not an error here.** Neither is
+///    bound; the name is recorded in the returned map and the diagnostic fires
+///    at the use site. Every other name from both wildcards is bound normally.
+///    A name whose routes all reach the SAME canonical item — through a
+///    `pub import` facade and through its defining module, say — is one item,
+///    not a collision, and binds like any other.
+/// 3. **Prelude items lose to any import.** Nothing to do: prelude names live
+///    in the resolver's scope 0 with a synthetic span, and
+///    `SymbolTable::define` already lets a real definition shadow those.
+///
+/// A wildcard naming a module that does not exist is left with an empty
+/// `items` vector, which is exactly what the resolver's existing
+/// `E0112 UnknownModule` path reports on. Only ITEMS expand — a submodule of
+/// the target is not brought into scope, matching
+/// `module_top_level_names`'s view of a module's exported surface.
+fn expand_wildcard_imports(
+    tree: &mut ProgramTree,
+) -> std::collections::HashMap<ModuleId, std::collections::HashMap<String, Vec<String>>> {
+    // A `pub import a.*;` FACADE re-exports names that only exist once that
+    // wildcard has itself expanded, so a module that wildcard-imports the
+    // facade needs a second pass to see them. Expansion only ever adds names,
+    // so iterating to a fixpoint terminates; the cap is a safety belt matching
+    // the re-export chain depth the rest of this module already bounds.
+    let mut ambiguities = std::collections::HashMap::new();
+    for _ in 0..=REEXPORT_MAX_DEPTH {
+        let (round, changed) = expand_wildcard_imports_round(tree);
+        ambiguities = round;
+        if !changed {
+            break;
+        }
+    }
+    ambiguities
+}
+
+/// One planning + application pass of [`expand_wildcard_imports`]. Returns the
+/// ambiguities found this round and whether any declaration's item list
+/// actually changed (the fixpoint signal).
+fn expand_wildcard_imports_round(
+    tree: &mut ProgramTree,
+) -> (
+    std::collections::HashMap<ModuleId, std::collections::HashMap<String, Vec<String>>>,
+    bool,
+) {
+    use std::collections::HashMap as Map;
+
+    // Phase 1 — read-only planning against the whole tree. Nothing is mutated
+    // while `tree` is borrowed shared, so the plan is computed against a
+    // consistent view of every module's exports.
+    struct Plan {
+        module: ModuleId,
+        /// Expansion per wildcard decl, indexed by the decl's position among
+        /// this module's wildcard decls in item order.
+        per_wildcard: Vec<Vec<String>>,
+        ambiguous: Map<String, Vec<String>>,
+    }
+    let mut plans: Vec<Plan> = Vec::new();
+
+    for m in &tree.modules {
+        if m.is_synthetic {
+            continue;
+        }
+        let wildcards: Vec<&ImportDecl> = m
+            .items
+            .iter()
+            .filter_map(|it| match it {
+                Item::Import(imp) if imp.is_wildcard => Some(imp),
+                _ => None,
+            })
+            .collect();
+        if wildcards.is_empty() {
+            continue;
+        }
+
+        // Rule 1's left-hand side: everything this module binds without help
+        // from a wildcard.
+        let mut explicit: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        for it in &m.items {
+            if let Item::Import(imp) = it {
+                if imp.is_wildcard {
+                    continue;
+                }
+                for ii in &imp.items {
+                    explicit.insert(ii.alias.as_deref().unwrap_or(&ii.name));
+                }
+            }
+        }
+
+        // Candidate name -> the wildcards offering it, each paired with the
+        // canonical item it resolves to. Two wildcards offering one name is
+        // rule 2's collision only when they mean DIFFERENT items — a name
+        // reached both through a `pub import` facade and through its origin is
+        // one item by two routes (design.md: "re-exports preserve canonical
+        // identity"), so it binds normally.
+        /// `(index of the offering wildcard, canonical item it names)`.
+        type Offer = (usize, (ModulePath, String));
+        let mut offers: Map<String, Vec<Offer>> = Map::new();
+        for (wi, imp) in wildcards.iter().enumerate() {
+            if tree.graph.lookup(&imp.path).is_none() {
+                continue; // E0112 territory — leave the decl empty
+            }
+            for name in crate::resolver::module_top_level_names(tree, &imp.path) {
+                if explicit.contains(name.as_str()) || module_defines_local_item(m, &name) {
+                    continue; // rule 1 — explicit/local wins
+                }
+                let Some(origin) = wildcard_import_origin(tree, m, &imp.path, &name) else {
+                    continue;
+                };
+                let entry = offers.entry(name).or_default();
+                if !entry.iter().any(|(seen, _)| *seen == wi) {
+                    entry.push((wi, origin));
+                }
+            }
+        }
+
+        let mut per_wildcard: Vec<Vec<String>> = vec![Vec::new(); wildcards.len()];
+        let mut ambiguous: Map<String, Vec<String>> = Map::new();
+        let mut names: Vec<&String> = offers.keys().collect();
+        names.sort_unstable(); // `offers` is a HashMap — keep expansion order stable
+        for name in names {
+            let sources = &offers[name];
+            let one_item = sources.iter().all(|(_, origin)| *origin == sources[0].1);
+            if one_item {
+                // Exactly one item, however many routes reach it — bind it
+                // through the first wildcard that offered it.
+                per_wildcard[sources[0].0].push(name.clone());
+            } else {
+                // Rule 2 — bind none of them, report at the use site.
+                ambiguous.insert(
+                    name.clone(),
+                    sources
+                        .iter()
+                        .map(|(wi, _)| format_module_path(&wildcards[*wi].path))
+                        .collect(),
+                );
+            }
+        }
+        plans.push(Plan {
+            module: m.id,
+            per_wildcard,
+            ambiguous,
+        });
+    }
+
+    // Phase 2 — apply.
+    let mut ambiguities: Map<ModuleId, Map<String, Vec<String>>> = Map::new();
+    let mut changed = false;
+    for plan in plans {
+        let m = &mut tree.modules[plan.module];
+        let mut wi = 0usize;
+        for it in &mut m.items {
+            let Item::Import(imp) = it else { continue };
+            if !imp.is_wildcard {
+                continue;
+            }
+            let span = imp.span;
+            let expanded: Vec<ImportItem> = plan.per_wildcard[wi]
+                .iter()
+                .map(|name| ImportItem {
+                    span,
+                    name: name.clone(),
+                    alias: None,
+                })
+                .collect();
+            if imp.items.len() != expanded.len()
+                || imp
+                    .items
+                    .iter()
+                    .zip(&expanded)
+                    .any(|(a, b)| a.name != b.name)
+            {
+                changed = true;
+                imp.items = expanded;
+            }
+            wi += 1;
+        }
+        // `Module::imports` is a side-table copy of the same decls, so it has
+        // to be rewritten in lockstep or the graph builder and the CLI's
+        // gated-stdlib splice keep reading the pre-expansion shape.
+        m.imports = extract_imports_from_items(&m.items);
+        if !plan.ambiguous.is_empty() {
+            ambiguities.insert(plan.module, plan.ambiguous);
+        }
+    }
+    (ambiguities, changed)
+}
+
+/// Would an explicit `import <path>.<name>;` written in `importer` be accepted,
+/// and if so, which item does it name? The wildcard expands to exactly the
+/// names for which the answer is yes, so `import a.*` binds precisely what
+/// writing out every legal single-item import of `a` would have bound — never a
+/// name whose use would then be rejected. The canonical `(module, item)` comes
+/// back with it so two wildcards reaching ONE item through different re-export
+/// routes can be told apart from two wildcards naming two different items.
+///
+/// design.md says a wildcard "brings all `pub` items from the named module into
+/// scope", which is the cross-package phrasing: across a package boundary only
+/// `pub` is importable at all. Within a package, default visibility is
+/// importable too (§ Three-level visibility — "visible to all files in the
+/// project"), and `private` is importable from the same directory, so the two
+/// join here into one predicate rather than a literal `pub`-only filter. Taking
+/// "all `pub` items" literally would make a wildcard bind *nothing* from a
+/// typical same-package module, since design.md calls default visibility "the
+/// most common case".
+fn wildcard_import_origin(
+    tree: &ProgramTree,
+    importer: &Module,
+    path: &[String],
+    name: &str,
+) -> Option<(ModulePath, String)> {
+    // `None` when the name is a submodule re-export, or nothing at all.
+    let (def_path, def_name) = canonical_origin(tree, path, name)?;
+    let vis = canonical_item_visibility(tree, path, name)?;
+    if !crate::resolver::visibility_allows_access(vis, &def_path, &importer.path) {
+        return None;
+    }
+    if vis != Visibility::Pub {
+        let def_pkg = tree
+            .graph
+            .lookup(&def_path)
+            .and_then(|id| tree.module(id).package.as_deref());
+        if importer.package.as_deref() != def_pkg {
+            return None; // only `pub` crosses a package boundary
+        }
+    }
+    Some((def_path, def_name))
 }
 
 /// Walk top-level items and gather every `import` declaration into a side
 /// table. The dependency-graph builder walks only these, while every
 /// downstream pass continues to iterate `Module.items` directly.
 fn extract_imports(program: &Program) -> Vec<ImportDecl> {
-    program
-        .items
+    extract_imports_from_items(&program.items)
+}
+
+/// [`extract_imports`] over a bare item slice — used to refresh the side table
+/// after [`expand_wildcard_imports`] rewrites a module's import declarations.
+fn extract_imports_from_items(items: &[Item]) -> Vec<ImportDecl> {
+    items
         .iter()
         .filter_map(|it| match it {
             Item::Import(d) => Some(d.clone()),
@@ -735,6 +1008,15 @@ fn extract_imports(program: &Program) -> Vec<ImportDecl> {
 fn collect_import_edges(modules: &[Module], graph: &mut ModuleGraph) {
     for m in modules {
         for imp in &m.imports {
+            // A wildcard whose module exists but exports nothing importable
+            // expands to zero items, yet still depends on that module — the
+            // edge has to come from the path, or an import cycle closed only
+            // by wildcards would slip past `E0223 CircularModuleDependency`.
+            if imp.is_wildcard {
+                if let Some(&id) = graph.by_path.get(&imp.path) {
+                    graph.add_edge(m.id, id);
+                }
+            }
             for item in &imp.items {
                 let mut full = imp.path.clone();
                 full.push(item.name.clone());
@@ -1206,6 +1488,7 @@ mod tests {
                 by_path,
             },
             target_tombstones: HashMap::new(),
+            wildcard_ambiguities: HashMap::new(),
         }
     }
 

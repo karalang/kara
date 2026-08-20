@@ -17,10 +17,13 @@
 //!   3. The same names are still registered directly in the resolver's global
 //!      scope and the typechecker's type environment — `register_builtin_types`
 //!      remains the *placeholder* implementation that backs the synthetic
-//!      module's stub items. Wildcard imports (`import a.b.*;`) are deferred
-//!      from CR-24, so we can't actually splat the synthetic module's
-//!      contents into every file via the import machinery yet — direct
-//!      registration provides the equivalent name visibility today.
+//!      module's stub items. Direct registration provides the name visibility
+//!      that design.md describes as a synthetic `import std.prelude.*;` at
+//!      each module's top. The wildcard FORM itself now exists
+//!      (B-2026-08-20-18 — `module::expand_wildcard_imports`), so routing the
+//!      prelude through the real import machinery is no longer blocked on it;
+//!      that is simply a separate change, and the two paths agree on the name
+//!      set today because both read the lists below.
 //!
 //! Real stdlib materialisation (replacing `register_builtin_types` with
 //! `runtime/stdlib/*.kara` source baked into the compiler) is a follow-up CR
@@ -1444,9 +1447,11 @@ pub fn expand_gated_stdlib_imports(program: &mut Program) {
         appended.extend(expansion);
     }
     // Imports left with zero items would confuse downstream passes —
-    // remove them entirely.
+    // remove them entirely. A WILDCARD is exempt: it parses with an empty
+    // `items` and is filled in later by `module::expand_wildcard_imports`, so
+    // dropping it here would delete the declaration before it ever expanded.
     program.items.retain(|item| match item {
-        Item::Import(imp) => !imp.items.is_empty(),
+        Item::Import(imp) => !imp.items.is_empty() || imp.is_wildcard,
         _ => true,
     });
     // Dedup auto-spliced effect resources by name: a resource can arrive

@@ -31,7 +31,19 @@ impl super::Formatter {
             Item::Import(i) => {
                 let vis = if i.is_pub { "pub " } else { "" };
                 let prefix = path_str(&i.path);
-                let rendered = if i.items.len() == 1 {
+                let rendered = if i.is_wildcard {
+                    // A wildcard's `items` is filled in later by the tree pass;
+                    // the formatter sees the parsed AST, so it always renders
+                    // the source form. Nested grouping is NOT re-nested — the
+                    // parser already flattened it into one decl per prefix, and
+                    // design.md defines the two spellings as equivalent, so
+                    // `fmt` normalizes to the flat form.
+                    if prefix.is_empty() {
+                        "*".to_string()
+                    } else {
+                        format!("{prefix}.*")
+                    }
+                } else if i.items.len() == 1 {
                     let only = &i.items[0];
                     let base = if prefix.is_empty() {
                         ident_str(&only.name)

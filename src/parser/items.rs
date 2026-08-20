@@ -12,7 +12,8 @@
 //! (`parse_effect_decl`, `parse_effect_group_body`,
 //! `parse_optional_effect_list`, `parse_effect_list`,
 //! `parse_resource`), module surface (`parse_use_decl`,
-//! `parse_import_decl`, `parse_import_item_list`,
+//! `parse_import_decl`, `parse_import_subtree`,
+//! `group_import_leaves`,
 //! `parse_const_decl`, `parse_alias_decl`,
 //! `parse_independent_decl`, `parse_type_alias`,
 //! `parse_distinct_type`), and extern blocks
@@ -187,8 +188,17 @@ impl super::Parser {
                 Some(Item::UseDecl(decl))
             }
             Token::Import => {
-                let decl = self.parse_import_decl(is_pub)?;
-                Some(Item::Import(decl))
+                let mut decls = self.parse_import_decl(is_pub)?;
+                if decls.is_empty() {
+                    return None;
+                }
+                // Nested grouping can expand one statement into several
+                // decls. The item loop takes one `Item` per call, so the
+                // extras queue up and are drained there.
+                let first = decls.remove(0);
+                self.pending_extra_items
+                    .extend(decls.into_iter().map(Item::Import));
+                Some(Item::Import(first))
             }
             Token::Const => {
                 let decl = self.parse_const_decl(attributes, is_pub, is_private)?;
@@ -2374,101 +2384,171 @@ impl super::Parser {
     /// import a.b.Item;
     /// import a.b.Item as X;
     /// import a.b.{A, B as X};
-    /// import a.b;            // binds the last segment (module or item)
-    /// pub import a.b.Item;   // re-export (slice 7 consumer)
+    /// import a.b;              // binds the last segment (module or item)
+    /// import a.b.*;            // wildcard — every accessible item of `a.b`
+    /// import a.{b.{c, d}, e};  // nested grouping
+    /// pub import a.b.Item;     // re-export (slice 7 consumer)
     /// ```
     ///
     /// `ImportDecl.path` is the module prefix (everything before the item /
     /// last-segment binding) and `ImportDecl.items` lists the names bound in
-    /// the current scope. Wildcard and nested grouping are deferred.
-    fn parse_import_decl(&mut self, is_pub: bool) -> Option<ImportDecl> {
+    /// the current scope.
+    ///
+    /// **Nested grouping desugars here.** design.md specifies
+    /// `import a.{b.{c, d}, e}` as *equivalent to* `import a.b.c; import a.b.d;
+    /// import a.e` — an expansion "before resolution". One source statement can
+    /// therefore name leaves under several distinct prefixes, which a single
+    /// `ImportDecl` (one `path`, many `items`) cannot represent, so the parse
+    /// returns one decl per distinct prefix and the caller emits them all. A
+    /// flat group (`a.b.{c, d}`) still yields exactly ONE decl with two items,
+    /// as it always did — the split is driven by the prefixes actually present,
+    /// not by the syntax used.
+    fn parse_import_decl(&mut self, is_pub: bool) -> Option<Vec<ImportDecl>> {
         let start = self.current_span();
         self.expect(&Token::Import)?;
 
-        // Collect the dotted prefix up to the first `{` or the final segment.
-        let mut prefix: Vec<(String, Span)> = Vec::new();
         let first_span = self.current_span();
         let first_name = self.expect_identifier()?;
-        prefix.push((first_name, first_span));
-
-        let mut items: Vec<ImportItem> = Vec::new();
-
-        loop {
-            if self.eat(&Token::Dot) {
-                // After a `.`, either an identifier continues the path or a
-                // `{` opens a brace-grouped item list.
-                if self.check(&Token::LeftBrace) {
-                    self.advance();
-                    items = self.parse_import_item_list()?;
-                    self.expect(&Token::RightBrace)?;
-                    break;
-                }
-                let seg_span = self.current_span();
-                let seg = self.expect_identifier()?;
-                prefix.push((seg, seg_span));
-                continue;
-            }
-            // Dot-free path ended. The last `prefix` entry is the bound name.
-            break;
-        }
-
-        if items.is_empty() {
-            // Bare `import a.b.c;` or `import a.b.c as X;` — the last segment
-            // is the item, everything before is the path prefix.
-            let (name, name_span) = prefix.pop().expect("at least one segment parsed");
-            let alias = if self.eat(&Token::As) {
-                Some(self.expect_identifier()?)
-            } else {
-                None
-            };
-            items.push(ImportItem {
-                span: name_span,
-                name,
-                alias,
-            });
-        }
-
+        let mut leaves: Vec<ImportLeaf> = Vec::new();
+        self.parse_import_subtree(vec![(first_name, first_span)], &mut leaves)?;
         self.expect(&Token::Semicolon)?;
 
-        let (path, path_spans): (Vec<String>, Vec<Span>) = prefix.into_iter().unzip();
-        Some(ImportDecl {
-            span: self.span_from(&start),
-            is_pub,
-            path,
-            path_spans,
-            items,
-        })
+        let span = self.span_from(&start);
+        Some(Self::group_import_leaves(leaves, span, is_pub))
     }
 
-    /// Parse the body of `import path.{ ... };` — a comma-separated list of
-    /// `Name` or `Name as Alias`, with optional trailing comma.
-    fn parse_import_item_list(&mut self) -> Option<Vec<ImportItem>> {
-        let mut items = Vec::new();
+    /// Parse one dotted path and everything that hangs off it, appending a
+    /// leaf per bound name. `prefix` is the path parsed so far (at least one
+    /// segment); on entry the cursor sits just past its last segment.
+    ///
+    /// Recurses only through `{ ... }` groups, so depth is bounded by the
+    /// source's brace nesting; the shared [`Parser::recursion_depth`] budget
+    /// guards it exactly as it guards types and patterns.
+    fn parse_import_subtree(
+        &mut self,
+        mut prefix: Vec<(String, Span)>,
+        out: &mut Vec<ImportLeaf>,
+    ) -> Option<()> {
         loop {
-            if self.check(&Token::RightBrace) {
-                break;
+            if !self.eat(&Token::Dot) {
+                // Dot-free path ended. The last segment is the bound name.
+                let (name, name_span) = prefix.pop().expect("at least one segment parsed");
+                let alias = if self.eat(&Token::As) {
+                    Some(self.expect_identifier()?)
+                } else {
+                    None
+                };
+                out.push(ImportLeaf::Item {
+                    path: prefix,
+                    item: ImportItem {
+                        span: name_span,
+                        name,
+                        alias,
+                    },
+                });
+                return Some(());
             }
-            let name_span = self.current_span();
-            let name = self.expect_identifier()?;
-            let alias = if self.eat(&Token::As) {
-                Some(self.expect_identifier()?)
-            } else {
-                None
-            };
-            items.push(ImportItem {
-                span: name_span,
-                name,
-                alias,
-            });
-            if !self.eat(&Token::Comma) {
-                break;
+            // After a `.`: an identifier continues the path, `*` closes it as
+            // a wildcard, `{` opens a group.
+            if self.check(&Token::Star) {
+                self.advance();
+                if self.check(&Token::As) {
+                    self.error(
+                        "a wildcard import cannot be renamed — `import path.* as X;` is not a \
+                         form; import the items you want to rename explicitly \
+                         (`import path.{Item as X};`)",
+                    );
+                    return None;
+                }
+                if self.check(&Token::Dot) {
+                    self.error(
+                        "`*` must be the last segment of an import path — `import path.*.more;` \
+                         is not a form",
+                    );
+                    return None;
+                }
+                out.push(ImportLeaf::Wildcard { path: prefix });
+                return Some(());
+            }
+            if self.check(&Token::LeftBrace) {
+                self.advance();
+                let before = out.len();
+                loop {
+                    if self.check(&Token::RightBrace) {
+                        break;
+                    }
+                    if self.check(&Token::Star) {
+                        self.advance();
+                        out.push(ImportLeaf::Wildcard {
+                            path: prefix.clone(),
+                        });
+                    } else {
+                        let seg_span = self.current_span();
+                        let seg = self.expect_identifier()?;
+                        let mut nested = prefix.clone();
+                        nested.push((seg, seg_span));
+                        if !self.enter_recursion() {
+                            return None;
+                        }
+                        let inner = self.parse_import_subtree(nested, out);
+                        self.exit_recursion();
+                        inner?;
+                    }
+                    if !self.eat(&Token::Comma) {
+                        break;
+                    }
+                }
+                self.expect(&Token::RightBrace)?;
+                if out.len() == before {
+                    self.error("empty import group — `import path.{}` is not allowed");
+                    return None;
+                }
+                return Some(());
+            }
+            let seg_span = self.current_span();
+            let seg = self.expect_identifier()?;
+            prefix.push((seg, seg_span));
+        }
+    }
+
+    /// Fold the parsed leaves into `ImportDecl`s: consecutive item leaves that
+    /// share a prefix collapse into one decl (so the common flat forms keep the
+    /// exact AST shape they had before nested grouping existed), and every
+    /// wildcard leaf becomes its own decl.
+    fn group_import_leaves(leaves: Vec<ImportLeaf>, span: Span, is_pub: bool) -> Vec<ImportDecl> {
+        let mut decls: Vec<ImportDecl> = Vec::new();
+        for leaf in leaves {
+            match leaf {
+                ImportLeaf::Wildcard { path } => {
+                    let (path, path_spans): (Vec<String>, Vec<Span>) = path.into_iter().unzip();
+                    decls.push(ImportDecl {
+                        span,
+                        is_pub,
+                        path,
+                        path_spans,
+                        items: Vec::new(),
+                        is_wildcard: true,
+                    });
+                }
+                ImportLeaf::Item { path, item } => {
+                    let (path, path_spans): (Vec<String>, Vec<Span>) = path.into_iter().unzip();
+                    match decls.last_mut() {
+                        Some(last) if !last.is_wildcard && last.path == path => {
+                            last.items.push(item);
+                        }
+                        _ => decls.push(ImportDecl {
+                            span,
+                            is_pub,
+                            path,
+                            path_spans,
+                            items: vec![item],
+                            is_wildcard: false,
+                        }),
+                    }
+                }
             }
         }
-        if items.is_empty() {
-            self.error("empty import group — `import path.{}` is not allowed");
-            return None;
-        }
-        Some(items)
+        decls
     }
 
     // ── Constants ────────────────────────────────────────────────
@@ -2625,4 +2705,18 @@ impl super::Parser {
             lint_overrides,
         })
     }
+}
+
+/// One bound name (or one wildcard) parsed out of an `import` statement, with
+/// the dotted prefix it hangs off. Nested grouping means a single statement can
+/// produce leaves under several distinct prefixes;
+/// [`Parser::group_import_leaves`] folds them back into `ImportDecl`s.
+enum ImportLeaf {
+    Item {
+        path: Vec<(String, Span)>,
+        item: ImportItem,
+    },
+    Wildcard {
+        path: Vec<(String, Span)>,
+    },
 }

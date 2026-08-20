@@ -1510,6 +1510,7 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::resolver::ResolveErrorKind::UnknownModule => "E0112",
                 crate::resolver::ResolveErrorKind::UnknownItemInModule => "E0113",
                 crate::resolver::ResolveErrorKind::PrivateItemAccess => "E0111",
+                crate::resolver::ResolveErrorKind::AmbiguousWildcardImport => "E0124",
                 crate::resolver::ResolveErrorKind::ReservedEffectResource => "E0114",
                 crate::resolver::ResolveErrorKind::CompilerBuiltinReserved => "E0115",
                 crate::resolver::ResolveErrorKind::ContinueOnBlockLabel => "E0116",

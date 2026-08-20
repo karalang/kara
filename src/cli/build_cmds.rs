@@ -2494,6 +2494,7 @@ pub(super) fn resolve_error_code(kind: &ResolveErrorKind) -> &'static str {
         ResolveErrorKind::UnknownModule => "E0112",
         ResolveErrorKind::UnknownItemInModule => "E0113",
         ResolveErrorKind::PrivateItemAccess => "E0111",
+        ResolveErrorKind::AmbiguousWildcardImport => "E0124",
         ResolveErrorKind::UndefinedName => "E0100",
         ResolveErrorKind::DuplicateDefinition => "E0101",
         ResolveErrorKind::ReservedIdentifier => "E0102",

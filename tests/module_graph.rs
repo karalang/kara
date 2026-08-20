@@ -2265,3 +2265,337 @@ fn transitively_reached_type_alias_is_expanded() {
         errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>(),
     );
 }
+
+// ── Wildcard and nested-group imports (B-2026-08-20-18) ─────────
+//
+// design.md § Module System ships both forms in v1. Nested grouping is a
+// parse-time desugar (covered in `tests/parser.rs`); the wildcard's semantics
+// — which names it binds, and the three precedence rules — are decided by
+// `module::expand_wildcard_imports` while the tree is built, so they are
+// tested here against a real project.
+
+/// Names bound by module `id`'s import declarations, sorted.
+fn import_bound_names(tree: &ProgramTree, id: usize) -> Vec<String> {
+    let mut names: Vec<String> = tree
+        .module(id)
+        .imports
+        .iter()
+        .flat_map(|imp| imp.items.iter())
+        .map(|ii| ii.alias.clone().unwrap_or_else(|| ii.name.clone()))
+        .collect();
+    names.sort();
+    names
+}
+
+fn module_id(tree: &ProgramTree, path: &[&str]) -> usize {
+    let owned: Vec<String> = path.iter().map(|s| s.to_string()).collect();
+    *tree
+        .graph
+        .by_path
+        .get(&owned)
+        .unwrap_or_else(|| panic!("module {path:?} not in tree"))
+}
+
+#[test]
+fn wildcard_import_expands_to_the_modules_accessible_items() {
+    let d = ScratchDir::new("wildcard-expand");
+    d.write("src/main.kara", "import wanted.*;\nfn main() {}\n");
+    // A sibling module the wildcard does NOT name — proves the expansion reads
+    // the module it points at, not every module in the project.
+    d.write(
+        "src/unwanted.kara",
+        "pub fn public_one() {}\npub struct PublicTwo { pub n: i64 }\n",
+    );
+    d.write("src/wanted.kara", "pub fn alpha() {}\npub fn beta() {}\n");
+
+    let w = walked(d.root());
+    let built = build_program_tree(&w).expect("build tree");
+    let root = module_id(&built.tree, &[]);
+    assert_eq!(
+        import_bound_names(&built.tree, root),
+        vec!["alpha".to_string(), "beta".to_string()],
+        "the wildcard binds exactly `wanted`'s items, and nothing from `unwanted`",
+    );
+    assert!(
+        resolve_module_errors(&built.tree, root).is_empty(),
+        "an expanded wildcard resolves like the flat imports it stands for",
+    );
+}
+
+#[test]
+fn wildcard_import_of_an_unknown_module_is_e0112() {
+    let d = ScratchDir::new("wildcard-unknown");
+    d.write("src/main.kara", "import nope.*;\nfn main() {}\n");
+
+    let w = walked(d.root());
+    let built = build_program_tree(&w).expect("build tree");
+    let root = module_id(&built.tree, &[]);
+    let errors = resolve_module_errors(&built.tree, root);
+    assert_eq!(errors.len(), 1, "one diagnostic, got {errors:?}");
+    assert_eq!(errors[0].kind, ResolveErrorKind::UnknownModule);
+}
+
+/// design.md wildcard precedence rule 1, explicit-import half: "an explicit
+/// import always wins over a wildcard". The wildcard must not even bind the
+/// name — binding it would be a duplicate-definition error rather than the
+/// silent, order-independent win the spec describes.
+#[test]
+fn an_explicit_import_beats_a_wildcard_regardless_of_order() {
+    for (tag, source) in [
+        (
+            "explicit-first",
+            "import http.tag;\nimport net.*;\nfn main() {}\n",
+        ),
+        (
+            "wildcard-first",
+            "import net.*;\nimport http.tag;\nfn main() {}\n",
+        ),
+    ] {
+        let d = ScratchDir::new(tag);
+        d.write("src/main.kara", source);
+        d.write("src/http.kara", "pub fn tag() {}\n");
+        d.write("src/net.kara", "pub fn tag() {}\npub fn only_net() {}\n");
+
+        let w = walked(d.root());
+        let built = build_program_tree(&w).expect("build tree");
+        let root = module_id(&built.tree, &[]);
+        assert_eq!(
+            import_bound_names(&built.tree, root),
+            vec!["only_net".to_string(), "tag".to_string()],
+            "{tag}: `tag` is bound once — by the explicit import",
+        );
+        // The one `tag` binding must be the EXPLICIT one. `net`'s copy is
+        // dropped from the expansion, so no import declaration names it.
+        let from_net: Vec<String> = built
+            .tree
+            .module(root)
+            .imports
+            .iter()
+            .filter(|imp| imp.path == vec!["net".to_string()])
+            .flat_map(|imp| imp.items.iter().map(|ii| ii.name.clone()))
+            .collect();
+        assert_eq!(from_net, vec!["only_net".to_string()], "{tag}");
+        assert!(
+            resolve_module_errors(&built.tree, root).is_empty(),
+            "{tag}: no duplicate-definition error",
+        );
+    }
+}
+
+/// Rule 1, local-declaration half — a module's own item wins the same way.
+#[test]
+fn a_local_declaration_beats_a_wildcard() {
+    let d = ScratchDir::new("wildcard-vs-local");
+    d.write(
+        "src/main.kara",
+        "import net.*;\nfn tag() {}\nfn main() {}\n",
+    );
+    d.write("src/net.kara", "pub fn tag() {}\npub fn only_net() {}\n");
+
+    let w = walked(d.root());
+    let built = build_program_tree(&w).expect("build tree");
+    let root = module_id(&built.tree, &[]);
+    assert_eq!(
+        import_bound_names(&built.tree, root),
+        vec!["only_net".to_string()]
+    );
+    assert!(resolve_module_errors(&built.tree, root).is_empty());
+}
+
+/// Rule 2: "two wildcards that both expose the same name are not an error at
+/// the import site … all non-colliding names from both wildcards work
+/// normally."
+#[test]
+fn colliding_wildcards_are_not_an_error_until_the_name_is_used() {
+    let d = ScratchDir::new("wildcard-collide-unused");
+    d.write("src/main.kara", "import a.*;\nimport b.*;\nfn main() {}\n");
+    d.write("src/a.kara", "pub fn dup() {}\npub fn only_a() {}\n");
+    d.write("src/b.kara", "pub fn dup() {}\npub fn only_b() {}\n");
+
+    let w = walked(d.root());
+    let built = build_program_tree(&w).expect("build tree");
+    let root = module_id(&built.tree, &[]);
+    assert_eq!(
+        import_bound_names(&built.tree, root),
+        vec!["only_a".to_string(), "only_b".to_string()],
+        "`dup` is bound by neither; every other name still is",
+    );
+    assert!(
+        resolve_module_errors(&built.tree, root).is_empty(),
+        "the collision alone is not a diagnostic",
+    );
+    let amb = built
+        .tree
+        .wildcard_ambiguities
+        .get(&root)
+        .expect("collision recorded for the use site");
+    assert_eq!(
+        amb.get("dup").cloned().unwrap_or_default(),
+        vec!["a".to_string(), "b".to_string()],
+    );
+}
+
+/// Rule 2's use-site half — `E0124 AmbiguousWildcardImport`. design.md spells
+/// the code `E0226`, which is the typechecker's band; the number was corrected
+/// in the spec when this landed (see `ResolveErrorKind::AmbiguousWildcardImport`).
+#[test]
+fn using_a_name_two_wildcards_expose_is_ambiguous() {
+    let d = ScratchDir::new("wildcard-collide-used");
+    d.write(
+        "src/main.kara",
+        "import a.*;\nimport b.*;\nfn main() { dup(); }\n",
+    );
+    d.write("src/a.kara", "pub fn dup() {}\npub fn only_a() {}\n");
+    d.write("src/b.kara", "pub fn dup() {}\n");
+
+    let w = walked(d.root());
+    let built = build_program_tree(&w).expect("build tree");
+    let root = module_id(&built.tree, &[]);
+    let errors = resolve_module_errors(&built.tree, root);
+    assert_eq!(errors.len(), 1, "one diagnostic, got {errors:?}");
+    assert_eq!(errors[0].kind, ResolveErrorKind::AmbiguousWildcardImport);
+    assert!(
+        errors[0].message.contains('a') && errors[0].message.contains('b'),
+        "the message names both modules: {}",
+        errors[0].message,
+    );
+}
+
+/// The same collision resolved by adding the explicit import the diagnostic
+/// suggests — rule 1 applied to a name rule 2 had refused to bind.
+#[test]
+fn an_explicit_import_resolves_a_wildcard_ambiguity() {
+    let d = ScratchDir::new("wildcard-collide-fixed");
+    d.write(
+        "src/main.kara",
+        "import a.dup;\nimport a.*;\nimport b.*;\nfn main() { dup(); }\n",
+    );
+    d.write("src/a.kara", "pub fn dup() {}\n");
+    d.write("src/b.kara", "pub fn dup() {}\n");
+
+    let w = walked(d.root());
+    let built = build_program_tree(&w).expect("build tree");
+    let root = module_id(&built.tree, &[]);
+    assert!(
+        !built.tree.wildcard_ambiguities.contains_key(&root),
+        "the explicit import takes the name out of the wildcards' hands",
+    );
+    assert!(resolve_module_errors(&built.tree, root).is_empty());
+}
+
+/// A wildcard binds what an explicit import of the same name would have bound
+/// — no more. A `private` sibling in another directory is not importable
+/// explicitly, so the wildcard must not bind it either (which would turn an
+/// `E0111` at the import into a duplicate-definition or a dangling name).
+#[test]
+fn a_wildcard_skips_items_the_importer_could_not_import_explicitly() {
+    let d = ScratchDir::new("wildcard-visibility");
+    d.write("src/main.kara", "import db.conn.*;\nfn main() {}\n");
+    d.write(
+        "src/db/conn.kara",
+        "pub fn open() {}\nprivate fn helper() {}\nfn internal() {}\n",
+    );
+
+    let w = walked(d.root());
+    let built = build_program_tree(&w).expect("build tree");
+    let root = module_id(&built.tree, &[]);
+    assert_eq!(
+        import_bound_names(&built.tree, root),
+        // `internal` is default visibility — project-internal, so importable
+        // from another directory. `helper` is `private` to `src/db/`.
+        vec!["internal".to_string(), "open".to_string()],
+    );
+    assert!(resolve_module_errors(&built.tree, root).is_empty());
+}
+
+/// A `pub import x.*;` facade re-exports names that only exist once its own
+/// wildcard has expanded, so a consumer's wildcard needs the expansion to run
+/// to a fixpoint rather than in one pass.
+#[test]
+fn a_wildcard_sees_through_a_wildcard_re_export_facade() {
+    let d = ScratchDir::new("wildcard-facade");
+    d.write("src/main.kara", "import facade.*;\nfn main() {}\n");
+    d.write("src/facade.kara", "pub import inner.core.*;\n");
+    d.write("src/inner/core.kara", "pub fn deep() {}\n");
+
+    let w = walked(d.root());
+    let built = build_program_tree(&w).expect("build tree");
+    let root = module_id(&built.tree, &[]);
+    assert_eq!(
+        import_bound_names(&built.tree, root),
+        vec!["deep".to_string()]
+    );
+    assert!(resolve_module_errors(&built.tree, root).is_empty());
+}
+
+/// A wildcard is a real module dependency even when it expands to nothing, so
+/// a cycle closed only by wildcards must still be rejected.
+#[test]
+fn wildcard_imports_close_a_module_cycle() {
+    let d = ScratchDir::new("wildcard-cycle");
+    d.write("src/main.kara", "import a.from_a;\nfn main() {}\n");
+    d.write("src/a.kara", "import b.*;\npub fn from_a() {}\n");
+    d.write("src/b.kara", "import a.*;\npub fn from_b() {}\n");
+
+    let w = walked(d.root());
+    let built = build_program_tree(&w).expect("build tree");
+    assert!(
+        !karac::module::detect_cycles(&built.tree).is_empty(),
+        "a ↔ b via wildcards is a cycle",
+    );
+}
+
+/// Nested grouping is defined as *equivalent to* the flat imports it expands
+/// to, so a group spanning two prefixes must reach both modules.
+#[test]
+fn a_nested_group_import_reaches_every_prefix_it_names() {
+    let d = ScratchDir::new("nested-group-tree");
+    d.write(
+        "src/main.kara",
+        "import db.{conn.{open, close}, pool.size};\nfn main() {}\n",
+    );
+    d.write("src/db/conn.kara", "pub fn open() {}\npub fn close() {}\n");
+    d.write("src/db/pool.kara", "pub fn size() {}\n");
+
+    let w = walked(d.root());
+    let built = build_program_tree(&w).expect("build tree");
+    let root = module_id(&built.tree, &[]);
+    assert_eq!(
+        import_bound_names(&built.tree, root),
+        vec!["close".to_string(), "open".to_string(), "size".to_string()],
+    );
+    assert!(resolve_module_errors(&built.tree, root).is_empty());
+    // Both named modules are dependencies, not just the first.
+    let conn = module_id(&built.tree, &["db", "conn"]);
+    let pool = module_id(&built.tree, &["db", "pool"]);
+    assert!(built.tree.graph.edges.contains(&(root, conn)));
+    assert!(built.tree.graph.edges.contains(&(root, pool)));
+}
+
+/// Two wildcards that expose one name are only ambiguous when they mean two
+/// DIFFERENT items. A name reached both through a `pub import` facade and
+/// through its defining module is a single item by two routes — design.md:
+/// "re-exports preserve canonical identity" — so it binds normally.
+#[test]
+fn two_wildcards_reaching_one_item_are_not_ambiguous() {
+    let d = ScratchDir::new("wildcard-same-origin");
+    d.write(
+        "src/main.kara",
+        "import facade.*;\nimport inner.core.*;\nfn main() { deep(); }\n",
+    );
+    d.write("src/facade.kara", "pub import inner.core.*;\n");
+    d.write("src/inner/core.kara", "pub fn deep() {}\n");
+
+    let w = walked(d.root());
+    let built = build_program_tree(&w).expect("build tree");
+    let root = module_id(&built.tree, &[]);
+    assert!(
+        !built.tree.wildcard_ambiguities.contains_key(&root),
+        "one item by two routes is not a collision",
+    );
+    assert_eq!(
+        import_bound_names(&built.tree, root),
+        vec!["deep".to_string()]
+    );
+    assert!(resolve_module_errors(&built.tree, root).is_empty());
+}

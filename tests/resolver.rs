@@ -6067,3 +6067,83 @@ fn generic_provider_bound_with_a_known_argument_resolves() {
         "#,
     );
 }
+
+// ── Single-file mode and wildcard imports (B-2026-08-20-18) ─────
+
+/// Resolve `source` the way the CLI resolves one file that lives inside a
+/// package's `src/` — single-file mode, `pub` items possibly read off-screen.
+fn resolve_as_package_member(source: &str) -> ResolveResult {
+    let parsed = parse(source);
+    assert!(
+        parsed.errors.is_empty(),
+        "Parse errors: {:?}",
+        parsed.errors
+    );
+    Resolver::new(&parsed.program)
+        .with_external_pub_refs(true)
+        .resolve()
+}
+
+/// Single-file mode has no program tree, so a wildcard import cannot be
+/// expanded and the names it would supply stay unbound. Reporting them as
+/// undefined would flood `karac check <file>` with false diagnostics on a
+/// program that builds — so the undefined-name channel goes quiet for a
+/// package member carrying an unexpandable wildcard.
+#[test]
+fn a_wildcard_import_silences_undefined_names_in_single_file_mode() {
+    let result =
+        resolve_as_package_member("import util.*;\nfn main() { println(from_the_wildcard()); }\n");
+    assert!(
+        result.errors.is_empty(),
+        "expected no diagnostics, got: {:?}",
+        result
+            .errors
+            .iter()
+            .map(|e| e.message.clone())
+            .collect::<Vec<_>>(),
+    );
+}
+
+/// The suppression is scoped to files that actually carry a wildcard — an
+/// ordinary import leaves the undefined-name channel exactly as it was.
+#[test]
+fn without_a_wildcard_single_file_mode_still_reports_undefined_names() {
+    let result = resolve_as_package_member("import util.tag;\nfn main() { println(missing()); }\n");
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| e.kind == ResolveErrorKind::UndefinedName),
+        "expected an undefined-name diagnostic, got: {:?}",
+        result
+            .errors
+            .iter()
+            .map(|e| e.message.clone())
+            .collect::<Vec<_>>(),
+    );
+}
+
+/// …and to package members. A standalone script is not a translation unit of
+/// anything, so its unresolved names are still reported.
+#[test]
+fn a_wildcard_does_not_silence_a_standalone_scripts_undefined_names() {
+    let parsed = parse("import util.*;\nfn main() { println(missing()); }\n");
+    assert!(
+        parsed.errors.is_empty(),
+        "Parse errors: {:?}",
+        parsed.errors
+    );
+    let result = Resolver::new(&parsed.program).resolve();
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| e.kind == ResolveErrorKind::UndefinedName),
+        "expected an undefined-name diagnostic, got: {:?}",
+        result
+            .errors
+            .iter()
+            .map(|e| e.message.clone())
+            .collect::<Vec<_>>(),
+    );
+}

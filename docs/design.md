@@ -953,16 +953,20 @@ import db.connection.Connection as Conn;                         // rename
 import db.connection.{Connection, Pool};                          // multi-item (brace-grouped)
 import db.connection.{Connection as Conn, Pool as P};            // multi-item + renames
 import db.connection;                                             // bind the module itself as `connection`
+import db.connection.*;                                           // wildcard — every accessible item of `db.connection`
+import db.{connection.{Connection, Pool}, auth.Token};            // nested grouping
 ```
 
 **Binding rule.** The last segment of each imported path is bound in the current scope. `import a.b.c;` binds `c`. `import a.b.{c, d};` binds `c` and `d`. Renames override: `import a.b.c as X;` binds `X`. The rule is uniform for items and for sub-modules — `import db.connection;` binds `connection` as a module reference (reach `Connection` as `connection.Connection`).
 
-**Wildcard imports** (`import path.*;`) bring all `pub` items from the named module into scope. **Nested grouping** (`import a.{b.{c, d}, e};`) expands to flat imports before resolution — `import a.{b.{c, d}, e}` is equivalent to `import a.b.c; import a.b.d; import a.e`. Both are available in v1.
+**Wildcard imports** (`import path.*;`) bring in exactly the items an explicit single-item import of that module would have been allowed to bind — all `pub` items across a package boundary, and within a package also default-visibility items (and `private` ones from the same directory), per § *Three-level visibility*. Submodules of the named module are not items and are not brought into scope; import those by path. **Nested grouping** (`import a.{b.{c, d}, e};`) expands to flat imports before resolution — `import a.{b.{c, d}, e}` is equivalent to `import a.b.c; import a.b.d; import a.e`. Both are available in v1.
 
 Wildcard import precedence rules:
 - An explicit import always wins over a wildcard: `import http.Response` + `import net.*;` — `Response` is unambiguously `http.Response` even if `net` also exports a `Response`.
-- Two wildcards that both expose the same name are not an error at the import site. The name becomes ambiguous and produces a compile error **at the use site** (`E0226 AmbiguousWildcardImport` — name `X` found in both `a` and `b`; add an explicit import to resolve). All non-colliding names from both wildcards work normally.
+- Two wildcards that both expose the same name are not an error at the import site. The name becomes ambiguous and produces a compile error **at the use site** (`E0124 AmbiguousWildcardImport` — name `X` found in both `a` and `b`; add an explicit import to resolve). All non-colliding names from both wildcards work normally.
 - Prelude items have the lowest priority — any explicit import or wildcard import shadows a prelude name without error.
+
+A wildcard is expanded to the flat imports it stands for before name resolution, exactly as nested grouping is, so the two forms compose freely (`import a.{b.*, c};`) and every later phase sees only single-item imports. `import path.* as X;` and `import path.*.more;` are not forms — the `*` binds the module's items under their own names and must be the last segment of the path.
 
 **Re-exports (`pub import`).** Prefix any `import` with `pub` to re-export the item at the current module's public surface. External consumers see the re-exported item at the shorter path; internal code continues using the canonical path. Re-exports preserve canonical identity — `mylib.Connection` and `mylib.db.connection.Connection` are the same type after re-export, not two distinct types.
 

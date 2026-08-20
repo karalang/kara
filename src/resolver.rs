@@ -729,6 +729,18 @@ pub enum ResolveErrorKind {
     /// declared `private` (same-directory-only) and the importer lives in a
     /// different directory (CR-24 slice 6, `E0111`).
     PrivateItemAccess,
+    /// A name exposed by two `import path.*;` wildcards is USED. design.md
+    /// § Module System makes the collision itself legal — every other name
+    /// from both wildcards still works — and defers the error to the use
+    /// site, which is what this kind reports.
+    ///
+    /// `E0124`, allocated from the resolver's own band. design.md § Module
+    /// System wrote `E0226` for it, which is the TYPECHECKER's band (pinned by
+    /// `explain::tests::resolver_numeric_codes_live_in_the_resolve_band`) and
+    /// was already spelled for a second, unrelated diagnostic in the same
+    /// document — `E0226 ConflictingPlatformModule`, § Platform-specific
+    /// modules. The spec text was corrected to E0124 when this landed.
+    AmbiguousWildcardImport,
     /// `effect resource CompileTimeEnv;` or `effect resource CompileTimeHeap;`
     /// — these names are reserved for the deferred comptime feature (`E0114`).
     ReservedEffectResource,
@@ -1085,6 +1097,19 @@ pub struct Resolver<'a> {
     /// via [`Resolver::with_target_tombstones`]; project mode adopts it
     /// off the `ProgramTree` in [`Resolver::with_tree`].
     pub(crate) target_tombstones: FxHashMap<String, String>,
+    /// Names this module cannot bind because two wildcard imports both offer
+    /// them, mapped to the offering module paths — adopted from
+    /// [`ProgramTree::wildcard_ambiguities`] by [`Resolver::with_tree`]. A
+    /// reference to one of these names reports `E0124` instead of "undefined
+    /// name", which is design.md's use-site half of the wildcard collision
+    /// rule. Empty in single-file mode and for every module without a
+    /// collision.
+    pub(crate) wildcard_ambiguities: FxHashMap<String, Vec<String>>,
+    /// Set by `collect_import` when a `import path.*;` reaches the resolver
+    /// still unexpanded — i.e. single-file mode, where there is no program
+    /// tree to enumerate the target module's items against. See
+    /// [`Resolver::wildcard_hides_unresolved_names`].
+    pub(crate) unexpanded_wildcard_import: bool,
     /// See [`ResolveResult::error_fix_diffs`].
     pub(crate) error_fix_diffs: FxHashMap<SpanKey, Vec<TextEdit>>,
     /// Renames proposed by `E_MODULE_BINDING_NAMING` that still need their
@@ -1165,6 +1190,8 @@ impl<'a> Resolver<'a> {
             is_test_file: false,
             call_callee_span: None,
             target_tombstones: FxHashMap::default(),
+            wildcard_ambiguities: FxHashMap::default(),
+            unexpanded_wildcard_import: false,
             error_fix_diffs: FxHashMap::default(),
             pending_binding_renames: Vec::new(),
             ident_ref_offsets: FxHashMap::default(),
@@ -1189,6 +1216,9 @@ impl<'a> Resolver<'a> {
                 .iter()
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect();
+        }
+        if let Some(amb) = tree.wildcard_ambiguities.get(&module_id) {
+            self.wildcard_ambiguities = amb.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
         }
         self
     }
@@ -1397,7 +1427,70 @@ impl<'a> Resolver<'a> {
         }
     }
 
+    /// design.md § Module System, wildcard precedence rule 2: a name offered
+    /// by two wildcards "produces a compile error **at the use site**". The
+    /// expansion pass bound neither candidate, so the name genuinely is not in
+    /// scope by the time a reference reaches here — this turns what would be a
+    /// misleading "undefined name" (with an edit-distance suggestion for some
+    /// unrelated name) into the diagnostic the spec asks for, naming both
+    /// modules and the fix. Returns `true` when it reported, so the caller
+    /// stops.
+    /// True when this file carries a wildcard import the single-file resolver
+    /// could not expand, AND the file is a member of a package — so an
+    /// unresolved module-scope name is more likely to be one of the names the
+    /// wildcard would have supplied than a typo.
+    ///
+    /// Single-file mode already trusts cross-module imports blindly: it binds
+    /// `import db.conn.open;`'s `open` without checking, precisely because the
+    /// file may be one translation unit of a build it cannot see. A wildcard
+    /// is the same situation with the names withheld — there is nothing to
+    /// bind, so every name it would have supplied looks undefined. Claiming
+    /// `E0100 undefined name 'label', did you mean 'Map'?` for a program that
+    /// compiles is worse than staying quiet, so the whole undefined-name /
+    /// undefined-type channel goes silent for such a file. Project mode (which
+    /// expands the wildcard for real) still reports genuine typos.
+    ///
+    /// Gated on `pub_refs_may_be_external` because in single-file mode the CLI
+    /// sets that flag to exactly "this file lives inside a package's `src/`".
+    /// Since B-2026-08-20-16, `karac check <file>` / `karac run <file>` analyse
+    /// the whole package when one can be assembled, so this covers the residual
+    /// single-file path — a package with no entry file, or any other caller
+    /// that resolves one member on its own.
+    fn wildcard_hides_unresolved_names(&self) -> bool {
+        self.tree.is_none() && self.unexpanded_wildcard_import && self.pub_refs_may_be_external
+    }
+
+    fn report_ambiguous_wildcard(&mut self, name: &str, span: Span) -> bool {
+        let Some(modules) = self.wildcard_ambiguities.get(name) else {
+            return false;
+        };
+        let sources = modules.join("` and `");
+        let first = modules.first().cloned().unwrap_or_default();
+        self.errors.push(ResolveError {
+            message: format!(
+                "`{name}` is ambiguous — it is exposed by the wildcard imports of `{sources}`; \
+                 add an explicit import (e.g. `import {first}.{name};`) to choose one"
+            ),
+            span,
+            kind: ResolveErrorKind::AmbiguousWildcardImport,
+            // No `suggestion`: the CLI renders that field as "did you mean
+            // `X`?", which wants a bare replacement token, and WHICH module to
+            // take the name from is the user's call — there is no single edit
+            // to propose.
+            suggestion: None,
+            replacement: None,
+            stub_hint: None,
+        });
+        true
+    }
+
     fn error_undefined_name(&mut self, name: &str, span: Span) {
+        if self.report_ambiguous_wildcard(name, span) {
+            return;
+        }
+        if self.wildcard_hides_unresolved_names() {
+            return;
+        }
         // B-2026-07-02-5: the name exists — as a binding of a SIBLING branch
         // of the enclosing `par { }` block. Each top-level statement of a
         // `par { }` is a concurrent branch with its own scope, so the read
@@ -1625,6 +1718,12 @@ impl<'a> Resolver<'a> {
     }
 
     fn error_undefined_type(&mut self, name: &str, span: Span) {
+        if self.report_ambiguous_wildcard(name, span) {
+            return;
+        }
+        if self.wildcard_hides_unresolved_names() {
+            return;
+        }
         let visible = self.table.visible_names();
         // A known rename wins over edit distance — `TreeMap` is nowhere near
         // `SortedMap` by distance, so the generic suggester cannot find it.

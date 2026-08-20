@@ -14872,3 +14872,147 @@ fn a_128bit_literal_pattern_parses() {
         );
     }
 }
+
+// ── Wildcard and nested-group imports (B-2026-08-20-18) ─────────
+
+/// Every `ImportDecl` in `program`, as `(path, is_wildcard, bound names)`.
+fn import_shapes(program: &Program) -> Vec<(String, bool, Vec<String>)> {
+    program
+        .items
+        .iter()
+        .filter_map(|it| match it {
+            Item::Import(imp) => Some((
+                imp.path.join("."),
+                imp.is_wildcard,
+                imp.items
+                    .iter()
+                    .map(|ii| match &ii.alias {
+                        Some(a) => format!("{} as {a}", ii.name),
+                        None => ii.name.clone(),
+                    })
+                    .collect(),
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_wildcard_import_parses() {
+    let program = parse_ok("import db.connection.*;\nfn main() {}\n");
+    assert_eq!(
+        import_shapes(&program),
+        vec![("db.connection".to_string(), true, Vec::<String>::new())],
+        "the path is the whole module path and `items` is filled in later, \
+         by module::expand_wildcard_imports",
+    );
+}
+
+#[test]
+fn a_bare_wildcard_import_parses() {
+    // Crate-root wildcard: `import root.*` where `root` is a top-level module.
+    let program = parse_ok("import util.*;\nfn main() {}\n");
+    assert_eq!(
+        import_shapes(&program),
+        vec![("util".to_string(), true, Vec::<String>::new())],
+    );
+}
+
+/// design.md: `import a.{b.{c, d}, e}` is *equivalent to* `import a.b.c;
+/// import a.b.d; import a.e` — so it parses into exactly those decls.
+#[test]
+fn a_nested_group_import_flattens_to_one_decl_per_prefix() {
+    let program = parse_ok("import a.{b.{c, d}, e};\nfn main() {}\n");
+    assert_eq!(
+        import_shapes(&program),
+        vec![
+            (
+                "a.b".to_string(),
+                false,
+                vec!["c".to_string(), "d".to_string()]
+            ),
+            ("a".to_string(), false, vec!["e".to_string()]),
+        ],
+    );
+}
+
+#[test]
+fn a_nested_group_import_keeps_per_item_renames() {
+    let program = parse_ok("import a.{b.{c as C}, e as E};\nfn main() {}\n");
+    assert_eq!(
+        import_shapes(&program),
+        vec![
+            ("a.b".to_string(), false, vec!["c as C".to_string()]),
+            ("a".to_string(), false, vec!["e as E".to_string()]),
+        ],
+    );
+}
+
+#[test]
+fn a_nested_group_may_contain_a_wildcard() {
+    let program = parse_ok("import a.{b.*, c};\nfn main() {}\n");
+    assert_eq!(
+        import_shapes(&program),
+        vec![
+            ("a.b".to_string(), true, Vec::<String>::new()),
+            ("a".to_string(), false, vec!["c".to_string()]),
+        ],
+    );
+}
+
+/// Regression guard for the desugar: a FLAT group still produces exactly one
+/// declaration with two items, the shape every consumer has always seen.
+#[test]
+fn a_flat_group_import_is_still_a_single_decl() {
+    let program = parse_ok("import a.b.{c, d};\nfn main() {}\n");
+    assert_eq!(
+        import_shapes(&program),
+        vec![(
+            "a.b".to_string(),
+            false,
+            vec!["c".to_string(), "d".to_string()]
+        )],
+    );
+}
+
+#[test]
+fn a_wildcard_import_carries_the_pub_re_export_marker() {
+    let program = parse_ok("pub import a.b.*;\nfn main() {}\n");
+    let Item::Import(imp) = &program.items[0] else {
+        panic!("expected an import");
+    };
+    assert!(imp.is_pub && imp.is_wildcard);
+}
+
+#[test]
+fn a_wildcard_import_cannot_be_renamed() {
+    let (_, errors) = parse_with_errors("import a.b.* as X;\nfn main() {}\n");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.to_string().contains("wildcard import cannot be renamed")),
+        "expected a named diagnostic, got: {errors:?}",
+    );
+}
+
+#[test]
+fn a_wildcard_must_be_the_last_path_segment() {
+    let (_, errors) = parse_with_errors("import a.*.b;\nfn main() {}\n");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.to_string().contains("must be the last segment")),
+        "expected a named diagnostic, got: {errors:?}",
+    );
+}
+
+#[test]
+fn an_empty_nested_import_group_is_a_diagnostic() {
+    let (_, errors) = parse_with_errors("import a.{};\nfn main() {}\n");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.to_string().contains("empty import group")),
+        "expected the empty-group diagnostic, got: {errors:?}",
+    );
+}

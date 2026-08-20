@@ -1079,6 +1079,15 @@ pub struct UseDecl {
 /// `path` is the module prefix (dotted path, no item), and `items` lists the
 /// names being imported from that module. A bare `import path.Item;` maps to
 /// a single-element `items` vector.
+///
+/// **Wildcard** (`import path.*;`) and **nested grouping**
+/// (`import a.{b.{c, d}, e};`) are both v1 forms (design.md § Module System).
+/// Nested grouping is a pure parse-time desugar: one source statement becomes
+/// one `ImportDecl` per distinct dotted prefix, so every downstream pass sees
+/// only flat imports. A wildcard sets [`ImportDecl::is_wildcard`] and parses
+/// with an EMPTY `items` vector; `module::expand_wildcard_imports` fills that
+/// vector in with the target module's accessible names once the program tree
+/// exists, so — again — every downstream pass sees only flat imports.
 #[derive(Debug, Clone)]
 pub struct ImportDecl {
     pub span: Span,
@@ -1091,6 +1100,15 @@ pub struct ImportDecl {
     /// entire import statement.
     pub path_spans: Vec<Span>,
     pub items: Vec<ImportItem>,
+    /// `import path.*;` — bring every accessible item of the module named by
+    /// `path` into scope (design.md § Module System > Wildcard imports). The
+    /// parser leaves `items` empty; `module::expand_wildcard_imports` fills it
+    /// with the concrete names before resolution, applying the spec's three
+    /// precedence rules. A decl with `is_wildcard` set and `items` still empty
+    /// therefore means either "nothing accessible to import" or single-file
+    /// mode (no program tree to expand against) — never "drop me", which is
+    /// why the empty-items filters in `module.rs` / `prelude.rs` check it.
+    pub is_wildcard: bool,
 }
 
 #[derive(Debug, Clone)]

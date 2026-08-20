@@ -27450,3 +27450,124 @@ fn an_escalated_must_use_emits_a_code_that_is_its_own() {
     );
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+// ── Wildcard and nested-group imports (B-2026-08-20-18) ─────────
+
+/// A package whose entry file reaches its siblings through a wildcard import
+/// and a nested-group import — the two v1 forms of design.md § Module System
+/// that did not parse before B-2026-08-20-18 — must produce identical output
+/// on every execution surface. Both forms are pure front-end desugars, so a
+/// divergence here would mean one surface saw a different item set than
+/// another.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_wildcard_and_nested_group_imports_run_build_parity() {
+    let tmp = scratch_project("wildcard-nested-group-parity");
+    write(&tmp.join("kara.toml"), "[package]\nname = \"wc\"\n");
+    write(
+        &tmp.join("src/db/conn.kara"),
+        "pub fn open(n: i64) -> i64 { return n * 2; }\n\
+         pub fn close(n: i64) -> i64 { return n + 1; }\n",
+    );
+    write(
+        &tmp.join("src/db/pool.kara"),
+        "pub fn size() -> i64 { return 7; }\n",
+    );
+    write(
+        &tmp.join("src/util.kara"),
+        "pub fn tag() -> String { return \"util\"; }\n\
+         pub fn scale(n: i64) -> i64 { return n * 10; }\n",
+    );
+    write(
+        &tmp.join("src/main.kara"),
+        "import util.*;\n\
+         import db.{conn.{open, close}, pool.size};\n\
+         fn main() {\n\
+        \x20   println(tag());\n\
+        \x20   println(scale(3));\n\
+        \x20   println(open(4));\n\
+        \x20   println(close(4));\n\
+        \x20   println(size());\n\
+         }\n",
+    );
+    let expected = "util\n30\n8\n5\n7\n";
+
+    let stdout_of = |args: &[&str], auto_par: bool| -> Option<String> {
+        let cmd = karac_bin().current_dir(&tmp).args(args);
+        let cmd = if auto_par {
+            cmd
+        } else {
+            cmd.env("KARAC_AUTO_PAR", "0")
+        };
+        let out = cmd.output().ok()?;
+        out.status
+            .success()
+            .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+    };
+
+    let interp = stdout_of(&["run", "--interp", "src/main.kara"], true);
+    let jit = stdout_of(&["run", "src/main.kara"], true);
+    assert_eq!(
+        interp.as_deref(),
+        Some(expected),
+        "tree-walk interpreter output"
+    );
+    assert_eq!(jit.as_deref(), Some(expected), "LLJIT `karac run` output");
+
+    // AOT, once with auto-par (the default) and once without — effect
+    // analysis is the third surface a front-end desugar can perturb.
+    let exe = tmp.join("wc");
+    for auto_par in [true, false] {
+        let built = stdout_of(&["build"], auto_par).is_some() && exe.exists();
+        if !built {
+            eprintln!("skip: AOT build produced no binary (no runtime archive?)");
+            continue;
+        }
+        let out = Command::new(&exe).output().unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            expected,
+            "AOT output with KARAC_AUTO_PAR={}",
+            if auto_par { "1" } else { "0" },
+        );
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// The use-site half of design.md's wildcard collision rule, through the CLI:
+/// `E0124 AmbiguousWildcardImport`, naming both modules — not the
+/// `E0100 undefined name` (with an edit-distance guess) that an unbound name
+/// would otherwise get.
+#[test]
+fn test_ambiguous_wildcard_import_reports_e0124_at_the_use_site() {
+    let tmp = scratch_project("wildcard-ambiguous");
+    write(&tmp.join("kara.toml"), "[package]\nname = \"amb\"\n");
+    write(
+        &tmp.join("src/alpha.kara"),
+        "pub fn dup() -> i64 { return 1; }\n",
+    );
+    write(
+        &tmp.join("src/beta.kara"),
+        "pub fn dup() -> i64 { return 2; }\n",
+    );
+    write(
+        &tmp.join("src/main.kara"),
+        "import alpha.*;\nimport beta.*;\nfn main() { println(dup()); }\n",
+    );
+
+    let out = karac_bin().current_dir(&tmp).arg("build").output().unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        combined.contains("E0124"),
+        "expected E0124, got: {combined}"
+    );
+    assert!(
+        combined.contains("`alpha`") && combined.contains("`beta`"),
+        "the diagnostic names both wildcard sources: {combined}"
+    );
+}
