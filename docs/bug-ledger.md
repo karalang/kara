@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 133 | 0 |
 | missing-feature | 129 | 0 |
 | codegen-gap | 121 | 1 |
-| diagnostics | 90 | 1 |
+| diagnostics | 90 | 0 |
 | false-positive | 88 | 0 |
 | perf | 80 | 0 |
 | crash | 54 | 0 |
@@ -118,19 +118,18 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | cli | 55 | 0 |
 | autopar | 54 | 0 |
 | parser | 33 | 0 |
-| runtime | 28 | 1 |
+| runtime | 28 | 0 |
 | resolver | 23 | 0 |
 | effect | 7 | 0 |
 | lexer | 6 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1413 surfaced · 2 open · 1391 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1413 surfaced · 1 open · 1392 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (1)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-20-34 | 2026-08-20 | runtime | medium | STACK EXHAUSTION in an AOT binary is a BARE SIGSEGV with EMPTY stderr -- no message, no hint, exit 139; Rust prints `thread 'main' has overflowed its stack` and Go names its stack limit, so Kara matches C (the unsafe baseline) on a diagnostic its safety positioning implies it should beat | — |
 | B-2026-08-20-35 | 2026-08-20 | codegen | low | A NESTED INDEXED READ WHOSE OUTER CONTAINER IS A MAP (`m[k][i]` on a `Map[K, Vec[V]]`) is rejected by codegen with `codegen: nested indexed read on 'm' -- outer is not a Vec/Slice/Array`; the interpreter accepts it, so it is a run/build split. Measured on 5b6c33b, after B-2026-08-20-33 lifted the arbitrary-depth Vec/Slice/Array chain -- this shape is what is LEFT, and it is left because the element-pointer helpers the new resolver calls are all Vec/Slice/Array-shaped. | roadmap.md |
 
 ### Wontfix (7)
@@ -149,9 +148,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1413 surfaced
 
 </details>
 
-### Fixed (1391)
+### Fixed (1392)
 
-<details><summary>1391 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1392 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -13238,6 +13237,48 @@ ONE EXISTING TEST WAS INVERTED RATHER THAN DELETED. `test_e2e_nested_index_roote
 MEMORY-SAFETY GATE MATTERED HERE more than usual: the new path mints identifiers whose slots ALIAS interior Vec storage, so a stray drop registration would be a double free on the parent's buffer. `tests/memory_sanitizer.rs` under `--features llvm` is clean, alongside both full suites and clippy on both feature legs.
 
 STILL DEFERRED, and left that way on purpose: a nested indexed READ whose outer container is a MAP (`m[k][i]`) refuses with "nested indexed read on 'm' -- outer is not a Vec/Slice/Array". That is a different resolver -- the element-pointer helpers are Vec/Slice/Array-shaped and a Map element has no such pointer -- so it is out of this row's scope. Met while building the B-2026-08-20-32 parity fixture; filed separately rather than bundled here. |
+| B-2026-08-20-34 | runtime | medium | STACK EXHAUSTION in an AOT binary is a BARE SIGSEGV with EMPTY stderr -- no message, no hint, exit 139; Rust prints `thread 'main' has overflowed its… | FIXED by 1e91166. The row asked for "a guard-page handler that prints a stack-overflow message naming the condition before aborting -- Rust's shape is the obvious model", and that is exactly what landed. Kāra now matches Rust on this failure, exit code included.
+
+    BEFORE   exit 139 (SIGSEGV), stderr: ZERO BYTES
+    AFTER    exit 134, stderr:
+                 fatal runtime error: stack overflow
+                 note: a recursive call chain or an oversized stack frame exhausted the stack.
+                 note: raise the limit with `ulimit -s`, or make the recursion iterative.
+
+THE CAUSE, which the row inferred correctly but did not name: a Kāra binary has its OWN LLVM `main`, so Rust's `lang_start` never runs -- and `lang_start` is what installs std's guard-page handler. The runtime was linked in the whole time; the handler simply had no one to install it. So this was never "that is just what native code does": it was a startup step the generated entry point skipped.
+
+THE FIX is `runtime/src/stack_guard.rs` + one call emitted at the top of every generated `main`, before any user statement. It installs an ALTERNATE SIGNAL STACK (`sigaltstack`) and a `SIGSEGV`/`SIGBUS` handler. The alternate stack is the whole point rather than a detail: the fault means there is no stack left, so a handler running on the normal stack faults again and the process dies silently anyway.
+
+A FAULT OUTSIDE THE STACK IS LEFT ALONE, and this is the half worth verifying rather than assuming. The handler compares the faulting address against the main thread's stack bounds (`pthread_getattr_np` on Linux, `pthread_get_stackaddr_np` on macOS) and, if it does not match, restores the default disposition and re-raises -- so a genuine null dereference still dies as SIGSEGV with the same signal and core-dump behaviour it had before. VERIFIED with a C harness that links the archive, calls the installer, then dereferences null: exit 139, unchanged. Claiming every segfault is a stack overflow would have traded one misleading diagnostic for another.
+
+If the bounds cannot be determined the handler classifies NOTHING, so an unrecognised platform degrades to today's behaviour rather than to a wrong message.
+
+RE-MEASURED AGAINST THE MIRRORS, same machine, same recursion shape:
+    Kara (AOT)   exit 134   "fatal runtime error: stack overflow" + two hint lines
+    Rust         exit 134   "thread 'main' has overflowed its stack"
+    C -O0        exit 139   (empty)
+Kāra is now on the Rust side of the line the row measured it on the wrong side of.
+
+ONE CORRECTION TO THE ROW'S METHODOLOGY NOTE. It reports the Rust figure as `rustc -O0` and explains at length why `-O` would be a nonsense comparison (the recursion gets turned into a loop). The reasoning is right but `-O0` is not a rustc flag -- it is rejected as `Unrecognized option: '0'`. Plain `rustc` is already unoptimized, which is what the numbers above use. Measured both ways here for completeness: with a `black_box`ed frame the recursion survives `-O` too, and BOTH Rust builds print the message and exit 134.
+
+ALL THREE COMPILED SURFACES report it -- `karac build`, `KARAC_AUTO_PAR=0 karac build`, and `karac run` (JIT). The JIT leg needed the symbol added to `__preserve_no_mangle_symbols`, or the sibling `karac_jit_runner` could not resolve the call the generated `main` emits.
+
+AVAILABILITY, stated precisely because the gate looks arbitrary otherwise: the implementation needs `libc`, which this crate takes under the `net` feature. `net` is in the full, lean, GPU, regex and Arrow archives -- every NATIVE one -- and absent only from the two wasm archives, which have no POSIX signals to install into. The exported symbol is a no-op there, so codegen emits ONE unconditional call rather than carrying a per-target emission rule. If a native archive without `net` is ever added, that gate is what needs revisiting; it is written into the module doc.
+
+ALL FOUR ARCHIVES NEEDED REBUILDING, which is worth recording because the first
+attempt rebuilt only two. Adding a runtime symbol that the generated `main`
+calls UNCONDITIONALLY means every archive must carry it -- including the two
+wasm ones, where the export is a no-op. Rebuilding lean + full and running the
+suite produced 43 failures, ALL of them wasm, all `undefined symbol:
+karac_runtime_install_stack_guard`. That is the stale-archive failure mode
+CLAUDE.md documents, on the arm its recipe is easiest to skip: the wasm archives
+live in separate target directories and are not touched by the native build
+commands. It failed loudly at link rather than silently skipping, which is the
+behaviour that made it a two-minute diagnosis.
+
+REGRESSION COVERAGE: `e2e_stack_overflow_reports_itself` (tests/codegen.rs) asserts the process fails, that stderr names the overflow, AND that the cause/remedy notes are present -- a bare "stack overflow" would still leave a reader guessing what to change. The fixture recurses WITHOUT allocating, so it faults in ~6 ms instead of churning the heap on the way down.
+
+SCOPE, unchanged from the row: the tree-walk interpreter is not affected (it does not recurse the native stack per Kāra frame deeply enough to fault on the same program), and this guard covers the MAIN thread, where a deep user recursion runs. Pool threads keep their own stacks and are not covered. |
 
 </details>
 
