@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 128 | 3 |
 | codegen-gap | 119 | 0 |
 | false-positive | 87 | 0 |
-| diagnostics | 85 | 0 |
+| diagnostics | 86 | 1 |
 | perf | 80 | 0 |
 | crash | 55 | 1 |
 | soundness | 51 | 0 |
@@ -113,7 +113,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen | 954 | 2 |
 | typecheck | 219 | 1 |
 | interp | 165 | 0 |
-| ownership | 60 | 0 |
+| ownership | 61 | 1 |
 | other | 58 | 0 |
 | autopar | 54 | 0 |
 | cli | 51 | 0 |
@@ -124,16 +124,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 6 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1400 surfaced · 4 open · 1376 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1401 surfaced · 5 open · 1376 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-19-13 | 2026-08-19 | typecheck+codegen+runtime | medium | GPU reductions: NO SEPARATE PROJECTS REMAIN. Two narrower items are left — `variance` / `stddev` are f32-only and the integer form needs a DECISION (the deviations are formed on-device in f32, so `mean`'s promote-late trick does not carry over), and integer `prod` / `dot` / `matmul` are BLOCKED ON WGSL lacking a widening multiply. A SAMPLE (÷ n-1) variance is decided against rather than pending. Shipped: sum / prod / min / max / mean / dot / argmin / argmax / variance / stddev / prefix_sum over `Vec[f32]`, sum / min / max / mean / argmin / argmax over `Vec[i32]` and `Vec[u32]`, and a tiled `matmul` over rank-2 `Tensor[f32]` that equals `a.matmul(b)` bit-for-bit. | docs/spikes/gpu-llvm-offload-assessment.md; src/gpu_wgsl.rs::emit_reduce_kernel; src/reduce_kernel.rs::tree_reduce_f32 |
+| B-2026-08-19-13 | 2026-08-19 | typecheck+codegen+runtime | medium | GPU reductions: NO DECISIONS AND NO SEPARATE PROJECTS REMAIN. One item is open — integer `prod` / `dot` / `matmul` — and its recorded blocker ("WGSL has no widening multiply") is now KNOWN FALSE: `karac_mul_wide` is that primitive, shipped and device-verified, so they are ordinary work. Shipped: sum / prod / min / max / mean / dot / argmin / argmax / variance / stddev / prefix_sum over `Vec[f32]`; sum / min / max / mean / argmin / argmax / variance / stddev over `Vec[i32]` and `Vec[u32]`, the last of these EXACT via an integer shift and an emulated 64-bit accumulator; and a tiled `matmul` over rank-2 `Tensor[f32]` that equals `a.matmul(b)` bit-for-bit. | docs/spikes/gpu-llvm-offload-assessment.md; src/gpu_wgsl.rs::emit_reduce_kernel; src/reduce_kernel.rs::tree_reduce_f32 |
 | B-2026-08-20-5 | 2026-08-20 | codegen | high | `e2e_128bit_integers_end_to_end` produces EMPTY STDOUT on macOS arm64 only — the binary links and runs but prints nothing before the first `println`. Linux x86_64 and Linux arm64 both pass the same test. CI's `Codegen E2E (macOS arm64, LLVM 18)` lane has been red on `main` since the test landed. | tests/codegen.rs::e2e_128bit_integers_end_to_end (line ~21227); tests/codegen.rs::run_program_capturing (stdout-only discard); added by 7561b5d1 (B-2026-08-19-8 stage 5); CI job `Codegen E2E (macOS arm64, LLVM 18)` in .github/workflows/ci.yml |
 | B-2026-08-20-17 | 2026-08-20 | resolver | medium | MODULE-BINDING imports are unimplemented on every surface: `import db.connection;` and `import db;` bind nothing. design.md § Module System lists `import db.connection;` in its own import-form gallery ("bind the module itself as `connection`") and states the Binding rule explicitly: "The last segment of each imported path is bound in the current scope... The rule is UNIFORM for items and for sub-modules -- `import db.connection;` binds `connection` as a module reference (reach `Connection` as `connection.Connection`)." Measured on a real package: `import db.connection;` + `connection.open(4)` -> whole-package `karac build` fails `error[resolve]: multi-file resolve failed`, `karac run` fails `undefined name 'connection', did you mean 'Connection'?`, and single-file `karac check` PASSES (that last one is B-2026-08-20-16's truncation, not a working path). The top-level form `import db;` + `db.label()` behaves identically -> `undefined name 'db'`. So the four item-import forms all work and the two module-binding forms work nowhere. | roadmap.md |
 | B-2026-08-20-18 | 2026-08-20 | parser | medium | WILDCARD and NESTED-GROUP imports do not lex or parse, though design.md says both ship in v1. § Module System: "**Wildcard imports** (`import path.*;`) bring all `pub` items from the named module into scope. **Nested grouping** (`import a.{b.{c, d}, e};`) expands to flat imports before resolution -- `import a.{b.{c, d}, e}` is equivalent to `import a.b.c; import a.b.d; import a.e`. **Both are available in v1.**" Measured: `import db.connection.*;` -> `error[parse]: Expected identifier, found Star`; `import db.{connection.{open}, label};` -> `error[parse]: Expected RightBrace, found Dot`. Same on all three surfaces, since it fails at parse. The spec goes on to specify three wildcard PRECEDENCE rules in detail -- explicit import beats wildcard, two colliding wildcards defer the error to the use site as `E0226 AmbiguousWildcardImport`, prelude items lose to any import -- none of which is reachable, because the form the rules govern cannot be written. | roadmap.md |
+| B-2026-08-20-23 | 2026-08-20 | ownership | low | every whole-buffer `gpu.*` reduction CONSUMES its buffer, so calling two of them on the same `Vec` warns `value moved here, used again here` -- but they only READ it | — |
 
 ### Wontfix (7)
 
