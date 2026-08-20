@@ -94,11 +94,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 269 | 0 |
 | leak | 185 | 0 |
-| run-vs-build | 144 | 0 |
+| run-vs-build | 145 | 1 |
+| missing-feature | 133 | 4 |
 | double-free | 133 | 0 |
-| missing-feature | 129 | 0 |
 | codegen-gap | 120 | 0 |
-| diagnostics | 90 | 0 |
+| diagnostics | 91 | 1 |
 | false-positive | 88 | 0 |
 | perf | 80 | 0 |
 | crash | 54 | 0 |
@@ -110,25 +110,32 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 958 | 0 |
-| typecheck | 219 | 0 |
+| codegen | 959 | 1 |
+| typecheck | 222 | 3 |
 | interp | 167 | 0 |
 | ownership | 61 | 0 |
 | other | 59 | 0 |
-| cli | 55 | 0 |
+| cli | 56 | 1 |
 | autopar | 54 | 0 |
 | parser | 33 | 0 |
 | runtime | 28 | 0 |
 | resolver | 23 | 0 |
+| lexer | 7 | 1 |
 | effect | 7 | 0 |
-| lexer | 6 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1413 surfaced · 0 open · 1393 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1419 surfaced · 6 open · 1393 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (0)
+### Open (6)
 
-_None — the ledger is fully drained._
+| id | date | surface | sev | title | tracker |
+|---|---|---|---|---|---|
+| B-2026-08-20-36 | 2026-08-20 | cli | medium | EIGHT of the 28 registered lints have NO EMIT SITE anywhere in `src/` outside the registry, so they can never fire -- and all eight are registered `default_level: LintLevel::Warn`, i.e. advertised as on. The dead set: `f16_software_emulated`, `float_in_serialized_type`, `implicit_clone`, `module_mut_binding`, `mutual_recursion_note`, `pure_loop_in_par`, `redundant_suffix`, `repr_c_layout_ignored`. design.md documents at least one of them as live behaviour -- § Numeric Semantics: "A suffix matching the default type (`42i64`, `3.14f64`) is valid but the compiler WARNS -- suppressible with `#[allow(redundant_suffix)]`" -- and `redundant_suffix` produces no warning in any of five shapes measured (suffix == default type `42i64` / `3.14f64`; suffix == annotated type `let c: i32 = 42i32`; suffix == parameter type `take(7i32)`; suffix == element type `v.push(1i32)`). THE COMPILER CONFIRMS IT ITSELF: `#[expect(redundant_suffix)] fn main() { let a = 42i64; ... }` reports `warning[unfulfilled_lint_expectation]: the lint 'redundant_suffix' did not fire`, which is the compiler stating that a lint it registers at Warn never triggered on the case its own description names. | roadmap.md |
+| B-2026-08-20-37 | 2026-08-20 | lexer | medium | BYTE-STRING literals `b"..."` are lexed as RESERVED, though design.md § Byte and Byte-String Literals specifies them as shipped with a type rule, three worked examples and an escape table -- while the sibling byte-CHAR literal `b'A'` in the same section works fully. `let eth: Array[u8, 2] = b"\x08\x00";` -> `error[parse]: string prefix 'b"..."' is reserved for future use; only `f"..."` ...`. The section opens by saying the grammar "reserves the `b` prefix FOR THIS PURPOSE (`syntax.md § 1.3`), producing `u8`-typed and `[u8; N]`-typed literals", states "**`b"..."` has type `[u8; N]` where `N` is the byte count of the literal after escape resolution**", and its own "Reserved but not yet implemented" paragraph lists only `r`, `br` and `rb` -- `b"..."` is presented as the working half. Nothing in deferred.md or roadmap.md marks it deferred. Measured working in the same section: `b'U'` is 85, and every escape the spec permits in a byte literal is correct (`\n`=10, `\t`=9, `\r`=13, `\0`=0, `\\`=92, `\'`=39, `\"`=34, `\xFF`=255, `\x41`=65), as is the forbidden case -- `b'\u{FF}'` produces the spec's exact wording, "Unicode escapes are not permitted in byte literals — use \xFF for byte 0xFF", and `r"..."` produces the spec's exact reserved-prefix message. | roadmap.md |
+| B-2026-08-20-38 | 2026-08-20 | typecheck | medium | A MUTABLE SUB-RANGE slice cannot be formed at a call site -- design.md § Slices' own second example is rejected. The spec's block reads `sort_in_place(mut v);` then `sort_in_place(mut v[1..4]);  // sub-range mutable slice`. The first works on all three backends; the second fails `karac check` with `expected 'mut Slice[i64]', found 'Slice[i64]'`, so a range-indexed argument produces a READ-ONLY slice header even under a `mut` marker. There is no alternative spelling: `let s = mut v[1..4];` is `error[parse]: 'mut' is a reserved keyword and cannot be used as an identifier`. The read-only half of the same feature is fine -- `sum(v[1..3])` gives 5 on interp and JIT alike. | roadmap.md |
+| B-2026-08-20-39 | 2026-08-20 | typecheck | medium | `v.last(n)` -- the END-RELATIVE ACCESS design.md prescribes as THE replacement for negative indexing -- takes no argument: `v.last(1)` is rejected with `Vec.last() takes no arguments`. § Numeric Semantics, in the same breath as ruling out Python-style wrap-around: "Negative indices are out-of-bounds errors — they panic at runtime... No Python-style wrap-around; `-1` as an index is always a bug. FOR END-RELATIVE ACCESS, USE `.last(n)` WHERE `n` DEFAULTS TO 0: `v.last()` returns the last element, `v.last(1)` the second-to-last, etc. Negative or out-of-bounds `n` panics." So the spec closes one door and points at another that is not there -- `v.last()` works, `v.last(1)` does not, and the diagnostic states the no-argument form as though it were the intended surface rather than an unimplemented half. | roadmap.md |
+| B-2026-08-20-40 | 2026-08-20 | codegen | medium | `s.bytes()[i]` -- the byte-access form design.md documents for protocol and binary-format parsing -- is check-clean and interp-correct but has NO CODEGEN: `karac run` and `karac build` both die with `codegen failed: Index operator applied to non-array type`. § Strings, Internal representation bullets: "Byte access: `s.bytes()[i]` returns `u8`, panics on out-of-bounds (same as any slice). Use for protocol/binary format parsing, not text processing." Measured on `let s = "hello"; println(f"byte0 = {s.bytes()[0]}")`: `karac check` -> All checks passed; `karac run --interp` -> byte0 = 104; `karac run` and `karac build` -> the codegen failure above. So the documented binary-parsing primitive is available only under the interpreter, which is now the opt-in backend. | roadmap.md |
+| B-2026-08-20-41 | 2026-08-20 | typecheck | medium | `String.normalize` and the `NFC` constant DO NOT EXIST, so the remedy design.md gives for its own Unicode-equality hazard is unwritable. § Strings, Equality bullet: "`String` equality (`==`) compares raw UTF-8 bytes. Two strings with identical visual appearance but different Unicode normalization forms (e.g., NFC vs NFD) are **not** equal. USE `s.normalize(NFC)` FOR NORMALIZATION-AWARE COMPARISON." Measured: `a.normalize(NFC)` -> `error[resolve]: undefined name 'NFC', did you mean 'Neg'?`; the no-argument form `a.normalize()` -> `error[typecheck]: no method 'normalize' on type 'String'`. Neither `normalize` nor `NFC` appears anywhere in `src/`. The hazard the bullet describes is real and reproduces -- `"e\u{0301}" == "\u{00e9}"` is false, exactly as documented -- so the paragraph correctly warns about a trap and then names an escape that was never built. | roadmap.md |
 
 ### Wontfix (7)
 
