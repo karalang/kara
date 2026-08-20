@@ -94,11 +94,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 266 | 0 |
 | leak | 185 | 0 |
-| run-vs-build | 139 | 0 |
+| run-vs-build | 140 | 1 |
 | double-free | 133 | 0 |
 | missing-feature | 128 | 3 |
 | codegen-gap | 119 | 0 |
-| false-positive | 87 | 1 |
+| false-positive | 87 | 0 |
 | diagnostics | 85 | 1 |
 | perf | 80 | 0 |
 | crash | 55 | 1 |
@@ -116,15 +116,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | ownership | 60 | 0 |
 | other | 58 | 0 |
 | autopar | 54 | 0 |
-| cli | 50 | 2 |
+| cli | 51 | 2 |
 | parser | 33 | 1 |
 | runtime | 27 | 1 |
-| resolver | 21 | 1 |
+| resolver | 22 | 2 |
 | effect | 7 | 0 |
 | lexer | 6 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1397 surfaced · 6 open · 1371 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1398 surfaced · 6 open · 1372 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (6)
 
@@ -132,10 +132,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1397 surfaced
 |---|---|---|---|---|---|
 | B-2026-08-19-13 | 2026-08-19 | typecheck+codegen+runtime | medium | GPU reductions still lack TILED MATMUL (2-D workgroup indexing the 1-D model lacks); integer `prod` / `dot` are blocked on WGSL lacking a widening multiply; and `variance` / `stddev` are f32-only (the integer form needs a decision, not just work — the deviations are formed on-device in f32, so `mean`'s promote-late trick does not carry over). A SAMPLE (÷ n-1) form is decided against rather than pending. Everything else has shipped: sum / prod / min / max / mean / dot / argmin / argmax / variance / stddev / prefix_sum over `Vec[f32]`, and sum / min / max / mean / argmin / argmax over `Vec[i32]` and `Vec[u32]`. | docs/spikes/gpu-llvm-offload-assessment.md; src/gpu_wgsl.rs::emit_reduce_kernel; src/reduce_kernel.rs::tree_reduce_f32 |
 | B-2026-08-20-5 | 2026-08-20 | codegen | high | `e2e_128bit_integers_end_to_end` produces EMPTY STDOUT on macOS arm64 only — the binary links and runs but prints nothing before the first `println`. Linux x86_64 and Linux arm64 both pass the same test. CI's `Codegen E2E (macOS arm64, LLVM 18)` lane has been red on `main` since the test landed. | tests/codegen.rs::e2e_128bit_integers_end_to_end (line ~21227); tests/codegen.rs::run_program_capturing (stdout-only discard); added by 7561b5d1 (B-2026-08-19-8 stage 5); CI job `Codegen E2E (macOS arm64, LLVM 18)` in .github/workflows/ci.yml |
-| B-2026-08-20-16 | 2026-08-20 | cli | high | `karac check <file>` and `karac run <file>` SILENTLY TRUNCATE a package member to a single file, producing both FALSE REJECTIONS and FALSE ACCEPTANCES -- while the sibling `karac build <file>` refuses the very same invocation with an accurate guard. Given a two-module package (src/main.kara + src/db/connection.kara), `karac build src/main.kara` says: "`src/main.kara` is a source file of the package at <root> -- a single-file `karac build` drops the package's sibling modules and produces a truncated binary. Build the whole package instead". `karac check src/main.kara` has NO such guard: it proceeds and reports `error[typecheck]: 'Connection' is not a struct` for an imported `pub struct` that the whole-package `karac build` compiles and the resulting binary prints correctly. The same truncation runs the other way too -- `import db.helpers.secret;` where `secret` is `private` in a DIFFERENT directory passes `karac check` clean and PRINTS 42 under `karac run`, while the whole-package build correctly refuses it with a well-formed `error[E0111]`. There is no whole-package check mode to fall back on: `karac check` with no file argument answers `error: missing file argument`. | roadmap.md |
 | B-2026-08-20-17 | 2026-08-20 | resolver | medium | MODULE-BINDING imports are unimplemented on every surface: `import db.connection;` and `import db;` bind nothing. design.md § Module System lists `import db.connection;` in its own import-form gallery ("bind the module itself as `connection`") and states the Binding rule explicitly: "The last segment of each imported path is bound in the current scope... The rule is UNIFORM for items and for sub-modules -- `import db.connection;` binds `connection` as a module reference (reach `Connection` as `connection.Connection`)." Measured on a real package: `import db.connection;` + `connection.open(4)` -> whole-package `karac build` fails `error[resolve]: multi-file resolve failed`, `karac run` fails `undefined name 'connection', did you mean 'Connection'?`, and single-file `karac check` PASSES (that last one is B-2026-08-20-16's truncation, not a working path). The top-level form `import db;` + `db.label()` behaves identically -> `undefined name 'db'`. So the four item-import forms all work and the two module-binding forms work nowhere. | roadmap.md |
 | B-2026-08-20-18 | 2026-08-20 | parser | medium | WILDCARD and NESTED-GROUP imports do not lex or parse, though design.md says both ship in v1. § Module System: "**Wildcard imports** (`import path.*;`) bring all `pub` items from the named module into scope. **Nested grouping** (`import a.{b.{c, d}, e};`) expands to flat imports before resolution -- `import a.{b.{c, d}, e}` is equivalent to `import a.b.c; import a.b.d; import a.e`. **Both are available in v1.**" Measured: `import db.connection.*;` -> `error[parse]: Expected identifier, found Star`; `import db.{connection.{open}, label};` -> `error[parse]: Expected RightBrace, found Dot`. Same on all three surfaces, since it fails at parse. The spec goes on to specify three wildcard PRECEDENCE rules in detail -- explicit import beats wildcard, two colliding wildcards defer the error to the use site as `E0226 AmbiguousWildcardImport`, prelude items lose to any import -- none of which is reachable, because the form the rules govern cannot be written. | roadmap.md |
 | B-2026-08-20-19 | 2026-08-20 | cli | low | E0223 (circular module dependency) prints a BARE one-line message -- no cycle path, no span, no suggestion -- while the data it needs is already computed and sitting in the value it discards. design.md § Module System: "Cycles emit `E0223 CircularModuleDependency` WITH A LISTING OF THE CYCLE PATH and a suggestion to extract shared items into a lower-layer module." Measured on a genuine two-module cycle (src/main.kara imports `db.label`, src/db.kara imports the hoisted `start`), the entire diagnostic is: `error[E0223]: circular module dependency`. No file:line, no module names, no help line. src/module.rs:753 documents the carrier as "A circular module dependency. `nodes` lists modules on the cycle in ..." -- so the path IS available; src/cli/build_cmds.rs:2905 just `eprintln!`s a constant string and drops it. | roadmap.md |
+| B-2026-08-20-20 | 2026-08-20 | cli+resolver | medium | `karac run <file>` rejects an ALIASED import of a sibling module -- `import db.connection.Pool as P;` then `P { size: 2 }` fails with `error[resolve]: undefined name 'P'`, while `karac check` and the whole-package `karac build` both accept it and the built binary runs | — |
 
 ### Wontfix (7)
 
@@ -153,9 +153,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1397 surfaced
 
 </details>
 
-### Fixed (1371)
+### Fixed (1372)
 
-<details><summary>1371 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1372 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -12665,6 +12665,25 @@ A `for` counter needs no write-back and gets none: it is loop-scoped, so `self.v
 TESTS (tests/par_codegen.rs, strict `assert_eq!` rather than the tolerant `if let Some(out)` idiom that green-skips on a missing archive): `e2e_while_counter_is_end_after_a_fanned_out_reduction`, `e2e_while_counter_with_a_nonzero_start_is_end_after_fan_out` and `e2e_while_counter_is_end_after_a_fanned_out_collect` all FAIL without the fix and pass with it; `e2e_while_counter_that_never_enters_the_loop_keeps_its_init` passes either way by design — it guards the `max`, not the write-back. Reaching the collect site took a `#[par_order_free]` body with real per-iteration work, since a bare push loop is recognized as `sequential_tabulate` and lowered inline; verified via `--concurrency-report` that the test program reports `fanned_out: true`.
 
 FIX SHA: d361c11 |
+| B-2026-08-20-16 | cli | high | `karac check <file>` and `karac run <file>` SILENTLY TRUNCATE a package member to a single file, producing both FALSE REJECTIONS and FALSE ACCEPTANCE… | FIXED by b8e8a70. `karac check <file>` and `karac run <file>` now run the SAME module-aware pipeline `karac build` runs, so all three commands agree on a package member. The walk -> tree -> cycles -> per-module resolve -> per-module typecheck sequence was extracted out of `cmd_build_project` into `build_cmds::package_check` and is shared by all three.
+
+THE REFUSAL SHAPE THE ROW PROPOSED WAS NOT ADOPTED, and should not be. The row's suggestion was to give `check` and `run` the guard `karac build` already has. But `karac check <file>` is what editors, the Mend loop and every `karac fix` cycle call, and `karac run <file>` is the documented way to run a package — single-file `karac build`'s own refusal message points at it ("or `karac run <file>` to run it directly"). Answering "run it differently" to all of those trades an incorrect answer for no answer. What was actually wrong was the ANALYSIS being file-scoped, not the invocation being file-scoped, so the analysis was widened and the invocation kept.
+
+WHAT EACH COMMAND DOES NOW:
+  - `karac check <file>` on a package member analyses the whole package, then renders THIS FILE's diagnostics. Sibling-module errors are not swallowed: a one-line note reports how many there are and where to see them. Scoping the report to the file the caller named keeps `--output=json` consumers pointed at what they asked about.
+  - `karac run <file>` gates on the whole-package check before executing. Errors are rendered for the WHOLE package here, not just the entry, because running requires all of it to be sound.
+  - `karac check` with NO file is now the analysis twin of bare `karac build` — the escape hatch the row correctly identified as missing (it used to answer `error: missing file argument`).
+
+CORRECTED LEG MATRIX. Three of the row's four legs reproduced exactly; leg D needed the explicit `private` keyword to reproduce (a bare `fn` is DEFAULT visibility, which is package-internal and legitimately importable, so the original repro shape matters). After the fix, `check <file>` / `build` / `run <file>` agree on:
+  `import db.connection.Connection;` + struct literal -> all three OK (was: check invented "'Connection' is not a struct")
+  `import db.connection.{open, pool_of};`             -> all three OK (was already OK)
+  `import db.helpers.secret;` (`private`, cross-dir)  -> all three E0111 (was: check passed, run PRINTED 42)
+
+ONE LEG DID NOT GET FIXED HERE and is split into B-2026-08-20-20 rather than buried: `import db.connection.Pool as P;` still fails under `karac run` with "undefined name 'P'" while `check` and `build` accept it. That is a different mechanism — `try_build_run_super_program` merges the package into a flat item list and drops import ALIASES — and it is a false rejection rather than a false acceptance, so it does not carry this row's soundness weight.
+
+A FALLBACK THE FIRST DRAFT DID NOT HAVE, caught by `file_targeted_examples_check`: a directory can hold a `kara.toml` and modules but no `src/main.kara` / `src/lib.kara` entry (several `examples/` packages are shaped this way), so no package view can be formed at all. Failing there would have been a new way for `karac check` to refuse a file it used to accept, and "this package has no entry point" is not an answer about the file the caller asked about. It falls back to the single-file check and SAYS so — narrowing silently would be this same bug wearing a new hat.
+
+TESTS (tests/cli.rs): `test_check_package_member_sees_sibling_modules` (false rejection), `test_check_package_member_reports_a_private_cross_directory_import` and `test_run_package_member_refuses_a_private_cross_directory_import` (false acceptance, both surfaces) all fail without the fix. `test_run_package_member_still_runs_a_sound_package` pins that the run gate did not become a blanket refusal, `test_check_standalone_script_is_unaffected` pins that a script merely sitting near a manifest keeps the single-file path, and `test_check_with_no_file_checks_the_whole_package` covers the new project mode in both directions. |
 
 </details>
 
