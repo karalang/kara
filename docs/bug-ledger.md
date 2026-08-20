@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 185 | 0 |
 | run-vs-build | 139 | 0 |
 | double-free | 133 | 0 |
-| missing-feature | 124 | 2 |
+| missing-feature | 125 | 2 |
 | codegen-gap | 119 | 0 |
 | diagnostics | 83 | 0 |
 | false-positive | 82 | 0 |
@@ -110,29 +110,29 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 950 | 1 |
-| typecheck | 214 | 1 |
-| interp | 162 | 0 |
+| codegen | 951 | 2 |
+| typecheck | 215 | 2 |
+| interp | 163 | 1 |
 | ownership | 60 | 0 |
 | other | 58 | 0 |
 | autopar | 50 | 1 |
 | cli | 48 | 0 |
-| parser | 30 | 1 |
+| parser | 31 | 1 |
 | runtime | 26 | 1 |
 | resolver | 20 | 0 |
 | effect | 7 | 0 |
 | lexer | 6 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1381 surfaced · 3 open · 1358 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1382 surfaced · 3 open · 1359 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-19-13 | 2026-08-19 | typecheck+codegen+runtime | medium | GPU reductions still lack prefix-sum and tiled matmul (separate algorithms, not halving folds); integer `prod` / `dot` are blocked on WGSL lacking a widening multiply; and `variance` / `stddev` are f32-only. Everything else has shipped: sum / prod / min / max / mean / dot / argmin / argmax / variance / stddev over `Vec[f32]`, and sum / min / max / mean / argmin / argmax over `Vec[i32]` and `Vec[u32]`. | docs/spikes/gpu-llvm-offload-assessment.md; src/gpu_wgsl.rs::emit_reduce_kernel; src/reduce_kernel.rs::tree_reduce_f32 |
-| B-2026-08-20-1 | 2026-08-20 | parser | low | AN UPPER-HALF UNSIGNED LITERAL CANNOT BE A MATCH PATTERN for any width: `match n { 18446744073709551615u64 => .. }` fails with "Expected pattern, found IntegerOutOfRange". The expression parser has an unsigned band that admits these onto the signed carrier; the PATTERN parser has none. | src/parser/patterns.rs (no IntegerOutOfRange arm); src/parser/exprs.rs (the expression-side unsigned band it should mirror); src/exhaustive.rs |
 | B-2026-08-20-3 | 2026-08-20 | autopar | high | AUTO-PAR (on by default) turns a `parallel_reduction` whose body does `chars().collect()` into a 2.55x PESSIMIZATION — 326 ms sequential becomes 831 ms parallel, with system time exploding 2.9 ms -> 812.8 ms (allocator contention); the same body without the collect parallelizes cleanly at 3.67 cores | — |
+| B-2026-08-20-4 | 2026-08-20 | parser+typecheck+codegen+interp | medium | `LiteralPattern::Integer` holds an `i64`, so NO 128-bit literal can be a match pattern — `match n { 170141183460469231731687303715884105727i128 => .. }` is rejected. Until B-2026-08-20-1 it did not merely fail, it PANICKED the compiler; that crash is gone, but the width is still unreachable in pattern position. | src/ast/patterns.rs:240 (`LiteralPattern::Integer(i64, ...)`); src/parser/patterns.rs (the diagnostic that stands in for it today); src/exhaustive.rs (range arithmetic that assumes i64) |
 
 ### Wontfix (7)
 
@@ -150,9 +150,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1381 surfaced
 
 </details>
 
-### Fixed (1358)
+### Fixed (1359)
 
-<details><summary>1358 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1359 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -12483,6 +12483,28 @@ WHY A NEW TABLE WAS UNAVOIDABLE. The three callers of `render_user_enum_display`
 VERIFICATION. Byte-identical across `karac build`, that build with `KARAC_AUTO_PAR=0`, `karac run` (JIT) and `karac run --interp`, on: a one-parameter enum at `i64`, `String` and `Vec[i64]` — the latter two HEAP-BOXED, since a generic enum's slot is the erased one-word base, so they also re-exercise B-2026-08-19-28's debox — a `u64` payload past 2^63 (which puts B-2026-08-19-27's unsigned reading through the same path), the payload-free variant, a TWO-parameter enum including a variant using only the first parameter so the substitution must be positional and tolerate partial arity, a non-generic enum as the control, and the f-string and `to_string` surfaces. Tests: `e2e_generic_enum_display_direct_spellings` (tests/codegen.rs) with the twin `a_generic_enum_renders_directly_at_its_instantiation` (tests/interpreter.rs). Gates: fmt, both clippy legs, default suite (106 targets), codegen 3083 and memory_sanitizer 1130 under KARAC_REQUIRE_RUNTIME_ARCHIVE=1.
 
 WITH B-2026-08-19-28, THE GENERIC-ENUM DISPLAY SURFACE IS NOW CLOSED: nested (container element, map value, set element) and direct (binding, f-string, to_string) both render at the instantiation, for seeded and user-defined generics alike. What remains is the unrelated subtask-5 restriction on rendering an unbound call result or literal, which is not specific to enums or to generics. |
+| B-2026-08-20-1 | parser | low | An upper-half unsigned literal could not be a MATCH PATTERN for any width — `parser/exprs.rs` has an unsigned band that wraps the magnitude onto the… | FIXED by 08ab8a7.
+
+The pattern now rides the identical wrapped bit pattern the expression side produces, so pattern and scrutinee compare as the same bits and the arm the author wrote is the arm that fires. Three sites needed it — the main pattern parse, `parse_literal_pattern` (which range bounds go through), and `starts_literal_pattern`, the predicate deciding a token can begin a literal pattern at all.
+
+VERIFIED across `run --interp` / `run` / `build` / `KARAC_AUTO_PAR=0 build`, including an upper-half INCLUSIVE RANGE — the shape a wrapped-negative carrier would most plausibly break:
+
+    match n {
+        18446744073709551615u64                           => 1,
+        18446744073709551610u64..=18446744073709551614u64 => 2,
+        0u64                                              => 3,
+        _                                                 => 4,
+    }
+
+prints 1 2 3 4 on all four surfaces.
+
+PROBING THIS FOUND A COMPILER PANIC, worse than the row and reached by a DIFFERENT token. An in-range `i128` literal in pattern position (`170141183460469231731687303715884105727i128`) is `Token::Integer`, not `IntegerOutOfRange`, so the row's repro never touched it — it went straight to `narrow_literal_to_i64` and crashed `karac` with a Rust backtrace: "internal error: 128-bit integer literal … reached an i64-only consumer".
+
+`LiteralPattern::Integer` holds an `i64`, so the pattern AST genuinely cannot represent a 128-bit value; this is not a missing arm but a missing width. Widening it is 16 references across 9 files and lands inside the 128-bit work another session is actively shipping — the panic message names that stage itself. Taking it here would collide, and leaving a crash is not an option, so the parser now emits a structured diagnostic naming the limit and suggesting the guard form. The widening is filed separately for whoever owns that surface.
+
+IMPLEMENTATION NOTE: `Token::Integer` carries `i128` and `Token::IntegerOutOfRange` carries `u128`, so the two cannot share a match binding. The range-pattern tail is extracted into `finish_integer_pattern` and both arms call it; a first attempt that forced a single arm behind a guard was convoluted enough to revert and redo.
+
+Tests: two in tests/parser.rs (the three accepted shapes — literal, `usize`, and a range bound — plus the 128-bit diagnostic, where reaching the assertion at all is what proves the panic is gone) and one in tests/interpreter.rs for arm selection. |
 | B-2026-08-20-2 | codegen | high | GPU float NaN guards written as `!(x == x)` are DELETED on Metal: MSL compiles with fast-math by default, which lets the compiler assume no NaN exist… | FIXED by 9aed2e2c. Every float NaN guard in the emitted shaders now tests the BIT PATTERN — `(bitcast<u32>(x) & 0x7fffffffu) > 0x7f800000u`, true exactly when the exponent is all ones and the mantissa non-zero — instead of `!(x == x)`. Integer arithmetic carries no fast-math licence, so it survives every backend, and `bitcast` was already proven on both since the ±inf identities use it.
 
 APPLIED TO BOTH FLOAT FAMILIES THAT HAD THE PATTERN, not just the one that failed: the Arg combine and `karac_min`/`karac_max`. min/max were PASSING on Metal, but by luck rather than by construction — the same fold applies to them, and the surviving `select(a, b, b < a)` merely happened to land on the right answer for the fixtures in the suite. Fixing only the observed failure would have left an identical latent bug one test away.
