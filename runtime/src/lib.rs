@@ -85,6 +85,7 @@ pub mod semaphore;
 // `snprintf` can't express. Shares `src/format_spec.rs` via `#[path]`.
 pub mod fmt;
 mod lifecycle;
+mod stack_guard;
 // `std.process` Command/Child spawning (phase-8 P1, codegen leg).
 // Target-independent like `file`: on wasm the std::process stubs
 // return `unsupported` at runtime, which surfaces as `IoError.Other`.
@@ -341,6 +342,9 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         lifecycle::karac_runtime_init,
         lifecycle::karac_runtime_shutdown,
     );
+    // Stack-overflow guard (B-2026-08-20-34) — called from the generated
+    // `main`'s prologue, so the JIT runner must be able to resolve it too.
+    keep!(stack_guard::karac_runtime_install_stack_guard,);
     // Map runtime (`runtime/src/map.rs`).
     keep!(
         map::karac_map_new,

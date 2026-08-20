@@ -46553,6 +46553,54 @@ fn main() {
         );
     }
 
+    /// B-2026-08-20-34 — stack exhaustion SAYS SO instead of dying silently.
+    ///
+    /// A Kāra binary has its own `main`, so Rust's `lang_start` never runs and
+    /// std's guard-page handler was never installed: exhausting the stack
+    /// killed the process with a bare SIGSEGV, exit 139, and ZERO bytes on
+    /// stderr — nothing naming recursion as the cause. Measured against the
+    /// mirrors on the same machine, Kāra matched `cc -O0` and lost to both
+    /// comparators it otherwise benchmarks against; unoptimized `rustc` prints
+    /// `thread 'main' has overflowed its stack` and exits 134.
+    ///
+    /// The fixture recurses without allocating, so it faults in single-digit
+    /// milliseconds rather than churning the heap on the way down.
+    #[test]
+    fn e2e_stack_overflow_reports_itself() {
+        let Some(run) = run_program_capturing(
+            "fn down(n: i64) -> i64 {\n\
+             \x20   if n <= 0 {\n\
+             \x20       return 0;\n\
+             \x20   }\n\
+             \x20   let sub = down(n - 1);\n\
+             \x20   return sub + n;\n\
+             }\n\
+             fn main() {\n\
+             \x20   println(f\"{down(50000000i64)}\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert!(
+            !run.status.success(),
+            "the fixture must actually overflow; got a clean exit with stdout {:?}",
+            run.stdout
+        );
+        assert!(
+            run.stderr.contains("stack overflow"),
+            "stack exhaustion must name itself, got stderr {:?} status {:?}",
+            run.stderr,
+            run.status
+        );
+        // The hint is the half that makes it actionable — a bare "stack
+        // overflow" would still leave a reader guessing what to change.
+        assert!(
+            run.stderr.contains("recursive") && run.stderr.contains("ulimit"),
+            "expected the cause + remedy notes, got stderr {:?}",
+            run.stderr
+        );
+    }
+
     /// B-2026-08-20-33 — a THREE-level index, read and write.
     ///
     /// `a[i][j][k] = v` was refused `Index assignment target must be a

@@ -1609,6 +1609,25 @@ impl<'ctx> super::Codegen<'ctx> {
         // Placed after `di_enter_function` so the call carries a valid
         // `!dbg` location when debug info is on. `main` only.
         if func.name == "main" {
+            // B-2026-08-20-34 — arm the stack-overflow guard before anything
+            // else runs. A Kāra binary has its own `main`, so Rust's
+            // `lang_start` never installs std's guard-page handler and
+            // exhausting the stack killed the process with a bare SIGSEGV and
+            // ZERO bytes of stderr. Emitted for every `main`: the runtime side
+            // is a no-op on targets without POSIX signals, which keeps this a
+            // single unconditional call rather than a per-target rule here.
+            let guard = self
+                .module
+                .get_function("karac_runtime_install_stack_guard")
+                .unwrap_or_else(|| {
+                    self.module.add_function(
+                        "karac_runtime_install_stack_guard",
+                        self.context.void_type().fn_type(&[], false),
+                        None,
+                    )
+                });
+            self.builder.build_call(guard, &[], "").unwrap();
+
             if let Some(init_fn) = self.static_init_fn {
                 self.builder.build_call(init_fn, &[], "").unwrap();
             }
