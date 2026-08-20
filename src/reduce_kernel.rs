@@ -183,15 +183,40 @@ fn one_workgroup_i32(
 /// sentinel would have had to be NaN to lose reliably, and NaN preservation is
 /// optional in Vulkan — the index sentinel needs no such guarantee.)
 pub fn tree_arg_f32(xs: &[f32], want_max: bool) -> Option<i64> {
+    tree_arg_with(xs, want_max, arg_takes_b)
+}
+
+/// The `i32` sibling of [`tree_arg_f32`]. Same tree, same tie-break, no NaN
+/// rule — integers are totally ordered, so the combine is just "strictly
+/// better, or an equal value at a smaller index".
+pub fn tree_arg_i32(xs: &[i32], want_max: bool) -> Option<i64> {
+    tree_arg_with(xs, want_max, arg_takes_b_i32)
+}
+
+/// The `u32` sibling. Split from the signed one because the ORDER differs
+/// above 2^31 — `4294967295` is `-1` read as `i32`, so a signed compare
+/// answers argmin and argmax backwards on exactly the values unsigned data is
+/// most likely to contain.
+pub fn tree_arg_u32(xs: &[u32], want_max: bool) -> Option<i64> {
+    tree_arg_with(xs, want_max, arg_takes_b_u32)
+}
+
+/// The tree itself, shared by every element type: level 0 seeds each element
+/// as its own candidate, then the surviving candidates are folded in
+/// workgroup-wide chunks until one remains. Only the COMBINE varies.
+fn tree_arg_with<T>(
+    xs: &[T],
+    want_max: bool,
+    takes_b: fn(u32, u32, &[T], bool) -> bool,
+) -> Option<i64> {
     if xs.is_empty() {
         return None;
     }
-    // Level 0: every element is its own candidate.
     let mut level: Vec<u32> = (0..xs.len() as u32).collect();
     while level.len() > 1 {
         level = level
             .chunks(GPU_REDUCE_WIDTH)
-            .map(|chunk| one_workgroup_arg(chunk, xs, want_max))
+            .map(|chunk| one_workgroup_arg(chunk, xs, want_max, takes_b))
             .collect();
     }
     Some(level[0] as i64)
@@ -207,7 +232,12 @@ pub fn tree_arg_f32(xs: &[f32], want_max: bool) -> Option<i64> {
 pub const ARG_INVALID: u32 = u32::MAX;
 
 /// One workgroup's halving tree over (value, index) pairs.
-fn one_workgroup_arg(candidates: &[u32], xs: &[f32], want_max: bool) -> u32 {
+fn one_workgroup_arg<T>(
+    candidates: &[u32],
+    xs: &[T],
+    want_max: bool,
+    takes_b: fn(u32, u32, &[T], bool) -> bool,
+) -> u32 {
     debug_assert!(candidates.len() <= GPU_REDUCE_WIDTH);
     let mut idxs = [ARG_INVALID; GPU_REDUCE_WIDTH];
     for (slot, &c) in idxs.iter_mut().zip(candidates) {
@@ -217,13 +247,42 @@ fn one_workgroup_arg(candidates: &[u32], xs: &[f32], want_max: bool) -> u32 {
     while stride > 0 {
         for t in 0..stride {
             let (ia, ib) = (idxs[t], idxs[t + stride]);
-            if arg_takes_b(ia, ib, xs, want_max) {
+            if takes_b(ia, ib, xs, want_max) {
                 idxs[t] = ib;
             }
         }
         stride /= 2;
     }
     idxs[0]
+}
+
+/// The INTEGER combine: everything the float one does except the NaN rules,
+/// which have nothing to bite on. `<` and `>` on a signed slice are signed;
+/// on an unsigned one, unsigned — which is the whole difference between the
+/// two integer arms.
+fn arg_takes_b_i32(ia: u32, ib: u32, xs: &[i32], want_max: bool) -> bool {
+    if ib == ARG_INVALID {
+        return false;
+    }
+    if ia == ARG_INVALID {
+        return true;
+    }
+    let (a, b) = (xs[ia as usize], xs[ib as usize]);
+    let strictly_better = if want_max { b > a } else { b < a };
+    strictly_better || (b == a && ib < ia)
+}
+
+/// The unsigned combine. Identical in shape; the comparison is what differs.
+fn arg_takes_b_u32(ia: u32, ib: u32, xs: &[u32], want_max: bool) -> bool {
+    if ib == ARG_INVALID {
+        return false;
+    }
+    if ia == ARG_INVALID {
+        return true;
+    }
+    let (a, b) = (xs[ia as usize], xs[ib as usize]);
+    let strictly_better = if want_max { b > a } else { b < a };
+    strictly_better || (b == a && ib < ia)
 }
 
 /// Does the right-hand candidate beat the left-hand one? The whole combine
@@ -875,6 +934,51 @@ mod tests {
                 .map(|(i, _)| i as i64);
             assert_eq!(tree_arg_f32(&xs, false), want_min, "argmin n={n}");
             assert_eq!(tree_arg_f32(&xs, true), want_max, "argmax n={n}");
+        }
+    }
+
+    #[test]
+    fn tree_arg_integer_orders_by_the_element_type_not_the_bits() {
+        // Above 2^31 the signed and unsigned orders disagree, and they
+        // disagree on BOTH ends: `4294967295` is the largest u32 and `-1` as
+        // i32. So a signed compare on unsigned data answers argmin AND argmax
+        // backwards — which is why these are two functions rather than one
+        // over the raw words.
+        assert_eq!(tree_arg_u32(&[u32::MAX, 1], true), Some(0));
+        assert_eq!(tree_arg_u32(&[u32::MAX, 1], false), Some(1));
+        let as_signed = [-1i32, 1];
+        assert_eq!(tree_arg_i32(&as_signed, true), Some(1));
+        assert_eq!(tree_arg_i32(&as_signed, false), Some(0));
+
+        // Signed negatives order below zero.
+        assert_eq!(tree_arg_i32(&[5, -7, 2], false), Some(1));
+        assert_eq!(tree_arg_i32(&[5, -7, 2], true), Some(0));
+    }
+
+    #[test]
+    fn tree_arg_integer_keeps_every_rule_except_the_nan_one() {
+        // Ties take the first occurrence, empty is None, padding never wins —
+        // the integer arms differ from the float one ONLY in dropping the NaN
+        // rules, which have nothing to bite on.
+        assert_eq!(tree_arg_i32(&[3, 1, 1, 5], false), Some(1));
+        assert_eq!(tree_arg_u32(&[3, 5, 5], true), Some(1));
+        assert_eq!(tree_arg_i32(&[], false), None);
+        assert_eq!(tree_arg_u32(&[], true), None);
+
+        // 65 elements: the winner sits alone in a chunk that is 63/64 padding.
+        let mut xs = vec![5i32; 65];
+        xs[64] = -3;
+        assert_eq!(tree_arg_i32(&xs, false), Some(64));
+
+        // Grouping-independent at every length, like the float arm.
+        for n in [1usize, 63, 64, 65, 128, 4096] {
+            let xs: Vec<i32> = (0..n).map(|i| ((i * 37) % 101) as i32 - 50).collect();
+            let want = xs
+                .iter()
+                .enumerate()
+                .min_by_key(|(i, &v)| (v, *i))
+                .map(|(i, _)| i as i64);
+            assert_eq!(tree_arg_i32(&xs, false), want, "n={n}");
         }
     }
 

@@ -3667,22 +3667,40 @@ impl<'a> super::TypeChecker<'a> {
                 return result;
             }
         };
-        if !matches!(elem, Type::Float(FloatSize::F32)) {
+        let elem_spelling = match &elem {
+            Type::Float(FloatSize::F32) => Some("f32"),
+            Type::Int(IntSize::I32) => Some("i32"),
+            Type::UInt(UIntSize::U32) => Some("u32"),
+            _ => None,
+        };
+        let Some(elem_spelling) = elem_spelling else {
             self.type_error(
                 format!(
-                    "error[E_GPU_REDUCE_BUFFER]: `gpu.{spelling}` takes a `Vec[f32]` (found \
-                     `Vec[{}]`) — the arg reductions are f32-only; an integer one needs the \
-                     signed/unsigned compare wired through the pair tree",
+                    "error[E_GPU_REDUCE_BUFFER]: `gpu.{spelling}` takes a `Vec[f32]`, \
+                     `Vec[i32]` or `Vec[u32]` (found `Vec[{}]`)",
                     crate::typechecker::types::type_display(&elem)
                 ),
                 args[0].value.span,
                 TypeErrorKind::TypeMismatch,
             );
             return result;
+        };
+        if elem_spelling != "f32" {
+            // The INTERPRETER needs this: a `Value::Int` carries no width or
+            // sign, so a `Vec[u32]` of small values is indistinguishable from
+            // a `Vec[i32]` by inspection — and the two order differently above
+            // 2^31, which is exactly where an argmin would answer backwards.
+            // Codegen does not need it (the shader carries the comparison and
+            // an index needs no widening decision), but one table serving both
+            // beats a second one serving one.
+            self.gpu_reduce_int_elems.insert(
+                SpanKey(args[0].value.span.offset, args[0].value.span.length),
+                elem_spelling.to_string(),
+            );
         }
 
-        let seed = crate::gpu_wgsl::emit_arg_kernel(op, "f32", false);
-        let fold = crate::gpu_wgsl::emit_arg_kernel(op, "f32", true);
+        let seed = crate::gpu_wgsl::emit_arg_kernel(op, elem_spelling, false);
+        let fold = crate::gpu_wgsl::emit_arg_kernel(op, elem_spelling, true);
         match (seed, fold) {
             (Ok(seed_wgsl), Ok(fold_wgsl)) => {
                 self.gpu_dispatch_wgsl.insert(

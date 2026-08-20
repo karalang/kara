@@ -838,6 +838,14 @@ async fn dispatch_arg_async(
 /// C entry point for `gpu.argmin(buffer)` / `gpu.argmax(buffer)` — the index
 /// of the extremum (B-2026-08-19-13).
 ///
+/// **Element-type agnostic, and named for it.** The input is opaque 4-byte
+/// words: this function never interprets them, the SHADER does (declaring
+/// `array<f32>` / `array<i32>` / `array<u32>` is what fixes the comparison,
+/// including whether `<` is signed). And the result is an INDEX, so unlike the
+/// value reductions there is no widening or signedness decision on the way out
+/// either. One entry point genuinely serves all three element types — which is
+/// why it is not called `_f32`.
+///
 /// Takes TWO shaders, like `gpu.dot`, but for a different reason. Level 0
 /// seeds every element as its own candidate; every level after that receives
 /// the surviving candidate INDICES and re-reads their values from the original
@@ -852,15 +860,15 @@ async fn dispatch_arg_async(
 /// # Safety
 ///
 /// Both `*_wgsl_ptr`/`_len` pairs a valid UTF-8 shader; `in_ptr` points to `n`
-/// valid `f32` values. Aborts on no available GPU adapter (no CPU fallback),
-/// same as every other entry point here.
+/// valid 4-byte elements. Aborts on no available GPU adapter (no CPU
+/// fallback), same as every other entry point here.
 #[no_mangle]
-pub unsafe extern "C" fn karac_runtime_gpu_arg_f32(
+pub unsafe extern "C" fn karac_runtime_gpu_arg_index(
     seed_wgsl_ptr: *const u8,
     seed_wgsl_len: usize,
     fold_wgsl_ptr: *const u8,
     fold_wgsl_len: usize,
-    in_ptr: *const f32,
+    in_ptr: *const u32,
     n: usize,
 ) -> u32 {
     unsafe {
@@ -885,7 +893,8 @@ pub unsafe extern "C" fn karac_runtime_gpu_arg_f32(
             std::process::abort();
         };
 
-        let input = std::slice::from_raw_parts(in_ptr as *const u8, n * std::mem::size_of::<f32>());
+        // Bytes in, bytes to the device. The element type lives in the shader.
+        let input = std::slice::from_raw_parts(in_ptr as *const u8, n * std::mem::size_of::<u32>());
 
         // LEVEL 0: every element is its own candidate.
         let Some(mut level) = pollster::block_on(dispatch_arg_async(seed_wgsl, input, None, n))
@@ -2066,12 +2075,12 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
                 return;
             }
             let got = unsafe {
-                karac_runtime_gpu_arg_f32(
+                karac_runtime_gpu_arg_index(
                     ARGMIN_SEED_WGSL.as_ptr(),
                     ARGMIN_SEED_WGSL.len(),
                     ARGMIN_FOLD_WGSL.as_ptr(),
                     ARGMIN_FOLD_WGSL.len(),
-                    input.as_ptr(),
+                    input.as_ptr().cast(),
                     input.len(),
                 )
             };
@@ -2099,12 +2108,12 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
             return;
         }
         let got = unsafe {
-            karac_runtime_gpu_arg_f32(
+            karac_runtime_gpu_arg_index(
                 ARGMIN_SEED_WGSL.as_ptr(),
                 ARGMIN_SEED_WGSL.len(),
                 ARGMIN_FOLD_WGSL.as_ptr(),
                 ARGMIN_FOLD_WGSL.len(),
-                input.as_ptr(),
+                input.as_ptr().cast(),
                 input.len(),
             )
         };
@@ -2119,7 +2128,7 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
         // Needs no device: an empty buffer has no extremum. The caller turns
         // the sentinel into `None`.
         let got = unsafe {
-            karac_runtime_gpu_arg_f32(
+            karac_runtime_gpu_arg_index(
                 ARGMIN_SEED_WGSL.as_ptr(),
                 ARGMIN_SEED_WGSL.len(),
                 ARGMIN_FOLD_WGSL.as_ptr(),

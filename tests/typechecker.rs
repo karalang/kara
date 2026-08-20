@@ -37817,14 +37817,26 @@ fn gpu_arg_reductions_return_an_index_not_an_element() {
         !errs.is_empty(),
         "`gpu.argmin` yields an index, not a value"
     );
+
+    // Integer buffers too, and the result is STILL `Option[i64]` — an index is
+    // an index whatever the buffer holds, so unlike the value reductions there
+    // is no per-element-type result shape here at all.
+    typecheck_ok(
+        "fn main() {\n\
+        \x20   let b: Vec[i32] = [1, 2];\n\
+        \x20   let m: Option[i64] = gpu.argmin(b);\n\
+        \x20   let u: Vec[u32] = [1, 2];\n\
+        \x20   let g: Option[i64] = gpu.argmax(u);\n\
+        }",
+    );
 }
 
 #[test]
 fn gpu_arg_reductions_refuse_non_f32_and_wrong_arity() {
     for (src, needle) in [
         (
-            "fn main() { let b: Vec[i32] = [1, 2]; let m = gpu.argmin(b); }",
-            "arg reductions are f32-only",
+            "fn main() { let b: Vec[f64] = [1.0]; let m = gpu.argmin(b); }",
+            "E_GPU_REDUCE_BUFFER",
         ),
         (
             "fn main() { let b: Vec[f32] = [1.0]; let m = gpu.argmax(b, b); }",

@@ -1048,16 +1048,24 @@ pub fn emit_reduce_kernel(op: ReduceOp, elem: &str) -> Result<String, WgslError>
 /// order, hence a semilattice, hence grouping-independent — `argmin` can
 /// promise the same answer at every buffer length where `sum` cannot.
 ///
+/// **Integers drop the NaN half and nothing else.** They are totally ordered,
+/// so there is nothing for those two guards to catch. Signedness needs no
+/// separate spelling either: WGSL's `<` and `>` are signed on an `array<i32>`
+/// and unsigned on an `array<u32>`, so declaring the element type is what
+/// makes `4294967295` the largest `u32` rather than `-1`. And unlike the value
+/// reductions, the RESULT needs no widening decision at all — an index is a
+/// `u32` whatever the buffer holds.
+///
 /// Padding is marked by the INDEX sentinel
 /// ([`crate::reduce_kernel::ARG_INVALID`]), never by a value. A value sentinel
 /// would have to be NaN to lose reliably, and NaN preservation is an OPTIONAL
 /// Vulkan feature — a device that flushed it would silently let padding win
 /// and report a nonexistent index.
 pub fn emit_arg_kernel(op: ReduceOp, elem: &str, fold: bool) -> Result<String, WgslError> {
-    if elem != "f32" {
+    if !matches!(elem, "f32" | "i32" | "u32") {
         return Err(WgslError::UnsupportedSignature(format!(
-            "GPU `argmin`/`argmax` over `{elem}` is not supported yet — the arg reductions are \
-             f32-only"
+            "GPU `argmin`/`argmax` over `{elem}` is not supported — the arg reductions cover \
+             f32, i32 and u32"
         )));
     }
     let want_max = match op {
@@ -1070,6 +1078,30 @@ pub fn emit_arg_kernel(op: ReduceOp, elem: &str, fold: bool) -> Result<String, W
         }
     };
     let strict = if want_max { ">" } else { "<" };
+    // Integers are TOTALLY ORDERED, so the NaN rules have nothing to bite on
+    // and are simply absent. WGSL's `<` / `>` are signed on an `array<i32>`
+    // and unsigned on an `array<u32>`, so the declared element type is what
+    // makes `4294967295` the largest u32 rather than `-1` — no separate
+    // comparison spelling is needed.
+    // The emitted comment has to match the emitted CODE — an integer shader
+    // that talked about NaN would be describing guards it does not contain.
+    let combine_doc = if elem == "f32" {
+        "// The combine, verbatim from `reduce_kernel::arg_takes_b`: a strictly\n\
+         // better value wins, an exact tie goes to the SMALLER index, and a NaN\n\
+         // loses to anything real (ties with another NaN, where the smaller\n\
+         // index survives). Lexicographic, therefore grouping-independent.\n"
+    } else {
+        "// The combine: a strictly better value wins, an exact tie goes to the\n\
+         // SMALLER index. Integers are totally ordered, so there is no NaN rule\n\
+         // — and `<` / `>` are signed or unsigned to match the declared element\n\
+         // type. Lexicographic, therefore grouping-independent.\n"
+    };
+    let nan_guards = if elem == "f32" {
+        "\x20   if (!(a == a)) { return (b == b); }\n\
+         \x20   if (!(b == b)) { return false; }\n"
+    } else {
+        ""
+    };
     let invalid = format!("{}u", crate::reduce_kernel::ARG_INVALID);
     let width = GPU_REDUCE_WIDTH;
     let half = width / 2;
@@ -1103,17 +1135,13 @@ pub fn emit_arg_kernel(op: ReduceOp, elem: &str, fold: bool) -> Result<String, W
          \n\
          var<workgroup> idxs: array<u32, {width}>;\n\
          \n\
-         // The combine, verbatim from `reduce_kernel::arg_takes_b`: a strictly\n\
-         // better value wins, an exact tie goes to the SMALLER index, and a NaN\n\
-         // loses to anything real (ties with another NaN, where the smaller\n\
-         // index survives). Lexicographic, therefore grouping-independent.\n\
+         {combine_doc}\
          fn takes_b(ia: u32, ib: u32) -> bool {{\n\
          \x20   if (ib == {invalid}) {{ return false; }}\n\
          \x20   if (ia == {invalid}) {{ return true; }}\n\
          \x20   let a = input[ia];\n\
          \x20   let b = input[ib];\n\
-         \x20   if (!(a == a)) {{ return (b == b); }}\n\
-         \x20   if (!(b == b)) {{ return false; }}\n\
+         {nan_guards}\
          \x20   return (b {strict} a) || (b == a && ib < ia);\n\
          }}\n\
          \n\
@@ -4370,10 +4398,55 @@ mod tests {
     }
 
     #[test]
+    fn arg_kernel_integer_drops_the_nan_guards_and_nothing_else() {
+        let f = emit_arg_kernel(ReduceOp::Argmin, "f32", false).unwrap();
+        let i = emit_arg_kernel(ReduceOp::Argmin, "i32", false).unwrap();
+        let u = emit_arg_kernel(ReduceOp::Argmax, "u32", false).unwrap();
+
+        // Integers are totally ordered, so there is nothing for the NaN
+        // guards to catch — and a shader that carried them would be describing
+        // a case that cannot arise.
+        assert!(f.contains("if (!(a == a)) { return (b == b); }"), "{f}");
+        for w in [&i, &u] {
+            assert!(
+                !w.contains("a == a"),
+                "integer shader has no NaN guard:\n{w}"
+            );
+        }
+        // The emitted PROSE must match the emitted code.
+        assert!(!i.contains("NaN loses"), "{i}");
+        assert!(i.contains("there is no NaN rule"), "{i}");
+
+        // Signedness needs no separate spelling: WGSL's `<` is signed on an
+        // `array<i32>` and unsigned on an `array<u32>`, so declaring the
+        // element type is the whole mechanism.
+        assert!(i.contains("input:  array<i32>;"), "{i}");
+        assert!(u.contains("input:  array<u32>;"), "{u}");
+        assert!(i.contains("return (b < a) || (b == a && ib < ia);"), "{i}");
+        assert!(u.contains("return (b > a) || (b == a && ib < ia);"), "{u}");
+
+        // Everything else is shared — including the INDEX output, which is
+        // u32 whatever the buffer holds.
+        for w in [&f, &i, &u] {
+            assert!(w.contains("output: array<u32>;"), "{w}");
+            assert!(w.contains("var<workgroup> idxs: array<u32, 64>;"), "{w}");
+            assert!(
+                w.contains("if (ib == 4294967295u) { return false; }"),
+                "{w}"
+            );
+        }
+    }
+
+    #[test]
     fn arg_kernel_refuses_non_f32_and_non_arg_ops() {
-        for elem in ["i32", "u32", "f64"] {
+        // Used to reject i32/u32 as well; they are supported now. What is
+        // still refused is anything that is not a 32-bit element.
+        for elem in ["f64", "i64", "u8"] {
             let err = emit_arg_kernel(ReduceOp::Argmin, elem, false).unwrap_err();
-            assert!(format!("{err:?}").contains("f32-only"), "{elem}");
+            assert!(
+                format!("{err:?}").contains("f32, i32 and u32"),
+                "{elem}: {err:?}"
+            );
         }
         // The value reductions have their own emitters; routing one here would
         // produce an index where a value was expected.

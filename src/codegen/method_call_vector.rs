@@ -2095,7 +2095,7 @@ impl<'ctx> super::Codegen<'ctx> {
         }
 
         let (data, n) = self.read_gpu_reduce_buffer(&args[0].value)?;
-        let arg_fn = self.gpu_arg_f32_fn();
+        let arg_fn = self.gpu_arg_index_fn();
         let idx = self
             .builder
             .build_call(

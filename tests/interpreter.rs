@@ -34795,6 +34795,50 @@ fn gpu_argmin_argmax_report_indices_with_first_occurrence_ties() {
 }
 
 #[test]
+fn gpu_integer_arg_orders_by_the_element_type() {
+    // Above 2^31 the signed and unsigned orders disagree at BOTH ends:
+    // `4294967295` is the largest u32 and `-1` read as i32. So a signed
+    // compare on unsigned data answers argmin and argmax backwards — the
+    // discriminating case for wiring signedness through the pair tree.
+    let out = run_no_errors(
+        "fn main() {\n\
+        \x20   let v: Vec[u32] = [4294967295, 1];\n\
+        \x20   let m = gpu.argmax(v);\n\
+        \x20   match m {\n\
+        \x20       Some(x) => println(f\"{x}\"),\n\
+        \x20       None => println(\"empty\"),\n\
+        \x20   }\n\
+        }",
+    );
+    assert_eq!(out.trim(), "0", "u32::MAX is the LARGEST u32, not -1");
+
+    let out = run_no_errors(
+        "fn main() {\n\
+        \x20   let v: Vec[u32] = [4294967295, 1];\n\
+        \x20   let m = gpu.argmin(v);\n\
+        \x20   match m {\n\
+        \x20       Some(x) => println(f\"{x}\"),\n\
+        \x20       None => println(\"empty\"),\n\
+        \x20   }\n\
+        }",
+    );
+    assert_eq!(out.trim(), "1");
+
+    // Signed negatives order below zero, and ties still take the first.
+    let out = run_no_errors(
+        "fn main() {\n\
+        \x20   let v: Vec[i32] = [5, -7, -7];\n\
+        \x20   let m = gpu.argmin(v);\n\
+        \x20   match m {\n\
+        \x20       Some(x) => println(f\"{x}\"),\n\
+        \x20       None => println(\"empty\"),\n\
+        \x20   }\n\
+        }",
+    );
+    assert_eq!(out.trim(), "1");
+}
+
+#[test]
 fn gpu_argmin_makes_nan_lose_unlike_stats_argmin() {
     // A DELIBERATE difference from `Stats.argmin`, which is position-dependent
     // on NaN — it seeds its best with element 0 and displaces only on a strict

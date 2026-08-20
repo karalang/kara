@@ -1118,6 +1118,68 @@ fn gpu_arg_reductions_agree_with_the_interpreter() {
 }
 
 #[test]
+fn gpu_integer_arg_reductions_order_by_the_element_type() {
+    // The discriminating pair: above 2^31 the signed and unsigned orders
+    // disagree at BOTH ends, so a signed compare on unsigned data answers
+    // argmax and argmin backwards. On the device the comparison comes from the
+    // shader's declared `array<u32>` rather than from any host-side choice.
+    assert_gpu_reduce_matches_interp(
+        "reduce_arg_u32_max",
+        "fn main() {\n\
+        \x20   let v: Vec[u32] = [4294967295, 1];\n\
+        \x20   let m = gpu.argmax(v);\n\
+        \x20   match m {\n\
+        \x20       Some(x) => println(f\"{x}\"),\n\
+        \x20       None => println(\"empty\"),\n\
+        \x20   }\n\
+        }\n",
+        "0",
+    );
+    assert_gpu_reduce_matches_interp(
+        "reduce_arg_u32_min",
+        "fn main() {\n\
+        \x20   let v: Vec[u32] = [4294967295, 1];\n\
+        \x20   let m = gpu.argmin(v);\n\
+        \x20   match m {\n\
+        \x20       Some(x) => println(f\"{x}\"),\n\
+        \x20       None => println(\"empty\"),\n\
+        \x20   }\n\
+        }\n",
+        "1",
+    );
+
+    // Signed negatives order below zero; ties still take the first.
+    assert_gpu_reduce_matches_interp(
+        "reduce_arg_i32_tie",
+        "fn main() {\n\
+        \x20   let v: Vec[i32] = [5, -7, -7];\n\
+        \x20   let m = gpu.argmin(v);\n\
+        \x20   match m {\n\
+        \x20       Some(x) => println(f\"{x}\"),\n\
+        \x20       None => println(\"empty\"),\n\
+        \x20   }\n\
+        }\n",
+        "1",
+    );
+
+    // Two full fold levels, so the integer fold shader runs for real.
+    assert_gpu_reduce_matches_interp(
+        "reduce_arg_i32_multi",
+        "fn main() {\n\
+        \x20   let mut v: Vec[i32] = [];\n\
+        \x20   for i in 0..4096 { v.push(50) }\n\
+        \x20   v[3000] = -1;\n\
+        \x20   let m = gpu.argmin(v);\n\
+        \x20   match m {\n\
+        \x20       Some(x) => println(f\"{x}\"),\n\
+        \x20       None => println(\"empty\"),\n\
+        \x20   }\n\
+        }\n",
+        "3000",
+    );
+}
+
+#[test]
 fn gpu_u32_reductions_are_unsigned_end_to_end() {
     // The whole u32 question in one place: above 2^31 the unsigned reading
     // differs from the signed one at EVERY step — the shader's compare, the

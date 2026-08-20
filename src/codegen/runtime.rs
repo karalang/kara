@@ -12101,7 +12101,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .add_function("karac_runtime_gpu_reduce_i32", fn_ty, None)
     }
 
-    /// Lazily declare `karac_runtime_gpu_arg_f32(seed_wgsl_ptr: ptr,
+    /// Lazily declare `karac_runtime_gpu_arg_index(seed_wgsl_ptr: ptr,
     /// seed_wgsl_len: i64, fold_wgsl_ptr: ptr, fold_wgsl_len: i64,
     /// in_ptr: ptr, n: i64) -> i32` — the Arg family's entry point
     /// (B-2026-08-19-13).
@@ -12114,8 +12114,8 @@ impl<'ctx> super::Codegen<'ctx> {
     ///
     /// Returns the index as a raw 32-bit word, or `u32::MAX` for an empty
     /// buffer — which codegen turns into `None`.
-    pub(super) fn gpu_arg_f32_fn(&self) -> FunctionValue<'ctx> {
-        if let Some(f) = self.module.get_function("karac_runtime_gpu_arg_f32") {
+    pub(super) fn gpu_arg_index_fn(&self) -> FunctionValue<'ctx> {
+        if let Some(f) = self.module.get_function("karac_runtime_gpu_arg_index") {
             return f;
         }
         let i32_t = self.context.i32_type();
@@ -12133,7 +12133,7 @@ impl<'ctx> super::Codegen<'ctx> {
             false,
         );
         self.module
-            .add_function("karac_runtime_gpu_arg_f32", fn_ty, None)
+            .add_function("karac_runtime_gpu_arg_index", fn_ty, None)
     }
 
     /// Lazily declare `karac_runtime_gpu_dot_f32(dot_wgsl_ptr: ptr,

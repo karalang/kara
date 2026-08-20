@@ -10192,7 +10192,7 @@ Two consequences worth stating plainly:
 
 Two operations are defined in terms of `sum` rather than having a tree of their own, and both equalities are exact:
 
-- `gpu.argmin` / `gpu.argmax` report an **index**, so they yield `Option[i64]` whatever the element type. Ties take the **first** occurrence, matching `Stats.argmin`. Their tree carries (value, index) pairs and its combine is lexicographic — strictly better value wins, exact tie goes to the smaller index — which is a semilattice, so like `min`/`max` they are grouping-independent.
+- `gpu.argmin` / `gpu.argmax` report an **index**, so they yield `Option[i64]` whatever the element type — including over `Vec[i32]` and `Vec[u32]`, where signedness affects only the comparison and never the result. Above 2³¹ the two integer orders disagree at both ends (`4294967295` is the largest `u32` and `-1` as `i32`), so the element type decides the answer, not the bits. Ties take the **first** occurrence, matching `Stats.argmin`. Their tree carries (value, index) pairs and its combine is lexicographic — strictly better value wins, exact tie goes to the smaller index — which is a semilattice, so like `min`/`max` they are grouping-independent.
 
 They diverge from `Stats.argmin` on **NaN**, and necessarily. `Stats.argmin` seeds its running best with element 0 and displaces it only on a strict comparison, so a leading NaN is never displaced: `Stats.argmin([NaN, 3.0, 1.0])` is `0` while `Stats.argmin([3.0, 1.0, NaN])` is `1`. That position-dependence cannot survive a halving tree, where the grouping decides the positions. In `gpu.argmin` a NaN always loses, so the first buffer answers `2`; an all-NaN buffer answers `0`, since nothing ever wins and the leftmost survives.
 

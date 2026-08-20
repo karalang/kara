@@ -1032,10 +1032,59 @@ impl<'a> super::Interpreter<'a> {
             );
         }
         let Value::Array(rc) = self.eval_expr_inner(&args[0].value) else {
-            return self
-                .record_runtime_error(format!("gpu.{spelling} buffer must be a Vec of f32"), span);
+            return self.record_runtime_error(
+                format!("gpu.{spelling} buffer must be a Vec of f32, i32 or u32"),
+                span,
+            );
         };
         let elems = rc.read().unwrap().clone();
+
+        // INTEGER buffers order differently, and the interpreter cannot tell
+        // which kind it holds from the values: a `Value::Int` carries no width
+        // or sign, so a `Vec[u32]` of small values looks exactly like a
+        // `Vec[i32]`. Above 2^31 the two disagree about which element is the
+        // minimum, so the element type comes from the typechecker's hint —
+        // the same one the value reductions read.
+        if matches!(elems.first(), Some(Value::Int(_))) {
+            let unsigned = self
+                .typecheck_result
+                .gpu_reduce_int_elems
+                .get(&crate::resolver::SpanKey(
+                    args[0].value.span.offset,
+                    args[0].value.span.length,
+                ))
+                .is_some_and(|e| e == "u32");
+            let mut ints: Vec<i128> = Vec::with_capacity(elems.len());
+            for v in &elems {
+                let Value::Int(i) = v else {
+                    return self.record_runtime_error(
+                        format!("gpu.{spelling} buffer elements must all be integers"),
+                        span,
+                    );
+                };
+                ints.push(*i);
+            }
+            let found = if unsigned {
+                let u: Vec<u32> = ints.iter().map(|&i| i as u32).collect();
+                crate::reduce_kernel::tree_arg_u32(&u, want_max)
+            } else {
+                let i: Vec<i32> = ints.iter().map(|&i| i as i32).collect();
+                crate::reduce_kernel::tree_arg_i32(&i, want_max)
+            };
+            return match found {
+                Some(i) => Value::EnumVariant {
+                    enum_name: "Option".to_string(),
+                    variant: "Some".to_string(),
+                    data: EnumData::Tuple(vec![Value::Int(i as i128)]),
+                },
+                None => Value::EnumVariant {
+                    enum_name: "Option".to_string(),
+                    variant: "None".to_string(),
+                    data: EnumData::Unit,
+                },
+            };
+        }
+
         let mut xs: Vec<f32> = Vec::with_capacity(elems.len());
         for v in &elems {
             match v {
