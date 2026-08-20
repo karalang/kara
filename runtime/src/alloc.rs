@@ -113,12 +113,71 @@ pub extern "C" fn karac_realloc_or_panic(ptr: *mut u8, size: usize) -> *mut u8 {
         std::process::abort();
     }
     let n = if size == 0 { 1 } else { size };
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    if n <= SMALL_REALLOC_MAX {
+        let old = unsafe { buf_cache::usable_size(ptr) };
+        if old <= SMALL_REALLOC_MAX {
+            return small_realloc(ptr, old, n);
+        }
+    }
     let p = unsafe { realloc(ptr, n) };
     if p.is_null() {
         crate::fatal::write_stderr(b"panic: out of memory\n");
         std::process::abort();
     }
     p
+}
+
+/// Buffers at or below this size take the [`small_realloc`] path instead of
+/// libc `realloc`. Sized to glibc's default `tcache_max` (1032 bytes, i.e. the
+/// largest chunk the per-thread cache serves) rounded down to a power of two:
+/// the whole point is that BOTH the new allocation and the old release land in
+/// tcache, so neither touches the arena.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+const SMALL_REALLOC_MAX: usize = 1024;
+
+/// A small resize served as `malloc` + copy + `free` rather than `realloc`.
+///
+/// **This is a concurrency fix, not a micro-optimisation** (B-2026-08-20-9).
+/// glibc's `malloc`/`free` short-circuit into the per-thread tcache for chunks
+/// up to `tcache_max` and never touch an arena mutex. `realloc` has NO tcache
+/// path: `__libc_realloc` locks `arena_for_chunk(ptr)` unconditionally. So an
+/// auto-par loop whose body grows a fresh Vec/String per iteration — the
+/// `Vec.new()` + push chain, cap 1 → 2 → 4 → … — puts every worker thread on
+/// the same arena mutex, while the identical sequential program takes no lock
+/// at all. Measured on a 4-core Linux box, a 1M-iteration reduction whose body
+/// pushes ~15 elements into a fresh `Vec[char]`: 0.11 s sequential vs 0.55 s
+/// auto-par (a 5× PESSIMIZATION, system time 0.00 s → 0.57 s, ~99 % of it futex
+/// waits in `__lll_lock_wait_private` under `realloc`). With this path: 0.035 s
+/// auto-par — 3.1× FASTER than sequential, system time back to 0.00 s.
+///
+/// The copy is bounded by `min(old, new)`, which is within both blocks, so a
+/// shrink is as safe as a grow. Sequential cost is a wash (measured 0.11 s →
+/// 0.11–0.12 s on the same probe): for a chunk this small glibc's `realloc`
+/// usually cannot extend in place either, so it was already doing this copy
+/// internally — just behind the lock.
+///
+/// Uses plain libc `free`, not [`karac_free_buf`]: `realloc`'s internal release
+/// never fed the cache's small-churn bookkeeping either, so this keeps the
+/// `malloc_trim` compensation decision exactly where it was.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn small_realloc(ptr: *mut u8, old: usize, new: usize) -> *mut u8 {
+    extern "C" {
+        fn free(ptr: *mut core::ffi::c_void);
+    }
+    let fresh = unsafe { malloc(new) };
+    if fresh.is_null() {
+        crate::fatal::write_stderr(b"panic: out of memory\n");
+        std::process::abort();
+    }
+    let copy = if old < new { old } else { new };
+    // Safety: `copy <= old` bytes are owned by `ptr` (allocator ground truth)
+    // and `copy <= new` bytes by `fresh`; the two blocks are distinct.
+    unsafe {
+        std::ptr::copy_nonoverlapping(ptr, fresh, copy);
+        free(ptr as *mut core::ffi::c_void);
+    }
+    fresh
 }
 
 /// Panicking **zeroed** allocation — the `calloc` counterpart of
@@ -226,6 +285,13 @@ mod buf_cache {
         #[cfg_attr(target_os = "macos", link_name = "malloc_size")]
         #[cfg_attr(target_os = "linux", link_name = "malloc_usable_size")]
         fn platform_malloc_usable(ptr: *const core::ffi::c_void) -> usize;
+    }
+
+    /// The same query, for the parent module's small-realloc path. Lock-free
+    /// on both platforms (it reads the chunk header), so the hot grow path can
+    /// afford it. Safety: `ptr` must be a live pointer from this allocator.
+    pub(super) unsafe fn usable_size(ptr: *const u8) -> usize {
+        unsafe { platform_malloc_usable(ptr as *const core::ffi::c_void) }
     }
 
     // glibc only. `target_env = "gnu"` (not merely `target_os = "linux"`)
@@ -661,6 +727,77 @@ mod tests {
         // A degenerate 0-count / 0-size request must still yield a usable pointer.
         assert!(!karac_alloc_zeroed_or_panic(0, 8).is_null());
         assert!(!karac_alloc_zeroed_or_panic(16, 0).is_null());
+    }
+
+    // ── small-realloc path (B-2026-08-20-9) ──
+    //
+    // These pin CONTENT PRESERVATION, which is the only thing the caller can
+    // observe: whether a given resize took `malloc`+copy+`free` or libc
+    // `realloc` is deliberately invisible. The win it exists for is a
+    // concurrency property (no arena lock under auto-par fan-out) and is
+    // measured in the ledger row, not asserted here — a timing assertion would
+    // be flaky in CI without catching anything a content check misses.
+
+    /// Fill `n` bytes with a position-derived pattern, then verify them back.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    fn fill(p: *mut u8, n: usize) {
+        for i in 0..n {
+            unsafe { *p.add(i) = (i % 251) as u8 };
+        }
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    fn check(p: *const u8, n: usize) -> bool {
+        (0..n).all(|i| unsafe { *p.add(i) } == (i % 251) as u8)
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn small_realloc_grow_preserves_bytes() {
+        // The Vec/String growth chain this path exists for: 1 → 2 → 4 → …,
+        // every step at or below the threshold. Every byte written before a
+        // step must survive it.
+        let mut cap = 8usize;
+        let mut p = karac_alloc_or_panic(cap);
+        fill(p, cap);
+        while cap < SMALL_REALLOC_MAX {
+            let next = cap * 2;
+            p = karac_realloc_or_panic(p, next);
+            assert!(!p.is_null());
+            assert!(check(p, cap), "grow {cap} -> {next} lost the old bytes");
+            fill(p, next);
+            cap = next;
+        }
+        karac_free_buf(p, cap);
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn small_realloc_shrink_keeps_the_surviving_prefix() {
+        // A shrink copies `new`, not `old` — reading `old` bytes out of the
+        // smaller destination would be the obvious way to get this wrong.
+        let p = karac_alloc_or_panic(512);
+        fill(p, 512);
+        let q = karac_realloc_or_panic(p, 64);
+        assert!(!q.is_null());
+        assert!(check(q, 64), "shrink lost the surviving prefix");
+        karac_free_buf(q, 64);
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn realloc_across_the_threshold_preserves_bytes() {
+        // Straddling the boundary in both directions: a request ABOVE the
+        // threshold delegates to libc `realloc`, and a block whose allocator
+        // usable size is above it does too even when the request is small.
+        // Both must be as content-preserving as the small path.
+        let p = karac_alloc_or_panic(SMALL_REALLOC_MAX);
+        fill(p, SMALL_REALLOC_MAX);
+        let q = karac_realloc_or_panic(p, SMALL_REALLOC_MAX * 4);
+        assert!(check(q, SMALL_REALLOC_MAX), "small -> large lost bytes");
+        let r = karac_realloc_or_panic(q, 32);
+        assert!(check(r, 32), "large -> small lost the surviving prefix");
+        karac_free_buf(r, 32);
     }
 
     #[cfg(target_pointer_width = "64")]
