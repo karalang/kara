@@ -5746,12 +5746,64 @@ impl<'ctx> super::Codegen<'ctx> {
         } = &object.kind
         {
             if let ExprKind::Identifier(outer_name) = &outer.kind {
-                let outer_is_vec_of_vec = self
-                    .var_types
-                    .var_elem_type_exprs
-                    .get(outer_name.as_str())
-                    .and_then(vec_inner_type_expr)
-                    .is_some();
+                // A MAP outer (`m[k][i] = v`) reaches here looking exactly like
+                // a Vec-of-Vec: `var_elem_type_exprs` holds the map's VALUE
+                // TypeExpr, so for `Map[K, Vec[V]]` that is `Vec[V]` and
+                // `vec_inner_type_expr` happily returns `Some(V)`. The test
+                // below therefore said yes and handed a MAP HANDLE to
+                // `compile_nested_vec_vec_index_store`, which indexed it as a
+                // Vec of Vecs — the program BUILT and then segfaulted at
+                // runtime. Excluding maps here turns that silent miscompile
+                // into the correct lowering just below (B-2026-08-20-35).
+                let outer_is_map = self.mapset.map_val_types.contains_key(outer_name.as_str());
+                let outer_is_vec_of_vec = !outer_is_map
+                    && self
+                        .var_types
+                        .var_elem_type_exprs
+                        .get(outer_name.as_str())
+                        .and_then(vec_inner_type_expr)
+                        .is_some();
+                if outer_is_map {
+                    // Resolve `m[k]` to a pointer into the value half of the
+                    // key's bucket and recurse, so the identifier-keyed store
+                    // below does the write against the map's own storage.
+                    let elem_te = self
+                        .var_types
+                        .var_elem_type_exprs
+                        .get(outer_name.as_str())
+                        .cloned();
+                    if let Some(elem_te) = elem_te {
+                        let (elem_ptr, elem_ll_ty) =
+                            self.lower_indexed_elem_ptr_map(outer_name, outer_idx)?;
+                        let synth = format!("__map_elem_{}", self.indexed_elem_counter);
+                        self.indexed_elem_counter += 1;
+                        self.variables.insert(
+                            synth.clone(),
+                            super::state::VarSlot {
+                                ptr: elem_ptr,
+                                ty: elem_ll_ty,
+                            },
+                        );
+                        self.register_var_from_type_expr(&synth, &elem_te);
+                        let synth_expr = Expr {
+                            kind: ExprKind::Identifier(synth.clone()),
+                            span: outer.span,
+                        };
+                        let result = self.compile_index_store(
+                            &synth_expr,
+                            index,
+                            val,
+                            rhs_is_fresh,
+                            rhs_src,
+                        );
+                        self.variables.remove(&synth);
+                        self.var_types.vec_elem_types.remove(&synth);
+                        self.var_types.slice_elem_types.remove(&synth);
+                        self.var_types.var_elem_type_exprs.remove(&synth);
+                        self.var_types.var_type_names.remove(&synth);
+                        return result;
+                    }
+                }
                 if outer_is_vec_of_vec {
                     return self.compile_nested_vec_vec_index_store(
                         outer_name,
@@ -5846,41 +5898,35 @@ impl<'ctx> super::Codegen<'ctx> {
         // `container_place_name` resolver, so arbitrary depth costs one arm
         // instead of one arm per depth. The read side lifted its matching MR5
         // deferral through the same resolver.
-        if let ExprKind::Index {
-            object: outer,
-            index: outer_idx,
-        } = &object.kind
-        {
-            if matches!(outer.kind, ExprKind::Index { .. }) {
-                let mut scratch = Vec::new();
-                let resolved = self.container_place_name(outer, &mut scratch);
-                let out = match resolved {
-                    Ok(Some(base)) => {
-                        let nested_obj = Expr {
-                            kind: ExprKind::Index {
-                                object: Box::new(Expr {
-                                    kind: ExprKind::Identifier(base),
-                                    span: outer.span,
-                                }),
-                                index: outer_idx.clone(),
-                            },
-                            span: object.span,
-                        };
-                        Some(self.compile_index_store(
-                            &nested_obj,
-                            index,
-                            val,
-                            rhs_is_fresh,
-                            rhs_src,
-                        ))
-                    }
-                    Ok(None) => None,
-                    Err(e) => Some(Err(e)),
-                };
-                self.release_place_synths(scratch);
-                if let Some(result) = out {
-                    return result;
+        if let ExprKind::Index { .. } = &object.kind {
+            // Reached only when every arm above declined, so this cannot
+            // preempt the vec-of-vec store (which also releases the element it
+            // overwrites) or the Map store. What it picks up is any REMAINING
+            // index-rooted target: a chained base (`a[i][j][k] = v`, the
+            // B-2026-08-20-33 shape) and a Vec/Slice whose ELEMENT is a Map
+            // (`vm[i][k] = v` on a `Vec[Map[K, V]]`), which matched neither the
+            // vec-of-vec test nor the map test because `vm` is a Vec and its
+            // element is not (B-2026-08-20-35).
+            //
+            // `container_place_name` resolves the whole target to a synth bound
+            // to the element's storage; the identifier-keyed store below then
+            // writes through it with the shape the element actually has.
+            let mut scratch = Vec::new();
+            let resolved = self.container_place_name(object, &mut scratch);
+            let out = match resolved {
+                Ok(Some(base)) => {
+                    let synth_expr = Expr {
+                        kind: ExprKind::Identifier(base),
+                        span: object.span,
+                    };
+                    Some(self.compile_index_store(&synth_expr, index, val, rhs_is_fresh, rhs_src))
                 }
+                Ok(None) => None,
+                Err(e) => Some(Err(e)),
+            };
+            self.release_place_synths(scratch);
+            if let Some(result) = out {
+                return result;
             }
         }
 

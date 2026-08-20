@@ -1280,6 +1280,13 @@ impl<'ctx> super::Codegen<'ctx> {
             .contains_key(outer_name.as_str())
         {
             self.lower_indexed_elem_ptr_slice(&outer_name, inner_idx)?
+        } else if self.mapset.map_val_types.contains_key(outer_name.as_str()) {
+            // A MAP outer (`m[k][i]` on a `Map[K, Vec[V]]`). The
+            // indexed-RECEIVER path (`m[k].push(x)`) has had this arm since
+            // B-2026-07-25-5 and the `elem_te` lookup above already resolves
+            // for maps — `var_elem_type_exprs` holds the map's VALUE TypeExpr
+            // — so only this one dispatch line was missing (B-2026-08-20-35).
+            self.lower_indexed_elem_ptr_map(&outer_name, inner_idx)?
         } else {
             let slot = self
                 .variables
@@ -1822,6 +1829,13 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.lower_indexed_elem_ptr_vec(&base, index)?
                     } else if self.var_types.slice_elem_types.contains_key(base.as_str()) {
                         self.lower_indexed_elem_ptr_slice(&base, index)?
+                    } else if self.mapset.map_val_types.contains_key(base.as_str()) {
+                        // A Map link in the chain (`m[k][i]`). The element
+                        // pointer aliases the value half of the key's bucket —
+                        // the same `karac_map_lookup_slot` contract that backs
+                        // `m[k].push(x)` — so a Map is no less resolvable here
+                        // than a Vec (B-2026-08-20-35).
+                        self.lower_indexed_elem_ptr_map(&base, index)?
                     } else if let Some(slot) = self.variables.get(base.as_str()).copied() {
                         if matches!(slot.ty, BasicTypeEnum::ArrayType(_)) {
                             self.lower_indexed_elem_ptr_array(slot, index)?

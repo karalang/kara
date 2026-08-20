@@ -46553,6 +46553,98 @@ fn main() {
         );
     }
 
+    /// B-2026-08-20-35 — a nested index whose outer container is a MAP.
+    ///
+    /// The READ (`m[k][i]`) was refused `outer is not a Vec/Slice/Array`. The
+    /// WRITE was worse than refused: `m[k][i] = v` BUILT and then SEGFAULTED.
+    /// `var_elem_type_exprs` holds a map's VALUE TypeExpr, so for
+    /// `Map[K, Vec[V]]` that is `Vec[V]` and the nested store's "is the outer a
+    /// Vec of Vecs?" test happily said yes — handing a MAP HANDLE to
+    /// `compile_nested_vec_vec_index_store`, which indexed it as a Vec of Vecs.
+    /// The row that filed this described a clean refusal on both halves; the
+    /// store half was a silent miscompile.
+    ///
+    /// Case 4 is the one that shows the fix generalised rather than special-
+    /// cased: a `Vec[Map[K, V]]` matches NEITHER test — the outer is a Vec and
+    /// its element is not — and is served by the shared place resolver.
+    #[test]
+    fn e2e_nested_index_through_a_map() {
+        // 1. The read half.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                 \x20   let mut m: Map[i64, Vec[i64]] = Map.new();\n\
+                 \x20   m.insert(1i64, [7i64, 8i64]);\n\
+                 \x20   println(f\"{m[1i64][0]}\");\n\
+                 }\n"
+            )
+            .as_deref(),
+            Some("7\n")
+        );
+        // 2. The write half — the one that used to build and segfault. The
+        // read-back also proves the store reached the MAP's storage rather
+        // than a temporary.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                 \x20   let mut m: Map[i64, Vec[i64]] = Map.new();\n\
+                 \x20   m.insert(1i64, [7i64, 8i64]);\n\
+                 \x20   m.insert(2i64, [9i64]);\n\
+                 \x20   m[1i64][1] = 55i64;\n\
+                 \x20   println(f\"{m[1i64][0]} {m[1i64][1]} {m[2i64][0]}\");\n\
+                 }\n"
+            )
+            .as_deref(),
+            Some("7 55 9\n")
+        );
+        // 3. A Map whose values are Maps.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                 \x20   let mut mm: Map[i64, Map[i64, i64]] = Map.new();\n\
+                 \x20   let mut inner: Map[i64, i64] = Map.new();\n\
+                 \x20   inner.insert(5i64, 6i64);\n\
+                 \x20   mm.insert(1i64, inner);\n\
+                 \x20   mm[1i64][5i64] = 66i64;\n\
+                 \x20   println(f\"{mm[1i64][5i64]}\");\n\
+                 }\n"
+            )
+            .as_deref(),
+            Some("66\n")
+        );
+        // 4. A VEC whose elements are Maps — neither the vec-of-vec test nor
+        // the map test matches, so this only works through the shared
+        // resolver. It was still refused after the first two were fixed.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                 \x20   let mut vm: Vec[Map[i64, i64]] = Vec.new();\n\
+                 \x20   let mut e: Map[i64, i64] = Map.new();\n\
+                 \x20   e.insert(3i64, 4i64);\n\
+                 \x20   vm.push(e);\n\
+                 \x20   vm[0][3i64] = 44i64;\n\
+                 \x20   println(f\"{vm[0][3i64]}\");\n\
+                 }\n"
+            )
+            .as_deref(),
+            Some("44\n")
+        );
+        // 5. A Map reached through a struct FIELD.
+        assert_eq!(
+            run_program(
+                "struct Holder { buckets: Map[i64, Vec[i64]] }\n\
+                 fn main() {\n\
+                 \x20   let mut h = Holder { buckets: Map.new() };\n\
+                 \x20   h.buckets.insert(1i64, [1i64, 2i64]);\n\
+                 \x20   h.buckets[1i64][0] = 21i64;\n\
+                 \x20   println(f\"{h.buckets[1i64][0]} {h.buckets[1i64][1]}\");\n\
+                 }\n"
+            )
+            .as_deref(),
+            Some("21 2\n")
+        );
+    }
+
     /// B-2026-08-20-34 — stack exhaustion SAYS SO instead of dying silently.
     ///
     /// A Kāra binary has its own `main`, so Rust's `lang_start` never runs and
