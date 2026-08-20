@@ -35748,6 +35748,31 @@ fn a_generic_enum_renders_directly_at_its_instantiation() {
     );
 }
 
+/// The interpreter twin of `e2e_128bit_literal_patterns_match_their_own_value`
+/// (tests/codegen.rs), B-2026-08-20-4. Both backends read the pattern's payload
+/// off the same widened AST node, so the pair pins that they agree — including
+/// on the wrapped encoding a `u128` past `i128::MAX` rides.
+#[test]
+fn a_128bit_literal_pattern_matches_its_own_value() {
+    assert_eq!(
+        run_no_errors(
+            "fn main() {\n\
+             let a: i128 = 170141183460469231731687303715884105727i128;\n\
+             match a { 170141183460469231731687303715884105727i128 => println(\"imax\"), _ => println(\"no\") }\n\
+             let b: i128 = 1267650600228229401496703205376i128;\n\
+             match b { 170141183460469231731687303715884105727i128 => println(\"imax\"), _ => println(\"no\") }\n\
+             let c: u128 = 340282366920938463463374607431768211455u128;\n\
+             match c { 340282366920938463463374607431768211455u128 => println(\"umax\"), _ => println(\"no\") }\n\
+             let d: u128 = 170141183460469231731687303715884105728u128;\n\
+             match d { 340282366920938463463374607431768211455u128 => println(\"umax\"), _ => println(\"no\") }\n\
+             let e: i128 = 1500000000000000000000000000000i128;\n\
+             match e { 1000000000000000000000000000000i128..=2000000000000000000000000000000i128 => println(\"band\"), _ => println(\"no\") }\n\
+             }"
+        ),
+        "imax\nno\numax\nno\nband\n"
+    );
+}
+
 // ── B-2026-08-19-16: qualified unit-variant paths across colliding enums ──
 
 #[test]

@@ -5012,9 +5012,7 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             PatternKind::Literal(lit) => {
                 let lit_val = match lit {
-                    LiteralPattern::Integer(n, sfx) => {
-                        self.const_int_for_suffix((*n).into(), *sfx).into()
-                    }
+                    LiteralPattern::Integer(n, sfx) => self.const_int_for_suffix(*n, *sfx).into(),
                     LiteralPattern::Bool(b) => self
                         .context
                         .bool_type()
@@ -5316,7 +5314,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// here (parser rejects), so they fall back to an i64 0.
     fn range_bound_const(&self, lit: &LiteralPattern) -> BasicValueEnum<'ctx> {
         match lit {
-            LiteralPattern::Integer(n, sfx) => self.const_int_for_suffix((*n).into(), *sfx).into(),
+            LiteralPattern::Integer(n, sfx) => self.const_int_for_suffix(*n, *sfx).into(),
             LiteralPattern::Char(c) => self.context.i32_type().const_int(*c as u64, false).into(),
             _ => self.context.i64_type().const_int(0, false).into(),
         }

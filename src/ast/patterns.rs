@@ -237,7 +237,17 @@ pub enum RestPattern {
 
 #[derive(Debug, Clone)]
 pub enum LiteralPattern {
-    Integer(i64, Option<IntSuffix>),
+    /// Payload is `i128` for the same reason `ExprKind::Integer`'s is: a
+    /// 128-bit literal has to be representable in the node before any consumer
+    /// can act on it. While it was `i64` no literal past `i64::MAX` could be a
+    /// pattern at all — the whole upper half of `i128`/`u128`, plus the entire
+    /// `u64` top half, were reachable in expression position and unreachable in
+    /// pattern position (B-2026-08-20-4).
+    ///
+    /// An UNSIGNED value keeps riding as its wrapped two's-complement pattern,
+    /// exactly as the expression carrier does, so a pattern and its scrutinee
+    /// compare as identical bits without either side re-reading the sign.
+    Integer(i128, Option<IntSuffix>),
     Float(f64, Option<FloatSuffix>),
     Char(char),
     String(String),

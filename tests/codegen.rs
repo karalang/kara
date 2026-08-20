@@ -21815,6 +21815,70 @@ fn main() {
     }
 
     #[test]
+    fn e2e_128bit_literal_patterns_match_their_own_value() {
+        // B-2026-08-20-4. `LiteralPattern::Integer` held an `i64`, so no
+        // literal past `i64::MAX` could be a match pattern — the upper half of
+        // `i128`, the whole top half of `u128`, and every `u128` value beyond
+        // `i128::MAX` were reachable in EXPRESSION position and unreachable in
+        // PATTERN position. A 128-bit scrutinee could be compared and bound but
+        // never matched against its own literal, and a guard (`n if n == …`)
+        // was the only spelling — one exhaustiveness cannot see through.
+        //
+        // Every value here is past `i64::MAX`, which is exactly where the old
+        // carrier ran out. The MISS arms matter as much as the hits: the
+        // pattern and the scrutinee have to agree on the wrapped encoding, so a
+        // pattern that should not fire must not fire either. `…105728u128` is
+        // one past `i128::MAX`, so its carrier value is NEGATIVE — it is
+        // distinguished from `u128::MAX` and from `5u128` on the same run.
+        if let Some(out) = run_program(
+            "fn classify(n: i128) -> String {\n\
+             match n {\n\
+             0i128 => return \"zero\",\n\
+             1267650600228229401496703205376i128 => return \"2^100\",\n\
+             170141183460469231731687303715884105727i128 => return \"i128max\",\n\
+             1000000000000000000000000000000i128..=2000000000000000000000000000000i128 => return \"band\",\n\
+             _ => return \"other\",\n\
+             }\n\
+             }\n\
+             fn uclassify(n: u128) -> String {\n\
+             match n {\n\
+             340282366920938463463374607431768211455u128 => return \"umax\",\n\
+             170141183460469231731687303715884105728u128 => return \"just-past-imax\",\n\
+             5u128 => return \"five\",\n\
+             _ => return \"other\",\n\
+             }\n\
+             }\n\
+             fn main() {\n\
+             println(classify(0i128));\n\
+             println(classify(1267650600228229401496703205376i128));\n\
+             println(classify(170141183460469231731687303715884105727i128));\n\
+             println(classify(1500000000000000000000000000000i128));\n\
+             println(classify(7i128));\n\
+             println(uclassify(340282366920938463463374607431768211455u128));\n\
+             println(uclassify(170141183460469231731687303715884105728u128));\n\
+             println(uclassify(5u128));\n\
+             println(uclassify(9u128));\n\
+             let b: u64 = 18446744073709551615u64;\n\
+             match b { 18446744073709551615u64 => println(\"u64max\"), _ => println(\"no\") }\n\
+             }",
+        ) {
+            assert_eq!(
+                out,
+                "zero\n\
+                 2^100\n\
+                 i128max\n\
+                 band\n\
+                 other\n\
+                 umax\n\
+                 just-past-imax\n\
+                 five\n\
+                 other\n\
+                 u64max\n"
+            );
+        }
+    }
+
+    #[test]
     fn e2e_chained_width_sensitive_int_methods() {
         // CHAINED width-preserving int methods resolve their receiver width
         // through the receiver itself, not the span-keyed table

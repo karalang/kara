@@ -1047,7 +1047,7 @@ impl<'a> super::Interpreter<'a> {
         // so a `None` here only arises in an already-erroring program.
         let bound_key = |b: &RangeBound| -> Option<i128> {
             match b {
-                RangeBound::Literal(LiteralPattern::Integer(n, _)) => Some(*n as i128),
+                RangeBound::Literal(LiteralPattern::Integer(n, _)) => Some(*n),
                 RangeBound::Literal(LiteralPattern::Char(c)) => Some((*c as u32) as i128),
                 RangeBound::Literal(_) => None,
                 RangeBound::Path { segments, .. } if segments.len() == 1 => {
@@ -1085,7 +1085,7 @@ impl<'a> super::Interpreter<'a> {
 
     fn literal_to_value(&self, lit: &LiteralPattern) -> Value {
         match lit {
-            LiteralPattern::Integer(i, _) => Value::Int((*i).into()),
+            LiteralPattern::Integer(i, _) => Value::Int(*i),
             LiteralPattern::Float(f, _) => Value::Float(*f),
             LiteralPattern::String(s) => Value::String(s.clone()),
             LiteralPattern::Char(c) => Value::Char(*c),

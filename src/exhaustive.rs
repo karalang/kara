@@ -281,7 +281,7 @@ fn refinement_const_int(expr: &Expr, env: &TypeEnv) -> Option<i128> {
 /// Integer / `char` value of a literal-pattern bound, in the `i128` space.
 fn lit_to_i128(l: &LiteralPattern) -> Option<i128> {
     match l {
-        LiteralPattern::Integer(n, _) => Some(*n as i128),
+        LiteralPattern::Integer(n, _) => Some(*n),
         LiteralPattern::Char(c) => Some(*c as i128),
         _ => None,
     }
@@ -598,10 +598,7 @@ fn lower_pattern(p: &Pattern, scrut_type: &Type, env: &TypeEnv) -> Pat {
             // Integers and `char`s become singleton `IntRange`s so they
             // share the interval-splitting machinery with range patterns.
             LiteralPattern::Integer(n, _) => Pat::Ctor {
-                ctor: PatCtor::IntRange {
-                    lo: *n as i128,
-                    hi: *n as i128,
-                },
+                ctor: PatCtor::IntRange { lo: *n, hi: *n },
                 args: vec![],
             },
             LiteralPattern::Char(c) => Pat::Ctor {

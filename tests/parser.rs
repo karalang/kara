@@ -14782,27 +14782,31 @@ fn upper_half_unsigned_literal_is_a_valid_pattern() {
 }
 
 #[test]
-fn a_128bit_literal_pattern_is_a_diagnostic_not_a_compiler_panic() {
-    // Found while fixing the above: a 128-bit literal in pattern position
-    // reached `narrow_literal_to_i64` and PANICKED the compiler with a Rust
-    // backtrace ("internal error: 128-bit integer literal … reached an
-    // i64-only consumer"). `LiteralPattern::Integer` holds an i64, so the
-    // pattern AST genuinely cannot represent the value — but the standing rule
-    // is a structured diagnostic, never a panic.
+fn a_128bit_literal_pattern_parses() {
+    // B-2026-08-20-4. This test used to assert the OPPOSITE — that a 128-bit
+    // literal in pattern position produced a diagnostic — because
+    // `LiteralPattern::Integer` held an `i64` and genuinely could not represent
+    // the value. (Before that diagnostic it PANICKED the compiler, which is
+    // what B-2026-08-20-1 replaced.) The node now carries `i128`, matching
+    // `ExprKind::Integer`, so the refusal is gone and the same literal parses
+    // in pattern position and expression position alike.
     //
-    // Reaching the assertion at all is half the test: a panic would unwind the
-    // test process instead of returning parse errors.
+    // Both bounds are past `i64::MAX`, which is exactly where the old carrier
+    // ran out: the `u128` case additionally rides its top half as a WRAPPED
+    // negative, the same encoding the expression parser uses, so the two sides
+    // compare as identical bits.
     for src in [
         "fn main() { let n: i128 = 170141183460469231731687303715884105727i128; match n { 170141183460469231731687303715884105727i128 => println(1), _ => println(2), } }",
         "fn main() { let n: u128 = 340282366920938463463374607431768211455u128; match n { 340282366920938463463374607431768211455u128 => println(1), _ => println(2), } }",
+        // just past `i128::MAX` — a `u128` whose carrier value is negative
+        "fn main() { let n: u128 = 170141183460469231731687303715884105728u128; match n { 170141183460469231731687303715884105728u128 => println(1), _ => println(2), } }",
+        // as a RANGE bound, which goes through `parse_literal_pattern`
+        "fn main() { let n: i128 = 5i128; match n { 1000000000000000000000000000000i128..=2000000000000000000000000000000i128 => println(1), _ => println(2), } }",
     ] {
         let parsed = parse(src);
         assert!(
-            parsed
-                .errors
-                .iter()
-                .any(|e| e.to_string().contains("128-bit integer literals are not yet supported in patterns")),
-            "expected the 128-bit pattern diagnostic, got: {:?}",
+            parsed.errors.is_empty(),
+            "expected a clean parse, got: {:?}",
             parsed.errors.iter().map(|e| e.to_string()).collect::<Vec<_>>(),
         );
     }

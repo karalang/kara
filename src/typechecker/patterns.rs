@@ -1098,7 +1098,7 @@ impl<'a> super::TypeChecker<'a> {
                     Some(t) => (t, true),
                     None => (Type::Int(IntSize::I64), false),
                 };
-                Some((*n as i128, ty, explicit))
+                Some((*n, ty, explicit))
             }
             RangeBound::Literal(LiteralPattern::Char(c)) => Some((*c as i128, Type::Char, true)),
             // The parser only admits integer / char / byte literals in

@@ -145,31 +145,15 @@ impl super::Parser {
             // gives it, so pattern and scrutinee compare as the same bits.
             &Token::IntegerOutOfRange(m, sfx) => {
                 self.advance();
-                let Some(v) = Self::pattern_uint_on_i64_carrier(m, sfx) else {
-                    self.error(
-                        "128-bit integer literals are not yet supported in patterns \
-                         (the pattern AST holds i64); use a guard instead, e.g. \
-                         `n if n == <literal>`",
-                    );
+                let Some(v) = Self::pattern_int_on_carrier(m, sfx) else {
+                    self.error("integer literal is out of range for its suffix in a pattern");
                     return None;
                 };
                 self.finish_integer_pattern(v, sfx, start)
             }
             &Token::Integer(n, sfx) => {
                 self.advance();
-                // A 128-bit value past `i64` cannot ride this carrier at all.
-                // It used to reach `narrow_literal_to_i64` and PANIC the
-                // compiler with a Rust backtrace (measured on an in-range
-                // `…105727i128` pattern); a diagnostic is the standing rule.
-                let Some(v) = i64::try_from(n).ok() else {
-                    self.error(
-                        "128-bit integer literals are not yet supported in patterns \
-                         (the pattern AST holds i64); use a guard instead, e.g. \
-                         `n if n == <literal>`",
-                    );
-                    return None;
-                };
-                self.finish_integer_pattern(v, sfx, start)
+                self.finish_integer_pattern(n, sfx, start)
             }
             // Byte literals (`b'I'`) are u8 integers — desugar to an
             // integer pattern with a U8 suffix so the whole Integer
@@ -178,7 +162,7 @@ impl super::Parser {
             // `b'I'` and `73u8` are then identical in pattern position.
             &Token::ByteLiteral(b) => {
                 self.advance();
-                let lit = LiteralPattern::Integer(b as i64, Some(IntSuffix::U8));
+                let lit = LiteralPattern::Integer(b as i128, Some(IntSuffix::U8));
                 // Range pattern: `b'a'..=b'z'` or `b'a'..`
                 if self.eat(&Token::DotDotEq) {
                     let end = self.parse_range_bound()?;
@@ -648,7 +632,7 @@ impl super::Parser {
     /// or the start of a `lo..=hi` / `lo..hi` / `lo..` range.
     fn finish_integer_pattern(
         &mut self,
-        v: i64,
+        v: i128,
         sfx: Option<IntSuffix>,
         start: crate::token::Span,
     ) -> Option<Pattern> {
@@ -692,7 +676,11 @@ impl super::Parser {
     /// to the same bit pattern `parser/exprs.rs` produces in expression
     /// position, so a pattern and its scrutinee compare as identical bits. A
     /// 128-bit suffix has no room here and returns `None`.
-    fn pattern_uint_on_i64_carrier(m: u128, sfx: Option<IntSuffix>) -> Option<i64> {
+    fn pattern_int_on_carrier(m: u128, sfx: Option<IntSuffix>) -> Option<i128> {
+        // ≤64-bit unsigned: the magnitude rides the carrier as its wrapped
+        // 64-bit two's-complement pattern, which is how the same literal is
+        // encoded in expression position and at runtime, so pattern and
+        // scrutinee compare as identical bits (B-2026-08-20-1).
         if matches!(
             sfx,
             Some(IntSuffix::U8)
@@ -702,8 +690,19 @@ impl super::Parser {
                 | Some(IntSuffix::Usize)
         ) {
             if let Ok(u) = u64::try_from(m) {
-                return Some(u as i64);
+                return Some((u as i64) as i128);
             }
+        }
+        // 128-bit: the same rule one width up. `i128` takes the magnitude
+        // positively; `u128` wraps its top half into the signed carrier, which
+        // is exactly what `parser/exprs.rs` does for the expression spelling
+        // (B-2026-08-19-23) — the two encodings have to agree or a pattern
+        // would never match its own value (B-2026-08-20-4).
+        if matches!(sfx, Some(IntSuffix::I128)) {
+            return i128::try_from(m).ok();
+        }
+        if matches!(sfx, Some(IntSuffix::U128)) {
+            return Some(m as i128);
         }
         None
     }
@@ -712,12 +711,12 @@ impl super::Parser {
         match *self.peek_token_ref() {
             Token::Integer(n, sfx) => {
                 self.advance();
-                Some(LiteralPattern::Integer(i64::try_from(n).ok()?, sfx))
+                Some(LiteralPattern::Integer(n, sfx))
             }
             Token::IntegerOutOfRange(m, sfx) => {
                 self.advance();
                 Some(LiteralPattern::Integer(
-                    Self::pattern_uint_on_i64_carrier(m, sfx)?,
+                    Self::pattern_int_on_carrier(m, sfx)?,
                     sfx,
                 ))
             }
@@ -727,7 +726,7 @@ impl super::Parser {
             }
             Token::ByteLiteral(b) => {
                 self.advance();
-                Some(LiteralPattern::Integer(b as i64, Some(IntSuffix::U8)))
+                Some(LiteralPattern::Integer(b as i128, Some(IntSuffix::U8)))
             }
             _ => {
                 self.error("Expected integer or character literal in range pattern");
