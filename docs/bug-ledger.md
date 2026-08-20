@@ -96,10 +96,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 185 | 0 |
 | run-vs-build | 142 | 0 |
 | double-free | 133 | 0 |
-| missing-feature | 128 | 3 |
+| missing-feature | 128 | 2 |
 | codegen-gap | 119 | 0 |
-| false-positive | 87 | 0 |
-| diagnostics | 86 | 1 |
+| false-positive | 88 | 1 |
+| diagnostics | 87 | 2 |
 | perf | 80 | 0 |
 | crash | 55 | 1 |
 | soundness | 51 | 0 |
@@ -114,27 +114,28 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | typecheck | 219 | 1 |
 | interp | 165 | 0 |
 | ownership | 61 | 1 |
-| other | 58 | 0 |
+| other | 59 | 1 |
 | autopar | 54 | 0 |
-| cli | 51 | 0 |
-| parser | 33 | 1 |
+| cli | 52 | 1 |
+| parser | 33 | 0 |
 | runtime | 27 | 1 |
 | resolver | 22 | 1 |
 | effect | 7 | 0 |
 | lexer | 6 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1401 surfaced · 5 open · 1376 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1403 surfaced · 6 open · 1377 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-19-13 | 2026-08-19 | typecheck+codegen+runtime | medium | GPU reductions: NO DECISIONS AND NO SEPARATE PROJECTS REMAIN. One item is open — integer `prod` / `dot` / `matmul` — and its recorded blocker ("WGSL has no widening multiply") is now KNOWN FALSE: `karac_mul_wide` is that primitive, shipped and device-verified, so they are ordinary work. Shipped: sum / prod / min / max / mean / dot / argmin / argmax / variance / stddev / prefix_sum over `Vec[f32]`; sum / min / max / mean / argmin / argmax / variance / stddev over `Vec[i32]` and `Vec[u32]`, the last of these EXACT via an integer shift and an emulated 64-bit accumulator; and a tiled `matmul` over rank-2 `Tensor[f32]` that equals `a.matmul(b)` bit-for-bit. | docs/spikes/gpu-llvm-offload-assessment.md; src/gpu_wgsl.rs::emit_reduce_kernel; src/reduce_kernel.rs::tree_reduce_f32 |
 | B-2026-08-20-5 | 2026-08-20 | codegen | high | `e2e_128bit_integers_end_to_end` produces EMPTY STDOUT on macOS arm64 only — the binary links and runs but prints nothing before the first `println`. Linux x86_64 and Linux arm64 both pass the same test. CI's `Codegen E2E (macOS arm64, LLVM 18)` lane has been red on `main` since the test landed. | tests/codegen.rs::e2e_128bit_integers_end_to_end (line ~21227); tests/codegen.rs::run_program_capturing (stdout-only discard); added by 7561b5d1 (B-2026-08-19-8 stage 5); CI job `Codegen E2E (macOS arm64, LLVM 18)` in .github/workflows/ci.yml |
 | B-2026-08-20-17 | 2026-08-20 | resolver | medium | MODULE-BINDING imports are unimplemented on every surface: `import db.connection;` and `import db;` bind nothing. design.md § Module System lists `import db.connection;` in its own import-form gallery ("bind the module itself as `connection`") and states the Binding rule explicitly: "The last segment of each imported path is bound in the current scope... The rule is UNIFORM for items and for sub-modules -- `import db.connection;` binds `connection` as a module reference (reach `Connection` as `connection.Connection`)." Measured on a real package: `import db.connection;` + `connection.open(4)` -> whole-package `karac build` fails `error[resolve]: multi-file resolve failed`, `karac run` fails `undefined name 'connection', did you mean 'Connection'?`, and single-file `karac check` PASSES (that last one is B-2026-08-20-16's truncation, not a working path). The top-level form `import db;` + `db.label()` behaves identically -> `undefined name 'db'`. So the four item-import forms all work and the two module-binding forms work nowhere. | roadmap.md |
-| B-2026-08-20-18 | 2026-08-20 | parser | medium | WILDCARD and NESTED-GROUP imports do not lex or parse, though design.md says both ship in v1. § Module System: "**Wildcard imports** (`import path.*;`) bring all `pub` items from the named module into scope. **Nested grouping** (`import a.{b.{c, d}, e};`) expands to flat imports before resolution -- `import a.{b.{c, d}, e}` is equivalent to `import a.b.c; import a.b.d; import a.e`. **Both are available in v1.**" Measured: `import db.connection.*;` -> `error[parse]: Expected identifier, found Star`; `import db.{connection.{open}, label};` -> `error[parse]: Expected RightBrace, found Dot`. Same on all three surfaces, since it fails at parse. The spec goes on to specify three wildcard PRECEDENCE rules in detail -- explicit import beats wildcard, two colliding wildcards defer the error to the use site as `E0226 AmbiguousWildcardImport`, prelude items lose to any import -- none of which is reachable, because the form the rules govern cannot be written. | roadmap.md |
 | B-2026-08-20-23 | 2026-08-20 | ownership | low | every whole-buffer `gpu.*` reduction CONSUMES its buffer, so calling two of them on the same `Vec` warns `value moved here, used again here` -- but they only READ it | — |
+| B-2026-08-20-24 | 2026-08-20 | cli | high | Two modules of one package may not declare the same top-level name: `karac check` ACCEPTS the program and BOTH execution paths reject it. Repro (no wildcards involved) -- `src/alpha.kara`: `pub fn common() -> i64 { return 1; } pub fn only_a() -> i64 { return 11; }`; `src/beta.kara`: the same with `common`/`only_b`; `src/main.kara`: `import alpha.only_a; import beta.only_b; fn main() { println(only_a()); println(only_b()); }` -- main never mentions `common`. Measured on 6aa26bb: `karac check src/main.kara` -> `All checks passed.`; `karac run src/main.kara` -> `error[resolve]: src/main.kara:1:5: 'common' is already defined in this scope (first defined at 1:5)`; `karac build` (llvm) -> `error[resolve]: multi-file resolve failed:`. design.md § Module System makes the two `common`s distinct ("all types, functions, and effect resources are namespaced by their module path"), so this rejects a legal -- and very ordinary -- program: any two modules with a `new`, `parse`, `size` or `run` collide. | roadmap.md |
+| B-2026-08-20-25 | 2026-08-20 | other | low | design.md assigns `E0226` to `ConflictingPlatformModule` (§ Platform-specific modules), which is the TYPECHECKER's band. `explain::tests::resolver_numeric_codes_live_in_the_resolve_band` fails any resolve-phase code outside E01xx/E08xx and `collision_render_names_every_phase` fails a code minted by two phases, so implementing this diagnostic under the number the spec gives it turns the suite red. The same number was, until B-2026-08-20-18, also spelled for `AmbiguousWildcardImport` (§ Module System); that one had to be allocated E0124 from the resolver band instead and the spec text corrected. This second E0226 is still in the document, unimplemented. | roadmap.md |
 
 ### Wontfix (7)
 
@@ -152,9 +153,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1401 surfaced
 
 </details>
 
-### Fixed (1376)
+### Fixed (1377)
 
-<details><summary>1376 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1377 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -12683,6 +12684,69 @@ ONE LEG DID NOT GET FIXED HERE and is split into B-2026-08-20-20 rather than bur
 A FALLBACK THE FIRST DRAFT DID NOT HAVE, caught by `file_targeted_examples_check`: a directory can hold a `kara.toml` and modules but no `src/main.kara` / `src/lib.kara` entry (several `examples/` packages are shaped this way), so no package view can be formed at all. Failing there would have been a new way for `karac check` to refuse a file it used to accept, and "this package has no entry point" is not an answer about the file the caller asked about. It falls back to the single-file check and SAYS so — narrowing silently would be this same bug wearing a new hat.
 
 TESTS (tests/cli.rs): `test_check_package_member_sees_sibling_modules` (false rejection), `test_check_package_member_reports_a_private_cross_directory_import` and `test_run_package_member_refuses_a_private_cross_directory_import` (false acceptance, both surfaces) all fail without the fix. `test_run_package_member_still_runs_a_sound_package` pins that the run gate did not become a blanket refusal, `test_check_standalone_script_is_unaffected` pins that a script merely sitting near a manifest keeps the single-file path, and `test_check_with_no_file_checks_the_whole_package` covers the new project mode in both directions. |
+| B-2026-08-20-18 | parser | medium | WILDCARD and NESTED-GROUP imports do not lex or parse, though design.md says both ship in v1 | FIXED by ae0b21b.
+
+Both forms land as desugars ahead of name resolution, so every later phase still
+sees only single-item imports.
+
+NESTED GROUPING desugars in the parser: `parse_import_decl` is now a small
+recursive descent (`parse_import_subtree` + `group_import_leaves`) returning one
+`ImportDecl` per distinct dotted prefix, since one decl (one `path`, many
+`items`) cannot hold leaves under two prefixes. `Parser::pending_extra_items`
+carries the extras out of `parse_item`, which returns a single `Item`. A FLAT
+group (`a.b.{c, d}`) still yields exactly one decl with two items — the split
+follows the prefixes present, not the syntax used — so no existing consumer sees
+a new shape. `karac fmt` renders the flattened spelling, which is the same
+equivalence design.md defines.
+
+WILDCARD sets `ImportDecl::is_wildcard` with an empty `items`, filled in by
+`module::expand_wildcard_imports` while the program tree is built: after
+`#[target(...)]` filtering (so it cannot import a name that does not exist on
+this target) and before graph-edge collection (so a cycle closed only by
+wildcards is still `E0223` — a wildcard contributes its edge from the path, not
+from items it may not have). It binds exactly the names an explicit single-item
+import from that module would have been allowed to bind; design.md's "all `pub`
+items" is the cross-package phrasing, and reading it literally would make a
+wildcard bind NOTHING from a same-package module, since default visibility is
+what the spec calls "the most common case". The spec text was clarified.
+
+The three precedence rules are decided in that pass, where the whole module is
+visible at once: (1) a name the module already binds — local item or non-wildcard
+import — is dropped from the expansion in either source order, so it never
+reaches `define` to collide; (2) two wildcards offering one name bind neither and
+record it for the use site, UNLESS both routes reach the same canonical item (a
+`pub import` facade and its origin), which is one item and binds normally;
+(3) prelude was already handled — `define` lets a real span shadow a synthetic
+one. A `pub import x.*;` facade re-exports names that exist only once its own
+wildcard expands, so the pass iterates to a fixpoint.
+
+Rule 2's use-site half is `E0124 AmbiguousWildcardImport`, naming both modules.
+design.md spelled it `E0226`, which is the TYPECHECKER's band — pinned by
+`explain::tests::resolver_numeric_codes_live_in_the_resolve_band` — and is the
+same number the spec separately spells for `ConflictingPlatformModule`. Allocated
+from the resolver's own band instead and the spec corrected; the second E0226 is
+filed as its own row.
+
+Single-file mode has no tree to expand against, so a wildcard binds nothing there
+and every name it would have supplied looks undefined. For a PACKAGE MEMBER the
+undefined-name/type channel goes quiet rather than accuse a program that builds —
+the same "one translation unit of a larger build" posture that already makes
+single-file mode trust an explicit import blindly. Since B-2026-08-20-16
+`check`/`run` analyse the whole package, so this covers the residual path (a
+package with no entry file, or any other single-module caller).
+
+The row's DIAGNOSTIC NOTE is answered by the forms existing: `Expected identifier,
+found Star` is gone. Two non-forms keep named diagnostics — `import path.* as X;`
+("a wildcard import cannot be renamed") and `import path.*.more;` ("`*` must be
+the last segment of an import path").
+
+Tests: 10 in tests/parser.rs (both forms, renames, `*` inside a group, the two
+rejection shapes, a guard that a flat group is still one decl), 13 in
+tests/module_graph.rs (what a wildcard binds, visibility filtering, all three
+precedence rules, canonical identity, the facade fixpoint, cycle edges,
+nested-group prefixes), 3 in tests/resolver.rs (the single-file posture and both
+its scopes), 2 E2E in tests/cli.rs (interp / JIT / AOT / `KARAC_AUTO_PAR=0`
+byte-identical on a package using both forms; `E0124` through the CLI). |
 | B-2026-08-20-19 | cli | low | E0223 (circular module dependency) omits the FILES on the cycle from its TEXT render, though `--output=json` has always carried `cycle_files` | FIXED by 1f3d565. THE ROW'S PREMISE DID NOT REPRODUCE, and the title has been corrected to what was actually measured. The row states the entire diagnostic is `error[E0223]: circular module dependency` with "no file:line, no module names, no help line". Two of those three were already present and had been since the CLI was split into submodules (7a1757f) — `print_cycles_text` has always emitted three lines, and `git log -L` over the function shows it was never the bare form the row describes. Measured on this compiler across three cycle shapes (two-module, three-module, self-import) and on all three surfaces that can reach it (`karac build`, `karac check`, `karac check <file>`), the output was:
 
     error[E0223]: circular module dependency
