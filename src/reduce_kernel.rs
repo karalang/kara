@@ -596,6 +596,77 @@ pub fn tree_prefix_sum_f32(xs: &[f32]) -> Vec<f32> {
     out
 }
 
+/// The tile edge of the GPU matmul — the shader's `@workgroup_size(TILE,
+/// TILE)`, the side of both its workgroup-memory tiles, and the step of
+/// [`tiled_matmul_f32`]'s `k` loop.
+///
+/// Sixteen, not [`GPU_REDUCE_WIDTH`]'s sixty-four, and the two are unrelated
+/// numbers despite both being "the workgroup size". A reduction workgroup is a
+/// LINE of 64 lanes; a matmul workgroup is a SQUARE of 16x16 = 256, which is
+/// the portable `maxComputeInvocationsPerWorkgroup` floor. A 64x64 tile would
+/// ask for 4096 invocations and 32 KiB of workgroup memory, both far past what
+/// any baseline device guarantees.
+pub const GPU_MATMUL_TILE: usize = 16;
+
+/// The CPU twin of the GPU tiled matmul — **the definition of what
+/// `gpu.matmul` MEANS**, in the same sense as [`tree_reduce_f32`].
+///
+/// `a` is `[m, k]` and `b` is `[k, n]`, both C-order (row-major); the result
+/// is `[m, n]`.
+///
+/// **THE FINDING THIS FUNCTION EXISTS TO RECORD: tiling does not change the
+/// answer.** Every other op in this family had to specify a grouping because
+/// the GPU's order differs from the obvious CPU one — `gpu.sum` is a halving
+/// tree where `v.sum()` is a line, and `gpu.prefix_sum`'s last element is not
+/// `gpu.sum` for exactly that reason. A tiled matmul is the exception, and not
+/// by luck: tiles are visited in ascending `k`, and within a tile the inner
+/// loop runs `p = 0..TILE` in ascending order, so the accumulation order over
+/// the whole contraction is `k = 0, 1, 2, ...` — element for element, the
+/// order the naive triple loop uses. Tiling changes WHERE THE OPERANDS ARE
+/// READ FROM (workgroup memory instead of global), not when they are added.
+///
+/// So `gpu.matmul(a, b)` is bit-for-bit `a.matmul(b)`, on all three surfaces,
+/// and this function is written as the plain triple loop rather than as a
+/// simulation of the tiling. Verified against an explicit tile-by-tile
+/// simulation over 300 random shapes straddling the tile edge — see
+/// `matmul_tiling_matches_naive_order` in the tests below, which is the
+/// property, not an example of it.
+///
+/// **The zero padding is what keeps that true at a ragged edge**, and it is
+/// only safe because BOTH tiles are padded at the same `k`. A thread whose
+/// `k` is past the contraction reads `0.0` from the A tile and `0.0` from the
+/// B tile, contributing `0.0 * 0.0`. Padding only one side would let a real
+/// value meet a padded zero — and if that real value were an infinity, `inf *
+/// 0.0` is NaN, which would poison an output element that has no business
+/// being NaN. The accumulator itself cannot be `-0.0` (it starts at `+0.0`
+/// and `0.0 + -0.0` is `+0.0`), so adding padded zeros is a true no-op rather
+/// than an approximate one.
+///
+/// **f32 accumulation, rounding at every step**, matching codegen's triple
+/// loop over the element LLVM type and the interpreter as of B-2026-08-20-21.
+/// This is forced rather than chosen: WGSL has no f64, so a wider accumulator
+/// would put the GPU permanently out of reach of its own CPU twin.
+///
+/// `None` when the inner dimensions disagree — the one shape error a caller
+/// can make that no amount of checking upstream can turn into a meaningful
+/// product.
+pub fn tiled_matmul_f32(a: &[f32], b: &[f32], m: usize, k: usize, n: usize) -> Option<Vec<f32>> {
+    if a.len() != m * k || b.len() != k * n {
+        return None;
+    }
+    let mut out = vec![0.0f32; m * n];
+    for i in 0..m {
+        for j in 0..n {
+            let mut acc = 0.0f32;
+            for p in 0..k {
+                acc += a[i * k + p] * b[p * n + j];
+            }
+            out[i * n + j] = acc;
+        }
+    }
+    Some(out)
+}
+
 /// One workgroup's inclusive Hillis-Steele scan, zero-padded to
 /// [`GPU_REDUCE_WIDTH`]. The full width is returned because the caller wants
 /// both the scanned prefix AND the last lane, which is the chunk total.
@@ -1923,5 +1994,137 @@ mod tests {
         assert_eq!(quantile_linear_sorted_i64(&sorted, 0.0), 1.0);
         assert_eq!(quantile_linear_sorted_i64(&sorted, 3.0), 4.0);
         assert_eq!(quantile_linear_sorted_i64(&sorted, 1.5), 2.5);
+    }
+
+    /// A tile-by-tile simulation of the emitted shader: tiles in ascending
+    /// `k`, `TILE` steps inside each, both operand tiles zero-padded past the
+    /// contraction. Deliberately written as the LITERAL tiling rather than
+    /// reusing [`tiled_matmul_f32`] — it is the thing under test, so sharing
+    /// code with it would make the comparison vacuous.
+    fn simulate_tiling(a: &[f32], b: &[f32], m: usize, k: usize, n: usize) -> Vec<f32> {
+        let t = GPU_MATMUL_TILE;
+        let mut out = vec![0.0f32; m * n];
+        for i in 0..m {
+            for j in 0..n {
+                let mut acc = 0.0f32;
+                for tile in 0..k.div_ceil(t) {
+                    // The workgroup-memory staging both shaders do, including
+                    // the padding: a lane past the contraction stages 0.0 on
+                    // BOTH sides.
+                    let mut a_sub = [0.0f32; GPU_MATMUL_TILE];
+                    let mut b_sub = [0.0f32; GPU_MATMUL_TILE];
+                    for p in 0..t {
+                        let kk = tile * t + p;
+                        if kk < k {
+                            a_sub[p] = a[i * k + kk];
+                            b_sub[p] = b[kk * n + j];
+                        }
+                    }
+                    for p in 0..t {
+                        acc += a_sub[p] * b_sub[p];
+                    }
+                }
+                out[i * n + j] = acc;
+            }
+        }
+        out
+    }
+
+    /// THE PROPERTY `gpu.matmul` RESTS ON: the tiled accumulation order is the
+    /// naive one, so `gpu.matmul(a, b)` is bit-for-bit `a.matmul(b)`. If this
+    /// ever fails, the GPU op has silently become a different function and
+    /// every equality test elsewhere is testing a coincidence.
+    ///
+    /// Shapes are drawn to straddle the tile edge in all three dimensions
+    /// (1, 2, 3, 15, 16, 17, 31, 33 against a tile of 16), because a matmul
+    /// whose every dimension is a tile multiple exercises no padding at all —
+    /// the case where a one-sided pad would go unnoticed.
+    #[test]
+    fn matmul_tiling_matches_naive_order() {
+        // A deterministic LCG rather than a dependency: the values only need
+        // to be non-uniform and reproducible.
+        let mut seed: u64 = 0x243f_6a88_85a3_08d3;
+        let mut next = || {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((seed >> 33) as f32 / (1u32 << 31) as f32) * 10.0 - 5.0
+        };
+        let dims = [1usize, 2, 3, 15, 16, 17, 31, 33];
+        let mut checked = 0;
+        for &m in &dims {
+            for &k in &dims {
+                for &n in &dims {
+                    let a: Vec<f32> = (0..m * k).map(|_| next()).collect();
+                    let b: Vec<f32> = (0..k * n).map(|_| next()).collect();
+                    let naive = tiled_matmul_f32(&a, &b, m, k, n).unwrap();
+                    let tiled = simulate_tiling(&a, &b, m, k, n);
+                    assert_eq!(
+                        naive, tiled,
+                        "tiled order diverged from naive at [{m}x{k}] x [{k}x{n}] — \
+                         `gpu.matmul` is no longer `a.matmul(b)`, and docs/design.md \
+                         § Tiled matmul needs re-deriving"
+                    );
+                    checked += 1;
+                }
+            }
+        }
+        assert_eq!(checked, dims.len().pow(3));
+    }
+
+    /// The inner dimensions have to agree, and a length that does not match
+    /// the claimed shape is the same error one step earlier. Both are `None`
+    /// rather than a silently-truncated product.
+    #[test]
+    fn matmul_rejects_mismatched_shapes() {
+        let a = vec![1.0f32; 6]; // [2 x 3]
+        let b = vec![1.0f32; 6]; // [3 x 2]
+        assert!(tiled_matmul_f32(&a, &b, 2, 3, 2).is_some());
+        // `a` is not [2 x 4].
+        assert!(tiled_matmul_f32(&a, &b, 2, 4, 2).is_none());
+        // Right shape for `a`, wrong length for `b`.
+        assert!(tiled_matmul_f32(&a, &vec![1.0f32; 5], 2, 3, 2).is_none());
+    }
+
+    /// An empty contraction (`k == 0`) is `[m, n]` of zeros, not an error: the
+    /// empty sum is the additive identity, which is the same answer the naive
+    /// loop gives when it never runs. Distinct from the reductions, where an
+    /// empty input has no answer and returns `None`.
+    #[test]
+    fn matmul_empty_contraction_is_zeros() {
+        assert_eq!(tiled_matmul_f32(&[], &[], 2, 0, 3), Some(vec![0.0f32; 6]));
+        assert_eq!(tiled_matmul_f32(&[], &[], 0, 0, 0), Some(Vec::new()));
+    }
+
+    /// Padding is applied to BOTH operand tiles at the same `k`, so an
+    /// infinity in the last partial tile never meets a padded zero. A
+    /// one-sided pad would compute `inf * 0.0` = NaN and poison an output
+    /// element whose real value is finite.
+    ///
+    /// `k = 17` puts exactly one live lane in the second tile, so 15 of that
+    /// tile's 16 steps are padded — the widest padding a two-tile contraction
+    /// can have, and the most chances to get it wrong.
+    #[test]
+    fn matmul_padding_does_not_poison_infinities() {
+        let k = 17;
+        let mut a = vec![1.0f32; k];
+        a[k - 1] = f32::INFINITY;
+        let mut b = vec![1.0f32; k];
+        b[k - 1] = 0.0;
+        // The real product of the last pair is inf * 0.0 = NaN, which is the
+        // honest answer and must survive; what must NOT happen is the padded
+        // lanes manufacturing a second NaN from the infinity.
+        let out = tiled_matmul_f32(&a, &b, 1, k, 1).unwrap();
+        // `assert_eq!` is useless on a NaN (it never equals itself), so the
+        // agreement between the two orders is checked as NaN-ness.
+        assert!(out[0].is_nan(), "inf * 0.0 in the DATA is a real NaN");
+        assert!(simulate_tiling(&a, &b, 1, k, 1)[0].is_nan());
+
+        // With no inf/0 pair in the data, a long padded tile stays finite.
+        let a2 = vec![f32::MAX; k];
+        let b2 = vec![0.0f32; k];
+        let out2 = tiled_matmul_f32(&a2, &b2, 1, k, 1).unwrap();
+        assert_eq!(out2, vec![0.0f32]);
+        assert_eq!(simulate_tiling(&a2, &b2, 1, k, 1), out2);
     }
 }

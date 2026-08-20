@@ -426,6 +426,7 @@ const GPU_REDUCTION_CALLS: &[&str] = &[
     "gpu.variance(",
     "gpu.stddev(",
     "gpu.prefix_sum(",
+    "gpu.matmul(",
 ];
 
 /// True when the program reaches the GPU runtime at all, and so must route to

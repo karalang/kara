@@ -1518,6 +1518,142 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(res.into())
     }
 
+    /// Lower `gpu.matmul(a, b)` to a fresh owned rank-2 `Tensor[f32]`
+    /// (B-2026-08-19-13).
+    ///
+    /// **The only GPU lowering that takes and returns TENSORS.** Every
+    /// reduction reads a `Vec` and returns a scalar; `gpu.prefix_sum` returns
+    /// a `Vec`. A matmul needs a shape on the way in and carries one on the
+    /// way out, so it speaks the tensor ABI at both ends — which is also what
+    /// makes `gpu.matmul(a, b)` and `a.matmul(b)` interchangeable in a
+    /// program, not merely equal in value.
+    ///
+    /// Lives beside [`Self::compile_tensor_matmul`] rather than with the other
+    /// `gpu.*` lowerings because it needs the tensor header helpers, and
+    /// because the two are the same operation on two devices — a reader
+    /// comparing them should not have to cross a file to do it.
+    ///
+    /// Runtime guards are re-emitted here (rank 2 on both operands, inner dims
+    /// equal) per module policy, matching the CPU twin guard for guard, so a
+    /// bypassed typecheck traps identically on either surface.
+    pub(super) fn compile_gpu_matmul(
+        &mut self,
+        args: &[CallArg],
+        call_span: &Span,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        if args.len() != 2 {
+            return Err(format!(
+                "gpu.matmul expects two tensors, found {} argument(s)",
+                args.len()
+            ));
+        }
+        let wgsl = self
+            .accel
+            .gpu_dispatch_wgsl
+            .get(&(call_span.offset, call_span.length))
+            .cloned()
+            .ok_or_else(|| {
+                "internal error: no WGSL recorded for `gpu.matmul` — the typechecker \
+                 intercept must run before codegen"
+                    .to_string()
+            })?;
+
+        let i64_t = self.context.i64_type();
+        let two = i64_t.const_int(2, false);
+        let elem_size = 4u64; // f32-only, enforced at typecheck.
+
+        // Both operands resolve the same two ways `compile_tensor_matmul`'s
+        // receiver and argument do, and a fresh owned temp is freed after the
+        // dispatch reads it — the same ownership line, since these are the
+        // same operands in the same positions.
+        let mut ptrs = Vec::with_capacity(2);
+        for arg in args {
+            let expr = &arg.value;
+            let is_fresh = self.tensor_receiver_is_owned_fresh_temp(expr);
+            let ptr = match &expr.kind {
+                ExprKind::Identifier(name)
+                    if self.accel.tensor_var_infos.contains_key(name.as_str()) =>
+                {
+                    self.tensor_ptr_for_var(name)?
+                }
+                _ => self.compile_expr(expr)?.into_pointer_value(),
+            };
+            ptrs.push((ptr, is_fresh));
+        }
+        let (a_ptr, a_fresh) = ptrs[0];
+        let (b_ptr, b_fresh) = ptrs[1];
+
+        let a_rank = self.tensor_load_rank(a_ptr);
+        let a_rank_ok = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, a_rank, two, "g.mm.arank.ok")
+            .unwrap();
+        self.emit_tensor_guard(a_rank_ok, "gpu.matmul requires a rank-2 left operand")?;
+        let b_rank = self.tensor_load_rank(b_ptr);
+        let b_rank_ok = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, b_rank, two, "g.mm.brank.ok")
+            .unwrap();
+        self.emit_tensor_guard(b_rank_ok, "gpu.matmul requires a rank-2 right operand")?;
+        let m = self.tensor_load_dim(a_ptr, 0);
+        let k = self.tensor_load_dim(a_ptr, 1);
+        let k2 = self.tensor_load_dim(b_ptr, 0);
+        let n = self.tensor_load_dim(b_ptr, 1);
+        let inner_ok = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, k, k2, "g.mm.inner.ok")
+            .unwrap();
+        self.emit_tensor_guard(inner_ok, "gpu.matmul inner dimensions mismatch")?;
+
+        // Result: rank-2 [m, n], allocated HERE. The runtime fills it and
+        // never allocates, so the tensor the caller frees is an ordinary owned
+        // temporary — nothing about its lifetime is GPU-specific.
+        let count = self.builder.build_int_mul(m, n, "g.mm.cnt").unwrap();
+        let (res, res_data) = self.tensor_alloc_runtime(two, count, elem_size);
+        let m_slot = self.tensor_header_slot(res, 1, "g.mm.d0.p");
+        self.builder.build_store(m_slot, m).unwrap();
+        let n_slot = self.tensor_header_slot(res, 2, "g.mm.d1.p");
+        self.builder.build_store(n_slot, n).unwrap();
+        let a_data = self.tensor_data_ptr_dyn(a_ptr, two, "g.mm.adata");
+        let b_data = self.tensor_data_ptr_dyn(b_ptr, two, "g.mm.bdata");
+
+        let wgsl_len = i64_t.const_int(wgsl.len() as u64, false);
+        let wgsl_ptr = self
+            .builder
+            .build_global_string_ptr(&wgsl, "gpu.mm.wgsl")
+            .map_err(|e| format!("baking gpu matmul shader constant failed: {e}"))?
+            .as_pointer_value();
+
+        let mm_fn = self.gpu_matmul_f32_fn();
+        self.builder
+            .build_call(
+                mm_fn,
+                &[
+                    wgsl_ptr.into(),
+                    wgsl_len.into(),
+                    a_data.into(),
+                    b_data.into(),
+                    m.into(),
+                    k.into(),
+                    n.into(),
+                    res_data.into(),
+                ],
+                "",
+            )
+            .unwrap();
+
+        // Freed AFTER the dispatch, which reads through their data pointers.
+        for (ptr, fresh) in [(a_ptr, a_fresh), (b_ptr, b_fresh)] {
+            if fresh {
+                self.builder
+                    .build_call(self.runtime_fns.free_fn, &[ptr.into()], "")
+                    .unwrap();
+            }
+        }
+
+        Ok(res.into())
+    }
+
     /// `a.matmul(b)` — rank-2 matrix multiplication: `[m, k] × [k, n] →
     /// [m, n]`, C-order data, standard triple loop over runtime dims. The
     /// typechecker enforces rank-2 × rank-2 with matching numeric element

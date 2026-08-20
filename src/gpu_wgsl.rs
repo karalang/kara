@@ -35,7 +35,7 @@ use crate::ast::{
     BinOp, Block, CallArg, CompoundOp, Expr, ExprKind, Function, Param, PatternKind, Stmt,
     StmtKind, TypeExpr, TypeKind, UnaryOp,
 };
-use crate::reduce_kernel::{ReduceOp, GPU_REDUCE_WIDTH};
+use crate::reduce_kernel::{ReduceOp, GPU_MATMUL_TILE, GPU_REDUCE_WIDTH};
 use std::collections::{HashMap, HashSet};
 
 /// Why a `#[gpu]` kernel could not be lowered to slice-0 WGSL. Every variant
@@ -1521,6 +1521,130 @@ pub fn emit_int_reduce_kernel(op: ReduceOp, elem: &str) -> Result<String, WgslEr
          \x20   // One partial AND one overflow bit per workgroup; the host ORs\n\
          \x20   // the bits and re-dispatches over the partials.\n\
          \x20   if (t == 0u) {{ output[wid.x] = scratch[0]; flags[wid.x] = {ovf_out}; }}\n\
+         }}\n"
+    ))
+}
+
+/// Emit the tiled matrix-multiply kernel for `gpu.matmul(a, b)`
+/// (B-2026-08-19-13).
+///
+/// **The first 2-D shader in this file, and the reason matmul was tracked as a
+/// separate project rather than another reduction.** Every kernel above is a
+/// line of `@workgroup_size(64)` lanes indexed by `local_invocation_id.x`;
+/// this one is a `TILE x TILE` square indexed by `.x` AND `.y`, and it is
+/// dispatched over a genuinely 2-D grid rather than the flattened one
+/// `run_compute` builds. The `x`-only model could not express it, which is
+/// what "2-D workgroup indexing the 1-D model lacks" meant.
+///
+/// Each workgroup computes one `TILE x TILE` block of the output. It walks the
+/// contraction in `TILE`-wide steps: stage one tile of `a` and one of `b` into
+/// workgroup memory, barrier, accumulate `TILE` products from the staged
+/// tiles, barrier, advance. Staging is the entire point — every value read
+/// from global memory is used `TILE` times instead of once.
+///
+/// **THE ACCUMULATION ORDER IS THE NAIVE ONE, and that is a promise, not an
+/// accident.** Tiles are visited in ascending `k` and the inner loop runs
+/// `p = 0..TILE` in order, so the products are added in `k = 0, 1, 2, ...`
+/// order — exactly what `Tensor.matmul`'s triple loop does on both CPU
+/// surfaces. Unlike `gpu.sum` (a tree where the CPU is a line) and
+/// `gpu.prefix_sum` (whose total differs from `gpu.sum` for that very reason),
+/// `gpu.matmul(a, b)` is bit-for-bit `a.matmul(b)`. Reordering this loop, or
+/// splitting the contraction across workgroups and summing the partials, would
+/// break that — such a split is a semantics change, not an optimization.
+///
+/// **TWO BARRIERS PER TILE, not one.** The second one — after the inner loop,
+/// before the next tile is staged — is the one that looks redundant and is
+/// not: without it a fast lane could overwrite `a_tile` for tile `t + 1` while
+/// a slow lane is still reading tile `t`. The corruption is a race, so it
+/// appears only under contention and only on some devices.
+///
+/// **Both tiles are zero-padded at the same `k`.** A lane whose `k` is past
+/// the contraction stages `0.0` on BOTH sides, contributing `0.0 * 0.0`.
+/// Padding one side only would let a real value meet a padded zero, and `inf *
+/// 0.0` is NaN — an output element poisoned by arithmetic that was never in
+/// the data. The `m`/`n` edges are guarded separately: an out-of-range lane
+/// stages zeros and skips its final store, so its garbage accumulator never
+/// reaches the output.
+///
+/// Dimensions arrive as a uniform buffer (`dims[0..3]` = `m`, `k`, `n`) rather
+/// than being baked into the shader text, so one compiled pipeline serves
+/// every shape — the pipeline cache is keyed on the WGSL string, and
+/// specializing it per shape would recompile on every new matrix.
+pub fn emit_matmul_kernel(elem: &str) -> Result<String, WgslError> {
+    if elem != "f32" {
+        return Err(WgslError::UnsupportedSignature(format!(
+            "GPU `matmul` over `{elem}` is not supported yet — it is f32-only. \
+             An integer matmul accumulates a sum of PRODUCTS, so it needs both the \
+             checked multiply WGSL lacks (no widening multiply) and the overflow flag \
+             of `emit_int_reduce_kernel` carried through every one of its `k` steps"
+        )));
+    }
+    let tile = GPU_MATMUL_TILE;
+    Ok(format!(
+        "@group(0) @binding(0) var<storage, read>       a:      array<{elem}>;\n\
+         @group(0) @binding(1) var<storage, read>       b:      array<{elem}>;\n\
+         @group(0) @binding(2) var<storage, read_write> output: array<{elem}>;\n\
+         // m, k, n. A storage buffer rather than a `uniform` one, matching the\n\
+         // convention in `run_compute`: it avoids the 16-byte uniform\n\
+         // alignment rule for three loose u32s.\n\
+         @group(0) @binding(3) var<storage, read>       dims:   array<u32>;\n\
+         \n\
+         var<workgroup> a_tile: array<{elem}, {tile}u * {tile}u>;\n\
+         var<workgroup> b_tile: array<{elem}, {tile}u * {tile}u>;\n\
+         \n\
+         @compute @workgroup_size({tile}, {tile})\n\
+         fn main(@builtin(local_invocation_id) lid: vec3<u32>,\n\
+         \x20       @builtin(workgroup_id) wid: vec3<u32>) {{\n\
+         \x20   let m = dims[0];\n\
+         \x20   let k = dims[1];\n\
+         \x20   let n = dims[2];\n\
+         \x20   // .y indexes the output ROW, .x the output COLUMN — the same\n\
+         \x20   // orientation as the 2-D dispatch, whose x spans n and y spans m.\n\
+         \x20   let ty = lid.y;\n\
+         \x20   let tx = lid.x;\n\
+         \x20   let row = wid.y * {tile}u + ty;\n\
+         \x20   let col = wid.x * {tile}u + tx;\n\
+         \n\
+         \x20   var acc: {elem} = 0.0;\n\
+         \x20   let tiles = (k + {tile}u - 1u) / {tile}u;\n\
+         \x20   var t: u32 = 0u;\n\
+         \x20   loop {{\n\
+         \x20       if (t >= tiles) {{ break; }}\n\
+         \x20       // STAGE. The k each lane stages differs per side: for `a`\n\
+         \x20       // the lane's column walks k, for `b` its row does.\n\
+         \x20       let a_k = t * {tile}u + tx;\n\
+         \x20       let b_k = t * {tile}u + ty;\n\
+         \x20       // Padded on BOTH sides at the same k, and at the m/n edges,\n\
+         \x20       // so a padded lane always contributes 0.0 * 0.0.\n\
+         \x20       if (row < m && a_k < k) {{\n\
+         \x20           a_tile[ty * {tile}u + tx] = a[row * k + a_k];\n\
+         \x20       }} else {{\n\
+         \x20           a_tile[ty * {tile}u + tx] = 0.0;\n\
+         \x20       }}\n\
+         \x20       if (col < n && b_k < k) {{\n\
+         \x20           b_tile[ty * {tile}u + tx] = b[b_k * n + col];\n\
+         \x20       }} else {{\n\
+         \x20           b_tile[ty * {tile}u + tx] = 0.0;\n\
+         \x20       }}\n\
+         \x20       workgroupBarrier();\n\
+         \n\
+         \x20       // ACCUMULATE, ascending p — this is what keeps the order\n\
+         \x20       // identical to the naive triple loop.\n\
+         \x20       var p: u32 = 0u;\n\
+         \x20       loop {{\n\
+         \x20           if (p >= {tile}u) {{ break; }}\n\
+         \x20           acc = acc + a_tile[ty * {tile}u + p] * b_tile[p * {tile}u + tx];\n\
+         \x20           p = p + 1u;\n\
+         \x20       }}\n\
+         \x20       // The barrier that looks redundant and is not: without it a\n\
+         \x20       // fast lane stages tile t+1 over values a slow lane is still\n\
+         \x20       // reading from tile t.\n\
+         \x20       workgroupBarrier();\n\
+         \x20       t = t + 1u;\n\
+         \x20   }}\n\
+         \n\
+         \x20   // Edge workgroups overshoot; only real output cells store.\n\
+         \x20   if (row < m && col < n) {{ output[row * n + col] = acc; }}\n\
          }}\n"
     ))
 }

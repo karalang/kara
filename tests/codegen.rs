@@ -91860,7 +91860,7 @@ fn main() {
 
     #[test]
     fn test_e2e_tensor_matmul_f32_accumulates_at_element_width() {
-        // B-2026-08-20-20, the AOT half of
+        // B-2026-08-20-21, the AOT half of
         // `tests/interpreter.rs::test_tensor_matmul_f32_accumulates_at_element_width`.
         // Codegen already accumulated in the element LLVM type; this pins the
         // value the interpreter was fixed to match, so a later change to

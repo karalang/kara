@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 266 | 0 |
 | leak | 185 | 0 |
-| run-vs-build | 140 | 1 |
+| run-vs-build | 142 | 1 |
 | double-free | 133 | 0 |
 | missing-feature | 128 | 3 |
 | codegen-gap | 119 | 0 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | codegen | 954 | 2 |
 | typecheck | 219 | 1 |
-| interp | 163 | 0 |
+| interp | 165 | 0 |
 | ownership | 60 | 0 |
 | other | 58 | 0 |
 | autopar | 54 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 6 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1398 surfaced · 6 open · 1372 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1400 surfaced · 6 open · 1374 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (6)
 
@@ -153,9 +153,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1398 surfaced
 
 </details>
 
-### Fixed (1372)
+### Fixed (1374)
 
-<details><summary>1372 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1374 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -12684,6 +12684,8 @@ ONE LEG DID NOT GET FIXED HERE and is split into B-2026-08-20-20 rather than bur
 A FALLBACK THE FIRST DRAFT DID NOT HAVE, caught by `file_targeted_examples_check`: a directory can hold a `kara.toml` and modules but no `src/main.kara` / `src/lib.kara` entry (several `examples/` packages are shaped this way), so no package view can be formed at all. Failing there would have been a new way for `karac check` to refuse a file it used to accept, and "this package has no entry point" is not an answer about the file the caller asked about. It falls back to the single-file check and SAYS so — narrowing silently would be this same bug wearing a new hat.
 
 TESTS (tests/cli.rs): `test_check_package_member_sees_sibling_modules` (false rejection), `test_check_package_member_reports_a_private_cross_directory_import` and `test_run_package_member_refuses_a_private_cross_directory_import` (false acceptance, both surfaces) all fail without the fix. `test_run_package_member_still_runs_a_sound_package` pins that the run gate did not become a blanket refusal, `test_check_standalone_script_is_unaffected` pins that a script merely sitting near a manifest keeps the single-file path, and `test_check_with_no_file_checks_the_whole_package` covers the new project mode in both directions. |
+| B-2026-08-20-21 | interp | medium | `Tensor[f32].matmul` accumulates in f64 under `karac run --interp` and in f32 under `karac build`, so a long enough contraction gives DIFFERENT ANSWE… | 2f94bb1b |
+| B-2026-08-20-22 | interp | medium | `Tensor.from` under a `Tensor[f32, ...]` annotation narrows a bare float LITERAL but not a NEGATED one or a computed one, so `Tensor.from([-0.1])` ho… | PENDING |
 
 </details>
 

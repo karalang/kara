@@ -193,7 +193,7 @@ impl<'a> super::TypeChecker<'a> {
     /// are concrete literals; both backends also guard at runtime (module
     /// policy: every compile-time check re-emitted as a runtime guard).
     /// B-2026-07-14-18: previously a PHANTOM method (see transpose above).
-    fn infer_tensor_matmul(
+    pub(super) fn infer_tensor_matmul(
         &mut self,
         elem_ty: Type,
         shape: &[DimArg],

@@ -12165,6 +12165,41 @@ impl<'ctx> super::Codegen<'ctx> {
             .add_function("karac_runtime_gpu_prefix_sum_f32", fn_ty, None)
     }
 
+    /// Lazily declare `karac_runtime_gpu_matmul_f32(wgsl_ptr: ptr,
+    /// wgsl_len: i64, a_ptr: ptr, b_ptr: ptr, m: i64, k: i64, n: i64,
+    /// out_ptr: ptr)` — the tiled matmul's entry point (B-2026-08-19-13).
+    ///
+    /// Returns nothing, like `gpu.prefix_sum`: the result is `m * n` values,
+    /// so the caller allocates the destination and owns freeing it. The
+    /// dimensions travel as arguments rather than being read off the buffers,
+    /// because `m * k` and `k * n` do not determine `m`, `k` and `n`.
+    ///
+    /// ONE shader, unlike `gpu.dot`'s two: the contraction is walked inside a
+    /// single workgroup rather than across a multi-level host fold, which is
+    /// also what keeps the accumulation order equal to the naive one.
+    pub(super) fn gpu_matmul_f32_fn(&self) -> FunctionValue<'ctx> {
+        if let Some(f) = self.module.get_function("karac_runtime_gpu_matmul_f32") {
+            return f;
+        }
+        let i64_t = self.context.i64_type();
+        let ptr_t = self.context.ptr_type(AddressSpace::default());
+        let fn_ty = self.context.void_type().fn_type(
+            &[
+                ptr_t.into(),
+                i64_t.into(),
+                ptr_t.into(),
+                ptr_t.into(),
+                i64_t.into(),
+                i64_t.into(),
+                i64_t.into(),
+                ptr_t.into(),
+            ],
+            false,
+        );
+        self.module
+            .add_function("karac_runtime_gpu_matmul_f32", fn_ty, None)
+    }
+
     /// Lazily declare `karac_runtime_gpu_arg_index(seed_wgsl_ptr: ptr,
     /// seed_wgsl_len: i64, fold_wgsl_ptr: ptr, fold_wgsl_len: i64,
     /// in_ptr: ptr, n: i64) -> i32` — the Arg family's entry point

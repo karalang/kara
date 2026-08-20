@@ -1212,6 +1212,132 @@ pub unsafe extern "C" fn karac_runtime_gpu_arg_index(
     }
 }
 
+/// The tile edge of the matmul kernel — must equal
+/// `karac::reduce_kernel::GPU_MATMUL_TILE`, which is what the emitted shader
+/// is built from. The runtime cannot import the compiler crate, so the two
+/// sites agree by this comment; a mismatch would dispatch the wrong number of
+/// workgroups and silently leave a band of the output unwritten.
+const MATMUL_TILE: usize = 16;
+
+/// One tiled matmul dispatch: three buffers in (`a`, `b`, and the `m`/`k`/`n`
+/// uniform), one `[m, n]` buffer out, over a genuinely 2-D workgroup grid.
+///
+/// **The grid is the reason this does not go through [`run_compute`].** That
+/// one derives its grid from a single element count and pins x at 65535 to
+/// spill into y; here x spans output COLUMNS and y spans output ROWS, and the
+/// shader reads `workgroup_id.x` and `.y` as those two different things. One
+/// workgroup covers a `TILE x TILE` block of the output, so the grid is
+/// `(ceil(n / TILE), ceil(m / TILE))`.
+async fn dispatch_matmul_async(
+    wgsl: &str,
+    a: &[u8],
+    b: &[u8],
+    m: usize,
+    k: usize,
+    n: usize,
+) -> Option<Vec<u8>> {
+    let ctx = gpu_context()?;
+    let device = &ctx.device;
+    let queue = &ctx.queue;
+
+    let input_bufs: Vec<wgpu::Buffer> = [a, b]
+        .iter()
+        .map(|bytes| {
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("gpu-matmul-input"),
+                contents: bytes,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            })
+        })
+        .collect();
+
+    // m, k, n as three u32s, bound after the in/out buffers exactly like every
+    // other scalar uniform here.
+    let mut dims = Vec::with_capacity(12);
+    for v in [m, k, n] {
+        dims.extend_from_slice(&(v as u32).to_le_bytes());
+    }
+
+    let out_sizes = [(m * n * std::mem::size_of::<f32>()) as u64];
+    let grid = (
+        n.div_ceil(MATMUL_TILE) as u32,
+        m.div_ceil(MATMUL_TILE) as u32,
+    );
+    if grid.0 > 65535 || grid.1 > 65535 {
+        // 65535 × 16 = 1,048,560 per side. Fail loud rather than dispatch a
+        // truncated grid and return a partially-written product.
+        crate::fatal::write_stderr(
+            b"panic: gpu.matmul dimensions exceed the dispatch grid limit\n",
+        );
+        std::process::abort();
+    }
+    let output_bufs =
+        run_compute_grid(device, queue, wgsl, &input_bufs, &out_sizes, &[&dims], grid);
+    let mut outs = readback(device, queue, &output_bufs, &out_sizes)?;
+    outs.pop()
+}
+
+/// C entry point for `gpu.matmul(a, b)` — a tiled `[m, k] x [k, n] -> [m, n]`
+/// matrix product (B-2026-08-19-13).
+///
+/// **The only op in this family that agrees bit-for-bit with its ordinary CPU
+/// counterpart.** `gpu.matmul(a, b)` equals `a.matmul(b)` exactly, because
+/// tiling reorders WHERE OPERANDS ARE READ FROM, not when they are added: the
+/// tile loop ascends `k` and the inner loop ascends within the tile, so the
+/// products accumulate in the naive `k = 0, 1, 2, ...` order. Contrast
+/// `gpu.sum`, a tree where `v.sum()` is a line. See
+/// `karac::reduce_kernel::tiled_matmul_f32`, which is the twin and the
+/// specification.
+///
+/// Like `gpu.prefix_sum` the result is a BUFFER, so the caller allocates it
+/// and this fills it; codegen already knows `m * n` and owns the `Tensor`
+/// control block.
+///
+/// # Safety
+///
+/// `wgsl_ptr`/`wgsl_len` a valid UTF-8 shader; `a_ptr` points to `m * k` valid
+/// `f32` values, `b_ptr` to `k * n`, and `out_ptr` to space for `m * n` more,
+/// non-overlapping with either input. Aborts on no available GPU adapter (no
+/// CPU fallback), same as every other entry point here.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_gpu_matmul_f32(
+    wgsl_ptr: *const u8,
+    wgsl_len: usize,
+    a_ptr: *const f32,
+    b_ptr: *const f32,
+    m: usize,
+    k: usize,
+    n: usize,
+    out_ptr: *mut f32,
+) {
+    unsafe {
+        // An empty product writes nothing and dispatches nothing. `k == 0`
+        // with non-empty m and n is NOT this case: it is an [m, n] block of
+        // zeros (the empty sum), and the shader's tile loop produces exactly
+        // that by never running — so it still dispatches.
+        if m == 0 || n == 0 {
+            return;
+        }
+        let Ok(wgsl) = std::str::from_utf8(std::slice::from_raw_parts(wgsl_ptr, wgsl_len)) else {
+            crate::fatal::write_stderr(b"panic: gpu.matmul shader is not valid UTF-8\n");
+            std::process::abort();
+        };
+
+        let elem_size = std::mem::size_of::<f32>();
+        let a = std::slice::from_raw_parts(a_ptr as *const u8, m * k * elem_size);
+        let b = std::slice::from_raw_parts(b_ptr as *const u8, k * n * elem_size);
+
+        let Some(result) = pollster::block_on(dispatch_matmul_async(wgsl, a, b, m, k, n)) else {
+            crate::fatal::write_stderr(
+                b"panic: gpu.matmul found no available GPU adapter (no CPU fallback)\n",
+            );
+            std::process::abort();
+        };
+
+        std::ptr::copy_nonoverlapping(result.as_ptr(), out_ptr as *mut u8, m * n * elem_size);
+    }
+}
+
 /// C entry point for `gpu.dot(a, b)` — the fused multiply-then-sum reduction
 /// (B-2026-08-19-13).
 ///
@@ -1351,6 +1477,60 @@ fn run_compute(
     uniforms: &[&[u8]],
     elem_count: usize,
 ) -> Vec<wgpu::Buffer> {
+    // One invocation per element; @workgroup_size(64) in the shader.
+    // wgpu caps each dispatch dimension at 65535 workgroups, so any
+    // grid past 65535 × 64 = 4,194,240 elements spreads across a 2D
+    // dispatch: X FIXED at 65535 whenever a second row exists, so the
+    // kernels recover the flat index as `gid.y * (65535 * 64) + gid.x`
+    // with a fold-time constant (src/gpu_wgsl.rs::DISPATCH_X_SPAN — the
+    // two sites must agree). y == 1 degenerates to the old 1D form;
+    // last-row overshoot threads exit on the `>= arrayLength` guard.
+    //
+    // This is a FLATTENED grid, not a genuinely 2-D one: y exists to get
+    // past a dimension cap, and the shader immediately folds (x, y) back
+    // into one index. `gpu.matmul` is the opposite case — its two axes
+    // mean different things (output row and output column) — so it calls
+    // [`run_compute_grid`] directly with a grid it computes itself.
+    let wg = (elem_count as u64).div_ceil(64);
+    let x = wg.min(65535) as u32;
+    let y = wg.div_ceil(65535);
+    if y > 65535 {
+        // 65535² workgroups × 64 ≈ 2.7e14 elements — unreachable for
+        // any real buffer, but fail loud rather than truncate.
+        crate::fatal::write_stderr(b"panic: gpu.dispatch grid exceeds the 2D dispatch limit\n");
+        std::process::abort();
+    }
+    run_compute_grid(
+        device,
+        queue,
+        wgsl,
+        input_bufs,
+        out_sizes,
+        uniforms,
+        (x, y as u32),
+    )
+}
+
+/// The dispatch half of [`run_compute`], with the workgroup grid supplied by
+/// the caller rather than derived from an element count.
+///
+/// Split out for `gpu.matmul` (B-2026-08-19-13), the first kernel here whose
+/// grid is not a function of one buffer's length: it dispatches
+/// `(ceil(n / TILE), ceil(m / TILE))` workgroups of `TILE x TILE` lanes, and
+/// its two axes carry real meaning — x spans output COLUMNS, y spans output
+/// ROWS — where every other kernel's y is only an overflow lane for x.
+/// Everything below the dispatch call (buffer pooling, binding order, the
+/// pipeline cache) is shared, so the two paths cannot drift on the parts that
+/// are genuinely common.
+fn run_compute_grid(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    wgsl: &str,
+    input_bufs: &[wgpu::Buffer],
+    out_sizes: &[u64],
+    uniforms: &[&[u8]],
+    grid: (u32, u32),
+) -> Vec<wgpu::Buffer> {
     let n_buffers = input_bufs.len();
     // GPU-SLIP-4 buffer pooling: reuse a freed grid's output buffers (from the
     // pool) rather than allocating fresh ones each dispatch — the per-substep
@@ -1417,24 +1597,8 @@ fn run_compute(
         });
         pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
-        // One invocation per element; @workgroup_size(64) in the shader.
-        // wgpu caps each dispatch dimension at 65535 workgroups, so any
-        // grid past 65535 × 64 = 4,194,240 elements spreads across a 2D
-        // dispatch: X FIXED at 65535 whenever a second row exists, so the
-        // kernels recover the flat index as `gid.y * (65535 * 64) + gid.x`
-        // with a fold-time constant (src/gpu_wgsl.rs::DISPATCH_X_SPAN — the
-        // two sites must agree). y == 1 degenerates to the old 1D form;
-        // last-row overshoot threads exit on the `>= arrayLength` guard.
-        let wg = (elem_count as u64).div_ceil(64);
-        let x = wg.min(65535) as u32;
-        let y = wg.div_ceil(65535);
-        if y > 65535 {
-            // 65535² workgroups × 64 ≈ 2.7e14 elements — unreachable for
-            // any real buffer, but fail loud rather than truncate.
-            crate::fatal::write_stderr(b"panic: gpu.dispatch grid exceeds the 2D dispatch limit\n");
-            std::process::abort();
-        }
-        pass.dispatch_workgroups(x, y as u32, 1);
+        let (x, y) = grid;
+        pass.dispatch_workgroups(x, y, 1);
     }
     queue.submit(Some(encoder.finish()));
     output_bufs

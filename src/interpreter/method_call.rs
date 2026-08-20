@@ -1051,6 +1051,100 @@ impl<'a> super::Interpreter<'a> {
         Value::Array(std::sync::Arc::new(std::sync::RwLock::new(scanned)))
     }
 
+    /// `gpu.matmul(a, b)` — the interpreter twin of the tiled device kernel
+    /// (B-2026-08-19-13).
+    ///
+    /// **The one twin in this family that is just the obvious loop**, and that
+    /// is the finding rather than a shortcut: a tiled matmul accumulates in
+    /// ascending `k`, exactly as the naive triple loop does, so there is no
+    /// device-specific order to reproduce. `tiled_matmul_f32` carries the
+    /// argument and the property test; this is the `Value` glue.
+    ///
+    /// Consequently `gpu.matmul(a, b)` and `a.matmul(b)` agree bit-for-bit,
+    /// where `gpu.sum(v)` and `v.sum()` do not.
+    fn eval_gpu_matmul(&mut self, args: &[CallArg], span: &Span) -> Value {
+        if args.len() != 2 {
+            return self.record_runtime_error(
+                format!("gpu.matmul expects two tensors (found {})", args.len()),
+                span,
+            );
+        }
+        let a = self.eval_expr_inner(&args[0].value);
+        let b = self.eval_expr_inner(&args[1].value);
+        let (
+            Value::Tensor {
+                dims: ad,
+                data: adata,
+                ..
+            },
+            Value::Tensor {
+                dims: bd,
+                data: bdata,
+                ..
+            },
+        ) = (&a, &b)
+        else {
+            return self
+                .record_runtime_error("gpu.matmul operands must be rank-2 f32 tensors", span);
+        };
+        // Re-emitted as runtime guards even though the typechecker enforces
+        // them, per module policy: a bypassed typecheck must trap, not
+        // silently produce a differently-shaped product.
+        if ad.len() != 2 || bd.len() != 2 {
+            return self.record_runtime_error(
+                format!(
+                    "gpu.matmul requires rank-2 x rank-2, found rank {} x rank {}",
+                    ad.len(),
+                    bd.len()
+                ),
+                span,
+            );
+        }
+        let (m, k) = (ad[0] as usize, ad[1] as usize);
+        let (k2, n) = (bd[0] as usize, bd[1] as usize);
+        if k != k2 {
+            return self.record_runtime_error(
+                format!("gpu.matmul inner dimensions mismatch: [{m}x{k}] x [{k2}x{n}]"),
+                span,
+            );
+        }
+
+        let to_f32 = |vs: &[Value]| -> Option<Vec<f32>> {
+            vs.iter()
+                .map(|v| match v {
+                    Value::Float(f) => Some(*f as f32),
+                    _ => None,
+                })
+                .collect()
+        };
+        let (Some(av), Some(bv)) = (
+            to_f32(&adata.read().unwrap()),
+            to_f32(&bdata.read().unwrap()),
+        ) else {
+            return self.record_runtime_error(
+                "gpu.matmul is f32-only — an integer matmul needs a widening multiply WGSL \
+                 lacks; `a.matmul(b)` runs integer tensors on the CPU",
+                span,
+            );
+        };
+
+        let Some(out) = crate::reduce_kernel::tiled_matmul_f32(&av, &bv, m, k, n) else {
+            return self.record_runtime_error(
+                format!(
+                    "gpu.matmul operand length does not match its shape: [{m}x{k}] x [{k2}x{n}]"
+                ),
+                span,
+            );
+        };
+        Value::Tensor {
+            dims: std::sync::Arc::new(vec![m as i64, n as i64]),
+            data: std::sync::Arc::new(std::sync::RwLock::new(
+                out.into_iter().map(|f| Value::Float(f as f64)).collect(),
+            )),
+            elem: crate::interpreter::value::TensorElemWidth::F32,
+        }
+    }
+
     fn eval_gpu_variance(
         &mut self,
         args: &[CallArg],
@@ -1373,6 +1467,7 @@ impl<'a> super::Interpreter<'a> {
                 }
                 ("gpu", "stddev") => return self.eval_gpu_variance(args, span, true, "stddev"),
                 ("gpu", "prefix_sum") => return self.eval_gpu_prefix_sum(args, span),
+                ("gpu", "matmul") => return self.eval_gpu_matmul(args, span),
                 ("gpu", "argmin") => return self.eval_gpu_arg(args, span, false, "argmin"),
                 ("gpu", "argmax") => return self.eval_gpu_arg(args, span, true, "argmax"),
                 // `gpu.upload` / `gpu.download` (resident device buffers) are

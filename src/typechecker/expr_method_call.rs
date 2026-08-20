@@ -1122,6 +1122,12 @@ impl<'a> super::TypeChecker<'a> {
             if module == "gpu" && method == "prefix_sum" {
                 return self.infer_gpu_prefix_sum(args, span);
             }
+            // The only GPU op that takes TENSORS rather than `Vec`s, because
+            // it is the only one whose meaning depends on a SHAPE — and the
+            // shape already lives in `Tensor[f32, [m, k]]`'s type.
+            if module == "gpu" && method == "matmul" {
+                return self.infer_gpu_matmul(args, span);
+            }
             // The Arg family reports an INDEX, so it needs two shaders and a
             // result type unrelated to the element type.
             if module == "gpu" && method == "argmin" {
@@ -3905,6 +3911,157 @@ impl<'a> super::TypeChecker<'a> {
                         e.reason()
                     ),
                     args[0].value.span,
+                    TypeErrorKind::TypeMismatch,
+                );
+            }
+        }
+
+        self.record_expr_type(span, &result);
+        result
+    }
+
+    /// Type `gpu.matmul(a, b)` — a tiled `[m, k] x [k, n] -> [m, n]` matrix
+    /// product (B-2026-08-19-13).
+    ///
+    /// **Takes TENSORS, not `Vec`s, and is the only op in this family that
+    /// does.** Every reduction above contracts a flat buffer to a scalar, so
+    /// `Vec[f32]` says everything about its input. A matmul's meaning depends
+    /// on a shape, and `m * k` values can be read as `[1, mk]`, `[m, k]`, or
+    /// any other factorisation — so the shape has to come from somewhere.
+    /// Taking it as extra `i64` arguments would let a caller state a shape the
+    /// data does not have, and the wrong `k` reads real values from the wrong
+    /// places rather than failing. `Tensor[f32, [m, k]]` already carries the
+    /// shape, checked, next to the data.
+    ///
+    /// Deferring the whole shape check to [`Self::infer_tensor_matmul`] is the
+    /// other half of that: `gpu.matmul(a, b)` and `a.matmul(b)` accept exactly
+    /// the same operands because the SAME function decides, so no program can
+    /// typecheck on one surface and not the other.
+    ///
+    /// f32-only, unlike `Tensor.matmul`, which also accepts integer elements.
+    /// An integer matmul accumulates a sum of PRODUCTS, needing both a checked
+    /// multiply (WGSL has no widening multiply — the same wall `gpu.prod` and
+    /// `gpu.dot` hit) and the overflow flag carried through every one of its
+    /// `k` steps.
+    fn infer_gpu_matmul(&mut self, args: &[CallArg], span: &Span) -> Type {
+        if args.len() != 2 {
+            self.type_error(
+                format!(
+                    "error[E_GPU_REDUCE_ARITY]: `gpu.matmul` takes exactly two tensors — \
+                     `gpu.matmul(a, b)` (found {} argument(s))",
+                    args.len()
+                ),
+                *span,
+                TypeErrorKind::WrongNumberOfArgs,
+            );
+            for arg in args {
+                self.infer_expr(&arg.value);
+            }
+            return Type::Error;
+        }
+
+        let a_ty = self.infer_expr(&args[0].value);
+        let a_core = match &a_ty {
+            Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
+            other => other,
+        };
+        let Type::Named { name, args: ta } = a_core else {
+            self.type_error(
+                format!(
+                    "error[E_GPU_REDUCE_BUFFER]: `gpu.matmul` takes two rank-2 \
+                     `Tensor[f32, [?, ?]]` operands (found `{}` on the left)",
+                    crate::typechecker::types::type_display(&a_ty)
+                ),
+                args[0].value.span,
+                TypeErrorKind::TypeMismatch,
+            );
+            self.infer_expr(&args[1].value);
+            return Type::Error;
+        };
+        if name != "Tensor" || ta.len() != 2 {
+            self.type_error(
+                format!(
+                    "error[E_GPU_REDUCE_BUFFER]: `gpu.matmul` takes two rank-2 \
+                     `Tensor[f32, [?, ?]]` operands (found `{}` on the left) — unlike the \
+                     reductions it needs a SHAPE, which a `Vec` does not carry",
+                    crate::typechecker::types::type_display(&a_ty)
+                ),
+                args[0].value.span,
+                TypeErrorKind::TypeMismatch,
+            );
+            self.infer_expr(&args[1].value);
+            return Type::Error;
+        }
+        let [a_elem, Type::Shape(a_shape)] = &ta[..] else {
+            self.type_error(
+                "error[E_GPU_REDUCE_BUFFER]: `gpu.matmul` requires the left tensor's rank \
+                 to be statically known"
+                    .to_string(),
+                args[0].value.span,
+                TypeErrorKind::TypeMismatch,
+            );
+            self.infer_expr(&args[1].value);
+            return Type::Error;
+        };
+        if *a_elem != Type::Float(FloatSize::F32) {
+            self.type_error(
+                format!(
+                    "error[E_GPU_REDUCE_BUFFER]: `gpu.matmul` is f32-only (found \
+                     `Tensor[{}, …]`) — an integer matmul accumulates a sum of PRODUCTS, so it \
+                     needs both the widening multiply WGSL lacks and an overflow flag carried \
+                     through every one of its `k` steps. `a.matmul(b)` runs integer tensors on \
+                     the CPU",
+                    crate::typechecker::types::type_display(a_elem)
+                ),
+                args[0].value.span,
+                TypeErrorKind::TypeMismatch,
+            );
+            self.infer_expr(&args[1].value);
+            return Type::Error;
+        }
+
+        // Rank checked HERE rather than left to the delegate below, whose
+        // message says "receiver" — accurate for `a.matmul(b)`, wrong for a
+        // two-operand call where neither side is a receiver.
+        if a_shape.len() != 2 {
+            self.type_error(
+                format!(
+                    "error[E_GPU_REDUCE_BUFFER]: `gpu.matmul` requires a rank-2 left                      operand, found rank {} — batched matmul is v1.5, on both surfaces",
+                    a_shape.len()
+                ),
+                args[0].value.span,
+                TypeErrorKind::TypeMismatch,
+            );
+            self.infer_expr(&args[1].value);
+            return Type::Error;
+        }
+
+        // Element-type agreement, the right operand's rank, and the static
+        // inner-dim check are `Tensor.matmul`'s, reused rather than restated:
+        // the two surfaces must accept exactly the same operands, and a second
+        // copy of those rules is a second place for them to drift. The
+        // delegate reads its own `args[0]` as the RIGHT operand, which is this
+        // call's `args[1]`.
+        let a_shape = a_shape.clone();
+        let a_elem = a_elem.clone();
+        let result = self.infer_tensor_matmul(a_elem, &a_shape, &args[1..], span);
+        if result == Type::Error {
+            return result;
+        }
+
+        match crate::gpu_wgsl::emit_matmul_kernel("f32") {
+            Ok(wgsl) => {
+                self.gpu_dispatch_wgsl
+                    .insert(SpanKey(span.offset, span.length), wgsl);
+            }
+            Err(e) => {
+                self.type_error(
+                    format!(
+                        "error[E_GPU_REDUCE_KERNEL]: cannot lower `gpu.matmul` to a GPU \
+                         shader — {}",
+                        e.reason()
+                    ),
+                    *span,
                     TypeErrorKind::TypeMismatch,
                 );
             }

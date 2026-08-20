@@ -23237,8 +23237,51 @@ fn test_tensor_permute_transpose_and_rank3() {
 }
 
 #[test]
+fn test_tensor_from_narrows_every_element_form_to_f32() {
+    // B-2026-08-20-22. `Tensor.from` under a `Tensor[f32, …]` annotation must
+    // narrow EVERY element, whatever expression produced it. A bare float
+    // literal already arrived narrowed by another route, so `[0.1]` looked
+    // right and the hole stayed hidden: `-0.1` is `Unary(Neg, Literal)` and
+    // `0.05 + 0.05` is a binary op, and neither took that route.
+    //
+    // The AOT backend stores a packed f32 buffer, so it narrows all four by
+    // construction — this is a run-vs-build divergence visible in a SINGLE
+    // ELEMENT, before any arithmetic, which is the simplest possible repro of
+    // the class B-2026-08-05-31 was opened for.
+    let out = run_no_errors(
+        "fn main() {\n\
+        \x20   let x: f32 = 0.1;\n\
+        \x20   let t: Tensor[f32, [?]] = Tensor.from([0.1, -0.1, x, 0.05 + 0.05]);\n\
+        \x20   println(t[0]); println(t[1]); println(t[2]); println(t[3]);\n\
+         }",
+    );
+    // f32(0.1) widened back to f64 for printing, negated for element 1.
+    assert_eq!(
+        out,
+        "0.10000000149011612\n\
+         -0.10000000149011612\n\
+         0.10000000149011612\n\
+         0.10000000149011612\n"
+    );
+}
+
+/// An `f64` tensor must NOT be narrowed by the same code path — the width is
+/// applied, and for `F64` applying it is the identity. Without this the fix
+/// above could "pass" by rounding everything to f32.
+#[test]
+fn test_tensor_from_leaves_f64_elements_alone() {
+    let out = run_no_errors(
+        "fn main() {\n\
+        \x20   let t: Tensor[f64, [?]] = Tensor.from([0.1, -0.1]);\n\
+        \x20   println(t[0]); println(t[1]);\n\
+         }",
+    );
+    assert_eq!(out, "0.1\n-0.1\n");
+}
+
+#[test]
 fn test_tensor_matmul_f32_accumulates_at_element_width() {
-    // B-2026-08-20-20. `Tensor[f32].matmul` must accumulate IN f32, rounding
+    // B-2026-08-20-21. `Tensor[f32].matmul` must accumulate IN f32, rounding
     // on every one of the `k` steps, because that is what codegen's triple
     // loop does (it accumulates in the element LLVM type). Accumulating in
     // f64 and rounding the finished sum — B-2026-08-05-31's fix — agrees only

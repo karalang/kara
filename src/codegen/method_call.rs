@@ -1008,6 +1008,15 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
         }
+        // `gpu.matmul(a, b)` takes TENSORS, not `Vec`s — it is the only op
+        // here whose meaning depends on a shape — and returns one.
+        if method == "matmul" {
+            if let ExprKind::Identifier(name) = &object.kind {
+                if name == "gpu" && !self.variables.contains_key("gpu") {
+                    return self.compile_gpu_matmul(args, call_span);
+                }
+            }
+        }
         // The Arg family reports an INDEX, so it returns `Option[i64]`
         // regardless of the element type and needs its own lowering.
         if matches!(method, "argmin" | "argmax") {

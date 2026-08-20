@@ -362,14 +362,28 @@ impl<'a> super::Interpreter<'a> {
         if let Err(msg) = collect_tensor_literal_dims(data, 0, &mut dims, &mut leaves) {
             return self.record_runtime_error(msg, span);
         }
+        // NARROWED HERE, uniformly, rather than wherever the element
+        // happened to come from (B-2026-08-20-22). A bare float literal was
+        // already arriving at f32 width by a different route, so `[0.1]` had
+        // always looked right; `[-0.1]` is `Unary(Neg, Literal)` and
+        // `[0.05 + 0.05]` is a binary op, and NEITHER took that route — both
+        // stayed f64 while codegen's packed f32 buffer held the narrowed
+        // value. This is the one site that knows both the declared width and
+        // every element, so narrowing here covers every expression form
+        // instead of one per shape.
+        let width = self.pending_tensor_width();
         let mut elements = Vec::with_capacity(leaves.len());
         for leaf in leaves {
-            elements.push(self.eval_expr_inner(leaf));
+            let v = self.eval_expr_inner(leaf);
+            elements.push(match v {
+                Value::Float(f) => Value::Float(width.round(f)),
+                other => other,
+            });
         }
         Value::Tensor {
             dims: Arc::new(dims),
             data: Arc::new(RwLock::new(elements)),
-            elem: self.pending_tensor_width(),
+            elem: width,
         }
     }
 
@@ -1293,7 +1307,7 @@ impl<'a> super::Interpreter<'a> {
                     out.push(Value::Int(acc));
                 } else {
                     // ROUNDED AT EVERY STEP, not once at the end
-                    // (B-2026-08-20-20). Codegen accumulates in the ELEMENT
+                    // (B-2026-08-20-21). Codegen accumulates in the ELEMENT
                     // LLVM type — an f32 tensor multiplies and adds in f32,
                     // rounding on each of the `k` steps — so accumulating in
                     // f64 here and rounding the finished sum agrees only while
@@ -1310,7 +1324,7 @@ impl<'a> super::Interpreter<'a> {
                 }
             }
         }
-        // B-2026-08-05-31 rounded the finished sum here; B-2026-08-20-20
+        // B-2026-08-05-31 rounded the finished sum here; B-2026-08-20-21
         // moved that into the accumulation loop above, where codegen does it.
         // Nothing is left to round at this point — a trailing pass would be a
         // no-op that reads as if the width were still being applied late.
