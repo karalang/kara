@@ -1782,13 +1782,21 @@ impl<'ctx> super::Codegen<'ctx> {
         // The identity's BITS, which is all the runtime carries: it copies the
         // slot on the empty path and never interprets it, so `u32::MAX` riding
         // in an `i32`-typed parameter is exact rather than lossy. (`min`/`max`
-        // discard it anyway — an empty buffer is `None` — so it only ever
-        // surfaces for `sum`, where it is 0 either way.)
+        // discard it anyway — an empty buffer is `None` — so it surfaces only
+        // for the TOTAL folds, `sum` and `prod`.)
+        //
+        // `prod` is spelled out rather than left to the catch-all: the
+        // multiplicative identity is 1, and `gpu.prod([])` answering 0 would
+        // be a wrong answer for the one input no shader ever sees. Both the
+        // float path and the interpreter twin already said 1 (design.md
+        // § whole-buffer reductions), so a 0 here was a three-way
+        // disagreement waiting on integer `prod` shipping.
         let identity = match (spelling, unsigned) {
             ("min", false) => i32_t.const_int(i32::MAX as u64, false),
             ("max", false) => i32_t.const_int(i32::MIN as u64, false),
             ("min", true) => i32_t.const_int(u32::MAX as u64, false),
             ("max", true) => i32_t.const_int(0, false),
+            ("prod", _) => i32_t.const_int(1, false),
             _ => i32_t.const_int(0, false),
         };
         let out = self.builder.build_alloca(i32_t, "gpu.ireduce.out").unwrap();
@@ -2278,6 +2286,89 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(self.build_option_some_via_phis(&[word], some_end_bb, none_bb, "gpu.var"))
     }
 
+    /// Lower an INTEGER `gpu.dot(a, b)` (B-2026-08-19-13).
+    ///
+    /// Returns the ELEMENT type, exactly as `gpu.sum` does over the same
+    /// buffer — the identity `dot == sum(a * b)` would not survive a different
+    /// result type — and traps on overflow of either the product or the
+    /// accumulation, raised HERE so it carries Kāra's own `integer overflow`
+    /// message and span.
+    #[allow(clippy::too_many_arguments)]
+    fn compile_gpu_dot_int(
+        &mut self,
+        elem: &str,
+        dot_ptr: PointerValue<'ctx>,
+        dot_len: IntValue<'ctx>,
+        sum_ptr: PointerValue<'ctx>,
+        sum_len: IntValue<'ctx>,
+        a_data: PointerValue<'ctx>,
+        b_data: PointerValue<'ctx>,
+        n: IntValue<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let i32_t = self.context.i32_type();
+        let fn_val = self.current_fn.expect("gpu.dot in function");
+        let out = self.builder.build_alloca(i32_t, "gpu.idot.out").unwrap();
+        let dot_fn = self.gpu_dot_int_fn();
+        let status = self
+            .builder
+            .build_call(
+                dot_fn,
+                &[
+                    dot_ptr.into(),
+                    dot_len.into(),
+                    sum_ptr.into(),
+                    sum_len.into(),
+                    a_data.into(),
+                    b_data.into(),
+                    n.into(),
+                    out.into(),
+                ],
+                "gpu.idot.status",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+
+        let overflowed = self
+            .builder
+            .build_int_compare(IntPredicate::NE, status, i32_t.const_zero(), "gpu.idot.ovf")
+            .unwrap();
+        let trap_bb = self.context.append_basic_block(fn_val, "gpu.idot.trap");
+        let ok_bb = self.context.append_basic_block(fn_val, "gpu.idot.ok");
+        self.builder
+            .build_conditional_branch(overflowed, trap_bb, ok_bb)
+            .unwrap();
+        self.builder.position_at_end(trap_bb);
+        self.emit_panic("integer overflow");
+        self.builder.build_unreachable().unwrap();
+        self.builder.position_at_end(ok_bb);
+
+        let word = self
+            .builder
+            .build_load(i32_t, out, "gpu.idot.val")
+            .unwrap()
+            .into_int_value();
+        // Widened into the i64 carrier the rest of the compiler uses for
+        // integers, sign- or zero-extending per THIS CALL's element type — the
+        // same decision `compile_gpu_reduce_int` makes for its result. Read
+        // from the argument rather than from the side table at large, so a
+        // program containing both an i32 and a u32 dot classifies each on its
+        // own.
+        let unsigned = elem == "u32";
+        let i64_t = self.context.i64_type();
+        let widened = if unsigned {
+            self.builder
+                .build_int_z_extend(word, i64_t, "gpu.idot.zext")
+                .unwrap()
+        } else {
+            self.builder
+                .build_int_s_extend(word, i64_t, "gpu.idot.sext")
+                .unwrap()
+        };
+        Ok(widened.into())
+    }
+
     /// Lower an INTEGER `gpu.variance` / `gpu.stddev` (B-2026-08-19-13).
     ///
     /// **Returns `Option[f64]`, not `Option[f32]`, and it is exact.** The
@@ -2539,6 +2630,17 @@ impl<'ctx> super::Codegen<'ctx> {
 
         let (a_data, a_n) = self.read_gpu_reduce_buffer(&args[0].value)?;
         let (b_data, b_n) = self.read_gpu_reduce_buffer(&args[1].value)?;
+
+        // INTEGER buffers take the entry point that can TRAP. Selected from
+        // the typechecker's plain-data hint, since a `Vec`'s data pointer is
+        // opaque at the LLVM level.
+        let int_key = (args[0].value.span.offset, args[0].value.span.length);
+        if let Some(elem) = self.accel.gpu_reduce_int_elems.get(&int_key).cloned() {
+            return self.compile_gpu_dot_int(
+                &elem, baked[0].0, baked[0].1, baked[1].0, baked[1].1, a_data, b_data, a_n,
+            );
+        }
+        let _ = b_n;
 
         let dot_fn = self.gpu_dot_f32_fn();
         let out = self

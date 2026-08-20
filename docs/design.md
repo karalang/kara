@@ -10188,7 +10188,7 @@ let p   = gpu.prod(buf)       // f32
 let lo  = gpu.min(buf)        // Option[f32] — None iff the buffer is empty
 let hi  = gpu.max(buf)        // Option[f32]
 let mu  = gpu.mean(buf)       // Option[f32]
-let d   = gpu.dot(a, b)       // f32 — traps if the lengths differ
+let d   = gpu.dot(a, b)       // f32 — traps if the lengths differ; the element type over integers
 let a   = gpu.mean(buf)       // Option[f32]; Option[f64] over an integer buffer
 let s2  = gpu.variance(buf)   // Option[f32] — population (÷ n); Option[f64] over an integer buffer
 let sd  = gpu.stddev(buf)     // Option[f32]; Option[f64] over an integer buffer
@@ -10218,6 +10218,17 @@ They diverge from `Stats.argmin` on **NaN**, and necessarily. `Stats.argmin` see
 
 `gpu.variance` / `gpu.stddev` are the **population** forms (÷ n), matching `Stats.variance` and `Stats.stddev`, so the two answer the same number on the same buffer — and differing from `Column`'s `var` / `std`, which are the **sample** (÷ n−1) forms; see [Numerical Types](#numerical-types-tensor-column-dataframe) § "Variance divisor" for why the split is deliberate. They are the only **two-pass** reductions: the mean has to exist before a single deviation can be formed, so the device runs a complete sum reduction, reads the mean back, and dispatches again with it as a uniform. Both passes go through the same sum tree, so the grouping caveat above is inherited rather than re-derived — and `gpu.stddev(v)` is exactly `gpu.variance(v)` rooted once at the end, not a separate accumulation.
 
+
+
+**`prod`, `dot` and `matmul` work over `Vec[i32]` / `Vec[u32]` and rank-2 `Tensor[i32]` / `Tensor[u32]`, and they trap.** These were recorded for several revisions as *blocked on WGSL*, on the grounds that it has no widening multiply. That was true of the **intrinsic** and false of the capability: a `u32 × u32 → u64` product is four 16-bit partial products and two carries, which the emitted `karac_mul_wide` performs exactly. Once an exact wide product exists, "did this multiply overflow 32 bits?" is a question about the high word — which is how a hardware multiplier answers it too.
+
+So all three follow the rule the integer reductions already set (§ Integer reductions overflow-check): compute in the element type, and **trap rather than wrap**, matching `v.product()` on a `Vec[i32]`.
+
+- **`gpu.prod`** checks each multiply and folds the overflow bit exactly as `sum` folds its own. The empty product is `1` — the multiplicative identity, supplied by the host, since no shader ever sees an empty buffer.
+- **`gpu.dot`** checks the per-element product *and* every accumulation, because either can overflow alone (`65536 * 65536` leaves `i32` in a single term, with nothing yet accumulated). The identity `gpu.dot(a, b) == gpu.sum(a * b)` therefore extends over integers to **which programs trap**, not only to what the successful ones return. Its operands must share an element type: a mixed pair has no single overflow rule.
+- **`gpu.matmul`** over an integer tensor equals `a.matmul(b)` **trap for trap**. That is the sharper form of the float promise: tiling preserves the naive `k`-ascending order, so the same intermediates are formed — and overflow is a property of the intermediates. Reordering the tile loop would break the trap agreement even where it preserved every returned value. One output cell that cannot be represented traps the whole product; a matrix with a wrapped entry in it is not an answer.
+
+A padded lane can never raise an overflow flag. Lanes past `m`, `n` or `k` stage zeros and multiply them, so an edge workgroup on a perfectly valid matrix cannot trap on arithmetic that is not in the data.
 
 **Over an integer buffer, `variance` and `stddev` are EXACT, and return `Option[f64]`.** This is the one place in the family where the GPU is more accurate than the CPU, so it is worth saying why rather than only that.
 

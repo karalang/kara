@@ -1390,6 +1390,179 @@ fn gpu_prefix_sums_last_element_need_not_equal_gpu_sum() {
 }
 
 #[test]
+fn gpu_integer_prod_traps_where_the_cpu_product_does() {
+    // `v.product()` over a `Vec[i32]` already traps on overflow, so `gpu.prod`
+    // inherits the contract rather than choosing one. The device does it with
+    // a CHECKED multiply built on the emitted widening product — the primitive
+    // whose absence was recorded as blocking `prod` for several batches.
+    assert_gpu_reduce_matches_interp(
+        "int_prod",
+        "fn main() {\n\
+        \x20   let v: Vec[i32] = [2 as i32, 3 as i32, 4 as i32, 5 as i32];\n\
+        \x20   println(f\"{gpu.prod(v)}\");\n\
+        \x20   let n: Vec[i32] = [-2 as i32, 3 as i32, -4 as i32];\n\
+        \x20   println(f\"{gpu.prod(n)}\");\n\
+        \x20   let u: Vec[u32] = [2u32, 3u32, 7u32];\n\
+        \x20   println(f\"{gpu.prod(u)}\");\n\
+        }\n",
+        "120\n24\n42",
+    );
+
+    // THE EMPTY PRODUCT IS 1, not 0. It is the one input no shader ever sees,
+    // so the identity is supplied by the host — and a 0 here would be a wrong
+    // answer that only an empty buffer reveals.
+    assert_gpu_reduce_matches_interp(
+        "int_prod_empty",
+        "fn main() {\n\
+        \x20   let e: Vec[i32] = [];\n\
+        \x20   println(f\"{gpu.prod(e)}\");\n\
+        }\n",
+        "1",
+    );
+
+    // i32::MIN is reachable as a PRODUCT even though its magnitude is not
+    // reachable as a positive one — the range is asymmetric, and the checked
+    // multiply tests against the bound for the RESULT's sign.
+    assert_gpu_reduce_matches_interp(
+        "int_prod_asymmetric_edge",
+        "fn main() {\n\
+        \x20   let v: Vec[i32] = [(-2147483647 - 1) as i32, 1 as i32];\n\
+        \x20   println(f\"{gpu.prod(v)}\");\n\
+        }\n",
+        "-2147483648",
+    );
+}
+
+#[test]
+fn gpu_integer_dot_is_sum_of_products_including_the_traps() {
+    // The defining identity, asserted IN the language rather than in a
+    // comment: `gpu.dot(a, b) == gpu.sum(a * b)`. Over integers this now
+    // extends to which programs trap, because both sides use the same checked
+    // combine.
+    assert_gpu_reduce_matches_interp(
+        "int_dot_identity",
+        "fn main() {\n\
+        \x20   let a: Vec[i32] = [7 as i32, 11 as i32, 13 as i32];\n\
+        \x20   let b: Vec[i32] = [3 as i32, 5 as i32, 2 as i32];\n\
+        \x20   let mut p: Vec[i32] = [];\n\
+        \x20   for i in 0..3 { p.push(a[i] * b[i]) }\n\
+        \x20   println(f\"{gpu.dot(a, b) == gpu.sum(p)}\");\n\
+        }\n",
+        "true",
+    );
+
+    assert_gpu_reduce_matches_interp(
+        "int_dot_values",
+        "fn main() {\n\
+        \x20   let a: Vec[i32] = [1 as i32, 2 as i32, 3 as i32, 4 as i32];\n\
+        \x20   let b: Vec[i32] = [5 as i32, 6 as i32, 7 as i32, 8 as i32];\n\
+        \x20   println(f\"{gpu.dot(a, b)}\");\n\
+        \x20   let n: Vec[i32] = [-1 as i32, 2 as i32];\n\
+        \x20   let m: Vec[i32] = [3 as i32, -4 as i32];\n\
+        \x20   println(f\"{gpu.dot(n, m)}\");\n\
+        \x20   let u: Vec[u32] = [2u32, 3u32];\n\
+        \x20   let w: Vec[u32] = [10u32, 100u32];\n\
+        \x20   println(f\"{gpu.dot(u, w)}\");\n\
+        \x20   let e: Vec[i32] = [];\n\
+        \x20   let f: Vec[i32] = [];\n\
+        \x20   println(f\"{gpu.dot(e, f)}\");\n\
+        }\n",
+        "70\n-11\n320\n0",
+    );
+}
+
+#[test]
+fn gpu_integer_dot_traps_when_a_single_product_overflows() {
+    // The PRODUCT can overflow with nothing accumulated yet, so checking only
+    // the running sum would let a wrapped term through. `65536 * 65536` leaves
+    // i32 in one term while the rest of the buffer is zeros.
+    let Some(backend) = gpu_or_skip() else { return };
+    let dir = scratch("int_dot_product_overflow");
+    let src = dir.join("int_dot_product_overflow.kara");
+    std::fs::write(
+        &src,
+        "fn main() {\n\
+        \x20   let a: Vec[i32] = [65536 as i32, 0 as i32];\n\
+        \x20   let b: Vec[i32] = [65536 as i32, 0 as i32];\n\
+        \x20   println(f\"{gpu.dot(a, b)}\");\n\
+        }\n",
+    )
+    .expect("write fixture source");
+    let err = build_and_run_on_gpu(&dir, &src, "int_dot_product_overflow", backend)
+        .expect_err("a product past i32 must trap, not wrap");
+    assert!(
+        err.contains("integer overflow"),
+        "expected Kāra's own `integer overflow` panic, got: {err}"
+    );
+}
+
+#[test]
+fn gpu_integer_matmul_equals_the_cpu_matmul() {
+    // Small case, checked against `a.matmul(b)` IN the program — the promise
+    // is equality with the CPU form, so the test states it that way rather
+    // than pinning numbers that could both drift together.
+    assert_gpu_reduce_matches_interp(
+        "int_matmul_small",
+        "fn main() {\n\
+        \x20   let a: Tensor[i32, [?, ?]] = Tensor.from([[1, 2, 3], [4, 5, 6]]);\n\
+        \x20   let b: Tensor[i32, [?, ?]] = Tensor.from([[7, 8], [9, 10], [11, 12]]);\n\
+        \x20   let g = gpu.matmul(a, b);\n\
+        \x20   let c = a.matmul(b);\n\
+        \x20   println(f\"{g[0, 0]} {g[0, 1]} {g[1, 0]} {g[1, 1]}\");\n\
+        \x20   println(f\"{g[0, 0] == c[0, 0]} {g[1, 1] == c[1, 1]}\");\n\
+        \x20   let u: Tensor[u32, [?, ?]] = Tensor.from([[2u32, 3u32]]);\n\
+        \x20   let v: Tensor[u32, [?, ?]] = Tensor.from([[10u32], [100u32]]);\n\
+        \x20   println(f\"{gpu.matmul(u, v)[0, 0]}\");\n\
+        }\n",
+        "58 64 139 154\ntrue true\n320",
+    );
+
+    // 17 straddles the 16-wide tile in ALL THREE dimensions, so every edge
+    // guard and the k-padding are exercised at once. A matmul whose dimensions
+    // are all tile multiples exercises no padding at all.
+    assert_gpu_reduce_matches_interp(
+        "int_matmul_tile_edge",
+        "fn main() {\n\
+        \x20   let a: Tensor[i32, [?, ?]] = Tensor.from([[-5, -2, 1, 4, -4, -1, 2, 5, -3, 0, 3, -5, -2, 1, 4, -4, -1], [2, 5, -3, 0, 3, -5, -2, 1, 4, -4, -1, 2, 5, -3, 0, 3, -5], [-2, 1, 4, -4, -1, 2, 5, -3, 0, 3, -5, -2, 1, 4, -4, -1, 2], [5, -3, 0, 3, -5, -2, 1, 4, -4, -1, 2, 5, -3, 0, 3, -5, -2], [1, 4, -4, -1, 2, 5, -3, 0, 3, -5, -2, 1, 4, -4, -1, 2, 5], [-3, 0, 3, -5, -2, 1, 4, -4, -1, 2, 5, -3, 0, 3, -5, -2, 1], [4, -4, -1, 2, 5, -3, 0, 3, -5, -2, 1, 4, -4, -1, 2, 5, -3], [0, 3, -5, -2, 1, 4, -4, -1, 2, 5, -3, 0, 3, -5, -2, 1, 4], [-4, -1, 2, 5, -3, 0, 3, -5, -2, 1, 4, -4, -1, 2, 5, -3, 0], [3, -5, -2, 1, 4, -4, -1, 2, 5, -3, 0, 3, -5, -2, 1, 4, -4], [-1, 2, 5, -3, 0, 3, -5, -2, 1, 4, -4, -1, 2, 5, -3, 0, 3], [-5, -2, 1, 4, -4, -1, 2, 5, -3, 0, 3, -5, -2, 1, 4, -4, -1], [2, 5, -3, 0, 3, -5, -2, 1, 4, -4, -1, 2, 5, -3, 0, 3, -5], [-2, 1, 4, -4, -1, 2, 5, -3, 0, 3, -5, -2, 1, 4, -4, -1, 2], [5, -3, 0, 3, -5, -2, 1, 4, -4, -1, 2, 5, -3, 0, 3, -5, -2], [1, 4, -4, -1, 2, 5, -3, 0, 3, -5, -2, 1, 4, -4, -1, 2, 5], [-3, 0, 3, -5, -2, 1, 4, -4, -1, 2, 5, -3, 0, 3, -5, -2, 1]]);\n\
+        \x20   let b: Tensor[i32, [?, ?]] = Tensor.from([[-6, -4, -2, 0, 2, 4, 6, -5, -3, -1, 1, 3, 5, -6, -4, -2, 0], [-1, 1, 3, 5, -6, -4, -2, 0, 2, 4, 6, -5, -3, -1, 1, 3, 5], [4, 6, -5, -3, -1, 1, 3, 5, -6, -4, -2, 0, 2, 4, 6, -5, -3], [-4, -2, 0, 2, 4, 6, -5, -3, -1, 1, 3, 5, -6, -4, -2, 0, 2], [1, 3, 5, -6, -4, -2, 0, 2, 4, 6, -5, -3, -1, 1, 3, 5, -6], [6, -5, -3, -1, 1, 3, 5, -6, -4, -2, 0, 2, 4, 6, -5, -3, -1], [-2, 0, 2, 4, 6, -5, -3, -1, 1, 3, 5, -6, -4, -2, 0, 2, 4], [3, 5, -6, -4, -2, 0, 2, 4, 6, -5, -3, -1, 1, 3, 5, -6, -4], [-5, -3, -1, 1, 3, 5, -6, -4, -2, 0, 2, 4, 6, -5, -3, -1, 1], [0, 2, 4, 6, -5, -3, -1, 1, 3, 5, -6, -4, -2, 0, 2, 4, 6], [5, -6, -4, -2, 0, 2, 4, 6, -5, -3, -1, 1, 3, 5, -6, -4, -2], [-3, -1, 1, 3, 5, -6, -4, -2, 0, 2, 4, 6, -5, -3, -1, 1, 3], [2, 4, 6, -5, -3, -1, 1, 3, 5, -6, -4, -2, 0, 2, 4, 6, -5], [-6, -4, -2, 0, 2, 4, 6, -5, -3, -1, 1, 3, 5, -6, -4, -2, 0], [-1, 1, 3, 5, -6, -4, -2, 0, 2, 4, 6, -5, -3, -1, 1, 3, 5], [4, 6, -5, -3, -1, 1, 3, 5, -6, -4, -2, 0, 2, 4, 6, -5, -3], [-4, -2, 0, 2, 4, 6, -5, -3, -1, 1, 3, 5, -6, -4, -2, 0, 2]]);\n\
+        \x20   let g = gpu.matmul(a, b);\n\
+        \x20   let c = a.matmul(b);\n\
+        \x20   let mut same = true;\n\
+        \x20   for i in 0..17 { for j in 0..17 { if g[i, j] != c[i, j] { same = false; } } }\n\
+        \x20   println(f\"{same}\");\n\
+        }\n",
+        "true",
+    );
+}
+
+#[test]
+fn gpu_integer_matmul_traps_where_the_cpu_matmul_does() {
+    // THE SHARPER HALF OF THE PROMISE. `gpu.matmul` equals `a.matmul(b)` trap
+    // for trap, not merely value for value: the tiled order is the naive one,
+    // so the same intermediates are formed, and overflow is a property of the
+    // intermediates. B-2026-08-20-27 made the CPU side trap here; this pins
+    // that the GPU side agrees.
+    let Some(backend) = gpu_or_skip() else { return };
+    let dir = scratch("int_matmul_overflow");
+    let src = dir.join("int_matmul_overflow.kara");
+    std::fs::write(
+        &src,
+        "fn main() {\n\
+        \x20   let a: Tensor[i32, [?, ?]] = Tensor.from([[65536, 65536]]);\n\
+        \x20   let b: Tensor[i32, [?, ?]] = Tensor.from([[65536], [65536]]);\n\
+        \x20   println(f\"{gpu.matmul(a, b)[0, 0]}\");\n\
+        }\n",
+    )
+    .expect("write fixture source");
+    let err = build_and_run_on_gpu(&dir, &src, "int_matmul_overflow", backend)
+        .expect_err("a contraction past i32 must trap, not wrap");
+    assert!(
+        err.contains("integer overflow"),
+        "expected Kāra's own `integer overflow` panic, got: {err}"
+    );
+}
+
+#[test]
 fn gpu_integer_variance_is_exact_where_an_f32_deviation_would_not_be() {
     // THE fixture for the integer-variance decision. Sixty-four values
     // centred at 2³⁰ with a spread of ±100: forming `(x - mean)` in f32

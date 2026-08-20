@@ -1487,6 +1487,128 @@ async fn dispatch_matmul_async(
     outs.pop()
 }
 
+/// One CHECKED integer tiled-matmul dispatch: two inputs plus the dims
+/// uniform in, the product and one overflow word per workgroup out
+/// (B-2026-08-19-13).
+///
+/// The flag buffer is sized to the FULL 2-D grid (`grid.x * grid.y`), not to
+/// `grid.x` — the shader indexes it by the flattened workgroup id, and a
+/// `wid.x`-only index would have edge rows overwriting each other's flags.
+async fn dispatch_int_matmul_async(
+    wgsl: &str,
+    a: &[u8],
+    b: &[u8],
+    m: usize,
+    k: usize,
+    n: usize,
+) -> Option<(Vec<u8>, Vec<u8>)> {
+    let ctx = gpu_context()?;
+    let device = &ctx.device;
+    let queue = &ctx.queue;
+
+    let input_bufs: Vec<wgpu::Buffer> = [a, b]
+        .iter()
+        .map(|bytes| {
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("gpu-int-matmul-input"),
+                contents: bytes,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            })
+        })
+        .collect();
+
+    let mut dims = Vec::with_capacity(12);
+    for v in [m, k, n] {
+        dims.extend_from_slice(&(v as u32).to_le_bytes());
+    }
+
+    let grid = (
+        n.div_ceil(MATMUL_TILE) as u32,
+        m.div_ceil(MATMUL_TILE) as u32,
+    );
+    if grid.0 > 65535 || grid.1 > 65535 {
+        crate::fatal::write_stderr(
+            b"panic: gpu.matmul dimensions exceed the dispatch grid limit\n",
+        );
+        std::process::abort();
+    }
+    let groups = grid.0 as u64 * grid.1 as u64;
+    let out_sizes = [(m * n * std::mem::size_of::<i32>()) as u64, groups * 4];
+    let output_bufs =
+        run_compute_grid(device, queue, wgsl, &input_bufs, &out_sizes, &[&dims], grid);
+    let mut outs = readback(device, queue, &output_bufs, &out_sizes)?;
+    let flags = outs.pop()?;
+    let values = outs.pop()?;
+    Some((values, flags))
+}
+
+/// C entry point for an INTEGER `gpu.matmul(a, b)` (B-2026-08-19-13).
+///
+/// **Equal to `a.matmul(b)` trap for trap, not merely value for value.**
+/// Tiling preserves the naive `k`-ascending accumulation order, so the two
+/// form the same intermediates — and since overflow is a property of the
+/// intermediates, they agree about which contractions fail as well as what
+/// the successful ones return.
+///
+/// Returns 0 on success (filling `out_ptr`) and 1 on overflow, matching the
+/// status convention of the other checked integer entry points; the caller
+/// raises Kāra's own `integer overflow` panic so the message and span match a
+/// scalar overflow rather than being a bare abort.
+///
+/// # Safety
+///
+/// `wgsl_ptr`/`wgsl_len` a valid UTF-8 shader; `a_ptr` points to `m * k` valid
+/// 4-byte elements, `b_ptr` to `k * n`, and `out_ptr` to space for `m * n`
+/// more, non-overlapping with either input. Aborts on no available GPU
+/// adapter (no CPU fallback).
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_gpu_matmul_int(
+    wgsl_ptr: *const u8,
+    wgsl_len: usize,
+    a_ptr: *const i32,
+    b_ptr: *const i32,
+    m: usize,
+    k: usize,
+    n: usize,
+    out_ptr: *mut i32,
+) -> i32 {
+    unsafe {
+        if m == 0 || n == 0 {
+            return 0;
+        }
+        let Ok(wgsl) = std::str::from_utf8(std::slice::from_raw_parts(wgsl_ptr, wgsl_len)) else {
+            crate::fatal::write_stderr(b"panic: gpu.matmul integer shader is not valid UTF-8\n");
+            std::process::abort();
+        };
+
+        let elem_size = std::mem::size_of::<i32>();
+        let a = std::slice::from_raw_parts(a_ptr as *const u8, m * k * elem_size);
+        let b = std::slice::from_raw_parts(b_ptr as *const u8, k * n * elem_size);
+
+        let Some((values, flags)) =
+            pollster::block_on(dispatch_int_matmul_async(wgsl, a, b, m, k, n))
+        else {
+            crate::fatal::write_stderr(
+                b"panic: gpu.matmul found no available GPU adapter (no CPU fallback)\n",
+            );
+            std::process::abort();
+        };
+
+        // ANY workgroup's flag poisons the whole product: one output cell that
+        // cannot be represented makes the matmul unrepresentable, and Kāra
+        // traps rather than handing back a matrix with a wrapped entry in it.
+        if flags
+            .chunks_exact(4)
+            .any(|w| u32::from_le_bytes([w[0], w[1], w[2], w[3]]) != 0)
+        {
+            return 1;
+        }
+
+        std::ptr::copy_nonoverlapping(values.as_ptr(), out_ptr as *mut u8, m * n * elem_size);
+        0
+    }
+}
+
 /// C entry point for `gpu.matmul(a, b)` — a tiled `[m, k] x [k, n] -> [m, n]`
 /// matrix product (B-2026-08-19-13).
 ///
@@ -1664,6 +1786,143 @@ pub unsafe extern "C" fn karac_runtime_gpu_dot_f32(
         }
 
         f32::from_le_bytes([level[0], level[1], level[2], level[3]])
+    }
+}
+
+/// One CHECKED integer `dot` dispatch: two input buffers in, partials AND
+/// per-workgroup overflow flags out (B-2026-08-19-13).
+///
+/// The two-input sibling of [`dispatch_checked_int_async`]. Level 0 only —
+/// every level after it folds one buffer and goes through the ordinary
+/// checked integer sum.
+async fn dispatch_checked_int_dot_async(
+    wgsl: &str,
+    a: &[u8],
+    b: &[u8],
+    elem_size: usize,
+) -> Option<(Vec<u8>, Vec<u8>)> {
+    let ctx = gpu_context()?;
+    let device = &ctx.device;
+    let queue = &ctx.queue;
+
+    let n = a.len() / elem_size;
+    let input_bufs: Vec<wgpu::Buffer> = [a, b]
+        .iter()
+        .map(|bytes| {
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("gpu-int-dot-input"),
+                contents: bytes,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            })
+        })
+        .collect();
+    let groups = n.div_ceil(64);
+    let out_sizes = [(groups * elem_size) as u64, (groups * 4) as u64];
+    let output_bufs = run_compute(device, queue, wgsl, &input_bufs, &out_sizes, &[], n);
+    let mut outs = readback(device, queue, &output_bufs, &out_sizes)?;
+    let flags = outs.pop()?;
+    let values = outs.pop()?;
+    Some((values, flags))
+}
+
+/// C entry point for an INTEGER `gpu.dot(a, b)` — the fused checked
+/// multiply-then-sum reduction (B-2026-08-19-13).
+///
+/// **`gpu.dot(a, b)` is `gpu.sum(a * b)`, and over integers that now includes
+/// which programs TRAP.** Level 0 forms each product with a checked multiply
+/// and reduces with a checked add; every level after it is the ordinary
+/// checked integer sum, the same shader `gpu.sum` uses. Reusing that shader
+/// rather than re-emitting an equivalent one is what makes the equality hold
+/// by construction instead of by testing.
+///
+/// Returns 0 on success (writing through `out`) and 1 on overflow, matching
+/// `karac_runtime_gpu_reduce_i32`'s status convention — the caller raises
+/// Kāra's own `integer overflow` panic, so the message and span match a
+/// scalar overflow rather than being a bare abort.
+///
+/// # Safety
+///
+/// Both `*_wgsl_ptr`/`_len` pairs a valid UTF-8 shader; `a_ptr` and `b_ptr`
+/// each point to `n` valid 4-byte elements; `out` points to one writable
+/// `i32`. Aborts on no available GPU adapter (no CPU fallback).
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_gpu_dot_int(
+    dot_wgsl_ptr: *const u8,
+    dot_wgsl_len: usize,
+    sum_wgsl_ptr: *const u8,
+    sum_wgsl_len: usize,
+    a_ptr: *const i32,
+    b_ptr: *const i32,
+    n: usize,
+    out: *mut i32,
+) -> i32 {
+    unsafe {
+        // The empty dot product is the Sum identity, 0 — total, like the float
+        // form, and reached without any dispatch.
+        if n == 0 {
+            *out = 0;
+            return 0;
+        }
+        const WORKGROUP: usize = 64;
+
+        let Ok(dot_wgsl) =
+            std::str::from_utf8(std::slice::from_raw_parts(dot_wgsl_ptr, dot_wgsl_len))
+        else {
+            crate::fatal::write_stderr(b"panic: gpu.dot integer shader is not valid UTF-8\n");
+            std::process::abort();
+        };
+        let Ok(sum_wgsl) =
+            std::str::from_utf8(std::slice::from_raw_parts(sum_wgsl_ptr, sum_wgsl_len))
+        else {
+            crate::fatal::write_stderr(b"panic: gpu.dot integer fold shader is not valid UTF-8\n");
+            std::process::abort();
+        };
+
+        let elem_size = std::mem::size_of::<i32>();
+        let a = std::slice::from_raw_parts(a_ptr as *const u8, n * elem_size);
+        let b = std::slice::from_raw_parts(b_ptr as *const u8, n * elem_size);
+
+        let any_flag = |flags: &[u8], count: usize| {
+            flags[..count * 4]
+                .chunks_exact(4)
+                .any(|w| u32::from_le_bytes([w[0], w[1], w[2], w[3]]) != 0)
+        };
+
+        // LEVEL 0: checked product on load, then a checked per-workgroup sum.
+        let Some((values, flags)) =
+            pollster::block_on(dispatch_checked_int_dot_async(dot_wgsl, a, b, elem_size))
+        else {
+            crate::fatal::write_stderr(
+                b"panic: gpu.dot found no available GPU adapter (no CPU fallback)\n",
+            );
+            std::process::abort();
+        };
+        let mut count = n.div_ceil(WORKGROUP);
+        if any_flag(&flags, count) {
+            return 1;
+        }
+        let mut level = values[..count * elem_size].to_vec();
+
+        // LEVELS 1+: the ordinary checked integer sum fold.
+        while count > 1 {
+            let Some((next, next_flags)) =
+                pollster::block_on(dispatch_checked_int_async(sum_wgsl, &level, elem_size))
+            else {
+                crate::fatal::write_stderr(
+                    b"panic: gpu.dot found no available GPU adapter (no CPU fallback)\n",
+                );
+                std::process::abort();
+            };
+            let partials = count.div_ceil(WORKGROUP);
+            if any_flag(&next_flags, partials) {
+                return 1;
+            }
+            level = next[..partials * elem_size].to_vec();
+            count = partials;
+        }
+
+        *out = i32::from_le_bytes([level[0], level[1], level[2], level[3]]);
+        0
     }
 }
 

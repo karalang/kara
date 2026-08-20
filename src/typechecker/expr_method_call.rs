@@ -3581,20 +3581,27 @@ impl<'a> super::TypeChecker<'a> {
             return f32_ty;
         }
 
-        // Both buffers must be `Vec[f32]`. Inferred independently so a wrong
-        // second argument is reported against ITS OWN span.
+        // Both buffers must be `Vec` of the SAME supported element type.
+        // Inferred independently so a wrong second argument is reported
+        // against ITS OWN span, and compared afterwards so a MIXED pair
+        // (`Vec[f32]` against `Vec[i32]`) is its own error rather than being
+        // silently resolved to whichever came first.
+        let mut elems: Vec<Type> = Vec::with_capacity(2);
         for arg in args.iter().take(2) {
             let ty = self.infer_expr(&arg.value);
+            let elem = match &ty {
+                Type::Named { name, args: ta } if name == "Vec" && ta.len() == 1 => ta[0].clone(),
+                _ => Type::Error,
+            };
             let ok = matches!(
-                &ty,
-                Type::Named { name, args: ta }
-                    if name == "Vec" && ta.len() == 1 && ta[0] == Type::Float(FloatSize::F32)
+                &elem,
+                Type::Float(FloatSize::F32) | Type::Int(IntSize::I32) | Type::UInt(UIntSize::U32)
             );
             if !ok {
                 self.type_error(
                     format!(
-                        "error[E_GPU_REDUCE_BUFFER]: `gpu.dot` takes two `Vec[f32]` buffers \
-                         (found `{}`) — the GPU reductions cover f32 only",
+                        "error[E_GPU_REDUCE_BUFFER]: `gpu.dot` takes two `Vec[f32]`, \
+                         `Vec[i32]` or `Vec[u32]` buffers (found `{}`)",
                         crate::typechecker::types::type_display(&ty)
                     ),
                     arg.value.span,
@@ -3602,13 +3609,51 @@ impl<'a> super::TypeChecker<'a> {
                 );
                 return f32_ty;
             }
+            elems.push(elem);
+        }
+        if elems[0] != elems[1] {
+            self.type_error(
+                format!(
+                    "error[E_GPU_REDUCE_BUFFER]: `gpu.dot` operands must share an element \
+                     type (found `{}` and `{}`) — a mixed pair has no single overflow rule, \
+                     and for integers the rule decides which programs trap",
+                    crate::typechecker::types::type_display(&elems[0]),
+                    crate::typechecker::types::type_display(&elems[1])
+                ),
+                args[1].value.span,
+                TypeErrorKind::TypeMismatch,
+            );
+            return f32_ty;
+        }
+        let elem_spelling = match &elems[0] {
+            Type::Int(IntSize::I32) => "i32",
+            Type::UInt(UIntSize::U32) => "u32",
+            _ => "f32",
+        };
+        let is_int = elem_spelling != "f32";
+        if is_int {
+            // Codegen cannot see the element type through a `Vec`'s opaque
+            // data pointer; the spelling selects the entry point that traps.
+            self.gpu_reduce_int_elems.insert(
+                SpanKey(args[0].value.span.offset, args[0].value.span.length),
+                elem_spelling.to_string(),
+            );
         }
 
         // Equal lengths are a RUNTIME condition — nothing in the type system
         // carries a Vec's length — so the runtime entry point traps on a
         // mismatch rather than truncating to the shorter buffer.
-        let level0 = crate::gpu_wgsl::emit_dot_kernel("f32");
-        let fold = crate::gpu_wgsl::emit_reduce_kernel(ReduceOp::Sum, "f32");
+        let (level0, fold) = if is_int {
+            (
+                crate::gpu_wgsl::emit_int_dot_kernel(elem_spelling),
+                crate::gpu_wgsl::emit_int_reduce_kernel(ReduceOp::Sum, elem_spelling),
+            )
+        } else {
+            (
+                crate::gpu_wgsl::emit_dot_kernel("f32"),
+                crate::gpu_wgsl::emit_reduce_kernel(ReduceOp::Sum, "f32"),
+            )
+        };
         match (level0, fold) {
             (Ok(dot_wgsl), Ok(sum_wgsl)) => {
                 self.gpu_dispatch_wgsl.insert(
@@ -3632,8 +3677,12 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
-        self.record_expr_type(span, &f32_ty);
-        f32_ty
+        // An integer dot returns the ELEMENT type, exactly as `gpu.sum` does
+        // over the same buffer — the identity `dot == sum(a * b)` would not
+        // survive a different result type.
+        let result = elems[0].clone();
+        self.record_expr_type(span, &result);
+        result
     }
 
     /// `gpu.argmin(buf)` / `gpu.argmax(buf)` — the INDEX of the extremum
@@ -4047,14 +4096,18 @@ impl<'a> super::TypeChecker<'a> {
             self.infer_expr(&args[1].value);
             return Type::Error;
         };
-        if *a_elem != Type::Float(FloatSize::F32) {
+        let elem_spelling = match a_elem {
+            Type::Float(FloatSize::F32) => Some("f32"),
+            Type::Int(IntSize::I32) => Some("i32"),
+            Type::UInt(UIntSize::U32) => Some("u32"),
+            _ => None,
+        };
+        let Some(elem_spelling) = elem_spelling else {
             self.type_error(
                 format!(
-                    "error[E_GPU_REDUCE_BUFFER]: `gpu.matmul` is f32-only (found \
-                     `Tensor[{}, …]`) — an integer matmul accumulates a sum of PRODUCTS, so it \
-                     needs both the widening multiply WGSL lacks and an overflow flag carried \
-                     through every one of its `k` steps. `a.matmul(b)` runs integer tensors on \
-                     the CPU",
+                    "error[E_GPU_REDUCE_BUFFER]: `gpu.matmul` takes a rank-2 \
+                     `Tensor[f32]`, `Tensor[i32]` or `Tensor[u32]` (found `Tensor[{}, …]`) — \
+                     `a.matmul(b)` runs any numeric element type on the CPU",
                     crate::typechecker::types::type_display(a_elem)
                 ),
                 args[0].value.span,
@@ -4062,6 +4115,13 @@ impl<'a> super::TypeChecker<'a> {
             );
             self.infer_expr(&args[1].value);
             return Type::Error;
+        };
+        let is_int = elem_spelling != "f32";
+        if is_int {
+            // Codegen cannot see a tensor's element type through its data
+            // pointer; the spelling selects the entry point that traps.
+            self.gpu_reduce_int_elems
+                .insert(SpanKey(span.offset, span.length), elem_spelling.to_string());
         }
 
         // Rank checked HERE rather than left to the delegate below, whose
@@ -4093,7 +4153,12 @@ impl<'a> super::TypeChecker<'a> {
             return result;
         }
 
-        match crate::gpu_wgsl::emit_matmul_kernel("f32") {
+        let emitted = if is_int {
+            crate::gpu_wgsl::emit_int_matmul_kernel(elem_spelling)
+        } else {
+            crate::gpu_wgsl::emit_matmul_kernel("f32")
+        };
+        match emitted {
             Ok(wgsl) => {
                 self.gpu_dispatch_wgsl
                     .insert(SpanKey(span.offset, span.length), wgsl);

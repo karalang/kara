@@ -38150,11 +38150,11 @@ fn gpu_sum_accepts_i32_now_that_the_overflow_rule_is_settled() {
     // the buffer is legal and the trap is a runtime condition.
     typecheck_ok("fn main() { let b: Vec[i32] = [1, 2]; let s = gpu.sum(b); }");
 
-    // What is still refused, and why, is covered by
-    // `gpu_integer_reductions_refuse_what_has_not_been_decided` — each of
-    // those is a DECISION not yet made rather than an implementation gap.
-    let errs = typecheck_errors("fn main() { let b: Vec[u32] = [1, 2]; let s = gpu.prod(b); }");
-    assert!(!errs.is_empty(), "u32 is not wired up yet");
+    // The rest of the integer surface followed the same arc and is covered by
+    // `gpu_integer_prod_and_dot_are_accepted_now_that_the_multiply_exists`:
+    // each refusal held only while its question was open, and none of them
+    // was ever an implementation gap.
+    typecheck_ok("fn main() { let b: Vec[u32] = [1u32, 2u32]; let s: u32 = gpu.prod(b); }");
 }
 
 #[test]
@@ -38358,25 +38358,30 @@ fn gpu_integer_reductions_are_accepted_for_the_ops_whose_overflow_rule_is_settle
 }
 
 #[test]
-fn gpu_integer_reductions_refuse_what_has_not_been_decided() {
-    // Each refusal is a DECISION not yet made, not an implementation gap, and
-    // each says which decision. Inheriting any of them by accident is exactly
-    // what the integer-overflow rule was written to prevent.
+fn gpu_integer_prod_and_dot_are_accepted_now_that_the_multiply_exists() {
+    // These were refused for several revisions on the grounds that WGSL has no
+    // widening multiply. It has no widening-multiply INTRINSIC; the capability
+    // is four 16-bit partial products and two carries (B-2026-08-19-13). Both
+    // now type-check and both TRAP on overflow, matching `v.product()` over a
+    // `Vec[i32]`.
+    typecheck_ok("fn main() { let b: Vec[i32] = [1, 2]; let p: i32 = gpu.prod(b); }");
+    typecheck_ok("fn main() { let b: Vec[u32] = [1u32, 2u32]; let p: u32 = gpu.prod(b); }");
+    typecheck_ok("fn main() { let b: Vec[i32] = [1, 2]; let d: i32 = gpu.dot(b, b); }");
+    typecheck_ok("fn main() { let b: Vec[u32] = [1u32, 2u32]; let d: u32 = gpu.dot(b, b); }");
+
     for (src, needle) in [
-        // A checked multiply needs a widening intermediate WGSL lacks.
+        // `dot`'s operands must SHARE an element type: a mixed pair has no
+        // single overflow rule, and for integers the rule decides which
+        // programs trap.
         (
-            "fn main() { let b: Vec[i32] = [1, 2]; let p = gpu.prod(b); }",
-            "widening multiply",
+            "fn main() { let a: Vec[i32] = [1, 2]; let b: Vec[f32] = [1.0, 2.0]; \
+             let d = gpu.dot(a, b); }",
+            "share an element type",
         ),
-        // u32 `prod` is refused for the SAME reason i32 `prod` is — the
-        // widening multiply — not because u32 is unsupported.
+        // 64-bit elements are still refused: WGSL has no 64-bit ELEMENT type,
+        // and the emulated 64-bit arithmetic operates on accumulators.
         (
-            "fn main() { let b: Vec[u32] = [1, 2]; let p = gpu.prod(b); }",
-            "widening multiply",
-        ),
-        // dot over integers would need the same checked multiply.
-        (
-            "fn main() { let b: Vec[i32] = [1, 2]; let d = gpu.dot(b, b); }",
+            "fn main() { let b: Vec[i64] = [1i64, 2i64]; let p = gpu.prod(b); }",
             "E_GPU_REDUCE_BUFFER",
         ),
     ] {

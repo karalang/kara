@@ -1624,23 +1624,69 @@ impl<'ctx> super::Codegen<'ctx> {
             .map_err(|e| format!("baking gpu matmul shader constant failed: {e}"))?
             .as_pointer_value();
 
-        let mm_fn = self.gpu_matmul_f32_fn();
-        self.builder
-            .build_call(
-                mm_fn,
-                &[
-                    wgsl_ptr.into(),
-                    wgsl_len.into(),
-                    a_data.into(),
-                    b_data.into(),
-                    m.into(),
-                    k.into(),
-                    n.into(),
-                    res_data.into(),
-                ],
-                "",
-            )
-            .unwrap();
+        // INTEGER tensors take the entry point that can TRAP. Selected from
+        // the typechecker's plain-data hint, since a tensor's data pointer is
+        // opaque at the LLVM level.
+        let is_int = self
+            .accel
+            .gpu_reduce_int_elems
+            .contains_key(&(call_span.offset, call_span.length));
+        if is_int {
+            let mm_fn = self.gpu_matmul_int_fn();
+            let status = self
+                .builder
+                .build_call(
+                    mm_fn,
+                    &[
+                        wgsl_ptr.into(),
+                        wgsl_len.into(),
+                        a_data.into(),
+                        b_data.into(),
+                        m.into(),
+                        k.into(),
+                        n.into(),
+                        res_data.into(),
+                    ],
+                    "gpu.imm.status",
+                )
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_int_value();
+            let i32_t = self.context.i32_type();
+            let fn_val = self.current_fn.expect("gpu.matmul in function");
+            let overflowed = self
+                .builder
+                .build_int_compare(IntPredicate::NE, status, i32_t.const_zero(), "gpu.imm.ovf")
+                .unwrap();
+            let trap_bb = self.context.append_basic_block(fn_val, "gpu.imm.trap");
+            let ok_bb = self.context.append_basic_block(fn_val, "gpu.imm.ok");
+            self.builder
+                .build_conditional_branch(overflowed, trap_bb, ok_bb)
+                .unwrap();
+            self.builder.position_at_end(trap_bb);
+            self.emit_panic("integer overflow");
+            self.builder.build_unreachable().unwrap();
+            self.builder.position_at_end(ok_bb);
+        } else {
+            let mm_fn = self.gpu_matmul_f32_fn();
+            self.builder
+                .build_call(
+                    mm_fn,
+                    &[
+                        wgsl_ptr.into(),
+                        wgsl_len.into(),
+                        a_data.into(),
+                        b_data.into(),
+                        m.into(),
+                        k.into(),
+                        n.into(),
+                        res_data.into(),
+                    ],
+                    "",
+                )
+                .unwrap();
+        }
 
         // Freed AFTER the dispatch, which reads through their data pointers.
         for (ptr, fresh) in [(a_ptr, a_fresh), (b_ptr, b_fresh)] {

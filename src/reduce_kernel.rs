@@ -328,6 +328,7 @@ fn arg_takes_b(ia: u32, ib: u32, xs: &[f32], want_max: bool) -> bool {
 pub fn tree_reduce_u32(xs: &[u32], op: ReduceOp) -> Option<Result<u32, IntFoldOverflow>> {
     let (combine, identity): CheckedCombinerU = match op {
         ReduceOp::Sum => (u32::checked_add, 0),
+        ReduceOp::Prod => (u32::checked_mul, 1),
         ReduceOp::Min => (|a, b| Some(a.min(b)), u32::MAX),
         ReduceOp::Max => (|a, b| Some(a.max(b)), u32::MIN),
         _ => return None,
@@ -664,6 +665,51 @@ pub fn tree_dot_f32(a: &[f32], b: &[f32]) -> Option<f32> {
     tree_reduce_f32(&products, ReduceOp::Sum)
 }
 
+/// The CPU twin of an INTEGER `gpu.dot(a, b)` (B-2026-08-19-13). `None` iff
+/// the lengths differ; `Some(Err)` iff any product or any accumulation
+/// overflows.
+///
+/// **Written as products-then-`tree_reduce_i32`, not as a fused loop**, and
+/// that is the specification rather than a convenience: `gpu.dot(a, b)` is
+/// `gpu.sum(a * b)` to the last bit, and over integers that promise extends to
+/// WHICH PROGRAMS TRAP. Building the twin out of the very functions the
+/// equality names makes it true by construction — a fused loop would be a
+/// second implementation to keep in step.
+///
+/// The product is checked BEFORE it reaches the sum, because it can overflow
+/// on its own: `65536 * 65536` leaves `i32` in one term, with nothing yet
+/// accumulated.
+pub fn tree_dot_i32(a: &[i32], b: &[i32]) -> Option<Result<i32, IntFoldOverflow>> {
+    if a.len() != b.len() {
+        return None;
+    }
+    let mut products = Vec::with_capacity(a.len());
+    for (x, y) in a.iter().zip(b) {
+        match x.checked_mul(*y) {
+            Some(p) => products.push(p),
+            None => return Some(Err(IntFoldOverflow)),
+        }
+    }
+    tree_reduce_i32(&products, ReduceOp::Sum)
+}
+
+/// The unsigned sibling of [`tree_dot_i32`]. Same shape; the overflow
+/// condition differs only in that an unsigned product overflows on a carry
+/// rather than on a sign flip, which `u32::checked_mul` already encodes.
+pub fn tree_dot_u32(a: &[u32], b: &[u32]) -> Option<Result<u32, IntFoldOverflow>> {
+    if a.len() != b.len() {
+        return None;
+    }
+    let mut products = Vec::with_capacity(a.len());
+    for (x, y) in a.iter().zip(b) {
+        match x.checked_mul(*y) {
+            Some(p) => products.push(p),
+            None => return Some(Err(IntFoldOverflow)),
+        }
+    }
+    tree_reduce_u32(&products, ReduceOp::Sum)
+}
+
 /// The CPU twin of `gpu.prefix_sum(v)` — **the definition of what a GPU
 /// prefix sum MEANS** (B-2026-08-19-13). Inclusive: `out[i]` is the sum of
 /// `v[0..=i]`. Empty in, empty out.
@@ -813,6 +859,60 @@ pub fn tiled_matmul_f32(a: &[f32], b: &[f32], m: usize, k: usize, n: usize) -> O
         }
     }
     Some(out)
+}
+
+/// The CPU twin of an INTEGER tiled matmul — **the definition of what
+/// `gpu.matmul(Tensor[i32])` MEANS**, including which programs trap
+/// (B-2026-08-19-13). `None` on a shape mismatch; `Some(Err)` on overflow.
+///
+/// **Equal to `a.matmul(b)`, trap for trap.** The float form's promise was
+/// that tiling does not change the accumulation ORDER; the integer form
+/// inherits that and adds a second, sharper consequence: because the order is
+/// identical, the set of intermediate values is identical, so the two agree
+/// about WHICH CONTRACTIONS OVERFLOW as well as what they return. Reordering
+/// the tile loop would break that even where it preserved the final value —
+/// overflow is a property of the intermediates, exactly as
+/// [`tree_reduce_i32`] records for the reductions.
+///
+/// Both the product and the accumulation are checked, because either can
+/// overflow alone: `65536 * 65536` leaves `i32` in a single term.
+///
+/// `unsigned` selects the range, not a different algorithm — the arithmetic is
+/// the same, and only the bound each intermediate is tested against differs.
+pub fn tiled_matmul_int(
+    a: &[i64],
+    b: &[i64],
+    m: usize,
+    k: usize,
+    n: usize,
+    unsigned: bool,
+) -> Option<Result<Vec<i64>, IntFoldOverflow>> {
+    if a.len() != m * k || b.len() != k * n {
+        return None;
+    }
+    let (lo, hi) = if unsigned {
+        (0i128, u32::MAX as i128)
+    } else {
+        (i32::MIN as i128, i32::MAX as i128)
+    };
+    let mut out = vec![0i64; m * n];
+    for i in 0..m {
+        for j in 0..n {
+            let mut acc: i128 = 0;
+            for p in 0..k {
+                let prod = a[i * k + p] as i128 * b[p * n + j] as i128;
+                if prod < lo || prod > hi {
+                    return Some(Err(IntFoldOverflow));
+                }
+                acc += prod;
+                if acc < lo || acc > hi {
+                    return Some(Err(IntFoldOverflow));
+                }
+            }
+            out[i * n + j] = acc as i64;
+        }
+    }
+    Some(Ok(out))
 }
 
 /// One workgroup's inclusive Hillis-Steele scan, zero-padded to
@@ -1583,8 +1683,15 @@ mod tests {
             let want: u32 = xs.iter().sum();
             assert_eq!(tree_reduce_u32(&xs, ReduceOp::Sum), Some(Ok(want)), "n={n}");
         }
-        // Same refusal set as every other tree.
-        assert_eq!(tree_reduce_u32(&[1], ReduceOp::Prod), None);
+        // `prod` is available over u32 as of B-2026-08-19-13 — the device
+        // gained a checked multiply, so the twin has one too.
+        assert_eq!(tree_reduce_u32(&[2, 3, 7], ReduceOp::Prod), Some(Ok(42)));
+        assert_eq!(
+            tree_reduce_u32(&[u32::MAX, 2], ReduceOp::Prod),
+            Some(Err(IntFoldOverflow))
+        );
+        // `mean` is still not a single-shader tree fold: it needs a division
+        // the shader cannot place, so it stays out of this combiner.
         assert_eq!(tree_reduce_u32(&[1], ReduceOp::Mean), None);
     }
 

@@ -1109,6 +1109,12 @@ impl<'a> super::Interpreter<'a> {
             );
         }
 
+        // INTEGER tensors take the checked route — a matmul is a sum of
+        // products, and both can overflow.
+        if matches!(adata.read().unwrap().first(), Some(Value::Int(_))) {
+            return self.eval_gpu_matmul_int(&a, &b, m, k, n, span);
+        }
+
         let to_f32 = |vs: &[Value]| -> Option<Vec<f32>> {
             vs.iter()
                 .map(|v| match v {
@@ -1208,6 +1214,159 @@ impl<'a> super::Interpreter<'a> {
                 variant: "None".to_string(),
                 data: EnumData::Unit,
             },
+        }
+    }
+
+    /// The INTEGER arm of `gpu.matmul` under the interpreter
+    /// (B-2026-08-19-13).
+    ///
+    /// `tiled_matmul_int` carries the specification: the tiled order is the
+    /// naive one, so the same intermediates are formed and `gpu.matmul` agrees
+    /// with `a.matmul(b)` about which contractions overflow, not only about
+    /// what the successful ones return.
+    ///
+    /// Signedness is read from the typechecker's hint at the CALL span (where
+    /// `infer_gpu_matmul` records it), rather than guessed from the values —
+    /// the same rule every integer GPU op here follows.
+    fn eval_gpu_matmul_int(
+        &mut self,
+        a: &Value,
+        b: &Value,
+        m: usize,
+        k: usize,
+        n: usize,
+        span: &Span,
+    ) -> Value {
+        let unsigned = self
+            .typecheck_result
+            .gpu_reduce_int_elems
+            .get(&crate::resolver::SpanKey(span.offset, span.length))
+            .is_some_and(|e| e == "u32");
+        let width = if unsigned { "u32" } else { "i32" };
+
+        let mut flat: Vec<Vec<i64>> = Vec::with_capacity(2);
+        for t in [a, b] {
+            let Value::Tensor { data, .. } = t else {
+                return self.record_runtime_error("gpu.matmul operands must be tensors", span);
+            };
+            let guard = data.read().unwrap();
+            let mut xs: Vec<i64> = Vec::with_capacity(guard.len());
+            for v in guard.iter() {
+                let Value::Int(i) = v else {
+                    return self.record_runtime_error(
+                        format!("gpu.matmul tensor elements must all be {width}"),
+                        span,
+                    );
+                };
+                let fits = if unsigned {
+                    u32::try_from(*i).is_ok()
+                } else {
+                    i32::try_from(*i).is_ok()
+                };
+                if !fits {
+                    return self.record_runtime_error(
+                        format!("gpu.matmul tensor element {i} does not fit {width}"),
+                        span,
+                    );
+                }
+                xs.push(*i as i64);
+            }
+            flat.push(xs);
+        }
+
+        match crate::reduce_kernel::tiled_matmul_int(&flat[0], &flat[1], m, k, n, unsigned) {
+            Some(Err(_)) => self.record_runtime_error("integer overflow", span),
+            Some(Ok(out)) => Value::Tensor {
+                dims: std::sync::Arc::new(vec![m as i64, n as i64]),
+                data: std::sync::Arc::new(std::sync::RwLock::new(
+                    out.into_iter().map(|v| Value::Int(v as i128)).collect(),
+                )),
+                elem: crate::interpreter::value::TensorElemWidth::F64,
+            },
+            None => self.record_runtime_error(
+                format!(
+                    "gpu.matmul operand length does not match its shape: [{m}x{k}] x [{k}x{n}]"
+                ),
+                span,
+            ),
+        }
+    }
+
+    /// The INTEGER arm of `gpu.dot` under the interpreter (B-2026-08-19-13).
+    ///
+    /// `tree_dot_i32` / `_u32` are literally products-then-`tree_reduce`, so
+    /// the identity `gpu.dot(a, b) == gpu.sum(a * b)` — including which
+    /// programs trap — holds by construction rather than by testing.
+    ///
+    /// Signedness comes from the typechecker's hint for the reason spelled out
+    /// in `eval_gpu_reduce_int`: a `Vec[u32]` of small values is
+    /// indistinguishable from a `Vec[i32]` at the `Value` level, and guessing
+    /// would produce a divergence visible only on large data.
+    fn eval_gpu_dot_int(
+        &mut self,
+        xa: &[Value],
+        ya: &[Value],
+        buf_span: &Span,
+        span: &Span,
+    ) -> Value {
+        let unsigned = self
+            .typecheck_result
+            .gpu_reduce_int_elems
+            .get(&crate::resolver::SpanKey(buf_span.offset, buf_span.length))
+            .is_some_and(|e| e == "u32");
+        let width = if unsigned { "u32" } else { "i32" };
+
+        let mut sx: Vec<i32> = Vec::with_capacity(xa.len());
+        let mut sy: Vec<i32> = Vec::with_capacity(ya.len());
+        let mut ux: Vec<u32> = Vec::with_capacity(xa.len());
+        let mut uy: Vec<u32> = Vec::with_capacity(ya.len());
+        for (src, (sd, ud)) in [(xa, (&mut sx, &mut ux)), (ya, (&mut sy, &mut uy))] {
+            for v in src {
+                let Value::Int(i) = v else {
+                    return self.record_runtime_error(
+                        format!("gpu.dot buffer elements must all be {width}"),
+                        span,
+                    );
+                };
+                if unsigned {
+                    let Ok(x) = u32::try_from(*i) else {
+                        return self.record_runtime_error(
+                            format!("gpu.dot buffer element {i} does not fit u32"),
+                            span,
+                        );
+                    };
+                    ud.push(x);
+                } else {
+                    let Ok(x) = i32::try_from(*i) else {
+                        return self.record_runtime_error(
+                            format!("gpu.dot buffer element {i} does not fit i32"),
+                            span,
+                        );
+                    };
+                    sd.push(x);
+                }
+            }
+        }
+
+        let folded = if unsigned {
+            crate::reduce_kernel::tree_dot_u32(&ux, &uy).map(|r| r.map(|v| v as i128))
+        } else {
+            crate::reduce_kernel::tree_dot_i32(&sx, &sy).map(|r| r.map(|v| v as i128))
+        };
+        match folded {
+            Some(Err(_)) => self.record_runtime_error("integer overflow in gpu.dot", span),
+            Some(Ok(v)) => Value::Int(v),
+            // Mismatched lengths trap here exactly as in the runtime entry
+            // point: truncating to the shorter buffer would silently answer a
+            // question nobody asked.
+            None => self.record_runtime_error(
+                format!(
+                    "gpu.dot requires buffers of equal length ({} vs {})",
+                    xa.len(),
+                    ya.len()
+                ),
+                span,
+            ),
         }
     }
 
@@ -1414,6 +1573,31 @@ impl<'a> super::Interpreter<'a> {
             );
         }
         let mut buffers: Vec<Vec<f32>> = Vec::with_capacity(2);
+        // INTEGER buffers take a different route entirely — checked products
+        // into a checked tree — because `gpu.dot == gpu.sum(a * b)` extends
+        // over integers to WHICH PROGRAMS TRAP, and converting to f32 would
+        // both lose precision above 2^24 and lose the trap.
+        let mut int_pair: Option<(Vec<Value>, Vec<Value>)> = None;
+        {
+            let vals: Vec<Value> = args
+                .iter()
+                .take(2)
+                .map(|a| self.eval_expr_inner(&a.value))
+                .collect();
+            if let [Value::Array(x), Value::Array(y)] = &vals[..] {
+                let xa = x.read().unwrap().clone();
+                let ya = y.read().unwrap().clone();
+                if matches!(xa.first(), Some(Value::Int(_)))
+                    || matches!(ya.first(), Some(Value::Int(_)))
+                {
+                    int_pair = Some((xa, ya));
+                }
+            }
+        }
+        if let Some((xa, ya)) = int_pair {
+            return self.eval_gpu_dot_int(&xa, &ya, &args[0].value.span, span);
+        }
+
         for arg in args.iter().take(2) {
             let Value::Array(rc) = self.eval_expr_inner(&arg.value) else {
                 return self

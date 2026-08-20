@@ -1469,14 +1469,46 @@ pub fn emit_int_reduce_kernel(op: ReduceOp, elem: &str) -> Result<String, WgslEr
             "0u".to_string(),
             "scratch[t] = max(scratch[t], scratch[t + stride]);".to_string(),
         ),
+        // `prod` reached the device once the widening multiply did
+        // (B-2026-08-19-13). The combine is a CHECKED multiply whose overflow
+        // bit folds exactly like the sum's, so nothing else about the kernel
+        // changes — which is the point of having built the primitive.
+        (ReduceOp::Prod, true) => (
+            "1".to_string(),
+            "let a = scratch[t];\n\
+             \x20           let b = scratch[t + stride];\n\
+             \x20           let r = karac_mul_i32_checked(a, b);\n\
+             \x20           scratch[t] = r.x;\n\
+             \x20           ovf[t] = ovf[t] | ovf[t + stride] | select(0u, 1u, r.y != 0);"
+                .to_string(),
+        ),
+        (ReduceOp::Prod, false) => (
+            "1u".to_string(),
+            "let a = scratch[t];\n\
+             \x20           let b = scratch[t + stride];\n\
+             \x20           let r = karac_mul_u32_checked(a, b);\n\
+             \x20           scratch[t] = r.x;\n\
+             \x20           ovf[t] = ovf[t] | ovf[t + stride] | select(0u, 1u, r.y != 0u);"
+                .to_string(),
+        ),
         _ => {
             return Err(WgslError::UnsupportedSignature(format!(
-                "checked integer GPU reduction `{op:?}` is not supported yet — the integer ops \
-                 are `sum`, `min` and `max`; `prod` needs a widening multiply WGSL does not have"
+                "checked integer GPU reduction `{op:?}` is not supported — the integer ops \
+                 are `sum`, `prod`, `min` and `max`"
             )))
         }
     };
-    let can_overflow = matches!(op, ReduceOp::Sum);
+    // `prod` overflows exactly as `sum` does, so it carries the same flag
+    // buffer and the same host-side fold.
+    let can_overflow = matches!(op, ReduceOp::Sum | ReduceOp::Prod);
+    // The multiply helpers are only pulled in for `prod`; `sum`/`min`/`max`
+    // emit the same text they always did, so their shaders keep their
+    // pipeline-cache identity.
+    let mul_helpers = if matches!(op, ReduceOp::Prod) {
+        format!("{WIDE_U64_WGSL}{CHECKED_MUL_WGSL}")
+    } else {
+        String::new()
+    };
     let ovf_decl = if can_overflow {
         format!("var<workgroup> ovf: array<u32, {}>;\n", GPU_REDUCE_WIDTH)
     } else {
@@ -1495,6 +1527,8 @@ pub fn emit_int_reduce_kernel(op: ReduceOp, elem: &str) -> Result<String, WgslEr
         "@group(0) @binding(0) var<storage, read>       input:  array<{elem}>;\n\
          @group(0) @binding(1) var<storage, read_write> output: array<{elem}>;\n\
          @group(0) @binding(2) var<storage, read_write> flags:  array<u32>;\n\
+         \n\
+         {mul_helpers}\
          \n\
          var<workgroup> scratch: array<{elem}, {width}>;\n\
          {ovf_decl}\n\
@@ -1577,6 +1611,57 @@ fn karac_add_wide_overflowed(a: vec2<u32>, b: vec2<u32>, s: vec2<u32>) -> bool {
 \x20   // it to exactly `a.y` — so the carry is folded in first.\n\
 \x20   let carry = select(0u, 1u, (a.x + b.x) < a.x);\n\
 \x20   return s.y < a.y || (b.y + carry) < b.y || (a.y + b.y + carry) < a.y;\n\
+}\n";
+
+/// WGSL helpers for a CHECKED 32-bit integer multiply, built on
+/// [`WIDE_U64_WGSL`]'s exact widening product (B-2026-08-19-13).
+///
+/// **This is what "`prod` needs a widening multiply WGSL does not have" was
+/// waiting for**, and the wait was based on a misreading: WGSL lacks the
+/// widening-multiply INTRINSIC, not the capability. With an exact
+/// `u32 × u32 → u64` in hand, "did this product overflow 32 bits?" is a
+/// question about the high word, which is exactly how a hardware multiplier
+/// answers it.
+///
+/// Unsigned is the easy case: `a * b` overflows `u32` iff the wide product's
+/// high word is non-zero.
+///
+/// Signed needs the magnitude, because `i32`'s range is asymmetric. The
+/// product's magnitude is `|a| · |b|`, computed wide; it fits iff it is at
+/// most `2147483647` for a positive result, or `2147483648` for a negative
+/// one — that extra value being `i32::MIN`, the one magnitude only the
+/// negative side can hold. Taking `|i32::MIN|` as a `u32` is exact
+/// (`2147483648u`), which is why the magnitudes are carried unsigned rather
+/// than negated in place, where `-i32::MIN` would itself overflow.
+const CHECKED_MUL_WGSL: &str = "\
+fn karac_mul_u32_checked(a: u32, b: u32) -> vec2<u32> {\n\
+\x20   // Returns (product, overflowed). The wide product's high word is\n\
+\x20   // non-zero exactly when the result does not fit u32.\n\
+\x20   let w = karac_mul_wide(a, b);\n\
+\x20   return vec2<u32>(w.x, select(0u, 1u, w.y != 0u));\n\
+}\n\
+\n\
+fn karac_abs_u32(x: i32) -> u32 {\n\
+\x20   // |x| as a u32. Exact even at i32::MIN, whose magnitude 2147483648\n\
+\x20   // has no i32 representation — negating in i32 would overflow, so the\n\
+\x20   // negation happens after the bitcast, in u32, where it wraps to\n\
+\x20   // exactly the right magnitude.\n\
+\x20   if (x < 0) { return 0u - bitcast<u32>(x); }\n\
+\x20   return bitcast<u32>(x);\n\
+}\n\
+\n\
+fn karac_mul_i32_checked(a: i32, b: i32) -> vec2<i32> {\n\
+\x20   // Returns (product, overflowed). Magnitudes multiplied wide, then\n\
+\x20   // range-checked against the bound for the RESULT's sign — i32's range\n\
+\x20   // is asymmetric, so a negative result may reach one further.\n\
+\x20   let w = karac_mul_wide(karac_abs_u32(a), karac_abs_u32(b));\n\
+\x20   let negative = (a < 0) != (b < 0);\n\
+\x20   let limit = select(2147483647u, 2147483648u, negative);\n\
+\x20   if (w.y != 0u || w.x > limit) { return vec2<i32>(0, 1); }\n\
+\x20   // In range: rebuild the signed value from the magnitude.\n\
+\x20   let mag = w.x;\n\
+\x20   let v = select(bitcast<i32>(mag), bitcast<i32>(0u - mag), negative);\n\
+\x20   return vec2<i32>(v, 0);\n\
 }\n";
 
 /// Emit the squared-deviation kernel for an INTEGER `gpu.variance` /
@@ -1801,6 +1886,143 @@ fn int_deviation_helpers(elem: &str) -> String {
     }
 }
 
+/// Emit the CHECKED INTEGER tiled matmul kernel (B-2026-08-19-13).
+///
+/// **Same tiling, same order, plus overflow flags.** The float kernel's
+/// promise is that tiling preserves the naive `k`-ascending accumulation
+/// order; the integer form inherits it and gains a sharper consequence —
+/// because the order is identical, so is the set of intermediates, so
+/// `gpu.matmul` and `a.matmul(b)` agree about WHICH CONTRACTIONS OVERFLOW as
+/// well as what they return. Reordering the tile loop would break that even
+/// where it preserved the final value.
+///
+/// Both the product and the accumulation are checked: `65536 * 65536` leaves
+/// `i32` in one term, so checking only the running sum would let a wrapped
+/// product through.
+///
+/// The overflow flag is per WORKGROUP, on the same channel every checked
+/// integer kernel here uses, and the host ORs it — one poisoned output cell
+/// traps the whole matmul, which is what a language that traps on overflow
+/// has to do with a value it cannot represent.
+///
+/// PADDED LANES CANNOT RAISE THE FLAG. A lane past `m`/`n`/`k` stages zeros
+/// and multiplies them, so it contributes `0 * 0` and never overflows; only a
+/// lane holding real operands can. Without that, an edge workgroup on a
+/// perfectly valid matrix would trap on arithmetic that is not in the data.
+pub fn emit_int_matmul_kernel(elem: &str) -> Result<String, WgslError> {
+    let (zero, mul, add) = match elem {
+        "i32" => (
+            "0",
+            "let pr = karac_mul_i32_checked(av, bv);\n\
+             \x20           let po = pr.y != 0;\n\
+             \x20           let s = acc + pr.x;\n\
+             \x20           let so = ((acc ^ s) & (pr.x ^ s)) < 0;\n\
+             \x20           acc = s;",
+            "ovf_local = ovf_local || po || so;",
+        ),
+        "u32" => (
+            "0u",
+            "let pr = karac_mul_u32_checked(av, bv);\n\
+             \x20           let po = pr.y != 0u;\n\
+             \x20           let s = acc + pr.x;\n\
+             \x20           let so = s < acc;\n\
+             \x20           acc = s;",
+            "ovf_local = ovf_local || po || so;",
+        ),
+        _ => {
+            return Err(WgslError::UnsupportedSignature(format!(
+                "checked integer GPU `matmul` over `{elem}` is not supported — the integer \
+                 entry points cover i32 and u32"
+            )))
+        }
+    };
+    let tile = GPU_MATMUL_TILE;
+    Ok(format!(
+        "@group(0) @binding(0) var<storage, read>       a:      array<{elem}>;\n\
+         @group(0) @binding(1) var<storage, read>       b:      array<{elem}>;\n\
+         @group(0) @binding(2) var<storage, read_write> output: array<{elem}>;\n\
+         @group(0) @binding(3) var<storage, read_write> flags:  array<u32>;\n\
+         @group(0) @binding(4) var<storage, read>       dims:   array<u32>;\n\
+         \n\
+         {WIDE_U64_WGSL}{CHECKED_MUL_WGSL}\
+         \n\
+         var<workgroup> a_tile: array<{elem}, {tile}u * {tile}u>;\n\
+         var<workgroup> b_tile: array<{elem}, {tile}u * {tile}u>;\n\
+         var<workgroup> ovf: array<u32, {tile}u * {tile}u>;\n\
+         \n\
+         @compute @workgroup_size({tile}, {tile})\n\
+         fn main(@builtin(local_invocation_id) lid: vec3<u32>,\n\
+         \x20       @builtin(workgroup_id) wid: vec3<u32>,\n\
+         \x20       @builtin(num_workgroups) nwg: vec3<u32>) {{\n\
+         \x20   let m = dims[0];\n\
+         \x20   let k = dims[1];\n\
+         \x20   let n = dims[2];\n\
+         \x20   let ty = lid.y;\n\
+         \x20   let tx = lid.x;\n\
+         \x20   let row = wid.y * {tile}u + ty;\n\
+         \x20   let col = wid.x * {tile}u + tx;\n\
+         \x20   let lane = ty * {tile}u + tx;\n\
+         \x20   ovf[lane] = 0u;\n\
+         \x20   var ovf_local: bool = false;\n\
+         \n\
+         \x20   var acc: {elem} = {zero};\n\
+         \x20   let tiles = (k + {tile}u - 1u) / {tile}u;\n\
+         \x20   var t: u32 = 0u;\n\
+         \x20   loop {{\n\
+         \x20       if (t >= tiles) {{ break; }}\n\
+         \x20       let a_k = t * {tile}u + tx;\n\
+         \x20       let b_k = t * {tile}u + ty;\n\
+         \x20       if (row < m && a_k < k) {{\n\
+         \x20           a_tile[lane] = a[row * k + a_k];\n\
+         \x20       }} else {{\n\
+         \x20           a_tile[lane] = {zero};\n\
+         \x20       }}\n\
+         \x20       if (col < n && b_k < k) {{\n\
+         \x20           b_tile[lane] = b[b_k * n + col];\n\
+         \x20       }} else {{\n\
+         \x20           b_tile[lane] = {zero};\n\
+         \x20       }}\n\
+         \x20       workgroupBarrier();\n\
+         \n\
+         \x20       // Only a lane holding a REAL output cell accumulates. A\n\
+         \x20       // padded lane would multiply zeros harmlessly, but letting\n\
+         \x20       // it run would also let it raise the overflow flag for\n\
+         \x20       // arithmetic that is not in the data.\n\
+         \x20       if (row < m && col < n) {{\n\
+         \x20           var p: u32 = 0u;\n\
+         \x20           loop {{\n\
+         \x20               if (p >= {tile}u) {{ break; }}\n\
+         \x20               let av = a_tile[ty * {tile}u + p];\n\
+         \x20               let bv = b_tile[p * {tile}u + tx];\n\
+         \x20               {mul}\n\
+         \x20               {add}\n\
+         \x20               p = p + 1u;\n\
+         \x20           }}\n\
+         \x20       }}\n\
+         \x20       workgroupBarrier();\n\
+         \x20       t = t + 1u;\n\
+         \x20   }}\n\
+         \n\
+         \x20   if (row < m && col < n) {{ output[row * n + col] = acc; }}\n\
+         \x20   ovf[lane] = select(0u, 1u, ovf_local);\n\
+         \x20   workgroupBarrier();\n\
+         \x20   // Lane 0 ORs its workgroup's flags into one word, indexed by\n\
+         \x20   // the FLATTENED workgroup id — the grid is 2-D here, so a\n\
+         \x20   // `wid.x`-only index would collide across rows.\n\
+         \x20   if (lane == 0u) {{\n\
+         \x20       var any: u32 = 0u;\n\
+         \x20       var q: u32 = 0u;\n\
+         \x20       loop {{\n\
+         \x20           if (q >= {tile}u * {tile}u) {{ break; }}\n\
+         \x20           any = any | ovf[q];\n\
+         \x20           q = q + 1u;\n\
+         \x20       }}\n\
+         \x20       flags[wid.y * nwg.x + wid.x] = any;\n\
+         \x20   }}\n\
+         }}\n"
+    ))
+}
+
 /// Emit the tiled matrix-multiply kernel for `gpu.matmul(a, b)`
 /// (B-2026-08-19-13).
 ///
@@ -1921,6 +2143,106 @@ pub fn emit_matmul_kernel(elem: &str) -> Result<String, WgslError> {
          \n\
          \x20   // Edge workgroups overshoot; only real output cells store.\n\
          \x20   if (row < m && col < n) {{ output[row * n + col] = acc; }}\n\
+         }}\n"
+    ))
+}
+
+/// Emit the CHECKED integer level-0 kernel for `gpu.dot(a, b)`
+/// (B-2026-08-19-13).
+///
+/// **`gpu.dot(a, b)` is `gpu.sum(a * b)` to the last bit, and over integers
+/// that promise now extends to WHICH PROGRAMS TRAP.** Both the per-element
+/// product and every accumulation are checked, so a dot product overflows on
+/// exactly the inputs the equivalent `sum`-of-products would — the identity
+/// design.md states for floats holds for integers without an exception
+/// clause.
+///
+/// Two overflow sources, and both matter. The PRODUCT can overflow on its own
+/// (`65536 * 65536` passes `i32` with one term), and so can the SUM of
+/// products that individually fit. Checking only the accumulation would let
+/// the first slip through wrapped, which is the plausible-wrong-number shape
+/// this family is built to refuse.
+///
+/// Levels 1+ are the ordinary CHECKED integer sum kernel, exactly as the float
+/// form reuses the plain sum — which is what keeps `dot` and `sum` agreeing
+/// rather than merely being tested to agree.
+pub fn emit_int_dot_kernel(elem: &str) -> Result<String, WgslError> {
+    let (identity, body) = match elem {
+        "i32" => (
+            "0",
+            "let p = karac_mul_i32_checked(a[i], b[i]);\n\
+             \x20       scratch[t] = p.x;\n\
+             \x20       ovf[t] = select(0u, 1u, p.y != 0);",
+        ),
+        "u32" => (
+            "0u",
+            "let p = karac_mul_u32_checked(a[i], b[i]);\n\
+             \x20       scratch[t] = p.x;\n\
+             \x20       ovf[t] = select(0u, 1u, p.y != 0u);",
+        ),
+        _ => {
+            return Err(WgslError::UnsupportedSignature(format!(
+                "checked integer GPU `dot` over `{elem}` is not supported — the integer \
+                 reduction entry points cover i32 and u32"
+            )))
+        }
+    };
+    // The combine is the CHECKED sum, identical to `emit_int_reduce_kernel`'s
+    // — reused verbatim so the two cannot drift on the overflow rule.
+    let add = if elem == "i32" {
+        "let x = scratch[t];\n\
+         \x20           let y = scratch[t + stride];\n\
+         \x20           let s = x + y;\n\
+         \x20           scratch[t] = s;\n\
+         \x20           ovf[t] = ovf[t] | ovf[t + stride] | \
+         select(0u, 1u, ((x ^ s) & (y ^ s)) < 0);"
+    } else {
+        "let x = scratch[t];\n\
+         \x20           let y = scratch[t + stride];\n\
+         \x20           let s = x + y;\n\
+         \x20           scratch[t] = s;\n\
+         \x20           ovf[t] = ovf[t] | ovf[t + stride] | select(0u, 1u, s < x);"
+    };
+    let width = GPU_REDUCE_WIDTH;
+    let half = width / 2;
+    Ok(format!(
+        "@group(0) @binding(0) var<storage, read>       a:      array<{elem}>;\n\
+         @group(0) @binding(1) var<storage, read>       b:      array<{elem}>;\n\
+         @group(0) @binding(2) var<storage, read_write> output: array<{elem}>;\n\
+         @group(0) @binding(3) var<storage, read_write> flags:  array<u32>;\n\
+         \n\
+         {WIDE_U64_WGSL}{CHECKED_MUL_WGSL}\
+         \n\
+         var<workgroup> scratch: array<{elem}, {width}>;\n\
+         var<workgroup> ovf: array<u32, {width}>;\n\
+         \n\
+         @compute @workgroup_size({width})\n\
+         fn main(@builtin(local_invocation_id) lid: vec3<u32>,\n\
+         \x20       @builtin(workgroup_id) wid: vec3<u32>,\n\
+         \x20       @builtin(global_invocation_id) gid: vec3<u32>) {{\n\
+         \x20   let t = lid.x;\n\
+         \x20   let i = gid.x;\n\
+         \x20   if (i < arrayLength(&a)) {{\n\
+         \x20       {body}\n\
+         \x20   }} else {{\n\
+         \x20       // A padded lane contributes the Sum identity and cannot\n\
+         \x20       // raise the flag — it multiplied nothing.\n\
+         \x20       scratch[t] = {identity};\n\
+         \x20       ovf[t] = 0u;\n\
+         \x20   }}\n\
+         \x20   workgroupBarrier();\n\
+         \n\
+         \x20   var stride: u32 = {half}u;\n\
+         \x20   loop {{\n\
+         \x20       if (stride == 0u) {{ break; }}\n\
+         \x20       if (t < stride) {{\n\
+         \x20           {add}\n\
+         \x20       }}\n\
+         \x20       workgroupBarrier();\n\
+         \x20       stride = stride / 2u;\n\
+         \x20   }}\n\
+         \n\
+         \x20   if (t == 0u) {{ output[wid.x] = scratch[0]; flags[wid.x] = ovf[0]; }}\n\
          }}\n"
     ))
 }
@@ -5340,14 +5662,31 @@ mod tests {
     }
 
     #[test]
-    fn checked_int_emitter_refuses_prod_and_non_32_bit_elements() {
-        // `prod` needs a widening intermediate WGSL does not have, and the
-        // usual `s / a != b` substitute is unsound there: `i32::MIN / -1` is
-        // indeterminate in WGSL, so the check would misfire on exactly the
-        // input it exists to catch. Refusing beats guessing.
-        let err = emit_int_reduce_kernel(ReduceOp::Prod, "i32").unwrap_err();
-        assert!(format!("{err:?}").contains("widening multiply"), "{err:?}");
-        // And the element set is the two 32-bit integer types.
+    fn checked_int_emitter_supports_prod_and_only_32_bit_elements() {
+        // `prod` was refused for several revisions on the grounds that WGSL
+        // has no widening multiply. It has no widening-multiply INTRINSIC; the
+        // capability is four 16-bit partial products and two carries, which
+        // `karac_mul_wide` performs exactly (B-2026-08-19-13). So `prod` emits
+        // a CHECKED multiply and carries the same overflow flag `sum` does.
+        //
+        // The substitute this emitter used to reject — `s / a != b` — really
+        // is unsound in WGSL, where `i32::MIN / -1` is indeterminate, so it
+        // would misfire on exactly the input it exists to catch. The wide
+        // product avoids the division entirely.
+        for elem in ["i32", "u32"] {
+            let w = emit_int_reduce_kernel(ReduceOp::Prod, elem).unwrap();
+            assert!(
+                w.contains("karac_mul_wide"),
+                "{elem} prod must use the exact widening product:\n{w}"
+            );
+            assert!(
+                w.contains("var<workgroup> ovf"),
+                "{elem} prod must carry an overflow flag:\n{w}"
+            );
+        }
+        // The element set is still the two 32-bit integer types: WGSL has no
+        // 64-bit ELEMENT type, and the emulated 64-bit arithmetic above
+        // operates on accumulators, not on elements.
         for elem in ["f32", "i64", "u8"] {
             let err = emit_int_reduce_kernel(ReduceOp::Sum, elem).unwrap_err();
             assert!(
