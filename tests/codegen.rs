@@ -21879,6 +21879,70 @@ fn main() {
     }
 
     #[test]
+    fn e2e_negative_literal_patterns_match() {
+        // B-2026-08-20-7. Parsing is only half of it — the folded literal has
+        // to carry its sign all the way to the comparison, on both backends.
+        //
+        // MISS arms are asserted beside the hits throughout: a sign lost
+        // anywhere between the fold and the compare would show up as an arm
+        // that fires on the wrong value, not as one that fails to fire. The two
+        // MIN magnitudes are the sharpest case — they have no positive form, so
+        // they exist only as an already-negated literal.
+        //
+        // One miss is deliberately NOT asserted here: `Some(5)` against a
+        // `Some(-5)` pattern. Codegen does not compare an enum payload's
+        // literal at all — it matches on the tag alone, so `Some(5)` also
+        // matches `Some(7)` — a pre-existing miscompile with no negatives
+        // involved, filed as B-2026-08-20-11 and covered by its own test there.
+        // Asserting it here would tie this row's regression test to that one.
+        if let Some(out) = run_program(
+            "fn sign(n: i64) -> String {\n\
+             match n {\n\
+             -9223372036854775808 => return \"min\",\n\
+             -10..=-1 => return \"small-neg\",\n\
+             0 => return \"zero\",\n\
+             1 | 2 => return \"one-or-two\",\n\
+             _ => return \"other\",\n\
+             }\n\
+             }\n\
+             fn main() {\n\
+             println(sign(0i64 - 9223372036854775807i64 - 1i64));\n\
+             println(sign(0i64 - 5i64));\n\
+             println(sign(0i64));\n\
+             println(sign(2i64));\n\
+             println(sign(0i64 - 99i64));\n\
+             let o: Option[i64] = Some(0i64 - 5i64);\n\
+             match o { Some(-5) => println(\"payload\"), _ => println(\"no\") }\n\
+             let t = (0i64 - 1i64, 2i64);\n\
+             match t { (-1, 2) => println(\"tuple\"), _ => println(\"no\") }\n\
+             let f: f64 = 0.0 - 1.5;\n\
+             match f { -1.5 => println(\"float\"), _ => println(\"no\") }\n\
+             let g: f64 = 1.5;\n\
+             match g { -1.5 => println(\"float\"), _ => println(\"no\") }\n\
+             let w: i128 = 0i128 - 170141183460469231731687303715884105727i128 - 1i128;\n\
+             match w { -170141183460469231731687303715884105728i128 => println(\"i128min\"), _ => println(\"no\") }\n\
+             let s: i8 = 0i8 - 5i8;\n\
+             match s { -128i8..=-1i8 => println(\"neg\"), 0i8..=127i8 => println(\"nonneg\") }\n\
+             }",
+        ) {
+            assert_eq!(
+                out,
+                "min\n\
+                 small-neg\n\
+                 zero\n\
+                 one-or-two\n\
+                 other\n\
+                 payload\n\
+                 tuple\n\
+                 float\n\
+                 no\n\
+                 i128min\n\
+                 neg\n"
+            );
+        }
+    }
+
+    #[test]
     fn e2e_chained_width_sensitive_int_methods() {
         // CHAINED width-preserving int methods resolve their receiver width
         // through the receiver itself, not the span-keyed table

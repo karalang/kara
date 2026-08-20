@@ -143,6 +143,20 @@ impl super::Parser {
             // literal in EXPRESSION position compiled fine. It rides the signed
             // carrier as the identical wrapped bit pattern `parser/exprs.rs`
             // gives it, so pattern and scrutinee compare as the same bits.
+            // A NEGATIVE literal (B-2026-08-20-7). Routed through
+            // `finish_integer_pattern` like its positive twin so a negative
+            // bound can open a range (`-10..=-1`, `-10..`); a negative FLOAT is
+            // a plain literal, matching the positive float arm below.
+            Token::Minus => {
+                self.advance();
+                match self.parse_negated_literal()? {
+                    LiteralPattern::Integer(v, sfx) => self.finish_integer_pattern(v, sfx, start),
+                    lit => Some(Pattern {
+                        kind: PatternKind::Literal(lit),
+                        span: self.span_from(&start),
+                    }),
+                }
+            }
             &Token::IntegerOutOfRange(m, sfx) => {
                 self.advance();
                 let Some(v) = Self::pattern_int_on_carrier(m, sfx) else {
@@ -511,6 +525,12 @@ impl super::Parser {
                 | Token::IntegerOutOfRange(..)
                 | Token::CharLiteral(_)
                 | Token::ByteLiteral(_)
+                // A leading `-` begins a NEGATIVE literal (B-2026-08-20-7).
+                // Needed here and not only at the dispatch, because this is
+                // what tells `lo..` apart from `lo..hi` when `hi` is negative:
+                // without it `-10..=-1` parsed its start and then took the
+                // half-open path, silently changing the pattern's meaning.
+                | Token::Minus
         )
     }
 
@@ -671,11 +691,64 @@ impl super::Parser {
         })
     }
 
-    /// An out-of-range UNSIGNED magnitude on the `i64` carrier that
+    /// An out-of-range magnitude placed on the `i128` carrier that
     /// `LiteralPattern::Integer` provides. Widths of 64 bits or narrower wrap
     /// to the same bit pattern `parser/exprs.rs` produces in expression
-    /// position, so a pattern and its scrutinee compare as identical bits. A
-    /// 128-bit suffix has no room here and returns `None`.
+    /// position, so a pattern and its scrutinee compare as identical bits; the
+    /// 128-bit suffixes are handled one width up by the same rule.
+    /// Parse a NEGATIVE literal, with the leading `Minus` already consumed.
+    ///
+    /// B-2026-08-20-7. The pattern parser had no unary-minus arm at all, so
+    /// `match n { -5 => .. }` failed with `Expected pattern, found Minus` at
+    /// every width and in every pattern position — arm, range bound, tuple
+    /// element, enum payload, or-alternative — and floats with it. The whole
+    /// negative half of every signed type was unmatchable by literal, and the
+    /// guard workaround (`n if n == -5`) is opaque to exhaustiveness, so the
+    /// arm could not count toward coverage either.
+    ///
+    /// This mirrors `parser/exprs.rs`'s `parse_prefix`: the minus is FOLDED
+    /// INTO the literal rather than wrapped around it, which is what lets the
+    /// two MIN magnitudes work. `i64::MIN` and `i128::MIN` have no positive
+    /// form — their magnitude is one past the corresponding MAX — so they
+    /// arrive as `IntegerOutOfRange` and can only be represented already
+    /// negated. `LiteralPattern::Integer` carries `i128` (B-2026-08-20-4), so
+    /// every negative magnitude including `i128::MIN` fits.
+    ///
+    /// A negative magnitude under an UNSIGNED suffix is folded here too rather
+    /// than refused: it is a type error, not a syntax error, and the
+    /// typechecker's literal range check reports it against the actual scrutinee
+    /// type — the same division of labour the expression path uses.
+    fn parse_negated_literal(&mut self) -> Option<LiteralPattern> {
+        match *self.peek_token_ref() {
+            Token::Integer(n, sfx) => {
+                self.advance();
+                Some(LiteralPattern::Integer(-n, sfx))
+            }
+            Token::IntegerOutOfRange(m, sfx) => {
+                self.advance();
+                // The two MIN magnitudes: `2^63` for the 64-bit widths and
+                // `2^127` for `i128`. Each is exactly one past its type's MAX,
+                // so it is representable only with the sign already applied.
+                if m == (1u128 << 63) && !matches!(sfx, Some(IntSuffix::I128)) {
+                    return Some(LiteralPattern::Integer(i64::MIN as i128, sfx));
+                }
+                if m == (1u128 << 127) {
+                    return Some(LiteralPattern::Integer(i128::MIN, sfx));
+                }
+                let v = i128::try_from(m).ok()?;
+                Some(LiteralPattern::Integer(-v, sfx))
+            }
+            Token::Float(f, sfx) => {
+                self.advance();
+                Some(LiteralPattern::Float(-f, sfx))
+            }
+            _ => {
+                self.error("expected an integer or float literal after '-' in a pattern");
+                None
+            }
+        }
+    }
+
     fn pattern_int_on_carrier(m: u128, sfx: Option<IntSuffix>) -> Option<i128> {
         // ≤64-bit unsigned: the magnitude rides the carrier as its wrapped
         // 64-bit two's-complement pattern, which is how the same literal is
@@ -709,6 +782,10 @@ impl super::Parser {
 
     pub(crate) fn parse_literal_pattern(&mut self) -> Option<LiteralPattern> {
         match *self.peek_token_ref() {
+            Token::Minus => {
+                self.advance();
+                self.parse_negated_literal()
+            }
             Token::Integer(n, sfx) => {
                 self.advance();
                 Some(LiteralPattern::Integer(n, sfx))

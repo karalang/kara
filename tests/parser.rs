@@ -14782,6 +14782,67 @@ fn upper_half_unsigned_literal_is_a_valid_pattern() {
 }
 
 #[test]
+fn a_negative_literal_parses_as_a_pattern() {
+    // B-2026-08-20-7. The pattern parser had no unary-minus arm, so
+    // `match n { -5 => .. }` failed with `Expected pattern, found Minus` at
+    // EVERY width and in EVERY pattern position — the whole negative half of
+    // every signed type was unmatchable by literal, and the guard workaround
+    // (`n if n == -5`) is opaque to exhaustiveness, so the arm could not count
+    // toward coverage either.
+    //
+    // The minus is FOLDED INTO the literal rather than wrapped around it,
+    // mirroring `parser/exprs.rs`'s `parse_prefix`. That is what lets the two
+    // MIN magnitudes work: `i64::MIN` and `i128::MIN` have no positive form
+    // (their magnitude is one past the corresponding MAX), so they arrive as
+    // `IntegerOutOfRange` and exist only already-negated.
+    for src in [
+        // plain arm, suffixed and bare
+        "fn main() { let n: i64 = 0i64; match n { -5 => println(1), _ => println(2), } }",
+        "fn main() { let n: i32 = 0i32; match n { -5i32 => println(1), _ => println(2), } }",
+        // every range form, since a negative bound also has to OPEN a range
+        "fn main() { let n: i64 = 0i64; match n { -10..=-1 => println(1), _ => println(2), } }",
+        "fn main() { let n: i64 = 0i64; match n { -10..=5 => println(1), _ => println(2), } }",
+        "fn main() { let n: i64 = 0i64; match n { -10.. => println(1), _ => println(2), } }",
+        "fn main() { let n: i64 = 0i64; match n { ..=-1 => println(1), _ => println(2), } }",
+        // nested positions: enum payload, or-alternative, tuple element
+        "fn main() { let o: Option[i64] = None; match o { Some(-5) => println(1), _ => println(2), } }",
+        "fn main() { let n: i64 = 0i64; match n { -1 | -2 => println(1), _ => println(2), } }",
+        "fn main() { let t = (0i64, 0i64); match t { (-1, 2) => println(1), _ => println(2), } }",
+        // floats negate too — same arm, same fold
+        "fn main() { let f: f64 = 0.0; match f { -1.5 => println(1), _ => println(2), } }",
+        // the two magnitudes with no positive form
+        "fn main() { let n: i64 = 0i64; match n { -9223372036854775808 => println(1), _ => println(2), } }",
+        "fn main() { let n: i128 = 0i128; match n { -170141183460469231731687303715884105728i128 => println(1), _ => println(2), } }",
+    ] {
+        let parsed = parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "expected a clean parse of {src:?}, got: {:?}",
+            parsed.errors.iter().map(|e| e.to_string()).collect::<Vec<_>>(),
+        );
+    }
+}
+
+#[test]
+fn a_bare_minus_in_pattern_position_is_a_diagnostic() {
+    // The fold reads a literal after the `-`; anything else has to report
+    // rather than fall through to a confusing downstream error.
+    let parsed =
+        parse("fn main() { let n: i64 = 0i64; match n { -x => println(1), _ => println(2), } }");
+    assert!(
+        parsed.errors.iter().any(|e| e
+            .to_string()
+            .contains("expected an integer or float literal after '-'")),
+        "got: {:?}",
+        parsed
+            .errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>(),
+    );
+}
+
+#[test]
 fn a_128bit_literal_pattern_parses() {
     // B-2026-08-20-4. This test used to assert the OPPOSITE — that a 128-bit
     // literal in pattern position produced a diagnostic — because

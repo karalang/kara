@@ -35773,6 +35773,34 @@ fn a_128bit_literal_pattern_matches_its_own_value() {
     );
 }
 
+/// The interpreter twin of `e2e_negative_literal_patterns_match`
+/// (tests/codegen.rs), B-2026-08-20-7. Both backends read the folded sign off
+/// the same AST node, so the pair pins that they agree — including on the two
+/// MIN magnitudes, which exist only as an already-negated literal.
+#[test]
+fn a_negative_literal_pattern_matches() {
+    assert_eq!(
+        run_no_errors(
+            "fn main() {\n\
+             let a: i64 = 0i64 - 5i64;\n\
+             match a { -5 => println(\"neg5\"), _ => println(\"no\") }\n\
+             match a { -10..=-1 => println(\"band\"), _ => println(\"no\") }\n\
+             let b: i64 = 7i64;\n\
+             match b { -5 => println(\"neg5\"), _ => println(\"no\") }\n\
+             let m: i64 = 0i64 - 9223372036854775807i64 - 1i64;\n\
+             match m { -9223372036854775808 => println(\"min\"), _ => println(\"no\") }\n\
+             let w: i128 = 0i128 - 170141183460469231731687303715884105727i128 - 1i128;\n\
+             match w { -170141183460469231731687303715884105728i128 => println(\"i128min\"), _ => println(\"no\") }\n\
+             let f: f64 = 0.0 - 1.5;\n\
+             match f { -1.5 => println(\"float\"), _ => println(\"no\") }\n\
+             let t = (0i64 - 1i64, 2i64);\n\
+             match t { (-1, 2) => println(\"tuple\"), _ => println(\"no\") }\n\
+             }"
+        ),
+        "neg5\nband\nno\nmin\ni128min\nfloat\ntuple\n"
+    );
+}
+
 // ── B-2026-08-19-16: qualified unit-variant paths across colliding enums ──
 
 #[test]
