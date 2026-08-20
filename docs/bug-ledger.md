@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 269 | 1 |
+| miscompile | 268 | 0 |
 | leak | 185 | 0 |
 | run-vs-build | 143 | 0 |
 | double-free | 133 | 0 |
@@ -103,14 +103,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | perf | 80 | 0 |
 | crash | 54 | 0 |
 | soundness | 51 | 0 |
-| other | 49 | 0 |
+| other | 50 | 0 |
 | use-after-free | 20 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 956 | 1 |
+| codegen | 956 | 0 |
 | typecheck | 219 | 0 |
 | interp | 166 | 0 |
 | ownership | 61 | 1 |
@@ -124,15 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 6 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1406 surfaced · 3 open · 1383 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1406 surfaced · 2 open · 1384 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-20-23 | 2026-08-20 | ownership | low | every whole-buffer `gpu.*` reduction CONSUMES its buffer, so calling two of them on the same `Vec` warns `value moved here, used again here` -- but they only READ it | — |
 | B-2026-08-20-25 | 2026-08-20 | other | low | design.md assigns `E0226` to `ConflictingPlatformModule` (§ Platform-specific modules), which is the TYPECHECKER's band. `explain::tests::resolver_numeric_codes_live_in_the_resolve_band` fails any resolve-phase code outside E01xx/E08xx and `collision_render_names_every_phase` fails a code minted by two phases, so implementing this diagnostic under the number the spec gives it turns the suite red. The same number was, until B-2026-08-20-18, also spelled for `AmbiguousWildcardImport` (§ Module System); that one had to be allocated E0124 from the resolver band instead and the spec text corrected. This second E0226 is still in the document, unimplemented. | roadmap.md |
-| B-2026-08-20-26 | 2026-08-20 | codegen | high | B-2026-08-05-16'S NONDETERMINISM IS BACK, or was never fully fixed: its own regression test (`test_ir_shared_variant_name_resolves_to_scrutinee_enum_deterministically`) fails in ~6 of 8 FULL-SUITE runs on macOS arm64 — IR for identical source differs between compiles because a bare variant name shared by two enums still resolves against the unordered `enum_layouts` map. That row records the symptom as a NONDETERMINISTIC SEGV at -O0, so this is a live miscompile, not a flaky test. | tests/codegen.rs::test_ir_shared_variant_name_resolves_to_scrutinee_enum_deterministically; the `enum_layouts` lookup for bare variant patterns in src/codegen.rs; prior row B-2026-08-05-16 (fixed) whose regression test this is; found as the control arm of B-2026-08-20-5 |
 
 ### Wontfix (7)
 
@@ -150,9 +149,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1406 surfaced
 
 </details>
 
-### Fixed (1383)
+### Fixed (1384)
 
-<details><summary>1383 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1384 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -12880,6 +12879,84 @@ because auto-par reads exactly what a renamed resource feeds; and 6 planner test
 covering the root rule, the path-derived replacement name, both guards, and the
 no-collision no-op. `karac test` shares the run path's merge and was verified on
 a colliding package. |
+| B-2026-08-20-26 | codegen | medium | A TEST BINARY MUTATING THE PROCESS ENV, not a miscompile: `test_ir_shared_variant_name_resolves_to_scrutinee_enum_deterministically` failed ~6 of 8 F… | FIXED by 3220697. The reported failure is real and reproducible; its attributed cause is not.
+
+WHAT WAS MEASURED (Linux x86, this container, at 01a8ff2):
+
+  * 300 compiles of the row's exact fixture in one process, in isolation:
+    ONE distinct IR. No seed-driven variation at all.
+
+  * The same fixture compiled with `enum_layouts` swapped from `HashMap` to
+    `BTreeMap` (deterministic alphabetical iteration): byte-identical IR,
+    same 74,949 bytes. So iteration order does not reach the emitted code for
+    this shape.
+
+  * The fixture spelled twice, once with the value enum sorting BEFORE the
+    shared enum (`AaTok` / `ZzExpr`) and once after (`ZzTok` / `AaExpr`), so
+    that an order-dependent fallback would have to pick differently:
+    `tok_kind` came out identical modulo the names, comparing tag 0 for
+    `Tok.Str` and tag 1 for `Tok.Int` in both. The `#39` scrutinee hint from
+    B-2026-08-05-16 covers every resolution this fixture reaches; the fix did
+    not regress and was not partial here.
+
+  * Compiling the fixture with and without `KARAC_RUNTIME_DEBUG_METADATA=0`:
+    the IRs differ by exactly ONE line --
+    `@KARAC_SPAWN_SITES_ENABLED = constant i1 true|false`.
+
+  * A sibling thread toggling that env var while the 24-compile loop runs
+    reproduces the row's assertion verbatim on the first try, on Linux, with
+    no HashMap involved: "IR for the same source differed on compile 4",
+    differing only in `@KARAC_SPAWN_SITES_ENABLED`.
+
+THE MECHANISM. `read_runtime_debug_metadata_env()` is called afresh from every
+`Codegen::new`, and the environment is process-global while cargo runs ~3,000
+tests on parallel threads. Six tests in `tests/codegen.rs` set or unset the var
+around their own compile. They serialized on `SPAWN_SITE_ENV_LOCK` -- but that
+lock is held only by tests that know to ask for it, so it protected them from
+each other and nothing else from them. The test doc even stated the wrong
+inference explicitly: "the var name is unique to this test, so there is no
+collision risk with peers". The var name being unique is irrelevant; the var is
+READ by every compile in the process.
+
+THE FIX. `KARAC_STRIP_CONTRACTS`, `KARAC_DEBUG_INFO` and `KARAC_STRIP_ERROR_TRACE`
+each already grew a race-free override for exactly this reason -- their doc
+comments say so ("via an explicit setter so the decision is race-free (no
+process-global env mutation)"). This gate was the one left without.
+`codegen::pin_runtime_debug_metadata(bool)` now returns an RAII guard pinning
+the gate for the CALLING THREAD only; `read_runtime_debug_metadata_env` consults
+it before the env var. Per-thread rather than per-call because the gate has to
+reach three compile lanes (IR, object, JIT) whose entry points already carry 6-9
+positional parameters -- the object path's own comment warns against a 10th.
+
+All six tests now pin instead of mutating; `SPAWN_SITE_ENV_LOCK` and its nine
+acquisitions are gone with it, since nothing serializable remains. Verified on
+both the AOT and `KARAC_TEST_JIT=1` lanes.
+
+REGRESSION GUARD, at the class level rather than the instance:
+`no_test_in_this_binary_mutates_the_process_env` scans `tests/codegen.rs` and
+fails on any `std::env::set_var` / `remove_var`. Every codegen env gate is
+exposed to this same defect, so pinning only the one that bit is not enough.
+
+THE ASSERTION MESSAGE was itself a cause of the misdiagnosis: it named
+`enum_layouts` as the reason two compiles differed, which a repetition test can
+never observe. It now prints the differing lines and names BOTH candidate
+causes with the signature that tells them apart -- moved tag constants and
+payload offsets for the miscompile, a single flipped global initializer for the
+env race.
+
+HARDENING, separately motivated. Five bare-variant-name lookups settled ties
+with `get_or_insert` over an `enum_layouts` iteration, i.e. by the per-process
+HashMap seed. They now go through one `owning_enum_for_variant` helper:
+scrutinee hint first, then the lexicographically-first user enum, then the
+lexicographically-first seeded one. Two of the five had no scrutinee-hint
+preference at all -- `enum_tag_for_variant`, and `resolve_variant_field_offsets`,
+which is the EXTRACTED TWIN of the `bind_pattern_values` arm B-2026-08-05-16
+taught to consult the hint and which did not inherit it (its remaining
+`llvm_type` filter is not a unique key, since two structurally identical enums
+share one LLVM struct type). Ordering by name does not make an ambiguous case
+correct; it makes a wrong pick fail the same way on every run instead of hiding
+behind a seed, which is what the row asked for. The full 3,098-test codegen
+suite passes unchanged with it. |
 | B-2026-08-20-27 | interp+codegen | high | an INTEGER `Tensor.matmul` never overflow-checks: `karac build` silently WRAPS and `karac run --interp` returns a value outside the element type -- w… | FIXED by beb4c419. |
 | B-2026-08-20-28 | resolver | high | A module binding's MEMBER ACCESS claims the bare member name in the importing module, so anything else answering to that name either collides with it… | FIXED by c50c3fa.
 
