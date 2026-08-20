@@ -12685,7 +12685,7 @@ A FALLBACK THE FIRST DRAFT DID NOT HAVE, caught by `file_targeted_examples_check
 
 TESTS (tests/cli.rs): `test_check_package_member_sees_sibling_modules` (false rejection), `test_check_package_member_reports_a_private_cross_directory_import` and `test_run_package_member_refuses_a_private_cross_directory_import` (false acceptance, both surfaces) all fail without the fix. `test_run_package_member_still_runs_a_sound_package` pins that the run gate did not become a blanket refusal, `test_check_standalone_script_is_unaffected` pins that a script merely sitting near a manifest keeps the single-file path, and `test_check_with_no_file_checks_the_whole_package` covers the new project mode in both directions. |
 | B-2026-08-20-21 | interp | medium | `Tensor[f32].matmul` accumulates in f64 under `karac run --interp` and in f32 under `karac build`, so a long enough contraction gives DIFFERENT ANSWE… | 2f94bb1b |
-| B-2026-08-20-22 | interp | medium | `Tensor.from` under a `Tensor[f32, ...]` annotation narrows a bare float LITERAL but not a NEGATED one or a computed one, so `Tensor.from([-0.1])` ho… | PENDING |
+| B-2026-08-20-22 | interp | medium | `Tensor.from` under a `Tensor[f32, ...]` annotation narrows a bare float LITERAL but not a NEGATED one or a computed one, so `Tensor.from([-0.1])` ho… | 209a6607 |
 
 </details>
 
