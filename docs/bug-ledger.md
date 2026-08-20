@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 144 | 0 |
 | double-free | 133 | 0 |
 | missing-feature | 129 | 0 |
-| codegen-gap | 120 | 1 |
+| codegen-gap | 121 | 1 |
 | diagnostics | 90 | 1 |
 | false-positive | 88 | 0 |
 | perf | 80 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 957 | 1 |
+| codegen | 958 | 1 |
 | typecheck | 219 | 0 |
 | interp | 167 | 0 |
 | ownership | 61 | 0 |
@@ -124,14 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 6 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1412 surfaced · 2 open · 1390 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1413 surfaced · 2 open · 1391 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-20-33 | 2026-08-20 | codegen | medium | A THREE-level index assignment (`a[i][j][k] = v` on a plain local `Vec[Vec[Vec[T]]]`) is rejected by codegen with `Index assignment target must be a variable`; the two-level form compiles, and the interpreter accepts both | — |
 | B-2026-08-20-34 | 2026-08-20 | runtime | medium | STACK EXHAUSTION in an AOT binary is a BARE SIGSEGV with EMPTY stderr -- no message, no hint, exit 139; Rust prints `thread 'main' has overflowed its stack` and Go names its stack limit, so Kara matches C (the unsafe baseline) on a diagnostic its safety positioning implies it should beat | — |
+| B-2026-08-20-35 | 2026-08-20 | codegen | low | A NESTED INDEXED READ WHOSE OUTER CONTAINER IS A MAP (`m[k][i]` on a `Map[K, Vec[V]]`) is rejected by codegen with `codegen: nested indexed read on 'm' -- outer is not a Vec/Slice/Array`; the interpreter accepts it, so it is a run/build split. Measured on 5b6c33b, after B-2026-08-20-33 lifted the arbitrary-depth Vec/Slice/Array chain -- this shape is what is LEFT, and it is left because the element-pointer helpers the new resolver calls are all Vec/Slice/Array-shaped. | roadmap.md |
 
 ### Wontfix (7)
 
@@ -149,9 +149,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1412 surfaced
 
 </details>
 
-### Fixed (1390)
+### Fixed (1391)
 
-<details><summary>1390 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1391 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -13219,6 +13219,25 @@ REGRESSION COVERAGE IS A PAIR THAT ASSERTS THE SAME STRING, deliberately: `test_
 TWO CODEGEN GAPS MET WHILE BUILDING THE PARITY FIXTURE, both pre-existing and neither this row's: a THREE-level index assignment (`c3[0][0][0] = 42`) is rejected `Index assignment target must be a variable` -- that is B-2026-08-20-33, already open -- and a nested indexed READ through a Map (`m[1i64][0]`) is rejected `nested indexed read on 'm' -- outer is not a Vec/Slice/Array`. That is why the codegen twin covers depth 2 and the interpreter twin carries depth 3 alone; the reason is written into the test so nobody "simplifies" it back.
 
 NOT B-2026-06-18-9, as the row says: that was CODEGEN mis-building a shallow copy for a borrowed receiver. This is the INTERPRETER on an owned receiver, and codegen is the leg that was correct. |
+| B-2026-08-20-33 | codegen | medium | A THREE-level index assignment (`a[i][j][k] = v` on a plain local `Vec[Vec[Vec[T]]]`) is rejected by codegen with `Index assignment target must be a… | FIXED by 5b6c33b. The row proposed the general fix over a third special case -- "a general place-expression store path would subsume this row and both of those, which is probably the fix worth making" -- and that is what landed. It also turned out to be TWO deferrals, not one.
+
+THE SECOND HALF THE ROW DID NOT NAME. The row is about the STORE, and reports that the interpreter accepts all three depths while codegen refuses the assignment. But a three-level chained READ was refused too, by a completely separate guard in `compile_nested_index_read` with a different message: "codegen: chained indexed reads (`a[i][j][k]`) are deferred to v1.x; bind the intermediate element to a temporary first". So fixing only the store would have produced a compiler that could WRITE `d[0][0][0] = 42` and then refuse to READ `d[0][0][0]` back -- worse than the symmetric refusal it started from. Both halves are lifted.
+
+WHY IT WAS EXACTLY ONE LEVEL DEEP, which is the detail that identifies the cause. Three arms existed for a nested store, one per base shape: a named outer container, a struct FIELD (B-2026-08-09-21), and a TUPLE field (B-2026-08-10-5). Every one of them required whatever sat UNDER the base to be a bare identifier. A chained base is an `Index` under an `Index`, so it matched none of the three and fell to the "must be a variable" gate -- a message that named the wrong thing, since the target IS a variable, just reached through two indices.
+
+THE FIX IS A RECURSIVE PLACE RESOLVER, `container_place_name` (`src/codegen/calls.rs`): given a place expression that denotes a CONTAINER, return a name the existing name-keyed element-pointer helpers accept, minting a synth identifier for each link that is not already a named variable. Identifier -> itself; FieldAccess -> `lower_field_access_ptr`; Index -> resolve the base recursively, then `lower_indexed_elem_ptr_vec` / `_slice` / `_array`. Both call sites then normalise-and-recurse, which is the trick the file had already open-coded three times; this is that trick as one function, so ARBITRARY DEPTH costs one arm instead of one arm per depth.
+
+TEARDOWN IS THE CALLER'S, deliberately, and it is the one subtle part. Each synth is pushed onto a caller-owned scratch vector released only after the whole expression is compiled. Releasing a link as soon as the next resolved would unregister the very slot the next `lower_indexed_elem_ptr_*` reads -- the registrations must outlive the entire chain. Written into the doc comment so the next reader does not "tidy" it into a local teardown.
+
+FAILS SOFT BY CONSTRUCTION. `container_place_name` returns `Ok(None)` for a shape it cannot resolve and both call sites then fall through to their ORIGINAL diagnostic. So this widens what builds without converting any current clean refusal into a confusing one or, worse, a miscompile.
+
+VERIFIED BEYOND THE ROW'S REPRO, because "depth 3 now works" would be satisfied by a fix that merely moved the boundary to depth 4. Measured, all four surfaces (`--interp`, JIT, `build`, `KARAC_AUTO_PAR=0 build`) byte-identical: depth-3 store AND read; DEPTH FOUR; a `mut ref` parameter (the store must reach the caller's buffer, not a copy); a struct-FIELD root at depth three -- the B-2026-08-09-21 base one level deeper than that row could reach; and COMPUTED indices at every level with a neighbour element asserted untouched, which a constant-folding shortcut would fail while passing every literal-index case.
+
+ONE EXISTING TEST WAS INVERTED RATHER THAN DELETED. `test_e2e_nested_index_rooted_at_struct_field` case 5 pinned the triple index as a LOUD deferral, on the stated principle that widening the field base was not an excuse to generalise the MR5 guard too. That principle was right then; this row generalises it deliberately and through a shared resolver rather than another bespoke arm. The case now asserts the triple index LOWERS, with a comment recording that it is the case that pins where the boundary sits and that the boundary moved.
+
+MEMORY-SAFETY GATE MATTERED HERE more than usual: the new path mints identifiers whose slots ALIAS interior Vec storage, so a stray drop registration would be a double free on the parent's buffer. `tests/memory_sanitizer.rs` under `--features llvm` is clean, alongside both full suites and clippy on both feature legs.
+
+STILL DEFERRED, and left that way on purpose: a nested indexed READ whose outer container is a MAP (`m[k][i]`) refuses with "nested indexed read on 'm' -- outer is not a Vec/Slice/Array". That is a different resolver -- the element-pointer helpers are Vec/Slice/Array-shaped and a Map element has no such pointer -- so it is out of this row's scope. Met while building the B-2026-08-20-32 parity fixture; filed separately rather than bundled here. |
 
 </details>
 
