@@ -1182,6 +1182,199 @@ mod tests {
         );
     }
 
+    /// design.md source, for the code-assignment lint below.
+    const DESIGN_MD: &str = include_str!("../../docs/design.md");
+
+    /// Codes design.md names that [`CODE_TABLE`] does not carry, each with the
+    /// phase that mints it.
+    ///
+    /// Both rows here SHIP but are minted outside the catalogue — `E0223` by
+    /// `print_cycles_text`, `E0227` by `ManifestError::code` — from phases the
+    /// catalogue has no band for. So `karac explain E0223` refuses a code users
+    /// actually see, with a message that claims the `E02xx` family IS covered.
+    /// They are also the last two survivors of CR-24's allocation of the whole
+    /// module-system family out of the typechecker's band (see
+    /// `docs/implementation_checklist/phase-4-interpreter.md`): B-2026-07-27-14
+    /// moved the three that had collided into `E01xx`, and B-2026-08-20-25
+    /// struck `E0226`. Renumbering these two is a user-visible change rather
+    /// than a spec correction, so it is its own row (B-2026-08-20-30). Listing
+    /// them keeps this lint honest about the remainder instead of passing
+    /// quietly over it.
+    const SPEC_RESERVED: &[(&str, &str, &str)] = &[
+        ("E0223", "CircularModuleDependency", "module_graph"),
+        ("E0227", "NotInsideKaraProject", "manifest"),
+    ];
+
+    /// Codes design.md names ONLY to record that they were withdrawn. The prose
+    /// has to keep the number — that is what stops it being re-allocated by
+    /// someone who reads the section and sees a gap — so the lint has to know
+    /// the difference between a live assignment and an epitaph.
+    const SPEC_RETIRED: &[(&str, &str)] = &[
+        ("E0226", "ConflictingPlatformModule"),
+        // B-2026-08-20-25: the condition it named cannot arise — the walker
+        // keeps at most one file per (module path, target).
+    ];
+
+    /// Every `E0NNN Name` pair design.md writes, in document order. A bare
+    /// `E0NNN` with no name after it is skipped — those are JSON samples and
+    /// prose references, not assignments.
+    fn design_md_named_codes() -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        let bytes = DESIGN_MD.as_bytes();
+        let mut i = 0;
+        while let Some(hit) = DESIGN_MD[i..].find("E0") {
+            let start = i + hit;
+            i = start + 2;
+            let digits: String = DESIGN_MD[i..].chars().take(3).collect();
+            if digits.len() != 3 || !digits.chars().all(|c| c.is_ascii_digit()) {
+                continue;
+            }
+            // Must be a whole token: `aE0123` and `E01234` are not codes.
+            if start > 0 && (bytes[start - 1] as char).is_alphanumeric() {
+                continue;
+            }
+            let after = start + 5;
+            if DESIGN_MD[after..].starts_with(|c: char| c.is_ascii_digit()) {
+                continue;
+            }
+            let name: String = DESIGN_MD[after..]
+                .trim_start_matches(' ')
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            // A name is UpperCamel and follows on the same line; anything else
+            // (prose, a table cell, the end of a backticked span) is not one.
+            if name.len() > 1 && name.starts_with(|c: char| c.is_ascii_uppercase()) {
+                out.push((format!("E0{digits}"), name));
+            }
+        }
+        out
+    }
+
+    /// design.md names diagnostic codes in prose, and those numbers are what a
+    /// reader — human, or the Mend loop's LLM authoring against the spec —
+    /// implements. Nothing tied them to the catalogue, so a code could be
+    /// written into the spec in the wrong phase's band and sit there until
+    /// someone tried to build it.
+    ///
+    /// That is not hypothetical. CR-24 allocated the whole module-system family
+    /// out of the typechecker's `E02xx` band; B-2026-07-27-14 moved the three
+    /// that had collided into `E01xx` and left the rest, so design.md went on
+    /// naming `E0226 ConflictingPlatformModule` — a check the typechecker would
+    /// never mint — until B-2026-08-20-25 established it could not fire at all
+    /// and struck it. Two of that family are still out of band and shipping.
+    /// This is the guard that makes the next one a test failure rather than a
+    /// discovery.
+    ///
+    /// Every `E0NNN Name` the spec writes must therefore match its `CODE_TABLE`
+    /// row, or be listed in [`SPEC_RESERVED`] with the phase that mints it, or
+    /// in [`SPEC_RETIRED`] as a withdrawn number the prose still records.
+    #[test]
+    fn design_md_code_assignments_match_the_catalogue() {
+        let mut wrong_kind: Vec<String> = Vec::new();
+        let mut uncatalogued: Vec<String> = Vec::new();
+        let mut out_of_band: Vec<String> = Vec::new();
+
+        for (code, name) in design_md_named_codes() {
+            if let Some(entry) = CODE_TABLE.iter().find(|(c, _)| *c == code).map(|(_, e)| e) {
+                if entry.kind != name {
+                    wrong_kind.push(format!(
+                        "{code}: design.md says `{name}`, CODE_TABLE says `{}`",
+                        entry.kind
+                    ));
+                }
+                continue;
+            }
+            if SPEC_RETIRED.iter().any(|(c, n)| *c == code && *n == name) {
+                continue;
+            }
+            let Some((_, _, phase)) = SPEC_RESERVED.iter().find(|(c, _, _)| *c == code) else {
+                uncatalogued.push(format!("{code} {name}"));
+                continue;
+            };
+            // A reserved code still has to sit in the band of the phase that
+            // mints it. Only `resolve` has a band to check against here — the
+            // two CLI-level phases have none yet (see SPEC_RESERVED).
+            if *phase == "resolve" && !code.starts_with("E01") {
+                out_of_band.push(format!("{code} {name} (minted by resolve)"));
+            }
+        }
+
+        for list in [&mut wrong_kind, &mut uncatalogued, &mut out_of_band] {
+            list.sort();
+            list.dedup(); // a code named in several places reports once
+        }
+        assert!(
+            wrong_kind.is_empty(),
+            "design.md and CODE_TABLE disagree about what a code IS: {wrong_kind:?}"
+        );
+        assert!(
+            uncatalogued.is_empty(),
+            "design.md names diagnostic codes that are neither catalogued nor \
+             listed in SPEC_RESERVED / SPEC_RETIRED: {uncatalogued:?}. Add the \
+             row to CODE_TABLE when the diagnostic ships, to SPEC_RESERVED with \
+             the phase that mints it, or to SPEC_RETIRED if the number was \
+             withdrawn."
+        );
+        assert!(
+            out_of_band.is_empty(),
+            "design.md allocates a code outside its minting phase's band: \
+             {out_of_band:?}. Each phase owns a band (resolve E01xx, typecheck \
+             E02xx/W02xx, ownership E05xx)."
+        );
+    }
+
+    /// The lint above is only worth anything if the extractor actually finds the
+    /// spec's assignments — one that silently matched nothing would make all
+    /// three of its assertions vacuously true. Pin the set.
+    #[test]
+    fn design_md_named_codes_finds_the_module_system_family() {
+        let found = design_md_named_codes();
+        for (code, name) in [
+            ("E0111", "PrivateItemAccess"),
+            ("E0112", "UnknownModule"),
+            ("E0113", "UnknownItemInModule"),
+            ("E0124", "AmbiguousWildcardImport"),
+            ("E0221", "PrivateTypeInPublicSignature"),
+            ("E0223", "CircularModuleDependency"),
+            ("E0227", "NotInsideKaraProject"),
+        ] {
+            assert!(
+                found.iter().any(|(c, n)| c == code && n == name),
+                "design.md names `{code} {name}` but the extractor missed it"
+            );
+        }
+        // A bare code with no name — design.md's JSON sample carries
+        // `"code":"E0099"` — must NOT be read as an assignment.
+        assert!(
+            !found.iter().any(|(c, _)| c == "E0099"),
+            "a bare code with no name was read as an assignment"
+        );
+    }
+
+    /// Every [`SPEC_RESERVED`] / [`SPEC_RETIRED`] row must still be named in
+    /// design.md — otherwise the list rots into a reservation for a code the
+    /// spec no longer mentions.
+    #[test]
+    fn spec_reserved_and_retired_rows_are_still_in_design_md() {
+        let named = design_md_named_codes();
+        let mut stale: Vec<&str> = SPEC_RESERVED
+            .iter()
+            .filter(|(code, name, _)| !named.iter().any(|(c, n)| c == code && n == name))
+            .map(|(code, _, _)| *code)
+            .collect();
+        stale.extend(
+            SPEC_RETIRED
+                .iter()
+                .filter(|(code, name)| !named.iter().any(|(c, n)| c == code && n == name))
+                .map(|(code, _)| *code),
+        );
+        assert!(
+            stale.is_empty(),
+            "SPEC_RESERVED / SPEC_RETIRED rows design.md no longer names: {stale:?}"
+        );
+    }
+
     /// No `(code, phase)` pair may appear twice — that would be a
     /// straight copy-paste error rather than a cross-phase collision.
     #[test]

@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 129 | 1 |
 | codegen-gap | 119 | 0 |
 | false-positive | 88 | 0 |
-| diagnostics | 87 | 1 |
+| diagnostics | 88 | 2 |
 | perf | 80 | 0 |
 | crash | 54 | 0 |
 | soundness | 51 | 0 |
@@ -116,7 +116,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | ownership | 61 | 1 |
 | other | 59 | 0 |
 | autopar | 54 | 0 |
-| cli | 53 | 1 |
+| cli | 54 | 2 |
 | parser | 33 | 0 |
 | runtime | 27 | 0 |
 | resolver | 23 | 0 |
@@ -124,14 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 6 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1407 surfaced · 2 open · 1385 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1408 surfaced · 3 open · 1385 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-20-23 | 2026-08-20 | ownership | low | every whole-buffer `gpu.*` reduction CONSUMES its buffer, so calling two of them on the same `Vec` warns `value moved here, used again here` -- but they only READ it | — |
 | B-2026-08-20-29 | 2026-08-20 | cli | low | THE NATIVE OS PLATFORMS ARE NOT SELECTABLE, so a `_macos` / `_windows` / `_linux` module can only be checked or built on that host, and no command verifies that a platform split covers every OS. `cmd_build_project` derives the walker's platform as `wasm_* -> Platform::Wasm`, everything else `Platform::host()` (now shared as `walk_platform_for_target`), and `kara.toml [build].target` -- a rustc-style overlay triple -- never touches it. So `_wasm` is reachable from any host and the three native suffixes are host-locked. design.md's *Missing-platform rule* used to promise exactly the missing guarantee (`karac check --target all` for "a compile-time guarantee that every target has coverage"); that text was corrected rather than the feature built (B-2026-08-20-25), and this row is the feature. | roadmap.md |
+| B-2026-08-20-30 | 2026-08-20 | cli | low | `karac explain E0223` and `E0227` REFUSE two codes users actually see, with a message that claims their family IS covered: "`karac explain` covers the resolve and typecheck families (E01xx, E02xx / W02xx, E08xx)" -- and both codes are E02xx. Measured on 9dfa7d8: a module cycle prints `error[E0223]: circular module dependency` and a command run outside a package reports `E0227`, yet neither is in `CODE_TABLE`, so `karac explain` answers `diagnostic code 'E0223' is not in the catalogue yet` for both. They are also both in the WRONG BAND -- `E0223` is minted by `print_cycles_text` (module-graph phase) and `E0227` by `ManifestError::code` (manifest phase), neither of which is the typechecker whose band E02xx is. | roadmap.md |
 
 ### Wontfix (7)
 
