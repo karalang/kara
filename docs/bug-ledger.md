@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | diagnostics | 83 | 0 |
 | false-positive | 82 | 0 |
 | perf | 77 | 0 |
-| crash | 54 | 1 |
+| crash | 54 | 0 |
 | soundness | 51 | 0 |
 | other | 49 | 0 |
 | use-after-free | 20 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 949 | 2 |
+| codegen | 949 | 1 |
 | typecheck | 214 | 1 |
 | interp | 162 | 0 |
 | ownership | 60 | 0 |
@@ -124,15 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 6 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1378 surfaced · 3 open · 1355 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1378 surfaced · 2 open · 1356 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-19-13 | 2026-08-19 | typecheck+codegen+runtime | medium | GPU reductions still lack the two-pass statistics (var / std), prefix-sum and tiled matmul; integer `prod` / `dot` are blocked on WGSL lacking a widening multiply. Everything else has shipped: `sum`/`prod`/`min`/`max`/`mean`/`dot`/`argmin`/`argmax` over `Vec[f32]`, and `sum`/`min`/`max`/`mean`/`argmin`/`argmax` over `Vec[i32]` and `Vec[u32]`. | docs/spikes/gpu-llvm-offload-assessment.md; src/gpu_wgsl.rs::emit_reduce_kernel; src/reduce_kernel.rs::tree_reduce_f32 |
 | B-2026-08-19-29 | 2026-08-19 | parser | low | `usize` is missing from the parser's unsigned-suffix list for the out-of-range literal band, so `18446744073709551615usize` is REJECTED ("out of range for i64 … add an unsigned suffix") while the byte-identical `18446744073709551615u64` is accepted. `usize` is 64-bit, so the whole upper half of its range is unwritable as a literal. | src/parser/exprs.rs (the `IntegerOutOfRange` arm's unsigned-suffix match); src/typechecker/exprs.rs::int_literal_range (which already handles Usize); src/typechecker/exprs.rs::literal_as_i128 |
-| B-2026-08-19-30 | 2026-08-20 | codegen | medium | A BARE `println(e)` on a user-defined GENERIC enum value PANICS the compiler — `emit_display_fn_for_type: type_name 'T' not yet supported`. The nested spellings (`Vec[MyOpt[T]]`, a `Map` value) were fixed by B-2026-08-19-28; this one takes a different entry point, `render_user_enum_display`, which receives only the enum's NAME and so cannot substitute the instantiation. | src/codegen/synth_display.rs::render_user_enum_display (the `&[]` argument); src/codegen/synth_display.rs::emit_enum_display_fn (already instantiation-aware); src/codegen/types_lowering.rs::register_var_from_type_expr (where a binding's full TypeExpr is seen and dropped); src/codegen/display.rs::display_option_result_types (the span-addressed precedent) |
 
 ### Wontfix (7)
 
@@ -150,9 +149,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1378 surfaced
 
 </details>
 
-### Fixed (1355)
+### Fixed (1356)
 
-<details><summary>1355 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1356 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -12457,6 +12456,17 @@ VERIFICATION. The interpreter was already correct throughout — it renders from
 STILL BROKEN, split out as B-2026-08-19-30: a BARE `println(e)` on a user-defined generic enum value. It takes a different entry point (`render_user_enum_display`), which receives only the enum's name, and codegen has no span-addressed table carrying a variable's full instantiation — so it needs a new side table rather than a call-site argument. Unchanged by this commit: it panicked before and panics now, with the same message.
 
 NOT A BUG, for the next reader: a struct FIELD whose type is `Option[T]` / `Vec[...]` is refused with a clean diagnostic, not a panic. That is the documented subtask-5 deferral in `display_field_is_leaf`, unrelated to this row. |
+| B-2026-08-19-30 | codegen | medium | A BARE `println(e)` on a user-defined GENERIC enum value PANICS the compiler — `emit_display_fn_for_type: type_name 'T' not yet supported` | FIXED by db463e5. The row's own analysis said this needed "a new side table rather than a call-site argument" and that an identifier-only patch would silently decline every other expression shape. The first half was right; the second was too pessimistic, and measuring first is what showed the difference.
+
+WHAT THE MEASUREMENT CHANGED. The row implied the non-binding shapes would be left silently unhandled. In fact `println(mk())` — a call result rendered without binding — fails with a CLEAN diagnostic ("bind a struct literal or call result to a `let` first") and fails identically for a NON-generic enum, so it is the pre-existing subtask-5 restriction, orthogonal to generics rather than a remainder of this row. That reframing is what made the scope finite: the shapes that differ between a generic and a non-generic enum are exactly the direct spellings of a BOUND value, and all three of them (`println(e)`, `f"{e}"`, `e.to_string()`) share one entry point.
+
+FIX. The instantiation arrives the way Option/Result's and tuple's already do: a span-keyed table forwarded by the lowering pass from the typechecker's `expr_types`, carrying the full `TypeExpr` of every generic-user-enum expression, which `render_user_enum_display` reads to hand `emit_enum_display_fn` its concrete arguments. Span-keyed rather than name-keyed on purpose — it covers a `let` binding and a call result through one mechanism and adds no bookkeeping at the binding site. The table excludes `Option`/`Result` (their dedicated table and renderer already serve them) and non-generic enums (nothing to substitute), so the tables stay disjoint and no path that already worked is rerouted.
+
+WHY A NEW TABLE WAS UNAVOIDABLE. The three callers of `render_user_enum_display` hold an arbitrary `Expr`, not a declared type, and codegen keeps no general span→TypeExpr channel — `var_type_names` stores only the last path segment, which is why the base name was all this path ever had. `mono_struct_type(name, args)` is the precedent for args arriving from a caller that already holds them; here no caller does.
+
+VERIFICATION. Byte-identical across `karac build`, that build with `KARAC_AUTO_PAR=0`, `karac run` (JIT) and `karac run --interp`, on: a one-parameter enum at `i64`, `String` and `Vec[i64]` — the latter two HEAP-BOXED, since a generic enum's slot is the erased one-word base, so they also re-exercise B-2026-08-19-28's debox — a `u64` payload past 2^63 (which puts B-2026-08-19-27's unsigned reading through the same path), the payload-free variant, a TWO-parameter enum including a variant using only the first parameter so the substitution must be positional and tolerate partial arity, a non-generic enum as the control, and the f-string and `to_string` surfaces. Tests: `e2e_generic_enum_display_direct_spellings` (tests/codegen.rs) with the twin `a_generic_enum_renders_directly_at_its_instantiation` (tests/interpreter.rs). Gates: fmt, both clippy legs, default suite (106 targets), codegen 3083 and memory_sanitizer 1130 under KARAC_REQUIRE_RUNTIME_ARCHIVE=1.
+
+WITH B-2026-08-19-28, THE GENERIC-ENUM DISPLAY SURFACE IS NOW CLOSED: nested (container element, map value, set element) and direct (binding, f-string, to_string) both render at the instantiation, for seeded and user-defined generics alike. What remains is the unrelated subtask-5 restriction on rendering an unbound call result or literal, which is not specific to enums or to generics. |
 
 </details>
 
