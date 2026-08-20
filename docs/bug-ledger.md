@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 185 | 0 |
 | run-vs-build | 143 | 0 |
 | double-free | 133 | 0 |
-| missing-feature | 128 | 1 |
+| missing-feature | 128 | 0 |
 | codegen-gap | 119 | 0 |
 | false-positive | 88 | 1 |
 | diagnostics | 87 | 2 |
@@ -110,27 +110,26 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 956 | 2 |
-| typecheck | 219 | 1 |
+| codegen | 956 | 1 |
+| typecheck | 219 | 0 |
 | interp | 166 | 0 |
 | ownership | 61 | 1 |
 | other | 59 | 1 |
 | autopar | 54 | 0 |
 | cli | 52 | 1 |
 | parser | 33 | 0 |
-| runtime | 27 | 1 |
+| runtime | 27 | 0 |
 | resolver | 22 | 0 |
 | effect | 7 | 0 |
 | lexer | 6 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1405 surfaced · 5 open · 1380 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1405 surfaced · 4 open · 1381 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-19-13 | 2026-08-19 | typecheck+codegen+runtime | medium | GPU reductions: NO DECISIONS AND NO SEPARATE PROJECTS REMAIN. One item is open — integer `prod` / `dot` / `matmul` — and its recorded blocker ("WGSL has no widening multiply") is now KNOWN FALSE: `karac_mul_wide` is that primitive, shipped and device-verified, so they are ordinary work. Shipped: sum / prod / min / max / mean / dot / argmin / argmax / variance / stddev / prefix_sum over `Vec[f32]`; sum / min / max / mean / argmin / argmax / variance / stddev over `Vec[i32]` and `Vec[u32]`, the last of these EXACT via an integer shift and an emulated 64-bit accumulator; and a tiled `matmul` over rank-2 `Tensor[f32]` that equals `a.matmul(b)` bit-for-bit. | docs/spikes/gpu-llvm-offload-assessment.md; src/gpu_wgsl.rs::emit_reduce_kernel; src/reduce_kernel.rs::tree_reduce_f32 |
 | B-2026-08-20-23 | 2026-08-20 | ownership | low | every whole-buffer `gpu.*` reduction CONSUMES its buffer, so calling two of them on the same `Vec` warns `value moved here, used again here` -- but they only READ it | — |
 | B-2026-08-20-24 | 2026-08-20 | cli | high | Two modules of one package may not declare the same top-level name: `karac check` ACCEPTS the program and BOTH execution paths reject it. Repro (no wildcards involved) -- `src/alpha.kara`: `pub fn common() -> i64 { return 1; } pub fn only_a() -> i64 { return 11; }`; `src/beta.kara`: the same with `common`/`only_b`; `src/main.kara`: `import alpha.only_a; import beta.only_b; fn main() { println(only_a()); println(only_b()); }` -- main never mentions `common`. Measured on 6aa26bb: `karac check src/main.kara` -> `All checks passed.`; `karac run src/main.kara` -> `error[resolve]: src/main.kara:1:5: 'common' is already defined in this scope (first defined at 1:5)`; `karac build` (llvm) -> `error[resolve]: multi-file resolve failed:`. design.md § Module System makes the two `common`s distinct ("all types, functions, and effect resources are namespaced by their module path"), so this rejects a legal -- and very ordinary -- program: any two modules with a `new`, `parse`, `size` or `run` collide. | roadmap.md |
 | B-2026-08-20-25 | 2026-08-20 | other | low | design.md assigns `E0226` to `ConflictingPlatformModule` (§ Platform-specific modules), which is the TYPECHECKER's band. `explain::tests::resolver_numeric_codes_live_in_the_resolve_band` fails any resolve-phase code outside E01xx/E08xx and `collision_render_names_every_phase` fails a code minted by two phases, so implementing this diagnostic under the number the spec gives it turns the suite red. The same number was, until B-2026-08-20-18, also spelled for `AmbiguousWildcardImport` (§ Module System); that one had to be allocated E0124 from the resolver band instead and the spec text corrected. This second E0226 is still in the document, unimplemented. | roadmap.md |
@@ -152,9 +151,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1405 surfaced
 
 </details>
 
-### Fixed (1380)
+### Fixed (1381)
 
-<details><summary>1380 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1381 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -12334,6 +12333,7 @@ design.md now says, at every one of the five spots that touched this:
 - :7244 / :7245 the two bullets that described providers as "satisfying `Send + Sync`" / "satisfying `Sync`" -> cross-task-safety and concurrent-access wording.
 
 :7274 keeps its Send/Sync mentions on purpose: that paragraph is the one EXPLAINING the replacement, and its deferred.md cross-reference is the historical record. |
+| B-2026-08-19-13 | typecheck+codegen+runtime | medium | GPU reductions COMPLETE: nothing open, nothing blocked, no decisions left | FIXED across twelve batches, closing with 25070af7 (integer prod / dot / matmul). See detail for the per-batch record. |
 | B-2026-08-19-14 | typecheck | high | NO `shared struct` OR `par struct` COULD SATISFY ANY TRAIT BOUND ANYWHERE -- `impl_table_key` had no `Type::Shared` arm, so `type_satisfies_bound` an… | f4340ba |
 | B-2026-08-19-15 | typecheck | medium | the `providers { R => p } in { . | f4340ba |
 | B-2026-08-19-16 | interp | high | `First.A` EVALUATED TO A `Second` VALUE under `karac run` whenever two enums shared a unit-variant name -- user enums registered their unit variants… | FIXED by c88b51b. `register_items` now binds each user-enum unit variant under BOTH `First.A` and the bare `A`, which is what the two neighbouring registration paths already did -- the prelude `Ordering` / `MemoryOrdering` loop binds both spellings, and the baked-stdlib `Item::EnumDef` arm ~40 lines above binds the qualified one. User enums were the single path that bound only the bare name.
