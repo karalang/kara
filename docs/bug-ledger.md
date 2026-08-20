@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 133 | 0 |
 | missing-feature | 129 | 0 |
 | codegen-gap | 120 | 1 |
-| diagnostics | 89 | 0 |
+| diagnostics | 90 | 1 |
 | false-positive | 88 | 0 |
 | perf | 80 | 0 |
 | crash | 54 | 0 |
@@ -118,20 +118,21 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | cli | 55 | 0 |
 | autopar | 54 | 0 |
 | parser | 33 | 0 |
-| runtime | 27 | 0 |
+| runtime | 28 | 1 |
 | resolver | 23 | 0 |
 | effect | 7 | 0 |
 | lexer | 6 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1411 surfaced · 2 open · 1389 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1412 surfaced · 3 open · 1389 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-20-32 | 2026-08-20 | interp | high | The TREE-WALK INTERPRETER's `.clone()` on a NESTED `Vec[Vec[T]]` is SHALLOW -- the inner Vecs are shared, so mutating the clone mutates the original; codegen (JIT, AOT and auto-par-off alike) deep-copies correctly, so the same five-line program prints a different answer under `--interp` | — |
 | B-2026-08-20-33 | 2026-08-20 | codegen | medium | A THREE-level index assignment (`a[i][j][k] = v` on a plain local `Vec[Vec[Vec[T]]]`) is rejected by codegen with `Index assignment target must be a variable`; the two-level form compiles, and the interpreter accepts both | — |
+| B-2026-08-20-34 | 2026-08-20 | runtime | medium | STACK EXHAUSTION in an AOT binary is a BARE SIGSEGV with EMPTY stderr -- no message, no hint, exit 139; Rust prints `thread 'main' has overflowed its stack` and Go names its stack limit, so Kara matches C (the unsafe baseline) on a diagnostic its safety positioning implies it should beat | — |
 
 ### Wontfix (7)
 
