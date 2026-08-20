@@ -281,10 +281,32 @@ fn refinement_const_int(expr: &Expr, env: &TypeEnv) -> Option<i128> {
 /// Integer / `char` value of a literal-pattern bound, in the `i128` space.
 fn lit_to_i128(l: &LiteralPattern) -> Option<i128> {
     match l {
-        LiteralPattern::Integer(n, _) => Some(*n),
+        LiteralPattern::Integer(n, sfx) => Some(unwrapped_literal_value(*n, *sfx)),
         LiteralPattern::Char(c) => Some(*c as i128),
         _ => None,
     }
+}
+
+/// A pattern literal's payload as the VALUE it denotes, which is not always the
+/// payload itself.
+///
+/// B-2026-08-20-6. An unsigned literal past its signed half rides the pattern
+/// carrier as a WRAPPED two's-complement value — B-2026-08-20-1 chose that so a
+/// pattern and its scrutinee compare as identical bits, which is why matching
+/// works correctly at runtime. Exhaustiveness, though, compares those payloads
+/// against the type's domain from [`int_domain`], which speaks UNSIGNED: `u64`
+/// is `(0, u64::MAX)`. The two representations disagreed, so the second arm of
+/// `0u64..=i64::MAX as u64, that+1..=u64::MAX` landed at `[-2^63, -1]`, missed
+/// the domain entirely, and a match covering the whole `u64` range was reported
+/// non-exhaustive — naming as its witness the very value the second arm starts
+/// at.
+///
+/// Un-wrapping here rather than widening the domain keeps every value in ONE
+/// space (unsigned, positive, inside `i128`) for the split arithmetic, and
+/// leaves the carrier encoding — which the parser, the interpreter and codegen
+/// all depend on — untouched.
+fn unwrapped_literal_value(n: i128, sfx: Option<crate::token::IntSuffix>) -> i128 {
+    crate::typechecker::TypeChecker::pattern_literal_as_checked_value(n, sfx)
 }
 
 /// Integer / `char` value of a range-pattern bound, in the `i128` space.
@@ -597,10 +619,13 @@ fn lower_pattern(p: &Pattern, scrut_type: &Type, env: &TypeEnv) -> Pat {
             },
             // Integers and `char`s become singleton `IntRange`s so they
             // share the interval-splitting machinery with range patterns.
-            LiteralPattern::Integer(n, _) => Pat::Ctor {
-                ctor: PatCtor::IntRange { lo: *n, hi: *n },
-                args: vec![],
-            },
+            LiteralPattern::Integer(n, sfx) => {
+                let v = unwrapped_literal_value(*n, *sfx);
+                Pat::Ctor {
+                    ctor: PatCtor::IntRange { lo: v, hi: v },
+                    args: vec![],
+                }
+            }
             LiteralPattern::Char(c) => Pat::Ctor {
                 ctor: PatCtor::IntRange {
                     lo: *c as i128,

@@ -21946,6 +21946,34 @@ fn main() {
     }
 
     #[test]
+    fn e2e_unsigned_whole_domain_match_dispatches() {
+        // The runtime half of B-2026-08-20-6. The typechecker no longer refuses
+        // a `u64` match that partitions its whole domain — this pins that the
+        // arms then dispatch CORRECTLY, which the wrapped carrier makes
+        // non-obvious: the upper arm's bounds are negative on the carrier, so a
+        // comparison done in the wrong space would send every value one way.
+        //
+        // The two values either side of 2^63 are the whole point; the rest
+        // bracket them.
+        if let Some(out) = run_program(
+            "fn half(n: u64) -> String {\n\
+             match n {\n\
+             0u64..=9223372036854775807u64 => return \"lo\",\n\
+             9223372036854775808u64..=18446744073709551615u64 => return \"hi\",\n\
+             }\n\
+             }\n\
+             fn main() {\n\
+             println(half(0u64));\n\
+             println(half(9223372036854775807u64));\n\
+             println(half(9223372036854775808u64));\n\
+             println(half(18446744073709551615u64));\n\
+             }",
+        ) {
+            assert_eq!(out, "lo\nlo\nhi\nhi\n");
+        }
+    }
+
+    #[test]
     fn e2e_chained_width_sensitive_int_methods() {
         // CHAINED width-preserving int methods resolve their receiver width
         // through the receiver itself, not the span-keyed table

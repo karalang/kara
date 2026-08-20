@@ -1206,10 +1206,18 @@ impl<'a> super::TypeChecker<'a> {
         );
     }
 
-    /// A pattern literal's payload as the range check wants to read it: the
-    /// UNSIGNED value for an unsigned suffix, whose top half rides the carrier
-    /// wrapped. Mirrors `literal_as_i128` on the expression side.
-    fn pattern_literal_as_checked_value(n: i128, sfx: Option<crate::token::IntSuffix>) -> i128 {
+    /// A pattern literal's payload read as the VALUE it denotes: the unsigned
+    /// reading for an unsigned suffix, whose top half rides the carrier wrapped.
+    /// Mirrors `literal_as_i128` on the expression side.
+    ///
+    /// `pub(crate)` because exhaustiveness needs the identical un-wrap before
+    /// its range arithmetic (B-2026-08-20-6) — two copies of this rule would be
+    /// two places to forget it, and forgetting it is precisely how the carrier
+    /// and the declared domain came to disagree.
+    pub(crate) fn pattern_literal_as_checked_value(
+        n: i128,
+        sfx: Option<crate::token::IntSuffix>,
+    ) -> i128 {
         use crate::token::IntSuffix;
         match sfx {
             Some(IntSuffix::U8)

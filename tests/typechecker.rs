@@ -437,6 +437,73 @@ fn the_literal_pattern_check_agrees_with_expression_position() {
     );
 }
 
+/// A `u64` / `usize` match whose arms cover the WHOLE domain is exhaustive
+/// (B-2026-08-20-6). An unsigned literal past its signed half rides the pattern
+/// carrier as a WRAPPED negative — the encoding that makes a pattern and its
+/// scrutinee compare as identical bits, which is why matching always worked at
+/// runtime. Exhaustiveness compared those payloads against `int_domain`, which
+/// speaks unsigned, so the upper arm landed at `[-2^63, -1]`, missed the domain
+/// entirely, and the match was reported non-exhaustive — naming as its witness
+/// the very value the upper arm starts at.
+///
+/// The narrow widths are here as the control: their whole domain fits the
+/// carrier positively, so they never wrapped and always worked.
+#[test]
+fn an_unsigned_match_covering_its_whole_domain_is_exhaustive() {
+    for src in [
+        "fn main() { let n: u64 = 5u64; match n { 0u64..=9223372036854775807u64 => println(1), 9223372036854775808u64..=18446744073709551615u64 => println(2), } }",
+        "fn main() { let n: usize = 5usize; match n { 0usize..=9223372036854775807usize => println(1), 9223372036854775808usize..=18446744073709551615usize => println(2), } }",
+        // controls: never wrapped, must not regress
+        "fn main() { let n: u8 = 5u8; match n { 0u8..=127u8 => println(1), 128u8..=255u8 => println(2), } }",
+        "fn main() { let n: u32 = 5u32; match n { 0u32..=2147483647u32 => println(1), 2147483648u32..=4294967295u32 => println(2), } }",
+        "fn main() { let n: i8 = 5i8; match n { -128i8..=-1i8 => println(1), 0i8..=127i8 => println(2), } }",
+    ] {
+        typecheck_ok(src);
+    }
+}
+
+/// The direction that must NOT move: a genuinely incomplete unsigned match is
+/// still rejected, and still names a correct witness. Un-wrapping the carrier
+/// removes false positives; turning it into a false NEGATIVE would be unsound,
+/// because the match would fall through at runtime with no arm to take.
+#[test]
+fn an_incomplete_unsigned_match_is_still_non_exhaustive() {
+    for (src, witness) in [
+        // lower half only — the first uncovered value is 2^63
+        (
+            "fn main() { let n: u64 = 5u64; match n { 0u64..=9223372036854775807u64 => println(1), } }",
+            "9223372036854775808",
+        ),
+        // upper half only — 0 is uncovered
+        (
+            "fn main() { let n: u64 = 5u64; match n { 9223372036854775808u64..=18446744073709551615u64 => println(1), } }",
+            "0",
+        ),
+        // a single top-of-range literal covers one value, not the domain
+        (
+            "fn main() { let n: u64 = 5u64; match n { 18446744073709551615u64 => println(1), } }",
+            "0",
+        ),
+    ] {
+        let errs = typecheck_errors(src);
+        assert!(
+            errs.iter()
+                .any(|e| e.message.contains("non-exhaustive") && e.message.contains(witness)),
+            "expected a non-exhaustive error naming {witness} for {src:?}; got: {:?}",
+            errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+    // A hole in the MIDDLE is still caught too.
+    let errs = typecheck_errors(
+        "fn main() { let n: u64 = 5u64; match n { 0u64..=100u64 => println(1), 200u64..=18446744073709551615u64 => println(2), } }",
+    );
+    assert!(
+        errs.iter().any(|e| e.message.contains("non-exhaustive")),
+        "expected a non-exhaustive error for a mid-domain gap; got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
 /// Every width that DOES have a real carrier stays accepted — the guard against
 /// a rejection that over-reaches into the widths this is not about.
 #[test]
