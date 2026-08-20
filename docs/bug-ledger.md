@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 126 | 1 |
 | codegen-gap | 119 | 0 |
 | false-positive | 86 | 2 |
-| diagnostics | 84 | 1 |
+| diagnostics | 84 | 0 |
 | perf | 80 | 2 |
 | crash | 55 | 1 |
 | soundness | 51 | 0 |
@@ -115,7 +115,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | interp | 163 | 0 |
 | ownership | 60 | 0 |
 | other | 58 | 0 |
-| autopar | 53 | 3 |
+| autopar | 53 | 2 |
 | cli | 48 | 0 |
 | parser | 32 | 0 |
 | runtime | 27 | 2 |
@@ -124,15 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 6 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1392 surfaced · 7 open · 1365 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1392 surfaced · 6 open · 1366 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (7)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-19-13 | 2026-08-19 | typecheck+codegen+runtime | medium | GPU reductions still lack TILED MATMUL (2-D workgroup indexing the 1-D model lacks); integer `prod` / `dot` are blocked on WGSL lacking a widening multiply; and `variance` / `stddev` are f32-only (the integer form needs a decision, not just work — the deviations are formed on-device in f32, so `mean`'s promote-late trick does not carry over). A SAMPLE (÷ n-1) form is decided against rather than pending. Everything else has shipped: sum / prod / min / max / mean / dot / argmin / argmax / variance / stddev / prefix_sum over `Vec[f32]`, and sum / min / max / mean / argmin / argmax over `Vec[i32]` and `Vec[u32]`. | docs/spikes/gpu-llvm-offload-assessment.md; src/gpu_wgsl.rs::emit_reduce_kernel; src/reduce_kernel.rs::tree_reduce_f32 |
 | B-2026-08-20-5 | 2026-08-20 | codegen | high | `e2e_128bit_integers_end_to_end` produces EMPTY STDOUT on macOS arm64 only — the binary links and runs but prints nothing before the first `println`. Linux x86_64 and Linux arm64 both pass the same test. CI's `Codegen E2E (macOS arm64, LLVM 18)` lane has been red on `main` since the test landed. | tests/codegen.rs::e2e_128bit_integers_end_to_end (line ~21227); tests/codegen.rs::run_program_capturing (stdout-only discard); added by 7561b5d1 (B-2026-08-19-8 stage 5); CI job `Codegen E2E (macOS arm64, LLVM 18)` in .github/workflows/ci.yml |
-| B-2026-08-20-8 | 2026-08-20 | autopar | medium | `karac build --concurrency-report` prints the ANALYSIS label with no lowering verdict, so it claims `parallel_reduction` for a loop its own sibling query reports as `fanned_out: false` — the binary contains zero worker symbols | — |
 | B-2026-08-20-9 | 2026-08-20 | runtime+autopar | medium | Auto-par worker threads contend on ONE glibc malloc arena: any fan-out body that allocates per iteration pays a shared lock the sequential build never touches | — |
 | B-2026-08-20-12 | 2026-08-20 | typecheck | low | A FLOAT literal pattern makes the following `_` arm report `warning[unreachable_arm]`: `match f { 1.5 => .., _ => .. }` warns that the wildcard is "fully covered by an earlier arm". The `_` is of course required — a single float literal covers one value — and the integer equivalent produces no warning. | src/exhaustive.rs::int_domain (no float domain); src/exhaustive.rs (usefulness/unreachable-arm computation for LiteralPattern::Float); src/typechecker (where warning[unreachable_arm] is emitted) |
 | B-2026-08-20-13 | 2026-08-20 | typecheck | medium | A FLOAT literal is accepted at an INTEGER-annotated binding and the annotation is simply ignored: `let n: i64 = 1.5; println(n)` compiles and prints `1.5` on BOTH backends. The reverse (`let n: f64 = 5`) is the documented int-to-float widening and is fine; this direction has no rule behind it. | src/typechecker/exprs.rs::check_expr (where a suffixed/unsuffixed literal meets its contextual type); src/typechecker/exprs.rs::check_int_literal_fits (the integer half, which works); src/typechecker/patterns.rs::check_literal_pattern (the pattern-side check that deliberately departs from this behaviour); tests/typechecker.rs::the_literal_pattern_check_agrees_with_expression_position (the assertion that flags when this is fixed) |
@@ -154,9 +153,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1392 surfaced
 
 </details>
 
-### Fixed (1365)
+### Fixed (1366)
 
-<details><summary>1365 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1366 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -12574,6 +12573,21 @@ THE DIRECTION THAT MUST NOT MOVE. Removing a false positive is worth little if i
 RUNTIME DISPATCH IS ASSERTED TOO, not just acceptance. The upper arm's bounds are negative on the carrier, so a comparison performed in the wrong space would send every value one way; the E2E test pins the two values either side of 2^63, byte-identical across `karac build`, that build with `KARAC_AUTO_PAR=0`, `karac run` (JIT) and `karac run --interp`.
 
 VERIFICATION. Tests: `an_unsigned_match_covering_its_whole_domain_is_exhaustive` (the fix, plus the narrow-width and signed controls that must not regress), `an_incomplete_unsigned_match_is_still_non_exhaustive` (the unsound direction, witnesses included) and `e2e_unsigned_whole_domain_match_dispatches` (tests/codegen.rs). Fallout swept as with B-2026-08-20-10 — every `.kara` file in both repos, 898 katas and 231 here, byte-identical error sets before and after. Gates: fmt, both clippy legs, default suite (106 targets), codegen 3094 and memory_sanitizer 1130 under KARAC_REQUIRE_RUNTIME_ARCHIVE=1. |
+| B-2026-08-20-8 | autopar | medium | `karac build --concurrency-report` prints the ANALYSIS label with no lowering verdict, so it claims `parallel_reduction` for a loop its own sibling q… | FIXED by c0874f8. The verdict logic lived only on the query path. Extracted `effect_graph::reduction_verdict_parts` — one definition, two callers, which is what the module was built for — and routed both `loop_reductions_json` (the query) and `concurrency_report::render_function` (the human report) through it, so the two surfaces cannot disagree by construction.
+
+The report now prints `fanned_out: <bool>` on every reduction entry, plus `cost_gate` and `reason` when the answer is "it didn't". A fan-out that DID happen stays a one-liner — a gate line for it would be the noise B-2026-08-01-33 warned about.
+
+VERIFIED ON THE THREE PATHS, each cross-checked against `karac query concurrency` on the same file: a memory-bound decline prints `fanned_out: false` + `cost_gate: declined_memory_bound` + the reason (query agrees, `false`); a compute-heavy loop that clears the gates prints `fanned_out: true` with no gate line (query agrees, `true`); and `KARAC_AUTO_PAR=0` prints `declined_auto_par_disabled`.
+
+BONUS FIX OF THE SAME CLASS. That last path was broken too: the report had been ignoring `KARAC_AUTO_PAR=0` entirely, which is exactly the defect B-2026-08-05-13 fixed for the query and never for the report. Both callers now read `par_cost::auto_par_enabled()` through the shared helper.
+
+SCOPE NOTE — this does NOT reopen B-2026-08-01-33's decision to keep decline REASONS out of the report. That decision is about declined DISJOINT-WRITE loops, an open-ended set the analyzer considers and rejects, whose per-loop prose would bury the opportunities the report exists to show; its single aggregate line is untouched. A reduction entry is the other shape: already surfaced as an opportunity and already printed, so the only question is whether that printed line tells the truth. The distinction is recorded in the code, not just here.
+
+TWO EXISTING TESTS MOVED, and the second is the bug in miniature. (1) The declined-disjoint test asserted `!contains("declined")`, a bare substring over the whole report standing in for the footer; this fixture also holds an unrelated, genuinely memory-bound reduction, so a CORRECT report now trips it — tightened to the precise footer string the subject-side assertion already used. (2) The parallax-lite snapshot needed updating because the repo's own canonical example fixture had been advertising `parallel_reduction` for a loop that is in fact `declined_variable_k_param_bound`. The snapshot was encoding the false claim.
+
+Regression test `test_report_states_whether_each_reduction_fanned_out` asserts BOTH directions, so it cannot pass on a report that prints `false` unconditionally — which is the old bug in mirror image.
+
+GATES: fmt clean; default suite 106/106 targets green; both clippy legs clean (`--all-targets`, default and `--features llvm`); llvm suite 105 targets green with zero ASAN/LSan reports. The 3 red llvm targets are the documented optional-archive set only (6 regex + 3 arrow under `KARAC_REQUIRE_RUNTIME_ARCHIVE=1`, plus 30 gpu) — unbuilt opt-in archives, unrelated to this change and identical to the pre-change baseline. |
 | B-2026-08-20-10 | typecheck | high | LITERAL PATTERNS ARE NEVER TYPECHECKED — `PatternKind::Literal` is an explicit "deferred" arm | FIXED by b585059. The empty `PatternKind::Literal` arm now checks the literal against the scrutinee: class first, then range for the integer case, reusing `check_int_literal_fits` — the same helper the expression path calls.
 
 EXPRESSION POSITION WAS THE ORACLE, and choosing it is most of what made this tractable. `let n: T = <lit>;` already decides every one of these cases, so the check was built to AGREE with it rather than to invent rules, and the agreement is now asserted directly over both spellings (`the_literal_pattern_check_agrees_with_expression_position`) — if either side moves, that test fails instead of the gap silently reopening. Following the oracle is also what kept the check NARROW: an integer literal at a float scrutinee stays accepted (documented int→float widening), and so does an in-range suffix/width mismatch (`5u64` against an `i64`). Whether that last should require `as` is a separate open design question; answering it here would have rejected code that compiles today for reasons unrelated to this bug.
