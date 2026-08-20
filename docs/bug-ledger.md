@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 119 | 0 |
 | false-positive | 86 | 3 |
 | diagnostics | 84 | 1 |
-| perf | 79 | 1 |
+| perf | 80 | 2 |
 | crash | 55 | 1 |
 | soundness | 51 | 0 |
 | other | 49 | 0 |
@@ -115,7 +115,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | interp | 163 | 0 |
 | ownership | 60 | 0 |
 | other | 58 | 0 |
-| autopar | 52 | 2 |
+| autopar | 53 | 3 |
 | cli | 48 | 0 |
 | parser | 32 | 0 |
 | runtime | 27 | 2 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 6 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1391 surfaced · 7 open · 1364 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1392 surfaced · 8 open · 1364 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (7)
+### Open (8)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -137,6 +137,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1391 surfaced
 | B-2026-08-20-9 | 2026-08-20 | runtime+autopar | medium | Auto-par worker threads contend on ONE glibc malloc arena: any fan-out body that allocates per iteration pays a shared lock the sequential build never touches | — |
 | B-2026-08-20-12 | 2026-08-20 | typecheck | low | A FLOAT literal pattern makes the following `_` arm report `warning[unreachable_arm]`: `match f { 1.5 => .., _ => .. }` warns that the wildcard is "fully covered by an earlier arm". The `_` is of course required — a single float literal covers one value — and the integer equivalent produces no warning. | src/exhaustive.rs::int_domain (no float domain); src/exhaustive.rs (usefulness/unreachable-arm computation for LiteralPattern::Float); src/typechecker (where warning[unreachable_arm] is emitted) |
 | B-2026-08-20-13 | 2026-08-20 | typecheck | medium | A FLOAT literal is accepted at an INTEGER-annotated binding and the annotation is simply ignored: `let n: i64 = 1.5; println(n)` compiles and prints `1.5` on BOTH backends. The reverse (`let n: f64 = 5`) is the documented int-to-float widening and is fine; this direction has no rule behind it. | src/typechecker/exprs.rs::check_expr (where a suffixed/unsuffixed literal meets its contextual type); src/typechecker/exprs.rs::check_int_literal_fits (the integer half, which works); src/typechecker/patterns.rs::check_literal_pattern (the pattern-side check that deliberately departs from this behaviour); tests/typechecker.rs::the_literal_pattern_check_agrees_with_expression_position (the assertion that flags when this is fixed) |
+| B-2026-08-20-14 | 2026-08-20 | autopar | high | A `parallel_reduction` is REPORTED but never dispatched when the loop's induction variable is a REUSED binding (`i = 0` on an `i` declared earlier) rather than a fresh `let mut i = 0` — one token, 3.69x, and the concurrency report claims parallelism either way | — |
 
 ### Wontfix (7)
 
