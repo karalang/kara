@@ -2083,7 +2083,7 @@ mod tests {
         // `a` is not [2 x 4].
         assert!(tiled_matmul_f32(&a, &b, 2, 4, 2).is_none());
         // Right shape for `a`, wrong length for `b`.
-        assert!(tiled_matmul_f32(&a, &vec![1.0f32; 5], 2, 3, 2).is_none());
+        assert!(tiled_matmul_f32(&a, &[1.0f32; 5], 2, 3, 2).is_none());
     }
 
     /// An empty contraction (`k == 0`) is `[m, n]` of zeros, not an error: the
