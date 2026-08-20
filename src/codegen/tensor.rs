@@ -1670,6 +1670,15 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let elem = self.tensor_transform_elem(call_span)?;
         let elem_size = self.tensor_elem_size(elem)?;
+        // Signedness selects the checked intrinsic below: an unsigned overflow
+        // is a carry, a signed one is a shared-sign-then-flip, and using the
+        // wrong test would trap on the wrong half of the range.
+        let elem_unsigned = self
+            .accel
+            .tensor_typed_exprs
+            .get(&(call_span.offset, call_span.length))
+            .map(|ti| type_expr_is_unsigned_int(&ti.elem))
+            .unwrap_or(false);
         let i64_t = self.context.i64_type();
         let fn_val = self.current_fn.unwrap();
         let two = i64_t.const_int(2, false);
@@ -1811,13 +1820,19 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap()
                 .into()
         } else {
-            let prod = self
-                .builder
-                .build_int_mul(av.into_int_value(), bv.into_int_value(), "t.mm.prod")
-                .unwrap();
-            self.builder
-                .build_int_add(acc.into_int_value(), prod, "t.mm.nacc")
-                .unwrap()
+            // CHECKED, at the element's own width (B-2026-08-20-27). A matmul
+            // is a sum of products, and the element-wise `a * b` over the same
+            // tensors already traps on overflow — so this cannot be the one
+            // integer tensor operation that silently wraps. Both the product
+            // and the accumulation are checked, because either can overflow
+            // on its own.
+            let prod = self.emit_checked_int_arith(
+                "mul",
+                av.into_int_value(),
+                bv.into_int_value(),
+                elem_unsigned,
+            )?;
+            self.emit_checked_int_arith("add", acc.into_int_value(), prod, elem_unsigned)?
                 .into()
         };
         self.builder.build_store(accv, new_acc).unwrap();

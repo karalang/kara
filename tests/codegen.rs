@@ -91859,6 +91859,49 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_tensor_matmul_integer_overflow_traps() {
+        // B-2026-08-20-27, the AOT half of
+        // `tests/interpreter.rs::test_tensor_matmul_integer_overflow_traps`.
+        // Before the fix this printed `0` — the wrapped i64 — where the
+        // interpreter printed 8589934592, so the pair was a silent miscompile
+        // and a run/build divergence at once. Both surfaces now trap, and the
+        // pair fails if either one stops.
+        let src = "fn main() {\n\
+             \x20   let a: Tensor[i32, [?, ?]] = Tensor.from([[65536, 65536]]);\n\
+             \x20   let b: Tensor[i32, [?, ?]] = Tensor.from([[65536], [65536]]);\n\
+             \x20   println(a.matmul(b)[0, 0]);\n\
+             }";
+        if let Some(cap) = run_program_capturing(src) {
+            assert_eq!(cap.status.code(), Some(1), "stderr={:?}", cap.stderr);
+            assert!(
+                cap.stdout.contains("integer overflow"),
+                "an overflowing integer matmul must trap under `karac build`, \
+                 got stdout={:?} stderr={:?}",
+                cap.stdout,
+                cap.stderr
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_tensor_matmul_integer_in_range_is_unchanged() {
+        // The checked arithmetic must not cost the ordinary case, signed or
+        // unsigned.
+        let out = run_program(
+            "fn main() {\n\
+             \x20   let a: Tensor[i32, [?, ?]] = Tensor.from([[1, 2], [3, 4]]);\n\
+             \x20   let b: Tensor[i32, [?, ?]] = Tensor.from([[5, 6], [7, 8]]);\n\
+             \x20   let c = a.matmul(b);\n\
+             \x20   println(c[0, 0]); println(c[1, 1]);\n\
+             \x20   let u: Tensor[u32, [?, ?]] = Tensor.from([[1u32, 2u32]]);\n\
+             \x20   let v: Tensor[u32, [?, ?]] = Tensor.from([[3u32], [4u32]]);\n\
+             \x20   println(u.matmul(v)[0, 0]);\n\
+             }",
+        );
+        assert_eq!(out, Some("19\n50\n11\n".to_string()));
+    }
+
+    #[test]
     fn test_e2e_tensor_matmul_f32_accumulates_at_element_width() {
         // B-2026-08-20-21, the AOT half of
         // `tests/interpreter.rs::test_tensor_matmul_f32_accumulates_at_element_width`.

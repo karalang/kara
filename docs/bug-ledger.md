@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 267 | 1 |
+| miscompile | 268 | 1 |
 | leak | 185 | 0 |
 | run-vs-build | 143 | 0 |
 | double-free | 133 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 955 | 2 |
+| codegen | 956 | 2 |
 | typecheck | 219 | 1 |
-| interp | 165 | 0 |
+| interp | 166 | 0 |
 | ownership | 61 | 1 |
 | other | 59 | 1 |
 | autopar | 54 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 6 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1404 surfaced · 6 open · 1378 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1405 surfaced · 6 open · 1379 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (6)
 
@@ -153,9 +153,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1404 surfaced
 
 </details>
 
-### Fixed (1378)
+### Fixed (1379)
 
-<details><summary>1378 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1379 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -12786,6 +12786,7 @@ TEST: `test_run_package_member_honours_an_aliased_import` (tests/cli.rs) fails w
 SOURCE NOTE: split out of B-2026-08-20-16, which fixed the ANALYSIS being file-scoped on the check and run paths. This was the one leg of that row's matrix left inconsistent afterwards, and it is downstream rather than the same defect — -16 was about which program gets analysed, this is about the flat program the run path then executes. |
 | B-2026-08-20-21 | interp | medium | `Tensor[f32].matmul` accumulates in f64 under `karac run --interp` and in f32 under `karac build`, so a long enough contraction gives DIFFERENT ANSWE… | 2f94bb1b |
 | B-2026-08-20-22 | interp | medium | `Tensor.from` under a `Tensor[f32, ...]` annotation narrows a bare float LITERAL but not a NEGATED one or a computed one, so `Tensor.from([-0.1])` ho… | 209a6607 |
+| B-2026-08-20-27 | interp+codegen | high | an INTEGER `Tensor.matmul` never overflow-checks: `karac build` silently WRAPS and `karac run --interp` returns a value outside the element type -- w… | PENDING |
 
 </details>
 

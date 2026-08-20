@@ -23280,6 +23280,52 @@ fn test_tensor_from_leaves_f64_elements_alone() {
 }
 
 #[test]
+fn test_tensor_matmul_integer_overflow_traps() {
+    // B-2026-08-20-27. An integer matmul is a SUM OF PRODUCTS, and the
+    // element-wise `a * b` over the same tensors already traps on overflow —
+    // so matmul cannot be the one integer tensor operation that wraps.
+    //
+    // Before the fix this printed 8589934592 under `karac run --interp` (a
+    // value outside i32 entirely) and 0 under `karac build` (the wrapped
+    // i64), with neither surface trapping: a silent miscompile AND a
+    // run/build divergence in one operation.
+    //
+    // 65536 * 65536 = 2^32, twice over = 2^33, past i32 either way.
+    let errors = runtime_errors(
+        "fn main() {\n\
+        \x20   let a: Tensor[i32, [?, ?]] = Tensor.from([[65536, 65536]]);\n\
+        \x20   let b: Tensor[i32, [?, ?]] = Tensor.from([[65536], [65536]]);\n\
+        \x20   println(a.matmul(b)[0, 0]);\n\
+        }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("integer overflow")),
+        "an overflowing integer matmul must trap, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_tensor_matmul_integer_in_range_is_unchanged() {
+    // The trap must not cost the ordinary case. Signed and unsigned, both
+    // well inside range.
+    let out = run_no_errors(
+        "fn main() {\n\
+        \x20   let a: Tensor[i32, [?, ?]] = Tensor.from([[1, 2], [3, 4]]);\n\
+        \x20   let b: Tensor[i32, [?, ?]] = Tensor.from([[5, 6], [7, 8]]);\n\
+        \x20   let c = a.matmul(b);\n\
+        \x20   println(c[0, 0]); println(c[1, 1]);\n\
+        \x20   let u: Tensor[u32, [?, ?]] = Tensor.from([[1u32, 2u32]]);\n\
+        \x20   let v: Tensor[u32, [?, ?]] = Tensor.from([[3u32], [4u32]]);\n\
+        \x20   println(u.matmul(v)[0, 0]);\n\
+        }",
+    );
+    assert_eq!(out, "19\n50\n11\n");
+}
+
+#[test]
 fn test_tensor_matmul_f32_accumulates_at_element_width() {
     // B-2026-08-20-21. `Tensor[f32].matmul` must accumulate IN f32, rounding
     // on every one of the `k` steps, because that is what codegen's triple

@@ -1292,7 +1292,16 @@ impl<'a> super::Interpreter<'a> {
         for i in 0..m {
             for j in 0..n {
                 if int_elems {
+                    // CHECKED, at the ELEMENT's declared width (B-2026-08-20-27).
+                    // Every product and every accumulation traps on overflow,
+                    // exactly as the element-wise `a * b` on the same tensors
+                    // already did — a matmul is a sum of those same products,
+                    // so it cannot be the one integer tensor operation that
+                    // wraps. `narrow_oob` reads the width from the recorded
+                    // type at this span, which `span_int_bounds` already peels
+                    // from `Tensor[T, S]` down to `T`.
                     let mut acc: i128 = 0;
+                    let mut overflowed = false;
                     for p in 0..k {
                         let x = match &a[i * k + p] {
                             Value::Int(v) => *v,
@@ -1302,7 +1311,29 @@ impl<'a> super::Interpreter<'a> {
                             Value::Int(v) => *v,
                             _ => 0,
                         };
-                        acc += x * y;
+                        // The i128 carrier is wide enough that `checked_*`
+                        // rarely fires; the width check is what actually
+                        // catches an i32 or i64 element going out of range.
+                        let Some(prod) = x.checked_mul(y) else {
+                            overflowed = true;
+                            break;
+                        };
+                        if self.narrow_oob(prod, span) {
+                            overflowed = true;
+                            break;
+                        }
+                        let Some(next) = acc.checked_add(prod) else {
+                            overflowed = true;
+                            break;
+                        };
+                        if self.narrow_oob(next, span) {
+                            overflowed = true;
+                            break;
+                        }
+                        acc = next;
+                    }
+                    if overflowed {
+                        return self.record_integer_overflow(span);
                     }
                     out.push(Value::Int(acc));
                 } else {
