@@ -96,10 +96,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 185 | 0 |
 | run-vs-build | 139 | 0 |
 | double-free | 133 | 0 |
-| missing-feature | 125 | 2 |
+| missing-feature | 126 | 2 |
 | codegen-gap | 119 | 0 |
+| false-positive | 83 | 1 |
 | diagnostics | 83 | 0 |
-| false-positive | 82 | 0 |
 | perf | 78 | 1 |
 | crash | 55 | 1 |
 | soundness | 51 | 0 |
@@ -110,30 +110,31 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 952 | 3 |
-| typecheck | 215 | 2 |
-| interp | 163 | 1 |
+| codegen | 952 | 2 |
+| typecheck | 216 | 2 |
+| interp | 163 | 0 |
 | ownership | 60 | 0 |
 | other | 58 | 0 |
 | autopar | 50 | 1 |
 | cli | 48 | 0 |
-| parser | 31 | 1 |
+| parser | 32 | 1 |
 | runtime | 26 | 1 |
 | resolver | 20 | 0 |
 | effect | 7 | 0 |
 | lexer | 6 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1383 surfaced · 4 open · 1359 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1385 surfaced · 5 open · 1360 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-19-13 | 2026-08-19 | typecheck+codegen+runtime | medium | GPU reductions still lack prefix-sum and tiled matmul (separate algorithms, not halving folds); integer `prod` / `dot` are blocked on WGSL lacking a widening multiply; and `variance` / `stddev` are f32-only. Everything else has shipped: sum / prod / min / max / mean / dot / argmin / argmax / variance / stddev over `Vec[f32]`, and sum / min / max / mean / argmin / argmax over `Vec[i32]` and `Vec[u32]`. | docs/spikes/gpu-llvm-offload-assessment.md; src/gpu_wgsl.rs::emit_reduce_kernel; src/reduce_kernel.rs::tree_reduce_f32 |
 | B-2026-08-20-3 | 2026-08-20 | autopar | high | AUTO-PAR (on by default) turns a `parallel_reduction` whose body does `chars().collect()` into a 2.55x PESSIMIZATION — 326 ms sequential becomes 831 ms parallel, with system time exploding 2.9 ms -> 812.8 ms (allocator contention); the same body without the collect parallelizes cleanly at 3.67 cores | — |
-| B-2026-08-20-4 | 2026-08-20 | parser+typecheck+codegen+interp | medium | `LiteralPattern::Integer` holds an `i64`, so NO 128-bit literal can be a match pattern — `match n { 170141183460469231731687303715884105727i128 => .. }` is rejected. Until B-2026-08-20-1 it did not merely fail, it PANICKED the compiler; that crash is gone, but the width is still unreachable in pattern position. | src/ast/patterns.rs:240 (`LiteralPattern::Integer(i64, ...)`); src/parser/patterns.rs (the diagnostic that stands in for it today); src/exhaustive.rs (range arithmetic that assumes i64) |
 | B-2026-08-20-5 | 2026-08-20 | codegen | high | `e2e_128bit_integers_end_to_end` produces EMPTY STDOUT on macOS arm64 only — the binary links and runs but prints nothing before the first `println`. Linux x86_64 and Linux arm64 both pass the same test. CI's `Codegen E2E (macOS arm64, LLVM 18)` lane has been red on `main` since the test landed. | tests/codegen.rs::e2e_128bit_integers_end_to_end (line ~21227); tests/codegen.rs::run_program_capturing (stdout-only discard); added by 7561b5d1 (B-2026-08-19-8 stage 5); CI job `Codegen E2E (macOS arm64, LLVM 18)` in .github/workflows/ci.yml |
+| B-2026-08-20-7 | 2026-08-20 | parser | high | A NEGATIVE integer literal cannot be a match pattern at ANY width: `match n { -5 => .. }` fails to parse with `Expected pattern, found Minus`. Affects every signed type — `-5`, `-5i32`, `-5i64`, `-5i128`, and `i64::MIN` / `i128::MIN` — so the entire negative half of every signed integer is unmatchable by literal. | src/parser/patterns.rs::parse_pattern (no `Token::Minus` arm); src/parser/patterns.rs::parse_literal_pattern (the range-bound entry, same gap); src/parser/exprs.rs::parse_prefix (the expression-side fold to mirror, including both MIN magnitudes) |
+| B-2026-08-20-6 | 2026-08-20 | typecheck | medium | A `u64` / `usize` match whose arms COVER THE WHOLE DOMAIN by two ranges is wrongly rejected as non-exhaustive: `match n { 0u64..=9223372036854775807u64 => .., 9223372036854775808u64..=18446744073709551615u64 => .. }` reports `pattern 9223372036854775808 not covered` — naming the very value the second arm starts at. The identical `u8` shape is accepted. | src/exhaustive.rs::int_domain (declared domain in unsigned space); src/exhaustive.rs (PatCtor::IntRange construction from LiteralPattern::Integer); src/parser/patterns.rs::pattern_int_on_carrier (where the wrap is applied); src/typechecker/exprs.rs::literal_as_i128 (the un-wrap precedent) |
 
 ### Wontfix (7)
 
@@ -151,9 +152,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1383 surfaced
 
 </details>
 
-### Fixed (1359)
+### Fixed (1360)
 
-<details><summary>1359 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1360 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -12511,6 +12512,23 @@ Tests: two in tests/parser.rs (the three accepted shapes — literal, `usize`, a
 APPLIED TO BOTH FLOAT FAMILIES THAT HAD THE PATTERN, not just the one that failed: the Arg combine and `karac_min`/`karac_max`. min/max were PASSING on Metal, but by luck rather than by construction — the same fold applies to them, and the surviving `select(a, b, b < a)` merely happened to land on the right answer for the fixtures in the suite. Fixing only the observed failure would have left an identical latent bug one test away.
 
 WHAT THE FIX DOES NOT COVER, stated so nobody assumes more: with the guards working, no comparison ever sees a NaN operand, so the rest of each combine is fast-math-safe. But if a backend FLUSHES NaN on load rather than merely assuming it away, no shader-level test can help — that needs `shaderSignedZeroInfNanPreserveFloat32`, which this codebase cannot assert from here. |
+| B-2026-08-20-4 | parser+typecheck+codegen+interp | medium | `LiteralPattern::Integer` holds an `i64`, so NO 128-bit literal can be a match pattern — `match n { 170141183460469231731687303715884105727i128 => . | FIXED by b4072bc. `LiteralPattern::Integer` now carries `i128`, matching `ExprKind::Integer`, so a literal means the same thing in pattern position as in expression position.
+
+THE ROW'S RISK ESTIMATE WAS INVERTED, and measuring is what showed it. It predicted "sixteen references across nine files" with `exhaustive.rs` needing the most care because "the range arithmetic there is where an i64 assumption would hide". Widening the node produced FIVE compile errors, all five in `parser/patterns.rs`. Every other consumer was already payload-generic or already working in `i128` — `exhaustive.rs` most of all: its range arithmetic runs in `i128` space already (`PatCtor::IntRange`), and `int_domain` deliberately returns `None` for the 128-bit widths so they route through the open-domain path that demands an explicit wildcard. That is imprecise but SOUND, it is documented in place, and it is unchanged by this. Verified rather than assumed: a `match` on `i128` with no wildcard is still correctly rejected, 128-bit range patterns hit and miss correctly, and the `u8`/`u64` domains still enumerate.
+
+PARSER SIDE. Both refusals are deleted and `pattern_uint_on_i64_carrier` became `pattern_int_on_carrier`, covering all four ≤64-bit unsigned bands plus both 128-bit suffixes. `i128` takes the magnitude positively; `u128` wraps its top half into the signed carrier — exactly what `parser/exprs.rs` does for the expression spelling (B-2026-08-19-23). The two encodings HAVE to agree, or a pattern could never match its own value, which is why the tests assert the MISS arms alongside the hits: a disagreement would surface as a pattern that fires when it should not, not as one that fails to fire.
+
+CLIPPY FOUND THE REST. Eight now-identity widening conversions across five files — the sites that used to widen the payload by hand — removed. TWO of the eight are visible only on the `--features llvm` leg, which is the CLAUDE.md two-leg rule earning its keep again; the default leg alone would have shipped them.
+
+VERIFICATION. Byte-identical across `karac build`, that build with `KARAC_AUTO_PAR=0`, `karac run` (JIT) and `karac run --interp`: literal arms at `i128::MAX` and 2^100, a 128-bit inclusive range pattern, `u128::MAX`, and `170141183460469231731687303715884105728u128` — one past `i128::MAX`, so its carrier value is NEGATIVE — distinguished from both `u128::MAX` and `5u128` within one match. Tests: `a_128bit_literal_pattern_parses` (tests/parser.rs), `e2e_128bit_literal_patterns_match_their_own_value` (tests/codegen.rs) and the twin `a_128bit_literal_pattern_matches_its_own_value` (tests/interpreter.rs). Gates: fmt, both clippy legs, default suite (106 targets), codegen 3084 and memory_sanitizer 1130 under KARAC_REQUIRE_RUNTIME_ARCHIVE=1.
+
+TEST CONVERTED, NOT DELETED. `a_128bit_literal_pattern_is_a_diagnostic_not_a_compiler_panic` asserted the refusal this removes, so it became `a_128bit_literal_pattern_parses` over the same literals plus the range-bound path — the same treatment B-2026-08-19-19 gave its refusal test when the underlying limit lifted.
+
+TWO GAPS FOUND WHILE MEASURING, both PRE-EXISTING (each confirmed by reproducing on a clean `main` build) and both split out rather than folded in:
+  - B-2026-08-20-7: a NEGATIVE literal pattern does not parse at ANY width — `match n { -5 => .. }` is `Expected pattern, found Minus`. Filed HIGH: it blocks the entire negative half of every signed type, and a guard workaround is opaque to exhaustiveness. The AST is now wide enough for every negative magnitude including `i128::MIN`, so what remains is a parser-side fold mirroring `parse_prefix`.
+  - B-2026-08-20-6: a `u64` match whose two range arms cover the whole domain is wrongly reported non-exhaustive, because the top-half bounds ride the carrier as negatives while `int_domain` speaks unsigned. Sound (it over-demands a wildcard) but it rejects correct code.
+
+WHAT THIS DOES NOT REACH: `i128::MIN` as a pattern still needs B-2026-08-20-7, since its magnitude is only expressible under a unary minus. Every other 128-bit literal is now a legal pattern. |
 
 </details>
 
