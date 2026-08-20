@@ -311,8 +311,26 @@ fn parse_check_command(args: &[String]) -> Command {
         i += 1;
     }
     let Some(file) = file else {
-        eprintln!("error: missing file argument");
-        process::exit(1);
+        // No file: check the WHOLE package, mirroring bare `karac build`
+        // (B-2026-08-20-16). Before this the command answered "missing file
+        // argument", so a user told that a single-file check was unreliable on
+        // a package member had nowhere to go.
+        //
+        // `--profiles` / `--targets` are per-file matrices with no project-mode
+        // meaning yet; reject them here rather than silently ignoring them.
+        if profiles.is_some() || targets.is_some() {
+            eprintln!(
+                "error: --profiles / --targets need a file argument \
+                 (they are per-file matrices; project-mode support is a follow-up)"
+            );
+            process::exit(1);
+        }
+        return Command::CheckProject {
+            output,
+            concurrency_report,
+            simd_report,
+            lint_overrides,
+        };
     };
     Command::Check {
         file,

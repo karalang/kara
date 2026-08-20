@@ -212,6 +212,65 @@ pub(super) fn quiet_dep_package_walks(root: &std::path::Path) -> Vec<module::Dep
 /// multi-module projects. Canonicalizes the entry first so the canonical
 /// invocation `karac run src/main.kara` (relative path) discovers the root —
 /// `discover_project_root` can't walk up a bare relative `src`.
+/// Refuse to run a package whose module-aware check fails.
+///
+/// `karac run` executes a merged super-program (see
+/// [`try_build_run_super_program`]), which is exactly why it needs this: the
+/// merge flattens away the module boundaries that carry visibility, so the
+/// run path's own resolve cannot see a `private` item being imported across
+/// directories. Without the gate, `karac run` was the one surface that
+/// executed a program `karac build` rejects.
+///
+/// Diagnostics are rendered exactly as the build renders them, so the two
+/// commands are quotable against each other.
+fn gate_run_on_package_check(root: &std::path::Path, output: OutputMode) {
+    let mut lints = crate::lints::CliLintOverrides::default();
+    if let Ok(mf) = manifest::load_from_root(root) {
+        lints.apply_manifest_lints(&mf.lints);
+    }
+    // A walk/tree failure is NOT fatal here: the single-file path below will
+    // surface its own diagnostic against the entry file, and this gate exists
+    // to add errors the run path cannot see, never to invent a new way for
+    // `karac run` to fail on a package the build handles.
+    let Ok(pc) = super::build_cmds::package_check(root, &lints) else {
+        return;
+    };
+    if !pc.has_errors() {
+        return;
+    }
+    match output {
+        OutputMode::Json => {
+            let mut diags: Vec<String> = Vec::new();
+            diags.extend(super::build_cmds::parse_errors_json(&pc.parse_errors));
+            diags.extend(super::build_cmds::cycles_json(&pc.cycles, &pc.tree));
+            diags.extend(super::build_cmds::resolve_errors_json(&pc.resolve_errors));
+            diags.extend(super::build_cmds::type_errors_json(&pc.type_errors));
+            println!("{{\"diagnostics\":[{}]}}", diags.join(","));
+        }
+        OutputMode::Jsonl => {
+            for e in super::build_cmds::parse_errors_jsonl(&pc.parse_errors) {
+                println!("{e}");
+            }
+            for e in super::build_cmds::cycles_jsonl(&pc.cycles, &pc.tree) {
+                println!("{e}");
+            }
+            for e in super::build_cmds::resolve_errors_jsonl(&pc.resolve_errors) {
+                println!("{e}");
+            }
+            for e in super::build_cmds::type_errors_jsonl(&pc.type_errors) {
+                println!("{e}");
+            }
+        }
+        OutputMode::Text => {
+            super::build_cmds::print_parse_errors_text(&pc.parse_errors);
+            super::build_cmds::print_cycles_text(&pc.cycles, &pc.tree);
+            super::build_cmds::print_resolve_errors_text(&pc.resolve_errors);
+            super::build_cmds::print_type_errors_text(&pc.type_errors);
+        }
+    }
+    process::exit(1);
+}
+
 pub(super) fn try_build_run_super_program(filename: &str, no_manifest: bool) -> Option<Program> {
     if no_manifest {
         return None; // operator opted out of project/manifest discovery
@@ -548,6 +607,22 @@ pub(super) fn cmd_run(
     // and one-module projects (`try_build_run_super_program` returns `None`).
     if let Some(super_program) = try_build_run_super_program(filename, no_manifest) {
         pipeline.parsed.program = super_program;
+        // The merged super-program is a FLAT list of every module's items, so
+        // the resolve below no longer knows which module an item came from —
+        // and therefore cannot enforce visibility. `import db.helpers.secret;`
+        // on a `private` item in another directory ran happily here while
+        // `karac build` refused it with E0111 (B-2026-08-20-16): the default
+        // execution path was running a program the compiler rejects.
+        //
+        // Gate on the module-aware check before executing. Errors are rendered
+        // for the WHOLE package, not just the entry file, because running
+        // requires all of it to be sound — unlike `karac check <file>`, which
+        // answers about the file it was asked about.
+        if !no_manifest {
+            if let Some(root) = package_root_of_member(filename) {
+                gate_run_on_package_check(&root, output);
+            }
+        }
     }
     pipeline.resolve();
 
@@ -1336,6 +1411,196 @@ pub(super) fn cmd_run(
     }
 }
 
+/// `karac check` with no file argument: check the whole package in the current
+/// directory, the analysis twin of bare `karac build` (B-2026-08-20-16).
+///
+/// The command used to answer `error: missing file argument`, which left a user
+/// who had just been told a single-file check is unreliable on a package member
+/// with nowhere to go. `--concurrency-report` / `--simd-report` are accepted so
+/// the flag surface matches `karac check <file>`, and noted as not yet wired for
+/// project mode rather than silently ignored.
+pub(super) fn cmd_check_project(
+    output: OutputMode,
+    concurrency_report: bool,
+    simd_report: bool,
+    lint_overrides: crate::lints::CliLintOverrides,
+) {
+    let cwd = match std::env::current_dir() {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("error: cannot read current directory: {e}");
+            process::exit(1);
+        }
+    };
+    let (root, mf) = match manifest::load_from_cwd(&cwd) {
+        Ok(ok) => ok,
+        Err(e) => {
+            emit_manifest_error(&e, OutputMode::Text);
+            process::exit(1);
+        }
+    };
+    if concurrency_report || simd_report {
+        eprintln!(
+            "note: --concurrency-report / --simd-report read a single file's late-phase \
+             analysis; project-mode reporting is a follow-up. Point them at one file, or \
+             use `karac build --concurrency-report`."
+        );
+    }
+    let mut lints = lint_overrides;
+    lints.apply_manifest_lints(&mf.lints);
+    let pc = match super::build_cmds::package_check(&root, &lints) {
+        Ok(pc) => pc,
+        Err(e) => {
+            emit_build_error(&e, output);
+            process::exit(1);
+        }
+    };
+    let errors = pc.error_count();
+    match output {
+        OutputMode::Json => {
+            let mut diags: Vec<String> = Vec::new();
+            diags.extend(super::build_cmds::parse_errors_json(&pc.parse_errors));
+            diags.extend(super::build_cmds::type_warnings_json(&pc.type_warnings));
+            diags.extend(super::build_cmds::cycles_json(&pc.cycles, &pc.tree));
+            diags.extend(super::build_cmds::resolve_errors_json(&pc.resolve_errors));
+            diags.extend(super::build_cmds::type_errors_json(&pc.type_errors));
+            println!("{{\"diagnostics\":[{}]}}", diags.join(","));
+        }
+        OutputMode::Jsonl => {
+            for e in super::build_cmds::parse_errors_jsonl(&pc.parse_errors) {
+                println!("{e}");
+            }
+            for e in super::build_cmds::cycles_jsonl(&pc.cycles, &pc.tree) {
+                println!("{e}");
+            }
+            for e in super::build_cmds::resolve_errors_jsonl(&pc.resolve_errors) {
+                println!("{e}");
+            }
+            for e in super::build_cmds::type_errors_jsonl(&pc.type_errors) {
+                println!("{e}");
+            }
+        }
+        OutputMode::Text => {
+            super::build_cmds::print_type_warnings_text(&pc.type_warnings);
+            super::build_cmds::print_parse_errors_text(&pc.parse_errors);
+            super::build_cmds::print_cycles_text(&pc.cycles, &pc.tree);
+            super::build_cmds::print_resolve_errors_text(&pc.resolve_errors);
+            super::build_cmds::print_type_errors_text(&pc.type_errors);
+            if errors == 0 {
+                println!("All checks passed.");
+            } else {
+                println!("\n{errors} error(s) found.");
+            }
+        }
+    }
+    if errors > 0 {
+        process::exit(1);
+    }
+}
+
+/// `karac check <file>` where `<file>` is a member of a `kara.toml` package.
+///
+/// Runs the WHOLE package through the module-aware pipeline (the same one
+/// `karac build` runs) and then renders only the requested file's diagnostics,
+/// with a one-line pointer when sibling modules carry errors of their own.
+///
+/// The alternative — refusing the invocation the way single-file `karac build`
+/// does — was rejected: `karac check <file>` is what editors, the Mend loop and
+/// every `karac fix` cycle call, and answering "run it differently" to all of
+/// them trades an incorrect answer for no answer. Widening the ANALYSIS while
+/// keeping the REPORT scoped to the file the caller named gives the correct
+/// answer to the question actually asked.
+fn cmd_check_package_member(
+    filename: &str,
+    root: &std::path::Path,
+    output: OutputMode,
+    lint_overrides: &crate::lints::CliLintOverrides,
+) -> bool {
+    let mut lints = lint_overrides.clone();
+    if let Ok(mf) = manifest::load_from_root(root) {
+        lints.apply_manifest_lints(&mf.lints);
+    }
+    let mut pc = match super::build_cmds::package_check(root, &lints) {
+        Ok(pc) => pc,
+        Err(e) => {
+            // No package VIEW could be formed at all — most often a directory
+            // holding a `kara.toml` and modules but no `src/main.kara` /
+            // `src/lib.kara` entry. Several `examples/` packages are shaped
+            // that way, and `karac build` refuses them for the same reason.
+            //
+            // Fall back to the single-file check rather than failing: the
+            // caller asked about one file, and "this package has no entry
+            // point" is not an answer about that file. The single-file view is
+            // the blind one this function exists to replace, so say so once —
+            // narrowing silently would be the original bug wearing a new hat.
+            if output == OutputMode::Text {
+                eprintln!(
+                    "note: checking `{filename}` on its own — the package at `{}` could \
+                     not be assembled ({e}), so imports of sibling modules are not \
+                     resolved here",
+                    root.display(),
+                );
+            }
+            return false;
+        }
+    };
+    let had_errors = pc.has_errors();
+    let elsewhere = pc.restrict_to_file(std::path::Path::new(filename));
+
+    match output {
+        OutputMode::Json => {
+            let mut diags: Vec<String> = Vec::new();
+            diags.extend(super::build_cmds::parse_errors_json(&pc.parse_errors));
+            diags.extend(super::build_cmds::type_warnings_json(&pc.type_warnings));
+            diags.extend(super::build_cmds::cycles_json(&pc.cycles, &pc.tree));
+            diags.extend(super::build_cmds::resolve_errors_json(&pc.resolve_errors));
+            diags.extend(super::build_cmds::type_errors_json(&pc.type_errors));
+            println!("{{\"diagnostics\":[{}]}}", diags.join(","));
+        }
+        OutputMode::Jsonl => {
+            for e in super::build_cmds::parse_errors_jsonl(&pc.parse_errors) {
+                println!("{e}");
+            }
+            for e in super::build_cmds::cycles_jsonl(&pc.cycles, &pc.tree) {
+                println!("{e}");
+            }
+            for e in super::build_cmds::resolve_errors_jsonl(&pc.resolve_errors) {
+                println!("{e}");
+            }
+            for e in super::build_cmds::type_errors_jsonl(&pc.type_errors) {
+                println!("{e}");
+            }
+        }
+        OutputMode::Text => {
+            super::build_cmds::print_type_warnings_text(&pc.type_warnings);
+            super::build_cmds::print_parse_errors_text(&pc.parse_errors);
+            super::build_cmds::print_cycles_text(&pc.cycles, &pc.tree);
+            super::build_cmds::print_resolve_errors_text(&pc.resolve_errors);
+            super::build_cmds::print_type_errors_text(&pc.type_errors);
+            let shown = pc.error_count();
+            if shown == 0 && elsewhere == 0 {
+                println!("All checks passed.");
+            } else if shown > 0 {
+                println!("\n{shown} error(s) found.");
+            }
+            // Never let a sibling module's real error vanish just because the
+            // caller named one file: say it exists and where to see it.
+            if elsewhere > 0 {
+                eprintln!(
+                    "note: {elsewhere} further error(s) in other modules of the package at \
+                     `{}` — run `cd {} && karac build` to see them",
+                    root.display(),
+                    root.display(),
+                );
+            }
+        }
+    }
+    if had_errors {
+        process::exit(1);
+    }
+    true
+}
+
 pub(super) fn cmd_check(
     filename: &str,
     output: OutputMode,
@@ -1418,6 +1683,24 @@ pub(super) fn cmd_check(
     if let Some(list) = targets {
         cmd_check_targets(filename, &source, output, &list, lint_overrides);
         return;
+    }
+
+    // A file inside a package's `src/` is not a program on its own: its
+    // `import`s name sibling modules that a single-file check never loads, so
+    // the pipeline below would answer about a program the user did not write
+    // and `karac build` will not build (B-2026-08-20-16). Route it through the
+    // same module-aware walk → resolve → typecheck the build runs.
+    //
+    // Placed AFTER the `--profiles` / `--targets` dispatches on purpose: those
+    // are matrices over one file's pipeline, and a package member under them
+    // keeps the single-file behaviour rather than gaining a half-defined
+    // product of two matrices. The single-pass path below is the one the Mend
+    // loop and every plain `karac check <file>` take, and the one that was
+    // reporting invented type errors.
+    if let Some(root) = package_root_of_member(filename) {
+        if cmd_check_package_member(filename, &root, output, &lint_overrides) {
+            return;
+        }
     }
 
     match output {

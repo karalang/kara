@@ -2900,6 +2900,154 @@ pub(super) fn type_errors_jsonl(per_module: &[ModuleTypeErrors]) -> Vec<String> 
     out
 }
 
+/// The module-aware diagnostics for a WHOLE package: the same walk → tree →
+/// cycles → per-module resolve → per-module typecheck sequence `cmd_build_project`
+/// runs, without any codegen.
+///
+/// Extracted so `karac check` and `karac run` can reach the answer `karac build`
+/// already had (B-2026-08-20-16). Before this, those two commands saw only the
+/// ONE file named on the command line, which on a package member is neither the
+/// program the user wrote nor the program that gets built: an `import` of a
+/// sibling module resolves to nothing, so a `pub struct` read through it draws
+/// an invented "`X` is not a struct", while a `private` item imported across
+/// directories draws no E0111 at all. Both directions were wrong, and
+/// `karac check --output=json` is the Mend loop's diagnostics feed.
+pub(super) struct PackageCheck {
+    pub(super) tree: ProgramTree,
+    pub(super) parse_errors: Vec<crate::module::ModuleParseErrors>,
+    pub(super) cycles: Vec<Cycle>,
+    pub(super) resolve_errors: Vec<ModuleResolveErrors>,
+    pub(super) type_errors: Vec<ModuleTypeErrors>,
+    pub(super) type_warnings: Vec<ModuleTypeErrors>,
+}
+
+impl PackageCheck {
+    /// Any error-severity diagnostic, in any module. Warnings are excluded —
+    /// they do not gate an exit status.
+    pub(super) fn has_errors(&self) -> bool {
+        !self.parse_errors.is_empty()
+            || !self.cycles.is_empty()
+            || self.resolve_errors.iter().any(|m| !m.errors.is_empty())
+            || self.type_errors.iter().any(|m| !m.errors.is_empty())
+    }
+
+    /// How many error-severity diagnostics this holds, across every module it
+    /// still carries. Used for the caller's summary line, so it counts what was
+    /// RENDERED — call it after [`Self::restrict_to_file`], not before.
+    pub(super) fn error_count(&self) -> usize {
+        self.parse_errors
+            .iter()
+            .map(|m| m.errors.len())
+            .sum::<usize>()
+            + self.cycles.len()
+            + self
+                .resolve_errors
+                .iter()
+                .map(|m| m.errors.len())
+                .sum::<usize>()
+            + self
+                .type_errors
+                .iter()
+                .map(|m| m.errors.len())
+                .sum::<usize>()
+    }
+
+    /// Drop every per-module diagnostic that does not belong to `file`, and
+    /// return how many ERRORS were dropped.
+    ///
+    /// `karac check <file>` asks about one file and should answer about that
+    /// file — reporting the whole package would flood a caller that named a
+    /// single module, and `--output=json` consumers reasonably expect the
+    /// diagnostics to concern what they asked about. The dropped count is not
+    /// discarded: the caller prints a one-line pointer at `karac check` so a
+    /// sibling module's real error is never silently swallowed.
+    ///
+    /// Cycles are NOT filtered — a cycle is a property of the graph, not of one
+    /// file, and it invalidates this file's resolution too.
+    pub(super) fn restrict_to_file(&mut self, file: &std::path::Path) -> usize {
+        let keep = |p: &std::path::Path| -> bool {
+            // Compare canonically where both sides canonicalize; fall back to a
+            // literal match so a path that no longer exists still filters
+            // predictably rather than dropping everything.
+            match (std::fs::canonicalize(p), std::fs::canonicalize(file)) {
+                (Ok(a), Ok(b)) => a == b,
+                _ => p == file,
+            }
+        };
+        let mut dropped = 0usize;
+        dropped += self
+            .parse_errors
+            .iter()
+            .filter(|m| !keep(&m.file))
+            .map(|m| m.errors.len())
+            .sum::<usize>();
+        self.parse_errors.retain(|m| keep(&m.file));
+        dropped += self
+            .resolve_errors
+            .iter()
+            .filter(|m| !keep(&m.file))
+            .map(|m| m.errors.len())
+            .sum::<usize>();
+        self.resolve_errors.retain(|m| keep(&m.file));
+        dropped += self
+            .type_errors
+            .iter()
+            .filter(|m| !keep(&m.file))
+            .map(|m| m.errors.len())
+            .sum::<usize>();
+        self.type_errors.retain(|m| keep(&m.file));
+        self.type_warnings.retain(|m| keep(&m.file));
+        dropped
+    }
+}
+
+/// Run [`PackageCheck`] over the package rooted at `root`.
+///
+/// `Err` carries an already-formatted message for the walk/tree failures that
+/// have no per-file span (a broken manifest, a mixed `main.kara`/`lib.kara`
+/// entry pair). Callers on the check/run paths treat those as fatal, matching
+/// `karac build`.
+pub(super) fn package_check(
+    root: &std::path::Path,
+    lint_overrides: &crate::lints::CliLintOverrides,
+) -> Result<PackageCheck, String> {
+    let walked = walker::walk_project(root, WalkerOpts::default()).map_err(|e| format!("{e}"))?;
+    // Same lenient dep posture as the `karac run` super-program builder: a
+    // dep-resolution failure proceeds without dependency modules rather than
+    // failing the check of the local package.
+    let dep_walks = super::run_check_cmds::quiet_dep_package_walks(root);
+    let built =
+        module::build_program_tree_with_deps(&walked, &dep_walks, module::BuildTreeOpts::default())
+            .map_err(|e| format!("{e}"))?;
+    let BuildTreeOk { tree, parse_errors } = built;
+    let cycles = module::detect_cycles(&tree);
+    // Ordering mirrors `cmd_build_project` exactly, including the skips: a
+    // half-parsed or cyclic tree cascades spurious E0112/E0113s, and a
+    // half-resolved one cascades type errors. Answering differently here would
+    // reintroduce the very divergence this function exists to remove.
+    let resolve_errors = if parse_errors.is_empty() && cycles.is_empty() {
+        resolve_modules(&tree)
+    } else {
+        Vec::new()
+    };
+    let diags = if parse_errors.is_empty() && cycles.is_empty() && resolve_errors.is_empty() {
+        typecheck_modules(&tree, lint_overrides)
+    } else {
+        ModuleTypeDiagnostics {
+            errors: Vec::new(),
+            warnings: Vec::new(),
+        }
+    };
+    Ok(PackageCheck {
+        tree,
+        parse_errors,
+        cycles,
+        resolve_errors,
+        type_errors: diags.errors,
+        type_warnings: diags.warnings,
+    })
+}
+
 pub(super) fn print_cycles_text(cycles: &[Cycle], tree: &ProgramTree) {
     for c in cycles {
         eprintln!("error[E0223]: circular module dependency");

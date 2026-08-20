@@ -3302,6 +3302,222 @@ fn write(path: &std::path::Path, contents: &str) {
     std::fs::write(path, contents).unwrap();
 }
 
+// ── `check` / `run` on a member of a multi-module package (B-2026-08-20-16) ──
+//
+// A file under a package's `src/` is not a program on its own. Before this,
+// `karac check <file>` and `karac run <file>` saw ONLY that file, so an
+// `import` of a sibling module resolved to nothing — inventing type errors for
+// code the package builds, and missing visibility errors the package build
+// catches. All three commands must now agree.
+
+/// A two-module package: `src/main.kara` plus `src/db/connection.kara`
+/// (`pub`) and `src/db/helpers.kara` (`private`). `main_src` is the entry.
+fn scratch_module_package(name: &str, main_src: &str) -> std::path::PathBuf {
+    let tmp = scratch_project(name);
+    write(&tmp.join("kara.toml"), "[package]\nname = \"modpkg\"\n");
+    write(&tmp.join("src/db.kara"), "pub import db.connection;\n");
+    write(
+        &tmp.join("src/db/connection.kara"),
+        "pub struct Connection {\n    pub id: i64,\n}\n\n\
+         pub fn open(id: i64) -> Connection {\n    return Connection { id: id };\n}\n",
+    );
+    write(
+        &tmp.join("src/db/helpers.kara"),
+        "private fn secret() -> i64 {\n    return 42;\n}\n",
+    );
+    write(&tmp.join("src/main.kara"), main_src);
+    tmp
+}
+
+#[test]
+fn test_check_package_member_sees_sibling_modules() {
+    // The false-REJECTION half: a `pub struct` imported from a sibling module
+    // used in a struct literal. A single-file check never loaded the sibling,
+    // so it reported `'Connection' is not a struct` for code that builds and
+    // runs correctly.
+    let tmp = scratch_module_package(
+        "check-member-sees-siblings",
+        "import db.connection.Connection;\n\n\
+         fn main() {\n    let c = Connection { id: 5 };\n    println(f\"{c.id}\");\n}\n",
+    );
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .arg("check")
+        .arg("src/main.kara")
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "check should pass on a package member whose imports resolve; \
+         stdout={stdout} stderr={stderr}"
+    );
+    assert!(
+        !stdout.contains("is not a struct") && !stderr.contains("is not a struct"),
+        "the single-file blind spot is back: {stdout}{stderr}"
+    );
+}
+
+#[test]
+fn test_check_package_member_reports_a_private_cross_directory_import() {
+    // The false-ACCEPTANCE half, and the more dangerous one: importing a
+    // `private` item from another directory is E0111 in the package build, and
+    // a single-file check said "All checks passed".
+    let tmp = scratch_module_package(
+        "check-member-private-import",
+        "import db.helpers.secret;\n\nfn main() {\n    println(f\"{secret()}\");\n}\n",
+    );
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .arg("check")
+        .arg("src/main.kara")
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "check must fail on a private cross-directory import: stdout={stdout} stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("E0111"),
+        "expected the build's E0111, got: {stdout}{stderr}"
+    );
+}
+
+#[test]
+fn test_run_package_member_refuses_a_private_cross_directory_import() {
+    // `karac run` merges the package into one flat super-program, which is
+    // exactly why it could not see visibility: the merge drops the module
+    // boundaries that carry it. It executed a program `karac build` rejects.
+    let tmp = scratch_module_package(
+        "run-member-private-import",
+        "import db.helpers.secret;\n\nfn main() {\n    println(f\"{secret()}\");\n}\n",
+    );
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .arg("run")
+        .arg("src/main.kara")
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "run must refuse what build refuses: stdout={stdout} stderr={stderr}"
+    );
+    assert!(
+        !stdout.contains("42"),
+        "run executed the refused program anyway: {stdout}"
+    );
+    assert!(
+        stderr.contains("E0111"),
+        "expected E0111 from the run gate, got: {stdout}{stderr}"
+    );
+}
+
+#[test]
+fn test_run_package_member_still_runs_a_sound_package() {
+    // The gate must not become a blanket refusal: `karac run src/main.kara` is
+    // the documented way to run a package, and single-file `karac build`'s own
+    // refusal message points at it.
+    let tmp = scratch_module_package(
+        "run-member-sound",
+        "import db.connection.open;\n\n\
+         fn main() {\n    let c = open(7);\n    println(f\"{c.id}\");\n}\n",
+    );
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .arg("run")
+        .arg("src/main.kara")
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "a sound package must still run: stdout={stdout} stderr={stderr}"
+    );
+    assert!(stdout.contains('7'), "expected 7, got: {stdout}");
+}
+
+#[test]
+fn test_check_with_no_file_checks_the_whole_package() {
+    // The escape hatch the row named as missing: `karac check` with no file
+    // used to answer `error: missing file argument`, so a user told that a
+    // single-file check is unreliable on a package member had nowhere to go.
+    // It is now the analysis twin of bare `karac build`.
+    let tmp = scratch_module_package(
+        "check-project-mode",
+        "import db.helpers.secret;\n\nfn main() {\n    println(f\"{secret()}\");\n}\n",
+    );
+    let bad = karac_bin().current_dir(&tmp).arg("check").output().unwrap();
+    let bad_err = String::from_utf8_lossy(&bad.stderr).to_string();
+    let bad_out = String::from_utf8_lossy(&bad.stdout).to_string();
+    // …and it passes once the package is sound, so the failure above is about
+    // the code rather than about project mode being broken.
+    write(
+        &tmp.join("src/main.kara"),
+        "import db.connection.open;\n\nfn main() {\n    let c = open(1);\n    println(f\"{c.id}\");\n}\n",
+    );
+    let good = karac_bin().current_dir(&tmp).arg("check").output().unwrap();
+    let good_out = String::from_utf8_lossy(&good.stdout).to_string();
+    let good_err = String::from_utf8_lossy(&good.stderr).to_string();
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    assert!(
+        !bad.status.success(),
+        "project check must fail on a private cross-directory import: {bad_out}{bad_err}"
+    );
+    assert!(
+        !bad_err.contains("missing file argument"),
+        "`karac check` with no file still refuses to run: {bad_err}"
+    );
+    assert!(
+        bad_err.contains("E0111"),
+        "expected E0111 from the project check, got: {bad_out}{bad_err}"
+    );
+    assert!(
+        good.status.success(),
+        "project check must pass on a sound package: {good_out}{good_err}"
+    );
+    assert!(
+        good_out.contains("All checks passed"),
+        "expected the pass verdict, got: {good_out}{good_err}"
+    );
+}
+
+#[test]
+fn test_check_standalone_script_is_unaffected() {
+    // The widening is gated on membership of a package's `src/`. A script that
+    // merely sits near a manifest keeps the single-file path.
+    let tmp = scratch_project("check-standalone-script");
+    write(&tmp.join("kara.toml"), "[package]\nname = \"modpkg\"\n");
+    write(&tmp.join("src/main.kara"), "fn main() {}\n");
+    write(
+        &tmp.join("script.kara"),
+        "fn main() {\n    println(\"hi\");\n}\n",
+    );
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .arg("check")
+        .arg("script.kara")
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "standalone script check regressed: stdout={stdout} stderr={stderr}"
+    );
+}
+
 #[test]
 fn test_build_project_lists_discovered_modules() {
     let tmp = scratch_project("lists-modules");

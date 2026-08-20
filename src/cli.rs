@@ -334,6 +334,14 @@ pub enum Command {
     /// `kara.toml`, loads the manifest, and (once CR-24 slices 3+ land) runs
     /// the multi-file pipeline. In slice 2 this is a stub that loads the
     /// manifest and reports. Missing manifest → E0227 NotInsideKaraProject.
+    /// `karac check` with no file: the whole-package twin of [`Self::Check`],
+    /// mirroring [`Self::BuildProject`] (B-2026-08-20-16).
+    CheckProject {
+        output: OutputMode,
+        concurrency_report: bool,
+        simd_report: bool,
+        lint_overrides: crate::lints::CliLintOverrides,
+    },
     BuildProject {
         output: OutputMode,
         /// `--offline` — see `Build.offline` above. Same v1 contract.
@@ -827,6 +835,12 @@ pub fn execute(cmd: Command) {
             out_path.as_deref(),
             lint_overrides,
         ),
+        Command::CheckProject {
+            output,
+            concurrency_report,
+            simd_report,
+            lint_overrides,
+        } => cmd_check_project(output, concurrency_report, simd_report, lint_overrides),
         Command::BuildProject {
             output,
             offline,
