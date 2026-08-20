@@ -100792,6 +100792,73 @@ mod presize_reservation {
         );
     }
 
+    /// `with_cap.buf` is the name `Vec.with_capacity` gives its allocation —
+    /// the Vec twin of `reserves`'s `str_with_cap.buf`.
+    fn reserves_vec(body: &str) -> bool {
+        module_ir(&format!("fn main() {{ {body} }}\n")).contains("with_cap.buf")
+    }
+
+    /// B-2026-08-20-3 — a `chars()` fill reserves `s.len()` up front, in both
+    /// the hand-written and the fused-`collect()` spelling.
+    ///
+    /// THE `collect()` HALF IS THE ONE THAT NEEDED WIRING. Its block is
+    /// synthesized at CODEGEN time by `compile_chars_collect_to_vec`, so it
+    /// never passes through `lowering`, where `presize_block` normally runs —
+    /// the pass had to be invoked on the synthesized block explicitly. That
+    /// makes this test the only thing standing between the two spellings and a
+    /// silent 2.5x divergence, since they compile through different modules.
+    ///
+    /// Why it matters beyond one allocation: every `realloc` in the grow chain
+    /// takes the glibc arena lock, which under auto-par is shared by all
+    /// fan-out workers. Before the reservation a 1M-round `chars().collect()`
+    /// loop measured 0.08s sequential / 0.30s parallel — a 3.75x
+    /// PESSIMIZATION from fanning out. After: 0.03s / 0.01s.
+    #[test]
+    fn chars_fill_reserves_up_front() {
+        assert!(
+            reserves_vec(
+                "let s: String = \"hello\"; let mut v: Vec[char] = Vec.new(); \
+                 for c in s.chars() { v.push(c); } println(v.len());"
+            ),
+            "a hand-written chars() fill must reserve s.len()"
+        );
+        assert!(
+            reserves_vec(
+                "let s: String = \"hello\"; let v: Vec[char] = s.chars().collect(); \
+                 println(v.len());"
+            ),
+            "the fused chars().collect() must reserve too — same loop, \
+             synthesized at codegen time"
+        );
+        assert!(
+            reserves_vec(
+                "let s: String = \"hello\"; let mut v: Vec[u8] = Vec.new(); \
+                 for b in s.bytes() { v.push(b); } println(v.len());"
+            ),
+            "a bytes() fill must reserve s.len()"
+        );
+    }
+
+    /// The other side of that boundary. The collection-capacity-presizing spike
+    /// measured accumulator pre-sizing on 2026-07-09 and declined it for
+    /// HEAP-element sources (`Vec[String].iter()...collect()` at 0.72x), so
+    /// `iterable_len_bound` matches `chars`/`bytes` and nothing else. A
+    /// `for w in xs.iter()` fill is syntactically one method name away from the
+    /// chars fill above, which is exactly why it is asserted here rather than
+    /// left to the reader.
+    #[test]
+    fn iter_fill_still_declines_per_the_spike() {
+        assert!(
+            !reserves_vec(
+                "let xs: Vec[String] = Vec[\"a\".to_string(), \"bb\".to_string()]; \
+                 let mut v: Vec[i64] = Vec.new(); \
+                 for w in xs.iter() { v.push(w.len()); } println(v.len());"
+            ),
+            "iter() over a heap source is the declined shape — see \
+             docs/spikes/collection-capacity-presizing.md"
+        );
+    }
+
     /// The declines. Pre-sizing is only a capacity hint, so none of these could
     /// change an answer — but a heuristic that fires on shapes it cannot
     /// account for stops meaning anything, and these are the shapes whose final

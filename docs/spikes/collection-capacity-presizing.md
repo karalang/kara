@@ -54,6 +54,37 @@ counted `push` loops — it is already delivered by the `src/presize.rs` loop pa
 rewrites `Vec.new()` + counted unconditional `push` → `with_capacity`) and by the manual
 `Vec.with_capacity` idiom now documented in `ch09-collections.md` (Slice B).
 
+**Amendment (2026-08-20, B-2026-08-20-3) — the `chars`/`bytes` half is now pre-sized.**
+The decline above stands for what it measured: the `.iter()`-adaptor `collect`, whose
+accumulator is still a plain `Vec.new()` and whose test lock is untouched. What it did not
+measure is the **multi-threaded** cost of the grow chain. Every `realloc` in that chain takes
+the glibc arena lock, and under auto-par that one lock is shared by all fan-out workers — so a
+`chars().collect()` inside a `parallel_reduction` body turned a 4-way fan-out into a **3.75×
+pessimization** (0.08 s sequential → 0.30 s parallel at ~200% CPU, 8,923 futex waits landing in
+`__lll_lock_wait_private` under `malloc`/`realloc`; with the same binary run under
+`GLIBC_TUNABLES=glibc.malloc.tcache_count=0` the contention vanished and it scaled to 0.03 s at
+330% CPU, proving the lowering itself was fine). Per-iteration allocator traffic was
+1 `malloc` + ~1.5 `realloc` + 1 `free`; reserving up front makes it 1 + 0 + 1.
+
+So `src/presize.rs` now also reserves for `for I in SRC.chars()` / `SRC.bytes()`, and
+`compile_chars_collect_to_vec` runs `presize_block` on its codegen-synthesized block so the
+fused `chars().collect()` gets the same treatment as the hand-written loop. Result on the probe
+above: **0.08 s → 0.03 s sequential, 0.30 s → 0.01 s parallel** — a 3.75× pessimization becomes
+a 3× win.
+
+This is deliberately the *narrow* half of the space this spike left open, not a reopening of
+the decline. The disqualifier for a general pre-size was that a source-element-type gate is
+"opaque, allocator- and hardware-dependent". `chars`/`bytes` need no such gate: their element
+type is `char`/`u8` **by construction**, so the firing rule is the method name, and that puts
+them squarely in the POD column this spike already measured as a 1.16–1.17× win. `.iter()` —
+the heap-source shape that measured 0.72–0.81× — stays declined, asserted by
+`presize::tests::declines_for_over_iter` and `presize_reservation::iter_fill_still_declines_per_the_spike`
+so the one-method-name gap between the two cannot close by accident.
+
+The open remainder is broader than this fix: **any** allocating auto-par body still contends on
+the shared arena. Reserving removes the `realloc`s from this shape, it does not give the runtime
+a thread-caching small-object allocator. Tracked separately.
+
 **Original framing (2026-07-03), retained for context.** Decision framing: the
 *narrow* version (size-hinted bulk construction — `collect`/map-to-`Vec`/comprehension/
 `from_iter` pre-sizes from a known source length) is the defensible long-term fix; the

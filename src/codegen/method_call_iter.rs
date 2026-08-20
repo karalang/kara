@@ -140,12 +140,41 @@ impl<'ctx> super::Codegen<'ctx> {
         };
 
         // `{ <let>; <for>; __cas_N }`
+        let mut synth = Block {
+            stmts: vec![let_stmt, for_stmt],
+            final_expr: Some(Box::new(ident(&vec_name, &sp))),
+            span: sp,
+        };
+        // Pre-size the accumulator to `<string>.len()` (B-2026-08-20-3). This
+        // block is synthesized HERE, at codegen time, so it never passed
+        // through `lowering`'s pre-sizing pass — the one place that would
+        // otherwise turn this exact `Vec.new()` + counted-push shape into a
+        // single up-front allocation. Running the pass on the synthesized
+        // block gives the fused `collect` the same treatment the hand-written
+        // `for c in s.chars() { v.push(c) }` gets, from one rule rather than a
+        // second copy of the reservation logic here.
+        //
+        // It is not a micro-optimization: the grow chain is 1 malloc + ~1.5
+        // reallocs per collect, and `realloc` always takes the glibc arena
+        // lock. Under auto-par that lock is shared by every worker, so a
+        // `collect`ing loop body turned a 4-way fan-out into a 3.75x
+        // PESSIMIZATION (0.08s sequential -> 0.30s parallel, 8.9k futex waits
+        // in `__lll_lock_wait_private` under `malloc`/`realloc`). Reserving
+        // once drops the per-iteration allocator traffic from 3.5 calls to 2
+        // and restores scaling: 0.03s sequential, 0.01s parallel.
+        //
+        // This does NOT reopen the collection-capacity-presizing spike's
+        // 2026-07-09 decline of accumulator pre-sizing — see
+        // `iterable_len_bound` for the boundary. That measurement was about
+        // HEAP-element sources under the `.iter()`-adaptor collect, which still
+        // builds its accumulator with a plain `Vec.new()`
+        // (`e2e_collect_accumulator_is_not_presized_codegen` locks it). A
+        // `chars()` source is `char`, i.e. the POD column the same spike
+        // measured as a 1.16x win, and `presize_block` only reserves for
+        // `chars`/`bytes`.
+        crate::presize::presize_block(&mut synth);
         let block = Expr {
-            kind: ExprKind::Block(Block {
-                stmts: vec![let_stmt, for_stmt],
-                final_expr: Some(Box::new(ident(&vec_name, &sp))),
-                span: sp,
-            }),
+            kind: ExprKind::Block(synth),
             span: sp,
         };
 

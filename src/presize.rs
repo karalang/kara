@@ -28,9 +28,10 @@
 //! Firing pattern (ALL must hold):
 //!   1. `let mut V = Vec.new()` / `String.new()` / `""` — fresh mutable binding.
 //!   2. A following `while IV < BOUND` / `while IV <= BOUND` / `for I in LO..BOUND`
-//!      loop whose body appends to `V` exactly once, unconditionally, with no
-//!      break/continue/return (so append-count == trip-count). The `<=` form runs
-//!      one extra iteration, so it reserves `BOUND + 1`.
+//!      / `for I in SRC.chars()/.bytes()` loop whose body appends to `V`
+//!      exactly once, unconditionally, with no break/continue/return (so
+//!      append-count == trip-count). The `<=` form runs one extra iteration, so
+//!      it reserves `BOUND + 1`; the adaptor form reserves `SRC.len()`.
 //!   3. Between the Let and the loop, `V` may only be *seed-appended* (e.g.
 //!      `fact.push(1)` / `s = s + "seed"` / DP base cases); each such append adds
 //!      1 to the reservation. Any other mention there (move, reassign,
@@ -245,8 +246,10 @@ fn add_const(e: &Expr, k: i64) -> Expr {
     }
 }
 
-/// `for I in LO..BOUND { body }` (exclusive or inclusive). Bound is the range's
-/// upper expr; the (≤ LO) over-reservation is harmless.
+/// `for I in LO..BOUND { body }` (exclusive or inclusive) — bound is the range's
+/// upper expr; the (≤ LO) over-reservation is harmless. Also
+/// `for I in SRC.chars()/.bytes() { body }`, whose trip count is
+/// `SRC.len()` — see [`iterable_len_bound`].
 fn analyze_for(
     pattern: &Pattern,
     iterable: &Expr,
@@ -263,7 +266,87 @@ fn analyze_for(
             return LoopVerdict::Presize(Box::new((**end).clone()));
         }
     }
+    if let Some(bound) = iterable_len_bound(iterable) {
+        if fill_loop_ok(body, v, iv, &bound, bound_between) {
+            return LoopVerdict::Presize(Box::new(bound));
+        }
+    }
     loop_touches_v_verdict(Some(iterable), body, v)
+}
+
+/// Trip-count bound for a `for` over a **character or byte** iterator:
+/// `SRC.chars()` / `SRC.bytes()` runs `SRC.len()` times, so a
+/// `v.push(..)`-per-element body fills exactly that many slots. Returns the
+/// synthesized `SRC.len()` expression, or `None` when the shape doesn't apply.
+///
+/// **Why `chars`/`bytes` and NOT `iter`.** The collection-capacity-presizing
+/// spike measured the general case end-to-end on 2026-07-09 and declined it:
+/// reserving up front WINS ~1.16× on POD-element sources but REGRESSES 20–30%
+/// on heap-element ones (`Vec[String].iter().filter(..).collect()` at 0.72×),
+/// because a fresh full-size malloc per round lands on cold pages while the
+/// grow path reuses the previous round's hot buffer. It rejected a
+/// source-element-type gate as too opaque and allocator-dependent to be a
+/// predictable firing rule — see `docs/spikes/collection-capacity-presizing.md`
+/// and `e2e_collect_accumulator_is_not_presized_codegen`, which locks that in.
+/// `.iter()` is exactly the declined shape, so it stays out.
+///
+/// `chars`/`bytes` are the half of the space that decision leaves open: their
+/// element type is `char`/`u8` by construction, so "is this a POD source" is
+/// answered by the METHOD NAME rather than by a hardware-dependent heuristic —
+/// the "cheap and exactly known" bar the spike set. They are also the shapes
+/// where the win is largest: a `chars()` fill measured 0.08s → 0.03s
+/// sequentially, and under auto-par 0.30s → 0.01s (B-2026-08-20-3), because
+/// every `realloc` in the grow chain takes the glibc arena lock that all fan-out
+/// workers share.
+///
+/// `.chars()` over-reserves for non-ASCII (byte length ≥ codepoint count, by at
+/// most 4×). Capacity is a hint, so that is memory use, never output — the same
+/// margin the `≤`/seed-append adjustments already accept.
+///
+/// `SRC` is restricted to a **place expression** (identifier, `self`, or a
+/// field/tuple-index chain over one). Anything else — a call, an index, an
+/// arbitrary temporary — could be side-effecting or expensive, and the bound is
+/// emitted as a *second* evaluation of `SRC` alongside the loop header's.
+fn iterable_len_bound(iterable: &Expr) -> Option<Expr> {
+    let ExprKind::MethodCall {
+        object,
+        method,
+        args,
+        ..
+    } = &iterable.kind
+    else {
+        return None;
+    };
+    if !args.is_empty() || !matches!(method.as_str(), "chars" | "bytes") {
+        return None;
+    }
+    if !is_place_expr(object) {
+        return None;
+    }
+    let span = object.span;
+    Some(Expr {
+        kind: ExprKind::MethodCall {
+            object: object.clone(),
+            method: "len".to_string(),
+            turbofish: None,
+            args: vec![],
+            args_close_span: span,
+        },
+        span,
+    })
+}
+
+/// A re-evaluable place expression: an identifier, `self`, or a field /
+/// tuple-index projection over one. Deliberately narrow — see
+/// [`iterable_len_bound`] for why the bound must be safe to evaluate twice.
+fn is_place_expr(e: &Expr) -> bool {
+    match &e.kind {
+        ExprKind::Identifier(_) | ExprKind::SelfValue => true,
+        ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+            is_place_expr(object)
+        }
+        _ => false,
+    }
 }
 
 /// A loop that wasn't a clean fill: `Bail` if it mentions `v` anywhere (we don't
@@ -891,6 +974,54 @@ mod tests {
     fn fires_on_for_range() {
         let src = "fn f(n: i64) {\n  let mut v: Vec[i64] = Vec.new();\n  for i in 0i64..n {\n    v.push(i);\n  }\n}\n";
         assert!(fires_for(src, "v"));
+    }
+
+    /// `for c in s.chars() { v.push(c) }` — the char/byte fill, whose trip
+    /// count is `s.len()`. The bound is SYNTHESIZED here (there is no such
+    /// expression in the source), which is why the `.iter()` decline below sits
+    /// right next to it: the two differ only by the method name, and the method
+    /// name is the whole firing rule.
+    #[test]
+    fn fires_on_for_over_chars_and_bytes() {
+        let src = "fn f(s: ref String) {\n  let mut v: Vec[char] = Vec.new();\n  for c in s.chars() {\n    v.push(c);\n  }\n}\n";
+        assert!(fires_for(src, "v"), "a chars() fill reserves s.len()");
+        let src = "fn f(s: ref String) {\n  let mut v: Vec[u8] = Vec.new();\n  for b in s.bytes() {\n    v.push(b);\n  }\n}\n";
+        assert!(fires_for(src, "v"), "a bytes() fill reserves s.len()");
+    }
+
+    /// `.iter()` is the shape the collection-capacity-presizing spike measured
+    /// and DECLINED (heap-element sources regress 20-30%; see
+    /// `iterable_len_bound`). It has the same `for`-over-an-adaptor syntax as
+    /// the chars/bytes fill above, so nothing but this test stands between the
+    /// two — widening the match set would silently reopen a closed decision.
+    #[test]
+    fn declines_for_over_iter() {
+        let src = "fn f(xs: ref Vec[String]) {\n  let mut v: Vec[i64] = Vec.new();\n  for w in xs.iter() {\n    v.push(w.len());\n  }\n}\n";
+        assert!(
+            !fires_for(src, "v"),
+            "iter() is the declined heap-source shape"
+        );
+    }
+
+    /// The bound is emitted as a SECOND evaluation of the receiver alongside
+    /// the loop header's, so a receiver that is not a re-evaluable place
+    /// expression must decline — otherwise `mk().chars()` would call `mk()`
+    /// twice.
+    #[test]
+    fn declines_chars_over_a_non_place_receiver() {
+        let src = "fn mk() -> String {\n  return \"ab\";\n}\nfn f() {\n  let mut v: Vec[char] = Vec.new();\n  for c in mk().chars() {\n    v.push(c);\n  }\n}\n";
+        assert!(
+            !fires_for(src, "v"),
+            "a call receiver must not be re-evaluated"
+        );
+    }
+
+    /// A conditional push is <= the trip count, so the chars arm inherits the
+    /// same decline the counted forms already have.
+    #[test]
+    fn declines_conditional_push_in_chars_fill() {
+        let src = "fn f(s: ref String) {\n  let mut v: Vec[char] = Vec.new();\n  for c in s.chars() {\n    if c == 'x' {\n      v.push(c);\n    }\n  }\n}\n";
+        assert!(!fires_for(src, "v"));
     }
 
     #[test]
