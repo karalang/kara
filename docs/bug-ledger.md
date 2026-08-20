@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 185 | 0 |
 | run-vs-build | 143 | 0 |
 | double-free | 133 | 0 |
-| missing-feature | 128 | 2 |
+| missing-feature | 128 | 1 |
 | codegen-gap | 119 | 0 |
 | false-positive | 88 | 1 |
 | diagnostics | 87 | 2 |
@@ -119,19 +119,18 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | cli | 52 | 1 |
 | parser | 33 | 0 |
 | runtime | 27 | 1 |
-| resolver | 22 | 1 |
+| resolver | 22 | 0 |
 | effect | 7 | 0 |
 | lexer | 6 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1405 surfaced · 6 open · 1379 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1405 surfaced · 5 open · 1380 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-19-13 | 2026-08-19 | typecheck+codegen+runtime | medium | GPU reductions: NO DECISIONS AND NO SEPARATE PROJECTS REMAIN. One item is open — integer `prod` / `dot` / `matmul` — and its recorded blocker ("WGSL has no widening multiply") is now KNOWN FALSE: `karac_mul_wide` is that primitive, shipped and device-verified, so they are ordinary work. Shipped: sum / prod / min / max / mean / dot / argmin / argmax / variance / stddev / prefix_sum over `Vec[f32]`; sum / min / max / mean / argmin / argmax / variance / stddev over `Vec[i32]` and `Vec[u32]`, the last of these EXACT via an integer shift and an emulated 64-bit accumulator; and a tiled `matmul` over rank-2 `Tensor[f32]` that equals `a.matmul(b)` bit-for-bit. | docs/spikes/gpu-llvm-offload-assessment.md; src/gpu_wgsl.rs::emit_reduce_kernel; src/reduce_kernel.rs::tree_reduce_f32 |
-| B-2026-08-20-17 | 2026-08-20 | resolver | medium | MODULE-BINDING imports are unimplemented on every surface: `import db.connection;` and `import db;` bind nothing. design.md § Module System lists `import db.connection;` in its own import-form gallery ("bind the module itself as `connection`") and states the Binding rule explicitly: "The last segment of each imported path is bound in the current scope... The rule is UNIFORM for items and for sub-modules -- `import db.connection;` binds `connection` as a module reference (reach `Connection` as `connection.Connection`)." Measured on a real package: `import db.connection;` + `connection.open(4)` -> whole-package `karac build` fails `error[resolve]: multi-file resolve failed`, `karac run` fails `undefined name 'connection', did you mean 'Connection'?`, and single-file `karac check` PASSES (that last one is B-2026-08-20-16's truncation, not a working path). The top-level form `import db;` + `db.label()` behaves identically -> `undefined name 'db'`. So the four item-import forms all work and the two module-binding forms work nowhere. | roadmap.md |
 | B-2026-08-20-23 | 2026-08-20 | ownership | low | every whole-buffer `gpu.*` reduction CONSUMES its buffer, so calling two of them on the same `Vec` warns `value moved here, used again here` -- but they only READ it | — |
 | B-2026-08-20-24 | 2026-08-20 | cli | high | Two modules of one package may not declare the same top-level name: `karac check` ACCEPTS the program and BOTH execution paths reject it. Repro (no wildcards involved) -- `src/alpha.kara`: `pub fn common() -> i64 { return 1; } pub fn only_a() -> i64 { return 11; }`; `src/beta.kara`: the same with `common`/`only_b`; `src/main.kara`: `import alpha.only_a; import beta.only_b; fn main() { println(only_a()); println(only_b()); }` -- main never mentions `common`. Measured on 6aa26bb: `karac check src/main.kara` -> `All checks passed.`; `karac run src/main.kara` -> `error[resolve]: src/main.kara:1:5: 'common' is already defined in this scope (first defined at 1:5)`; `karac build` (llvm) -> `error[resolve]: multi-file resolve failed:`. design.md § Module System makes the two `common`s distinct ("all types, functions, and effect resources are namespaced by their module path"), so this rejects a legal -- and very ordinary -- program: any two modules with a `new`, `parse`, `size` or `run` collide. | roadmap.md |
 | B-2026-08-20-25 | 2026-08-20 | other | low | design.md assigns `E0226` to `ConflictingPlatformModule` (§ Platform-specific modules), which is the TYPECHECKER's band. `explain::tests::resolver_numeric_codes_live_in_the_resolve_band` fails any resolve-phase code outside E01xx/E08xx and `collision_render_names_every_phase` fails a code minted by two phases, so implementing this diagnostic under the number the spec gives it turns the suite red. The same number was, until B-2026-08-20-18, also spelled for `AmbiguousWildcardImport` (§ Module System); that one had to be allocated E0124 from the resolver band instead and the spec text corrected. This second E0226 is still in the document, unimplemented. | roadmap.md |
@@ -153,9 +152,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1405 surfaced
 
 </details>
 
-### Fixed (1379)
+### Fixed (1380)
 
-<details><summary>1379 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1380 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -12685,6 +12684,27 @@ ONE LEG DID NOT GET FIXED HERE and is split into B-2026-08-20-20 rather than bur
 A FALLBACK THE FIRST DRAFT DID NOT HAVE, caught by `file_targeted_examples_check`: a directory can hold a `kara.toml` and modules but no `src/main.kara` / `src/lib.kara` entry (several `examples/` packages are shaped this way), so no package view can be formed at all. Failing there would have been a new way for `karac check` to refuse a file it used to accept, and "this package has no entry point" is not an answer about the file the caller asked about. It falls back to the single-file check and SAYS so — narrowing silently would be this same bug wearing a new hat.
 
 TESTS (tests/cli.rs): `test_check_package_member_sees_sibling_modules` (false rejection), `test_check_package_member_reports_a_private_cross_directory_import` and `test_run_package_member_refuses_a_private_cross_directory_import` (false acceptance, both surfaces) all fail without the fix. `test_run_package_member_still_runs_a_sound_package` pins that the run gate did not become a blanket refusal, `test_check_standalone_script_is_unaffected` pins that a script merely sitting near a manifest keeps the single-file path, and `test_check_with_no_file_checks_the_whole_package` covers the new project mode in both directions. |
+| B-2026-08-20-17 | resolver | medium | MODULE-BINDING imports are unimplemented on every surface: `import db.connection;` and `import db;` bind nothing | FIXED by f725b44. Module-binding imports now work on every surface, desugared to item imports at tree-build time rather than threaded through the passes as a new namespace.
+
+WHY A DESUGAR. Resolver scopes, the typechecker environment and -- decisively -- the flattened super-program that project-mode `build` and `run` both compile all work in ONE namespace of bare item names. The flattening already erases the module boundary: after the concat, `db.connection`'s `Connection` IS the flat unit's `Connection`. So `connection.Connection` has exactly one honest lowering, bare `Connection`, which is what an item import already produces. Lowering to that buys the whole feature off machinery that already works, instead of teaching five passes about modules-as-values.
+
+NEW `src/module_binding.rs` walks a module's items and rewrites every `<bound>.NAME` reference to bare `NAME`: the two expression roots (`connection.open(4)` -> `open(4)` via MethodCall -> Call, `connection.LIMIT` -> `LIMIT` via FieldAccess -> Identifier), plus leading segments in type paths, struct-literal paths, `impl Trait for` names, trait-bound paths, generic-arg types and pattern paths. It records, per module, which names were reached through it and the span of the first reference.
+
+The walk goes CHILDREN-FIRST and then rewrites at the node, because a chain reaches the binding only through its innermost link: `db.connection.open(5)` needs `db.connection` collapsed to `connection` before the outer method call can see a module-rooted receiver. Walking the receiver first costs nothing -- a bare `Identifier` has no children and is never rewritten on its own.
+
+`module.rs::expand_module_binding_imports` then splices a synthesized `import db.connection.{open, LIMIT};` in beside the original declaration, carrying its `pub` (so a `pub import` re-export stays a re-export) and its per-segment spans. It iterates to a fixpoint for the case where the intermediate module is NOT itself bound: `import db;` alone strips `db.connection.open(5)` to `connection.open(5)`, which is a module binding the file never declared, so a second pass turns it into `open(5)`. Each re-binding lengthens the module path, so the loop terminates. When both `import db;` and `import db.connection;` are present the chain collapses in one pass.
+
+A name already bound by a plain (un-aliased) item import from the SAME module is not synthesized again -- `import db.connection;` + `import db.connection.open;` reaches `open` two ways, and a second binding for it would be a spurious E0101 duplicate definition for a program that is not ambiguous.
+
+The original declaration is KEPT. It already resolves (the `binds_submodule` arm of `collect_import`) and it is what `collect_import_edges` draws the module-graph edge from, so an unused binding still records its dependency and cycle detection is untouched.
+
+DIAGNOSTICS -- the row's second half -- follow for free, because the synthesized imports go through the same validation every item import does. `connection.opne(4)` is now `E0113: unknown item 'opne' in module 'db.connection', did you mean 'open'?` with a machine-applicable edit, against the module's real export list, in place of `undefined name 'connection', did you mean 'Connection'?`. A `private` target draws E0111 naming the item and its defining module. Both fire identically on `check`, `build` and `run`.
+
+SHADOW GUARD: a bound name the module also declares as an item or binds as a value ANYWHERE is skipped -- `crate::import_alias`'s existing conservative, module-wide test, reused for the same reason. A local `let connection = Holder { .. }` makes `connection.v` an ordinary field access, and redirecting one would be a miscompile. Over-approximating only declines the rewrite.
+
+THE SILENT CHECK/BUILD DIVERGENCE the row reported as a third symptom closes as a consequence: the per-module resolver was lenient because nothing consulted the module symbol it bound, so a program that could not build passed `check` -- in PROJECT mode too, so unlike B-2026-08-20-16 this was not file-scoping. With the desugar in place both surfaces validate the same synthesized imports and agree.
+
+Verified across all four surfaces (`check`, `build`, `run` JIT, `run --interp`) for: single-level binding, top-level `import db;`, aliased `import db.connection as conn;`, a brace group mixing a module and an item, a module-qualified type in a `pub fn` signature, an enum type reached through a binding with variants used unqualified, a two-level chain in both expression and type position, an unused binding, the shadow case, a binding alongside an explicit item import of the same name, an unknown item, and a `private` item. Eight E2E tests in `tests/cli.rs`. |
 | B-2026-08-20-18 | parser | medium | WILDCARD and NESTED-GROUP imports do not lex or parse, though design.md says both ship in v1 | FIXED by ae0b21b.
 
 Both forms land as desugars ahead of name resolution, so every later phase still
