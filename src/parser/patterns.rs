@@ -16,7 +16,6 @@ use crate::lexer::IdentClass;
 use crate::token::{IntSuffix, Token};
 
 use super::{starts_upper, ParseError};
-use crate::ast::narrow_literal_to_i64;
 
 impl super::Parser {
     // ── Patterns ─────────────────────────────────────────────────
@@ -137,42 +136,40 @@ impl super::Parser {
                     span: self.span_from(&start),
                 })
             }
+            // B-2026-08-20-1 — an UPPER-HALF unsigned magnitude
+            // (`18446744073709551615u64`) arrives as `IntegerOutOfRange`, and
+            // the pattern parser had no arm for it, so the whole top half of
+            // every unsigned range was unmatchable by literal while the same
+            // literal in EXPRESSION position compiled fine. It rides the signed
+            // carrier as the identical wrapped bit pattern `parser/exprs.rs`
+            // gives it, so pattern and scrutinee compare as the same bits.
+            &Token::IntegerOutOfRange(m, sfx) => {
+                self.advance();
+                let Some(v) = Self::pattern_uint_on_i64_carrier(m, sfx) else {
+                    self.error(
+                        "128-bit integer literals are not yet supported in patterns \
+                         (the pattern AST holds i64); use a guard instead, e.g. \
+                         `n if n == <literal>`",
+                    );
+                    return None;
+                };
+                self.finish_integer_pattern(v, sfx, start)
+            }
             &Token::Integer(n, sfx) => {
                 self.advance();
-                let lit = LiteralPattern::Integer(narrow_literal_to_i64(n), sfx);
-                // Check for range pattern: `1..=10` or `1..`
-                if self.eat(&Token::DotDotEq) {
-                    let end = self.parse_range_bound()?;
-                    return Some(Pattern {
-                        kind: PatternKind::RangePattern {
-                            start: Some(RangeBound::Literal(lit)),
-                            end: Some(end),
-                            inclusive: true,
-                        },
-                        span: self.span_from(&start),
-                    });
-                }
-                if self.eat(&Token::DotDot) {
-                    // `lo..hi` (bounded exclusive) when the next token is
-                    // a literal or const path; `lo..` (half-open) otherwise.
-                    let end = if Self::starts_range_bound(self.peek_token_ref()) {
-                        Some(self.parse_range_bound()?)
-                    } else {
-                        None
-                    };
-                    return Some(Pattern {
-                        kind: PatternKind::RangePattern {
-                            start: Some(RangeBound::Literal(lit)),
-                            end,
-                            inclusive: false,
-                        },
-                        span: self.span_from(&start),
-                    });
-                }
-                Some(Pattern {
-                    kind: PatternKind::Literal(lit),
-                    span: self.span_from(&start),
-                })
+                // A 128-bit value past `i64` cannot ride this carrier at all.
+                // It used to reach `narrow_literal_to_i64` and PANIC the
+                // compiler with a Rust backtrace (measured on an in-range
+                // `…105727i128` pattern); a diagnostic is the standing rule.
+                let Some(v) = i64::try_from(n).ok() else {
+                    self.error(
+                        "128-bit integer literals are not yet supported in patterns \
+                         (the pattern AST holds i64); use a guard instead, e.g. \
+                         `n if n == <literal>`",
+                    );
+                    return None;
+                };
+                self.finish_integer_pattern(v, sfx, start)
             }
             // Byte literals (`b'I'`) are u8 integers — desugar to an
             // integer pattern with a U8 suffix so the whole Integer
@@ -526,7 +523,10 @@ impl super::Parser {
     fn starts_literal_pattern(tok: &Token) -> bool {
         matches!(
             tok,
-            Token::Integer(..) | Token::CharLiteral(_) | Token::ByteLiteral(_)
+            Token::Integer(..)
+                | Token::IntegerOutOfRange(..)
+                | Token::CharLiteral(_)
+                | Token::ByteLiteral(_)
         )
     }
 
@@ -644,11 +644,82 @@ impl super::Parser {
         Some((fields, has_rest))
     }
 
+    /// The tail shared by both integer-literal pattern arms: a bare literal,
+    /// or the start of a `lo..=hi` / `lo..hi` / `lo..` range.
+    fn finish_integer_pattern(
+        &mut self,
+        v: i64,
+        sfx: Option<IntSuffix>,
+        start: crate::token::Span,
+    ) -> Option<Pattern> {
+        let lit = LiteralPattern::Integer(v, sfx);
+        if self.eat(&Token::DotDotEq) {
+            let end = self.parse_range_bound()?;
+            return Some(Pattern {
+                kind: PatternKind::RangePattern {
+                    start: Some(RangeBound::Literal(lit)),
+                    end: Some(end),
+                    inclusive: true,
+                },
+                span: self.span_from(&start),
+            });
+        }
+        if self.eat(&Token::DotDot) {
+            // `lo..hi` (bounded exclusive) when the next token is a literal or
+            // const path; `lo..` (half-open) otherwise.
+            let end = if Self::starts_range_bound(self.peek_token_ref()) {
+                Some(self.parse_range_bound()?)
+            } else {
+                None
+            };
+            return Some(Pattern {
+                kind: PatternKind::RangePattern {
+                    start: Some(RangeBound::Literal(lit)),
+                    end,
+                    inclusive: false,
+                },
+                span: self.span_from(&start),
+            });
+        }
+        Some(Pattern {
+            kind: PatternKind::Literal(lit),
+            span: self.span_from(&start),
+        })
+    }
+
+    /// An out-of-range UNSIGNED magnitude on the `i64` carrier that
+    /// `LiteralPattern::Integer` provides. Widths of 64 bits or narrower wrap
+    /// to the same bit pattern `parser/exprs.rs` produces in expression
+    /// position, so a pattern and its scrutinee compare as identical bits. A
+    /// 128-bit suffix has no room here and returns `None`.
+    fn pattern_uint_on_i64_carrier(m: u128, sfx: Option<IntSuffix>) -> Option<i64> {
+        if matches!(
+            sfx,
+            Some(IntSuffix::U8)
+                | Some(IntSuffix::U16)
+                | Some(IntSuffix::U32)
+                | Some(IntSuffix::U64)
+                | Some(IntSuffix::Usize)
+        ) {
+            if let Ok(u) = u64::try_from(m) {
+                return Some(u as i64);
+            }
+        }
+        None
+    }
+
     pub(crate) fn parse_literal_pattern(&mut self) -> Option<LiteralPattern> {
         match *self.peek_token_ref() {
             Token::Integer(n, sfx) => {
                 self.advance();
-                Some(LiteralPattern::Integer(narrow_literal_to_i64(n), sfx))
+                Some(LiteralPattern::Integer(i64::try_from(n).ok()?, sfx))
+            }
+            Token::IntegerOutOfRange(m, sfx) => {
+                self.advance();
+                Some(LiteralPattern::Integer(
+                    Self::pattern_uint_on_i64_carrier(m, sfx)?,
+                    sfx,
+                ))
             }
             Token::CharLiteral(c) => {
                 self.advance();

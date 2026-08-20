@@ -36018,3 +36018,27 @@ fn stats_int_reductions_still_work_when_they_do_not_overflow() {
         "14\n60\n3\n[1, 1, 3, 4, 5]\n"
     );
 }
+
+#[test]
+fn upper_half_unsigned_patterns_match_the_right_arm() {
+    // B-2026-08-20-1 — behaviour, not just parsing: the pattern rides the same
+    // wrapped bit pattern the scrutinee does, so `u64::MAX` selects its own arm
+    // and an upper-half inclusive RANGE selects its own too.
+    assert_eq!(
+        run("fn classify(n: u64) -> i64 {
+                 match n {
+                     18446744073709551615u64 => 1,
+                     18446744073709551610u64..=18446744073709551614u64 => 2,
+                     0u64 => 3,
+                     _ => 4,
+                 }
+             }
+             fn main() {
+                 println(classify(18446744073709551615u64));
+                 println(classify(18446744073709551612u64));
+                 println(classify(0u64));
+                 println(classify(7u64));
+             }"),
+        "1\n2\n3\n4\n"
+    );
+}
