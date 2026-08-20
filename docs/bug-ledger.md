@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 263 | 0 |
+| miscompile | 264 | 0 |
 | leak | 185 | 0 |
 | run-vs-build | 139 | 0 |
 | double-free | 133 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 949 | 1 |
+| codegen | 950 | 1 |
 | typecheck | 214 | 1 |
 | interp | 162 | 0 |
 | ownership | 60 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 6 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1379 surfaced · 2 open · 1357 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1380 surfaced · 2 open · 1358 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (2)
 
@@ -149,9 +149,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1379 surfaced
 
 </details>
 
-### Fixed (1357)
+### Fixed (1358)
 
-<details><summary>1357 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1358 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -12482,6 +12482,11 @@ WHY A NEW TABLE WAS UNAVOIDABLE. The three callers of `render_user_enum_display`
 VERIFICATION. Byte-identical across `karac build`, that build with `KARAC_AUTO_PAR=0`, `karac run` (JIT) and `karac run --interp`, on: a one-parameter enum at `i64`, `String` and `Vec[i64]` — the latter two HEAP-BOXED, since a generic enum's slot is the erased one-word base, so they also re-exercise B-2026-08-19-28's debox — a `u64` payload past 2^63 (which puts B-2026-08-19-27's unsigned reading through the same path), the payload-free variant, a TWO-parameter enum including a variant using only the first parameter so the substitution must be positional and tolerate partial arity, a non-generic enum as the control, and the f-string and `to_string` surfaces. Tests: `e2e_generic_enum_display_direct_spellings` (tests/codegen.rs) with the twin `a_generic_enum_renders_directly_at_its_instantiation` (tests/interpreter.rs). Gates: fmt, both clippy legs, default suite (106 targets), codegen 3083 and memory_sanitizer 1130 under KARAC_REQUIRE_RUNTIME_ARCHIVE=1.
 
 WITH B-2026-08-19-28, THE GENERIC-ENUM DISPLAY SURFACE IS NOW CLOSED: nested (container element, map value, set element) and direct (binding, f-string, to_string) both render at the instantiation, for seeded and user-defined generics alike. What remains is the unrelated subtask-5 restriction on rendering an unbound call result or literal, which is not specific to enums or to generics. |
+| B-2026-08-20-2 | codegen | high | GPU float NaN guards written as `!(x == x)` are DELETED on Metal: MSL compiles with fast-math by default, which lets the compiler assume no NaN exist… | FIXED by 9aed2e2c. Every float NaN guard in the emitted shaders now tests the BIT PATTERN — `(bitcast<u32>(x) & 0x7fffffffu) > 0x7f800000u`, true exactly when the exponent is all ones and the mantissa non-zero — instead of `!(x == x)`. Integer arithmetic carries no fast-math licence, so it survives every backend, and `bitcast` was already proven on both since the ±inf identities use it.
+
+APPLIED TO BOTH FLOAT FAMILIES THAT HAD THE PATTERN, not just the one that failed: the Arg combine and `karac_min`/`karac_max`. min/max were PASSING on Metal, but by luck rather than by construction — the same fold applies to them, and the surviving `select(a, b, b < a)` merely happened to land on the right answer for the fixtures in the suite. Fixing only the observed failure would have left an identical latent bug one test away.
+
+WHAT THE FIX DOES NOT COVER, stated so nobody assumes more: with the guards working, no comparison ever sees a NaN operand, so the rest of each combine is fast-math-safe. But if a backend FLUSHES NaN on load rather than merely assuming it away, no shader-level test can help — that needs `shaderSignedZeroInfNanPreserveFloat32`, which this codebase cannot assert from here. |
 
 </details>
 
