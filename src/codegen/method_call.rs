@@ -987,6 +987,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
         }
+        // The two-pass statistics need their own lowering: the runtime hands
+        // back a sum of squares, and the divisor and the square root are
+        // decided here.
+        if matches!(method, "variance" | "stddev") {
+            if let ExprKind::Identifier(name) = &object.kind {
+                if name == "gpu" && !self.variables.contains_key("gpu") {
+                    return self.compile_gpu_variance(args, call_span, method == "stddev");
+                }
+            }
+        }
         // The Arg family reports an INDEX, so it returns `Option[i64]`
         // regardless of the element type and needs its own lowering.
         if matches!(method, "argmin" | "argmax") {

@@ -1105,6 +1105,16 @@ impl<'a> super::TypeChecker<'a> {
             if module == "gpu" && method == "dot" {
                 return self.infer_gpu_dot(args, span);
             }
+            // Variance is genuinely TWO PASSES, so it needs its own inference
+            // and two shaders — the deviation kernel and the sum kernel that
+            // both folds its partials and computes the mean in the first
+            // place.
+            if module == "gpu" && method == "variance" {
+                return self.infer_gpu_variance(args, span, false, "variance");
+            }
+            if module == "gpu" && method == "stddev" {
+                return self.infer_gpu_variance(args, span, true, "stddev");
+            }
             // The Arg family reports an INDEX, so it needs two shaders and a
             // result type unrelated to the element type.
             if module == "gpu" && method == "argmin" {
@@ -3709,6 +3719,96 @@ impl<'a> super::TypeChecker<'a> {
                 );
                 self.gpu_dispatch_wgsl
                     .insert(SpanKey(span.offset, span.length), fold_wgsl);
+            }
+            (Err(e), _) | (_, Err(e)) => {
+                self.type_error(
+                    format!(
+                        "error[E_GPU_REDUCE_KERNEL]: cannot lower `gpu.{spelling}` to a GPU \
+                         shader — {}",
+                        e.reason()
+                    ),
+                    args[0].value.span,
+                    TypeErrorKind::TypeMismatch,
+                );
+            }
+        }
+
+        self.record_expr_type(span, &result);
+        result
+    }
+
+    /// `gpu.variance(buf)` / `gpu.stddev(buf)` — the two-pass reductions
+    /// (B-2026-08-19-13).
+    ///
+    /// Separate from [`Self::infer_gpu_reduce`] because the shape is genuinely
+    /// different: the mean has to exist before a single deviation can be
+    /// formed, so the device runs a whole sum reduction, reads the answer
+    /// back, and dispatches again with the mean as a uniform. Everything
+    /// before this was one converging fold.
+    ///
+    /// Two shaders, keyed like the Arg family's: the DEVIATION kernel on the
+    /// buffer-argument span, the SUM kernel on the call span. The sum kernel
+    /// does double duty — the whole first pass, and folding the second pass's
+    /// partials — which is what makes the answer identical to summing the
+    /// squared deviations by hand.
+    ///
+    /// POPULATION form (÷ n), matching `Stats.variance` and `Stats.stddev`, so
+    /// the two answer the same number on the same buffer.
+    fn infer_gpu_variance(
+        &mut self,
+        args: &[CallArg],
+        span: &Span,
+        _sqrt: bool,
+        spelling: &str,
+    ) -> Type {
+        let f32_ty = Type::Float(FloatSize::F32);
+        let result = Type::Named {
+            name: "Option".to_string(),
+            args: vec![f32_ty.clone()],
+        };
+        if args.len() != 1 {
+            self.type_error(
+                format!(
+                    "error[E_GPU_REDUCE_ARITY]: `gpu.{spelling}` takes exactly one buffer — \
+                     `gpu.{spelling}(buffer)` (found {} argument(s))",
+                    args.len()
+                ),
+                *span,
+                TypeErrorKind::WrongNumberOfArgs,
+            );
+            return result;
+        }
+
+        let buf_ty = self.infer_expr(&args[0].value);
+        let ok = matches!(
+            &buf_ty,
+            Type::Named { name, args: ta }
+                if name == "Vec" && ta.len() == 1 && ta[0] == Type::Float(FloatSize::F32)
+        );
+        if !ok {
+            self.type_error(
+                format!(
+                    "error[E_GPU_REDUCE_BUFFER]: `gpu.{spelling}` takes a `Vec[f32]` (found \
+                     `{}`) — the two-pass statistics are f32-only; an integer form would have to \
+                     promote its deviations, which needs its own decision",
+                    crate::typechecker::types::type_display(&buf_ty)
+                ),
+                args[0].value.span,
+                TypeErrorKind::TypeMismatch,
+            );
+            return result;
+        }
+
+        let dev = crate::gpu_wgsl::emit_deviation_kernel("f32");
+        let sum = crate::gpu_wgsl::emit_reduce_kernel(ReduceOp::Sum, "f32");
+        match (dev, sum) {
+            (Ok(dev_wgsl), Ok(sum_wgsl)) => {
+                self.gpu_dispatch_wgsl.insert(
+                    SpanKey(args[0].value.span.offset, args[0].value.span.length),
+                    dev_wgsl,
+                );
+                self.gpu_dispatch_wgsl
+                    .insert(SpanKey(span.offset, span.length), sum_wgsl);
             }
             (Err(e), _) | (_, Err(e)) => {
                 self.type_error(

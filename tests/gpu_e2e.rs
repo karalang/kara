@@ -1118,6 +1118,102 @@ fn gpu_arg_reductions_agree_with_the_interpreter() {
 }
 
 #[test]
+fn gpu_variance_and_stddev_agree_with_the_interpreter() {
+    // The first TWO-PASS reduction, and the first shader with a UNIFORM. Both
+    // only really run on a device: the mean is produced by a complete sum
+    // reduction, read back to the host, and handed to a second dispatch that
+    // squares each deviation on load.
+    //
+    // Textbook population example: [2,4,4,4,5,5,7,9] has mean 5, variance 4,
+    // standard deviation 2. Matching `Stats.variance` / `Stats.stddev`, which
+    // are population too.
+    assert_gpu_reduce_matches_interp(
+        "reduce_variance",
+        "fn main() {\n\
+        \x20   let v: Vec[f32] = [2.0, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0];\n\
+        \x20   let a = gpu.variance(v);\n\
+        \x20   match a {\n\
+        \x20       Some(x) => println(f\"{x}\"),\n\
+        \x20       None => println(\"empty\"),\n\
+        \x20   }\n\
+        }\n",
+        "4",
+    );
+    assert_gpu_reduce_matches_interp(
+        "reduce_stddev",
+        "fn main() {\n\
+        \x20   let v: Vec[f32] = [2.0, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0];\n\
+        \x20   let a = gpu.stddev(v);\n\
+        \x20   match a {\n\
+        \x20       Some(x) => println(f\"{x}\"),\n\
+        \x20       None => println(\"empty\"),\n\
+        \x20   }\n\
+        }\n",
+        "2",
+    );
+
+    // A CONSTANT buffer is the fixture that proves the uniform actually
+    // carries the mean: every deviation is zero. A uniform that arrived as 0.0
+    // — an unbound or misbound binding — would give the sum of squares
+    // instead, which is loudly nonzero here.
+    assert_gpu_reduce_matches_interp(
+        "reduce_variance_constant",
+        "fn main() {\n\
+        \x20   let mut v: Vec[f32] = [];\n\
+        \x20   for i in 0..200 { v.push(7.0) }\n\
+        \x20   let a = gpu.variance(v);\n\
+        \x20   match a {\n\
+        \x20       Some(x) => println(f\"{x}\"),\n\
+        \x20       None => println(\"empty\"),\n\
+        \x20   }\n\
+        }\n",
+        "0",
+    );
+
+    // Two full fold levels in BOTH passes.
+    assert_gpu_reduce_matches_interp(
+        "reduce_stddev_multi",
+        "fn main() {\n\
+        \x20   let mut v: Vec[f32] = [];\n\
+        \x20   for i in 0..4096 { v.push((i % 13) as f32) }\n\
+        \x20   let a = gpu.stddev(v);\n\
+        \x20   match a {\n\
+        \x20       Some(x) => println(f\"{x}\"),\n\
+        \x20       None => println(\"empty\"),\n\
+        \x20   }\n\
+        }\n",
+        "3.742374897003174",
+    );
+
+    // Small-n edges: one element has zero population variance, none has no
+    // variance at all.
+    assert_gpu_reduce_matches_interp(
+        "reduce_variance_single",
+        "fn main() {\n\
+        \x20   let v: Vec[f32] = [3.0];\n\
+        \x20   let a = gpu.variance(v);\n\
+        \x20   match a {\n\
+        \x20       Some(x) => println(f\"{x}\"),\n\
+        \x20       None => println(\"empty\"),\n\
+        \x20   }\n\
+        }\n",
+        "0",
+    );
+    assert_gpu_reduce_matches_interp(
+        "reduce_variance_empty",
+        "fn main() {\n\
+        \x20   let v: Vec[f32] = [];\n\
+        \x20   let a = gpu.variance(v);\n\
+        \x20   match a {\n\
+        \x20       Some(x) => println(f\"{x}\"),\n\
+        \x20       None => println(\"empty\"),\n\
+        \x20   }\n\
+        }\n",
+        "empty",
+    );
+}
+
+#[test]
 fn gpu_integer_arg_reductions_order_by_the_element_type() {
     // The discriminating pair: above 2^31 the signed and unsigned orders
     // disagree at BOTH ends, so a signed compare on unsigned data answers

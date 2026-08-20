@@ -2040,6 +2040,132 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok((data, n))
     }
 
+    /// `gpu.variance(buf)` / `gpu.stddev(buf)` — the two-pass statistics
+    /// (B-2026-08-19-13).
+    ///
+    /// Bakes TWO shaders, keyed like the Arg family's: the DEVIATION kernel on
+    /// the buffer-argument span and the SUM kernel on the call span. The sum
+    /// kernel does double duty inside the runtime — the whole first pass that
+    /// produces the mean, and the fold over the second pass's partials.
+    ///
+    /// The runtime returns the sum of squared deviations; the divisor and the
+    /// square root are applied HERE, because they are the parts the CPU twin
+    /// has to mirror and because it lets one entry point serve both spellings.
+    /// POPULATION form (÷ n), matching `Stats.variance` / `Stats.stddev`.
+    pub(super) fn compile_gpu_variance(
+        &mut self,
+        args: &[CallArg],
+        call_span: &crate::token::Span,
+        sqrt: bool,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        if args.len() != 1 {
+            return Err(format!(
+                "gpu.variance/stddev expects one buffer, found {} argument(s)",
+                args.len()
+            ));
+        }
+        let i64_t = self.context.i64_type();
+        let f32_t = self.context.f32_type();
+
+        let mut baked = Vec::with_capacity(2);
+        for (key, label) in [
+            (
+                (args[0].value.span.offset, args[0].value.span.length),
+                "gpu.var.dev.wgsl",
+            ),
+            ((call_span.offset, call_span.length), "gpu.var.sum.wgsl"),
+        ] {
+            let wgsl = self
+                .accel
+                .gpu_dispatch_wgsl
+                .get(&key)
+                .cloned()
+                .ok_or_else(|| {
+                    "internal error: no WGSL recorded for `gpu.variance`/`gpu.stddev` — the \
+                     typechecker intercept must run before codegen"
+                        .to_string()
+                })?;
+            let len = i64_t.const_int(wgsl.len() as u64, false);
+            let ptr = self
+                .builder
+                .build_global_string_ptr(&wgsl, label)
+                .map_err(|e| format!("baking gpu variance shader constant failed: {e}"))?
+                .as_pointer_value();
+            baked.push((ptr, len));
+        }
+
+        let (data, n) = self.read_gpu_reduce_buffer(&args[0].value)?;
+        let sumsq_fn = self.gpu_sumsq_dev_f32_fn();
+        let fn_val = self.current_fn.expect("gpu variance in function");
+
+        // Empty has no variance — `None`, the answer every other GPU reduction
+        // gives for an empty buffer. Guarded BEFORE the divide, which would
+        // otherwise be by zero.
+        let nonempty = self
+            .builder
+            .build_int_compare(IntPredicate::UGT, n, i64_t.const_zero(), "gpu.var.ne")
+            .unwrap();
+        let some_bb = self.context.append_basic_block(fn_val, "gpu.var.some");
+        let none_bb = self.context.append_basic_block(fn_val, "gpu.var.none");
+        let merge_bb = self.context.append_basic_block(fn_val, "gpu.var.merge");
+        self.builder
+            .build_conditional_branch(nonempty, some_bb, none_bb)
+            .unwrap();
+
+        self.builder.position_at_end(some_bb);
+        let ss = self
+            .builder
+            .build_call(
+                sumsq_fn,
+                &[
+                    baked[0].0.into(),
+                    baked[0].1.into(),
+                    baked[1].0.into(),
+                    baked[1].1.into(),
+                    data.into(),
+                    n.into(),
+                ],
+                "gpu.var.ss",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_float_value();
+        // Population divisor. The count goes through i64 -> f32 to match the
+        // twin's `xs.len() as f32` exactly.
+        let n_f = self
+            .builder
+            .build_signed_int_to_float(n, f32_t, "gpu.var.nf")
+            .unwrap();
+        let var = self.builder.build_float_div(ss, n_f, "gpu.var").unwrap();
+        let result = if sqrt {
+            // `llvm.sqrt` is overloaded on the float width; declared at f32
+            // here so `gpu.stddev` roots the f32 variance rather than
+            // round-tripping through f64, which would round twice.
+            let intrinsic = inkwell::intrinsics::Intrinsic::find("llvm.sqrt")
+                .expect("llvm.sqrt intrinsic must exist");
+            let decl = intrinsic
+                .get_declaration(&self.module, &[f32_t.into()])
+                .expect("llvm.sqrt declaration for f32");
+            self.builder
+                .build_call(decl, &[var.into()], "gpu.std")
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+        } else {
+            var.into()
+        };
+        let word = self.coerce_to_payload_words(result, 1)?[0];
+        let some_end_bb = self.builder.get_insert_block().unwrap();
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+        self.builder.position_at_end(none_bb);
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+        self.builder.position_at_end(merge_bb);
+        Ok(self.build_option_some_via_phis(&[word], some_end_bb, none_bb, "gpu.var"))
+    }
+
     /// `gpu.argmin(buf)` / `gpu.argmax(buf)` — the INDEX of the extremum
     /// (B-2026-08-19-13).
     ///

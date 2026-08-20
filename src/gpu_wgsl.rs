@@ -1027,6 +1027,72 @@ pub fn emit_reduce_kernel(op: ReduceOp, elem: &str) -> Result<String, WgslError>
     ))
 }
 
+/// Emit the level-0 shader of a `gpu.variance` / `gpu.stddev` second pass:
+/// square each element's deviation from the mean ON LOAD, then run the same
+/// halving sum tree (B-2026-08-19-13).
+///
+/// **The first shader here that takes a UNIFORM.** Variance is genuinely two
+/// passes — the mean has to exist before a single deviation can be formed —
+/// so the host runs a complete sum reduction, reads the mean back, and
+/// dispatches this with the mean bound at `@binding(2)`. Every reduction
+/// before variance was a single converging fold.
+///
+/// The fusion is the one `gpu.dot` uses: the deviation is squared on load, so
+/// no `n`-element intermediate is ever written. And like `dot`, only LEVEL 0
+/// is special — the per-workgroup partials are folded by the ordinary sum
+/// shader, which is what makes `gpu.variance` and "sum the squared deviations
+/// yourself" the same number rather than merely close.
+///
+/// Binding order follows the runtime's convention — inputs, then outputs,
+/// then uniforms — so a 1-in/1-out kernel puts its uniform at 2.
+pub fn emit_deviation_kernel(elem: &str) -> Result<String, WgslError> {
+    if elem != "f32" {
+        return Err(WgslError::UnsupportedSignature(format!(
+            "GPU `variance`/`stddev` over `{elem}` is not supported yet — they are f32-only"
+        )));
+    }
+    let width = GPU_REDUCE_WIDTH;
+    let half = width / 2;
+    Ok(format!(
+        "@group(0) @binding(0) var<storage, read>       input:  array<{elem}>;\n\
+         @group(0) @binding(1) var<storage, read_write> output: array<{elem}>;\n\
+         @group(0) @binding(2) var<storage, read>       mean_u: array<{elem}>;\n\
+         \n\
+         var<workgroup> scratch: array<{elem}, {width}>;\n\
+         \n\
+         @compute @workgroup_size({width})\n\
+         fn main(@builtin(local_invocation_id) lid: vec3<u32>,\n\
+         \x20       @builtin(workgroup_id) wid: vec3<u32>,\n\
+         \x20       @builtin(global_invocation_id) gid: vec3<u32>) {{\n\
+         \x20   let t = lid.x;\n\
+         \x20   let i = gid.x;\n\
+         \x20   // The ONLY difference from the sum shader: the squared\n\
+         \x20   // deviation is formed on load, so no n-element intermediate\n\
+         \x20   // is written. The mean arrives as a uniform because it cannot\n\
+         \x20   // be known until a whole reduction has already finished.\n\
+         \x20   if (i < arrayLength(&input)) {{\n\
+         \x20       let d = input[i] - mean_u[0];\n\
+         \x20       scratch[t] = d * d;\n\
+         \x20   }} else {{\n\
+         \x20       scratch[t] = 0.0;\n\
+         \x20   }}\n\
+         \x20   workgroupBarrier();\n\
+         \n\
+         \x20   var stride: u32 = {half}u;\n\
+         \x20   loop {{\n\
+         \x20       if (stride == 0u) {{ break; }}\n\
+         \x20       if (t < stride) {{ scratch[t] = scratch[t] + scratch[t + stride]; }}\n\
+         \x20       workgroupBarrier();\n\
+         \x20       stride = stride / 2u;\n\
+         \x20   }}\n\
+         \n\
+         \x20   // One partial per workgroup; the host folds them with the\n\
+         \x20   // plain SUM shader, exactly as the dot path does.\n\
+         \x20   if (t == 0u) {{ output[wid.x] = scratch[0]; }}\n\
+         }}\n"
+    ))
+}
+
 /// Emit an `argmin`/`argmax` tree-reduction shader (B-2026-08-19-13).
 ///
 /// The Arg family is the one reduction whose scratch holds PAIRS: an index
@@ -4394,6 +4460,51 @@ mod tests {
         ] {
             assert!(seed.contains(shared), "seed missing `{shared}`");
             assert!(fold.contains(shared), "fold missing `{shared}`");
+        }
+    }
+
+    #[test]
+    fn deviation_kernel_is_the_sum_kernel_with_the_squared_deviation_on_load() {
+        // Same relationship the dot kernel has to the sum kernel: everything
+        // after the load is shared, so the fold levels can be the ordinary sum
+        // shader and the answer is identical to summing the squared deviations
+        // by hand.
+        let dev = emit_deviation_kernel("f32").unwrap();
+        let sum = emit_reduce_kernel(ReduceOp::Sum, "f32").unwrap();
+
+        // THE distinguishing feature: a uniform. Variance is genuinely two
+        // passes — the mean cannot be known until a whole reduction has
+        // finished — so it arrives bound after the in/out buffers.
+        assert!(
+            dev.contains("@binding(2) var<storage, read>       mean_u: array<f32>;"),
+            "{dev}"
+        );
+        assert!(!sum.contains("mean_u"), "the sum shader takes no uniform");
+        assert!(dev.contains("let d = input[i] - mean_u[0];"), "{dev}");
+        assert!(dev.contains("scratch[t] = d * d;"), "{dev}");
+        // Out-of-range lanes contribute nothing to a sum of squares.
+        assert!(dev.contains("scratch[t] = 0.0;"), "{dev}");
+
+        for shared in [
+            "var<workgroup> scratch: array<f32, 64>;",
+            "@compute @workgroup_size(64)",
+            "var stride: u32 = 32u;",
+            "if (t < stride) { scratch[t] = scratch[t] + scratch[t + stride]; }",
+            "if (t == 0u) { output[wid.x] = scratch[0]; }",
+        ] {
+            assert!(dev.contains(shared), "deviation missing `{shared}`:\n{dev}");
+            assert!(sum.contains(shared), "sum missing `{shared}`");
+        }
+    }
+
+    #[test]
+    fn deviation_kernel_refuses_non_f32() {
+        // An integer form would have to promote its deviations — the mean is
+        // fractional — and doing that on a device means f32, which loses whole
+        // integers above 2^24. Its own decision, not a widening.
+        for elem in ["i32", "u32", "f64"] {
+            let err = emit_deviation_kernel(elem).unwrap_err();
+            assert!(format!("{err:?}").contains("f32-only"), "{elem}: {err:?}");
         }
     }
 

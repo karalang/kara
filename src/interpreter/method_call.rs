@@ -1007,6 +1007,65 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
+    /// `gpu.variance(buf)` / `gpu.stddev(buf)` under the interpreter
+    /// (B-2026-08-19-13).
+    ///
+    /// POPULATION form (÷ n), matching `Stats.variance` / `Stats.stddev`. Both
+    /// passes go through the same sum tree the device uses, so the two agree
+    /// bit-for-bit rather than within an epsilon.
+    fn eval_gpu_variance(
+        &mut self,
+        args: &[CallArg],
+        span: &Span,
+        sqrt: bool,
+        spelling: &str,
+    ) -> Value {
+        if args.len() != 1 {
+            return self.record_runtime_error(
+                format!("gpu.{spelling} expects one buffer (found {})", args.len()),
+                span,
+            );
+        }
+        let Value::Array(rc) = self.eval_expr_inner(&args[0].value) else {
+            return self
+                .record_runtime_error(format!("gpu.{spelling} buffer must be a Vec of f32"), span);
+        };
+        let elems = rc.read().unwrap().clone();
+        let mut xs: Vec<f32> = Vec::with_capacity(elems.len());
+        for v in &elems {
+            match v {
+                Value::Float(f) => xs.push(*f as f32),
+                _ => {
+                    return self.record_runtime_error(
+                        format!("gpu.{spelling} buffer element must be f32"),
+                        span,
+                    )
+                }
+            }
+        }
+
+        // Population form, so `bessel` is false. An empty buffer has no
+        // variance — `None`, the answer every other GPU reduction gives for
+        // an empty input, where `Stats.variance` raises instead.
+        let folded = if sqrt {
+            crate::reduce_kernel::tree_stddev_f32(&xs, false)
+        } else {
+            crate::reduce_kernel::tree_variance_f32(&xs, false)
+        };
+        match folded {
+            Some(v) => Value::EnumVariant {
+                enum_name: "Option".to_string(),
+                variant: "Some".to_string(),
+                data: EnumData::Tuple(vec![Value::Float(v as f64)]),
+            },
+            None => Value::EnumVariant {
+                enum_name: "Option".to_string(),
+                variant: "None".to_string(),
+                data: EnumData::Unit,
+            },
+        }
+    }
+
     /// `gpu.argmin(buf)` / `gpu.argmax(buf)` under the interpreter
     /// (B-2026-08-19-13).
     ///
@@ -1271,6 +1330,10 @@ impl<'a> super::Interpreter<'a> {
                 ("gpu", "max") => return self.eval_gpu_reduce(args, span, ReduceOp::Max, "max"),
                 ("gpu", "mean") => return self.eval_gpu_reduce(args, span, ReduceOp::Mean, "mean"),
                 ("gpu", "dot") => return self.eval_gpu_dot(args, span),
+                ("gpu", "variance") => {
+                    return self.eval_gpu_variance(args, span, false, "variance")
+                }
+                ("gpu", "stddev") => return self.eval_gpu_variance(args, span, true, "stddev"),
                 ("gpu", "argmin") => return self.eval_gpu_arg(args, span, false, "argmin"),
                 ("gpu", "argmax") => return self.eval_gpu_arg(args, span, true, "argmax"),
                 // `gpu.upload` / `gpu.download` (resident device buffers) are

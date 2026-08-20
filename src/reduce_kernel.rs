@@ -400,6 +400,59 @@ pub fn tree_mean_f32(xs: &[f32]) -> Option<f32> {
     Some(sum / xs.len() as f32)
 }
 
+/// The CPU twin of `gpu.variance(buf)` — **the definition of what a GPU
+/// variance means** (B-2026-08-19-13). `None` iff the buffer is empty.
+///
+/// The first reduction here that is genuinely TWO PASSES: the mean has to
+/// exist before a single squared deviation can be formed, so the device runs
+/// a complete sum reduction, reads the answer back, and dispatches again with
+/// the mean as a uniform. Every reduction before this one was a single
+/// converging fold.
+///
+/// The order, matching the device step for step:
+///
+/// 1. `mean = tree_sum(xs) / n`, in `f32` — the same tree
+///    [`tree_mean_f32`] uses, not a separate accumulation.
+/// 2. `d_i = x_i - mean`, squared, formed ON LOAD in the second pass's
+///    level-0 shader — so no `n`-element deviation buffer is ever written,
+///    the same fusion `gpu.dot` uses.
+/// 3. `ss = tree_sum(d_i^2)`, the ordinary sum tree again.
+/// 4. `ss / n`, or `ss / (n - 1)` when `bessel`.
+///
+/// `bessel` selects the SAMPLE form. `Stats.variance` and `Stats.stddev` are
+/// POPULATION (`bessel: false`, ÷ n), so `gpu.variance` is too — the two
+/// answer the same number on the same buffer.
+///
+/// Both passes go through `tree_reduce_f32`, so the grouping caveat is
+/// inherited rather than re-derived: a long variance is a tree of trees twice
+/// over, and in `f32` that is part of the specified answer.
+pub fn tree_variance_f32(xs: &[f32], bessel: bool) -> Option<f32> {
+    if xs.is_empty() {
+        return None;
+    }
+    let n = xs.len() as f32;
+    let mean = tree_reduce_f32(xs, ReduceOp::Sum)? / n;
+    let squared: Vec<f32> = xs
+        .iter()
+        .map(|x| {
+            let d = x - mean;
+            d * d
+        })
+        .collect();
+    let ss = tree_reduce_f32(&squared, ReduceOp::Sum)?;
+    Some(ss / if bessel { n - 1.0 } else { n })
+}
+
+/// The CPU twin of `gpu.stddev(buf)` — the square root of
+/// [`tree_variance_f32`], taken once at the end.
+///
+/// Rooting the finished variance rather than accumulating anything different
+/// is what makes `gpu.stddev(v)` and `gpu.variance(v).sqrt()` the same number:
+/// there is only one computation, with one extra operation on the way out.
+pub fn tree_stddev_f32(xs: &[f32], bessel: bool) -> Option<f32> {
+    tree_variance_f32(xs, bessel).map(f32::sqrt)
+}
+
 /// The CPU twin of `gpu.mean` over an INTEGER buffer — **the definition of
 /// what an integer GPU mean means** (B-2026-08-19-13). `None` iff empty;
 /// `Some(Err)` iff the SUM overflows.
@@ -1021,6 +1074,77 @@ mod tests {
         assert_eq!(tree_arg_f32(&xs, true), Some(64));
         // The sentinel is never a legal answer.
         assert_ne!(tree_arg_f32(&xs, true), Some(ARG_INVALID as i64));
+    }
+
+    #[test]
+    fn tree_variance_matches_the_textbook_population_form() {
+        // `Stats.variance` / `Stats.stddev` are POPULATION (÷ n), so these are
+        // too — the two answer the same number on the same buffer. The
+        // canonical example: [2,4,4,4,5,5,7,9] has mean 5, variance 4, sd 2.
+        let xs = [2.0f32, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0];
+        assert_eq!(tree_variance_f32(&xs, false), Some(4.0));
+        assert_eq!(tree_stddev_f32(&xs, false), Some(2.0));
+
+        // The SAMPLE form divides by n-1 instead: 32/7.
+        assert_eq!(tree_variance_f32(&xs, true), Some(32.0 / 7.0));
+    }
+
+    #[test]
+    fn tree_variance_handles_the_small_n_edges() {
+        // A single element has zero population variance, and `Stats.variance`
+        // says the same. Empty has none at all — the surface reports `None`
+        // where `Stats.variance` raises, because every other GPU reduction
+        // already answers `None` for an empty buffer.
+        assert_eq!(tree_variance_f32(&[3.0], false), Some(0.0));
+        assert_eq!(tree_stddev_f32(&[3.0], false), Some(0.0));
+        assert_eq!(tree_variance_f32(&[], false), None);
+        assert_eq!(tree_stddev_f32(&[], true), None);
+
+        // n = 1 with Bessel divides by zero — an infinity, not a trap. Left as
+        // IEEE gives it rather than special-cased, because a sample variance
+        // of one observation is genuinely undefined and any invented finite
+        // answer would be a lie.
+        assert!(tree_variance_f32(&[3.0], true).unwrap().is_nan());
+    }
+
+    #[test]
+    fn tree_stddev_is_exactly_the_root_of_the_variance() {
+        // One computation, one extra operation on the way out — so the two
+        // cannot drift.
+        for n in [1usize, 7, 64, 65, 4096] {
+            let xs: Vec<f32> = (0..n).map(|i| ((i * 37) % 101) as f32 * 0.25).collect();
+            let v = tree_variance_f32(&xs, false).unwrap();
+            assert_eq!(
+                tree_stddev_f32(&xs, false).map(f32::to_bits),
+                Some(v.sqrt().to_bits()),
+                "n={n}"
+            );
+        }
+    }
+
+    #[test]
+    fn tree_variance_reuses_the_sum_tree_for_both_passes() {
+        // Both passes go through `tree_reduce_f32`, so the grouping story is
+        // inherited rather than re-derived. Spelled out here so a future
+        // "optimization" that folded the deviations some other way would fail
+        // rather than silently change the specified answer.
+        for n in [64usize, 65, 4096] {
+            let xs: Vec<f32> = (0..n).map(|i| (i % 13) as f32).collect();
+            let mean = tree_reduce_f32(&xs, ReduceOp::Sum).unwrap() / n as f32;
+            let squared: Vec<f32> = xs
+                .iter()
+                .map(|x| {
+                    let d = x - mean;
+                    d * d
+                })
+                .collect();
+            let ss = tree_reduce_f32(&squared, ReduceOp::Sum).unwrap();
+            assert_eq!(
+                tree_variance_f32(&xs, false).map(f32::to_bits),
+                Some((ss / n as f32).to_bits()),
+                "n={n}"
+            );
+        }
     }
 
     #[test]

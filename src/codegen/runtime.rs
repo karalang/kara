@@ -12101,6 +12101,38 @@ impl<'ctx> super::Codegen<'ctx> {
             .add_function("karac_runtime_gpu_reduce_i32", fn_ty, None)
     }
 
+    /// Lazily declare `karac_runtime_gpu_sumsq_dev_f32(dev_wgsl_ptr: ptr,
+    /// dev_wgsl_len: i64, sum_wgsl_ptr: ptr, sum_wgsl_len: i64, in_ptr: ptr,
+    /// n: i64) -> f32` — the two-pass statistics' entry point
+    /// (B-2026-08-19-13).
+    ///
+    /// Returns the SUM OF SQUARED DEVIATIONS, not the variance. The final
+    /// divisor is the caller's choice (`n` for the population form, `n - 1`
+    /// for the sample one) and `stddev` needs one more operation on top, so
+    /// both stay here where the CPU twin mirrors them — and one entry point
+    /// serves `variance` and `stddev` both.
+    pub(super) fn gpu_sumsq_dev_f32_fn(&self) -> FunctionValue<'ctx> {
+        if let Some(f) = self.module.get_function("karac_runtime_gpu_sumsq_dev_f32") {
+            return f;
+        }
+        let i64_t = self.context.i64_type();
+        let f32_t = self.context.f32_type();
+        let ptr_t = self.context.ptr_type(AddressSpace::default());
+        let fn_ty = f32_t.fn_type(
+            &[
+                ptr_t.into(),
+                i64_t.into(),
+                ptr_t.into(),
+                i64_t.into(),
+                ptr_t.into(),
+                i64_t.into(),
+            ],
+            false,
+        );
+        self.module
+            .add_function("karac_runtime_gpu_sumsq_dev_f32", fn_ty, None)
+    }
+
     /// Lazily declare `karac_runtime_gpu_arg_index(seed_wgsl_ptr: ptr,
     /// seed_wgsl_len: i64, fold_wgsl_ptr: ptr, fold_wgsl_len: i64,
     /// in_ptr: ptr, n: i64) -> i32` — the Arg family's entry point

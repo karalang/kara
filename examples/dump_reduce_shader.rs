@@ -7,6 +7,10 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let op = args.get(1).map(String::as_str).unwrap_or("sum");
     let elem = args.get(2).map(String::as_str).unwrap_or("f32");
+    if op == "dev" {
+        println!("{}", karac::gpu_wgsl::emit_deviation_kernel(elem).unwrap());
+        return;
+    }
     if let Some(aop) = op.strip_prefix("arg-") {
         let (o, fold) = match aop {
             "min" => (karac::reduce_kernel::ReduceOp::Argmin, false),

@@ -37799,6 +37799,40 @@ fn gpu_integer_mean_promotes_to_f64_rather_than_truncating() {
 }
 
 #[test]
+fn gpu_variance_and_stddev_are_option_f32_and_f32_only() {
+    typecheck_ok(
+        "fn main() {\n\
+        \x20   let b: Vec[f32] = [1.0, 2.0];\n\
+        \x20   let v: Option[f32] = gpu.variance(b);\n\
+        \x20   let s: Option[f32] = gpu.stddev(b);\n\
+        }",
+    );
+
+    for (src, needle) in [
+        // Integers would have to promote their deviations — the mean is
+        // fractional — and on a device that means f32. Its own decision.
+        (
+            "fn main() { let b: Vec[i32] = [1, 2]; let v = gpu.variance(b); }",
+            "f32-only",
+        ),
+        (
+            "fn main() { let b: Vec[f32] = [1.0]; let v = gpu.stddev(b, b); }",
+            "E_GPU_REDUCE_ARITY",
+        ),
+        (
+            "fn main() { let v = gpu.variance(1.0); }",
+            "E_GPU_REDUCE_BUFFER",
+        ),
+    ] {
+        let errs = typecheck_errors(src);
+        assert!(
+            errs.iter().any(|e| e.to_string().contains(needle)),
+            "expected `{needle}` for {src}, got: {errs:?}"
+        );
+    }
+}
+
+#[test]
 fn gpu_arg_reductions_return_an_index_not_an_element() {
     // `Option[i64]` whatever the element type — an index is not an element,
     // and `Stats.argmin` says the same. Not `Option[f32]`, which is the shape

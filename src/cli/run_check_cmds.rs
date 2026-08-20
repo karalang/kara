@@ -364,6 +364,8 @@ const GPU_REDUCTION_CALLS: &[&str] = &[
     "gpu.dot(",
     "gpu.argmin(",
     "gpu.argmax(",
+    "gpu.variance(",
+    "gpu.stddev(",
 ];
 
 /// True when the program reaches the GPU runtime at all, and so must route to

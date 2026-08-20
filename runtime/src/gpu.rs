@@ -835,6 +835,138 @@ async fn dispatch_arg_async(
     outs.pop()
 }
 
+/// One level-0 deviation dispatch: one input buffer plus the MEAN as a
+/// uniform, one partials buffer out (B-2026-08-19-13).
+///
+/// The uniform is what makes variance two passes rather than one. Bound after
+/// the in/out buffers, following `run_compute`'s convention, so a 1-in/1-out
+/// kernel finds it at `@binding(2)`.
+async fn dispatch_deviation_async(
+    wgsl: &str,
+    input: &[u8],
+    mean: f32,
+    elem_size: usize,
+) -> Option<Vec<u8>> {
+    let ctx = gpu_context()?;
+    let device = &ctx.device;
+    let queue = &ctx.queue;
+
+    let input_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("gpu-dev-input"),
+        contents: input,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+    });
+    let mean_bytes = mean.to_le_bytes();
+    let out_sizes = [input.len() as u64];
+    let output_bufs = run_compute(
+        device,
+        queue,
+        wgsl,
+        &[input_buf],
+        &out_sizes,
+        &[&mean_bytes],
+        input.len() / elem_size,
+    );
+    let mut outs = readback(device, queue, &output_bufs, &out_sizes)?;
+    outs.pop()
+}
+
+/// C entry point for `gpu.variance(buffer)` / `gpu.stddev(buffer)` — returns
+/// the SUM OF SQUARED DEVIATIONS (B-2026-08-19-13).
+///
+/// **The first genuinely two-pass reduction.** Every other one here is a
+/// single converging fold; this one cannot be, because the mean has to exist
+/// before a single deviation can be formed. So it runs a complete sum
+/// reduction, divides to get the mean, and dispatches a second pass that
+/// squares each deviation on load and folds again.
+///
+/// Returns the sum of squares rather than the variance because the final
+/// divisor is the caller's choice — `n` for the population form, `n - 1` for
+/// the sample one — and `stddev` needs one more operation on top. Keeping
+/// both in codegen means the CPU twin mirrors them in one obvious place, and
+/// means ONE entry point serves `variance` and `stddev` both.
+///
+/// Takes two shaders: the deviation kernel for level 0 of the second pass, and
+/// the ordinary SUM kernel, used BOTH for the whole first pass and to fold the
+/// second pass's partials. Reusing it is what makes the answer identical to
+/// summing the squared deviations by hand.
+///
+/// # Safety
+///
+/// Both `*_wgsl_ptr`/`_len` pairs a valid UTF-8 shader; `in_ptr` points to `n`
+/// valid `f32` values. Aborts on no available GPU adapter (no CPU fallback),
+/// same as every other entry point here.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_gpu_sumsq_dev_f32(
+    dev_wgsl_ptr: *const u8,
+    dev_wgsl_len: usize,
+    sum_wgsl_ptr: *const u8,
+    sum_wgsl_len: usize,
+    in_ptr: *const f32,
+    n: usize,
+) -> f32 {
+    unsafe {
+        // No elements, no deviations. The caller turns this into `None`; it
+        // never divides by the zero that would otherwise follow.
+        if n == 0 {
+            return 0.0;
+        }
+        const WORKGROUP: usize = 64;
+
+        let Ok(dev_wgsl) =
+            std::str::from_utf8(std::slice::from_raw_parts(dev_wgsl_ptr, dev_wgsl_len))
+        else {
+            crate::fatal::write_stderr(
+                b"panic: gpu.variance deviation shader is not valid UTF-8\n",
+            );
+            std::process::abort();
+        };
+        let Ok(sum_wgsl) =
+            std::str::from_utf8(std::slice::from_raw_parts(sum_wgsl_ptr, sum_wgsl_len))
+        else {
+            crate::fatal::write_stderr(b"panic: gpu.variance fold shader is not valid UTF-8\n");
+            std::process::abort();
+        };
+
+        let elem_size = std::mem::size_of::<f32>();
+        let input = std::slice::from_raw_parts(in_ptr as *const u8, n * elem_size);
+
+        // PASS 1: the whole sum reduction, then the mean. Identical to
+        // `gpu.mean`, deliberately — the two must agree about what the mean of
+        // this buffer is, or the deviations are measured from the wrong place.
+        let sum = karac_runtime_gpu_reduce_f32(sum_wgsl_ptr, sum_wgsl_len, in_ptr, n, 0.0);
+        let mean = sum / n as f32;
+
+        // PASS 2, level 0: square each deviation on load and reduce per
+        // workgroup.
+        let Some(output) =
+            pollster::block_on(dispatch_deviation_async(dev_wgsl, input, mean, elem_size))
+        else {
+            crate::fatal::write_stderr(
+                b"panic: gpu.variance found no available GPU adapter (no CPU fallback)\n",
+            );
+            std::process::abort();
+        };
+        let mut count = n.div_ceil(WORKGROUP);
+        let mut level = output[..count * elem_size].to_vec();
+
+        // PASS 2, levels 1+: the ordinary sum fold over the partials.
+        while count > 1 {
+            let Some(next) = pollster::block_on(dispatch_bytes_async(sum_wgsl, &level, elem_size))
+            else {
+                crate::fatal::write_stderr(
+                    b"panic: gpu.variance found no available GPU adapter (no CPU fallback)\n",
+                );
+                std::process::abort();
+            };
+            count = count.div_ceil(WORKGROUP);
+            level = next[..count * elem_size].to_vec();
+        }
+
+        f32::from_le_bytes([level[0], level[1], level[2], level[3]])
+    }
+}
+
 /// C entry point for `gpu.argmin(buffer)` / `gpu.argmax(buffer)` — the index
 /// of the extremum (B-2026-08-19-13).
 ///
@@ -1665,6 +1797,49 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
 }
 "#;
 
+    /// The variance second-pass level-0 shader, as `karac`'s emitter generates
+    /// it (`gpu_wgsl::emit_deviation_kernel("f32")`). Copied here so the
+    /// UNIFORM binding — the first one in this file — can be proven against a
+    /// real device before any of the compiler surface is built on it.
+    const DEVIATION_WGSL: &str = r#"
+@group(0) @binding(0) var<storage, read>       input:  array<f32>;
+@group(0) @binding(1) var<storage, read_write> output: array<f32>;
+@group(0) @binding(2) var<storage, read>       mean_u: array<f32>;
+
+var<workgroup> scratch: array<f32, 64>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(local_invocation_id) lid: vec3<u32>,
+        @builtin(workgroup_id) wid: vec3<u32>,
+        @builtin(global_invocation_id) gid: vec3<u32>) {
+    let t = lid.x;
+    let i = gid.x;
+    // The ONLY difference from the sum shader: the squared
+    // deviation is formed on load, so no n-element intermediate
+    // is written. The mean arrives as a uniform because it cannot
+    // be known until a whole reduction has already finished.
+    if (i < arrayLength(&input)) {
+        let d = input[i] - mean_u[0];
+        scratch[t] = d * d;
+    } else {
+        scratch[t] = 0.0;
+    }
+    workgroupBarrier();
+
+    var stride: u32 = 32u;
+    loop {
+        if (stride == 0u) { break; }
+        if (t < stride) { scratch[t] = scratch[t] + scratch[t + stride]; }
+        workgroupBarrier();
+        stride = stride / 2u;
+    }
+
+    // One partial per workgroup; the host folds them with the
+    // plain SUM shader, exactly as the dot path does.
+    if (t == 0u) { output[wid.x] = scratch[0]; }
+}
+"#;
+
     /// The `argmin` level-0 and fold shaders, as `karac`'s emitter generates
     /// them (`gpu_wgsl::emit_arg_kernel(ReduceOp::Argmin, "f32", fold)`).
     /// Copied here so the pair-carrying tree, the NaN rule and the index
@@ -2030,6 +2205,88 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>,
                 all_nan.iter().copied().fold(f32::INFINITY, f32::min)
             );
         }
+    }
+
+    #[test]
+    fn sumsq_dev_entry_point_matches_a_hand_rolled_two_pass() {
+        // The first two-pass reduction, and the first UNIFORM binding. Proves
+        // both against a real device: the mean is computed by a complete sum
+        // reduction, read back, and handed to a second dispatch that squares
+        // each deviation on load.
+        for n in [3usize, 8, 64, 65, 4096] {
+            let xs: Vec<f32> = (0..n).map(|i| ((i * 37) % 101) as f32 * 0.25).collect();
+            if dispatch_f32_map(SUM_REDUCE_WGSL, &xs).is_none() {
+                eprintln!("gpu-var: no GPU adapter available — skipping");
+                return;
+            }
+            let got = unsafe {
+                karac_runtime_gpu_sumsq_dev_f32(
+                    DEVIATION_WGSL.as_ptr(),
+                    DEVIATION_WGSL.len(),
+                    SUM_REDUCE_WGSL.as_ptr(),
+                    SUM_REDUCE_WGSL.len(),
+                    xs.as_ptr(),
+                    xs.len(),
+                )
+            };
+
+            // Reproduced with the same trees the device uses: the mean from a
+            // tree sum, then the squared deviations through a tree sum. Not a
+            // naive left fold — that would disagree in the last ulp and the
+            // whole family exists to be bit-exact.
+            let mean = tree_sum_multi_f32(&xs) / n as f32;
+            let squared: Vec<f32> = xs
+                .iter()
+                .map(|x| {
+                    let d = x - mean;
+                    d * d
+                })
+                .collect();
+            assert_eq!(
+                got.to_bits(),
+                tree_sum_multi_f32(&squared).to_bits(),
+                "n={n}"
+            );
+        }
+    }
+
+    #[test]
+    fn sumsq_dev_entry_point_is_zero_for_an_empty_buffer() {
+        // Needs no device, and never reaches the divide that would follow.
+        let got = unsafe {
+            karac_runtime_gpu_sumsq_dev_f32(
+                DEVIATION_WGSL.as_ptr(),
+                DEVIATION_WGSL.len(),
+                SUM_REDUCE_WGSL.as_ptr(),
+                SUM_REDUCE_WGSL.len(),
+                std::ptr::null(),
+                0,
+            )
+        };
+        assert_eq!(got, 0.0);
+    }
+
+    #[test]
+    fn sumsq_dev_is_zero_for_a_constant_buffer() {
+        // Every deviation is zero, so the uniform must actually be the mean —
+        // a uniform that arrived as 0.0 (an unbound or misbound binding) would
+        // give the sum of squares instead, which is loudly nonzero here.
+        let xs = vec![7.0f32; 200];
+        if dispatch_f32_map(SUM_REDUCE_WGSL, &xs).is_none() {
+            eprintln!("gpu-var-const: no GPU adapter available — skipping");
+            return;
+        }
+        let got = unsafe {
+            karac_runtime_gpu_sumsq_dev_f32(
+                DEVIATION_WGSL.as_ptr(),
+                DEVIATION_WGSL.len(),
+                SUM_REDUCE_WGSL.as_ptr(),
+                SUM_REDUCE_WGSL.len(),
+                xs.as_ptr(),
+                xs.len(),
+            )
+        };
+        assert_eq!(got, 0.0, "constant buffer has zero deviation from its mean");
     }
 
     #[test]

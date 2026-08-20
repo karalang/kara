@@ -10173,6 +10173,8 @@ let hi  = gpu.max(buf)        // Option[f32]
 let mu  = gpu.mean(buf)       // Option[f32]
 let d   = gpu.dot(a, b)       // f32 — traps if the lengths differ
 let a   = gpu.mean(buf)       // Option[f32]; Option[f64] over an integer buffer
+let s2  = gpu.variance(buf)   // Option[f32] — population (÷ n)
+let sd  = gpu.stddev(buf)     // Option[f32]
 let i   = gpu.argmin(buf)     // Option[i64] — the INDEX of the minimum
 let j   = gpu.argmax(buf)     // Option[i64]
 ```
@@ -10195,6 +10197,8 @@ Two operations are defined in terms of `sum` rather than having a tree of their 
 - `gpu.argmin` / `gpu.argmax` report an **index**, so they yield `Option[i64]` whatever the element type — including over `Vec[i32]` and `Vec[u32]`, where signedness affects only the comparison and never the result. Above 2³¹ the two integer orders disagree at both ends (`4294967295` is the largest `u32` and `-1` as `i32`), so the element type decides the answer, not the bits. Ties take the **first** occurrence, matching `Stats.argmin`. Their tree carries (value, index) pairs and its combine is lexicographic — strictly better value wins, exact tie goes to the smaller index — which is a semilattice, so like `min`/`max` they are grouping-independent.
 
 They diverge from `Stats.argmin` on **NaN**, and necessarily. `Stats.argmin` seeds its running best with element 0 and displaces it only on a strict comparison, so a leading NaN is never displaced: `Stats.argmin([NaN, 3.0, 1.0])` is `0` while `Stats.argmin([3.0, 1.0, NaN])` is `1`. That position-dependence cannot survive a halving tree, where the grouping decides the positions. In `gpu.argmin` a NaN always loses, so the first buffer answers `2`; an all-NaN buffer answers `0`, since nothing ever wins and the leftmost survives.
+
+`gpu.variance` / `gpu.stddev` are the **population** forms (÷ n), matching `Stats.variance` and `Stats.stddev`, so the two answer the same number on the same buffer. They are the only **two-pass** reductions: the mean has to exist before a single deviation can be formed, so the device runs a complete sum reduction, reads the mean back, and dispatches again with it as a uniform. Both passes go through the same sum tree, so the grouping caveat above is inherited rather than re-derived — and `gpu.stddev(v)` is exactly `gpu.variance(v)` rooted once at the end, not a separate accumulation.
 
 `gpu.dot(a, b)` is `gpu.sum(a * b)`, to the last bit. It is a separate operation only because the product is formed **on load** inside the reduction's first level, so no `n`-element intermediate is ever written — a device-traffic win, not a semantic difference.
 - `gpu.mean(buf)` is `gpu.sum(buf) / n`, to the last bit: the specified tree sum, divided by the count, in `f32`, **once**. Not compensated, not accumulated wider. So `mean` inherits the sum's grouping rather than having one of its own, and adds exactly one further rounding — that is the whole of its precision story. The division happens on the host after the fold converges, never in the shader: a shader cannot know it is running the last level of the tree, so a division inside it would divide once per level.

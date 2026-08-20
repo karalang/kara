@@ -34795,6 +34795,53 @@ fn gpu_argmin_argmax_report_indices_with_first_occurrence_ties() {
 }
 
 #[test]
+fn gpu_variance_and_stddev_are_the_population_forms() {
+    // `Stats.variance` / `Stats.stddev` are POPULATION (÷ n), so these are
+    // too — the two answer the same number on the same buffer. Textbook
+    // example: [2,4,4,4,5,5,7,9] has mean 5, variance 4, sd 2.
+    let out = run_no_errors(
+        "fn main() {\n\
+        \x20   let v: Vec[f32] = [2.0, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0];\n\
+        \x20   let a = gpu.variance(v);\n\
+        \x20   match a {\n\
+        \x20       Some(x) => println(f\"{x}\"),\n\
+        \x20       None => println(\"empty\"),\n\
+        \x20   }\n\
+        }",
+    );
+    assert_eq!(out.trim(), "4");
+
+    let out = run_no_errors(
+        "fn main() {\n\
+        \x20   let v: Vec[f32] = [2.0, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0];\n\
+        \x20   let a = gpu.stddev(v);\n\
+        \x20   match a {\n\
+        \x20       Some(x) => println(f\"{x}\"),\n\
+        \x20       None => println(\"empty\"),\n\
+        \x20   }\n\
+        }",
+    );
+    assert_eq!(out.trim(), "2");
+
+    // A single element has zero population variance; an empty buffer has
+    // none at all. `Stats.variance` raises on empty — every GPU reduction
+    // answers `None` instead, and this one is consistent with its siblings.
+    for (buf, want) in [("[3.0]", "0"), ("[]", "empty")] {
+        let out = run_no_errors(&format!(
+            "fn main() {{\n\
+            \x20   let v: Vec[f32] = {buf};\n\
+            \x20   let a = gpu.variance(v);\n\
+            \x20   match a {{\n\
+            \x20       Some(x) => println(f\"{{x}}\"),\n\
+            \x20       None => println(\"empty\"),\n\
+            \x20   }}\n\
+            }}"
+        ));
+        assert_eq!(out.trim(), want, "variance of {buf}");
+    }
+}
+
+#[test]
 fn gpu_integer_arg_orders_by_the_element_type() {
     // Above 2^31 the signed and unsigned orders disagree at BOTH ends:
     // `4294967295` is the largest u32 and `-1` read as i32. So a signed
