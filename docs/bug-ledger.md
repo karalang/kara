@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | diagnostics | 83 | 0 |
 | false-positive | 82 | 0 |
 | perf | 77 | 0 |
-| crash | 53 | 1 |
+| crash | 54 | 1 |
 | soundness | 51 | 0 |
 | other | 49 | 0 |
 | use-after-free | 20 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 948 | 2 |
+| codegen | 949 | 2 |
 | typecheck | 214 | 1 |
 | interp | 162 | 0 |
 | ownership | 60 | 0 |
@@ -124,15 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 6 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1377 surfaced · 3 open · 1354 fixed · 7 wontfix** (2026-05-20 → 2026-08-19). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1378 surfaced · 3 open · 1355 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-19-13 | 2026-08-19 | typecheck+codegen+runtime | medium | GPU reductions still lack the two-pass statistics (var / std), prefix-sum and tiled matmul; integer `prod` / `dot` are blocked on WGSL lacking a widening multiply, and the Arg family is f32-only. `sum`/`prod`/`min`/`max`/`mean`/`dot`/`argmin`/`argmax` over `Vec[f32]` and `sum`/`min`/`max`/`mean` over `Vec[i32]` and `Vec[u32]` have shipped. | docs/spikes/gpu-llvm-offload-assessment.md; src/gpu_wgsl.rs::emit_reduce_kernel; src/reduce_kernel.rs::tree_reduce_f32 |
-| B-2026-08-19-28 | 2026-08-19 | codegen | medium | `println(v)` on a `Vec[Option[T]]` PANICS the compiler — `emit_display_fn_for_type: type_name 'T' not yet supported` — unless an earlier bare `Option[T]` render happened to seed the display-fn cache. ORDER-DEPENDENT: the identical program compiles when a `println(o)` on a plain `Option[T]` precedes it, so deleting an unrelated print can break a build. | src/codegen/synth_display.rs::emit_display_fn_for_type (the panicking catch-all); src/codegen/synth_display.rs::emit_vec_display_fn_te; src/codegen/synth_display.rs::display_fn_cache (the seeding that hides it) |
 | B-2026-08-19-29 | 2026-08-19 | parser | low | `usize` is missing from the parser's unsigned-suffix list for the out-of-range literal band, so `18446744073709551615usize` is REJECTED ("out of range for i64 … add an unsigned suffix") while the byte-identical `18446744073709551615u64` is accepted. `usize` is 64-bit, so the whole upper half of its range is unwritable as a literal. | src/parser/exprs.rs (the `IntegerOutOfRange` arm's unsigned-suffix match); src/typechecker/exprs.rs::int_literal_range (which already handles Usize); src/typechecker/exprs.rs::literal_as_i128 |
+| B-2026-08-19-30 | 2026-08-20 | codegen | medium | A BARE `println(e)` on a user-defined GENERIC enum value PANICS the compiler — `emit_display_fn_for_type: type_name 'T' not yet supported`. The nested spellings (`Vec[MyOpt[T]]`, a `Map` value) were fixed by B-2026-08-19-28; this one takes a different entry point, `render_user_enum_display`, which receives only the enum's NAME and so cannot substitute the instantiation. | src/codegen/synth_display.rs::render_user_enum_display (the `&[]` argument); src/codegen/synth_display.rs::emit_enum_display_fn (already instantiation-aware); src/codegen/types_lowering.rs::register_var_from_type_expr (where a binding's full TypeExpr is seen and dropped); src/codegen/display.rs::display_option_result_types (the span-addressed precedent) |
 
 ### Wontfix (7)
 
@@ -150,9 +150,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1377 surfaced
 
 </details>
 
-### Fixed (1354)
+### Fixed (1355)
 
-<details><summary>1354 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1355 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -12444,6 +12444,19 @@ VERIFICATION. Codegen was already correct on every shape, which made it an exact
 THE COUNTERWEIGHT TEST IS THE IMPORTANT ONE. The failure mode of over-applying this fix is turning every `-1` into 18446744073709551615, so `the_display_peel_leaves_signed_and_narrow_values_alone` pins `Option[i64]`, `Vec[i64]`, `Vec[u8]`, a negative tuple, `f64`, `String` and `bool` to their existing rendering. The peel changes the reading only for the two widths whose top half does not fit the signed carrier.
 
 SPLIT OUT, found by this row's measurement: B-2026-08-19-28 (a `println` of a `Vec[Option[T]]` PANICS codegen unless an earlier bare `Option[T]` render happens to have seeded the display-fn cache — order-dependent, confirmed pre-existing on a clean `main` build) and B-2026-08-19-29 (`usize` is missing from the parser's unsigned-suffix list for the out-of-range literal band, so `18446744073709551615usize` is rejected while the identical `u64` literal is accepted). |
+| B-2026-08-19-28 | codegen | medium | `println(v)` on a `Vec[Option[T]]` PANICS the compiler — `emit_display_fn_for_type: type_name 'T' not yet supported` — unless an earlier bare `Option… | FIXED by c72187e. The row understated the extent, which measuring corrected before any code changed: it is not `Vec[Option[T]]` but EVERY generic enum reached through a container or a field, on every render surface — `println` / f-string / `to_string` of a `Vec[Option[T]]`, `Vec[Result[T, E]]`, a `Map` value, a `Set` element — and user-defined generics as well as the seeded ones. Signedness was irrelevant; `Vec[Option[i64]]` panicked just as readily as the `u64` case that surfaced it.
+
+ROOT CAUSE. `emit_enum_display_fn` took only the enum's NAME, so it read variant payload types straight from the DECLARATION. For a generic enum those are the bare parameters, and recursing on `T` — which has no layout and no renderer — fell to the by-name catch-all and panicked. `Option` LOOKED fine because a bespoke instantiation-aware path (`emit_option_display_te`) intercepts the DIRECT `println(o)` spelling ahead of this function and leaves a concrete fn in the cache that a later nested use then finds. That cache hit is the whole of the order-dependence: the same program compiles or does not depending on whether an unrelated earlier `println` happened to seed it.
+
+FIX SHAPE. Making the emitter instantiation-aware, rather than adding a second special case for `Option`/`Result`. The narrow fix would have left every user-defined generic enum broken — including the bare `println` of one, which panics for the same reason — and would have added a third path doing what two already do. It now takes the use site's generic arguments, substitutes them into the variant payload types with `subst_type_params_in_type_expr` (the helper the drop synthesizer already uses for generic struct fields), and keys its cache PER INSTANTIATION. That last part is load-bearing: the cache was keyed on the bare enum name, so `MyOpt[i64]` and `MyOpt[String]` in one program would otherwise collide on whichever fn was emitted first. A non-generic enum keeps the exact cache key and behaviour it had.
+
+A SECOND DEFECT UNDERNEATH, unreachable while the parameter never resolved, and a WRONG ANSWER rather than a panic. A generic enum's layout is the ERASED base, so a payload wider than its inline area is heap-boxed with the box pointer in word 0 — the normal state for `MyOpt[String]`, whose `Has` slot is one word while a String is three. The display path read the slot inline and zero-filled past the area, rebuilding `{ptr, 0, 0}` and printing `Has()` where the interpreter printed `Has(x)`. Caught by A/B-ing the first fix rather than by reading it, and fixed with the same debox the match-arm unpack applies, keyed on the same static predicate so both sites agree about which payloads are boxed. Turning a panic into a silently wrong answer would have been a worse state than the bug being closed, which is why this was not deferred.
+
+VERIFICATION. The interpreter was already correct throughout — it renders from the VALUE, which carries its payload directly — so it is the reference this was measured against. Byte-identical on `Vec[Option[T]]`, `Vec[Result[T, E]]`, `Map[String, Option[T]]`, `Set[Option[T]]`, `Vec[Vec[Option[T]]]`, a user `MyOpt[T]` at three instantiations (including a boxed `String` payload and a boxed `Vec[i64]` payload), two instantiations of one enum in a single program, `u128` payloads, and the f-string and `to_string` surfaces. No seeding `println` appears anywhere in the tests, deliberately — that is the thing that used to hide the bug. Tests: `e2e_generic_enum_display_renders_at_its_instantiation` and `e2e_generic_enum_display_deboxes_an_oversized_payload` (tests/codegen.rs) with the twin `a_generic_enum_renders_at_its_instantiation` (tests/interpreter.rs). Gates: fmt, both clippy legs, default suite (106 targets), codegen 3082 and memory_sanitizer 1130 under KARAC_REQUIRE_RUNTIME_ARCHIVE=1.
+
+STILL BROKEN, split out as B-2026-08-19-30: a BARE `println(e)` on a user-defined generic enum value. It takes a different entry point (`render_user_enum_display`), which receives only the enum's name, and codegen has no span-addressed table carrying a variable's full instantiation — so it needs a new side table rather than a call-site argument. Unchanged by this commit: it panicked before and panics now, with the same message.
+
+NOT A BUG, for the next reader: a struct FIELD whose type is `Option[T]` / `Vec[...]` is refused with a clean diagnostic, not a panic. That is the documented subtask-5 deferral in `display_field_is_leaf`, unrelated to this row. |
 
 </details>
 
