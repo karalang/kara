@@ -3319,6 +3319,7 @@ fn scratch_module_package(name: &str, main_src: &str) -> std::path::PathBuf {
     write(
         &tmp.join("src/db/connection.kara"),
         "pub struct Connection {\n    pub id: i64,\n}\n\n\
+         pub struct Pool {\n    pub size: i64,\n}\n\n\
          pub fn open(id: i64) -> Connection {\n    return Connection { id: id };\n}\n",
     );
     write(
@@ -3490,6 +3491,97 @@ fn test_check_with_no_file_checks_the_whole_package() {
         good_out.contains("All checks passed"),
         "expected the pass verdict, got: {good_out}{good_err}"
     );
+}
+
+#[test]
+fn test_run_package_member_honours_an_aliased_import() {
+    // B-2026-08-20-20: `karac run` executes a merged super-program that drops
+    // the `import` declarations, and the ALIAS binding went with them — `P`
+    // named nothing in the flat unit, so the run path rejected a program
+    // `karac check` and `karac build` both accept. The BUILD path's merge had
+    // solved this already (B-2026-07-29-14); the run path's had not.
+    //
+    // Both an aliased TYPE and an aliased FUNCTION, since the substitution has
+    // to reach type positions and call positions alike.
+    let tmp = scratch_module_package(
+        "run-member-aliased-import",
+        "import db.connection.Pool as P;\n\n         fn main() {\n    let p = P { size: 2 };\n    println(f\"{p.size}\");\n}\n",
+    );
+    let aliased_type = karac_bin()
+        .current_dir(&tmp)
+        .arg("run")
+        .arg("src/main.kara")
+        .output()
+        .unwrap();
+    let ty_out = String::from_utf8_lossy(&aliased_type.stdout).to_string();
+    let ty_err = String::from_utf8_lossy(&aliased_type.stderr).to_string();
+
+    write(
+        &tmp.join("src/main.kara"),
+        "import db.connection.{open as make, Connection};\n\n         fn main() {\n    let c: Connection = make(9);\n    println(f\"{c.id}\");\n}\n",
+    );
+    let aliased_fn = karac_bin()
+        .current_dir(&tmp)
+        .arg("run")
+        .arg("src/main.kara")
+        .output()
+        .unwrap();
+    let fn_out = String::from_utf8_lossy(&aliased_fn.stdout).to_string();
+    let fn_err = String::from_utf8_lossy(&aliased_fn.stderr).to_string();
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    assert!(
+        aliased_type.status.success(),
+        "aliased type import failed under run: {ty_out}{ty_err}"
+    );
+    assert!(ty_out.contains('2'), "expected 2, got: {ty_out}{ty_err}");
+    assert!(
+        aliased_fn.status.success(),
+        "aliased fn import failed under run: {fn_out}{fn_err}"
+    );
+    assert!(fn_out.contains('9'), "expected 9, got: {fn_out}{fn_err}");
+}
+
+#[test]
+fn test_module_cycle_diagnostic_names_the_files_on_the_cycle() {
+    // B-2026-08-20-19. A cycle is the one module diagnostic with no single
+    // span to point at — the offending edge is spread across several files —
+    // so the text render now lists the file behind each module on the cycle.
+    // The dotted path and the extract-to-a-lower-layer suggestion were already
+    // there and are asserted too, so a future edit cannot quietly drop them.
+    let tmp = scratch_project("module-cycle-diagnostic");
+    write(&tmp.join("kara.toml"), "[package]\nname = \"cyc\"\n");
+    write(
+        &tmp.join("src/main.kara"),
+        "import a.f;\nfn main() {\n    println(f\"{f()}\");\n}\npub fn z() -> i64 {\n    return 1;\n}\n",
+    );
+    write(
+        &tmp.join("src/a.kara"),
+        "import b.g;\npub fn f() -> i64 {\n    return g();\n}\n",
+    );
+    write(
+        &tmp.join("src/b.kara"),
+        "import z;\npub fn g() -> i64 {\n    return z();\n}\n",
+    );
+    let out = karac_bin().current_dir(&tmp).arg("build").output().unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "a cycle must fail the build");
+    assert!(stderr.contains("E0223"), "expected E0223, got: {stderr}");
+    assert!(
+        stderr.contains('→'),
+        "the cycle PATH must still be listed: {stderr}"
+    );
+    assert!(
+        stderr.contains("lower-layer module"),
+        "the suggestion must still be listed: {stderr}"
+    );
+    for f in ["a.kara", "b.kara", "main.kara"] {
+        assert!(
+            stderr.contains(f),
+            "expected `{f}` among the cycle's files: {stderr}"
+        );
+    }
 }
 
 #[test]

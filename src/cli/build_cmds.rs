@@ -3052,6 +3052,21 @@ pub(super) fn print_cycles_text(cycles: &[Cycle], tree: &ProgramTree) {
     for c in cycles {
         eprintln!("error[E0223]: circular module dependency");
         eprintln!("  cycle: {}", c.format(tree));
+        // Name the FILE behind each module on the cycle (B-2026-08-20-19). A
+        // cycle is the one module diagnostic with no single span to point at —
+        // the offending edge is spread across several files — so the closest
+        // thing to "where do I go and look" is the list of files involved. The
+        // JSON emitter has carried `cycle_files` all along; the text render
+        // left the reader to map dotted module paths back to paths on disk.
+        for &id in &c.nodes {
+            let m = &tree.modules[id];
+            let label = if m.path.is_empty() {
+                "<crate root>".to_string()
+            } else {
+                m.path.join(".")
+            };
+            eprintln!("    {label}  {}", m.file.display());
+        }
         eprintln!(
             "  suggestion: extract the shared items into a lower-layer module that both ends of the cycle can depend on."
         );
