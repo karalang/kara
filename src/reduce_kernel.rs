@@ -516,6 +516,111 @@ pub fn tree_dot_f32(a: &[f32], b: &[f32]) -> Option<f32> {
     tree_reduce_f32(&products, ReduceOp::Sum)
 }
 
+/// The CPU twin of `gpu.prefix_sum(v)` — **the definition of what a GPU
+/// prefix sum MEANS** (B-2026-08-19-13). Inclusive: `out[i]` is the sum of
+/// `v[0..=i]`. Empty in, empty out.
+///
+/// **The first reduction in this family whose result is a BUFFER**, not a
+/// scalar, and the first that is not a fold at all — a prefix sum is a
+/// different algorithm, which is why the row tracked it as a separate project
+/// rather than another combine string.
+///
+/// INCLUSIVE, because every mainstream prefix sum is: NumPy's `cumsum`, C++'s
+/// `partial_sum`, Python's `itertools.accumulate`. Kāra has no CPU prefix sum
+/// to match — `scan` is taken, and means the ITERATOR ADAPTER (a stateful
+/// map, as in Rust), which is why this is spelled `prefix_sum` rather than
+/// reusing that name for a second thing.
+///
+/// **The order is Hillis-Steele, and it is specified rather than incidental.**
+/// Within one [`GPU_REDUCE_WIDTH`] chunk, for stride 1, 2, 4, 8, 16, 32:
+/// every lane at or past `stride` adds the lane `stride` below it, all lanes
+/// reading the PRE-STEP values (the shader's workgroup barrier — expressed
+/// here as the `prev` copy). Past one chunk the chunks are scanned
+/// independently, their totals are prefix-summed by this same function one
+/// level up, and each chunk's exclusive offset is added back — the recursion
+/// the multi-dispatch performs.
+///
+/// **`prefix_sum(v).last()` need NOT equal `gpu.sum(v)` in f32, and cannot be
+/// made to.** Both are the total, but they reach it by different summation
+/// orders, and float addition is not associative. For `[a, b, c, d]` the
+/// halving tree computes `(a+c) + (b+d)` — its strides run 32…1 over a
+/// zero-padded 64-wide scratch — while Hillis-Steele's last lane computes
+/// `(a+b) + (c+d)`: the same four values in two different GROUPINGS.
+///
+/// They agree far more often than not, which is what makes this worth writing
+/// down rather than discovering later. Any uniform buffer agrees (both
+/// groupings pair equal magnitudes), and so does any buffer whose two
+/// partitions happen to pair the same way — measured over random buffers,
+/// about 60% differ. No scan algorithm fixes it either: Blelloch's up-sweep
+/// does form exactly the tree total, but its down-sweep overwrites the root
+/// with the identity before any output is produced, so the total never
+/// survives into the result. This is the same class of fact as the
+/// multi-workgroup grouping already documented on [`tree_reduce_f32`] —
+/// observable in f32, specified, and not a divergence.
+///
+/// Work-inefficient by design at this slice: Hillis-Steele performs
+/// `O(n log n)` adds where Blelloch performs `O(n)`. It is chosen for having
+/// a step order that can be written down exactly in one paragraph, which is
+/// what the interpreter has to reproduce bit-for-bit. Blelloch is the
+/// performance follow-up, and swapping to it CHANGES THE ANSWER in f32 — so
+/// it is a semantics change, not an optimization.
+pub fn tree_prefix_sum_f32(xs: &[f32]) -> Vec<f32> {
+    if xs.is_empty() {
+        return Vec::new();
+    }
+    // Phase 1 — every chunk scanned independently, exactly as one workgroup
+    // does, and its total recorded. The zero padding is the Sum identity, so
+    // a partial chunk's last lane still holds that chunk's real total.
+    let mut out: Vec<f32> = Vec::with_capacity(xs.len());
+    let mut totals: Vec<f32> = Vec::with_capacity(xs.len().div_ceil(GPU_REDUCE_WIDTH));
+    for chunk in xs.chunks(GPU_REDUCE_WIDTH) {
+        let scanned = one_workgroup_scan_f32(chunk);
+        totals.push(scanned[GPU_REDUCE_WIDTH - 1]);
+        out.extend_from_slice(&scanned[..chunk.len()]);
+    }
+    if totals.len() == 1 {
+        return out;
+    }
+    // Phase 2 — the chunk totals are themselves prefix-summed, by this same
+    // function. Self-similar, like `tree_fold_f32`'s partials.
+    let chunk_prefix = tree_prefix_sum_f32(&totals);
+    // Phase 3 — each chunk is shifted by the EXCLUSIVE prefix of the totals
+    // before it, which is the inclusive prefix one position back. Chunk 0
+    // has nothing before it.
+    for (c, chunk) in out.chunks_mut(GPU_REDUCE_WIDTH).enumerate().skip(1) {
+        let offset = chunk_prefix[c - 1];
+        for x in chunk.iter_mut() {
+            *x += offset;
+        }
+    }
+    out
+}
+
+/// One workgroup's inclusive Hillis-Steele scan, zero-padded to
+/// [`GPU_REDUCE_WIDTH`]. The full width is returned because the caller wants
+/// both the scanned prefix AND the last lane, which is the chunk total.
+///
+/// The `prev` copy is load-bearing and is not a Rust artifact: it is the
+/// shader's `workgroupBarrier()`. Every lane must read the values as they
+/// stood BEFORE this step. Updating in place would let a low lane's new value
+/// feed a high lane in the same step, double-counting — and the result would
+/// still look like a plausible prefix sum.
+fn one_workgroup_scan_f32(xs: &[f32]) -> [f32; GPU_REDUCE_WIDTH] {
+    let mut s = [0.0f32; GPU_REDUCE_WIDTH];
+    for (slot, &x) in s.iter_mut().zip(xs) {
+        *slot = x;
+    }
+    let mut stride = 1;
+    while stride < GPU_REDUCE_WIDTH {
+        let prev = s;
+        for t in stride..GPU_REDUCE_WIDTH {
+            s[t] = prev[t] + prev[t - stride];
+        }
+        stride *= 2;
+    }
+    s
+}
+
 /// One GPU-expressible reduction as data: its combining function and the
 /// identity that pads a short chunk.
 type Combiner = (fn(f32, f32) -> f32, f32);
@@ -1453,6 +1558,141 @@ mod tests {
             let want_max = xs.iter().copied().fold(f32::NEG_INFINITY, f32::max);
             assert_eq!(tree_reduce_f32(&xs, ReduceOp::Min), Some(want_min), "n={n}");
             assert_eq!(tree_reduce_f32(&xs, ReduceOp::Max), Some(want_max), "n={n}");
+        }
+    }
+
+    #[test]
+    fn prefix_sum_is_inclusive_and_exact_on_small_integers() {
+        // Every value here is exactly representable in f32 and every partial
+        // sum is too, so the answer is order-independent — this leg pins WHAT
+        // is computed, leaving the order to the tests below.
+        assert_eq!(tree_prefix_sum_f32(&[]), Vec::<f32>::new());
+        assert_eq!(tree_prefix_sum_f32(&[7.0]), vec![7.0]);
+        assert_eq!(
+            tree_prefix_sum_f32(&[1.0, 2.0, 3.0, 4.0]),
+            vec![1.0, 3.0, 6.0, 10.0],
+            "inclusive: out[i] is the sum through i, not up to i"
+        );
+        assert_eq!(
+            tree_prefix_sum_f32(&[5.0, -5.0, 5.0, -5.0]),
+            vec![5.0, 0.0, 5.0, 0.0],
+            "negatives do not need a separate path"
+        );
+    }
+
+    #[test]
+    fn prefix_sum_crosses_the_workgroup_boundary() {
+        // The three lengths that exercise the three phases: exactly one
+        // chunk (no phase 2 at all), one chunk plus one element (phase 2 runs
+        // over a 2-element total array), and a chunk boundary landing
+        // mid-buffer. All-ones makes every expected value its own index + 1,
+        // so an off-by-one in the chunk offset is visible at a glance rather
+        // than as a plausible-looking float.
+        for n in [
+            GPU_REDUCE_WIDTH,
+            GPU_REDUCE_WIDTH + 1,
+            GPU_REDUCE_WIDTH * 2,
+            GPU_REDUCE_WIDTH * 3 + 7,
+        ] {
+            let got = tree_prefix_sum_f32(&vec![1.0f32; n]);
+            let want: Vec<f32> = (1..=n).map(|i| i as f32).collect();
+            assert_eq!(got, want, "n = {n}");
+        }
+    }
+
+    #[test]
+    fn prefix_sum_recurses_past_one_level_of_chunk_totals() {
+        // 64 * 64 + 1 elements means the chunk-total array is itself longer
+        // than one workgroup, so phase 2 recurses a second time. A twin that
+        // handled only one level would be correct up to 4096 and wrong after
+        // — passing every small test, which is the failure shape this family
+        // keeps having to design against.
+        let n = GPU_REDUCE_WIDTH * GPU_REDUCE_WIDTH + 1;
+        let got = tree_prefix_sum_f32(&vec![1.0f32; n]);
+        assert_eq!(got.len(), n);
+        assert_eq!(got[0], 1.0);
+        assert_eq!(got[GPU_REDUCE_WIDTH - 1], GPU_REDUCE_WIDTH as f32);
+        assert_eq!(got[n - 1], n as f32, "the last element is the total");
+        // And it is monotone by exactly one everywhere, so no chunk was
+        // shifted by the wrong offset.
+        for i in 1..n {
+            assert_eq!(got[i] - got[i - 1], 1.0, "step at {i}");
+        }
+    }
+
+    #[test]
+    fn prefix_sums_last_element_is_not_the_tree_sum_in_f32() {
+        // PINNED BECAUSE IT IS SPECIFIED, not because it is desirable. Both
+        // numbers are "the total"; they differ because the two algorithms
+        // reach it by different summation orders and f32 addition is not
+        // associative. The halving tree computes (a+c) + (b+d) — its strides
+        // run 32..1 over a zero-padded scratch — while Hillis-Steele's last
+        // lane computes (a+b) + (c+d).
+        //
+        // Finding a discriminating buffer takes care: a UNIFORM one does not
+        // work (every 4-element grouping of equal values agrees), and neither
+        // does any buffer whose two groupings happen to pair the same
+        // magnitudes. Measured over random buffers, ~60% differ; this is the
+        // smallest legible one.
+        //
+        //   fold = (a+c) + (b+d) = fl(1 + 2^-24) + fl(1 + 2^-23)
+        //                        = 1.0 + (1 + 2^-23)  -> 2.0        (tie to even)
+        //   scan = (a+b) + (c+d) = 2.0 + (2^-24 + 2^-23)
+        //                        = 2.0 + 3*2^-24      -> 2 + 2^-22
+        let xs = [
+            1.0f32,
+            1.0,
+            f32::from_bits(0x3380_0000),
+            f32::from_bits(0x3400_0000),
+        ];
+
+        let scan = tree_prefix_sum_f32(&xs);
+        let fold = tree_reduce_f32(&xs, ReduceOp::Sum).unwrap();
+        assert_ne!(
+            scan[3].to_bits(),
+            fold.to_bits(),
+            "if these ever agree the summation orders have converged — \
+             re-derive the docs on tree_prefix_sum_f32 before relaxing this"
+        );
+
+        // And each is what its own grouping predicts, so the test says which
+        // is which rather than merely that they differ.
+        let (a, b, c, d) = (xs[0], xs[1], xs[2], xs[3]);
+        assert_eq!(
+            fold.to_bits(),
+            ((a + c) + (b + d)).to_bits(),
+            "halving tree"
+        );
+        assert_eq!(
+            scan[3].to_bits(),
+            ((a + b) + (c + d)).to_bits(),
+            "Hillis-Steele"
+        );
+        assert_eq!(fold.to_bits(), 2.0f32.to_bits());
+        assert_eq!(
+            scan[3].to_bits(),
+            (2.0f32 + f32::from_bits(0x3480_0000)).to_bits()
+        );
+    }
+
+    #[test]
+    fn prefix_sum_reads_pre_step_values_at_every_stride() {
+        // The `prev` copy in `one_workgroup_scan_f32` is the shader's
+        // workgroup barrier. Updating in place instead would let a low lane's
+        // freshly written value feed a high lane within the same step, so
+        // element i would be counted more than once — and the result would
+        // still be monotone and still look like a prefix sum, which is why
+        // this needs its own test rather than trusting the all-ones legs.
+        //
+        // Powers of two make double-counting unmistakable: the correct
+        // prefix sums are 1, 3, 7, 15, …, one below the next power.
+        let xs: Vec<f32> = (0..GPU_REDUCE_WIDTH.min(20))
+            .map(|i| (1u32 << i) as f32)
+            .collect();
+        let got = tree_prefix_sum_f32(&xs);
+        for (i, &g) in got.iter().enumerate() {
+            let want = ((1u64 << (i + 1)) - 1) as f32;
+            assert_eq!(g, want, "at {i}: any double count shows up here");
         }
     }
 

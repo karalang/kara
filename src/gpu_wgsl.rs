@@ -1044,6 +1044,131 @@ const NAN_PREDICATE_WGSL: &str = "fn karac_is_nan(x: f32) -> bool {\n\
      \x20   return (bitcast<u32>(x) & 0x7fffffffu) > 0x7f800000u;\n\
      }";
 
+/// Emit phase 1 of `gpu.prefix_sum(buf)`: each workgroup scans its own
+/// [`GPU_REDUCE_WIDTH`]-element chunk in place and records that chunk's total
+/// (B-2026-08-19-13).
+///
+/// **The first GPU op here that is not a fold.** Every reduction before it
+/// converged to one value; a prefix sum produces `n` of them, so the shader
+/// writes a full-width output and the host never gets to stop at "one value
+/// remains". That is why the row tracked it as a separate project rather than
+/// another combine string.
+///
+/// The order is Hillis-Steele and it is language semantics, specified in
+/// [`reduce_kernel::tree_prefix_sum_f32`]: for stride 1, 2, 4, 8, 16, 32,
+/// every lane at or past `stride` adds the lane `stride` below it, and every
+/// lane reads the values as they stood BEFORE the step.
+///
+/// **The read-barrier-write-barrier pair is the whole correctness argument.**
+/// A single barrier per step is not enough and the bug it admits is subtle:
+/// without the FIRST barrier a lane could write `scratch[t]` before a higher
+/// lane has read it, so the higher lane adds an already-updated value and
+/// double-counts an element. The result stays monotone and still looks like a
+/// prefix sum. The CPU twin expresses the same constraint as a `prev` copy.
+///
+/// Two outputs, not one: the scanned chunk AND its total, because phase 2
+/// prefix-sums the totals and phase 3 adds them back. Lane 63 holds the total
+/// unconditionally — a short chunk is padded with `0.0`, the Sum identity, so
+/// the padding contributes nothing.
+pub fn emit_scan_kernel(elem: &str) -> Result<String, WgslError> {
+    if elem != "f32" {
+        return Err(WgslError::UnsupportedSignature(format!(
+            "GPU `prefix_sum` over `{elem}` is not supported yet — it is f32-only. \
+             An integer prefix sum has to carry the overflow flag of \
+             `emit_int_reduce_kernel` through every lane, not just lane 0"
+        )));
+    }
+    let width = GPU_REDUCE_WIDTH;
+    let last = width - 1;
+    Ok(format!(
+        "@group(0) @binding(0) var<storage, read>       input:   array<{elem}>;\n\
+         @group(0) @binding(1) var<storage, read_write> output:  array<{elem}>;\n\
+         @group(0) @binding(2) var<storage, read_write> totals:  array<{elem}>;\n\
+         \n\
+         var<workgroup> scratch: array<{elem}, {width}>;\n\
+         \n\
+         @compute @workgroup_size({width})\n\
+         fn main(@builtin(local_invocation_id) lid: vec3<u32>,\n\
+         \x20       @builtin(workgroup_id) wid: vec3<u32>,\n\
+         \x20       @builtin(global_invocation_id) gid: vec3<u32>) {{\n\
+         \x20   let t = lid.x;\n\
+         \x20   let i = gid.x;\n\
+         \x20   // Every lane loads, including the padding lanes — the scan\n\
+         \x20   // reads across the whole width, so a lane left uninitialised\n\
+         \x20   // would poison its neighbours. 0.0 is the Sum identity.\n\
+         \x20   if (i < arrayLength(&input)) {{ scratch[t] = input[i]; }} else {{ scratch[t] = 0.0; }}\n\
+         \x20   workgroupBarrier();\n\
+         \n\
+         \x20   var stride: u32 = 1u;\n\
+         \x20   loop {{\n\
+         \x20       if (stride >= {width}u) {{ break; }}\n\
+         \x20       // READ first, for every lane, then barrier, then write.\n\
+         \x20       // One barrier per step would let a low lane's new value\n\
+         \x20       // reach a high lane within the same step, double-counting\n\
+         \x20       // an element while still looking like a prefix sum.\n\
+         \x20       var addend: {elem} = 0.0;\n\
+         \x20       if (t >= stride) {{ addend = scratch[t - stride]; }}\n\
+         \x20       workgroupBarrier();\n\
+         \x20       if (t >= stride) {{ scratch[t] = scratch[t] + addend; }}\n\
+         \x20       workgroupBarrier();\n\
+         \x20       stride = stride * 2u;\n\
+         \x20   }}\n\
+         \n\
+         \x20   if (i < arrayLength(&input)) {{ output[i] = scratch[t]; }}\n\
+         \x20   // Lane {last} always holds this chunk's total: a short chunk is\n\
+         \x20   // padded with the identity, so the padding adds nothing.\n\
+         \x20   if (t == {last}u) {{ totals[wid.x] = scratch[{last}]; }}\n\
+         }}\n"
+    ))
+}
+
+/// Emit phase 3 of `gpu.prefix_sum(buf)`: shift every chunk by the total of
+/// all chunks before it (B-2026-08-19-13).
+///
+/// Phase 2 is not a shader — it is this whole three-phase dance run again, one
+/// level up, over the per-chunk totals. So a long prefix sum is a prefix sum
+/// OF PREFIX SUMS, the same self-similarity `tree_fold_f32` has, and the twin
+/// recurses identically.
+///
+/// The offsets arriving here are the INCLUSIVE prefix of the chunk totals, so
+/// chunk `c` wants element `c - 1` — the exclusive prefix is the inclusive one
+/// read a position back. Chunk 0 has nothing before it and is left alone. That
+/// off-by-one is the whole shader, which is why the twin asserts a
+/// one-per-element step over a long all-ones buffer: a misindexed offset shows
+/// up as a jump at a chunk boundary rather than as a wrong total.
+///
+/// Written as a copying pass (two reads, one write) rather than an in-place
+/// update, because the runtime's `run_compute` allocates outputs rather than
+/// aliasing an input — and an in-place variant would need the scanned buffer
+/// bound as both, which the binding convention (inputs, then outputs, then
+/// uniforms) has no way to express.
+pub fn emit_scan_offset_kernel(elem: &str) -> Result<String, WgslError> {
+    if elem != "f32" {
+        return Err(WgslError::UnsupportedSignature(format!(
+            "GPU `prefix_sum` over `{elem}` is not supported yet — it is f32-only"
+        )));
+    }
+    let width = GPU_REDUCE_WIDTH;
+    Ok(format!(
+        "@group(0) @binding(0) var<storage, read>       scanned: array<{elem}>;\n\
+         @group(0) @binding(1) var<storage, read>       offsets: array<{elem}>;\n\
+         @group(0) @binding(2) var<storage, read_write> output:  array<{elem}>;\n\
+         \n\
+         @compute @workgroup_size({width})\n\
+         fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{\n\
+         \x20   let i = gid.x;\n\
+         \x20   if (i >= arrayLength(&scanned)) {{ return; }}\n\
+         \x20   let c = i / {width}u;\n\
+         \x20   // `offsets` is the INCLUSIVE prefix of the chunk totals, so\n\
+         \x20   // chunk c's EXCLUSIVE offset is one position back. Chunk 0\n\
+         \x20   // has nothing before it.\n\
+         \x20   var off: {elem} = 0.0;\n\
+         \x20   if (c > 0u) {{ off = offsets[c - 1u]; }}\n\
+         \x20   output[i] = scanned[i] + off;\n\
+         }}\n"
+    ))
+}
+
 /// Emit the level-0 shader of a `gpu.variance` / `gpu.stddev` second pass:
 /// square each element's deviation from the mean ON LOAD, then run the same
 /// halving sum tree (B-2026-08-19-13).
@@ -4353,6 +4478,60 @@ mod tests {
             "if (t == 0u) { output[wid.x] = scratch[0]; }",
         ] {
             assert!(wgsl.contains(needle), "missing `{needle}` in:\n{wgsl}");
+        }
+    }
+
+    #[test]
+    fn scan_kernel_matches_the_hand_validated_shader() {
+        // Same contract as `reduce_kernel_matches_the_hand_validated_shader`:
+        // `runtime/src/gpu.rs`'s SCAN_WGSL / SCAN_OFFSET_WGSL are what the
+        // prefix sum was proven against on lavapipe, so the generator must
+        // reproduce them or the runtime tests stop testing the emitted shader.
+        let scan = emit_scan_kernel("f32").unwrap();
+        for needle in [
+            "var<workgroup> scratch: array<f32, 64>;",
+            "@compute @workgroup_size(64)",
+            "if (i < arrayLength(&input)) { scratch[t] = input[i]; } else { scratch[t] = 0.0; }",
+            "var stride: u32 = 1u;",
+            "if (stride >= 64u) { break; }",
+            // The read-barrier-write-barrier trio IS the algorithm — a single
+            // barrier per step double-counts while still looking plausible.
+            "if (t >= stride) { addend = scratch[t - stride]; }",
+            "if (t >= stride) { scratch[t] = scratch[t] + addend; }",
+            "stride = stride * 2u;",
+            "if (i < arrayLength(&input)) { output[i] = scratch[t]; }",
+            "if (t == 63u) { totals[wid.x] = scratch[63]; }",
+        ] {
+            assert!(scan.contains(needle), "missing `{needle}` in:\n{scan}");
+        }
+        // Two barriers per step, not one.
+        assert_eq!(
+            scan.matches("workgroupBarrier();").count(),
+            3,
+            "one load barrier plus the read/write pair inside the loop:\n{scan}"
+        );
+
+        let off = emit_scan_offset_kernel("f32").unwrap();
+        for needle in [
+            "let c = i / 64u;",
+            // The exclusive prefix is the inclusive one read a position back.
+            "if (c > 0u) { off = offsets[c - 1u]; }",
+            "output[i] = scanned[i] + off;",
+        ] {
+            assert!(off.contains(needle), "missing `{needle}` in:\n{off}");
+        }
+    }
+
+    #[test]
+    fn scan_kernels_refuse_integer_elements() {
+        // An integer prefix sum has to carry the overflow flag of
+        // `emit_int_reduce_kernel` through EVERY lane, not just lane 0 —
+        // a different shader, and one nothing calls yet. Refusing beats
+        // emitting a silently-wrapping scan, which is the hazard the float
+        // reduce emitter already had to close.
+        for elem in ["i32", "u32"] {
+            assert!(emit_scan_kernel(elem).is_err(), "{elem} scan");
+            assert!(emit_scan_offset_kernel(elem).is_err(), "{elem} offset");
         }
     }
 

@@ -39,6 +39,17 @@ fn main() {
         );
         return;
     }
+    if op == "scan" {
+        println!("{}", karac::gpu_wgsl::emit_scan_kernel(elem).unwrap());
+        return;
+    }
+    if op == "scan-offset" {
+        println!(
+            "{}",
+            karac::gpu_wgsl::emit_scan_offset_kernel(elem).unwrap()
+        );
+        return;
+    }
     if op == "dot" {
         println!("{}", karac::gpu_wgsl::emit_dot_kernel(elem).unwrap());
         return;

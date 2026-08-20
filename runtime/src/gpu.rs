@@ -967,6 +967,159 @@ pub unsafe extern "C" fn karac_runtime_gpu_sumsq_dev_f32(
     }
 }
 
+/// Phase 1 of a prefix sum: scan every chunk in place and record its total.
+/// Returns `(scanned, totals)` — two outputs, which is why it cannot reuse
+/// `dispatch_bytes_async`.
+async fn dispatch_scan_async(
+    wgsl: &str,
+    input: &[u8],
+    elem_size: usize,
+) -> Option<(Vec<u8>, Vec<u8>)> {
+    let ctx = gpu_context()?;
+    let device = &ctx.device;
+    let queue = &ctx.queue;
+
+    let n = input.len() / elem_size;
+    let groups = n.div_ceil(64);
+
+    let input_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("gpu-scan-input"),
+        contents: input,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+    });
+    // Two outputs: the scanned buffer (one per element) and the per-chunk
+    // totals (one per workgroup).
+    let out_sizes = [input.len() as u64, (groups * elem_size) as u64];
+    let output_bufs = run_compute(device, queue, wgsl, &[input_buf], &out_sizes, &[], n);
+    let mut outs = readback(device, queue, &output_bufs, &out_sizes)?;
+    let totals = outs.pop()?;
+    let scanned = outs.pop()?;
+    Some((scanned, totals))
+}
+
+/// Phase 3 of a prefix sum: shift each chunk by the exclusive prefix of the
+/// chunk totals before it. Two inputs, one output.
+async fn dispatch_scan_offset_async(
+    wgsl: &str,
+    scanned: &[u8],
+    offsets: &[u8],
+    elem_size: usize,
+) -> Option<Vec<u8>> {
+    let ctx = gpu_context()?;
+    let device = &ctx.device;
+    let queue = &ctx.queue;
+
+    let scanned_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("gpu-scan-scanned"),
+        contents: scanned,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+    });
+    let offsets_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("gpu-scan-offsets"),
+        contents: offsets,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+    });
+    let out_sizes = [scanned.len() as u64];
+    let output_bufs = run_compute(
+        device,
+        queue,
+        wgsl,
+        &[scanned_buf, offsets_buf],
+        &out_sizes,
+        &[],
+        scanned.len() / elem_size,
+    );
+    let mut outs = readback(device, queue, &output_bufs, &out_sizes)?;
+    outs.pop()
+}
+
+/// The whole three-phase prefix sum over raw bytes, recursing on the chunk
+/// totals — the device twin of `reduce_kernel::tree_prefix_sum_f32`.
+///
+/// Phase 2 is this same function one level up, which is why the recursion is
+/// here rather than unrolled: a buffer longer than `64 * 64` needs more than
+/// one level of chunk totals, and a host loop that handled only one level
+/// would be correct up to 4096 elements and wrong past it.
+fn scan_bytes(scan_wgsl: &str, off_wgsl: &str, input: &[u8], elem_size: usize) -> Option<Vec<u8>> {
+    let (scanned, totals) = pollster::block_on(dispatch_scan_async(scan_wgsl, input, elem_size))?;
+    if totals.len() <= elem_size {
+        // One chunk: the per-chunk scan IS the answer, nothing to shift by.
+        return Some(scanned);
+    }
+    let chunk_prefix = scan_bytes(scan_wgsl, off_wgsl, &totals, elem_size)?;
+    pollster::block_on(dispatch_scan_offset_async(
+        off_wgsl,
+        &scanned,
+        &chunk_prefix,
+        elem_size,
+    ))
+}
+
+/// C entry point for `gpu.prefix_sum(buffer)` — an inclusive prefix sum
+/// (B-2026-08-19-13).
+///
+/// **The first GPU entry point whose result is a BUFFER rather than a
+/// scalar.** Every reduction before it converged to one value that could come
+/// back in a return register; `n` values cannot, so the caller allocates the
+/// destination and this fills it. Allocating here and handing back a pointer
+/// would move ownership across the FFI boundary for no gain — codegen already
+/// knows `n`, already builds the `Vec` control block, and already owns the
+/// freeing.
+///
+/// Three phases, of which phase 2 is this same computation one level up: scan
+/// each chunk and record its total, prefix-sum the totals, add each chunk's
+/// exclusive offset back. See [`scan_bytes`].
+///
+/// # Safety
+///
+/// Both `*_wgsl_ptr`/`_len` pairs a valid UTF-8 shader; `in_ptr` points to `n`
+/// valid `f32` values and `out_ptr` to space for `n` more, non-overlapping.
+/// Aborts on no available GPU adapter (no CPU fallback), same as every other
+/// entry point here.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_gpu_prefix_sum_f32(
+    scan_wgsl_ptr: *const u8,
+    scan_wgsl_len: usize,
+    off_wgsl_ptr: *const u8,
+    off_wgsl_len: usize,
+    in_ptr: *const f32,
+    n: usize,
+    out_ptr: *mut f32,
+) {
+    unsafe {
+        // Empty in, empty out — and no dispatch at all. Unlike the folds
+        // there is no identity to return here; there is simply nothing to
+        // write.
+        if n == 0 {
+            return;
+        }
+        let Ok(scan_wgsl) =
+            std::str::from_utf8(std::slice::from_raw_parts(scan_wgsl_ptr, scan_wgsl_len))
+        else {
+            crate::fatal::write_stderr(b"panic: gpu.prefix_sum scan shader is not valid UTF-8\n");
+            std::process::abort();
+        };
+        let Ok(off_wgsl) =
+            std::str::from_utf8(std::slice::from_raw_parts(off_wgsl_ptr, off_wgsl_len))
+        else {
+            crate::fatal::write_stderr(b"panic: gpu.prefix_sum offset shader is not valid UTF-8\n");
+            std::process::abort();
+        };
+
+        let elem_size = std::mem::size_of::<f32>();
+        let input = std::slice::from_raw_parts(in_ptr as *const u8, n * elem_size);
+
+        let Some(result) = scan_bytes(scan_wgsl, off_wgsl, input, elem_size) else {
+            crate::fatal::write_stderr(
+                b"panic: gpu.prefix_sum found no available GPU adapter (no CPU fallback)\n",
+            );
+            std::process::abort();
+        };
+
+        std::ptr::copy_nonoverlapping(result.as_ptr(), out_ptr as *mut u8, n * elem_size);
+    }
+}
+
 /// C entry point for `gpu.argmin(buffer)` / `gpu.argmax(buffer)` — the index
 /// of the extremum (B-2026-08-19-13).
 ///
@@ -3028,6 +3181,195 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     e_out[i] = e_in[i] + 5.0;
 }
 "#;
+
+    /// Hand-validated copy of the phase-1 scan shader
+    /// (`gpu_wgsl::emit_scan_kernel`), kept honest by
+    /// `scan_kernel_matches_the_hand_validated_shader` on the compiler side.
+    ///
+    /// **THIS SHADER DEFINES THE SUMMATION ORDER** for a prefix sum, the same
+    /// way `SUM_REDUCE_WGSL` does for a fold, and for the same reason: f32
+    /// addition is not associative, so Hillis-Steele's grouping is semantics
+    /// rather than an implementation detail. The interpreter twin
+    /// (`reduce_kernel::tree_prefix_sum_f32`) reproduces it bit-for-bit.
+    const SCAN_WGSL: &str = r#"
+@group(0) @binding(0) var<storage, read>       input:   array<f32>;
+@group(0) @binding(1) var<storage, read_write> output:  array<f32>;
+@group(0) @binding(2) var<storage, read_write> totals:  array<f32>;
+
+var<workgroup> scratch: array<f32, 64>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(local_invocation_id) lid: vec3<u32>,
+        @builtin(workgroup_id) wid: vec3<u32>,
+        @builtin(global_invocation_id) gid: vec3<u32>) {
+    let t = lid.x;
+    let i = gid.x;
+    if (i < arrayLength(&input)) { scratch[t] = input[i]; } else { scratch[t] = 0.0; }
+    workgroupBarrier();
+
+    var stride: u32 = 1u;
+    loop {
+        if (stride >= 64u) { break; }
+        var addend: f32 = 0.0;
+        if (t >= stride) { addend = scratch[t - stride]; }
+        workgroupBarrier();
+        if (t >= stride) { scratch[t] = scratch[t] + addend; }
+        workgroupBarrier();
+        stride = stride * 2u;
+    }
+
+    if (i < arrayLength(&input)) { output[i] = scratch[t]; }
+    if (t == 63u) { totals[wid.x] = scratch[63]; }
+}
+"#;
+
+    /// Hand-validated copy of the phase-3 offset shader
+    /// (`gpu_wgsl::emit_scan_offset_kernel`).
+    const SCAN_OFFSET_WGSL: &str = r#"
+@group(0) @binding(0) var<storage, read>       scanned: array<f32>;
+@group(0) @binding(1) var<storage, read>       offsets: array<f32>;
+@group(0) @binding(2) var<storage, read_write> output:  array<f32>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x;
+    if (i >= arrayLength(&scanned)) { return; }
+    let c = i / 64u;
+    var off: f32 = 0.0;
+    if (c > 0u) { off = offsets[c - 1u]; }
+    output[i] = scanned[i] + off;
+}
+"#;
+
+    /// The CPU twin of the prefix sum, duplicated here because the runtime
+    /// crate cannot depend on `karac`. Must stay identical to
+    /// `reduce_kernel::tree_prefix_sum_f32` — the compiler-side unit tests own
+    /// that definition; this copy exists so the device can be checked against
+    /// it without a circular dependency.
+    fn tree_prefix_sum_f32(xs: &[f32]) -> Vec<f32> {
+        const W: usize = 64;
+        if xs.is_empty() {
+            return Vec::new();
+        }
+        let mut out: Vec<f32> = Vec::with_capacity(xs.len());
+        let mut totals: Vec<f32> = Vec::with_capacity(xs.len().div_ceil(W));
+        for chunk in xs.chunks(W) {
+            let mut s = [0.0f32; W];
+            for (slot, &x) in s.iter_mut().zip(chunk) {
+                *slot = x;
+            }
+            let mut stride = 1;
+            while stride < W {
+                let prev = s;
+                for t in stride..W {
+                    s[t] = prev[t] + prev[t - stride];
+                }
+                stride *= 2;
+            }
+            totals.push(s[W - 1]);
+            out.extend_from_slice(&s[..chunk.len()]);
+        }
+        if totals.len() == 1 {
+            return out;
+        }
+        let chunk_prefix = tree_prefix_sum_f32(&totals);
+        for (c, chunk) in out.chunks_mut(W).enumerate().skip(1) {
+            let offset = chunk_prefix[c - 1];
+            for x in chunk.iter_mut() {
+                *x += offset;
+            }
+        }
+        out
+    }
+
+    fn device_prefix_sum(xs: &[f32]) -> Vec<f32> {
+        let mut out = vec![0.0f32; xs.len()];
+        unsafe {
+            karac_runtime_gpu_prefix_sum_f32(
+                SCAN_WGSL.as_ptr(),
+                SCAN_WGSL.len(),
+                SCAN_OFFSET_WGSL.as_ptr(),
+                SCAN_OFFSET_WGSL.len(),
+                xs.as_ptr(),
+                xs.len(),
+                out.as_mut_ptr(),
+            );
+        }
+        out
+    }
+
+    #[test]
+    fn prefix_sum_matches_the_twin_bit_for_bit_on_the_device() {
+        if gpu_context().is_none() {
+            eprintln!("gpu: no GPU adapter available — skipping");
+            return;
+        }
+        // The four lengths that exercise the three phases and the recursion:
+        // inside one chunk, exactly one chunk (phase 2 never runs), several
+        // chunks, and past 64*64 so the chunk totals themselves need more than
+        // one workgroup — the level a host loop written for a single level
+        // would get wrong while passing everything shorter.
+        for n in [1usize, 7, 64, 65, 200, 4096, 4097] {
+            // Values that are NOT all equal, because a uniform buffer makes
+            // every grouping agree and would hide an order bug.
+            let xs: Vec<f32> = (0..n).map(|i| ((i % 13) as f32) * 0.25 - 1.0).collect();
+            let got = device_prefix_sum(&xs);
+            let want = tree_prefix_sum_f32(&xs);
+            assert_eq!(got.len(), want.len(), "n = {n}");
+            for (i, (g, w)) in got.iter().zip(&want).enumerate() {
+                assert_eq!(
+                    g.to_bits(),
+                    w.to_bits(),
+                    "n = {n}, element {i}: device {g} vs twin {w}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn prefix_sum_is_inclusive_and_empty_writes_nothing() {
+        if gpu_context().is_none() {
+            eprintln!("gpu: no GPU adapter available — skipping");
+            return;
+        }
+        // Exact small integers, so this leg pins WHAT is computed independent
+        // of any ordering question.
+        assert_eq!(
+            device_prefix_sum(&[1.0, 2.0, 3.0, 4.0]),
+            vec![1.0, 3.0, 6.0, 10.0]
+        );
+        // Empty dispatches nothing at all and must not touch the output.
+        let mut sentinel = [7.0f32; 1];
+        unsafe {
+            karac_runtime_gpu_prefix_sum_f32(
+                SCAN_WGSL.as_ptr(),
+                SCAN_WGSL.len(),
+                SCAN_OFFSET_WGSL.as_ptr(),
+                SCAN_OFFSET_WGSL.len(),
+                std::ptr::null(),
+                0,
+                sentinel.as_mut_ptr(),
+            );
+        }
+        assert_eq!(sentinel[0], 7.0, "n = 0 must not write");
+    }
+
+    #[test]
+    fn prefix_sum_carries_the_chunk_offset_across_every_boundary() {
+        if gpu_context().is_none() {
+            eprintln!("gpu: no GPU adapter available — skipping");
+            return;
+        }
+        // All-ones over three-and-a-bit chunks: every element must be exactly
+        // its index plus one. A missing or misindexed chunk offset shows up as
+        // a RESET at a 64-boundary rather than as a slightly wrong float,
+        // which is the failure this phase actually has.
+        let n = 64 * 3 + 5;
+        let got = device_prefix_sum(&vec![1.0f32; n]);
+        for (i, &g) in got.iter().enumerate() {
+            assert_eq!(g, (i + 1) as f32, "element {i} (chunk {})", i / 64);
+        }
+    }
 
     #[test]
     fn five_group_kernel_exceeds_default_storage_buffer_limit() {
