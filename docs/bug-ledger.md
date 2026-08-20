@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 119 | 0 |
 | false-positive | 86 | 0 |
 | diagnostics | 84 | 0 |
-| perf | 80 | 2 |
+| perf | 80 | 1 |
 | crash | 55 | 1 |
 | soundness | 51 | 0 |
 | other | 49 | 0 |
@@ -115,24 +115,23 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | interp | 163 | 0 |
 | ownership | 60 | 0 |
 | other | 58 | 0 |
-| autopar | 53 | 2 |
+| autopar | 53 | 1 |
 | cli | 48 | 0 |
 | parser | 32 | 0 |
-| runtime | 27 | 2 |
+| runtime | 27 | 1 |
 | resolver | 20 | 0 |
 | effect | 7 | 0 |
 | lexer | 6 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1392 surfaced · 4 open · 1368 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1392 surfaced · 3 open · 1369 fixed · 7 wontfix** (2026-05-20 → 2026-08-20). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-19-13 | 2026-08-19 | typecheck+codegen+runtime | medium | GPU reductions still lack TILED MATMUL (2-D workgroup indexing the 1-D model lacks); integer `prod` / `dot` are blocked on WGSL lacking a widening multiply; and `variance` / `stddev` are f32-only (the integer form needs a decision, not just work — the deviations are formed on-device in f32, so `mean`'s promote-late trick does not carry over). A SAMPLE (÷ n-1) form is decided against rather than pending. Everything else has shipped: sum / prod / min / max / mean / dot / argmin / argmax / variance / stddev / prefix_sum over `Vec[f32]`, and sum / min / max / mean / argmin / argmax over `Vec[i32]` and `Vec[u32]`. | docs/spikes/gpu-llvm-offload-assessment.md; src/gpu_wgsl.rs::emit_reduce_kernel; src/reduce_kernel.rs::tree_reduce_f32 |
 | B-2026-08-20-5 | 2026-08-20 | codegen | high | `e2e_128bit_integers_end_to_end` produces EMPTY STDOUT on macOS arm64 only — the binary links and runs but prints nothing before the first `println`. Linux x86_64 and Linux arm64 both pass the same test. CI's `Codegen E2E (macOS arm64, LLVM 18)` lane has been red on `main` since the test landed. | tests/codegen.rs::e2e_128bit_integers_end_to_end (line ~21227); tests/codegen.rs::run_program_capturing (stdout-only discard); added by 7561b5d1 (B-2026-08-19-8 stage 5); CI job `Codegen E2E (macOS arm64, LLVM 18)` in .github/workflows/ci.yml |
-| B-2026-08-20-9 | 2026-08-20 | runtime+autopar | medium | Auto-par worker threads contend on ONE glibc malloc arena: any fan-out body that allocates per iteration pays a shared lock the sequential build never touches | — |
 | B-2026-08-20-14 | 2026-08-20 | autopar | high | A `parallel_reduction` is REPORTED but never dispatched when the loop's induction variable is a REUSED binding (`i = 0` on an `i` declared earlier) rather than a fresh `let mut i = 0` — one token, 3.69x, and the concurrency report claims parallelism either way | — |
 
 ### Wontfix (7)
@@ -151,9 +150,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1392 surfaced
 
 </details>
 
-### Fixed (1368)
+### Fixed (1369)
 
-<details><summary>1368 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1369 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -12586,6 +12585,21 @@ TWO EXISTING TESTS MOVED, and the second is the bug in miniature. (1) The declin
 Regression test `test_report_states_whether_each_reduction_fanned_out` asserts BOTH directions, so it cannot pass on a report that prints `false` unconditionally — which is the old bug in mirror image.
 
 GATES: fmt clean; default suite 106/106 targets green; both clippy legs clean (`--all-targets`, default and `--features llvm`); llvm suite 105 targets green with zero ASAN/LSan reports. The 3 red llvm targets are the documented optional-archive set only (6 regex + 3 arrow under `KARAC_REQUIRE_RUNTIME_ARCHIVE=1`, plus 30 gpu) — unbuilt opt-in archives, unrelated to this change and identical to the pre-change baseline. |
+| B-2026-08-20-9 | runtime+autopar | medium | Auto-par worker threads contend on ONE glibc malloc arena: any fan-out body that allocates per iteration pays a shared lock the sequential build neve… | FIXED IN THE RUNTIME, NOT THE COST MODEL. `karac_realloc_or_panic` now serves a resize where BOTH the request and the block's allocator usable size are <= 1 KiB as `malloc` + copy + `free` instead of libc `realloc` (`runtime/src/alloc.rs::small_realloc`, gated to macOS/Linux where the usable-size query exists; wasm and everything else fall through unchanged).
+
+THE MECHANISM IS NARROWER THAN THE ROW ASSUMED, AND THAT IS WHY THE FIX IS SMALL. The row proposed a thread-local small-object free list in front of `karac_alloc_fallible` / `karac_free_buf`, and flagged three constraints that made it non-trivial (no std::sync in a force-kept module, LSan-clean, wasm-buildable). None of that was needed, because plain allocation was never the problem: glibc's `malloc`/`free` short-circuit into the PER-THREAD tcache for chunks up to `tcache_max` and never touch an arena mutex. `realloc` is the one small-object entry point with NO tcache path — `__libc_realloc` locks `arena_for_chunk(ptr)` unconditionally. So the shape that pessimizes is specifically a REALLOC CHAIN in the fan-out body (a fresh `Vec`/`String` grown by push, caps 1 -> 2 -> 4 -> ...), not "any body that allocates".
+
+MEASURED, four probes on a 4-core Linux container, each run against its own `KARAC_AUTO_PAR=0` build of the same source:
+  - 16 exact-size `String` clones per iteration (4.8M malloc/free pairs, NO realloc): par already FASTER than seq, system time 0.00 s. Allocation alone does not contend.
+  - `Vec[char]` filled by `for c in w.chars()` : covered by B-2026-08-20-3's presizing, one exact malloc per iteration, par ~= seq.
+  - `Vec[char]` filled by a push behind an `if` (defeats presizing, so the realloc chain is intact), 1M iterations: seq 0.11 s vs par 0.55 s — a 5x PESSIMIZATION with system time 0.00 s -> 0.57 s. `strace -f -k` puts ~99% of syscall time in futex, and the stacks are `karac_realloc_or_panic` -> `realloc` -> `__lll_lock_wait_private`.
+  - The same binary under `GLIBC_TUNABLES=glibc.malloc.tcache_count=0`: 0.53 s -> 0.04 s. Disabling tcache forces every malloc through `arena_get`, whose `trylock` failure is what makes glibc SPREAD threads across arenas — so the tcache that makes malloc fast is exactly what leaves every thread on one arena for realloc to serialize on.
+
+AFTER THE FIX, same probe: par 0.55 s -> 0.023 s, system time 0.57 s -> 0.00 s. Auto-par goes from 5x SLOWER than sequential to 4.4x FASTER — a ~24x swing on the parallel leg, and the win auto-par advertised in the first place. Sequential is a wash (0.11 s -> 0.10 s): for a chunk this small glibc's `realloc` usually cannot extend in place either, so it was already doing this copy internally, just behind the lock. Above the threshold the code path is unchanged.
+
+THE CHEAPER PARTIAL THE ROW PROPOSED WAS NOT ADOPTED, and should not be: treating a per-iteration allocation as a fan-out cost would have declined this loop, forfeiting a real 4.4x rather than fixing anything. The row was right to require measuring it first.
+
+TESTS: `small_realloc_grow_preserves_bytes`, `small_realloc_shrink_keeps_the_surviving_prefix`, `realloc_across_the_threshold_preserves_bytes` (runtime unit tests) pin CONTENT PRESERVATION across the whole growth chain and in both directions across the 1 KiB boundary — the only caller-observable property, since which path a resize took is deliberately invisible. The concurrency win is a timing property and is recorded here rather than asserted in CI, where a timing threshold would be flaky without catching anything the content checks miss. The `memory_sanitizer` suite covers the new path for ASAN/LSan. |
 | B-2026-08-20-10 | typecheck | high | LITERAL PATTERNS ARE NEVER TYPECHECKED — `PatternKind::Literal` is an explicit "deferred" arm | FIXED by b585059. The empty `PatternKind::Literal` arm now checks the literal against the scrutinee: class first, then range for the integer case, reusing `check_int_literal_fits` — the same helper the expression path calls.
 
 EXPRESSION POSITION WAS THE ORACLE, and choosing it is most of what made this tractable. `let n: T = <lit>;` already decides every one of these cases, so the check was built to AGREE with it rather than to invent rules, and the agreement is now asserted directly over both spellings (`the_literal_pattern_check_agrees_with_expression_position`) — if either side moves, that test fails instead of the gap silently reopening. Following the oracle is also what kept the check NARROW: an integer literal at a float scrutinee stays accepted (documented int→float widening), and so does an in-range suffix/width mismatch (`5u64` against an `i64`). Whether that last should require `as` is a separate open design question; answering it here would have rejected code that compiles today for reasons unrelated to this bug.
