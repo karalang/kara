@@ -1738,8 +1738,15 @@ fn parse_explain_command(args: &[String]) -> Command {
 /// falling through to a confusing concept-page error.
 fn classify_explain_name(name: &str) -> crate::cli::ExplainTarget {
     let is_code = {
+        // ANY uppercase letter followed by digits, not just `E` / `W`. The
+        // ownership notes are `N05xx` and the FFI lint hint is `L0001`, and
+        // while only `E` / `W` were accepted those fell through to the CLASS
+        // arm below and were rejected as "unknown diagnostic class 'N0503'" —
+        // cataloguing them was not enough on its own (B-2026-08-20-31).
+        // A class name is UPPER_SNAKE and always has a non-digit after its
+        // first character, so it cannot be caught by this arm.
         let mut chars = name.chars();
-        matches!(chars.next(), Some('E') | Some('W'))
+        matches!(chars.next(), Some(c) if c.is_ascii_uppercase())
             && !name[1..].is_empty()
             && chars.all(|c| c.is_ascii_digit())
     };
@@ -2112,6 +2119,16 @@ mod tests {
             T::Class(_)
         ));
         assert!(matches!(classify_explain_name("closures"), T::Concept(c) if c == "closures"));
+        // Not only `E` / `W`: the ownership notes are `N05xx` and the FFI
+        // lint hint is `L0001`. While the arm accepted only the two error
+        // prefixes these reached the CLASS lookup and came back as "unknown
+        // diagnostic class 'N0503'" (B-2026-08-20-31).
+        assert!(matches!(classify_explain_name("N0503"), T::Code(c) if c == "N0503"));
+        assert!(matches!(classify_explain_name("L0001"), T::Code(c) if c == "L0001"));
+        // A class name always has a non-digit after its first character, so
+        // widening the code arm cannot swallow one.
+        assert!(matches!(classify_explain_name("LINT_WARNING"), T::Class(_)));
+        assert!(matches!(classify_explain_name("OTHER"), T::Class(_)));
     }
 
     /// Shapes that are *nearly* a code must not be swallowed by the

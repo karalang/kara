@@ -10924,13 +10924,17 @@ fn test_explain_accepts_the_code_a_diagnostic_reports() {
 
 #[test]
 fn test_explain_uncatalogued_code_points_at_the_class_surface() {
-    // E0001 (parse) is deliberately outside the catalogue's covered bands.
-    // The message must say so and redirect, not pretend the code is unknown
-    // gibberish.
-    let out = karac_bin().args(["explain", "E0001"]).output().unwrap();
+    // Every NUMBERED code is catalogued since B-2026-08-20-31 — `E0001` is
+    // the parser's `Syntax` error and now answers — so the stock example had
+    // to become a number nothing mints. The redirect still matters: the
+    // symbolic `E_*` codes are genuinely reachable only by class.
+    let out = karac_bin().args(["explain", "E0997"]).output().unwrap();
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("not in the catalogue yet"), "got: {stderr}");
+    assert!(
+        stderr.contains("not a diagnostic code this compiler mints"),
+        "got: {stderr}"
+    );
     assert!(stderr.contains("--class"), "got: {stderr}");
 }
 
@@ -11027,23 +11031,87 @@ fn test_explain_answers_for_every_code_in_a_band_it_claims() {
     }
 }
 
-/// The message must not go back to claiming coverage it does not have. The
-/// bands it disclaims are named, so a future catalogue widening that forgets
-/// to update the text fails here rather than misleading the next reader.
+/// Every band is now claimed, so the message's job flipped: instead of
+/// disclaiming three bands it asserts the numbering is complete and points
+/// symbolic codes at the class surface. A future NARROWING that quietly drops
+/// a band has to update this text, and a future widening cannot leave a stale
+/// disclaimer behind.
 #[test]
-fn test_explain_uncatalogued_message_names_the_bands_it_does_not_cover() {
-    let out = karac_bin().args(["explain", "E0500"]).output().unwrap();
+fn test_explain_unmatched_code_message_claims_the_whole_numbering() {
+    let out = karac_bin().args(["explain", "E0997"]).output().unwrap();
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
-    for fragment in ["E04xx", "E05xx", "E0600"] {
+    for fragment in ["E00xx", "E01xx", "E02xx", "E04xx", "E05xx", "E08xx"] {
         assert!(
             stderr.contains(fragment),
-            "the uncatalogued message no longer names {fragment}: {stderr}"
+            "the message no longer names {fragment}: {stderr}"
         );
     }
     assert!(
-        !stderr.contains("resolve and typecheck families"),
-        "the message is back to describing coverage by phase: {stderr}"
+        !stderr.contains("are not catalogued"),
+        "a stale band disclaimer survived the widening: {stderr}"
+    );
+}
+
+/// Every phase's band answers, including the two note prefixes and the lint
+/// hint — `N05xx` and `L0001` needed the ARG PARSER widened as well as a
+/// catalogue row, because its shape check only routed `E` / `W` names to the
+/// code lookup and sent these to the class lookup instead, where they came
+/// back as "unknown diagnostic class 'N0503'" (B-2026-08-20-31).
+#[test]
+fn test_explain_answers_across_every_phase_band() {
+    for (code, phase, kind) in [
+        ("E0001", "parse", "Syntax"),
+        ("E0005", "parse", "ReservedSyntax"),
+        ("E0400", "effect", "MissingEffectDeclaration"),
+        ("E0416", "effect", "NoEffectViolated"),
+        ("L0001", "effect", "FfiLintHint"),
+        ("E0500", "ownership", "UseAfterMove"),
+        ("E0512", "ownership", "FrozenTypeNotFreezable"),
+        ("N0503", "ownership", "RcFallbackNote"),
+        ("N0507", "ownership", "UnusedMutCaptureNote"),
+        ("E0600", "provider_escape", "ProviderEscape"),
+    ] {
+        let out = karac_bin().args(["explain", code]).output().unwrap();
+        assert!(
+            out.status.success(),
+            "`karac explain {code}` failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(text.contains(&format!("phase: {phase}")), "got: {text}");
+        assert!(text.contains(kind), "got: {text}");
+    }
+}
+
+/// The classes this backfill made reachable have to actually arrive on a real
+/// diagnostic, not just in the catalogue. `OWNERSHIP_MOVE_AFTER_USE` was
+/// declared in `DiagnosticClass` but emitted by nothing — every ownership
+/// record carried `"class":"OTHER"` — so `karac explain --class=...` described
+/// a family no diagnostic ever claimed membership of.
+#[test]
+fn test_ownership_diagnostic_carries_its_class_in_the_json_feed() {
+    let tmp = scratch_project("ownership-class-backfill");
+    let file = tmp.join("moved.kara");
+    write(
+        &file,
+        "fn take(v: Vec[i64]) -> i64 {\n    return v.len();\n}\n\nfn main() {\n    let v = [1, 2, 3];\n    let a = take(v);\n    let b = take(v);\n    println(f\"{a} {b}\");\n}\n",
+    );
+    let out = karac_bin()
+        .args(["check", "--output=json"])
+        .arg(&file)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let combined = format!("{stdout}{}", String::from_utf8_lossy(&out.stderr));
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(
+        combined.contains("\"code\":\"E0500\""),
+        "expected the move-after-use record: {combined}"
+    );
+    assert!(
+        combined.contains("\"class\":\"OWNERSHIP_MOVE_AFTER_USE\""),
+        "E0500 must carry its class, not OTHER: {combined}"
     );
 }
 

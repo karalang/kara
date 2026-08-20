@@ -341,6 +341,70 @@ pub enum EffectErrorKind {
     GpuEffectViolation,
 }
 
+/// Broad-category class for an effect-checker diagnostic, mirroring
+/// [`crate::typechecker::class_for_type_error_kind`].
+///
+/// `None` means "not individually classified" and renders as `OTHER` in the
+/// JSON `class` field. That is the honest answer for most of this enum: the
+/// published classes are a small, deliberately coarse taxonomy, and a kind is
+/// mapped here ONLY where the class's own documentation covers it. Inventing a
+/// fit would put fiction into a field machine consumers route on — the whole
+/// value of `class` is that it is narrower than the message text, so a wrong
+/// class is worse than `OTHER` (B-2026-08-20-31).
+pub(crate) fn class_for_effect_error_kind(
+    kind: &EffectErrorKind,
+) -> Option<crate::diagnostic_class::DiagnosticClass> {
+    use crate::diagnostic_class::DiagnosticClass as DC;
+    match kind {
+        // "A public function uses an effect not present in its declared
+        // effect row" — the class doc describes this kind exactly.
+        EffectErrorKind::MissingEffectDeclaration => Some(DC::EffectUndeclared),
+
+        // "Effect-set conflict between concurrent / interleaved
+        // computations": a `writes` to module state from inside `par {}` is
+        // the canonical instance.
+        EffectErrorKind::ModuleBindingWriteInPar => Some(DC::EffectConflict),
+
+        // `TargetIncompatible`'s doc names "cross-target effect violations"
+        // among its members, and the GPU gate is the other half of the same
+        // rule — which is why `GpuEffectViolation` was allocated into the
+        // shared `E08xx` target band rather than the effect band.
+        EffectErrorKind::TargetGateViolation | EffectErrorKind::GpuEffectViolation => {
+            Some(DC::TargetIncompatible)
+        }
+
+        // FFI-shape rules: what an `extern` declaration's effect row must
+        // contain, and which profile it must be compiled under. Not casts, so
+        // `FfiViolation` rather than `InvalidCast`.
+        EffectErrorKind::ExternCUnwindRequiresPanics
+        | EffectErrorKind::ExternExportSuspendsUnsupported
+        | EffectErrorKind::ExternCUnwindRequiresUnwindProfile => Some(DC::FfiViolation),
+
+        // A note-severity lint hint, not a hard rule.
+        EffectErrorKind::FfiLintHint => Some(DC::LintWarning),
+
+        // Deliberately unclassified. `OverDeclaredEffect` is the INVERSE of
+        // `EffectUndeclared` and would be actively misleading under it;
+        // `EffectVariableConflict` is a unification failure, not the
+        // concurrency conflict `EffectConflict` names; the rest describe
+        // shapes no published class covers. Back-filling any of these means
+        // adding a class first.
+        EffectErrorKind::OverDeclaredEffect
+        | EffectErrorKind::CircularEffectGroup
+        | EffectErrorKind::UndefinedEffectGroup
+        | EffectErrorKind::EffectSubtypeViolation
+        | EffectErrorKind::ProfileViolation
+        | EffectErrorKind::ImplExceedsTraitCeiling
+        | EffectErrorKind::TraitDefaultExceedsCeiling
+        | EffectErrorKind::EffectVariableConflict
+        | EffectErrorKind::ProfileIncompatibleEffect
+        | EffectErrorKind::NoEffectViolated
+        | EffectErrorKind::PubFnSyntheticResource
+        | EffectErrorKind::ForbiddenEffectInContract
+        | EffectErrorKind::ResourceReceiverContradiction => None,
+    }
+}
+
 impl std::fmt::Display for EffectError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(

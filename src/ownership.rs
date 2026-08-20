@@ -722,6 +722,63 @@ pub enum OwnershipErrorKind {
     ExclusiveBorrowAliasedArgs,
 }
 
+/// Broad-category class for an ownership diagnostic, mirroring
+/// [`crate::typechecker::class_for_type_error_kind`].
+///
+/// `None` means "not individually classified" and renders as `OTHER` in the
+/// JSON `class` field — the honest answer wherever no published class covers
+/// the kind. See the note on
+/// [`crate::effectchecker::class_for_effect_error_kind`] for why a wrong class
+/// is worse than `OTHER` here (B-2026-08-20-31).
+///
+/// Worth noting what this reveals: `OwnershipBorrowConflict` names "the borrow
+/// checker's conflict matrix", and every member of that matrix — slice, cross,
+/// closure-capture, aliased-args — is emitted under a SYMBOLIC `E_*` code
+/// rather than a numeric `E05xx` one. The class is well populated; it just has
+/// no numerically-coded members.
+pub(crate) fn class_for_ownership_error_kind(
+    kind: &OwnershipErrorKind,
+) -> Option<crate::diagnostic_class::DiagnosticClass> {
+    use crate::diagnostic_class::DiagnosticClass as DC;
+    match kind {
+        // "Use of a binding after its value was moved" — verbatim.
+        OwnershipErrorKind::UseAfterMove => Some(DC::OwnershipMoveAfterUse),
+
+        // "Read of a binding before it was initialised (let-uninit DFA)" —
+        // verbatim.
+        OwnershipErrorKind::UseOfUninitialized => Some(DC::OwnershipUseOfUninitialized),
+
+        // "Live-borrow / live-slice / cross-borrow conflict in the borrow
+        // checker's conflict matrix."
+        OwnershipErrorKind::SliceBorrowConflict { .. }
+        | OwnershipErrorKind::CrossBorrowConflict
+        | OwnershipErrorKind::ClosureCaptureBorrowConflict
+        | OwnershipErrorKind::ExclusiveBorrowAliasedArgs => Some(DC::OwnershipBorrowConflict),
+
+        // Deliberately unclassified. Escapes, freeze rules, immutability and
+        // the RC-budget/fallback family are each a distinct shape from the
+        // three published ownership classes, and folding an escape into
+        // "borrow conflict" would tell a consumer the borrow checker found an
+        // overlap when it found a lifetime problem.
+        OwnershipErrorKind::OwnershipCycle
+        | OwnershipErrorKind::NoRcViolation
+        | OwnershipErrorKind::RcFallbackNote
+        | OwnershipErrorKind::CaptureModeViolation
+        | OwnershipErrorKind::ReassignToImmutable
+        | OwnershipErrorKind::MutateImmutableBinding
+        | OwnershipErrorKind::FrozenParamEscapes
+        | OwnershipErrorKind::FrozenTypeNotFreezable
+        | OwnershipErrorKind::UnusedMutCaptureNote
+        | OwnershipErrorKind::RefCaptureEscapesScope
+        | OwnershipErrorKind::SliceFromTemporaryEscapes
+        | OwnershipErrorKind::RcBudgetExceeded { .. }
+        | OwnershipErrorKind::ConcurrentSharedStruct { .. }
+        | OwnershipErrorKind::ConcurrentPlainStruct { .. }
+        | OwnershipErrorKind::BorrowReturnNotSourcePinned { .. }
+        | OwnershipErrorKind::RcFallbackAllocatesUnderFallibleProfile => None,
+    }
+}
+
 /// Why a `-> ref T` return failed the source-pinning check — selects the
 /// diagnostic wording for [`OwnershipErrorKind::BorrowReturnNotSourcePinned`].
 #[derive(Debug, Clone, PartialEq)]

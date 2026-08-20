@@ -549,9 +549,15 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
     // `code_table_has_no_cross_phase_collisions` able to see them: an
     // uncatalogued stray is exactly the shape that hid four of the eight
     // B-2026-07-27-14 collisions.
-    ("E0230", eff("ImplExceedsTraitCeiling")),
-    ("E0231", eff("TraitDefaultExceedsCeiling")),
-    ("E0802", eff("GpuEffectViolation")),
+    ("E0230", eff("ImplExceedsTraitCeiling", None)),
+    ("E0231", eff("TraitDefaultExceedsCeiling", None)),
+    (
+        "E0802",
+        eff(
+            "GpuEffectViolation",
+            Some(DiagnosticClass::TargetIncompatible),
+        ),
+    ),
     // ── module graph / manifest ─────────────────────────────────
     //
     // The two codes minted outside the diagnostic emitter entirely: `E0223` by
@@ -568,6 +574,110 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
     // now provide directly.
     ("E0223", mg("CircularModuleDependency")),
     ("E0227", mf("NotInsideKaraProject")),
+    // ── parse ───────────────────────────────────────────────────
+    //
+    // The whole band: `ParseErrorKind::code` mints exactly these four.
+    ("E0001", parse("Syntax")),
+    ("E0002", parse("UnexpectedToken")),
+    ("E0003", parse("ReservedKeyword")),
+    ("E0005", parse("ReservedSyntax")),
+    // ── effect ──────────────────────────────────────────────────
+    //
+    // `L0001` is a NOTE, not an error, and its `L` prefix puts it outside the
+    // `E`/`W` shape `unknown_code_message` recognises — so before it was
+    // catalogued, `karac explain L0001` did not even say "uncatalogued", it
+    // said the argument was not a diagnostic code at all.
+    (
+        "E0400",
+        eff(
+            "MissingEffectDeclaration",
+            Some(DiagnosticClass::EffectUndeclared),
+        ),
+    ),
+    ("E0401", eff("OverDeclaredEffect", None)),
+    ("E0402", eff("CircularEffectGroup", None)),
+    ("E0403", eff("UndefinedEffectGroup", None)),
+    ("E0404", eff("EffectSubtypeViolation", None)),
+    ("E0405", eff("ProfileViolation", None)),
+    ("E0406", eff("EffectVariableConflict", None)),
+    ("E0407", eff("ProfileIncompatibleEffect", None)),
+    (
+        "E0408",
+        eff(
+            "ModuleBindingWriteInPar",
+            Some(DiagnosticClass::EffectConflict),
+        ),
+    ),
+    ("E0409", eff("PubFnSyntheticResource", None)),
+    ("E0410", eff("ForbiddenEffectInContract", None)),
+    (
+        "E0411",
+        eff(
+            "TargetGateViolation",
+            Some(DiagnosticClass::TargetIncompatible),
+        ),
+    ),
+    ("E0412", eff("ResourceReceiverContradiction", None)),
+    (
+        "E0413",
+        eff(
+            "ExternCUnwindRequiresPanics",
+            Some(DiagnosticClass::FfiViolation),
+        ),
+    ),
+    (
+        "E0414",
+        eff(
+            "ExternExportSuspendsUnsupported",
+            Some(DiagnosticClass::FfiViolation),
+        ),
+    ),
+    (
+        "E0415",
+        eff(
+            "ExternCUnwindRequiresUnwindProfile",
+            Some(DiagnosticClass::FfiViolation),
+        ),
+    ),
+    ("E0416", eff("NoEffectViolated", None)),
+    (
+        "L0001",
+        eff("FfiLintHint", Some(DiagnosticClass::LintWarning)),
+    ),
+    // ── ownership ───────────────────────────────────────────────
+    //
+    // `N0503` / `N0507` are notes on the same `OwnershipErrorKind` enum as the
+    // errors around them, which is why they sit in the ownership band with an
+    // `N` prefix rather than in a band of their own.
+    //
+    // Nine more ownership kinds — the borrow-conflict matrix, the RC budget,
+    // the two concurrent-struct rules and the temporary-slice escape — are
+    // emitted under SYMBOLIC `E_*` codes and are deliberately outside every
+    // numeric band; `explain` still reaches them by class.
+    (
+        "E0500",
+        own("UseAfterMove", Some(DiagnosticClass::OwnershipMoveAfterUse)),
+    ),
+    ("E0501", own("OwnershipCycle", None)),
+    ("E0502", own("NoRcViolation", None)),
+    ("N0503", own("RcFallbackNote", None)),
+    ("E0504", own("CaptureModeViolation", None)),
+    (
+        "E0505",
+        own(
+            "UseOfUninitialized",
+            Some(DiagnosticClass::OwnershipUseOfUninitialized),
+        ),
+    ),
+    ("E0506", own("ReassignToImmutable", None)),
+    ("N0507", own("UnusedMutCaptureNote", None)),
+    ("E0508", own("RefCaptureEscapesScope", None)),
+    ("E0509", own("BorrowReturnNotSourcePinned", None)),
+    ("E0510", own("MutateImmutableBinding", None)),
+    ("E0511", own("FrozenParamEscapes", None)),
+    ("E0512", own("FrozenTypeNotFreezable", None)),
+    // ── provider escape ─────────────────────────────────────────
+    ("E0600", prov("ProviderEscape")),
     // ── lint (non-`TypeErrorKind`) ──────────────────────────────
     //
     // Both halves of each pair are catalogued: the W code is what a default
@@ -624,9 +734,40 @@ const fn lint(kind: &'static str) -> CodeEntry {
 /// `EFFECT_UNDECLARED` / `EFFECT_CONFLICT` classes exist in
 /// [`DiagnosticClass`] but nothing applies them yet, and a row that claimed
 /// otherwise would disagree with the record an agent actually reads.
-const fn eff(kind: &'static str) -> CodeEntry {
+const fn eff(kind: &'static str, class: Option<DiagnosticClass>) -> CodeEntry {
     CodeEntry {
         phase: "effect",
+        kind,
+        class,
+    }
+}
+
+/// An ownership row. Same rule as [`eff`]: `class` restates
+/// `class_for_ownership_error_kind`, which is `None` for most kinds.
+const fn own(kind: &'static str, class: Option<DiagnosticClass>) -> CodeEntry {
+    CodeEntry {
+        phase: "ownership",
+        kind,
+        class,
+    }
+}
+
+/// A parse row. The parser owns `E00xx`, below the resolver's `E01xx`, and
+/// mints exactly four codes from `ParseErrorKind::code`. None is classified —
+/// `class` is a semantic taxonomy and a syntax error has no semantics yet.
+const fn parse(kind: &'static str) -> CodeEntry {
+    CodeEntry {
+        phase: "parse",
+        kind,
+        class: None,
+    }
+}
+
+/// The provider-escape phase, which mints exactly one code: `E0600`.
+/// `phase: "provider_escape"` matches the emitted record.
+const fn prov(kind: &'static str) -> CodeEntry {
+    CodeEntry {
+        phase: "provider_escape",
         kind,
         class: None,
     }
@@ -673,18 +814,26 @@ fn lookup_code(code: &str) -> Vec<CodeEntry> {
 }
 
 fn unknown_code_message(code: &str) -> String {
+    // Same shape rule as `classify_explain_name` — any uppercase letter then
+    // digits, so the `N05xx` notes and `L0001` are recognised as codes rather
+    // than reported as non-codes.
     let looks_like_a_code = {
         let mut chars = code.chars();
-        matches!(chars.next(), Some('E') | Some('W')) && chars.all(|c| c.is_ascii_digit())
+        matches!(chars.next(), Some(c) if c.is_ascii_uppercase())
+            && code.len() > 1
+            && chars.all(|c| c.is_ascii_digit())
     };
     if looks_like_a_code {
         format!(
-            "diagnostic code '{code}' is not in the catalogue yet. \
-             `karac explain` covers the E01xx, E02xx / W02xx and E08xx \
-             bands in full, plus E0223 and E0227; the effect (E04xx), \
-             ownership (E05xx) and provider-escape (E0600) bands are not \
-             catalogued. Look the diagnostic up by class instead — \
-             `karac check --output=json` reports one in each record's \
+            "'{code}' is not a diagnostic code this compiler mints. Every \
+             NUMBERED code does have an entry — parse E00xx, resolve E01xx, \
+             typecheck E02xx / W02xx, effect E04xx, ownership E05xx / N05xx, \
+             provider-escape E0600, target/GPU E08xx, and the loose E0223 / \
+             E0227 — so a code in that shape which lands here is either a \
+             typo or from a different compiler version. Some diagnostics \
+             carry a SYMBOLIC code instead (`E_SLICE_BORROW_CONFLICT` and \
+             the rest of the borrow-conflict family); look those up by class \
+             — `karac check --output=json` reports one in each record's \
              `class` field, and `karac explain --class=NAME` explains it. \
              Supported classes: {}.",
             class_list(),
@@ -1287,11 +1436,13 @@ mod tests {
         );
     }
 
-    /// Bands [`CODE_TABLE`] claims COMPLETELY, as `(prefix, why)` pairs. A
-    /// code the emitter mints with one of these prefixes must have a row.
-    const COVERED_BANDS: &[&str] = &["E01", "E02", "W02", "E08"];
-
     /// Every numeric code the diagnostic emitter mints, regardless of phase.
+    ///
+    /// There is no band list to check against. [`CODE_TABLE`] claims the
+    /// WHOLE numeric space since B-2026-08-20-31, so every numbered code the
+    /// emitter mints must have a row, full stop — nothing to keep in sync.
+    /// Symbolic codes (`E_SLICE_BORROW_CONFLICT`, `E_UNKNOWN_ATTRIBUTE`, …)
+    /// are outside the numbering by design and are reached by class instead.
     ///
     /// [`emitted_codes`] above cannot serve here: it keys off the
     /// `ResolveErrorKind::` / `TypeErrorKind::` text on the line, so it sees
@@ -1309,7 +1460,11 @@ mod tests {
             if b[i] != b'"' || b[i + 6] != b'"' {
                 continue;
             }
-            if !matches!(b[i + 1], b'E' | b'W') {
+            // Any uppercase prefix, not just `E`/`W`: the ownership notes are
+            // `N05xx` and the FFI lint hint is `L0001`, and a scan that only
+            // knew the two error prefixes would have skipped all three
+            // silently — the exact failure mode this guard exists to prevent.
+            if !b[i + 1].is_ascii_uppercase() {
                 continue;
             }
             if !b[i + 2..i + 6].iter().all(|c| c.is_ascii_digit()) {
@@ -1346,16 +1501,14 @@ mod tests {
     fn code_table_catalogues_every_code_in_a_covered_band() {
         let mut missing: Vec<&str> = emitted_numeric_codes()
             .into_iter()
-            .filter(|code| COVERED_BANDS.iter().any(|b| code.starts_with(b)))
             .filter(|code| !CODE_TABLE.iter().any(|(c, _)| c == code))
             .collect();
         missing.sort_unstable();
         assert!(
             missing.is_empty(),
-            "codes minted in a band CODE_TABLE claims to cover completely, \
-             with no row: {missing:?}. Either add the row (under the phase \
-             that MINTS it, which need not be the band's owner) or drop the \
-             band from COVERED_BANDS and from `unknown_code_message`."
+            "numbered codes the emitter mints with no CODE_TABLE row: \
+             {missing:?}. Add the row under the phase that MINTS the code, \
+             which need not be the owner of the band the number sits in."
         );
     }
 
@@ -1391,6 +1544,86 @@ mod tests {
                 "{what} no longer mints {code} — move its CODE_TABLE row to \
                  match, or drop it"
             );
+        }
+    }
+
+    /// The parser mints its codes through `ParseErrorKind::code`, so no
+    /// literal reaches `diag_json.rs` and the scan above cannot see them.
+    /// Enumerate the enum instead — and assert the count, because an added
+    /// variant is a compile error in `code()` but would be a SILENT omission
+    /// from a hand-written list here.
+    #[test]
+    fn code_table_catalogues_every_parse_code() {
+        use crate::parser::ParseErrorKind as P;
+        let all = [
+            P::Syntax,
+            P::UnexpectedToken,
+            P::ReservedKeyword,
+            P::ReservedSyntax,
+        ];
+        assert_eq!(
+            all.len(),
+            4,
+            "ParseErrorKind gained a variant — add it here and to CODE_TABLE"
+        );
+        for kind in all {
+            let code = kind.code();
+            assert!(
+                CODE_TABLE
+                    .iter()
+                    .any(|(c, e)| *c == code && e.phase == "parse"),
+                "parse code {code} ({kind:?}) has no CODE_TABLE row"
+            );
+        }
+    }
+
+    /// The effect and ownership rows must restate
+    /// `class_for_effect_error_kind` / `class_for_ownership_error_kind`, the
+    /// same contract `code_table_class_matches_typechecker` holds for the
+    /// typecheck rows. Without it the catalogue could claim a class the
+    /// emitted record does not carry — and `class` is the field machine
+    /// consumers route on, so the two disagreeing is worse than either being
+    /// coarse (B-2026-08-20-31).
+    #[test]
+    fn code_table_class_matches_the_effect_and_ownership_classifiers() {
+        use crate::effectchecker::EffectErrorKind as E;
+        use crate::ownership::OwnershipErrorKind as O;
+
+        let effects: &[(&str, E)] = &[
+            ("E0400", E::MissingEffectDeclaration),
+            ("E0401", E::OverDeclaredEffect),
+            ("E0408", E::ModuleBindingWriteInPar),
+            ("E0411", E::TargetGateViolation),
+            ("E0413", E::ExternCUnwindRequiresPanics),
+            ("E0416", E::NoEffectViolated),
+            ("L0001", E::FfiLintHint),
+            ("E0802", E::GpuEffectViolation),
+            ("E0230", E::ImplExceedsTraitCeiling),
+        ];
+        for (code, kind) in effects {
+            let want = crate::effectchecker::class_for_effect_error_kind(kind);
+            let row = CODE_TABLE
+                .iter()
+                .find(|(c, e)| c == code && e.phase == "effect")
+                .unwrap_or_else(|| panic!("{code} has no effect row"));
+            assert_eq!(row.1.class, want, "{code} class");
+        }
+
+        let ownerships: &[(&str, O)] = &[
+            ("E0500", O::UseAfterMove),
+            ("E0501", O::OwnershipCycle),
+            ("N0503", O::RcFallbackNote),
+            ("E0505", O::UseOfUninitialized),
+            ("E0508", O::RefCaptureEscapesScope),
+            ("E0512", O::FrozenTypeNotFreezable),
+        ];
+        for (code, kind) in ownerships {
+            let want = crate::ownership::class_for_ownership_error_kind(kind);
+            let row = CODE_TABLE
+                .iter()
+                .find(|(c, e)| c == code && e.phase == "ownership")
+                .unwrap_or_else(|| panic!("{code} has no ownership row"));
+            assert_eq!(row.1.class, want, "{code} class");
         }
     }
 
@@ -1863,11 +2096,21 @@ mod tests {
         }
     }
 
+    /// `E0001` used to be the stock example of an uncatalogued code — it is
+    /// the parser's `Syntax` error, and the parse band was outside the
+    /// catalogue's scope. B-2026-08-20-31 closed the numbering, so the
+    /// example had to become a number nothing mints. The message for one of
+    /// those still has to point at the class surface, because the symbolic
+    /// `E_*` codes genuinely are only reachable that way.
     #[test]
     fn uncatalogued_code_points_at_the_class_surface() {
-        assert!(lookup_code("E0001").is_empty());
-        let msg = unknown_code_message("E0001");
-        assert!(msg.contains("not in the catalogue yet"));
+        assert!(
+            !lookup_code("E0001").is_empty(),
+            "E0001 is the parser's Syntax error and is catalogued"
+        );
+        assert!(lookup_code("E0997").is_empty());
+        let msg = unknown_code_message("E0997");
+        assert!(msg.contains("not a diagnostic code this compiler mints"));
         assert!(msg.contains("--class"));
     }
 

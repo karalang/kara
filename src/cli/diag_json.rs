@@ -2025,7 +2025,8 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 extra_json,
                 lint_name: None,
                 fix_it: None,
-                class: None,
+                class: crate::effectchecker::class_for_effect_error_kind(&err.kind)
+                    .map(|c| c.as_str()),
                 expected: None,
                 got: None,
                 stub_hint_json: None,
@@ -2133,7 +2134,8 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 extra_json,
                 lint_name: None,
                 fix_it: None,
-                class: None,
+                class: crate::ownership::class_for_ownership_error_kind(&err.kind)
+                    .map(|c| c.as_str()),
                 expected: None,
                 got: None,
                 stub_hint_json: None,
