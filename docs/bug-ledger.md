@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 271 | 0 |
 | leak | 185 | 0 |
 | run-vs-build | 145 | 0 |
-| missing-feature | 137 | 7 |
+| missing-feature | 137 | 6 |
 | double-free | 133 | 0 |
 | codegen-gap | 120 | 0 |
 | diagnostics | 93 | 1 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 965 | 1 |
-| typecheck | 225 | 4 |
+| typecheck | 225 | 3 |
 | interp | 169 | 1 |
 | ownership | 62 | 0 |
 | other | 60 | 1 |
@@ -124,14 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 7 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1435 surfaced · 9 open · 1404 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1435 surfaced · 8 open · 1405 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (9)
+### Open (8)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-20-37 | 2026-08-20 | lexer | medium | BYTE-STRING literals `b"..."` are lexed as RESERVED, though design.md § Byte and Byte-String Literals specifies them as shipped with a type rule, three worked examples and an escape table -- while the sibling byte-CHAR literal `b'A'` in the same section works fully. `let eth: Array[u8, 2] = b"\x08\x00";` -> `error[parse]: string prefix 'b"..."' is reserved for future use; only `f"..."` ...`. The section opens by saying the grammar "reserves the `b` prefix FOR THIS PURPOSE (`syntax.md § 1.3`), producing `u8`-typed and `[u8; N]`-typed literals", states "**`b"..."` has type `[u8; N]` where `N` is the byte count of the literal after escape resolution**", and its own "Reserved but not yet implemented" paragraph lists only `r`, `br` and `rb` -- `b"..."` is presented as the working half. Nothing in deferred.md or roadmap.md marks it deferred. Measured working in the same section: `b'U'` is 85, and every escape the spec permits in a byte literal is correct (`\n`=10, `\t`=9, `\r`=13, `\0`=0, `\\`=92, `\'`=39, `\"`=34, `\xFF`=255, `\x41`=65), as is the forbidden case -- `b'\u{FF}'` produces the spec's exact wording, "Unicode escapes are not permitted in byte literals — use \xFF for byte 0xFF", and `r"..."` produces the spec's exact reserved-prefix message. | roadmap.md |
-| B-2026-08-20-39 | 2026-08-20 | typecheck | medium | `v.last(n)` -- the END-RELATIVE ACCESS design.md prescribes as THE replacement for negative indexing -- takes no argument: `v.last(1)` is rejected with `Vec.last() takes no arguments`. § Numeric Semantics, in the same breath as ruling out Python-style wrap-around: "Negative indices are out-of-bounds errors — they panic at runtime... No Python-style wrap-around; `-1` as an index is always a bug. FOR END-RELATIVE ACCESS, USE `.last(n)` WHERE `n` DEFAULTS TO 0: `v.last()` returns the last element, `v.last(1)` the second-to-last, etc. Negative or out-of-bounds `n` panics." So the spec closes one door and points at another that is not there -- `v.last()` works, `v.last(1)` does not, and the diagnostic states the no-argument form as though it were the intended surface rather than an unimplemented half. | roadmap.md |
 | B-2026-08-20-41 | 2026-08-20 | typecheck | medium | `String.normalize` and the `NFC` constant DO NOT EXIST, so the remedy design.md gives for its own Unicode-equality hazard is unwritable. § Strings, Equality bullet: "`String` equality (`==`) compares raw UTF-8 bytes. Two strings with identical visual appearance but different Unicode normalization forms (e.g., NFC vs NFD) are **not** equal. USE `s.normalize(NFC)` FOR NORMALIZATION-AWARE COMPARISON." Measured: `a.normalize(NFC)` -> `error[resolve]: undefined name 'NFC', did you mean 'Neg'?`; the no-argument form `a.normalize()` -> `error[typecheck]: no method 'normalize' on type 'String'`. Neither `normalize` nor `NFC` appears anywhere in `src/`. The hazard the bullet describes is real and reproduces -- `"e\u{0301}" == "\u{00e9}"` is false, exactly as documented -- so the paragraph correctly warns about a trap and then names an escape that was never built. | roadmap.md |
 | B-2026-08-21-2 | 2026-08-21 | cli | medium | FIVE REGISTERED LINTS STILL HAVE NO EMIT SITE and so can never fire, though all seven are registered `default_level: LintLevel::Warn` -- advertised by `karac lint --list` and accepted in `#[allow(...)]`: `f16_software_emulated`, `float_in_serialized_type`, `implicit_clone`, `pure_loop_in_par`, `repr_c_layout_ignored`. They are the remainder of B-2026-08-20-36's eight, which wired `redundant_suffix` (the one design.md documents as live) and added the guard that now holds this list. They are VISIBLE IN CODE, not only here: `KNOWN_UNWIRED` in `src/lints.rs`, which `every_registered_lint_is_emitted_or_declared_unwired` fails on if the list grows or goes stale. | roadmap.md |
 | B-2026-08-21-6 | 2026-08-21 | codegen+interp | medium | `Map`/`Set` DO NOT USE THE SPEC'S DEFAULT HASHER: design.md mandates `SipHash13BuildHasher` seeded from a per-process random source, codegen emits FxHash with a COMPILE-TIME-CONSTANT seed and the interpreter hashes not at all -- so there is no hash-flooding resistance, iteration order is fully deterministic across runs (design.md says it must vary), the two backends order differently from each other, and `Map[K, V, FxBuildHasher]` -- design.md's own spelling -- does not resolve, so there is no opt-in either way | roadmap.md |
@@ -157,9 +156,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1435 surfaced
 
 </details>
 
-### Fixed (1404)
+### Fixed (1405)
 
-<details><summary>1404 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1405 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -13349,6 +13348,21 @@ MEASURED, byte-identical across interp / JIT / AOT / `KARAC_AUTO_PAR=0` AOT. The
 REJECTIONS ALL HOLD, each with its specific diagnostic rather than a blunt fallback: unmarked `bump(v[1..3])` gets the marker diagnostic ("requires a `mut` marker"), a `ref Vec[T]` base and a read-only `Slice[T]` base get "expected 'mut Slice[i64]', found 'Slice[i64]'", a marked forward gets "already a mut-ref; drop the marker", and `sum(v[1..3])` is unchanged.
 
 Pinned by eight tests in tests/typechecker.rs (`test_mut_slice_accepts_a_marked_sub_range` and siblings -- the three accepting ones fail without the fix; the marker test additionally asserts the redundant-marker message is ABSENT, which is what makes it guard the `is_arg_forwarded` half rather than just the type) and two E2E in tests/codegen.rs (`test_e2e_mut_sub_range_slice_writes_through_to_the_backing_buffer`, `test_e2e_mut_sub_range_of_a_mut_slice_forwards`). |
+| B-2026-08-20-39 | typecheck | medium | `v.last(n)` -- the END-RELATIVE ACCESS design.md prescribes as THE replacement for negative indexing -- takes no argument: `v.last(1)` is rejected wi… | FIXED by 537a237. `last` now takes an optional end-relative index on every sequence receiver -- `Vec`, `Slice` and `Array` -- across typecheck, the interpreter, and both codegen paths.
+
+WHAT THE SPEC ASKED FOR AND WHAT SHIPPED. design.md § Numeric Semantics rules out Python-style wrap-around (`-1` as an index is always a bug, and panics) and names the replacement in the same breath: "For end-relative access, use `.last(n)` where `n` defaults to 0". The no-argument half shipped; the argument half did not. The diagnostic made it worse by stating the shipped half as the intended surface -- `Vec.last() takes no arguments` reads like a rule rather than a gap.
+
+ONE DEVIATION FROM THE SPEC SENTENCE, DELIBERATE AND NOW WRITTEN INTO IT. That paragraph ends "Negative or out-of-bounds `n` panics", and this returns `None` instead. The panic clause reads `last(n)` as an INDEXING form, but the shipped `last()` is on the other side of the very split the paragraph draws: `v[i]` panics (measured: both `v[-1]` and `v[9]` panic), while `v.get(i)`, `v.first()` and `v.last()` return `Option` (measured: `v.get(9)` -> None, `v.last()` on an empty Vec -> None). Since `n` DEFAULTS TO 0, honouring the panic clause literally would make `v.last()` on an empty sequence panic where it has always returned `None` -- breaking a working API and splitting `last` from `first`, which returns `Option` too. The Option contract is the only reading under which `last()` and `last(0)` can agree, so that is what landed, and design.md's sentence has been corrected to state it (with a parenthetical recording what it used to say, so the change is not silent).
+
+CODEGEN IS WHERE THE REAL RISK WAS, and the E2E test exists because of it: the first build ACCEPTED `v.last(2)`, type-checked it, and returned the last element on every call while the interpreter walked back correctly -- a silent run-vs-build divergence that only differing element values expose. Two separate lowerings had to learn the offset, because `Vec`/`Slice` share a length-driven arm while `Array` indexes a static length through its own. The Array arm needs no range test of its own: `(n - 1) - k` against an UNSIGNED bounds compare rejects both directions for free, since `k >= n` wraps the subtraction to a huge unsigned value and `k < 0` pushes the index past `n - 1`.
+
+The argument is evaluated BEFORE the branch in the Vec/Slice arm, unconditionally, so a side-effecting `n` runs exactly once on every path including the empty receiver -- sinking it into the taken branch would have made the effect depend on the length.
+
+MEASURED on all four surfaces (interp / JIT / AOT / `KARAC_AUTO_PAR=0` AOT), byte-identical: `v.last()`/`last(0)`/`last(1)`/`last(2)` over `[10,20,30]` -> 30/30/20/10; `last(3)` and `last(-1)` -> None; the same sweep on a `Slice` and on an `Array[i64,3]`; an empty `Vec` -> None at every arity; a RUNTIME `n` driven by a loop counter that walks off the front; and a `String` element, whose multi-word Option payload rides the same path.
+
+Pinned by five tests, all failing without the fix: `last_accepts_an_optional_end_relative_index`, `last_rejects_two_args_and_a_non_integer_index`, and `first_still_takes_no_arguments` (tests/typechecker.rs -- the last of these because `first` and `last` were ONE match arm before this change, so splitting them could have widened both), plus `test_e2e_last_takes_an_end_relative_index` and `test_e2e_last_end_relative_carries_a_heap_element` (tests/codegen.rs).
+
+SCOPED TO SEQUENCES. `Iterator.last()` keeps its no-argument arity: an iterator has no random access, so an end-relative index would mean buffering the tail, which is a different feature and not what the spec paragraph is about (it is written about ARRAY INDEXING). |
 | B-2026-08-20-40 | codegen | medium | `s.bytes()[i]` -- the byte-access form design.md documents for protocol and binary-format parsing -- is check-clean and interp-correct but has NO COD… | FIXED by bc2a768. Codegen's index dispatch gained a `Slice` sibling to the inline-temp `Vec` arm it already had -- `inline_index_recv_slice_te` + `compile_inline_temp_slice_index` in `src/codegen/collections.rs`, dispatched immediately after the Vec arm. The identifier-keyed slice path fires only for a NAMED binding, so the `{ptr, len}` header a slice-producing expression evaluates to fell through to the generic tail, which handles only `ArrayType` / `VectorType` -- hence "Index operator applied to non-array type". The new arm materializes the header into a synth slice local, registers it through the same `register_var_from_type_expr` every other synth-binding arm uses, and recurses, so `compile_slice_index` lowers the read (bounds check included) unchanged.
 
 Its own arm rather than a widening of the Vec one, because the two differ in both layout and ownership: a slice is a 16-byte `{ptr,len}` with no `cap` word to read, and it is ALWAYS a borrow -- so nothing is dropped and no element is deep-cloned. Dropping here would free the receiver's buffer out from under the live binding that owns it.
