@@ -3780,6 +3780,31 @@ impl<'ctx> super::Codegen<'ctx> {
                             }
                         }
                     }
+                    // `let a = b"abc"` — an Array binding with NO annotation.
+                    // `array_elem_type_exprs` is otherwise populated only from
+                    // the annotation below, which was complete while every
+                    // un-annotated collection literal inferred `Vec`. A
+                    // byte-string literal is the first expression whose type is
+                    // `Array[u8, N]` with nothing declared (B-2026-08-20-37),
+                    // so without this the element type is unknown to the
+                    // fixed-array method arms and `b"abc".is_sorted()` failed
+                    // codegen ("no source element type for the receiver") while
+                    // `--interp` answered — a run/build divergence.
+                    if ty.is_none() {
+                        if let ExprKind::ByteStringLit(_) = &value.kind {
+                            self.var_types.array_elem_type_exprs.insert(
+                                var_name.clone(),
+                                TypeExpr {
+                                    span: value.span,
+                                    kind: TypeKind::Path(crate::ast::PathExpr {
+                                        segments: vec!["u8".to_string()],
+                                        generic_args: None,
+                                        span: value.span,
+                                    }),
+                                },
+                            );
+                        }
+                    }
                     // Explicit type annotation: let v: Vec[T] = ... or let s: String = ...
                     if let Some(ref te) = ty {
                         // B-2026-07-15-6: inside a monomorphized generic fn, a

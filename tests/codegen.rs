@@ -37060,6 +37060,32 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_byte_string_method_on_an_unannotated_binding() {
+        // A run/build divergence created by two independent commits an hour
+        // apart: `b"..."` began inferring `Array[u8, N]` (B-2026-08-20-37)
+        // while `Array.is_sorted()` had just landed (5fee766). The fixed-array
+        // method arms read the element type from `array_elem_type_exprs`,
+        // which was populated ONLY from a type ANNOTATION — complete while
+        // every un-annotated collection literal inferred `Vec`, and newly
+        // incomplete once a literal could be an un-annotated `Array`.
+        // `--interp` answered while `build` failed with "no source element
+        // type for the receiver".
+        //
+        // The ANNOTATED spelling always worked, which is why neither commit's
+        // own tests caught it — this pins the un-annotated one.
+        let src = r#"
+fn main() {
+    let a = b"abc";
+    println(a.is_sorted());
+    let b = b"cba";
+    println(b.is_sorted());
+    println(a.len());
+}
+"#;
+        assert_eq!(run_program(src), Some("true\nfalse\n3\n".to_string()));
+    }
+
+    #[test]
     fn test_e2e_cstr_methods_on_a_ref_param_receiver() {
         // B-2026-08-21-5: a `ref CStr` PARAMETER receiver aborted karac
         // with an inkwell `into_struct_value` unwrap in
