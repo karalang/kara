@@ -38,12 +38,20 @@ fn resolve_ok(source: &str) -> ResolveResult {
             .join(", ")
     );
     let result = resolve(&parsed.program);
+    // Note-severity kinds are not errors. Filtered through the one shared
+    // predicate rather than a private list, so this harness cannot drift from
+    // the CLI the way the effect-side harness did — twelve open-coded copies
+    // of `!= FfiLintHint` all broke at once when a second advisory kind
+    // appeared (B-2026-08-21-2).
+    let real: Vec<_> = result
+        .errors
+        .iter()
+        .filter(|e| !karac::resolver::resolve_kind_is_note(&e.kind))
+        .collect();
     assert!(
-        result.errors.is_empty(),
+        real.is_empty(),
         "Resolve errors: {}",
-        result
-            .errors
-            .iter()
+        real.iter()
             .map(|e| e.to_string())
             .collect::<Vec<_>>()
             .join(", ")
@@ -1286,6 +1294,71 @@ fn test_atomic_resolves() {
 }
 
 // ── Layout validation ────────────────────────────────────────────
+
+/// `layout_unassigned_fields` is a WARNING over DEFINED behaviour, not an
+/// error (B-2026-08-21-2 follow-up). design.md § Layout blocks > Unassigned
+/// fields: unlisted fields "are collected into an implicit trailing hot
+/// group … The compiler emits a warning once per layout block listing the
+/// unassigned fields — suppress with `#[allow(layout_unassigned_fields)]`."
+///
+/// It was emitted as a hard `ResolveError`, so a spec-legal program failed to
+/// compile: `karac build` exited 1 and produced no binary. The suggestion the
+/// diagnostic printed named an attribute the resolver never read, so the
+/// escape hatch it advertised did not exist.
+#[test]
+fn layout_unassigned_fields_is_a_note_not_an_error() {
+    let result = resolve_ok(
+        r#"
+struct Entity { x: f64, y: f64, hp: i64 }
+layout entities: Vec[Entity] {
+    group physics { x, y }
+}
+"#,
+    );
+    let notes: Vec<_> = result
+        .errors
+        .iter()
+        .filter(|e| e.kind == ResolveErrorKind::LayoutUnassignedFields)
+        .collect();
+    assert_eq!(
+        notes.len(),
+        1,
+        "expected one note naming the unassigned field; got: {:?}",
+        result.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+    assert!(
+        notes[0].message.contains("hp"),
+        "the note must LIST the unassigned fields, per the spec sentence; got: {}",
+        notes[0].message
+    );
+    assert!(
+        karac::resolver::resolve_kind_is_note(&notes[0].kind),
+        "it must be note severity, or a legal program stops compiling"
+    );
+}
+
+/// `#[allow(layout_unassigned_fields)]` on the layout block suppresses it —
+/// the attribute the diagnostic's own suggestion names.
+#[test]
+fn layout_unassigned_fields_suppressed_by_allow() {
+    let result = resolve_ok(
+        r#"
+struct Entity { x: f64, y: f64, hp: i64 }
+#[allow(layout_unassigned_fields)]
+layout entities: Vec[Entity] {
+    group physics { x, y }
+}
+"#,
+    );
+    assert!(
+        !result
+            .errors
+            .iter()
+            .any(|e| e.kind == ResolveErrorKind::LayoutUnassignedFields),
+        "the allow must suppress the note; got: {:?}",
+        result.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
 
 #[test]
 fn test_layout_valid_all_fields_assigned() {

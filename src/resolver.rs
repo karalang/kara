@@ -699,6 +699,20 @@ impl StubHint {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ResolveErrorKind {
+    /// `layout_unassigned_fields` (B-2026-08-21-2 follow-up) — a `layout`
+    /// block leaves some of the struct's fields out of every `group` / `cold`
+    /// section. design.md § Layout blocks > Unassigned fields: those fields
+    /// "are collected into an implicit trailing hot group … The compiler
+    /// emits a WARNING once per layout block listing the unassigned fields —
+    /// suppress with `#[allow(layout_unassigned_fields)]` when the omission
+    /// is intentional."
+    ///
+    /// NOTE severity, never fatal: the spec documents the implicit trailing
+    /// group as the DEFINED behaviour, so a layout block that uses it is a
+    /// legal program. Emitting this as a hard `ResolveError` made every such
+    /// program fail to compile, and the attached suggestion told the user to
+    /// suppress it with an attribute that was never read.
+    LayoutUnassignedFields,
     UndefinedName,
     DuplicateDefinition,
     ReservedIdentifier,
@@ -862,6 +876,18 @@ pub enum ResolveErrorKind {
     /// attribute accepts no arguments. Mapped to
     /// `E_MALFORMED_ATTRIBUTE_ARGS`.
     MalformedAttributeArgs,
+}
+
+/// True for NOTE-severity resolve diagnostics — rendered `warning[resolve]`,
+/// never counted toward an exit code, never fatal to a build.
+///
+/// The resolver had no such notion: every `ResolveError` was fatal, so a
+/// diagnostic the spec calls a warning could only be spelled as an error.
+/// Same one-predicate discipline as `effectchecker::kind_is_note`
+/// (B-2026-08-21-2) — every gate consults this rather than open-coding the
+/// list, which is how the effect side accumulated seventeen copies.
+pub fn resolve_kind_is_note(kind: &ResolveErrorKind) -> bool {
+    matches!(kind, ResolveErrorKind::LayoutUnassignedFields)
 }
 
 impl std::fmt::Display for ResolveError {

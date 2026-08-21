@@ -1155,7 +1155,14 @@ impl Pipeline {
     }
 
     fn has_resolve_errors(&self) -> bool {
-        self.resolved.as_ref().is_some_and(|r| !r.errors.is_empty())
+        // Note-severity resolve diagnostics are not errors — `layout_
+        // unassigned_fields` is a spec'd WARNING over DEFINED behaviour, so a
+        // program that trips it must still compile (B-2026-08-21-2 follow-up).
+        self.resolved.as_ref().is_some_and(|r| {
+            r.errors
+                .iter()
+                .any(|e| !crate::resolver::resolve_kind_is_note(&e.kind))
+        })
     }
 
     /// Hard typecheck errors only — warnings are stored separately in
@@ -1625,7 +1632,11 @@ impl Pipeline {
     fn total_errors(&self) -> usize {
         let mut n = self.parsed.errors.len();
         if let Some(ref r) = self.resolved {
-            n += r.errors.len();
+            n += r
+                .errors
+                .iter()
+                .filter(|e| !crate::resolver::resolve_kind_is_note(&e.kind))
+                .count();
         }
         if let Some(ref t) = self.typed {
             n += t.errors.len();
@@ -1891,9 +1902,17 @@ fn render_text_diagnostics(pipeline: &Pipeline) -> Vec<String> {
     }
     if let Some(ref r) = pipeline.resolved {
         for err in &r.errors {
+            // Note-severity resolve diagnostics render `warning[resolve]`
+            // (B-2026-08-21-2 follow-up) — one predicate, so this renderer
+            // cannot disagree with the exit-code count.
+            let sev = if crate::resolver::resolve_kind_is_note(&err.kind) {
+                "warning"
+            } else {
+                "error"
+            };
             out.push(with_snippet(
                 format!(
-                    "error[resolve]: {}:{}:{}: {}",
+                    "{sev}[resolve]: {}:{}:{}: {}",
                     filename, err.span.line, err.span.column, err.message
                 ),
                 source,

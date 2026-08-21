@@ -214,6 +214,10 @@ struct CodeEntry {
 const CODE_TABLE: &[(&str, CodeEntry)] = &[
     // ── resolve ─────────────────────────────────────────────────
     (
+        "W0150",
+        res("LayoutUnassignedFields", Some(DiagnosticClass::LintWarning)),
+    ),
+    (
         "E0100",
         res("UndefinedName", Some(DiagnosticClass::UndefinedName)),
     ),
@@ -1418,7 +1422,16 @@ mod tests {
         let mut strays: Vec<&str> = emitted_codes()
             .into_iter()
             .filter(|(phase, code)| {
-                *phase == "resolve" && !code.starts_with("E01") && !code.starts_with("E08")
+                // `W01xx` is the resolver's WARNING half of the same 01xx
+                // numeric band (B-2026-08-21-2 follow-up): the band exists to
+                // stop numeric collisions with the typechecker's E02xx, and
+                // the prefix carries severity, not ownership. Before
+                // `layout_unassigned_fields` the resolver minted only errors,
+                // so this check could assume an `E` prefix.
+                *phase == "resolve"
+                    && !code.starts_with("E01")
+                    && !code.starts_with("E08")
+                    && !code.starts_with("W01")
             })
             .map(|(_, code)| code)
             .collect();
@@ -1757,7 +1770,7 @@ mod tests {
             // A reserved code still has to sit in the band of the phase that
             // mints it. Only `resolve` has a band to check against here — the
             // two CLI-level phases have none yet (see SPEC_RESERVED).
-            if *phase == "resolve" && !code.starts_with("E01") {
+            if *phase == "resolve" && !code.starts_with("E01") && !code.starts_with("W01") {
                 out_of_band.push(format!("{code} {name} (minted by resolve)"));
             }
         }

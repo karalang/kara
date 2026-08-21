@@ -399,8 +399,27 @@ impl<'a> super::Resolver<'a> {
             .iter()
             .filter(|f| !assigned.contains(*f))
             .collect();
-        if !unassigned.is_empty() {
-            // TODO: Implement proper warning severity and #[allow(layout_unassigned_fields)].
+        // design.md § Layout blocks > Unassigned fields makes the implicit
+        // trailing hot group the DEFINED behaviour and the diagnostic a
+        // WARNING, "suppress with `#[allow(layout_unassigned_fields)]` when
+        // the omission is intentional". Both halves were missing: the
+        // diagnostic was a hard `ResolveError` (so a spec-legal program
+        // failed to compile — `build` exited 1 and emitted no binary) and the
+        // attribute was never read, so the suggestion the diagnostic itself
+        // printed had no effect. B-2026-08-21-2 follow-up.
+        let suppressed = layout.attributes.iter().any(|a| {
+            a.is_bare("allow")
+                && a.args.iter().any(|arg| {
+                    matches!(
+                        &arg.value,
+                        Some(crate::ast::Expr {
+                            kind: crate::ast::ExprKind::Identifier(name),
+                            ..
+                        }) if name == "layout_unassigned_fields"
+                    )
+                })
+        });
+        if !unassigned.is_empty() && !suppressed {
             let field_list = unassigned
                 .iter()
                 .map(|s| s.as_str())
@@ -412,7 +431,7 @@ impl<'a> super::Resolver<'a> {
                     layout.name, field_list
                 ),
                 span: layout.span,
-                kind: ResolveErrorKind::UndefinedField,
+                kind: ResolveErrorKind::LayoutUnassignedFields,
                 suggestion: Some("assign all fields to groups, or suppress with #[allow(layout_unassigned_fields)]".to_string()),
                 replacement: None,
                 stub_hint: None,

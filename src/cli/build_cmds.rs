@@ -2486,6 +2486,9 @@ pub(super) fn resolve_modules(tree: &ProgramTree) -> Vec<ModuleResolveErrors> {
 
 pub(super) fn resolve_error_code(kind: &ResolveErrorKind) -> &'static str {
     match kind {
+        // NOTE severity — the spec calls this a warning, so it gets a `W`
+        // code, not an `E` one (B-2026-08-21-2 follow-up).
+        ResolveErrorKind::LayoutUnassignedFields => "W0150",
         ResolveErrorKind::UnknownModule => "E0112",
         ResolveErrorKind::UnknownItemInModule => "E0113",
         ResolveErrorKind::PrivateItemAccess => "E0111",
