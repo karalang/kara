@@ -95,14 +95,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 273 | 1 |
 | leak | 185 | 0 |
 | run-vs-build | 147 | 1 |
-| missing-feature | 141 | 7 |
+| missing-feature | 143 | 9 |
 | double-free | 134 | 1 |
 | codegen-gap | 122 | 2 |
 | diagnostics | 94 | 1 |
 | false-positive | 91 | 0 |
 | perf | 83 | 0 |
 | crash | 55 | 0 |
-| other | 53 | 1 |
+| other | 53 | 0 |
 | soundness | 51 | 0 |
 | use-after-free | 20 | 0 |
 
@@ -111,22 +111,22 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 973 | 7 |
-| typecheck | 230 | 4 |
+| typecheck | 231 | 5 |
 | interp | 169 | 1 |
 | ownership | 62 | 0 |
-| other | 61 | 1 |
+| other | 61 | 0 |
 | cli | 59 | 1 |
 | autopar | 54 | 0 |
 | parser | 35 | 1 |
 | runtime | 28 | 0 |
-| resolver | 24 | 0 |
+| resolver | 26 | 2 |
 | lexer | 8 | 1 |
-| effect | 7 | 0 |
+| effect | 8 | 1 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1449 surfaced · 14 open · 1413 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1451 surfaced · 15 open · 1414 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (14)
+### Open (15)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -141,9 +141,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1449 surfaced
 | B-2026-08-21-24 | 2026-08-21 | codegen | medium | AN ARRAY **LITERAL** TEMPORARY IN A `ref Slice[T]` PARAMETER FAILS LLVM MODULE VERIFICATION -- `f([1u8, 2u8, 3u8])` builds nothing while the by-value `Slice[T]` spelling of the same call compiles and runs | roadmap.md |
 | B-2026-08-21-25 | 2026-08-21 | codegen | medium | A METHOD CALL ON A FIXED-ARRAY **TEMPORARY** HAS NO CODEGEN LOWERING -- `n.to_ne_bytes().len()` build-fails with the dispatcher's own "this is a codegen bug" message while the bound two-line spelling works | roadmap.md |
 | B-2026-08-21-26 | 2026-08-21 | typecheck | medium | `TryFrom[intN]` FOR A C-LIKE `#[repr(intN)]` ENUM DOES NOT EXIST -- design.md § Enum Discriminant Runtime Surface commits to auto-generating it and shows the worked `match UsbClass.try_from(raw)`, which fails to compile | roadmap.md |
-| B-2026-08-21-28 | 2026-08-21 | other | medium | THE design.md CONFORMANCE SUITE IS BLIND TO ITS HIGHEST-YIELD CLASS: 21 of its 71 baseline blocks are SIGNATURE CATALOGUES that never compile, so the 60 method signatures they list are unchecked -- two of the five probed by hand do not exist, which is exactly the B-2026-08-21-10 shape the suite was built to catch | roadmap.md |
-| B-2026-08-21-29 | 2026-08-21 | typecheck | medium | TWO DOCUMENTED STDLIB SURFACES ARE NOT REACHABLE AS WRITTEN: `Channel.new[T]()` does not exist (`struct Channel[=T] { }` is empty) and design.md's whole `io.` I/O prefix resolves to nothing -- the surface is spelled `Stdin.read_line`, which the implementation's own comment already notes | roadmap.md |
+| B-2026-08-21-29 | 2026-08-21 | typecheck | medium | THREE DOCUMENTED SURFACES ARE NOT REACHABLE AS WRITTEN: every spelling of channel construction design.md uses (`Channel.new[T]()`, `Channel.bounded`), its whole `io.` I/O prefix, and `allocates(Heap)` -- whose `Heap` the document never declares and the prelude does not provide | roadmap.md |
 | B-2026-08-21-30 | 2026-08-21 | codegen | high | A `mut Slice[T]` **METHOD** PARAMETER FED A `mut`-MARKED ARRAY LOSES THE WRITE -- the callee's `b[0] = 9u8` never reaches the caller's array under JIT and default AOT, while `--interp` and `KARAC_AUTO_PAR=0` AOT both keep it and the free-function spelling is correct on all four | roadmap.md |
+| B-2026-08-21-31 | 2026-08-21 | resolver+typecheck | medium | `isize` IS NOT A TYPE -- design.md names it a v1 numeric primitive in four normative passages and writes it into six signatures, and three of the compiler's own back-end tables already map it, but the resolver answers `undefined type 'isize', did you mean 'usize'?` in every position | roadmap.md |
+| B-2026-08-21-32 | 2026-08-21 | resolver+effect | medium | EFFECT RESOURCES CANNOT BE ROOTED AT A VALUE, so design.md's whole channel effect model is unwritable: `with sends(tx)` on a channel PARAMETER is `'tx' is not an effect resource (it is a variable)`, and the seven `Sender`/`Receiver` declarations at :6064-:6094 are all written that way | roadmap.md |
 
 ### Wontfix (8)
 
@@ -162,9 +163,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1449 surfaced
 
 </details>
 
-### Fixed (1413)
+### Fixed (1414)
 
-<details><summary>1413 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1414 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -13611,6 +13612,69 @@ Both rows are the same failure: `selfhost_typechecker_matches_rust_typechecker` 
 WHY IT WAS FILED TWICE, since that is the reusable part. Three sessions met the same red test within a few hours: one filed B-2026-08-21-20 and named the cause (`3b4b97d`), a second fixed it, and a third — running the full suite for unrelated GPU work, from a checkout taken before the fix landed — filed this row and bisected the cause to "cb9f6b96 or earlier", which is correct but coarser. Nobody did anything wrong; the duplicate is the cost of a shared `main` and a several-hour-old checkout.
 
 The cheap defence is a `git fetch` immediately before filing, and a grep of the open rows for the failing TEST NAME rather than for the symptom — `selfhost_typechecker_matches_rust_typechecker` would have matched B-2026-08-21-20 on the first try, where "struct update" and "missing-field" do not. |
+| B-2026-08-21-28 | other | medium | THE design.md CONFORMANCE SUITE IS BLIND TO ITS HIGHEST-YIELD CLASS: 21 of its 71 baseline blocks are SIGNATURE CATALOGUES that never compile, so the… | FIXED by c320ae5 — the signature rung in `scripts/design-conformance.py`. A block that fails every framing in the ladder is no longer set aside — it is now asked the one question a bodiless declaration table can answer, in the two shapes the row proposed.
+
+WHAT LANDED.
+
+  (a) `fn name(args) -> R [with E]`  ->  `trait _Probe { <line>; }`. A bodiless
+      method declaration is legal in a trait, so the parameter and return types
+      and the effect clause are all typechecked.
+  (b) `Type.method(args) -> R`  ->  `let _ = Type.method(<fillers>);`, judged on
+      whether the NAME resolved rather than on whether the call typechecked.
+
+THE VALUE TABLE TURNED OUT TO BE UNNECESSARY, which is the one place this came in under the row's estimate. Measured: `karac` reports a wrong ARGUMENT TYPE as `expected 'i64', found 'String'` — a message that presupposes the function was found — while a name that does not exist is `no associated function 'filled' on type 'Vec'`. So the probe passes `0` for every argument and classifies on the diagnostic. ARITY does matter (`Vec.filled()` with no arguments reports `no associated function`, because resolution is arity-aware), and arity is the one thing a signature always states.
+
+THREE HARNESS FIXES WERE LOAD-BEARING, each found by a wrong answer rather than by reading the code:
+
+  - `SIG_CONTINUATION_RE` ended in `\b` after `->`, and `>` is a non-word
+    character, so the boundary never fired. Every signature whose return type sat
+    on its own line was silently TRUNCATED at the line above, and the walk then
+    continued into the function BODY below — which is how `File.open(path)?.lines()`
+    inside a worked example became a `Type.method(…)` catalogue entry and got
+    probed as one. Three blocks were mis-triaged as catalogues on the strength of
+    that; all three are ordinary code with bodies and are re-triaged.
+  - `DECLARES_RE` captured `io` out of `fn io.read_line()` — the catalogue line
+    under test — so the declaration index vouched for exactly the name it exists
+    to catch.
+  - The orphan check (below) applied to every block flagged 130 findings, of which
+    ~none were about the compiler: an example's undefined `load_config` / `pool` /
+    `normalize` is stage furniture. Restricting it to signature catalogues, which
+    are claims about an API surface rather than illustrations, brought it to 4.
+
+TWO IMPROVEMENTS CAME WITH IT, both needed before the rung could work at all:
+
+  - `undefined effect resource 'X'` now joins the out-of-block bucket. A catalogue
+    is out-of-block references by construction — its `T` is bound by an `impl`
+    header pages away, its `Heap` by an `effect resource` declaration in another
+    section — and without this every catalogue failed for the one thing that is
+    not a divergence.
+  - A DECLARATION INDEX over design.md separates the two things `undefined name
+    'X'` can mean. `Config` is declared three blocks up: prose ordering. `io` is
+    declared nowhere, here or in the compiler: the spec promising a surface that
+    does not exist. The messages are identical, so without the index the second
+    hides inside the first — which is precisely where design.md's whole `io.`
+    surface had been sitting.
+
+THE COUNT WENT DOWN, NOT UP, AND THE ROW'S WARNING WAS STILL RIGHT. Baseline 71 -> 53. The prediction that the queue would GROW was about the signatures, and it was correct on its own terms: 44 signature lines across 21 blocks went from unchecked to checked, and 8 blocks now report a specific defect where they previously said "not compilable code". The total fell anyway because the effect-resource reclassification moved 16 blocks out at the same time. The right way to read it: the baseline did not shrink because fewer things are wrong, it shrank because the harness stopped counting out-of-block references as divergences — and separately started counting real ones.
+
+WHAT IT FOUND, on its first run:
+
+  B-2026-08-21-31  `isize` is not a type, though design.md gives it as a v1
+                   primitive in four normative passages and three of the
+                   compiler's own back-end tables already map it.
+  B-2026-08-21-32  effect resources cannot be rooted at a VALUE, so the seven
+                   `Sender`/`Receiver` declarations design.md:6049 specifies —
+                   `with sends(tx)`, `with receives(rx)` — are unwritable.
+  B-2026-08-21-29  corrected and extended: `Channel.new[T]()` does not parse as a
+                   type application, `Channel.new()` never infers `T` from use
+                   despite a code comment saying it does, `Channel.bounded` does
+                   not exist at all, and `allocates(Heap)` names a resource
+                   design.md never declares.
+  B-2026-08-21-9   items (8) and (9): `with` before `->` in a signature, and the
+                   PascalCase rule refusing `extern "C" { type FILE; }` — a name
+                   Kāra does not get to choose.
+
+REMAINING LIMIT, stated rather than hidden. The rung answers "does this name resolve", not "does this signature match the implementation's". `Vec.filled(0, 0)` passing proves `filled` exists and takes two arguments; it does not prove the second is a `T` or that the return is `Vec[T]`. Checking that needs the value table this row proposed and this fix skipped, and it is the natural next increment. Nor can the orphan check tell a spec promise from a gesture at a user type — design.md:7021's `Key` / `Wire` are flagged alongside `io`, and are triaged in the baseline as the false positive they are. |
 
 </details>
 
