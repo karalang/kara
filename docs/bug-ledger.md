@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 270 | 1 |
 | leak | 185 | 0 |
 | run-vs-build | 145 | 0 |
-| missing-feature | 133 | 4 |
+| missing-feature | 134 | 5 |
 | double-free | 133 | 0 |
 | codegen-gap | 120 | 0 |
 | diagnostics | 92 | 1 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 963 | 2 |
+| codegen | 964 | 3 |
 | typecheck | 222 | 3 |
-| interp | 167 | 0 |
+| interp | 168 | 1 |
 | ownership | 61 | 0 |
 | other | 59 | 0 |
 | cli | 57 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 7 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1424 surfaced · 7 open · 1395 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1425 surfaced · 8 open · 1395 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (7)
+### Open (8)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -137,6 +137,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1424 surfaced
 | B-2026-08-21-2 | 2026-08-21 | cli | medium | SEVEN REGISTERED LINTS STILL HAVE NO EMIT SITE and so can never fire, though all seven are registered `default_level: LintLevel::Warn` -- advertised by `karac lint --list` and accepted in `#[allow(...)]`: `f16_software_emulated`, `float_in_serialized_type`, `implicit_clone`, `module_mut_binding`, `mutual_recursion_note`, `pure_loop_in_par`, `repr_c_layout_ignored`. They are the remainder of B-2026-08-20-36's eight, which wired `redundant_suffix` (the one design.md documents as live) and added the guard that now holds this list. They are VISIBLE IN CODE, not only here: `KNOWN_UNWIRED` in `src/lints.rs`, which `every_registered_lint_is_emitted_or_declared_unwired` fails on if the list grows or goes stale. | roadmap.md |
 | B-2026-08-21-4 | 2026-08-21 | codegen | high | A free function DECLARED to return `Slice[T]` hands back a GARBAGE header in codegen while `--interp` is correct, and MOST uses of it are SILENT. `fn pick(v: ref Vec[i64]) -> Slice[i64] { v.as_slice() }` over `let v: Vec[i64] = [10, 20, 30]`, measured on the JIT: `println(pick(v).len())` prints a pointer-sized number (140208557007525) instead of 3; `let s = pick(v); println(s.len())` the same; `for x in s` floods hundreds of garbage words instead of 10 20 30. No diagnostic, exit 0. Only the INDEX paths fail loudly -- `pick(v)[2]` and `let s = pick(v); s[2]` both report `codegen failed: Index operator applied to non-array type`, because the callee's `Slice[T]` return is never registered as an element type anywhere. So one family reads as a wrong answer or a hard stop purely by which method you call on it. | src/codegen/types_lowering.rs::llvm_return_type (how a `Slice[T]` return is typed at the call boundary — start here, the returned VALUE is what is wrong); src/codegen/functions.rs::compile_function (the return emission that feeds it); src/codegen/types_lowering.rs::infer_slice_elem_from_rhs + ::slice_elem_type_expr_from_rhs (the two element-type resolvers whose missing `Call` arm is the SECOND half, deliberately not landed — see detail); src/codegen/collections.rs::inline_index_recv_slice_te (the B-2026-08-20-40 sibling that must not be widened to a `Call` until the boundary is fixed) |
 | B-2026-08-21-5 | 2026-08-21 | codegen | medium | `compile_cstr_method` PANICS on a `ref CStr` PARAMETER receiver instead of emitting a diagnostic: `fn look(c: ref CStr) -> i64 { c.len() }` aborts karac with `Found IntValue(... %c.deref = load i64, ptr %c1 ...) but expected the StructValue variant` at src/codegen/method_call_ffi.rs:34 (inkwell `BasicValueEnum::into_struct_value`). `--interp` prints 3. Any CStr method on that receiver shape hits it -- `len`, `as_bytes` measured. | src/codegen/method_call_ffi.rs::compile_cstr_method (the `recv.into_struct_value()` unwrap at the top of the fn — the panic site, and the place a structured Err belongs regardless); src/codegen/functions.rs (where a `ref CStr` param's slot is set up — the receiver arrives as a loaded i64 rather than the `{ptr, i64}` aggregate); tests/codegen.rs::test_e2e_cstr_len_is_empty_as_bytes (the literal-receiver coverage that passes, showing the gap is param-only) |
+| B-2026-08-21-6 | 2026-08-21 | codegen+interp | medium | `Map`/`Set` DO NOT USE THE SPEC'S DEFAULT HASHER: design.md mandates `SipHash13BuildHasher` seeded from a per-process random source, codegen emits FxHash with a COMPILE-TIME-CONSTANT seed and the interpreter hashes not at all -- so there is no hash-flooding resistance, iteration order is fully deterministic across runs (design.md says it must vary), the two backends order differently from each other, and `Map[K, V, FxBuildHasher]` -- design.md's own spelling -- does not resolve, so there is no opt-in either way | roadmap.md |
 
 ### Wontfix (8)
 
