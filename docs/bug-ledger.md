@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 133 | 0 |
 | codegen-gap | 120 | 0 |
 | diagnostics | 93 | 2 |
-| false-positive | 89 | 0 |
+| false-positive | 90 | 0 |
 | perf | 83 | 0 |
 | crash | 55 | 0 |
 | soundness | 51 | 0 |
@@ -115,7 +115,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | interp | 169 | 1 |
 | ownership | 62 | 0 |
 | other | 60 | 1 |
-| cli | 58 | 2 |
+| cli | 59 | 2 |
 | autopar | 54 | 0 |
 | parser | 35 | 2 |
 | runtime | 28 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 7 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1433 surfaced · 10 open · 1401 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1434 surfaced · 10 open · 1402 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (10)
 
@@ -133,7 +133,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1433 surfaced
 | B-2026-08-20-37 | 2026-08-20 | lexer | medium | BYTE-STRING literals `b"..."` are lexed as RESERVED, though design.md § Byte and Byte-String Literals specifies them as shipped with a type rule, three worked examples and an escape table -- while the sibling byte-CHAR literal `b'A'` in the same section works fully. `let eth: Array[u8, 2] = b"\x08\x00";` -> `error[parse]: string prefix 'b"..."' is reserved for future use; only `f"..."` ...`. The section opens by saying the grammar "reserves the `b` prefix FOR THIS PURPOSE (`syntax.md § 1.3`), producing `u8`-typed and `[u8; N]`-typed literals", states "**`b"..."` has type `[u8; N]` where `N` is the byte count of the literal after escape resolution**", and its own "Reserved but not yet implemented" paragraph lists only `r`, `br` and `rb` -- `b"..."` is presented as the working half. Nothing in deferred.md or roadmap.md marks it deferred. Measured working in the same section: `b'U'` is 85, and every escape the spec permits in a byte literal is correct (`\n`=10, `\t`=9, `\r`=13, `\0`=0, `\\`=92, `\'`=39, `\"`=34, `\xFF`=255, `\x41`=65), as is the forbidden case -- `b'\u{FF}'` produces the spec's exact wording, "Unicode escapes are not permitted in byte literals — use \xFF for byte 0xFF", and `r"..."` produces the spec's exact reserved-prefix message. | roadmap.md |
 | B-2026-08-20-39 | 2026-08-20 | typecheck | medium | `v.last(n)` -- the END-RELATIVE ACCESS design.md prescribes as THE replacement for negative indexing -- takes no argument: `v.last(1)` is rejected with `Vec.last() takes no arguments`. § Numeric Semantics, in the same breath as ruling out Python-style wrap-around: "Negative indices are out-of-bounds errors — they panic at runtime... No Python-style wrap-around; `-1` as an index is always a bug. FOR END-RELATIVE ACCESS, USE `.last(n)` WHERE `n` DEFAULTS TO 0: `v.last()` returns the last element, `v.last(1)` the second-to-last, etc. Negative or out-of-bounds `n` panics." So the spec closes one door and points at another that is not there -- `v.last()` works, `v.last(1)` does not, and the diagnostic states the no-argument form as though it were the intended surface rather than an unimplemented half. | roadmap.md |
 | B-2026-08-20-41 | 2026-08-20 | typecheck | medium | `String.normalize` and the `NFC` constant DO NOT EXIST, so the remedy design.md gives for its own Unicode-equality hazard is unwritable. § Strings, Equality bullet: "`String` equality (`==`) compares raw UTF-8 bytes. Two strings with identical visual appearance but different Unicode normalization forms (e.g., NFC vs NFD) are **not** equal. USE `s.normalize(NFC)` FOR NORMALIZATION-AWARE COMPARISON." Measured: `a.normalize(NFC)` -> `error[resolve]: undefined name 'NFC', did you mean 'Neg'?`; the no-argument form `a.normalize()` -> `error[typecheck]: no method 'normalize' on type 'String'`. Neither `normalize` nor `NFC` appears anywhere in `src/`. The hazard the bullet describes is real and reproduces -- `"e\u{0301}" == "\u{00e9}"` is false, exactly as documented -- so the paragraph correctly warns about a trap and then names an escape that was never built. | roadmap.md |
-| B-2026-08-21-2 | 2026-08-21 | cli | medium | SIX REGISTERED LINTS STILL HAVE NO EMIT SITE and so can never fire, though all seven are registered `default_level: LintLevel::Warn` -- advertised by `karac lint --list` and accepted in `#[allow(...)]`: `f16_software_emulated`, `float_in_serialized_type`, `implicit_clone`, `mutual_recursion_note`, `pure_loop_in_par`, `repr_c_layout_ignored`. They are the remainder of B-2026-08-20-36's eight, which wired `redundant_suffix` (the one design.md documents as live) and added the guard that now holds this list. They are VISIBLE IN CODE, not only here: `KNOWN_UNWIRED` in `src/lints.rs`, which `every_registered_lint_is_emitted_or_declared_unwired` fails on if the list grows or goes stale. | roadmap.md |
+| B-2026-08-21-2 | 2026-08-21 | cli | medium | FIVE REGISTERED LINTS STILL HAVE NO EMIT SITE and so can never fire, though all seven are registered `default_level: LintLevel::Warn` -- advertised by `karac lint --list` and accepted in `#[allow(...)]`: `f16_software_emulated`, `float_in_serialized_type`, `implicit_clone`, `pure_loop_in_par`, `repr_c_layout_ignored`. They are the remainder of B-2026-08-20-36's eight, which wired `redundant_suffix` (the one design.md documents as live) and added the guard that now holds this list. They are VISIBLE IN CODE, not only here: `KNOWN_UNWIRED` in `src/lints.rs`, which `every_registered_lint_is_emitted_or_declared_unwired` fails on if the list grows or goes stale. | roadmap.md |
 | B-2026-08-21-6 | 2026-08-21 | codegen+interp | medium | `Map`/`Set` DO NOT USE THE SPEC'S DEFAULT HASHER: design.md mandates `SipHash13BuildHasher` seeded from a per-process random source, codegen emits FxHash with a COMPILE-TIME-CONSTANT seed and the interpreter hashes not at all -- so there is no hash-flooding resistance, iteration order is fully deterministic across runs (design.md says it must vary), the two backends order differently from each other, and `Map[K, V, FxBuildHasher]` -- design.md's own spelling -- does not resolve, so there is no opt-in either way | roadmap.md |
 | B-2026-08-21-9 | 2026-08-21 | parser | medium | design.md WRITES SYNTAX THE PARSER HAS NO PRODUCTION FOR, in two places syntax.md also disagrees with: the inline associated-type binding `Trait[Assoc = T]` (43 lines of design.md, and syntax.md's own comment at :650) has no form in `TRAIT_BOUND = PATH [ "[" TYPE_LIST "]" ]`, and an effect clause on an impl header (`impl From[E] for A with writes(Log) {`) has no form at all | roadmap.md |
 | B-2026-08-21-10 | 2026-08-21 | typecheck | medium | FOUR STDLIB ENTRY POINTS design.md DOCUMENTS DO NOT EXIST -- `Vec.from_fn` (in the Vec method table, with a worked example), `Vec.is_sorted` (used inside `requires` contracts twice), `u16.to_ne_bytes`, and an enum's `.discriminant()` -- the `TreeMap` shape again: written up, never implemented | roadmap.md |
@@ -158,9 +158,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1433 surfaced
 
 </details>
 
-### Fixed (1401)
+### Fixed (1402)
 
-<details><summary>1401 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1402 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -13457,6 +13457,9 @@ HOW MUCH THIS ROW'S OWN EXAMPLE GAINS, measured rather than assumed, because the
 
 Pinned by nine E2E tests in tests/interpreter.rs -- insertion order, overwrite-keeps-position, survivors-findable-after-remove (the case a stale index breaks silently), value-semantics for `Map`, `Set`, and a map inside a struct field, the `entry`/`or_insert` slot chain, distinct tuple keys sharing a bucket, and a 400-key volume case -- plus four unit tests in src/interpreter/value.rs, of which `hash_value_agrees_with_equality` is the one guarding the whole design. |
 | B-2026-08-21-13 | codegen | high | EVERY `gpu.*` REDUCTION SILENTLY DROPPED every element past 4,194,240 | 42fee64f |
+| B-2026-08-21-15 | cli | medium | The MULTI-FILE build gate failed the build on ANY effect-checker entry, including NOTE-severity ones: `run_multi_file_codegen` tested `!e.errors.is_e… | FIXED by 2a12881 (same commit that surfaced it).
+
+The gate now filters with the hoisted `kind_is_note`, so note-severity effect findings never fail a multi-file build. |
 
 </details>
 
