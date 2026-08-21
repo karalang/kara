@@ -299,6 +299,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         | ExprKind::Bool(_)
                         | ExprKind::CharLit(_)
                         | ExprKind::ByteLit(_)
+                        | ExprKind::ByteStringLit(_)
                 );
                 if is_literal_index && self.mono_state.generic_fns.contains_key(name) {
                     let explicit_args = vec![GenericArg::Const((**index).clone())];
@@ -2751,6 +2752,7 @@ impl<'ctx> super::Codegen<'ctx> {
             | ExprKind::Float(..)
             | ExprKind::CharLit(..)
             | ExprKind::ByteLit(..)
+            | ExprKind::ByteStringLit(..)
             | ExprKind::StringLit(..)
             | ExprKind::MultiStringLit(..)
             | ExprKind::Bool(..) => true,

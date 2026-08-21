@@ -285,6 +285,7 @@ fn walk_children(kind: &ExprKind, f: &mut dyn FnMut(&Expr)) {
         | ExprKind::Float(..)
         | ExprKind::CharLit(..)
         | ExprKind::ByteLit(..)
+        | ExprKind::ByteStringLit(..)
         | ExprKind::StringLit(..)
         | ExprKind::MultiStringLit(..)
         | ExprKind::CStringLit { .. }

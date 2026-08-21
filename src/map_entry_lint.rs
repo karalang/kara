@@ -473,6 +473,7 @@ fn walk_expr(expr: &Expr, typed: &TypeCheckResult, src: &str, out: &mut Vec<Type
         | ExprKind::Float(_, _)
         | ExprKind::CharLit(_)
         | ExprKind::ByteLit(_)
+        | ExprKind::ByteStringLit(_)
         | ExprKind::StringLit(_)
         | ExprKind::MultiStringLit(_)
         | ExprKind::CStringLit { .. }

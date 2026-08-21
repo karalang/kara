@@ -734,6 +734,7 @@ pub(crate) fn subst_expr(expr: &mut Expr, subst: &std::collections::HashMap<Stri
         | ExprKind::Float(..)
         | ExprKind::CharLit(..)
         | ExprKind::ByteLit(..)
+        | ExprKind::ByteStringLit(..)
         | ExprKind::StringLit(..)
         | ExprKind::MultiStringLit(..)
         | ExprKind::CStringLit { .. }
@@ -1731,6 +1732,7 @@ fn walk_expr(expr: &mut Expr, ret: Option<&TypeExpr>, cx: &mut WalkCx) {
         | ExprKind::Float(..)
         | ExprKind::CharLit(..)
         | ExprKind::ByteLit(..)
+        | ExprKind::ByteStringLit(..)
         | ExprKind::StringLit(..)
         | ExprKind::MultiStringLit(..)
         | ExprKind::CStringLit { .. }

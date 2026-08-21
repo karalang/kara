@@ -1840,7 +1840,7 @@ fn infer_stub_arg_type(expr: &Expr) -> Option<String> {
         },
         ExprKind::Bool(_) => "bool",
         ExprKind::CharLit(_) => "char",
-        ExprKind::ByteLit(_) => "u8",
+        ExprKind::ByteLit(_) | ExprKind::ByteStringLit(_) => "u8",
         ExprKind::StringLit(_) | ExprKind::MultiStringLit(_) => "String",
         ExprKind::CStringLit { .. } => "ref CStr",
         _ => return None,

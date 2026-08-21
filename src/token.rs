@@ -283,6 +283,15 @@ pub enum Token {
     /// `b'A'` byte char literal — type `u8` (design.md § Byte and
     /// Byte-String Literals; phase-1-lexer slice).
     ByteLiteral(u8),
+    /// `b"..."` byte-string literal — the escape-resolved bytes. design.md
+    /// § Byte and Byte-String Literals: "`b"..."` has type `[u8; N]` where
+    /// `N` is the byte count of the literal after escape resolution. Not
+    /// `Slice[u8]`". The parser desugars it to the `Array[u8, N]` literal
+    /// `[b'h', b'e', …]`, which is the form design.md § Reserved
+    /// Single-Letter String-Prefix Syntax already called the current
+    /// spelling — so the quoted form is pure surface sugar over a shape
+    /// typecheck / interp / codegen already handle (B-2026-08-20-37).
+    ByteStringLiteral(Vec<u8>),
     StringLiteral(String),
     MultiStringLiteral(String),
     InterpolatedStringLiteral(Vec<InterpolationPart>),

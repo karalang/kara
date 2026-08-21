@@ -124,7 +124,8 @@ fn appended_cast_end_offset(expr: &Expr) -> Option<usize> {
         ExprKind::Identifier(_)
         | ExprKind::SelfValue
         | ExprKind::Integer(..)
-        | ExprKind::ByteLit(_) => Some(expr.span.offset + expr.span.length),
+        | ExprKind::ByteLit(_)
+        | ExprKind::ByteStringLit(_) => Some(expr.span.offset + expr.span.length),
         ExprKind::MethodCall {
             args_close_span, ..
         } => Some(args_close_span.offset + args_close_span.length),

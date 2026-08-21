@@ -496,6 +496,7 @@ fn mono_scan_expr(e: &Expr, s: &mut MonotoneScan) {
         | ExprKind::Float(_, _)
         | ExprKind::CharLit(_)
         | ExprKind::ByteLit(_)
+        | ExprKind::ByteStringLit(_)
         | ExprKind::StringLit(_)
         | ExprKind::MultiStringLit(_)
         | ExprKind::CStringLit { .. }
@@ -1214,6 +1215,7 @@ fn expr_is_scalar_only(e: &Expr) -> bool {
         | ExprKind::Bool(_)
         | ExprKind::CharLit(_)
         | ExprKind::ByteLit(_)
+        | ExprKind::ByteStringLit(_)
         | ExprKind::Identifier(_) => true,
         ExprKind::Binary { left, right, .. } => {
             expr_is_scalar_only(left) && expr_is_scalar_only(right)
@@ -1318,6 +1320,7 @@ fn expr_is_unroll_cheap_free(e: &Expr) -> bool {
         | ExprKind::Bool(_)
         | ExprKind::CharLit(_)
         | ExprKind::ByteLit(_)
+        | ExprKind::ByteStringLit(_)
         | ExprKind::Identifier(_)
         | ExprKind::SelfValue => true,
         ExprKind::Binary { left, right, .. } => {

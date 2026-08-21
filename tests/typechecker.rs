@@ -3393,6 +3393,43 @@ fn lint_attrs_slice4b_warn_explicit_keeps_warning_behavior() {
     );
 }
 
+/// `b"..."` has type `Array[u8, N]` INTRINSICALLY (B-2026-08-20-37).
+///
+/// design.md § Byte and Byte-String Literals: "`b"..."` has type
+/// `Array[u8, N]` where `N` is the byte count of the literal after escape
+/// resolution. Not `Slice[u8]`, not a reference to one."
+///
+/// The un-annotated binding is the whole point of this test. An earlier cut
+/// desugared the literal to the array literal `[b'h', b'e']`, which types as
+/// `Vec[u8]` when no expected type is present — so the spec'd type only
+/// appeared when the binding happened to carry an annotation. The type
+/// belongs to the literal, not to its context.
+#[test]
+fn byte_string_literal_is_array_u8_n_without_an_annotation() {
+    let result = typecheck_ok("fn main() { let b = b\"hi\"; println(b[0]); }");
+    assert!(
+        result.errors.is_empty(),
+        "expected a clean typecheck; got: {:?}",
+        result.errors
+    );
+}
+
+/// A byte string is not text: passing one where a `String` is expected is a
+/// type error, and the diagnostic must name the array type so the mismatch
+/// is legible (design.md § Byte and Byte-String Literals, "Interaction with
+/// existing types").
+#[test]
+fn byte_string_literal_is_not_a_string() {
+    let errors = typecheck_errors(
+        "fn take(s: String) -> i64 { return 1; }\n         fn main() { let b = b\"hi\"; println(take(b)); }",
+    );
+    assert!(
+        errors.iter().any(|e| e.message.contains("Array[u8, 2]")),
+        "the mismatch must name the literal's `Array[u8, N]` type; got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
 /// `module_mut_binding` fires on a module-level `let mut` (B-2026-08-21-2).
 ///
 /// design.md § Module-Level State > Profile gating gives the `lib` (default)

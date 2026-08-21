@@ -588,6 +588,7 @@ impl<'a> OwnershipChecker<'a> {
             | ExprKind::Float(..)
             | ExprKind::CharLit(_)
             | ExprKind::ByteLit(_)
+            | ExprKind::ByteStringLit(_)
             | ExprKind::StringLit(_)
             | ExprKind::MultiStringLit(_)
             | ExprKind::CStringLit { .. }
@@ -2137,6 +2138,7 @@ impl<'a> OwnershipChecker<'a> {
             | ExprKind::Float(..)
             | ExprKind::CharLit(_)
             | ExprKind::ByteLit(_)
+            | ExprKind::ByteStringLit(_)
             | ExprKind::StringLit(_)
             | ExprKind::MultiStringLit(_)
             | ExprKind::CStringLit { .. }
@@ -2689,6 +2691,7 @@ fn walk_fn_exprs(block: &Block, f: &mut impl FnMut(&Expr, bool)) {
             | ExprKind::Float(..)
             | ExprKind::CharLit(_)
             | ExprKind::ByteLit(_)
+            | ExprKind::ByteStringLit(_)
             | ExprKind::StringLit(_)
             | ExprKind::MultiStringLit(_)
             | ExprKind::CStringLit { .. }

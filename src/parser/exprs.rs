@@ -971,6 +971,18 @@ impl super::Parser {
                     kind: ExprKind::ByteLit(b),
                 })
             }
+            // `b"..."` — its own node, because the `Array[u8, N]` type is
+            // intrinsic to the literal; see `ExprKind::ByteStringLit`
+            // (B-2026-08-20-37).
+            Token::ByteStringLiteral(bytes) => {
+                let bytes = bytes.clone();
+                self.advance();
+                let span = self.span_from(&start);
+                Some(Expr {
+                    span,
+                    kind: ExprKind::ByteStringLit(bytes),
+                })
+            }
             Token::StringLiteral(s) => {
                 let s = s.clone();
                 self.advance();

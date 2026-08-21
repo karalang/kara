@@ -238,6 +238,7 @@ impl<'ctx> super::Codegen<'ctx> {
             | ExprKind::Float(..)
             | ExprKind::CharLit(_)
             | ExprKind::ByteLit(_)
+            | ExprKind::ByteStringLit(_)
             | ExprKind::StringLit(_)
             | ExprKind::MultiStringLit(_)
             | ExprKind::CStringLit { .. }
@@ -284,6 +285,7 @@ impl<'ctx> super::Codegen<'ctx> {
             | ExprKind::Float(..)
             | ExprKind::CharLit(_)
             | ExprKind::ByteLit(_)
+            | ExprKind::ByteStringLit(_)
             | ExprKind::StringLit(_)
             | ExprKind::MultiStringLit(_)
             | ExprKind::CStringLit { .. }
@@ -12366,7 +12368,8 @@ impl<'ctx> super::Codegen<'ctx> {
             | ExprKind::Float(..)
             | ExprKind::Bool(..)
             | ExprKind::CharLit(..)
-            | ExprKind::ByteLit(..) => true,
+            | ExprKind::ByteLit(..)
+            | ExprKind::ByteStringLit(..) => true,
             ExprKind::Binary { left, right, .. } => {
                 self.expr_cannot_carry_container_heap(left, container, clone_log_mark)
                     && self.expr_cannot_carry_container_heap(right, container, clone_log_mark)

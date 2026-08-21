@@ -1895,7 +1895,7 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::Float(_, sfx) => self.llvm_float_type_for_suffix(*sfx).into(),
             ExprKind::Bool(_) => self.context.bool_type().into(),
             ExprKind::CharLit(_) => self.context.i32_type().into(),
-            ExprKind::ByteLit(_) => self.context.i8_type().into(),
+            ExprKind::ByteLit(_) | ExprKind::ByteStringLit(_) => self.context.i8_type().into(),
             // B-2026-08-08-22: the `{ptr, len, cap}` String aggregate, NOT a
             // bare `ptr` into rodata. This arm used to say `ptr` on the reading
             // that a literal is a BORROWED `str` — true of the literal, false

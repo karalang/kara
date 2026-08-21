@@ -548,7 +548,8 @@ pub(super) fn is_literal_const_arg_expr(expr: &Expr) -> bool {
         ExprKind::Integer(_, _)
         | ExprKind::Bool(_)
         | ExprKind::CharLit(_)
-        | ExprKind::ByteLit(_) => true,
+        | ExprKind::ByteLit(_)
+        | ExprKind::ByteStringLit(_) => true,
         ExprKind::Unary {
             op: UnaryOp::Neg,
             operand,

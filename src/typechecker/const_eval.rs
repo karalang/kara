@@ -294,7 +294,7 @@ pub(super) fn infer_operand_target_ty(left: &Expr, right: &Expr) -> Option<Type>
             ExprKind::Integer(_, Some(IntSuffix::Usize)) => Some(Type::UInt(UIntSize::Usize)),
             ExprKind::Bool(_) => Some(Type::Bool),
             ExprKind::CharLit(_) => Some(Type::Char),
-            ExprKind::ByteLit(_) => Some(Type::UInt(UIntSize::U8)),
+            ExprKind::ByteLit(_) | ExprKind::ByteStringLit(_) => Some(Type::UInt(UIntSize::U8)),
             // B-2026-08-12-10 — FLOAT literals, so a comparison between a
             // suffixed operand and an unsuffixed one folds at ONE width. Only a
             // SUFFIXED float names a type here, exactly as for integers: an

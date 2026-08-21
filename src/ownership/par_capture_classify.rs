@@ -594,6 +594,7 @@ fn refs_in_expr(expr: &Expr, refs: &mut HashSet<String>, defs: &mut HashSet<Stri
         | ExprKind::Float(..)
         | ExprKind::CharLit(..)
         | ExprKind::ByteLit(..)
+        | ExprKind::ByteStringLit(..)
         | ExprKind::StringLit(..)
         | ExprKind::MultiStringLit(..)
         | ExprKind::CStringLit { .. }

@@ -645,6 +645,7 @@ fn collect_idents(e: &Expr, out: &mut Vec<String>) -> bool {
         | ExprKind::Bool(..)
         | ExprKind::CharLit(..)
         | ExprKind::ByteLit(..)
+        | ExprKind::ByteStringLit(..)
         | ExprKind::StringLit(..) => true,
         ExprKind::Identifier(n) => {
             out.push(n.clone());
@@ -763,6 +764,7 @@ fn expr_mutates_ident(e: &Expr, name: &str) -> bool {
         | ExprKind::Bool(..)
         | ExprKind::CharLit(..)
         | ExprKind::ByteLit(..)
+        | ExprKind::ByteStringLit(..)
         | ExprKind::StringLit(..)
         | ExprKind::Identifier(..)
         | ExprKind::Path { .. } => false,
@@ -875,6 +877,7 @@ fn mentions_ident(e: &Expr, name: &str) -> bool {
         | ExprKind::Bool(..)
         | ExprKind::CharLit(..)
         | ExprKind::ByteLit(..)
+        | ExprKind::ByteStringLit(..)
         | ExprKind::StringLit(..) => false,
         ExprKind::Identifier(n) => n == name,
         ExprKind::Path { segments, .. } => segments.first().is_some_and(|s| s == name),

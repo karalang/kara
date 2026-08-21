@@ -524,6 +524,55 @@ fn test_char_literal_unknown_escape() {
 // design.md § Byte and Byte-String Literals. Type u8.
 
 #[test]
+fn byte_string_literal_resolves_escapes_and_length() {
+    // B-2026-08-20-37. design.md § Byte and Byte-String Literals: the bytes
+    // are the literal's value AFTER escape resolution, and that count is `N`
+    // in its `Array[u8, N]` type — so the escape table is length-relevant,
+    // not just value-relevant.
+    assert_eq!(
+        tokens_only(r#"b"\x08\x00""#)[0],
+        Token::ByteStringLiteral(vec![0x08, 0x00])
+    );
+    assert_eq!(
+        tokens_only(r#"b"hi""#)[0],
+        Token::ByteStringLiteral(vec![b'h', b'i'])
+    );
+    // Every escape the spec's table permits, in one literal.
+    assert_eq!(
+        tokens_only(r#"b"\n\t\r\0\\\'\"\x41""#)[0],
+        Token::ByteStringLiteral(vec![10, 9, 13, 0, 92, 39, 34, 65])
+    );
+    // Empty is legal and is `Array[u8, 0]`.
+    assert_eq!(tokens_only(r#"b"""#)[0], Token::ByteStringLiteral(vec![]));
+}
+
+#[test]
+fn byte_string_literal_rejects_unicode_escape_and_non_ascii() {
+    // Same refusals as the byte-CHAR form, with the same wording — design.md
+    // gives ONE escape table for both. A raw non-ASCII codepoint is refused
+    // rather than UTF-8 encoded because its byte count would silently change
+    // `N`, and `N` is part of the type.
+    let t = tokens_only(r#"b"\u{FF}""#);
+    assert!(
+        matches!(&t[0], Token::Error(m) if m.contains("Unicode escapes are not permitted")),
+        "got {:?}",
+        t[0]
+    );
+    let t = tokens_only("b\"\u{e9}\"");
+    assert!(
+        matches!(&t[0], Token::Error(m) if m.contains("non-ASCII")),
+        "got {:?}",
+        t[0]
+    );
+    let t = tokens_only(r#"b"\q""#);
+    assert!(
+        matches!(&t[0], Token::Error(m) if m.contains("Unknown escape sequence")),
+        "got {:?}",
+        t[0]
+    );
+}
+
+#[test]
 fn test_byte_literal_simple_ascii() {
     assert_eq!(tokens_only("b'A'")[0], Token::ByteLiteral(0x41));
     assert_eq!(tokens_only("b'0'")[0], Token::ByteLiteral(0x30));
@@ -1219,10 +1268,18 @@ fn test_v60_reserved_hash_guarded_string() {
 fn test_v60_reserved_string_prefix_diagnostic() {
     // Per design.md § Reserved Single-Letter String-Prefix Syntax (v60 item 10).
     // Every ASCII single-letter prefix immediately followed by `"` is reserved
-    // at v1, except `f"..."` (interpolated strings) and `c"..."` (C-string
-    // literals). The lexer emits a focused reserved-prefix diagnostic and
-    // consumes the string body for clean error recovery.
-    for prefix in ['a', 'b', 'g', 'r', 'x', 'z', '_'] {
+    // at v1, except the RECOGNIZED ones — `f"..."` (interpolated strings),
+    // `c"..."` (C-strings) and, since B-2026-08-20-37, `b"..."` (byte
+    // strings). The lexer emits a focused reserved-prefix diagnostic for the
+    // rest and consumes the string body for clean error recovery.
+    //
+    // `b` was in this list because § Reserved Single-Letter String-Prefix
+    // Syntax listed `b"..."` as reserved with type `Slice[u8]`, while
+    // § Byte and Byte-String Literals specified it as shipped with type
+    // `Array[u8, N]` and "Not `Slice[u8]`". The owner settled that
+    // contradiction in favour of the byte-literal section, so `b` now lexes
+    // and is covered by `byte_string_literal_resolves_escapes_and_length`.
+    for prefix in ['a', 'g', 'r', 'x', 'z', '_'] {
         let source = format!(r#"{prefix}"hello""#);
         let tokens = tokens_only(&source);
         assert_eq!(

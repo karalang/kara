@@ -143,6 +143,13 @@ impl<'a> super::Interpreter<'a> {
             // `b'X'` evaluates as a u8 via the shared `Value::Int(i64)` carrier
             // (the typechecker has already classified the value as u8).
             ExprKind::ByteLit(b) => Value::Int(i128::from(*b)),
+            // `b"..."` evaluates to exactly what `[b'h', b'e', …]` does —
+            // design.md names that array literal as the equivalent spelling,
+            // so the two forms must be indistinguishable at runtime
+            // (B-2026-08-20-37).
+            ExprKind::ByteStringLit(bytes) => {
+                Value::array_of(bytes.iter().map(|b| Value::Int(i128::from(*b))).collect())
+            }
             ExprKind::StringLit(s) => Value::String(s.clone()),
             ExprKind::MultiStringLit(s) => Value::String(s.clone()),
             // `c"..."` — bytes exclude the trailing NUL (a codegen-level

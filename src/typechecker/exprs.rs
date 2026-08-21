@@ -3808,6 +3808,17 @@ impl<'a> super::TypeChecker<'a> {
             }
             ExprKind::CharLit(_) => Type::Char,
             ExprKind::ByteLit(_) => Type::UInt(UIntSize::U8),
+            // design.md § Byte and Byte-String Literals: "`b"..."` has type
+            // `[u8; N]` where `N` is the byte count of the literal AFTER
+            // ESCAPE RESOLUTION. Not `Slice[u8]`, not `&[u8; N]`." The length
+            // is part of the type, which is the guarantee MMIO / protocol
+            // code needs, so it is read off the resolved bytes rather than
+            // inferred from context — an un-annotated `let b = b"hi"` is
+            // `Array[u8, 2]`, not `Vec[u8]` (B-2026-08-20-37).
+            ExprKind::ByteStringLit(bytes) => Type::Array {
+                element: Box::new(Type::UInt(UIntSize::U8)),
+                size: ConstArg::Literal(bytes.len() as i64),
+            },
             ExprKind::StringLit(_) | ExprKind::MultiStringLit(_) => Type::Str,
             // `c"..."` C-string literal — typed `ref CStr` per
             // design.md § C-String Literals (v60 item 18). The

@@ -2909,7 +2909,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 | ExprKind::Float(..)
                 | ExprKind::Bool(..)
                 | ExprKind::CharLit(..)
-                | ExprKind::ByteLit(..) => true,
+                | ExprKind::ByteLit(..)
+                | ExprKind::ByteStringLit(..) => true,
                 ExprKind::Cast { ty, .. } => matches!(
                     &ty.kind,
                     TypeKind::Path(p)

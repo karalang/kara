@@ -3221,7 +3221,7 @@ fn validate_refinement_predicate(expr: &Expr) -> Result<(), (String, crate::toke
         | ExprKind::Float(..)
         | ExprKind::Bool(_)
         | ExprKind::CharLit(_)
-        | ExprKind::ByteLit(_)
+        | ExprKind::ByteLit(_) | ExprKind::ByteStringLit(_)
         | ExprKind::StringLit(_)
         // A bare identifier is treated as a module-level constant
         // reference (`MAX`). Whether the name actually resolves to a

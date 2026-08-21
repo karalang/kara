@@ -263,6 +263,17 @@ pub enum ExprKind {
     // Composite literals
     Tuple(Vec<Expr>),
     ArrayLiteral(Vec<Expr>),
+    /// `b"..."` — the escape-resolved bytes. design.md § Byte and
+    /// Byte-String Literals: "`b"..."` has type `[u8; N]` where `N` is the
+    /// byte count of the literal after escape resolution. Not `Slice[u8]`,
+    /// not `&[u8; N]`."
+    ///
+    /// A node of its own rather than a desugaring to `ArrayLiteral`: an
+    /// array literal with no expected type infers `Vec[u8]`, so the
+    /// desugared form only carried the spec'd type when the binding was
+    /// annotated. The type rule is intrinsic to the literal, so the literal
+    /// needs to say so itself (B-2026-08-20-37).
+    ByteStringLit(Vec<u8>),
     /// `TypeName[e1, e2, ...]` — prefix collection literal.
     /// `type_name` is one of `Vec`, `Array`, `Set`, `Map`.
     /// `Array[e1, e2, e3]` produces a fixed-size array; `Vec[...]` produces a growable vec.

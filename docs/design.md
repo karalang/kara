@@ -425,9 +425,9 @@ The lexer reserves the entire **single-letter ASCII string-prefix space** — ev
 Recognized at v1:
 - `f"..."` — interpolated strings (already shipped). See § *String Interpolation*.
 - `c"..."` — NUL-terminated C strings of type `ref CStr` for FFI (specced at v1, lex acceptance ships in Phase 5.2). See § *C-String Literals*.
+- `b"..."` — byte-string literals of type `Array[u8, N]`. See § *Byte and Byte-String Literals*, which is authoritative for the type rule and the escape table. (This entry previously sat in the reserved list below, describing a `Slice[u8]` type the byte-literal section explicitly rejects; the two are reconciled here in favour of that section — B-2026-08-20-37.)
 
 Reserved against future use, no v1 implementation:
-- `b"..."` — byte-string literals (`Slice[u8]` from a quoted form) — currently the byte-literal syntax is `[b'h', b'e', ...]`; the prefix is reserved against a more ergonomic future form.
 - All other single-letter prefixes (`a`, `d`, `e`, `g`, `h`, `i`, `j`, `k`, `l`, `m`, `n`, `o`, `p`, `q`, `r`, `s`, `t`, `u`, `v`, `w`, `x`, `y`, `z`, every uppercase letter, `_`) — held in reserve for design space exploration. Plausible future uses include `r"..."` (raw strings — see also § *Reserved `#`-Guarded String Syntax* for the guarded variant), `s"..."` (printf-style format-and-return strings), `i"..."` (case-insensitive comparison strings), `t"..."` (translation/i18n marker strings), and so on. None are committed at v1; the language preserves the design space by closing the entire single-letter prefix grammar to user identifiers up front.
 
 This is purely a lexer-level reservation. There is no parse-tree representation for reserved prefixes; the diagnostic is emitted as a `Token::Error` at lex time and never reaches later phases. User identifiers ending in a single letter immediately followed by a string still parse correctly when whitespace separates them: `let a = "hello"` is `let`, `a`, `=`, `"hello"` (four distinct tokens), and that idiom is not affected. Only the *no-whitespace* form `a"hello"` triggers the reservation.
@@ -4628,18 +4628,18 @@ This is the foundational primitive for safe parallel writes into a shared buffer
 
 ### Byte and Byte-String Literals
 
-Protocol code, MMIO register definitions, and binary format parsers need literal bytes that are not valid UTF-8 — exactly the case where using `String` is wrong. Kāra's grammar reserves the `b` prefix for this purpose (`syntax.md § 1.3`), producing `u8`-typed and `[u8; N]`-typed literals.
+Protocol code, MMIO register definitions, and binary format parsers need literal bytes that are not valid UTF-8 — exactly the case where using `String` is wrong. Kāra's grammar reserves the `b` prefix for this purpose (`syntax.md § 1.3`), producing `u8`-typed and `Array[u8, N]`-typed literals.
 
 ```kara
 let magic: u8 = b'U';                     // 0x55
-let eth_ether_type: [u8; 2] = b"\x08\x00" // IPv4 magic
-let ascii_banner: [u8; 13] = b"hello world\n\0";
+let eth_ether_type: Array[u8, 2] = b"\x08\x00"; // IPv4 magic
+let ascii_banner: Array[u8, 13] = b"hello world\n\0";
 ```
 
 **Types.**
 
 - **`b'A'` has type `u8`.** A single byte.
-- **`b"..."` has type `[u8; N]` where `N` is the byte count of the literal after escape resolution.** Not `Slice[u8]`, not `&[u8; N]`. Rationale: Kāra's owned-by-default model means the literal itself is an owned fixed-size array; coercion to `Slice[u8]` happens at call sites the same way `Array[T, N]` coerces elsewhere in the language. Preserving the length at the type level is exactly the guarantee MMIO / protocol code needs at compile time.
+- **`b"..."` has type `Array[u8, N]` where `N` is the byte count of the literal after escape resolution.** Not `Slice[u8]`, not a reference to one. Rationale: Kāra's owned-by-default model means the literal itself is an owned fixed-size array; coercion to `Slice[u8]` happens at call sites the same way `Array[T, N]` coerces elsewhere in the language. Preserving the length at the type level is exactly the guarantee MMIO / protocol code needs at compile time.
 
 **Escape sequences inside byte literals.**
 
@@ -4648,7 +4648,7 @@ let ascii_banner: [u8; 13] = b"hello world\n\0";
 
 **Reserved but not yet implemented.** The grammar also reserves `r` (raw strings) and `br`/`rb` (raw byte strings) so that future additions don't collide with identifiers users might rely on today. The full single-letter ASCII prefix space is additionally reserved by the rule at [§ Reserved Single-Letter String-Prefix Syntax](#reserved-single-letter-string-prefix-syntax). Writing `r"..."` in v1 is a lex error with a `"string prefix 'r' is reserved but not yet implemented"` diagnostic — not a generic syntax error. A prefix is only recognized when immediately followed by `'` or `"` with no intervening whitespace, so bare identifiers named `b`, `r`, `br`, `rb` remain legal wherever identifiers are. The `c"..."` prefix has graduated from reserved to specced — see [§ C-String Literals](#c-string-literals) below.
 
-**Interaction with existing types.** A `b"hi"` literal owned as `[u8; 2]` coerces to `Slice[u8]` at borrow sites and to `ref [u8; 2]` when the callee expects a reference — no special-case machinery. Passing to a function expecting `ref String` or `StringSlice` is a type error: a byte string is not a UTF-8 text string, and the type system keeps the distinction visible. Conversions go through explicit methods (`String.from_utf8(bytes) -> Result[String, Utf8Error]`) when the programmer wants to assert the bytes are valid UTF-8.
+**Interaction with existing types.** A `b"hi"` literal owned as `Array[u8, 2]` coerces to `Slice[u8]` at borrow sites and to `ref Array[u8, 2]` when the callee expects a reference — no special-case machinery. Passing to a function expecting `ref String` or `StringSlice` is a type error: a byte string is not a UTF-8 text string, and the type system keeps the distinction visible. Conversions go through explicit methods (`String.from_utf8(bytes) -> Result[String, Utf8Error]`) when the programmer wants to assert the bytes are valid UTF-8.
 
 ### C-String Literals
 

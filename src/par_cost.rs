@@ -593,6 +593,7 @@ impl<'a> CostEstimator<'a> {
             | ExprKind::Bool(_)
             | ExprKind::CharLit(_)
             | ExprKind::ByteLit(_)
+            | ExprKind::ByteStringLit(_)
             | ExprKind::StringLit(_)
             | ExprKind::MultiStringLit(_)
             | ExprKind::CStringLit { .. }

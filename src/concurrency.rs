@@ -933,6 +933,7 @@ fn expr_is_binding_free(expr: &Expr) -> bool {
         | ExprKind::Float(..)
         | ExprKind::CharLit(..)
         | ExprKind::ByteLit(..)
+        | ExprKind::ByteStringLit(..)
         | ExprKind::StringLit(..)
         | ExprKind::MultiStringLit(..)
         | ExprKind::CStringLit { .. }

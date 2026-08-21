@@ -602,6 +602,7 @@ impl Walker<'_> {
             | ExprKind::Float(..)
             | ExprKind::CharLit(..)
             | ExprKind::ByteLit(..)
+            | ExprKind::ByteStringLit(..)
             | ExprKind::StringLit(..)
             | ExprKind::MultiStringLit(..)
             | ExprKind::InterpolatedStringLit(..)

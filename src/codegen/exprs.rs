@@ -82,6 +82,20 @@ impl<'ctx> super::Codegen<'ctx> {
                 .i8_type()
                 .const_int(u64::from(*b), false)
                 .into()),
+            // `b"..."` — an `Array[u8, N]` VALUE, so it lowers to a constant
+            // `[N x i8]` aggregate, exactly what `[b'h', b'e', …]` produces
+            // for the same bytes. Constant-folded here rather than routed
+            // through the array-literal path because the bytes are already
+            // resolved at lex time, so there is nothing to evaluate
+            // (B-2026-08-20-37).
+            ExprKind::ByteStringLit(bytes) => {
+                let i8_ty = self.context.i8_type();
+                let vals: Vec<_> = bytes
+                    .iter()
+                    .map(|b| i8_ty.const_int(u64::from(*b), false))
+                    .collect();
+                Ok(i8_ty.const_array(&vals).into())
+            }
             ExprKind::Bool(b) => Ok(self
                 .context
                 .bool_type()
@@ -2553,6 +2567,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 | ExprKind::Bool(_)
                 | ExprKind::CharLit(_)
                 | ExprKind::ByteLit(_)
+                | ExprKind::ByteStringLit(_)
                 | ExprKind::StringLit(_)
                 | ExprKind::SelfValue
                 | ExprKind::SelfType
@@ -3184,6 +3199,7 @@ impl<'ctx> super::Codegen<'ctx> {
             | ExprKind::Bool(_)
             | ExprKind::CharLit(_)
             | ExprKind::ByteLit(_)
+            | ExprKind::ByteStringLit(_)
             | ExprKind::StringLit(_)
             | ExprKind::MultiStringLit(_) => true,
             ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {

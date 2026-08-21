@@ -226,7 +226,14 @@ const CORPUS: &[&str] = &[
     "_\"y\"",
     "r\"raw\"",
     "z\"esc \\\" end\"",
-    "a + b\"\" + c",
+    // A reserved prefix mid-expression, with recovery. This used to spell the
+    // prefix `b`; `b"..."` became a RECOGNIZED byte-string literal
+    // (B-2026-08-20-37), so the case now uses a still-reserved letter to keep
+    // testing the same thing. It must NOT be respelled back to `b` until the
+    // self-hosted Kāra lexer learns byte strings — until then the two lexers
+    // genuinely disagree on that input, which is the point of the follow-up
+    // row, not something this oracle should paper over.
+    "a + g\"\" + c",
     // Reserved `#`-guarded strings (Rust-style raw strings); `#[attr]` stays Pound.
     "#\"raw\"#",
     "##\"x\"##",
@@ -513,6 +520,16 @@ fn render_rust(t: &SpannedToken) -> String {
             return body_with(s, &format!("CHAR {}", escape_for_render(&c.to_string())))
         }
         Token::ByteLiteral(b) => return body_with(s, &format!("BYTE {b}")),
+        // `b"..."` (B-2026-08-20-37). NOTE: the SELF-HOSTED Kāra lexer does
+        // not lex this form yet — it still takes the reserved-string-prefix
+        // path and emits `ERROR`. The two lexers therefore disagree on any
+        // input containing `b"..."`, so no oracle case may use one until the
+        // Kāra lexer catches up; this arm exists so the renderer is total,
+        // not because the oracle exercises it.
+        Token::ByteStringLiteral(bytes) => {
+            let joined: Vec<String> = bytes.iter().map(|b| b.to_string()).collect();
+            return body_with(s, &format!("BYTESTR {}", joined.join(",")));
+        }
         Token::DocComment(t) => return body_with(s, &format!("DOC {t}")),
         Token::ModuleDocComment(t) => return body_with(s, &format!("MODDOC {t}")),
         // Error tokens (slice E: raw-ident structural markers, reserved string

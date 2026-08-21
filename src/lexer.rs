@@ -299,14 +299,22 @@ impl<'a> Lexer<'a> {
             }
 
             // Byte char literal `b'A'` (design.md § Byte and Byte-String
-            // Literals). The `b"..."` byte-string form is *not* yet
-            // implemented and falls into the reserved-string-prefix path
-            // below — kept distinct because design.md has an unresolved
-            // divergence about whether `b"..."` is shipped at v1 (line 429
-            // vs the byte-literal section). Only `b'` enters this arm.
+            // Literals). Only `b'` enters this arm; `b"` is the byte-string
+            // arm just below.
             b'b' if self.peek() == b'\'' => {
                 self.advance(); // consume opening `'`
                 self.byte_char_literal()
+            }
+
+            // Byte STRING literal `b"..."` (design.md § Byte and Byte-String
+            // Literals). Resolved to `Array[u8, N]` by the parser. The
+            // owner settled the spec's self-contradiction in favour of that
+            // section over § Reserved Single-Letter String-Prefix Syntax,
+            // which had listed `b"..."` as reserved with type `Slice[u8]`;
+            // that list is now corrected (B-2026-08-20-37).
+            b'b' if self.peek() == b'"' => {
+                self.advance(); // consume opening `"`
+                self.byte_string_literal()
             }
 
             // Raw-identifier escape `r#NAME` (design.md § Raw Identifiers).
@@ -982,6 +990,122 @@ impl<'a> Lexer<'a> {
     /// rejected with a specced diagnostic; multi-byte UTF-8 in the body
     /// is rejected (non-ASCII codepoints have no valid `u8`
     /// representation).
+    /// Lex a `b"..."` byte-string body; the opening `b"` is already
+    /// consumed. Returns [`Token::ByteStringLiteral`] carrying the
+    /// escape-resolved bytes, which the parser turns into the `Array[u8, N]`
+    /// literal `[b'h', b'e', …]` (B-2026-08-20-37).
+    ///
+    /// The escape table is deliberately the SAME set `byte_char_literal`
+    /// accepts — design.md § Byte and Byte-String Literals gives one table
+    /// for both forms, so `\n`, `\t`, `\r`, `\0`, `\\`, `\'`, `\"` and
+    /// `\xHH` mean the same byte in either, and `\u{...}` is refused in
+    /// both with the same wording. A raw byte >= 0x80 is rejected rather
+    /// than silently UTF-8 encoded: the literal's length is part of its
+    /// TYPE, so a two-byte codepoint would silently change `N`.
+    fn byte_string_literal(&mut self) -> SpannedToken {
+        let mut bytes: Vec<u8> = Vec::new();
+        loop {
+            if self.is_at_end() {
+                return self
+                    .make_spanned(Token::Error("Unterminated byte string literal".to_string()));
+            }
+            match self.peek() {
+                b'"' => {
+                    self.advance(); // closing quote
+                    return self.make_spanned(Token::ByteStringLiteral(bytes));
+                }
+                b'\\' => {
+                    self.advance(); // consume backslash
+                    if self.is_at_end() {
+                        return self.make_spanned(Token::Error(
+                            "Unterminated byte string literal".to_string(),
+                        ));
+                    }
+                    let b = match self.peek() {
+                        b'n' => {
+                            self.advance();
+                            b'\n'
+                        }
+                        b't' => {
+                            self.advance();
+                            b'\t'
+                        }
+                        b'r' => {
+                            self.advance();
+                            b'\r'
+                        }
+                        b'0' => {
+                            self.advance();
+                            0
+                        }
+                        b'\\' => {
+                            self.advance();
+                            b'\\'
+                        }
+                        b'\'' => {
+                            self.advance();
+                            b'\''
+                        }
+                        b'"' => {
+                            self.advance();
+                            b'"'
+                        }
+                        b'x' => {
+                            self.advance();
+                            match self.parse_hex_byte_escape() {
+                                Ok(v) => v,
+                                Err(msg) => return self.make_spanned(Token::Error(msg)),
+                            }
+                        }
+                        b'u' => {
+                            // Same refusal as the byte-CHAR form, verbatim.
+                            self.advance();
+                            if self.peek() == b'{' {
+                                self.advance();
+                                while !self.is_at_end()
+                                    && self.peek() != b'}'
+                                    && self.peek() != b'"'
+                                {
+                                    self.advance();
+                                }
+                                if self.peek() == b'}' {
+                                    self.advance();
+                                }
+                            }
+                            return self.make_spanned(Token::Error(
+                                "Unicode escapes are not permitted in byte literals — use \\xFF for byte 0xFF."
+                                    .to_string(),
+                            ));
+                        }
+                        _ => {
+                            let other = self.consume_codepoint();
+                            return self.make_spanned(Token::Error(format!(
+                                "Unknown escape sequence in byte literal: \\{other}"
+                            )));
+                        }
+                    };
+                    bytes.push(b);
+                }
+                b'\n' => {
+                    return self.make_spanned(Token::Error(
+                        "Unterminated byte string literal: a raw newline is not permitted; use \\n"
+                            .to_string(),
+                    ));
+                }
+                b if b >= 0x80 => {
+                    let other = self.consume_codepoint();
+                    return self.make_spanned(Token::Error(format!(
+                        "non-ASCII character `{other}` in byte string literal — use \\xHH for byte values above 0x7F"
+                    )));
+                }
+                b => {
+                    self.advance();
+                    bytes.push(b);
+                }
+            }
+        }
+    }
+
     fn byte_char_literal(&mut self) -> SpannedToken {
         if self.is_at_end() {
             return self.make_spanned(Token::Error("Unterminated byte literal".to_string()));

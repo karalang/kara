@@ -21,6 +21,24 @@ impl super::Formatter {
                 }
             }
             ExprKind::CharLit(c) => write!(self.output, "'{c}'").unwrap(),
+            // `b"..."` — re-emit the quoted form, escaping exactly what the
+            // lexer accepts so the output round-trips (B-2026-08-20-37).
+            ExprKind::ByteStringLit(bytes) => {
+                self.write_str("b\"");
+                for b in bytes {
+                    match *b {
+                        b'\n' => self.write_str("\\n"),
+                        b'\t' => self.write_str("\\t"),
+                        b'\r' => self.write_str("\\r"),
+                        0 => self.write_str("\\0"),
+                        b'\\' => self.write_str("\\\\"),
+                        b'"' => self.write_str("\\\""),
+                        c if (0x20..=0x7E).contains(&c) => self.write_str(&(c as char).to_string()),
+                        c => self.write_str(&format!("\\x{c:02X}")),
+                    }
+                }
+                self.write_str("\"");
+            }
             ExprKind::ByteLit(b) => {
                 // `b'X'` — mirror the lexer's accepted forms. Printable
                 // ASCII (0x20..=0x7E, except `'` and `\`) round-trips as

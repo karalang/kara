@@ -1183,6 +1183,7 @@ impl EscapeAnalysis {
             | ExprKind::Float(..)
             | ExprKind::CharLit(..)
             | ExprKind::ByteLit(..)
+            | ExprKind::ByteStringLit(..)
             | ExprKind::StringLit(..)
             | ExprKind::MultiStringLit(..)
             | ExprKind::CStringLit { .. }
@@ -1389,6 +1390,7 @@ impl EscapeAnalysis {
             | ExprKind::Float(..)
             | ExprKind::CharLit(..)
             | ExprKind::ByteLit(..)
+            | ExprKind::ByteStringLit(..)
             | ExprKind::StringLit(..)
             | ExprKind::MultiStringLit(..)
             | ExprKind::CStringLit { .. }
@@ -2606,7 +2608,7 @@ pub fn refs_in_expr(expr: &Expr, refs: &mut HashSet<String>, defs: &mut HashSet<
         ExprKind::Integer(..)
         | ExprKind::Float(..)
         | ExprKind::CharLit(..)
-        | ExprKind::ByteLit(..)
+        | ExprKind::ByteLit(..) | ExprKind::ByteStringLit(..)
         | ExprKind::StringLit(..)
         | ExprKind::MultiStringLit(..)
         | ExprKind::CStringLit { .. }

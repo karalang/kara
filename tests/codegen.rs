@@ -37028,6 +37028,38 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_byte_string_literal_values_and_escapes() {
+        // B-2026-08-20-37 — `b"..."` lowers to a constant `[N x i8]`, the
+        // same aggregate `[b'h', b'e', …]` produces. design.md gives one
+        // escape table for the byte-CHAR and byte-STRING forms, so every
+        // escape here must yield the byte the `b'X'` form yields.
+        //
+        // Strict assert: this pins a codegen VALUE, so it must not pass
+        // vacuously when the runtime archive is absent.
+        let src = r#"
+fn main() {
+    let eth: Array[u8, 2] = b"\x08\x00";
+    println(eth[0]);
+    println(eth[1]);
+    let banner: Array[u8, 13] = b"hello world\n\0";
+    println(banner[0]);
+    println(banner[11]);
+    println(banner[12]);
+    let esc: Array[u8, 7] = b"\n\t\r\0\\\'\"";
+    println(esc[0]);
+    println(esc[4]);
+    println(esc[6]);
+    let inferred = b"hi";
+    println(inferred[1]);
+}
+"#;
+        assert_eq!(
+            run_program(src),
+            Some("8\n0\n104\n10\n0\n10\n92\n34\n105\n".to_string())
+        );
+    }
+
+    #[test]
     fn test_e2e_cstr_methods_on_a_ref_param_receiver() {
         // B-2026-08-21-5: a `ref CStr` PARAMETER receiver aborted karac
         // with an inkwell `into_struct_value` unwrap in

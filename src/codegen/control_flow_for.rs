@@ -4826,6 +4826,7 @@ fn rewrite_loop_ctl_expr(e: &mut Expr, cfg: &LoopCtlRewrite) {
         | ExprKind::Float(..)
         | ExprKind::CharLit(_)
         | ExprKind::ByteLit(_)
+        | ExprKind::ByteStringLit(_)
         | ExprKind::StringLit(_)
         | ExprKind::MultiStringLit(_)
         | ExprKind::CStringLit { .. }

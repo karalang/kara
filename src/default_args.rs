@@ -214,6 +214,7 @@ impl Filler {
             | ExprKind::Float(..)
             | ExprKind::CharLit(..)
             | ExprKind::ByteLit(..)
+            | ExprKind::ByteStringLit(..)
             | ExprKind::StringLit(..)
             | ExprKind::MultiStringLit(..)
             | ExprKind::CStringLit { .. }
