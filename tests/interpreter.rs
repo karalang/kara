@@ -36591,3 +36591,62 @@ fn is_sorted_reaches_slice_and_array_receivers() {
     }");
     assert_eq!(out, "true false true false\n");
 }
+
+// ── B-2026-08-21-10: `Vec.from_fn(n, f)` ────────────────────────
+//
+// The index-driven constructor beside `Vec.filled` in design.md's `Vec`
+// table. The interpreter calls the function once per index in ascending
+// order and keeps the result as-is — no clone, because each call produces a
+// fresh value, which is exactly what separates it from `filled`.
+
+#[test]
+fn vec_from_fn_computes_each_slot_by_index() {
+    // design.md's own worked example, verbatim.
+    let out = run("fn main() {\n\
+        let evens = Vec.from_fn(5, |i| i * 2);\n\
+        println(f\"{evens[0]} {evens[1]} {evens[2]} {evens[3]} {evens[4]} len={evens.len()}\");\n\
+    }");
+    assert_eq!(out, "0 2 4 6 8 len=5\n");
+}
+
+#[test]
+fn vec_from_fn_handles_zero_and_heap_elements() {
+    let out = run("fn main() {\n\
+        let e: Vec[i64] = Vec.from_fn(0, |i| i);\n\
+        let s: Vec[String] = Vec.from_fn(3, |i| f\"n{i}\");\n\
+        println(f\"{e.len()} {s[0]} {s[2]}\");\n\
+    }");
+    assert_eq!(out, "0 n0 n2\n");
+}
+
+#[test]
+fn vec_from_fn_sees_the_enclosing_scope() {
+    // The function is a closure, so an outer binding it captures is live at
+    // every index — not just the first.
+    let out = run("fn main() {\n\
+        let base = 100i64;\n\
+        let v = Vec.from_fn(3, |i| base + i);\n\
+        println(f\"{v[0]} {v[2]}\");\n\
+    }");
+    assert_eq!(out, "100 102\n");
+}
+
+#[test]
+fn vec_from_fn_rejects_a_negative_length() {
+    // Kāra has no `usize`, so a negative count is a runtime error rather than
+    // an empty result — the same rule `Vec.filled` follows.
+    let errors = runtime_errors(
+        "fn main() {\n\
+             let n = -1i64;\n\
+             let v: Vec[i64] = Vec.from_fn(n, |i| i);\n\
+             println(v.len());\n\
+         }",
+    );
+    assert!(
+        errors.iter().any(|e| e
+            .message
+            .contains("Vec.from_fn length must be non-negative")),
+        "negative from_fn length must be a runtime error; got {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}

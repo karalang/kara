@@ -51452,4 +51452,38 @@ fn main() {
             "asan_index_into_slice_temporary_frees_nothing",
         );
     }
+
+    /// B-2026-08-21-10 — `Vec.from_fn` with a HEAP element.
+    ///
+    /// The function's result is MOVED into the buffer, so the body's own
+    /// temporary must be disarmed or the last iteration's allocation gets two
+    /// owners. Measured before the disarm: `Vec.from_fn(3, |i| f"n{i}")`
+    /// aborted with "free(): double free detected in tcache 2" on both AOT
+    /// and JIT while `--interp` printed correctly.
+    ///
+    /// Both heap body shapes are swept — an f-string (which builds through a
+    /// scope-registered accumulator) and a method result — inside a loop so a
+    /// per-call imbalance accumulates rather than hiding in one iteration.
+    #[test]
+    fn asan_vec_from_fn_heap_element_has_one_owner() {
+        assert_clean_asan_run(
+            r#"fn main() {
+    let mut round = 0i64;
+    let mut last: String = "";
+    let mut total = 0i64;
+    while round < 30i64 {
+        let interp: Vec[String] = Vec.from_fn(4, |i| f"n{i}");
+        let built: Vec[String] = Vec.from_fn(4, |i| i.to_string());
+        total = total + interp.len() + built.len();
+        last = built[3];
+        round = round + 1i64;
+    }
+    println(last);
+    println(total);
+}
+"#,
+            &["3", "240"],
+            "asan_vec_from_fn_heap_element_has_one_owner",
+        );
+    }
 }

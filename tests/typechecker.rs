@@ -3623,6 +3623,92 @@ fn first_still_takes_no_arguments() {
     }
 }
 
+/// B-2026-08-21-10 — `Vec.from_fn(n, f)` exists and types as `Vec[T]` where
+/// `T` is the function's RETURN.
+///
+/// design.md § `Vec` constructors documents it beside `Vec.filled` and gives
+/// the worked example verbatim; before this it failed with "no associated
+/// function 'from_fn' on type 'Vec'".
+#[test]
+fn vec_from_fn_types_as_the_functions_return() {
+    // The spec's own example, verbatim.
+    typecheck_ok(
+        "fn main() {\n\
+             let evens = Vec.from_fn(5, |i| i * 2);\n\
+             println(evens[4]);\n\
+         }",
+    );
+    // The element is the body's type, not the index's.
+    typecheck_ok(
+        "fn main() {\n\
+             let v: Vec[String] = Vec.from_fn(3, |i| i.to_string());\n\
+             println(v[0]);\n\
+         }",
+    );
+    // Check position pushes the destination element through as the return.
+    typecheck_ok(
+        "fn main() {\n\
+             let v: Vec[i32] = Vec.from_fn(3, |i| 7);\n\
+             println(v[0]);\n\
+         }",
+    );
+}
+
+/// The index parameter is SEEDED as `i64` rather than left a metavar. Without
+/// the seed the spec's `|i| i * 2` fails inside the body with "cannot compare
+/// / operate on '?T0'" — the shape B-2026-07-15-16 fixed for `Vec.retain`.
+#[test]
+fn vec_from_fn_seeds_the_index_parameter_as_i64() {
+    typecheck_ok(
+        "fn main() {\n\
+             let v = Vec.from_fn(4, |i| if i > 1 { i * 10 } else { 0 });\n\
+             println(v[3]);\n\
+         }",
+    );
+    // An explicit annotation on the index agrees with the seed.
+    typecheck_ok(
+        "fn main() {\n\
+             let v = Vec.from_fn(4, |i: i64| i + 1);\n\
+             println(v[3]);\n\
+         }",
+    );
+}
+
+/// Arity and argument KIND are checked — the constructor was added, not a
+/// hole opened.
+#[test]
+fn vec_from_fn_rejects_bad_arity_and_a_non_function() {
+    for (src, needle) in [
+        (
+            "fn main() {\n let v = Vec.from_fn(3);\n println(v[0]);\n}",
+            "expects 2 arguments",
+        ),
+        (
+            "fn main() {\n let v = Vec.from_fn(3, |i| i, 9);\n println(v[0]);\n}",
+            "expects 2 arguments",
+        ),
+        (
+            "fn main() {\n let v = Vec.from_fn(3, 7);\n println(v[0]);\n}",
+            "expects a function argument",
+        ),
+        (
+            "fn main() {\n let v = Vec.from_fn(\"x\", |i| i);\n println(v[0]);\n}",
+            "expected",
+        ),
+        (
+            "fn main() {\n let v = Vec.from_fn(3, |a, b| a);\n println(v[0]);\n}",
+            "1 parameter",
+        ),
+    ] {
+        let errs = typecheck_errors(src);
+        assert!(
+            errs.iter().any(|e| e.message.contains(needle)),
+            "expected a message containing {needle:?}; got {:?}",
+            errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+}
+
 /// B-2026-08-21-10 — `is_sorted()` exists on every sequence receiver.
 ///
 /// design.md § Contracts writes the feature's whole worked example against it

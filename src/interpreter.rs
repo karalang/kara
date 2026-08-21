@@ -3080,6 +3080,41 @@ impl<'a> Interpreter<'a> {
         Value::array_of(items)
     }
 
+    /// `Vec.from_fn(n, f)` — produce `n` elements computed by index per
+    /// design.md § `Vec` constructors. The index-driven sibling of
+    /// [`eval_vec_filled`], and it shares that method's negative-length rule:
+    /// Kāra has no `usize`, so a negative count is a runtime error rather
+    /// than an empty result (B-2026-08-21-10).
+    ///
+    /// The function is called once per index, in ascending order, and its
+    /// result is stored directly — no clone, because each call produces a
+    /// fresh value (which is exactly what distinguishes `from_fn` from
+    /// `filled`, where one value is copied into every slot).
+    pub(crate) fn eval_vec_from_fn(&mut self, args: &[CallArg], span: &Span) -> Value {
+        let Some(n_arg) = args.first() else {
+            return self
+                .record_runtime_error("Vec.from_fn expects 2 arguments (n, f), found 0", span);
+        };
+        let Some(f_arg) = args.get(1) else {
+            return self
+                .record_runtime_error("Vec.from_fn expects 2 arguments (n, f), found 1", span);
+        };
+        let n_val = self.eval_expr_inner(&n_arg.value);
+        let f_val = self.eval_expr_inner(&f_arg.value);
+        let Value::Int(n) = n_val else {
+            return self.record_runtime_error("Vec.from_fn length must be i64", span);
+        };
+        if n < 0 {
+            return self.record_runtime_error("Vec.from_fn length must be non-negative", span);
+        }
+        let len = n as usize;
+        let mut items = Vec::with_capacity(len);
+        for i in 0..len {
+            items.push(self.invoke_function_value(f_val.clone(), vec![Value::Int(i as i128)]));
+        }
+        Value::array_of(items)
+    }
+
     /// `Vec.with_capacity(n: i64) -> Vec[T]` — empty Vec (len=0) with
     /// pre-allocated capacity n. Codegen relies on this for realloc-
     /// free push-N runs; here in the interpreter the underlying

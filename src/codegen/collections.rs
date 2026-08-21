@@ -1747,6 +1747,146 @@ impl<'ctx> super::Codegen<'ctx> {
 
     /// Build the `{data=buf, len=n, cap=n}` Vec aggregate returned by
     /// `build_vec_filled` (shared by the clone and bit-copy fill paths).
+    /// `Vec.from_fn(n, f)` — `n` elements computed by index (design.md
+    /// § `Vec` constructors). The index-driven sibling of `build_vec_filled`,
+    /// and the reason it is a separate builder: `filled` copies ONE compiled
+    /// value into every slot, while this one re-runs the function body per
+    /// index, so the body has to be inlined into the fill loop rather than
+    /// evaluated ahead of it (B-2026-08-21-10).
+    ///
+    /// The element type is the body's, and it must be known BEFORE the
+    /// allocation is emitted — which is why `infer_expr_llvm_type` is the
+    /// fallback rather than "compile the body and read its type": the buffer
+    /// is sized and strided at `sizeof(elem)`, so a wrong width mis-aligns
+    /// every slot exactly as B-2026-07-08-10 did for `filled`. A destination
+    /// annotation (`let v: Vec[i32] = Vec.from_fn(…)`) wins when present,
+    /// since it is the authority on a narrow element the body's natural
+    /// width would overshoot.
+    ///
+    /// Negative `n` rides the same overflow-checked byte count `filled` uses,
+    /// so it panics with the identical "capacity overflow" rather than
+    /// quietly producing an empty Vec.
+    pub(super) fn build_vec_from_fn(
+        &mut self,
+        n: IntValue<'ctx>,
+        param_name: &str,
+        body: &Expr,
+        elem_te: Option<TypeExpr>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let i64_t = self.context.i64_type();
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "Vec.from_fn outside a function".to_string())?;
+
+        let elem_ty = match elem_te.as_ref() {
+            Some(te) => self.llvm_type_for_type_expr(te),
+            None => {
+                let mut locals = std::collections::HashMap::new();
+                locals.insert(param_name.to_string(), i64_t.into());
+                self.infer_expr_llvm_type(body, &locals).ok_or_else(|| {
+                    "codegen: Vec.from_fn cannot determine the element type of the \
+                     function's body; annotate the binding (`let v: Vec[T] = \
+                     Vec.from_fn(…)`)"
+                        .to_string()
+                })?
+            }
+        };
+        let elem_size = elem_ty.size_of().unwrap();
+        let alloc_bytes = self.checked_alloc_bytes(n, elem_size, "fromfn")?;
+        let buf = self
+            .builder
+            .build_call(
+                self.runtime_fns.alloc_or_panic_fn,
+                &[alloc_bytes.into()],
+                "fromfn.buf",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+
+        let i_slot = self.create_entry_alloca(fn_val, "fromfn.i", i64_t.into());
+        self.builder
+            .build_store(i_slot, i64_t.const_zero())
+            .unwrap();
+        let cond_bb = self.context.append_basic_block(fn_val, "fromfn.cond");
+        let body_bb = self.context.append_basic_block(fn_val, "fromfn.body");
+        let exit_bb = self.context.append_basic_block(fn_val, "fromfn.exit");
+        self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+        self.builder.position_at_end(cond_bb);
+        let i_cur = self
+            .builder
+            .build_load(i64_t, i_slot, "fromfn.i.cur")
+            .unwrap()
+            .into_int_value();
+        let in_range = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::ULT, i_cur, n, "fromfn.lt")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(in_range, body_bb, exit_bb)
+            .unwrap();
+
+        self.builder.position_at_end(body_bb);
+        let i_v = self
+            .builder
+            .build_load(i64_t, i_slot, "fromfn.i.v")
+            .unwrap()
+            .into_int_value();
+        // Bind the index param by shadowing, exactly as `Vec.retain` binds its
+        // element param: the body may also capture outer variables, so the
+        // outer scope stays visible, and a param that shadows an outer binding
+        // of the same name is restored intact afterwards.
+        let saved_slot = self.variables.get(param_name).copied();
+        let saved_meta = self.take_var_metadata(param_name);
+        let palloca = self.create_entry_alloca(fn_val, param_name, i64_t.into());
+        self.builder.build_store(palloca, i_v).unwrap();
+        self.variables.insert(
+            param_name.to_string(),
+            VarSlot {
+                ptr: palloca,
+                ty: i64_t.into(),
+            },
+        );
+        let produced = self.compile_expr(body)?;
+        // The produced value is MOVED into the buffer, so an f-string body
+        // must not also be freed at scope exit — `Vec.push(f"…")` disarms its
+        // accumulator through exactly this call, and without it the last
+        // iteration's buffer is freed twice (measured: "free(): double free
+        // detected in tcache 2" on `Vec.from_fn(3, |i| f"n{i}")`).
+        self.suppress_fstr_acc_if_moved_out(body);
+        let _ = self.take_var_metadata(param_name);
+        self.restore_var_metadata(param_name, saved_meta);
+        match saved_slot {
+            Some(slot) => {
+                self.variables.insert(param_name.to_string(), slot);
+            }
+            None => {
+                self.variables.remove(param_name);
+            }
+        }
+        let produced = self.coerce_scalar_to_type(produced, elem_ty);
+        // Re-read the index: the body may have emitted its own blocks, so the
+        // insert point is wherever it left off, but `i_v` is still the right
+        // value — the slot is only written at the bottom of the loop.
+        let dst = unsafe {
+            self.builder
+                .build_gep(elem_ty, buf, &[i_v], "fromfn.dst")
+                .map_err(|e| format!("Vec.from_fn gep: {e}"))?
+        };
+        self.builder.build_store(dst, produced).unwrap();
+        let i_next = self
+            .builder
+            .build_int_add(i_v, i64_t.const_int(1, false), "fromfn.next")
+            .unwrap();
+        self.builder.build_store(i_slot, i_next).unwrap();
+        self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+        self.builder.position_at_end(exit_bb);
+        Ok(self.finish_vec_filled_agg(buf, n))
+    }
+
     fn finish_vec_filled_agg(
         &mut self,
         buf: PointerValue<'ctx>,

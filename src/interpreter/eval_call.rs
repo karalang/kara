@@ -581,6 +581,10 @@ impl<'a> super::Interpreter<'a> {
                 // overflowed `test_e2e_fibonacci`, same shape as the
                 // `and`/`or` short-circuit fix).
                 "Vec.filled" => return self.eval_vec_filled(args, span),
+                // `Vec.from_fn(n: i64, f: Fn(i64) -> T) -> Vec[T]` — the
+                // index-driven constructor beside `filled` in design.md's
+                // `Vec` table (B-2026-08-21-10). Same helper-frame treatment.
+                "Vec.from_fn" => return self.eval_vec_from_fn(args, span),
                 // `Vec.with_capacity(n: i64) -> Vec[T]` — empty Vec
                 // (len=0) with pre-allocated capacity n. In the
                 // tree-walk interpreter capacity is a hint to the

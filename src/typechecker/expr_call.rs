@@ -1337,6 +1337,92 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // `Vec.from_fn(n: i64, f: Fn(i64) -> T) -> Vec[T]` — `n` elements
+        // computed by index (design.md § `Vec` constructors, and the `from_fn`
+        // row of the `Vec[T]` method table). The sibling of `Vec.filled` and
+        // here for the same reason: `resolve_path_type` would otherwise reject
+        // the unknown `Type.method(...)` before codegen can claim it —
+        // measured as "no associated function 'from_fn' on type 'Vec'"
+        // (B-2026-08-21-10).
+        //
+        // Unlike `filled`, the element type is the CLOSURE'S RETURN, so the
+        // index parameter is seeded with `i64` before the argument is inferred.
+        // Without the seed the param stays a fresh metavar and the spec's own
+        // `Vec.from_fn(5, |i| i * 2)` fails inside the body with
+        // "cannot compare '?T0' and 'i64'" — the same shape B-2026-07-15-16
+        // fixed for `Vec.retain`.
+        if let ExprKind::Path { segments, .. } = &callee.kind {
+            if segments.len() == 2 && segments[0] == "Vec" && segments[1] == "from_fn" {
+                if args.len() != 2 {
+                    self.type_error(
+                        format!(
+                            "Vec.from_fn expects 2 arguments (n, f), found {}",
+                            args.len()
+                        ),
+                        *span,
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                    return Type::Error;
+                }
+                let n_ty = self.infer_expr(&args[0].value);
+                self.check_assignable(&Type::Int(IntSize::I64), &n_ty, args[0].value.span);
+                let idx_ty = Type::Int(IntSize::I64);
+                if matches!(&args[1].value.kind, ExprKind::Closure { .. }) {
+                    self.closure_param_seeds.insert(
+                        SpanKey::from_span(&args[1].value.span),
+                        vec![idx_ty.clone()],
+                    );
+                }
+                let f_ty = self.infer_expr(&args[1].value);
+                let f_resolved = resolve_type_var_top(&f_ty, &self.env.substitutions);
+                let elem_ty = match &f_resolved {
+                    Type::Function {
+                        params,
+                        return_type,
+                    }
+                    | Type::OnceFunction {
+                        params,
+                        return_type,
+                    } => {
+                        if params.len() != 1 {
+                            self.type_error(
+                                format!(
+                                    "Vec.from_fn's function takes 1 parameter (the index), \
+                                     found {}",
+                                    params.len()
+                                ),
+                                args[1].value.span,
+                                TypeErrorKind::WrongNumberOfArgs,
+                            );
+                            return Type::Error;
+                        }
+                        self.check_assignable(&idx_ty, &params[0], args[1].value.span);
+                        resolve_type_var_top(return_type, &self.env.substitutions)
+                    }
+                    _ => {
+                        self.type_error(
+                            format!(
+                                "Vec.from_fn expects a function argument, got '{}'",
+                                type_display(&f_resolved)
+                            ),
+                            args[1].value.span,
+                            TypeErrorKind::TypeMismatch,
+                        );
+                        return Type::Error;
+                    }
+                };
+                let ty = Type::Named {
+                    name: "Vec".to_string(),
+                    args: vec![elem_ty],
+                };
+                self.record_expr_type(span, &ty);
+                return ty;
+            }
+        }
+
         // `Atomic.new(v)` — transparent constructor for the `Atomic[T]`
         // concurrency primitive, recognized in **general expression position**
         // (struct-field-init, local `let`, call args), not just module-binding

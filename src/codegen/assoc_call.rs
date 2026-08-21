@@ -3386,6 +3386,49 @@ impl<'ctx> super::Codegen<'ctx> {
             return self.build_vec_filled(n, val, elem_te);
         }
 
+        // `Vec.from_fn(n: i64, f: Fn(i64) -> T) -> Vec[T]` — design.md
+        // § `Vec` constructors, the index-driven sibling of `filled`
+        // (B-2026-08-21-10). Only the INLINE-closure form is lowered: the
+        // body is inlined into the fill loop with the index bound as its
+        // parameter, the same treatment `Vec.retain` gives its predicate,
+        // because a captured-closure VALUE has no body for codegen to inline.
+        if type_name == "Vec" && method == "from_fn" {
+            if args.len() != 2 {
+                return Err(format!(
+                    "Vec.from_fn requires 2 arguments (n, f), got {}",
+                    args.len()
+                ));
+            }
+            let ExprKind::Closure { params, body, .. } = &args[1].value.kind else {
+                return Err(
+                    "codegen: Vec.from_fn is lowered only for an inline closure \
+                     (`Vec.from_fn(n, |i| …)`); a captured-closure value is \
+                     deferred — run it under the interpreter (`karac run --interp`)"
+                        .to_string(),
+                );
+            };
+            if params.len() != 1 {
+                return Err(format!(
+                    "Vec.from_fn's function takes 1 parameter (the index), got {}",
+                    params.len()
+                ));
+            }
+            let param_name = match &params[0].pattern.kind {
+                PatternKind::Binding(n) => n.clone(),
+                _ => "__from_fn_i".to_string(),
+            };
+            let body = (**body).clone();
+            // An explicit `return` inside the body belongs to the enclosing
+            // function once the body is inlined — same retarget `retain` does.
+            self.register_iter_body_retarget(&body);
+            // Consume the destination element TypeExpr BEFORE compiling the
+            // count, for the same reason `filled` does: a nested constructor in
+            // that argument must not inherit this binding's element type.
+            let elem_te = self.var_types.pending_let_elem_type_expr.take();
+            let n = self.compile_expr(&args[0].value)?.into_int_value();
+            return self.build_vec_from_fn(n, &param_name, &body, elem_te);
+        }
+
         // `Vec.from_slice(src: Slice[T]) -> Vec[T]` — bulk-copy a slice
         // (also accepts Array / Vec via the existing `coerce_to_slice`
         // shape recognition) into a freshly-allocated Vec. One malloc +

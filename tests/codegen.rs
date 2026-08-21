@@ -101428,6 +101428,78 @@ fn main() {
         );
     }
 
+    /// B-2026-08-21-10 — `Vec.from_fn(n, f)`, end to end.
+    ///
+    /// The element type must be settled BEFORE the buffer is allocated,
+    /// because the buffer is sized and strided at `sizeof(elem)` — a wrong
+    /// width mis-aligns every slot, which is exactly how `Vec.filled` failed
+    /// in B-2026-07-08-10 (a silent exit-0 wrong output, not a crash). So the
+    /// sweep mixes a body whose type is inferred from the body itself with one
+    /// pushed down from an annotation, and reads back interior elements rather
+    /// than just the length.
+    #[test]
+    fn test_e2e_vec_from_fn_computes_each_slot_by_index() {
+        let src = r#"
+fn main() {
+    // design.md's own example.
+    let evens = Vec.from_fn(5, |i| i * 2);
+    println(evens.len());
+    println(evens[0]);
+    println(evens[4]);
+
+    // Zero elements: no slot is ever written.
+    let e: Vec[i64] = Vec.from_fn(0, |i| i);
+    println(e.len());
+
+    // A RUNTIME count, so the loop bound is not a constant to fold.
+    let n = 4;
+    let sq = Vec.from_fn(n, |i| i * i);
+    println(sq[3]);
+
+    // The function is a closure: an outer binding it captures must be live at
+    // every index, not only the first.
+    let base = 100;
+    let off = Vec.from_fn(3, |i| base + i);
+    println(off[2]);
+
+    // Element type pushed down from the annotation — a NARROW element whose
+    // stride differs from the body's natural i64 width.
+    let narrow: Vec[i32] = Vec.from_fn(3, |i| 7);
+    println(narrow[0]);
+    println(narrow[2]);
+
+    // Nested collection element.
+    let rows: Vec[Vec[i64]] = Vec.from_fn(2, |i| Vec.filled(2, i));
+    println(rows[1][0]);
+}
+"#;
+        assert_eq!(
+            run_program(src).as_deref(),
+            Some("5\n0\n8\n0\n9\n102\n7\n7\n1\n")
+        );
+    }
+
+    /// A heap element through the same path. The produced value is MOVED into
+    /// the buffer, so the body's own temporary must not also be freed at scope
+    /// exit — measured before the disarm as "free(): double free detected in
+    /// tcache 2" under both AOT and JIT while `--interp` printed correctly.
+    /// The leak/UAF side is pinned under ASAN in tests/memory_sanitizer.rs;
+    /// this pins that the VALUES survive.
+    #[test]
+    fn test_e2e_vec_from_fn_carries_a_heap_element() {
+        let src = r#"
+fn main() {
+    let names: Vec[String] = Vec.from_fn(3, |i| f"n{i}");
+    println(names[0]);
+    println(names[2]);
+    println(names.len());
+    let built: Vec[String] = Vec.from_fn(2, |i| i.to_string());
+    println(built[1]);
+}
+"#;
+        assert_eq!(run_program(src).as_deref(), Some("n0\nn2\n3\n1\n"));
+    }
+
     /// B-2026-08-21-10 — `is_sorted()` end to end on all three sequence
     /// receivers.
     ///

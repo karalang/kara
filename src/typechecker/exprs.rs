@@ -743,6 +743,39 @@ impl<'a> super::TypeChecker<'a> {
             // `types_compatible` rejects with "expected Vec<Vec<i64>>,
             // found Vec<Vec<?T0>>" — surfaced 2026-05-25 by kata 3629's
             // `bench/bfs_sieve.kara::build_factors`.
+            // `Vec.from_fn(n, f)` in check position — push the destination's
+            // element type through as the function's RETURN type, the same
+            // pushdown the `Vec.filled` arm below does for its value argument
+            // (B-2026-08-21-10). Without it a `let v: Vec[i32] =
+            // Vec.from_fn(3, |i| 7)` synths `Vec[i64]` from the literal body
+            // and is refused against the annotation.
+            if args.len() == 2 {
+                if let ExprKind::Path { segments, .. } = &callee.kind {
+                    if segments.len() == 2 && segments[0] == "Vec" && segments[1] == "from_fn" {
+                        if let Type::Named {
+                            name,
+                            args: type_args,
+                        } = expected
+                        {
+                            if name == "Vec" && type_args.len() == 1 {
+                                let n_ty = self.infer_expr(&args[0].value);
+                                self.check_assignable(
+                                    &Type::Int(IntSize::I64),
+                                    &n_ty,
+                                    args[0].value.span,
+                                );
+                                let f_ty = Type::Function {
+                                    params: vec![Type::Int(IntSize::I64)],
+                                    return_type: Box::new(type_args[0].clone()),
+                                };
+                                self.check_expr(&args[1].value, &f_ty);
+                                self.record_expr_type(&expr.span, expected);
+                                return expected.clone();
+                            }
+                        }
+                    }
+                }
+            }
             if args.len() == 2 {
                 if let ExprKind::Path { segments, .. } = &callee.kind {
                     if segments.len() == 2 && segments[0] == "Vec" && segments[1] == "filled" {
