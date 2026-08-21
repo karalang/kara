@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 270 | 1 |
+| miscompile | 270 | 0 |
 | leak | 185 | 0 |
 | run-vs-build | 145 | 0 |
 | missing-feature | 134 | 4 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 964 | 3 |
+| codegen | 964 | 2 |
 | typecheck | 222 | 2 |
 | interp | 169 | 2 |
 | ownership | 62 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 7 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1427 surfaced · 9 open · 1396 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1427 surfaced · 8 open · 1397 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (9)
+### Open (8)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,7 +134,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1427 surfaced
 | B-2026-08-20-39 | 2026-08-20 | typecheck | medium | `v.last(n)` -- the END-RELATIVE ACCESS design.md prescribes as THE replacement for negative indexing -- takes no argument: `v.last(1)` is rejected with `Vec.last() takes no arguments`. § Numeric Semantics, in the same breath as ruling out Python-style wrap-around: "Negative indices are out-of-bounds errors — they panic at runtime... No Python-style wrap-around; `-1` as an index is always a bug. FOR END-RELATIVE ACCESS, USE `.last(n)` WHERE `n` DEFAULTS TO 0: `v.last()` returns the last element, `v.last(1)` the second-to-last, etc. Negative or out-of-bounds `n` panics." So the spec closes one door and points at another that is not there -- `v.last()` works, `v.last(1)` does not, and the diagnostic states the no-argument form as though it were the intended surface rather than an unimplemented half. | roadmap.md |
 | B-2026-08-20-41 | 2026-08-20 | typecheck | medium | `String.normalize` and the `NFC` constant DO NOT EXIST, so the remedy design.md gives for its own Unicode-equality hazard is unwritable. § Strings, Equality bullet: "`String` equality (`==`) compares raw UTF-8 bytes. Two strings with identical visual appearance but different Unicode normalization forms (e.g., NFC vs NFD) are **not** equal. USE `s.normalize(NFC)` FOR NORMALIZATION-AWARE COMPARISON." Measured: `a.normalize(NFC)` -> `error[resolve]: undefined name 'NFC', did you mean 'Neg'?`; the no-argument form `a.normalize()` -> `error[typecheck]: no method 'normalize' on type 'String'`. Neither `normalize` nor `NFC` appears anywhere in `src/`. The hazard the bullet describes is real and reproduces -- `"e\u{0301}" == "\u{00e9}"` is false, exactly as documented -- so the paragraph correctly warns about a trap and then names an escape that was never built. | roadmap.md |
 | B-2026-08-21-2 | 2026-08-21 | cli | medium | SEVEN REGISTERED LINTS STILL HAVE NO EMIT SITE and so can never fire, though all seven are registered `default_level: LintLevel::Warn` -- advertised by `karac lint --list` and accepted in `#[allow(...)]`: `f16_software_emulated`, `float_in_serialized_type`, `implicit_clone`, `module_mut_binding`, `mutual_recursion_note`, `pure_loop_in_par`, `repr_c_layout_ignored`. They are the remainder of B-2026-08-20-36's eight, which wired `redundant_suffix` (the one design.md documents as live) and added the guard that now holds this list. They are VISIBLE IN CODE, not only here: `KNOWN_UNWIRED` in `src/lints.rs`, which `every_registered_lint_is_emitted_or_declared_unwired` fails on if the list grows or goes stale. | roadmap.md |
-| B-2026-08-21-4 | 2026-08-21 | codegen | high | A free function DECLARED to return `Slice[T]` hands back a GARBAGE header in codegen while `--interp` is correct, and MOST uses of it are SILENT. `fn pick(v: ref Vec[i64]) -> Slice[i64] { v.as_slice() }` over `let v: Vec[i64] = [10, 20, 30]`, measured on the JIT: `println(pick(v).len())` prints a pointer-sized number (140208557007525) instead of 3; `let s = pick(v); println(s.len())` the same; `for x in s` floods hundreds of garbage words instead of 10 20 30. No diagnostic, exit 0. Only the INDEX paths fail loudly -- `pick(v)[2]` and `let s = pick(v); s[2]` both report `codegen failed: Index operator applied to non-array type`, because the callee's `Slice[T]` return is never registered as an element type anywhere. So one family reads as a wrong answer or a hard stop purely by which method you call on it. | src/codegen/types_lowering.rs::llvm_return_type (how a `Slice[T]` return is typed at the call boundary — start here, the returned VALUE is what is wrong); src/codegen/functions.rs::compile_function (the return emission that feeds it); src/codegen/types_lowering.rs::infer_slice_elem_from_rhs + ::slice_elem_type_expr_from_rhs (the two element-type resolvers whose missing `Call` arm is the SECOND half, deliberately not landed — see detail); src/codegen/collections.rs::inline_index_recv_slice_te (the B-2026-08-20-40 sibling that must not be widened to a `Call` until the boundary is fixed) |
 | B-2026-08-21-5 | 2026-08-21 | codegen | medium | `compile_cstr_method` PANICS on a `ref CStr` PARAMETER receiver instead of emitting a diagnostic: `fn look(c: ref CStr) -> i64 { c.len() }` aborts karac with `Found IntValue(... %c.deref = load i64, ptr %c1 ...) but expected the StructValue variant` at src/codegen/method_call_ffi.rs:34 (inkwell `BasicValueEnum::into_struct_value`). `--interp` prints 3. Any CStr method on that receiver shape hits it -- `len`, `as_bytes` measured. | src/codegen/method_call_ffi.rs::compile_cstr_method (the `recv.into_struct_value()` unwrap at the top of the fn — the panic site, and the place a structured Err belongs regardless); src/codegen/functions.rs (where a `ref CStr` param's slot is set up — the receiver arrives as a loaded i64 rather than the `{ptr, i64}` aggregate); tests/codegen.rs::test_e2e_cstr_len_is_empty_as_bytes (the literal-receiver coverage that passes, showing the gap is param-only) |
 | B-2026-08-21-6 | 2026-08-21 | codegen+interp | medium | `Map`/`Set` DO NOT USE THE SPEC'S DEFAULT HASHER: design.md mandates `SipHash13BuildHasher` seeded from a per-process random source, codegen emits FxHash with a COMPILE-TIME-CONSTANT seed and the interpreter hashes not at all -- so there is no hash-flooding resistance, iteration order is fully deterministic across runs (design.md says it must vary), the two backends order differently from each other, and `Map[K, V, FxBuildHasher]` -- design.md's own spelling -- does not resolve, so there is no opt-in either way | roadmap.md |
 | B-2026-08-21-7 | 2026-08-21 | ownership | medium | A call-site `mut` MARKER BYPASSES THE `let mut` REQUIREMENT, so a binding declared without `mut` can be mutated through any mutating parameter while direct assignment to that same binding is correctly refused. Measured on all three backends, `karac check` clean: `fn bump(n: mut ref i64) { n = n + 1; }` + `let x: i64 = 1; bump(mut x);` prints 2; `fn push_one(v: mut ref Vec[i64])` + `let v: Vec[i64] = [1]; push_one(mut v);` leaves 7 at index 1; `fn touch(xs: mut Slice[i64]) { xs[0] = 9; }` + `let v: Vec[i64] = [1,2,3]; touch(mut v);` prints 9. The SAME binding rejects `v[0] = 9` with `error[ownership]: cannot assign through 'v' -- 'v' is declared without 'mut' at line 2:5`, help `change the declaration to 'let mut v'`. So the marker -- whose stated job is to make the mutation VISIBLE at the call site -- is the one spelling that escapes the check the declaration is supposed to enforce. | src/ownership.rs (the `cannot assign through` check that fires for `v[0] = 9` -- the rule that already exists and the natural home for the argument-position twin); src/typechecker/expr_call.rs::check_call_site_marker (sees the marker and the argument's place expression, but deliberately asks only about presence -- it has no `let mut` bit to consult, which is why the fix belongs in ownership); src/typechecker/exprs.rs::param_mutates_through (the shared predicate naming the three parameter spellings that must all be covered: `mut ref T`, `mut Slice[T]`) |
@@ -157,9 +156,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1427 surfaced
 
 </details>
 
-### Fixed (1396)
+### Fixed (1397)
 
-<details><summary>1396 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1397 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -13360,6 +13359,27 @@ Measured on all four surfaces (interp / JIT / AOT / `KARAC_AUTO_PAR=0` AOT), byt
 Pinned by `test_e2e_index_slice_temporary_matches_the_bound_spelling` and `test_e2e_index_slice_temporary_bounds_checked` (tests/codegen.rs) and `asan_index_into_slice_temporary_frees_nothing` (tests/memory_sanitizer.rs -- LSan-clean over 60 iterations of a heap-element read, pinning the frees-nothing choice from both sides). All three fail without the fix.
 
 `s.bytes()[a..b]` never reaches the new arm and is unchanged: a range slice of a temporary escapes its statement and the ownership checker rejects it upstream with "bind the receiver to a local first". |
+| B-2026-08-21-4 | codegen | high | A free function DECLARED to return `Slice[T]` hands back a GARBAGE header in codegen while `--interp` is correct, and MOST uses of it are SILENT | FIXED by b538966 (header from the receiver's place) and c5469bb (method-return element type).
+
+Two defects, both in codegen's Slice[T] lowering.
+
+(1) `as_slice` built the returned header from the receiver's SLOT rather than
+its PLACE. For a `ref Vec[T]` receiver the slot holds a POINTER to the vec, so
+the emitted header took its data/len from the pointer's own storage — garbage.
+Reading the receiver's place first makes the header describe the vec itself.
+
+(2) The element type of a `-> Slice[T]` value was resolved only through a free
+function's declared return; a method returning `Slice[T]` fell through to the
+default and lowered its elements at the wrong width.
+
+The method arm must sit LAST among the method arms: the fixed-element arms
+(`bytes` / `as_bytes`) are more specific, and an earlier insert silently
+shadowed `CStr.as_bytes()` — caught by clippy's unreachable-pattern lint.
+
+Verified on both twins (--interp and codegen) for: a free-fn return
+(`pick(v).len()` -> 3), iteration (`for x in s` -> 10 20 30), indexing
+(`pick(v)[2]` -> 30), a ref param (`probe(ref)` -> 3), and the method sibling
+(-> 9 3 3). Six E2E cases added; all pass. |
 
 </details>
 
