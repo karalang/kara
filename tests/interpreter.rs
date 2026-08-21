@@ -2687,6 +2687,33 @@ fn test_let_else_match_and_diverge() {
     );
 }
 
+/// The same program written the way design.md and syntax.md write it — with the
+/// trailing `;` after the else block. It used to be a parse error while the
+/// spelling above compiled (B-2026-08-21-12); both are accepted now and must
+/// behave identically.
+#[test]
+fn test_let_else_with_the_grammars_trailing_semicolon_behaves_the_same() {
+    assert_eq!(
+        run("fn make(empty: bool) -> Option[i64] {\n\
+                 if empty { return Option.None; }\n\
+                 return Option.Some(7_i64);\n\
+             }\n\
+             fn check(empty: bool) {\n\
+                 let Some(x) = make(empty) else {\n\
+                     println(0_i64);\n\
+                     return;\n\
+                 };\n\
+                 println(x);\n\
+             }\n\
+             fn main() {\n\
+                 check(false);\n\
+                 check(true);\n\
+                 println(99_i64);\n\
+             }"),
+        "7\n0\n99\n"
+    );
+}
+
 // ── Vec.remove (interpreter parity with codegen) ───────────────
 
 #[test]

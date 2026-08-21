@@ -15016,3 +15016,38 @@ fn an_empty_nested_import_group_is_a_diagnostic() {
         "expected the empty-group diagnostic, got: {errors:?}",
     );
 }
+
+// ── `let ... else` — the trailing semicolon ─────────────────────
+
+/// syntax.md § Statements writes the statement as
+/// `LET_ELSE_STATEMENT = "let" [ "mut" ] PATTERN "=" EXPR "else" BLOCK ";"`,
+/// and design.md's `if let` / `let...else` section ends every example with
+/// `};`. The parser used to stop at the closing brace, so the spelling BOTH
+/// documents use failed with `Expected expression, found Semicolon` while the
+/// undocumented semicolon-less form compiled — the feature was fully
+/// implemented and unreachable as written down (B-2026-08-21-12, found by the
+/// design.md conformance sweep).
+#[test]
+fn test_let_else_accepts_the_trailing_semicolon_the_grammar_writes() {
+    for src in [
+        // design.md / syntax.md spelling
+        "fn f(o: Option[i64]) -> i64 { let Some(v) = o else { return 0; }; return v; }",
+        // the form this compiler's own tests were written in
+        "fn f(o: Option[i64]) -> i64 { let Some(v) = o else { return 0; } return v; }",
+    ] {
+        let prog = parse_ok(src);
+        let Item::Function(f) = &prog.items[0] else {
+            panic!("expected a function for {src:?}");
+        };
+        assert!(
+            matches!(f.body.stmts[0].kind, StmtKind::LetElse { .. }),
+            "expected a LetElse statement for {src:?}, got {:?}",
+            f.body.stmts[0].kind
+        );
+        assert_eq!(
+            f.body.stmts.len(),
+            2,
+            "the `;` must terminate the let-else, not open a new statement, for {src:?}"
+        );
+    }
+}

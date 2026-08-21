@@ -85,13 +85,6 @@
       "reason": "DOC BUG — the example uses `use` as an ordinary identifier, but syntax.md §1.1 reserves it. See B-2026-08-21-11",
       "first_diagnostic": "'use' is a reserved keyword and cannot be used as an identifier"
     },
-    "d310245969fc": {
-      "line": 2530,
-      "heading": "Module-Level Bindings > `if let` and `let...else`",
-      "outcome": "REJECTED",
-      "reason": "SPEC GAP — `let...else`; syntax.md:1115 defines LET_ELSE_STATEMENT and the parser rejects it. B-2026-08-21-12",
-      "first_diagnostic": "Expected expression, found Semicolon"
-    },
     "73106ad2a678": {
       "line": 2553,
       "heading": "Module-Level Bindings > `if let` and `let...else`",

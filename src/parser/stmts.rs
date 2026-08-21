@@ -627,6 +627,28 @@ impl super::Parser {
         // let ... else { diverging_block }
         if self.eat(&Token::Else) {
             let else_block = self.parse_block()?;
+            // The trailing `;` is OPTIONAL, and that is a deliberate
+            // under-commitment rather than the obvious reading of the grammar.
+            //
+            // syntax.md § Statements writes it as required —
+            //   LET_ELSE_STATEMENT = "let" [ "mut" ] PATTERN "=" EXPR "else" BLOCK ";"
+            // — and design.md's `if let` / `let...else` section ends every
+            // example with `};`. The parser used to stop at the closing brace,
+            // so the spelling BOTH documents use failed with `Expected
+            // expression, found Semicolon` while the undocumented one compiled:
+            // the feature was implemented and unreachable as written down
+            // (B-2026-08-21-12, found by the design.md conformance sweep).
+            //
+            // Requiring it would match the grammar exactly, and it would also
+            // reject the form this compiler's own tests are written in
+            // (`tests/interpreter.rs::test_let_else_match_and_diverge`,
+            // `tests/codegen.rs::test_e2e_let_else_binds_then_else_diverges`).
+            // That is a language decision about whether a block-tailed binding
+            // takes a terminator, not a defect, so it is left to the spec owner:
+            // accepting both spellings removes the divergence without deciding
+            // it. Tightening to required is a one-word change here plus those
+            // two tests.
+            self.eat(&Token::Semicolon);
             return Some(Stmt {
                 span: self.span_from(&start),
                 kind: StmtKind::LetElse {
