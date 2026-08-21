@@ -477,7 +477,19 @@ impl<'ctx> super::Codegen<'ctx> {
                     // co-existence repro).
                     return self.vec_struct_type().into();
                 }
-                if name == "Slice" {
+                if name == "Slice" || name == "CStr" {
+                    // `CStr` shares `Slice`'s `{ptr, i64}` shape: the
+                    // `CStringLit` lowering builds exactly that aggregate
+                    // (field 0 the NUL-terminated rodata pointer, field 1 the
+                    // byte count excluding the NUL), and `as_bytes` hands the
+                    // receiver back unchanged because `Slice[u8]` IS that
+                    // layout. Without the arm, `CStr` reached the unknown-name
+                    // `i64` default, so a `ref CStr` PARAM registered an 8-byte
+                    // `inner_ty` and `load_variable`'s ref-param deref loaded a
+                    // scalar word where the method expected the aggregate —
+                    // `compile_cstr_method` then panicked in
+                    // `into_struct_value` (B-2026-08-21-5). The owning
+                    // `CString` keeps the `{ptr,len,cap}` vec shape below.
                     return self.slice_struct_type().into();
                 }
                 // Opaque-handle built-ins: one bare `ptr`, whatever the generic
@@ -2609,7 +2621,10 @@ impl<'ctx> super::Codegen<'ctx> {
             // verifier accepted under opaque pointers but that semantics-
             // wise overflowed the field. Mirrors `llvm_type_for_type_expr`
             // line 67-69's identical `TypeKind::Path("Slice")` arm.
-            "Slice" => self.slice_struct_type().into(),
+            // `CStr` rides this arm for the same reason it rides the
+            // `TypeKind::Path` arm above — the two entry points must not
+            // answer differently for one type (B-2026-08-11-34).
+            "Slice" | "CStr" => self.slice_struct_type().into(),
             // `Unit` — the unit type written as a NAME (`-> Unit`,
             // `Result[Unit, IoError]`, both used throughout the baked stdlib).
             // It has no declaration anywhere, so it reached the unknown-name

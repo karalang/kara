@@ -37028,6 +37028,40 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_cstr_methods_on_a_ref_param_receiver() {
+        // B-2026-08-21-5: a `ref CStr` PARAMETER receiver aborted karac
+        // with an inkwell `into_struct_value` unwrap in
+        // `compile_cstr_method`, while `--interp` was correct. `CStr` was
+        // missing from BOTH type-lowering entry points, so it fell to the
+        // unknown-name `i64` default; the param then registered an 8-byte
+        // `inner_ty` and `load_variable`'s ref-param deref loaded a scalar
+        // word where the method expected the `{ptr, i64}` aggregate.
+        // A literal or owned receiver was always fine — only the parameter
+        // spelling reached the unwrap, which is why the sibling test above
+        // never caught it. Strict assert: this pins a CRASH fix, so it must
+        // not pass vacuously when the runtime archive is absent.
+        let src = r#"
+fn m_len(c: ref CStr) -> i64 { return c.len(); }
+fn m_empty(c: ref CStr) -> bool { return c.is_empty(); }
+fn m_byte(c: ref CStr, i: i64) -> u8 { return c.as_bytes()[i]; }
+
+fn main() {
+    let s = c"abc";
+    let e = c"";
+    println(m_len(s));
+    println(m_empty(s));
+    println(m_empty(e));
+    println(m_byte(s, 0));
+    println(m_byte(s, 2));
+}
+"#;
+        assert_eq!(
+            run_program(src),
+            Some("3\nfalse\ntrue\n97\n99\n".to_string())
+        );
+    }
+
+    #[test]
     fn test_e2e_cstr_to_string_result() {
         // `CStr.to_string() -> Result[String, Utf8Error]` (phase-12 Cluster 2).
         // The outbound `char*` read: validate UTF-8, copy to a heap String on

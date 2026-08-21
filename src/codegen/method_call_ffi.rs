@@ -31,6 +31,23 @@ impl<'ctx> super::Codegen<'ctx> {
         method: &str,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let recv = self.compile_expr(object)?;
+        // Structured failure, not a panic: `into_struct_value` aborts the
+        // whole compiler with an inkwell unwrap when the receiver did not
+        // lower to the `{ptr, i64}` aggregate, violating the standing rule
+        // that every phase emits a diagnostic with a span (CLAUDE.md
+        // § Coding Standards). The `ref CStr` param that motivated this
+        // (B-2026-08-21-5) is fixed at its root in `llvm_type_for_type_expr`,
+        // so this arm should now be unreachable — it stays as the guard for
+        // any future receiver shape that lowers to a non-aggregate, turning
+        // a compiler abort into a reportable error naming the receiver.
+        if !recv.is_struct_value() {
+            return Err(format!(
+                "codegen: `CStr` method '{}' needs a {{ptr, i64}} receiver, but the \
+                 receiver at offset {} lowered to a non-aggregate value. This \
+                 receiver form is not supported yet.",
+                method, object.span.offset
+            ));
+        }
         let agg = recv.into_struct_value();
         match method {
             "as_ptr" => Ok(self
