@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 120 | 0 |
 | diagnostics | 92 | 1 |
 | false-positive | 89 | 1 |
-| perf | 82 | 0 |
+| perf | 83 | 1 |
 | crash | 55 | 1 |
 | soundness | 51 | 0 |
 | other | 50 | 0 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | codegen | 964 | 3 |
 | typecheck | 222 | 2 |
-| interp | 168 | 1 |
+| interp | 169 | 2 |
 | ownership | 62 | 1 |
 | other | 59 | 0 |
 | cli | 57 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 7 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1426 surfaced · 8 open · 1396 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1427 surfaced · 9 open · 1396 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (8)
+### Open (9)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -138,6 +138,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1426 surfaced
 | B-2026-08-21-5 | 2026-08-21 | codegen | medium | `compile_cstr_method` PANICS on a `ref CStr` PARAMETER receiver instead of emitting a diagnostic: `fn look(c: ref CStr) -> i64 { c.len() }` aborts karac with `Found IntValue(... %c.deref = load i64, ptr %c1 ...) but expected the StructValue variant` at src/codegen/method_call_ffi.rs:34 (inkwell `BasicValueEnum::into_struct_value`). `--interp` prints 3. Any CStr method on that receiver shape hits it -- `len`, `as_bytes` measured. | src/codegen/method_call_ffi.rs::compile_cstr_method (the `recv.into_struct_value()` unwrap at the top of the fn — the panic site, and the place a structured Err belongs regardless); src/codegen/functions.rs (where a `ref CStr` param's slot is set up — the receiver arrives as a loaded i64 rather than the `{ptr, i64}` aggregate); tests/codegen.rs::test_e2e_cstr_len_is_empty_as_bytes (the literal-receiver coverage that passes, showing the gap is param-only) |
 | B-2026-08-21-6 | 2026-08-21 | codegen+interp | medium | `Map`/`Set` DO NOT USE THE SPEC'S DEFAULT HASHER: design.md mandates `SipHash13BuildHasher` seeded from a per-process random source, codegen emits FxHash with a COMPILE-TIME-CONSTANT seed and the interpreter hashes not at all -- so there is no hash-flooding resistance, iteration order is fully deterministic across runs (design.md says it must vary), the two backends order differently from each other, and `Map[K, V, FxBuildHasher]` -- design.md's own spelling -- does not resolve, so there is no opt-in either way | roadmap.md |
 | B-2026-08-21-7 | 2026-08-21 | ownership | medium | A call-site `mut` MARKER BYPASSES THE `let mut` REQUIREMENT, so a binding declared without `mut` can be mutated through any mutating parameter while direct assignment to that same binding is correctly refused. Measured on all three backends, `karac check` clean: `fn bump(n: mut ref i64) { n = n + 1; }` + `let x: i64 = 1; bump(mut x);` prints 2; `fn push_one(v: mut ref Vec[i64])` + `let v: Vec[i64] = [1]; push_one(mut v);` leaves 7 at index 1; `fn touch(xs: mut Slice[i64]) { xs[0] = 9; }` + `let v: Vec[i64] = [1,2,3]; touch(mut v);` prints 9. The SAME binding rejects `v[0] = 9` with `error[ownership]: cannot assign through 'v' -- 'v' is declared without 'mut' at line 2:5`, help `change the declaration to 'let mut v'`. So the marker -- whose stated job is to make the mutation VISIBLE at the call site -- is the one spelling that escapes the check the declaration is supposed to enforce. | src/ownership.rs (the `cannot assign through` check that fires for `v[0] = 9` -- the rule that already exists and the natural home for the argument-position twin); src/typechecker/expr_call.rs::check_call_site_marker (sees the marker and the argument's place expression, but deliberately asks only about presence -- it has no `let mut` bit to consult, which is why the fix belongs in ownership); src/typechecker/exprs.rs::param_mutates_through (the shared predicate naming the three parameter spellings that must all be covered: `mut ref T`, `mut Slice[T]`) |
+| B-2026-08-21-8 | 2026-08-21 | interp | medium | THE INTERPRETER'S `Map`/`Set` ARE ASSOCIATION LISTS, so every `get`/`insert`/`contains` is a LINEAR SCAN and any map-keyed program is QUADRATIC under `karac run --interp` -- measured 4x per doubling against codegen's flat line, and design.md documents O(1) lookup | roadmap.md |
 
 ### Wontfix (8)
 
