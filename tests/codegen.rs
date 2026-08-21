@@ -46662,7 +46662,31 @@ fn main() {
             .as_deref(),
             Some("30\n10\n")
         );
-        // 6. A `mut ref` receiver, and a slice taken through it after a
+        // 6. A METHOD declared `-> Slice[T]`. The impl pass emits it as a
+        //    `Type.method` function and records its return in the same table,
+        //    so resolving the receiver's type name is the whole of the extra
+        //    work. The filing row measured this sibling as a hard refusal and
+        //    asked for it to be re-measured once the header was fixed.
+        assert_eq!(
+            run_program(
+                "struct Buf { v: Vec[i64] }\n\
+                 impl Buf {\n\
+                 \x20   fn view(ref self) -> Slice[i64] {\n\
+                 \x20       return self.v.as_slice();\n\
+                 \x20   }\n\
+                 }\n\
+                 fn main() {\n\
+                 \x20   let b = Buf { v: [7, 8, 9] };\n\
+                 \x20   println(f\"{b.view()[2]}\");\n\
+                 \x20   let s = b.view();\n\
+                 \x20   println(f\"{s.len()}\");\n\
+                 \x20   println(f\"{b.view().len()}\");\n\
+                 }\n"
+            )
+            .as_deref(),
+            Some("9\n3\n3\n")
+        );
+        // 7. A `mut ref` receiver, and a slice taken through it after a
         //    mutation — the length must track the caller's Vec, not a stale
         //    copy of the header.
         assert_eq!(

@@ -957,18 +957,29 @@ impl<'ctx> super::Codegen<'ctx> {
     /// read a length out of whatever follows the pointer — the same shape of
     /// error this row was filed for, moved one level out.
     ///
-    /// Method calls are deliberately NOT covered here: `fn_return_type_exprs`
-    /// is keyed by free-function name, and the method sibling
-    /// (`b.view()` on an `impl` block) needs its own registration. It is
-    /// tracked separately rather than guessed at.
+    /// Covers a METHOD call too (`b.view()` on an `impl` block). The impl pass
+    /// emits each method as a `Type.method` function and records its return in
+    /// the SAME table, so resolving the receiver's type name is the whole of
+    /// the extra work — no second table.
+    ///
+    /// FAILS SAFE at every step: an unresolvable receiver, a missing entry, or
+    /// a return that is not `Slice[T]` all yield `None`, which leaves the
+    /// caller's binding unregistered and the shape refusing loudly exactly as
+    /// it did before. That is why a possible mis-resolution under colliding
+    /// generic impls costs nothing here — a wrong lookup cannot produce a
+    /// wrong element type, only no element type.
     fn call_slice_return_elem_te(&self, expr: &Expr) -> Option<TypeExpr> {
-        let ExprKind::Call { callee, .. } = &expr.kind else {
-            return None;
+        let key = match &expr.kind {
+            ExprKind::Call { callee, .. } => match &callee.kind {
+                ExprKind::Identifier(fname) => fname.clone(),
+                _ => return None,
+            },
+            ExprKind::MethodCall { object, method, .. } => {
+                format!("{}.{}", self.inferred_receiver_type(object)?, method)
+            }
+            _ => return None,
         };
-        let ExprKind::Identifier(fname) = &callee.kind else {
-            return None;
-        };
-        let ret = self.fn_sig.fn_return_type_exprs.get(fname.as_str())?;
+        let ret = self.fn_sig.fn_return_type_exprs.get(key.as_str())?;
         super::helpers::slice_inner_type_expr(ret)
     }
 
@@ -984,16 +995,22 @@ impl<'ctx> super::Codegen<'ctx> {
                 // — typechecker has gated the receiver to String.
                 Some(self.context.i8_type().into())
             }
-            ExprKind::Call { .. } => {
-                let te = self.call_slice_return_elem_te(expr)?;
-                Some(self.llvm_type_for_type_expr(&te))
-            }
             ExprKind::MethodCall { method, .. } if method == "as_bytes" => {
                 // `CStr.as_bytes() -> Slice[u8]` (design.md § C-String
                 // Literals). Same fixed-u8 story as `bytes` above —
                 // `as_bytes` is CStr-only at the typechecker layer, and
                 // the value is already the `{ptr, i64}` slice header.
                 Some(self.context.i8_type().into())
+            }
+            // A CALL — free fn or method — declared `-> Slice[T]`
+            // (B-2026-08-21-4). LAST among the method arms on purpose: the
+            // `as_slice` / `bytes` / `as_bytes` arms above resolve their own
+            // shapes with a fixed element type, and a broad `MethodCall`
+            // pattern placed ahead of them silently shadows them (clippy
+            // caught `as_bytes` going unreachable).
+            ExprKind::Call { .. } | ExprKind::MethodCall { .. } => {
+                let te = self.call_slice_return_elem_te(expr)?;
+                Some(self.llvm_type_for_type_expr(&te))
             }
             ExprKind::Index { object, index } => {
                 if matches!(&index.kind, ExprKind::Range { .. }) {
@@ -1070,8 +1087,12 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::MethodCall { method, .. } if method == "bytes" || method == "as_bytes" => {
                 Some(u8_te(&expr.span))
             }
-            // A CALL whose callee declares `-> Slice[T]` (B-2026-08-21-4).
-            ExprKind::Call { .. } => self.call_slice_return_elem_te(expr),
+            // A CALL — free fn or method — declared `-> Slice[T]`
+            // (B-2026-08-21-4). Placed after the `as_slice` / `bytes` arms so
+            // those keep priority for the shapes they already resolve.
+            ExprKind::Call { .. } | ExprKind::MethodCall { .. } => {
+                self.call_slice_return_elem_te(expr)
+            }
             ExprKind::Index { object, index } => {
                 let ExprKind::Identifier(base) = &object.kind else {
                     return None;
