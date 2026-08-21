@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 272 | 1 |
+| miscompile | 273 | 1 |
 | leak | 185 | 0 |
 | run-vs-build | 147 | 1 |
 | missing-feature | 141 | 7 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 972 | 7 |
+| codegen | 973 | 7 |
 | typecheck | 230 | 4 |
 | interp | 169 | 1 |
 | ownership | 62 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 7 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1448 surfaced · 14 open · 1412 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1449 surfaced · 14 open · 1413 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (14)
 
@@ -138,12 +138,12 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1448 surfaced
 | B-2026-08-21-18 | 2026-08-21 | codegen+typecheck | low | STRUCT FUNCTIONAL UPDATE `P { x: 1, ..base }` IS STILL UNIMPLEMENTED -- it now says so clearly instead of dropping the base, but the form syntax.md's STRUCT_LITERAL production admits cannot be used; the interpreter already implements the copy and codegen does not, so the remaining work is codegen plus the ownership rules for a spread base | roadmap.md |
 | B-2026-08-21-21 | 2026-08-21 | codegen | high | CODEGEN SILENTLY DROPS `requires` / `ensures` CONTRACTS ON A GENERIC FUNCTION -- the monomorphic sibling of the same contract fires on all three surfaces, so a precondition written on a `fn f[T](...)` is enforced under `--interp` and is not enforced by either compiled backend | roadmap.md |
 | B-2026-08-21-22 | 2026-08-21 | codegen | high | `Vec.filled(n, f"...")` DOUBLE-FREES UNDER BOTH COMPILED BACKENDS -- the f-string accumulator is moved into the buffer and ALSO freed at scope exit; `--interp` prints correctly, so it is a silent run-vs-build divergence that aborts the process | roadmap.md |
-| B-2026-08-21-23 | 2026-08-21 | codegen | high | A FIXED ARRAY PASSED TO A **METHOD**'s `ref Slice[T]` PARAMETER READS A GARBAGE LENGTH -- `bytes.len()` answers 3 under the interpreter, -1 under AOT and a wild number under JIT; the free-function spelling of the same call is correct | roadmap.md |
 | B-2026-08-21-24 | 2026-08-21 | codegen | medium | AN ARRAY **LITERAL** TEMPORARY IN A `ref Slice[T]` PARAMETER FAILS LLVM MODULE VERIFICATION -- `f([1u8, 2u8, 3u8])` builds nothing while the by-value `Slice[T]` spelling of the same call compiles and runs | roadmap.md |
 | B-2026-08-21-25 | 2026-08-21 | codegen | medium | A METHOD CALL ON A FIXED-ARRAY **TEMPORARY** HAS NO CODEGEN LOWERING -- `n.to_ne_bytes().len()` build-fails with the dispatcher's own "this is a codegen bug" message while the bound two-line spelling works | roadmap.md |
 | B-2026-08-21-26 | 2026-08-21 | typecheck | medium | `TryFrom[intN]` FOR A C-LIKE `#[repr(intN)]` ENUM DOES NOT EXIST -- design.md § Enum Discriminant Runtime Surface commits to auto-generating it and shows the worked `match UsbClass.try_from(raw)`, which fails to compile | roadmap.md |
 | B-2026-08-21-28 | 2026-08-21 | other | medium | THE design.md CONFORMANCE SUITE IS BLIND TO ITS HIGHEST-YIELD CLASS: 21 of its 71 baseline blocks are SIGNATURE CATALOGUES that never compile, so the 60 method signatures they list are unchecked -- two of the five probed by hand do not exist, which is exactly the B-2026-08-21-10 shape the suite was built to catch | roadmap.md |
 | B-2026-08-21-29 | 2026-08-21 | typecheck | medium | TWO DOCUMENTED STDLIB SURFACES ARE NOT REACHABLE AS WRITTEN: `Channel.new[T]()` does not exist (`struct Channel[=T] { }` is empty) and design.md's whole `io.` I/O prefix resolves to nothing -- the surface is spelled `Stdin.read_line`, which the implementation's own comment already notes | roadmap.md |
+| B-2026-08-21-30 | 2026-08-21 | codegen | high | A `mut Slice[T]` **METHOD** PARAMETER FED A `mut`-MARKED ARRAY LOSES THE WRITE -- the callee's `b[0] = 9u8` never reaches the caller's array under JIT and default AOT, while `--interp` and `KARAC_AUTO_PAR=0` AOT both keep it and the free-function spelling is correct on all four | roadmap.md |
 
 ### Wontfix (8)
 
@@ -162,9 +162,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1448 surfaced
 
 </details>
 
-### Fixed (1412)
+### Fixed (1413)
 
-<details><summary>1412 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1413 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -13590,6 +13590,20 @@ that another session had already pushed on top of a red main. Cheap guard
 for the next person: after touching a diagnostic's kind, span or ordering,
 run `cargo test --features llvm --test selfhost_typechecker --test
 selfhost_lexer` before pushing -- about 10 s against the ~13 min full suite. |
+| B-2026-08-21-23 | codegen | high | A FIXED ARRAY PASSED TO A **METHOD**'s `ref Slice[T]` PARAMETER READS A GARBAGE LENGTH -- `bytes.len()` answers 3 under the interpreter, -1 under AOT… | FIXED by 08f57a7.
+
+B-2026-06-19-1's carve-out, transplanted to the method-call argument loop where it had never been applied: for a `ref Slice[T]` slot fed an Array source, synthesize the `{ptr,len}` header and pass its ADDRESS, instead of letting the identifier fast path hand over `&array[0]` or the slice coercion push a header VALUE into a `ptr` slot. Placed FIRST in the `ref` arm, for the same reason it is first on the free-function path: the fast path below it is what produces the wrong pointer.
+
+THE REPORTED SYMPTOM UNDERSTATED IT. This row recorded `-1` for a `len()`-only body. With a body that INDEXES, the same call SEGFAULTS under both JIT and AOT (exit 139) -- the element bytes are dereferenced as a pointer. Three argument shapes gave three different symptoms, all from the one cause:
+
+  owned local array, body calls len()   JIT -129820080518201344
+  owned local array, body indexes       SEGFAULT (JIT and AOT)
+  struct-field array                    LLVM module verification failure
+  the same call as a free function      correct on all four surfaces
+
+Array sources ONLY, mirroring the free-function gate: a `Vec` binding's storage starts with `{ptr,len}` (a header superset) and a `Slice` / `ref Slice` binding's `get_data_ptr` already yields a header pointer, so both forward correctly through the existing path -- intercepting them would re-coerce a ref-slice binding and corrupt the forward.
+
+Verified byte-identical on interp / JIT / AOT / `KARAC_AUTO_PAR=0` AOT across an owned local, a struct field, `self.field` from inside another method, a `ref Array` parameter forwarded in, a trait method, `u8` / `i64` / `f64` / `String` elements, and lengths 1, 2, 3, 5 and 8. Both tests are pinned non-vacuous: with the fix reverted the E2E case segfaults and the ASAN case fails. The sanitizer case uses a `String` element deliberately -- the old lowering dereferenced element bytes as a pointer, and the new header must stay a BORROW, since the array still owns those buffers. |
 | B-2026-08-21-27 | typecheck | medium | self-host typechecker diverges from Rust on a struct-update expression missing a field | FIXED by dda94ff — the same commit that closed B-2026-08-21-20, which this row duplicates.
 
 Both rows are the same failure: `selfhost_typechecker_matches_rust_typechecker` at corpus input 126, `struct P { x: i64, y: i64 } fn f(b: P) -> P { P { x: 1, ..b } }`, where the Kara-written typechecker reported `missing-field` and the Rust one `type-mismatch`, both at 46:15. `dda94ff` taught `selfhost/src/typechecker.kara` the struct-spread rule `3b4b97d` introduced. Verified green on a clean checkout at `27735db`: `cargo test --features llvm --test selfhost_typechecker` — 1 passed, 0 failed.
