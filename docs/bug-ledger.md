@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | diagnostics | 92 | 1 |
 | false-positive | 89 | 0 |
 | perf | 83 | 0 |
-| crash | 55 | 1 |
+| crash | 55 | 0 |
 | soundness | 51 | 0 |
 | other | 51 | 1 |
 | use-after-free | 20 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 965 | 2 |
+| codegen | 965 | 1 |
 | typecheck | 224 | 4 |
 | interp | 169 | 1 |
 | ownership | 62 | 0 |
@@ -124,17 +124,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 7 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1432 surfaced · 10 open · 1400 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1432 surfaced · 9 open · 1401 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (10)
+### Open (9)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-20-37 | 2026-08-20 | lexer | medium | BYTE-STRING literals `b"..."` are lexed as RESERVED, though design.md § Byte and Byte-String Literals specifies them as shipped with a type rule, three worked examples and an escape table -- while the sibling byte-CHAR literal `b'A'` in the same section works fully. `let eth: Array[u8, 2] = b"\x08\x00";` -> `error[parse]: string prefix 'b"..."' is reserved for future use; only `f"..."` ...`. The section opens by saying the grammar "reserves the `b` prefix FOR THIS PURPOSE (`syntax.md § 1.3`), producing `u8`-typed and `[u8; N]`-typed literals", states "**`b"..."` has type `[u8; N]` where `N` is the byte count of the literal after escape resolution**", and its own "Reserved but not yet implemented" paragraph lists only `r`, `br` and `rb` -- `b"..."` is presented as the working half. Nothing in deferred.md or roadmap.md marks it deferred. Measured working in the same section: `b'U'` is 85, and every escape the spec permits in a byte literal is correct (`\n`=10, `\t`=9, `\r`=13, `\0`=0, `\\`=92, `\'`=39, `\"`=34, `\xFF`=255, `\x41`=65), as is the forbidden case -- `b'\u{FF}'` produces the spec's exact wording, "Unicode escapes are not permitted in byte literals — use \xFF for byte 0xFF", and `r"..."` produces the spec's exact reserved-prefix message. | roadmap.md |
 | B-2026-08-20-39 | 2026-08-20 | typecheck | medium | `v.last(n)` -- the END-RELATIVE ACCESS design.md prescribes as THE replacement for negative indexing -- takes no argument: `v.last(1)` is rejected with `Vec.last() takes no arguments`. § Numeric Semantics, in the same breath as ruling out Python-style wrap-around: "Negative indices are out-of-bounds errors — they panic at runtime... No Python-style wrap-around; `-1` as an index is always a bug. FOR END-RELATIVE ACCESS, USE `.last(n)` WHERE `n` DEFAULTS TO 0: `v.last()` returns the last element, `v.last(1)` the second-to-last, etc. Negative or out-of-bounds `n` panics." So the spec closes one door and points at another that is not there -- `v.last()` works, `v.last(1)` does not, and the diagnostic states the no-argument form as though it were the intended surface rather than an unimplemented half. | roadmap.md |
 | B-2026-08-20-41 | 2026-08-20 | typecheck | medium | `String.normalize` and the `NFC` constant DO NOT EXIST, so the remedy design.md gives for its own Unicode-equality hazard is unwritable. § Strings, Equality bullet: "`String` equality (`==`) compares raw UTF-8 bytes. Two strings with identical visual appearance but different Unicode normalization forms (e.g., NFC vs NFD) are **not** equal. USE `s.normalize(NFC)` FOR NORMALIZATION-AWARE COMPARISON." Measured: `a.normalize(NFC)` -> `error[resolve]: undefined name 'NFC', did you mean 'Neg'?`; the no-argument form `a.normalize()` -> `error[typecheck]: no method 'normalize' on type 'String'`. Neither `normalize` nor `NFC` appears anywhere in `src/`. The hazard the bullet describes is real and reproduces -- `"e\u{0301}" == "\u{00e9}"` is false, exactly as documented -- so the paragraph correctly warns about a trap and then names an escape that was never built. | roadmap.md |
-| B-2026-08-21-2 | 2026-08-21 | cli | medium | SEVEN REGISTERED LINTS STILL HAVE NO EMIT SITE and so can never fire, though all seven are registered `default_level: LintLevel::Warn` -- advertised by `karac lint --list` and accepted in `#[allow(...)]`: `f16_software_emulated`, `float_in_serialized_type`, `implicit_clone`, `module_mut_binding`, `mutual_recursion_note`, `pure_loop_in_par`, `repr_c_layout_ignored`. They are the remainder of B-2026-08-20-36's eight, which wired `redundant_suffix` (the one design.md documents as live) and added the guard that now holds this list. They are VISIBLE IN CODE, not only here: `KNOWN_UNWIRED` in `src/lints.rs`, which `every_registered_lint_is_emitted_or_declared_unwired` fails on if the list grows or goes stale. | roadmap.md |
-| B-2026-08-21-5 | 2026-08-21 | codegen | medium | `compile_cstr_method` PANICS on a `ref CStr` PARAMETER receiver instead of emitting a diagnostic: `fn look(c: ref CStr) -> i64 { c.len() }` aborts karac with `Found IntValue(... %c.deref = load i64, ptr %c1 ...) but expected the StructValue variant` at src/codegen/method_call_ffi.rs:34 (inkwell `BasicValueEnum::into_struct_value`). `--interp` prints 3. Any CStr method on that receiver shape hits it -- `len`, `as_bytes` measured. | src/codegen/method_call_ffi.rs::compile_cstr_method (the `recv.into_struct_value()` unwrap at the top of the fn — the panic site, and the place a structured Err belongs regardless); src/codegen/functions.rs (where a `ref CStr` param's slot is set up — the receiver arrives as a loaded i64 rather than the `{ptr, i64}` aggregate); tests/codegen.rs::test_e2e_cstr_len_is_empty_as_bytes (the literal-receiver coverage that passes, showing the gap is param-only) |
+| B-2026-08-21-2 | 2026-08-21 | cli | medium | SIX REGISTERED LINTS STILL HAVE NO EMIT SITE and so can never fire, though all seven are registered `default_level: LintLevel::Warn` -- advertised by `karac lint --list` and accepted in `#[allow(...)]`: `f16_software_emulated`, `float_in_serialized_type`, `implicit_clone`, `mutual_recursion_note`, `pure_loop_in_par`, `repr_c_layout_ignored`. They are the remainder of B-2026-08-20-36's eight, which wired `redundant_suffix` (the one design.md documents as live) and added the guard that now holds this list. They are VISIBLE IN CODE, not only here: `KNOWN_UNWIRED` in `src/lints.rs`, which `every_registered_lint_is_emitted_or_declared_unwired` fails on if the list grows or goes stale. | roadmap.md |
 | B-2026-08-21-6 | 2026-08-21 | codegen+interp | medium | `Map`/`Set` DO NOT USE THE SPEC'S DEFAULT HASHER: design.md mandates `SipHash13BuildHasher` seeded from a per-process random source, codegen emits FxHash with a COMPILE-TIME-CONSTANT seed and the interpreter hashes not at all -- so there is no hash-flooding resistance, iteration order is fully deterministic across runs (design.md says it must vary), the two backends order differently from each other, and `Map[K, V, FxBuildHasher]` -- design.md's own spelling -- does not resolve, so there is no opt-in either way | roadmap.md |
 | B-2026-08-21-9 | 2026-08-21 | parser | medium | design.md WRITES SYNTAX THE PARSER HAS NO PRODUCTION FOR, in two places syntax.md also disagrees with: the inline associated-type binding `Trait[Assoc = T]` (43 lines of design.md, and syntax.md's own comment at :650) has no form in `TRAIT_BOUND = PATH [ "[" TYPE_LIST "]" ]`, and an effect clause on an impl header (`impl From[E] for A with writes(Log) {`) has no form at all | roadmap.md |
 | B-2026-08-21-10 | 2026-08-21 | typecheck | medium | FOUR STDLIB ENTRY POINTS design.md DOCUMENTS DO NOT EXIST -- `Vec.from_fn` (in the Vec method table, with a worked example), `Vec.is_sorted` (used inside `requires` contracts twice), `u16.to_ne_bytes`, and an enum's `.discriminant()` -- the `TreeMap` shape again: written up, never implemented | roadmap.md |
@@ -158,9 +157,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1432 surfaced
 
 </details>
 
-### Fixed (1400)
+### Fixed (1401)
 
-<details><summary>1400 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1401 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -13382,6 +13381,33 @@ Verified on both twins (--interp and codegen) for: a free-fn return
 (`pick(v).len()` -> 3), iteration (`for x in s` -> 10 20 30), indexing
 (`pick(v)[2]` -> 30), a ref param (`probe(ref)` -> 3), and the method sibling
 (-> 9 3 3). Six E2E cases added; all pass. |
+| B-2026-08-21-5 | codegen | medium | `compile_cstr_method` PANICS on a `ref CStr` PARAMETER receiver instead of emitting a diagnostic: `fn look(c: ref CStr) -> i64 { c.len() }` aborts ka… | FIXED by 5b895aa.
+
+Root cause was upstream of the panic. `CStr` was missing from BOTH LLVM
+type-lowering entry points -- the `TypeKind::Path` arm of
+`llvm_type_for_type_expr` and the name-keyed `llvm_type_for_name` -- so it
+fell through to the unknown-name `i64` default. A `ref CStr` PARAM then
+registered an 8-byte `inner_ty`, and `load_variable`'s ref-param deref
+loaded a scalar word where the method expected the `{ptr, i64}` aggregate;
+`into_struct_value` panicked on it. That is why only the PARAMETER spelling
+crashed: a literal or owned receiver never crosses that deref.
+
+Both entry points now map `CStr` to `slice_struct_type()`, keeping them in
+agreement as the B-2026-08-11-34 comment requires. The owning `CString`
+keeps its distinct `{ptr,len,cap}` vec shape.
+
+The unwrap is ALSO replaced with a structured `Err` carrying the receiver
+offset, which the row asked for independently of the lowering fix: the root
+fix should make it unreachable, but no phase may abort with a Rust
+backtrace (CLAUDE.md § Coding Standards), and it now guards any future
+non-aggregate receiver shape.
+
+Verified on all THREE backends -- --interp, AOT build, and JIT -- for
+`len`, `is_empty`, and `as_bytes()[i]` on a `ref CStr` param: 3 false true
+97 99, identical everywhere. That includes the `c.as_bytes()[i]` shape from
+the originating B-2026-08-20-40 probe. One regression test added, using the
+STRICT assert form so a missing runtime archive cannot make it pass
+vacuously. |
 | B-2026-08-21-7 | ownership | medium | A call-site `mut` MARKER BYPASSES THE `let mut` REQUIREMENT, so a binding declared without `mut` can be mutated through any mutating parameter while… | FIXED by cefc213. The rule this bug was missing already existed -- B-2026-07-27-9 built `report_write_to_immutable_binding` (src/ownership.rs), with the `immutable_lets` table, the reference-handle exemption, and a machine-applicable `let` -> `let mut` edit. It was wired to the write forms design.md § Variable Binding Rules ENUMERATES -- reassignment (`v[0] = 1`, `x += 1`) and a `mut ref self` method (`v.push(x)`) -- and to nothing else. The call-site `mut` marker is the third write form and had no call site into it.
 
 ONE SHARED HELPER, `report_mut_marked_arg_write`, called from BOTH `ExprKind::Call` arms of src/ownership/expr_check.rs (the reading arm and the consuming arm, which are otherwise identical and would silently drift if hooked separately). It reuses the existing reporter wholesale, so the new diagnostic inherits the phrasing, the `MutateImmutableBinding` kind, the shared-handle exemption, and the auto-fix for free: `cannot pass `x` as `mut` -- `x` is declared without `mut` at line 2:5`, and `karac fix` inserts the `mut` at the declaration in one edit (verified end to end: fix, then check clean, then run correct).
