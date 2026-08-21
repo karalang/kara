@@ -1913,11 +1913,20 @@ pub(super) fn run_multi_file_codegen(
     }
     pipeline.lower();
     pipeline.effectcheck();
-    if pipeline
-        .effects
-        .as_ref()
-        .is_some_and(|e| !e.errors.is_empty())
-    {
+    // Note-severity findings must not fail a multi-file build. This gate used
+    // to test `!e.errors.is_empty()` with NO filtering at all, so it would
+    // have failed on an `FfiLintHint` too — latent since the hint existed,
+    // unhit only because no multi-file fixture declared an `extern` that
+    // triggers one. `mutual_recursion_note` surfaced it immediately: the
+    // self-hosted compiler is full of legitimate mutual recursion (a
+    // recursive-descent parser and a recursive emitter), so the self-host
+    // oracle went red with eleven notes reported as `error[effect]`
+    // (B-2026-08-21-2).
+    if pipeline.effects.as_ref().is_some_and(|e| {
+        e.errors
+            .iter()
+            .any(|err| !crate::effectchecker::kind_is_note(&err.kind))
+    }) {
         return BuildCodegenStatus::Failed {
             phase: "effect".to_string(),
             message: format_pipeline_errors(&pipeline, "effect", Some(&span_table)),

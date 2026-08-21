@@ -520,7 +520,6 @@ mod emit_site_guard {
         "f16_software_emulated",
         "float_in_serialized_type",
         "implicit_clone",
-        "mutual_recursion_note",
         "pure_loop_in_par",
         "repr_c_layout_ignored",
     ];

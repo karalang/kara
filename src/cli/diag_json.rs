@@ -1963,6 +1963,9 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                     ("E0231", "error")
                 }
                 crate::effectchecker::EffectErrorKind::FfiLintHint => ("L0001", "note"),
+                // `mutual_recursion_note` — a note, never an error, exactly as
+                // design.md words it ("emits a note (not an error)").
+                crate::effectchecker::EffectErrorKind::MutualRecursionNote => ("L0002", "note"),
                 crate::effectchecker::EffectErrorKind::EffectVariableConflict => ("E0406", "error"),
                 crate::effectchecker::EffectErrorKind::ProfileIncompatibleEffect => {
                     ("E0407", "error")
@@ -2707,15 +2710,18 @@ pub(super) fn run_pipeline_jsonl(pipeline: &mut Pipeline) {
     emit_jsonl_event("phase_start", "\"phase\":\"effect\"");
     pipeline.effectcheck();
     let (effect_errors, effect_notes) = pipeline.effects.as_ref().map_or((0, 0), |e| {
+        // Both halves ride the one note predicate (B-2026-08-21-2), so the
+        // JSONL `phase_complete` counts cannot disagree with the text
+        // renderer and the exit code about what a note is.
         let errors = e
             .errors
             .iter()
-            .filter(|e| e.kind != EffectErrorKind::FfiLintHint)
+            .filter(|e| !crate::effectchecker::kind_is_note(&e.kind))
             .count();
         let notes = e
             .errors
             .iter()
-            .filter(|e| e.kind == EffectErrorKind::FfiLintHint)
+            .filter(|e| crate::effectchecker::kind_is_note(&e.kind))
             .count();
         (errors, notes)
     });

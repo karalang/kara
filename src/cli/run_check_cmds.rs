@@ -801,7 +801,9 @@ pub(super) fn cmd_run(
                         "warning[effect]: {}:{}:{}: {}",
                         filename, err.span.line, err.span.column, err.message
                     ),
-                    EffectErrorKind::FfiLintHint => eprintln!(
+                    // Note-severity kinds, per the one shared predicate
+                    // (`kind_is_note`, B-2026-08-21-2).
+                    ref k if crate::effectchecker::kind_is_note(k) => eprintln!(
                         "note[effect]: {}:{}:{}: {}",
                         filename, err.span.line, err.span.column, err.message
                     ),

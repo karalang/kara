@@ -39,7 +39,7 @@ fn effectcheck_ok_unwind(source: &str) -> EffectCheckResult {
     let real_errors: Vec<_> = result
         .errors
         .iter()
-        .filter(|e| e.kind != EffectErrorKind::FfiLintHint)
+        .filter(|e| !karac::effectchecker::kind_is_note(&e.kind))
         .collect();
     assert!(
         real_errors.is_empty(),
@@ -60,7 +60,7 @@ fn effectcheck_errors_unwind(source: &str) -> Vec<EffectError> {
     effectcheck_with_profile_config(&parsed.program, unwind_config())
         .errors
         .into_iter()
-        .filter(|e| e.kind != EffectErrorKind::FfiLintHint)
+        .filter(|e| !karac::effectchecker::kind_is_note(&e.kind))
         .collect()
 }
 
@@ -79,10 +79,19 @@ fn effectcheck_ok(source: &str) -> EffectCheckResult {
             .join(", ")
     );
     let result = effectcheck(&parsed.program);
+    // Advisory kinds are not errors. These filters used to hardcode
+    // `!= FfiLintHint` in TWELVE places, which silently made the harness
+    // disagree with the CLI the moment a second advisory kind existed
+    // (`MutualRecursionNote`, B-2026-08-21-2 — every mutually recursive
+    // fixture began failing `effectcheck_ok`). `kind_is_note` is the one
+    // predicate for note severity — consult it rather than keeping a private
+    // copy. NOT `kind_blocks_production`: `TargetGateViolation` does not block
+    // production but IS an error these tests assert on, so conflating the two
+    // makes every target-gate test stop seeing its diagnostic.
     let real_errors: Vec<_> = result
         .errors
         .iter()
-        .filter(|e| e.kind != EffectErrorKind::FfiLintHint)
+        .filter(|e| !karac::effectchecker::kind_is_note(&e.kind))
         .collect();
     assert!(
         real_errors.is_empty(),
@@ -112,7 +121,7 @@ fn effectcheck_errors(source: &str) -> Vec<EffectError> {
     let real_errors: Vec<EffectError> = result
         .errors
         .into_iter()
-        .filter(|e| e.kind != EffectErrorKind::FfiLintHint)
+        .filter(|e| !karac::effectchecker::kind_is_note(&e.kind))
         .collect();
     assert!(
         !real_errors.is_empty(),
@@ -1614,6 +1623,95 @@ fn dummy_span() -> karac::token::Span {
 }
 
 // ── Mutual Recursion Group Detection ───────────────────────────
+
+/// `mutual_recursion_note` EMITS a note, not just a JSON group
+/// (B-2026-08-21-2). design.md § Effect Inference and Boundaries: "it emits a
+/// note (not an error) listing the functions and their inferred or resolved
+/// effects. Visible in terminal output and in `--output=json` under
+/// `"mutual_recursion_groups"`."
+///
+/// The JSON half already worked — `mutual_recursion_groups` was populated all
+/// along. Only the note was missing, so `#[allow(mutual_recursion_note)]` had
+/// nothing to suppress and `#[deny(mutual_recursion_note)]` passed for the
+/// wrong reason. That asymmetry is what this test pins.
+#[test]
+fn mutual_recursion_note_is_emitted_for_a_detected_group() {
+    let source = r#"
+fn f() {
+    g()
+}
+fn g() {
+    f()
+}
+"#;
+    let result = effectcheck_all(source);
+    let notes: Vec<_> = result
+        .errors
+        .iter()
+        .filter(|e| e.kind == EffectErrorKind::MutualRecursionNote)
+        .collect();
+    assert_eq!(
+        notes.len(),
+        1,
+        "expected one note for the one detected group; got: {:?}",
+        result
+            .errors
+            .iter()
+            .map(|e| (&e.kind, &e.message))
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        notes[0].message.contains("`f`") && notes[0].message.contains("`g`"),
+        "the note must LIST the functions in the group, per the spec sentence; \
+         got: {}",
+        notes[0].message
+    );
+}
+
+/// The note is "not an error" in the spec's words, so it must not block
+/// production — same never-blocking path as `FfiLintHint`. Without this,
+/// every mutually recursive program would stop compiling.
+#[test]
+fn mutual_recursion_note_never_blocks_production() {
+    assert!(
+        !karac::effectchecker::kind_blocks_production(&EffectErrorKind::MutualRecursionNote),
+        "design.md calls this a note (not an error); it must never gate a build"
+    );
+}
+
+/// `#[allow(mutual_recursion_note)]` on ANY member suppresses the group's
+/// note. The note describes the CYCLE rather than one function, so annotating
+/// any participant is the user saying that cycle is intentional.
+#[test]
+fn mutual_recursion_note_suppressed_by_allow_on_one_member() {
+    let source = r#"
+#[allow(mutual_recursion_note)]
+fn f() {
+    g()
+}
+fn g() {
+    f()
+}
+"#;
+    let result = effectcheck_all(source);
+    assert!(
+        !result
+            .errors
+            .iter()
+            .any(|e| e.kind == EffectErrorKind::MutualRecursionNote),
+        "the allow on one member must suppress the whole group's note; got: {:?}",
+        result
+            .errors
+            .iter()
+            .map(|e| (&e.kind, &e.message))
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        !result.mutual_recursion_groups.is_empty(),
+        "suppressing the NOTE must not suppress DETECTION — the JSON \
+         `mutual_recursion_groups` field is a separate promise and stays populated"
+    );
+}
 
 #[test]
 fn test_mutual_recursion_detected() {
@@ -3258,7 +3356,7 @@ fn profile_ok(source: &str, profile: CompileProfile) -> EffectCheckResult {
     let real_errors: Vec<_> = result
         .errors
         .iter()
-        .filter(|e| e.kind != EffectErrorKind::FfiLintHint)
+        .filter(|e| !karac::effectchecker::kind_is_note(&e.kind))
         .collect();
     assert!(
         real_errors.is_empty(),
@@ -3288,7 +3386,7 @@ fn profile_errors(source: &str, profile: CompileProfile) -> Vec<EffectError> {
     let real_errors: Vec<EffectError> = result
         .errors
         .into_iter()
-        .filter(|e| e.kind != EffectErrorKind::FfiLintHint)
+        .filter(|e| !karac::effectchecker::kind_is_note(&e.kind))
         .collect();
     assert!(
         !real_errors.is_empty(),
@@ -4142,7 +4240,7 @@ fn test_inferred_policy_does_not_bypass_pub_trait_ceiling() {
     let real_errors: Vec<_> = result
         .errors
         .iter()
-        .filter(|e| e.kind != EffectErrorKind::FfiLintHint)
+        .filter(|e| !karac::effectchecker::kind_is_note(&e.kind))
         .collect();
     assert!(
         real_errors
@@ -8288,7 +8386,7 @@ fn test_pub_fn_with_reads_filesystem_declared_accepts_bufreader_methods() {
     let real_errors: Vec<_> = result
         .errors
         .iter()
-        .filter(|e| e.kind != EffectErrorKind::FfiLintHint)
+        .filter(|e| !karac::effectchecker::kind_is_note(&e.kind))
         .collect();
     assert!(
         real_errors.is_empty(),
@@ -8338,7 +8436,7 @@ fn test_pub_fn_with_reads_filesystem_declared_accepts_bufreader_lines() {
     let real_errors: Vec<_> = result
         .errors
         .iter()
-        .filter(|e| e.kind != EffectErrorKind::FfiLintHint)
+        .filter(|e| !karac::effectchecker::kind_is_note(&e.kind))
         .collect();
     assert!(
         real_errors.is_empty(),
@@ -8389,7 +8487,7 @@ fn test_pub_fn_with_reads_stdin_blocks_declared_accepts_stdin_lines() {
     let real_errors: Vec<_> = result
         .errors
         .iter()
-        .filter(|e| e.kind != EffectErrorKind::FfiLintHint)
+        .filter(|e| !karac::effectchecker::kind_is_note(&e.kind))
         .collect();
     assert!(
         real_errors.is_empty(),
@@ -8432,7 +8530,7 @@ fn test_pub_fn_calling_bufreader_consume_needs_no_effect() {
     let real_errors: Vec<_> = result
         .errors
         .iter()
-        .filter(|e| e.kind != EffectErrorKind::FfiLintHint)
+        .filter(|e| !karac::effectchecker::kind_is_note(&e.kind))
         .collect();
     assert!(
         real_errors.is_empty(),
@@ -8481,7 +8579,7 @@ fn test_pub_fn_with_writes_filesystem_declared_accepts_bufwriter_methods() {
     let real_errors: Vec<_> = result
         .errors
         .iter()
-        .filter(|e| e.kind != EffectErrorKind::FfiLintHint)
+        .filter(|e| !karac::effectchecker::kind_is_note(&e.kind))
         .collect();
     assert!(
         real_errors.is_empty(),
@@ -9583,7 +9681,7 @@ fn wrong_declared_verb_on_a_public_fn_is_fatal() {
     );
     let blocking: Vec<_> = errors
         .iter()
-        .filter(|e| karac::effectchecker::kind_blocks_production(&e.kind))
+        .filter(|e| !karac::effectchecker::kind_is_note(&e.kind))
         .collect();
     assert!(
         blocking

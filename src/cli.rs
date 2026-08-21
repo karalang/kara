@@ -1631,10 +1631,15 @@ impl Pipeline {
             n += t.errors.len();
         }
         if let Some(ref e) = self.effects {
+            // Note-severity effect diagnostics never count toward the exit
+            // code. `kind_is_note` is the single definition of that set
+            // (B-2026-08-21-2) — deliberately NOT `kind_blocks_production`,
+            // which also excludes `TargetGateViolation`; that one does not
+            // block a build but IS counted here and reported by `check`.
             n += e
                 .errors
                 .iter()
-                .filter(|e| e.kind != EffectErrorKind::FfiLintHint)
+                .filter(|e| !crate::effectchecker::kind_is_note(&e.kind))
                 .count();
         }
         if let Some(ref o) = self.ownership {
@@ -1995,7 +2000,11 @@ fn render_text_diagnostics(pipeline: &Pipeline) -> Vec<String> {
     }
     if let Some(ref e) = pipeline.effects {
         for err in &e.errors {
-            if err.kind == EffectErrorKind::FfiLintHint {
+            // NOTE-severity effect diagnostics — one shared predicate, so
+            // this renderer cannot drift from the exit-code count above
+            // (B-2026-08-21-2). Not `kind_blocks_production`:
+            // `TargetGateViolation` prints `error[effect]` on this path.
+            if crate::effectchecker::kind_is_note(&err.kind) {
                 out.push(with_snippet(
                     format!(
                         "note[effect]: {}:{}:{}: {}",

@@ -192,7 +192,7 @@ pub struct EffectError {
 /// hoisted once more so the test harnesses cannot drift from the CLI either
 /// (B-2026-08-19-5).
 ///
-/// Two kinds stay advisory, both by explicit design:
+/// Three kinds stay advisory, all by explicit design:
 ///
 ///   * [`EffectErrorKind::FfiLintHint`] — declared "never a compile error" at
 ///     its definition; rendered as `note[effect]`.
@@ -201,11 +201,56 @@ pub struct EffectError {
 ///     build path. Routing it through this generic gate as well would make a
 ///     NATIVE build reject the deliberate cross-target dev workflow `karac run`
 ///     supports by design.
+///   * [`EffectErrorKind::MutualRecursionNote`] — design.md calls it "a note
+///     (not an error)"; rendered as `note[effect]` (B-2026-08-21-2).
 pub fn kind_blocks_production(kind: &EffectErrorKind) -> bool {
     !matches!(
         kind,
-        EffectErrorKind::FfiLintHint | EffectErrorKind::TargetGateViolation
+        EffectErrorKind::FfiLintHint
+            | EffectErrorKind::TargetGateViolation
+            | EffectErrorKind::MutualRecursionNote
     )
+}
+
+/// True for the NOTE-severity effect diagnostics — the ones rendered
+/// `note[effect]`, never counted toward an exit code, and never an error in
+/// any harness.
+///
+/// Distinct from [`kind_blocks_production`], and the distinction is
+/// load-bearing: `TargetGateViolation` does NOT block production, but it IS a
+/// real finding that tests assert on and that `check` reports as an error.
+/// Conflating the two (using `kind_blocks_production` as "is this a note")
+/// makes every target-gate test stop seeing its diagnostic — measured, not
+/// hypothesised (B-2026-08-21-2).
+///
+/// Hoisted because this predicate was open-coded as `!= FfiLintHint` in
+/// FIFTEEN places — three in the CLI and twelve in the effect-checker test
+/// harness — so adding a second note kind silently broke every one of them at
+/// once. Same one-classifier discipline as `kind_blocks_production`
+/// (B-2026-08-19-5) and the ownership gate (B-2026-07-31-29).
+pub fn kind_is_note(kind: &EffectErrorKind) -> bool {
+    matches!(
+        kind,
+        EffectErrorKind::FfiLintHint | EffectErrorKind::MutualRecursionNote
+    )
+}
+
+/// True when a declaration carries `#[allow(mutual_recursion_note)]`.
+/// Mirrors `ownership.rs`'s `rc_fallback` attribute read: a positional
+/// `allow` arg whose value is the bare identifier.
+fn fn_allows_mutual_recursion_note(attributes: &[crate::ast::Attribute]) -> bool {
+    attributes.iter().any(|a| {
+        a.is_bare("allow")
+            && a.args.iter().any(|arg| {
+                matches!(
+                    &arg.value,
+                    Some(crate::ast::Expr {
+                        kind: crate::ast::ExprKind::Identifier(name),
+                        ..
+                    }) if name == "mutual_recursion_note"
+                )
+            })
+    })
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -228,6 +273,16 @@ pub enum EffectErrorKind {
     ProfileViolation,
     /// Advisory lint hint on an `extern` declaration — never a compile error.
     FfiLintHint,
+    /// `mutual_recursion_note` (B-2026-08-21-2) — a mutual recursion group
+    /// was detected during inference. design.md § Effect Inference and
+    /// Boundaries: "it emits a note (not an error) listing the functions and
+    /// their inferred or resolved effects … Suppress with
+    /// `#[allow(mutual_recursion_note)]`." Never a compile error, exactly as
+    /// the spec words it — it rides the same never-blocking path as
+    /// `FfiLintHint`. The `"mutual_recursion_groups"` JSON field the same
+    /// sentence promises was already populated; only the note was missing, so
+    /// `#[allow]` had nothing to suppress and `#[deny]` passed vacuously.
+    MutualRecursionNote,
     /// An impl method's inferred effects exceed the trait method's declared ceiling.
     ImplExceedsTraitCeiling,
     /// A trait default method body's inferred effects exceed the method's declared ceiling.
@@ -382,6 +437,10 @@ pub(crate) fn class_for_effect_error_kind(
 
         // A note-severity lint hint, not a hard rule.
         EffectErrorKind::FfiLintHint => Some(DC::LintWarning),
+
+        // `mutual_recursion_note` is a lint like `FfiLintHint` — same class,
+        // same never-blocking path (B-2026-08-21-2).
+        EffectErrorKind::MutualRecursionNote => Some(DC::LintWarning),
 
         // Deliberately unclassified. `OverDeclaredEffect` is the INVERSE of
         // `EffectUndeclared` and would be actively misleading under it;
@@ -579,6 +638,15 @@ pub struct EffectChecker<'a> {
     pub(crate) function_visibility: FxHashMap<Symbol, bool>,
     /// Function spans for error reporting.
     pub(crate) function_spans: FxHashMap<Symbol, Span>,
+    /// Functions carrying `#[allow(mutual_recursion_note)]`
+    /// (B-2026-08-21-2). The effect checker has no access to the
+    /// typechecker's `lint_override_stack` cascade, so the attribute is read
+    /// straight off the declaration exactly as `ownership.rs` does for
+    /// `rc_fallback` — the established pattern for a phase outside the
+    /// typechecker. A group is suppressed when ANY member carries the allow:
+    /// the note describes the CYCLE, not one function, so annotating any
+    /// participant is the user saying that cycle is intentional.
+    pub(crate) mutual_recursion_allow: FxHashSet<Symbol>,
     /// Functions and their AST bodies (for inference). [`FnHandle`]
     /// borrows the AST directly (the SCC convergence loop and
     /// whole-program walks clone the HANDLE, never the body — review
@@ -761,6 +829,7 @@ impl<'a> EffectChecker<'a> {
             inferred_effects: FxHashMap::default(),
             function_visibility: FxHashMap::default(),
             function_spans: FxHashMap::default(),
+            mutual_recursion_allow: FxHashSet::default(),
             function_bodies: FxHashMap::default(),
             method_bodies: FxHashMap::default(),
             method_name_index: FxHashMap::default(),
@@ -1397,6 +1466,7 @@ impl<'a> EffectChecker<'a> {
 
         // Phase C: Detect mutual recursion groups and build resolution traces
         let mutual_recursion_groups = self.detect_mutual_recursion_groups();
+        self.emit_mutual_recursion_notes(&mutual_recursion_groups);
 
         // Internal working tables are Symbol-keyed (name-interning spike
         // stage 3); the public result stays String-keyed std HashMap, so
@@ -1569,6 +1639,9 @@ impl<'a> EffectChecker<'a> {
                     self.declared_effects.insert(sym, decl);
                     self.function_visibility.insert(sym, f.is_pub);
                     self.function_spans.insert(sym, f.span);
+                    if fn_allows_mutual_recursion_note(&f.attributes) {
+                        self.mutual_recursion_allow.insert(sym);
+                    }
                 }
                 Item::ExternFunction(e) => self.register_extern_function_effects(e, &[]),
                 Item::ExternBlock(b) => {

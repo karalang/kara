@@ -30,7 +30,8 @@ use crate::ast::*;
 use crate::intern::Symbol;
 
 use super::{
-    effect_var_names_in_type, tarjan_scc, verb_name, MutualRecursionGroup, ResolvedEffect,
+    effect_var_names_in_type, tarjan_scc, verb_name, EffectError, EffectErrorKind,
+    MutualRecursionGroup, ResolvedEffect,
 };
 
 impl<'a> super::EffectChecker<'a> {
@@ -407,6 +408,92 @@ impl<'a> super::EffectChecker<'a> {
     }
 
     // ── SCC Detection (Tarjan's Algorithm) ───────────────────────
+
+    /// Emit the `mutual_recursion_note` advisory for every detected group
+    /// (B-2026-08-21-2). design.md § Effect Inference and Boundaries: "When
+    /// the compiler detects a mutual recursion group during inference, it
+    /// emits a note (not an error) listing the functions and their inferred
+    /// or resolved effects. Visible in terminal output and in
+    /// `--output=json` under `"mutual_recursion_groups"`. Suppress with
+    /// `#[allow(mutual_recursion_note)]`."
+    ///
+    /// The JSON half of that sentence already worked — `mutual_recursion_
+    /// groups` has been populated all along. Only the NOTE was missing, which
+    /// is why `#[allow(mutual_recursion_note)]` had nothing to suppress and
+    /// `#[deny(mutual_recursion_note)]` passed for the wrong reason.
+    ///
+    /// Anchored on the first group member's declaration span (`function_
+    /// spans`), with the member list sorted so the message is deterministic
+    /// across runs — Tarjan yields SCC members in traversal order, which is
+    /// not stable enough to pin in a test.
+    pub(crate) fn emit_mutual_recursion_notes(&mut self, groups: &[MutualRecursionGroup]) {
+        for group in groups {
+            let syms: Vec<Symbol> = group
+                .functions
+                .iter()
+                .map(|n| self.interner.intern(n))
+                .collect();
+            if syms.iter().any(|s| self.mutual_recursion_allow.contains(s)) {
+                continue;
+            }
+            let Some(span) = syms
+                .iter()
+                .find_map(|s| self.function_spans.get(s).copied())
+            else {
+                continue;
+            };
+            let mut listed: Vec<String> = group
+                .functions
+                .iter()
+                .map(|n| {
+                    let sym = self.interner.intern(n);
+                    // Same `verb(resource)` rendering the `--output=json`
+                    // `program_effects` field uses, so the note and the JSON
+                    // describe one group in one vocabulary. Execution verbs
+                    // (`blocks` / `suspends`) carry no resource, so they
+                    // render bare rather than as `blocks()`.
+                    let effects = self
+                        .inferred_effects
+                        .get(&sym)
+                        .map(|set| {
+                            let mut parts: Vec<String> = set
+                                .effects
+                                .iter()
+                                .map(|te| {
+                                    let verb = verb_name(&te.effect.verb);
+                                    if te.effect.resource.is_empty() {
+                                        verb.to_string()
+                                    } else {
+                                        format!("{}({})", verb, te.effect.resource)
+                                    }
+                                })
+                                .collect();
+                            parts.sort();
+                            parts.dedup();
+                            parts.join(", ")
+                        })
+                        .unwrap_or_default();
+                    if effects.is_empty() {
+                        format!("`{n}` (no effects)")
+                    } else {
+                        format!("`{n}` ({effects})")
+                    }
+                })
+                .collect();
+            listed.sort();
+            self.errors.push(EffectError {
+                message: format!(
+                    "mutual recursion group resolved by fixed-point inference: {}. \
+                     Suppress with `#[allow(mutual_recursion_note)]`",
+                    listed.join(", ")
+                ),
+                span,
+                kind: EffectErrorKind::MutualRecursionNote,
+                subtype_trace: None,
+                replacement: None,
+            });
+        }
+    }
 
     /// Detect mutual recursion groups (SCCs with >1 function).
     /// For each group, build a resolution trace showing how effects propagated.

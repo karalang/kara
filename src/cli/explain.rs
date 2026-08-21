@@ -660,6 +660,10 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
         "L0001",
         eff("FfiLintHint", Some(DiagnosticClass::LintWarning)),
     ),
+    (
+        "L0002",
+        eff("MutualRecursionNote", Some(DiagnosticClass::LintWarning)),
+    ),
     // ── ownership ───────────────────────────────────────────────
     //
     // `N0503` / `N0507` are notes on the same `OwnershipErrorKind` enum as the
@@ -1613,6 +1617,7 @@ mod tests {
             ("E0413", E::ExternCUnwindRequiresPanics),
             ("E0416", E::NoEffectViolated),
             ("L0001", E::FfiLintHint),
+            ("L0002", E::MutualRecursionNote),
             ("E0802", E::GpuEffectViolation),
             ("E0230", E::ImplExceedsTraitCeiling),
         ];
