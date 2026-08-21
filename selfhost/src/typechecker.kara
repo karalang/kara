@@ -1167,11 +1167,27 @@ impl Checker {
                 }
             }
         }
-        // Pass 1 — MissingField (kind 6): each declared field of the struct NOT
-        // hit by a provided field, in DECLARATION order, at the literal span. The
-        // spread is NOT consulted (the seed flags a field missing even under
-        // `..b`).
-        if sid >= 0 {
+        // Pass 1 — a struct literal carrying a SPREAD BASE (`P { x: 1, ..b }`)
+        // gets ONE TypeMismatch (kind 0) at the literal span, and the
+        // missing-field cascade is suppressed; without a spread, MissingField
+        // (kind 6) fires per absent declared field in DECLARATION order.
+        //
+        // Mirrors the Rust twin's `if has_spread { … } else { … }` in
+        // `infer_struct_literal_expected` exactly, including the position: the
+        // spread error replaces the missing pass in place, so the extra-field
+        // and value-mismatch passes below still emit in the same order. The
+        // base is parsed but never applied, so blaming a missing field accuses
+        // the writer of the one thing they did supply. The error fires even
+        // when NO field is missing — accepting it silently would keep implying
+        // the base means something (3b4b97d, B-2026-08-21-20).
+        let has_spread = match spread {
+            Some(_) => true,
+            None => false,
+        };
+        if sid >= 0 and has_spread {
+            self.push_err(0, span.offset, span.length);
+        }
+        if sid >= 0 and not has_spread {
             let mut i = 0;
             loop {
                 if i >= self.fld_owner.len() {
