@@ -92,12 +92,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 273 | 1 |
+| miscompile | 273 | 0 |
 | leak | 185 | 0 |
-| run-vs-build | 147 | 0 |
+| run-vs-build | 148 | 1 |
 | missing-feature | 143 | 9 |
 | double-free | 134 | 0 |
-| codegen-gap | 122 | 2 |
+| codegen-gap | 123 | 3 |
 | diagnostics | 94 | 1 |
 | false-positive | 91 | 0 |
 | perf | 83 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 973 | 5 |
+| codegen | 974 | 5 |
 | typecheck | 231 | 5 |
-| interp | 169 | 1 |
+| interp | 170 | 2 |
 | other | 62 | 0 |
 | ownership | 62 | 0 |
 | cli | 59 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 8 | 1 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1452 surfaced · 13 open · 1417 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1454 surfaced · 14 open · 1418 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (13)
+### Open (14)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -140,9 +140,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1452 surfaced
 | B-2026-08-21-25 | 2026-08-21 | codegen | medium | A METHOD CALL ON A FIXED-ARRAY **TEMPORARY** HAS NO CODEGEN LOWERING -- `n.to_ne_bytes().len()` build-fails with the dispatcher's own "this is a codegen bug" message while the bound two-line spelling works | roadmap.md |
 | B-2026-08-21-26 | 2026-08-21 | typecheck | medium | `TryFrom[intN]` FOR A C-LIKE `#[repr(intN)]` ENUM DOES NOT EXIST -- design.md § Enum Discriminant Runtime Surface commits to auto-generating it and shows the worked `match UsbClass.try_from(raw)`, which fails to compile | roadmap.md |
 | B-2026-08-21-29 | 2026-08-21 | typecheck | medium | THREE DOCUMENTED SURFACES ARE NOT REACHABLE AS WRITTEN: every spelling of channel construction design.md uses (`Channel.new[T]()`, `Channel.bounded`), its whole `io.` I/O prefix, and `allocates(Heap)` -- whose `Heap` the document never declares and the prelude does not provide | roadmap.md |
-| B-2026-08-21-30 | 2026-08-21 | codegen | high | A `mut Slice[T]` **METHOD** PARAMETER FED A `mut`-MARKED ARRAY LOSES THE WRITE -- the callee's `b[0] = 9u8` never reaches the caller's array under JIT and default AOT, while `--interp` and `KARAC_AUTO_PAR=0` AOT both keep it and the free-function spelling is correct on all four | roadmap.md |
 | B-2026-08-21-31 | 2026-08-21 | resolver+typecheck | medium | `isize` IS NOT A TYPE -- design.md names it a v1 numeric primitive in four normative passages and writes it into six signatures, and three of the compiler's own back-end tables already map it, but the resolver answers `undefined type 'isize', did you mean 'usize'?` in every position | roadmap.md |
 | B-2026-08-21-32 | 2026-08-21 | resolver+effect | medium | EFFECT RESOURCES CANNOT BE ROOTED AT A VALUE, so design.md's whole channel effect model is unwritable: `with sends(tx)` on a channel PARAMETER is `'tx' is not an effect resource (it is a variable)`, and the seven `Sender`/`Receiver` declarations at :6064-:6094 are all written that way | roadmap.md |
+| B-2026-08-21-38 | 2026-08-21 | interp | high | THE INTERPRETER LOSES A `mut ref` SCALAR WRITE THROUGH A **METHOD** ARGUMENT -- `h.bump(mut n)` leaves `n` at its old value under `--interp` while JIT, AOT and `KARAC_AUTO_PAR=0` AOT all publish it, and the free-function spelling of the same call is correct on all four; the interpreter is the wrong one here | roadmap.md |
+| B-2026-08-21-39 | 2026-08-21 | codegen | medium | AN **ASSOCIATED FUNCTION** (no `self`) FAILS MODULE VERIFICATION ON AN ARRAY ARGUMENT TO A SLICE PARAMETER -- `H.f(mut bm)` passes the raw `[3 x i8]` where the callee declares `{ptr, i64}`, while the free-function and instance-method spellings of the same call both work | roadmap.md |
 
 ### Wontfix (8)
 
@@ -161,9 +162,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1452 surfaced
 
 </details>
 
-### Fixed (1417)
+### Fixed (1418)
 
-<details><summary>1417 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1418 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -13732,6 +13733,19 @@ WHAT IT FOUND, on its first run:
                    Kāra does not get to choose.
 
 REMAINING LIMIT, stated rather than hidden. The rung answers "does this name resolve", not "does this signature match the implementation's". `Vec.filled(0, 0)` passing proves `filled` exists and takes two arguments; it does not prove the second is a `T` or that the return is `Vec[T]`. Checking that needs the value table this row proposed and this fix skipped, and it is the natural next increment. Nor can the orphan check tell a spec promise from a gesture at a user type — design.md:7021's `Key` / `Wire` are flagged alongside `io`, and are triaged in the baseline as the false positive they are. |
+| B-2026-08-21-30 | codegen | high | A `mut Slice[T]` **METHOD** PARAMETER FED A `mut`-MARKED ARRAY LOSES THE WRITE -- the callee's `b[0] = 9u8` never reaches the caller's array under JI… | FIXED by 563fdfb.
+
+ROOT CAUSE, and it is not where this row guessed. `collect_expr_inner_writes`'s `MethodCall` arm recorded a write for the RECEIVER and then merely walked INSIDE each argument for nested mutations — the argument's own mutation-by-borrow was invisible. The `Call` arm immediately below it has had exactly that check since kata 22 (2026-06-06); the method arm never got it.
+
+So the dependency check saw two READS where there was a read-after-write, auto-par grouped the statements, and each branch captured the array BY VALUE from the same pre-split snapshot. The IR is unambiguous: under auto-par the two statements become `@__par_branch_0_0` / `_0_1`, the array is `load [3 x i8]`-ed into the branch env struct, and `main` ends at `karac_par_run_auto` with NO write-back — branch 0's write was invisible to branch 1.
+
+BOTH DETECTION PATHS OF THE `Call` ARM WERE NEEDED. design.md Feature 4 Part 1½ says method calls never write the `mut` marker, so the DECLARED parameter mode is what carries the common spelling — but the marked form parses and behaved identically, and both were measured losing the write. `method_param_modes` resolves by NAME and UNIONs across same-named methods, mirroring `method_receiver_is_mut_ref`: a method call's receiver type is not resolved in this pass, and over-marking only de-parallelizes while under-marking is the miscompile. The gate is the parameter MODE, not "any method argument" — a read-only `ref Slice[T]` argument gains no edge, pinned by a test comparing the two spellings of one program.
+
+ONE MEASURED NON-FIX, recorded because it is the obvious next guess: adding `Array` to the container classifier in `hazards.rs` does NOT help. `captured_container_mutations` intersects the same write set this arm populates, so with the write missing there is nothing to intersect. Tried, measured unchanged, dropped rather than shipped as an unnecessary de-parallelization of array code.
+
+Verified byte-identical on interp / JIT / AOT / `KARAC_AUTO_PAR=0` AOT across the marked and unmarked spellings, an `Array` through `mut Slice[T]`, a `Vec` through `mut ref Vec[T]`, two mut-slice arguments in one call (both writes land), and a read-only `ref Slice[T]` argument on a struct field. Six new tests — four analysis-level in tests/concurrency.rs, two in tests/par_codegen.rs — all fail with the change reverted.
+
+The runtime test had to live in tests/par_codegen.rs: its harness threads the concurrency analysis into codegen, while tests/codegen.rs passes `concurrency: None`, so auto-par is dead there and the same test would have been vacuous. |
 | B-2026-08-21-33 | other | low | the seven self-host oracles ignore `KARAC_REQUIRE_RUNTIME_ARCHIVE=1` on the one link failure that still soft-skips, and their skip comment wrongly cl… | FIXED by 2947a26 (rebased to e263ef7). The seven self-host oracles now honour `KARAC_REQUIRE_RUNTIME_ARCHIVE=1`: on a link failure the guard panics instead of returning `None` and reporting a pass over zero comparisons.
 
 Scope is what the measurement supports and no more. A MISSING ARCHIVE never took the skip -- `karac` reports `error[link]: libkarac_runtime.a not found`, whose `error[` prefix the oracle's own compile-error heuristic already matches, so it asserts loudly. Verified by moving all seven archives aside: `selfhost_lexer` FAILS rather than skips, with and without the flag. The stale half of the skip comment ("or a link failure from a missing runtime archive") is corrected in place, since it describes behaviour the heuristic three lines above prevents.
