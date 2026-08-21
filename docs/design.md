@@ -2357,7 +2357,7 @@ error: String does not support indexing with []
 
 ### Variable Binding Rules
 
-**Immutable by default.** `let` declares an immutable binding. Reassigning the binding or calling a method with `mut ref self` on it is a compile error. `let mut` opts in to mutability:
+**Immutable by default.** `let` declares an immutable binding. Reassigning the binding, calling a method with `mut ref self` on it, or passing it to a mutating parameter under a call-site `mut` marker (§ *Part 1½: Call-site Mutation Markers*) is a compile error. `let mut` opts in to mutability:
 
 ```
 let x = 5;
@@ -8020,6 +8020,8 @@ Signatures declare the mode; call sites mark mutation for fresh bindings. Togeth
 let mut v = [3, 1, 4, 1, 5];
 sort_in_place(mut v);        // fresh binding → marker required
 ```
+
+The binding must be declared `let mut`. The marker announces the mutation at the call site; it does not authorize one the declaration withheld, so `let v = ...; sort_in_place(mut v);` is the same error as `v = ...` — see § *Variable Binding Rules*. Marking is required *in addition to* `let mut`, never instead of it.
 
 Omission is a compile error: `"function `sort_in_place` takes `xs: mut Slice[i32]`; call with fresh binding `v` requires `sort_in_place(mut v)` to permit the mutation."`
 

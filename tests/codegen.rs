@@ -16703,7 +16703,7 @@ fn main() {
              \x20       for c in alphabet.chars() { sh = sh + (c as i64); }\n\
              \x20       println(sh);\n\
              \x20   }\n\
-             \x20   let ma: String = \"ab\";\n\
+             \x20   let mut ma: String = \"ab\";\n\
              \x20   spoil(mut ma);\n\
              \x20   let mut mc = 0i64;\n\
              \x20   for c in ma.chars() { mc = mc + (c as i64); }\n\

@@ -10246,6 +10246,170 @@ fn test_read_only_method_on_immutable_let_is_fine() {
     );
 }
 
+// ── B-2026-08-21-7: the same rule at a `mut`-marked call argument ────
+//
+// design.md § Variable Binding Rules names two writes a `let` forbids —
+// reassignment and a `mut ref self` method — and the block above enforces
+// both. The call-site `mut` marker is the third, and it escaped: `bump(mut x)`
+// over a `let x` mutated the binding on every backend with a clean
+// `karac check`, while `x = x + 1` on that same binding was refused. The
+// marker's whole job is to make the mutation visible at the call site, so it
+// was the one spelling that announced the write and then evaded the check.
+
+#[test]
+fn test_mut_marked_arg_on_immutable_let_errors() {
+    let errors = ownership_errors(
+        "fn bump(n: mut ref i64) { n = n + 1; }\n\
+         fn main() {\n\
+            let x: i64 = 1;\n\
+            bump(mut x);\n\
+        }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == OwnershipErrorKind::MutateImmutableBinding),
+        "expected MutateImmutableBinding, got {:?}",
+        errors.iter().map(|e| &e.kind).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_mut_marked_slice_arg_on_immutable_let_errors() {
+    // The `mut Slice[T]` spelling of the same parameter mode —
+    // `param_mutates_through` names both, so the rule must reach both.
+    let errors = ownership_errors(
+        "fn touch(xs: mut Slice[i64]) { xs[0] = 9; }\n\
+         fn main() {\n\
+            let v: Vec[i64] = [1, 2];\n\
+            touch(mut v);\n\
+        }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == OwnershipErrorKind::MutateImmutableBinding),
+        "expected MutateImmutableBinding, got {:?}",
+        errors.iter().map(|e| &e.kind).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_mut_marked_field_arg_reports_the_root_binding() {
+    // A projection argument is the same write to the same binding, so the
+    // rule keys on the place ROOT — exactly as the field-assignment arm
+    // (`p.x = 9`) does. Without the root walk, `touch(mut p.v)` would slip
+    // through while `p.v[0] = 9` was caught.
+    let errors = ownership_errors(
+        "struct P { v: Vec[i64] }\n\
+         fn touch(xs: mut Slice[i64]) { xs[0] = 9; }\n\
+         fn main() {\n\
+            let p = P { v: [1, 2] };\n\
+            touch(mut p.v);\n\
+        }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == OwnershipErrorKind::MutateImmutableBinding),
+        "expected MutateImmutableBinding, got {:?}",
+        errors.iter().map(|e| &e.kind).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_mut_marked_sub_range_arg_on_immutable_let_errors() {
+    // B-2026-08-20-38 made `touch(mut v[1..3])` legal at the type level. It
+    // inherits this rule rather than a private one: the sub-range is still a
+    // write to `v`, and the index root is where that is decided.
+    let errors = ownership_errors(
+        "fn touch(xs: mut Slice[i64]) { xs[0] = 9; }\n\
+         fn main() {\n\
+            let v: Vec[i64] = [1, 2, 3];\n\
+            touch(mut v[0..2]);\n\
+        }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == OwnershipErrorKind::MutateImmutableBinding),
+        "expected MutateImmutableBinding, got {:?}",
+        errors.iter().map(|e| &e.kind).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_mut_marked_arg_diagnostic_carries_the_mut_insertion_fix() {
+    // Shares `report_write_to_immutable_binding` with the assignment arm, so
+    // it inherits the machine-applicable edit: the message points at the call
+    // and the edit inserts `mut` at the declaration. That is what makes this
+    // one `karac fix` away rather than a manual hunt for the `let`.
+    let src =
+        "fn bump(n: mut ref i64) { n = n + 1; }\nfn main() {\n    let x = 1;\n    bump(mut x);\n}";
+    let errors = ownership_errors(src);
+    let err = errors
+        .iter()
+        .find(|e| e.kind == OwnershipErrorKind::MutateImmutableBinding)
+        .expect("expected MutateImmutableBinding");
+    let edit = err
+        .replacement
+        .as_ref()
+        .expect("expected a machine-applicable edit");
+    let mut fixed = src.to_string();
+    fixed.insert_str(edit.offset, &edit.replacement);
+    assert!(fixed.contains("let mut x = 1;"), "got {:?}", fixed);
+}
+
+#[test]
+fn test_mut_marked_arg_on_a_let_mut_binding_is_fine() {
+    // The whole point: `let mut` permits the marker. Every accepting shape in
+    // one place, so a rule that fired too broadly could not pass this file.
+    ownership_ok(
+        "struct P { v: Vec[i64] }\n\
+         fn bump(n: mut ref i64) { n = n + 1; }\n\
+         fn touch(xs: mut Slice[i64]) { xs[0] = 9; }\n\
+         fn main() {\n\
+            let mut x: i64 = 1;\n\
+            bump(mut x);\n\
+            let mut v: Vec[i64] = [1, 2, 3];\n\
+            touch(mut v);\n\
+            touch(mut v[0..2]);\n\
+            let mut p = P { v: [1, 2] };\n\
+            touch(mut p.v);\n\
+        }",
+    );
+}
+
+#[test]
+fn test_forwarded_mut_ref_param_needs_no_mut_declaration() {
+    // A `mut ref` PARAMETER is a reference handle: `let` would freeze the
+    // handle, not the referent, and a parameter has no `let` at all. The
+    // forwarded spelling carries no marker either, so this is the case the
+    // rule must stay silent on — and the reason keying on the marker is
+    // complete rather than merely convenient.
+    ownership_ok(
+        "fn bump(n: mut ref i64) { n = n + 1; }\n\
+         fn thru(k: mut ref i64) { bump(k); }\n\
+         fn main() {\n\
+            let mut x: i64 = 1;\n\
+            thru(mut x);\n\
+        }",
+    );
+}
+
+#[test]
+fn test_unmarked_read_only_arg_on_immutable_let_is_fine() {
+    // Passing an immutable binding to a read-only parameter is not a write
+    // and must stay silent — the rule keys on the marker, not on the call.
+    ownership_ok(
+        "fn peek(xs: Slice[i64]) -> i64 { 0 }\n\
+         fn main() {\n\
+            let v: Vec[i64] = [1, 2];\n\
+            let _n = peek(v);\n\
+        }",
+    );
+}
+
 #[test]
 fn test_immutability_does_not_leak_across_functions() {
     // `immutable_lets` is keyed by bare name and must be reset per function,

@@ -382,6 +382,9 @@ impl<'a> super::OwnershipChecker<'a> {
                     } else {
                         self.check_expr_consuming(&arg.value, states, param_types, param_usage);
                     }
+                    // B-2026-08-21-7 — the marker is a write; both Call arms
+                    // route through the one helper so they cannot drift.
+                    self.report_mut_marked_arg_write(arg);
                     // Slice 1: site (iii) call-arg coercion — see
                     // `check_expr_reading`'s Call arm for rationale.
                     if let Some(formal_mutable) = self.arg_formal_slice_kind(callee, i) {
@@ -596,6 +599,9 @@ impl<'a> super::OwnershipChecker<'a> {
                     } else {
                         self.check_expr_consuming(&arg.value, states, param_types, param_usage);
                     }
+                    // B-2026-08-21-7 — the marker is a write; both Call arms
+                    // route through the one helper so they cannot drift.
+                    self.report_mut_marked_arg_write(arg);
                     // Slice 1: site (iii) call-arg coercion. When the
                     // formal slot is `Slice[T]` / `mut Slice[T]` and the
                     // arg flows in as a `Vec` / `Array` / `Slice`, the

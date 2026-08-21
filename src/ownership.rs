@@ -1500,6 +1500,46 @@ impl<'a> OwnershipChecker<'a> {
         });
     }
 
+    /// B-2026-08-21-7 — a call-site `mut` marker is a WRITE to the marked
+    /// binding, and obeys the same `let mut` rule as every other write.
+    ///
+    /// The rule already covered the two shapes design.md § Variable Binding
+    /// Rules names — reassignment (`v[0] = 1`, `x += 1`) and a `mut ref self`
+    /// method (`v.push(x)`, caught in `check_expr_reading`'s MethodCall arm)
+    /// — but not the third. So `bump(mut x)` over a `let x` mutated a binding
+    /// the declaration had frozen, on every backend, with a clean `karac
+    /// check`, while `x = x + 1` on that same binding was correctly refused.
+    /// The marker, whose whole job is to make the mutation VISIBLE at the call
+    /// site, was the one spelling that escaped the check the declaration is
+    /// supposed to enforce.
+    ///
+    /// KEYED ON THE MARKER, not on the callee's parameter mode. The
+    /// typechecker has already settled that the two agree: a marker is
+    /// required exactly at a `mut ref T` / `mut Slice[T]` slot fed a FRESH
+    /// binding, and rejected everywhere else (`check_call_site_marker`). The
+    /// case the marker does not cover — a forwarded `mut ref` argument, which
+    /// needs no marker — is one the rule must not fire on anyway: its root is
+    /// a reference handle, which `report_write_to_immutable_binding` exempts
+    /// because `let` froze the handle, not the referent.
+    ///
+    /// Shares the `shared`-handle exemption with the assignment arm for the
+    /// same reason it does: a path crossing a `shared` hop writes the
+    /// reference-counted pointee, not the binding.
+    pub(crate) fn report_mut_marked_arg_write(&mut self, arg: &crate::ast::CallArg) {
+        if !arg.mut_marker || self.place_writes_through_shared(&arg.value) {
+            return;
+        }
+        let Some(root) = Self::root_identifier(&arg.value) else {
+            return;
+        };
+        self.report_write_to_immutable_binding(
+            &root,
+            &arg.value.span,
+            OwnershipErrorKind::MutateImmutableBinding,
+            format!("cannot pass `{}` as `mut`", root),
+        );
+    }
+
     /// Record (or clear) the non-`mut` status of every binding a `let`
     /// pattern introduces. A `let mut` **removes** the names, so shadowing an
     /// immutable binding with a mutable one (`let x = 1; let mut x = x;` —
