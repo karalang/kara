@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 137 | 7 |
 | double-free | 133 | 0 |
 | codegen-gap | 120 | 0 |
-| diagnostics | 93 | 2 |
+| diagnostics | 93 | 1 |
 | false-positive | 90 | 0 |
 | perf | 83 | 0 |
 | crash | 55 | 0 |
@@ -111,11 +111,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 965 | 1 |
-| typecheck | 225 | 5 |
+| typecheck | 225 | 4 |
 | interp | 169 | 1 |
 | ownership | 62 | 0 |
 | other | 60 | 1 |
-| cli | 59 | 2 |
+| cli | 59 | 1 |
 | autopar | 54 | 0 |
 | parser | 35 | 2 |
 | runtime | 28 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 7 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1434 surfaced · 10 open · 1402 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1434 surfaced · 9 open · 1403 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (10)
+### Open (9)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -139,7 +139,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1434 surfaced
 | B-2026-08-21-10 | 2026-08-21 | typecheck | medium | FOUR STDLIB ENTRY POINTS design.md DOCUMENTS DO NOT EXIST -- `Vec.from_fn` (in the Vec method table, with a worked example), `Vec.is_sorted` (used inside `requires` contracts twice), `u16.to_ne_bytes`, and an enum's `.discriminant()` -- the `TreeMap` shape again: written up, never implemented | roadmap.md |
 | B-2026-08-21-11 | 2026-08-21 | other | low | design.md EXAMPLES ARE WRITTEN IN SYNTAX design.md AND syntax.md THEMSELVES FORBID: `mu.lock()` and `let group = ...` use hard keywords as identifiers, `fillna(0.0, flag = true)` uses `=` where the doc's own rule says labeled `:`, `[u8; 2]` and `r"..."` are Rust idioms the spec explicitly does not have | roadmap.md |
 | B-2026-08-21-12 | 2026-08-21 | parser+typecheck | medium | FOUR FORMS syntax.md OR design.md DEFINES THAT THE FRONT END REJECTS -- `let...else` (a named production, LET_ELSE_STATEMENT), struct functional update `Name { f: v, ..base }` (in the STRUCT_LITERAL production; it PARSES and the typechecker then ignores the base), lint-level attributes on a statement (`#[expect(deprecated)] old_api();`), and a sub-range mutable slice argument (`f(mut v[1..4])`, design.md's own § Slices line) | roadmap.md |
-| B-2026-08-21-14 | 2026-08-21 | typecheck+cli | medium | THE NEWLY-WIRED `redundant_suffix` LINT SHIPS WARN-BY-DEFAULT WITH NO MACHINE-APPLICABLE FIX, so `karac fix` reports `no fixable diagnostics` on a file carrying 14 of them -- and the kata corpus went from warning-clean to 26,094 warnings across 853 of its 914 `.kara` files the moment it landed | roadmap.md |
 
 ### Wontfix (8)
 
@@ -158,9 +157,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1434 surfaced
 
 </details>
 
-### Fixed (1402)
+### Fixed (1403)
 
-<details><summary>1402 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1403 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -13457,6 +13456,23 @@ HOW MUCH THIS ROW'S OWN EXAMPLE GAINS, measured rather than assumed, because the
 
 Pinned by nine E2E tests in tests/interpreter.rs -- insertion order, overwrite-keeps-position, survivors-findable-after-remove (the case a stale index breaks silently), value-semantics for `Map`, `Set`, and a map inside a struct field, the `entry`/`or_insert` slot chain, distinct tuple keys sharing a bucket, and a 400-key volume case -- plus four unit tests in src/interpreter/value.rs, of which `hash_value_agrees_with_equality` is the one guarding the whole design. |
 | B-2026-08-21-13 | codegen | high | EVERY `gpu.*` REDUCTION SILENTLY DROPPED every element past 4,194,240 | 42fee64f |
+| B-2026-08-21-14 | typecheck+cli | medium | THE NEWLY-WIRED `redundant_suffix` LINT SHIPS WARN-BY-DEFAULT WITH NO MACHINE-APPLICABLE FIX, so `karac fix` reports `no fixable diagnostics` on a fi… | FIXED by c6ac12f. The warning now carries a machine-applicable DELETION of the suffix, so `karac fix` removes it.
+
+THE CHANNEL WAS ALREADY THERE AND ALREADY READ. `cmd_fix` has consumed the WARNING fix-it channel since B-2026-08-03-9 (`src/cli/fix_cmds.rs`, the `t.warnings.iter().filter_map(|e| e.fix_it...)` arm, whose comment says a warning's fix "is by definition optional-but-safe ... which is exactly what `fix` is for"). Nothing about `karac fix` needed changing. The producer was missing for one reason: `type_lint_warning` hardcodes `fix_it: None`, so NO lint routed through it could ever advertise a fix. Split it into `type_lint_warning_with_fix`, with the old name delegating and `None`, so no other call site moved and the next lint that wants a fix has somewhere to put it.
+
+THE EDIT IS DERIVABLE WITHOUT RE-LEXING, which is why this is small: `warn_redundant_suffix` already receives the literal's whole token span (`42i64`, `1_000i64`, `0xFFi64`, `3.14f64`) and the suffix is its tail, so the edit is the last `suffix.len()` bytes with an empty replacement. Both suffixes this lint fires on are ASCII, so byte and character length agree and the arithmetic cannot land mid-character. Guarded rather than assumed: a span not longer than the suffix would mean the token span is not what the arithmetic takes it for, and a wrong deletion is worse than none, so that case emits the warning with no fix.
+
+SAFE BY THE LINT'S OWN PREDICATE. It fires only when the suffix names the type the literal would have had anyway, so the unsuffixed spelling infers identically. The shape worth checking was a method call on a literal -- `1i64.to_string()` becoming `1.to_string()`, where `1.` might plausibly have lexed as a float -- and it parses correctly. The float form cannot lose its point (`1f64` is already a parse error; only `3.14f64` reaches the lint), so removing `f64` leaves a float.
+
+VERIFIED ON THE EXACT CORPUS THIS ROW MEASURED, not on a sample. Re-measuring first reproduced the row's numbers to the digit: 914 files, 853 carrying warnings, 26,094 warnings. Then every one of those 853 files was copied, fixed, and re-checked:
+
+    853 files fixed, 26,094 suffixes deleted, 0 broke compilation, 0 warnings left
+
+and on the 24 of them fast enough to run under the interpreter inside the harness timeout, output was byte-identical before and after. So the fix is complete over the corpus and semantics-preserving where semantics could be compared.
+
+Pinned by three tests, all of which fail without the fix: `redundant_suffix_carries_a_suffix_deleting_fix` and `redundant_suffix_fix_spans_every_literal_spelling` (tests/typechecker.rs) assert the EDIT rather than its presence -- they read the cut back out of the source and check the byte before it is still part of the number, because an off-by-one here silently eats a digit and changes the program's value -- and `test_fix_deletes_redundant_literal_suffixes` (tests/cli.rs) drives `karac fix` end to end over underscored, hex, negative, float and in-loop literals, then asserts the rewritten file still CHECKS CLEAN, since a fix that produced a broken file would still have "applied".
+
+THE ROW'S DEFERRED QUESTION IS STILL DEFERRED, and correctly so: whether kara-katas drops its suffixes or carries `#[allow(redundant_suffix)]` is a content decision for that repo. It is now a one-command decision rather than 26,094 hand edits, which is what this row was for. Nothing in kara-katas was changed here. |
 | B-2026-08-21-15 | cli | medium | The MULTI-FILE build gate failed the build on ANY effect-checker entry, including NOTE-severity ones: `run_multi_file_codegen` tested `!e.errors.is_e… | FIXED by 2a12881 (same commit that surfaced it).
 
 The gate now filters with the hoisted `kind_is_note`, so note-severity effect findings never fail a multi-file build. |
