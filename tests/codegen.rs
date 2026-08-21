@@ -19554,6 +19554,64 @@ fn main() {
         }
     }
 
+    /// B-2026-08-21-24 — a Vec RVALUE argument in a `ref Slice[T]` parameter.
+    ///
+    /// `coerce_to_slice` builds the `{ptr, i64}` header as a VALUE; a `ref`
+    /// slot declares a `ptr`. The place arms pass a pointer already, so every
+    /// OTHER ref-slot shape pushed the bare header into a pointer parameter and
+    /// LLVM rejected the module. `karac check` passed and `--interp` printed 3.
+    ///
+    /// The row calls the argument an "array literal", which is worth
+    /// correcting here because it points at the wrong fix: `[1u8, 2u8, 3u8]`
+    /// parses as a `PrefixCollectionLiteral{type_name: "Vec"}`, a Vec rvalue,
+    /// so `arg_is_array_source` is correctly false and giving it an
+    /// `ArrayLiteral` arm changes nothing. What the shape actually lacks is
+    /// storage to borrow — hence spilling the synthesized header.
+    ///
+    /// The by-value control is kept beside it: that spelling always worked, so
+    /// a regression that broke only the `ref` slot would otherwise look like a
+    /// passing test.
+    #[test]
+    fn e2e_vec_rvalue_into_a_ref_slice_param() {
+        let src = "fn total(b: ref Slice[u8]) -> i64 { b.len() }\n\
+                   fn total_val(b: Slice[u8]) -> i64 { b.len() }\n\
+                   fn main() {\n\
+                   println(total([1u8, 2u8, 3u8]));\n\
+                   println(total_val([1u8, 2u8, 3u8, 4u8]));\n\
+                   }";
+        assert_eq!(run_program(src).as_deref(), Some("3\n4\n"));
+    }
+
+    /// B-2026-08-21-39 — an `Array[T, N]` argument to a `mut Slice[T]`
+    /// parameter of an ASSOCIATED function (`Type.f(..)`, no receiver).
+    ///
+    /// That call path consulted `fn_param_ref` but never
+    /// `fn_param_slice_elem`, so the argument arrived as the raw `[3 x i8]`
+    /// aggregate against a `{ptr, i64}` slot — no header synthesized at all.
+    /// The free-function spelling has worked since B-2026-06-19-1 and the
+    /// instance-method spelling since 08f57a7; this was the last of the three.
+    ///
+    /// `bm[0]` after the call is the load-bearing line: it proves the slice
+    /// ALIASES the array rather than borrowing a copy, which a header
+    /// synthesized over a spilled temporary would not.
+    #[test]
+    fn e2e_array_into_a_mut_slice_param_of_an_assoc_fn() {
+        let src = "struct H { acc: i64 }\n\
+                   impl H {\n\
+                   fn f(b: mut Slice[u8]) -> i64 { b[0] = 9u8; b.len() }\n\
+                   }\n\
+                   fn free_f(b: mut Slice[u8]) -> i64 { b[0] = 8u8; b.len() }\n\
+                   fn main() {\n\
+                   let mut bm: Array[u8, 3] = [10u8, 20u8, 30u8];\n\
+                   println(H.f(mut bm));\n\
+                   println(bm[0]);\n\
+                   let mut cm: Array[u8, 3] = [10u8, 20u8, 30u8];\n\
+                   println(free_f(mut cm));\n\
+                   println(cm[0]);\n\
+                   }";
+        assert_eq!(run_program(src).as_deref(), Some("3\n9\n3\n8\n"));
+    }
+
     /// Regression (B-2026-07-30-3): an `Array[T, N]` argument passed to a
     /// GENERIC `ref Slice[T]` parameter. This is B-2026-06-19-1 — an Array
     /// binding's storage is its raw elements with no `{ptr,len}` header — left

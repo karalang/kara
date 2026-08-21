@@ -2965,6 +2965,27 @@ impl<'ctx> super::Codegen<'ctx> {
                 .cloned()
                 .unwrap_or_default();
             let param_tensor_infos = self.fn_sig.fn_param_tensor_info.get(&qualified).cloned();
+            // B-2026-08-21-39 — this loop consulted `fn_param_ref` but never
+            // `fn_param_slice_elem`, so a `Slice[T]` / `mut Slice[T]` parameter
+            // of an ASSOCIATED function got whatever `compile_expr` produced.
+            // For an `Array[T, N]` argument that is the raw `[N x T]`
+            // aggregate, handed to a slot declaring `{ptr, i64}`:
+            //
+            //   impl H { fn f(b: mut Slice[u8]) -> i64 { … } }
+            //   H.f(mut bm)   // bm: Array[u8, 3]
+            //
+            // failed module verification. The free-function path
+            // (`compile_call`) and the instance-method path have synthesized
+            // the header for this shape since B-2026-06-19-1 and 08f57a7
+            // respectively; `Type.f(..)` with no receiver was the remaining
+            // hole in that family, which is why the row could name the other
+            // two spellings as working.
+            let slice_elems = self
+                .fn_sig
+                .fn_param_slice_elem
+                .get(&qualified)
+                .cloned()
+                .unwrap_or_default();
             let mut compiled_args: Vec<BasicMetadataValueEnum<'ctx>> = Vec::new();
             for (i, a) in _args.iter().enumerate() {
                 let is_ref = ref_flags.get(i).copied().unwrap_or(false);
@@ -3032,6 +3053,16 @@ impl<'ctx> super::Codegen<'ctx> {
                             self.track_tensor_var(slot.into_pointer_value());
                         }
                         slot.into()
+                    }
+                } else if let Some(Some(elem_ty)) = slice_elems.get(i).cloned() {
+                    // Slice-parameter coercion, the same one `compile_call`
+                    // applies: synthesize the `{ptr, i64}` header from an
+                    // Array / Vec / slice argument. Falls through to the
+                    // compiled value for shapes the coercion declines, which
+                    // keeps every previously-working argument on its old path.
+                    match self.coerce_to_slice(&a.value, elem_ty)? {
+                        Some(slice_val) => slice_val.into(),
+                        None => self.compile_expr(&a.value)?.into(),
                     }
                 } else {
                     let val = self.compile_expr(&a.value)?;

@@ -1521,7 +1521,31 @@ impl<'ctx> super::Codegen<'ctx> {
             if let Some(Some(elem_ty)) = slice_elems.get(i).cloned() {
                 if !(is_ref && self.arg_is_vec_header_place(&a.value)) {
                     if let Some(slice_val) = self.coerce_to_slice(&a.value, elem_ty)? {
-                        compiled_args.push(slice_val.into());
+                        // B-2026-08-21-24 — a `ref Slice[T]` slot takes a
+                        // POINTER to a header, and `coerce_to_slice` produces
+                        // the header as a VALUE. The place arms above are
+                        // excluded because they already pass a pointer; every
+                        // OTHER ref-slot shape reached here and pushed the
+                        // bare `{ptr, i64}` into a `ptr` parameter, which LLVM
+                        // rejects at module verification:
+                        //
+                        //   fn total(b: ref Slice[u8]) -> i64 { b.len() }
+                        //   total([1u8, 2u8, 3u8])
+                        //
+                        // The literal is a Vec RVALUE (a
+                        // `PrefixCollectionLiteral`, not an array — the row's
+                        // "array literal" framing is off), so it owns no
+                        // storage the pointer fast-paths can borrow. Spilling
+                        // the synthesized header into an entry alloca gives the
+                        // slot the pointer it declares, and reuses the same
+                        // helper the rvalue-ref path already uses rather than
+                        // inventing a second materialization.
+                        let to_push = if is_ref {
+                            self.materialize_rvalue_for_ref_arg(slice_val, i)
+                        } else {
+                            slice_val
+                        };
+                        compiled_args.push(to_push.into());
                         continue;
                     }
                 }
