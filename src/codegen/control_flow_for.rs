@@ -67,6 +67,22 @@ impl<'ctx> super::Codegen<'ctx> {
         if matches!(inner.kind, ExprKind::FieldAccess { .. }) {
             return true;
         }
+        // B-2026-08-21-41 — an array-valued TEMPORARY (`mk()`,
+        // `n.to_ne_bytes()`, `b"abc"`). `try_compile_for_array_value` drives
+        // it through `compile_for_array_var`, whose induction variable IS the
+        // enumerate index, so the peel works on it exactly as it does on a
+        // named array binding. Without this, `for (i, x) in mk().enumerate()`
+        // declined the peel and fell through to the adaptor backstop —
+        // build-failing on a program the interpreter runs.
+        //
+        // Answered syntactically because this predicate is `&self` and cannot
+        // compile the expression. `array_elem_type_expr_from_rhs` says Some
+        // only for shapes that ARE fixed arrays, and a false positive costs
+        // nothing now that the fall-through is loud: the recursion either
+        // lowers the source or reports it by name.
+        if self.array_elem_type_expr_from_rhs(inner).is_some() {
+            return true;
+        }
         false
     }
 
@@ -820,7 +836,25 @@ impl<'ctx> super::Codegen<'ctx> {
                 if self.mapset.set_elem_types.contains_key("self") {
                     return self.compile_for_set_var(label, pattern, "self", body);
                 }
-                Ok(self.context.i64_type().const_int(0, false).into())
+                // B-2026-08-21-41 — an ARRAY `self`. The five tables above are
+                // the pointer-backed containers; a fixed array is none of
+                // them, it is an `[N x T]` slot, so `for x in self` inside an
+                // `impl … for Array[i64, 3]` body matched nothing and ran ZERO
+                // times against the interpreter's N. Same recovery as the
+                // `Identifier` arm — `self` is registered under the name
+                // "self", so its slot carries both the pointer and the type.
+                if let Some(slot) = self.variables.get("self").copied() {
+                    if let BasicTypeEnum::ArrayType(at) = slot.ty {
+                        return self.compile_for_array_var(label, pattern, slot.ptr, at, body);
+                    }
+                }
+                if let Some(&BasicTypeEnum::ArrayType(at)) = self.borrow_vars.ref_params.get("self")
+                {
+                    if let Some(arr_ptr) = self.get_data_ptr("self") {
+                        return self.compile_for_array_var(label, pattern, arr_ptr, at, body);
+                    }
+                }
+                Err(Self::unlowered_for_source_error(iterable))
             }
             // Bare field receiver: `for x in obj.field { }` (no
             // `.iter()` peel-off). Same synth-identifier pattern as the
@@ -836,7 +870,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 {
                     return Ok(result);
                 }
-                Ok(self.context.i64_type().const_int(0, false).into())
+                Err(Self::unlowered_for_source_error(iterable))
             }
             _ => {
                 // `for row in t.iter_axis(n)` — FUSED. The materializing arm
@@ -1002,8 +1036,46 @@ impl<'ctx> super::Codegen<'ctx> {
                         ));
                     }
                 }
-                // Unknown iterable — skip body, return unit
-                Ok(self.context.i64_type().const_int(0, false).into())
+                // B-2026-08-21-41 — a fixed-`Array[T, N]` VALUE as the loop
+                // source: `for x in n.to_ne_bytes()`, `for x in mk()`,
+                // `for b in b"abc"`. `for_receiver_is_indexable` requires the
+                // (optionally `.iter()`-peeled) source to be an `Identifier`
+                // or a `FieldAccess`, so an array-valued temporary answered
+                // false, no arm claimed it, and it reached the catch-all
+                // below and ran ZERO times against the interpreter's N — the
+                // silent sibling of the loud B-2026-08-21-25.
+                //
+                // Placed last, immediately before that catch-all, for the
+                // reason the `-25` arm records: every path that could claim
+                // this source has already declined, so a source compiled here
+                // and then rejected on shape leaves dead IR in a compile that
+                // is now going to fail anyway. It must NOT sit ahead of the
+                // adaptor backstops above — `compile_expr` on a `.map()` chain
+                // is not a thing to attempt speculatively, and those shapes
+                // have their own diagnostics.
+                if let Some(result) =
+                    self.try_compile_for_array_value(label, pattern, iterable, body)?
+                {
+                    return Ok(result);
+                }
+                // NO ARM CLAIMED THIS SOURCE. Returning unit here — which is
+                // what this did until B-2026-08-21-41 — compiles a loop that
+                // runs ZERO times, with no diagnostic and exit 0. That failure
+                // mode has now been found five separate times, once per source
+                // shape that happened to fall through: B-2026-07-14-9
+                // (`iter_mut`), -14-21 (a rejected `map`/`filter` peel),
+                // -07-31-30 (a module-level container binding), -08-21-41 (an
+                // array-valued temporary), and B-2026-07-14-7, which is where
+                // the loud backstops above came from. Each fix converted ONE
+                // shape and left the catch-all silent, so the class kept
+                // reappearing under a new shape.
+                //
+                // The catch-all is the actual defect: a `for` source codegen
+                // cannot lower is not an empty collection, and the two are
+                // indistinguishable at the call site. Failing loud here means
+                // the NEXT unlowered source shape is a build error naming
+                // itself rather than a wrong answer someone has to find.
+                Err(Self::unlowered_for_source_error(iterable))
             }
         }
     }
@@ -4428,6 +4500,125 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
 
         Ok(i64_t.const_int(0, false).into())
+    }
+
+    /// B-2026-08-21-41 — the diagnostic for a `for` source no arm lowered.
+    ///
+    /// All three dispatch fall-throughs share it, and that sharing is the
+    /// point. Each of them used to return unit — a loop that runs ZERO times,
+    /// with no diagnostic and exit 0, which at the call site is
+    /// indistinguishable from an empty collection. That failure mode has been
+    /// found five separate times, once per source shape that happened to fall
+    /// through: B-2026-07-14-9 (`iter_mut`), -14-21 (a rejected `map`/`filter`
+    /// peel), -07-31-30 (a module-level container binding), -08-21-41 (an
+    /// array-valued temporary, and an array `self`), and -07-14-7, which is
+    /// where the loud adaptor backstops above came from. Every one of those
+    /// fixes converted ONE shape and left the fall-throughs silent, so the
+    /// class kept reappearing wearing a new shape.
+    ///
+    /// The fall-through is the actual defect, so the next unlowered source is
+    /// a build error naming itself rather than a wrong answer someone has to
+    /// go find.
+    fn unlowered_for_source_error(iterable: &Expr) -> String {
+        // Built with `concat!` rather than a `\`-continued literal: rustfmt
+        // rejoins a continued string into one line and keeps the continuation
+        // indentation as REAL SPACES, so the emitted diagnostic comes out with
+        // 14-space runs in the middle of sentences. `concat!` is folded at
+        // compile time and has no such hazard.
+        format!(
+            concat!(
+                "codegen: for-loop over this iterable is not lowered under ",
+                "`karac build`/JIT — the loop body would otherwise be silently ",
+                "skipped, running zero times. Bind the source to a local first ",
+                "(`let xs = …; for x in xs {{ … }}`), which is lowered for every ",
+                "container, or re-run with `--interp` (or `KARAC_RUN_JIT=0`) to ",
+                "use the tree-walk interpreter, which handles every shape. ",
+                "(source shape: {})"
+            ),
+            Self::for_source_shape_name(iterable)
+        )
+    }
+
+    /// A short human name for a `for` source expression, used only by the
+    /// unlowered-iterable diagnostic. Names the SHAPE rather than dumping the
+    /// AST, because the reader's next move depends on it: a method call has a
+    /// receiver to bind to a local, a call has a result to bind, and an
+    /// unexpected literal usually means the program means something other than
+    /// what it says.
+    fn for_source_shape_name(expr: &Expr) -> &'static str {
+        match &expr.kind {
+            ExprKind::MethodCall { .. } => "a method call",
+            ExprKind::Call { .. } => "a function call",
+            ExprKind::Index { .. } => "an index expression",
+            ExprKind::FieldAccess { .. } => "a field access",
+            ExprKind::TupleIndex { .. } => "a tuple element",
+            ExprKind::Identifier(_) => "a name with no container type recorded",
+            ExprKind::SelfValue => "`self` with no container type recorded",
+            _ => "an expression",
+        }
+    }
+
+    /// B-2026-08-21-41 — a fixed-`Array[T, N]` VALUE as a for-loop source.
+    /// The iteration twin of `try_compile_nonident_fixed_array_method`
+    /// (B-2026-08-21-25), which did this for a METHOD receiver: spill the
+    /// aggregate to a slot and drive the loop the named binding already
+    /// drives, so `for x in mk()` lowers exactly as
+    /// `let a = mk(); for x in a` does — the spelling that always worked and
+    /// the oracle this arm is measured against.
+    ///
+    /// A trailing `.iter()` / `.into_iter()` is peeled first. On a fixed array
+    /// neither is a lazy adaptor — both name the same N elements — which is
+    /// why `for_receiver_is_indexable` peels them the same way for the
+    /// identifier case.
+    ///
+    /// The SCALAR-element gate carries the same weight it does in `-25`: a
+    /// materialized array of `Int` / `Float` (covering `bool` and `char`) owns
+    /// no heap, so the spill creates no second owner and the loop has no drop
+    /// to run at exit. That is what makes this arm a lowering rather than a
+    /// leak; a non-scalar element temporary declines and gets the loud
+    /// diagnostic below it.
+    fn try_compile_for_array_value(
+        &mut self,
+        label: Option<&str>,
+        pattern: &Pattern,
+        iterable: &Expr,
+        body: &Block,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        let src = match &iterable.kind {
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } if args.is_empty() && (method == "iter" || method == "into_iter") => object.as_ref(),
+            _ => iterable,
+        };
+        // A named binding, `self`, and a field all have their own arms above,
+        // each of which iterates the source IN PLACE. Materializing them here
+        // would copy, and for a borrowed source it would also invent an owner.
+        if matches!(
+            &src.kind,
+            ExprKind::Identifier(_) | ExprKind::SelfValue | ExprKind::FieldAccess { .. }
+        ) {
+            return Ok(None);
+        }
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "for-loop over an array value outside a fn".to_string())?;
+        let val = self.compile_expr(src)?;
+        let BasicTypeEnum::ArrayType(at) = val.get_type() else {
+            return Ok(None);
+        };
+        if !matches!(
+            at.get_element_type(),
+            BasicTypeEnum::IntType(_) | BasicTypeEnum::FloatType(_)
+        ) {
+            return Ok(None);
+        }
+        let slot = self.create_entry_alloca(fn_val, "for.arr.tmp", val.get_type());
+        self.builder.build_store(slot, val).unwrap();
+        self.compile_for_array_var(label, pattern, slot, at, body)
+            .map(Some)
     }
 
     pub(super) fn compile_for_array_var(

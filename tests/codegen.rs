@@ -102350,6 +102350,141 @@ fn main() {
         );
     }
 
+    /// B-2026-08-21-41 — a fixed-array TEMPORARY as a for-loop source.
+    ///
+    /// `for_receiver_is_indexable` required the (`.iter()`-peeled) source to be
+    /// an `Identifier` or a `FieldAccess`, so an array-valued temporary was
+    /// claimed by no arm, reached the `for` dispatch catch-all, and ran ZERO
+    /// times — with no diagnostic and exit 0, against the interpreter's N. It
+    /// is the silent sibling of B-2026-08-21-25, which was the same receiver
+    /// shape failing LOUDLY at method dispatch.
+    ///
+    /// Every temporary spelling is pinned beside its bound twin, because the
+    /// fix routes the temporary onto the binding's own loop — if that path
+    /// regressed, a test that only covered the temporary would go green while
+    /// both were wrong.
+    ///
+    /// Four things here are deliberate:
+    ///
+    ///   * the `enumerate` cases weight by `i`, so a lowering that bound the
+    ///     element but left the index at zero still fails. `compile_for_array_var`
+    ///     carries the storage index as its induction variable and the peel
+    ///     relies on exactly that, so the index is the part worth doubting.
+    ///   * `fs()` has a FLOAT element, so the loop cannot be assuming an
+    ///     integer array — the scalar gate admits `Int` and `Float` alike.
+    ///   * `.iter().count()` is included because it is not a for-loop at all,
+    ///     yet it read 0 pre-fix: the eager terminal desugars through this same
+    ///     lowering, which is what makes this one root cause rather than two.
+    ///   * the `break` case proves the loop frame is intact on an early exit,
+    ///     the shape most likely to break if the materialized slot were ever
+    ///     given a scope-exit action.
+    #[test]
+    fn test_e2e_for_loop_over_a_fixed_array_temporary() {
+        let src = r#"
+fn mk() -> Array[i64, 3] { return [10, 20, 30]; }
+fn fs() -> Array[f64, 2] { return [1.5, 2.25]; }
+
+fn main() {
+    let mut a = 0;
+    for x in mk() { a = a + x; }
+    println(a);
+    let m = mk();
+    let mut b = 0;
+    for x in m { b = b + x; }
+    println(b);
+
+    let mut c = 0;
+    for x in mk().iter() { c = c + x; }
+    println(c);
+    let mut d = 0;
+    for x in mk().into_iter() { d = d + x; }
+    println(d);
+
+    let mut e = 0;
+    for (i, x) in mk().iter().enumerate() { e = e + i * x; }
+    println(e);
+    let mut f = 0;
+    for (i, x) in m.iter().enumerate() { f = f + i * x; }
+    println(f);
+
+    let u: u16 = 258u16;
+    let mut g = 0;
+    for x in u.to_ne_bytes() { g = g + (x as i64); }
+    println(g);
+    let mut h = 0;
+    for x in b"abc" { h = h + (x as i64); }
+    println(h);
+
+    let mut fl = 0.0;
+    for x in fs() { fl = fl + x; }
+    println(fl);
+
+    println(mk().iter().count());
+    println(u.to_ne_bytes().iter().count());
+
+    let mut k = 0;
+    for x in mk() { if x > 15 { break; } k = k + x; }
+    println(k);
+
+    // An ARRAY `self` inside an impl body, owned and borrowed. The `self`
+    // dispatch arm checked the five POINTER-backed container tables; a fixed
+    // array is none of them — it is an `[N x T]` slot — so this matched
+    // nothing and ran zero times too.
+    let s: Array[i64, 3] = [1, 2, 3];
+    println(s.total());
+    println(s.doubled());
+}
+
+trait Sums { fn total(self) -> i64; fn doubled(ref self) -> i64; }
+impl Sums for Array[i64, 3] {
+    fn total(self) -> i64 { let mut n = 0; for x in self { n = n + x; } return n; }
+    fn doubled(ref self) -> i64 { let mut n = 0; for x in self { n = n + x * 2; } return n; }
+}
+"#;
+        assert_eq!(
+            run_program(src).as_deref(),
+            Some("60\n60\n60\n60\n80\n80\n3\n294\n3.75\n3\n2\n10\n6\n12\n")
+        );
+    }
+
+    /// B-2026-08-21-41, the class half: a `for` source that codegen cannot
+    /// lower must be an ERROR, not a loop that runs zero times.
+    ///
+    /// The dispatch catch-all returned unit — a zero-iteration loop — for any
+    /// source no arm claimed. That is indistinguishable at the call site from
+    /// an empty collection, and it has now been found five separate times, once
+    /// per source shape that happened to fall through: B-2026-07-14-9
+    /// (`iter_mut`), -14-21 (a rejected `map`/`filter` peel), -07-31-30 (a
+    /// module-level container binding), -08-21-41 (an array-valued temporary),
+    /// and -07-14-7, which is where the loud adaptor backstops came from. Each
+    /// of those fixed ONE shape and left the catch-all silent, so the class
+    /// kept coming back wearing a new shape. This pins the catch-all itself.
+    ///
+    /// The carrier is a non-scalar-element array temporary, which is exactly
+    /// what the `-41` lowering declines: its elements own heap, so
+    /// materializing the temporary would need drop-tracking the fix does not
+    /// establish. Deferring it is fine; running the body zero times and
+    /// printing a plausible number is not. If that shape is ever lowered, this
+    /// test should be re-pointed at whatever still reaches the catch-all rather
+    /// than deleted — the contract is about the catch-all, not the carrier.
+    #[test]
+    fn e2e_for_over_an_unlowerable_source_bails_loud() {
+        let err = ir_result(
+            "fn mk() -> Array[String, 2] { return [f\"a\", f\"b\"]; }\n\
+             fn main() {\n\
+                 let mut n = 0;\n\
+                 for s in mk() { n = n + 1; }\n\
+                 println(n);\n\
+             }\n",
+        )
+        .expect_err("an unlowerable for-source must bail loud, not run zero times");
+        assert!(
+            err.contains("silently skipped") && err.contains("interp"),
+            "expected the unlowered-iterable message naming the risk and the \
+             interpreter, got: {err}"
+        );
+    }
+
     /// B-2026-08-21-10 — `Vec.from_fn(n, f)`, end to end.
     ///
     /// The element type must be settled BEFORE the buffer is allocated,
