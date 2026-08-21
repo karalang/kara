@@ -226,14 +226,28 @@ const CORPUS: &[&str] = &[
     "_\"y\"",
     "r\"raw\"",
     "z\"esc \\\" end\"",
-    // A reserved prefix mid-expression, with recovery. This used to spell the
-    // prefix `b`; `b"..."` became a RECOGNIZED byte-string literal
-    // (B-2026-08-20-37), so the case now uses a still-reserved letter to keep
-    // testing the same thing. It must NOT be respelled back to `b` until the
-    // self-hosted Kāra lexer learns byte strings — until then the two lexers
-    // genuinely disagree on that input, which is the point of the follow-up
-    // row, not something this oracle should paper over.
+    // A reserved prefix mid-expression, with recovery. Stays a still-reserved
+    // letter: `b` is no longer reserved (B-2026-08-20-37), so spelling this
+    // case with `b` would test byte strings, not recovery. The byte-string
+    // cases below cover `b` now that the Kāra lexer lexes it too
+    // (B-2026-08-21-17).
     "a + g\"\" + c",
+    // Byte strings — both lexers must agree on the resolved bytes, the escape
+    // table, and the two refusals. `\u{…}` and a raw non-ASCII byte are
+    // ERRORs whose SPAN must match, which is the part a naive port gets wrong.
+    r#"b"abc""#,
+    r#"b"\x08\x00""#,
+    r#"b"hello world\n\0""#,
+    r#"b"\n\t\r\0\\\'\"""#,
+    r#"b"""#,
+    r#"a + b"hi" + c"#,
+    r#"b"\u{FF}""#,
+    r#"b"é""#,
+    // The byte-CHAR sibling of the same refusal — its non-ASCII arm had the
+    // identical non-advancing recovery bug, uncovered until this case existed
+    // (B-2026-08-21-17).
+    r#"b'é'"#,
+    r#"b"unterminated"#,
     // Reserved `#`-guarded strings (Rust-style raw strings); `#[attr]` stays Pound.
     "#\"raw\"#",
     "##\"x\"##",

@@ -1072,6 +1072,17 @@ impl<'a> Lexer<'a> {
                                     self.advance();
                                 }
                             }
+                            // Eat the closing quote so the next token starts
+                            // cleanly — the byte-CHAR form does this and the
+                            // comment above claimed parity with it, but the
+                            // step was missing, so the `"` was left to open a
+                            // stray string and cascade. Caught by the
+                            // self-host lexer oracle once the Kāra port (which
+                            // had it) could finally be compared
+                            // (B-2026-08-21-17).
+                            if self.peek() == b'"' {
+                                self.advance();
+                            }
                             return self.make_spanned(Token::Error(
                                 "Unicode escapes are not permitted in byte literals — use \\xFF for byte 0xFF."
                                     .to_string(),

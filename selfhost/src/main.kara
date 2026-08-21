@@ -242,6 +242,19 @@ fn render(tok: SpannedToken) -> String {
             line.push_str("BYTE ");
             line.push_str(b.to_string());
         }
+        // `BYTESTR 8,0` — comma-joined decimals, matching `render_rust` in
+        // tests/selfhost_lexer.rs byte for byte (B-2026-08-21-17).
+        ByteString(bytes) => {
+            line.push_str("BYTESTR ");
+            let mut first = true;
+            for b in bytes {
+                if not first {
+                    line.push_str(",");
+                }
+                line.push_str(b.to_string());
+                first = false;
+            }
+        }
         DocComment(text) => {
             line.push_str("DOC ");
             line.push_str(text);

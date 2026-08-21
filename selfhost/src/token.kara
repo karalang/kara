@@ -203,6 +203,10 @@ pub enum Token {
     CStringLiteral(CStr),
     CharLiteral(char),
     ByteLiteral(u8),
+    // `b"…"` — the escape-resolved bytes. The Rust twin's
+    // `Token::ByteStringLiteral`; the parser turns it into the
+    // `Array[u8, N]` literal `[b'h', b'e', …]` (B-2026-08-21-17).
+    ByteString(Vec[u8]),
     DocComment(String),
     ModuleDocComment(String),
     Eof,

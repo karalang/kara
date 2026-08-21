@@ -416,6 +416,13 @@ impl Lexer {
                 if c == b'b' and self.peek() == b'\'' {
                     self.advance();
                     self.byte_char_literal()
+                } else if c == b'b' and self.peek() == b'"' {
+                    // `b"…"` byte string (B-2026-08-21-17). Recognized, not
+                    // reserved: the Rust lexer emits a byte-string token here,
+                    // so routing it to `reserved_prefix_string` below made the
+                    // two lexers disagree on any input containing one.
+                    self.advance();
+                    self.byte_string_literal()
                 } else if c == b'f' and self.peek() == b'"' {
                     self.advance();
                     self.interpolated_string()
@@ -854,6 +861,17 @@ impl Lexer {
         } else {
             let b = self.peek();
             if b >= 0x80 {
+                // Same codepoint-consuming recovery as the Rust twin. This arm
+                // had the identical non-advancing bug as the byte-STRING one
+                // below; no oracle case reached it until B-2026-08-21-17 added
+                // `b'é'`, so the two lexers had been silently disagreeing on
+                // that input's error span.
+                self.consume_codepoint();
+                // Eat the trailing `'` too, as the Rust twin does, so recovery
+                // is clean and the error spans the whole literal.
+                if self.peek() == b'\'' {
+                    self.advance();
+                }
                 return self.make_spanned(Token.Error("non-ASCII character in byte literal".to_string()));
             }
             self.advance();
@@ -867,6 +885,87 @@ impl Lexer {
         }
         self.advance();
         self.make_spanned(Token.ByteLiteral(byte))
+    }
+
+    // `b"…"` byte string; the opening `b"` is consumed. Mirrors the Rust
+    // `byte_string_literal` exactly: the SAME escape table the byte-CHAR form
+    // accepts (design.md gives one table for both), and the same two refusals
+    // — `\u{…}` and a raw byte >= 0x80, the latter because a multi-byte
+    // codepoint would silently change `N`, and `N` is part of the type
+    // (B-2026-08-21-17).
+    fn byte_string_literal(mut ref self) -> SpannedToken {
+        let mut bytes: Vec[u8] = Vec.new();
+        loop {
+            if self.is_at_end() {
+                return self.make_spanned(Token.Error("Unterminated byte string literal".to_string()));
+            }
+            let c = self.peek();
+            if c == b'"' {
+                self.advance();
+                return self.make_spanned(Token.ByteString(bytes));
+            } else if c == b'\\' {
+                self.advance();
+                if self.is_at_end() {
+                    return self.make_spanned(Token.Error("Unterminated byte string literal".to_string()));
+                }
+                let e = self.peek();
+                self.advance();
+                if e == b'n' {
+                    bytes.push(b'\n');
+                } else if e == b't' {
+                    bytes.push(b'\t');
+                } else if e == b'r' {
+                    bytes.push(b'\r');
+                } else if e == b'\\' {
+                    bytes.push(b'\\');
+                } else if e == b'\'' {
+                    bytes.push(b'\'');
+                } else if e == b'"' {
+                    bytes.push(b'"');
+                } else if e == b'0' {
+                    bytes.push(0);
+                } else if e == b'x' {
+                    let hi = hex_val(self.peek());
+                    let lo = hex_val(self.peek_at(1));
+                    if hi < 0 or lo < 0 {
+                        return self.make_spanned(Token.Error("\\xHH escape requires two hex digits".to_string()));
+                    }
+                    self.advance();
+                    self.advance();
+                    bytes.push(byte_of(hi * 16 + lo));
+                } else if e == b'u' {
+                    // Consume `{…}` and the closing quote so the Error span
+                    // matches the Rust seed's extent byte for byte.
+                    if self.peek() == b'{' {
+                        self.advance();
+                        while not self.is_at_end() and self.peek() != b'}' and self.peek() != b'"' {
+                            self.advance();
+                        }
+                        if self.peek() == b'}' {
+                            self.advance();
+                        }
+                    }
+                    if self.peek() == b'"' {
+                        self.advance();
+                    }
+                    return self.make_spanned(Token.Error("Unicode escapes are not permitted in byte literals — use \\xFF for byte 0xFF.".to_string()));
+                } else {
+                    return self.make_spanned(Token.Error("Unknown escape sequence in byte literal".to_string()));
+                }
+            } else if c == b'\n' {
+                return self.make_spanned(Token.Error("Unterminated byte string literal: a raw newline is not permitted; use \\n".to_string()));
+            } else if c >= 0x80 {
+                // Consume the whole codepoint, as the Rust twin's
+                // `consume_codepoint` does — returning without advancing left
+                // the error span 2 bytes where Rust reported 4
+                // (B-2026-08-21-17).
+                self.consume_codepoint();
+                return self.make_spanned(Token.Error("non-ASCII character in byte string literal".to_string()));
+            } else {
+                self.advance();
+                bytes.push(c);
+            }
+        }
     }
 
     // `f"…{expr}…"` interpolated string. The opening `f"` is consumed. Literal
