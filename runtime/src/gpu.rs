@@ -2558,6 +2558,163 @@ pub unsafe extern "C" fn karac_runtime_gpu_dispatch_resident(
     }
 }
 
+/// Reduce ONE FIELD of a resident `gpu.Buffer[S]` to a scalar without a host
+/// round-trip — the runtime half of `gpu.sum(buf.mass)` (GPU-SLIP-4b-3).
+///
+/// **The whole point is the transfer that does NOT happen.** `gpu.sum` on a
+/// `Vec[S]` uploads the field, reduces, and reads back; inside a resident sim
+/// loop the grid is already on the device, so uploading a copy of it every step
+/// to ask for its total is the one cost the resident path exists to remove.
+/// Only the final 4 bytes cross the bus.
+///
+/// Two shaders, because the levels differ. `level0_wgsl` is the STRIDED kernel
+/// ([`emit_reduce_field_kernel`]): a group's device buffer holds `n` records of
+/// `stride` f32s and the field sits at a fixed offset, both baked into the text
+/// by codegen. It leaves `ceil(n / 64)` CONTIGUOUS partials behind, so every
+/// level above it is the ordinary contiguous kernel (`fold_wgsl`) — the same
+/// shader, and the same tree, as the round-trip path folds with. That sharing is
+/// what makes the oracle exact rather than epsilon-tolerant.
+///
+/// **Every level's output buffer is sized to its EXACT partial count**, which is
+/// load-bearing rather than tidy. The contiguous kernel bounds itself with
+/// `arrayLength(&input)`, and these buffers come from a size-keyed pool, so a
+/// buffer one slot longer than the live partial count would fold a recycled
+/// slot's stale bytes into the answer. The host-side path truncates its `Vec`
+/// between levels for the same reason; on the device the allocation size IS the
+/// truncation.
+///
+/// # Safety
+///
+/// Both shader pointers/lengths a valid UTF-8 shader. Aborts on no available GPU
+/// adapter, an unknown-or-freed handle, an out-of-range group, or a readback
+/// failure. The handle is BORROWED — reducing a buffer does not consume it.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_gpu_reduce_resident_f32(
+    level0_wgsl_ptr: *const u8,
+    level0_wgsl_len: usize,
+    fold_wgsl_ptr: *const u8,
+    fold_wgsl_len: usize,
+    handle: u64,
+    group: usize,
+    identity: f32,
+) -> f32 {
+    unsafe {
+        // Must match the shaders' `@workgroup_size`, their `scratch` length and
+        // `reduce_kernel::GPU_REDUCE_WIDTH`.
+        const WORKGROUP: usize = 64;
+        const ELEM: u64 = 4; // f32
+
+        let level0 = {
+            let b = std::slice::from_raw_parts(level0_wgsl_ptr, level0_wgsl_len);
+            match std::str::from_utf8(b) {
+                Ok(s) => s,
+                Err(_) => {
+                    crate::fatal::write_stderr(
+                        b"panic: resident field reduction shader is not valid UTF-8\n",
+                    );
+                    std::process::abort();
+                }
+            }
+        };
+        let fold = {
+            let b = std::slice::from_raw_parts(fold_wgsl_ptr, fold_wgsl_len);
+            match std::str::from_utf8(b) {
+                Ok(s) => s,
+                Err(_) => {
+                    crate::fatal::write_stderr(
+                        b"panic: resident field fold shader is not valid UTF-8\n",
+                    );
+                    std::process::abort();
+                }
+            }
+        };
+
+        let Some(ctx) = gpu_context() else {
+            crate::fatal::write_stderr(
+                b"panic: a resident field reduction found no available GPU adapter (no CPU fallback)\n",
+            );
+            std::process::abort();
+        };
+        let device = &ctx.device;
+        let queue = &ctx.queue;
+
+        // LEVEL 0 — strided, reading the resident buffer in place. The registry
+        // lock is held only across the submit: `run_compute` never waits, and the
+        // input buffer stays alive because reducing BORROWS the handle rather
+        // than freeing it, so the queued read is safe after the lock drops.
+        let (mut cur, mut count) = {
+            let reg = resident_registry().lock().unwrap();
+            let Some(input) = reg.get(&handle) else {
+                crate::fatal::write_stderr(
+                    b"panic: a field reduction on an unknown or already-freed device buffer\n",
+                );
+                std::process::abort();
+            };
+            // An empty buffer is the operation's identity and needs no device —
+            // the same contract as the round-trip `karac_runtime_gpu_reduce_f32`,
+            // and the reason an empty `gpu.prod` is 1 rather than 0.
+            if input.n == 0 {
+                return identity;
+            }
+            if group >= input.bufs.len() {
+                crate::fatal::write_stderr(
+                    b"panic: a field reduction named a layout group this buffer does not have\n",
+                );
+                std::process::abort();
+            }
+            let n = input.n;
+            let partials = n.div_ceil(WORKGROUP);
+            let out = run_compute(
+                device,
+                queue,
+                level0,
+                &input.bufs[group..group + 1],
+                &[partials as u64 * ELEM],
+                &[],
+                n,
+            );
+            (out, partials)
+        };
+
+        // LEVELS 1+ — contiguous, device→device. Nothing is read back until the
+        // tree has collapsed to a single value.
+        let mut spent: Vec<(wgpu::Buffer, u64)> = Vec::new();
+        while count > 1 {
+            let next_count = count.div_ceil(WORKGROUP);
+            let next = run_compute(
+                device,
+                queue,
+                fold,
+                &cur,
+                &[next_count as u64 * ELEM],
+                &[],
+                count,
+            );
+            for buf in cur {
+                spent.push((buf, count as u64 * ELEM));
+            }
+            cur = next;
+            count = next_count;
+        }
+
+        let Some(bytes) = readback(device, queue, &cur, &[ELEM]) else {
+            crate::fatal::write_stderr(
+                b"panic: a resident field reduction could not read its result back\n",
+            );
+            std::process::abort();
+        };
+        let out = f32::from_le_bytes([bytes[0][0], bytes[0][1], bytes[0][2], bytes[0][3]]);
+
+        // Return every level's buffer to the size-keyed pool; the resident input
+        // is untouched (borrowed, not consumed).
+        for (buf, sz) in spent {
+            recycle_buffers(vec![buf], &[sz]);
+        }
+        recycle_buffers(cur, &[ELEM]);
+        out
+    }
+}
+
 /// Download a resident SoA handle back to a host AoS buffer and FREE the handle
 /// (GPU-SLIP-4b): `gpu.download` moves the `gpu.Buffer[S]` back to a `Vec[S]`, so
 /// the handle is consumed. Reads each group's device buffer, scatters the struct

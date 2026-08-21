@@ -10296,6 +10296,30 @@ Signedness follows the element type all the way through — the shader's compari
 
 So `gpu.sum(v)` and `v.sum()` over the same integer buffer may legitimately disagree about whether they fail. That is not a bug and not a divergence: they are different operations with different, specified evaluation orders, exactly as they are for `f32` values. It does mean that replacing `v.sum()` with `gpu.sum(v)` is **not** a pure speedup for integer data — it can introduce a trap that was not there, or remove one that was. Float reductions have no analogue of this, because float addition saturates rather than trapping.
 
+##### Reducing a buffer that is already on the device
+
+Every reduction above takes a host `Vec` — it uploads, reduces, and reads one value back. Inside a resident sim loop that is the wrong shape. `gpu.upload` has already put the grid on the device and `gpu.dispatch` keeps it there across substeps, so asking for its total each step by uploading a *second copy* of data the device is already holding reinstates exactly the transfer the resident path exists to remove.
+
+A reduction may therefore name a field of a live `GpuBuffer[S]`:
+
+```
+let buf   = gpu.upload(bodies)   // GpuBuffer[Body], resident
+let total = gpu.sum(buf.mass)    // f32   — no upload; 4 bytes come back
+let peak  = gpu.max(buf.speed)   // Option[f32]
+```
+
+**A field, not the buffer.** `gpu.upload` takes a `Vec[S]` over an all-`f32` struct, so a `GpuBuffer[S]` holds *records*; "the sum of a buffer of records" names nothing. The quantity a loop actually wants is a reduction over one field, and `buf.mass` already parses as an ordinary field access, so this needs no new syntax — only the recognition that a field access on a device buffer means a projection rather than a load.
+
+**The result types are unchanged**, and deliberately so: `sum`/`prod` stay total, `min`/`max`/`mean` stay `Option[f32]` because an empty buffer still has no minimum. Moving a reduction onto a resident buffer is a change of *where the data is*, never of what the operation means, so it is a refactor rather than a signature change.
+
+**The answer is bit-identical to the round-trip.** `gpu.sum(buf.mass)` equals `gpu.sum(v)` for the host `Vec[f32]` of those same values — not within an epsilon, exactly. The device path reads the field with a stride and the host path reads a contiguous array, but both walk the *same* padded-halving tree at the same width, and every level above the first is literally the same shader. So the grouping rule above applies unchanged, and the resident form inherits its consequences rather than acquiring its own.
+
+That equality is what makes the feature safe to reach for: it is an optimisation whose observable result is the operation it optimises. A design where the resident form had its own summation order would force every caller to decide which number they meant.
+
+**Layout groups are resolved, not assumed.** A `layout` block splits `S` across several device buffers, so `mass` is a *(group, stride, offset)* rather than a field index — and the compiler resolves it through the same layout lookup `gpu.upload` and `gpu.dispatch` use. All three must agree: a buffer uploaded under one grouping and reduced under another would read a different field entirely and report a plausible wrong number, with nothing to flag it.
+
+This is a **compiled-only** surface, like the rest of the resident API — `karac run` reports that rather than pretending, since there is no device buffer to project a field out of.
+
 ##### Prefix sum — the one that is not a fold
 
 `gpu.prefix_sum(buf)` is the odd member of this family: its result is a **buffer**, not a value. `out[i]` is the sum of `buf[0..=i]` — **inclusive**, matching NumPy's `cumsum`, C++'s `partial_sum` and Python's `itertools.accumulate`. It returns a bare `Vec[f32]`, with no `Option`: the prefix sums of an empty buffer are the empty buffer, so unlike `min`/`mean` there is no missing answer for `None` to carry.

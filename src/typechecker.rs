@@ -1547,6 +1547,19 @@ pub struct TypeCheckResult {
     /// checked integer runtime entry point (which can trap on overflow) over
     /// the float one, and to zero- vs sign-extend the 32-bit result.
     pub gpu_reduce_int_elems: FxHashMap<SpanKey, String>,
+    /// Buffer-argument spans of a `gpu.<reduce>` call over ONE FIELD of a
+    /// RESIDENT `GpuBuffer[S]` — `gpu.sum(buf.mass)` — mapped to
+    /// `(struct name, field name)` (GPU-SLIP-4b-3).
+    ///
+    /// The field's physical position is deliberately NOT resolved here.
+    /// Turning a field name into `(group, stride, offset)` needs the
+    /// `SoaLayout` for `S`, which lives in codegen and carries an inkwell
+    /// type, so the typechecker records the NAME and codegen resolves it —
+    /// which is also the only place that already computes the identical
+    /// `group_strides` / `field_src` descriptors for `gpu.upload`. Recording a
+    /// name rather than an offset keeps one layout authority instead of two
+    /// that can drift.
+    pub gpu_resident_field: FxHashMap<SpanKey, (String, String)>,
     /// Bare-call dispatch resolutions: span of a `Call(Identifier(name))` →
     /// resolved target type name (e.g. `"Wrapper"`). Populated when expected-
     /// type inference resolves a bare associated-function call to a concrete
@@ -2039,6 +2052,9 @@ pub struct TypeChecker<'a> {
     /// public copy on `TypeCheckResult`.
     pub(super) gpu_dispatch_wgsl: FxHashMap<SpanKey, String>,
     pub(super) gpu_reduce_int_elems: FxHashMap<SpanKey, String>,
+    /// `gpu.<reduce>(buf.field)` arg span → `(struct, field)`. See the public
+    /// copy on `TypeCheckResult`.
+    pub(super) gpu_resident_field: FxHashMap<SpanKey, (String, String)>,
     /// `TaskHandle[T].join()` MethodCall span → result type `T`. See the
     /// public copy on `TypeCheckResult` for the full rationale.
     pub(super) task_join_return_types: FxHashMap<SpanKey, TypeExpr>,
@@ -2322,6 +2338,7 @@ impl<'a> TypeChecker<'a> {
             stats_elem_types: FxHashMap::default(),
             gpu_dispatch_wgsl: FxHashMap::default(),
             gpu_reduce_int_elems: FxHashMap::default(),
+            gpu_resident_field: FxHashMap::default(),
             task_join_return_types: FxHashMap::default(),
             user_effect_resources: FxHashMap::default(),
             resource_key_types: FxHashMap::default(),
@@ -2546,6 +2563,7 @@ impl<'a> TypeChecker<'a> {
             stats_elem_types: self.stats_elem_types,
             gpu_dispatch_wgsl: self.gpu_dispatch_wgsl,
             gpu_reduce_int_elems: self.gpu_reduce_int_elems,
+            gpu_resident_field: self.gpu_resident_field,
             task_join_return_types: self.task_join_return_types,
             bare_assoc_fn_targets: self.bare_assoc_fn_targets,
             path_call_method_dispatch: self.path_call_method_dispatch,

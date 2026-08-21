@@ -1649,6 +1649,21 @@ impl<'ctx> super::Codegen<'ctx> {
                 )
             })?;
 
+        // GPU-SLIP-4b-3: a RESIDENT field reduction. Its presence in the map is
+        // the discriminator — a `GpuBuffer`'s `{i64, i64}` is structurally
+        // ambiguous with a user struct, so the LLVM type cannot be asked. The
+        // WGSL just fetched is the CONTIGUOUS fold kernel for this path; the
+        // strided level-0 kernel is emitted inside, where the layout is known.
+        if let Some((struct_name, field)) = self.accel.gpu_resident_field.get(&key).cloned() {
+            return self.compile_gpu_resident_field_reduce(
+                args,
+                spelling,
+                &struct_name,
+                &field,
+                &wgsl,
+            );
+        }
+
         let i64_t = self.context.i64_type();
         let wgsl_len = i64_t.const_int(wgsl.len() as u64, false);
         let wgsl_ptr = self
@@ -1700,6 +1715,30 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap_basic()
         };
 
+        self.finish_gpu_reduce_scalar(spelling, n, call_reduce)
+    }
+
+    /// The result-shaping tail every `gpu.<reduce>` scalar shares: `sum`/`prod`
+    /// are total, `min`/`max`/`mean` are `Option[f32]`, and `mean` divides once
+    /// after the fold converges.
+    ///
+    /// Shared by the host-`Vec` and the resident-field lowerings so the two
+    /// cannot drift on the part that is genuinely common — and the emptiness
+    /// rule in particular is the kind that must not be re-derived twice.
+    /// `call_reduce` is a closure rather than a value because on the `min` /
+    /// `max` / `mean` path the dispatch must be built INSIDE the non-empty
+    /// block: the whole point of the guard is that an empty buffer never
+    /// reaches a device.
+    fn finish_gpu_reduce_scalar<F>(
+        &mut self,
+        spelling: &str,
+        n: IntValue<'ctx>,
+        call_reduce: F,
+    ) -> Result<BasicValueEnum<'ctx>, String>
+    where
+        F: Fn(&Self) -> BasicValueEnum<'ctx>,
+    {
+        let f32_t = self.context.f32_type();
         // `sum`/`prod` always have an answer, so the call IS the result.
         if !matches!(spelling, "min" | "max" | "mean") {
             return Ok(call_reduce(self));
@@ -1753,6 +1792,150 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.position_at_end(merge_bb);
         Ok(self.build_option_some_via_phis(&[word], some_end_bb, none_bb, "gpu.mm"))
+    }
+
+    /// `gpu.sum(buf.mass)` — reduce one FIELD of a buffer already resident on
+    /// the device, with no upload (GPU-SLIP-4b-3).
+    ///
+    /// **Codegen resolves the field's physical position, not the typechecker.**
+    /// A `layout` block splits a struct across several device buffers, so
+    /// `mass` is `(group k, stride, offset)` rather than an index — and the
+    /// `SoaLayout` that says so is codegen state. Resolving it here also means
+    /// the reduction reads the layout through the SAME lookup `gpu.upload` and
+    /// the resident `gpu.dispatch` use, which is what guarantees the three
+    /// agree: a buffer uploaded under one grouping and reduced under another
+    /// would read a different field and report a plausible wrong number.
+    ///
+    /// The strided level-0 shader is emitted HERE for the same reason. It is
+    /// still plain data — [`crate::gpu_wgsl`] imports `ast`, never `inkwell` —
+    /// so codegen-containment holds; what crosses the boundary is a `String`.
+    fn compile_gpu_resident_field_reduce(
+        &mut self,
+        args: &[CallArg],
+        spelling: &str,
+        struct_name: &str,
+        field: &str,
+        fold_wgsl: &str,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        // The same layout lookup `gpu.upload` / resident `gpu.dispatch` perform:
+        // an explicit `layout` block for `S` if one exists, else the default
+        // single interleaved group. All three must agree, and they do because
+        // all three ask this question the same way.
+        let soa = self
+            .accel
+            .soa_layouts
+            .values()
+            .find(|l| l.struct_name == struct_name)
+            .cloned()
+            .or_else(|| self.default_gpu_soa_layout(struct_name))
+            .ok_or_else(|| {
+                format!("gpu.{spelling}: no `layout` block found for `{struct_name}`")
+            })?;
+        if soa.cold_group.is_some() {
+            return Err(format!(
+                "gpu.{spelling}: a `cold` layout group is not supported over a device buffer"
+            ));
+        }
+
+        // (group, stride, offset) — in f32 UNITS, matching the shader's
+        // `array<f32>` view. The byte-level twin of this is `gpu.upload`'s
+        // `group_strides[k] = fields * 4` / `field_src = j * 4`; same numbers,
+        // scaled, and deliberately derived from the same `soa.groups`.
+        let mut resolved = None;
+        for (k, g) in soa.groups.iter().enumerate() {
+            if let Some(j) = g.fields.iter().position(|f| f == field) {
+                resolved = Some((k, g.fields.len(), j));
+                break;
+            }
+        }
+        let (group, stride, offset) = resolved.ok_or_else(|| {
+            format!(
+                "gpu.{spelling}: `{struct_name}` has no field `{field}` in its GPU layout groups"
+            )
+        })?;
+
+        let op = match spelling {
+            "prod" => crate::reduce_kernel::ReduceOp::Prod,
+            "min" => crate::reduce_kernel::ReduceOp::Min,
+            "max" => crate::reduce_kernel::ReduceOp::Max,
+            // `mean` folds with the SUM kernel and divides once on the host —
+            // a shader cannot know it is running the last level.
+            _ => crate::reduce_kernel::ReduceOp::Sum,
+        };
+        let level0 =
+            crate::gpu_wgsl::emit_reduce_field_kernel(op, "f32", stride as u32, offset as u32)
+                .map_err(|e| {
+                    format!(
+                        "gpu.{spelling}: cannot lower the resident field kernel — {}",
+                        e.reason()
+                    )
+                })?;
+
+        let i64_t = self.context.i64_type();
+        let f32_t = self.context.f32_type();
+        let l0_len = i64_t.const_int(level0.len() as u64, false);
+        let l0_ptr = self
+            .builder
+            .build_global_string_ptr(&level0, "gpu.res.l0.wgsl")
+            .map_err(|e| format!("baking gpu.{spelling} level-0 shader failed: {e}"))?
+            .as_pointer_value();
+        let fold_len = i64_t.const_int(fold_wgsl.len() as u64, false);
+        let fold_ptr = self
+            .builder
+            .build_global_string_ptr(fold_wgsl, "gpu.res.fold.wgsl")
+            .map_err(|e| format!("baking gpu.{spelling} fold shader failed: {e}"))?
+            .as_pointer_value();
+
+        // `{handle, n}` from the RECEIVER of the field access — `buf`, not
+        // `buf.mass`. The typechecker already proved it is a `GpuBuffer[S]`.
+        let crate::ast::ExprKind::FieldAccess { object, .. } = &args[0].value.kind else {
+            return Err(format!(
+                "internal error: gpu.{spelling} resident reduction without a field access"
+            ));
+        };
+        let buf_sv = self.compile_expr(object)?.into_struct_value();
+        let handle = self
+            .builder
+            .build_extract_value(buf_sv, 0, "gpu.res.red.handle")
+            .unwrap()
+            .into_int_value();
+        let n = self
+            .builder
+            .build_extract_value(buf_sv, 1, "gpu.res.red.n")
+            .unwrap()
+            .into_int_value();
+
+        // Same identities as the host-side path, and for the same reason: an
+        // empty buffer never reaches a device, so the runtime has to be told
+        // what the answer is.
+        let identity = match spelling {
+            "prod" => f32_t.const_float(1.0),
+            "min" => f32_t.const_float(f64::INFINITY),
+            "max" => f32_t.const_float(f64::NEG_INFINITY),
+            _ => f32_t.const_float(0.0),
+        };
+        let group_v = i64_t.const_int(group as u64, false);
+        let reduce_fn = self.gpu_reduce_resident_f32_fn();
+        let call_reduce = move |me: &Self| {
+            me.builder
+                .build_call(
+                    reduce_fn,
+                    &[
+                        l0_ptr.into(),
+                        l0_len.into(),
+                        fold_ptr.into(),
+                        fold_len.into(),
+                        handle.into(),
+                        group_v.into(),
+                        identity.into(),
+                    ],
+                    "gpu.res.reduced",
+                )
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+        };
+        self.finish_gpu_reduce_scalar(spelling, n, call_reduce)
     }
 
     /// The INTEGER arm of `compile_gpu_reduce` (B-2026-08-19-13).

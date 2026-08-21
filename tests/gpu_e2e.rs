@@ -2478,3 +2478,224 @@ fn a_reduction_past_one_dispatch_row_still_sees_every_element() {
          `4194240 / 1 / 0` — one row's worth, with the tail unseen."
     );
 }
+
+/// A resident FIELD reduction agrees with the round-trip reduction of the same
+/// numbers BIT-FOR-BIT, not within an epsilon (GPU-SLIP-4b-3).
+///
+/// This is the oracle the whole slice rests on. `gpu.sum(buf.m)` reads a buffer
+/// already on the device; `gpu.sum(host)` uploads the identical values from a
+/// host `Vec[f32]`. The two must be the same number — which holds only because
+/// the strided level-0 kernel walks the same padded-halving tree at the same
+/// width as the contiguous one, and every level above it IS the contiguous
+/// kernel, shared verbatim.
+///
+/// **The comparison happens inside the program, not over printed text.**
+/// `println` of an `f32` rounds for display, so two values that differ in the
+/// last bit can print identically; `want == got` is a real float comparison and
+/// is what the `MATCH` line reports. The printed values are there to make a
+/// failure readable, not to be the assertion.
+///
+/// 5000 elements is chosen to force a THREE-level fold (5000 → 79 → 2 → 1), so
+/// the partial-folding path is exercised rather than a single workgroup, and
+/// `i * 0.1` gives values whose f32 sum genuinely depends on association — a
+/// left fold over them lands elsewhere.
+#[test]
+fn a_resident_field_reduction_matches_the_round_trip_oracle() {
+    let Some(backend) = gpu_or_skip() else { return };
+
+    let tag = "resident_field_oracle";
+    let dir = scratch(tag);
+    let src = dir.join(format!("{tag}.kara"));
+    std::fs::write(
+        &src,
+        "struct Cell { m: f32, t: f32 }\n\
+        fn main() {\n\
+        \x20   let mut cells: Vec[Cell] = Vec.new();\n\
+        \x20   let mut host: Vec[f32] = Vec.new();\n\
+        \x20   let mut i: i64 = 0;\n\
+        \x20   while i < 5000 {\n\
+        \x20       let v: f32 = (i as f32) * 0.1;\n\
+        \x20       cells.push(Cell { m: v, t: 0.0 });\n\
+        \x20       host.push(v);\n\
+        \x20       i = i + 1;\n\
+        \x20   }\n\
+        \x20   let want = gpu.sum(host);\n\
+        \x20   let buf = gpu.upload(cells);\n\
+        \x20   let got = gpu.sum(buf.m);\n\
+        \x20   if want == got { println(\"MATCH\"); } else { println(\"DIVERGE\"); }\n\
+        \x20   println(f\"{want}\");\n\
+        \x20   println(f\"{got}\");\n\
+        }\n",
+    )
+    .expect("write fixture source");
+
+    let out =
+        build_and_run_on_gpu(&dir, &src, tag, backend).unwrap_or_else(|e| panic!("{tag}: {e}"));
+    let got: Vec<&str> = out.lines().map(str::trim).collect();
+    assert_eq!(
+        got.first().copied(),
+        Some("MATCH"),
+        "{tag}: a resident field reduction diverged from the round-trip reduction of the \
+         same values — the two tree orders have drifted apart. Full output:\n{out}"
+    );
+}
+
+/// A resident field reduction resolves the field's LAYOUT GROUP, stride and
+/// offset — not just its position in the struct (GPU-SLIP-4b-3).
+///
+/// A `layout` block splits `Body` across two device buffers, so the four fields
+/// land at four distinct `(group, offset)` pairs under a stride of 2: `x` is
+/// (0, 0), `y` is (0, 1), `vx` is (1, 0), `vy` is (1, 1). Every one of the four
+/// sums is a different number, and each is wrong in a DIFFERENT way if the
+/// resolution slips — reading the wrong group returns another field's total,
+/// reading the wrong offset within the right group returns its neighbour's.
+/// That is why all four are asserted rather than one: a single-field test
+/// passes under a stride bug that happens to alias.
+///
+/// `min` / `max` / `mean` ride along because they take the `Option` path, which
+/// is a different tail in codegen — and `mean`'s host-side divide is the only
+/// arithmetic outside a shader in the whole family.
+#[test]
+fn a_resident_field_reduction_resolves_layout_groups_and_offsets() {
+    let Some(backend) = gpu_or_skip() else { return };
+
+    let tag = "resident_field_layout";
+    let dir = scratch(tag);
+    let src = dir.join(format!("{tag}.kara"));
+    std::fs::write(
+        &src,
+        "struct Body { x: f32, y: f32, vx: f32, vy: f32 }\n\
+        layout bodies: Vec[Body] {\n\
+        \x20   group pos { x, y }\n\
+        \x20   group vel { vx, vy }\n\
+        }\n\
+        fn main() {\n\
+        \x20   let mut bodies: Vec[Body] = Vec.new();\n\
+        \x20   bodies.push(Body { x: 1.0, y: 2.0, vx: 3.0, vy: 4.0 });\n\
+        \x20   bodies.push(Body { x: 10.0, y: 20.0, vx: 30.0, vy: 40.0 });\n\
+        \x20   bodies.push(Body { x: 100.0, y: 200.0, vx: 300.0, vy: 400.0 });\n\
+        \x20   let buf = gpu.upload(bodies);\n\
+        \x20   println(f\"{gpu.sum(buf.x)}\");\n\
+        \x20   println(f\"{gpu.sum(buf.y)}\");\n\
+        \x20   println(f\"{gpu.sum(buf.vx)}\");\n\
+        \x20   println(f\"{gpu.sum(buf.vy)}\");\n\
+        \x20   match gpu.max(buf.vy) {\n\
+        \x20       Some(m) => println(f\"{m}\"),\n\
+        \x20       None => println(\"none\"),\n\
+        \x20   }\n\
+        \x20   match gpu.min(buf.x) {\n\
+        \x20       Some(m) => println(f\"{m}\"),\n\
+        \x20       None => println(\"none\"),\n\
+        \x20   }\n\
+        \x20   match gpu.mean(buf.y) {\n\
+        \x20       Some(m) => println(f\"{m}\"),\n\
+        \x20       None => println(\"none\"),\n\
+        \x20   }\n\
+        }\n",
+    )
+    .expect("write fixture source");
+
+    let out =
+        build_and_run_on_gpu(&dir, &src, tag, backend).unwrap_or_else(|e| panic!("{tag}: {e}"));
+    let got: Vec<&str> = out.lines().map(str::trim).collect();
+    assert_eq!(
+        got,
+        vec!["111", "222", "333", "444", "400", "1", "74"],
+        "{tag}: a field resolved to the wrong layout group or offset. The four sums are \
+         deliberately distinct — 111/222/333/444 name (group 0, off 0), (0, 1), (1, 0) and \
+         (1, 1) in that order, so a swapped pair identifies which half slipped."
+    );
+}
+
+/// An EMPTY resident buffer answers with the operation's identity, and `min`
+/// answers `None` — no device is touched at all (GPU-SLIP-4b-3).
+///
+/// The same contract the host-side reduction has, and it matters for the same
+/// reason: the empty input is the one case no shader ever sees, so the answer
+/// comes from codegen and the runtime agreeing rather than from a device. `min`
+/// over nothing must be `None` rather than the `+inf` that pads a short chunk —
+/// which is exactly the plausible wrong answer available here.
+#[test]
+fn a_resident_field_reduction_of_an_empty_buffer_is_the_identity() {
+    let Some(backend) = gpu_or_skip() else { return };
+
+    let tag = "resident_field_empty";
+    let dir = scratch(tag);
+    let src = dir.join(format!("{tag}.kara"));
+    std::fs::write(
+        &src,
+        "struct Cell { m: f32, t: f32 }\n\
+        fn main() {\n\
+        \x20   let empty: Vec[Cell] = Vec.new();\n\
+        \x20   let buf = gpu.upload(empty);\n\
+        \x20   println(f\"{gpu.sum(buf.m)}\");\n\
+        \x20   match gpu.min(buf.m) {\n\
+        \x20       Some(m) => println(f\"{m}\"),\n\
+        \x20       None => println(\"none\"),\n\
+        \x20   }\n\
+        }\n",
+    )
+    .expect("write fixture source");
+
+    let out =
+        build_and_run_on_gpu(&dir, &src, tag, backend).unwrap_or_else(|e| panic!("{tag}: {e}"));
+    let got: Vec<&str> = out.lines().map(str::trim).collect();
+    assert_eq!(
+        got,
+        vec!["0", "none"],
+        "{tag}: an empty device buffer must reduce to the identity, and `min` to `None` — \
+         a `+inf` here would be the padding leaking out as an answer."
+    );
+}
+
+/// A resident field reduction past the 2-D dispatch row boundary still sees
+/// every element (GPU-SLIP-4b-3, guarding the B-2026-08-21-13 class).
+///
+/// The strided level-0 kernel is NEW code that recovers a thread's index
+/// itself, so it can reintroduce exactly the defect the twelve contiguous
+/// emitters were just fixed for: reading `gid.x` alone silently stops at
+/// `65535 * 64 = 4_194_240` elements. A structural gate over the emitter text
+/// would not catch a regression here, because this kernel's bound is
+/// `arrayLength(&input) / stride` rather than the array length — one more
+/// place the record grid and the f32 grid can be confused.
+///
+/// Build-only for the same reason as its contiguous sibling: a dispatch grid
+/// exists only on the device path, and with every value 1.0 the sum is exact in
+/// f32 at any tree order, so this measures element COVERAGE rather than
+/// association.
+#[test]
+fn a_resident_field_reduction_past_one_dispatch_row_sees_every_element() {
+    let Some(backend) = gpu_or_skip() else { return };
+
+    const ROW_SPAN: usize = 65535 * 64;
+    const N: usize = 5_000_000;
+    const _: () = assert!(N > ROW_SPAN);
+
+    let tag = "resident_field_two_rows";
+    let dir = scratch(tag);
+    let src = dir.join(format!("{tag}.kara"));
+    std::fs::write(
+        &src,
+        "struct Cell { m: f32, t: f32 }\n\
+        fn main() {\n\
+        \x20   let mut big: Vec[Cell] = Vec.new();\n\
+        \x20   let mut i: i64 = 0;\n\
+        \x20   while i < 5000000 {\n\
+        \x20       big.push(Cell { m: 1.0, t: 0.0 });\n\
+        \x20       i = i + 1;\n\
+        \x20   }\n\
+        \x20   let buf = gpu.upload(big);\n\
+        \x20   println(f\"{gpu.sum(buf.m)}\");\n\
+        }\n",
+    )
+    .expect("write fixture source");
+
+    let out =
+        build_and_run_on_gpu(&dir, &src, tag, backend).unwrap_or_else(|e| panic!("{tag}: {e}"));
+    assert_eq!(
+        out.trim(),
+        "5000000",
+        "{tag}: the strided field kernel lost the elements past dispatch row 0 — \
+         a `4194240` here is the `gid.x`-only index returning."
+    );
+}

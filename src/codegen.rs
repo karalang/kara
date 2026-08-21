@@ -5556,6 +5556,7 @@ impl<'ctx> Codegen<'ctx> {
                 soa_return_locals: std::collections::HashSet::new(),
                 soa_drop_fns: HashMap::new(),
                 gpu_dispatch_wgsl: HashMap::new(),
+                gpu_resident_field: HashMap::new(),
                 gpu_reduce_int_elems: HashMap::new(),
                 tensor_typed_exprs: HashMap::new(),
                 tensor_index_recv_types: HashMap::new(),
@@ -6920,6 +6921,7 @@ impl<'ctx> Codegen<'ctx> {
         self.conc.channel_elem_types = program.channel_elem_types.clone();
         self.span_tables.stats_elem_types = program.stats_elem_types.clone();
         self.accel.gpu_dispatch_wgsl = program.gpu_dispatch_wgsl.clone();
+        self.accel.gpu_resident_field = program.gpu_resident_field.clone();
         self.accel.gpu_reduce_int_elems = program.gpu_reduce_int_elems.clone();
         self.conc.task_join_return_types = program.task_join_return_types.clone();
         self.ref_return_inner_types = program.ref_return_inner_types.clone();

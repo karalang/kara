@@ -12068,6 +12068,46 @@ impl<'ctx> super::Codegen<'ctx> {
             .add_function("karac_runtime_gpu_reduce_f32", fn_ty, None)
     }
 
+    /// Lazily declare `karac_runtime_gpu_reduce_resident_f32(level0_wgsl: ptr,
+    /// level0_len: i64, fold_wgsl: ptr, fold_len: i64, handle: i64, group: i64,
+    /// identity: f32) -> f32` — reduce one FIELD of a device-resident buffer
+    /// (GPU-SLIP-4b-3).
+    ///
+    /// Takes a HANDLE where [`Self::gpu_reduce_f32_fn`] takes a host pointer,
+    /// which is the entire point: the data is already on the device, so no
+    /// upload happens and only the 4-byte result comes back.
+    ///
+    /// TWO shaders rather than one. `level0` is strided — codegen bakes the
+    /// field's group stride and offset into it, since only codegen knows the
+    /// `SoaLayout`. It leaves contiguous partials behind, so `fold` is the
+    /// ordinary contiguous reduce kernel, shared verbatim with the host-side
+    /// path; that sharing is what makes the two agree bit-for-bit.
+    pub(super) fn gpu_reduce_resident_f32_fn(&self) -> FunctionValue<'ctx> {
+        if let Some(f) = self
+            .module
+            .get_function("karac_runtime_gpu_reduce_resident_f32")
+        {
+            return f;
+        }
+        let i64_t = self.context.i64_type();
+        let f32_t = self.context.f32_type();
+        let ptr_t = self.context.ptr_type(AddressSpace::default());
+        let fn_ty = f32_t.fn_type(
+            &[
+                ptr_t.into(), // level0_wgsl
+                i64_t.into(), // level0_len
+                ptr_t.into(), // fold_wgsl
+                i64_t.into(), // fold_len
+                i64_t.into(), // handle
+                i64_t.into(), // group
+                f32_t.into(), // identity
+            ],
+            false,
+        );
+        self.module
+            .add_function("karac_runtime_gpu_reduce_resident_f32", fn_ty, None)
+    }
+
     /// Lazily declare `karac_runtime_gpu_reduce_i32(wgsl_ptr: ptr,
     /// wgsl_len: i64, in_ptr: ptr, n: i64, identity: i32, out: ptr)` — the
     /// CHECKED integer reduction entry (B-2026-08-19-13).

@@ -239,6 +239,14 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
         .iter()
         .map(|(k, v)| ((k.0, k.1), v.clone()))
         .collect();
+    // Sibling marker: which of those reductions read a RESIDENT device buffer's
+    // field rather than a host `Vec` (GPU-SLIP-4b-3). Travels as the field NAME;
+    // codegen owns the name -> (group, stride, offset) resolution.
+    program.gpu_resident_field = tc
+        .gpu_resident_field
+        .iter()
+        .map(|(k, v)| ((k.0, k.1), v.clone()))
+        .collect();
     // Sibling hint: which of those buffers hold INTEGERS. Codegen cannot
     // re-derive it (Vec data pointers are opaque) and it selects a different
     // runtime ABI, so it travels as plain data alongside the shader text.

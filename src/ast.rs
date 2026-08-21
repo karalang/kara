@@ -359,6 +359,20 @@ pub type StatsElemTypesTable = std::collections::HashMap<(usize, usize), TypeExp
 /// codegen-containment invariant).
 pub type GpuDispatchWgslTable = std::collections::HashMap<(usize, usize), String>;
 
+/// Set by the lowering pass from `TypeCheckResult.gpu_resident_field`. Maps a
+/// `gpu.<reduce>(buf.field)` argument span to `(struct name, field name)` —
+/// the marker that this reduction reads a buffer already RESIDENT on the
+/// device rather than a host `Vec` (GPU-SLIP-4b-3).
+///
+/// A NAME, not a physical offset, on purpose: resolving `field` to its
+/// `(group, stride, offset)` needs the `SoaLayout` for the struct, which is
+/// codegen state. Codegen is also where the identical descriptors are already
+/// computed for `gpu.upload` and the resident `gpu.dispatch`, so keeping the
+/// resolution there keeps ONE layout authority rather than two that can drift
+/// — a buffer uploaded under one grouping and reduced under another would
+/// silently read the wrong field.
+pub type GpuResidentFieldTable = std::collections::HashMap<(usize, usize), (String, String)>;
+
 /// Set by the lowering pass from `TypeCheckResult.gpu_reduce_int_elems`. Maps
 /// a `gpu.<reduce>(buffer)` BUFFER-argument span to its INTEGER element
 /// spelling (`"i32"` / `"u32"`); float buffers have no entry.
@@ -823,6 +837,9 @@ pub struct Program {
     /// empty otherwise. `gpu.dispatch` kernel-arg span → generated WGSL shader
     /// text (spike slice-0c). See [`GpuDispatchWgslTable`].
     pub gpu_dispatch_wgsl: GpuDispatchWgslTable,
+    /// Set by the lowering pass from `TypeCheckResult.gpu_resident_field`;
+    /// empty otherwise. See [`GpuResidentFieldTable`].
+    pub gpu_resident_field: GpuResidentFieldTable,
     /// Set by the lowering pass from `TypeCheckResult.gpu_reduce_int_elems`;
     /// empty otherwise. See [`GpuReduceIntElemsTable`].
     pub gpu_reduce_int_elems: GpuReduceIntElemsTable,

@@ -3450,6 +3450,109 @@ impl<'a> super::TypeChecker<'a> {
     ///
     /// `sum`/`prod` yield `f32`; `min`/`max` yield `Option[f32]`, because an
     /// empty buffer has no extremum — see [`gpu_reduce_result_ty`].
+    /// `gpu.sum(buf.mass)` — reduce ONE FIELD of a buffer already resident on
+    /// the device, with no host round-trip (GPU-SLIP-4b-3).
+    ///
+    /// **Why a field projection rather than a whole buffer.** `gpu.upload`
+    /// takes a `Vec[S]` over an all-`f32` STRUCT, so a `GpuBuffer[S]` holds
+    /// records, and "the sum of a buffer of records" names nothing. The
+    /// quantity a sim loop actually wants — total mass, peak velocity — is a
+    /// reduction over ONE field, and `buf.mass` already parses as an ordinary
+    /// `FieldAccess`, so the surface needs no new syntax.
+    ///
+    /// **The receiver must be a plain binding.** The type is read out of scope
+    /// with the local scope instead of by inferring `object`, because
+    /// inferring it here and again on the fall-through path would report any
+    /// error inside it twice. That restricts the form to `binding.field`; a
+    /// deeper receiver (`sim.grid.mass`) falls through and is diagnosed as a
+    /// non-`Vec` argument, which is honest if terse. Widening it wants a
+    /// side-effect-free type peek, which this typechecker does not have yet.
+    ///
+    /// Returns the same type the host-side reduction does, and records only
+    /// `(struct, field)` — see [`TypeCheckResult::gpu_resident_field`] for why
+    /// the physical offset is codegen's to resolve.
+    fn infer_gpu_resident_field_reduce(
+        &mut self,
+        arg: &Expr,
+        struct_name: &str,
+        field: &str,
+        span: &Span,
+        op: ReduceOp,
+        spelling: &str,
+    ) -> Type {
+        let f32_ty = Type::Float(FloatSize::F32);
+        let Some(info) = self.env.structs.get(struct_name) else {
+            self.type_error(
+                format!(
+                    "error[E_GPU_REDUCE_FIELD]: `gpu.{spelling}` cannot see the fields of \
+                     `{struct_name}`"
+                ),
+                arg.span,
+                TypeErrorKind::TypeMismatch,
+            );
+            return gpu_reduce_result_ty(op, f32_ty);
+        };
+        let Some((_, field_ty, _)) = info.fields.iter().find(|(n, _, _)| n == field) else {
+            let known: Vec<&str> = info.fields.iter().map(|(n, _, _)| n.as_str()).collect();
+            self.type_error(
+                format!(
+                    "error[E_GPU_REDUCE_FIELD]: `{struct_name}` has no field `{field}` — \
+                     `gpu.{spelling}` over a device buffer reduces one of its fields ({})",
+                    known.join(", ")
+                ),
+                arg.span,
+                TypeErrorKind::TypeMismatch,
+            );
+            return gpu_reduce_result_ty(op, f32_ty);
+        };
+        // `gpu.upload` already rejects a struct with a non-`f32` field, so this
+        // is unreachable through a well-typed program — but it is the guard that
+        // keeps the emitted shader's `array<f32>` binding honest if that ever
+        // widens, and it costs one comparison.
+        if !matches!(field_ty, Type::Float(FloatSize::F32)) {
+            self.type_error(
+                format!(
+                    "error[E_GPU_REDUCE_FIELD]: `gpu.{spelling}` reduces an `f32` field — \
+                     `{struct_name}.{field}` is `{}`",
+                    crate::typechecker::types::type_display(field_ty)
+                ),
+                arg.span,
+                TypeErrorKind::TypeMismatch,
+            );
+            return gpu_reduce_result_ty(op, f32_ty);
+        }
+
+        // Only the CONTIGUOUS fold kernel is baked here — it folds the partials
+        // that level 0 leaves behind and is layout-independent. The strided
+        // level-0 kernel is codegen's, because only codegen knows the field's
+        // group and offset.
+        match crate::gpu_wgsl::emit_reduce_kernel(gpu_reduce_shader_op(op), "f32") {
+            Ok(wgsl) => {
+                self.gpu_dispatch_wgsl
+                    .insert(SpanKey(arg.span.offset, arg.span.length), wgsl);
+                self.gpu_resident_field.insert(
+                    SpanKey(arg.span.offset, arg.span.length),
+                    (struct_name.to_string(), field.to_string()),
+                );
+            }
+            Err(e) => {
+                self.type_error(
+                    format!(
+                        "error[E_GPU_REDUCE_KERNEL]: cannot lower `gpu.{spelling}` to a GPU \
+                         shader — {}",
+                        e.reason()
+                    ),
+                    arg.span,
+                    TypeErrorKind::TypeMismatch,
+                );
+            }
+        }
+
+        let result = gpu_reduce_result_ty(op, f32_ty);
+        self.record_expr_type(span, &result);
+        result
+    }
+
     fn infer_gpu_reduce(
         &mut self,
         args: &[CallArg],
@@ -3468,6 +3571,31 @@ impl<'a> super::TypeChecker<'a> {
                 TypeErrorKind::WrongNumberOfArgs,
             );
             return gpu_reduce_result_ty(op, Type::Float(FloatSize::F32));
+        }
+
+        // GPU-SLIP-4b-3: `gpu.sum(buf.mass)` — a RESIDENT field reduction, which
+        // never uploads. Recognised before the argument is typed as a value,
+        // because `buf.mass` on a `GpuBuffer[S]` is not a field access the
+        // ordinary rules would accept.
+        if let ExprKind::FieldAccess { object, field } = &args[0].value.kind {
+            if let ExprKind::Identifier(binding) = &object.kind {
+                if let Some(Type::Named { name, args: ta }) = self.local_scope.lookup(binding) {
+                    if name == "GpuBuffer" && ta.len() == 1 {
+                        if let Type::Named { name: sname, .. } = &ta[0] {
+                            let sname = sname.clone();
+                            let field = field.clone();
+                            return self.infer_gpu_resident_field_reduce(
+                                &args[0].value,
+                                &sname,
+                                &field,
+                                span,
+                                op,
+                                spelling,
+                            );
+                        }
+                    }
+                }
+            }
         }
 
         let buf_ty = self.infer_expr(&args[0].value);

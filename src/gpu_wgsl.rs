@@ -1039,6 +1039,81 @@ pub fn emit_reduce_kernel(op: ReduceOp, elem: &str) -> Result<String, WgslError>
     ))
 }
 
+/// Emit the tree-reduction shader for a reduction over ONE FIELD of a resident
+/// `gpu.Buffer[S]` — `gpu.sum(buf.mass)` (GPU-SLIP-4b-3).
+///
+/// Identical in tree order to [`emit_reduce_kernel`]; the only difference is
+/// where a lane finds its element. A resident buffer is stored per LAYOUT
+/// GROUP, so one group's device buffer holds `n` records of `stride` f32s and
+/// the requested field sits at `offset` within each. `stride == 1 && offset ==
+/// 0` (the one-field-per-group default) degenerates to a contiguous read.
+///
+/// **The tree order is deliberately shared, not merely similar.** The oracle
+/// for a resident field reduction is the round-trip reduction of that same
+/// field — `gpu.sum(buf.mass)` must equal `gpu.sum(download(buf).map(|r| r.mass))`
+/// BIT-FOR-BIT, not within an epsilon. That holds only because both walk the
+/// same padded-halving tree at the same [`GPU_REDUCE_WIDTH`] and chunk into
+/// partials the same way, so f32 non-associativity lands identically on both
+/// sides. Any divergence here (a different width, an unpadded tail, a
+/// strided-only fast path that folds pairs in a different order) would turn an
+/// exact oracle into an approximate one.
+///
+/// **`arrayLength` is in f32s, not in records.** The bound is therefore
+/// `arrayLength(&input) / stride`, and reading it any other way would let the
+/// last workgroup of an interleaved group run off the end of the record grid
+/// (or, with `stride` folded in twice, silently reduce a prefix).
+pub fn emit_reduce_field_kernel(
+    op: ReduceOp,
+    elem: &str,
+    stride: u32,
+    offset: u32,
+) -> Result<String, WgslError> {
+    if stride == 0 {
+        return Err(WgslError::UnsupportedBody(
+            "a resident field reduction needs a non-zero group stride".to_string(),
+        ));
+    }
+    if offset >= stride {
+        return Err(WgslError::UnsupportedBody(format!(
+            "field offset {offset} is outside its layout group's stride {stride}"
+        )));
+    }
+    let (prelude, combine, identity) = reduce_combine_wgsl(op, elem)?;
+    let width = GPU_REDUCE_WIDTH;
+    let half = width / 2;
+    Ok(format!(
+        "@group(0) @binding(0) var<storage, read>       input:  array<{elem}>;\n\
+         @group(0) @binding(1) var<storage, read_write> output: array<{elem}>;\n\
+         \n\
+         var<workgroup> scratch: array<{elem}, {width}>;\n\
+         {prelude}\n\
+         @compute @workgroup_size({width})\n\
+         fn main(@builtin(local_invocation_id) lid: vec3<u32>,\n\
+         \x20       @builtin(workgroup_id) wid: vec3<u32>,\n\
+         \x20       @builtin(global_invocation_id) gid: vec3<u32>) {{\n\
+         \x20   let t = lid.x;\n\
+         \x20   let i = gid.y * {DISPATCH_X_SPAN}u + gid.x;\n\
+         \x20   let wg = wid.y * {DISPATCH_X_WORKGROUPS}u + wid.x;\n\
+         \x20   // `arrayLength` counts f32s; the grid is records of {stride}.\n\
+         \x20   let n = arrayLength(&input) / {stride}u;\n\
+         \x20   if (i < n) {{ scratch[t] = input[i * {stride}u + {offset}u]; }} else {{ scratch[t] = {identity}; }}\n\
+         \x20   workgroupBarrier();\n\
+         \n\
+         \x20   var stride: u32 = {half}u;\n\
+         \x20   loop {{\n\
+         \x20       if (stride == 0u) {{ break; }}\n\
+         \x20       if (t < stride) {{ scratch[t] = {combine}; }}\n\
+         \x20       workgroupBarrier();\n\
+         \x20       stride = stride / 2u;\n\
+         \x20   }}\n\
+         \n\
+         \x20   // Level 0 only. The partials this leaves behind are CONTIGUOUS,\n\
+         \x20   // so the host folds them with the ordinary contiguous kernel.\n\
+         \x20   if (t == 0u) {{ output[wg] = scratch[0]; }}\n\
+         }}\n"
+    ))
+}
+
 /// The NaN predicate every float reduction shares — a BIT-PATTERN test rather
 /// than `x != x` (B-2026-08-20-2).
 ///
@@ -5390,6 +5465,51 @@ mod tests {
         }
     }
 
+    /// The strided field kernel reads the requested field, and bounds itself
+    /// in RECORDS rather than f32s (GPU-SLIP-4b-3).
+    ///
+    /// Two things can only go wrong here, and they are the two asserted.
+    /// `arrayLength(&input)` counts f32s, so the element bound must divide by
+    /// the stride — forgetting that reduces `stride`× too many slots and runs
+    /// off the group; folding the stride in twice silently reduces a prefix.
+    /// And the load must be `i * stride + offset`, since offset alone would
+    /// read record 0's neighbour every time.
+    ///
+    /// The rejection cases matter because both are reachable from a codegen
+    /// bug rather than from user input: a zero stride would divide by zero in
+    /// the shader, and an offset outside the stride would read the NEXT
+    /// record's field — a wrong answer rather than a crash.
+    #[test]
+    fn reduce_field_kernel_indexes_by_stride_and_offset() {
+        let w = emit_reduce_field_kernel(ReduceOp::Sum, "f32", 4, 3).unwrap();
+        assert!(
+            w.contains("let n = arrayLength(&input) / 4u;"),
+            "the element bound must be in RECORDS (arrayLength / stride); got:\n{w}"
+        );
+        assert!(
+            w.contains("scratch[t] = input[i * 4u + 3u];"),
+            "the load must be `i * stride + offset`; got:\n{w}"
+        );
+
+        // A single-field group degenerates to a contiguous read, which is the
+        // default layout and therefore the common case.
+        let flat = emit_reduce_field_kernel(ReduceOp::Sum, "f32", 1, 0).unwrap();
+        assert!(
+            flat.contains("let n = arrayLength(&input) / 1u;")
+                && flat.contains("scratch[t] = input[i * 1u + 0u];"),
+            "stride 1 / offset 0 must still be well-formed; got:\n{flat}"
+        );
+
+        assert!(
+            emit_reduce_field_kernel(ReduceOp::Sum, "f32", 0, 0).is_err(),
+            "a zero stride would divide by zero in the shader"
+        );
+        assert!(
+            emit_reduce_field_kernel(ReduceOp::Sum, "f32", 2, 2).is_err(),
+            "an offset outside the stride would read the next record's field"
+        );
+    }
+
     /// Every reduce/scan shader must recover the FLAT thread index and the
     /// FLAT workgroup number (B-2026-08-21-13).
     ///
@@ -5441,11 +5561,22 @@ mod tests {
             shaders.push((name, made.unwrap()));
         }
         shaders.push(("wide_fold", emit_wide_fold_kernel()));
+        // The STRIDED level-0 kernel for a resident field reduction
+        // (GPU-SLIP-4b-3). It recovers its own index, so it can reintroduce
+        // this defect independently of the twelve above — and it is the one
+        // emitter whose bound is `arrayLength / stride` rather than the array
+        // length, so both a contiguous group (stride 1) and an interleaved one
+        // are covered here.
+        for (stride, offset) in [(1u32, 0u32), (4, 3)] {
+            if let Ok(w) = emit_reduce_field_kernel(ReduceOp::Sum, "f32", stride, offset) {
+                shaders.push(("reduce_field", w));
+            }
+        }
 
         let distinct: std::collections::BTreeSet<&str> = shaders.iter().map(|(n, _)| *n).collect();
         assert_eq!(
             distinct.len(),
-            12,
+            13,
             "every reduce/scan emitter must be covered; got {distinct:?}"
         );
 

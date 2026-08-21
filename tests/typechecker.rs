@@ -38418,6 +38418,60 @@ fn gpu_sum_rejects_a_non_wgsl_element_type() {
 }
 
 #[test]
+fn gpu_reduce_over_a_device_buffer_field_typechecks_and_names_unknown_fields() {
+    // GPU-SLIP-4b-3: `gpu.sum(buf.m)` reduces one FIELD of a resident
+    // `GpuBuffer[S]`. `buf.m` is an ordinary `FieldAccess`, so the surface
+    // needs no new syntax — but `GpuBuffer[S]` has no fields of its own, so
+    // without the intercept this would be a plain field-access error.
+    typecheck_ok(
+        "struct Cell { m: f32, t: f32 }\n\
+        fn main() {\n\
+        \x20   let v: Vec[Cell] = Vec.new();\n\
+        \x20   let buf = gpu.upload(v);\n\
+        \x20   let s: f32 = gpu.sum(buf.m);\n\
+        }",
+    );
+
+    // The result shapes match the host-side reductions exactly, which is what
+    // makes swapping `gpu.sum(v)` for `gpu.sum(buf.m)` a refactor rather than
+    // a signature change: `min` is still `Option[f32]` because an empty buffer
+    // still has no minimum.
+    typecheck_ok(
+        "struct Cell { m: f32, t: f32 }\n\
+        fn main() {\n\
+        \x20   let v: Vec[Cell] = Vec.new();\n\
+        \x20   let buf = gpu.upload(v);\n\
+        \x20   let m: Option[f32] = gpu.min(buf.m);\n\
+        }",
+    );
+
+    // A misspelled field must say so, and LIST the real ones — the whole
+    // reason to intercept here rather than let it fall through to a generic
+    // "not a Vec" complaint about a type the user never wrote.
+    let errs = typecheck_errors(
+        "struct Cell { m: f32, t: f32 }\n\
+        fn main() {\n\
+        \x20   let v: Vec[Cell] = Vec.new();\n\
+        \x20   let buf = gpu.upload(v);\n\
+        \x20   let s = gpu.sum(buf.nope);\n\
+        }",
+    );
+    let joined = errs
+        .iter()
+        .map(|e| e.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        joined.contains("E_GPU_REDUCE_FIELD") && joined.contains("nope"),
+        "expected a named-field error, got: {joined}"
+    );
+    assert!(
+        joined.contains("m, t"),
+        "the diagnostic must list the fields that DO exist, got: {joined}"
+    );
+}
+
+#[test]
 fn gpu_sum_takes_exactly_one_buffer() {
     // No kernel argument — the operation is named so its associativity is the
     // compiler's guarantee, not something a user combiner would have to
