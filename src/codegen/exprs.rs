@@ -1433,6 +1433,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 match vec_elem_te {
                     Some(elem_te) => {
                         let val = self.compile_expr(value)?;
+                        // The fill value is MOVED into every slot of the buffer, so any
+                        // independent scope-exit cleanup it registered must be
+                        // suppressed — otherwise that cleanup and the Vec's owner both
+                        // free the same pointer (B-2026-08-21-22: `Vec.filled(3, f"n{1}")`
+                        // aborted with "double free detected in tcache 2" under both
+                        // compiled backends while `--interp` printed correctly). Must run
+                        // RIGHT AFTER `compile_expr(value)` — `last_fstr_acc` is a single
+                        // slot the next compile overwrites, so the count's compile below
+                        // would clear it. Same call `Vec.push` and `Vec.from_fn` make.
+                        self.suppress_fstr_acc_if_moved_out(value);
                         let target = self.llvm_type_for_type_expr(&elem_te);
                         let val = if target.is_int_type() || target.is_float_type() {
                             self.coerce_literal_elem_to_type(val, target)

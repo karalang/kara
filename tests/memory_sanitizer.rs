@@ -666,6 +666,55 @@ mod memory_sanitizer_tests {
     //       binding's `FreeTensor` — previously both the Vec's element-drop and
     //       `seed`'s cleanup freed the block (double-free).
 
+    /// B-2026-08-21-22 — `Vec.filled(n, f"...")` DOUBLE-FREED under both
+    /// compiled backends (`free(): double free detected in tcache 2`, SIGABRT
+    /// exit 134) while `--interp` printed correctly: a silent run/build
+    /// divergence that aborts the process.
+    ///
+    /// The fill value is moved into every slot of the buffer, but the f-string
+    /// accumulator kept its OWN scope-exit cleanup, so that cleanup and the
+    /// Vec's owner both freed the same pointer. `Vec.push` and `Vec.from_fn`
+    /// already called `suppress_fstr_acc_if_moved_out`; `filled` did not — at
+    /// any of its THREE entry points, which is why both spellings are pinned
+    /// here. The call has to sit immediately after the value's `compile_expr`:
+    /// `last_fstr_acc` is a single slot that the count's compile overwrites.
+    ///
+    /// Controls from the row, both always clean and both still exercised
+    /// elsewhere: `Vec.filled(3, "x".to_string())` and a `push` loop.
+    #[test]
+    fn asan_vec_filled_fstring_value_is_not_double_freed() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let v: Vec[String] = Vec.filled(3, f"n{1}");
+    println(v[0]);
+    println(v[2]);
+}
+"#,
+            &["n1", "n1"],
+            "asan_vec_filled_fstring_value_is_not_double_freed",
+        );
+    }
+
+    /// The `Vec[v; n]` repeat-literal spelling of the same constructor — a
+    /// DIFFERENT codegen entry point into `build_vec_filled`, so a partial fix
+    /// that patched only `Vec.filled(...)` fails this test specifically
+    /// (B-2026-08-21-22).
+    #[test]
+    fn asan_vec_repeat_literal_fstring_value_is_not_double_freed() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let v: Vec[String] = Vec[f"r{2}"; 3];
+    println(v[0]);
+    println(v[2]);
+}
+"#,
+            &["r2", "r2"],
+            "asan_vec_repeat_literal_fstring_value_is_not_double_freed",
+        );
+    }
+
     #[test]
     fn asan_shared_struct_vec_tensor_field_drop() {
         // (a) push-only — the shared-struct `Vec[Tensor]` field drop must free

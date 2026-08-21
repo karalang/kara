@@ -2091,6 +2091,9 @@ impl<'ctx> super::Codegen<'ctx> {
             // nested repeat/`filled` value does not inherit a stale element type.
             let elem_te = self.var_types.pending_let_elem_type_expr.take();
             let val = self.compile_expr(value)?;
+            // Moved into every slot — suppress its independent cleanup before the
+            // count's compile overwrites `last_fstr_acc` (B-2026-08-21-22).
+            self.suppress_fstr_acc_if_moved_out(value);
             let n = self.compile_expr(count)?.into_int_value();
             return self.build_vec_filled(n, val, elem_te);
         }
