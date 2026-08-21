@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 120 | 0 |
 | diagnostics | 92 | 1 |
 | false-positive | 89 | 0 |
-| perf | 83 | 1 |
+| perf | 83 | 0 |
 | crash | 55 | 1 |
 | soundness | 51 | 0 |
 | other | 51 | 1 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | codegen | 965 | 2 |
 | typecheck | 224 | 4 |
-| interp | 169 | 2 |
+| interp | 169 | 1 |
 | ownership | 62 | 0 |
 | other | 60 | 1 |
 | cli | 57 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 7 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1432 surfaced · 11 open · 1399 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1432 surfaced · 10 open · 1400 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (11)
+### Open (10)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -136,7 +136,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1432 surfaced
 | B-2026-08-21-2 | 2026-08-21 | cli | medium | SEVEN REGISTERED LINTS STILL HAVE NO EMIT SITE and so can never fire, though all seven are registered `default_level: LintLevel::Warn` -- advertised by `karac lint --list` and accepted in `#[allow(...)]`: `f16_software_emulated`, `float_in_serialized_type`, `implicit_clone`, `module_mut_binding`, `mutual_recursion_note`, `pure_loop_in_par`, `repr_c_layout_ignored`. They are the remainder of B-2026-08-20-36's eight, which wired `redundant_suffix` (the one design.md documents as live) and added the guard that now holds this list. They are VISIBLE IN CODE, not only here: `KNOWN_UNWIRED` in `src/lints.rs`, which `every_registered_lint_is_emitted_or_declared_unwired` fails on if the list grows or goes stale. | roadmap.md |
 | B-2026-08-21-5 | 2026-08-21 | codegen | medium | `compile_cstr_method` PANICS on a `ref CStr` PARAMETER receiver instead of emitting a diagnostic: `fn look(c: ref CStr) -> i64 { c.len() }` aborts karac with `Found IntValue(... %c.deref = load i64, ptr %c1 ...) but expected the StructValue variant` at src/codegen/method_call_ffi.rs:34 (inkwell `BasicValueEnum::into_struct_value`). `--interp` prints 3. Any CStr method on that receiver shape hits it -- `len`, `as_bytes` measured. | src/codegen/method_call_ffi.rs::compile_cstr_method (the `recv.into_struct_value()` unwrap at the top of the fn — the panic site, and the place a structured Err belongs regardless); src/codegen/functions.rs (where a `ref CStr` param's slot is set up — the receiver arrives as a loaded i64 rather than the `{ptr, i64}` aggregate); tests/codegen.rs::test_e2e_cstr_len_is_empty_as_bytes (the literal-receiver coverage that passes, showing the gap is param-only) |
 | B-2026-08-21-6 | 2026-08-21 | codegen+interp | medium | `Map`/`Set` DO NOT USE THE SPEC'S DEFAULT HASHER: design.md mandates `SipHash13BuildHasher` seeded from a per-process random source, codegen emits FxHash with a COMPILE-TIME-CONSTANT seed and the interpreter hashes not at all -- so there is no hash-flooding resistance, iteration order is fully deterministic across runs (design.md says it must vary), the two backends order differently from each other, and `Map[K, V, FxBuildHasher]` -- design.md's own spelling -- does not resolve, so there is no opt-in either way | roadmap.md |
-| B-2026-08-21-8 | 2026-08-21 | interp | medium | THE INTERPRETER'S `Map`/`Set` ARE ASSOCIATION LISTS, so every `get`/`insert`/`contains` is a LINEAR SCAN and any map-keyed program is QUADRATIC under `karac run --interp` -- measured 4x per doubling against codegen's flat line, and design.md documents O(1) lookup | roadmap.md |
 | B-2026-08-21-9 | 2026-08-21 | parser | medium | design.md WRITES SYNTAX THE PARSER HAS NO PRODUCTION FOR, in two places syntax.md also disagrees with: the inline associated-type binding `Trait[Assoc = T]` (43 lines of design.md, and syntax.md's own comment at :650) has no form in `TRAIT_BOUND = PATH [ "[" TYPE_LIST "]" ]`, and an effect clause on an impl header (`impl From[E] for A with writes(Log) {`) has no form at all | roadmap.md |
 | B-2026-08-21-10 | 2026-08-21 | typecheck | medium | FOUR STDLIB ENTRY POINTS design.md DOCUMENTS DO NOT EXIST -- `Vec.from_fn` (in the Vec method table, with a worked example), `Vec.is_sorted` (used inside `requires` contracts twice), `u16.to_ne_bytes`, and an enum's `.discriminant()` -- the `TreeMap` shape again: written up, never implemented | roadmap.md |
 | B-2026-08-21-11 | 2026-08-21 | other | low | design.md EXAMPLES ARE WRITTEN IN SYNTAX design.md AND syntax.md THEMSELVES FORBID: `mu.lock()` and `let group = ...` use hard keywords as identifiers, `fillna(0.0, flag = true)` uses `=` where the doc's own rule says labeled `:`, `[u8; 2]` and `r"..."` are Rust idioms the spec explicitly does not have | roadmap.md |
@@ -159,9 +158,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1432 surfaced
 
 </details>
 
-### Fixed (1399)
+### Fixed (1400)
 
-<details><summary>1399 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1400 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -13398,6 +13397,38 @@ So the hole was real and all but unexploited: the corpus was already writing the
 DESIGN.MD UPDATED IN THE SAME CHANGE, because the enumeration is what let this ship. § Variable Binding Rules named two write forms and now names three, and § Part 1½ (Call-site Mutation Markers) gains the sentence that closes the ambiguity directly: the marker announces a mutation at the call site, it does not authorize one the declaration withheld -- required IN ADDITION TO `let mut`, never instead of it.
 
 Pinned by eight tests in tests/ownership.rs, in B-2026-07-27-9's own block: the `mut ref T` and `mut Slice[T]` spellings, a field-rooted argument (the place ROOT is what the rule keys on, as in the field-assignment arm), a sub-range argument (B-2026-08-20-38's shape, inheriting this rule rather than a private one), the auto-fix edit, and three accepting controls -- every write shape over a `let mut` binding, a forwarded `mut ref` parameter, and an unmarked read-only argument. The five rejecting tests fail without the fix. |
+| B-2026-08-21-8 | interp | medium | THE INTERPRETER'S `Map`/`Set` ARE ASSOCIATION LISTS, so every `get`/`insert`/`contains` is a LINEAR SCAN and any map-keyed program is QUADRATIC under… | FIXED by 04ed765. `Value::Map` and `Value::Set` are now `Arc<RwLock<MapData>>` / `Arc<RwLock<SetData>>` — insertion-ordered storage with a hash index beside it — where they were a bare `Vec<(Value, Value)>` / `Vec<Value>`.
+
+MEASUREMENT CORRECTED THIS ROW'S CAUSE ANALYSIS, and the correction is the useful part. The row attributes the quadratic behaviour to the association list's linear scan. That scan is real, but it is the SMALLER half. Two measurements separate them:
+
+  - INSERT-ONLY is quadratic on its own -- 0.19 s / 0.64 s / 2.40 s at n = 1000 / 2000 / 4000, ratios 3.3x and 3.8x -- in a program that performs no lookups at all.
+  - `Vec.push` over the same lengths is LINEAR: 0.088 / 0.094 / 0.130 / 0.192 s at n = 1000..8000.
+
+The difference between those two loops is representation, not algorithm. `Env::get` ends in `other.clone()`, so materializing a method's receiver DEEP-COPIES the whole container before the method body runs. `Value::Array` was already `Arc<RwLock<Vec<Value>>>`, so its clone is a refcount bump; `Value::Map` was by-value, so every `insert` / `get` / `len` copied the map. An index alone would have left that untouched and the curve would have stayed quadratic -- the fix had to move the representation first.
+
+BOTH HALVES LANDED, because either alone is insufficient: Arc-backing removes the O(n) clone but leaves an O(n) scan, and the index removes the scan but not the clone.
+
+MEASURED, same program as the row's (insert n keys, then look up all n):
+
+  n        before      after     speedup
+  1000     0.48 s      0.123 s     3.9x
+  2000     1.84 s      0.179 s      10x
+  4000     7.31 s      0.281 s      26x
+  8000    27.61 s      0.473 s      58x
+
+Per-doubling ratios go from 3.8x / 4.0x / 3.8x (quadratic) to 1.46x / 1.57x / 1.69x (linear, with the interpreter's constant factor). `Set` is the same story: 0.33 / 1.08 / 4.33 s (3.3x, 4.0x) becomes 0.115 / 0.170 / 0.263 s (1.5x). Map and Set EQUALITY also drop from O(n^2) to O(n) as a side effect -- both were a nested scan and now probe the index.
+
+ITERATION ORDER IS UNCHANGED, deliberately. design.md § Map states iteration order is unspecified and the two backends already disagree (interpreter insertion-ordered, codegen bucket-ordered) -- that divergence is B-2026-08-21-6's subject, not this row's, so keeping the interpreter's insertion order makes this a complexity fix with nothing observable riding on it. `entries` is walked directly by every read path exactly as the `Vec` was; the index only answers "where is this key".
+
+ONE OBSERVABLE CHANGE, stated rather than buried: `Set.remove` used `swap_remove`, which moved the last element into the hole, and now preserves order like every other container. Both are legal under the unspecified-order rule and order-preserving is what `Map` and `Vec` already do.
+
+CORRECTNESS OF THE INDEX rests on one asymmetric obligation: `a == b` implies equal hashes, but NOT the converse -- every candidate the hash suggests is confirmed with `==`. That is what lets `hash_value` be written conservatively: anything whose equality is subtle (every float carrier, `SharedStruct`, channel ends, closures) hashes to its DISCRIMINANT ALONE, so those keys share one bucket and degrade to a linear scan -- which is exactly the behaviour being removed here, so an under-hashed key type is slow, never wrong. Only OVER-hashing could lose an entry, so no arm hashes anything the matching arm of `PartialEq for Value` does not compare. Floats are the sharpest case (IEEE equality: `NaN != NaN`, `0.0 == -0.0`) and are unreachable as keys anyway -- `Map[f64, _]` is rejected at typecheck as not `Hash`. `Struct` fields and `EnumData::Struct` payloads live in a `HashMap`, so their per-field hashes are XOR-combined to stay order-independent.
+
+REGRESSION SURFACE MEASURED, because Arc-backing changes how storage is shared and only `deep_clone_value` at binding sites keeps two bindings independent. Both full suites are green (`cargo test` and `cargo test --features llvm`, zero failures). A 40-file interp-vs-JIT parity sweep over map/set-using katas agrees 26/26 on every file that completes under both backends; the 14 that do not are BENCH files whose interpreter arm still exceeds 40 s, and the 15 apparent "divergences" in a first pass were an artifact of that sweep masking `timeout`'s exit status behind a pipe -- re-run with the status checked, nothing diverges. A baseline sweep on the pre-change compiler produced the identical set, confirming none of it is new.
+
+HOW MUCH THIS ROW'S OWN EXAMPLE GAINS, measured rather than assumed, because the row's "WHY IT MATTERS" leans on it: kata #294's differential runs 234 s before and 168 s after on the same machine -- a real 1.4x, not an order of magnitude. Its memo map holds ~1492 entries over ~8900 calls, so the scan was never where its time went; that kata is dominated by general tree-walk overhead. The 58x figure above is what MAP-BOUND work gains. The row's claim that "essentially all of that difference is memo lookups scanning a list" does not survive measurement, and the coverage that kata cut (exhaustive band 14 -> 12) is not restored by this fix alone.
+
+Pinned by nine E2E tests in tests/interpreter.rs -- insertion order, overwrite-keeps-position, survivors-findable-after-remove (the case a stale index breaks silently), value-semantics for `Map`, `Set`, and a map inside a struct field, the `entry`/`or_insert` slot chain, distinct tuple keys sharing a bucket, and a 400-key volume case -- plus four unit tests in src/interpreter/value.rs, of which `hash_value_agrees_with_equality` is the one guarding the whole design. |
 | B-2026-08-21-13 | codegen | high | EVERY `gpu.*` REDUCTION SILENTLY DROPPED every element past 4,194,240 | 42fee64f |
 
 </details>
