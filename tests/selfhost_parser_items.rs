@@ -1033,7 +1033,7 @@ fn selfhost_parser_matches_rust_parser_items() {
             "self-hosted item parser FAILED TO COMPILE (port regression):\n{berr}\n\
              --- generated source ---\n{prog}"
         );
-        // B-2026-08-21-30 — a soft-skip must not report PASS having compared nothing.
+        // B-2026-08-21-33 — a soft-skip must not report PASS having compared nothing.
         //
         // On a link failure this oracle returns `None` and the caller returns,
         // so the test passes having run no comparison — the vacuous-pass shape
