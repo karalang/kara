@@ -21,7 +21,7 @@
 use crate::ast::*;
 use crate::token::Span;
 
-use super::types::{type_display, FloatSize, IntSize, Type, UIntSize};
+use super::types::{type_display, ConstArg, FloatSize, IntSize, Type, UIntSize};
 use super::TypeErrorKind;
 
 impl<'a> super::TypeChecker<'a> {
@@ -568,6 +568,42 @@ impl<'a> super::TypeChecker<'a> {
         {
             self.record_expr_type(args_close_span, receiver_for_lookup);
             return Some(Type::UInt(UIntSize::U32));
+        }
+        // `to_ne_bytes()` on integer scalars -> `Array[u8, N]`, N = the
+        // receiver's byte width (B-2026-08-21-10). design.md § `Hash` and
+        // `Hasher` writes the trait's default bodies against it —
+        // `fn write_u16(mut ref self, n: u16) { self.write(n.to_ne_bytes()) }`
+        // — so the spec's own `Hasher` cannot be transcribed without it; it
+        // failed with "no method 'to_ne_bytes' on type 'u16'".
+        //
+        // `Array[u8, N]` rather than `Vec[u8]` is what makes that example
+        // work: the fixed array coerces to the `ref Slice[u8]` the `write`
+        // parameter declares, and it allocates nothing. The result type
+        // differs from the receiver, so the receiver is stashed at the
+        // non-aliased `args_close_span` leaf for the interpreter's width
+        // recovery — the same channel the bit intrinsics use.
+        //
+        // NATIVE order only. `to_le_bytes` / `to_be_bytes` are NOT here:
+        // design.md names only the `ne` form, and native order is the one
+        // shape both backends can produce as a pure reinterpretation of the
+        // value's bytes with no endianness assumption baked into the compiler.
+        if args.is_empty()
+            && method == "to_ne_bytes"
+            && matches!(receiver_for_lookup, Type::Int(_) | Type::UInt(_))
+        {
+            let bytes = match receiver_for_lookup {
+                Type::Int(IntSize::I8) | Type::UInt(UIntSize::U8) => 1,
+                Type::Int(IntSize::I16) | Type::UInt(UIntSize::U16) => 2,
+                Type::Int(IntSize::I32) | Type::UInt(UIntSize::U32) => 4,
+                Type::Int(IntSize::I128) | Type::UInt(UIntSize::U128) => 16,
+                // i64 / u64 / isize / usize.
+                _ => 8,
+            };
+            self.record_expr_type(args_close_span, receiver_for_lookup);
+            return Some(Type::Array {
+                element: Box::new(Type::UInt(UIntSize::U8)),
+                size: ConstArg::Literal(bytes),
+            });
         }
         // `is_power_of_two` on unsigned integer scalars -> bool (Rust's
         // `uN::is_power_of_two`; unsigned-only, since power-of-two-ness is

@@ -8288,7 +8288,17 @@ impl<'ctx> super::Codegen<'ctx> {
     /// gates from drifting apart again.
     pub(super) fn arg_is_array_source(&self, arg: &Expr) -> bool {
         let ExprKind::Identifier(var) = &arg.kind else {
-            return false;
+            // A fixed-array RVALUE — `f(n.to_ne_bytes())` (B-2026-08-21-10).
+            // It needs the header synthesis for the same reason a named array
+            // does, and more urgently: a bound array at least has an alloca to
+            // point at, while a temporary reached the call as a raw
+            // `[N x i8]` aggregate. `infer_expr_llvm_type` is conservative and
+            // side-effect-free, so a shape it cannot classify falls through to
+            // the existing behaviour rather than being guessed at.
+            return matches!(
+                self.infer_expr_llvm_type(arg, &std::collections::HashMap::new()),
+                Some(BasicTypeEnum::ArrayType(_))
+            );
         };
         if self
             .variables
@@ -8476,6 +8486,33 @@ impl<'ctx> super::Codegen<'ctx> {
         // general (B-2026-07-29-32).
         if let Some((data, len)) = self.fresh_vec_rvalue_slice_parts(arg)? {
             return Ok(Some(self.build_slice_header(slice_ty, data, len)));
+        }
+
+        // A fixed-ARRAY rvalue at a call boundary — `f(n.to_ne_bytes())`
+        // (B-2026-08-21-10). The `Identifier` fast path at the top covers a
+        // BOUND array by pointing at its alloca; a temporary has no alloca, so
+        // it reached the call as a raw `[N x i8]` aggregate and failed LLVM
+        // verification against the param's `{ptr, len}` — the same class the
+        // collection-literal arm above closes for `f([1, 2, 3])`.
+        //
+        // The type is PREDICTED before compiling, never after: `coerce_to_slice`
+        // is called for its side effects, so a compile-then-decide would
+        // double-emit the argument on every path that then returns `None`.
+        // `infer_expr_llvm_type` is conservative and answers `None` rather than
+        // guessing, and the element check makes the stride the caller asked for
+        // the stride this actually has.
+        if let Some(BasicTypeEnum::ArrayType(at)) =
+            self.infer_expr_llvm_type(arg, &std::collections::HashMap::new())
+        {
+            if at.get_element_type() == elem_ty {
+                if let Some(fn_val) = self.current_fn {
+                    let compiled = self.compile_expr(arg)?;
+                    let slot = self.create_entry_alloca(fn_val, "arr.rvalue.arg", at.into());
+                    self.builder.build_store(slot, compiled).unwrap();
+                    let len = i64_t.const_int(at.len() as u64, false);
+                    return Ok(Some(self.build_slice_header(slice_ty, slot, len)));
+                }
+            }
         }
 
         let _ = elem_ty;

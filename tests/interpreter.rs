@@ -36650,3 +36650,75 @@ fn vec_from_fn_rejects_a_negative_length() {
         errors.iter().map(|e| &e.message).collect::<Vec<_>>()
     );
 }
+
+// ── B-2026-08-21-10: `to_ne_bytes()` on the integer scalars ─────
+//
+// The bytes are the value's NATIVE-order memory image. The interpreter's
+// i64-backed model sign-extends a narrow `iN`, so taking the low N bytes of
+// that image is exactly the reinterpretation codegen's store-and-reload
+// performs — which is what keeps the two backends' answers identical.
+
+#[test]
+fn to_ne_bytes_gives_the_native_order_image() {
+    let out = run("fn main() {\n\
+        let n: u16 = 4660u16;\n\
+        let b = n.to_ne_bytes();\n\
+        let w: u32 = 16909060u32;\n\
+        let c = w.to_ne_bytes();\n\
+        println(f\"{b.len()} {b[0]} {b[1]} | {c.len()} {c[0]} {c[3]}\");\n\
+    }");
+    // 0x1234 and 0x01020304 on a little-endian host.
+    assert_eq!(out, "2 52 18 | 4 4 1\n");
+}
+
+#[test]
+fn to_ne_bytes_covers_every_integer_width() {
+    // Each result is BOUND before `len()` — a method call on an Array
+    // TEMPORARY has no codegen lowering, so chaining here would pin a shape
+    // only the interpreter runs.
+    let out = run("fn main() {\n\
+        let a: u8 = 7u8;\n\
+        let b: u16 = 7u16;\n\
+        let c: u32 = 7u32;\n\
+        let d: u64 = 7u64;\n\
+        let e: i16 = 7i16;\n\
+        let f: i64 = 7i64;\n\
+        let ab = a.to_ne_bytes();\n\
+        let bb = b.to_ne_bytes();\n\
+        let cb = c.to_ne_bytes();\n\
+        let db = d.to_ne_bytes();\n\
+        let eb = e.to_ne_bytes();\n\
+        let fb = f.to_ne_bytes();\n\
+        println(f\"{ab.len()} {bb.len()} {cb.len()} {db.len()} {eb.len()} {fb.len()}\");\n\
+    }");
+    assert_eq!(out, "1 2 4 8 2 8\n");
+}
+
+#[test]
+fn to_ne_bytes_of_a_negative_value_is_its_twos_complement_image() {
+    // The bytes are the value's memory image, not its magnitude — the model's
+    // sign extension must be masked to the receiver's width, or an `i16` -2
+    // would report the i64 image's 0xFF bytes at every index.
+    let out = run("fn main() {\n\
+        let n: i16 = -2i16;\n\
+        let b = n.to_ne_bytes();\n\
+        println(f\"{b.len()} {b[0]} {b[1]}\");\n\
+    }");
+    assert_eq!(out, "2 254 255\n");
+}
+
+#[test]
+fn to_ne_bytes_feeds_a_slice_parameter() {
+    // The shape design.md's `Hasher` default bodies are written in.
+    let out = run("fn total(b: ref Slice[u8]) -> i64 {\n\
+        let mut s = 0i64;\n\
+        let mut i = 0i64;\n\
+        while i < b.len() { s = s + b[i] as i64; i = i + 1i64; }\n\
+        s\n\
+    }\n\
+    fn main() {\n\
+        let w: u32 = 16909060u32;\n\
+        println(total(w.to_ne_bytes()));\n\
+    }");
+    assert_eq!(out, "10\n");
+}

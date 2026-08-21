@@ -3451,6 +3451,39 @@ impl<'a> super::Interpreter<'a> {
             }
         }
 
+        // `to_ne_bytes()` on integer scalars -> `Array[u8, N]` (typed in
+        // method_numeric.rs). The bytes are the value's NATIVE-order memory
+        // image, so the width recovered from `args_close_span` selects both
+        // how many bytes there are and which of them are significant: the
+        // i64-backed model sign-extends a narrow `iN`, and taking the low N
+        // bytes of that image is exactly the same reinterpretation codegen's
+        // store-and-reload performs (B-2026-08-21-10).
+        if args.is_empty() && method == "to_ne_bytes" {
+            if let Value::Int(n) = &obj {
+                let (bits, _signed) = match self.int_width_at(args_close_span) {
+                    IntW::S(b) => (b, true),
+                    IntW::U(b) => (b, false),
+                };
+                let nbytes = (bits as usize) / 8;
+                let image = (*n as u128).to_ne_bytes();
+                // `u128::to_ne_bytes` is the full 16-byte image in native
+                // order; the receiver's own bytes are the first N of it on a
+                // little-endian target and the last N on a big-endian one.
+                let bytes: Vec<Value> = if cfg!(target_endian = "little") {
+                    image[..nbytes]
+                        .iter()
+                        .map(|b| Value::Int(i128::from(*b)))
+                        .collect()
+                } else {
+                    image[16 - nbytes..]
+                        .iter()
+                        .map(|b| Value::Int(i128::from(*b)))
+                        .collect()
+                };
+                return Value::array_of(bytes);
+            }
+        }
+
         // `is_power_of_two` on unsigned integer scalars -> bool (typed in
         // expr_method_call.rs). The stored value is masked to the receiver width
         // recovered from `args_close_span` (a narrow unsigned value is already

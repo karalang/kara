@@ -101518,6 +101518,64 @@ fn main() {
         );
     }
 
+    /// B-2026-08-21-10 — `to_ne_bytes()`, end to end.
+    ///
+    /// Lowered as store-then-reload, so the answer IS the native byte order by
+    /// construction with no endianness constant in the compiler. Both halves
+    /// of the surface are swept: a BOUND result (which needs the binding
+    /// registered as `Array[u8, N]` — without that its element width is
+    /// unknown and handing it to a `ref Slice[u8]` parameter built a header
+    /// striding at the i64 default, which SEGFAULTED) and a TEMPORARY passed
+    /// straight to a slice parameter (which has no alloca to point at, so the
+    /// value is spilled at the call boundary).
+    #[test]
+    fn test_e2e_to_ne_bytes_is_the_native_order_image() {
+        let src = r#"
+fn total(b: ref Slice[u8]) -> i64 {
+    let mut s = 0;
+    let mut i = 0;
+    while i < b.len() { s = s + b[i] as i64; i = i + 1; }
+    s
+}
+fn by_value(b: Slice[u8]) -> i64 { b.len() }
+
+fn main() {
+    let n: u16 = 4660u16;      // 0x1234
+    let b = n.to_ne_bytes();
+    println(b.len());
+    println(b[0]);
+    println(b[1]);
+
+    // A BOUND array handed to a `ref Slice[u8]` parameter.
+    println(total(b));
+
+    // A TEMPORARY handed straight to a slice parameter, both param shapes.
+    let w: u32 = 16909060u32;  // 0x01020304
+    println(total(w.to_ne_bytes()));
+    println(by_value(w.to_ne_bytes()));
+
+    // Negative receiver: the bytes are the two's-complement image at the
+    // RECEIVER's width, not the i64 model's.
+    let sg: i16 = -2i16;
+    let sb = sg.to_ne_bytes();
+    println(sb[0]);
+    println(sb[1]);
+
+    // Every width the surface admits.
+    let a8: u8 = 7u8;
+    let a64: u64 = 7u64;
+    let ab = a8.to_ne_bytes();
+    let db = a64.to_ne_bytes();
+    println(ab.len());
+    println(db.len());
+}
+"#;
+        assert_eq!(
+            run_program(src).as_deref(),
+            Some("2\n52\n18\n70\n10\n4\n254\n255\n1\n8\n")
+        );
+    }
+
     /// B-2026-08-21-10 — `Vec.from_fn(n, f)`, end to end.
     ///
     /// The element type must be settled BEFORE the buffer is allocated,

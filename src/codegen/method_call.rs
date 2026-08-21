@@ -350,7 +350,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `method`), fall back to the receiver expression's declared type / literal
     /// suffix — matching the interpreter's non-aliased `args_close_span` recovery.
     /// Defaults to signed 64-bit (the language's default integer).
-    fn receiver_int_kind(
+    pub(super) fn receiver_int_kind(
         &self,
         object: &Expr,
         call_span: &crate::token::Span,
@@ -3967,6 +3967,31 @@ impl<'ctx> super::Codegen<'ctx> {
             let result =
                 self.coerce_int_to(acc_final, self.int_carrier_type_for_bits(bits), unsigned);
             return Ok(result.into());
+        }
+
+        // `to_ne_bytes()` (typed in method_numeric.rs) -> `Array[u8, N]`, the
+        // receiver's NATIVE-order memory image (B-2026-08-21-10).
+        //
+        // Lowered as store-then-reload rather than a shift/mask chain: the
+        // integer is narrowed to its declared width, stored into an alloca of
+        // that type, and read back as `[N x i8]`. That IS the native byte
+        // order by construction — no endianness constant is baked into the
+        // compiler, so the same code is correct on a big-endian target, and it
+        // matches the interpreter, which takes the same N bytes of the value's
+        // `to_ne_bytes` image. The alloca is aligned for the integer type, so
+        // the i8-array reload needs no lower alignment claim.
+        if args.is_empty() && method == "to_ne_bytes" {
+            let (bits, unsigned) = self.receiver_int_kind(object, call_span, method);
+            let int_ty = self.int_type_for_bits(bits);
+            let v_raw = self.compile_expr(object)?.into_int_value();
+            let v = self.coerce_int_to(v_raw, int_ty, unsigned);
+            let fn_val = self
+                .current_fn
+                .ok_or_else(|| "to_ne_bytes outside a function".to_string())?;
+            let slot = self.create_entry_alloca(fn_val, "tneb.slot", int_ty.into());
+            self.builder.build_store(slot, v).unwrap();
+            let arr_ty = self.context.i8_type().array_type(bits / 8);
+            return Ok(self.builder.build_load(arr_ty, slot, "tneb").unwrap());
         }
 
         // Bit intrinsics (typed in expr_method_call.rs): `count_ones` /

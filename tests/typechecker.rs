@@ -3623,6 +3623,65 @@ fn first_still_takes_no_arguments() {
     }
 }
 
+/// B-2026-08-21-10 — `to_ne_bytes()` exists on the integer scalars and returns
+/// `Array[u8, N]` at the receiver's byte width.
+///
+/// design.md § `Hash` and `Hasher` writes the trait's default bodies against it
+/// — `fn write_u16(mut ref self, n: u16) { self.write(n.to_ne_bytes()) }` —
+/// so the spec's `Hasher` could not be transcribed; it failed with "no method
+/// 'to_ne_bytes' on type 'u16'". `Array[u8, N]` rather than `Vec[u8]` is what
+/// makes that body work: the fixed array coerces to the `ref Slice[u8]` the
+/// `write` parameter declares, and it allocates nothing.
+#[test]
+fn to_ne_bytes_returns_a_fixed_array_at_the_receiver_width() {
+    for (ty, lit, n) in [
+        ("u8", "7u8", 1),
+        ("u16", "7u16", 2),
+        ("u32", "7u32", 4),
+        ("u64", "7u64", 8),
+        ("i16", "7i16", 2),
+        ("i64", "7i64", 8),
+    ] {
+        typecheck_ok(&format!(
+            "fn main() {{\n                 let n: {ty} = {lit};\n                 let b: Array[u8, {n}] = n.to_ne_bytes();\n                 println(b[0]);\n             }}"
+        ));
+    }
+    // The width is checked, not merely asserted: a wrong `N` is rejected.
+    let wrong = typecheck_errors(
+        "fn main() {\n             let n: u16 = 7u16;\n             let b: Array[u8, 4] = n.to_ne_bytes();\n             println(b[0]);\n         }",
+    );
+    assert!(
+        !wrong.is_empty(),
+        "a u16's to_ne_bytes must not satisfy Array[u8, 4]"
+    );
+}
+
+/// The result coerces to a `Slice[u8]` parameter, which is the only reason the
+/// spec's `Hasher` bodies parse as written.
+#[test]
+fn to_ne_bytes_coerces_to_a_slice_parameter() {
+    typecheck_ok(
+        "fn take(b: ref Slice[u8]) -> i64 { b.len() }\n         fn main() {\n             let n: u16 = 7u16;\n             println(take(n.to_ne_bytes()));\n         }",
+    );
+}
+
+/// Arity and receiver kind are checked.
+#[test]
+fn to_ne_bytes_rejects_arguments_and_non_integer_receivers() {
+    let arity = typecheck_errors(
+        "fn main() {\n             let n: u16 = 7u16;\n             let b = n.to_ne_bytes(2);\n             println(b[0]);\n         }",
+    );
+    assert!(!arity.is_empty(), "to_ne_bytes must not accept an argument");
+    let recv = typecheck_errors(
+        "fn main() {\n             let x = 1.5;\n             let b = x.to_ne_bytes();\n             println(b[0]);\n         }",
+    );
+    assert!(
+        recv.iter().any(|e| e.message.contains("to_ne_bytes")),
+        "a float receiver must be refused; got {:?}",
+        recv.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
 /// B-2026-08-21-10 — `Vec.from_fn(n, f)` exists and types as `Vec[T]` where
 /// `T` is the function's RETURN.
 ///

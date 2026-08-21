@@ -2264,6 +2264,18 @@ impl<'ctx> super::Codegen<'ctx> {
             //      `char` (i32), …) whose `-> Self` claim these methods don't
             //      make, so the slot stays un-inferrable rather than mis-sized.
             ExprKind::MethodCall { object, method, .. } => {
+                // `n.to_ne_bytes()` -> `[N x i8]` (B-2026-08-21-10). Checked
+                // before the user-impl lookup because this is a builtin whose
+                // result shape is fixed by the receiver's WIDTH, and no
+                // `<T>.to_ne_bytes` LLVM function exists to read a return type
+                // from. `receiver_int_kind` answers 64 for anything it cannot
+                // classify, so the method-name gate is the whole guard — and
+                // the typechecker admits `to_ne_bytes` on integer receivers
+                // only, so a non-integer receiver never reaches here.
+                if method == "to_ne_bytes" {
+                    let (bits, _) = self.receiver_int_kind(object, &expr.span, method);
+                    return Some(self.context.i8_type().array_type(bits / 8).into());
+                }
                 if let Some(ty_name) = self.inferred_receiver_type(object) {
                     if let Some(fn_val) = self.module.get_function(&format!("{ty_name}.{method}")) {
                         if let Some(ret) = fn_val.get_type().get_return_type() {
@@ -3628,6 +3640,51 @@ impl<'ctx> super::Codegen<'ctx> {
                     // `it.collect()`'s clone build a `Vec[char]` rather than a
                     // `String` — `receiver_collection_type_expr` distinguishes
                     // the two on exactly that map. B-2026-06-18-5.
+                    // `let b = n.to_ne_bytes()` — the RHS is an `Array[u8, N]`
+                    // value, and an UNANNOTATED binding of one has no other
+                    // source for its element type (B-2026-08-21-10). Without
+                    // this registration the alloca is the right `[N x i8]`
+                    // shape but the binding's element width is unknown, so
+                    // handing it to a `ref Slice[u8]` parameter built a header
+                    // striding at the i64 default: `total(b)` over the slice
+                    // read past the end and SEGFAULTED, while the annotated
+                    // `let b: Array[u8, 2] = [...]` control ran clean. Same
+                    // RHS-shape detection the `chars()` arm below uses.
+                    if let ExprKind::MethodCall {
+                        object,
+                        method,
+                        args,
+                        ..
+                    } = &value.kind
+                    {
+                        if method == "to_ne_bytes" && args.is_empty() {
+                            let (bits, _) =
+                                self.receiver_int_kind(object, &value.span, "to_ne_bytes");
+                            let u8_te = TypeExpr {
+                                kind: TypeKind::Path(PathExpr {
+                                    segments: vec!["u8".to_string()],
+                                    generic_args: None,
+                                    span: value.span,
+                                }),
+                                span: value.span,
+                            };
+                            let arr_te = TypeExpr {
+                                kind: TypeKind::Path(PathExpr {
+                                    segments: vec!["Array".to_string()],
+                                    generic_args: Some(vec![
+                                        GenericArg::Type(u8_te),
+                                        GenericArg::Const(Expr {
+                                            kind: ExprKind::Integer(i128::from(bits / 8), None),
+                                            span: value.span,
+                                        }),
+                                    ]),
+                                    span: value.span,
+                                }),
+                                span: value.span,
+                            };
+                            self.register_var_from_type_expr(var_name, &arr_te);
+                        }
+                    }
                     let rhs_is_chars = matches!(
                         &value.kind,
                         ExprKind::MethodCall { method, args, .. }
