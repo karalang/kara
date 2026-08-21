@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 148 | 1 |
 | missing-feature | 143 | 7 |
 | double-free | 134 | 0 |
-| codegen-gap | 123 | 3 |
+| codegen-gap | 123 | 1 |
 | diagnostics | 94 | 1 |
 | false-positive | 91 | 0 |
 | perf | 83 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 974 | 5 |
+| codegen | 974 | 3 |
 | typecheck | 231 | 4 |
 | interp | 170 | 2 |
 | other | 62 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 8 | 1 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1454 surfaced · 12 open · 1420 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1454 surfaced · 10 open · 1422 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (12)
+### Open (10)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -135,13 +135,11 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1454 surfaced
 | B-2026-08-21-6 | 2026-08-21 | codegen+interp | medium | `Map`/`Set` DO NOT USE THE SPEC'S DEFAULT HASHER: design.md mandates `SipHash13BuildHasher` seeded from a per-process random source, codegen emits FxHash with a COMPILE-TIME-CONSTANT seed and the interpreter hashes not at all -- so there is no hash-flooding resistance, iteration order is fully deterministic across runs (design.md says it must vary), the two backends order differently from each other, and `Map[K, V, FxBuildHasher]` -- design.md's own spelling -- does not resolve, so there is no opt-in either way | roadmap.md |
 | B-2026-08-21-9 | 2026-08-21 | parser | medium | design.md WRITES SYNTAX THE PARSER HAS NO PRODUCTION FOR, in two places syntax.md also disagrees with: the inline associated-type binding `Trait[Assoc = T]` (43 lines of design.md, and syntax.md's own comment at :650) has no form in `TRAIT_BOUND = PATH [ "[" TYPE_LIST "]" ]`, and an effect clause on an impl header (`impl From[E] for A with writes(Log) {`) has no form at all | roadmap.md |
 | B-2026-08-21-18 | 2026-08-21 | codegen+typecheck | low | STRUCT FUNCTIONAL UPDATE `P { x: 1, ..base }` IS STILL UNIMPLEMENTED -- it now says so clearly instead of dropping the base, but the form syntax.md's STRUCT_LITERAL production admits cannot be used; the interpreter already implements the copy and codegen does not, so the remaining work is codegen plus the ownership rules for a spread base | roadmap.md |
-| B-2026-08-21-24 | 2026-08-21 | codegen | medium | AN ARRAY **LITERAL** TEMPORARY IN A `ref Slice[T]` PARAMETER FAILS LLVM MODULE VERIFICATION -- `f([1u8, 2u8, 3u8])` builds nothing while the by-value `Slice[T]` spelling of the same call compiles and runs | roadmap.md |
 | B-2026-08-21-25 | 2026-08-21 | codegen | medium | A METHOD CALL ON A FIXED-ARRAY **TEMPORARY** HAS NO CODEGEN LOWERING -- `n.to_ne_bytes().len()` build-fails with the dispatcher's own "this is a codegen bug" message while the bound two-line spelling works | roadmap.md |
 | B-2026-08-21-26 | 2026-08-21 | typecheck | medium | `TryFrom[intN]` FOR A C-LIKE `#[repr(intN)]` ENUM DOES NOT EXIST -- design.md § Enum Discriminant Runtime Surface commits to auto-generating it and shows the worked `match UsbClass.try_from(raw)`, which fails to compile | roadmap.md |
 | B-2026-08-21-29 | 2026-08-21 | typecheck | medium | THREE DOCUMENTED SURFACES ARE NOT REACHABLE AS WRITTEN: every spelling of channel construction design.md uses (`Channel.new[T]()`, `Channel.bounded`), its whole `io.` I/O prefix, and `allocates(Heap)` -- whose `Heap` the document never declares and the prelude does not provide | roadmap.md |
 | B-2026-08-21-32 | 2026-08-21 | resolver+effect | medium | EFFECT RESOURCES CANNOT BE ROOTED AT A VALUE, so design.md's whole channel effect model is unwritable: `with sends(tx)` on a channel PARAMETER is `'tx' is not an effect resource (it is a variable)`, and the seven `Sender`/`Receiver` declarations at :6064-:6094 are all written that way | roadmap.md |
 | B-2026-08-21-38 | 2026-08-21 | interp | high | THE INTERPRETER LOSES A `mut ref` SCALAR WRITE THROUGH A **METHOD** ARGUMENT -- `h.bump(mut n)` leaves `n` at its old value under `--interp` while JIT, AOT and `KARAC_AUTO_PAR=0` AOT all publish it, and the free-function spelling of the same call is correct on all four; the interpreter is the wrong one here | roadmap.md |
-| B-2026-08-21-39 | 2026-08-21 | codegen | medium | AN **ASSOCIATED FUNCTION** (no `self`) FAILS MODULE VERIFICATION ON AN ARRAY ARGUMENT TO A SLICE PARAMETER -- `H.f(mut bm)` passes the raw `[3 x i8]` where the callee declares `{ptr, i64}`, while the free-function and instance-method spellings of the same call both work | roadmap.md |
 
 ### Wontfix (8)
 
@@ -160,9 +158,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1454 surfaced
 
 </details>
 
-### Fixed (1420)
+### Fixed (1422)
 
-<details><summary>1420 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1422 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -13698,6 +13696,17 @@ THE REPORTED SYMPTOM UNDERSTATED IT. This row recorded `-1` for a `len()`-only b
 Array sources ONLY, mirroring the free-function gate: a `Vec` binding's storage starts with `{ptr,len}` (a header superset) and a `Slice` / `ref Slice` binding's `get_data_ptr` already yields a header pointer, so both forward correctly through the existing path -- intercepting them would re-coerce a ref-slice binding and corrupt the forward.
 
 Verified byte-identical on interp / JIT / AOT / `KARAC_AUTO_PAR=0` AOT across an owned local, a struct field, `self.field` from inside another method, a `ref Array` parameter forwarded in, a trait method, `u8` / `i64` / `f64` / `String` elements, and lengths 1, 2, 3, 5 and 8. Both tests are pinned non-vacuous: with the fix reverted the E2E case segfaults and the ASAN case fails. The sanitizer case uses a `String` element deliberately -- the old lowering dereferenced element bytes as a pointer, and the new header must stay a BORROW, since the array still owns those buffers. |
+| B-2026-08-21-24 | codegen | medium | AN ARRAY **LITERAL** TEMPORARY IN A `ref Slice[T]` PARAMETER FAILS LLVM MODULE VERIFICATION -- `f([1u8, 2u8, 3u8])` builds nothing while the by-value… | FIXED by c5e549fc. THE ROW'S DIAGNOSIS WAS WRONG, and correcting it is the first thing the reader needs. The row calls `[1u8, 2u8, 3u8]` an "array LITERAL temporary" and names the cause as `arg_is_array_source` having no `ArrayLiteral` arm. That arm was implemented first, and the build failed identically. Instrumenting the gate shows why: the argument parses as `PrefixCollectionLiteral{type_name: "Vec"}` -- a Vec RVALUE, not an array -- so `arg_is_array_source` was correctly answering FALSE, and widening it reaches nothing. The unmotivated arm was reverted rather than left in.
+
+THE ACTUAL CAUSE is one slot-shape mismatch. `coerce_to_slice` produces the `{ptr, i64}` header as a VALUE; a `ref Slice[T]` slot declares a `ptr`. The B-2026-08-05-40 carve-out above it excludes the place arms because those already pass a pointer -- so every OTHER ref-slot shape fell into the coercion and pushed the bare header into a pointer parameter, which LLVM rejects at module verification. What the literal lacks is not array-ness but STORAGE: it owns nothing the pointer fast-paths can borrow. Spilling the synthesized header through `materialize_rvalue_for_ref_arg` -- the helper the rvalue-ref path already uses -- gives the slot the pointer it declares without inventing a second materialization.
+
+CONTROL CONFIRMED: the by-value `Slice[u8]` spelling the row cites as working still works, and is pinned beside the fixed one so a regression that broke only the `ref` slot cannot pass as green.
+
+SIBLING FIXED IN THE SAME CHANGE, since both rows asked for it: B-2026-08-21-39, the associated-function (`Type.f(..)`) hole. That argument loop consulted `fn_param_ref` but never `fn_param_slice_elem`, so a `Slice[T]` / `mut Slice[T]` parameter got whatever `compile_expr` produced -- for an `Array[T, N]` argument, the raw `[N x T]` aggregate against a `{ptr, i64}` slot, no header at all. It now coerces exactly as `compile_call` does. Its pin asserts `bm[0]` AFTER the call, which is the load-bearing line: it distinguishes a slice ALIASING the caller's array from one built over a spilled copy, the failure a careless fix introduces.
+
+VERIFIED: both pins reproduce the filed diagnostics verbatim on pre-fix source and pass after; full `--features llvm` suite with KARAC_REQUIRE_RUNTIME_ARCHIVE=1; both clippy legs; fmt; the -O0 ASAN leg.
+
+ONE ENVIRONMENT NOTE worth carrying: the fix first surfaced as `undefined reference to karac_runtime_install_stack_guard` at LINK time, which is the stale-archive signature CLAUDE.md documents, not a codegen bug. This container's archives were four days older than `main`. Rebuild lean-then-full before trusting any E2E result here -- a stale archive makes the tolerant call sites soft-skip, so it degrades a green run rather than failing it. |
 | B-2026-08-21-27 | typecheck | medium | self-host typechecker diverges from Rust on a struct-update expression missing a field | FIXED by dda94ff — the same commit that closed B-2026-08-21-20, which this row duplicates.
 
 Both rows are the same failure: `selfhost_typechecker_matches_rust_typechecker` at corpus input 126, `struct P { x: i64, y: i64 } fn f(b: P) -> P { P { x: 1, ..b } }`, where the Kara-written typechecker reported `missing-field` and the Rust one `type-mismatch`, both at 46:15. `dda94ff` taught `selfhost/src/typechecker.kara` the struct-spread rule `3b4b97d` introduced. Verified green on a clean checkout at `27735db`: `cargo test --features llvm --test selfhost_typechecker` — 1 passed, 0 failed.
@@ -13841,6 +13850,59 @@ Scope is what the measurement supports and no more. A MISSING ARCHIVE never took
 What the guard closes is the remainder: a link failure carrying none of those markers -- no linker on PATH, a permissions failure -- which reported a silent pass whatever the flag said.
 
 Verified: all seven oracles green with the archives present; fmt clean. |
+| B-2026-08-21-39 | codegen | medium | AN **ASSOCIATED FUNCTION** (no `self`) FAILS MODULE VERIFICATION ON AN ARRAY ARGUMENT TO A SLICE PARAMETER -- `H.f(mut bm)` passes the raw `[3 x i8]`… | Fixed in c5e549fc, together with the sibling B-2026-08-21-24 -- both rows asked
+that a fix for one check the others, and this is what that check turned up.
+
+THE ROW'S DIAGNOSIS WAS RIGHT, including the detail that made it findable: the
+free-function and instance-method spellings of the same call both work. That is
+exactly the shape of the defect. `compile_call` (free functions, since
+B-2026-06-19-1) and the instance-method path (since 08f57a7) both consult
+`fn_sig.fn_param_slice_elem` and synthesize a `{ptr, i64}` header for an
+`Array[T, N]` / `Vec[T]` argument. The ASSOCIATED-function argument loop in
+`src/codegen/assoc_call.rs` consulted `fn_param_ref` but never
+`fn_param_slice_elem`, so a `Slice[T]` / `mut Slice[T]` parameter received
+whatever `compile_expr` produced -- for an array argument, the raw `[N x T]`
+aggregate against a slot declaring `{ptr, i64}`. LLVM rejected the module. No
+header was synthesized at all, which is why the failure was loud rather than a
+silent aliasing bug.
+
+THE FIX is the coercion the other two paths already do, added as a branch before
+the loop's final `else`: look up `slice_elems` by `qualified`, and when slot `i`
+carries an element type, run `coerce_to_slice`. It falls through to
+`compile_expr` for shapes the coercion declines, so every argument that already
+worked stays on its old path -- the branch can only add headers where there
+were none.
+
+THE PIN is `e2e_array_into_a_mut_slice_param_of_an_assoc_fn` in `tests/codegen.rs`,
+asserting `"3\n9\n3\n8\n"`. Two things in it are load-bearing and should survive
+any future edit:
+
+  * `bm[0]` is read AFTER the call. That line is what distinguishes a slice
+    ALIASING the caller's array from one built over a spilled copy. A version of
+    this fix that materialized the array into fresh storage before taking its
+    address would still pass module verification, still print the right length,
+    and silently drop the callee's write -- turning a loud build error into the
+    exact silent miscompile the loud one was protecting against. Only the
+    post-call read catches it.
+  * The free-function spelling of the same call is kept beside the associated one.
+    A regression that broke only the fixed path would otherwise pass as green with
+    a smaller number of assertions in it.
+
+Reproduced in both directions: the pin fails on pre-fix source with the filed
+"Call parameter type does not match function signature" verbatim, and passes
+after.
+
+WHAT THE FAMILY LEAVES BEHIND. This closes the four-member set -- free function
+(B-2026-06-19-1), instance method (-23), `ref Slice[T]` slot (-24), associated
+function (-39) -- all one missing header synthesis at four call sites that were
+written independently. The lesson is not about slices: `compile_call`,
+`compile_method_call` and the associated-function loop each re-implement argument
+lowering, so any per-parameter lowering rule added to one is absent from the
+others until someone files the gap. A rule that must hold at every call site
+belongs in a shared helper the three loops call, not replicated three times; the
+`coerce_to_slice` branch added here is a fourth copy of the same six lines, and
+the right follow-up is to lift argument coercion into one place rather than wait
+for a fifth call form to file a fifth row. |
 
 </details>
 
