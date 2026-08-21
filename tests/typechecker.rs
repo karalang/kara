@@ -43104,3 +43104,86 @@ fn test_struct_literal_without_spread_still_reports_missing_fields() {
         errors[0].message
     );
 }
+
+// ── Statement-position lint attributes ──────────────────────────
+
+/// design.md § Lint Level Attributes, and § Module-Level Bindings calling
+/// `#[allow(module_mut_binding)]` "per-binding, not module-wide", document lint
+/// levels below item granularity. Until B-2026-08-21-12 they were a parse
+/// error: the only attribute handling under item level lived in the EXPRESSION
+/// prefix parser and accepted nothing but a loop.
+#[test]
+fn test_statement_lint_attribute_suppresses_only_its_own_statement() {
+    let result = typecheck_ok(
+        "fn main() {\n\
+         \x20   #[allow(redundant_suffix)]\n\
+         \x20   let a = 1i64;\n\
+         \x20   let b = 2i64;\n\
+         \x20   println(f\"{a} {b}\");\n\
+         }",
+    );
+    let suffix_warnings: Vec<_> = result
+        .warnings
+        .iter()
+        .filter(|w| w.lint_name.as_deref() == Some("redundant_suffix"))
+        .collect();
+    assert_eq!(
+        suffix_warnings.len(),
+        1,
+        "the attribute must cover its own statement and no other; got {suffix_warnings:?}"
+    );
+    assert_eq!(
+        suffix_warnings[0].span.line, 4,
+        "the surviving warning must be the UNattributed `let b`, got line {}",
+        suffix_warnings[0].span.line
+    );
+}
+
+/// An `#[expect]` that never fires is the one outcome the attribute exists to
+/// rule out, so the end-of-typecheck sweep has to see statement-level
+/// overrides too — they live beside the tree, not on `Stmt`, so the item walk
+/// cannot find them.
+#[test]
+fn test_unfulfilled_statement_expect_is_reported() {
+    let result = typecheck_ok(
+        "fn main() {\n\
+         \x20   #[expect(redundant_suffix)]\n\
+         \x20   let a = 1;\n\
+         \x20   println(f\"{a}\");\n\
+         }",
+    );
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|w| w.lint_name.as_deref() == Some("unfulfilled_lint_expectation")),
+        "expected an unfulfilled-expectation warning, got {:?}",
+        result
+            .warnings
+            .iter()
+            .map(|w| &w.message)
+            .collect::<Vec<_>>()
+    );
+}
+
+/// A fulfilled one stays silent — the guard that the sweep is not simply
+/// warning on every statement-level `#[expect]`.
+#[test]
+fn test_fulfilled_statement_expect_is_silent() {
+    let result = typecheck_ok(
+        "fn main() {\n\
+         \x20   #[expect(redundant_suffix)]\n\
+         \x20   let a = 1i64;\n\
+         \x20   println(f\"{a}\");\n\
+         }",
+    );
+    assert!(
+        result.warnings.is_empty(),
+        "expected no warnings, got {:?}",
+        result
+            .warnings
+            .iter()
+            .map(|w| &w.message)
+            .collect::<Vec<_>>()
+    );
+}

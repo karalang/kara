@@ -3955,6 +3955,26 @@ impl<'a> super::TypeChecker<'a> {
     /// coercion (phase-12 #12). Only `StmtKind::Expr` can carry
     /// divergence; every other statement form completes normally.
     pub(super) fn check_stmt(&mut self, stmt: &Stmt) -> Type {
+        // A statement-position lint attribute (`#[allow(lint)] stmt;`) becomes
+        // a frame around exactly this statement — its subexpressions included,
+        // nothing after it. The overrides live on
+        // `Program::stmt_lint_overrides` rather than on `Stmt`; see the field's
+        // comment for why (B-2026-08-21-12).
+        let stmt_lints = self
+            .program
+            .stmt_lint_overrides
+            .get(&crate::resolver::SpanKey::from_span(&stmt.span))
+            .cloned();
+        if let Some(overrides) = stmt_lints {
+            self.lint_override_stack.push(overrides);
+            let ty = self.check_stmt_inner(stmt);
+            self.lint_override_stack.pop();
+            return ty;
+        }
+        self.check_stmt_inner(stmt)
+    }
+
+    fn check_stmt_inner(&mut self, stmt: &Stmt) -> Type {
         if let StmtKind::Expr(expr) = &stmt.kind {
             return self.infer_expr(expr);
         }

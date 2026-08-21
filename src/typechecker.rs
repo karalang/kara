@@ -2819,6 +2819,23 @@ impl<'a> TypeChecker<'a> {
                 }
             }
         }
+        // Statement-position `#[expect(...)]` (B-2026-08-21-12). The overrides
+        // live beside the tree rather than on `Stmt`, so the item walk above
+        // cannot see them, and without this an unfulfilled statement-level
+        // expectation would be silently accepted — the one outcome `#[expect]`
+        // exists to rule out. Iterated in span order so the emission sequence
+        // is deterministic; `FxHashMap` is not.
+        let mut stmt_overrides: Vec<_> = self.program.stmt_lint_overrides.iter().collect();
+        stmt_overrides.sort_by_key(|(k, _)| (k.0, k.1));
+        for (_, overs) in stmt_overrides {
+            collect_unfulfilled_expects(
+                overs,
+                &self.fulfilled_expectations,
+                Vec::new(),
+                overs.clone(),
+                &mut emissions,
+            );
+        }
         for (outer, inner, span, lint_name) in emissions {
             let pushed_outer = !outer.is_empty();
             if pushed_outer {

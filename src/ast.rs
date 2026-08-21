@@ -727,6 +727,18 @@ pub struct Program {
     /// existing `frozen_alias_bindings` hint, so codegen learns nothing new.
     /// Empty for every program that does not use the statement.
     pub freeze_spans: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
+    /// Lint-level overrides written on a STATEMENT — `#[allow(lint)] stmt;` or
+    /// `#[expect(lint)] let x = …;`. Set by the PARSER, and kept beside the
+    /// tree for the same reason as [`Self::freeze_spans`] above: the
+    /// alternative is an `attributes` field on `Stmt`, and `Stmt` is
+    /// constructed at 191 sites across the parser, desugarer, lowering and
+    /// codegen, none of which have an opinion about lints. Keyed by the
+    /// statement's own span; the typechecker pushes the frame around
+    /// `check_stmt` and pops it after, so the override covers that statement
+    /// and its subexpressions and nothing else. Empty for programs that write
+    /// no statement-level lint attribute.
+    pub stmt_lint_overrides:
+        rustc_hash::FxHashMap<crate::resolver::SpanKey, Vec<crate::lints::LintLevelOverride>>,
     /// Set by the lowering pass; empty before lowering runs.
     pub question_conversions: QuestionConversionTable,
     /// Set by the lowering pass from `TypeCheckResult.question_ok_payload_types`;

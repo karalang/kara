@@ -301,10 +301,57 @@ impl super::Parser {
     }
 
     fn is_statement_start(&self) -> bool {
+        if matches!(self.peek_token_ref(), Token::Pound) {
+            // An attribute block introduces a STATEMENT unless what follows it
+            // is a loop, which keeps its existing expression-position path
+            // (`#[par_order_free]`, and a trailing `for` needs no `;` — routing
+            // it through the statement parser would demand one). Scanning past
+            // the block is the only way to tell, so scan.
+            return !matches!(
+                self.token_after_attribute_block(),
+                Token::While | Token::For | Token::Loop
+            );
+        }
         matches!(
             self.peek_token(),
             Token::Let | Token::Defer | Token::ErrDefer
         )
+    }
+
+    /// The first token after a run of `#[ … ]` attribute blocks at the cursor,
+    /// found by counting bracket depth. Returns [`Token::EOF`] if the run is
+    /// unterminated — a malformed attribute is the attribute parser's error to
+    /// report, not this predicate's.
+    fn token_after_attribute_block(&self) -> Token {
+        let mut i = 0usize;
+        loop {
+            if !matches!(self.peek_token_ref_at(i), Token::Pound) {
+                return self.peek_token_ref_at(i).clone();
+            }
+            i += 1; // past `#`
+            if matches!(self.peek_token_ref_at(i), Token::Bang) {
+                i += 1; // an inner attribute `#![ … ]`
+            }
+            if !matches!(self.peek_token_ref_at(i), Token::LeftBracket) {
+                return self.peek_token_ref_at(i).clone();
+            }
+            let mut depth = 0usize;
+            loop {
+                match self.peek_token_ref_at(i) {
+                    Token::LeftBracket => depth += 1,
+                    Token::RightBracket => {
+                        depth -= 1;
+                        if depth == 0 {
+                            i += 1;
+                            break;
+                        }
+                    }
+                    Token::EOF => return Token::EOF,
+                    _ => {}
+                }
+                i += 1;
+            }
+        }
     }
 
     /// `test "..." { … }` head — module-scope item shape encountered
@@ -469,7 +516,27 @@ impl super::Parser {
                     kind: StmtKind::ErrDefer { binding, body },
                 })
             }
-            _ => {
+            // Statement-position attributes. `#[allow(lint)] stmt;` and
+            // `#[expect(lint)] let x = …;` are documented lint surface —
+            // design.md § Lint Level Attributes, and § Module-Level Bindings
+            // calls `#[allow(module_mut_binding)]` "per-binding, not
+            // module-wide" — and used to be a parse error, because the only
+            // attribute handling below statement level lived in the EXPRESSION
+            // prefix parser and accepted nothing but a loop
+            // (B-2026-08-21-12). Loops still go there; everything else is
+            // handled here.
+            Token::Pound => self.parse_attributed_statement(),
+            _ => self.parse_expression_statement(),
+        }
+    }
+
+    /// The tail of [`Self::parse_statement`] — an expression, optionally
+    /// followed by `=` / a compound operator / a comma list, then `;`.
+    /// Extracted so the attribute arm can rewind into it when the attributes
+    /// turn out to belong to a loop.
+    fn parse_expression_statement(&mut self) -> Option<Stmt> {
+        {
+            {
                 let expr = self.parse_expression()?;
                 if self.check(&Token::Comma) {
                     // Parallel / destructuring assignment:
@@ -509,6 +576,68 @@ impl super::Parser {
                 }
             }
         }
+    }
+
+    /// Parse a statement introduced by an attribute block.
+    ///
+    /// Only LINT-LEVEL attributes (`allow` / `warn` / `deny` / `expect`) are
+    /// meaningful here; they are scanned into
+    /// [`crate::ast::Program::stmt_lint_overrides`], keyed by the statement's
+    /// own span, and the typechecker pushes them as a frame around that one
+    /// statement. Any other attribute in this position is rejected by name
+    /// rather than silently dropped — a `#[inline]` on a statement means the
+    /// writer expected something to happen, and nothing would.
+    ///
+    /// A loop keeps its existing expression-position path: `#[par_order_free]`
+    /// and the loop-attribute surface are parsed there, so when the attribute
+    /// block turns out to precede `while` / `for` / `loop` this rewinds and
+    /// lets the expression parser read the same attributes again.
+    fn parse_attributed_statement(&mut self) -> Option<Stmt> {
+        let saved = self.pos;
+        let attributes = self.parse_attributes();
+        // Rewind into the expression path for anything it already diagnoses
+        // better than a generic statement rejection would: a loop (which owns
+        // `#[par_order_free]` and needs no `;`), a MISPLACED loop attribute
+        // (`#[par_order_free] if …` keeps "expected `while`, `for`, or `loop`
+        // after attribute block"), and a codegen hint (which owns
+        // `E_CODEGEN_HINT_ON_CLOSURE`). Duplicating those messages here would
+        // be two places to keep in step.
+        let defer_to_expression_path = matches!(
+            self.peek_token_ref(),
+            Token::While | Token::For | Token::Loop
+        ) || attributes
+            .iter()
+            .any(|a| a.is_par_order_free() || a.codegen_hint_name().is_some());
+        if defer_to_expression_path {
+            self.pos = saved;
+            return self.parse_expression_statement();
+        }
+
+        let overrides = self.scan_lint_level_attrs(&attributes);
+        for attr in &attributes {
+            let is_lint_level = attr.path.len() == 1
+                && crate::lints::LintLevel::from_attr_name(&attr.path[0]).is_some();
+            if !is_lint_level {
+                let name = attr.path.join("::");
+                self.error_at(
+                    &format!(
+                        "error[E_ATTRIBUTE_NOT_VALID_ON_STATEMENT]: `#[{name}]` cannot \
+                         apply to a statement — only the lint-level attributes \
+                         `#[allow]`, `#[warn]`, `#[deny]` and `#[expect]` are \
+                         recognised here. Move it onto the enclosing item if it \
+                         belongs there."
+                    ),
+                    attr.span,
+                );
+            }
+        }
+
+        let stmt = self.parse_statement()?;
+        if !overrides.is_empty() {
+            self.stmt_lint_overrides
+                .insert(crate::resolver::SpanKey::from_span(&stmt.span), overrides);
+        }
+        Some(stmt)
     }
 
     /// Finish a parallel / destructuring assignment

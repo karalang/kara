@@ -189,6 +189,10 @@ pub struct Parser {
     /// onto [`crate::ast::Program::freeze_spans`] at the end. B-2026-08-01-33
     /// stage 3.
     pub(crate) freeze_spans: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
+    /// Statement-position lint-level overrides, moved onto
+    /// [`crate::ast::Program::stmt_lint_overrides`] at the end.
+    pub(crate) stmt_lint_overrides:
+        rustc_hash::FxHashMap<crate::resolver::SpanKey, Vec<crate::lints::LintLevelOverride>>,
     /// Script mode (design.md § Script mode): when `true` (the default —
     /// root source files), top-level statements synthesize a unit
     /// `fn main()`. Item-only contexts — comptime `ast.item` quotes,
@@ -315,6 +319,7 @@ impl Parser {
             frozen_consumed: false,
             frozen_self_consumed: false,
             freeze_spans: rustc_hash::FxHashSet::default(),
+            stmt_lint_overrides: rustc_hash::FxHashMap::default(),
             allow_script_mode: true,
             pending_doc: None,
             fn_context_stack: Vec::new(),
@@ -610,6 +615,7 @@ impl Parser {
             module_doc_comment,
             inner_attrs,
             freeze_spans: std::mem::take(&mut self.freeze_spans),
+            stmt_lint_overrides: std::mem::take(&mut self.stmt_lint_overrides),
             ..Program::default()
         }
     }

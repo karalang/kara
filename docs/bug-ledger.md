@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 271 | 0 |
 | leak | 185 | 0 |
 | run-vs-build | 145 | 0 |
-| missing-feature | 138 | 6 |
+| missing-feature | 139 | 6 |
 | double-free | 133 | 0 |
 | codegen-gap | 120 | 0 |
 | diagnostics | 93 | 1 |
@@ -110,21 +110,21 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 965 | 1 |
-| typecheck | 225 | 3 |
+| codegen | 966 | 2 |
+| typecheck | 226 | 3 |
 | interp | 169 | 1 |
 | ownership | 62 | 0 |
 | other | 60 | 1 |
 | cli | 59 | 1 |
 | autopar | 54 | 0 |
-| parser | 35 | 2 |
+| parser | 35 | 1 |
 | runtime | 28 | 0 |
 | resolver | 24 | 0 |
 | lexer | 8 | 1 |
 | effect | 7 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1436 surfaced · 8 open · 1406 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1437 surfaced · 8 open · 1407 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (8)
 
@@ -136,8 +136,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1436 surfaced
 | B-2026-08-21-9 | 2026-08-21 | parser | medium | design.md WRITES SYNTAX THE PARSER HAS NO PRODUCTION FOR, in two places syntax.md also disagrees with: the inline associated-type binding `Trait[Assoc = T]` (43 lines of design.md, and syntax.md's own comment at :650) has no form in `TRAIT_BOUND = PATH [ "[" TYPE_LIST "]" ]`, and an effect clause on an impl header (`impl From[E] for A with writes(Log) {`) has no form at all | roadmap.md |
 | B-2026-08-21-10 | 2026-08-21 | typecheck | medium | FOUR STDLIB ENTRY POINTS design.md DOCUMENTS DO NOT EXIST -- `Vec.from_fn` (in the Vec method table, with a worked example), `Vec.is_sorted` (used inside `requires` contracts twice), `u16.to_ne_bytes`, and an enum's `.discriminant()` -- the `TreeMap` shape again: written up, never implemented | roadmap.md |
 | B-2026-08-21-11 | 2026-08-21 | other | low | design.md EXAMPLES ARE WRITTEN IN SYNTAX design.md AND syntax.md THEMSELVES FORBID: `mu.lock()` and `let group = ...` use hard keywords as identifiers, `fillna(0.0, flag = true)` uses `=` where the doc's own rule says labeled `:`, `[u8; 2]` and `r"..."` are Rust idioms the spec explicitly does not have | roadmap.md |
-| B-2026-08-21-12 | 2026-08-21 | parser+typecheck | medium | FOUR FORMS syntax.md OR design.md DEFINES THAT THE FRONT END REJECTS -- `let...else` (a named production, LET_ELSE_STATEMENT), struct functional update `Name { f: v, ..base }` (in the STRUCT_LITERAL production; it PARSES and the typechecker then ignores the base), lint-level attributes on a statement (`#[expect(deprecated)] old_api();`), and a sub-range mutable slice argument (`f(mut v[1..4])`, design.md's own § Slices line) | roadmap.md |
 | B-2026-08-21-17 | 2026-08-21 | lexer | medium | THE SELF-HOSTED KARA LEXER CANNOT LEX `b"..."`, so it now disagrees with the Rust lexer on any input containing one: `selfhost/src/lexer.kara` still routes the `b` prefix down the reserved-string-prefix path and emits `ERROR`, while the Rust lexer emits the byte-string token (550bb1f, B-2026-08-20-37). The self-hosted compiler is behind the language on a construct design.md specifies as shipped. | roadmap.md |
+| B-2026-08-21-18 | 2026-08-21 | codegen+typecheck | low | STRUCT FUNCTIONAL UPDATE `P { x: 1, ..base }` IS STILL UNIMPLEMENTED -- it now says so clearly instead of dropping the base, but the form syntax.md's STRUCT_LITERAL production admits cannot be used; the interpreter already implements the copy and codegen does not, so the remaining work is codegen plus the ownership rules for a spread base | roadmap.md |
 
 ### Wontfix (8)
 
@@ -156,9 +156,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1436 surfaced
 
 </details>
 
-### Fixed (1406)
+### Fixed (1407)
 
-<details><summary>1406 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1407 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -13511,6 +13511,7 @@ REGRESSION SURFACE MEASURED, because Arc-backing changes how storage is shared a
 HOW MUCH THIS ROW'S OWN EXAMPLE GAINS, measured rather than assumed, because the row's "WHY IT MATTERS" leans on it: kata #294's differential runs 234 s before and 168 s after on the same machine -- a real 1.4x, not an order of magnitude. Its memo map holds ~1492 entries over ~8900 calls, so the scan was never where its time went; that kata is dominated by general tree-walk overhead. The 58x figure above is what MAP-BOUND work gains. The row's claim that "essentially all of that difference is memo lookups scanning a list" does not survive measurement, and the coverage that kata cut (exhaustive band 14 -> 12) is not restored by this fix alone.
 
 Pinned by nine E2E tests in tests/interpreter.rs -- insertion order, overwrite-keeps-position, survivors-findable-after-remove (the case a stale index breaks silently), value-semantics for `Map`, `Set`, and a map inside a struct field, the `entry`/`or_insert` slot chain, distinct tuple keys sharing a bucket, and a 400-key volume case -- plus four unit tests in src/interpreter/value.rs, of which `hash_value_agrees_with_equality` is the one guarding the whole design. |
+| B-2026-08-21-12 | parser+typecheck | medium | FOUR FORMS syntax.md OR design.md DEFINES THAT THE FRONT END REJECTS -- `let...else` (a named production, LET_ELSE_STATEMENT), struct functional upda… | FIXED across three commits, one per item. (1) `let...else`'s trailing `;`: e386fc4 — the feature was fully implemented and unreachable as written down; the parser stopped at the else block's closing brace. (3) statement lint attributes: this commit — parsed in statement position, scanned into `Program::stmt_lint_overrides`, pushed as a frame around `check_stmt`, and included in the unfulfilled-`#[expect]` sweep. (4) sub-range mutable slice: fixed upstream; the conformance gate reported it as `FIXED 4602` without anyone re-probing. Item (2) is split to its own row — the silent drop is fixed (3b4b97d), the feature is not built. |
 | B-2026-08-21-13 | codegen | high | EVERY `gpu.*` REDUCTION SILENTLY DROPPED every element past 4,194,240 | 42fee64f |
 | B-2026-08-21-14 | typecheck+cli | medium | THE NEWLY-WIRED `redundant_suffix` LINT SHIPS WARN-BY-DEFAULT WITH NO MACHINE-APPLICABLE FIX, so `karac fix` reports `no fixable diagnostics` on a fi… | FIXED by c6ac12f. The warning now carries a machine-applicable DELETION of the suffix, so `karac fix` removes it.
 

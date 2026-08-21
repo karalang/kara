@@ -15051,3 +15051,30 @@ fn test_let_else_accepts_the_trailing_semicolon_the_grammar_writes() {
         );
     }
 }
+
+// ── Statement-position attributes ───────────────────────────────
+
+/// Only lint-level attributes are meaningful on a statement. Anything else is
+/// rejected by name rather than dropped: a `#[repr]` on a statement means the
+/// writer expected something to happen, and nothing would (B-2026-08-21-12).
+#[test]
+fn test_non_lint_attribute_on_a_statement_is_rejected_by_name() {
+    let (_, errors) = parse_with_errors("fn main() { #[repr(C)] let x = 1; }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_ATTRIBUTE_NOT_VALID_ON_STATEMENT")
+                && e.message.contains("#[repr]")),
+        "expected the statement-attribute rejection naming `repr`, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+/// Regression guard for the rewind: a loop keeps its expression-position path,
+/// so `#[par_order_free]` before `for` still parses and needs no `;`.
+#[test]
+fn test_loop_attribute_still_parses_after_statement_attributes_landed() {
+    parse_ok(
+        "fn main() { let mut acc = 0i64; #[par_order_free] for i in 0..4i64 { acc = acc + i; } }",
+    );
+}
