@@ -102261,6 +102261,95 @@ fn main() {
         );
     }
 
+    /// B-2026-08-21-25 — a method call whose receiver is a fixed-array
+    /// TEMPORARY rather than a named binding.
+    ///
+    /// The fixed-array dispatch block is identifier-keyed — it reads
+    /// `variables[name].ty` and fires only when that slot is an LLVM
+    /// `ArrayType` — so a temporary had no slot to key on and every method of
+    /// the read surface hit the dispatch-fail error under `karac build` while
+    /// `--interp`, which runs a fixed array as a Vec, answered.
+    ///
+    /// Each spelling is pinned BESIDE its bound two-line twin, which is the
+    /// oracle the fix is written against and the thing that keeps this test
+    /// honest: the fix routes the temporary onto the binding's own path, so a
+    /// regression that broke only that path would otherwise still pass with a
+    /// smaller number of lines in the output.
+    ///
+    /// Three receiver shapes are swept because the element type behind them is
+    /// resolved three different ways, and only `is_sorted` consumes it —
+    /// `to_ne_bytes` (fixed `u8`), a user fn declared `-> Array[T, N]`
+    /// (signature lookup), and a byte-string literal (fixed `u8`). Get one
+    /// wrong and `is_sorted` is the single method that notices.
+    ///
+    /// `hi()` returns `[128, 1]` for exactly that reason: unsigned it is NOT
+    /// sorted, and read as `i8` (128 → -128) it WOULD be. Asserting `false`
+    /// is what proves the element type reached the comparator rather than the
+    /// arm defaulting to a signed compare. It is a declared `Array[u8, 2]`
+    /// rather than a `to_ne_bytes` result so the assertion does not also
+    /// depend on the host's byte order.
+    ///
+    /// `.last()` earns its own line: it is the one method of this surface the
+    /// dispatch tail could not see, because the iterator-chain terminal arm
+    /// admits ANY `MethodCall` receiver on the assumption that it is a chain
+    /// and returned its own error before the tail was reached.
+    #[test]
+    fn test_e2e_method_call_on_a_fixed_array_temporary() {
+        let src = r#"
+trait Head { fn head_or(self, d: i64) -> i64; }
+impl Head for Array[i64, 3] {
+    fn head_or(self, d: i64) -> i64 { return 111; }
+}
+fn mk() -> Array[i64, 3] { return [4, 5, 6]; }
+fn hi() -> Array[u8, 2] { return [128u8, 1u8]; }
+
+fn main() {
+    let e: u16 = 258u16;
+
+    // The whole read surface on a TEMPORARY, each beside its bound twin.
+    let b = e.to_ne_bytes();
+    println(e.to_ne_bytes().len());
+    println(b.len());
+    println(e.to_ne_bytes().is_empty());
+    println(b.is_empty());
+    println(e.to_ne_bytes().first().unwrap());
+    println(b.first().unwrap());
+    println(e.to_ne_bytes().last().unwrap());
+    println(b.last().unwrap());
+    println(e.to_ne_bytes().get(0).unwrap());
+    println(b.get(0).unwrap());
+    println(e.to_ne_bytes().contains(1u8));
+    println(b.contains(1u8));
+
+    // A user fn declared `-> Array[T, N]`: the element type comes from the
+    // signature, and `[128, 1]` is unsorted only if it is read as `u8`.
+    println(mk().len());
+    println(mk().last().unwrap());
+    println(hi().is_sorted());
+    let h = hi();
+    println(h.is_sorted());
+
+    // A byte-string literal receiver.
+    println(b"abc".len());
+    println(b"abc".is_sorted());
+    println(b"cba".is_sorted());
+
+    // A method a USER impl declared on the `Array` head, called on a
+    // temporary — admitted for the same reason the builtin names are: this
+    // routes the call to the path its bound twin already takes.
+    println(mk().head_or(-1));
+    let m = mk();
+    println(m.head_or(-1));
+}
+"#;
+        assert_eq!(
+            run_program(src).as_deref(),
+            Some(
+                "2\n2\nfalse\nfalse\n2\n2\n1\n1\n2\n2\ntrue\ntrue\n3\n6\nfalse\nfalse\n3\ntrue\nfalse\n111\n111\n"
+            )
+        );
+    }
+
     /// B-2026-08-21-10 — `Vec.from_fn(n, f)`, end to end.
     ///
     /// The element type must be settled BEFORE the buffer is allocated,

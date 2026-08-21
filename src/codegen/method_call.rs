@@ -7996,6 +7996,27 @@ impl<'ctx> super::Codegen<'ctx> {
                 {
                     return Ok(v);
                 }
+                // B-2026-08-21-25 — `last` is also a method on the fixed-array
+                // read surface, and the gate above admits ANY `MethodCall`
+                // receiver on the assumption that it is an iterator chain. So
+                // `n.to_ne_bytes().last()` was claimed here and died on this
+                // error, never reaching the fixed-array arm at the dispatch
+                // tail — the one method of that surface the tail could not see.
+                // Retried here rather than by narrowing the gate above: the
+                // chain path has already declined, so this runs only where the
+                // next statement is an error return, and a receiver it cannot
+                // type falls straight back to that same error.
+                if method == "last" {
+                    if let Some(v) = self.try_compile_nonident_fixed_array_method(
+                        object,
+                        method,
+                        args,
+                        call_span,
+                        args_close_span,
+                    )? {
+                        return Ok(v);
+                    }
+                }
                 return Err(format!(
                     "`Iterator.{}()` is lowered under `karac build` only for a SCALAR \
                      element over a fused map/filter chain; a heap element or an \
@@ -8580,6 +8601,24 @@ impl<'ctx> super::Codegen<'ctx> {
         // and then rejected leaves dead IR in an already-failing compile
         // rather than a duplicated side effect in a working one.
         if let Some(result) = self.try_compile_nonident_slice_method(
+            object,
+            method,
+            args,
+            call_span,
+            args_close_span,
+        )? {
+            return Ok(result);
+        }
+
+        // B-2026-08-21-25 — the fixed-`Array[T, N]` sibling of the arm above,
+        // for the same gap in the same shape: the array dispatch block reads
+        // `self.variables[name].ty`, so an array-valued TEMPORARY
+        // (`n.to_ne_bytes().len()`, `mk().first()`) had no slot to key on and
+        // every method on the surface fell through to the error below while
+        // `--interp` answered. Materializes and re-dispatches by identifier;
+        // see the helper for why the scalar-element gate is what makes that
+        // materialization carry no cleanup obligation.
+        if let Some(result) = self.try_compile_nonident_fixed_array_method(
             object,
             method,
             args,
@@ -9871,6 +9910,123 @@ impl<'ctx> super::Codegen<'ctx> {
         self.variables.remove(&synth);
         self.var_types.slice_elem_types.remove(&synth);
         self.var_types.var_elem_type_exprs.remove(&synth);
+
+        out.map(Some)
+    }
+
+    /// B-2026-08-21-25 — the fixed-`Array[T, N]` twin of
+    /// [`Self::try_compile_nonident_slice_method`]: a method call whose
+    /// receiver is an array-valued TEMPORARY rather than a named binding —
+    /// `n.to_ne_bytes().len()`, `mk().first()`, `b"abc".is_sorted()`.
+    ///
+    /// The whole fixed-array dispatch block is identifier-keyed: it reads
+    /// `self.variables[name].ty` and fires only when that slot's LLVM type is
+    /// an `ArrayType`. A temporary has no slot and no name, so every method on
+    /// the surface reached the dispatch-fail error under `karac build` while
+    /// `--interp` — which dispatches a fixed array as a Vec — answered. The
+    /// two-line spelling (`let b = n.to_ne_bytes(); b.len()`) always worked,
+    /// which is the oracle this arm is measured against: materialize the
+    /// aggregate into a slot, register the synthetic name, re-dispatch by
+    /// IDENTIFIER, unregister. Nothing here is method-specific.
+    ///
+    /// The SCALAR-element gate is not a shortcut, it is what makes the
+    /// materialization free of any cleanup obligation. An array of `Int` /
+    /// `Float` (which covers `bool` and `char`, both lowered to `IntType`)
+    /// owns no heap, so spilling it to an alloca creates no second owner and
+    /// no drop to track — the same property that made the slice sibling safe,
+    /// arrived at differently (a slice owns nothing because it is a view; a
+    /// scalar array owns nothing because its elements are scalars). It is
+    /// also exactly the gate the typechecker puts on the builtin surface
+    /// (`method_sequence_mutation.rs`, B-2026-07-17-19) and the one
+    /// `compile_fixed_array_read` is written against, so for those methods it
+    /// excludes nothing reachable. A USER impl on a non-scalar head —
+    /// `impl Tag for Array[String, 2]` — is reachable and stays loud here
+    /// (B-2026-08-21-43): giving it a lowering means answering who frees the
+    /// temporary's element buffers, which this arm does not establish.
+    ///
+    /// `as_ptr` / `as_mut_ptr` are deliberately absent from the gate even
+    /// though the identifier arm answers them. Handing out the interior
+    /// address of a value with no name is a different question from reading
+    /// it, and the interpreter refuses the same program ("method 'as_ptr' not
+    /// found"), so admitting it here would replace an agreement between the
+    /// backends with a divergence pointing the other way.
+    ///
+    /// Placed last, immediately before the diagnostic, for the reason the
+    /// slice sibling records: every other dispatcher has already declined, so
+    /// a receiver compiled here and then rejected on shape leaves dead IR in
+    /// an already-failing compile rather than a duplicated side effect in a
+    /// working one.
+    fn try_compile_nonident_fixed_array_method(
+        &mut self,
+        object: &Expr,
+        method: &str,
+        args: &[CallArg],
+        call_span: &crate::token::Span,
+        args_close_span: &crate::token::Span,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        // Identifier / self receivers already have a name to key on.
+        if matches!(&object.kind, ExprKind::Identifier(_) | ExprKind::SelfValue) {
+            return Ok(None);
+        }
+        // The builtin fixed-array read surface, plus any method a USER impl
+        // declared on the `Array` head — the same pairing the slice sibling
+        // admits (B-2026-08-18-14), and for the same reason: this arm routes
+        // a call to the path its bound twin already takes rather than adding
+        // one, so a user method belongs here exactly as much as a builtin.
+        if !matches!(
+            method,
+            "len" | "is_empty" | "get" | "first" | "last" | "contains" | "is_sorted"
+        ) && !self.user_impl_method_exists(call_span, "Array", method)
+        {
+            return Ok(None);
+        }
+        let cur_fn = self
+            .current_fn
+            .ok_or_else(|| "Array method on a temporary outside a fn".to_string())?;
+
+        let recv_val = self.compile_expr(object)?;
+        let BasicTypeEnum::ArrayType(at) = recv_val.get_type() else {
+            return Ok(None);
+        };
+        if !matches!(
+            at.get_element_type(),
+            BasicTypeEnum::IntType(_) | BasicTypeEnum::FloatType(_)
+        ) {
+            return Ok(None);
+        }
+        let slot = self.create_entry_alloca(cur_fn, "__arecv_tmp", recv_val.get_type());
+        self.builder.build_store(slot, recv_val).unwrap();
+
+        let synth = format!("__arecv_tmp_{}", self.indexed_elem_counter);
+        self.indexed_elem_counter += 1;
+        self.variables.insert(
+            synth.clone(),
+            super::state::VarSlot {
+                ptr: slot,
+                ty: recv_val.get_type(),
+            },
+        );
+        // `var_type_names` is what `inferred_receiver_type` reads to qualify a
+        // user-impl dispatch as `Array.<method>`; an Array local carries the
+        // bare head name `"Array"` there, so the synthetic name carries it too.
+        self.var_types
+            .var_type_names
+            .insert(synth.clone(), "Array".to_string());
+        if let Some(te) = self.array_elem_type_expr_from_rhs(object) {
+            self.var_types
+                .array_elem_type_exprs
+                .insert(synth.clone(), te);
+        }
+        let synth_expr = Expr {
+            kind: ExprKind::Identifier(synth.clone()),
+            span: object.span,
+        };
+        let out = self.compile_method_call(&synth_expr, method, args, call_span, args_close_span);
+
+        // Drop the dispatch-only registrations.
+        self.variables.remove(&synth);
+        self.var_types.var_type_names.remove(&synth);
+        self.var_types.array_elem_type_exprs.remove(&synth);
 
         out.map(Some)
     }

@@ -1124,6 +1124,62 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-08-21-25 — the fixed-`Array[T, N]` twin of
+    /// [`Self::slice_elem_type_expr_from_rhs`]: the element `TypeExpr` of an
+    /// array-valued expression that is NOT a named binding.
+    ///
+    /// Only `is_sorted` consumes it (see `compile_fixed_array_read`'s
+    /// `elem_te` parameter — every other arm on the fixed-array read surface
+    /// either does no comparison or compares for equality, both
+    /// signedness-blind). Returning `None` therefore costs exactly one
+    /// method: the arm declines rather than guess an ordering.
+    pub(super) fn array_elem_type_expr_from_rhs(&self, expr: &Expr) -> Option<TypeExpr> {
+        let u8_te = |span: &crate::token::Span| TypeExpr {
+            kind: TypeKind::Path(crate::ast::PathExpr {
+                segments: vec!["u8".to_string()],
+                generic_args: None,
+                span: *span,
+            }),
+            span: *span,
+        };
+        match &expr.kind {
+            // `n.to_ne_bytes() -> Array[u8, N]` (B-2026-08-21-10) — `u8` is
+            // fixed at the typechecker layer, so no lookup is needed. This is
+            // the only `Array`-returning builtin method today; `to_le_bytes`
+            // / `to_be_bytes` deliberately do not exist (design.md names only
+            // the native-order form).
+            ExprKind::MethodCall { method, .. } if method == "to_ne_bytes" => {
+                Some(u8_te(&expr.span))
+            }
+            ExprKind::ByteStringLit(_) => Some(u8_te(&expr.span)),
+            // A CALL — free fn or method — declared `-> Array[T, N]`. Placed
+            // after the fixed-element arms above so they keep priority for
+            // the shapes they resolve without a signature lookup, exactly as
+            // the slice sibling orders its own arms.
+            ExprKind::Call { .. } | ExprKind::MethodCall { .. } => {
+                self.call_array_return_elem_te(expr)
+            }
+            _ => None,
+        }
+    }
+
+    /// The `Array` half of [`Self::call_slice_return_elem_te`]: pull `T` out
+    /// of a callee declared `-> Array[T, N]`.
+    fn call_array_return_elem_te(&self, expr: &Expr) -> Option<TypeExpr> {
+        let key = match &expr.kind {
+            ExprKind::Call { callee, .. } => match &callee.kind {
+                ExprKind::Identifier(fname) => fname.clone(),
+                _ => return None,
+            },
+            ExprKind::MethodCall { object, method, .. } => {
+                format!("{}.{}", self.inferred_receiver_type(object)?, method)
+            }
+            _ => return None,
+        };
+        let ret = self.fn_sig.fn_return_type_exprs.get(key.as_str())?;
+        super::helpers::array_inner_type_expr(ret)
+    }
+
     /// Look up the element LLVM type of a known sequence variable (Array,
     /// Vec, or Slice).
     pub(super) fn infer_elem_from_source(&self, object: &Expr) -> Option<BasicTypeEnum<'ctx>> {

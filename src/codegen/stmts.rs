@@ -3780,29 +3780,52 @@ impl<'ctx> super::Codegen<'ctx> {
                             }
                         }
                     }
-                    // `let a = b"abc"` — an Array binding with NO annotation.
-                    // `array_elem_type_exprs` is otherwise populated only from
-                    // the annotation below, which was complete while every
-                    // un-annotated collection literal inferred `Vec`. A
-                    // byte-string literal is the first expression whose type is
-                    // `Array[u8, N]` with nothing declared (B-2026-08-20-37),
-                    // so without this the element type is unknown to the
-                    // fixed-array method arms and `b"abc".is_sorted()` failed
-                    // codegen ("no source element type for the receiver") while
-                    // `--interp` answered — a run/build divergence.
+                    // An Array binding with NO annotation. `array_elem_type_exprs`
+                    // is otherwise populated only from the annotation below,
+                    // which was complete while every un-annotated collection
+                    // literal inferred `Vec`. A byte-string literal was the
+                    // first expression whose type is `Array[u8, N]` with
+                    // nothing declared (B-2026-08-20-37), so without this
+                    // `let a = b"abc"; a.is_sorted()` failed codegen ("no
+                    // source element type for the receiver") while `--interp`
+                    // answered — a run/build divergence.
                     if ty.is_none() {
-                        if let ExprKind::ByteStringLit(_) = &value.kind {
-                            self.var_types.array_elem_type_exprs.insert(
-                                var_name.clone(),
-                                TypeExpr {
-                                    span: value.span,
-                                    kind: TypeKind::Path(crate::ast::PathExpr {
-                                        segments: vec!["u8".to_string()],
-                                        generic_args: None,
-                                        span: value.span,
-                                    }),
-                                },
-                            );
+                        // B-2026-08-21-25 — one resolver for both ends. This
+                        // was a hand-rolled `ByteStringLit` arm, which left the
+                        // OTHER un-annotated shape that produces a fixed array
+                        // — `let h = mk()` for a `mk() -> Array[T, N]` —
+                        // without an element type, so `h.is_sorted()` failed
+                        // codegen ("no source element type for the receiver")
+                        // while `--interp` answered. Routing through
+                        // `array_elem_type_expr_from_rhs` means the binding and
+                        // the TEMPORARY (`mk().is_sorted()`, which the same
+                        // helper types at the dispatch tail) can only ever
+                        // agree: a shape one of them can resolve is a shape
+                        // both resolve, which is the property the bound
+                        // two-line spelling is used as an oracle for.
+                        if let Some(elem_te) = self.array_elem_type_expr_from_rhs(value) {
+                            self.var_types
+                                .array_elem_type_exprs
+                                .insert(var_name.clone(), elem_te);
+                            // The resolver answers `Some` only for shapes that
+                            // ARE fixed arrays, so this is the same fact stated
+                            // to the other table `inferred_receiver_type` reads
+                            // — without it a user method declared on the
+                            // `Array` head had no name to qualify with and
+                            // `let m = mk(); m.head_or(-1)` loud-failed while
+                            // the annotated binding and the TEMPORARY
+                            // (`mk().head_or(-1)`, which registers `"Array"`
+                            // for its synthetic name) both dispatched. Additive
+                            // by construction, the argument the `Slice` twin
+                            // records at `inferred_receiver_type`: every
+                            // consumer of this name either compares it against
+                            // a specific type or looks `Array.<method>` up in
+                            // `module` / `generic_fns` and declines when it is
+                            // absent, and a program with no `impl … for
+                            // Array[T, N]` emits no such symbol.
+                            self.var_types
+                                .var_type_names
+                                .insert(var_name.clone(), "Array".to_string());
                         }
                     }
                     // Explicit type annotation: let v: Vec[T] = ... or let s: String = ...
