@@ -36722,3 +36722,78 @@ fn to_ne_bytes_feeds_a_slice_parameter() {
     }");
     assert_eq!(out, "10\n");
 }
+
+// ── B-2026-08-21-10: C-like enum `.discriminant()` ──────────────
+//
+// design.md § Enum Discriminant Runtime Surface. The values come from the
+// typechecker's FOLDED table, which is what keeps the two backends from
+// disagreeing about a declared `Audio = BASE + 1`.
+
+#[test]
+fn discriminant_reads_the_declared_value_not_the_tag() {
+    // The spec's own example. Tags are 0/1/2 by declaration position; the
+    // answers must be the DECLARED 1/3/8.
+    let out = run("#[repr(u8)]\n\
+    enum UsbClass { Audio = 0x01, Hid = 0x03, MassStorage = 0x08 }\n\
+    fn main() {\n\
+        let c = UsbClass.Hid;\n\
+        let byte: u8 = c.discriminant();\n\
+        println(f\"{byte} {UsbClass.Audio.discriminant()} {UsbClass.MassStorage.discriminant()}\");\n\
+    }");
+    assert_eq!(out, "3 1 8\n");
+}
+
+#[test]
+fn discriminant_falls_back_to_declaration_position() {
+    // No declared values: each variant's discriminant is its position, as in C.
+    let out = run("enum Plain { A, B, C }\n\
+    fn main() {\n\
+        println(f\"{Plain.A.discriminant()} {Plain.B.discriminant()} {Plain.C.discriminant()}\");\n\
+    }");
+    assert_eq!(out, "0 1 2\n");
+}
+
+#[test]
+fn discriminant_carries_a_signed_repr() {
+    let out = run("#[repr(i8)]\n\
+    enum Neg { Down = -128, Up = 127 }\n\
+    fn main() {\n\
+        let d: i8 = Neg.Down.discriminant();\n\
+        println(f\"{d} {Neg.Up.discriminant()}\");\n\
+    }");
+    assert_eq!(out, "-128 127\n");
+}
+
+#[test]
+fn discriminant_folds_a_constant_expression() {
+    // The value need not be a literal — it is folded once, in the typechecker,
+    // precisely so the interpreter and codegen cannot fold it differently.
+    let out = run("const BASE: i64 = 16;\n\
+    #[repr(u8)]\n\
+    enum Op { Add = BASE + 1, Sub = BASE + 2 }\n\
+    fn main() {\n\
+        println(f\"{Op.Add.discriminant()} {Op.Sub.discriminant()}\");\n\
+    }");
+    assert_eq!(out, "17 18\n");
+}
+
+#[test]
+fn discriminant_reaches_every_receiver_shape() {
+    let out = run("#[repr(u8)]\n\
+    enum Big { Lo = 0, Hi = 255 }\n\
+    struct Holder { kind: Big }\n\
+    #[repr(u8)]\n\
+    enum Op { Add = 1, Sub = 2 }\n\
+    impl Op {\n\
+        fn code(ref self) -> u8 { self.discriminant() }\n\
+    }\n\
+    fn as_u8(k: Big) -> u8 { k.discriminant() }\n\
+    fn main() {\n\
+        let h = Holder { kind: Big.Hi };\n\
+        let o = Op.Add;\n\
+        println(f\"{h.kind.discriminant()} {as_u8(Big.Hi)} {Op.Sub.code()} {o.code()}\");\n\
+    }");
+    // Field access, a by-value parameter, a path receiver, and `self` inside
+    // an impl all resolve to the same generated method.
+    assert_eq!(out, "255 255 2 1\n");
+}

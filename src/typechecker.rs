@@ -1484,6 +1484,20 @@ pub struct TypeCheckResult {
     /// return is `Type::Ref` and never matches, keeping borrows out of a
     /// path that frees the temporary.
     pub index_recv_vec_types: FxHashMap<SpanKey, TypeExpr>,
+    /// The runtime discriminant surface of every C-LIKE (payload-free) enum:
+    /// enum name → (repr type name, variant name → declared value in
+    /// declaration order). B-2026-08-21-10.
+    ///
+    /// Published from the typechecker rather than recomputed per backend
+    /// because a declared discriminant may be a constant EXPRESSION
+    /// (`Audio = BASE + 1`), and the constant folding that resolves it already
+    /// lives here — two independent folds is exactly how the interpreter and
+    /// codegen would come to disagree about what `.discriminant()` answers.
+    /// The repr name is the SOURCE spelling (`u8` / `i32` / …, `u32` when no
+    /// `#[repr]` is declared), so both backends map it to their own type
+    /// vocabulary. Payload-carrying enums are absent by construction —
+    /// design.md § Enum Discriminant Runtime Surface excludes them at v1.
+    pub enum_discriminants: crate::ast::EnumDiscriminantTable,
     /// Sibling of `temp_recv_elem_types` for `Map`/`Set` fresh-temp receivers
     /// (`make_map().get(k)`, `make_set().contains(x)`): span of the MethodCall →
     /// the receiver's whole `Map[K, V]` / `Set[T]` `TypeExpr` (codegen needs K+V
@@ -2040,6 +2054,8 @@ pub struct TypeChecker<'a> {
     pub(super) tensor_index_recv_types: FxHashMap<SpanKey, Type>,
     /// B-2026-08-14-38 — see `TypeCheckResult::index_recv_vec_types`.
     pub(super) index_recv_vec_types: FxHashMap<SpanKey, TypeExpr>,
+    /// B-2026-08-21-10 — see `TypeCheckResult::enum_discriminants`.
+    pub(super) enum_discriminants: crate::ast::EnumDiscriminantTable,
     /// MethodCall span → `Map[K,V]` / `Set[T]` `TypeExpr` of a fresh-temp
     /// Map/Set receiver. See the public copy on `TypeCheckResult`.
     pub(super) temp_recv_mapset_types: FxHashMap<SpanKey, TypeExpr>,
@@ -2343,6 +2359,7 @@ impl<'a> TypeChecker<'a> {
             temp_recv_elem_types: FxHashMap::default(),
             tensor_index_recv_types: FxHashMap::default(),
             index_recv_vec_types: FxHashMap::default(),
+            enum_discriminants: crate::ast::EnumDiscriminantTable::default(),
             temp_recv_mapset_types: FxHashMap::default(),
             temp_recv_len_elem_types: FxHashMap::default(),
             iter_terminal_elem_types: FxHashMap::default(),
@@ -2568,6 +2585,7 @@ impl<'a> TypeChecker<'a> {
             temp_recv_elem_types: self.temp_recv_elem_types,
             tensor_index_recv_types: self.tensor_index_recv_types,
             index_recv_vec_types: self.index_recv_vec_types,
+            enum_discriminants: self.enum_discriminants,
             temp_recv_mapset_types: self.temp_recv_mapset_types,
             temp_recv_len_elem_types: self.temp_recv_len_elem_types,
             iter_terminal_elem_types: self.iter_terminal_elem_types,

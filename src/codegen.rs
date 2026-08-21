@@ -5349,6 +5349,7 @@ impl<'ctx> Codegen<'ctx> {
                 union_field_types: HashMap::new(),
                 enum_layouts: HashMap::new(),
                 enum_unit_variants: HashMap::new(),
+                enum_discriminants: crate::ast::EnumDiscriminantTable::default(),
                 seeded_enum_names: HashSet::new(),
                 shared_types: HashMap::new(),
                 enum_inst_type_exprs: HashMap::new(),
@@ -6914,6 +6915,9 @@ impl<'ctx> Codegen<'ctx> {
         self.span_tables.optional_chain_lowering = program.optional_chain_lowering.clone();
         self.span_tables.method_unwrap_err_types = program.method_unwrap_err_types.clone();
         self.span_tables.temp_recv_elem_types = program.temp_recv_elem_types.clone();
+        // Keyed by enum NAME, so it lives with the other type declarations
+        // rather than in the span tables (B-2026-08-21-10).
+        self.type_decls.enum_discriminants = program.enum_discriminants.clone();
         self.mapset.temp_recv_mapset_types = program.temp_recv_mapset_types.clone();
         self.span_tables.temp_recv_len_elem_types = program.temp_recv_len_elem_types.clone();
         self.span_tables.iter_terminal_elem_types = program.iter_terminal_elem_types.clone();

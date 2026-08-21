@@ -101544,6 +101544,78 @@ fn main() {
         );
     }
 
+    /// B-2026-08-21-10 — C-like enum `.discriminant()`, end to end.
+    ///
+    /// The value is NOT the tag. design.md is explicit that declared
+    /// discriminants are not layout commitments at v1, so codegen lays these
+    /// enums out at declaration positions 0/1/2 and maps them to the DECLARED
+    /// values with a select chain. A lowering that just returned the tag would
+    /// answer 0/1/2 here and pass any test whose declared values happened to
+    /// be 0, 1, 2 — hence the deliberately non-positional `0x01 / 0x03 / 0x08`
+    /// and the constant-expression variant.
+    #[test]
+    fn test_e2e_discriminant_reads_the_declared_value() {
+        let src = r#"
+const BASE: i64 = 16;
+
+#[repr(u8)]
+enum UsbClass { Audio = 0x01, Hid = 0x03, MassStorage = 0x08 }
+
+enum Plain { A, B, C }
+
+#[repr(i8)]
+enum Neg { Down = -128, Up = 127 }
+
+#[repr(u16)]
+enum Wide { A = 1000, B = 65535 }
+
+#[repr(u8)]
+enum Op { Add = BASE + 1, Sub = BASE + 2 }
+
+struct Holder { kind: UsbClass }
+
+impl Op {
+    fn code(ref self) -> u8 { self.discriminant() }
+}
+
+fn as_u8(k: UsbClass) -> u8 { k.discriminant() }
+
+fn main() {
+    // The spec's example.
+    let c = UsbClass.Hid;
+    let byte: u8 = c.discriminant();
+    println(byte);
+    println(UsbClass.Audio.discriminant());
+    println(UsbClass.MassStorage.discriminant());
+
+    // No declared values: declaration position, as in C.
+    println(Plain.A.discriminant());
+    println(Plain.C.discriminant());
+
+    // Signed and wide reprs at their boundaries.
+    println(Neg.Down.discriminant());
+    println(Neg.Up.discriminant());
+    println(Wide.A.discriminant());
+    println(Wide.B.discriminant());
+
+    // A folded constant expression — the fold happens once, in the
+    // typechecker, so both backends read the same number.
+    println(Op.Add.discriminant());
+
+    // Every receiver shape: struct field, by-value parameter, `self`.
+    let h = Holder { kind: UsbClass.MassStorage };
+    println(h.kind.discriminant());
+    println(as_u8(UsbClass.Audio));
+    let o = Op.Sub;
+    println(o.code());
+}
+"#;
+        assert_eq!(
+            run_program(src).as_deref(),
+            Some("3\n1\n8\n0\n2\n-128\n127\n1000\n65535\n17\n8\n1\n18\n")
+        );
+    }
+
     /// B-2026-08-21-10 — `to_ne_bytes()`, end to end.
     ///
     /// Lowered as store-then-reload, so the answer IS the native byte order by

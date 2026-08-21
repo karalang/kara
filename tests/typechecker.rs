@@ -3623,6 +3623,84 @@ fn first_still_takes_no_arguments() {
     }
 }
 
+/// B-2026-08-21-10 — a C-like enum's `.discriminant()` returns its REPR type.
+///
+/// design.md § Enum Discriminant Runtime Surface commits the shape: `u8` for
+/// `#[repr(u8)]`, `i32` for `#[repr(i32)]`, and a conservative `u32` for a
+/// C-like enum with no `#[repr]`. Before this the spec's own worked example
+/// failed with "no method 'discriminant' on type 'UsbClass'".
+#[test]
+fn discriminant_returns_the_repr_type() {
+    for (attr, ty) in [
+        ("#[repr(u8)]\n", "u8"),
+        ("#[repr(u16)]\n", "u16"),
+        ("#[repr(u32)]\n", "u32"),
+        ("#[repr(i32)]\n", "i32"),
+        // No `#[repr]` — the conservative default.
+        ("", "u32"),
+    ] {
+        typecheck_ok(&format!(
+            "{attr}enum E {{ A, B }}\n             fn main() {{\n                 let d: {ty} = E.B.discriminant();\n                 println(d);\n             }}"
+        ));
+    }
+    // The spec's example, verbatim.
+    typecheck_ok(
+        "#[repr(u8)]\n         enum UsbClass { Audio = 0x01, Hid = 0x03, MassStorage = 0x08 }\n         fn main() {\n             let c = UsbClass.Hid;\n             let byte: u8 = c.discriminant();\n             println(byte);\n         }",
+    );
+    // The repr type is enforced, not merely announced. Checked in the
+    // NARROWING direction, because a widening coercion (`u8` -> `i32`) is
+    // implicit in this language and would pass whatever the repr were.
+    let wrong = typecheck_errors(
+        "#[repr(u32)]\n         enum E { A, B }\n         fn main() {\n             let d: u8 = E.B.discriminant();\n             println(d);\n         }",
+    );
+    assert!(
+        wrong.iter().any(|e| e.message.contains("would narrow")),
+        "a #[repr(u32)] enum's discriminant must not narrow silently into u8; got {:?}",
+        wrong.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+    // …and the default IS that same `u32`, so a repr-less enum narrows
+    // exactly as the declared-`u32` one does.
+    let default_narrows = typecheck_errors(
+        "enum E { A, B }\n         fn main() {\n             let d: u8 = E.B.discriminant();\n             println(d);\n         }",
+    );
+    assert!(
+        default_narrows
+            .iter()
+            .any(|e| e.message.contains("would narrow")),
+        "a repr-less enum's discriminant must be the conservative u32; got {:?}",
+        default_narrows
+            .iter()
+            .map(|e| &e.message)
+            .collect::<Vec<_>>()
+    );
+}
+
+/// A PAYLOAD-carrying enum is excluded at v1 — the spec's own restriction —
+/// and says why, plus the remedy it recommends.
+#[test]
+fn discriminant_refuses_a_payload_enum_with_the_specs_remedy() {
+    let errs = typecheck_errors(
+        "enum Shape { Circle { radius: f64 }, Square }\n         fn main() {\n             let s = Shape.Square;\n             println(s.discriminant());\n         }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("payload-carrying variants")
+                && e.message.contains("fn tag(ref self)")),
+        "the refusal must name the restriction and the hand-written `tag` remedy; got {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+/// The generated method is a BUILTIN and resolves before the impl table, so a
+/// user `impl` that happens to define `discriminant` cannot hijack it — the
+/// same precedence `STRING_BUILTIN_METHODS` gives `len`.
+#[test]
+fn discriminant_is_not_shadowable_by_a_user_impl() {
+    typecheck_ok(
+        "#[repr(u8)]\n         enum E { A = 9 }\n         impl E {\n             fn discriminant(ref self) -> u8 { 42u8 }\n         }\n         fn main() { println(E.A.discriminant()); }",
+    );
+}
+
 /// B-2026-08-21-10 — `to_ne_bytes()` exists on the integer scalars and returns
 /// `Array[u8, N]` at the receiver's byte width.
 ///

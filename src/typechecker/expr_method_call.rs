@@ -1813,6 +1813,50 @@ impl<'a> super::TypeChecker<'a> {
         if method == "to_string" && matches!(receiver_for_lookup, Type::Int(_) | Type::UInt(_)) {
             self.record_expr_type(args_close_span, &receiver_for_lookup);
         }
+
+        // `<c-like enum>.discriminant() -> D` — design.md § Enum Discriminant
+        // Runtime Surface (B-2026-08-21-10). `D` is the repr type: `u8` for
+        // `#[repr(u8)]`, `i32` for `#[repr(i32)]`, and a conservative `u32`
+        // for a C-like enum with no `#[repr]`.
+        //
+        // Placed before user-`impl` dispatch, like every other builtin on this
+        // chain, so the auto-generated method cannot be shadowed. A
+        // PAYLOAD-carrying enum is absent from the table by construction (the
+        // spec excludes it at v1) and gets a targeted diagnostic rather than
+        // the generic "no method" — the remedy it names, a hand-written `tag`
+        // method, is the spec's own advice.
+        if method == "discriminant" && args.is_empty() {
+            if let Type::Named { name, .. } = &receiver_for_lookup {
+                if let Some((repr, _)) = self.enum_discriminants.get(name.as_str()) {
+                    let ty = match repr.as_str() {
+                        "i8" => Type::Int(IntSize::I8),
+                        "i16" => Type::Int(IntSize::I16),
+                        "i32" => Type::Int(IntSize::I32),
+                        "i64" => Type::Int(IntSize::I64),
+                        "u8" => Type::UInt(UIntSize::U8),
+                        "u16" => Type::UInt(UIntSize::U16),
+                        "u64" => Type::UInt(UIntSize::U64),
+                        _ => Type::UInt(UIntSize::U32),
+                    };
+                    self.record_expr_type(span, &ty);
+                    return ty;
+                }
+                if self.env.enums.contains_key(name.as_str()) {
+                    self.type_error(
+                        format!(
+                            "'{name}' has payload-carrying variants, and `.discriminant()` is \
+                             generated for C-like (payload-free) enums only — the compiler may \
+                             elide, reorder or move a payload enum's tag, so there is no stable \
+                             integer to read. Write an explicit `fn tag(ref self) -> u8` with a \
+                             `match` instead"
+                        ),
+                        *span,
+                        TypeErrorKind::NoMethodFound,
+                    );
+                    return Type::Error;
+                }
+            }
+        }
         // Last built-in guards before user-`impl` dispatch — distinct-type
         // `.raw()`, `cmp`, `to_string`, and the tuple surface, all keyed on
         // the normalized receiver. Extracted to `method_nominal_tail.rs`;

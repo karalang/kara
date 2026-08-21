@@ -99,6 +99,12 @@ pub(crate) struct TypeDecls<'ctx> {
     /// renders as the bare variant name, selected on the tag. Payload-bearing
     /// enums are absent (their Display codegen is a tracked follow-on).
     pub(crate) enum_unit_variants: HashMap<String, Vec<String>>,
+    /// C-like enum name → (repr type name, `(variant, declared value)` in
+    /// declaration order). Copied from `Program.enum_discriminants`, which the
+    /// lowering pass fills from the typechecker's folded table — codegen never
+    /// folds a declared discriminant itself, so it cannot disagree with the
+    /// interpreter about what `.discriminant()` answers (B-2026-08-21-10).
+    pub(crate) enum_discriminants: crate::ast::EnumDiscriminantTable,
     /// Names of enums seeded by `seed_builtin_enum_layouts` (`Option`,
     /// `Result`, `Json`, `TcpError`, …) — used by the variant-name →
     /// enum-name disambiguation in `try_compile_enum_variant` /

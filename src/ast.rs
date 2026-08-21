@@ -301,6 +301,14 @@ pub type MethodUnwrapInnerTypesTable = std::collections::HashMap<(usize, usize),
 /// through `compile_vec_method` (general-owned-temp-tracking spike, slice 3b).
 pub type TempRecvElemTypesTable = std::collections::HashMap<(usize, usize), TypeExpr>;
 
+/// The runtime discriminant surface of every C-LIKE (payload-free) enum:
+/// enum name → (repr type name, `(variant name, declared value)` in
+/// declaration order). Populated by the typechecker (`TypeCheckResult::
+/// enum_discriminants`) and forwarded here by the lowering pass so codegen can
+/// read it. B-2026-08-21-10; see the typechecker field's doc for why the
+/// values are folded once rather than per backend.
+pub type EnumDiscriminantTable = std::collections::HashMap<String, (String, Vec<(String, i64)>)>;
+
 /// Side-table populated by the lowering pass from the typechecker's
 /// `index_recv_vec_types` map. Maps the span of an `Index` RECEIVER that is a
 /// `Vec`/`VecDeque`-returning `MethodCall` (`v.clone()[1]`,
@@ -799,6 +807,10 @@ pub struct Program {
     /// empty otherwise. Fresh-temp `Vec`/`VecDeque` receiver scalar element
     /// types for codegen's slice-3b read-method redispatch.
     pub temp_recv_elem_types: TempRecvElemTypesTable,
+    /// Set by the lowering pass from `TypeCheckResult.enum_discriminants`;
+    /// empty otherwise. The C-like-enum runtime discriminant surface codegen
+    /// lowers `.discriminant()` against (B-2026-08-21-10).
+    pub enum_discriminants: EnumDiscriminantTable,
     /// Set by the lowering pass from
     /// `TypeCheckResult.tensor_index_recv_types`; empty otherwise. The
     /// `TensorTypeInfo` of an `Index` RECEIVER, keyed by the receiver's span.

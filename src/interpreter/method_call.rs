@@ -3434,6 +3434,25 @@ impl<'a> super::Interpreter<'a> {
             }
         }
 
+        // `<c-like enum>.discriminant() -> D` (typed in expr_method_call.rs)
+        // — design.md § Enum Discriminant Runtime Surface (B-2026-08-21-10).
+        // The values come from the typechecker's folded table, so a declared
+        // `Audio = BASE + 1` reads the same here as in codegen. A variant
+        // missing from the table cannot happen for a receiver the typechecker
+        // admitted, so falling through is a defensive no-op rather than a path.
+        if args.is_empty() && method == "discriminant" {
+            if let Value::EnumVariant {
+                enum_name, variant, ..
+            } = &obj
+            {
+                if let Some((_, values)) = self.typecheck_result.enum_discriminants.get(enum_name) {
+                    if let Some((_, v)) = values.iter().find(|(n, _)| n == variant) {
+                        return Value::Int(i128::from(*v));
+                    }
+                }
+            }
+        }
+
         // Bit intrinsics on integer scalars (typed in expr_method_call.rs):
         // `count_ones` / `leading_zeros` / `trailing_zeros` -> u32, computed at
         // the receiver width recovered from `args_close_span`. Signed `iN` values

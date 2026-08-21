@@ -80,6 +80,7 @@ impl<'a> super::TypeChecker<'a> {
                     self.check_enum_variance(e);
                     self.check_repr_transparent_enum(e);
                     self.check_enum_discriminants(e);
+                    self.record_enum_discriminant_surface(e);
                     if e.is_par {
                         for v in &e.variants {
                             if let VariantKind::Struct(fields) = &v.kind {
@@ -2188,6 +2189,70 @@ impl<'a> super::TypeChecker<'a> {
     /// codegen does not treat them as layout commitments at v1. All findings use
     /// `E0804` (`DiscriminantInvalid`), disambiguated by the symbolic code in
     /// the message.
+    /// Record the runtime discriminant surface of a C-LIKE (payload-free) enum
+    /// for both backends — design.md § Enum Discriminant Runtime Surface
+    /// (B-2026-08-21-10).
+    ///
+    /// Runs beside `check_enum_discriminants` rather than inside it because
+    /// that function returns early when no variant declares a value, and an
+    /// enum without declared values still HAS a discriminant surface: its
+    /// variants take their declaration positions, exactly as C does.
+    ///
+    /// Payload-carrying enums are skipped, which is the spec's own v1
+    /// restriction: the compiler may elide such an enum's discriminant, lay
+    /// its variants out non-contiguously, or move the tag between versions, so
+    /// exposing a reader would be a layout-stability commitment.
+    fn record_enum_discriminant_surface(&mut self, e: &EnumDef) {
+        if e.variants
+            .iter()
+            .any(|v| matches!(v.kind, VariantKind::Struct(_) | VariantKind::Tuple(_)))
+        {
+            return;
+        }
+        // `u32` when no `#[repr]` is declared — the spec's "conservative"
+        // default. A `#[repr(C)]` / `#[repr(align(N))]` head is not an integer
+        // repr and leaves the default in place.
+        let repr = super::repr_arg_head_names(&e.attributes)
+            .into_iter()
+            .find(|n| {
+                matches!(
+                    n.as_str(),
+                    "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64"
+                )
+            })
+            .unwrap_or_else(|| "u32".to_string());
+
+        // Same constant environment `check_enum_discriminants` folds against,
+        // so a declared `Audio = BASE + 1` resolves identically here and there.
+        let program: &Program = self.program;
+        let consts: HashMap<&str, &Expr> = program
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::ConstDecl(c) => Some((c.name.as_str(), &c.value)),
+                Item::ModuleBinding(b) if !b.is_mut => Some((b.name.as_str(), &b.value)),
+                _ => None,
+            })
+            .collect();
+
+        let mut values = Vec::with_capacity(e.variants.len());
+        for (i, v) in e.variants.iter().enumerate() {
+            // Declaration position is the fallback, and it is the ONLY value
+            // for an enum with no declared discriminants. A declared value
+            // that does not fold has already been reported by
+            // `check_enum_discriminants`; falling back to the position here
+            // keeps the table total rather than dropping the whole enum.
+            let value = v
+                .discriminant
+                .as_ref()
+                .and_then(|expr| Self::fold_int_const(expr, &consts, &mut Vec::new()))
+                .unwrap_or(i as i64);
+            values.push((v.name.clone(), value));
+        }
+        self.enum_discriminants
+            .insert(e.name.clone(), (repr, values));
+    }
+
     fn check_enum_discriminants(&mut self, e: &EnumDef) {
         // Nothing to check unless at least one variant declares `= value`.
         if e.variants.iter().all(|v| v.discriminant.is_none()) {

@@ -3969,6 +3969,93 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(result.into());
         }
 
+        // `<c-like enum>.discriminant() -> D` — design.md § Enum Discriminant
+        // Runtime Surface (B-2026-08-21-10).
+        //
+        // A select-chain over the tag rather than a bare tag read, because the
+        // tag is the DECLARATION POSITION and the answer is the DECLARED value
+        // — `#[repr(u8)] enum UsbClass { Audio = 0x01, Hid = 0x03 }` has tags
+        // 0 and 1 and must answer 1 and 3. design.md is explicit that declared
+        // discriminants are not layout commitments at v1, so the mapping has
+        // to happen here rather than by laying the enum out at those values.
+        // Same shape as `compile_unit_enum_display`, which folds a select
+        // chain over the same tag to pick a variant NAME.
+        //
+        // The result is truncated to the repr width so `.discriminant()` on a
+        // `#[repr(u8)]` enum really is a `u8`; the values themselves come from
+        // the typechecker's folded table, never from a second fold here.
+        if args.is_empty() && method == "discriminant" {
+            if let Some(enum_name) = self.expr_user_enum_name(object) {
+                if let Some((repr, values)) =
+                    self.type_decls.enum_discriminants.get(&enum_name).cloned()
+                {
+                    let val = self.compile_expr(object)?;
+                    let tag = match val {
+                        BasicValueEnum::IntValue(iv) => iv,
+                        BasicValueEnum::StructValue(sv) => self
+                            .builder
+                            .build_extract_value(sv, 0, "disc.tag")
+                            .unwrap()
+                            .into_int_value(),
+                        other => {
+                            return Err(format!(
+                                "discriminant: enum '{enum_name}' value has unexpected                                  representation {other:?}"
+                            ))
+                        }
+                    };
+                    let i64_t = self.context.i64_type();
+                    let mut acc: Option<inkwell::values::IntValue<'ctx>> = None;
+                    for (vname, dval) in &values {
+                        let tagval = *self
+                            .type_decls
+                            .enum_layouts
+                            .get(&enum_name)
+                            .and_then(|l| l.tags.get(vname))
+                            .ok_or_else(|| {
+                                format!("discriminant: missing tag for {enum_name}.{vname}")
+                            })?;
+                        let cand = i64_t.const_int(*dval as u64, true);
+                        acc = Some(match acc {
+                            // The first variant is the default: the tag is
+                            // always one of the exhaustive 0..N range, so no
+                            // select is needed for it.
+                            None => cand,
+                            Some(prev) => {
+                                let is_v = self
+                                    .builder
+                                    .build_int_compare(
+                                        IntPredicate::EQ,
+                                        tag,
+                                        i64_t.const_int(tagval, false),
+                                        "disc.is",
+                                    )
+                                    .unwrap();
+                                self.builder
+                                    .build_select(is_v, cand, prev, "disc.sel")
+                                    .unwrap()
+                                    .into_int_value()
+                            }
+                        });
+                    }
+                    let raw = acc.ok_or_else(|| {
+                        format!("discriminant: enum '{enum_name}' has no variants")
+                    })?;
+                    let (bits, unsigned) = match repr.as_str() {
+                        "i8" => (8u32, false),
+                        "i16" => (16, false),
+                        "i32" => (32, false),
+                        "i64" => (64, false),
+                        "u8" => (8, true),
+                        "u16" => (16, true),
+                        "u64" => (64, true),
+                        _ => (32, true),
+                    };
+                    let narrowed = self.coerce_int_to(raw, self.int_type_for_bits(bits), unsigned);
+                    return Ok(narrowed.into());
+                }
+            }
+        }
+
         // `to_ne_bytes()` (typed in method_numeric.rs) -> `Array[u8, N]`, the
         // receiver's NATIVE-order memory image (B-2026-08-21-10).
         //

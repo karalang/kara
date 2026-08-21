@@ -182,6 +182,10 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
         .iter()
         .map(|(k, v)| ((k.0, k.1), v.clone()))
         .collect();
+    // The C-like-enum discriminant surface (B-2026-08-21-10). Keyed by enum
+    // NAME rather than by span — it describes a declaration, not an
+    // expression — so it is a straight clone rather than a span remap.
+    program.enum_discriminants = tc.enum_discriminants.clone();
     // Sibling table for `Map`/`Set` fresh-temp receivers — codegen materializes
     // the handle, registers K/V (or elem) for the redispatch, and drop-tracks
     // the handle (`FreeMapHandle`). Same keying (MethodCall span).
