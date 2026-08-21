@@ -102,7 +102,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 91 | 0 |
 | perf | 83 | 0 |
 | crash | 55 | 0 |
-| other | 52 | 1 |
+| other | 52 | 0 |
 | soundness | 51 | 0 |
 | use-after-free | 20 | 0 |
 
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 972 | 7 |
-| typecheck | 228 | 4 |
+| typecheck | 228 | 3 |
 | interp | 169 | 1 |
 | ownership | 62 | 0 |
 | other | 60 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 7 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1445 surfaced · 13 open · 1410 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1445 surfaced · 12 open · 1411 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (13)
+### Open (12)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -136,7 +136,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1445 surfaced
 | B-2026-08-21-9 | 2026-08-21 | parser | medium | design.md WRITES SYNTAX THE PARSER HAS NO PRODUCTION FOR, in two places syntax.md also disagrees with: the inline associated-type binding `Trait[Assoc = T]` (43 lines of design.md, and syntax.md's own comment at :650) has no form in `TRAIT_BOUND = PATH [ "[" TYPE_LIST "]" ]`, and an effect clause on an impl header (`impl From[E] for A with writes(Log) {`) has no form at all | roadmap.md |
 | B-2026-08-21-17 | 2026-08-21 | lexer | medium | THE SELF-HOSTED KARA LEXER CANNOT LEX `b"..."`, so it now disagrees with the Rust lexer on any input containing one: `selfhost/src/lexer.kara` still routes the `b` prefix down the reserved-string-prefix path and emits `ERROR`, while the Rust lexer emits the byte-string token (550bb1f, B-2026-08-20-37). The self-hosted compiler is behind the language on a construct design.md specifies as shipped. | roadmap.md |
 | B-2026-08-21-18 | 2026-08-21 | codegen+typecheck | low | STRUCT FUNCTIONAL UPDATE `P { x: 1, ..base }` IS STILL UNIMPLEMENTED -- it now says so clearly instead of dropping the base, but the form syntax.md's STRUCT_LITERAL production admits cannot be used; the interpreter already implements the copy and codegen does not, so the remaining work is codegen plus the ownership rules for a spread base | roadmap.md |
-| B-2026-08-21-20 | 2026-08-21 | typecheck | high | `main` IS RED: `selfhost_typechecker_matches_rust_typechecker` fails at 5fee766 on a clean checkout, independent of any local work. Input 126 (`struct P { x: i64, y: i64 } fn f(b: P) -> P { P { x: 1, ..b } }`) -- Kara reports `missing-field @46:15`, Rust now reports `type-mismatch @46:15`. 3b4b97d changed the Rust typechecker's struct-literal-spread diagnostic without teaching the self-hosted Kara typechecker the same rule. | roadmap.md |
 | B-2026-08-21-21 | 2026-08-21 | codegen | high | CODEGEN SILENTLY DROPS `requires` / `ensures` CONTRACTS ON A GENERIC FUNCTION -- the monomorphic sibling of the same contract fires on all three surfaces, so a precondition written on a `fn f[T](...)` is enforced under `--interp` and is not enforced by either compiled backend | roadmap.md |
 | B-2026-08-21-22 | 2026-08-21 | codegen | high | `Vec.filled(n, f"...")` DOUBLE-FREES UNDER BOTH COMPILED BACKENDS -- the f-string accumulator is moved into the buffer and ALSO freed at scope exit; `--interp` prints correctly, so it is a silent run-vs-build divergence that aborts the process | roadmap.md |
 | B-2026-08-21-23 | 2026-08-21 | codegen | high | A FIXED ARRAY PASSED TO A **METHOD**'s `ref Slice[T]` PARAMETER READS A GARBAGE LENGTH -- `bytes.len()` answers 3 under the interpreter, -1 under AOT and a wild number under JIT; the free-function spelling of the same call is correct | roadmap.md |
@@ -161,9 +160,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1445 surfaced
 
 </details>
 
-### Fixed (1410)
+### Fixed (1411)
 
-<details><summary>1410 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1411 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -13560,6 +13559,35 @@ W0150 is the resolver's FIRST warning code, which broke two explain band checks 
 
 Verified: unannotated -> `warning[resolve]`, check and build exit 0, binary produced and runs; annotated -> silent. Two regression tests. |
 | B-2026-08-21-19 | codegen | high | RUN/BUILD DIVERGENCE from two independently-green commits meeting: `let a = b"abc"; a.is_sorted();` printed `true` under `--interp` and FAILED TO COM… | FIXED by ca74f17. An un-annotated binding initialised from a byte-string literal now registers `u8` in `array_elem_type_exprs`, so the fixed-array method arms can resolve the receiver's element type. Strict E2E regression test on the UN-ANNOTATED spelling (the annotated one never broke). |
+| B-2026-08-21-20 | typecheck | high | `main` IS RED: `selfhost_typechecker_matches_rust_typechecker` fails at 5fee766 on a clean checkout, independent of any local work | FIXED by dda94ff.
+
+`selfhost/src/typechecker.kara`'s `check_struct_lit` now mirrors the Rust
+twin's `if has_spread { … } else { … }` in
+`infer_struct_literal_expected`: a literal carrying a spread base emits ONE
+TypeMismatch (kind 0) at the literal span, and the per-field MissingField
+(kind 6) cascade is suppressed.
+
+POSITION IS PART OF THE CONTRACT, not just the kind: the spread error
+replaces the missing pass IN PLACE, so the extra-field and value-mismatch
+passes still emit in the same order. The oracle compares the whole
+diagnostic sequence, so emitting the same error at the end would still have
+diverged.
+
+Kept the Rust twin's deliberate choice that the error fires even when NO
+field is missing -- accepting `P { x: 1, y: 2, ..b }` silently would keep
+implying the base means something, when it is parsed and then dropped.
+
+Verified: full `--features llvm` suite green -- 108 binaries, 14,673 passed,
+0 failed, fmt and both clippy legs clean.
+
+PROCESS NOTE, since this is the second self-host twin left behind in one day
+(B-2026-08-21-17 is the same shape one phase over): changing a Rust-side
+DIAGNOSTIC is not a Rust-only change. The self-host oracles exist to catch
+exactly this and they did, but only at full-suite time, which is late enough
+that another session had already pushed on top of a red main. Cheap guard
+for the next person: after touching a diagnostic's kind, span or ordering,
+run `cargo test --features llvm --test selfhost_typechecker --test
+selfhost_lexer` before pushing -- about 10 s against the ~13 min full suite. |
 
 </details>
 
