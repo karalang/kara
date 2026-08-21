@@ -1979,8 +1979,29 @@ impl<'a> super::TypeChecker<'a> {
     /// Otherwise the argument is *fresh* (owned local, temporary, literal,
     /// non-mut-ref call return, etc.).
     fn is_arg_forwarded(&self, expr: &Expr, arg_ty: &Type) -> bool {
+        // B-2026-08-20-38 — a RANGE INDEX is never forwarded by (A). Its
+        // `mut Slice[T]` type is minted at this very call boundary, by the
+        // range-index arm of `infer_expr` reading the parameter it is being
+        // passed to; the borrow is taken HERE, so the argument is fresh and the
+        // marker rule applies to it exactly as it does to a bare `mut v`.
+        //
+        // Without this, (A) would read the type the upgrade just produced and
+        // conclude the argument arrived already-mutable — inverting the rule
+        // the spec line depends on: `sort_in_place(mut v[1..4])` was told
+        // "this argument is already a mut-ref; drop the `mut` marker", and
+        // dropping it made the sub-range read-only again.
+        //
+        // (B) below still speaks for a genuinely forwarded sub-range: it walks
+        // through `Index` to the place root, so `s[1..2]` over a
+        // `mut Slice[T]` binding forwards without a marker, as it should.
+        let is_range_index = matches!(
+            &expr.kind,
+            ExprKind::Index { index, .. } if matches!(index.kind, ExprKind::Range { .. })
+        );
         // (A) Argument's own type is already mut-ref / mut-slice.
-        if matches!(arg_ty, Type::MutRef(_)) || matches!(arg_ty, Type::Slice { mutable: true, .. })
+        if !is_range_index
+            && (matches!(arg_ty, Type::MutRef(_))
+                || matches!(arg_ty, Type::Slice { mutable: true, .. }))
         {
             return true;
         }

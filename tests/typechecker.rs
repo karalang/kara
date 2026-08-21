@@ -10909,6 +10909,147 @@ fn test_slice_accepts_mut_slice_as_reborrow() {
 }
 
 #[test]
+fn test_mut_slice_accepts_a_marked_sub_range() {
+    // B-2026-08-20-38 — design.md § Slices' second example. A sub-range
+    // handed to a `mut Slice[T]` parameter used to produce a READ-ONLY
+    // header, so the spec's own line failed with "expected 'mut Slice[i64]',
+    // found 'Slice[i64]'" and had no other spelling: `let s = mut v[1..4]`
+    // is not syntax, so the sub-range half of the feature was unreachable
+    // while the whole-collection half (`sort_in_place(mut v)`) worked.
+    typecheck_ok(
+        "fn sort_in_place(xs: mut Slice[i64]) { }
+         fn main() {
+             let mut v: Vec[i64] = [3, 1, 4, 1, 5];
+             sort_in_place(mut v[1..4]);
+         }",
+    );
+}
+
+#[test]
+fn test_mut_slice_accepts_a_marked_sub_range_of_an_array() {
+    // The `Array[T, N]` half of the same coercion row — the assignability
+    // table lists both sources, so the upgrade must reach both.
+    typecheck_ok(
+        "fn sort_in_place(xs: mut Slice[i64]) { }
+         fn main() {
+             let mut a: Array[i64, 4] = [3, 1, 4, 1];
+             sort_in_place(mut a[1..3]);
+         }",
+    );
+}
+
+#[test]
+fn test_mut_slice_sub_range_still_requires_the_marker() {
+    // The upgrade keys on the PARAMETER, so the unmarked spelling produces a
+    // `mut Slice[i64]` too — and must still be caught by the marker rule
+    // rather than sliding through. Asserting the MARKER diagnostic, not just
+    // "some error": a blunt type mismatch here would mean the argument had
+    // been misclassified as forwarded, which is the failure mode this whole
+    // fix turns on.
+    let errors = typecheck_errors(
+        "fn sort_in_place(xs: mut Slice[i64]) { }
+         fn main() {
+             let mut v: Vec[i64] = [3, 1, 4, 1, 5];
+             sort_in_place(v[1..4]);
+         }",
+    );
+    let msgs: Vec<String> = errors.iter().map(|e| e.message.clone()).collect();
+    assert!(
+        msgs.iter().any(|m| m.contains("`mut` marker")),
+        "expected the call-site marker diagnostic, got {msgs:?}"
+    );
+    // The inversion this fix had to avoid: reading the upgraded type as
+    // evidence the argument arrived already-mutable would flip this case to
+    // "drop the `mut` marker" — advice that makes the sub-range read-only
+    // again. Asserting its ABSENCE is what makes this test guard the
+    // `is_arg_forwarded` half rather than just the type.
+    assert!(
+        !msgs.iter().any(|m| m.contains("already a mut-ref")),
+        "unmarked argument must not be classified as forwarded, got {msgs:?}"
+    );
+}
+
+#[test]
+fn test_mut_slice_sub_range_rejects_a_read_only_base() {
+    // The base decides. A `ref Vec[T]` cannot yield a mutable view of part of
+    // itself any more than of the whole — the sibling of
+    // `test_mut_slice_rejects_read_only_source` one range-index deeper. The
+    // upgrade asks `types_compatible` exactly so these two cannot diverge.
+    let errors = typecheck_errors(
+        "fn sort_in_place(xs: mut Slice[i64]) { }
+         fn caller(v: ref Vec[i64]) { sort_in_place(mut v[1..4]); }
+         fn main() { }",
+    );
+    assert!(
+        !errors.is_empty(),
+        "expected a type error taking a mut sub-range of a `ref Vec`, got none"
+    );
+}
+
+#[test]
+fn test_mut_slice_sub_range_rejects_a_read_only_slice_base() {
+    // Same rule, with a read-only `Slice[T]` as the base rather than a `ref`
+    // borrow: a shared view must not upgrade to a mutable one.
+    let errors = typecheck_errors(
+        "fn sort_in_place(xs: mut Slice[i64]) { }
+         fn caller(s: Slice[i64]) { sort_in_place(mut s[0..2]); }
+         fn main() { }",
+    );
+    assert!(
+        !errors.is_empty(),
+        "expected a type error taking a mut sub-range of a read-only Slice, got none"
+    );
+}
+
+#[test]
+fn test_mut_slice_sub_range_of_a_mut_slice_forwards_without_a_marker() {
+    // A sub-range of an ALREADY-mutable view is forwarded, not freshly
+    // borrowed, so the marker rule's arm (B) applies: no marker required.
+    // This is the case that keeps the `is_arg_forwarded` change honest —
+    // range indexes are exempt from the by-TYPE arm (A) only, because there
+    // the mut-ness is minted at the call boundary; the place-root arm must
+    // still see through the index.
+    typecheck_ok(
+        "fn sort_in_place(xs: mut Slice[i64]) { }
+         fn caller(s: mut Slice[i64]) { sort_in_place(s[0..2]); }
+         fn main() { }",
+    );
+}
+
+#[test]
+fn test_mut_slice_sub_range_of_a_mut_slice_rejects_a_redundant_marker() {
+    // The inverse of the test above, and the reason arm (A) was narrowed
+    // rather than deleted: a forwarded sub-range that DOES carry a marker is
+    // still told to drop it.
+    let errors = typecheck_errors(
+        "fn sort_in_place(xs: mut Slice[i64]) { }
+         fn caller(s: mut Slice[i64]) { sort_in_place(mut s[0..2]); }
+         fn main() { }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("already a mut-ref")),
+        "expected the redundant-marker diagnostic, got {:?}",
+        errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_read_only_sub_range_is_unaffected() {
+    // The upgrade is gated on the parameter, so a sub-range passed to a
+    // read-only `Slice[T]` slot keeps its read-only type — the arm that was
+    // always correct and must stay that way.
+    typecheck_ok(
+        "fn sum(xs: Slice[i64]) -> i64 { 0 }
+         fn main() {
+             let v: Vec[i64] = [1, 2, 3, 4];
+             let _n = sum(v[1..3]);
+         }",
+    );
+}
+
+#[test]
 fn test_slice_rejects_incompatible_source_type() {
     // A bool value should not coerce to Slice[i64].
     let errors = typecheck_errors(

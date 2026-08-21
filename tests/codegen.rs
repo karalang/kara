@@ -101061,6 +101061,96 @@ fn main() {
             c.stderr
         );
     }
+
+    /// B-2026-08-20-38 — design.md § Slices' second example, end to end. A
+    /// sub-range handed to a `mut Slice[T]` parameter produced a READ-ONLY
+    /// header, so `sort_in_place(mut v[1..4])` failed `karac check` with
+    /// "expected 'mut Slice[i64]', found 'Slice[i64]'" while the line above it
+    /// in the same spec block (`sort_in_place(mut v)`) worked on every
+    /// backend. There was no other spelling: `let s = mut v[1..4]` is not
+    /// syntax.
+    ///
+    /// The typechecker half is pinned in tests/typechecker.rs. This is the
+    /// half that matters for correctness: the write has to land in the
+    /// ORIGINAL buffer, at the right OFFSET, and touch nothing outside the
+    /// range. `[3,1,4,1,5]` sorted over `1..4` is `3 [1,1,4] 5` — the
+    /// untouched endpoints are load-bearing, since a header built at the wrong
+    /// offset or over a copy would still print five sorted-looking numbers.
+    #[test]
+    fn test_e2e_mut_sub_range_slice_writes_through_to_the_backing_buffer() {
+        let src = r#"
+fn sort_in_place(xs: mut Slice[i64]) {
+    let n = xs.len();
+    let mut i = 0i64;
+    while i < n {
+        let mut j = i + 1i64;
+        while j < n {
+            if xs[j] < xs[i] {
+                let t = xs[i];
+                xs[i] = xs[j];
+                xs[j] = t;
+            }
+            j = j + 1i64;
+        }
+        i = i + 1i64;
+    }
+}
+
+fn poke(xs: mut Slice[i64]) { xs[0] = 99; }
+
+fn main() {
+    let mut v: Vec[i64] = [3, 1, 4, 1, 5];
+    sort_in_place(mut v[1..4]);
+    println(f"{v[0]} {v[1]} {v[2]} {v[3]} {v[4]}");
+
+    // The offset is the point: writing index 0 of `v[2..4]` must hit v[2].
+    let mut w: Vec[i64] = [1, 2, 3, 4];
+    poke(mut w[2..4]);
+    println(f"{w[0]} {w[1]} {w[2]} {w[3]}");
+
+    // Same for an `Array[T, N]` base — the other source the coercion table
+    // lists.
+    let mut a: Array[i64, 4] = [1, 2, 3, 4];
+    poke(mut a[1..3]);
+    println(f"{a[0]} {a[1]} {a[2]} {a[3]}");
+
+    // A read-only sub-range is untouched by the change.
+    let r: Vec[i64] = [1, 2, 3, 4];
+    println(sum(r[1..3]));
+}
+
+fn sum(xs: Slice[i64]) -> i64 {
+    let mut acc = 0i64;
+    for x in xs { acc = acc + x; }
+    acc
+}
+"#;
+        assert_eq!(
+            run_program(src).as_deref(),
+            Some("3 1 1 4 5\n1 2 99 4\n1 99 3 4\n5\n")
+        );
+    }
+
+    /// A sub-range of an already-mutable view forwards through a second call
+    /// without a marker, and the write still reaches the original `Vec`'s
+    /// buffer two frames down. Pins the arm of `is_arg_forwarded` that must
+    /// keep seeing through a range index to the place root.
+    #[test]
+    fn test_e2e_mut_sub_range_of_a_mut_slice_forwards() {
+        let src = r#"
+fn poke(xs: mut Slice[i64]) { xs[0] = 77; }
+fn middle(s: mut Slice[i64]) { poke(s[1..3]); }
+
+fn main() {
+    let mut v: Vec[i64] = [1, 2, 3, 4, 5];
+    middle(mut v[1..5]);
+    println(f"{v[0]} {v[1]} {v[2]} {v[3]} {v[4]}");
+}
+"#;
+        // `v[1..5]` views [2,3,4,5]; its `[1..3]` views [3,4]; writing index 0
+        // of that lands on v[2].
+        assert_eq!(run_program(src).as_deref(), Some("1 2 77 4 5\n"));
+    }
 }
 
 #[cfg(feature = "llvm")]

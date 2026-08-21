@@ -4390,8 +4390,47 @@ impl<'a> super::TypeChecker<'a> {
                     };
                     return match element_ty {
                         Some(el) => Type::Slice {
-                            element: Box::new(el),
-                            mutable: false,
+                            element: Box::new(el.clone()),
+                            // B-2026-08-20-38 — a sub-range handed to a
+                            // `mut Slice[T]` parameter is design.md § Slices'
+                            // second example (`sort_in_place(mut v[1..4])`),
+                            // and this arm produced a READ-ONLY header
+                            // unconditionally — so the spec's own line failed
+                            // with "expected 'mut Slice[i64]', found
+                            // 'Slice[i64]'", with no other spelling available
+                            // (`let s = mut v[1..4]` is not syntax).
+                            //
+                            // Keyed on the PARAMETER, not on the call-site
+                            // `mut` marker, even though the marker is what the
+                            // spec line writes. The marker rule is a
+                            // free-function rule (design.md Feature 4 Part 1½
+                            // — "method calls never mark"), so a method taking
+                            // `mut Slice[T]` has no marker to key on and would
+                            // otherwise inherit the same dead end. Marker
+                            // discipline stays where it already lives, in
+                            // `check_call_site_marker`, which sees this
+                            // upgraded type and classifies the argument as
+                            // FRESH — the mut-ness is a borrow taken here, not
+                            // one forwarded in.
+                            //
+                            // Whether the BASE may yield a mutable view is
+                            // asked with `types_compatible` against the very
+                            // slot type this produces, rather than by
+                            // re-listing sources: that is the same predicate
+                            // the argument is checked against a moment later,
+                            // so the upgrade cannot admit anything the
+                            // assignability table would reject. A `ref Vec[T]`
+                            // base and a read-only `Slice[T]` base both
+                            // decline, and still report the read-only type
+                            // they actually have.
+                            mutable: self.mut_through_param_arg
+                                && super::types::types_compatible(
+                                    &Type::Slice {
+                                        element: Box::new(el),
+                                        mutable: true,
+                                    },
+                                    &obj_ty,
+                                ),
                         },
                         None => {
                             self.type_error(
