@@ -105,14 +105,67 @@ ITEM_START_RE = re.compile(
     r"|^#\["
 )
 
-# A fragment naming a type or function declared in some OTHER block is the
-# common case in a spec, not a defect — the doc is read in order, the harness
+# A fragment naming a type, function, or EFFECT RESOURCE declared in some OTHER
+# block is the common case in a spec, not a defect — the doc is read in order, the harness
 # compiles each block alone. Those are bucketed as `unresolved` rather than
 # counted as divergences. They are not discarded, though: the undefined names
 # are tallied and printed, because a spec referring to something the compiler
 # has never heard of is exactly the shape of B-2026-08-17-38 (`TreeMap`,
 # documented 13 times, implemented zero).
-UNRESOLVED_RE = re.compile(r"^undefined (name|type|module|trait|field) '([^']+)'")
+#
+# `undefined effect resource 'X'` belongs in the same bucket: design.md declares
+# `effect resource Heap;` (and `Console`, `Log`, …) in the section that
+# introduces them and then writes `with allocates(Heap)` for pages afterward.
+# `Heap` in particular is NOT a prelude resource — `src/prelude.rs`'s
+# `PRELUDE_EFFECT_RESOURCES` comment says the primitives are "registered
+# incrementally as their method surfaces land" — so every signature carrying it
+# trips resolution. That is an out-of-block reference, not a divergence.
+UNRESOLVED_RE = re.compile(
+    r"^undefined (?:effect )?(name|type|module|trait|field|resource) '([^']+)'"
+)
+
+
+# Every name design.md itself declares, anywhere in any block. This is what
+# separates the two things `undefined name 'X'` can mean:
+#
+#   `undefined name 'Config'`  — design.md declares `struct Config` three blocks
+#                                up. The doc is read in order; the harness
+#                                compiles each block alone. Not a defect.
+#   `undefined name 'io'`      — NOTHING declares it, here or in the compiler.
+#                                The spec expects the implementation to provide
+#                                it and the implementation does not.
+#
+# The message shape is identical, so without this index the second hides inside
+# the first — which is how design.md's whole `io.` I/O surface sat in the
+# "out-of-block references" bucket looking like ordinary prose ordering.
+DECLARES_RE = re.compile(
+    r"^\s*(?:pub\s+)?(?:unsafe\s+)?(?:shared\s+)?"
+    r"(?:struct|enum|trait|type|const|static|distinct|layout|module|union|macro|"
+    r"marker|fn)\s+([A-Za-z_]\w*)(?!\.)"
+    r"|^\s*effect\s+resource\s+([A-Za-z_]\w*)"
+    r"|^\s*(?:pub\s+)?effect\s+([A-Za-z_]\w*)"
+)
+# A bare type parameter is not a missing name — it is the signature's own
+# variable, unbound because the enclosing `impl[K, V]` lives in another block.
+GENERIC_NAME_RE = re.compile(r"^[A-Z][0-9]?$|^(?:Eff|Self)$")
+
+
+def collect_declared_names(blocks):
+    names = set()
+    for b in blocks:
+        for line in b.code:
+            m = DECLARES_RE.match(line)
+            if m:
+                names.add(next(g for g in m.groups() if g))
+            # `[T, U]` / `[K: Hash, V]` — every generic parameter introduced
+            # anywhere counts, since a catalogue's `T` is bound by an `impl`
+            # header the harness never sees.
+            for grp in re.findall(r"\[([^\]\[]*)\]", line):
+                for part in grp.split(","):
+                    n = part.split(":")[0].strip().removeprefix("with ").strip()
+                    if re.fullmatch(r"[A-Za-z_]\w*", n):
+                        names.add(n)
+    return names
 
 
 class Block:
@@ -216,6 +269,271 @@ def rungs(block):
     return [in_main, items, items_main, type_rung]
 
 
+# ---------------------------------------------------------------------------
+# Signature catalogues
+#
+# A fifth of the baseline is a shape no framing above can reach: a table of
+# method SHAPES with no bodies, which is not a program in any wrapping.
+#
+#     Vec.filled(n: i64, val: T) -> Vec[T] where T: Clone
+#     fn or_insert(self, default: V) -> mut ref V
+#     Channel.new[T]() -> (Sender[T], Receiver[T])
+#     fn io.read_line() -> Result[String, IoError] with reads(Stdin)
+#
+# Setting them aside was the suite's biggest blind spot (B-2026-08-21-28): 21
+# blocks carrying 60 signature lines, unchecked — and the class the suite is
+# strongest at. B-2026-08-21-10 was four documented stdlib entry points that did
+# not exist, and every one was found by a human reading the doc rather than by
+# the sweep, because they live in exactly this shape.
+#
+# A signature is not a program, but it IS a declaration, and declarations are
+# checkable. Two probes cover the 60:
+#
+#   (a) `fn name(args) -> R [with E]`  ->  `trait _Probe { <line>; }`
+#       A bodiless method declaration is legal in a trait, so this typechecks
+#       the parameter and return types and the effect clause. It catches a
+#       signature naming a type that does not exist. It says NOTHING about
+#       whether the method is implemented — a trait can declare anything.
+#
+#   (b) `Type.method(args) -> R`  ->  `let _ = Type.method(<fillers>);`
+#       This is the probe that answers "does it exist", and it is where the
+#       `Channel.bounded` / `io.read_line` class lives.
+#
+# WHY FILLER ARGUMENTS ARE ENOUGH. (b) needs argument values, and the signature
+# gives types, not values. A per-type value table was the obvious answer and is
+# not needed: measured, `karac` reports a WRONG ARGUMENT TYPE as `expected
+# 'i64', found 'String'` — a message that presupposes the function was found —
+# while a name that does not exist is `no associated function 'filled' on type
+# 'Vec'`. So the probe passes `0` for every argument and classifies on the
+# diagnostic rather than on success. ARITY does matter (a call with the wrong
+# argument count reports as `no associated function`, since resolution is
+# arity-aware), and arity is the one thing a signature always states.
+#
+# That makes (b) a different question from every other rung — "does this name
+# resolve", not "does this call typecheck" — so its non-resolution diagnostics
+# are dropped rather than counted, and it gets its own outcome rather than
+# being folded into `conforms`.
+
+SIG_FN_RE = re.compile(
+    r"^(?:pub\s+)?(?:unsafe\s+)?fn\s+"
+    r"(?P<name>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?)\s*"
+    r"(?P<generics>\[[^\]]*\])?\s*\("
+)
+# `Vec.filled(...)` / `Channel.new[T](...)` — an associated function written the
+# way a doc table writes one, with no `fn`.
+SIG_ASSOC_RE = re.compile(
+    r"^(?P<ty>[A-Z]\w*)\.(?P<method>[a-z_]\w*)\s*(?P<generics>\[[^\]]*\])?\s*\("
+)
+# A free function written without its `fn` — the § Provider-Rooted Resources
+# table spells `with_provider[R: effect resource, …](…) -> T with E` this way.
+SIG_BARE_FN_RE = re.compile(
+    r"^(?P<name>[a-z_]\w*)\s*(?P<generics>\[[^\]]*\])\s*\("
+)
+# `<field-path>` and friends are doc placeholders standing in for syntax the
+# spec has not settled, not Kāra. A signature carrying one is prose with a hole
+# in it — the same thing `...` marks — so it is skipped rather than failed.
+SIG_PLACEHOLDER_RE = re.compile(r"<[a-z-]+>")
+# A line that continues the signature above it rather than starting a new one.
+# `->` ends in a non-word character, so a trailing `\b` never fires after it —
+# which silently truncated every signature whose return type sat on its own
+# line, and let the harness walk on into the function BODY below it.
+SIG_CONTINUATION_RE = re.compile(r"^(?:(?:with|requires|ensures|where)\b|->)")
+
+
+def _depth(line):
+    return (line.count("(") + line.count("[") + line.count("{")
+            - line.count(")") - line.count("]") - line.count("}"))
+
+
+def split_signature_declarations(code):
+    """Pull the bodiless declarations out of a block, one per returned string.
+
+    Flattens rather than parses: a declaration starts at any line matching
+    SIG_FN_RE / SIG_ASSOC_RE and runs until its brackets balance and no
+    continuation clause follows. Walking the lines this way reaches inside an
+    `impl … { }` or `extern "C" { }` wrapper without modelling either, and
+    steps over the wrapper braces, struct bodies and worked call examples that
+    share these blocks. A declaration whose balanced form ends in `{` has a
+    BODY — that is real code the ladder above already owns — so it is dropped.
+    """
+    lines = [re.sub(r"//.*$", "", l).rstrip() for l in code]
+    decls, i = [], 0
+    while i < len(lines):
+        stripped = lines[i].strip()
+        if not _starts_signature(stripped):
+            i += 1
+            continue
+        parts, depth = [], 0
+        while i < len(lines):
+            parts.append(lines[i].strip())
+            depth += _depth(lines[i])
+            i += 1
+            if depth > 0:
+                continue
+            nxt = next((l.strip() for l in lines[i:] if l.strip()), "")
+            if not SIG_CONTINUATION_RE.match(nxt):
+                break
+        decl = " ".join(x for x in parts if x).strip().rstrip(";")
+        # A `{` on the next line means this declaration has a BODY: it is a real
+        # function, not a catalogue entry, and the ladder above already owns it.
+        # Skip past the body so its statements are not mistaken for more
+        # signatures — `File.open(path)?.lines()` inside one read as a
+        # `Type.method(…)` catalogue line and got probed, which is how a worked
+        # example turns into a phantom finding.
+        nxt = next((l.strip() for l in lines[i:] if l.strip()), "")
+        if nxt.startswith("{") or "{" in decl:
+            i = _skip_body(lines, i)
+            continue
+        if SIG_PLACEHOLDER_RE.search(decl):
+            continue
+        decls.append(decl)
+    return decls
+
+
+def _starts_signature(stripped):
+    return bool(SIG_FN_RE.match(stripped)
+                or SIG_ASSOC_RE.match(stripped)
+                or SIG_BARE_FN_RE.match(stripped))
+
+
+def _skip_body(lines, i):
+    """Advance past a brace-delimited body starting at or after line `i`."""
+    depth = 0
+    while i < len(lines):
+        if "{" in lines[i] or depth:
+            depth += _depth(lines[i])
+            i += 1
+            if depth <= 0:
+                return i
+        else:
+            i += 1
+    return i
+
+
+def _call_probe(decl, match):
+    """`Type.method[T](a, b) -> R` -> `Type.method[i64](0, 0)`.
+
+    Probed AS WRITTEN, type arguments included: the documented spelling is what
+    a reader would type, so a form that only works with the type argument
+    dropped is a finding, not something to paper over.
+
+    `match` is a SIG_ASSOC_RE / SIG_FN_RE match on `decl`; both patterns end at
+    the parameter list's open paren, so `match.end() - 1` locates it without
+    re-scanning for a `(` that might belong to a type instead.
+    """
+    ty, _, method = _probe_name(match)
+    open_paren = match.end() - 1
+    args, depth = [], 0
+    cur = ""
+    for ch in decl[open_paren + 1:]:
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            if depth == 0:
+                break
+            depth -= 1
+        if ch == "," and depth == 0:
+            args.append(cur)
+            cur = ""
+        else:
+            cur += ch
+    if cur.strip():
+        args.append(cur)
+    targs = ""
+    generics = match.groupdict().get("generics")
+    if generics:
+        names = [g.split(":")[0].strip() for g in generics[1:-1].split(",") if g.strip()]
+        targs = "[" + ", ".join("i64" for _ in names) + "]" if names else ""
+    return f"{ty}.{method}{targs}({', '.join('0' for _ in args)})"
+
+
+def _probe_name(match):
+    """(receiver, '.', method) for either signature shape."""
+    g = match.groupdict()
+    if "ty" in g and g.get("ty"):
+        return g["ty"], ".", g["method"]
+    return g["name"].partition(".")
+
+
+def signature_probes(decls):
+    """(trait-declaration source, [(probe expression, declaration)]) for a block."""
+    items, calls = [], []
+    for n, decl in enumerate(decls):
+        if SIG_BARE_FN_RE.match(decl) and not SIG_FN_RE.match(decl):
+            decl = "fn " + decl               # the doc omits it; the grammar does not
+        m_fn = SIG_FN_RE.match(decl)
+        if m_fn and "." not in m_fn.group("name"):
+            body = re.sub(r"^(?:pub\s+)", "", decl)   # `pub` is not legal on a trait method
+            items.append(f"trait _Probe{n} {{ {body}; }}")
+            continue
+        if m_fn:                                       # `fn io.read_line() -> …`
+            calls.append((_call_probe(decl, m_fn), decl))
+            continue
+        m_assoc = SIG_ASSOC_RE.match(decl)
+        if m_assoc:
+            calls.append((_call_probe(decl, m_assoc), decl))
+    return items, calls
+
+
+# `type FILE;` inside an `extern "C" { }` block, `struct Entry[K, V] { … }`
+# above an `impl` — a catalogue's own supporting declarations, which the
+# flattening walk steps over on its way to the signatures.
+LOCAL_TYPE_RE = re.compile(r"^\s*(?:pub\s+)?type\s+([A-Za-z_]\w*)\s*;")
+
+
+def local_type_stubs(code):
+    """Opaque-type declarations the block makes for its own signatures to use."""
+    return [f"struct {m.group(1)} {{}}"
+            for m in (LOCAL_TYPE_RE.match(l) for l in code) if m]
+
+
+def evaluate_signatures(block, karac):
+    """Check a signature catalogue. Returns (status, diagnostics) or None.
+
+    None means the block yielded no signatures, so this rung does not apply and
+    the caller should report the ladder's verdict instead.
+    """
+    decls = split_signature_declarations(block.code)
+    items, calls = signature_probes(decls)
+    if not items and not calls:
+        return None
+    outside = []
+    diags = []
+    if items:
+        preamble = "\n".join(local_type_stubs(block.code))
+        _, d = run_karac(karac,
+                         (preamble + "\n" if preamble else "")
+                         + "\n".join(items) + "\n\nfn main() {}\n")
+        # A catalogue is out-of-block references by construction — its `T` is
+        # bound by an `impl` header in another block, its `Heap` by an `effect
+        # resource` declaration pages away. Judging the rung on those would fail
+        # every catalogue for the one thing that is not a divergence. They are
+        # returned alongside so the caller can still bucket them.
+        diags += [x for x in d if not UNRESOLVED_RE.match(x.get("message", ""))]
+        outside += [x for x in d if UNRESOLVED_RE.match(x.get("message", ""))]
+    for probe, decl in calls:
+        _, d = run_karac(karac, "fn main() {\n    let _ = %s;\n}\n" % probe)
+        # Resolution only: the arguments are fillers, so a type complaint about
+        # one of them is the probe's own doing and, more to the point, is proof
+        # the name resolved.
+        for x in d:
+            if RESOLUTION_ERROR_RE.match(x.get("message", "")):
+                x = dict(x, message=f"{x['message']}  [probe: {probe}]",
+                         signature=decl)
+                diags.append(x)
+    return ("rejected" if diags else "pass"), (diags or outside)
+
+
+# The diagnostics that mean A NAME DOES NOT EXIST, as opposed to one that exists
+# and was called wrongly. Only these decide a `Type.method(...)` probe.
+RESOLUTION_ERROR_RE = re.compile(
+    r"^no (?:associated function|method|associated type|associated const|"
+    r"variant|field) '"
+    r"|^undefined (?:effect )?(?:name|type|module|trait|field|resource) '"
+    r"|^unknown module"
+)
+
+
 def run_karac(karac, source, extra_timeout=60):
     with tempfile.NamedTemporaryFile(
         "w", suffix=".kara", delete=False, encoding="utf-8"
@@ -257,6 +575,12 @@ def evaluate(block, karac):
         if rc == 0 and not diags:
             return ("pass", name, [])
         attempts.append((name, diags, offset))
+    # Nothing in the ladder compiled. Before calling that a divergence, ask the
+    # one remaining question a bodiless signature table can answer.
+    sig = evaluate_signatures(block, karac)
+    if sig is not None:
+        status, diags = sig
+        return (status, "signatures", diags)
     name, diags, offset = attempts[0]
     for d in diags:
         d["design_line"] = block.line + max(0, d.get("line", 1) - 1) + offset
@@ -276,6 +600,7 @@ def main():
         sys.exit(f"karac not found at {args.karac} — build it first (cargo build)")
 
     blocks = parse_blocks(DESIGN)
+    declared = collect_declared_names(blocks)
     if args.only:
         blocks = [b for b in blocks if args.only in b.hash or args.only in b.text]
         if not blocks:
@@ -303,18 +628,34 @@ def main():
                             "outcome": "confirmed-rejection", "rung": rung,
                             "expects_error": True, "diagnostics": diags[:4]})
             continue
-        if (status == "rejected" and diags
-                and all(d.get("phase") == "resolve"
-                        and UNRESOLVED_RE.match(d.get("message", "")) for d in diags)):
-            missing = [UNRESOLVED_RE.match(d["message"]).group(2) for d in diags]
+        if (diags and all(UNRESOLVED_RE.match(d.get("message", "")) for d in diags)
+                and (status == "rejected" or rung == "signatures")):
+            missing = sorted({UNRESOLVED_RE.match(d["message"]).group(2)
+                              for d in diags})
+            # Split the two meanings of `undefined name 'X'`. A name design.md
+            # declares elsewhere is prose ordering; a name NOTHING declares is
+            # the `TreeMap` / `io.` shape — the spec promising a surface the
+            # implementation never grew.
+            #
+            # Only a SIGNATURE CATALOGUE gets this treatment. A catalogue is a
+            # claim about the API surface, so an undefined name in one is a
+            # promise nothing keeps. A worked example is illustration, and its
+            # undefined `load_config` / `pool` / `normalize` are stage
+            # furniture — scoring those the same way turned 28 out-of-block
+            # blocks into 130 findings, none of them about the compiler.
+            orphan = [n for n in missing
+                      if rung == "signatures"
+                      and n not in declared and not GENERIC_NAME_RE.match(n)]
             results.append({"hash": b.hash, "line": b.line, "heading": b.heading,
-                            "outcome": "unresolved", "rung": rung,
-                            "expects_error": b.expects_error,
-                            "missing": sorted(set(missing)),
+                            "outcome": "UNDECLARED-NAME" if orphan else "unresolved",
+                            "rung": rung, "expects_error": b.expects_error,
+                            "missing": missing, "undeclared": orphan,
                             "diagnostics": diags[:4]})
             continue
         if b.expects_error:
             outcome = "confirmed-rejection" if status == "rejected" else "MISSING-REJECTION"
+        elif rung == "signatures":
+            outcome = "signatures-ok" if status == "pass" else "SIGNATURE-MISSING"
         else:
             outcome = "conforms" if status == "pass" else "REJECTED"
         results.append({"hash": b.hash, "line": b.line, "heading": b.heading,
@@ -330,7 +671,7 @@ def main():
                       f"(design.md:{d.get('design_line')})")
 
     good = {"conforms", "confirmed-rejection", "skipped", "elided", "unresolved",
-            "deferred"}
+            "deferred", "signatures-ok"}
     bad = [r for r in results if r["outcome"] not in good]
 
     if args.update_baseline:
@@ -364,10 +705,16 @@ def main():
     eli = sum(1 for r in results if r["outcome"] == "elided")
     dfr = sum(1 for r in results if r["outcome"] == "deferred")
     unres = [r for r in results if r["outcome"] == "unresolved"]
+    sigok = sum(1 for r in results if r["outcome"] == "signatures-ok")
+    orphans = Counter(n for r in results for n in r.get("undeclared", ()))
+    if orphans:
+        top = ", ".join(f"{n}({c})" for n, c in orphans.most_common(12))
+        print(f"  names NOTHING defines — not design.md, not the compiler: {top}")
     print(f"\ndesign.md conformance: {total} blocks — {conf} accepted, "
           f"{rej} rejected-as-specified, {eli} elided (prose with `...`), "
           f"{dfr} under Deferred Items, "
           f"{len(unres)} referencing out-of-block declarations, "
+          f"{sigok} signature catalogues whose names all resolve, "
           f"{len(bad)} non-conforming")
     if unres:
         names = Counter(n for r in unres for n in r["missing"])
