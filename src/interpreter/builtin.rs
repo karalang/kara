@@ -170,6 +170,7 @@ impl<'a> super::Interpreter<'a> {
                 format!("[{}]", body)
             }
             Value::Map(entries) => {
+                let entries = entries.read().unwrap();
                 // `Map[K, V]` / `SortedMap[K, V]` — both K and V can be an
                 // unsigned scalar, so both sides peel.
                 let (kt, vt) = match ty {

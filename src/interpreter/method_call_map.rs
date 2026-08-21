@@ -79,8 +79,8 @@ impl<'a> super::Interpreter<'a> {
                         .get(1)
                         .map(|a| self.eval_expr_inner(&a.value))
                         .unwrap_or(Value::Unit);
-                    return Some(match m.iter().find(|(k, _)| *k == key) {
-                        Some((_, v)) => v.clone(),
+                    return Some(match m.read().unwrap().get(&key) {
+                        Some(v) => v.clone(),
                         None => default,
                     });
                 }
@@ -101,7 +101,9 @@ impl<'a> super::Interpreter<'a> {
             }
             "keys" => {
                 if let Value::Map(ref m) = obj {
-                    return Some(Value::array_of(m.iter().map(|(k, _)| k.clone()).collect()));
+                    return Some(Value::array_of(
+                        m.read().unwrap().iter().map(|(k, _)| k.clone()).collect(),
+                    ));
                 }
                 if let Value::SortedMap(ref m) = obj {
                     return Some(Value::array_of(m.keys().map(|k| k.0.clone()).collect()));
@@ -109,7 +111,9 @@ impl<'a> super::Interpreter<'a> {
             }
             "values" => {
                 if let Value::Map(ref m) = obj {
-                    return Some(Value::array_of(m.iter().map(|(_, v)| v.clone()).collect()));
+                    return Some(Value::array_of(
+                        m.read().unwrap().iter().map(|(_, v)| v.clone()).collect(),
+                    ));
                 }
                 if let Value::SortedMap(ref m) = obj {
                     return Some(Value::array_of(m.values().cloned().collect()));
@@ -118,7 +122,9 @@ impl<'a> super::Interpreter<'a> {
             "entries" => {
                 if let Value::Map(ref m) = obj {
                     return Some(Value::array_of(
-                        m.iter()
+                        m.read()
+                            .unwrap()
+                            .iter()
                             .map(|(k, v)| Value::Tuple(vec![k.clone(), v.clone()]))
                             .collect(),
                     ));
@@ -136,17 +142,15 @@ impl<'a> super::Interpreter<'a> {
                     let other = args
                         .first()
                         .map(|a| self.eval_expr_inner(&a.value))
-                        .unwrap_or(Value::Map(Vec::new()));
+                        .unwrap_or(Value::empty_map());
                     if let Value::Map(other_entries) = other {
-                        let mut result = base.clone();
-                        for (k, v) in other_entries {
-                            if let Some(entry) = result.iter_mut().find(|(ek, _)| *ek == k) {
-                                entry.1 = v;
-                            } else {
-                                result.push((k, v));
-                            }
+                        let mut result = base.read().unwrap().clone();
+                        for (k, v) in other_entries.read().unwrap().iter() {
+                            result.insert(k.clone(), v.clone());
                         }
-                        return Some(Value::Map(result));
+                        return Some(Value::Map(std::sync::Arc::new(std::sync::RwLock::new(
+                            result,
+                        ))));
                     }
                 }
                 if let Value::SortedMap(ref base) = obj {
@@ -199,7 +203,7 @@ impl<'a> super::Interpreter<'a> {
                     let key_expr = arg.value.clone();
                     self.record_container_move_sources_in_aggregate_arg(&key_expr);
                 }
-                if let Value::Map(mut m) = obj {
+                if let Value::Map(m) = obj {
                     // Map.insert(key, value) -> Option[V] (old value)
                     let value = args
                         .get(1)
@@ -210,21 +214,20 @@ impl<'a> super::Interpreter<'a> {
                             self.downgrade_weak_container_store(a, v)
                         })
                         .unwrap_or(Value::Unit);
-                    let old = if let Some(entry) = m.iter_mut().find(|(k, _)| *k == val) {
-                        let prev = entry.1.clone();
-                        entry.1 = value;
-                        Value::EnumVariant {
+                    // B-2026-08-21-8 — indexed insert-or-overwrite, and the
+                    // mutation lands in the shared storage, so the write-back
+                    // below re-binds the same `Arc` rather than a fresh copy.
+                    let old = match m.write().unwrap().insert(val, value) {
+                        Some(prev) => Value::EnumVariant {
                             enum_name: "Option".to_string(),
                             variant: "Some".to_string(),
                             data: EnumData::Tuple(vec![prev]),
-                        }
-                    } else {
-                        m.push((val, value));
-                        Value::EnumVariant {
+                        },
+                        None => Value::EnumVariant {
                             enum_name: "Option".to_string(),
                             variant: "None".to_string(),
                             data: EnumData::Unit,
-                        }
+                        },
                     };
                     self.write_back_receiver(object, Value::Map(m));
                     return Some(old);
@@ -259,11 +262,8 @@ impl<'a> super::Interpreter<'a> {
                     self.write_back_receiver(object, Value::SortedSet(set));
                     return Some(Value::Bool(was_absent));
                 }
-                if let Value::Set(mut set) = obj {
-                    let was_absent = !set.contains(&val);
-                    if was_absent {
-                        set.push(val);
-                    }
+                if let Value::Set(set) = obj {
+                    let was_absent = set.write().unwrap().insert(val);
                     self.write_back_receiver(object, Value::Set(set));
                     return Some(Value::Bool(was_absent));
                 }
@@ -273,20 +273,18 @@ impl<'a> super::Interpreter<'a> {
                     .first()
                     .map(|a| self.eval_expr_inner(&a.value))
                     .unwrap_or(Value::Unit);
-                if let Value::Map(mut m) = obj {
-                    let old = if let Some(pos) = m.iter().position(|(k, _)| *k == val) {
-                        let (_, v) = m.remove(pos);
-                        Value::EnumVariant {
+                if let Value::Map(m) = obj {
+                    let old = match m.write().unwrap().remove(&val) {
+                        Some((_, v)) => Value::EnumVariant {
                             enum_name: "Option".to_string(),
                             variant: "Some".to_string(),
                             data: EnumData::Tuple(vec![v]),
-                        }
-                    } else {
-                        Value::EnumVariant {
+                        },
+                        None => Value::EnumVariant {
                             enum_name: "Option".to_string(),
                             variant: "None".to_string(),
                             data: EnumData::Unit,
-                        }
+                        },
                     };
                     self.write_back_receiver(object, Value::Map(m));
                     return Some(old);
@@ -313,13 +311,13 @@ impl<'a> super::Interpreter<'a> {
                     self.write_back_receiver(object, Value::SortedSet(set));
                     return Some(Value::Bool(was_present));
                 }
-                if let Value::Set(mut set) = obj {
-                    let was_present = if let Some(pos) = set.iter().position(|x| *x == val) {
-                        set.swap_remove(pos);
-                        true
-                    } else {
-                        false
-                    };
+                if let Value::Set(set) = obj {
+                    // B-2026-08-21-8 — `SetData::remove` preserves order where
+                    // the `swap_remove` this replaces moved the last element
+                    // into the hole. Both are legal (design.md § Map leaves
+                    // `Set` iteration order unspecified) and order-preserving
+                    // is what every other interpreter container does.
+                    let was_present = set.write().unwrap().remove(&val);
                     self.write_back_receiver(object, Value::Set(set));
                     return Some(Value::Bool(was_present));
                 }
@@ -349,7 +347,7 @@ impl<'a> super::Interpreter<'a> {
                         .first()
                         .map(|a| self.eval_expr_inner(&a.value))
                         .unwrap_or(Value::Unit);
-                    let slot_idx = m.iter().position(|(k, _)| *k == key);
+                    let slot_idx = m.read().unwrap().position_of(&key);
                     let map_var = Self::map_place_string(object);
                     return Some(Value::Entry {
                         map_var,
@@ -391,7 +389,7 @@ impl<'a> super::Interpreter<'a> {
                     // may be stale after an earlier chain step mutated the map.
                     let occupied = match map_var.as_deref().and_then(|n| self.env.map_place_ref(n))
                     {
-                        Some(Value::Map(pairs)) => pairs.iter().any(|(k, _)| *k == *key),
+                        Some(Value::Map(pairs)) => pairs.read().unwrap().contains_key(&key),
                         Some(Value::SortedMap(m)) => m.contains_key(&OrdValue((*key).clone())),
                         _ => false,
                     };
@@ -437,18 +435,20 @@ impl<'a> super::Interpreter<'a> {
                         // left at its `or_insert` default while codegen applied
                         // the modification, a run-vs-build divergence.
                         match self.env.map_place_ref(name).cloned() {
-                            Some(Value::Map(mut m)) => {
+                            Some(Value::Map(m)) => {
                                 if let Some(idx) = slot_idx {
-                                    if let Some((_, slot_v)) = m.get(idx) {
-                                        let cell = Arc::new(Mutex::new(slot_v.clone()));
+                                    let slot_v = m.read().unwrap().value_at(idx).cloned();
+                                    if let Some(slot_v) = slot_v {
+                                        let cell = Arc::new(Mutex::new(slot_v));
                                         let _ = self.invoke_function_value(
                                             f,
                                             vec![Value::SharedCell(cell.clone())],
                                         );
                                         let new_v = cell.lock().unwrap().clone();
-                                        m[idx].1 = new_v;
-                                        if let Some(slot) = self.env.map_place_mut(name) {
-                                            *slot = Value::Map(m);
+                                        // Shared storage — writing through the
+                                        // lock IS the write-back.
+                                        if let Some(v) = m.write().unwrap().value_at_mut(idx) {
+                                            *v = new_v;
                                         }
                                     }
                                 }

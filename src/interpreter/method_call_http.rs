@@ -339,7 +339,8 @@ impl<'a> super::Interpreter<'a> {
                             .unwrap_or_default();
                         // Headers are stored as a Map field (key → value strings).
                         if let Some(Value::Map(ref pairs)) = fields.get("headers") {
-                            for (k, v) in pairs {
+                            let pairs = pairs.read().unwrap();
+                            for (k, v) in pairs.iter() {
                                 if let (Value::String(k_str), Value::String(v_str)) = (k, v) {
                                     if k_str.eq_ignore_ascii_case(&header_name) {
                                         return Some(Value::EnumVariant {
@@ -395,7 +396,8 @@ impl<'a> super::Interpreter<'a> {
                     if name == "Response" {
                         let mut pairs: Vec<Value> = Vec::new();
                         if let Some(Value::Map(ref map_pairs)) = fields.get("headers") {
-                            for (k, v) in map_pairs {
+                            let map_pairs = map_pairs.read().unwrap();
+                            for (k, v) in map_pairs.iter() {
                                 if let (Value::String(k_str), Value::String(v_str)) = (k, v) {
                                     pairs.push(Value::Tuple(vec![
                                         Value::String(k_str.clone()),

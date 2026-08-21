@@ -216,7 +216,7 @@ fn write_text_plain(out: &mut String, value: &Value, depth: usize) {
             let arr = storage.read().unwrap();
             write_seq_plain(out, &arr[*start..*start + *len], "[", "]", depth);
         }
-        Value::Map(entries) => write_map_plain(out, entries, depth),
+        Value::Map(entries) => write_map_plain(out, entries.read().unwrap().entries(), depth),
         Value::Struct { name, fields } => write_struct_plain(out, name, fields, depth),
         Value::Tuple(vals) => {
             // Tuples follow the same multi-line trigger as arrays — if
@@ -498,7 +498,7 @@ mod tests {
 
     #[test]
     fn map_with_atom_values_inline() {
-        let m = Value::Map(vec![
+        let m = Value::map_of(vec![
             (Value::String("a".to_string()), Value::Int(1)),
             (Value::String("b".to_string()), Value::Int(2)),
         ]);
@@ -508,7 +508,7 @@ mod tests {
 
     #[test]
     fn map_with_nested_values_multiline() {
-        let m = Value::Map(vec![(
+        let m = Value::map_of(vec![(
             Value::String("xs".to_string()),
             arr(vec![Value::Int(1), Value::Int(2)]),
         )]);

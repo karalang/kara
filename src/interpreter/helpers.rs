@@ -204,23 +204,25 @@ pub(super) fn value_compare(a: &Value, b: &Value) -> std::cmp::Ordering {
                 .unwrap_or_else(|| la.cmp(lb))
         }
         // Two Maps: lexicographic over (key, value) pairs in insertion order
-        (Value::Map(a), Value::Map(b)) => a
-            .iter()
-            .zip(b.iter())
-            .find_map(|((ak, av), (bk, bv))| {
-                let k_ord = value_compare(ak, bk);
-                if k_ord != Ordering::Equal {
-                    Some(k_ord)
-                } else {
-                    let v_ord = value_compare(av, bv);
-                    if v_ord != Ordering::Equal {
-                        Some(v_ord)
+        (Value::Map(a), Value::Map(b)) => {
+            let (a, b) = (a.read().unwrap(), b.read().unwrap());
+            a.iter()
+                .zip(b.iter())
+                .find_map(|((ak, av), (bk, bv))| {
+                    let k_ord = value_compare(ak, bk);
+                    if k_ord != Ordering::Equal {
+                        Some(k_ord)
                     } else {
-                        None
+                        let v_ord = value_compare(av, bv);
+                        if v_ord != Ordering::Equal {
+                            Some(v_ord)
+                        } else {
+                            None
+                        }
                     }
-                }
-            })
-            .unwrap_or_else(|| a.len().cmp(&b.len())),
+                })
+                .unwrap_or_else(|| a.len().cmp(&b.len()))
+        }
         // Two SortedSets: lexicographic over their ascending key sequences
         (Value::SortedSet(a), Value::SortedSet(b)) => {
             let ak: Vec<_> = a.keys().collect();
@@ -1044,7 +1046,7 @@ pub(super) fn make_response(status: u16, body: String, headers: Vec<(String, Str
             None
         })
         .collect();
-    fields.insert("headers".to_string(), Value::Map(map_pairs));
+    fields.insert("headers".to_string(), Value::map_of(map_pairs));
     Value::Struct {
         name: "Response".to_string(),
         fields,

@@ -463,7 +463,22 @@ pub enum Value {
         ops: Arc<Vec<LazyOp>>,
         keys: Vec<Arc<LazyExprIR>>,
     },
-    Map(Vec<(Value, Value)>),
+    /// B-2026-08-21-8 — `Arc<RwLock<MapData>>`, the same shape [`Value::Array`]
+    /// uses, and for the same two reasons.
+    ///
+    /// This WAS a bare `Vec<(Value, Value)>`, which made every map operation
+    /// quadratic through a path that has nothing to do with maps: `Env::get`
+    /// ends in `other.clone()`, so materializing a method's receiver
+    /// deep-copied the whole map before the method ran. Insert-only loops were
+    /// quadratic on their own — measured 3.3x/3.8x per doubling — while the
+    /// identical `Vec.push` loop stayed linear precisely because `Array` is
+    /// already behind an `Arc`. An index alone would not have touched that
+    /// cost; the representation is the fix.
+    ///
+    /// The derived `Clone` therefore SHARES storage, exactly as `Array`'s
+    /// does, and value semantics come from `deep_clone_value` at binding sites
+    /// — which has had a `Map` arm all along.
+    Map(Arc<RwLock<MapData>>),
     Struct {
         name: String,
         fields: HashMap<String, Value>,
@@ -579,7 +594,10 @@ pub enum Value {
     SortedMap(BTreeMap<OrdValue, Value>),
     /// Set[T: Hash + Eq] — hash set backed by a Vec for interpreter simplicity.
     /// O(n) lookup is fine for testing; the typechecker enforces Hash + Eq.
-    Set(Vec<Value>),
+    /// B-2026-08-21-8 — `Arc<RwLock<SetData>>`, the `Map` sibling. Same
+    /// representation change, same reasons: the receiver clone was O(n) and
+    /// `contains` was a linear scan.
+    Set(Arc<RwLock<SetData>>),
     /// Iterator value produced by `.iter()` / `.into_iter()` on a
     /// collection or by adaptor calls. `source` produces raw items
     /// (eager snapshot, chained sequence, or zipped pair); `steps` is
@@ -754,6 +772,392 @@ pub struct SharedStructInner {
     pub weak_mut_fields: HashMap<String, RwLock<std::sync::Weak<SharedStructInner>>>,
 }
 
+// ── Map / Set storage (B-2026-08-21-8) ─────────────────────────
+
+/// Hash a [`Value`] for the `Map` / `Set` index.
+///
+/// The ONE obligation is `a == b` ⟹ `hash_value(a) == hash_value(b)`. The
+/// converse is not required and not attempted: [`MapData`] re-checks every
+/// candidate with `==` before accepting it, so a collision costs a comparison,
+/// never a wrong answer.
+///
+/// That asymmetry is what makes this safe to write conservatively, and the
+/// arms below lean on it hard. Anything whose equality is subtle — every float
+/// carrier, `SharedStruct`, channel ends, closures — hashes to its
+/// DISCRIMINANT ALONE, so all such keys share one bucket and the lookup
+/// degrades to a linear scan over them. That is precisely the behaviour this
+/// bug is about removing, which is the point: the fallback is exactly today's
+/// association-list semantics, so a key type this function under-hashes is
+/// slow, never incorrect. Only OVER-hashing — splitting two equal values into
+/// different buckets — could lose an entry, so no arm hashes anything the
+/// matching arm of `PartialEq for Value` does not compare.
+///
+/// The float carriers are the sharpest case and the reason the rule is stated
+/// this way: `Value::Float`'s equality is IEEE (`NaN != NaN`, `0.0 == -0.0`),
+/// which no bit-pattern hash can track. They are unreachable as keys anyway —
+/// the typechecker rejects `Map[f64, _]` with "key type does not implement
+/// `Hash`" — so this costs nothing today and stays correct if that ever changes.
+///
+/// `Struct` fields and `EnumData::Struct` payloads live in a `HashMap`, whose
+/// iteration order is not stable, so their per-field hashes are combined with
+/// XOR — commutative, hence order-independent.
+pub(crate) fn hash_value(v: &Value) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    fn field_map_hash(fields: &HashMap<String, Value>) -> u64 {
+        fields.iter().fold(0u64, |acc, (name, val)| {
+            let mut h = DefaultHasher::new();
+            name.hash(&mut h);
+            hash_value(val).hash(&mut h);
+            acc ^ h.finish()
+        })
+    }
+
+    let mut h = DefaultHasher::new();
+    std::mem::discriminant(v).hash(&mut h);
+    match v {
+        Value::Int(i) => i.hash(&mut h),
+        Value::String(s) => s.hash(&mut h),
+        Value::Char(c) => c.hash(&mut h),
+        Value::Bool(b) => b.hash(&mut h),
+        Value::Unit => {}
+        Value::CStr(bytes) | Value::CString(bytes) => bytes.hash(&mut h),
+        Value::Tuple(items) => {
+            for item in items {
+                hash_value(item).hash(&mut h);
+            }
+        }
+        // Equality is CONTENTS-based (`Arc::ptr_eq` is only its fast path), so
+        // the hash must walk the contents too — hashing the pointer would split
+        // two equal arrays into different buckets.
+        Value::Array(rc) => {
+            for item in rc.read().unwrap().iter() {
+                hash_value(item).hash(&mut h);
+            }
+        }
+        Value::Slice {
+            storage,
+            start,
+            len,
+            ..
+        } => {
+            let items = storage.read().unwrap();
+            for item in &items[*start..*start + *len] {
+                hash_value(item).hash(&mut h);
+            }
+        }
+        Value::EnumVariant {
+            enum_name,
+            variant,
+            data,
+        } => {
+            enum_name.hash(&mut h);
+            variant.hash(&mut h);
+            match data {
+                EnumData::Unit => {}
+                EnumData::Tuple(items) => {
+                    for item in items {
+                        hash_value(item).hash(&mut h);
+                    }
+                }
+                EnumData::Struct(fields) => field_map_hash(fields).hash(&mut h),
+            }
+        }
+        Value::Struct { name, fields } => {
+            name.hash(&mut h);
+            field_map_hash(fields).hash(&mut h);
+        }
+        // Discriminant only — see the doc comment. Correct, deliberately coarse.
+        _ => {}
+    }
+    h.finish()
+}
+
+/// The interpreter's `Map` storage: insertion-ordered entries plus a hash
+/// index over them (B-2026-08-21-8).
+///
+/// WHY BOTH. `entries` is the observable half — design.md § Map leaves
+/// iteration order unspecified, but the interpreter has always iterated in
+/// insertion order and there is no reason for this change to disturb that, so
+/// every read path walks the `Vec` exactly as it did when this type WAS a
+/// `Vec<(Value, Value)>`. `index` is the half that makes lookup stop being a
+/// linear scan: it maps a key's hash to the positions in `entries` that might
+/// hold it, and the caller confirms with `==`.
+///
+/// The positions are the reason `remove` reindexes: `Vec::remove` shifts every
+/// later entry down one, invalidating stored positions. That rebuild is O(n),
+/// but so is the shift it follows, so removal's complexity is unchanged.
+#[derive(Debug, Default)]
+pub struct MapData {
+    entries: Vec<(Value, Value)>,
+    index: HashMap<u64, Vec<usize>>,
+}
+
+impl Clone for MapData {
+    /// Clones the entries and REBUILDS the index rather than cloning it. The
+    /// index is derived state; rebuilding is the same O(n) the entry clone
+    /// already costs and removes any way for the two halves to disagree.
+    fn clone(&self) -> Self {
+        Self::from_entries(self.entries.clone())
+    }
+}
+
+impl MapData {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn from_entries(entries: Vec<(Value, Value)>) -> Self {
+        let mut index: HashMap<u64, Vec<usize>> = HashMap::with_capacity(entries.len());
+        for (i, (k, _)) in entries.iter().enumerate() {
+            index.entry(hash_value(k)).or_default().push(i);
+        }
+        Self { entries, index }
+    }
+
+    pub fn entries(&self) -> &[(Value, Value)] {
+        &self.entries
+    }
+
+    pub fn into_entries(self) -> Vec<(Value, Value)> {
+        self.entries
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    pub fn iter(&self) -> std::slice::Iter<'_, (Value, Value)> {
+        self.entries.iter()
+    }
+
+    /// Position of `key` in `entries`, or `None`. The hash narrows the search
+    /// to one bucket; `==` decides, so a collision is a slower answer and never
+    /// a wrong one.
+    pub fn position_of(&self, key: &Value) -> Option<usize> {
+        let bucket = self.index.get(&hash_value(key))?;
+        bucket.iter().copied().find(|&i| self.entries[i].0 == *key)
+    }
+
+    pub fn contains_key(&self, key: &Value) -> bool {
+        self.position_of(key).is_some()
+    }
+
+    pub fn get(&self, key: &Value) -> Option<&Value> {
+        self.position_of(key).map(|i| &self.entries[i].1)
+    }
+
+    pub fn get_mut(&mut self, key: &Value) -> Option<&mut Value> {
+        self.position_of(key).map(|i| &mut self.entries[i].1)
+    }
+
+    /// Positional read of a key / value, for the `Entry` chain's `slot_idx`.
+    pub fn key_at(&self, i: usize) -> Option<&Value> {
+        self.entries.get(i).map(|(k, _)| k)
+    }
+
+    pub fn value_at(&self, i: usize) -> Option<&Value> {
+        self.entries.get(i).map(|(_, v)| v)
+    }
+
+    /// Positional write of a VALUE. Deliberately hands out no path to the key:
+    /// the index maps key hashes to positions, so mutating a key in place
+    /// would strand its entry where no lookup can find it, while changing a
+    /// value cannot invalidate anything.
+    pub fn value_at_mut(&mut self, i: usize) -> Option<&mut Value> {
+        self.entries.get_mut(i).map(|(_, v)| v)
+    }
+
+    /// Insert or overwrite, returning the previous value. An overwrite keeps
+    /// the key's original POSITION, so insertion order is a property of first
+    /// insertion — matching the `Vec`-scan code this replaces, which found the
+    /// existing pair and assigned through it.
+    pub fn insert(&mut self, key: Value, value: Value) -> Option<Value> {
+        match self.position_of(&key) {
+            Some(i) => Some(std::mem::replace(&mut self.entries[i].1, value)),
+            None => {
+                self.index
+                    .entry(hash_value(&key))
+                    .or_default()
+                    .push(self.entries.len());
+                self.entries.push((key, value));
+                None
+            }
+        }
+    }
+
+    pub fn remove(&mut self, key: &Value) -> Option<(Value, Value)> {
+        let i = self.position_of(key)?;
+        let pair = self.entries.remove(i);
+        self.reindex();
+        Some(pair)
+    }
+
+    pub fn clear(&mut self) {
+        self.entries.clear();
+        self.index.clear();
+    }
+
+    pub fn retain(&mut self, mut f: impl FnMut(&Value, &mut Value) -> bool) {
+        self.entries.retain_mut(|(k, v)| f(k, v));
+        self.reindex();
+    }
+
+    /// Rebuild `index` from `entries`. Required after anything that moves an
+    /// entry to a different position.
+    fn reindex(&mut self) {
+        self.index.clear();
+        for (i, (k, _)) in self.entries.iter().enumerate() {
+            self.index.entry(hash_value(k)).or_default().push(i);
+        }
+    }
+}
+
+/// The interpreter's `Set` storage — [`MapData`]'s sibling, same design and
+/// same reasons (B-2026-08-21-8): insertion-ordered `items` for the observable
+/// half, a hash index over them so `contains` / `insert` / `remove` stop being
+/// linear scans, and `==` confirming every candidate the hash suggests.
+#[derive(Debug, Default)]
+pub struct SetData {
+    items: Vec<Value>,
+    index: HashMap<u64, Vec<usize>>,
+}
+
+impl Clone for SetData {
+    fn clone(&self) -> Self {
+        Self::from_items(self.items.clone())
+    }
+}
+
+impl SetData {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn from_items(items: Vec<Value>) -> Self {
+        let mut index: HashMap<u64, Vec<usize>> = HashMap::with_capacity(items.len());
+        for (i, item) in items.iter().enumerate() {
+            index.entry(hash_value(item)).or_default().push(i);
+        }
+        Self { items, index }
+    }
+
+    /// Build from items that may contain DUPLICATES, keeping the first
+    /// occurrence of each — the set-ness a raw `Vec` of elements does not
+    /// carry on its own.
+    pub fn from_items_deduped(items: Vec<Value>) -> Self {
+        let mut set = Self::new();
+        for item in items {
+            set.insert(item);
+        }
+        set
+    }
+
+    pub fn items(&self) -> &[Value] {
+        &self.items
+    }
+
+    pub fn into_items(self) -> Vec<Value> {
+        self.items
+    }
+
+    pub fn len(&self) -> usize {
+        self.items.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+
+    pub fn iter(&self) -> std::slice::Iter<'_, Value> {
+        self.items.iter()
+    }
+
+    pub fn position_of(&self, item: &Value) -> Option<usize> {
+        let bucket = self.index.get(&hash_value(item))?;
+        bucket.iter().copied().find(|&i| self.items[i] == *item)
+    }
+
+    pub fn contains(&self, item: &Value) -> bool {
+        self.position_of(item).is_some()
+    }
+
+    /// Insert, returning whether the set gained an element.
+    pub fn insert(&mut self, item: Value) -> bool {
+        if self.contains(&item) {
+            return false;
+        }
+        self.index
+            .entry(hash_value(&item))
+            .or_default()
+            .push(self.items.len());
+        self.items.push(item);
+        true
+    }
+
+    pub fn remove(&mut self, item: &Value) -> bool {
+        match self.position_of(item) {
+            Some(i) => {
+                self.items.remove(i);
+                self.reindex();
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.items.clear();
+        self.index.clear();
+    }
+
+    pub fn retain(&mut self, mut f: impl FnMut(&Value) -> bool) {
+        self.items.retain(|v| f(v));
+        self.reindex();
+    }
+
+    fn reindex(&mut self) {
+        self.index.clear();
+        for (i, item) in self.items.iter().enumerate() {
+            self.index.entry(hash_value(item)).or_default().push(i);
+        }
+    }
+}
+
+impl FromIterator<Value> for SetData {
+    /// DEDUPING, because every caller collecting into a set means set-ness.
+    fn from_iter<I: IntoIterator<Item = Value>>(iter: I) -> Self {
+        Self::from_items_deduped(iter.into_iter().collect())
+    }
+}
+
+impl<'a> IntoIterator for &'a SetData {
+    type Item = &'a Value;
+    type IntoIter = std::slice::Iter<'a, Value>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.items.iter()
+    }
+}
+
+impl FromIterator<(Value, Value)> for MapData {
+    fn from_iter<I: IntoIterator<Item = (Value, Value)>>(iter: I) -> Self {
+        Self::from_entries(iter.into_iter().collect())
+    }
+}
+
+impl<'a> IntoIterator for &'a MapData {
+    type Item = &'a (Value, Value);
+    type IntoIter = std::slice::Iter<'a, (Value, Value)>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.entries.iter()
+    }
+}
+
 /// Newtype wrapping [`Value`] that implements [`Ord`] via [`value_compare`]
 /// so `Value` elements can key a `BTreeMap` without `Value` itself needing
 /// to implement `Ord` globally (NaN semantics on floats make global Ord
@@ -918,9 +1322,14 @@ impl PartialEq for Value {
                 av == bv
             }
             (Value::Map(a), Value::Map(b)) => {
-                a.len() == b.len()
-                    && a.iter()
-                        .all(|(k, v)| b.iter().any(|(bk, bv)| bk == k && bv == v))
+                if Arc::ptr_eq(a, b) {
+                    return true;
+                }
+                let (a, b) = (a.read().unwrap(), b.read().unwrap());
+                // Order-insensitive, as it has always been — but through the
+                // index rather than a nested scan, so map equality is O(n)
+                // instead of O(n^2) (B-2026-08-21-8).
+                a.len() == b.len() && a.iter().all(|(k, v)| b.get(k) == Some(v))
             }
             (Value::SortedSet(a), Value::SortedSet(b)) => {
                 a.len() == b.len() && a.keys().zip(b.keys()).all(|(x, y)| x == y)
@@ -931,7 +1340,14 @@ impl PartialEq for Value {
                         .zip(b.iter())
                         .all(|((ak, av), (bk, bv))| ak == bk && av == bv)
             }
-            (Value::Set(a), Value::Set(b)) => a.len() == b.len() && a.iter().all(|x| b.contains(x)),
+            (Value::Set(a), Value::Set(b)) => {
+                if Arc::ptr_eq(a, b) {
+                    return true;
+                }
+                let (a, b) = (a.read().unwrap(), b.read().unwrap());
+                // Indexed membership rather than a nested scan: O(n), was O(n^2).
+                a.len() == b.len() && a.iter().all(|x| b.contains(x))
+            }
             // Channel ends compare by pointer identity — two Senders are equal
             // only when they wrap the exact same Arc allocation.
             (Value::Sender(a), Value::Sender(b)) => Arc::ptr_eq(a, b),
@@ -1244,7 +1660,7 @@ impl std::fmt::Display for Value {
             }
             Value::Map(entries) => {
                 write!(f, "{{")?;
-                for (i, (k, v)) in entries.iter().enumerate() {
+                for (i, (k, v)) in entries.read().unwrap().iter().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
@@ -1372,7 +1788,7 @@ impl std::fmt::Display for Value {
             }
             Value::Set(elems) => {
                 write!(f, "Set{{")?;
-                for (i, v) in elems.iter().enumerate() {
+                for (i, v) in elems.read().unwrap().iter().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
@@ -1508,6 +1924,29 @@ impl Value {
         Value::Array(Arc::new(RwLock::new(items)))
     }
 
+    /// Build a `Map` from insertion-ordered entries — the `Value::Map` twin of
+    /// [`Value::array_of`], and the spelling every construction site uses so
+    /// the index is built in exactly one place.
+    pub fn map_of(entries: Vec<(Value, Value)>) -> Value {
+        Value::Map(Arc::new(RwLock::new(MapData::from_entries(entries))))
+    }
+
+    /// An empty `Map`.
+    pub fn empty_map() -> Value {
+        Value::map_of(Vec::new())
+    }
+
+    /// Build a `Set` from insertion-ordered items, keeping the first
+    /// occurrence of any duplicate.
+    pub fn set_of(items: Vec<Value>) -> Value {
+        Value::Set(Arc::new(RwLock::new(SetData::from_items_deduped(items))))
+    }
+
+    /// An empty `Set`.
+    pub fn empty_set() -> Value {
+        Value::set_of(Vec::new())
+    }
+
     /// If this value is `Result::Err(e)`, return `e` (the single payload).
     /// Used by the `karac run` entry-point handler to implement design.md
     /// § Entry Point: a `main() -> Result[(), E]` that returns `Err(e)` prints
@@ -1627,6 +2066,8 @@ impl Value {
             }
             Value::Map(entries) => {
                 let pairs: Vec<String> = entries
+                    .read()
+                    .unwrap()
                     .iter()
                     .map(|(k, v)| format!("{}: {}", k.debug_fmt(), v.debug_fmt()))
                     .collect();
@@ -1696,7 +2137,12 @@ impl Value {
                 format!("SortedMap{{{}}}", inner.join(", "))
             }
             Value::Set(elems) => {
-                let inner: Vec<String> = elems.iter().map(|v| v.debug_fmt()).collect();
+                let inner: Vec<String> = elems
+                    .read()
+                    .unwrap()
+                    .iter()
+                    .map(|v| v.debug_fmt())
+                    .collect();
                 format!("Set{{{}}}", inner.join(", "))
             }
             Value::Sender(_) => "<Sender>".to_string(),
@@ -1739,5 +2185,185 @@ pub(crate) fn upgrade_weak_to_option(weak: &std::sync::Weak<SharedStructInner>) 
             variant: "None".to_string(),
             data: EnumData::Unit,
         },
+    }
+}
+
+#[cfg(test)]
+mod map_data_tests {
+    use super::*;
+
+    /// The load-bearing invariant of the whole `Map` index (B-2026-08-21-8):
+    /// `a == b` ⟹ `hash_value(a) == hash_value(b)`. Break it and a lookup
+    /// silently misses an entry that is present, which is a wrong answer, not
+    /// a slow one — so this is checked over every key shape the typechecker
+    /// admits (`Map[K, V]` requires `K: Hash + Eq`: integers of any width,
+    /// `String`, `char`, `bool`, tuples, `Vec`, `Array`, `Option`, and
+    /// `#[derive(Hash, Eq)]` structs), plus the exotic carriers that reach the
+    /// deliberately-coarse fallback.
+    ///
+    /// Pairs are built so that equal values are constructed INDEPENDENTLY —
+    /// two separately-allocated arrays, two separately-built structs — since
+    /// hashing a pointer instead of contents would pass a test that compared a
+    /// value to a clone of itself.
+    fn equal_pairs() -> Vec<(Value, Value)> {
+        let mut fields_a = HashMap::new();
+        fields_a.insert("x".to_string(), Value::Int(1));
+        fields_a.insert("y".to_string(), Value::String("s".into()));
+        let mut fields_b = HashMap::new();
+        // Inserted in the opposite order: `fields` is a `HashMap`, so the hash
+        // must not depend on iteration order.
+        fields_b.insert("y".to_string(), Value::String("s".into()));
+        fields_b.insert("x".to_string(), Value::Int(1));
+
+        vec![
+            (Value::Int(42), Value::Int(42)),
+            (Value::Int(-7), Value::Int(-7)),
+            (Value::String("hello".into()), Value::String("hello".into())),
+            (Value::String(String::new()), Value::String(String::new())),
+            (Value::Char('é'), Value::Char('é')),
+            (Value::Bool(true), Value::Bool(true)),
+            (Value::Unit, Value::Unit),
+            (
+                Value::Tuple(vec![Value::Int(1), Value::String("a".into())]),
+                Value::Tuple(vec![Value::Int(1), Value::String("a".into())]),
+            ),
+            (
+                Value::array_of(vec![Value::Int(1), Value::Int(2)]),
+                Value::array_of(vec![Value::Int(1), Value::Int(2)]),
+            ),
+            (Value::array_of(vec![]), Value::array_of(vec![])),
+            (
+                Value::EnumVariant {
+                    enum_name: "Option".into(),
+                    variant: "Some".into(),
+                    data: EnumData::Tuple(vec![Value::Int(3)]),
+                },
+                Value::EnumVariant {
+                    enum_name: "Option".into(),
+                    variant: "Some".into(),
+                    data: EnumData::Tuple(vec![Value::Int(3)]),
+                },
+            ),
+            (
+                Value::EnumVariant {
+                    enum_name: "Option".into(),
+                    variant: "None".into(),
+                    data: EnumData::Unit,
+                },
+                Value::EnumVariant {
+                    enum_name: "Option".into(),
+                    variant: "None".into(),
+                    data: EnumData::Unit,
+                },
+            ),
+            (
+                Value::Struct {
+                    name: "P".into(),
+                    fields: fields_a,
+                },
+                Value::Struct {
+                    name: "P".into(),
+                    fields: fields_b,
+                },
+            ),
+            // Nested: a tuple of containers, to catch a recursion that stops
+            // one level down.
+            (
+                Value::Tuple(vec![Value::array_of(vec![Value::Int(9)])]),
+                Value::Tuple(vec![Value::array_of(vec![Value::Int(9)])]),
+            ),
+            // The coarse-fallback carriers. Equal by `==`, so they must hash
+            // equal — trivially true while they hash to the discriminant, and
+            // this is what fails if someone later adds a bit-pattern arm.
+            (Value::Float(1.5), Value::Float(1.5)),
+            (Value::Float(0.0), Value::Float(-0.0)),
+        ]
+    }
+
+    #[test]
+    fn hash_value_agrees_with_equality() {
+        for (a, b) in equal_pairs() {
+            assert!(
+                a == b,
+                "fixture is not actually an equal pair: {a:?} vs {b:?}"
+            );
+            assert_eq!(
+                hash_value(&a),
+                hash_value(&b),
+                "equal values hashed differently — a Map lookup would miss: {a:?} vs {b:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn map_data_finds_every_key_it_stores() {
+        // The index answering correctly for each key shape, through the real
+        // insert/lookup path rather than through `hash_value` alone.
+        let mut m = MapData::new();
+        let keys: Vec<Value> = equal_pairs().into_iter().map(|(a, _)| a).collect();
+        for (i, k) in keys.iter().enumerate() {
+            m.insert(k.clone(), Value::Int(i as i128));
+        }
+        for (i, (a, b)) in equal_pairs().into_iter().enumerate() {
+            // Looked up by the INDEPENDENTLY-built twin, not by the stored key.
+            assert_eq!(
+                m.get(&b),
+                Some(&Value::Int(i as i128)),
+                "lookup missed a stored key: {a:?}"
+            );
+        }
+        assert_eq!(m.len(), keys.len());
+    }
+
+    #[test]
+    fn map_data_preserves_insertion_order_across_overwrite_and_remove() {
+        // The observable half. Iteration order is insertion order, an
+        // overwrite keeps the original position, and a removal closes the gap
+        // without disturbing the survivors' order.
+        let mut m = MapData::new();
+        for k in [30i128, 10, 20, 5] {
+            m.insert(Value::Int(k), Value::Int(k * 2));
+        }
+        let order = |m: &MapData| -> Vec<i128> {
+            m.iter()
+                .map(|(k, _)| match k {
+                    Value::Int(i) => *i,
+                    other => panic!("unexpected key {other:?}"),
+                })
+                .collect()
+        };
+        assert_eq!(order(&m), vec![30, 10, 20, 5]);
+
+        let prev = m.insert(Value::Int(10), Value::Int(999));
+        assert_eq!(
+            prev,
+            Some(Value::Int(20)),
+            "overwrite returns the old value"
+        );
+        assert_eq!(order(&m), vec![30, 10, 20, 5], "overwrite keeps position");
+        assert_eq!(m.get(&Value::Int(10)), Some(&Value::Int(999)));
+
+        m.remove(&Value::Int(30));
+        assert_eq!(order(&m), vec![10, 20, 5]);
+        // Every survivor still findable — this is what a stale index breaks.
+        for k in [10i128, 20, 5] {
+            assert!(m.contains_key(&Value::Int(k)), "lost key {k} after remove");
+        }
+        assert!(!m.contains_key(&Value::Int(30)));
+    }
+
+    #[test]
+    fn map_data_handles_a_hash_collision_bucket() {
+        // Two DIFFERENT keys that share a bucket by construction: both float
+        // carriers hash to the discriminant alone. The `==` recheck is what
+        // keeps them distinct, and this is the case that would silently
+        // conflate them if `position_of` trusted the hash.
+        let mut m = MapData::new();
+        m.insert(Value::Float(1.0), Value::Int(1));
+        m.insert(Value::Float(2.0), Value::Int(2));
+        assert_eq!(m.len(), 2, "collision must not overwrite");
+        assert_eq!(m.get(&Value::Float(1.0)), Some(&Value::Int(1)));
+        assert_eq!(m.get(&Value::Float(2.0)), Some(&Value::Int(2)));
+        assert_eq!(m.get(&Value::Float(3.0)), None);
     }
 }

@@ -101,10 +101,10 @@ impl<'a> super::Interpreter<'a> {
                     // Literals). Both carry NUL-excluded bytes.
                     Value::CStr(b) => Value::Int((b.len() as i64).into()),
                     Value::CString(b) => Value::Int((b.len() as i64).into()),
-                    Value::Map(m) => Value::Int((m.len() as i64).into()),
+                    Value::Map(m) => Value::Int((m.read().unwrap().len() as i64).into()),
                     Value::SortedSet(s) => Value::Int((s.len() as i64).into()),
                     Value::SortedMap(m) => Value::Int((m.len() as i64).into()),
-                    Value::Set(s) => Value::Int((s.len() as i64).into()),
+                    Value::Set(s) => Value::Int((s.read().unwrap().len() as i64).into()),
                     // Note: Map also handled via Map.len() match above
                     _ => unreachable!(
                         "len() receiver at {}:{} was Value::{}; \
@@ -834,10 +834,10 @@ impl<'a> super::Interpreter<'a> {
                     return Some(Value::Bool(s.is_empty()));
                 }
                 if let Value::Set(ref s) = obj {
-                    return Some(Value::Bool(s.is_empty()));
+                    return Some(Value::Bool(s.read().unwrap().is_empty()));
                 }
                 if let Value::Map(ref m) = obj {
-                    return Some(Value::Bool(m.is_empty()));
+                    return Some(Value::Bool(m.read().unwrap().is_empty()));
                 }
                 if let Value::SortedMap(ref m) = obj {
                     return Some(Value::Bool(m.is_empty()));
@@ -1045,8 +1045,8 @@ impl<'a> super::Interpreter<'a> {
                         .first()
                         .map(|a| self.eval_expr_inner(&a.value))
                         .unwrap_or(Value::Unit);
-                    return Some(match m.iter().find(|(k, _)| *k == key) {
-                        Some((_, v)) => found_map_value_to_option(v),
+                    return Some(match m.read().unwrap().get(&key) {
+                        Some(v) => found_map_value_to_option(v),
                         None => Value::EnumVariant {
                             enum_name: "Option".to_string(),
                             variant: "None".to_string(),
@@ -1150,7 +1150,7 @@ impl<'a> super::Interpreter<'a> {
                         .first()
                         .map(|a| self.eval_expr_inner(&a.value))
                         .unwrap_or(Value::Unit);
-                    return Some(Value::Bool(s.contains(&needle)));
+                    return Some(Value::Bool(s.read().unwrap().contains(&needle)));
                 }
             }
             "contains_key" => {
@@ -1159,7 +1159,7 @@ impl<'a> super::Interpreter<'a> {
                         .first()
                         .map(|a| self.eval_expr_inner(&a.value))
                         .unwrap_or(Value::Unit);
-                    return Some(Value::Bool(m.iter().any(|(k, _)| *k == key)));
+                    return Some(Value::Bool(m.read().unwrap().contains_key(&key)));
                 }
                 if let Value::SortedMap(ref m) = obj {
                     let key = args

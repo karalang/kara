@@ -2937,11 +2937,8 @@ impl<'a> Interpreter<'a> {
                 _ => Some(self.eval_expr_inner(object)),
             };
             match recv {
-                Some(Value::Map(mut entries)) => {
-                    match entries.iter_mut().find(|(k, _)| *k == idx_val) {
-                        Some(slot) => slot.1 = val,
-                        None => entries.push((idx_val, val)),
-                    }
+                Some(Value::Map(entries)) => {
+                    entries.write().unwrap().insert(idx_val, val);
                     self.write_back_receiver(object, Value::Map(entries));
                     return;
                 }

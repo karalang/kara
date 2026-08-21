@@ -267,9 +267,13 @@ pub(crate) fn deep_clone_value(v: &Value) -> Value {
                 .collect();
             Value::array_of(snapshot)
         }
-        Value::Set(items) => Value::Set(items.iter().map(deep_clone_value).collect()),
-        Value::Map(entries) => Value::Map(
+        Value::Set(items) => {
+            Value::set_of(items.read().unwrap().iter().map(deep_clone_value).collect())
+        }
+        Value::Map(entries) => Value::map_of(
             entries
+                .read()
+                .unwrap()
                 .iter()
                 .map(|(k, val)| (deep_clone_value(k), deep_clone_value(val)))
                 .collect(),
@@ -735,9 +739,10 @@ impl Env {
     pub(crate) fn read_map_slot(&self, map_var: &str, key: &Value) -> Value {
         match self.map_place_ref(map_var) {
             Some(Value::Map(pairs)) => pairs
-                .iter()
-                .find(|(k, _)| k == key)
-                .map(|(_, v)| v.clone())
+                .read()
+                .unwrap()
+                .get(key)
+                .cloned()
                 .unwrap_or(Value::Unit),
             // SortedMap slot (BTreeMap keyed by `OrdValue`) — the entry
             // chain's `MapSlotRef` resolves through here for a SortedMap too.
@@ -755,11 +760,7 @@ impl Env {
     pub(crate) fn write_map_slot(&mut self, map_var: &str, key: &Value, val: Value) {
         match self.map_place_mut(map_var) {
             Some(Value::Map(pairs)) => {
-                if let Some((_, v)) = pairs.iter_mut().find(|(k, _)| k == key) {
-                    *v = val;
-                } else {
-                    pairs.push((key.clone(), val));
-                }
+                pairs.write().unwrap().insert(key.clone(), val);
             }
             // SortedMap sibling: insert-or-overwrite by `OrdValue` key.
             Some(Value::SortedMap(m)) => {

@@ -1270,11 +1270,17 @@ impl<'a> super::Interpreter<'a> {
                 .map(|g| g.iter().any(|e| self.value_runs_user_drop(e)))
                 .unwrap_or(false),
             Value::Tuple(items) => items.iter().any(|e| self.value_runs_user_drop(e)),
-            Value::Map(entries) => entries
-                .iter()
-                .any(|(_, val)| self.value_runs_user_drop(val)),
+            Value::Map(entries) => {
+                let entries = entries.read().unwrap().clone();
+                entries
+                    .iter()
+                    .any(|(_, val)| self.value_runs_user_drop(val))
+            }
             Value::SortedMap(entries) => entries.values().any(|val| self.value_runs_user_drop(val)),
-            Value::Set(items) => items.iter().any(|e| self.value_runs_user_drop(e)),
+            Value::Set(items) => {
+                let items = items.read().unwrap().clone();
+                items.iter().any(|e| self.value_runs_user_drop(e))
+            }
             Value::SortedSet(items) => items.keys().any(|k| self.value_runs_user_drop(&k.0)),
             // B-2026-08-03-1 — an Option/Result PAYLOAD is Drop-relevant
             // content like any other one-level container's. Built-in enums
@@ -1535,9 +1541,14 @@ impl<'a> super::Interpreter<'a> {
         generic_param_names: &[String],
     ) {
         let vals: Vec<Value> = match field_value {
-            Value::Map(entries) => entries.iter().map(|(_, v)| v.clone()).collect(),
+            Value::Map(entries) => entries
+                .read()
+                .unwrap()
+                .iter()
+                .map(|(_, v)| v.clone())
+                .collect(),
             Value::SortedMap(entries) => entries.values().cloned().collect(),
-            Value::Set(items) => items.clone(),
+            Value::Set(items) => items.read().unwrap().items().to_vec(),
             Value::SortedSet(items) => items.keys().map(|k| k.0.clone()).collect(),
             _ => return,
         };
@@ -2577,11 +2588,16 @@ impl<'a> super::Interpreter<'a> {
         // ordered-vs-unordered difference `for (k, v) in m` already has, so
         // parity tests stay order-insensitive.
         let vals: Vec<Value> = match self.env.get(name) {
-            Some(Value::Map(entries)) => entries.into_iter().map(|(_, v)| v).collect(),
+            Some(Value::Map(entries)) => entries
+                .read()
+                .unwrap()
+                .iter()
+                .map(|(_, v)| v.clone())
+                .collect(),
             Some(Value::SortedMap(entries)) => entries.into_values().collect(),
             // Set-elements leg (B-2026-07-30-11): the walked values are the
             // ELEMENTS — the key half of the same table shape.
-            Some(Value::Set(items)) => items,
+            Some(Value::Set(items)) => items.read().unwrap().items().to_vec(),
             Some(Value::SortedSet(items)) => items.into_keys().map(|k| k.0).collect(),
             _ => return false,
         };

@@ -108,9 +108,11 @@ impl<'a> super::Interpreter<'a> {
                     len,
                     ..
                 } => storage.read().unwrap()[*start..*start + *len].to_vec(),
-                Value::Set(s) => s.clone(),
+                Value::Set(s) => s.read().unwrap().items().to_vec(),
                 Value::SortedSet(s) => s.keys().map(|k| k.0.clone()).collect(),
                 Value::Map(m) => m
+                    .read()
+                    .unwrap()
                     .iter()
                     .map(|(k, v)| Value::Tuple(vec![k.clone(), v.clone()]))
                     .collect(),

@@ -36269,3 +36269,178 @@ fn upper_half_unsigned_patterns_match_the_right_arm() {
         "1\n2\n3\n4\n"
     );
 }
+
+// ── B-2026-08-21-8: Map / Set are hash-indexed and Arc-backed ────
+//
+// The representation moved from a bare `Vec` (a by-value association list) to
+// `Arc<RwLock<MapData>>` / `Arc<RwLock<SetData>>` — insertion-ordered storage
+// with a hash index beside it. Two properties had to survive that: the
+// observable ORDER, and VALUE SEMANTICS. The second is the one the change put
+// at risk, because the derived `Clone` now shares storage the way `Array`'s
+// always has, and only `deep_clone_value` at binding sites keeps two bindings
+// independent.
+
+#[test]
+fn map_iteration_stays_in_insertion_order() {
+    // Keys chosen so insertion order, sorted order, and hash order all differ
+    // — printing them sorted, or in bucket order, fails here.
+    let out = run("fn main() {\n\
+        let mut m: Map[i64, i64] = Map.new();\n\
+        m.insert(30, 3);\n\
+        m.insert(10, 1);\n\
+        m.insert(20, 2);\n\
+        m.insert(5, 0);\n\
+        for (k, v) in m { println(f\"{k}={v}\"); }\n\
+    }");
+    assert_eq!(out, "30=3\n10=1\n20=2\n5=0\n");
+}
+
+#[test]
+fn map_overwrite_keeps_the_original_position() {
+    // An overwrite updates in place rather than moving the key to the end —
+    // the behaviour the `Vec`-scan code had, since it assigned through the
+    // pair it found.
+    let out = run("fn main() {\n\
+        let mut m: Map[i64, i64] = Map.new();\n\
+        m.insert(1, 1);\n\
+        m.insert(2, 2);\n\
+        m.insert(1, 99);\n\
+        for (k, v) in m { println(f\"{k}={v}\"); }\n\
+    }");
+    assert_eq!(out, "1=99\n2=2\n");
+}
+
+#[test]
+fn map_remove_keeps_the_survivors_findable_and_ordered() {
+    // The index stores POSITIONS, and removing an entry shifts every later one
+    // down. Without the rebuild that follows the removal, the survivors would
+    // still print (the `Vec` is walked directly) but would no longer be found
+    // by key — a silent wrong answer that only a lookup after a removal shows.
+    let out = run("fn main() {\n\
+        let mut m: Map[i64, i64] = Map.new();\n\
+        m.insert(10, 1);\n\
+        m.insert(20, 2);\n\
+        m.insert(30, 3);\n\
+        m.remove(10);\n\
+        for (k, v) in m { println(f\"{k}={v}\"); }\n\
+        match m.get(30) { Some(v) => { println(f\"found30={v}\"); } None => { println(\"LOST30\"); } }\n\
+        match m.get(20) { Some(v) => { println(f\"found20={v}\"); } None => { println(\"LOST20\"); } }\n\
+        match m.get(10) { Some(v) => { println(f\"found10={v}\"); } None => { println(\"gone10\"); } }\n\
+    }");
+    assert_eq!(out, "20=2\n30=3\nfound30=3\nfound20=2\ngone10\n");
+}
+
+#[test]
+fn map_binding_is_a_value_not_an_alias() {
+    // THE regression this change could have introduced. `Map` storage is now
+    // shared by the derived `Clone`, so independence rests entirely on
+    // `deep_clone_value` firing at the binding. If it did not, inserting into
+    // `n` would show up in `m`.
+    let out = run("fn main() {\n\
+        let mut m: Map[i64, i64] = Map.new();\n\
+        m.insert(1, 1);\n\
+        let mut n = m;\n\
+        n.insert(2, 2);\n\
+        println(f\"m={m.len()} n={n.len()}\");\n\
+    }");
+    assert_eq!(out, "m=1 n=2\n");
+}
+
+#[test]
+fn set_binding_is_a_value_not_an_alias() {
+    let out = run("fn main() {\n\
+        let mut s: Set[i64] = Set.new();\n\
+        s.insert(1);\n\
+        let mut t = s;\n\
+        t.insert(2);\n\
+        println(f\"s={s.len()} t={t.len()}\");\n\
+    }");
+    assert_eq!(out, "s=1 t=2\n");
+}
+
+#[test]
+fn map_in_a_struct_field_is_independent_per_struct() {
+    // The same independence one level down: a map reached through a field is
+    // shared storage too, so copying the struct must not alias its map.
+    let out = run("struct H { m: Map[i64, i64] }\n\
+    fn main() {\n\
+        let mut a = H { m: Map.new() };\n\
+        a.m.insert(1, 1);\n\
+        let mut b = a;\n\
+        b.m.insert(2, 2);\n\
+        println(f\"a={a.m.len()} b={b.m.len()}\");\n\
+    }");
+    assert_eq!(out, "a=1 b=2\n");
+}
+
+#[test]
+fn set_iteration_and_membership_survive_a_removal() {
+    // `Set.remove` used to `swap_remove`, moving the last element into the
+    // hole; it now preserves order like every other container. Either is legal
+    // (design.md § Map leaves `Set` order unspecified) — this pins the one that
+    // shipped and, more importantly, that every survivor is still a member.
+    let out = run("fn main() {\n\
+        let mut s: Set[i64] = Set.new();\n\
+        s.insert(9); s.insert(3); s.insert(7); s.insert(1);\n\
+        s.remove(3);\n\
+        for x in s { println(x); }\n\
+        if s.contains(1) { println(\"has1\"); } else { println(\"LOST1\"); }\n\
+        if s.contains(7) { println(\"has7\"); } else { println(\"LOST7\"); }\n\
+        if s.contains(3) { println(\"BAD3\"); } else { println(\"gone3\"); }\n\
+    }");
+    assert_eq!(out, "9\n7\n1\nhas1\nhas7\ngone3\n");
+}
+
+#[test]
+fn map_entry_chain_still_reaches_the_live_slot() {
+    // `entry` / `or_insert` resolve a slot POSITIONALLY (`slot_idx`) and then
+    // write through it. Both halves moved onto the indexed storage, so this
+    // pins that the write lands in the map rather than in a detached copy.
+    let out = run("fn main() {\n\
+        let mut m: Map[String, i64] = Map.new();\n\
+        m.insert(\"a\", 1);\n\
+        m.entry(\"a\").or_insert(0);\n\
+        m.entry(\"b\").or_insert(7);\n\
+        for (k, v) in m { println(f\"{k}={v}\"); }\n\
+    }");
+    assert_eq!(out, "a=1\nb=7\n");
+}
+
+#[test]
+fn map_keeps_distinct_keys_that_share_a_hash_bucket() {
+    // Tuple keys whose components are swapped are different keys. They are
+    // built to be structurally similar so a hash that ignored component ORDER
+    // would collide them — and the `==` recheck is what keeps them apart even
+    // then. A conflation here is a lost entry, not a slow one.
+    let out = run("fn main() {\n\
+        let mut m: Map[(i64, i64), i64] = Map.new();\n\
+        m.insert((1, 2), 12);\n\
+        m.insert((2, 1), 21);\n\
+        println(m.len());\n\
+        match m.get((1, 2)) { Some(v) => { println(v); } None => { println(\"MISS\"); } }\n\
+        match m.get((2, 1)) { Some(v) => { println(v); } None => { println(\"MISS\"); } }\n\
+    }");
+    assert_eq!(out, "2\n12\n21\n");
+}
+
+#[test]
+fn map_with_many_keys_finds_every_one() {
+    // Volume, so a bucket that grows past one entry is actually exercised —
+    // the single-entry case can pass with an index that never collides. Also
+    // the shape that was quadratic: 400 inserts followed by 400 lookups took
+    // measurable seconds before this change.
+    let out = run("fn main() {\n\
+        let mut m: Map[i64, i64] = Map.new();\n\
+        let mut i = 0i64;\n\
+        while i < 400i64 { m.insert(i, i * 3i64); i = i + 1i64; }\n\
+        let mut missing = 0i64;\n\
+        let mut sum = 0i64;\n\
+        let mut j = 0i64;\n\
+        while j < 400i64 {\n\
+            match m.get(j) { Some(v) => { sum = sum + v; } None => { missing = missing + 1i64; } }\n\
+            j = j + 1i64;\n\
+        }\n\
+        println(f\"len={m.len()} missing={missing} sum={sum}\");\n\
+    }");
+    assert_eq!(out, "len=400 missing=0 sum=239400\n");
+}

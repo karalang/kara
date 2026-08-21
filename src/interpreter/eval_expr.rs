@@ -452,7 +452,7 @@ impl<'a> super::Interpreter<'a> {
                     .iter()
                     .map(|(k, v)| (self.eval_expr_inner(k), self.eval_expr_inner(v)))
                     .collect();
-                Value::Map(vals)
+                Value::map_of(vals)
             }
 
             // Struct literal
@@ -838,8 +838,9 @@ impl<'a> super::Interpreter<'a> {
                 // index being an integer). `m.get(k).unwrap()` remains the
                 // Option-returning workaround; this is the direct-index sugar.
                 if let Value::Map(entries) = &obj {
-                    return match entries.iter().find(|(k, _)| *k == idx) {
-                        Some((_, v)) => v.clone(),
+                    // B-2026-08-21-8 — indexed lookup, not a scan.
+                    return match entries.read().unwrap().get(&idx) {
+                        Some(v) => v.clone(),
                         None => self.record_runtime_error(
                             format!("key not found in map: {}", idx),
                             &expr.span,
@@ -1295,11 +1296,13 @@ impl<'a> super::Interpreter<'a> {
                             .map(|(k, v)| Value::Tuple(vec![k.0, v]))
                             .collect(),
                         // Set iterates in insertion order
-                        Value::Set(s) => s,
+                        Value::Set(s) => s.read().unwrap().items().to_vec(),
                         // Map iterates as (key, value) tuples in insertion order
                         Value::Map(m) => m
-                            .into_iter()
-                            .map(|(k, v)| Value::Tuple(vec![k, v]))
+                            .read()
+                            .unwrap()
+                            .iter()
+                            .map(|(k, v)| Value::Tuple(vec![k.clone(), v.clone()]))
                             .collect(),
                         // String iterates per Unicode scalar value, matching the
                         // canonical `s.chars()` surface — design.md § Character

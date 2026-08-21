@@ -501,7 +501,7 @@ impl<'a> super::Interpreter<'a> {
                     );
                 }
                 "Map.new" => {
-                    return Value::Map(Vec::new());
+                    return Value::empty_map();
                 }
                 "Vec.new" => {
                     return Value::array_of(Vec::new());
@@ -618,7 +618,7 @@ impl<'a> super::Interpreter<'a> {
                     return Value::SortedMap(BTreeMap::new());
                 }
                 "Set.new" => {
-                    return Value::Set(Vec::new());
+                    return Value::empty_set();
                 }
                 "Client.new" => {
                     return Value::Struct {
@@ -2758,8 +2758,11 @@ impl<'a> super::Interpreter<'a> {
         // whole-map clone/write-back the name-keyed `get`/`set` pair did.
         match self.env.map_place_mut(&name) {
             Some(Value::Map(m)) => {
-                if !m.iter().any(|(k, _)| *k == key) {
-                    m.push((key.clone(), default));
+                {
+                    let mut m = m.write().unwrap();
+                    if !m.contains_key(&key) {
+                        m.insert(key.clone(), default);
+                    }
                 }
                 Value::MapSlotRef {
                     map_var: name,

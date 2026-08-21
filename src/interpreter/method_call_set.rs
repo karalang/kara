@@ -49,8 +49,16 @@ impl<'a> super::Interpreter<'a> {
             // the memory work in `Map.clear`.
             "clear" => {
                 if let Value::Map(ref entries) = obj {
-                    let removed: Vec<Value> = entries.iter().map(|(_, v)| v.clone()).collect();
-                    self.write_back_receiver(object, Value::Map(Vec::new()));
+                    let removed: Vec<Value> = entries
+                        .read()
+                        .unwrap()
+                        .iter()
+                        .map(|(_, v)| v.clone())
+                        .collect();
+                    // Shared storage: clear THIS map rather than rebinding the
+                    // name to a fresh one, so a map reached through a field or
+                    // an alias is cleared too.
+                    entries.write().unwrap().clear();
                     for v in removed {
                         self.run_discarded_value_user_drops(v);
                     }
@@ -86,8 +94,10 @@ impl<'a> super::Interpreter<'a> {
                 // for a checks-clean-then-fails-at-build one. Noted as an
                 // adjacent gap on B-2026-08-12-8 instead.
                 if let Value::Set(ref elems) = obj {
-                    let removed: Vec<Value> = elems.clone();
-                    self.write_back_receiver(object, Value::Set(Vec::new()));
+                    let removed: Vec<Value> = elems.read().unwrap().items().to_vec();
+                    // Clear the shared storage, so an aliased or field-reached
+                    // set is cleared too rather than rebound.
+                    elems.write().unwrap().clear();
                     for v in removed {
                         self.run_discarded_value_user_drops(v);
                     }
@@ -188,13 +198,13 @@ impl<'a> super::Interpreter<'a> {
                     return Some(Value::SortedSet(result));
                 }
                 if let (Value::Set(ref a_set), Value::Set(ref b_set)) = (obj, &other) {
-                    let mut result = a_set.clone();
-                    for v in b_set {
-                        if !result.contains(v) {
-                            result.push(v.clone());
-                        }
+                    let mut result = a_set.read().unwrap().clone();
+                    for v in b_set.read().unwrap().iter() {
+                        result.insert(v.clone());
                     }
-                    return Some(Value::Set(result));
+                    return Some(Value::Set(std::sync::Arc::new(std::sync::RwLock::new(
+                        result,
+                    ))));
                 }
             }
             "intersection" => {
@@ -212,12 +222,15 @@ impl<'a> super::Interpreter<'a> {
                     return Some(Value::SortedSet(result));
                 }
                 if let (Value::Set(ref a_set), Value::Set(ref b_set)) = (obj, &other) {
+                    let b_set = b_set.read().unwrap();
                     let result: Vec<Value> = a_set
+                        .read()
+                        .unwrap()
                         .iter()
                         .filter(|v| b_set.contains(v))
                         .cloned()
                         .collect();
-                    return Some(Value::Set(result));
+                    return Some(Value::set_of(result));
                 }
             }
             "difference" => {
@@ -235,12 +248,15 @@ impl<'a> super::Interpreter<'a> {
                     return Some(Value::SortedSet(result));
                 }
                 if let (Value::Set(ref a_set), Value::Set(ref b_set)) = (obj, &other) {
+                    let b_set = b_set.read().unwrap();
                     let result: Vec<Value> = a_set
+                        .read()
+                        .unwrap()
                         .iter()
                         .filter(|v| !b_set.contains(v))
                         .cloned()
                         .collect();
-                    return Some(Value::Set(result));
+                    return Some(Value::set_of(result));
                 }
             }
             _ => return None,
