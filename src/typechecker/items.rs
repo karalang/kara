@@ -3182,7 +3182,52 @@ impl<'a> super::TypeChecker<'a> {
     /// §1297; when no annotation is present, infers the binding's type
     /// from the initializer and stashes it in `env.constants` for
     /// use-site resolution (slice 5).
+    /// `module_mut_binding` (B-2026-08-21-2). design.md § Module-Level State,
+    /// "Profile gating": a module-level `let mut` is a **Warning** under the
+    /// `lib` (default) profile, "suppress with `#[allow(module_mut_binding)]`".
+    ///
+    /// Scoped to the DEFAULT profile exactly as the table words it. `embedded`
+    /// PERMITS the form outright — MMIO, DMA and static buffers are where the
+    /// feature's core justification lives — so firing there would be a lint
+    /// beyond its documented trigger, which is its own defect (the same rule
+    /// `warn_redundant_suffix` follows). The table's `app` row is a hard error
+    /// rather than a lint, and no `app` variant exists in `CompileProfile`
+    /// yet, so that row is left unimplemented rather than approximated here;
+    /// `kernel` likewise specifies an error, not this warning.
+    ///
+    /// The binding's own `lint_overrides` are pushed as the innermost cascade
+    /// frame for the emit and popped immediately, which is what makes the
+    /// suppression PER-BINDING rather than module-wide, as the spec requires.
+    /// Scoping the frame to the emit alone (rather than the whole function)
+    /// keeps `check_module_binding`'s early returns from leaking it.
+    ///
+    /// Anchored on `name_span` so the diagnostic underlines the binding name
+    /// the `#[allow]` would attach to, not the whole `let … = …;`.
+    fn warn_module_mut_binding(&mut self, b: &ModuleBinding) {
+        if !b.is_mut {
+            return;
+        }
+        if self.profile_config.profile != crate::manifest::CompileProfile::Default {
+            return;
+        }
+        self.lint_override_stack.push(b.lint_overrides.clone());
+        self.type_lint_warning(
+            format!(
+                "module-level `let mut {}` is mutable global state. Prefer a \
+                 context struct, `Mutex`, `Atomic`, `#[thread_local]`, \
+                 `LazyLock`, or `OnceLock`; suppress per-binding with \
+                 `#[allow(module_mut_binding)]`",
+                b.name
+            ),
+            b.name_span,
+            TypeErrorKind::ModuleMutBinding,
+            "module_mut_binding",
+        );
+        self.lint_override_stack.pop();
+    }
+
     fn check_module_binding(&mut self, b: &ModuleBinding) {
+        self.warn_module_mut_binding(b);
         self.check_module_binding_init(&b.value, &b.name);
 
         if let Some(ref ty_expr) = b.ty {

@@ -816,6 +816,18 @@ pub enum TypeErrorKind {
     /// and never wired, so the spec sentence described behaviour that did not
     /// exist.
     RedundantSuffix,
+    /// `module_mut_binding` lint (B-2026-08-21-2) — a module-level `let mut`
+    /// binding under the default profile. design.md § Module-Level State >
+    /// Profile gating gives `lib` (the default) a **Warning**, suppressible
+    /// per-binding with `#[allow(module_mut_binding)]`. Registered from the
+    /// start and never wired, so the spec table described a warning that
+    /// never fired. Scoped to the DEFAULT profile exactly as the table words
+    /// it: `embedded` permits the form outright (MMIO / DMA / static
+    /// buffers), so it must stay silent there. The table's `app` row (a hard
+    /// error) has no counterpart here because no `app` profile exists in
+    /// `CompileProfile` yet — inventing one would fire beyond the documented
+    /// trigger.
+    ModuleMutBinding,
     /// Bare `method(args)` call appears in a synthesis position (no expected
     /// type) where the only candidate resolutions are trait associated
     /// functions. The typechecker cannot infer the target type — programmer
@@ -1155,7 +1167,8 @@ pub(crate) fn class_for_type_error_kind(
         | TypeErrorKind::ForbiddenLintAllow
         | TypeErrorKind::ExpectOnUnfulfilled
         | TypeErrorKind::UnfulfilledLintExpectation
-        | TypeErrorKind::RedundantSuffix => Some(DC::LintWarning),
+        | TypeErrorKind::RedundantSuffix
+        | TypeErrorKind::ModuleMutBinding => Some(DC::LintWarning),
 
         // Kinds not yet individually classified — `Other` at the JSON
         // emit site. Backfill is incremental; each one is a small

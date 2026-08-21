@@ -3393,6 +3393,77 @@ fn lint_attrs_slice4b_warn_explicit_keeps_warning_behavior() {
     );
 }
 
+/// `module_mut_binding` fires on a module-level `let mut` (B-2026-08-21-2).
+///
+/// design.md § Module-Level State > Profile gating gives the `lib` (default)
+/// profile a **Warning**, "suppress with `#[allow(module_mut_binding)]`".
+/// The lint was registered from the start and never wired, so the spec table
+/// described a warning that could not fire — `karac lint --list` advertised
+/// it and `#[deny(module_mut_binding)]` passed for the wrong reason.
+#[test]
+fn module_mut_binding_fires_on_a_module_level_let_mut() {
+    let result = typecheck_ok(
+        "let mut COUNTER: i64 = 0;\n\
+         fn main() { COUNTER = COUNTER + 1; println(COUNTER); }",
+    );
+    let hits: Vec<_> = result
+        .warnings
+        .iter()
+        .filter(|w| w.kind == TypeErrorKind::ModuleMutBinding)
+        .collect();
+    assert_eq!(
+        hits.len(),
+        1,
+        "expected one warning for the module-level `let mut`; got: {:?}",
+        result.warnings
+    );
+    assert_eq!(hits[0].lint_name.as_deref(), Some("module_mut_binding"));
+}
+
+/// An IMMUTABLE module binding is not global mutable state, so it must stay
+/// silent — the spec's trigger is `let mut`, and a lint that fires beyond its
+/// documented trigger is its own defect.
+#[test]
+fn module_mut_binding_silent_on_an_immutable_binding() {
+    let result = typecheck_ok(
+        "let LIMIT: i64 = 10;\n\
+         fn main() { println(LIMIT); }",
+    );
+    assert!(
+        !result
+            .warnings
+            .iter()
+            .any(|w| w.kind == TypeErrorKind::ModuleMutBinding),
+        "an immutable module binding must not warn; got: {:?}",
+        result.warnings
+    );
+}
+
+/// The suppression is PER-BINDING, not module-wide (design.md: "forcing an
+/// explicit opt-in at every site"). The allowed binding is silent while its
+/// un-annotated sibling in the SAME module still warns.
+#[test]
+fn module_mut_binding_allow_is_per_binding_not_module_wide() {
+    let result = typecheck_ok(
+        "let mut LOUD: i64 = 0;\n\
+         #[allow(module_mut_binding)]\n\
+         let mut QUIET: i64 = 1;\n\
+         fn main() { LOUD = LOUD + 1; println(LOUD + QUIET); }",
+    );
+    let hits: Vec<_> = result
+        .warnings
+        .iter()
+        .filter(|w| w.kind == TypeErrorKind::ModuleMutBinding)
+        .collect();
+    assert_eq!(
+        hits.len(),
+        1,
+        "the `#[allow]` must suppress only its own binding, leaving the \
+         sibling warning intact; got: {:?}",
+        result.warnings
+    );
+}
+
 /// `redundant_suffix` fires at all (B-2026-08-20-36).
 ///
 /// The lint was REGISTERED at `Warn` from the start and never wired, so

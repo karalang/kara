@@ -138,7 +138,7 @@ pub const STARTER_LINTS: &[LintInfo] = &[
     LintInfo {
         name: "module_mut_binding",
         default_level: LintLevel::Warn,
-        description: "A module-level `let mut` binding shadows a value that the resolver would otherwise rebind.",
+        description: "A module-level `let mut` binding is mutable global state (default profile).",
     },
     LintInfo {
         name: "redundant_suffix",
@@ -520,7 +520,6 @@ mod emit_site_guard {
         "f16_software_emulated",
         "float_in_serialized_type",
         "implicit_clone",
-        "module_mut_binding",
         "mutual_recursion_note",
         "pure_loop_in_par",
         "repr_c_layout_ignored",
