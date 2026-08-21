@@ -218,13 +218,6 @@
       "reason": "DOC BUG — `({ balance: … }, amount)` is an anonymous record literal; struct literals in this language are `Name { … }`. B-2026-08-21-11",
       "first_diagnostic": "Expected expression, found Colon"
     },
-    "25e33c3fcc4f": {
-      "line": 4602,
-      "heading": "Module-Level Bindings > Slices",
-      "outcome": "REJECTED",
-      "reason": "SPEC GAP — `f(mut v[1..4])`, a sub-range mutable slice, does not coerce to `mut Slice[T]`, though design.md § Slices writes exactly that line. B-2026-08-21-12",
-      "first_diagnostic": "expected 'mut Slice[T]', found 'Slice[i64]'"
-    },
     "fcca4c82794a": {
       "line": 4618,
       "heading": "Module-Level Bindings > Slices",
@@ -506,154 +499,154 @@
       "first_diagnostic": "Expected field name or tuple index after '.'"
     },
     "363e7d667a85": {
-      "line": 10385,
+      "line": 10409,
       "heading": "Cross-target Compilation > Effect-Driven Target Gating (primary mechanism)",
       "outcome": "REJECTED",
       "reason": "DOC BUG — comma-separated effect items (`with sends(Network), receives(Network)`); the compiler's own diagnostic says they are space-separated. B-2026-08-21-11",
       "first_diagnostic": "effect items are space-separated, not comma-separated; remove the `,`"
     },
     "8b8780c6f26a": {
-      "line": 10409,
+      "line": 10433,
       "heading": "Cross-target Compilation > Provider Injection for SSR-shared Code (primary pattern)",
       "outcome": "REJECTED",
       "reason": "DOC BUG — comma-separated effect items (`with reads(A), writes(B)`); the compiler's own diagnostic says they are space-separated. B-2026-08-21-11",
       "first_diagnostic": "effect items are space-separated, not comma-separated; remove the `,`"
     },
     "8c04638b1990": {
-      "line": 10795,
+      "line": 10819,
       "heading": "member core/kara.toml > Panic Strategy: `panic = \"unwind\" | \"abort\"`",
       "outcome": "REJECTED",
       "reason": "deferred feature (deferred.md) — the parser is not expected to accept this yet",
       "first_diagnostic": "error[E_UNKNOWN_ATTRIBUTE]: unknown attribute `panic_handler` — the compiler does not recognise this bare-name attribute. If you intended a diagnostic hint, write `#[diagnostic::panic_handler]`; if you intended a tool attribute, use a namespaced form like `#[your_tool::panic_handler]`."
     },
     "9457c8e612c7": {
-      "line": 11300,
+      "line": 11324,
       "heading": "Execution Model and Compilation Targets > Bounds-check elision and the `get_unchecked` escape hatch",
       "outcome": "REJECTED",
       "reason": "DOC BUG — the example mixes `i64` and `usize` in `xs[i]` and dereferences a non-pointer; it does not typecheck as written. B-2026-08-21-11",
       "first_diagnostic": "cannot mix integer types 'i64' and 'usize' in arithmetic — they must match; cast explicitly with `as`, choosing the direction deliberately: neither type can represent every value of the other"
     },
     "d83dca582a51": {
-      "line": 11591,
+      "line": 11615,
       "heading": "member core/kara.toml > Lint Level Attributes",
       "outcome": "REJECTED",
       "reason": "SPEC GAP — `#[expect(deprecated)]` on a statement; the parser accepts attributes only immediately before a loop. B-2026-08-21-12",
       "first_diagnostic": "attribute `#[expect]` is not valid on a loop expression; only `#[par_order_free]` is recognised here at Phase 1. See `docs/implementation_checklist/phase-7-codegen.md` collect-style reduction follow-on for the surface plan."
     },
     "8f06a6945386": {
-      "line": 11919,
+      "line": 11943,
       "heading": "Unsafe Escape Hatch > `unsafe_op_in_unsafe_fn` rule",
       "outcome": "REJECTED",
       "reason": "DOC BUG — `&*ptr.offset(n as isize)` is Rust reference syntax; this language has no `&` operator. B-2026-08-21-11",
       "first_diagnostic": "Expected expression, found Amp"
     },
     "39ac8c02f1b7": {
-      "line": 12050,
+      "line": 12074,
       "heading": "Unsafe Escape Hatch > Uninitialised Memory: `MaybeUninit[T]` only",
       "outcome": "REJECTED",
       "reason": "signature catalogue — a doc table of method shapes, not compilable code (no bodies); the harness cannot frame it",
       "first_diagnostic": "Expected LeftBrace, found Pub"
     },
     "b81d658bc836": {
-      "line": 12089,
+      "line": 12113,
       "heading": "member core/kara.toml > Volatile Memory Access (MMIO)",
       "outcome": "REJECTED",
       "reason": "signature catalogue — a doc table of method shapes, not compilable code (no bodies); the harness cannot frame it",
       "first_diagnostic": "Expected LeftBrace, found Unsafe"
     },
     "54027a815a45": {
-      "line": 12098,
+      "line": 12122,
       "heading": "member core/kara.toml > Volatile Memory Access (MMIO)",
       "outcome": "REJECTED",
       "reason": "mixed items and statements — a `struct` declaration followed by a function-body fragment; no single framing fits both halves",
       "first_diagnostic": "expected `extern` or `fn` after `unsafe` at module scope — `unsafe` may only prefix an `unsafe extern \"ABI\" { ... }` block or an `unsafe fn` declaration."
     },
     "015aa0d54d7a": {
-      "line": 12135,
+      "line": 12159,
       "heading": "Inline Assembly > Syntax",
       "outcome": "REJECTED",
       "reason": "DOC BUG — the example uses `asm` as an ordinary identifier, but syntax.md §1.1 reserves it. See B-2026-08-21-11",
       "first_diagnostic": "expected `extern` or `fn` after `unsafe` at module scope — `unsafe` may only prefix an `unsafe extern \"ABI\" { ... }` block or an `unsafe fn` declaration."
     },
     "24705350e558": {
-      "line": 12206,
+      "line": 12230,
       "heading": "Inline Assembly > Clobbers and ABI Clobbers",
       "outcome": "REJECTED",
       "reason": "DOC BUG — the example uses `asm` as an ordinary identifier, but syntax.md §1.1 reserves it. See B-2026-08-21-11",
       "first_diagnostic": "expected `extern` or `fn` after `unsafe` at module scope — `unsafe` may only prefix an `unsafe extern \"ABI\" { ... }` block or an `unsafe fn` declaration."
     },
     "5b705eea237c": {
-      "line": 12246,
+      "line": 12270,
       "heading": "Inline Assembly > Effect Integration",
       "outcome": "REJECTED",
       "reason": "DOC BUG — the example uses `asm` as an ordinary identifier, but syntax.md §1.1 reserves it. See B-2026-08-21-11",
       "first_diagnostic": "'asm' is a reserved keyword and cannot be used as an identifier"
     },
     "3a5f6133d1f4": {
-      "line": 12275,
+      "line": 12299,
       "heading": "Inline Assembly > `global_asm`",
       "outcome": "REJECTED",
       "reason": "DOC BUG — the example uses `global_asm` as an ordinary identifier, but syntax.md §1.1 reserves it. See B-2026-08-21-11",
       "first_diagnostic": "'global_asm' is a reserved keyword and cannot be used as an identifier"
     },
     "a11add6224ae": {
-      "line": 12627,
+      "line": 12651,
       "heading": "C Calling Convention Variants > `extern \"C-unwind\"` and the effect system",
       "outcome": "REJECTED",
       "reason": "signature catalogue — a doc table of method shapes, not compilable code (no bodies); the harness cannot frame it",
       "first_diagnostic": "undefined type 'PanicInfo'"
     },
     "72ea2d63741b": {
-      "line": 12662,
+      "line": 12686,
       "heading": "C Calling Convention Variants > Panic Semantics at the FFI Boundary",
       "outcome": "REJECTED",
       "reason": "DOC BUG — a `pub extern \"C\" fn` whose body panics but whose signature omits the `with panics` the effect checker requires. B-2026-08-21-11",
       "first_diagnostic": "public function 'double' performs effects [panics] but has no effect declaration. Add: with panics to the function signature"
     },
     "90bf84af4d8f": {
-      "line": 12682,
+      "line": 12706,
       "heading": "C Calling Convention Variants > Panic Semantics at the FFI Boundary",
       "outcome": "REJECTED",
       "reason": "out-of-block declarations — `parse`; the block additionally needs a `panic = \"unwind\"` build profile the harness does not set",
       "first_diagnostic": "undefined name 'parse', did you mean 'Parser'?"
     },
     "5fd5483df9a9": {
-      "line": 12692,
+      "line": 12716,
       "heading": "C Calling Convention Variants > Panic Semantics at the FFI Boundary",
       "outcome": "REJECTED",
       "reason": "deferred feature (deferred.md) — the parser is not expected to accept this yet",
       "first_diagnostic": "undefined name 'catch_panic'"
     },
     "abd6491d4ddf": {
-      "line": 12847,
+      "line": 12871,
       "heading": "FFI > FFI Unions: `union Foo { ... }`",
       "outcome": "REJECTED",
       "reason": "deferred feature (deferred.md) — the parser is not expected to accept this yet",
       "first_diagnostic": "cannot assign through `x` — `x` is declared without `mut` at line 7:1"
     },
     "6b08c218ce98": {
-      "line": 12921,
+      "line": 12945,
       "heading": "FFI > FFI Unions: `union Foo { ... }`",
       "outcome": "REJECTED",
       "reason": "deferred feature (deferred.md) — the parser is not expected to accept this yet",
       "first_diagnostic": "`epoll_data` is Value-class but union names must be Type-class (PascalCase); consider renaming to `EpollData`"
     },
     "335e127c698d": {
-      "line": 12948,
+      "line": 12972,
       "heading": "FFI > Opaque Foreign Types: `extern \"C\" { type Foo; }`",
       "outcome": "REJECTED",
       "reason": "signature catalogue — a doc table of method shapes, not compilable code (no bodies); the harness cannot frame it",
       "first_diagnostic": "`FILE` is Const-class but opaque foreign type names must be Type-class (PascalCase); consider renaming to `File`"
     },
     "069571babaa8": {
-      "line": 12993,
+      "line": 13017,
       "heading": "FFI > Opaque Foreign Types: `extern \"C\" { type Foo; }`",
       "outcome": "REJECTED",
       "reason": "DOC BUG — `if !ptr.is_null(…)` uses `!`; the language spells it `not`, and the compiler has a targeted diagnostic saying so. B-2026-08-21-11",
       "first_diagnostic": "the `!` operator is not used in Kāra; use `not` instead"
     },
     "5e7d3367b72c": {
-      "line": 13139,
+      "line": 13163,
       "heading": "Host Functions > Syntax",
       "outcome": "REJECTED",
       "reason": "DOC BUG — comma-separated effect items in a `host fn` declaration. B-2026-08-21-11",

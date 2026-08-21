@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 137 | 7 |
 | double-free | 133 | 0 |
 | codegen-gap | 120 | 0 |
-| diagnostics | 92 | 1 |
+| diagnostics | 93 | 2 |
 | false-positive | 89 | 0 |
 | perf | 83 | 0 |
 | crash | 55 | 0 |
@@ -111,11 +111,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 965 | 1 |
-| typecheck | 224 | 4 |
+| typecheck | 225 | 5 |
 | interp | 169 | 1 |
 | ownership | 62 | 0 |
 | other | 60 | 1 |
-| cli | 57 | 1 |
+| cli | 58 | 2 |
 | autopar | 54 | 0 |
 | parser | 35 | 2 |
 | runtime | 28 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 7 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1432 surfaced · 9 open · 1401 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1433 surfaced · 10 open · 1401 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (9)
+### Open (10)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -139,6 +139,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1432 surfaced
 | B-2026-08-21-10 | 2026-08-21 | typecheck | medium | FOUR STDLIB ENTRY POINTS design.md DOCUMENTS DO NOT EXIST -- `Vec.from_fn` (in the Vec method table, with a worked example), `Vec.is_sorted` (used inside `requires` contracts twice), `u16.to_ne_bytes`, and an enum's `.discriminant()` -- the `TreeMap` shape again: written up, never implemented | roadmap.md |
 | B-2026-08-21-11 | 2026-08-21 | other | low | design.md EXAMPLES ARE WRITTEN IN SYNTAX design.md AND syntax.md THEMSELVES FORBID: `mu.lock()` and `let group = ...` use hard keywords as identifiers, `fillna(0.0, flag = true)` uses `=` where the doc's own rule says labeled `:`, `[u8; 2]` and `r"..."` are Rust idioms the spec explicitly does not have | roadmap.md |
 | B-2026-08-21-12 | 2026-08-21 | parser+typecheck | medium | FOUR FORMS syntax.md OR design.md DEFINES THAT THE FRONT END REJECTS -- `let...else` (a named production, LET_ELSE_STATEMENT), struct functional update `Name { f: v, ..base }` (in the STRUCT_LITERAL production; it PARSES and the typechecker then ignores the base), lint-level attributes on a statement (`#[expect(deprecated)] old_api();`), and a sub-range mutable slice argument (`f(mut v[1..4])`, design.md's own § Slices line) | roadmap.md |
+| B-2026-08-21-14 | 2026-08-21 | typecheck+cli | medium | THE NEWLY-WIRED `redundant_suffix` LINT SHIPS WARN-BY-DEFAULT WITH NO MACHINE-APPLICABLE FIX, so `karac fix` reports `no fixable diagnostics` on a file carrying 14 of them -- and the kata corpus went from warning-clean to 26,094 warnings across 853 of its 914 `.kara` files the moment it landed | roadmap.md |
 
 ### Wontfix (8)
 
