@@ -2089,8 +2089,8 @@ prices.fillna(0.0, treat_nan_as_null = true)        // also replaces NaN values
 
 ```kara
 // Normalize before operating — ensures consistent null semantics
-let prices = raw_prices.fillna(0.0, treat_nan_as_null = true)
-let result  = prices + other    // NaN-originated values are now bitmap-null; SQL semantics apply
+let prices = raw_prices.fillna(0.0, treat_nan_as_null: true);
+let result  = prices + other;    // NaN-originated values are now bitmap-null; SQL semantics apply
 ```
 
 There are no operations where the two conventions are unified automatically — NaN is never promoted to bitmap-null implicitly. The two representations coexist in `Column[f64]` because real-world float data uses both, and silently conflating them would mask distinct missing-data causes.
@@ -2501,9 +2501,9 @@ This is the single-execution complement to `while let`. Without it, every single
 
 ```kara
 if let Some(a) = try_a() {
-    use(a);
+    observe(a);
 } else if let Some(b) = try_b() {
-    use(b);
+    observe(b);
 } else {
     fallback();
 }
@@ -2513,7 +2513,7 @@ if let Some(a) = try_a() {
 
 ```kara
 if let Left(x) | Right(x) = val {
-    use(x);
+    observe(x);
 }
 ```
 
@@ -2541,7 +2541,7 @@ Rules:
 
 `let...else` is the idiomatic pattern for guard-style preconditions at function entry. It reduces nesting compared to `match` and makes the happy path flush-left.
 
-**Scrutinee temporary scope.** Temporaries created inside the scrutinee expression of `if let` / `while let` / `let...else` (the right-hand side of the `=`, e.g., `mu.lock().get(key)` in `if let Some(v) = mu.lock().get(key) { ... }`) are scoped to the matching arm — *not* to the surrounding statement. Concretely:
+**Scrutinee temporary scope.** Temporaries created inside the scrutinee expression of `if let` / `while let` / `let...else` (the right-hand side of the `=`, e.g., `pool.acquire().get(key)` in `if let Some(v) = pool.acquire().get(key) { ... }`, where `Lease` has an `impl Drop` that returns the connection) are scoped to the matching arm — *not* to the surrounding statement. Concretely:
 
 - In the **`then` arm of `if let`**: scrutinee temporaries live through the entire arm body, because pattern-bound names may borrow into them. They drop at the arm's exit, before any cleanup in the surrounding scope.
 - In the **`else` arm of `if let` / `else if let`**: scrutinee temporaries have already been dropped *before* the arm body begins. The else arm does not see the scrutinee's temporaries — they fired the moment the match decision routed control to the else path.
@@ -2551,14 +2551,15 @@ Rules:
 This closes the lock-held-during-else-branch footgun:
 
 ```kara
-// Rule: the MutexGuard temporary held by `mu.lock()` does NOT cross into the else arm.
-if let Some(value) = mu.lock().get(key) {
-    use(value);                           // guard alive; `value` borrows through it
-}                                          // → guard drops here (then-arm exit)
+// Rule: the `Lease` temporary returned by `pool.acquire()` does NOT cross into
+// the else arm. `Lease` has an `impl Drop` that returns the connection.
+if let Some(value) = pool.acquire().get(key) {
+    observe(value);                       // lease alive; `value` borrows through it
+}                                          // → lease drops here (then-arm exit)
 else {
-    log("missing");                       // guard ALREADY DROPPED — lock not held in else
+    log("missing");                       // lease ALREADY RELEASED — not held in else
                                            //   pre-Rust-2024 semantics held it through here
-}                                          // (no extra drop — guard already gone)
+}                                          // (no extra drop — lease already gone)
 ```
 
 The rule symmetrises with the [tail-expression temporary scope](#drop-ordering-within-a-branch) rule: tail-expression temporaries drop before the block's locals; scrutinee temporaries drop before the non-matching arm runs. Both fire eagerly at the first program point where the temporary is provably no longer needed, rather than being hoisted to the enclosing statement's scope.
@@ -2567,11 +2568,11 @@ The rule symmetrises with the [tail-expression temporary scope](#drop-ordering-w
 
 ```kara
 fn parse_or_bail(input: ref String) -> Result[Config, ConfigError] {
-    let Ok(config) = parse(mu.lock().as_str()) else {
+    let Ok(config) = parse(pool.acquire().as_str()) else {
         return Err(ConfigError.Malformed);
-        // ↑ guard already dropped — error path runs without the lock held
+        // ↑ lease already released — the error path runs without it held
     };
-    use(config);                          // success path: scrutinee temps live as long as
+    observe(config);                      // success path: scrutinee temps live as long as
                                            // `config`'s bindings need them, then drop normally
     Ok(config)
 }
@@ -2580,15 +2581,15 @@ fn parse_or_bail(input: ref String) -> Result[Config, ConfigError] {
 **`while let` worked example.**
 
 ```kara
-while let Some(item) = mu.lock().pop_front() {
-    process(item);                        // guard alive throughout the body
-                                           // → guard drops at body-end, BEFORE next iteration's lock
-}                                          // (final iteration's match-failure path: guard already dropped)
+while let Some(item) = pool.acquire().pop_front() {
+    process(item);                        // lease alive throughout the body
+                                           // → lease drops at body-end, BEFORE the next iteration acquires
+}                                          // (final iteration's match-failure path: lease already dropped)
 ```
 
-The per-iteration lock-release is critical for liveness — without it, the lock would be held across the entire loop, defeating the point of locking only to dequeue.
+The per-iteration release is critical for liveness — without it, the lease would be held across the entire loop, defeating the point of acquiring only to dequeue.
 
-**Bindings vs. temporaries.** The pattern-bound names (e.g., `value` in `if let Some(value) = ...`) are *not* temporaries — they are local bindings of the matched arm and follow the standard `let`-binding drop rules. The rule above governs only the scrutinee expression's anonymous intermediates: function-call results not bound to a name, the `mu.lock()` guard in the example above, the `Option<T>` produced by `.get(...)` before pattern-matching extracts its `Some` payload, etc.
+**Bindings vs. temporaries.** The pattern-bound names (e.g., `value` in `if let Some(value) = ...`) are *not* temporaries — they are local bindings of the matched arm and follow the standard `let`-binding drop rules. The rule above governs only the scrutinee expression's anonymous intermediates: function-call results not bound to a name, the `pool.acquire()` lease in the example above, the `Option<T>` produced by `.get(...)` before pattern-matching extracts its `Some` payload, etc.
 
 **`if let` chains** (multiple `and`-joined `let` bindings in a single condition) are deferred to Phase 5+ (P0 — see [Deferred Items](#deferred-items) and [deferred.md § `if let` Chains](deferred.md#if-let-chains)). When chains land, the same scrutinee-temporary rule will apply per-link: each link's temporaries drop before the next link is evaluated (on success) or before the else arm runs (on failure).
 
@@ -2775,7 +2776,7 @@ This makes every `Iterator` value directly usable in a `for` loop and eliminates
 for event in stream.into_iter() { process(event); }
 
 // Borrowing: bare for (requires Iterable)
-for item in my_vec { use(item); }   // Vec implements Iterable; iter() borrows
+for item in my_vec { observe(item); }   // Vec implements Iterable; iter() borrows
 ```
 
 A type implementing only `IntoIterator` does not work with bare `for x in collection` — the compiler emits an error naming the missing `Iterable` impl and suggesting `.into_iter()` if `IntoIterator` is found.
@@ -4304,7 +4305,7 @@ impl Account {
             result.0.balance == old(self.balance) - amount
             and result.1 == amount
     {
-        ({ balance: self.balance - amount }, amount)
+        (Account { balance: self.balance - amount }, amount)
     }
 }
 ```
@@ -6032,7 +6033,7 @@ FFI is **not** a leaf for `suspends` — C code cannot suspend a Kāra task. `ex
 ```kara
 // stdlib — public, so effects are declared
 pub fn http_get(url: String) -> Result[Response, HttpError]
-    with reads(Network), suspends { ... }
+    with reads(Network) suspends { ... }
 
 // Application code — private, so effects are inferred
 fn fetch_user(id: u64) -> Result[User, AppError] {
@@ -8438,7 +8439,7 @@ fn connect(a: GraphNode, b: GraphNode) {
   // PANICS at runtime — read borrow on parent.left is live throughout the arm body.
   match parent.left {
       AstNode.Lit { value: v, .. } => {
-          parent.left = AstNode.Lit { value: v * 2, .. };  // exclusive borrow conflicts with arm's read borrow
+          parent.left = AstNode.Lit { value: v * 2 };      // exclusive borrow conflicts with arm's read borrow
       }
       _ => {}
   }
@@ -8458,7 +8459,7 @@ fn connect(a: GraphNode, b: GraphNode) {
           AstNode.Lit { value, .. } => value,  // bind and exit the match arm cleanly
           _ => unreachable(),
       };
-      parent.left = AstNode.Lit { value: v * 2, .. };  // borrow on parent.left is released; assignment OK
+      parent.left = AstNode.Lit { value: v * 2 };      // borrow on parent.left is released; assignment OK
   }
   ```
 
@@ -8467,7 +8468,7 @@ fn connect(a: GraphNode, b: GraphNode) {
   ```kara
   // OK — replacement is built inside the arm; assignment happens after the arm's borrow is released.
   let replacement = match parent.left {
-      AstNode.Lit { value, .. } => Some(AstNode.Lit { value: value * 2, .. }),
+      AstNode.Lit { value, .. } => Some(AstNode.Lit { value: value * 2 }),
       _ => None,
   };
   if let Some(new_node) = replacement {
@@ -8575,12 +8576,12 @@ impl Counter {
 ```kara
 // Before: shared struct, Mutex at the usage site (convention, not statically enforced)
 shared struct Counter { mut val: i64 }
-let c = Mutex(Counter { val: 0 });;
-lock c { c.val += 1 }
+let c = Mutex(Counter { val: 0 });
+lock c { c.val += 1; }
 
 // After: par struct, Mutex at the field (enforced at the definition site)
-par struct Counter { val: Mutex[i64] };
-lock counter.val v { counter.val = v + 1 }
+par struct Counter { val: Mutex[i64] }
+lock counter.val v { counter.val = v + 1; }
 ```
 
 `shared struct` types used purely within a single task — trees, graphs, AST nodes, UI hierarchies — are unchanged.
@@ -9226,12 +9227,12 @@ The compiler infers `reads(Network), suspends` for this function. Because the th
 fn handle_connections(listener: TcpListener) -> Result[(), ServerError]
     with reads(Network) writes(Network) suspends
 {
-    let group = TaskGroup.new()
+    let tasks = TaskGroup.new();
     loop {
         let conn = listener.accept()?;       // suspends until a client connects
-        group.spawn(|| handle_client(conn)) // spawn a task per connection
+        tasks.spawn(|| handle_client(conn)) // spawn a task per connection
     }
-    // group joins all spawned tasks on scope exit
+    // tasks joins all spawned tasks on scope exit
 }
 
 fn handle_client(conn: TcpConnection) -> Result[(), ServerError] {
@@ -9599,12 +9600,12 @@ Within a scope, `TaskHandle[T]` values are first-class: they can be bound to `le
 fn handle_connections(listener: TcpListener) -> Result[(), ServerError]
     with reads(Network) writes(Network) suspends
 {
-    let group = TaskGroup.new()
+    let tasks = TaskGroup.new();
     loop {
         let conn = listener.accept()?;
-        group.spawn(|| handle_client(conn))
+        tasks.spawn(|| handle_client(conn))
     }
-    // group joins all spawned tasks on scope exit
+    // tasks joins all spawned tasks on scope exit
 }
 ```
 
@@ -9742,7 +9743,7 @@ fn process_in_parallel(data: Vec[i64]) -> (i64, i64) {
 }
 
 // 2. One spawned task with mut ref T, parent uses T after join — ALLOWED.
-fn append_concurrently(mut log: Vec[String]) -> Vec[String] {
+fn append_concurrently(log: Vec[String]) -> Vec[String] {
     par {
         let _ = compute_metric();
         append_log(mut log);   // exclusive borrow into branch 2
@@ -9752,7 +9753,7 @@ fn append_concurrently(mut log: Vec[String]) -> Vec[String] {
 }
 
 // 3. mut ref T in one branch, ref T in another — REJECTED.
-fn invalid_aliasing(mut log: Vec[String]) {
+fn invalid_aliasing(log: Vec[String]) {
     par {
         append_log(mut log);    // exclusive borrow
         read_log_count(log);    // shared borrow — conflict!
@@ -9982,29 +9983,29 @@ Destructors fire at each binding's **live-range end**, not lexical scope end. Th
 
 **Tail-expression temporary scope.** A temporary created inside a block's tail expression — the trailing expression that produces the block's value, with no terminating semicolon — is scoped to the block, with a live range ending immediately after the tail expression finishes evaluating (including any borrow uses chained off it). Such a temporary's drop is pushed onto the unified LIFO stack *after* every `let` binding's drop, because the tail expression is later in the block's program order than every `let`. At scope exit the LIFO drain therefore pops tail-expression temporaries **before** the block's locals.
 
-This is the rule that closes the lock-held-too-long footgun:
+This is the rule that closes the held-too-long footgun:
 
 ```kara
-// `mu.lock()` returns a MutexGuard temporary used only by the tail expression.
-fn lookup(mu: ref Mutex[Map[K, V]], k: ref K) -> Option[V] {
+// `pool.acquire()` returns a `Lease` temporary used only by the tail expression.
+fn lookup(pool: ref Pool, k: ref K) -> Option[V] {
     let key_owned = k.clone();             // local — declared first, dropped last
-    mu.lock().get(key_owned).cloned()      // tail expression — guard is the temporary
-                                           //   • guard's last use: the .get(...) call
-                                           //   • guard's drop fires after .cloned() returns,
+    pool.acquire().get(key_owned).cloned() // tail expression — the lease is the temporary
+                                           //   • lease's last use: the .get(...) call
+                                           //   • lease's drop fires after .cloned() returns,
                                            //     before key_owned's drop
 }
 //   Cleanup order at block exit (LIFO of program-order):
-//     1. drop(MutexGuard)        ← tail-expression temporary first
+//     1. drop(Lease)             ← tail-expression temporary first
 //     2. drop(key_owned)         ← let binding next
 ```
 
-Without this rule, the MutexGuard temporary would outlive `key_owned` (because in older drop-scope models the tail-expression temporary was hoisted to the block's *outer* scope), keeping the mutex held strictly longer than the function actually reads it. The tail-temp-first rule guarantees the lock is released the instant the tail expression finishes producing its value, before any block-local cleanup runs. The same rule applies to `RefCell.borrow()` guards, `Arc::strong_count` snapshots, file-handle iterators, and any other type whose `Drop` impl carries a release semantics that should fire as eagerly as the tail expression's last use.
+Without this rule, the `Lease` temporary would outlive `key_owned` (because in older drop-scope models the tail-expression temporary was hoisted to the block's *outer* scope), keeping the connection checked out strictly longer than the function actually reads it. The tail-temp-first rule guarantees the lease is released the instant the tail expression finishes producing its value, before any block-local cleanup runs. The same rule applies to file-handle iterators, borrow snapshots, and any other type whose `Drop` impl carries a release semantics that should fire as eagerly as the tail expression's last use.
 
 Tail-expression temporaries that are *moved out* of the block (the temporary itself is the block's return value, not a value computed *from* the temporary) do not drop here — their live range escapes the block, and the move-out rule takes precedence. The drop fires at the consumer's live-range end, which is in the enclosing scope.
 
 ```kara
-fn make_guard(mu: ref Mutex[T]) -> MutexGuard[T] {
-    mu.lock()                              // tail expression IS the temporary; moved out, no drop here
+fn take_lease(pool: ref Pool) -> Lease {
+    pool.acquire()                         // tail expression IS the temporary; moved out, no drop here
 }
 ```
 
@@ -10430,7 +10431,7 @@ A function compiles for target `T` when its full inferred effect set references 
 // Target-agnostic: uses only `Network` and user resources.
 // Compiles for native, wasm_browser, and wasm_wasi.
 pub fn fetch_and_parse(url: ref String) -> Result[Data, Error]
-    with sends(Network), receives(Network), reads(Cache)
+    with sends(Network) receives(Network) reads(Cache)
 {
     let raw = net.fetch(url)?;
     let cached = cache.get(url)?;
@@ -10453,7 +10454,7 @@ For SSR components that must run on both `native` (server rendering) and `wasm_b
 ```kara
 // Target-agnostic component. Declares effect against a user resource.
 pub fn user_profile(user_id: UserId) -> Result[Html, Error]
-    with reads(UserStore), writes(Display)
+    with reads(UserStore) writes(Display)
 {
     let user = store.load(user_id)?;
     render_profile(user)
@@ -10620,7 +10621,7 @@ Browser host APIs that return Promises (`fetch`, `crypto.subtle.digest`, Indexed
 ```kara
 // stdlib, std.web.net
 host fn fetch(url: ref String) -> Result[Response, HttpError]
-    with sends(Network), receives(Network), suspends;
+    with sends(Network) receives(Network) suspends;
 
 // user code
 fn load_user(id: UserId) -> Result[User, Error] with suspends, ... {
@@ -10636,7 +10637,7 @@ No `.await`, no `.then`, no `async` keyword. Consistent with Kāra's existing "n
 ```kara
 // stdlib, std.web.time
 pub fn after(duration: Duration) -> Receiver[()]
-    with writes(Timer), allocates(Heap)
+    with writes(Timer) allocates(Heap)
 {
     let (tx, rx) = channel[()](1);
     host.set_timeout(|| tx.send(()), duration.as_ms());
@@ -10644,7 +10645,7 @@ pub fn after(duration: Duration) -> Receiver[()]
 }
 
 // user code
-fn delay_then(op: fn() -> ()) with writes(Timer), allocates(Heap), ... {
+fn delay_then(op: fn() -> ()) with writes(Timer) allocates(Heap) ... {
     after(Duration.ms(500)).recv();
     op();
 }
@@ -11352,7 +11353,7 @@ fn sum(xs: ref Slice[i64]) -> i64 {
 }
 
 // (c): manual escape hatch when (a) can't prove the index
-fn sum_strided(xs: ref Slice[i64], stride: usize, n: usize) -> i64 {
+fn sum_strided(xs: ref Slice[i64], stride: i64, n: i64) -> i64 {
     let mut total: i64 = 0;
     for k in 0..n {
         // Safety: caller guarantees `k * stride < xs.len()` for all k in 0..n
@@ -12704,7 +12705,7 @@ Cases 3 and 4 are the existing rules for foreign imports — see [Effect default
 **Case 1 — `extern "C" fn` exports auto-abort on panic.** When a Kāra function is defined as `pub extern "C" fn name(...) { ... }` and the body panics during a C-originated call, the runtime catches the in-flight unwind at the boundary and aborts the process via `std.process.abort()`. This is *defined-abort*: the failure mode is committed and observable, not undefined behavior.
 
 ```kara
-pub extern "C" fn double(x: i32) -> i32 {
+pub extern "C" fn double(x: i32) -> i32 with panics {
     x.checked_mul(2).unwrap()              // body may panic on overflow
 }
 // Called from C — panic on overflow becomes process abort with the panic message on stderr.
@@ -13039,7 +13040,7 @@ distinct type SafeFile = *mut FILE;
 
 impl Drop for SafeFile {
     fn drop(mut ref self) {
-        if !ptr.is_null(self.raw()) {
+        if not ptr.is_null(self.raw()) {
             unsafe { fclose(self.raw()) };  // declared effects flow through normally
         }
     }
@@ -13185,7 +13186,7 @@ host fn dom_append(parent: ElementHandle, child: ElementHandle)
     with writes(Display);
 
 host fn fetch_begin(url_ptr: *const u8, url_len: i64) -> RequestHandle
-    with sends(Network), receives(Network), suspends;
+    with sends(Network) receives(Network) suspends;
 ```
 
 No body — ends with `;`. Placed at module scope. Supports attributes and visibility like any other item. (`ElementHandle` / `RequestHandle` are opaque-handle newtypes and the string crosses as a `(ptr, len)` pair — earlier drafts showed `url: ref String` / `-> Result[Bytes, ...]` here, which the restriction list below rejects; a richer `fetch_json(url: ref String)` is the *library wrapper* built on top, not the `host fn` itself.)

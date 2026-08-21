@@ -234,7 +234,16 @@ def run_karac(karac, source, extra_timeout=60):
         except json.JSONDecodeError:
             return None, [{"message": (p.stderr or p.stdout or "").strip()[:400],
                            "phase": "harness", "line": 0}]
-        diags = [d for d in payload.get("diagnostics", []) if d.get("severity") == "error"]
+        # A program carrying `#[target(...)]` is checked once per target, and
+        # `karac check --output=json` then returns `{"targets": [{..., "diagnostics":
+        # [...]}, ...]}` instead of a top-level `diagnostics` array. Reading only
+        # the top level made those blocks report as REJECTED WITH NO DIAGNOSTICS —
+        # a failure with nothing to explain it, which is the least useful thing a
+        # checker can say.
+        raw = payload.get("diagnostics")
+        if raw is None and isinstance(payload.get("targets"), list):
+            raw = [d for t in payload["targets"] for d in t.get("diagnostics", [])]
+        diags = [d for d in (raw or []) if d.get("severity") == "error"]
         return p.returncode, diags
     finally:
         Path(tmp).unlink(missing_ok=True)

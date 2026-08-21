@@ -102,7 +102,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 91 | 0 |
 | perf | 83 | 0 |
 | crash | 55 | 0 |
-| other | 52 | 2 |
+| other | 52 | 1 |
 | soundness | 51 | 0 |
 | use-after-free | 20 | 0 |
 
@@ -114,7 +114,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | typecheck | 228 | 4 |
 | interp | 169 | 1 |
 | ownership | 62 | 0 |
-| other | 60 | 1 |
+| other | 60 | 0 |
 | cli | 59 | 1 |
 | autopar | 54 | 0 |
 | parser | 35 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 7 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1445 surfaced · 14 open · 1409 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1445 surfaced · 13 open · 1410 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (14)
+### Open (13)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,7 +134,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1445 surfaced
 | B-2026-08-21-2 | 2026-08-21 | cli | medium | FIVE REGISTERED LINTS STILL HAVE NO EMIT SITE and so can never fire, though all seven are registered `default_level: LintLevel::Warn` -- advertised by `karac lint --list` and accepted in `#[allow(...)]`: `f16_software_emulated`, `float_in_serialized_type`, `implicit_clone`, `pure_loop_in_par`, `repr_c_layout_ignored`. They are the remainder of B-2026-08-20-36's eight, which wired `redundant_suffix` (the one design.md documents as live) and added the guard that now holds this list. They are VISIBLE IN CODE, not only here: `KNOWN_UNWIRED` in `src/lints.rs`, which `every_registered_lint_is_emitted_or_declared_unwired` fails on if the list grows or goes stale. | roadmap.md |
 | B-2026-08-21-6 | 2026-08-21 | codegen+interp | medium | `Map`/`Set` DO NOT USE THE SPEC'S DEFAULT HASHER: design.md mandates `SipHash13BuildHasher` seeded from a per-process random source, codegen emits FxHash with a COMPILE-TIME-CONSTANT seed and the interpreter hashes not at all -- so there is no hash-flooding resistance, iteration order is fully deterministic across runs (design.md says it must vary), the two backends order differently from each other, and `Map[K, V, FxBuildHasher]` -- design.md's own spelling -- does not resolve, so there is no opt-in either way | roadmap.md |
 | B-2026-08-21-9 | 2026-08-21 | parser | medium | design.md WRITES SYNTAX THE PARSER HAS NO PRODUCTION FOR, in two places syntax.md also disagrees with: the inline associated-type binding `Trait[Assoc = T]` (43 lines of design.md, and syntax.md's own comment at :650) has no form in `TRAIT_BOUND = PATH [ "[" TYPE_LIST "]" ]`, and an effect clause on an impl header (`impl From[E] for A with writes(Log) {`) has no form at all | roadmap.md |
-| B-2026-08-21-11 | 2026-08-21 | other | low | design.md EXAMPLES ARE WRITTEN IN SYNTAX design.md AND syntax.md THEMSELVES FORBID: `mu.lock()` and `let group = ...` use hard keywords as identifiers, `fillna(0.0, flag = true)` uses `=` where the doc's own rule says labeled `:`, `[u8; 2]` and `r"..."` are Rust idioms the spec explicitly does not have | roadmap.md |
 | B-2026-08-21-17 | 2026-08-21 | lexer | medium | THE SELF-HOSTED KARA LEXER CANNOT LEX `b"..."`, so it now disagrees with the Rust lexer on any input containing one: `selfhost/src/lexer.kara` still routes the `b` prefix down the reserved-string-prefix path and emits `ERROR`, while the Rust lexer emits the byte-string token (550bb1f, B-2026-08-20-37). The self-hosted compiler is behind the language on a construct design.md specifies as shipped. | roadmap.md |
 | B-2026-08-21-18 | 2026-08-21 | codegen+typecheck | low | STRUCT FUNCTIONAL UPDATE `P { x: 1, ..base }` IS STILL UNIMPLEMENTED -- it now says so clearly instead of dropping the base, but the form syntax.md's STRUCT_LITERAL production admits cannot be used; the interpreter already implements the copy and codegen does not, so the remaining work is codegen plus the ownership rules for a spread base | roadmap.md |
 | B-2026-08-21-20 | 2026-08-21 | typecheck | high | `main` IS RED: `selfhost_typechecker_matches_rust_typechecker` fails at 5fee766 on a clean checkout, independent of any local work. Input 126 (`struct P { x: i64, y: i64 } fn f(b: P) -> P { P { x: 1, ..b } }`) -- Kara reports `missing-field @46:15`, Rust now reports `type-mismatch @46:15`. 3b4b97d changed the Rust typechecker's struct-literal-spread diagnostic without teaching the self-hosted Kara typechecker the same rule. | roadmap.md |
@@ -162,9 +161,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1445 surfaced
 
 </details>
 
-### Fixed (1409)
+### Fixed (1410)
 
-<details><summary>1409 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1410 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -13528,6 +13527,9 @@ All four entry points implemented, each through typecheck + the interpreter + co
 `to_ne_bytes()` (87a90e6) -- on every integer scalar, not just `u16`. Returns `Array[u8, N]`, not `Vec[u8]`, which is what makes design.md's `Hasher` body work as written: the fixed array coerces to the `ref Slice[u8]` that `write` declares, and allocates nothing. Codegen lowers it as store-then-reload, so the answer IS native order by construction and no endianness constant is baked in. Three codegen gaps had to close for the value to be usable, all about a fixed array that is not a named binding: an unannotated `let b = n.to_ne_bytes()` had no registered element type and striding at the i64 default SEGFAULTED when handed to a slice parameter; a fixed-array RVALUE at a call boundary reached the callee as a raw `[N x i8]` and failed module verification; and `arg_is_array_source` recognized only named bindings, so B-2026-06-19-1's `ref Slice[T]` carve-out skipped every temporary.
 
 `<enum>.discriminant()` (55c6ca9) -- on C-like (payload-free) enums, returning the repr type: `u8` for `#[repr(u8)]`, `i32` for `#[repr(i32)]`, conservative `u32` with no `#[repr]`. THE ANSWER IS NOT THE TAG: codegen lays these enums out at declaration positions 0/1/2 (design.md is explicit that declared discriminants are not layout commitments at v1), so `UsbClass { Audio = 0x01, Hid = 0x03, MassStorage = 0x08 }` must answer 1/3/8 from tags 0/1/2. Both backends map tag to declared value; the values are folded ONCE, in the typechecker (`TypeCheckResult::enum_discriminants`), because a declared discriminant may be a constant expression and two independent folds is exactly how the backends would come to disagree. Payload enums are excluded -- the spec's own v1 restriction -- with a diagnostic that names the reason and the hand-written `fn tag(ref self)` remedy design.md recommends. |
+| B-2026-08-21-11 | other | low | design.md EXAMPLES ARE WRITTEN IN SYNTAX design.md AND syntax.md THEMSELVES FORBID: `mu.lock()` and `let group = ...` use hard keywords as identifier… | FIXED in design.md. 19 blocks rewritten; the conformance suite's non-conforming count went 90 -> 71 and its DOC BUG bucket to ZERO. Reserved keywords out of identifier position: `use(x)` -> `observe(x)`, `let group = TaskGroup.new()` -> `let tasks = ...`. The MutexGuard model, which design.md itself rules out four sections away ("No `.lock()` method or guard values -- scope is always visible"), re-cast onto a `Lease` type with an `impl Drop` across six examples and their prose -- the temporary-scope lesson is unchanged, and it is now written in the language. `=` -> `:` for a labeled argument, per design.md:8773's own rule. Comma-separated effect lists -> space-separated, in six places. `!` -> `not`. `mut T` dropped from two parameter lists (not a mode; the modes are bare `T` / `ref T` / `mut ref T` / `mut Slice[T]`, and the `mut` at the CALL site is the marker Feature 4 Part 1.5 describes). `usize` -> `i64` for indices, per the doc's own Numeric Semantics rule. `({ ... }, x)` -> `(Account { ... }, x)`. Bare `..` removed from three struct CONSTRUCTIONS (legal in the patterns beside them; syntax.md:1774 requires a base EXPR in a literal). And the statement terminators those fixes exposed -- a `;` after a `let`, two inside `lock` bodies, and a stray `;;` removed.
+
+RECLASSIFIED, NOT EDITED -- seven blocks this row listed as doc bugs are not. `asm(...)` / `global_asm(...)` (4 blocks) is the INTENDED inline-assembly surface; syntax.md 1.1 lists both under "Reserved for future use", so documenting unimplemented syntax is the spec doing its job. `ref` as an expression prefix and `ref` in a match-arm pattern (2 blocks) are forms syntax.md's grammar never defines -- that is B-2026-08-21-9's shape, and they moved there. `&*ptr.offset(...)` likewise: see the note appended to B-2026-08-21-9 about `get_unchecked`. |
 | B-2026-08-21-12 | parser+typecheck | medium | FOUR FORMS syntax.md OR design.md DEFINES THAT THE FRONT END REJECTS -- `let...else` (a named production, LET_ELSE_STATEMENT), struct functional upda… | FIXED across three commits, one per item. (1) `let...else`'s trailing `;`: e386fc4 — the feature was fully implemented and unreachable as written down; the parser stopped at the else block's closing brace. (3) statement lint attributes: this commit — parsed in statement position, scanned into `Program::stmt_lint_overrides`, pushed as a frame around `check_stmt`, and included in the unfulfilled-`#[expect]` sweep. (4) sub-range mutable slice: fixed upstream; the conformance gate reported it as `FIXED 4602` without anyone re-probing. Item (2) is split to its own row — the silent drop is fixed (3b4b97d), the feature is not built. |
 | B-2026-08-21-13 | codegen | high | EVERY `gpu.*` REDUCTION SILENTLY DROPPED every element past 4,194,240 | 42fee64f |
 | B-2026-08-21-14 | typecheck+cli | medium | THE NEWLY-WIRED `redundant_suffix` LINT SHIPS WARN-BY-DEFAULT WITH NO MACHINE-APPLICABLE FIX, so `karac fix` reports `no fixable diagnostics` on a fi… | FIXED by c6ac12f. The warning now carries a machine-applicable DELETION of the suffix, so `karac fix` removes it.
