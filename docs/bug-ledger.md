@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 273 | 0 |
 | leak | 185 | 0 |
 | run-vs-build | 148 | 1 |
-| missing-feature | 143 | 9 |
+| missing-feature | 143 | 8 |
 | double-free | 134 | 0 |
 | codegen-gap | 123 | 3 |
 | diagnostics | 94 | 1 |
@@ -120,13 +120,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | parser | 35 | 1 |
 | runtime | 28 | 0 |
 | resolver | 26 | 2 |
-| lexer | 8 | 1 |
+| lexer | 8 | 0 |
 | effect | 8 | 1 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1454 surfaced · 14 open · 1418 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1454 surfaced · 13 open · 1419 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (14)
+### Open (13)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,7 +134,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1454 surfaced
 | B-2026-08-21-2 | 2026-08-21 | cli | medium | FIVE REGISTERED LINTS STILL HAVE NO EMIT SITE and so can never fire, though all seven are registered `default_level: LintLevel::Warn` -- advertised by `karac lint --list` and accepted in `#[allow(...)]`: `f16_software_emulated`, `float_in_serialized_type`, `implicit_clone`, `pure_loop_in_par`, `repr_c_layout_ignored`. They are the remainder of B-2026-08-20-36's eight, which wired `redundant_suffix` (the one design.md documents as live) and added the guard that now holds this list. They are VISIBLE IN CODE, not only here: `KNOWN_UNWIRED` in `src/lints.rs`, which `every_registered_lint_is_emitted_or_declared_unwired` fails on if the list grows or goes stale. | roadmap.md |
 | B-2026-08-21-6 | 2026-08-21 | codegen+interp | medium | `Map`/`Set` DO NOT USE THE SPEC'S DEFAULT HASHER: design.md mandates `SipHash13BuildHasher` seeded from a per-process random source, codegen emits FxHash with a COMPILE-TIME-CONSTANT seed and the interpreter hashes not at all -- so there is no hash-flooding resistance, iteration order is fully deterministic across runs (design.md says it must vary), the two backends order differently from each other, and `Map[K, V, FxBuildHasher]` -- design.md's own spelling -- does not resolve, so there is no opt-in either way | roadmap.md |
 | B-2026-08-21-9 | 2026-08-21 | parser | medium | design.md WRITES SYNTAX THE PARSER HAS NO PRODUCTION FOR, in two places syntax.md also disagrees with: the inline associated-type binding `Trait[Assoc = T]` (43 lines of design.md, and syntax.md's own comment at :650) has no form in `TRAIT_BOUND = PATH [ "[" TYPE_LIST "]" ]`, and an effect clause on an impl header (`impl From[E] for A with writes(Log) {`) has no form at all | roadmap.md |
-| B-2026-08-21-17 | 2026-08-21 | lexer | medium | THE SELF-HOSTED KARA LEXER CANNOT LEX `b"..."`, so it now disagrees with the Rust lexer on any input containing one: `selfhost/src/lexer.kara` still routes the `b` prefix down the reserved-string-prefix path and emits `ERROR`, while the Rust lexer emits the byte-string token (550bb1f, B-2026-08-20-37). The self-hosted compiler is behind the language on a construct design.md specifies as shipped. | roadmap.md |
 | B-2026-08-21-18 | 2026-08-21 | codegen+typecheck | low | STRUCT FUNCTIONAL UPDATE `P { x: 1, ..base }` IS STILL UNIMPLEMENTED -- it now says so clearly instead of dropping the base, but the form syntax.md's STRUCT_LITERAL production admits cannot be used; the interpreter already implements the copy and codegen does not, so the remaining work is codegen plus the ownership rules for a spread base | roadmap.md |
 | B-2026-08-21-24 | 2026-08-21 | codegen | medium | AN ARRAY **LITERAL** TEMPORARY IN A `ref Slice[T]` PARAMETER FAILS LLVM MODULE VERIFICATION -- `f([1u8, 2u8, 3u8])` builds nothing while the by-value `Slice[T]` spelling of the same call compiles and runs | roadmap.md |
 | B-2026-08-21-25 | 2026-08-21 | codegen | medium | A METHOD CALL ON A FIXED-ARRAY **TEMPORARY** HAS NO CODEGEN LOWERING -- `n.to_ne_bytes().len()` build-fails with the dispatcher's own "this is a codegen bug" message while the bound two-line spelling works | roadmap.md |
@@ -162,9 +161,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1454 surfaced
 
 </details>
 
-### Fixed (1418)
+### Fixed (1419)
 
-<details><summary>1418 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1419 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -13560,6 +13559,43 @@ The resolver had no notion of a non-fatal diagnostic -- every `ResolveError` was
 W0150 is the resolver's FIRST warning code, which broke two explain band checks asserting resolver codes start with `E01`/`E08` -- an encoding of "the resolver only mints errors". The band exists to stop numeric collision with the typechecker's E02xx, and W0150 is in the resolver's own 01xx band, so both checks now accept `W01` and the code is catalogued so `karac explain W0150` answers.
 
 Verified: unannotated -> `warning[resolve]`, check and build exit 0, binary produced and runs; annotated -> silent. Two regression tests. |
+| B-2026-08-21-17 | lexer | medium | THE SELF-HOSTED KARA LEXER CANNOT LEX `b"..."`, so it now disagrees with the Rust lexer on any input containing one: `selfhost/src/lexer.kara` still… | FIXED by 3e84931.
+
+`selfhost/src/lexer.kara` gains the `b"` arm, `selfhost/src/token.kara` the
+`Token.ByteString(Vec[u8])` variant, and `selfhost/src/main.kara` the
+`BYTESTR 8,0` render matching `render_rust` in tests/selfhost_lexer.rs byte
+for byte. The respelled oracle case is restored to `b` and NINE byte-string
+cases added -- the escape table, the empty literal, a mid-expression
+occurrence, both refusals (`\u{…}`, raw non-ASCII) and an unterminated
+literal -- so both lexers are now compared on the construct, not merely
+unblocked.
+
+PORTING THE RULE FOUND A BUG IN THE RUST ORIGINAL, which is the whole point
+of the oracle. The Rust `byte_string_literal`'s `\u{…}` arm carried the
+comment "Same refusal as the byte-CHAR form, verbatim" but did NOT consume
+the closing quote the way the byte-CHAR form does, so the `"` was left to
+open a stray string literal and cascade. The Kara port (written from the
+byte-CHAR form, which has the step) disagreed by exactly one byte --
+`0 9 1 1 ERROR` against `0 8 1 1 ERROR` on `b"\u{FF}"` -- and that
+one-byte span difference is the only reason the omission surfaced at all.
+The Rust side was corrected to match its own comment; both non-ASCII arms
+were aligned in the same pass.
+
+STANDING CONSTRAINT LIFTED: `.kara` sources may now use byte-string
+literals. The note in the oracle case forbidding a `b`-spelled fixture is
+removed with it.
+
+Verified: all four self-host oracles pass; full `--features llvm` suite
+green -- 108 binaries, 14,694 passed, 0 failed; fmt clean; clippy clean on
+both legs.
+
+PROCESS NOTE: this row's commit was made across a context-compaction
+boundary and the record of committing it was lost, so a later attempt to
+re-apply the same patch failed its own `--expect`-style assertion. That
+failure was the useful signal -- it prompted a `git blame` that identified
+the existing commit rather than a second, duplicate fix. Worth the reflex:
+when an edit refuses to apply, check whether the change is already in the
+tree before assuming the patch is wrong. |
 | B-2026-08-21-19 | codegen | high | RUN/BUILD DIVERGENCE from two independently-green commits meeting: `let a = b"abc"; a.is_sorted();` printed `true` under `--interp` and FAILED TO COM… | FIXED by ca74f17. An un-annotated binding initialised from a byte-string literal now registers `u8` in `array_elem_type_exprs`, so the fixed-array method arms can resolve the receiver's element type. Strict E2E regression test on the UN-ANNOTATED spelling (the annotated one never broke). |
 | B-2026-08-21-20 | typecheck | high | `main` IS RED: `selfhost_typechecker_matches_rust_typechecker` fails at 5fee766 on a clean checkout, independent of any local work | FIXED by dda94ff.
 
