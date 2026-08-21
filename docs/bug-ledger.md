@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 133 | 0 |
 | codegen-gap | 120 | 0 |
 | diagnostics | 93 | 1 |
-| false-positive | 90 | 0 |
+| false-positive | 91 | 0 |
 | perf | 83 | 0 |
 | crash | 55 | 0 |
 | soundness | 51 | 0 |
@@ -119,12 +119,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | autopar | 54 | 0 |
 | parser | 35 | 2 |
 | runtime | 28 | 0 |
-| resolver | 23 | 0 |
+| resolver | 24 | 0 |
 | lexer | 7 | 1 |
 | effect | 7 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1434 surfaced · 9 open · 1403 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1435 surfaced · 9 open · 1404 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (9)
 
@@ -157,9 +157,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1434 surfaced
 
 </details>
 
-### Fixed (1403)
+### Fixed (1404)
 
-<details><summary>1403 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1404 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -13476,6 +13476,13 @@ THE ROW'S DEFERRED QUESTION IS STILL DEFERRED, and correctly so: whether kara-ka
 | B-2026-08-21-15 | cli | medium | The MULTI-FILE build gate failed the build on ANY effect-checker entry, including NOTE-severity ones: `run_multi_file_codegen` tested `!e.errors.is_e… | FIXED by 2a12881 (same commit that surfaced it).
 
 The gate now filters with the hoisted `kind_is_note`, so note-severity effect findings never fail a multi-file build. |
+| B-2026-08-21-16 | resolver | high | A SPEC-LEGAL PROGRAM FAILED TO COMPILE: `layout_unassigned_fields` was emitted as a hard `ResolveError`, so any `layout` block not naming every field… | FIXED by fa8a940.
+
+The resolver had no notion of a non-fatal diagnostic -- every `ResolveError` was fatal -- so a diagnostic the spec calls a warning could only be spelled as an error. Adds `resolver::resolve_kind_is_note` (the resolver twin of `effectchecker::kind_is_note`) plus a `LayoutUnassignedFields` kind, and routes EVERY gate through the one predicate: `has_resolve_errors`, `total_errors`, the text renderer (`warning[resolve]`), the JSON code table (W0150), and `resolve_ok` in the test harness. The emit site now also reads `#[allow(layout_unassigned_fields)]` off the layout item's attributes, the way `ownership.rs` reads `rc_fallback`.
+
+W0150 is the resolver's FIRST warning code, which broke two explain band checks asserting resolver codes start with `E01`/`E08` -- an encoding of "the resolver only mints errors". The band exists to stop numeric collision with the typechecker's E02xx, and W0150 is in the resolver's own 01xx band, so both checks now accept `W01` and the code is catalogued so `karac explain W0150` answers.
+
+Verified: unannotated -> `warning[resolve]`, check and build exit 0, binary produced and runs; annotated -> silent. Two regression tests. |
 
 </details>
 
