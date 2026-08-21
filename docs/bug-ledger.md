@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 120 | 0 |
 | diagnostics | 91 | 1 |
 | false-positive | 88 | 0 |
-| perf | 81 | 1 |
+| perf | 81 | 0 |
 | crash | 54 | 0 |
 | soundness | 51 | 0 |
 | other | 50 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 960 | 2 |
+| codegen | 960 | 1 |
 | typecheck | 222 | 3 |
 | interp | 167 | 0 |
 | ownership | 61 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 7 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1420 surfaced · 7 open · 1393 fixed · 7 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1420 surfaced · 6 open · 1393 fixed · 7 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (7)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -136,7 +136,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1420 surfaced
 | B-2026-08-20-39 | 2026-08-20 | typecheck | medium | `v.last(n)` -- the END-RELATIVE ACCESS design.md prescribes as THE replacement for negative indexing -- takes no argument: `v.last(1)` is rejected with `Vec.last() takes no arguments`. § Numeric Semantics, in the same breath as ruling out Python-style wrap-around: "Negative indices are out-of-bounds errors — they panic at runtime... No Python-style wrap-around; `-1` as an index is always a bug. FOR END-RELATIVE ACCESS, USE `.last(n)` WHERE `n` DEFAULTS TO 0: `v.last()` returns the last element, `v.last(1)` the second-to-last, etc. Negative or out-of-bounds `n` panics." So the spec closes one door and points at another that is not there -- `v.last()` works, `v.last(1)` does not, and the diagnostic states the no-argument form as though it were the intended surface rather than an unimplemented half. | roadmap.md |
 | B-2026-08-20-40 | 2026-08-20 | codegen | medium | `s.bytes()[i]` -- the byte-access form design.md documents for protocol and binary-format parsing -- is check-clean and interp-correct but has NO CODEGEN: `karac run` and `karac build` both die with `codegen failed: Index operator applied to non-array type`. § Strings, Internal representation bullets: "Byte access: `s.bytes()[i]` returns `u8`, panics on out-of-bounds (same as any slice). Use for protocol/binary format parsing, not text processing." Measured on `let s = "hello"; println(f"byte0 = {s.bytes()[0]}")`: `karac check` -> All checks passed; `karac run --interp` -> byte0 = 104; `karac run` and `karac build` -> the codegen failure above. So the documented binary-parsing primitive is available only under the interpreter, which is now the opt-in backend. | roadmap.md |
 | B-2026-08-20-41 | 2026-08-20 | typecheck | medium | `String.normalize` and the `NFC` constant DO NOT EXIST, so the remedy design.md gives for its own Unicode-equality hazard is unwritable. § Strings, Equality bullet: "`String` equality (`==`) compares raw UTF-8 bytes. Two strings with identical visual appearance but different Unicode normalization forms (e.g., NFC vs NFD) are **not** equal. USE `s.normalize(NFC)` FOR NORMALIZATION-AWARE COMPARISON." Measured: `a.normalize(NFC)` -> `error[resolve]: undefined name 'NFC', did you mean 'Neg'?`; the no-argument form `a.normalize()` -> `error[typecheck]: no method 'normalize' on type 'String'`. Neither `normalize` nor `NFC` appears anywhere in `src/`. The hazard the bullet describes is real and reproduces -- `"e\u{0301}" == "\u{00e9}"` is false, exactly as documented -- so the paragraph correctly warns about a trap and then names an escape that was never built. | roadmap.md |
-| B-2026-08-21-1 | 2026-08-21 | codegen | medium | `String.push(char)` emits an OUT-OF-LINE call to `karac_string_encode_char` per character, ~1.3 ns each; the runtime function already tests ASCII first, so the cost is the call itself. Inlining the `cp < 0x80` fast path (as Rust's String::push does) should recover most of it -- worth ~40% of a string-building kata's total runtime | — |
 
 ### Wontfix (7)
 
