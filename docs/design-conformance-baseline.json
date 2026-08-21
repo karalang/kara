@@ -215,7 +215,7 @@
       "line": 4296,
       "heading": "Contracts (requires / ensures / invariant) > Contract evaluation semantics",
       "outcome": "REJECTED",
-      "reason": "DOC BUG — `({ balance: … }, amount)` is an anonymous record literal; struct literals in this language are `Name { … }`",
+      "reason": "DOC BUG — `({ balance: … }, amount)` is an anonymous record literal; struct literals in this language are `Name { … }`. B-2026-08-21-11",
       "first_diagnostic": "Expected expression, found Colon"
     },
     "25e33c3fcc4f": {
@@ -236,7 +236,7 @@
       "line": 4634,
       "heading": "Module-Level Bindings > Byte and Byte-String Literals",
       "outcome": "REJECTED",
-      "reason": "DOC BUG — `[u8; 2]` is the Rust array type; this language spells it `Array[u8, 2]` (syntax.md:927). The line is also missing its terminating `;`",
+      "reason": "DOC BUG — `[u8; 2]` is the Rust array type; this language spells it `Array[u8, 2]` (syntax.md:927). The line is also missing its terminating `;`. B-2026-08-21-11",
       "first_diagnostic": "Expected type, found LeftBracket"
     },
     "4d182164aab6": {
@@ -425,21 +425,21 @@
       "line": 8449,
       "heading": "Feature 4: Tiered Ownership > Part 5: Shared Types (`shared struct`)",
       "outcome": "REJECTED",
-      "reason": "DOC BUG — bare `..` in a struct literal; syntax.md:1774 requires `\"..\" EXPR`",
+      "reason": "DOC BUG — bare `..` in a struct literal; syntax.md:1774 requires `\"..\" EXPR`. B-2026-08-21-11",
       "first_diagnostic": "Expected expression, found RightBrace"
     },
     "1041ab91c090": {
       "line": 8467,
       "heading": "Feature 4: Tiered Ownership > Part 5: Shared Types (`shared struct`)",
       "outcome": "REJECTED",
-      "reason": "DOC BUG — bare `..` in a struct literal; syntax.md:1774 requires `\"..\" EXPR`",
+      "reason": "DOC BUG — bare `..` in a struct literal; syntax.md:1774 requires `\"..\" EXPR`. B-2026-08-21-11",
       "first_diagnostic": "Expected expression, found RightBrace"
     },
     "ae2286576a6f": {
       "line": 8575,
       "heading": "Feature 4: Tiered Ownership > Part 5b: Concurrent Shared Types (`par struct`)",
       "outcome": "REJECTED",
-      "reason": "DOC BUG — a stray double semicolon (`Mutex(Counter { val: 0 });;`) and a trailing `;` on a struct declaration",
+      "reason": "DOC BUG — a stray double semicolon (`Mutex(Counter { val: 0 });;`) and a trailing `;` on a struct declaration. B-2026-08-21-11",
       "first_diagnostic": "Expected expression, found Semicolon"
     },
     "0b00561248a8": {
@@ -530,7 +530,7 @@
       "line": 11300,
       "heading": "Execution Model and Compilation Targets > Bounds-check elision and the `get_unchecked` escape hatch",
       "outcome": "REJECTED",
-      "reason": "DOC BUG — the example mixes `i64` and `usize` in `xs[i]` and dereferences a non-pointer; it does not typecheck as written",
+      "reason": "DOC BUG — the example mixes `i64` and `usize` in `xs[i]` and dereferences a non-pointer; it does not typecheck as written. B-2026-08-21-11",
       "first_diagnostic": "cannot mix integer types 'i64' and 'usize' in arithmetic — they must match; cast explicitly with `as`, choosing the direction deliberately: neither type can represent every value of the other"
     },
     "d83dca582a51": {
@@ -544,7 +544,7 @@
       "line": 11919,
       "heading": "Unsafe Escape Hatch > `unsafe_op_in_unsafe_fn` rule",
       "outcome": "REJECTED",
-      "reason": "DOC BUG — `&*ptr.offset(n as isize)` is Rust reference syntax; this language has no `&` operator",
+      "reason": "DOC BUG — `&*ptr.offset(n as isize)` is Rust reference syntax; this language has no `&` operator. B-2026-08-21-11",
       "first_diagnostic": "Expected expression, found Amp"
     },
     "39ac8c02f1b7": {
