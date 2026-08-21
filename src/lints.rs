@@ -510,7 +510,7 @@ mod emit_site_guard {
     use std::collections::BTreeSet;
     use std::path::Path;
 
-    /// Lints known to have no emit site, tracked in B-2026-08-20-42.
+    /// Lints known to have no emit site, tracked in B-2026-08-21-2.
     ///
     /// This list may only ever SHRINK. A new entry means a lint was registered
     /// without its detection pass, which is exactly what this guard exists to

@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 133 | 4 |
 | double-free | 133 | 0 |
 | codegen-gap | 120 | 0 |
-| diagnostics | 91 | 1 |
+| diagnostics | 92 | 1 |
 | false-positive | 88 | 0 |
 | perf | 81 | 0 |
 | crash | 54 | 0 |
@@ -115,7 +115,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | interp | 167 | 0 |
 | ownership | 61 | 0 |
 | other | 59 | 0 |
-| cli | 56 | 1 |
+| cli | 57 | 1 |
 | autopar | 54 | 0 |
 | parser | 33 | 0 |
 | runtime | 28 | 0 |
@@ -124,18 +124,18 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 7 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1420 surfaced · 6 open · 1393 fixed · 7 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1421 surfaced · 6 open · 1394 fixed · 7 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-20-36 | 2026-08-20 | cli | medium | EIGHT of the 28 registered lints have NO EMIT SITE anywhere in `src/` outside the registry, so they can never fire -- and all eight are registered `default_level: LintLevel::Warn`, i.e. advertised as on. The dead set: `f16_software_emulated`, `float_in_serialized_type`, `implicit_clone`, `module_mut_binding`, `mutual_recursion_note`, `pure_loop_in_par`, `redundant_suffix`, `repr_c_layout_ignored`. design.md documents at least one of them as live behaviour -- § Numeric Semantics: "A suffix matching the default type (`42i64`, `3.14f64`) is valid but the compiler WARNS -- suppressible with `#[allow(redundant_suffix)]`" -- and `redundant_suffix` produces no warning in any of five shapes measured (suffix == default type `42i64` / `3.14f64`; suffix == annotated type `let c: i32 = 42i32`; suffix == parameter type `take(7i32)`; suffix == element type `v.push(1i32)`). THE COMPILER CONFIRMS IT ITSELF: `#[expect(redundant_suffix)] fn main() { let a = 42i64; ... }` reports `warning[unfulfilled_lint_expectation]: the lint 'redundant_suffix' did not fire`, which is the compiler stating that a lint it registers at Warn never triggered on the case its own description names. | roadmap.md |
 | B-2026-08-20-37 | 2026-08-20 | lexer | medium | BYTE-STRING literals `b"..."` are lexed as RESERVED, though design.md § Byte and Byte-String Literals specifies them as shipped with a type rule, three worked examples and an escape table -- while the sibling byte-CHAR literal `b'A'` in the same section works fully. `let eth: Array[u8, 2] = b"\x08\x00";` -> `error[parse]: string prefix 'b"..."' is reserved for future use; only `f"..."` ...`. The section opens by saying the grammar "reserves the `b` prefix FOR THIS PURPOSE (`syntax.md § 1.3`), producing `u8`-typed and `[u8; N]`-typed literals", states "**`b"..."` has type `[u8; N]` where `N` is the byte count of the literal after escape resolution**", and its own "Reserved but not yet implemented" paragraph lists only `r`, `br` and `rb` -- `b"..."` is presented as the working half. Nothing in deferred.md or roadmap.md marks it deferred. Measured working in the same section: `b'U'` is 85, and every escape the spec permits in a byte literal is correct (`\n`=10, `\t`=9, `\r`=13, `\0`=0, `\\`=92, `\'`=39, `\"`=34, `\xFF`=255, `\x41`=65), as is the forbidden case -- `b'\u{FF}'` produces the spec's exact wording, "Unicode escapes are not permitted in byte literals — use \xFF for byte 0xFF", and `r"..."` produces the spec's exact reserved-prefix message. | roadmap.md |
 | B-2026-08-20-38 | 2026-08-20 | typecheck | medium | A MUTABLE SUB-RANGE slice cannot be formed at a call site -- design.md § Slices' own second example is rejected. The spec's block reads `sort_in_place(mut v);` then `sort_in_place(mut v[1..4]);  // sub-range mutable slice`. The first works on all three backends; the second fails `karac check` with `expected 'mut Slice[i64]', found 'Slice[i64]'`, so a range-indexed argument produces a READ-ONLY slice header even under a `mut` marker. There is no alternative spelling: `let s = mut v[1..4];` is `error[parse]: 'mut' is a reserved keyword and cannot be used as an identifier`. The read-only half of the same feature is fine -- `sum(v[1..3])` gives 5 on interp and JIT alike. | roadmap.md |
 | B-2026-08-20-39 | 2026-08-20 | typecheck | medium | `v.last(n)` -- the END-RELATIVE ACCESS design.md prescribes as THE replacement for negative indexing -- takes no argument: `v.last(1)` is rejected with `Vec.last() takes no arguments`. § Numeric Semantics, in the same breath as ruling out Python-style wrap-around: "Negative indices are out-of-bounds errors — they panic at runtime... No Python-style wrap-around; `-1` as an index is always a bug. FOR END-RELATIVE ACCESS, USE `.last(n)` WHERE `n` DEFAULTS TO 0: `v.last()` returns the last element, `v.last(1)` the second-to-last, etc. Negative or out-of-bounds `n` panics." So the spec closes one door and points at another that is not there -- `v.last()` works, `v.last(1)` does not, and the diagnostic states the no-argument form as though it were the intended surface rather than an unimplemented half. | roadmap.md |
 | B-2026-08-20-40 | 2026-08-20 | codegen | medium | `s.bytes()[i]` -- the byte-access form design.md documents for protocol and binary-format parsing -- is check-clean and interp-correct but has NO CODEGEN: `karac run` and `karac build` both die with `codegen failed: Index operator applied to non-array type`. § Strings, Internal representation bullets: "Byte access: `s.bytes()[i]` returns `u8`, panics on out-of-bounds (same as any slice). Use for protocol/binary format parsing, not text processing." Measured on `let s = "hello"; println(f"byte0 = {s.bytes()[0]}")`: `karac check` -> All checks passed; `karac run --interp` -> byte0 = 104; `karac run` and `karac build` -> the codegen failure above. So the documented binary-parsing primitive is available only under the interpreter, which is now the opt-in backend. | roadmap.md |
 | B-2026-08-20-41 | 2026-08-20 | typecheck | medium | `String.normalize` and the `NFC` constant DO NOT EXIST, so the remedy design.md gives for its own Unicode-equality hazard is unwritable. § Strings, Equality bullet: "`String` equality (`==`) compares raw UTF-8 bytes. Two strings with identical visual appearance but different Unicode normalization forms (e.g., NFC vs NFD) are **not** equal. USE `s.normalize(NFC)` FOR NORMALIZATION-AWARE COMPARISON." Measured: `a.normalize(NFC)` -> `error[resolve]: undefined name 'NFC', did you mean 'Neg'?`; the no-argument form `a.normalize()` -> `error[typecheck]: no method 'normalize' on type 'String'`. Neither `normalize` nor `NFC` appears anywhere in `src/`. The hazard the bullet describes is real and reproduces -- `"e\u{0301}" == "\u{00e9}"` is false, exactly as documented -- so the paragraph correctly warns about a trap and then names an escape that was never built. | roadmap.md |
+| B-2026-08-21-2 | 2026-08-21 | cli | medium | SEVEN REGISTERED LINTS STILL HAVE NO EMIT SITE and so can never fire, though all seven are registered `default_level: LintLevel::Warn` -- advertised by `karac lint --list` and accepted in `#[allow(...)]`: `f16_software_emulated`, `float_in_serialized_type`, `implicit_clone`, `module_mut_binding`, `mutual_recursion_note`, `pure_loop_in_par`, `repr_c_layout_ignored`. They are the remainder of B-2026-08-20-36's eight, which wired `redundant_suffix` (the one design.md documents as live) and added the guard that now holds this list. They are VISIBLE IN CODE, not only here: `KNOWN_UNWIRED` in `src/lints.rs`, which `every_registered_lint_is_emitted_or_declared_unwired` fails on if the list grows or goes stale. | roadmap.md |
 
 ### Wontfix (7)
 
@@ -153,9 +153,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1420 surfaced
 
 </details>
 
-### Fixed (1393)
+### Fixed (1394)
 
-<details><summary>1393 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1394 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -13313,6 +13313,25 @@ AND ONE MORE SHAPE THE ROW DID NOT CONTAIN, found because fixing the first three
 VERIFIED on all four surfaces (`--interp`, JIT, `build`, `KARAC_AUTO_PAR=0 build`), byte-identical: Map[K,Vec[V]] read and write with a sibling key asserted untouched; Map[K,Map[K,V]]; Vec[Map[K,V]]; and a Map reached through a struct FIELD. The write cases read back through the container, so a store into a temporary rather than the map's own storage fails them.
 
 ASAN clean, which is the gate that matters here: the store writes through a pointer into the map's `kv` buffer, so a wrong shape or a stray drop registration would be a heap corruption rather than a wrong number. |
+| B-2026-08-20-36 | cli | medium | EIGHT of the 28 registered lints have NO EMIT SITE anywhere in `src/` outside the registry, so they can never fire -- and all eight are registered `d… | FIXED by 6c07671. The row's detection reproduced EXACTLY -- 28 registered, the same 8 dead -- and its scope note ("the eight are not necessarily one fix ... each needs its own trigger") set the shape of the close: implement the one design.md promises, guard the CLASS so a ninth cannot appear unnoticed, split the rest.
+
+THE SPEC'S RULE IS NARROWER THAN THE ROW'S PROBES, and that decided the implementation. The row measured five shapes and reports all five silent: suffix == default type (`42i64` / `3.14f64`), suffix == annotated type (`let c: i32 = 42i32`), suffix == parameter type (`take(7i32)`), suffix == element type (`v.push(1i32)`). But design.md § Numeric Semantics promises exactly one of them -- "A suffix matching the DEFAULT type (`42i64`, `3.14f64`) is valid but the compiler warns" -- and only that one is implemented.
+
+The other three are deliberately left silent. A non-default suffix CARRIES INFORMATION: design.md's own sentence two lines earlier is "use a suffix when the literal appears inline (e.g., a function argument: `Vec.filled(n, 0i32)`)", which is precisely `take(7i32)`. Warning there would contradict the paragraph that defines the feature. `let c: i32 = 42i32` is a defensible wider lint -- redundant against the ANNOTATION rather than the default -- but it is a different rule that design.md does not write, and a lint firing beyond its documented trigger is its own defect. Both directions are pinned: `redundant_suffix_fires_on_a_default_type_suffix` and `redundant_suffix_ignores_a_non_default_suffix`.
+
+DE-DUPLICATION IS LOAD-BEARING, not tidiness. `infer_expr` is NOT memoized -- it calls `infer_expr_inner` fresh every time -- and bidirectional checking re-infers the same literal, so a naive emission warns once per visit. `let a: i64 = 42i64` is the shape that exercises it (checked against `i64`, then inferred on its own) and it is the third test.
+
+FULL LINT SURFACE, verified rather than assumed, by routing through `type_lint_warning` rather than pushing a warning directly: `#[allow(redundant_suffix)]` suppresses; `-D redundant_suffix` escalates; `#[expect(redundant_suffix)]` is FULFILLED; `karac check --output=json` reports `W0280` with `"lint_name":"redundant_suffix"` and `"class":"LINT_WARNING"`.
+
+THE `#[expect]` ORACLE, INVERTED. The row's corroborating evidence was `#[expect(redundant_suffix)]` reporting `warning[unfulfilled_lint_expectation]: the lint 'redundant_suffix' did not fire` -- the compiler stating that a lint it registers never triggered. That expectation now resolves clean. Same oracle, opposite answer.
+
+THE CLASS-LEVEL FIX is `every_registered_lint_is_emitted_or_declared_unwired` (src/lints.rs), which promotes the row's own `rg` check to a test: every registered name must appear somewhere in `src/` OUTSIDE the registry, or be listed in `KNOWN_UNWIRED`. It fails in BOTH directions, and I verified both -- adding `unknown_lint` (which demonstrably fires) to the list fails with "listed in KNOWN_UNWIRED but now have an emit site". The two-way check is the part that matters: a one-way guard would let the debt list rot into a permanent excuse. The list may only shrink.
+
+The check is a proxy -- a name could appear only in a comment and pass -- and the test says so. It is the right direction anyway, because the failure it guards is a lint with NO mention at all, which is what all eight were.
+
+A NEW DIAGNOSTIC CODE VALIDATED THE PREVIOUS ROW. `RedundantSuffix` needed `W0280`/`E0280`, and `code_table_catalogues_every_code_in_a_covered_band` -- added hours earlier for B-2026-08-20-31 -- is what required the `CODE_TABLE` rows. The guard caught the omission on the first run rather than shipping an `explain`-less code.
+
+LIVE REMAINDER, split to its own row: the seven still-unwired lints (`f16_software_emulated`, `float_in_serialized_type`, `implicit_clone`, `module_mut_binding`, `mutual_recursion_note`, `pure_loop_in_par`, `repr_c_layout_ignored`). They are seven independent detection passes sharing only the shape of the omission, and they are now visible in `KNOWN_UNWIRED` rather than only in a ledger row. |
 
 </details>
 
