@@ -2584,6 +2584,33 @@ impl<'ctx> super::Codegen<'ctx> {
             return self.compile_inline_temp_vec_index_ex(object, index, &vec_te, owns_temp);
         }
 
+        // B-2026-08-20-40 — the `Slice[T]` sibling of the arm above: an inline
+        // index of a slice-valued temporary (`s.bytes()[i]`, `v.as_slice()[i]`,
+        // `c"…".as_bytes()[i]`, `w.s.bytes()[i]`). Same shape of gap and same
+        // remedy: the identifier-keyed slice path fires only for a NAMED
+        // binding, so the `{ptr, len}` header a slice-producing expression
+        // evaluates to reached the generic tail, which dispatches only
+        // `ArrayType` / `VectorType` and reported "Index operator applied to
+        // non-array type" while `--interp` read the byte.
+        //
+        // Worth its own arm rather than a widening of the Vec one because the
+        // two differ in both layout and ownership: a slice is a 16-byte
+        // `{ptr,len}` (no `cap` word to read) and it is ALWAYS a borrow — a
+        // view over storage some live binding owns — so there is no temp to
+        // drop and no element to deep-clone. Dropping here would free the
+        // receiver's buffer out from under it.
+        //
+        // The element type comes from `slice_elem_type_expr_from_rhs`, the
+        // same helper the `let b = s.bytes()` path uses to register a slice
+        // BINDING — so `s.bytes()[i]` now lowers exactly as the two-step
+        // spelling that already worked, which is the oracle this arm is
+        // measured against. `s.bytes()[a..b]` never reaches here: a range
+        // slice of a temporary escapes its statement and the ownership
+        // checker rejects it upstream.
+        if let Some(elem_te) = self.inline_index_recv_slice_te(object) {
+            return self.compile_inline_temp_slice_index(object, index, &elem_te);
+        }
+
         let idx_raw = self.compile_expr(index)?;
         let idx_val = self.coerce_to_i64(idx_raw)?;
         let i64_t = self.context.i64_type();
@@ -2841,6 +2868,78 @@ impl<'ctx> super::Codegen<'ctx> {
         // Only a `Vec` value is indexable via `[i]`; a `String` value is a
         // different (char-index) path, and a scalar owns no buffer.
         self.extract_vec_elem_type(&te).is_some().then_some(te)
+    }
+
+    /// The ELEMENT `TypeExpr` of a slice-valued receiver being indexed inline
+    /// (`s.bytes()[i]`, `v.as_slice()[i]`) — the `Slice` sibling of
+    /// [`Self::inline_index_recv_vec_te`]. `None` for anything that is not a
+    /// slice-producing expression, leaving the generic path to handle it.
+    ///
+    /// Deliberately the SAME resolver the `let b = s.bytes()` binding path
+    /// uses ([`Self::slice_elem_type_expr_from_rhs`]), so the inline and
+    /// two-step spellings of one expression cannot disagree about the element
+    /// type: whatever `let b = <expr>; b[i]` reads, `<expr>[i]` reads. A named
+    /// binding never reaches this (it has no arm there, and the
+    /// identifier-keyed slice dispatch has already claimed it upstream).
+    ///
+    /// No ownership flag to return, unlike the Vec sibling: a `Slice[T]` is a
+    /// borrow by construction, so the temporary is never dropped here.
+    pub(super) fn inline_index_recv_slice_te(&self, object: &Expr) -> Option<TypeExpr> {
+        self.slice_elem_type_expr_from_rhs(object)
+    }
+
+    /// Index a slice temporary (`s.bytes()[i]`) — the value `object`
+    /// evaluates to is a `{ptr, len}` slice header, not a named binding the
+    /// identifier-keyed slice path can dispatch on. Materializes it into a
+    /// synth slice local (so the existing `compile_slice_index` lowering,
+    /// bounds check included, runs unchanged), reads the element, then tidies
+    /// the synth registrations.
+    ///
+    /// Nothing is freed and nothing is cloned. The header views storage owned
+    /// by a live binding — the `String` behind `bytes()`, the `Vec` behind
+    /// `as_slice()` — and the element read is exactly the one a named slice
+    /// binding performs, so this stays byte-for-byte the two-step spelling.
+    fn compile_inline_temp_slice_index(
+        &mut self,
+        object: &Expr,
+        index: &Expr,
+        elem_te: &TypeExpr,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let slice_val = self.compile_expr(object)?;
+        // Defensive: a shape that satisfied the element-type resolver but did
+        // not evaluate to the `{ptr, len}` header (a `ref Slice` borrow arrives
+        // as a bare `ptr`) would have the slice path GEP through a word that is
+        // not a length. Report the generic error rather than read wild memory.
+        if slice_val.get_type() != self.slice_struct_type().as_basic_type_enum() {
+            return Err("Index operator applied to non-array type".to_string());
+        }
+        let fn_val = self.current_fn.unwrap();
+        let synth = format!("__inline_slice_{}", self.indexed_elem_counter);
+        self.indexed_elem_counter += 1;
+        let slot = self.create_entry_alloca(fn_val, "inline.slice.tmp", slice_val.get_type());
+        self.builder.build_store(slot, slice_val).unwrap();
+        self.variables.insert(
+            synth.clone(),
+            VarSlot {
+                ptr: slot,
+                ty: slice_val.get_type(),
+            },
+        );
+        let slice_te = super::Codegen::slice_type_expr_from_element(elem_te);
+        self.register_var_from_type_expr(&synth, &slice_te);
+
+        let synth_expr = Expr {
+            kind: ExprKind::Identifier(synth.clone()),
+            span: object.span,
+        };
+        let result = self.compile_index(&synth_expr, index);
+
+        self.variables.remove(&synth);
+        self.var_types.slice_elem_types.remove(&synth);
+        self.var_types.var_elem_type_exprs.remove(&synth);
+        self.var_types.var_type_names.remove(&synth);
+
+        result
     }
 
     /// The `Vec[T]` / `VecDeque[T]` a NAMELESS index receiver produces, and

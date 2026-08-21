@@ -100986,6 +100986,81 @@ fn main() {
             assert_eq!(out, "42\n", "`{self_mode}` receiver: wrong map read");
         }
     }
+
+    /// B-2026-08-20-40 — an inline index of a SLICE temporary. `s.bytes()[i]`
+    /// is the spelling the typechecker's own diagnostic recommends when it
+    /// rejects `s[i]` on a String ("or s.bytes()[i] for raw byte access
+    /// (O(1))"), and design.md § Character type names it as the O(1) form —
+    /// yet it was check-clean, correct under `--interp`, and failed BOTH
+    /// codegen backends with "Index operator applied to non-array type". The
+    /// identifier-keyed slice dispatch fires only for a NAMED binding, so the
+    /// `{ptr, len}` header a slice-producing expression evaluates to fell
+    /// through to the generic tail, which handles only `ArrayType` /
+    /// `VectorType`.
+    ///
+    /// The last line is the ORACLE the fix is measured against: `let b =
+    /// s.bytes(); b[1]` always worked, so the inline spelling has to read the
+    /// same byte. Every index is distinct per receiver (1→101, 4→111, 2 of
+    /// `v`→30, 2 of `c"abc"`→99, 3→108, 1 of `hs`→"cd") so a receiver bound to
+    /// the wrong source prints a wrong value rather than coincidentally
+    /// matching.
+    #[test]
+    fn test_e2e_index_slice_temporary_matches_the_bound_spelling() {
+        let src = r#"
+struct W { s: String }
+
+fn main() {
+    let s: String = "hello";
+    println(s.bytes()[1]);
+    println(f"b={s.bytes()[4]}");
+    let mut i = 0i64;
+    let mut sum = 0i64;
+    while i < 5i64 {
+        sum = sum + s.bytes()[i] as i64;
+        i = i + 1i64;
+    }
+    println(sum);
+    let v: Vec[i64] = [10, 20, 30];
+    println(v.as_slice()[2]);
+    println(c"abc".as_bytes()[2]);
+    let w = W { s: "hello" };
+    println(w.s.bytes()[3]);
+    let hs: Vec[String] = ["ab", "cd"];
+    println(hs.as_slice()[1]);
+    let b = s.bytes();
+    println(b[1]);
+}
+"#;
+        assert_eq!(
+            run_program(src).as_deref(),
+            Some("101\nb=111\n532\n30\n99\n108\ncd\n101\n")
+        );
+    }
+
+    /// The bounds check comes along with the lowering: the synth slice local
+    /// routes through `compile_slice_index`, so an out-of-range index into a
+    /// slice temporary panics rather than reading past the String's storage.
+    /// Pinned separately because the whole point of materializing into a synth
+    /// binding — rather than GEPing the header inline — is to inherit that
+    /// check, and a regression there would be silent in the value test above.
+    #[test]
+    fn test_e2e_index_slice_temporary_bounds_checked() {
+        let Some(c) = run_program_capturing(
+            "fn main() {\n\
+                 let s: String = \"hi\";\n\
+                 let i = 7i64;\n\
+                 println(s.bytes()[i]);\n\
+             }",
+        ) else {
+            return;
+        };
+        assert!(
+            c.stdout.contains("index out of bounds") || c.stderr.contains("index out of bounds"),
+            "expected an OOB panic from a slice temporary, got stdout={:?} stderr={:?}",
+            c.stdout,
+            c.stderr
+        );
+    }
 }
 
 #[cfg(feature = "llvm")]

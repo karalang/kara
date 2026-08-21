@@ -51418,4 +51418,38 @@ fn main() {
             "asan_destructured_heap_struct_param",
         );
     }
+
+    /// B-2026-08-20-40 — reading an element out of a SLICE temporary
+    /// (`v.as_slice()[i]`, `s.bytes()[i]`) now lowers. The header is a BORROW
+    /// of storage a live binding owns, so the new path deliberately frees
+    /// nothing and clones nothing — it materializes the `{ptr, len}` into a
+    /// synth local and performs exactly the element read a named slice binding
+    /// performs. This pins that choice from both sides: a heap element read
+    /// through the temporary must not hand the element's buffer a second owner
+    /// (double-free), and the temporary must not acquire one of its own and
+    /// free the Vec's buffer out from under it (use-after-free). Loops so any
+    /// per-iteration imbalance accumulates past anything LSan could miss.
+    #[test]
+    fn asan_index_into_slice_temporary_frees_nothing() {
+        assert_clean_asan_run(
+            r#"fn main() {
+    let names: Vec[String] = ["alpha", "beta", "gamma"];
+    let s: String = "hello";
+    let mut i = 0i64;
+    let mut last: String = "";
+    let mut sum = 0i64;
+    while i < 60i64 {
+        last = names.as_slice()[i % 3i64];
+        sum = sum + s.bytes()[i % 5i64] as i64;
+        i = i + 1i64;
+    }
+    println(last);
+    println(sum);
+    println(names[0]);
+}
+"#,
+            &["gamma", "6384", "alpha"],
+            "asan_index_into_slice_temporary_frees_nothing",
+        );
+    }
 }
