@@ -92,12 +92,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 273 | 0 |
+| miscompile | 274 | 1 |
 | leak | 186 | 1 |
 | run-vs-build | 148 | 0 |
 | missing-feature | 143 | 7 |
 | double-free | 134 | 0 |
-| codegen-gap | 123 | 1 |
+| codegen-gap | 126 | 3 |
 | diagnostics | 94 | 1 |
 | false-positive | 91 | 0 |
 | perf | 83 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 976 | 4 |
+| codegen | 980 | 7 |
 | typecheck | 231 | 4 |
 | interp | 170 | 1 |
 | other | 62 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 8 | 1 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1455 surfaced · 10 open · 1423 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1459 surfaced · 13 open · 1424 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (10)
+### Open (13)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -135,11 +135,14 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1455 surfaced
 | B-2026-08-21-6 | 2026-08-21 | codegen+interp | medium | `Map`/`Set` DO NOT USE THE SPEC'S DEFAULT HASHER: design.md mandates `SipHash13BuildHasher` seeded from a per-process random source, codegen emits FxHash with a COMPILE-TIME-CONSTANT seed and the interpreter hashes not at all -- so there is no hash-flooding resistance, iteration order is fully deterministic across runs (design.md says it must vary), the two backends order differently from each other, and `Map[K, V, FxBuildHasher]` -- design.md's own spelling -- does not resolve, so there is no opt-in either way | roadmap.md |
 | B-2026-08-21-9 | 2026-08-21 | parser | medium | design.md WRITES SYNTAX THE PARSER HAS NO PRODUCTION FOR, in two places syntax.md also disagrees with: the inline associated-type binding `Trait[Assoc = T]` (43 lines of design.md, and syntax.md's own comment at :650) has no form in `TRAIT_BOUND = PATH [ "[" TYPE_LIST "]" ]`, and an effect clause on an impl header (`impl From[E] for A with writes(Log) {`) has no form at all | roadmap.md |
 | B-2026-08-21-18 | 2026-08-21 | codegen+typecheck | low | STRUCT FUNCTIONAL UPDATE `P { x: 1, ..base }` IS STILL UNIMPLEMENTED -- it now says so clearly instead of dropping the base, but the form syntax.md's STRUCT_LITERAL production admits cannot be used; the interpreter already implements the copy and codegen does not, so the remaining work is codegen plus the ownership rules for a spread base | roadmap.md |
-| B-2026-08-21-25 | 2026-08-21 | codegen | medium | A METHOD CALL ON A FIXED-ARRAY **TEMPORARY** HAS NO CODEGEN LOWERING -- `n.to_ne_bytes().len()` build-fails with the dispatcher's own "this is a codegen bug" message while the bound two-line spelling works | roadmap.md |
 | B-2026-08-21-26 | 2026-08-21 | typecheck | medium | `TryFrom[intN]` FOR A C-LIKE `#[repr(intN)]` ENUM DOES NOT EXIST -- design.md § Enum Discriminant Runtime Surface commits to auto-generating it and shows the worked `match UsbClass.try_from(raw)`, which fails to compile | roadmap.md |
 | B-2026-08-21-29 | 2026-08-21 | typecheck | medium | THREE DOCUMENTED SURFACES ARE NOT REACHABLE AS WRITTEN: every spelling of channel construction design.md uses (`Channel.new[T]()`, `Channel.bounded`), its whole `io.` I/O prefix, and `allocates(Heap)` -- whose `Heap` the document never declares and the prelude does not provide | roadmap.md |
 | B-2026-08-21-32 | 2026-08-21 | resolver+effect | medium | EFFECT RESOURCES CANNOT BE ROOTED AT A VALUE, so design.md's whole channel effect model is unwritable: `with sends(tx)` on a channel PARAMETER is `'tx' is not an effect resource (it is a variable)`, and the seven `Sender`/`Receiver` declarations at :6064-:6094 are all written that way | roadmap.md |
 | B-2026-08-21-40 | 2026-08-21 | codegen | medium | A `mut ref String` ARGUMENT ON A **FIELD** PLACE LEAKS THE FIELD'S ORIGINAL BUFFER WHEN THE CALLEE REASSIGNS IT -- `free_app(mut b.name)` with a body of `s = s + "!"` leaks 8 bytes per call under LeakSanitizer while the identical call on an IDENTIFIER place is clean; both the free-function and the method spelling are affected | roadmap.md |
+| B-2026-08-21-41 | 2026-08-21 | codegen | high | ITERATING A FIXED-ARRAY **TEMPORARY** SILENTLY YIELDS ZERO ELEMENTS under `karac build` -- `n.to_ne_bytes().iter().count()` is 0 (interp: 2) and `for x in n.to_ne_bytes()` runs the body ZERO times, while the bound two-line spelling is correct on both backends | roadmap.md |
+| B-2026-08-21-42 | 2026-08-21 | codegen | medium | NO `self.<method>()` DISPATCHER ON AN `impl ... for Array[T, N]` BODY -- `self.get(0)` inside the impl fails codegen with "no handler for method 'get' on non-identifier receiver" while `--interp` runs it, the Array twin of the fixed B-2026-08-18-12 (Map/Set) and -11 | roadmap.md |
+| B-2026-08-21-43 | 2026-08-21 | codegen | low | A USER IMPL ON A **NON-SCALAR** `Array` HEAD IS UNCALLABLE ON A TEMPORARY -- `mk().tag()` for `impl Tag for Array[String, 2]` still loud-fails after B-2026-08-21-25, which admits only scalar-element arrays because a scalar array is the case that owns no heap | roadmap.md |
+| B-2026-08-21-44 | 2026-08-21 | codegen | low | `as_slice()` ON A FIXED-ARRAY **TEMPORARY** HAS NO CODEGEN LOWERING -- `n.to_ne_bytes().as_slice().len()` fails dispatch while `--interp` answers, the one method of the Array surface B-2026-08-21-25 left out | roadmap.md |
 
 ### Wontfix (8)
 
@@ -158,9 +161,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1455 surfaced
 
 </details>
 
-### Fixed (1423)
+### Fixed (1424)
 
-<details><summary>1423 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1424 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -13707,6 +13710,85 @@ SIBLING FIXED IN THE SAME CHANGE, since both rows asked for it: B-2026-08-21-39,
 VERIFIED: both pins reproduce the filed diagnostics verbatim on pre-fix source and pass after; full `--features llvm` suite with KARAC_REQUIRE_RUNTIME_ARCHIVE=1; both clippy legs; fmt; the -O0 ASAN leg.
 
 ONE ENVIRONMENT NOTE worth carrying: the fix first surfaced as `undefined reference to karac_runtime_install_stack_guard` at LINK time, which is the stale-archive signature CLAUDE.md documents, not a codegen bug. This container's archives were four days older than `main`. Rebuild lean-then-full before trusting any E2E result here -- a stale archive makes the tolerant call sites soft-skip, so it degrades a green run rather than failing it. |
+| B-2026-08-21-25 | codegen | medium | A METHOD CALL ON A FIXED-ARRAY **TEMPORARY** HAS NO CODEGEN LOWERING -- `n.to_ne_bytes().len()` build-fails with the dispatcher's own "this is a code… | Fixed in a496b8df.
+
+THE ROW'S DIAGNOSIS WAS RIGHT, including its pointer to B-2026-08-20-40 as the
+model. The fixed-array dispatch block reads `self.variables[name].ty` and fires
+only when that slot's LLVM type is an `ArrayType`, so a receiver with no name
+and no slot never reached it and every method of the surface hit the
+dispatch-fail error while `--interp`, which runs a fixed array as a Vec,
+answered. `try_compile_nonident_fixed_array_method` (`src/codegen/method_call.rs`)
+materializes the aggregate into an entry alloca, registers a synthetic name,
+re-dispatches by IDENTIFIER, and unregisters — the same three moves the slice
+sibling `try_compile_nonident_slice_method` makes, placed last for the same
+reason (every other dispatcher has already declined, so a receiver compiled
+here and then rejected on shape leaves dead IR in an already-failing compile).
+
+THE SCALAR-ELEMENT GATE IS THE LOAD-BEARING PART, and it is not a shortcut.
+What made the slice sibling safe was that a slice OWNS NOTHING — it is a view,
+so there is no temp to drop and nothing to deep-clone. A fixed array is not a
+view, so that argument does not carry over; what replaces it is the element
+type. An array of `Int`/`Float` (which covers `bool` and `char`, both lowered
+to `IntType`) owns no heap either, so spilling it creates no second owner and
+no drop obligation. It is also exactly the gate the typechecker puts on the
+builtin surface and the one `compile_fixed_array_read` is written against, so
+for those methods it excludes nothing reachable. It DOES exclude a user impl on
+a non-scalar head, which is reachable and typechecks — filed as its own row
+rather than guessed at, because getting it wrong is a leak or a double free,
+strictly worse than the loud error that stands.
+
+THREE THINGS THE SWEEP FOUND THAT THE ROW DID NOT MENTION, all fixed here
+because each one breaks the bound two-line spelling the row uses as its oracle:
+
+  * `.last()` was the one method the dispatch tail could not see. The
+    iterator-chain terminal arm admits ANY `MethodCall` receiver on the
+    assumption that it is a chain, and returns its own error before the tail is
+    reached. Retried there, after the chain path declines and immediately
+    before that error return.
+
+  * `let h = mk()` for a `mk() -> Array[T, N]` registered no element type, so
+    `h.is_sorted()` failed with "no source element type for the receiver". The
+    un-annotated array binding had a hand-rolled `ByteStringLit` arm and nothing
+    else; it now routes through `array_elem_type_expr_from_rhs`, the SAME
+    resolver the temporary path uses. That is the point of the change rather
+    than a tidy-up: with one resolver, a shape either end can type is a shape
+    both type, so the oracle cannot silently stop holding.
+
+  * the same binding registered no `var_type_names` entry, so a user method
+    declared on the `Array` head had no name to qualify with and
+    `let m = mk(); m.head_or(-1)` loud-failed while both the annotated binding
+    and the temporary dispatched.
+
+Without the last two, this fix would have SHIPPED THE ASYMMETRY BACKWARDS —
+`mk().is_sorted()` working while `let h = mk(); h.is_sorted()` failed — which
+is the same class of bug as the one being fixed, pointing the other way.
+
+THE PIN is `test_e2e_method_call_on_a_fixed_array_temporary` in
+`tests/codegen.rs`. Every temporary spelling sits beside its bound twin, so a
+regression that broke only the fixed path cannot pass as green with fewer lines
+of output. Three receiver shapes are swept because the element type behind them
+resolves three different ways (`to_ne_bytes` fixed-`u8`, a declared
+`-> Array[T, N]` signature, a byte-string literal) and only `is_sorted` consumes
+it — get one wrong and that is the single method that notices. `hi()` returns
+`[128, 1]` for exactly that reason: unsigned it is not sorted, read as `i8`
+(128 -> -128) it would be, so asserting `false` is what proves the element type
+reached the comparator. It is a declared `Array[u8, 2]` rather than a
+`to_ne_bytes` result so that assertion does not also depend on host byte order.
+
+THE LIVE REMAINDER, split into rows rather than buried here:
+
+  * B-2026-08-21-41 (HIGH) -- the SILENT half of this same receiver shape.
+    `n.to_ne_bytes().iter().count()` is 0 under `karac build` and 2 under
+    `--interp`, and `for x in n.to_ne_bytes()` runs the body zero times. -25 was
+    the loud half; this one has no diagnostic and exit 0. Not fixed here: `iter`
+    has its own dispatch arm and the for-loop source is a different subsystem
+    (`for_receiver_is_indexable` declines an array-valued `MethodCall` and the
+    loop then produces no iterations instead of failing).
+  * B-2026-08-21-42 -- no `self.<method>()` dispatcher on an `impl … for Array[T, N]`
+    body, the Array twin of the fixed B-2026-08-18-12.
+  * B-2026-08-21-43 -- the non-scalar-element user impl the gate excludes.
+  * B-2026-08-21-44 -- `as_slice()` on a temporary, excluded for the same
+    hands-out-an-interior-pointer reason as `as_ptr`. |
 | B-2026-08-21-27 | typecheck | medium | self-host typechecker diverges from Rust on a struct-update expression missing a field | FIXED by dda94ff — the same commit that closed B-2026-08-21-20, which this row duplicates.
 
 Both rows are the same failure: `selfhost_typechecker_matches_rust_typechecker` at corpus input 126, `struct P { x: i64, y: i64 } fn f(b: P) -> P { P { x: 1, ..b } }`, where the Kara-written typechecker reported `missing-field` and the Rust one `type-mismatch`, both at 46:15. `dda94ff` taught `selfhost/src/typechecker.kara` the struct-spread rule `3b4b97d` introduced. Verified green on a clean checkout at `27735db`: `cargo test --features llvm --test selfhost_typechecker` — 1 passed, 0 failed.
