@@ -51577,4 +51577,46 @@ fn main() {
             "asan_fixed_array_into_a_method_ref_slice_is_a_borrow",
         );
     }
+    /// B-2026-08-21-38 (codegen half) — a `mut ref` METHOD parameter fed a
+    /// heap-bearing struct FIELD. Before the fix the callee received a pointer
+    /// to a temporary COPY of the field, so the `Vec[String]` had two owners:
+    /// the copy's cleanup freed the buffer the caller's `Box` still owned and
+    /// freed again at scope exit. Measured on this fixture as
+    /// `AddressSanitizer: double-free` — the write-back miscompile and a
+    /// memory-safety defect were the same bug.
+    ///
+    /// With the place pointer the callee mutates the caller's field directly,
+    /// which is a BORROW: the caller keeps sole ownership and frees once. The
+    /// free-function spelling in the same program is the control — it has
+    /// taken this path since B-2026-08-05-41 — so a report naming only the
+    /// method half points at this transplant. The loop makes a per-call
+    /// imbalance accumulate rather than hide in one iteration, and `String`
+    /// elements put the element bodies on the same hook as the buffer.
+    #[test]
+    fn asan_mut_ref_heap_field_into_a_method_is_a_borrow() {
+        assert_clean_asan_run(
+            r#"struct Box { rows: Vec[String] }
+struct H { n: i64 }
+impl H {
+    fn grow(ref self, v: mut ref Vec[String]) { v.push("row"); }
+}
+fn free_grow(v: mut ref Vec[String]) { v.push("row"); }
+fn main() {
+    let mut i = 0i64;
+    let mut total = 0i64;
+    while i < 50i64 {
+        let mut b = Box { rows: ["seed"] };
+        free_grow(mut b.rows);
+        let h = H { n: 0 };
+        h.grow(mut b.rows);
+        total = total + b.rows.len();
+        i = i + 1i64;
+    }
+    println(total);
+}
+"#,
+            &["150"],
+            "asan_mut_ref_heap_field_into_a_method_is_a_borrow",
+        );
+    }
 }

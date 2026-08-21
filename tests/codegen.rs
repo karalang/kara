@@ -102542,6 +102542,152 @@ fn main() {
         // of that lands on v[2].
         assert_eq!(run_program(src).as_deref(), Some("1 2 77 4 5\n"));
     }
+
+    /// B-2026-08-21-38 (codegen half) — a `mut ref T` METHOD parameter fed a
+    /// FIELD or TUPLE-INDEX place. The identifier fast path does not cover
+    /// either, so the argument fell through to the rvalue path and the callee
+    /// mutated a COPY: `h.bump(mut b.v)` answered the pre-call value while the
+    /// byte-identical FREE function `free_bump(mut b.v)` answered the
+    /// incremented one on every surface. The free-function and generic paths
+    /// got this in B-2026-08-05-41; the method path never did.
+    #[test]
+    fn method_mut_ref_field_place_arg_writes_through() {
+        assert_eq!(
+            run_program(
+                "struct Box { v: i64 }\n\
+                 struct H { acc: i64 }\n\
+                 impl H { fn bump(ref self, x: mut ref i64) -> i64 { x = x + 1; x } }\n\
+                 fn free_bump(x: mut ref i64) -> i64 { x = x + 1; x }\n\
+                 fn main() {\n\
+                     let mut a = Box { v: 4 };\n\
+                     println(free_bump(mut a.v));\n\
+                     println(a.v);\n\
+                     let h = H { acc: 0 };\n\
+                     let mut b = Box { v: 4 };\n\
+                     println(h.bump(mut b.v));\n\
+                     println(b.v);\n\
+                 }"
+            ),
+            Some("5\n5\n5\n5\n".to_string())
+        );
+    }
+
+    /// Every place shape the method path must now reach, against the
+    /// free-function spelling of the same call as the in-program oracle: a
+    /// nested field, a tuple index, a struct-held tuple index, an array index
+    /// and a Vec index. Each pair prints the same number or the method path
+    /// regressed.
+    #[test]
+    fn method_mut_ref_place_arg_shapes_match_free_fn() {
+        assert_eq!(
+            run_program(
+                "struct Inner { w: i64 }\n\
+                 struct Box { v: i64, inner: Inner }\n\
+                 struct Pair { t: (i64, i64) }\n\
+                 struct H { acc: i64 }\n\
+                 impl H { fn bump(ref self, x: mut ref i64) -> i64 { x = x + 1; x } }\n\
+                 fn free_bump(x: mut ref i64) -> i64 { x = x + 1; x }\n\
+                 fn main() {\n\
+                     let h = H { acc: 0 };\n\
+                     let mut g1 = Box { v: 1, inner: Inner { w: 1 } };\n\
+                     free_bump(mut g1.inner.w);\n\
+                     let mut g2 = Box { v: 1, inner: Inner { w: 1 } };\n\
+                     h.bump(mut g2.inner.w);\n\
+                     println(g1.inner.w);\n\
+                     println(g2.inner.w);\n\
+                     let mut t1 = (1, 2);\n\
+                     free_bump(mut t1.0);\n\
+                     let mut t2 = (1, 2);\n\
+                     h.bump(mut t2.0);\n\
+                     println(t1.0);\n\
+                     println(t2.0);\n\
+                     let mut p1 = Pair { t: (1, 2) };\n\
+                     free_bump(mut p1.t.1);\n\
+                     let mut p2 = Pair { t: (1, 2) };\n\
+                     h.bump(mut p2.t.1);\n\
+                     println(p1.t.1);\n\
+                     println(p2.t.1);\n\
+                     let mut a1 = [1, 1];\n\
+                     free_bump(mut a1[0]);\n\
+                     let mut a2 = [1, 1];\n\
+                     h.bump(mut a2[0]);\n\
+                     println(a1[0]);\n\
+                     println(a2[0]);\n\
+                     let mut v1 = Vec.new();\n\
+                     v1.push(1);\n\
+                     free_bump(mut v1[0]);\n\
+                     let mut v2 = Vec.new();\n\
+                     v2.push(1);\n\
+                     h.bump(mut v2[0]);\n\
+                     println(v1[0]);\n\
+                     println(v2[0]);\n\
+                 }"
+            ),
+            Some("2\n2\n2\n2\n3\n3\n2\n2\n2\n2\n".to_string())
+        );
+    }
+
+    /// The `shared struct` field arm of the same transplant: the receiver's
+    /// slot holds a HANDLE, so the place is one load in at the header-shifted
+    /// offset. `mut_ref_place_arg_ptr` routes that through
+    /// `shared_mut_ref_place_arg_ptr`; reaching it from the method path is what
+    /// this pins.
+    #[test]
+    fn method_mut_ref_shared_field_arg_writes_through() {
+        assert_eq!(
+            run_program(
+                "shared struct S { mut val: i64 }\n\
+                 struct H { acc: i64 }\n\
+                 impl H { fn bump(ref self, x: mut ref i64) -> i64 { x = x + 1; x } }\n\
+                 fn free_bump(x: mut ref i64) -> i64 { x = x + 1; x }\n\
+                 fn main() {\n\
+                     let g1 = S { val: 7 };\n\
+                     free_bump(mut g1.val);\n\
+                     println(g1.val);\n\
+                     let h = H { acc: 0 };\n\
+                     let g2 = S { val: 7 };\n\
+                     h.bump(mut g2.val);\n\
+                     println(g2.val);\n\
+                 }"
+            ),
+            Some("8\n8\n".to_string())
+        );
+    }
+
+    /// A read-only `ref` method parameter must NOT be switched to the place
+    /// pointer — the transplanted arm is gated on the parameter MODE, and a
+    /// widening to every `ref` param is the regression shape this family has
+    /// a history of. A reader still sees the caller's value, and a `mut ref
+    /// self` receiver plus a `mut ref` field argument still publish to two
+    /// different places.
+    #[test]
+    fn method_ref_field_arg_reads_and_mut_ref_self_still_writes() {
+        assert_eq!(
+            run_program(
+                "struct Box { v: i64 }\n\
+                 struct H { acc: i64 }\n\
+                 impl H {\n\
+                     fn peek(ref self, x: ref i64) -> i64 { x + 1 }\n\
+                     fn bump(mut ref self, x: mut ref i64) -> i64 {\n\
+                         self.acc = self.acc + 1;\n\
+                         x = x + 10;\n\
+                         x\n\
+                     }\n\
+                 }\n\
+                 fn main() {\n\
+                     let mut h = H { acc: 0 };\n\
+                     let b = Box { v: 4 };\n\
+                     println(h.peek(b.v));\n\
+                     println(b.v);\n\
+                     let mut c = Box { v: 1 };\n\
+                     println(h.bump(mut c.v));\n\
+                     println(c.v);\n\
+                     println(h.acc);\n\
+                 }"
+            ),
+            Some("5\n4\n11\n11\n1\n".to_string())
+        );
+    }
 }
 
 #[cfg(feature = "llvm")]

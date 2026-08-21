@@ -36851,3 +36851,143 @@ fn discriminant_reaches_every_receiver_shape() {
     // an impl all resolve to the same generated method.
     assert_eq!(out, "255 255 2 1\n");
 }
+
+#[test]
+fn test_method_mut_ref_scalar_arg_writes_back() {
+    // B-2026-08-21-38: a `mut ref T` METHOD parameter must publish the
+    // callee's final value back to the caller's place, exactly as the
+    // identical free function does. The interpreter binds every parameter
+    // to a by-value copy, so without an explicit write-back the mutation
+    // died with the callee's scope — measured as `6 5` here against `6 6`
+    // for the free-function spelling and `6 6` on both compiled backends.
+    let out = run("struct H { acc: i64 }\n\
+        impl H { fn bump(ref self, x: mut ref i64) -> i64 { x = x + 1; x } }\n\
+        fn free_bump(x: mut ref i64) -> i64 { x = x + 1; x }\n\
+        fn main() {\n\
+            let h = H { acc: 0 };\n\
+            let mut n = 5;\n\
+            println(h.bump(mut n));\n\
+            println(n);\n\
+            let mut m = 5;\n\
+            println(free_bump(mut m));\n\
+            println(m);\n\
+        }");
+    assert_eq!(out, "6\n6\n6\n6\n");
+}
+
+#[test]
+fn test_method_mut_ref_arg_writes_back_alongside_mut_ref_self() {
+    // The receiver write-back predates B-2026-08-21-38 and must survive it:
+    // a `mut ref self` method that also takes a `mut ref` argument has to
+    // publish BOTH, to two different call-site places.
+    let out = run("struct H { acc: i64 }\n\
+        impl H {\n\
+            fn bump(mut ref self, x: mut ref i64) -> i64 {\n\
+                self.acc = self.acc + 1;\n\
+                x = x + 10;\n\
+                x\n\
+            }\n\
+        }\n\
+        fn main() {\n\
+            let mut h = H { acc: 0 };\n\
+            let mut q = 1;\n\
+            println(h.bump(mut q));\n\
+            println(q);\n\
+            println(h.acc);\n\
+        }");
+    assert_eq!(out, "11\n11\n1\n");
+}
+
+#[test]
+fn test_method_mut_ref_arg_writes_back_when_forwarded_unmarked() {
+    // design.md § Call-site mutation markers: an argument already rooted at
+    // a `mut ref` binding forwards WITHOUT a `mut` marker. Keying the
+    // write-back on the marker alone would drop the inner hop of
+    // `forward` → `self.bump(x)` and leave `f` at 100. Keying it on the
+    // callee's declared parameter mode — what `method_param_mut_ref_flags`
+    // reports — carries the chain.
+    let out = run("struct H { acc: i64 }\n\
+        impl H {\n\
+            fn bump(ref self, x: mut ref i64) -> i64 { x = x + 1; x }\n\
+            fn forward(ref self, x: mut ref i64) -> i64 { self.bump(x) }\n\
+        }\n\
+        fn main() {\n\
+            let h = H { acc: 0 };\n\
+            let mut f = 100;\n\
+            println(h.forward(mut f));\n\
+            println(f);\n\
+        }");
+    assert_eq!(out, "101\n101\n");
+}
+
+#[test]
+fn test_method_mut_ref_arg_writes_back_to_every_place_shape() {
+    // The write-back lands through `assign_to_place`, so it must reach a
+    // field, a nested field, a tuple index and an index place — every shape
+    // `place_is_writeback_safe` admits — not just a bare identifier.
+    let out = run("struct Inner { w: i64 }\n\
+        struct Box { v: i64, inner: Inner }\n\
+        struct H { acc: i64 }\n\
+        impl H { fn bump(ref self, x: mut ref i64) -> i64 { x = x + 1; x } }\n\
+        fn main() {\n\
+            let h = H { acc: 0 };\n\
+            let mut b = Box { v: 1, inner: Inner { w: 1 } };\n\
+            h.bump(mut b.v);\n\
+            h.bump(mut b.inner.w);\n\
+            println(b.v);\n\
+            println(b.inner.w);\n\
+            let mut t = (1, 2);\n\
+            h.bump(mut t.0);\n\
+            println(t.0);\n\
+            let mut a = [10, 20];\n\
+            h.bump(mut a[1]);\n\
+            println(a[1]);\n\
+        }");
+    assert_eq!(out, "2\n2\n2\n21\n");
+}
+
+#[test]
+fn test_method_two_mut_ref_args_write_back_independently() {
+    // Two `mut ref` parameters are two distinct caller places; the
+    // write-back must be per-argument, not "the first one wins".
+    let out = run("struct H { acc: i64 }\n\
+        impl H {\n\
+            fn twice(ref self, a: mut ref i64, b: mut ref i64) {\n\
+                a = a + 1;\n\
+                b = b + 2;\n\
+            }\n\
+        }\n\
+        fn main() {\n\
+            let h = H { acc: 0 };\n\
+            let mut a = 0;\n\
+            let mut b = 0;\n\
+            h.twice(mut a, mut b);\n\
+            println(a);\n\
+            println(b);\n\
+        }");
+    assert_eq!(out, "1\n2\n");
+}
+
+#[test]
+fn test_method_owned_arg_reassigned_in_body_is_not_written_back() {
+    // The gate is the DECLARED parameter mode, and this is the control that
+    // makes that load-bearing: an OWNED parameter reassigned in the body is
+    // the callee's own copy, and the caller's binding must not move. The
+    // free-function spelling below is the in-program oracle — it prints
+    // `9 5`, and the method spelling has to match. Dropping the mode gate to
+    // a blanket "copy every parameter back" flips the method half to `9 9`,
+    // measured.
+    let out = run("struct H { acc: i64 }\n\
+        impl H { fn owned(ref self, x: i64) -> i64 { x = 9; x } }\n\
+        fn free_owned(x: i64) -> i64 { x = 9; x }\n\
+        fn main() {\n\
+            let h = H { acc: 0 };\n\
+            let mut n = 5;\n\
+            println(h.owned(n));\n\
+            println(n);\n\
+            let mut m = 5;\n\
+            println(free_owned(m));\n\
+            println(m);\n\
+        }");
+    assert_eq!(out, "9\n5\n9\n5\n");
+}

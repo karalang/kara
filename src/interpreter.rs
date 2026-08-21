@@ -1037,6 +1037,59 @@ impl<'a> Interpreter<'a> {
         })
     }
 
+    /// Per-parameter "is a mutate-through-borrow mode" flags for the impl
+    /// method `type_name.method` — the method sibling of
+    /// [`Self::fn_param_mut_ref_flags`], resolved through the same
+    /// program-then-stdlib chain as [`Self::method_self_param`].
+    ///
+    /// The receiver is NOT represented: index `i` is the method's `i`-th
+    /// DECLARED parameter, which is also the `i`-th call-site argument.
+    /// (`param_patterns` carries an extra leading `self` slot, so a lookup
+    /// into it needs `i + 1`.)
+    ///
+    /// Drives the argument half of the method CICO write-back in
+    /// `method_call.rs`: keying purely on the call site's `mut` marker drops
+    /// a `mut ref` binding FORWARDED from an enclosing signature, which per
+    /// design.md § Call-site mutation markers carries no marker of its own.
+    /// Returns `None` when no `impl` of that type declares the method (an
+    /// extern or builtin), leaving those on the marker-only path.
+    pub(crate) fn method_param_mut_ref_flags(
+        &self,
+        type_name: &str,
+        method: &str,
+    ) -> Option<Vec<bool>> {
+        fn find_in(items: &[Item], type_name: &str, method: &str) -> Option<Vec<bool>> {
+            items.iter().find_map(|item| match item {
+                Item::ImplBlock(imp) => {
+                    let target = match &imp.target_type.kind {
+                        TypeKind::Path(p) => p.segments.last().map(String::as_str),
+                        _ => None,
+                    };
+                    if target != Some(type_name) {
+                        return None;
+                    }
+                    imp.items.iter().find_map(|it| match it {
+                        ImplItem::Method(m) if m.name == method => Some(
+                            m.params
+                                .iter()
+                                .map(|p| {
+                                    matches!(p.ty.kind, TypeKind::MutRef(_) | TypeKind::MutSlice(_))
+                                })
+                                .collect(),
+                        ),
+                        _ => None,
+                    })
+                }
+                _ => None,
+            })
+        }
+        find_in(&self.program.items, type_name, method).or_else(|| {
+            crate::prelude::STDLIB_PROGRAMS
+                .iter()
+                .find_map(|(_, p)| find_in(&p.items, type_name, method))
+        })
+    }
+
     /// Owned (by-value) parameter names of the impl method
     /// `type_name.method`, for the param-scrutinee / destructure gates
     /// (B-2026-08-01-13) — the impl-method sibling of `eval_call`'s

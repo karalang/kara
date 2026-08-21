@@ -591,16 +591,58 @@ impl<'a> super::Interpreter<'a> {
                 // `StmtKind::Assign` (identifier / field / index), plus
                 // `SelfValue` so a nested self-method call (`self.adv()` inside
                 // `skip_ws`) propagates the mutation up the receiver chain.
-                let self_writeback = if matches!(
-                    self.method_self_param(&type_name, method),
-                    Some(crate::ast::SelfParam::MutRef)
-                ) {
+                let self_param = self.method_self_param(&type_name, method);
+                let self_writeback = if matches!(self_param, Some(crate::ast::SelfParam::MutRef)) {
                     self.env.get("self")
                 } else {
                     None
                 };
 
+                // B-2026-08-21-38 — the ARGUMENT half of the same CICO
+                // write-back. `mut ref T` / `mut Slice[T]` method parameters
+                // bind to a by-value copy in this scope exactly as `self`
+                // does, so without this the callee's mutation of a SCALAR
+                // parameter never reached the caller's variable — while the
+                // identical free function (`eval_call.rs`) wrote it back, and
+                // both compiled backends did too. Container arguments only
+                // looked correct because `Value::Vec`/`String` share their
+                // buffer, so the callee mutated the caller's storage directly.
+                //
+                // Gated on a self-taking method because that is what makes the
+                // index arithmetic sound: `param_patterns` carries a leading
+                // `self` slot, so declared parameter `i` — and therefore
+                // `args[i]` — is `param_patterns[i + 1]`.
+                let arg_writebacks: Vec<(Expr, Value)> = if self_param.is_some() {
+                    let param_mut_ref = self.method_param_mut_ref_flags(&type_name, method);
+                    args.iter()
+                        .enumerate()
+                        .filter(|(i, arg)| {
+                            arg.mut_marker
+                                || param_mut_ref
+                                    .as_ref()
+                                    .and_then(|f| f.get(*i))
+                                    .copied()
+                                    .unwrap_or(false)
+                        })
+                        .filter(|(_, arg)| Self::place_is_writeback_safe(&arg.value))
+                        .filter_map(|(i, arg)| {
+                            let pat = param_patterns.get(i + 1)?;
+                            let PatternKind::Binding(param_name) = &pat.kind else {
+                                return None;
+                            };
+                            let val = self.env.get(param_name)?;
+                            Some((arg.value.clone(), val))
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+
                 self.env.pop_scope();
+
+                for (place, val) in arg_writebacks {
+                    self.assign_to_place(&place, val);
+                }
 
                 if let Some(self_val) = self_writeback {
                     match &object.kind {

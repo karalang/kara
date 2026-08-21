@@ -6935,6 +6935,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     .get(&qualified)
                     .cloned()
                     .unwrap_or_default();
+                // B-2026-08-21-38 (codegen half) — the mutate-through subset,
+                // which needs a pointer to the caller's PLACE rather than to a
+                // copy. Same key and same self-at-0 indexing as `ref_flags`.
+                let mut_ref_flags = self
+                    .fn_sig
+                    .fn_param_mut_ref
+                    .get(&qualified)
+                    .cloned()
+                    .unwrap_or_default();
                 let mut compiled_args: Vec<BasicMetadataValueEnum<'ctx>> = vec![receiver_arg];
                 for (i, a) in args.iter().enumerate() {
                     let pidx = i + 1;
@@ -7014,6 +7023,30 @@ impl<'ctx> super::Codegen<'ctx> {
                         if let Some(elem_ptr) = self.ref_arg_index_borrow_ptr(&a.value)? {
                             compiled_args.push(elem_ptr.into());
                             continue;
+                        }
+                        // B-2026-08-21-38 (codegen half) — a `mut ref T` slot
+                        // fed a FIELD or TUPLE-INDEX place. Neither took the
+                        // identifier fast path above, so the argument fell
+                        // through to the rvalue path below and the callee
+                        // mutated a COPY: measured on
+                        // `struct Box { v: i64 }` … `h.bump(mut b.v)` as `4`
+                        // under JIT and AOT where the byte-identical FREE
+                        // function `free_bump(mut b.v)` answered `5` on every
+                        // surface. This is B-2026-08-05-41's fix, which landed
+                        // on the free-function path (`call_dispatch.rs`) and
+                        // the generic path (`mono.rs`) and never on this one.
+                        //
+                        // Gated on the PARAMETER MODE, not the payload type,
+                        // exactly as the free-fn arm is: a mutate-through
+                        // borrow of a place always needs the place, while a
+                        // read-only `ref` param is left alone because a copy is
+                        // a correct borrow for a reader and the arms below do
+                        // type-specific work on that path.
+                        if mut_ref_flags.get(pidx).copied().unwrap_or(false) {
+                            if let Some(place_ptr) = self.mut_ref_place_arg_ptr(&a.value) {
+                                compiled_args.push(place_ptr.into());
+                                continue;
+                            }
                         }
                         // Borrow-returning call in ref-arg position — forward
                         // the raw `-> ref T` borrow pointer (bypass the
