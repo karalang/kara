@@ -1128,8 +1128,13 @@ impl<'a> super::TypeChecker<'a> {
                             && si.generic_params.len() == args.len()
                     })
                 {
-                    let ty =
-                        self.infer_struct_literal_expected(path, fields, &expr.span, Some(args));
+                    let ty = self.infer_struct_literal_expected(
+                        path,
+                        fields,
+                        &expr.span,
+                        Some(args),
+                        false,
+                    );
                     self.record_expr_type(&expr.span, &ty);
                     return ty;
                 }
@@ -5178,7 +5183,10 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 }
                 if let Some(ref spread_expr) = spread {
+                    // Inferred for its own diagnostics' sake; the base itself
+                    // goes nowhere (see `infer_struct_literal_with_spread`).
                     self.infer_expr(spread_expr);
+                    return self.infer_struct_literal_with_spread(path, fields, &expr.span);
                 }
                 self.infer_struct_literal(path, fields, &expr.span)
             }

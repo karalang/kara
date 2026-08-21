@@ -714,7 +714,19 @@ impl<'a> super::TypeChecker<'a> {
         fields: &[FieldInit],
         span: &Span,
     ) -> Type {
-        self.infer_struct_literal_expected(path, fields, span, None)
+        self.infer_struct_literal_expected(path, fields, span, None, false)
+    }
+
+    /// [`infer_struct_literal`] for a literal that carried a spread base
+    /// (`P { x: 1, ..base }`). Split out so the one call site that has the
+    /// base in hand can say so without every other caller growing an argument.
+    pub(super) fn infer_struct_literal_with_spread(
+        &mut self,
+        path: &[String],
+        fields: &[FieldInit],
+        span: &Span,
+    ) -> Type {
+        self.infer_struct_literal_expected(path, fields, span, None, true)
     }
 
     /// Struct-literal inference, optionally seeded by the type-args of an
@@ -734,6 +746,7 @@ impl<'a> super::TypeChecker<'a> {
         fields: &[FieldInit],
         span: &Span,
         expected_type_args: Option<&[Type]>,
+        has_spread: bool,
     ) -> Type {
         let struct_name = path.last().cloned().unwrap_or_default();
 
@@ -808,9 +821,54 @@ impl<'a> super::TypeChecker<'a> {
             .collect();
         let provided_fields: HashSet<&str> = fields.iter().map(|f| f.name.as_str()).collect();
 
-        // Check for missing fields
-        for (fname, _, _) in &struct_info.fields {
-            if !provided_fields.contains(fname.as_str()) {
+        // Check for missing fields.
+        //
+        // A SPREAD BASE gets one targeted error instead. `P { x: 1, ..base }`
+        // parses — syntax.md § Struct Literals admits `[".." EXPR]` — and the
+        // base is then dropped on the floor: codegen's `StructLiteral` arm
+        // binds `{ path, fields, .. }` and never reads it. Reporting "missing
+        // field 'y'" for that blames the writer for the one thing they DID
+        // supply, and points at a construct the compiler silently discarded
+        // (B-2026-08-21-12). The interpreter, confusingly, implements the copy
+        // — so the form is unreachable rather than merely useless, which is the
+        // only reason there is no run-vs-build miscompile here today.
+        let missing: Vec<&str> = struct_info
+            .fields
+            .iter()
+            .map(|(n, _, _)| n.as_str())
+            .filter(|n| !provided_fields.contains(n))
+            .collect();
+        if has_spread {
+            let tail = if missing.is_empty() {
+                "every field is already given explicitly here, so the base has no \
+                 effect — drop it"
+                    .to_string()
+            } else {
+                format!(
+                    "copy the remaining {} explicitly instead: {}",
+                    if missing.len() == 1 {
+                        "field"
+                    } else {
+                        "fields"
+                    },
+                    missing
+                        .iter()
+                        .map(|f| format!("`{f}: <base>.{f}`"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            };
+            self.type_error(
+                format!(
+                    "error[E_STRUCT_LITERAL_SPREAD_UNSUPPORTED]: struct '{struct_name}' \
+                     literal has a spread base (`..base`), which is parsed but NOT \
+                     applied — no field is copied from the base. {tail}."
+                ),
+                *span,
+                TypeErrorKind::TypeMismatch,
+            );
+        } else {
+            for fname in &missing {
                 self.type_error(
                     format!("missing field '{}' in struct '{}'", fname, struct_name),
                     *span,

@@ -42820,3 +42820,65 @@ fn usize_suffixed_literals_typecheck_across_the_whole_range() {
         typecheck_ok(src);
     }
 }
+
+// ── Struct-literal spread base (`P { x: 1, ..base }`) ───────────
+
+/// The spread base parses — syntax.md § Struct Literals admits `[".." EXPR]` —
+/// and is then dropped: codegen's `StructLiteral` arm binds `{ path, fields, .. }`
+/// and never reads it. The typechecker used to report `missing field 'y'`, which
+/// blames the writer for the one thing they DID supply and says nothing about the
+/// construct that was discarded (B-2026-08-21-12).
+#[test]
+fn test_struct_literal_spread_base_is_rejected_not_reported_as_a_missing_field() {
+    let errors = typecheck_errors(
+        "struct P { x: i64, y: i64 }\n\
+         fn main() { let a = P { x: 1, y: 2 }; let b = P { x: 5, ..a }; }",
+    );
+    assert_eq!(errors.len(), 1, "expected one error, got {errors:?}");
+    let msg = errors[0].message.clone();
+    assert!(
+        msg.contains("E_STRUCT_LITERAL_SPREAD_UNSUPPORTED"),
+        "expected the spread diagnostic, got {msg}"
+    );
+    assert!(
+        msg.contains("`y: <base>.y`"),
+        "the message must name the field to copy, got {msg}"
+    );
+    assert!(
+        !msg.contains("missing field"),
+        "the missing-field cascade must be suppressed, got {msg}"
+    );
+}
+
+/// With every field given explicitly the base is inert rather than lossy, so the
+/// message says so instead of listing fields to copy. Still an error: the form is
+/// unimplemented, and accepting it here would keep suggesting that the base means
+/// something.
+#[test]
+fn test_struct_literal_spread_base_with_all_fields_explicit_says_it_is_inert() {
+    let errors = typecheck_errors(
+        "struct P { x: i64, y: i64 }\n\
+         fn main() { let a = P { x: 1, y: 2 }; let b = P { x: 5, y: 6, ..a }; }",
+    );
+    assert_eq!(errors.len(), 1, "expected one error, got {errors:?}");
+    assert!(
+        errors[0].message.contains("the base has no effect"),
+        "got {}",
+        errors[0].message
+    );
+}
+
+/// Regression guard: a literal with NO spread still gets the plain
+/// missing-field diagnostic, one per absent field.
+#[test]
+fn test_struct_literal_without_spread_still_reports_missing_fields() {
+    let errors = typecheck_errors("struct P { x: i64, y: i64 }\nfn main() { let b = P { x: 5 }; }");
+    assert_eq!(errors.len(), 1, "expected one error, got {errors:?}");
+    assert!(
+        errors[0]
+            .message
+            .contains("missing field 'y' in struct 'P'"),
+        "got {}",
+        errors[0].message
+    );
+}
