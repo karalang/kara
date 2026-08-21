@@ -1477,6 +1477,17 @@ impl<'ctx> super::Codegen<'ctx> {
             /// because close is NOT idempotent and the null is what makes a
             /// second drop of the same storage inert.
             FileHandleClose,
+            /// GPU-SLIP-4b-4 — a `GpuBuffer[S]` field. The device allocation
+            /// sits behind a `{ i64 handle, i64 n }` value that no
+            /// layout-driven classifier reads as anything but two integers, so
+            /// `struct Sim { grid: GpuBuffer[B] }` reclaimed its storage and
+            /// leaked the buffer. Freed via `karac_runtime_gpu_free_soa`, which
+            /// is idempotent (a no-op on a handle already consumed by
+            /// `gpu.download` or already freed, and handles are never reused),
+            /// so unlike `FileHandleClose` this needs neither a live-guard nor
+            /// a nulling write — the same rationale
+            /// `CleanupAction::FreeGpuBuffer` records for a bound buffer.
+            GpuBufferFree,
             /// Phase-8 line 39 follow-up — an i64 field that's an opaque
             /// handle into a runtime side-table; free it via the named
             /// extern (guarded on `handle != 0`) at scope exit.
@@ -2142,6 +2153,38 @@ impl<'ctx> super::Codegen<'ctx> {
                 kinds[idx] = FieldDrop::FileHandleClose;
             }
         }
+        // GPU-SLIP-4b-4 — a `GpuBuffer[S]` FIELD, reachable since the type
+        // became nameable. The same class of gap as the `File` handle above,
+        // and worse to diagnose: a leaked device allocation is invisible to
+        // LeakSanitizer (it is not in the host heap LSan walks), so it surfaces
+        // only as a GPU eventually refusing to allocate.
+        //
+        // Guarded the same two ways for the same reasons: a user type named
+        // `GpuBuffer` shadows the builtin and keeps whatever class it already
+        // had, and the LLVM field must actually be the two-integer aggregate
+        // the handle lowers to, so a shadowing type of another shape can never
+        // be read as a handle and freed.
+        if !self.type_decls.struct_types.contains_key("GpuBuffer") {
+            let gpu_idxs: Vec<usize> = field_kinds
+                .iter()
+                .enumerate()
+                .filter(|(idx, fk)| {
+                    fk.as_deref() == Some("GpuBuffer")
+                        && kinds.get(*idx) == Some(&FieldDrop::None)
+                        && matches!(
+                            st.get_field_type_at_index(*idx as u32),
+                            Some(inkwell::types::BasicTypeEnum::StructType(t))
+                                if t.count_fields() == 2
+                                    && t.get_field_type_at_index(0)
+                                        .is_some_and(|f| f.is_int_type())
+                        )
+                })
+                .map(|(idx, _)| idx)
+                .collect();
+            for idx in gpu_idxs {
+                kinds[idx] = FieldDrop::GpuBufferFree;
+            }
+        }
         if kinds.iter().all(|k| *k == FieldDrop::None) {
             return None;
         }
@@ -2696,6 +2739,43 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.builder
                         .build_store(field_ptr, ptr_ty.const_null())
                         .unwrap();
+                }
+                FieldDrop::GpuBufferFree => {
+                    // Field 0 of the `{handle, n}` value is the resident
+                    // handle. No live-guard: the runtime free is idempotent and
+                    // a no-op on an unknown handle, so a field that was moved
+                    // out or already downloaded costs one inert call rather
+                    // than needing move-suppression to be exact.
+                    let field_ptr = self
+                        .builder
+                        .build_struct_gep(
+                            st,
+                            p_arg,
+                            field_idx as u32,
+                            &format!("drop.field{field_idx}.gpubuf.p"),
+                        )
+                        .unwrap();
+                    let buf_ty = self.gpu_buffer_type();
+                    let handle_ptr = self
+                        .builder
+                        .build_struct_gep(
+                            buf_ty,
+                            field_ptr,
+                            0,
+                            &format!("drop.field{field_idx}.gpubuf.handle.p"),
+                        )
+                        .unwrap();
+                    let handle = self
+                        .builder
+                        .build_load(
+                            i64_t,
+                            handle_ptr,
+                            &format!("drop.field{field_idx}.gpubuf.handle"),
+                        )
+                        .unwrap()
+                        .into_int_value();
+                    let free_fn = self.gpu_free_soa_fn();
+                    self.builder.build_call(free_fn, &[handle.into()], "").ok();
                 }
                 FieldDrop::HttpHandleFree(extern_name) => {
                     // Phase-8 line 39 follow-up — load the i64 side-table

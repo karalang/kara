@@ -2607,6 +2607,107 @@ fn a_resident_field_reduction_resolves_layout_groups_and_offsets() {
     );
 }
 
+/// `GpuBuffer[S]` is a first-class type: it can be a struct FIELD, a
+/// PARAMETER, and a RETURN type, and a buffer reached through any of them
+/// behaves exactly like a locally-bound one (GPU-SLIP-4b-4).
+///
+/// The struct-field case is the one that could not previously be written at
+/// all — `GpuBuffer` was not a nameable type, so a buffer could live in a local
+/// binding and nowhere else. The repeated reads are the ownership half: the
+/// struct owns that buffer, so a reduction over `sim.grid` must only READ it.
+/// Freeing there is what the older place rule did, and the second read then hit
+/// the runtime's already-freed guard.
+#[test]
+fn a_gpu_buffer_is_storable_in_a_field_a_parameter_and_a_return() {
+    let Some(backend) = gpu_or_skip() else { return };
+
+    let tag = "gpu_buffer_first_class";
+    let dir = scratch(tag);
+    let src = dir.join(format!("{tag}.kara"));
+    std::fs::write(
+        &src,
+        "struct Body { mass: f32, speed: f32 }\n\
+        struct Sim  { grid: GpuBuffer[Body], step: i32 }\n\
+        fn make(v: Vec[Body]) -> GpuBuffer[Body] { gpu.upload(v) }\n\
+        fn total(b: ref GpuBuffer[Body]) -> f32 { gpu.sum(b.mass) }\n\
+        impl Sim {\n\
+        \x20   fn mass(ref self) -> f32 { gpu.sum(self.grid.mass) }\n\
+        }\n\
+        fn main() {\n\
+        \x20   let bodies: Vec[Body] = [Body { mass: 1.0, speed: 10.0 },\n\
+        \x20                            Body { mass: 3.0, speed: 30.0 }];\n\
+        \x20   let buf = make(bodies);\n\
+        \x20   println(f\"{total(buf)}\");\n\
+        \x20   let sim = Sim { grid: buf, step: 0 };\n\
+        \x20   println(f\"{sim.mass()}\");\n\
+        \x20   println(f\"{gpu.sum(sim.grid.mass)}\");\n\
+        \x20   println(f\"{gpu.sum(sim.grid.speed)}\");\n\
+        \x20   println(f\"{gpu.sum(sim.grid.mass)}\");\n\
+        \x20   let back = gpu.download(sim.grid);\n\
+        \x20   println(f\"{back.len()}\");\n\
+        }\n",
+    )
+    .expect("write fixture source");
+
+    let out =
+        build_and_run_on_gpu(&dir, &src, tag, backend).unwrap_or_else(|e| panic!("{tag}: {e}"));
+    let got: Vec<&str> = out.lines().map(str::trim).collect();
+    assert_eq!(
+        got,
+        vec!["4", "4", "4", "40", "4", "2"],
+        "{tag}: a buffer through a return, a `ref` parameter, `self.grid` and a \
+         plain field must all answer alike, the field must survive being read \
+         three times, and it must still download. Full output:\n{out}"
+    );
+}
+
+/// A struct holding a `GpuBuffer` field can be built and dropped repeatedly
+/// without exhausting the device (GPU-SLIP-4b-4).
+///
+/// The execution half of the struct-field drop. It cannot prove the free on its
+/// own — a leak of 300 buffers may simply fit — which is why
+/// `tests/codegen.rs` asserts the free is EMITTED. What this adds is that the
+/// free is also correct at runtime: freeing a field the struct owns, once per
+/// struct, neither double-frees nor reclaims a buffer still in use.
+#[test]
+fn a_struct_holding_a_gpu_buffer_survives_repeated_create_and_drop() {
+    let Some(backend) = gpu_or_skip() else { return };
+
+    let tag = "gpu_buffer_field_drop";
+    let dir = scratch(tag);
+    let src = dir.join(format!("{tag}.kara"));
+    std::fs::write(
+        &src,
+        "struct Body { mass: f32, speed: f32 }\n\
+        struct Sim  { grid: GpuBuffer[Body], step: i32 }\n\
+        fn once() -> f32 {\n\
+        \x20   let bodies: Vec[Body] = [Body { mass: 1.0, speed: 2.0 },\n\
+        \x20                            Body { mass: 3.0, speed: 4.0 }];\n\
+        \x20   let sim = Sim { grid: gpu.upload(bodies), step: 0 };\n\
+        \x20   gpu.sum(sim.grid.mass)\n\
+        }\n\
+        fn main() {\n\
+        \x20   let mut i: i64 = 0;\n\
+        \x20   let mut bad: i64 = 0;\n\
+        \x20   while i < 300 {\n\
+        \x20       if once() != 4.0 { bad = bad + 1; }\n\
+        \x20       i = i + 1;\n\
+        \x20   }\n\
+        \x20   println(f\"{bad}\");\n\
+        }\n",
+    )
+    .expect("write fixture source");
+
+    let out =
+        build_and_run_on_gpu(&dir, &src, tag, backend).unwrap_or_else(|e| panic!("{tag}: {e}"));
+    assert_eq!(
+        out.lines().next().map(str::trim),
+        Some("0"),
+        "{tag}: 300 create/drop cycles of a struct holding a device buffer must \
+         all answer 4. Full output:\n{out}"
+    );
+}
+
 /// A resident reduction over a TEMPORARY buffer answers correctly, and a
 /// reduction over a BINDING leaves that binding usable (GPU-SLIP-4b-3b).
 ///

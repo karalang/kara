@@ -58035,6 +58035,96 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_a_gpu_buffer_struct_field_is_freed_when_the_struct_dies() {
+        // GPU-SLIP-4b-4. `GpuBuffer[S]` is a nameable type, so a buffer can
+        // live in a struct field — and a field is reclaimed by the struct's
+        // drop, not by any `let`. Without the `synth_drop` classifier arm
+        // nothing frees it: the storage goes away and the DEVICE allocation
+        // stays, which LeakSanitizer cannot see (it is not in the host heap)
+        // and which surfaces only as a GPU eventually refusing to allocate.
+        //
+        // The program deliberately binds NO buffer to a local, so every
+        // `karac_runtime_gpu_free_soa` in the IR must have come from the
+        // struct drop. Zero occurrences is the pre-fix state.
+        let src = r#"
+struct Body { mass: f32, speed: f32 }
+struct Sim  { grid: GpuBuffer[Body], step: i32 }
+
+fn main() {
+    let bodies: Vec[Body] = [Body { mass: 1.0, speed: 2.0 }];
+    let sim = Sim { grid: gpu.upload(bodies), step: 0 };
+    println(sim.step);
+}
+"#;
+        let ir = ir_for_with_ownership(src);
+        assert!(
+            ir.contains("karac_runtime_gpu_free_soa"),
+            "a GpuBuffer struct field must be freed by the struct's drop; got no \
+             free at all:\n{ir}"
+        );
+        assert!(
+            ir.contains("__karac_drop_struct_Sim"),
+            "the free must live in the struct's drop fn, not at a binding:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_a_declared_gpu_buffer_field_lowers_to_the_two_word_handle() {
+        // The declared type must lower to the same `{ i64 handle, i64 n }` the
+        // upload produces. Before the lowering arm existed, `GpuBuffer[S]` hit
+        // the unknown-name `i64` default and `Sim` lowered to `{ i64, i32 }` —
+        // half a handle, and the reduction then read an integer where it
+        // expected the aggregate.
+        let src = r#"
+struct Body { mass: f32, speed: f32 }
+struct Sim  { grid: GpuBuffer[Body], step: i32 }
+
+fn main() {
+    let bodies: Vec[Body] = [Body { mass: 1.0, speed: 2.0 }];
+    let sim = Sim { grid: gpu.upload(bodies), step: 0 };
+    println(f"{gpu.sum(sim.grid.mass)}");
+}
+"#;
+        let ir = ir_for_with_ownership(src);
+        assert!(
+            ir.contains("{ { i64, i64 }, i32 }"),
+            "`Sim` must lower with the two-word buffer handle inline; got:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_a_reduction_over_a_struct_owned_buffer_does_not_free_it() {
+        // The place-vs-temporary rule, at the point where making the type
+        // storable changed the answer. `sim.grid` is a PLACE — the struct owns
+        // that buffer and the reduction only reads it — so the reduction must
+        // emit no free of its own; the struct's drop is the single owner.
+        //
+        // Under the older "a bare identifier is a binding, anything else is a
+        // temporary" rule this freed the field at the first reduction, and a
+        // second read of `sim.grid` hit the runtime's already-freed guard.
+        // Two reductions plus one struct here: exactly one free (plus its
+        // declare) is correct.
+        let src = r#"
+struct Body { mass: f32, speed: f32 }
+struct Sim  { grid: GpuBuffer[Body], step: i32 }
+
+fn main() {
+    let bodies: Vec[Body] = [Body { mass: 1.0, speed: 2.0 }];
+    let sim = Sim { grid: gpu.upload(bodies), step: 0 };
+    println(f"{gpu.sum(sim.grid.mass)}");
+    println(f"{gpu.sum(sim.grid.speed)}");
+}
+"#;
+        let ir = ir_for_with_ownership(src);
+        let frees = ir.matches("karac_runtime_gpu_free_soa").count();
+        assert_eq!(
+            frees, 2,
+            "a struct-owned buffer must be freed once by the struct's drop and \
+             never by a reduction over it (one declare + one call), got {frees}:\n{ir}"
+        );
+    }
+
+    #[test]
     fn test_ir_a_resident_reduction_frees_a_temporary_buffer_but_never_a_binding() {
         // GPU-SLIP-4b-3b. The receiver of `gpu.<reduce>(<expr>.field)` may be a
         // binding or a temporary, and the ONLY difference that reaches the

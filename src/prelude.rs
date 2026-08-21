@@ -89,6 +89,12 @@ pub const PRELUDE_TYPES: &[&str] = &[
     "Bf16",
     "Atomic",
     "Mutex",
+    // `GpuBuffer[S]` — a handle to a device-resident SoA buffer produced by
+    // `gpu.upload` (design.md § Resident GPU buffers). Prelude-visible so it
+    // can be WRITTEN: as a struct field, a parameter, a return type. Before
+    // this it existed only as the type `gpu.upload` inferred, which made a
+    // buffer un-storable — it could live in a local binding and nowhere else.
+    "GpuBuffer",
     // `VolatileCell[T: Copy]` — the ergonomic typed wrapper over a single MMIO
     // register (`runtime/stdlib/volatile_cell.kara`). Prelude-visible like its
     // sibling hardware/concurrency primitives; its `.read()` / `.write(v)`
@@ -1868,9 +1874,8 @@ fn stub_struct(name: &str, span: &Span) -> Item {
 fn stub_generics(name: &str, span: &Span) -> Option<GenericParams> {
     let params: &[&str] = match name {
         "Option" | "Vec" | "VecDeque" | "Slice" | "Array" | "Vector" | "Set" | "Atomic"
-        | "Mutex" | "SortedSet" | "Channel" | "Sender" | "Receiver" | "BufReader" | "BufWriter" => {
-            &["T"]
-        }
+        | "Mutex" | "SortedSet" | "Channel" | "Sender" | "Receiver" | "BufReader" | "BufWriter"
+        | "GpuBuffer" => &["T"],
         "Result" => &["T", "E"],
         "Map" | "Entry" | "SortedMap" => &["K", "V"],
         _ => return None,

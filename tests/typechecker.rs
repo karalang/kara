@@ -38938,6 +38938,48 @@ fn gpu_reduce_over_a_device_buffer_field_typechecks_and_names_unknown_fields() {
 }
 
 #[test]
+fn gpu_buffer_is_nameable_in_every_type_position() {
+    // GPU-SLIP-4b-4: `GpuBuffer[S]` is a real, writable type. Before this it
+    // existed only as the type `gpu.upload` INFERRED — the name resolved
+    // nowhere, so `undefined type 'GpuBuffer'` was the answer in a struct
+    // field, a parameter and a return type alike, and a buffer could live in a
+    // local binding and nowhere else.
+    typecheck_ok(
+        "struct Body { mass: f32, speed: f32 }\n\
+        struct Sim  { grid: GpuBuffer[Body], step: i32 }\n\
+        fn make(v: Vec[Body]) -> GpuBuffer[Body] { gpu.upload(v) }\n\
+        fn total(b: ref GpuBuffer[Body]) -> f32 { gpu.sum(b.mass) }\n\
+        impl Sim {\n\
+        \x20   fn mass(ref self) -> f32 { gpu.sum(self.grid.mass) }\n\
+        }\n\
+        fn main() {\n\
+        \x20   let bodies: Vec[Body] = [Body { mass: 1.0, speed: 2.0 }];\n\
+        \x20   let sim = Sim { grid: make(bodies), step: 0 };\n\
+        \x20   let a: f32 = total(sim.grid);\n\
+        \x20   let b: f32 = sim.mass();\n\
+        \x20   let c: f32 = gpu.sum(sim.grid.mass);\n\
+        }",
+    );
+}
+
+#[test]
+fn a_reduction_projects_through_a_borrowed_device_buffer() {
+    // `ref GpuBuffer[S]` is exactly the read-only use a reduction makes of its
+    // receiver, so it is the natural way to pass a buffer to a function that
+    // only totals a field — and the reduction has to see through the borrow to
+    // accept it, the way field access does for every other aggregate receiver.
+    typecheck_ok(
+        "struct Body { mass: f32 }\n\
+        fn total(b: ref GpuBuffer[Body]) -> f32 { gpu.sum(b.mass) }\n\
+        fn main() {\n\
+        \x20   let bodies: Vec[Body] = [Body { mass: 1.0 }];\n\
+        \x20   let buf = gpu.upload(bodies);\n\
+        \x20   let t: f32 = total(buf);\n\
+        }",
+    );
+}
+
+#[test]
 fn gpu_reduce_accepts_a_temporary_device_buffer_as_the_receiver() {
     // GPU-SLIP-4b-3b: the receiver of a resident field reduction does not have
     // to be a binding. A buffer that a call just produced is reducible in

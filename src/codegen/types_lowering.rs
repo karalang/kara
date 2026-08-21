@@ -2625,6 +2625,14 @@ impl<'ctx> super::Codegen<'ctx> {
             // `TypeKind::Path` arm above — the two entry points must not
             // answer differently for one type (B-2026-08-11-34).
             "Slice" | "CStr" => self.slice_struct_type().into(),
+            // `GpuBuffer[S]` — the `{ i64 handle, i64 n }` device-buffer value
+            // (GPU-SLIP-4b). Its layout does not depend on `S`: the handle is
+            // type-erased and `S` only tells the compiler how to interpret the
+            // bytes already on the device, which is why the name-level lowering
+            // is complete for it. Without this arm a declared `GpuBuffer[S]`
+            // field fell to the unknown-name `i64` default at the bottom and a
+            // struct holding one lowered to `{ i64, … }` — half a handle.
+            "GpuBuffer" => self.gpu_buffer_type().into(),
             // `Unit` — the unit type written as a NAME (`-> Unit`,
             // `Result[Unit, IoError]`, both used throughout the baked stdlib).
             // It has no declaration anywhere, so it reached the unknown-name

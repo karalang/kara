@@ -10319,9 +10319,25 @@ That equality is what makes the feature safe to reach for: it is an optimisation
 
 **Layout groups are resolved, not assumed.** A `layout` block splits `S` across several device buffers, so `mass` is a *(group, stride, offset)* rather than a field index — and the compiler resolves it through the same layout lookup `gpu.upload` and `gpu.dispatch` use. All three must agree: a buffer uploaded under one grouping and reduced under another would read a different field entirely and report a plausible wrong number, with nothing to flag it.
 
-**The receiver may be a binding or a temporary, and that decides who frees it.** `buf.mass` reduces a buffer someone else owns, so the reduction only reads it — freeing it there would leave `buf` holding a dangling handle for the rest of its scope. `gpu.upload(cells).mass` and `gpu.dispatch(k, buf).mass` reduce a buffer that has no owner at all: no `let` bound it, so no scope exit will ever free it, and the reduction is the only site that can. Both forms are accepted and the compiler emits the free for exactly the second.
+**`GpuBuffer[S]` is a first-class type.** It can be written wherever a type can be written — a struct field, a parameter, a return type — so a device buffer is storable rather than confined to the local binding that produced it:
 
-That distinction is syntactic — a bare identifier is a binding, anything else is a temporary — and it is exact rather than approximate, because `GpuBuffer[S]` is not a *nameable* type. It cannot be written as a struct field, a parameter, or a return type, so the only expressions that can denote a device buffer are a local binding and a call that just produced one. Neither half shows up in a program's output (an unfreed temporary still prints the right number, and so does the first read of a wrongly-freed binding), so the emitted free is asserted structurally in the codegen tests rather than left to an end-to-end run.
+```
+struct Sim { grid: GpuBuffer[Body], step: i32 }
+
+fn make(v: Vec[Body]) -> GpuBuffer[Body] { gpu.upload(v) }
+fn total(b: ref GpuBuffer[Body]) -> f32   { gpu.sum(b.mass) }
+
+let sim = Sim { grid: make(bodies), step: 0 }
+let m    = gpu.sum(sim.grid.mass)     // a field of a buffer the struct owns
+```
+
+`S` rides in the type, which is what lets a buffer reached through a field or a parameter behave exactly like a bound one: the element struct used to come only from a registry keyed by the *variable name* an upload was bound to, so a buffer reached any other way had no element type and `gpu.download` had to refuse it. A `ref GpuBuffer[S]` parameter is the natural way to pass one to a function that only reads it, and a reduction projects through the borrow the way field access does for any other aggregate.
+
+**A field is freed by its struct's drop.** No `let` binds a buffer that lives in a field, so nothing else would ever reclaim it — and a leaked *device* allocation is invisible to LeakSanitizer, which walks the host heap, so it surfaces only as a GPU eventually refusing to allocate. The drop is emitted by the same field classifier that closes a `File` field and frees an HTTP handle, guarded the same two ways: a user type named `GpuBuffer` shadows the builtin and keeps whatever class it had, and the field must actually lower to the two-word handle.
+
+**The receiver may be a place or a temporary, and that decides who frees it.** `buf.mass` and `sim.grid.mass` reduce a buffer someone else owns, so the reduction only reads it — freeing it there would leave the binding, or the struct's field, holding a dangling handle. `gpu.upload(cells).mass` and `gpu.dispatch(k, buf).mass` reduce a buffer that has no owner at all: no `let` bound it and no struct holds it, so nothing else will ever free it and the reduction is the only site that can. Both forms are accepted and the compiler emits the free for exactly the second.
+
+The distinction is the receiver's shape: a *place* — a binding, `self`, or a projection out of one — belongs to whoever declared it, and anything else produced the buffer on the spot. Neither half shows up in a program's output (an unfreed temporary still prints the right number, and so does the *first* read of a wrongly-freed place), so the emitted free is asserted structurally in the codegen tests rather than left to an end-to-end run.
 
 This is a **compiled-only** surface, like the rest of the resident API — `karac run` reports that rather than pretending, since there is no device buffer to project a field out of.
 

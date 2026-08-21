@@ -3537,6 +3537,66 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(())
     }
 
+    /// The element struct `S` behind an expression whose type is `GpuBuffer[S]`.
+    ///
+    /// Resolving `S` from the TYPE is what making `GpuBuffer` nameable bought.
+    /// Before it, `S` could only come from `gpu_buffer_elem_structs` — a
+    /// registry keyed by the VARIABLE NAME an upload was bound to — so a buffer
+    /// reached any other way had no element type at all, which is why
+    /// `gpu.download` could only accept a bare binding. A struct field carries
+    /// its `S` in its declared type and needs no registry.
+    ///
+    /// The registry still answers first for a bare identifier, because a local
+    /// `let buf = gpu.upload(v)` has no declared type to read: its `S` was
+    /// recorded at the upload, derived from the SOURCE `Vec`'s layout.
+    pub(super) fn gpu_buffer_elem_struct_of_expr(&self, expr: &Expr) -> Option<String> {
+        match &expr.kind {
+            ExprKind::Identifier(name) => self
+                .accel
+                .gpu_buffer_elem_structs
+                .get(name.as_str())
+                .cloned(),
+            ExprKind::FieldAccess { object, field } => {
+                let obj_ty = self.type_name_of_expr(object)?;
+                let idx = self
+                    .type_decls
+                    .struct_field_names
+                    .get(obj_ty.as_str())?
+                    .iter()
+                    .position(|n| n == field)?;
+                let te = self
+                    .type_decls
+                    .struct_field_type_exprs
+                    .get(obj_ty.as_str())?
+                    .get(idx)?;
+                Self::gpu_buffer_elem_of_type_expr(te)
+            }
+            _ => None,
+        }
+    }
+
+    /// `GpuBuffer[S]` -> `S` for a DECLARED type. `None` for any other type,
+    /// including a bare `GpuBuffer` with no argument — without `S` there is no
+    /// layout to interpret the device bytes with, and guessing one would read
+    /// the buffer as the wrong struct.
+    fn gpu_buffer_elem_of_type_expr(te: &crate::ast::TypeExpr) -> Option<String> {
+        let crate::ast::TypeKind::Path(p) = &te.kind else {
+            return None;
+        };
+        if p.segments.last().map(String::as_str) != Some("GpuBuffer") {
+            return None;
+        }
+        match p.generic_args.as_ref()?.first()? {
+            crate::ast::GenericArg::Type(arg) => {
+                let crate::ast::TypeKind::Path(ap) = &arg.kind else {
+                    return None;
+                };
+                ap.segments.last().cloned()
+            }
+            _ => None,
+        }
+    }
+
     /// The element struct name `S` behind a `gpu.upload(vec)` /
     /// resident-`gpu.dispatch(kernel, buf, …)` value expression, for the
     /// GPU-SLIP-4h handle registry: upload derives it from the uploaded
@@ -3601,19 +3661,13 @@ impl<'ctx> super::Codegen<'ctx> {
         let ExprKind::MethodCall { args, .. } = &value.kind else {
             return Err("compile_plain_let_from_gpu_download: expected a gpu.download".to_string());
         };
-        let ExprKind::Identifier(buf_name) = &args[0].value.kind else {
-            return Err(
-                "gpu.download: the buffer must be a bare `GpuBuffer` binding in this build"
-                    .to_string(),
-            );
-        };
         let struct_name = self
-            .accel
-            .gpu_buffer_elem_structs
-            .get(buf_name)
-            .cloned()
+            .gpu_buffer_elem_struct_of_expr(&args[0].value)
             .ok_or_else(|| {
-                format!("gpu.download: `{buf_name}` is not a known `GpuBuffer` binding")
+                "gpu.download: the argument is not a known `GpuBuffer` — either a local \
+                 binding from `gpu.upload` / a resident `gpu.dispatch`, or a place whose \
+                 declared type is `GpuBuffer[S]`"
+                    .to_string()
             })?;
         let soa = self.default_gpu_soa_layout(&struct_name).ok_or_else(|| {
             format!(

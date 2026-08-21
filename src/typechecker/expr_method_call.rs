@@ -3515,12 +3515,10 @@ impl<'a> super::TypeChecker<'a> {
     /// site is the only place that can. `temporary` carries that one bit down
     /// to codegen, which emits the free after the fold.
     ///
-    /// The bit is syntactic — a bare identifier is a binding, anything else is
-    /// a temporary — and that is exact rather than approximate, because
-    /// `GpuBuffer` is not a nameable type. It cannot be a struct field, a
-    /// parameter, or a return type, so the only expressions that can denote a
-    /// device buffer are a local binding and a call that just made one. There
-    /// is no `sim.grid.mass` to worry about: no program can construct it.
+    /// The bit is syntactic — see [`Self::receiver_is_a_place`]. A PLACE (a
+    /// binding, `self`, or a projection out of one) is owned by whoever
+    /// declared it and is only read; anything else produced the buffer on the
+    /// spot and owns it alone.
     ///
     /// Returns the same type the host-side reduction does, and records only
     /// `(struct, field)` — see [`TypeCheckResult::gpu_resident_field`] for why
@@ -3631,6 +3629,36 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// Whether the receiver of a resident field reduction names a PLACE that
+    /// outlives the reduction — a binding, `self`, or a projection out of one
+    /// — rather than a temporary the call itself produced.
+    ///
+    /// This is the entire ownership question for the lowering, and the
+    /// receiver's shape answers it: a place belongs to whoever declared it and
+    /// has to survive being read, while a temporary has no owner at all, so
+    /// the reduction is the only site that can free it.
+    ///
+    /// Deliberately NOT `ast::assign_target_root`, which asks a neighbouring
+    /// question and answers `None` for `self` because `self` is not an
+    /// assignment target. `self.grid` is a field of a struct someone else owns
+    /// — the case that most needs reading rather than freeing — so it belongs
+    /// on the place side here.
+    ///
+    /// Before `GpuBuffer` became a nameable type this could be (and was) the
+    /// cruder test "a bare identifier": a buffer could only ever live in a
+    /// local, so a non-identifier receiver was necessarily a temporary. Making
+    /// the type storable is exactly what invalidated that shortcut — a field
+    /// access can now reach a buffer the struct owns.
+    fn receiver_is_a_place(object: &Expr) -> bool {
+        match &object.kind {
+            ExprKind::Identifier(_) | ExprKind::SelfValue => true,
+            ExprKind::FieldAccess { object, .. }
+            | ExprKind::TupleIndex { object, .. }
+            | ExprKind::Index { object, .. } => Self::receiver_is_a_place(object),
+            _ => false,
+        }
+    }
+
     fn infer_gpu_reduce(
         &mut self,
         args: &[CallArg],
@@ -3666,6 +3694,16 @@ impl<'a> super::TypeChecker<'a> {
         let buf_ty = match &args[0].value.kind {
             ExprKind::FieldAccess { object, field } if self.may_be_a_device_buffer(object) => {
                 let obj_ty = self.infer_expr(object);
+                // A BORROWED buffer is still a buffer: `ref GpuBuffer[S]` is
+                // exactly the read-only use a reduction makes of its receiver,
+                // so a `ref` parameter is the natural way to pass one to a
+                // function that only totals a field. Projecting through the
+                // borrow matches what field access does for every other
+                // aggregate receiver.
+                let obj_ty = match &obj_ty {
+                    Type::Ref(inner) | Type::MutRef(inner) => (**inner).clone(),
+                    _ => obj_ty,
+                };
                 if let Type::Named { name, args: ta } = &obj_ty {
                     if name == "GpuBuffer" && ta.len() == 1 {
                         if let Type::Named { name: sname, .. } = &ta[0] {
@@ -3676,7 +3714,7 @@ impl<'a> super::TypeChecker<'a> {
                                 ResidentField {
                                     struct_name: &sname,
                                     field: &field,
-                                    temporary: !matches!(object.kind, ExprKind::Identifier(_)),
+                                    temporary: !Self::receiver_is_a_place(object),
                                 },
                                 span,
                                 op,
