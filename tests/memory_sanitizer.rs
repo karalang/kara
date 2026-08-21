@@ -51486,4 +51486,46 @@ fn main() {
             "asan_vec_from_fn_heap_element_has_one_owner",
         );
     }
+
+    /// B-2026-08-21-23 — a fixed array handed to a METHOD's `ref Slice[T]`
+    /// parameter, under the sanitizer.
+    ///
+    /// Two things need pinning from opposite sides. The OLD lowering passed
+    /// `&array[0]`, so the callee read `{ptr,len}` out of the first two
+    /// ELEMENTS and dereferenced element bytes as a pointer — a wild read that
+    /// segfaulted once the body indexed. The NEW one synthesizes a header in a
+    /// stack temp, which must stay a BORROW: the array still owns its heap
+    /// elements, so the header must not hand them a second owner. A `String`
+    /// element makes both failure modes reachable, and the loop makes a
+    /// per-call imbalance accumulate rather than hide in one iteration.
+    #[test]
+    fn asan_fixed_array_into_a_method_ref_slice_is_a_borrow() {
+        assert_clean_asan_run(
+            r#"struct H { n: i64 }
+struct Held { rows: Array[String, 3] }
+impl H {
+    fn first(ref self, xs: ref Slice[String]) -> String { xs[0] }
+    fn count(ref self, xs: ref Slice[String]) -> i64 { xs.len() }
+}
+fn main() {
+    let h = H { n: 0 };
+    let held = Held { rows: ["alpha", "beta", "gamma"] };
+    let mut i = 0i64;
+    let mut total = 0i64;
+    let mut last: String = "";
+    while i < 50i64 {
+        let owned: Array[String, 3] = ["one", "two", "three"];
+        total = total + h.count(owned) + h.count(held.rows);
+        last = h.first(owned);
+        i = i + 1i64;
+    }
+    println(last);
+    println(total);
+    println(held.rows[2]);
+}
+"#,
+            &["one", "300", "gamma"],
+            "asan_fixed_array_into_a_method_ref_slice_is_a_borrow",
+        );
+    }
 }

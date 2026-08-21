@@ -6936,6 +6936,45 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                     if is_ref {
+                        // B-2026-08-21-23 — a `ref Slice[T]` / `mut ref Slice[T]`
+                        // slot fed an `Array[T, N]`. The callee receives a
+                        // POINTER to a `{ptr,len}` header; an Array binding's
+                        // storage is its raw ELEMENTS, with no header anywhere.
+                        // Without this, the `get_data_ptr` fast path immediately
+                        // below hands over `&array[0]` and the callee reads
+                        // `{ptr,len}` out of the first two elements — measured on
+                        // `let b: Array[u8, 3] = [10u8, 20u8, 30u8]; h.by_ref(b)`
+                        // as `-129820080518201344` under JIT and a SEGFAULT under
+                        // AOT once the body indexes, while `--interp` answered 3.
+                        // A struct-FIELD array missed that fast path and instead
+                        // reached the slice coercion further down, which pushes a
+                        // header VALUE into a `ptr` slot: module verification
+                        // failure. One carve-out covers both, because both want
+                        // the same thing — synthesize the header, pass its
+                        // address.
+                        //
+                        // This is B-2026-06-19-1's fix, which landed on the
+                        // free-function path (`call_dispatch.rs`) and the generic
+                        // path (`mono.rs`) and never on this one. Placed FIRST,
+                        // above the identifier fast path, for the same reason it
+                        // is first there: the fast path is what produces the
+                        // wrong pointer.
+                        //
+                        // Array sources ONLY, mirroring that gate: a `Vec`
+                        // binding's storage starts with `{ptr,len}` (a header
+                        // superset) and a `Slice` / `ref Slice` binding's
+                        // `get_data_ptr` already yields a header pointer, so both
+                        // forward correctly below — intercepting them would
+                        // re-coerce a ref-slice binding and corrupt the forward.
+                        if let Some(Some(elem_ty)) = slice_elems.get(pidx).cloned() {
+                            if self.arg_is_array_source(&a.value) {
+                                if let Some(slice_val) = self.coerce_to_slice(&a.value, elem_ty)? {
+                                    let ptr = self.materialize_rvalue_for_ref_arg(slice_val, i);
+                                    compiled_args.push(ptr.into());
+                                    continue;
+                                }
+                            }
+                        }
                         // Identifier place — pass its data pointer.
                         if let ExprKind::Identifier(var_name) = &a.value.kind {
                             if let Some(ptr) = self.get_data_ptr(var_name) {

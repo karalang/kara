@@ -101607,6 +101607,108 @@ fn main() {
         );
     }
 
+    /// B-2026-08-21-23 — a fixed array handed to a METHOD's `ref Slice[T]`
+    /// parameter.
+    ///
+    /// A `ref Slice[T]` slot takes a POINTER to a `{ptr,len}` header; an
+    /// `Array[T, N]`'s storage is its raw ELEMENTS, with no header anywhere.
+    /// The method path passed `&array[0]`, so the callee read `{ptr,len}` out
+    /// of the first two elements. Measured before the fix, all with
+    /// `--interp` answering correctly:
+    ///
+    ///   * body that only calls `len()` — JIT answered `-129820080518201344`
+    ///   * body that INDEXES — SEGFAULT under both JIT and AOT (exit 139)
+    ///   * a struct-FIELD array — LLVM module verification failure
+    ///
+    /// which is why every arm below indexes rather than just measuring: the
+    /// length alone would have caught the garbage but not the wild
+    /// dereference, and the wild dereference is the reason this is high
+    /// severity. The free-function spelling was correct throughout, so it is
+    /// swept beside the method one as the control that pins the two together.
+    #[test]
+    fn test_e2e_fixed_array_into_a_method_ref_slice_parameter() {
+        let src = r#"
+trait Sink { fn feed(mut ref self, xs: ref Slice[i64]) -> i64; }
+
+struct Acc { total: i64 }
+impl Sink for Acc {
+    fn feed(mut ref self, xs: ref Slice[i64]) -> i64 {
+        let mut i = 0;
+        while i < xs.len() { self.total = self.total + xs[i]; i = i + 1; }
+        xs.len()
+    }
+}
+
+struct Wrap { small: Array[i64, 2], big: Array[f64, 4] }
+impl Wrap {
+    fn sum(ref self, xs: ref Slice[i64]) -> i64 {
+        let mut s = 0;
+        let mut i = 0;
+        while i < xs.len() { s = s + xs[i]; i = i + 1; }
+        s
+    }
+    fn count_f64(ref self, xs: ref Slice[f64]) -> i64 { xs.len() }
+    // `self.field` as the argument, from inside another method.
+    fn sum_own(ref self) -> i64 { self.sum(self.small) }
+}
+
+struct U8s { d: Array[u8, 5] }
+impl U8s {
+    fn sum(ref self, xs: ref Slice[u8]) -> i64 {
+        let mut s = 0;
+        let mut i = 0;
+        while i < xs.len() { s = s + xs[i] as i64; i = i + 1; }
+        s
+    }
+}
+
+// A `ref Array` PARAM forwarded into the method — the shape B-2026-07-30-3
+// widened the free-function gate for.
+fn fwd(w: ref Wrap, xs: ref Array[i64, 3]) -> i64 { w.sum(xs) }
+
+// The free-function spelling, correct before and after.
+fn free_sum(xs: ref Slice[i64]) -> i64 {
+    let mut s = 0;
+    let mut i = 0;
+    while i < xs.len() { s = s + xs[i]; i = i + 1; }
+    s
+}
+
+fn main() {
+    let w = Wrap { small: [7, 8], big: [1.0, 2.0, 3.0, 4.0] };
+    let arr: Array[i64, 3] = [100, 200, 300];
+
+    println(w.sum(arr));          // owned local array
+    println(w.sum(w.small));      // struct field
+    println(w.sum_own());         // self.field from inside a method
+    println(w.count_f64(w.big));  // a wider element
+    println(fwd(w, arr));         // ref Array param forwarded
+
+    let u = U8s { d: [1u8, 2u8, 3u8, 4u8, 5u8] };
+    let ua: Array[u8, 5] = [9u8, 9u8, 9u8, 9u8, 9u8];
+    println(u.sum(u.d));
+    println(u.sum(ua));
+
+    let mut a = Acc { total: 0 };
+    println(a.feed(arr));         // trait method
+    println(a.total);
+
+    // Degenerate and larger lengths — the header's len must come from the
+    // ARRAY's static length, not from whatever sits in element 1.
+    let one: Array[i64, 1] = [42];
+    println(w.sum(one));
+    let eight: Array[i64, 8] = [1, 2, 3, 4, 5, 6, 7, 8];
+    println(w.sum(eight));
+
+    println(free_sum(arr));       // control
+}
+"#;
+        assert_eq!(
+            run_program(src).as_deref(),
+            Some("600\n15\n15\n4\n600\n15\n45\n3\n600\n42\n36\n600\n")
+        );
+    }
+
     /// B-2026-08-21-10 — C-like enum `.discriminant()`, end to end.
     ///
     /// The value is NOT the tag. design.md is explicit that declared
