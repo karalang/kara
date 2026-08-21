@@ -3307,11 +3307,38 @@ impl<'a> super::TypeChecker<'a> {
         {
             return;
         }
-        self.type_lint_warning(
+        // B-2026-08-21-14 — the fix is a DELETION of the suffix, and the span
+        // to delete is derivable here without re-lexing: `span` covers the
+        // whole literal token (`42i64`, `1_000i64`, `0xFFi64`, `3.14f64`) and
+        // the suffix is its tail, so the edit is the last `suffix.len()` bytes.
+        // Every suffix this lint fires on is ASCII (`i64` / `f64`), so byte
+        // length and character length agree and the arithmetic cannot land
+        // mid-character.
+        //
+        // DELETING IT IS SAFE BY THE LINT'S OWN PREDICATE: it fires only when
+        // the suffix names the type the literal would have had anyway, so the
+        // unsuffixed spelling infers to the same type. `1i64.to_string()` was
+        // the shape worth checking — `1.to_string()` could plausibly have
+        // lexed `1.` as a float — and it parses correctly.
+        //
+        // Guarded rather than assumed: a span shorter than the suffix it is
+        // supposed to end with would mean the token span is not what this
+        // arithmetic takes it for, and a wrong deletion is worse than none, so
+        // that case emits the warning with no fix instead.
+        let fix_it = (span.length > suffix.len()).then(|| crate::typechecker::FixIt {
+            span: Span {
+                offset: span.offset + span.length - suffix.len(),
+                length: suffix.len(),
+                ..span
+            },
+            replacement: String::new(),
+        });
+        self.type_lint_warning_with_fix(
             format!("redundant `{suffix}` suffix: {suffix} is the default type for this literal"),
             span,
             TypeErrorKind::RedundantSuffix,
             "redundant_suffix",
+            fix_it,
         );
     }
 

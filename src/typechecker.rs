@@ -3154,6 +3154,25 @@ impl<'a> TypeChecker<'a> {
         kind: TypeErrorKind,
         lint_name: &'static str,
     ) {
+        self.type_lint_warning_with_fix(message, span, kind, lint_name, None)
+    }
+
+    /// [`Self::type_lint_warning`] carrying a machine-applicable edit
+    /// (B-2026-08-21-14).
+    ///
+    /// A lint's fix is optional-but-safe by construction — the code already
+    /// compiles and is already correct — which is exactly what `karac fix` is
+    /// for, and `cmd_fix` has read the WARNING fix-it channel since
+    /// B-2026-08-03-9. The channel had no producer on this path only because
+    /// this constructor hardcoded `fix_it: None`.
+    pub(super) fn type_lint_warning_with_fix(
+        &mut self,
+        message: String,
+        span: Span,
+        kind: TypeErrorKind,
+        lint_name: &'static str,
+        fix_it: Option<FixIt>,
+    ) {
         use crate::lints::LintLevel;
         let level = self.effective_lint_level(lint_name);
         // Lint entries default to `LintWarning` regardless of the
@@ -3166,7 +3185,7 @@ impl<'a> TypeChecker<'a> {
             span,
             kind,
             lint_name: Some(lint_name.to_string()),
-            fix_it: None,
+            fix_it,
             class: Some(crate::diagnostic_class::DiagnosticClass::LintWarning),
             expected: None,
             got: None,

@@ -3503,6 +3503,96 @@ fn redundant_suffix_fires_on_a_default_type_suffix() {
     );
 }
 
+/// B-2026-08-21-14 — the warning must carry a MACHINE-APPLICABLE deletion.
+///
+/// The lint was wired warn-by-default with `fix_it: None`, so it fired 26,094
+/// times across 853 of kara-katas' 914 files and `karac fix` answered "no
+/// fixable diagnostics" to every one of them. `cmd_fix` has read the warning
+/// fix-it channel since B-2026-08-03-9 — the channel simply had no producer
+/// here, because `type_lint_warning` hardcoded `None`.
+///
+/// Asserts the EDIT, not just its presence: the span must cover exactly the
+/// suffix and nothing of the digits, since an off-by-one here silently eats a
+/// digit and changes the program's value.
+#[test]
+fn redundant_suffix_carries_a_suffix_deleting_fix() {
+    let src =
+        "fn main() {\n    let a = 42i64;\n    let b = 3.14f64;\n    println(f\"{a} {b}\");\n}";
+    let result = typecheck_ok(src);
+    let hits: Vec<_> = result
+        .warnings
+        .iter()
+        .filter(|w| w.kind == TypeErrorKind::RedundantSuffix)
+        .collect();
+    assert_eq!(hits.len(), 2, "expected both literals to warn");
+    for w in &hits {
+        let fix = w
+            .fix_it
+            .as_ref()
+            .unwrap_or_else(|| panic!("warning carries no fix: {w:?}"));
+        assert!(
+            fix.replacement.is_empty(),
+            "the fix is a deletion, not a substitution: {fix:?}"
+        );
+        let cut = &src[fix.span.offset..fix.span.offset + fix.span.length];
+        assert!(
+            cut == "i64" || cut == "f64",
+            "the edit must cover exactly the suffix, got {cut:?}"
+        );
+    }
+    // Applying every edit yields the unsuffixed program.
+    let mut edited = src.to_string();
+    let mut spans: Vec<_> = hits
+        .iter()
+        .map(|w| w.fix_it.as_ref().unwrap().span)
+        .collect();
+    spans.sort_by_key(|s| std::cmp::Reverse(s.offset));
+    for s in spans {
+        edited.replace_range(s.offset..s.offset + s.length, "");
+    }
+    assert!(edited.contains("let a = 42;"), "got: {edited}");
+    assert!(edited.contains("let b = 3.14;"), "got: {edited}");
+}
+
+/// The span arithmetic takes the literal's token span and cuts its tail, so
+/// every spelling whose text is longer than its digits has to land correctly —
+/// an underscored decimal, a hex literal, a negative, and a float. Each is
+/// checked by reading the cut back out of the source rather than by trusting
+/// the offset.
+#[test]
+fn redundant_suffix_fix_spans_every_literal_spelling() {
+    let src = "fn main() {\n\
+        \x20   let a = 1_000i64;\n\
+        \x20   let b = 0xFFi64;\n\
+        \x20   let c = -5i64;\n\
+        \x20   let d = 2.5f64;\n\
+        \x20   println(f\"{a} {b} {c} {d}\");\n\
+    }";
+    let result = typecheck_ok(src);
+    let hits: Vec<_> = result
+        .warnings
+        .iter()
+        .filter(|w| w.kind == TypeErrorKind::RedundantSuffix)
+        .collect();
+    assert_eq!(hits.len(), 4, "one per literal; got {:?}", result.warnings);
+    for w in &hits {
+        let fix = w.fix_it.as_ref().expect("every hit carries a fix");
+        let cut = &src[fix.span.offset..fix.span.offset + fix.span.length];
+        assert!(
+            cut == "i64" || cut == "f64",
+            "edit landed on {cut:?} rather than the suffix"
+        );
+        // And the byte just before the cut is part of the NUMBER, never the
+        // start of the suffix — the off-by-one that would eat a digit.
+        let prev = &src[fix.span.offset - 1..fix.span.offset];
+        assert!(
+            prev.chars()
+                .all(|c| c.is_ascii_hexdigit() || c == '.' || c == '_'),
+            "the byte before the cut should be part of the literal, got {prev:?}"
+        );
+    }
+}
+
 /// The literals the spec does NOT name stay silent. A suffix that is not the
 /// default carries information — it is the only way to type an inline literal
 /// — so warning on it would be wrong, not merely noisy.

@@ -9394,6 +9394,75 @@ fn test_fix_widens_mixed_int_operand() {
     let _ = std::fs::remove_file(&path);
 }
 
+/// B-2026-08-21-14 — `karac fix` deletes redundant literal suffixes.
+///
+/// The end-to-end half of the typechecker's fix-span tests: the lint fired
+/// warn-by-default with no fix attached, so `karac fix` printed "no fixable
+/// diagnostics" on files carrying dozens of them, sending work the fix channel
+/// exists for into the feed-it-back-to-a-model path instead. CLAUDE.md makes
+/// `karac fix` the PRIMARY path of the Mend loop, which is why a
+/// machine-applicable lint without a fix is a defect rather than a nicety.
+///
+/// Covers the spellings whose text is longer than their digits, since the edit
+/// cuts the token span's tail: underscored, hex, negative, float, and a suffix
+/// inside a loop body. Asserts the resulting program is CHECK-CLEAN, not just
+/// textually changed — a fix that produced a broken file would still "apply".
+#[test]
+fn test_fix_deletes_redundant_literal_suffixes() {
+    let path = fix_scratch_file(
+        "redundant_suffix",
+        "fn main() {\n\
+         \x20   let a = 1_000i64;\n\
+         \x20   let b = 0xFFi64;\n\
+         \x20   let c = -5i64;\n\
+         \x20   let d = 2.5f64;\n\
+         \x20   let mut i = 0i64;\n\
+         \x20   while i < 3i64 { i = i + 1i64; }\n\
+         \x20   println(f\"{a} {b} {c} {d} {i}\");\n\
+         }\n",
+    );
+    let out = karac_bin()
+        .args(["fix", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "fix failed: stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        stdout.contains("applied 7 fix"),
+        "expected one fix per suffixed literal, got: {stdout}"
+    );
+
+    let rewritten = std::fs::read_to_string(&path).unwrap();
+    assert!(rewritten.contains("let a = 1_000;"), "got: {rewritten}");
+    assert!(rewritten.contains("let b = 0xFF;"), "got: {rewritten}");
+    assert!(rewritten.contains("let c = -5;"), "got: {rewritten}");
+    assert!(rewritten.contains("let d = 2.5;"), "got: {rewritten}");
+    assert!(
+        rewritten.contains("while i < 3 { i = i + 1; }"),
+        "got: {rewritten}"
+    );
+    assert!(
+        !rewritten.contains("i64") && !rewritten.contains("f64"),
+        "no suffix should survive: {rewritten}"
+    );
+
+    // The rewritten file must still be a clean program — and must no longer
+    // carry the warning, which is the point of applying the fix at all.
+    let check = karac_bin()
+        .args(["check", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let check_out = String::from_utf8_lossy(&check.stderr);
+    assert!(
+        check_out.contains("All checks passed"),
+        "the fixed file must still check clean, got: {check_out}"
+    );
+}
+
 #[test]
 fn test_fix_dry_run_does_not_modify_file() {
     let original = "fn helper() -> i64 { 42 }\nfn main() { println(helpr()); }\n";
