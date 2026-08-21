@@ -130,6 +130,7 @@ pub(crate) const SLICE_BUILTIN_METHODS: &[&str] = &[
     "get_unchecked",
     "into_iter",
     "is_empty",
+    "is_sorted",
     "iter",
     "last",
     "len",
@@ -1471,6 +1472,24 @@ impl<'a> super::TypeChecker<'a> {
         // `as_slice` / `as_slice_mut`, `as_ptr` / `as_mut_ptr`. Extracted to
         // `method_sequence_mutation.rs`; it keeps this position in the
         // first-match-wins chain and the block order within it.
+        // The fixed-`Array` leg of the close-paren element stash the `Vec` and
+        // `Slice` dispatches below do (B-2026-08-21-10). Recorded BEFORE the
+        // call because the array surface lives inside `try_slice_view_method`,
+        // which takes no `args_close_span`; `record_expr_type` overwrites, so
+        // an inner recording at the same leaf would still win if one existed.
+        if method == "is_sorted" {
+            let array_elem = match &obj_ty {
+                Type::Array { element, .. } => Some((**element).clone()),
+                Type::Ref(inner) | Type::MutRef(inner) => match inner.as_ref() {
+                    Type::Array { element, .. } => Some((**element).clone()),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(el) = array_elem {
+                self.record_expr_type(args_close_span, &el);
+            }
+        }
         if let Some(t) = self.try_slice_view_method(method, args, span, &obj_ty) {
             return t;
         }
@@ -1493,6 +1512,15 @@ impl<'a> super::TypeChecker<'a> {
                     .find_methods_with_args("Slice", &[(**element).clone()], method)
                     .is_empty();
             if !routes_to_user_impl {
+                // Same close-paren element stash the `Vec` arm above does, so
+                // the interpreter reads a `Slice[u64]` element as unsigned
+                // (B-2026-08-21-10). The slice arm had no stash at all before
+                // — `is_sorted` is the first slice method whose ANSWER depends
+                // on element signedness, where `sort` only reorders in place.
+                if matches!(method, "sort" | "sorted" | "is_sorted") {
+                    let elem = (**element).clone();
+                    self.record_expr_type(args_close_span, &elem);
+                }
                 return self.infer_slice_method(element, *mutable, method, args, span);
             }
         }
@@ -1738,7 +1766,11 @@ impl<'a> super::TypeChecker<'a> {
                 // `sorted()`'s `Vec[T]` result also clobbers the receiver span,
                 // so this leaf is the reliable channel to a `u64` element (same
                 // mechanism as the Column / Tensor ordering methods).
-                if matches!(method, "sort" | "sorted") {
+                // `is_sorted` joined the list with B-2026-08-21-10 for the
+                // same reason and with more force: `sort()` disagreeing with
+                // `is_sorted()` about the very sequence it just produced would
+                // be a self-contradiction inside one interpreter run.
+                if matches!(method, "sort" | "sorted" | "is_sorted") {
                     self.record_expr_type(args_close_span, &elem);
                 }
                 return ty;

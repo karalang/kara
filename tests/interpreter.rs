@@ -36520,3 +36520,74 @@ fn map_with_many_keys_finds_every_one() {
     }");
     assert_eq!(out, "len=400 missing=0 sum=239400\n");
 }
+
+// ── B-2026-08-21-10: `is_sorted()` on the sequence receivers ─────
+//
+// The interpreter's element surface is wider than codegen's (a user struct
+// without `#[derive(Ord)]` compares here and refuses to lower), so these pin
+// the answers the tree-walk backend gives; the E2E sweep in tests/codegen.rs
+// pins the compiled ones on the shapes both backends run.
+
+#[test]
+fn is_sorted_answers_the_boundary_shapes() {
+    let out = run("fn main() {\n\
+        let e: Vec[i64] = [];\n\
+        let one: Vec[i64] = [7];\n\
+        let eq: Vec[i64] = [4, 4, 4];\n\
+        let asc: Vec[i64] = [1, 2, 3];\n\
+        let desc: Vec[i64] = [3, 2, 1];\n\
+        let dip: Vec[i64] = [1, 2, 3, 2, 4];\n\
+        println(f\"{e.is_sorted()} {one.is_sorted()} {eq.is_sorted()} \
+                   {asc.is_sorted()} {desc.is_sorted()} {dip.is_sorted()}\");\n\
+    }");
+    // Empty and single are vacuously sorted; equal neighbours are sorted
+    // (non-strict); a dip anywhere, not just at the end, is not.
+    assert_eq!(out, "true true true true false false\n");
+}
+
+#[test]
+fn is_sorted_reads_a_u64_element_as_unsigned() {
+    // The element type reaches the interpreter through the close-paren stash
+    // the sort family uses. Without it these order as negative two's-complement
+    // i64 and the answers invert — and `is_sorted` would then contradict the
+    // `sort()` two lines above it.
+    let out = run("fn main() {\n\
+        let v: Vec[u64] = [1u64, 18446744073709551615u64];\n\
+        let w: Vec[u64] = [18446744073709551615u64, 1u64];\n\
+        println(f\"{v.is_sorted()} {w.is_sorted()}\");\n\
+        let mut s: Vec[u64] = [9223372036854775809u64, 3u64, 1u64];\n\
+        s.sort();\n\
+        println(s.is_sorted());\n\
+    }");
+    assert_eq!(out, "true false\ntrue\n");
+}
+
+#[test]
+fn is_sorted_orders_strings_and_compound_elements() {
+    let out = run("struct P { a: i64, b: i64 }\n\
+    fn main() {\n\
+        let s: Vec[String] = [\"apple\", \"banana\"];\n\
+        let s2: Vec[String] = [\"banana\", \"apple\"];\n\
+        let t: Vec[(i64, i64)] = [(1, 2), (1, 3), (2, 0)];\n\
+        let n: Vec[Vec[i64]] = [[1, 2], [1, 3]];\n\
+        let p: Vec[P] = [P { a: 1, b: 2 }, P { a: 1, b: 1 }];\n\
+        println(f\"{s.is_sorted()} {s2.is_sorted()} {t.is_sorted()} \
+                   {n.is_sorted()} {p.is_sorted()}\");\n\
+    }");
+    // Tuples and nested Vecs compare lexicographically; a struct compares by
+    // field DECLARATION order, so `b` breaks the tie the equal `a` leaves.
+    assert_eq!(out, "true false true true false\n");
+}
+
+#[test]
+fn is_sorted_reaches_slice_and_array_receivers() {
+    let out = run("fn main() {\n\
+        let v: Vec[i64] = [1, 2, 3, 0];\n\
+        let head: Slice[i64] = v[0..3];\n\
+        let tail: Slice[i64] = v[1..4];\n\
+        let a: Array[i64, 3] = [5, 6, 7];\n\
+        let b: Array[i64, 3] = [7, 6, 5];\n\
+        println(f\"{head.is_sorted()} {tail.is_sorted()} {a.is_sorted()} {b.is_sorted()}\");\n\
+    }");
+    assert_eq!(out, "true false true false\n");
+}

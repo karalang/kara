@@ -323,7 +323,7 @@ impl<'a> super::TypeChecker<'a> {
         // arm does not provide, so they are excluded and stay rejected.
         if matches!(
             method,
-            "len" | "is_empty" | "get" | "first" | "last" | "contains"
+            "len" | "is_empty" | "get" | "first" | "last" | "contains" | "is_sorted"
         ) {
             let array_elem = match obj_ty {
                 Type::Array { element, .. } => Some((**element).clone()),
@@ -393,6 +393,15 @@ impl<'a> super::TypeChecker<'a> {
                                 let at = self.infer_expr(&arg.value);
                                 self.check_assignable(&elem, &at, arg.value.span);
                             }
+                            return Some(Type::Bool);
+                        }
+                        // The fixed-array twin of `Vec.is_sorted` /
+                        // `Slice.is_sorted` (B-2026-08-21-10). Same
+                        // total-order gate, so a `Array[f64, N]` receiver is
+                        // rejected exactly as `Vec[f64].sort()` is.
+                        "is_sorted" => {
+                            self.expect_no_args("Array.is_sorted", args, span);
+                            self.require_ord_element(&elem, "Array", "is_sorted", span);
                             return Some(Type::Bool);
                         }
                         _ => unreachable!(),

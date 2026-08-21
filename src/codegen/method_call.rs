@@ -565,6 +565,13 @@ impl<'ctx> super::Codegen<'ctx> {
         n: u64,
         method: &str,
         args: &[CallArg],
+        // The element's source-level `TypeExpr`, when the binding registered
+        // one. Only `is_sorted` needs it — every other arm here either does no
+        // comparison at all or compares for equality, both of which are
+        // signedness-blind. `is_sorted` is not: an `Array[u64, N]` element past
+        // `i64::MAX` orders differently signed and unsigned, so the arm
+        // declines rather than guess when this is `None`.
+        elem_te: Option<TypeExpr>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let i64_t = self.context.i64_type();
         match method {
@@ -573,6 +580,68 @@ impl<'ctx> super::Codegen<'ctx> {
                 .bool_type()
                 .const_int((n == 0) as u64, false)
                 .into()),
+            // `is_sorted()` over a fixed array (B-2026-08-21-10) — the
+            // `Vec`/`Slice` twin. `N` is static and small, so the pairwise
+            // compares unroll instead of looping, exactly as `contains` does.
+            // The per-pair comparator is the same `karac_cmp_<T>` the `Vec`
+            // arm calls, which is what keeps the answer identical to the
+            // interpreter's `value_compare` on unsigned elements.
+            "is_sorted" => {
+                let bool_t = self.context.bool_type();
+                if n < 2 {
+                    return Ok(bool_t.const_int(1, false).into());
+                }
+                let elem_te = elem_te.ok_or_else(|| {
+                    "Array.is_sorted: no source element type for the receiver".to_string()
+                })?;
+                let cmp_fn = self.emit_cmp_fn_for_type_expr(&elem_te).ok_or_else(|| {
+                    "Array.is_sorted() in codegen supports integer, char, bool, String, float, \
+                     tuple, nested-Vec and derived-`Ord` struct/enum element types; add \
+                     `#[derive(Ord, Eq)]` to the element type"
+                        .to_string()
+                })?;
+                let mut acc = bool_t.const_int(1, false);
+                for i in 1..n {
+                    let prev_ptr = unsafe {
+                        self.builder
+                            .build_gep(
+                                elem_ty,
+                                elem0_ptr,
+                                &[i64_t.const_int(i - 1, false)],
+                                "arr.is.prev",
+                            )
+                            .map_err(|e| format!("Array.is_sorted gep: {e}"))?
+                    };
+                    let cur_ptr = unsafe {
+                        self.builder
+                            .build_gep(
+                                elem_ty,
+                                elem0_ptr,
+                                &[i64_t.const_int(i, false)],
+                                "arr.is.cur",
+                            )
+                            .map_err(|e| format!("Array.is_sorted gep: {e}"))?
+                    };
+                    let sign = self
+                        .builder
+                        .build_call(cmp_fn, &[prev_ptr.into(), cur_ptr.into()], "arr.is.cmp")
+                        .unwrap()
+                        .try_as_basic_value()
+                        .unwrap_basic()
+                        .into_int_value();
+                    let ordered = self
+                        .builder
+                        .build_int_compare(
+                            IntPredicate::SLE,
+                            sign,
+                            i64_t.const_zero(),
+                            "arr.is.ordered",
+                        )
+                        .unwrap();
+                    acc = self.builder.build_and(acc, ordered, "arr.is.acc").unwrap();
+                }
+                Ok(acc.into())
+            }
             "get" | "first" | "last" => {
                 // Resolve the index and whether it is statically out of storage
                 // (only the degenerate empty-array `first`/`last`).
@@ -5136,20 +5205,28 @@ impl<'ctx> super::Codegen<'ctx> {
                     if matches!(
                         elem_ty,
                         BasicTypeEnum::IntType(_) | BasicTypeEnum::FloatType(_)
-                    ) && matches!(method, "get" | "first" | "last" | "contains" | "is_empty")
-                    {
+                    ) && matches!(
+                        method,
+                        "get" | "first" | "last" | "contains" | "is_empty" | "is_sorted"
+                    ) {
                         let zero = self.context.i32_type().const_zero();
                         let elem0 = unsafe {
                             self.builder
                                 .build_in_bounds_gep(at, slot.ptr, &[zero, zero], "arr.elem0")
                                 .map_err(|e| format!("Array.{method} gep: {e}"))?
                         };
+                        let elem_te = self
+                            .var_types
+                            .array_elem_type_exprs
+                            .get(name.as_str())
+                            .cloned();
                         return self.compile_fixed_array_read(
                             elem0,
                             elem_ty,
                             at.len() as u64,
                             method,
                             args,
+                            elem_te,
                         );
                     }
                 }
@@ -5181,17 +5258,25 @@ impl<'ctx> super::Codegen<'ctx> {
                     if matches!(
                         elem_ty,
                         BasicTypeEnum::IntType(_) | BasicTypeEnum::FloatType(_)
-                    ) && matches!(method, "get" | "first" | "last" | "contains" | "is_empty")
-                    {
+                    ) && matches!(
+                        method,
+                        "get" | "first" | "last" | "contains" | "is_empty" | "is_sorted"
+                    ) {
                         let data = self.get_data_ptr(name).ok_or_else(|| {
                             format!("Array.{method}: no data pointer for ref array '{name}'")
                         })?;
+                        let elem_te = self
+                            .var_types
+                            .array_elem_type_exprs
+                            .get(name.as_str())
+                            .cloned();
                         return self.compile_fixed_array_read(
                             data,
                             elem_ty,
                             at.len() as u64,
                             method,
                             args,
+                            elem_te,
                         );
                     }
                 }
@@ -5967,8 +6052,8 @@ impl<'ctx> super::Codegen<'ctx> {
                         // the 2-field header below. `chunks` / `windows` /
                         // `split_at` return views and have no Vec analogue at
                         // all.
-                        "contains" | "first" | "last" | "get" | "reverse" | "sort" | "sort_by"
-                        | "sort_by_key" => {
+                        "contains" | "first" | "last" | "get" | "is_sorted" | "reverse"
+                        | "sort" | "sort_by" | "sort_by_key" => {
                             let elem_ty =
                                 *self.var_types.slice_elem_types.get(name.as_str()).unwrap();
                             let ptr_ty = self.context.ptr_type(AddressSpace::default());

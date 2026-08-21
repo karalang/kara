@@ -319,7 +319,20 @@ impl<'a> super::TypeChecker<'a> {
         // The harm clause is per-method because the observed wrong answer
         // differs, and a diagnostic that describes the wrong symptom teaches
         // the wrong lesson. Both texts are measured, not paraphrased.
-        let harm = if matches!(method, "max" | "min") {
+        let harm = if method == "is_sorted" {
+            // Measured, not paraphrased: with the gate lifted,
+            // `[1.0, NaN].is_sorted()` answered `true` on all four surfaces
+            // while `a[0] <= a[1]` on the same pair answered `false`. The two
+            // backends AGREE here (both route floats through the IEEE total
+            // order), so the harm is not a divergence — it is that the
+            // predicate contradicts the comparison operator it reads as a fold
+            // of, and a `requires v.is_sorted()` contract therefore passes on a
+            // sequence `binary_search` cannot search.
+            "`[1.0, NaN].is_sorted()` answers TRUE, while the `v[0] <= v[1]` it \
+             reads as a fold of answers false — the predicate needs a TOTAL order \
+             and `<=` is the IEEE partial one, so a `requires v.is_sorted()` \
+             contract admits a sequence `binary_search` cannot search"
+        } else if matches!(method, "max" | "min") {
             "`[3.0, NaN, 1.0].iter().max()` silently SKIPS the NaN and answers 3, \
              while `[NaN, 3.0, 1.0]` makes BOTH `max()` and `min()` answer NaN — \
              the result depends on where the NaN sits"

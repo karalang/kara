@@ -1539,6 +1539,31 @@ impl<'a> super::Interpreter<'a> {
                     return Some(Value::Unit);
                 }
             }
+            // `is_sorted() -> bool` — the predicate design.md § Contracts
+            // writes `requires haystack.is_sorted()` / `invariant
+            // self.data.is_sorted()` against (B-2026-08-21-10). Non-strict
+            // ascending: equal neighbours are sorted, and a sequence of 0 or 1
+            // elements is vacuously sorted.
+            //
+            // Uses the same close-paren element-type probe `sort`/`sorted` do,
+            // so a `Vec[u64]` past `i64::MAX` is read as unsigned here exactly
+            // as it is when sorting — otherwise `v.sort()` and
+            // `v.is_sorted()` would disagree about the very sequence `sort`
+            // just produced.
+            "is_sorted" => {
+                if let Value::Array(ref rc) = obj {
+                    let v = rc.read().unwrap();
+                    let cmp = match self.span_unsigned_int_width(args_close_span) {
+                        Some(64) => value_compare_u64,
+                        Some(128) => value_compare_u128,
+                        _ => value_compare,
+                    };
+                    let sorted = v
+                        .windows(2)
+                        .all(|w| cmp(&w[0], &w[1]) != std::cmp::Ordering::Greater);
+                    return Some(Value::Bool(sorted));
+                }
+            }
             "sorted" => {
                 if let Value::String(ref s) = obj {
                     let mut chars: Vec<char> = s.chars().collect();

@@ -6925,6 +6925,154 @@ impl<'ctx> super::Codegen<'ctx> {
             // (the typechecker already enforces `arg : elem`). Mirrors the
             // interpreter's `v.contains(&needle)`. Surfaced by
             // B-2026-06-10-1.
+            // `is_sorted() -> bool` (B-2026-08-21-10) — non-strict ascending;
+            // 0 or 1 elements is vacuously sorted.
+            //
+            // Adjacent pairs go through the SAME `karac_cmp_<T>` family that
+            // `sort`'s general path uses, rather than an open-coded `<=`. That
+            // is the whole parity argument: the comparator family is built to
+            // mirror the interpreter's `value_compare` (unsigned widths
+            // compare unsigned, `String` routes to `karac_string_cmp`, structs
+            // and enums order by declaration position, `F64` uses the IEEE
+            // total order), so `is_sorted` cannot drift from either the
+            // interpreter's answer or from the order `sort` just produced. An
+            // open-coded `build_int_compare(SLE, ..)` would have read a
+            // `Vec[u64]` element past `i64::MAX` as negative — agreeing with
+            // neither.
+            "is_sorted" => {
+                if !args.is_empty() {
+                    return Err(format!(
+                        "Vec.is_sorted expects 0 arguments, got {}",
+                        args.len()
+                    ));
+                }
+                let bool_t = self.context.bool_type();
+                let elem_te = self
+                    .var_types
+                    .var_elem_type_exprs
+                    .get(var_name)
+                    .cloned()
+                    .ok_or_else(|| {
+                        format!("Vec.is_sorted: unknown element type for '{var_name}'")
+                    })?;
+                let cmp_fn = self.emit_cmp_fn_for_type_expr(&elem_te).ok_or_else(|| {
+                    "Vec.is_sorted() in codegen supports integer, char, bool, String, float, \
+                     tuple, nested-Vec and derived-`Ord` struct/enum element types; add \
+                     `#[derive(Ord, Eq)]` to the element type"
+                        .to_string()
+                })?;
+
+                let data_ptr_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 0, "vis.data.ptr")
+                    .unwrap();
+                let len_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 1, "vis.len.ptr")
+                    .unwrap();
+                let data = self
+                    .builder
+                    .build_load(ptr_ty, data_ptr_ptr, "vis.data")
+                    .unwrap()
+                    .into_pointer_value();
+                let len = self
+                    .builder
+                    .build_load(i64_t, len_ptr, "vis.len")
+                    .unwrap()
+                    .into_int_value();
+
+                let fn_val = self.current_fn.unwrap();
+                let head_bb = self.context.append_basic_block(fn_val, "vis.head");
+                let body_bb = self.context.append_basic_block(fn_val, "vis.body");
+                let bad_bb = self.context.append_basic_block(fn_val, "vis.bad");
+                let next_bb = self.context.append_basic_block(fn_val, "vis.next");
+                let done_bb = self.context.append_basic_block(fn_val, "vis.done");
+
+                let i_slot = self.create_entry_alloca(fn_val, "vis.i", i64_t.into());
+                let result_slot = self.create_entry_alloca(fn_val, "vis.result", bool_t.into());
+                self.builder
+                    .build_store(i_slot, i64_t.const_int(1, false))
+                    .unwrap();
+                self.builder
+                    .build_store(result_slot, bool_t.const_int(1, false))
+                    .unwrap();
+                self.builder.build_unconditional_branch(head_bb).unwrap();
+
+                // head: `i < len`, starting at 1 — so an empty or 1-element
+                // Vec never enters the body and keeps the initial `true`.
+                self.builder.position_at_end(head_bb);
+                let i = self
+                    .builder
+                    .build_load(i64_t, i_slot, "vis.i.load")
+                    .unwrap()
+                    .into_int_value();
+                let in_range = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::ULT, i, len, "vis.in_range")
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(in_range, body_bb, done_bb)
+                    .unwrap();
+
+                // body: `cmp(data[i-1], data[i]) > 0` means a descent.
+                self.builder.position_at_end(body_bb);
+                let prev_i = self
+                    .builder
+                    .build_int_sub(i, i64_t.const_int(1, false), "vis.i.prev")
+                    .unwrap();
+                let prev_ptr = unsafe {
+                    self.builder
+                        .build_gep(elem_ty, data, &[prev_i], "vis.prev.ptr")
+                        .unwrap()
+                };
+                let cur_ptr = unsafe {
+                    self.builder
+                        .build_gep(elem_ty, data, &[i], "vis.cur.ptr")
+                        .unwrap()
+                };
+                let sign = self
+                    .builder
+                    .build_call(cmp_fn, &[prev_ptr.into(), cur_ptr.into()], "vis.cmp")
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_int_value();
+                let descends = self
+                    .builder
+                    .build_int_compare(
+                        inkwell::IntPredicate::SGT,
+                        sign,
+                        i64_t.const_zero(),
+                        "vis.descends",
+                    )
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(descends, bad_bb, next_bb)
+                    .unwrap();
+
+                // bad: record false, exit early.
+                self.builder.position_at_end(bad_bb);
+                self.builder
+                    .build_store(result_slot, bool_t.const_zero())
+                    .unwrap();
+                self.builder.build_unconditional_branch(done_bb).unwrap();
+
+                // next: i++, loop.
+                self.builder.position_at_end(next_bb);
+                let i_next = self
+                    .builder
+                    .build_int_add(i, i64_t.const_int(1, false), "vis.i.next")
+                    .unwrap();
+                self.builder.build_store(i_slot, i_next).unwrap();
+                self.builder.build_unconditional_branch(head_bb).unwrap();
+
+                self.builder.position_at_end(done_bb);
+                let result = self
+                    .builder
+                    .build_load(bool_t, result_slot, "vis.result.load")
+                    .unwrap();
+                Ok(result)
+            }
             "contains" => {
                 if args.is_empty() {
                     return Err("Vec.contains requires an argument".to_string());

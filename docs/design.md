@@ -1693,9 +1693,10 @@ Method signatures for the standard collections. All methods that grow the collec
 | `len` | `fn len(ref self) -> i64` | Number of elements |
 | `is_empty` | `fn is_empty(ref self) -> bool` | `self.len() == 0` |
 | `get` | `fn get(ref self, idx: i64) -> Option[ref T]` | Bounds-checked access |
-| `last` | `fn last(ref self, n: i64 = 0) -> ref T` | End-relative access: `n=0` → last element, `n=1` → second-to-last, etc. Equivalent to `self[self.len() - 1 - n]`. Panics if out of bounds or vec is empty |
+| `last` | `fn last(ref self, n: i64 = 0) -> Option[ref T]` | End-relative access: `n=0` → last element, `n=1` → second-to-last, etc. `None` when `n` is negative or past the front, and on an empty vec — the same `Option` contract as `first`/`get` (see [Numeric Semantics](#numeric-semantics); this row previously read `-> ref T` and "panics if out of bounds") |
 | `contains` | `fn contains(ref self, val: ref T) -> bool where T: Eq` | Linear search |
 | `sort` | `fn sort(mut ref self) where T: Ord` | In-place stable sort |
+| `is_sorted` | `fn is_sorted(ref self) -> bool where T: Ord` | Non-strict ascending check — equal neighbours count as sorted, and a vec of 0 or 1 elements is vacuously sorted. The predicate the [Contracts](#contracts) examples use in `requires` / `invariant` |
 | `reverse` | `fn reverse(mut ref self)` | In-place reversal |
 | `clear` | `fn clear(mut ref self)` | Removes all elements |
 | `extend` | `fn extend[I: Iterator[Item = T]](mut ref self, iter: I)` | Appends from iterator |

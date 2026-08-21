@@ -1085,6 +1085,13 @@ impl<'a> super::TypeChecker<'a> {
                 self.expect_optional_index_arg("Slice.last", args, span);
                 option_elem
             }
+            // The `Slice` twin of `Vec.is_sorted` (B-2026-08-21-10) — same
+            // no-args, same total-order gate.
+            "is_sorted" => {
+                self.expect_no_args("Slice.is_sorted", args, span);
+                self.require_ord_element(&elem, "Slice", "is_sorted", span);
+                Type::Bool
+            }
             "get" => {
                 for arg in args {
                     let at = self.infer_expr(&arg.value);
@@ -1632,6 +1639,20 @@ impl<'a> super::TypeChecker<'a> {
                     self.check_assignable(&Type::Int(IntSize::I64), &at, args[0].value.span);
                 }
                 Type::Unit
+            }
+            // `is_sorted() -> bool` — design.md § Contracts uses it as the
+            // worked example of a `requires` precondition (`requires
+            // haystack.is_sorted()` on `binary_search`) and of a struct
+            // `invariant` (`invariant self.data.is_sorted()`), so the spec's
+            // own contracts example did not compile without it (B-2026-08-21-10).
+            //
+            // Gated by `require_ord_element` for the same reason `sort` /
+            // `sorted` are: on an IEEE float element the answer is not
+            // well-defined, and the two backends disagree about it.
+            "is_sorted" => {
+                self.expect_no_args("Vec.is_sorted", args, span);
+                self.require_ord_element(&elem, "Vec", "is_sorted", span);
+                Type::Bool
             }
             "sorted" => {
                 self.expect_no_args("Vec.sorted", args, span);

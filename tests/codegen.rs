@@ -101428,6 +101428,126 @@ fn main() {
         );
     }
 
+    /// B-2026-08-21-10 — `is_sorted()` end to end on all three sequence
+    /// receivers.
+    ///
+    /// The `u64` cases are the ones with teeth. Codegen compares adjacent
+    /// pairs through the `karac_cmp_<T>` family rather than an open-coded
+    /// `<=`, precisely so an element past `i64::MAX` is read UNSIGNED — an
+    /// open-coded signed compare answers `false` for `[1, u64::MAX]`, which is
+    /// both wrong and a disagreement with `sort()`'s own output. Each receiver
+    /// reaches the comparator by a different route (`Vec` directly, `Slice`
+    /// through the header-into-Vec-view republish, `Array` through the
+    /// unrolled fixed-array arm), so all three are swept.
+    #[test]
+    fn test_e2e_is_sorted_across_receivers() {
+        let src = r#"
+fn main() {
+    let a: Vec[i64] = [1, 2, 2, 5];
+    println(a.is_sorted());
+    let b: Vec[i64] = [1, 3, 2];
+    println(b.is_sorted());
+    let e: Vec[i64] = [];
+    println(e.is_sorted());
+    let one: Vec[i64] = [42];
+    println(one.is_sorted());
+
+    // An element past i64::MAX: unsigned order says sorted, signed says not.
+    let big: Vec[u64] = [1u64, 18446744073709551615u64];
+    println(big.is_sorted());
+
+    let s: Vec[String] = ["apple", "banana", "cherry"];
+    println(s.is_sorted());
+    let s2: Vec[String] = ["cherry", "apple"];
+    println(s2.is_sorted());
+
+    let sl: Slice[i64] = a[0..3];
+    println(sl.is_sorted());
+    let sl2: Slice[i64] = b[0..3];
+    println(sl2.is_sorted());
+    let slu: Slice[u64] = big[0..2];
+    println(slu.is_sorted());
+
+    let arr: Array[i64, 4] = [1, 2, 3, 4];
+    println(arr.is_sorted());
+    let arr2: Array[i64, 3] = [3, 1, 2];
+    println(arr2.is_sorted());
+    let arru: Array[u64, 2] = [1u64, 18446744073709551615u64];
+    println(arru.is_sorted());
+}
+"#;
+        assert_eq!(
+            run_program(src).as_deref(),
+            Some(concat!(
+                "true\nfalse\ntrue\ntrue\n",
+                "true\n",
+                "true\nfalse\n",
+                "true\nfalse\ntrue\n",
+                "true\nfalse\ntrue\n"
+            ))
+        );
+    }
+
+    /// `sort()` and `is_sorted()` must agree about the sequence `sort` just
+    /// produced. They are separate lowerings that each pick an element
+    /// ordering, so a signed/unsigned mismatch between them would show up here
+    /// as `false` right after a sort — the shape B-2026-07-04-8 fixed for
+    /// `sort` alone.
+    #[test]
+    fn test_e2e_is_sorted_agrees_with_sort() {
+        let src = r#"
+fn main() {
+    let mut v: Vec[u64] = [9223372036854775809u64, 3u64, 18446744073709551615u64, 1u64];
+    println(v.is_sorted());
+    v.sort();
+    println(v.is_sorted());
+    println(v[0]);
+    println(v[3]);
+
+    let mut w: Vec[String] = ["pear", "apple", "fig"];
+    println(w.is_sorted());
+    w.sort();
+    println(w.is_sorted());
+    println(w[0]);
+}
+"#;
+        assert_eq!(
+            run_program(src).as_deref(),
+            Some("false\ntrue\n1\n18446744073709551615\nfalse\ntrue\napple\n")
+        );
+    }
+
+    /// design.md § Contracts' worked example, compiled. The spec writes
+    /// `requires haystack.is_sorted()` on `binary_search` and
+    /// `invariant self.data.is_sorted()` on `SortedVec`; neither compiled
+    /// before B-2026-08-21-10, so the feature was documented against a method
+    /// that did not exist.
+    #[test]
+    fn test_e2e_is_sorted_backs_the_spec_contract_example() {
+        let src = r#"
+fn find(haystack: ref Vec[i64], needle: i64) -> Option[i64]
+    requires haystack.is_sorted()
+{
+    haystack.binary_search(needle)
+}
+
+struct SortedVec {
+    data: Vec[i64],
+
+    invariant self.data.is_sorted()
+}
+
+fn main() {
+    let v: Vec[i64] = [1, 3, 5, 7];
+    match find(v, 5) { Some(i) => { println(i); } None => { println("none"); } }
+    match find(v, 4) { Some(i) => { println(i); } None => { println("none"); } }
+    let sv = SortedVec { data: [2, 4, 6] };
+    println(sv.data.len());
+}
+"#;
+        assert_eq!(run_program(src).as_deref(), Some("2\nnone\n3\n"));
+    }
+
     /// B-2026-08-20-38 — design.md § Slices' second example, end to end. A
     /// sub-range handed to a `mut Slice[T]` parameter produced a READ-ONLY
     /// header, so `sort_in_place(mut v[1..4])` failed `karac check` with

@@ -3623,6 +3623,105 @@ fn first_still_takes_no_arguments() {
     }
 }
 
+/// B-2026-08-21-10 — `is_sorted()` exists on every sequence receiver.
+///
+/// design.md § Contracts writes the feature's whole worked example against it
+/// — `requires haystack.is_sorted()` on `binary_search`, twice, plus
+/// `invariant self.data.is_sorted()` on `SortedVec` — so before this the
+/// spec's demonstration of contracts could not be compiled at all.
+#[test]
+fn is_sorted_is_a_no_arg_bool_on_every_sequence_receiver() {
+    for recv in [
+        "let v: Vec[i64] = [1, 2, 3];",
+        "let v: Array[i64, 3] = [1, 2, 3];",
+    ] {
+        typecheck_ok(&format!(
+            "fn main() {{\n {recv}\n let b: bool = v.is_sorted();\n println(b);\n}}"
+        ));
+    }
+    typecheck_ok(
+        "fn main() {\n\
+             let v: Vec[i64] = [1, 2, 3];\n\
+             let s = v.as_slice();\n\
+             let b: bool = s.is_sorted();\n\
+             println(b);\n\
+         }",
+    );
+    // A `String` element is ordered, so it is admitted too.
+    typecheck_ok(
+        "fn main() {\n\
+             let v: Vec[String] = [\"a\", \"b\"];\n\
+             println(v.is_sorted());\n\
+         }",
+    );
+}
+
+/// The spec's own contract example, straight from design.md § Contracts.
+#[test]
+fn is_sorted_backs_the_spec_contract_and_invariant_examples() {
+    typecheck_ok(
+        "fn binary_search_spec[T](haystack: ref Vec[T], needle: ref T) -> Option[i64]\n\
+             requires haystack.is_sorted()\n\
+         where T: Ord\n\
+         {\n\
+             haystack.binary_search(needle)\n\
+         }\n\
+         struct SortedVec {\n\
+             data: Vec[i64],\n\
+             invariant self.data.is_sorted()\n\
+         }\n\
+         fn main() {\n\
+             let sv = SortedVec { data: [2, 4, 6] };\n\
+             println(sv.data.len());\n\
+         }",
+    );
+}
+
+/// Arity is checked, and an IEEE float element is refused for the same reason
+/// `sort` refuses it: without a total order the answer is not well-defined.
+/// The note is `is_sorted`-specific and measured — with the gate lifted,
+/// `[1.0, NaN].is_sorted()` answered `true` on all four surfaces while
+/// `a[0] <= a[1]` on the same pair answered `false`.
+#[test]
+fn is_sorted_rejects_arguments_and_ieee_float_elements() {
+    let arity = typecheck_errors(
+        "fn main() {\n\
+             let v: Vec[i64] = [1, 2, 3];\n\
+             println(v.is_sorted(1));\n\
+         }",
+    );
+    assert!(
+        arity
+            .iter()
+            .any(|e| e.message.contains("takes no arguments")),
+        "is_sorted() must reject an argument; got {:?}",
+        arity.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+
+    let float = typecheck_errors(
+        "fn main() {\n\
+             let v: Vec[f64] = [1.0, 2.0];\n\
+             println(v.is_sorted());\n\
+         }",
+    );
+    assert!(
+        float
+            .iter()
+            .any(|e| e.message.contains("has no total order")
+                && e.message.contains("`[1.0, NaN].is_sorted()` answers TRUE")),
+        "the f64 refusal must name the is_sorted-specific harm; got {:?}",
+        float.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+
+    // The total-order wrapper the note points at is accepted.
+    typecheck_ok(
+        "fn main() {\n\
+             let v: Vec[F64] = [F64.from(1.0), F64.from(2.0)];\n\
+             println(v.is_sorted());\n\
+         }",
+    );
+}
+
 /// B-2026-08-21-14 — the warning must carry a MACHINE-APPLICABLE deletion.
 ///
 /// The lint was wired warn-by-default with `fix_it: None`, so it fired 26,094
