@@ -93,8 +93,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 273 | 0 |
-| leak | 185 | 0 |
-| run-vs-build | 148 | 1 |
+| leak | 186 | 1 |
+| run-vs-build | 148 | 0 |
 | missing-feature | 143 | 7 |
 | double-free | 134 | 0 |
 | codegen-gap | 123 | 1 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 974 | 3 |
+| codegen | 976 | 4 |
 | typecheck | 231 | 4 |
-| interp | 170 | 2 |
+| interp | 170 | 1 |
 | other | 62 | 0 |
 | ownership | 62 | 0 |
 | cli | 59 | 1 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 8 | 1 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1454 surfaced · 10 open · 1422 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1455 surfaced · 10 open · 1423 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (10)
 
@@ -139,7 +139,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1454 surfaced
 | B-2026-08-21-26 | 2026-08-21 | typecheck | medium | `TryFrom[intN]` FOR A C-LIKE `#[repr(intN)]` ENUM DOES NOT EXIST -- design.md § Enum Discriminant Runtime Surface commits to auto-generating it and shows the worked `match UsbClass.try_from(raw)`, which fails to compile | roadmap.md |
 | B-2026-08-21-29 | 2026-08-21 | typecheck | medium | THREE DOCUMENTED SURFACES ARE NOT REACHABLE AS WRITTEN: every spelling of channel construction design.md uses (`Channel.new[T]()`, `Channel.bounded`), its whole `io.` I/O prefix, and `allocates(Heap)` -- whose `Heap` the document never declares and the prelude does not provide | roadmap.md |
 | B-2026-08-21-32 | 2026-08-21 | resolver+effect | medium | EFFECT RESOURCES CANNOT BE ROOTED AT A VALUE, so design.md's whole channel effect model is unwritable: `with sends(tx)` on a channel PARAMETER is `'tx' is not an effect resource (it is a variable)`, and the seven `Sender`/`Receiver` declarations at :6064-:6094 are all written that way | roadmap.md |
-| B-2026-08-21-38 | 2026-08-21 | interp | high | THE INTERPRETER LOSES A `mut ref` SCALAR WRITE THROUGH A **METHOD** ARGUMENT -- `h.bump(mut n)` leaves `n` at its old value under `--interp` while JIT, AOT and `KARAC_AUTO_PAR=0` AOT all publish it, and the free-function spelling of the same call is correct on all four; the interpreter is the wrong one here | roadmap.md |
+| B-2026-08-21-40 | 2026-08-21 | codegen | medium | A `mut ref String` ARGUMENT ON A **FIELD** PLACE LEAKS THE FIELD'S ORIGINAL BUFFER WHEN THE CALLEE REASSIGNS IT -- `free_app(mut b.name)` with a body of `s = s + "!"` leaks 8 bytes per call under LeakSanitizer while the identical call on an IDENTIFIER place is clean; both the free-function and the method spelling are affected | roadmap.md |
 
 ### Wontfix (8)
 
@@ -158,9 +158,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1454 surfaced
 
 </details>
 
-### Fixed (1422)
+### Fixed (1423)
 
-<details><summary>1422 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1423 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -13850,6 +13850,23 @@ Scope is what the measurement supports and no more. A MISSING ARCHIVE never took
 What the guard closes is the remainder: a link failure carrying none of those markers -- no linker on PATH, a permissions failure -- which reported a silent pass whatever the flag said.
 
 Verified: all seven oracles green with the archives present; fmt clean. |
+| B-2026-08-21-38 | interp+codegen | high | THE INTERPRETER LOSES A `mut ref` SCALAR WRITE THROUGH A **METHOD** ARGUMENT -- `h.bump(mut n)` leaves `n` at its old value under `--interp` while JI… | FIXED by c2d4c83. TWO HALVES, both measured, because fixing the reported one exposed its twin.
+
+INTERPRETER HALF (the reported bug). `src/interpreter/method_call.rs`'s method epilogue had a CICO write-back for a `mut ref self` RECEIVER and nothing for ARGUMENTS; `eval_call.rs` has had the full free-function version since B-2026-08-05-37. Every parameter binds to a by-value copy in the callee scope, so without an argument write-back the callee's mutation died with the scope. Added: collect `(place, final value)` pairs before `env.pop_scope()` and apply them with `assign_to_place` after, alongside the existing receiver write-back.
+
+The trigger is `arg.mut_marker || <the callee's declared param mode>`, not the marker alone. design.md Feature 4 Part 1½: an argument already rooted at a `mut ref` binding forwards WITHOUT a marker, so a marker-only gate drops the inner hop of `forward(x)` -> `self.bump(x)`. The mode comes from a new `Interpreter::method_param_mut_ref_flags`, the method sibling of `fn_param_mut_ref_flags`, resolved program-then-`STDLIB_PROGRAMS` exactly as `method_self_param` is. It reports DECLARED params only (no `self` slot) because declared param i is call-site argument i; the `param_patterns` lookup that reads the final value shifts by one for the receiver, and the whole block is gated on a self-taking method so that arithmetic is sound by construction.
+
+WHY THE ROW SAW SCALARS ONLY, corrected here: a `Vec` / `String` / array argument was never "already correct" by a different mechanism -- `Value::Vec` and `Value::Str` share their buffer, so the callee mutated the CALLER's storage directly and the missing write-back was unobservable. Same gap, invisible payload.
+
+CODEGEN HALF (found by the fix, fixed in the same commit). With the interpreter corrected, a `mut ref` method argument on a FIELD place diverged the other way: `h.bump(mut b.v)` printed the pre-call value under JIT and AOT while the byte-identical `free_bump(mut b.v)` printed the incremented one on all four surfaces. `src/codegen/method_call.rs`'s ref-argument loop had no `mut_ref_place_arg_ptr` arm -- B-2026-08-05-41's fix landed on the free-function path (`call_dispatch.rs`) and the generic path (`mono.rs`) and never on this one, the same shape as B-2026-08-21-23's missing array carve-out. Transplanted verbatim, gated on the PARAMETER MODE (`fn_param_mut_ref` at `pidx`, self at 0) rather than on `ref`-ness, because a read-only `ref` param is correctly served by a copy and this family's history is over-broad widenings that had to be reverted.
+
+THE CODEGEN HALF IS A MEMORY-SAFETY FIX, NOT ONLY A LOST WRITE. For a heap-bearing field the callee received a pointer to a temporary COPY, giving the `Vec[String]` two owners: measured as `AddressSanitizer: double-free`, now clean. That is what `asan_mut_ref_heap_field_into_a_method_is_a_borrow` pins; it double-frees with the arm reverted.
+
+Verified byte-identical on --interp / JIT / AOT / `KARAC_AUTO_PAR=0` AOT across: the reported scalar repro, `mut ref self` plus a `mut ref` argument publishing to two different places, an unmarked forwarded borrow, two `mut ref` arguments in one call, and every place shape -- identifier, field, nested field, tuple index, struct-held tuple index, array index, Vec index, and a `shared struct` field (which routes through `shared_mut_ref_place_arg_ptr`). Eleven new tests: six in tests/interpreter.rs, four in tests/codegen.rs, one ASAN fixture. All five positive interpreter tests fail with the interpreter half reverted and all four codegen tests fail with the codegen half reverted.
+
+The sixth interpreter test is a NEGATIVE control and passes either way by design: an owned parameter reassigned in the body must NOT move the caller's binding. It earns its place by failing when the mode gate is removed -- measured at `9 9` against the free function's `9 5` -- which is the over-broad direction a blanket "copy every parameter back" would take.
+
+ONE PRE-EXISTING LEAK FOUND AND NOT FIXED HERE, filed as B-2026-08-21-40: a `mut ref String` argument on a FIELD place whose callee REASSIGNS it (`s = s + "!"`) leaks the field's original buffer, 8 bytes per call. It reproduces on the FREE-FUNCTION spelling with this commit's codegen arm stashed, so it belongs to B-2026-08-05-41's path, not to this transplant; an identifier place is clean. The ASAN fixture here deliberately uses a `Vec[String]` field so it pins the double-free this commit fixes without asserting that leak away. |
 | B-2026-08-21-39 | codegen | medium | AN **ASSOCIATED FUNCTION** (no `self`) FAILS MODULE VERIFICATION ON AN ARRAY ARGUMENT TO A SLICE PARAMETER -- `H.f(mut bm)` passes the raw `[3 x i8]`… | Fixed in c5e549fc, together with the sibling B-2026-08-21-24 -- both rows asked
 that a fix for one check the others, and this is what that check turned up.
 
