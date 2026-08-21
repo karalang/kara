@@ -5203,3 +5203,135 @@ fn read_only_shared_argument_is_not_serialized() {
         main_fc.serialization_points
     );
 }
+
+// ── B-2026-08-21-30: a method's `mut` ARGUMENTS are writes ──────
+//
+// `collect_expr_inner_writes`'s `MethodCall` arm recorded a write for the
+// RECEIVER and then merely walked INSIDE each argument for nested mutations,
+// so the argument's own mutation-by-borrow was invisible. The `Call` arm has
+// had that check since kata 22.
+//
+// The consequence was a miscompile, not a missed optimization: the
+// dependency check saw two reads where there was a read-after-write, auto-par
+// split the statements into two branches, each captured the array BY VALUE
+// from the same pre-split snapshot, and branch 0's write was invisible to
+// branch 1 — `karac build` printed the original element while `--interp` and
+// `KARAC_AUTO_PAR=0` printed the mutated one.
+
+/// Asserted on the CALL→READ pair specifically (statements 2 and 3), never on
+/// "some edge mentions the name": the `let` that introduces the binding
+/// already def-use-links it to both later statements, so a name-only assertion
+/// passes against the broken compiler. Measured — the first draft of these
+/// three did exactly that and stayed green with the fix reverted.
+fn call_to_read_edge(src: &str, var: char) -> bool {
+    let analysis = analyze_typed(src);
+    get_function(&analysis, "main")
+        .serialization_points
+        .iter()
+        .any(|sp| sp.statement_indices == vec![2, 3] && sp.reason.contains(var))
+}
+
+/// The declared parameter mode is what carries the common spelling:
+/// design.md Feature 4 Part 1½ says method calls never write the `mut`
+/// marker, so an unmarked argument must still register the write.
+#[test]
+fn method_mut_slice_arg_is_a_write_on_the_caller_binding() {
+    assert!(
+        call_to_read_edge(
+            "struct H { acc: i64 }\n\
+             impl H { fn bump(ref self, b: mut Slice[u8]) -> i64 { b[0] = 9u8; b.len() } }\n\
+             fn main() {\n\
+                 let h = H { acc: 0 };\n\
+                 let mut bm: Array[u8, 3] = [10u8, 20u8, 30u8];\n\
+                 println(h.bump(bm));\n\
+                 println(bm[0]);\n\
+             }",
+            'b',
+        ),
+        "an UNMARKED mut-slice method argument must serialize the call against \
+         the later read of `bm`"
+    );
+}
+
+/// The marked spelling parses and behaves identically today, so the marker is
+/// honoured as well rather than trusted to be absent.
+#[test]
+fn method_mut_marked_arg_is_a_write_on_the_caller_binding() {
+    assert!(
+        call_to_read_edge(
+            "struct H { acc: i64 }\n\
+             impl H { fn bump(ref self, b: mut Slice[u8]) -> i64 { b[0] = 9u8; b.len() } }\n\
+             fn main() {\n\
+                 let h = H { acc: 0 };\n\
+                 let mut bm: Array[u8, 3] = [10u8, 20u8, 30u8];\n\
+                 println(h.bump(mut bm));\n\
+                 println(bm[0]);\n\
+             }",
+            'b',
+        ),
+        "the marked spelling must serialize too"
+    );
+}
+
+/// A `mut ref T` (non-slice) method parameter is the same class. The
+/// free-function spelling of this was already correct; this pins that the
+/// method spelling now agrees.
+#[test]
+fn method_mut_ref_arg_is_a_write_on_the_caller_binding() {
+    assert!(
+        call_to_read_edge(
+            "struct H { acc: i64 }\n\
+             impl H { fn bump(ref self, v: mut ref Vec[i64]) -> i64 { v.push(99); v.len() } }\n\
+             fn main() {\n\
+                 let h = H { acc: 0 };\n\
+                 let mut xs: Vec[i64] = [1, 2];\n\
+                 println(h.bump(mut xs));\n\
+                 println(xs[0]);\n\
+             }",
+            'x',
+        ),
+        "a `mut ref Vec` method argument must serialize the call against the \
+         later read"
+    );
+}
+
+/// The gate is the PARAMETER MODE, not "any method argument": a read-only
+/// `ref Slice[T]` argument must NOT gain an edge, or the fix would trade a
+/// miscompile for a blanket de-parallelization of every method call.
+///
+/// Asserted on the CALL→READ pair specifically (statements 2 and 3), not on
+/// the presence of any `a` edge: the `let` at statement 1 defines `a` and both
+/// later statements read it, so two def-use edges from the binding are there
+/// either way and measuring them proves nothing. The mut spelling of the same
+/// program is checked in the same test so the two differ by exactly the
+/// parameter mode.
+#[test]
+fn only_a_mut_method_arg_adds_the_call_to_read_edge() {
+    let program = |param: &str, call: &str| {
+        format!(
+            "struct H {{ acc: i64 }}\n\
+             impl H {{ fn f(ref self, b: {param}) -> i64 {{ b.len() }} }}\n\
+             fn main() {{\n\
+                 let h = H {{ acc: 0 }};\n\
+                 let mut a: Array[u8, 3] = [10u8, 20u8, 30u8];\n\
+                 println(h.f({call}));\n\
+                 println(a[0]);\n\
+             }}"
+        )
+    };
+    let call_to_read = |src: &str| -> bool {
+        let analysis = analyze_typed(src);
+        get_function(&analysis, "main")
+            .serialization_points
+            .iter()
+            .any(|sp| sp.statement_indices == vec![2, 3] && sp.reason.contains('a'))
+    };
+    assert!(
+        call_to_read(&program("mut Slice[u8]", "a")),
+        "a `mut Slice` argument must serialize the call against the later read"
+    );
+    assert!(
+        !call_to_read(&program("ref Slice[u8]", "a")),
+        "a read-only `ref Slice` argument must NOT add that edge"
+    );
+}

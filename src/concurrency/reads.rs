@@ -316,7 +316,43 @@ impl<'a> super::ConcurrencyChecker<'a> {
                     self.collect_assign_target_defines(object, writes);
                 }
                 self.collect_expr_inner_writes(object, writes);
-                for arg in args {
+                // B-2026-08-21-30 — a method mutates caller-visible state
+                // through its `mut ref T` / `mut Slice[T]` ARGUMENTS too, not
+                // only through its receiver. This arm recorded a write for the
+                // receiver and then merely walked INSIDE each argument for
+                // nested mutations, so the argument's own mutation-by-borrow
+                // was invisible — the `Call` arm immediately below has had
+                // exactly this check since kata 22.
+                //
+                // That was a miscompile, not a missed optimization. Measured:
+                //
+                //     let mut bm: Array[u8, 3] = [10u8, 20u8, 30u8];
+                //     println(h.f(mut bm));   // f writes b[0] = 9u8
+                //     println(bm[0]);
+                //
+                // recorded no write on `bm`, so the dependency check saw two
+                // reads, auto-par split them into two branches, and each
+                // branch captured `bm` BY VALUE from the same pre-split
+                // snapshot — branch 0's write was invisible to branch 1 and
+                // the program printed 10 for 9, while `--interp` and
+                // `KARAC_AUTO_PAR=0` printed 9. An ordinary read-after-write
+                // on which the two lanes disagreed.
+                //
+                // Both detection paths of the `Call` arm apply, OR'd, and both
+                // are load-bearing here: design.md Feature 4 Part 1½ says
+                // method calls never write the `mut` marker, so the DECLARED
+                // parameter mode is the one that carries the common spelling —
+                // but the marked form parses and behaves identically today, so
+                // the marker is honoured as well rather than trusted to be
+                // absent.
+                let method_params = self.method_param_modes(method);
+                for (i, arg) in args.iter().enumerate() {
+                    let param_is_mut_borrow = method_params
+                        .as_ref()
+                        .is_some_and(|modes| modes.get(i).copied().unwrap_or(false));
+                    if arg.mut_marker || param_is_mut_borrow {
+                        self.collect_assign_target_defines(&arg.value, writes);
+                    }
                     self.collect_expr_inner_writes(&arg.value, writes);
                 }
             }
@@ -599,6 +635,47 @@ impl<'a> super::ConcurrencyChecker<'a> {
             (key == method || key.ends_with(&suffix))
                 && matches!(f.self_param, Some(SelfParam::MutRef))
         })
+    }
+
+    /// Per-argument "is this parameter a mutable borrow" flags for `method`,
+    /// resolved by name across every `impl` in this program (B-2026-08-21-30).
+    ///
+    /// Name-based and UNION-ed across same-named methods, for the same reason
+    /// [`Self::method_receiver_is_mut_ref`] is: a method call's receiver type
+    /// is not resolved here, so two `impl`s can offer the same method name.
+    /// Answering `true` when ANY of them declares a mutable borrow at that
+    /// position is the conservative direction — over-marking only
+    /// de-parallelizes and can never introduce a race, while under-marking is
+    /// the miscompile this exists to prevent.
+    ///
+    /// `None` when no method of that name is in this program (an extern or
+    /// builtin), which leaves the call-site `mut` marker as the only signal.
+    pub(super) fn method_param_modes(&self, method: &str) -> Option<Vec<bool>> {
+        let suffix = format!(".{}", method);
+        let mut modes: Option<Vec<bool>> = None;
+        for (key, f) in self.method_bodies.iter() {
+            if key != method && !key.ends_with(&suffix) {
+                continue;
+            }
+            let this: Vec<bool> = f
+                .params
+                .iter()
+                .map(|p| matches!(p.ty.kind, TypeKind::MutRef(_) | TypeKind::MutSlice(_)))
+                .collect();
+            modes = Some(match modes {
+                None => this,
+                Some(prev) => {
+                    let n = prev.len().max(this.len());
+                    (0..n)
+                        .map(|i| {
+                            prev.get(i).copied().unwrap_or(false)
+                                || this.get(i).copied().unwrap_or(false)
+                        })
+                        .collect()
+                }
+            });
+        }
+        modes
     }
 
     /// Resolve a call's callee expression to its declared parameter list, using

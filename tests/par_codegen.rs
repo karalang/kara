@@ -12046,6 +12046,51 @@ fn main() {
 "#;
         assert_eq!(run_program(src).as_deref(), Some("24 24\n"));
     }
+
+    /// B-2026-08-21-30 — a METHOD's `mut` argument is a write on the caller's
+    /// binding, so the call and a later read of it cannot be raced.
+    ///
+    /// The write-collection walk recorded a write for the method's RECEIVER
+    /// and merely walked INSIDE each argument for nested mutations, so the
+    /// argument's own mutation-by-borrow was invisible. The dependency check
+    /// then saw two reads where there was a read-after-write, auto-par split
+    /// the statements into two branches, and each captured the array BY VALUE
+    /// from the same pre-split snapshot — branch 0's write was invisible to
+    /// branch 1.
+    ///
+    /// Measured before the fix: `10` from `karac build` and `karac run`
+    /// against `9` from `--interp` and `KARAC_AUTO_PAR=0`, on both the marked
+    /// and unmarked spellings. This test has to live HERE rather than in
+    /// tests/codegen.rs, whose harness passes `concurrency: None` — auto-par
+    /// is dead there, so the bug is unreachable and the test would be vacuous.
+    #[test]
+    fn autopar_does_not_race_a_method_mut_arg_against_its_later_read() {
+        // design.md Feature 4 Part 1½ says method calls never write the `mut`
+        // marker, so the UNMARKED spelling is the common one — but the marked
+        // form parses and behaved identically, so both are swept.
+        for call in ["h.bump(bm)", "h.bump(mut bm)"] {
+            let src = format!(
+                r#"
+struct H {{ acc: i64 }}
+impl H {{
+    fn bump(ref self, b: mut Slice[u8]) -> i64 {{ b[0] = 9u8; b.len() }}
+}}
+fn main() {{
+    let h = H {{ acc: 0 }};
+    let mut bm: Array[u8, 3] = [10u8, 20u8, 30u8];
+    println({call});
+    println(bm[0]);
+}}
+"#
+            );
+            assert_eq!(
+                run_program(&src).as_deref(),
+                Some("3\n9\n"),
+                "the method's write through `{call}` must be visible to the \
+                 later read"
+            );
+        }
+    }
 }
 
 #[cfg(feature = "llvm")]
@@ -12162,6 +12207,44 @@ fn main() {
             main_fn.parallel_groups.is_empty(),
             "two pushes to the same tuple-element Vec (and the read after them) \
              must not be grouped as independent; got {:?}",
+            main_fn.parallel_groups
+        );
+    }
+
+    /// The analysis-level twin: the two statements must not be collected into
+    /// one parallel group in the first place.
+    #[test]
+    fn autopar_does_not_group_a_method_mut_arg_with_its_later_read() {
+        let src = r#"
+struct H { acc: i64 }
+impl H {
+    fn bump(ref self, b: mut Slice[u8]) -> i64 { b[0] = 9u8; b.len() }
+}
+fn main() {
+    let h = H { acc: 0 };
+    let mut bm: Array[u8, 3] = [10u8, 20u8, 30u8];
+    println(h.bump(bm));
+    println(bm[0]);
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let analysis = karac::concurrency_analyze_typed(&parsed.program, &effects, Some(&typed));
+        let main_fn = analysis
+            .function_decisions
+            .get("main")
+            .expect("main in function_decisions");
+        assert!(
+            main_fn
+                .parallel_groups
+                .iter()
+                .all(|g| !(g.statement_indices.contains(&2) && g.statement_indices.contains(&3))),
+            "the mut-arg call and the read after it must not share a parallel \
+             group; got {:?}",
             main_fn.parallel_groups
         );
     }
