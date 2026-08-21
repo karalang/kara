@@ -120,6 +120,16 @@ carry a reason, 18 of them SPEC GAP and 29 DOC BUG, filed across
   declared two blocks earlier) reads as `unresolved`. Assembling context
   automatically was rejected: it would mask the `TreeMap` class of divergence,
   which is the one worth catching.
+- **Signature catalogues are unchecked, and that is where the yield is.** 21 of
+  the baseline's entries are doc method tables — `Channel.new[T]() ->
+  (Sender[T], Receiver[T])`, `fn io.read_line() -> Result[String, IoError]` —
+  which are declarations, not programs, so they never parse in any framing and
+  the suite cannot tell whether the 60 methods they name EXIST. That is exactly
+  the class of `B-2026-08-21-10`, the four documented stdlib entry points that
+  did not, every one of which was found by a person reading the doc rather than
+  by this sweep. Hand-probing five of the 60 found two missing. Filed as
+  `B-2026-08-21-28`, with the two findings split to `B-2026-08-21-29`. Closing
+  it is expected to GROW the non-conforming count, not shrink it.
 - Deferred-vs-divergent is a judgement call the harness cannot make; it lives in
   the baseline's `reason` field, written by hand.
 - Acceptance is not semantics. A block that compiles to the wrong thing passes
