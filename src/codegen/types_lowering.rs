@@ -948,6 +948,30 @@ impl<'ctx> super::Codegen<'ctx> {
     /// and `s.bytes()` on a `String` (always `u8`, since `bytes()` is
     /// String-only at the typechecker layer).
     /// Returns `None` when the RHS is not a slice-producing shape.
+    /// The ELEMENT `TypeExpr` of a call whose callee is declared to return
+    /// `Slice[T]` (B-2026-08-21-4).
+    ///
+    /// Only a BY-VALUE `Slice[T]` return qualifies. A `ref Slice[T]` return
+    /// arrives as a bare pointer rather than a `{ptr, len}` header, so
+    /// registering the caller's binding as a slice would have the dispatch
+    /// read a length out of whatever follows the pointer — the same shape of
+    /// error this row was filed for, moved one level out.
+    ///
+    /// Method calls are deliberately NOT covered here: `fn_return_type_exprs`
+    /// is keyed by free-function name, and the method sibling
+    /// (`b.view()` on an `impl` block) needs its own registration. It is
+    /// tracked separately rather than guessed at.
+    fn call_slice_return_elem_te(&self, expr: &Expr) -> Option<TypeExpr> {
+        let ExprKind::Call { callee, .. } = &expr.kind else {
+            return None;
+        };
+        let ExprKind::Identifier(fname) = &callee.kind else {
+            return None;
+        };
+        let ret = self.fn_sig.fn_return_type_exprs.get(fname.as_str())?;
+        super::helpers::slice_inner_type_expr(ret)
+    }
+
     pub(super) fn infer_slice_elem_from_rhs(&self, expr: &Expr) -> Option<BasicTypeEnum<'ctx>> {
         match &expr.kind {
             ExprKind::MethodCall { object, method, .. }
@@ -959,6 +983,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 // `String.bytes() -> Slice[u8]`. Element type is fixed
                 // — typechecker has gated the receiver to String.
                 Some(self.context.i8_type().into())
+            }
+            ExprKind::Call { .. } => {
+                let te = self.call_slice_return_elem_te(expr)?;
+                Some(self.llvm_type_for_type_expr(&te))
             }
             ExprKind::MethodCall { method, .. } if method == "as_bytes" => {
                 // `CStr.as_bytes() -> Slice[u8]` (design.md § C-String
@@ -1042,6 +1070,8 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::MethodCall { method, .. } if method == "bytes" || method == "as_bytes" => {
                 Some(u8_te(&expr.span))
             }
+            // A CALL whose callee declares `-> Slice[T]` (B-2026-08-21-4).
+            ExprKind::Call { .. } => self.call_slice_return_elem_te(expr),
             ExprKind::Index { object, index } => {
                 let ExprKind::Identifier(base) = &object.kind else {
                     return None;

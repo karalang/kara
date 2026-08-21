@@ -4984,14 +4984,29 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let Some(slot) = self.variables.get(name.as_str()).copied() {
                     let i64_t = self.context.i64_type();
                     let slice_ty = self.slice_struct_type();
+                    // B-2026-08-21-4 — the receiver's PLACE, not its slot.
+                    //
+                    // For an owned binding the alloca IS the aggregate, so
+                    // `slot.ptr` and the place coincide and this arm was right
+                    // by accident. For a `ref` / `mut ref` PARAMETER the alloca
+                    // holds a POINTER to the caller's aggregate, and reading
+                    // the header straight out of `slot.ptr` interpreted that
+                    // pointer as the Vec's `data` field and whatever sat beside
+                    // it on the stack as `len` — a silent wrong answer
+                    // (`v.as_slice().len()` returned a pointer-sized number, or
+                    // 0). `get_data_ptr` is the established resolver for
+                    // exactly this and also covers the RC-fallback box and a
+                    // module-binding global; every other Vec method already
+                    // goes through it, which is why only `as_slice` was wrong.
+                    let place = self.get_data_ptr(name).unwrap_or(slot.ptr);
                     if let BasicTypeEnum::ArrayType(at) = slot.ty {
                         let len = i64_t.const_int(at.len() as u64, false);
-                        return Ok(self.build_slice_header(slice_ty, slot.ptr, len));
+                        return Ok(self.build_slice_header(slice_ty, place, len));
                     }
                     if self.var_types.slice_elem_types.contains_key(name.as_str()) {
                         return Ok(self
                             .builder
-                            .build_load(slice_ty, slot.ptr, "as_slice.passthrough")
+                            .build_load(slice_ty, place, "as_slice.passthrough")
                             .unwrap());
                     }
                     if self.var_types.vec_elem_types.contains_key(name.as_str()) {
@@ -4999,7 +5014,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         let vec_ty = self.vec_struct_type();
                         let data_pp = self
                             .builder
-                            .build_struct_gep(vec_ty, slot.ptr, 0, "as_slice.v.data.pp")
+                            .build_struct_gep(vec_ty, place, 0, "as_slice.v.data.pp")
                             .unwrap();
                         let data = self
                             .builder
@@ -5008,7 +5023,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             .into_pointer_value();
                         let len_p = self
                             .builder
-                            .build_struct_gep(vec_ty, slot.ptr, 1, "as_slice.v.len.p")
+                            .build_struct_gep(vec_ty, place, 1, "as_slice.v.len.p")
                             .unwrap();
                         let len = self
                             .builder

@@ -46553,6 +46553,135 @@ fn main() {
         );
     }
 
+    /// B-2026-08-21-4 — `as_slice()` on a `ref`-mode receiver, and a call
+    /// declared to return `Slice[T]`.
+    ///
+    /// THE SILENT HALF was `as_slice` reading the slice header straight out of
+    /// the receiver's SLOT. For an owned binding the alloca IS the aggregate,
+    /// so that was right by accident; for a `ref` / `mut ref` PARAMETER the
+    /// alloca holds a POINTER to the caller's aggregate, and the lowering read
+    /// that pointer as the Vec's `data` and whatever sat beside it on the stack
+    /// as `len`. `v.as_slice().len()` returned a pointer-sized number, exit 0,
+    /// no diagnostic. Case 1 needs no `Slice` return at all, which is what
+    /// identifies the cause: the row was filed against the return boundary, but
+    /// the header is built wrong before it ever reaches a `return`.
+    ///
+    /// THE LOUD HALF was the element type: a call result had no entry in
+    /// either slice-element resolver, so `pick(v)[2]` and `for x in s` refused.
+    /// The filing row measured that arm ALONE and reverted it — with the header
+    /// still wrong it turned the loud failures into silent ones (`pick(v)[2]`
+    /// gave 3, the length, instead of 30). Both land together here, and case 5
+    /// is the one that proves the order mattered.
+    #[test]
+    fn e2e_as_slice_on_a_ref_receiver_and_a_slice_returning_call() {
+        // 1. No `Slice` return anywhere — the minimal shape of the miscompile.
+        //    The owned twin was always correct and is the control.
+        assert_eq!(
+            run_program(
+                "fn probe(v: ref Vec[i64]) -> i64 {\n\
+                 \x20   let s = v.as_slice();\n\
+                 \x20   return s.len();\n\
+                 }\n\
+                 fn owned(v: Vec[i64]) -> i64 {\n\
+                 \x20   let s = v.as_slice();\n\
+                 \x20   return s.len();\n\
+                 }\n\
+                 fn main() {\n\
+                 \x20   let v: Vec[i64] = [10, 20, 30];\n\
+                 \x20   println(f\"{probe(v)}\");\n\
+                 \x20   let w: Vec[i64] = [1, 2];\n\
+                 \x20   println(f\"{owned(w)}\");\n\
+                 }\n"
+            )
+            .as_deref(),
+            Some("3\n2\n")
+        );
+        // 2. The row's own repro: an inline call through a `Slice[T]` return.
+        assert_eq!(
+            run_program(
+                "fn pick(v: ref Vec[i64]) -> Slice[i64] {\n\
+                 \x20   return v.as_slice();\n\
+                 }\n\
+                 fn main() {\n\
+                 \x20   let v: Vec[i64] = [10, 20, 30];\n\
+                 \x20   println(f\"{pick(v).len()}\");\n\
+                 }\n"
+            )
+            .as_deref(),
+            Some("3\n")
+        );
+        // 3. Bound to a local, then a method on it.
+        assert_eq!(
+            run_program(
+                "fn pick(v: ref Vec[i64]) -> Slice[i64] {\n\
+                 \x20   return v.as_slice();\n\
+                 }\n\
+                 fn main() {\n\
+                 \x20   let v: Vec[i64] = [10, 20, 30];\n\
+                 \x20   let s = pick(v);\n\
+                 \x20   println(f\"{s.len()}\");\n\
+                 }\n"
+            )
+            .as_deref(),
+            Some("3\n")
+        );
+        // 4. Iterated — the shape that flooded garbage words rather than
+        //    printing three elements.
+        assert_eq!(
+            run_program(
+                "fn pick(v: ref Vec[i64]) -> Slice[i64] {\n\
+                 \x20   return v.as_slice();\n\
+                 }\n\
+                 fn main() {\n\
+                 \x20   let v: Vec[i64] = [10, 20, 30];\n\
+                 \x20   let s = pick(v);\n\
+                 \x20   for x in s {\n\
+                 \x20       println(f\"{x}\");\n\
+                 \x20   }\n\
+                 }\n"
+            )
+            .as_deref(),
+            Some("10\n20\n30\n")
+        );
+        // 5. INDEXED, inline and bound. This is the case the filing row saw
+        //    return 3 (the length) when the element type was registered while
+        //    the header was still wrong — so `30` here is what proves the
+        //    header fix has to come first, not merely alongside.
+        assert_eq!(
+            run_program(
+                "fn pick(v: ref Vec[i64]) -> Slice[i64] {\n\
+                 \x20   return v.as_slice();\n\
+                 }\n\
+                 fn main() {\n\
+                 \x20   let v: Vec[i64] = [10, 20, 30];\n\
+                 \x20   println(f\"{pick(v)[2]}\");\n\
+                 \x20   let s = pick(v);\n\
+                 \x20   println(f\"{s[0]}\");\n\
+                 }\n"
+            )
+            .as_deref(),
+            Some("30\n10\n")
+        );
+        // 6. A `mut ref` receiver, and a slice taken through it after a
+        //    mutation — the length must track the caller's Vec, not a stale
+        //    copy of the header.
+        assert_eq!(
+            run_program(
+                "fn grow(v: mut ref Vec[i64]) -> i64 {\n\
+                 \x20   v.push(40i64);\n\
+                 \x20   let s = v.as_slice();\n\
+                 \x20   return s.len();\n\
+                 }\n\
+                 fn main() {\n\
+                 \x20   let mut v: Vec[i64] = [10, 20, 30];\n\
+                 \x20   println(f\"{grow(mut v)}\");\n\
+                 }\n"
+            )
+            .as_deref(),
+            Some("4\n")
+        );
+    }
+
     /// B-2026-08-20-35 — a nested index whose outer container is a MAP.
     ///
     /// The READ (`m[k][i]`) was refused `outer is not a Vec/Slice/Array`. The
