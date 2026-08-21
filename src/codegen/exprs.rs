@@ -1028,6 +1028,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     // retract a queued `FreeMapHandle` / skip the UserDrop so the
                     // moved-out handle / drop-side-effect doesn't fire here — the
                     // caller fires it when its own binding goes out of scope.
+                    // GPU-SLIP-4b-5 — the explicit-`return` twin of the tail-expression
+                    // case: the buffer escapes this frame, so the binding's queued free
+                    // must go inert or the caller receives a dead handle.
+                    self.gpu_zero_moved_buffer_handle(e);
                     self.suppress_source_vec_cleanup_for_arg(e);
                     // B-2026-07-22-2: `return mk().s;` — the caller now owns
                     // the extracted field's buffer; zero it in the staged
@@ -2948,6 +2952,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     // when the consumer reads through the struct.
                     // Mirrors the enum-variant constructor pattern
                     // already wired at `try_compile_enum_variant`.
+                    // GPU-SLIP-4b-5 — a buffer moved INTO a struct field. The struct
+                    // owns it now and its drop frees it, so the source binding's free
+                    // must go inert: in the same scope that is only a redundant free,
+                    // but when the struct is RETURNED it is the source's free running
+                    // while the caller holds the handle.
+                    self.gpu_zero_moved_buffer_handle(&field_init.value);
                     self.suppress_source_vec_cleanup_for_arg(&field_init.value);
                     // Boxed / inline-heap `Option`/`Result` binding moved whole
                     // into this shared-struct field — see the non-shared peer
@@ -3130,6 +3140,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 // struct branch above. The new struct aggregate carries
                 // the source's data pointer; suppress the source's
                 // scope-exit free so the consumer can read through.
+                // GPU-SLIP-4b-5 — a buffer moved INTO a struct field. The struct
+                // owns it now and its drop frees it, so the source binding's free
+                // must go inert: in the same scope that is only a redundant free,
+                // but when the struct is RETURNED it is the source's free running
+                // while the caller holds the handle.
+                self.gpu_zero_moved_buffer_handle(&field_init.value);
                 self.suppress_source_vec_cleanup_for_arg(&field_init.value);
                 // #14 — field-access peer: `S { f: obj.field }` moves a heap
                 // FIELD out of a tracked struct `obj`; cap-zero it so `obj`'s

@@ -58061,6 +58061,69 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_an_escaping_gpu_buffer_is_disarmed_but_a_call_argument_is_not() {
+        // GPU-SLIP-4b-5. A buffer that ESCAPES the scope that bound it — by
+        // being returned, or by being moved into a struct that is returned —
+        // must have its binding's queued free disarmed, or that free runs while
+        // the caller still holds the handle. That is a use-after-free, not a
+        // leak: the runtime catches it as "a field reduction on an already-freed
+        // device buffer".
+        //
+        // A by-value CALL ARGUMENT is deliberately not disarmed, and that
+        // asymmetry is the whole design. A by-value aggregate parameter is
+        // normally callee-owned because the callee deep-copies on entry — but a
+        // device buffer cannot be copied by duplicating its handle, so the
+        // callee only aliases it and registers no free of its own. Disarming
+        // the caller there would leave the allocation with no owner at all, and
+        // a leaked DEVICE allocation is invisible to LeakSanitizer.
+        //
+        // The named GEP is the marker: it exists only where a move was
+        // suppressed.
+        let escaping = r#"
+struct Body { mass: f32, speed: f32 }
+
+fn make() -> GpuBuffer[Body] {
+    let bodies: Vec[Body] = [Body { mass: 1.0, speed: 2.0 }];
+    let buf = gpu.upload(bodies);
+    buf
+}
+
+fn main() {
+    println(f"{gpu.sum(make().mass)}");
+}
+"#;
+        let ir = ir_for_with_ownership(escaping);
+        assert!(
+            ir.contains("gpu.moved.handle.p"),
+            "a returned buffer must have its binding's free disarmed; got no \
+             suppression at all:\n{ir}"
+        );
+
+        let argument = r#"
+struct Body { mass: f32, speed: f32 }
+
+fn total(b: GpuBuffer[Body]) -> f32 { gpu.sum(b.mass) }
+
+fn main() {
+    let bodies: Vec[Body] = [Body { mass: 1.0, speed: 2.0 }];
+    let buf = gpu.upload(bodies);
+    println(f"{total(buf)}");
+}
+"#;
+        let ir = ir_for_with_ownership(argument);
+        assert!(
+            !ir.contains("gpu.moved.handle.p"),
+            "a by-value call argument must NOT disarm the caller's free — the \
+             callee aliases the buffer rather than owning a copy, so disarming \
+             leaves it with no owner:\n{ir}"
+        );
+        assert!(
+            ir.contains("karac_runtime_gpu_free_soa"),
+            "the caller must still free the buffer it passed by value:\n{ir}"
+        );
+    }
+
+    #[test]
     fn test_ir_a_gpu_buffer_struct_field_is_freed_when_the_struct_dies() {
         // GPU-SLIP-4b-4. `GpuBuffer[S]` is a nameable type, so a buffer can
         // live in a struct field — and a field is reclaimed by the struct's

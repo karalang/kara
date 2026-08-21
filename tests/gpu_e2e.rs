@@ -2607,6 +2607,117 @@ fn a_resident_field_reduction_resolves_layout_groups_and_offsets() {
     );
 }
 
+/// A device buffer that ESCAPES the scope that bound it stays alive
+/// (GPU-SLIP-4b-5).
+///
+/// Making the type storable made escapes writable, and every one of them was a
+/// use-after-free: the binding's `let` queued a scope-exit free that ran while
+/// the caller still held the handle. Three shapes reach it — a tail expression,
+/// an explicit `return`, and a buffer moved into a struct that is returned —
+/// and all three panicked in the runtime's already-freed guard.
+///
+/// This is the half no structural assertion can make. `tests/codegen.rs` proves
+/// the disarm is EMITTED for an escape and deliberately NOT for a by-value call
+/// argument; what an execution needs to show is that the handle each caller
+/// receives is still live.
+#[test]
+fn a_device_buffer_survives_every_way_it_can_escape_its_scope() {
+    let Some(backend) = gpu_or_skip() else { return };
+
+    let tag = "gpu_buffer_escape";
+    let dir = scratch(tag);
+    let src = dir.join(format!("{tag}.kara"));
+    std::fs::write(
+        &src,
+        "struct Body { mass: f32, speed: f32 }\n\
+        struct Sim  { grid: GpuBuffer[Body], step: i32 }\n\
+        fn tail() -> GpuBuffer[Body] {\n\
+        \x20   let v: Vec[Body] = [Body { mass: 1.0, speed: 2.0 },\n\
+        \x20                       Body { mass: 3.0, speed: 4.0 }];\n\
+        \x20   let buf = gpu.upload(v);\n\
+        \x20   buf\n\
+        }\n\
+        fn explicit() -> GpuBuffer[Body] {\n\
+        \x20   let v: Vec[Body] = [Body { mass: 7.0, speed: 2.0 }];\n\
+        \x20   let buf = gpu.upload(v);\n\
+        \x20   return buf;\n\
+        }\n\
+        fn wrapped() -> Sim {\n\
+        \x20   let v: Vec[Body] = [Body { mass: 5.0, speed: 6.0 }];\n\
+        \x20   let buf = gpu.upload(v);\n\
+        \x20   Sim { grid: buf, step: 0 }\n\
+        }\n\
+        fn main() {\n\
+        \x20   println(f\"{gpu.sum(tail().mass)}\");\n\
+        \x20   println(f\"{gpu.sum(explicit().mass)}\");\n\
+        \x20   let s = wrapped();\n\
+        \x20   println(f\"{gpu.sum(s.grid.mass)}\");\n\
+        \x20   println(f\"{gpu.sum(s.grid.speed)}\");\n\
+        }\n",
+    )
+    .expect("write fixture source");
+
+    let out =
+        build_and_run_on_gpu(&dir, &src, tag, backend).unwrap_or_else(|e| panic!("{tag}: {e}"));
+    let got: Vec<&str> = out.lines().map(str::trim).collect();
+    assert_eq!(
+        got,
+        vec!["4", "7", "5", "6"],
+        "{tag}: a buffer returned as a tail expression, through an explicit \
+         `return`, and inside a returned struct must all still be live in the \
+         caller. Full output:\n{out}"
+    );
+}
+
+/// A buffer passed BY VALUE to a function is still owned by the caller, and the
+/// caller's free is what reclaims it (GPU-SLIP-4b-5).
+///
+/// The other side of the escape rule. A by-value aggregate parameter is
+/// normally callee-owned because the callee deep-copies on entry — but a device
+/// buffer cannot be copied by duplicating its handle, so the callee only
+/// aliases it. Disarming the caller there would leave the allocation with no
+/// owner, and a leaked device allocation is invisible to LeakSanitizer, so the
+/// loop is what would eventually notice.
+#[test]
+fn a_buffer_passed_by_value_stays_owned_by_the_caller() {
+    let Some(backend) = gpu_or_skip() else { return };
+
+    let tag = "gpu_buffer_byval";
+    let dir = scratch(tag);
+    let src = dir.join(format!("{tag}.kara"));
+    std::fs::write(
+        &src,
+        "struct Body { mass: f32, speed: f32 }\n\
+        fn total(b: GpuBuffer[Body]) -> f32 { gpu.sum(b.mass) }\n\
+        fn once() -> f32 {\n\
+        \x20   let v: Vec[Body] = [Body { mass: 1.0, speed: 2.0 },\n\
+        \x20                       Body { mass: 3.0, speed: 4.0 }];\n\
+        \x20   let buf = gpu.upload(v);\n\
+        \x20   total(buf)\n\
+        }\n\
+        fn main() {\n\
+        \x20   let mut i: i64 = 0;\n\
+        \x20   let mut bad: i64 = 0;\n\
+        \x20   while i < 300 {\n\
+        \x20       if once() != 4.0 { bad = bad + 1; }\n\
+        \x20       i = i + 1;\n\
+        \x20   }\n\
+        \x20   println(f\"{bad}\");\n\
+        }\n",
+    )
+    .expect("write fixture source");
+
+    let out =
+        build_and_run_on_gpu(&dir, &src, tag, backend).unwrap_or_else(|e| panic!("{tag}: {e}"));
+    assert_eq!(
+        out.lines().next().map(str::trim),
+        Some("0"),
+        "{tag}: 300 passes of a buffer by value must each answer 4 — the \
+         caller frees it and the callee must not have been handed ownership. \
+         Full output:\n{out}"
+    );
+}
+
 /// `GpuBuffer[S]` is a first-class type: it can be a struct FIELD, a
 /// PARAMETER, and a RETURN type, and a buffer reached through any of them
 /// behaves exactly like a locally-bound one (GPU-SLIP-4b-4).

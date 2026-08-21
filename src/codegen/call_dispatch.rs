@@ -5036,6 +5036,15 @@ impl<'ctx> super::Codegen<'ctx> {
             _ => None,
         });
         if let Some(expr) = from_final.or(from_last_stmt) {
+            // GPU-SLIP-4b-5 — a device buffer RETURNED out of the scope that
+            // bound it. Its `let` queued a scope-exit free that would run while
+            // the caller still holds the handle, which is a use-after-free the
+            // runtime catches as "a field reduction on an already-freed device
+            // buffer" rather than a leak. Only the ESCAPING positions zero: a
+            // by-value call argument does NOT take ownership of a buffer,
+            // because there is no deep copy to hand the callee, so the caller
+            // stays the owner and its free must survive.
+            self.gpu_zero_moved_buffer_handle(expr);
             self.suppress_source_vec_cleanup_for_arg(expr);
             // B-2026-07-22-2: `fn get() -> String { mk().s }` tail — the
             // caller owns the extracted field; zero it in the staged
@@ -5912,6 +5921,69 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         let var = var.clone();
         self.suppress_struct_cleanup_for_tail_identifier(&var);
+    }
+
+    /// Zero the handle word of a `GpuBuffer` binding that has just been MOVED,
+    /// so the origin's free goes inert and the destination is sole owner.
+    /// Returns whether `expr` named such a binding.
+    ///
+    /// Zeroing rather than retracting the queued `FreeGpuBuffer`, for reasons
+    /// that all bear on this type. It is FLOW-SENSITIVE — the store lands on
+    /// the path the move actually took, where a static retraction disarms every
+    /// path and can only under-fire, which for a device allocation is a leak
+    /// LeakSanitizer cannot see. It composes with the struct-field drop, which
+    /// lives inside `__karac_drop_struct_<S>` and is not in any scope's action
+    /// list to retract. And `karac_runtime_gpu_free_soa(0)` is already inert —
+    /// that is precisely why the scope-exit drain needs no live-guard — so a
+    /// zeroed slot is a shape every existing free path already handles rather
+    /// than a new one to teach them.
+    ///
+    /// Every caller orders this load-then-suppress, and that ordering is not
+    /// incidental: zeroing before the value is materialized would hand the
+    /// consumer the null handle instead of the buffer. B-2026-06-12-6 is the
+    /// same mistake made against `Vec`'s `cap`, and the tail-return path
+    /// documents the order it fixed on (compile body, load result, suppress).
+    ///
+    /// Gated on `gpu_buffer_vars` and not on the LLVM type alone: `{i64, i64}`
+    /// is structurally identical to any two-field all-`i64` user struct
+    /// (B-2026-07-18-7), and zeroing a field of one of those would be a silent
+    /// wrong answer rather than a leak.
+    pub(super) fn gpu_zero_moved_buffer_handle(&mut self, expr: &Expr) -> bool {
+        let ExprKind::Identifier(name) = &expr.kind else {
+            return false;
+        };
+        // Same guard `suppress_source_vec_cleanup_for_arg_ex` opens with: at a
+        // move the ownership pass flagged as REUSED, the source must keep its
+        // handle. There is no defensive copy to fall back on for a device
+        // buffer — a handle copy aliases the same allocation — so zeroing here
+        // would hand the later read a null handle instead of merely costing a
+        // redundant free.
+        if self
+            .span_tables
+            .uam_copied_sites
+            .contains(&(expr.span.offset, expr.span.length))
+        {
+            return false;
+        }
+        if !self.accel.gpu_buffer_vars.contains(name.as_str()) {
+            return false;
+        }
+        let buf_ty = self.gpu_buffer_type();
+        let Some(slot) = self.variables.get(name.as_str()).copied() else {
+            return false;
+        };
+        if slot.ty != buf_ty.into() {
+            return false;
+        }
+        if let Ok(handle_ptr) =
+            self.builder
+                .build_struct_gep(buf_ty, slot.ptr, 0, "gpu.moved.handle.p")
+        {
+            let _ = self
+                .builder
+                .build_store(handle_ptr, self.context.i64_type().const_zero());
+        }
+        true
     }
 
     pub(super) fn suppress_struct_cleanup_for_tail_identifier(&mut self, name: &str) {
