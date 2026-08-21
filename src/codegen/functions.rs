@@ -21,7 +21,7 @@ use super::state::VarSlot;
 /// (whose return value carries the type's invariants) from a static associated
 /// function returning some unrelated type. Mirrors the interpreter's helper of
 /// the same name.
-fn returns_self_or_type(return_type: Option<&TypeExpr>, type_name: &str) -> bool {
+pub(super) fn returns_self_or_type(return_type: Option<&TypeExpr>, type_name: &str) -> bool {
     match return_type.map(|t| &t.kind) {
         Some(TypeKind::Path(p)) => {
             matches!(p.segments.last().map(String::as_str), Some(seg) if seg == "Self" || seg == type_name)
@@ -2531,79 +2531,13 @@ impl<'ctx> super::Codegen<'ctx> {
             .and_then(|te| self.option_inner_shared_type_for_type_expr(te))
             .map(|(_, info)| info.heap_type);
 
-        // Contract emission setup (design.md § Contracts). Gated on
-        // `!strip_contracts` so a release build (design: "stripped in
-        // release") emits none of it — zero runtime cost, including the
-        // `old(...)` pre-state clone. Suppressing the three setup statements
-        // here is sufficient: `emit_ensures_checks` / `emit_invariant_checks`
-        // both no-op on their now-empty state vectors at the return sites, no
-        // `requires` assert is built, and `old(...)` (which lives only inside
-        // `ensures` bodies) is never reached because those bodies aren't
-        // compiled. The gate is a single decision point for the whole feature.
-        if !self.contract_state.strip_contracts {
-            // `requires` preconditions: emit the entry-time predicate checks
-            // now that parameters are bound and before the body runs. A false
-            // predicate aborts with `contract violated`.
-            self.emit_requires_checks(&func.requires)?;
-
-            // `ensures` setup: capture `old(...)` pre-state now (entry
-            // dominates every return point) and stash the clauses so
-            // `emit_ensures_checks` can fire them inline before each `ret`
-            // (the tail return below + every explicit `return`).
-            self.capture_contract_old_snapshots(&func.ensures)?;
-            self.contract_state.current_contract_ensures = func.ensures.clone();
-            // Return type for the `result` binding in `emit_ensures_checks`
-            // (so `result.field` resolves its struct field index).
-            self.contract_state.current_contract_result_type = func.return_type.clone();
-
-            // Struct/impl `invariant` setup (rule 3): resolve the receiver
-            // type's invariants for this method and stash them so
-            // `emit_invariant_checks` can fire them inline before each `ret`
-            // (same exit points as `ensures`), with `self` bound. The synthetic
-            // method function carries `Type.method` as its name and the
-            // method's `is_pub` flag — both consumed by `method_invariants_for`.
-            // Free functions and invariant-free structs yield an empty list.
-            self.contract_state.current_method_invariants =
-                self.method_invariants_for(&func.name, func.is_pub);
-            self.contract_state.constructor_invariant_self_type = None;
-            // `method_invariants_for` keys purely off the `Type.method` name, so
-            // it also matches associated functions (which `make_impl_method_function`
-            // names `Type.method` but gives no `self` parameter). For those:
-            //   - A *constructor* — returns `Self`/the type — checks the invariants
-            //     against its RETURN value (the construction boundary). Record the
-            //     type so `emit_invariant_checks` binds the return value as `self`.
-            //   - Any other associated function (e.g. `Type.parse() -> i64`) is NOT
-            //     a constructor: clear the invariants so we don't try to evaluate
-            //     `self.field` against a non-receiver (which previously aborted
-            //     codegen with `Undefined variable 'self'`).
-            if !self.contract_state.current_method_invariants.is_empty() {
-                let has_self_param = func.params.first().is_some_and(|p| {
-                    matches!(&p.pattern.kind, crate::ast::PatternKind::Binding(n) if n == "self")
-                });
-                if !has_self_param {
-                    match func.name.split_once('.') {
-                        // Constructor (returns `Self`/the type): bind the return
-                        // value as `self` and enforce the invariants against it.
-                        // Works for owned and shared (RC) structs alike — for a
-                        // shared struct the return value is the heap pointer, and
-                        // `self.field` resolves through the shared heap-GEP path
-                        // because `shared_type_for_expr` accepts the constructor's
-                        // `SelfValue` binding (gated to non-`ref`-param `self`).
-                        Some((type_name, _))
-                            if returns_self_or_type(func.return_type.as_ref(), type_name) =>
-                        {
-                            self.contract_state.constructor_invariant_self_type =
-                                Some(type_name.to_string());
-                        }
-                        // Any other associated function (e.g. `Type.parse() -> i64`)
-                        // is NOT a constructor: clear the name-resolved invariants
-                        // so we don't evaluate `self.field` against a non-receiver
-                        // (which would abort codegen with `Undefined variable 'self'`).
-                        _ => self.contract_state.current_method_invariants.clear(),
-                    }
-                }
-            }
-        }
+        // Contract emission setup (design.md § Contracts) — `requires`
+        // asserts, `old(...)` capture, the `ensures` clauses, and the
+        // receiver-type invariants. Extracted so the MONOMORPHIZED body path
+        // can install the identical frame: it never did, so every contract on
+        // a generic function was silently dropped by both compiled backends
+        // while the interpreter enforced it (B-2026-08-21-21).
+        self.install_contract_frame(func)?;
 
         // Borrow-elision (B-2026-06-19-6): per-function set of `let r = v[i]`
         // RHS spans whose binding is a provably read-only, non-escaping borrow

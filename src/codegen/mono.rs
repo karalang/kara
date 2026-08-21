@@ -3032,6 +3032,21 @@ impl<'ctx> super::Codegen<'ctx> {
         // the non-generic `compile_function` path.
         self.build_slice_alias_scopes(func);
 
+        // Contract frame for THIS mono (B-2026-08-21-21). The monomorphized
+        // path had none at all, so `requires` / `ensures` / `invariant` on a
+        // generic function were silently dropped by both compiled backends
+        // while the interpreter enforced them — design.md § Contracts leads
+        // with a generic `binary_search[T: Ord]`, so the documented shape was
+        // the unchecked one.
+        //
+        // Saved and restored around the body because a mono is compiled INLINE
+        // inside its caller (`compile_generic_call` reaches here mid-body), so
+        // the caller's own `ensures` clauses and `old(...)` snapshots are live
+        // across this call — the same reason `variables`, `ref_params` and the
+        // layout carriers are swapped at the mono entry point.
+        let saved_contract_frame = self.take_contract_frame();
+        self.install_contract_frame(func)?;
+
         let mut result = self.compile_block(&func.body)?;
 
         if self
@@ -3105,6 +3120,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.zero_vec_alloca_cap(acc);
                 }
             }
+            // Contract `ensures` / `invariant` checks at the tail return, with
+            // `result` bound to the tail value — BEFORE scope cleanup, so the
+            // postcondition sees live params and result. Same ordering and same
+            // exit point as `compile_function` (B-2026-08-21-21). An explicit
+            // `return` inside the body already fires them through the shared
+            // Return arm in `compile_expr`, which reads the frame installed
+            // above; only this tail site is per-path.
+            self.emit_ensures_checks(result)?;
+            self.emit_invariant_checks(result)?;
             self.emit_scope_cleanup();
             // A VOID monomorph whose body tail still compiled to a value must
             // `ret void`, mirroring the non-generic `compile_function` guard
@@ -3153,6 +3177,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
         }
+        // Hand the enclosing function back its contract frame — this mono's
+        // is finished at the returns above (B-2026-08-21-21).
+        self.restore_contract_frame(saved_contract_frame);
         // Leave the frame stack as the caller swapped it in
         // (`compile_generic_call` restores its own); clearing keeps the
         // post-body state tidy and matches `compile_function`'s exit.

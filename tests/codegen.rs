@@ -101607,6 +101607,273 @@ fn main() {
         );
     }
 
+    /// B-2026-08-21-21 — `requires` / `ensures` on a GENERIC function are
+    /// enforced by the compiled backends.
+    ///
+    /// The monomorphized body path had NO contract handling at all, so every
+    /// contract on a generic function was silently dropped by JIT and AOT
+    /// while the interpreter enforced it. design.md § Contracts presents a
+    /// generic `binary_search[T: Ord]` as the feature's worked example, so the
+    /// one shape the documentation leads with was the one shape neither
+    /// compiled backend checked.
+    ///
+    /// A passing contract must stay silent, which is what separates "the check
+    /// is emitted" from "the check is emitted and always fires".
+    #[test]
+    fn test_e2e_generic_fn_requires_is_enforced() {
+        let violated = r#"
+fn gen_req[T](v: ref Vec[T]) -> i64
+    requires v.len() > 5
+where T: Ord
+{ v.len() }
+fn main() {
+    let a: Vec[i64] = [1, 2, 3];
+    println(gen_req(a));
+}
+"#;
+        let cap = run_program_capturing(violated).expect("build the violating program");
+        assert!(
+            cap.stdout.contains("contract violated: requires clause"),
+            "a generic `requires` must abort; got stdout={:?}",
+            cap.stdout
+        );
+        assert_ne!(
+            cap.status.code(),
+            Some(0),
+            "the abort must exit nonzero, got {:?}",
+            cap.status
+        );
+
+        // The same function, satisfied: no abort, no noise.
+        let satisfied = r#"
+fn gen_req[T](v: ref Vec[T]) -> i64
+    requires v.len() > 1
+where T: Ord
+{ v.len() }
+fn main() {
+    let a: Vec[i64] = [1, 2, 3];
+    let s: Vec[String] = ["x", "y"];
+    println(gen_req(a));
+    println(gen_req(s));
+}
+"#;
+        // Two instantiations, so each mono has to carry its OWN frame rather
+        // than inheriting one.
+        assert_eq!(run_program(satisfied).as_deref(), Some("3\n2\n"));
+    }
+
+    /// The `ensures` half, including `old(...)` capture and an explicit
+    /// `return` (which exits through a different site than the tail).
+    #[test]
+    fn test_e2e_generic_fn_ensures_and_old_are_enforced() {
+        // Tail return.
+        let tail = r#"
+fn gen_ens[T](v: ref Vec[T]) -> i64
+    ensures(result) result > 100
+where T: Ord
+{ v.len() }
+fn main() {
+    let a: Vec[i64] = [1, 2, 3];
+    println(gen_ens(a));
+}
+"#;
+        let cap = run_program_capturing(tail).expect("build the tail-return program");
+        assert!(
+            cap.stdout.contains("contract violated: ensures clause"),
+            "a generic tail-return `ensures` must abort; got stdout={:?}",
+            cap.stdout
+        );
+
+        // Explicit `return` — the shared Return arm fires the checks off the
+        // frame installed for this mono.
+        let early = r#"
+fn gen_ret[T](v: ref Vec[T]) -> i64
+    ensures(result) result > 100
+where T: Ord
+{
+    if v.len() > 0 { return v.len(); }
+    999
+}
+fn main() {
+    let a: Vec[i64] = [1, 2, 3];
+    println(gen_ret(a));
+}
+"#;
+        let cap = run_program_capturing(early).expect("build the early-return program");
+        assert!(
+            cap.stdout.contains("contract violated: ensures clause"),
+            "a generic early-return `ensures` must abort; got stdout={:?}",
+            cap.stdout
+        );
+
+        // `old(...)` pre-state inside a generic `ensures`: the correct
+        // postcondition passes, the wrong one fires — so the snapshot is
+        // actually captured rather than defaulting to something that happens
+        // to satisfy the predicate.
+        let old_ok = r#"
+fn grow[T](v: mut ref Vec[T], x: T) -> i64
+    ensures(result) result == old(v.len()) + 1
+where T: Ord
+{
+    v.push(x);
+    v.len()
+}
+fn main() {
+    let mut a: Vec[i64] = [1, 2];
+    println(grow(mut a, 3));
+}
+"#;
+        assert_eq!(run_program(old_ok).as_deref(), Some("3\n"));
+
+        let old_bad = r#"
+fn bad[T](v: mut ref Vec[T], x: T) -> i64
+    ensures(result) result == old(v.len())
+where T: Ord
+{
+    v.push(x);
+    v.len()
+}
+fn main() {
+    let mut b: Vec[i64] = [1, 2];
+    println(bad(mut b, 3));
+}
+"#;
+        let cap = run_program_capturing(old_bad).expect("build the old() program");
+        assert!(
+            cap.stdout.contains("contract violated: ensures clause"),
+            "`old(...)` in a generic `ensures` must be captured and compared; got stdout={:?}",
+            cap.stdout
+        );
+    }
+
+    /// The contract frame is SAVED and RESTORED around a monomorphized body,
+    /// because a mono is compiled INLINE inside its caller.
+    ///
+    /// Both directions are pinned, and both were measured by disabling the
+    /// restore: a monomorphic caller's own `ensures` was silently lost (the
+    /// program printed its value instead of aborting), and a generic caller's
+    /// `ensures` failed codegen outright with "Undefined variable 'result'" as
+    /// the inner frame leaked outward. Installing the frame without the
+    /// save/restore would have traded one silent drop for another.
+    #[test]
+    fn test_e2e_generic_contract_frame_is_saved_across_nested_bodies() {
+        // A MONOMORPHIC caller whose `ensures` must survive an inner generic
+        // call compiled inside its body.
+        let mono_outer = r#"
+fn helper[T](v: ref Vec[T]) -> i64 where T: Ord { v.len() }
+fn mono_outer(v: ref Vec[i64]) -> i64
+    ensures(result) result > 100
+{
+    helper(v)
+}
+fn main() {
+    let a: Vec[i64] = [1, 2, 3];
+    println(mono_outer(a));
+}
+"#;
+        let cap = run_program_capturing(mono_outer).expect("build the mono-outer program");
+        assert!(
+            cap.stdout.contains("contract violated: ensures clause"),
+            "a monomorphic caller's `ensures` must survive an inner generic call; got stdout={:?}",
+            cap.stdout
+        );
+
+        // A GENERIC caller whose own `ensures` must survive two inner generic
+        // calls.
+        let gen_outer = r#"
+fn inner[T](v: ref Vec[T]) -> i64
+    requires v.len() > 0
+    ensures(result) result > 0
+where T: Ord
+{ v.len() }
+
+fn outer[T](v: ref Vec[T]) -> i64
+    requires v.len() > 1
+    ensures(result) result > 100
+where T: Ord
+{
+    inner(v) + inner(v)
+}
+
+fn main() {
+    let a: Vec[i64] = [1, 2, 3];
+    println(outer(a));
+}
+"#;
+        let cap = run_program_capturing(gen_outer).expect("build the generic-outer program");
+        assert!(
+            cap.stdout.contains("contract violated: ensures clause"),
+            "a generic caller's `ensures` must survive its inner monos; got stdout={:?}",
+            cap.stdout
+        );
+    }
+
+    /// A struct `invariant` reached through a GENERIC method — the third
+    /// contract kind, and it rides the same frame.
+    #[test]
+    fn test_e2e_generic_method_checks_the_struct_invariant() {
+        let src = r#"
+struct Holder {
+    items: Vec[i64],
+
+    invariant self.items.len() < 4
+}
+impl Holder {
+    pub fn add[T](mut ref self, x: T) -> i64 where T: Ord {
+        self.items.push(1);
+        self.items.len()
+    }
+}
+fn main() {
+    let mut h = Holder { items: [1, 2] };
+    println(h.add(3));
+    println(h.add(4));
+}
+"#;
+        let cap = run_program_capturing(src).expect("build the invariant program");
+        assert!(
+            cap.stdout.starts_with("3\n"),
+            "the first call satisfies the invariant and must print; got stdout={:?}",
+            cap.stdout
+        );
+        assert!(
+            cap.stdout.contains("contract violated: invariant"),
+            "the second call breaks it and must abort; got stdout={:?}",
+            cap.stdout
+        );
+    }
+
+    /// design.md § Contracts' own worked example, generic as the spec writes
+    /// it: `requires haystack.is_sorted()` on `binary_search[T: Ord]`.
+    #[test]
+    fn test_e2e_generic_binary_search_contract_from_the_spec() {
+        let src = r#"
+fn binary_search[T](haystack: ref Vec[T], needle: ref T) -> Option[i64]
+    requires haystack.is_sorted()
+where T: Ord
+{
+    haystack.binary_search(needle)
+}
+fn main() {
+    let sorted: Vec[i64] = [1, 3, 5, 7];
+    match binary_search(sorted, 5) { Some(i) => { println(i); } None => { println("none"); } }
+    let unsorted: Vec[i64] = [7, 3, 5, 1];
+    match binary_search(unsorted, 5) { Some(i) => { println(i); } None => { println("none"); } }
+}
+"#;
+        let cap = run_program_capturing(src).expect("build the spec example");
+        assert!(
+            cap.stdout.starts_with("2\n"),
+            "the sorted haystack satisfies the precondition; got stdout={:?}",
+            cap.stdout
+        );
+        assert!(
+            cap.stdout.contains("contract violated: requires clause"),
+            "the unsorted haystack must abort; got stdout={:?}",
+            cap.stdout
+        );
+    }
+
     /// B-2026-08-21-23 — a fixed array handed to a METHOD's `ref Slice[T]`
     /// parameter.
     ///

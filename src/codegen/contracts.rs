@@ -19,7 +19,142 @@ use inkwell::values::BasicValueEnum;
 
 use super::state::VarSlot;
 
+/// The per-function half of [`super::contract_state::ContractState`], lifted out
+/// so a nested (monomorphized) body compile can swap it. See
+/// [`super::Codegen::take_contract_frame`].
+pub(crate) struct SavedContractFrame<'ctx> {
+    ensures: Vec<crate::ast::EnsuresClause>,
+    result_type: Option<crate::ast::TypeExpr>,
+    old_snapshots: rustc_hash::FxHashMap<SpanKey, BasicValueEnum<'ctx>>,
+    invariants: Vec<Expr>,
+    ctor_self_type: Option<String>,
+}
+
 impl<'ctx> super::Codegen<'ctx> {
+    /// Install the contract frame for `func`: emit its `requires` asserts,
+    /// capture `old(...)` pre-state, and stash the `ensures` clauses, the
+    /// result type and the receiver-type invariants for the return sites.
+    ///
+    /// Called at the same point by BOTH body-emitting paths — `compile_function`
+    /// and `compile_mono_function` — after the parameters are bound and before
+    /// the body runs. It is one function rather than two copies because the
+    /// second copy is precisely what was missing: the monomorphized path had no
+    /// contract handling at all, so `requires` and `ensures` on a GENERIC
+    /// function were silently dropped by both compiled backends while the
+    /// interpreter enforced them (B-2026-08-21-21). design.md § Contracts
+    /// presents a generic `binary_search[T: Ord]` as the feature's worked
+    /// example, so the one shape the documentation leads with was the one shape
+    /// neither backend checked.
+    pub(super) fn install_contract_frame(
+        &mut self,
+        func: &crate::ast::Function,
+    ) -> Result<(), String> {
+        // Contract emission setup (design.md § Contracts). Gated on
+        // `!strip_contracts` so a release build (design: "stripped in
+        // release") emits none of it — zero runtime cost, including the
+        // `old(...)` pre-state clone. Suppressing the three setup statements
+        // here is sufficient: `emit_ensures_checks` / `emit_invariant_checks`
+        // both no-op on their now-empty state vectors at the return sites, no
+        // `requires` assert is built, and `old(...)` (which lives only inside
+        // `ensures` bodies) is never reached because those bodies aren't
+        // compiled. The gate is a single decision point for the whole feature.
+        if !self.contract_state.strip_contracts {
+            // `requires` preconditions: emit the entry-time predicate checks
+            // now that parameters are bound and before the body runs. A false
+            // predicate aborts with `contract violated`.
+            self.emit_requires_checks(&func.requires)?;
+
+            // `ensures` setup: capture `old(...)` pre-state now (entry
+            // dominates every return point) and stash the clauses so
+            // `emit_ensures_checks` can fire them inline before each `ret`
+            // (the tail return below + every explicit `return`).
+            self.capture_contract_old_snapshots(&func.ensures)?;
+            self.contract_state.current_contract_ensures = func.ensures.clone();
+            // Return type for the `result` binding in `emit_ensures_checks`
+            // (so `result.field` resolves its struct field index).
+            self.contract_state.current_contract_result_type = func.return_type.clone();
+
+            // Struct/impl `invariant` setup (rule 3): resolve the receiver
+            // type's invariants for this method and stash them so
+            // `emit_invariant_checks` can fire them inline before each `ret`
+            // (same exit points as `ensures`), with `self` bound. The synthetic
+            // method function carries `Type.method` as its name and the
+            // method's `is_pub` flag — both consumed by `method_invariants_for`.
+            // Free functions and invariant-free structs yield an empty list.
+            self.contract_state.current_method_invariants =
+                self.method_invariants_for(&func.name, func.is_pub);
+            self.contract_state.constructor_invariant_self_type = None;
+            // `method_invariants_for` keys purely off the `Type.method` name, so
+            // it also matches associated functions (which `make_impl_method_function`
+            // names `Type.method` but gives no `self` parameter). For those:
+            //   - A *constructor* — returns `Self`/the type — checks the invariants
+            //     against its RETURN value (the construction boundary). Record the
+            //     type so `emit_invariant_checks` binds the return value as `self`.
+            //   - Any other associated function (e.g. `Type.parse() -> i64`) is NOT
+            //     a constructor: clear the invariants so we don't try to evaluate
+            //     `self.field` against a non-receiver (which previously aborted
+            //     codegen with `Undefined variable 'self'`).
+            if !self.contract_state.current_method_invariants.is_empty() {
+                let has_self_param = func.params.first().is_some_and(|p| {
+                    matches!(&p.pattern.kind, crate::ast::PatternKind::Binding(n) if n == "self")
+                });
+                if !has_self_param {
+                    match func.name.split_once('.') {
+                        // Constructor (returns `Self`/the type): bind the return
+                        // value as `self` and enforce the invariants against it.
+                        // Works for owned and shared (RC) structs alike — for a
+                        // shared struct the return value is the heap pointer, and
+                        // `self.field` resolves through the shared heap-GEP path
+                        // because `shared_type_for_expr` accepts the constructor's
+                        // `SelfValue` binding (gated to non-`ref`-param `self`).
+                        Some((type_name, _))
+                            if super::functions::returns_self_or_type(
+                                func.return_type.as_ref(),
+                                type_name,
+                            ) =>
+                        {
+                            self.contract_state.constructor_invariant_self_type =
+                                Some(type_name.to_string());
+                        }
+                        // Any other associated function (e.g. `Type.parse() -> i64`)
+                        // is NOT a constructor: clear the name-resolved invariants
+                        // so we don't evaluate `self.field` against a non-receiver
+                        // (which would abort codegen with `Undefined variable 'self'`).
+                        _ => self.contract_state.current_method_invariants.clear(),
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Snapshot of the per-function contract frame, taken so a nested body
+    /// compile can install its own without destroying the enclosing one.
+    ///
+    /// A monomorphized body is emitted INLINE while its caller is mid-compile
+    /// (`compile_generic_call` reaches `compile_mono_function` from inside the
+    /// caller's body), so the caller's `ensures` clauses and `old(...)`
+    /// snapshots are live across that call. The mono path saves them the same
+    /// way it already saves `variables`, `ref_params` and the layout carriers.
+    pub(super) fn take_contract_frame(&mut self) -> SavedContractFrame<'ctx> {
+        SavedContractFrame {
+            ensures: std::mem::take(&mut self.contract_state.current_contract_ensures),
+            result_type: self.contract_state.current_contract_result_type.take(),
+            old_snapshots: std::mem::take(&mut self.contract_state.contract_old_snapshots),
+            invariants: std::mem::take(&mut self.contract_state.current_method_invariants),
+            ctor_self_type: self.contract_state.constructor_invariant_self_type.take(),
+        }
+    }
+
+    /// Put back what [`Self::take_contract_frame`] removed.
+    pub(super) fn restore_contract_frame(&mut self, saved: SavedContractFrame<'ctx>) {
+        self.contract_state.current_contract_ensures = saved.ensures;
+        self.contract_state.current_contract_result_type = saved.result_type;
+        self.contract_state.contract_old_snapshots = saved.old_snapshots;
+        self.contract_state.current_method_invariants = saved.invariants;
+        self.contract_state.constructor_invariant_self_type = saved.ctor_self_type;
+    }
+
     /// Compile `pred` to an `i1` and branch: on `true` execution continues;
     /// on `false` the program aborts via `emit_panic(fault_msg)`. The builder
     /// is left positioned in a block where the predicate held. Reuses the
