@@ -12926,6 +12926,34 @@ fn main() {
             Some("-5\n-9\n[-1, 2, 3]\n".to_string()),
             "as an Option payload, a struct field, and a SIGNED-sorted Vec element"
         );
+        // Displaying the Option/Result VARIABLE ITSELF, which the `match` above
+        // does not reach: destructuring reads the payload directly, while
+        // `println(o)` goes through the display REGISTRATION, and that path
+        // asks `type_to_type_expr` for the payload's `TypeExpr`.
+        //
+        // That function matches with a `_ => Error` fallback, so a missing arm
+        // is SILENT — no non-exhaustive-match error, no wrong answer at the
+        // type level. The payload comes back `TypeKind::Error`, the binding is
+        // skipped, and `println` on a plain variable is refused with "bind a
+        // struct literal or call result to a `let` first" while the interpreter
+        // renders it fine: a run-vs-build divergence. That is exactly how the
+        // 128-bit widths broke (B-2026-08-19-23), and the `Isize` arm sits
+        // beside theirs for the same reason, so it needs its own assertion.
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                 let o: Option[isize] = Some(-5isize);\n\
+                 println(o);\n\
+                 let n: Option[isize] = None;\n\
+                 println(n);\n\
+                 let r: Result[isize, String] = Ok(7isize);\n\
+                 println(r);\n\
+                 println(f\"{o}\");\n\
+                 }\n"
+            ),
+            Some("Some(-5)\nNone\nOk(7)\nSome(-5)\n".to_string()),
+            "the Option/Result VARIABLE renders, not just its destructured payload"
+        );
     }
 
     /// B-2026-08-21-31 — the overflow trap must sit at the SIGNED boundary.
