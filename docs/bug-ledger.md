@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 270 | 0 |
+| miscompile | 271 | 0 |
 | leak | 185 | 0 |
 | run-vs-build | 145 | 0 |
 | missing-feature | 137 | 7 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 964 | 2 |
+| codegen | 965 | 2 |
 | typecheck | 224 | 4 |
 | interp | 169 | 2 |
 | ownership | 62 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 7 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1431 surfaced · 11 open · 1398 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1432 surfaced · 11 open · 1399 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (11)
 
@@ -159,9 +159,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1431 surfaced
 
 </details>
 
-### Fixed (1398)
+### Fixed (1399)
 
-<details><summary>1398 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1399 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -13398,6 +13398,7 @@ So the hole was real and all but unexploited: the corpus was already writing the
 DESIGN.MD UPDATED IN THE SAME CHANGE, because the enumeration is what let this ship. § Variable Binding Rules named two write forms and now names three, and § Part 1½ (Call-site Mutation Markers) gains the sentence that closes the ambiguity directly: the marker announces a mutation at the call site, it does not authorize one the declaration withheld -- required IN ADDITION TO `let mut`, never instead of it.
 
 Pinned by eight tests in tests/ownership.rs, in B-2026-07-27-9's own block: the `mut ref T` and `mut Slice[T]` spellings, a field-rooted argument (the place ROOT is what the rule keys on, as in the field-assignment arm), a sub-range argument (B-2026-08-20-38's shape, inheriting this rule rather than a private one), the auto-fix edit, and three accepting controls -- every write shape over a `let mut` binding, a forwarded `mut ref` parameter, and an unmarked read-only argument. The five rejecting tests fail without the fix. |
+| B-2026-08-21-13 | codegen | high | EVERY `gpu.*` REDUCTION SILENTLY DROPPED every element past 4,194,240 | 42fee64f |
 
 </details>
 
