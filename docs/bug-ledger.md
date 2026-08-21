@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 273 | 0 |
 | leak | 185 | 0 |
 | run-vs-build | 148 | 1 |
-| missing-feature | 143 | 8 |
+| missing-feature | 143 | 7 |
 | double-free | 134 | 0 |
 | codegen-gap | 123 | 3 |
 | diagnostics | 94 | 1 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 974 | 5 |
-| typecheck | 231 | 5 |
+| typecheck | 231 | 4 |
 | interp | 170 | 2 |
 | other | 62 | 0 |
 | ownership | 62 | 0 |
@@ -119,14 +119,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | autopar | 54 | 0 |
 | parser | 35 | 1 |
 | runtime | 28 | 0 |
-| resolver | 26 | 2 |
+| resolver | 26 | 1 |
 | lexer | 8 | 0 |
 | effect | 8 | 1 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1454 surfaced · 13 open · 1419 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1454 surfaced · 12 open · 1420 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (13)
+### Open (12)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -139,7 +139,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1454 surfaced
 | B-2026-08-21-25 | 2026-08-21 | codegen | medium | A METHOD CALL ON A FIXED-ARRAY **TEMPORARY** HAS NO CODEGEN LOWERING -- `n.to_ne_bytes().len()` build-fails with the dispatcher's own "this is a codegen bug" message while the bound two-line spelling works | roadmap.md |
 | B-2026-08-21-26 | 2026-08-21 | typecheck | medium | `TryFrom[intN]` FOR A C-LIKE `#[repr(intN)]` ENUM DOES NOT EXIST -- design.md § Enum Discriminant Runtime Surface commits to auto-generating it and shows the worked `match UsbClass.try_from(raw)`, which fails to compile | roadmap.md |
 | B-2026-08-21-29 | 2026-08-21 | typecheck | medium | THREE DOCUMENTED SURFACES ARE NOT REACHABLE AS WRITTEN: every spelling of channel construction design.md uses (`Channel.new[T]()`, `Channel.bounded`), its whole `io.` I/O prefix, and `allocates(Heap)` -- whose `Heap` the document never declares and the prelude does not provide | roadmap.md |
-| B-2026-08-21-31 | 2026-08-21 | resolver+typecheck | medium | `isize` IS NOT A TYPE -- design.md names it a v1 numeric primitive in four normative passages and writes it into six signatures, and three of the compiler's own back-end tables already map it, but the resolver answers `undefined type 'isize', did you mean 'usize'?` in every position | roadmap.md |
 | B-2026-08-21-32 | 2026-08-21 | resolver+effect | medium | EFFECT RESOURCES CANNOT BE ROOTED AT A VALUE, so design.md's whole channel effect model is unwritable: `with sends(tx)` on a channel PARAMETER is `'tx' is not an effect resource (it is a variable)`, and the seven `Sender`/`Receiver` declarations at :6064-:6094 are all written that way | roadmap.md |
 | B-2026-08-21-38 | 2026-08-21 | interp | high | THE INTERPRETER LOSES A `mut ref` SCALAR WRITE THROUGH A **METHOD** ARGUMENT -- `h.bump(mut n)` leaves `n` at its old value under `--interp` while JIT, AOT and `KARAC_AUTO_PAR=0` AOT all publish it, and the free-function spelling of the same call is correct on all four; the interpreter is the wrong one here | roadmap.md |
 | B-2026-08-21-39 | 2026-08-21 | codegen | medium | AN **ASSOCIATED FUNCTION** (no `self`) FAILS MODULE VERIFICATION ON AN ARRAY ARGUMENT TO A SLICE PARAMETER -- `H.f(mut bm)` passes the raw `[3 x i8]` where the callee declares `{ptr, i64}`, while the free-function and instance-method spellings of the same call both work | roadmap.md |
@@ -161,9 +160,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1454 surfaced
 
 </details>
 
-### Fixed (1419)
+### Fixed (1420)
 
-<details><summary>1419 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1420 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -13782,6 +13781,59 @@ ONE MEASURED NON-FIX, recorded because it is the obvious next guess: adding `Arr
 Verified byte-identical on interp / JIT / AOT / `KARAC_AUTO_PAR=0` AOT across the marked and unmarked spellings, an `Array` through `mut Slice[T]`, a `Vec` through `mut ref Vec[T]`, two mut-slice arguments in one call (both writes land), and a read-only `ref Slice[T]` argument on a struct field. Six new tests — four analysis-level in tests/concurrency.rs, two in tests/par_codegen.rs — all fail with the change reverted.
 
 The runtime test had to live in tests/par_codegen.rs: its harness threads the concurrency analysis into codegen, while tests/codegen.rs passes `concurrency: None`, so auto-par is dead there and the same test would have been vacuous. |
+| B-2026-08-21-31 | resolver+typecheck | medium | `isize` IS NOT A TYPE -- design.md names it a v1 numeric primitive in four normative passages and writes it into six signatures, and three of the com… | FIXED by 50deb0a. `isize` is a real type: pointer-width SIGNED, 64-bit on every target the compiler emits for, and the exact mirror of `usize` at every site that had one.
+
+WHAT IT TOOK. `IntSize` gained an `Isize` variant, `IntSuffix` an `Isize` suffix, and `ConstValue` an `Isize(i64)` carrier; the rest was making the ~40 places that enumerate primitive names or integer widths agree. Two mechanical sweeps, both auditable rather than blind:
+
+  - A name-list sweep over every `"usize"` string literal in `src/`. The
+    discriminator that made it safe: a list naming ONLY `u*` widths is an
+    IS-THIS-UNSIGNED test and must NOT gain `isize`; a list that also names
+    `i8`/`i16`/`i32`/`i64`/`i128` is a "which numeric primitive is this" test
+    and its `usize` arm without an `isize` sibling was the oversight. 31 lists
+    gained it, 45 unsigned-only lists were left alone.
+  - The compiler's own exhaustiveness checking for the enum variants. Adding
+    `IntSize::Isize` produced 5 non-exhaustive matches, `ConstValue::Isize` a
+    further 9, and each was decided individually — overflow bounds and SIMD
+    width mirror `I64`, the layout key shares `Usize`'s pointer-width sentinel,
+    `int_width_range` returns `(32, 64)` because wasm32 is a first-class target.
+
+FOUR SITES NEEDED A JUDGEMENT, not a mechanical mirror:
+
+  (1) `int_signed_width` returned `None` for `isize`, so
+      `int_coercion_is_widening` answered "not widening" and the check-mode gate
+      demanded `as i64` on a coercion that is the identity in BOTH width and
+      signedness — while `usize` -> `u64` passed silently. Found by the design.md
+      conformance suite, which flagged design.md:11987 as newly REJECTED.
+  (2) `env_build`'s `int_types` (the TryFrom impl registration) omitted `isize`
+      while the receiver gate in `method_identifier_receiver.rs` admitted it, so
+      `isize.try_from(5i64)` resolved no impl and fell through to "expects an
+      integer argument, got `i64`" — a message blaming the ARGUMENT for a
+      missing registration of the TARGET.
+  (3) `wrapping_*` gates on an explicit width list (`checked_*` /`saturating_*` /
+      `overflowing_*` gate on `Type::Int(_) | Type::UInt(_)` and were free), so
+      it was the one family of the four that silently omitted the new type.
+  (4) The GPU backend's `kty_of_type` classified `isize` as `KTy::Unknown` while
+      `cast_ctor` right below it already mapped `isize` -> `i32`.
+
+THE BACK END WAS ALREADY WAITING. `src/cheader.rs:783` mapped `"isize" => "ptrdiff_t"`, `src/deque_head.rs:79` listed it among scalar element types, and `src/wasm_glue.rs` crossed it as a `BigInt` — three tables carrying a type the resolver refused. `karac build --crate-type=staticlib` now emits `ptrdiff_t span_len(ptrdiff_t a, ptrdiff_t b);` for `pub extern "C" fn span_len(a: isize, b: isize) -> isize`, which is design.md:13104's FFI row honoured end to end.
+
+VERIFIED ON ALL FOUR SURFACES, byte-identical: `karac run --interp`, `karac run` (JIT), `karac build` (auto-par ON) and `KARAC_AUTO_PAR=0 karac build`. The programs cover negatives, signed division, signed comparison, `abs`, `pow`, `min`/`max`, all four overflow method families, `as` casts in both directions plus the wrapping narrow, an `Option[isize]` payload, a struct field, a signed-sorted `Vec[isize]`, a `Map[isize, _]` key, float->isize conversions, and the extern-C signature from design.md:12011 that started this.
+
+THE TRAP IS AT THE SIGNED BOUNDARY, which is the half `usize` cannot cover: `isize.MAX + 1` panics with "integer overflow" on interp, JIT and AOT, where the same bit pattern is an ordinary mid-range value unsigned. Every regression test asserts a signed-specific answer for that reason — a lowering that reinterpreted the i64 carrier as unsigned would still pass a width-only test.
+
+THREE TESTS PINNED THE OLD PREMISE and were rewritten rather than deleted, since each was asserting something true when written:
+  - `numeric_conv::tests::rejects_unknown_and_isize` -> `accepts_isize_and_rejects_unknown`
+    (`trunc_to_isize` now resolves, at 64 bits, signed).
+  - `test_float_to_int_isize_target_rejected` -> `_accepted`, plus a new
+    `test_float_to_int_unknown_target_still_rejected` so the NoMethodFound
+    tightening the old case exercised keeps a case of its own.
+  - Five `IntSuffix` rendering tables in `tests/` (three of them llvm-gated).
+
+SELF-HOST PORT UPDATED IN LOCKSTEP: `selfhost/src/lexer.kara`'s suffix table, `resolver.kara`'s prelude seeding (16 -> 17 primitives), and `typechecker.kara`'s `cat_of_name`. `selfhost_lexer.rs` renders the two lexers' output byte-for-byte, so a port that lagged would have failed rather than drifted.
+
+DOC SIDE: design.md needed no change — it already specified the type correctly in four normative passages, which is what made this an implementation gap rather than a spec question. `docs/syntax.md`'s primitive-type list DID omit `isize` while its own FFI examples at :962 and :965 used it; the list now carries it with the same "FFI-only, use i64 for indices/sizes" note `usize` has.
+
+NOT DONE, deliberately: `isize` is absent from `Vector[T, N]`'s SIMD element set and from the const-generic parameter types, in both cases matching `usize`, which design.md:586 excludes from const-params by name. |
 | B-2026-08-21-33 | other | low | the seven self-host oracles ignore `KARAC_REQUIRE_RUNTIME_ARCHIVE=1` on the one link failure that still soft-skips, and their skip comment wrongly cl… | FIXED by 2947a26 (rebased to e263ef7). The seven self-host oracles now honour `KARAC_REQUIRE_RUNTIME_ARCHIVE=1`: on a link failure the guard panics instead of returning `None` and reporting a pass over zero comparisons.
 
 Scope is what the measurement supports and no more. A MISSING ARCHIVE never took the skip -- `karac` reports `error[link]: libkarac_runtime.a not found`, whose `error[` prefix the oracle's own compile-error heuristic already matches, so it asserts loudly. Verified by moving all seven archives aside: `selfhost_lexer` FAILS rather than skips, with and without the flag. The stale half of the skip comment ("or a link failure from a missing runtime archive") is corrected in place, since it describes behaviour the heuristic three lines above prevents.
