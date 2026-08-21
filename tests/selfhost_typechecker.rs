@@ -484,6 +484,35 @@ fn build_and_run_driver(tag: &str, driver: &str) -> Option<Vec<String>> {
             "self-hosted typechecker FAILED TO COMPILE (port regression):\n{berr}\n\
              --- generated driver ---\n{driver}"
         );
+        // B-2026-08-21-30 — a soft-skip must not report PASS having compared nothing.
+        //
+        // On a link failure this oracle returns `None` and the caller returns,
+        // so the test passes having run no comparison — the vacuous-pass shape
+        // B-2026-07-28-1 closed for `common::link_or_skip`. These seven
+        // oracles never routed through that helper, so
+        // `KARAC_REQUIRE_RUNTIME_ARCHIVE=1` — the opt-in CI sets on its
+        // archive-building jobs — had no effect here. They are its
+        // highest-value users, being the only tests that run two independent
+        // implementations against each other, so a silent skip removes the
+        // whole differential.
+        //
+        // A MISSING ARCHIVE does not reach this path, and the skip comment
+        // above is stale in saying it does: `karac` reports that as
+        // `error[link]: libkarac_runtime.a not found`, whose `error[` prefix
+        // the compile-error heuristic matches, so it asserts loudly instead.
+        // Measured, not assumed — moving the archives aside fails this oracle
+        // rather than skipping it. What stays reachable is a link failure
+        // carrying none of those markers (no linker, permissions), and that is
+        // what this guard covers.
+        if std::env::var("KARAC_REQUIRE_RUNTIME_ARCHIVE").as_deref() == Ok("1") {
+            panic!(
+                "self-host oracle did not link and KARAC_REQUIRE_RUNTIME_ARCHIVE=1 \
+                 forbids the soft-skip. This oracle compares the Kāra port against \
+                 the Rust original, so skipping removes the differential entirely. \
+                 Build the runtime archives (see CLAUDE.md § Codegen E2E) and \
+                 re-run.\n\nlinker error:\n{berr}"
+            );
+        }
         eprintln!(
             "skip: selfhost typechecker oracle [{tag}] — did not link \
              (no llvm feature / missing runtime archive); stderr:\n{berr}"
