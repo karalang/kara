@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 271 | 0 |
 | leak | 185 | 0 |
 | run-vs-build | 145 | 0 |
-| missing-feature | 137 | 6 |
+| missing-feature | 138 | 6 |
 | double-free | 133 | 0 |
 | codegen-gap | 120 | 0 |
 | diagnostics | 93 | 1 |
@@ -120,17 +120,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | parser | 35 | 2 |
 | runtime | 28 | 0 |
 | resolver | 24 | 0 |
-| lexer | 7 | 1 |
+| lexer | 8 | 1 |
 | effect | 7 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1435 surfaced · 8 open · 1405 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1436 surfaced · 8 open · 1406 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (8)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-20-37 | 2026-08-20 | lexer | medium | BYTE-STRING literals `b"..."` are lexed as RESERVED, though design.md § Byte and Byte-String Literals specifies them as shipped with a type rule, three worked examples and an escape table -- while the sibling byte-CHAR literal `b'A'` in the same section works fully. `let eth: Array[u8, 2] = b"\x08\x00";` -> `error[parse]: string prefix 'b"..."' is reserved for future use; only `f"..."` ...`. The section opens by saying the grammar "reserves the `b` prefix FOR THIS PURPOSE (`syntax.md § 1.3`), producing `u8`-typed and `[u8; N]`-typed literals", states "**`b"..."` has type `[u8; N]` where `N` is the byte count of the literal after escape resolution**", and its own "Reserved but not yet implemented" paragraph lists only `r`, `br` and `rb` -- `b"..."` is presented as the working half. Nothing in deferred.md or roadmap.md marks it deferred. Measured working in the same section: `b'U'` is 85, and every escape the spec permits in a byte literal is correct (`\n`=10, `\t`=9, `\r`=13, `\0`=0, `\\`=92, `\'`=39, `\"`=34, `\xFF`=255, `\x41`=65), as is the forbidden case -- `b'\u{FF}'` produces the spec's exact wording, "Unicode escapes are not permitted in byte literals — use \xFF for byte 0xFF", and `r"..."` produces the spec's exact reserved-prefix message. | roadmap.md |
 | B-2026-08-20-41 | 2026-08-20 | typecheck | medium | `String.normalize` and the `NFC` constant DO NOT EXIST, so the remedy design.md gives for its own Unicode-equality hazard is unwritable. § Strings, Equality bullet: "`String` equality (`==`) compares raw UTF-8 bytes. Two strings with identical visual appearance but different Unicode normalization forms (e.g., NFC vs NFD) are **not** equal. USE `s.normalize(NFC)` FOR NORMALIZATION-AWARE COMPARISON." Measured: `a.normalize(NFC)` -> `error[resolve]: undefined name 'NFC', did you mean 'Neg'?`; the no-argument form `a.normalize()` -> `error[typecheck]: no method 'normalize' on type 'String'`. Neither `normalize` nor `NFC` appears anywhere in `src/`. The hazard the bullet describes is real and reproduces -- `"e\u{0301}" == "\u{00e9}"` is false, exactly as documented -- so the paragraph correctly warns about a trap and then names an escape that was never built. | roadmap.md |
 | B-2026-08-21-2 | 2026-08-21 | cli | medium | FIVE REGISTERED LINTS STILL HAVE NO EMIT SITE and so can never fire, though all seven are registered `default_level: LintLevel::Warn` -- advertised by `karac lint --list` and accepted in `#[allow(...)]`: `f16_software_emulated`, `float_in_serialized_type`, `implicit_clone`, `pure_loop_in_par`, `repr_c_layout_ignored`. They are the remainder of B-2026-08-20-36's eight, which wired `redundant_suffix` (the one design.md documents as live) and added the guard that now holds this list. They are VISIBLE IN CODE, not only here: `KNOWN_UNWIRED` in `src/lints.rs`, which `every_registered_lint_is_emitted_or_declared_unwired` fails on if the list grows or goes stale. | roadmap.md |
 | B-2026-08-21-6 | 2026-08-21 | codegen+interp | medium | `Map`/`Set` DO NOT USE THE SPEC'S DEFAULT HASHER: design.md mandates `SipHash13BuildHasher` seeded from a per-process random source, codegen emits FxHash with a COMPILE-TIME-CONSTANT seed and the interpreter hashes not at all -- so there is no hash-flooding resistance, iteration order is fully deterministic across runs (design.md says it must vary), the two backends order differently from each other, and `Map[K, V, FxBuildHasher]` -- design.md's own spelling -- does not resolve, so there is no opt-in either way | roadmap.md |
@@ -138,6 +137,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1435 surfaced
 | B-2026-08-21-10 | 2026-08-21 | typecheck | medium | FOUR STDLIB ENTRY POINTS design.md DOCUMENTS DO NOT EXIST -- `Vec.from_fn` (in the Vec method table, with a worked example), `Vec.is_sorted` (used inside `requires` contracts twice), `u16.to_ne_bytes`, and an enum's `.discriminant()` -- the `TreeMap` shape again: written up, never implemented | roadmap.md |
 | B-2026-08-21-11 | 2026-08-21 | other | low | design.md EXAMPLES ARE WRITTEN IN SYNTAX design.md AND syntax.md THEMSELVES FORBID: `mu.lock()` and `let group = ...` use hard keywords as identifiers, `fillna(0.0, flag = true)` uses `=` where the doc's own rule says labeled `:`, `[u8; 2]` and `r"..."` are Rust idioms the spec explicitly does not have | roadmap.md |
 | B-2026-08-21-12 | 2026-08-21 | parser+typecheck | medium | FOUR FORMS syntax.md OR design.md DEFINES THAT THE FRONT END REJECTS -- `let...else` (a named production, LET_ELSE_STATEMENT), struct functional update `Name { f: v, ..base }` (in the STRUCT_LITERAL production; it PARSES and the typechecker then ignores the base), lint-level attributes on a statement (`#[expect(deprecated)] old_api();`), and a sub-range mutable slice argument (`f(mut v[1..4])`, design.md's own § Slices line) | roadmap.md |
+| B-2026-08-21-17 | 2026-08-21 | lexer | medium | THE SELF-HOSTED KARA LEXER CANNOT LEX `b"..."`, so it now disagrees with the Rust lexer on any input containing one: `selfhost/src/lexer.kara` still routes the `b` prefix down the reserved-string-prefix path and emits `ERROR`, while the Rust lexer emits the byte-string token (550bb1f, B-2026-08-20-37). The self-hosted compiler is behind the language on a construct design.md specifies as shipped. | roadmap.md |
 
 ### Wontfix (8)
 
@@ -156,9 +156,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1435 surfaced
 
 </details>
 
-### Fixed (1405)
+### Fixed (1406)
 
-<details><summary>1405 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1406 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -13335,6 +13335,48 @@ The check is a proxy -- a name could appear only in a comment and pass -- and th
 A NEW DIAGNOSTIC CODE VALIDATED THE PREVIOUS ROW. `RedundantSuffix` needed `W0280`/`E0280`, and `code_table_catalogues_every_code_in_a_covered_band` -- added hours earlier for B-2026-08-20-31 -- is what required the `CODE_TABLE` rows. The guard caught the omission on the first run rather than shipping an `explain`-less code.
 
 LIVE REMAINDER, split to its own row: the seven still-unwired lints (`f16_software_emulated`, `float_in_serialized_type`, `implicit_clone`, `module_mut_binding`, `mutual_recursion_note`, `pure_loop_in_par`, `repr_c_layout_ignored`). They are seven independent detection passes sharing only the shape of the omission, and they are now visible in `KNOWN_UNWIRED` rather than only in a ledger row. |
+| B-2026-08-20-37 | lexer | medium | BYTE-STRING literals `b"..."` are lexed as RESERVED, though design.md § Byte and Byte-String Literals specifies them as shipped with a type rule, thr… | FIXED by 550bb1f.
+
+THE ROW'S PREMISE WAS HALF WRONG and the correction matters: it states
+"Nothing in deferred.md or roadmap.md marks it deferred", but design.md
+ITSELF did -- § Reserved Single-Letter String-Prefix Syntax listed `b"..."`
+under "Reserved against future use, no v1 implementation" with type
+`Slice[u8]`, directly contradicting § Byte and Byte-String Literals, which
+specified it as shipped with type `[u8; N]` and explicitly "Not
+`Slice[u8]`". The lexer had implemented the reserved reading and carried a
+comment naming the divergence. So this was a SPEC CONTRADICTION, not a
+plain missing feature; the owner settled it in favour of the byte-literal
+section (2026-08-21).
+
+Implemented full-stack with its own AST node rather than a desugaring. That
+choice is load-bearing: desugaring `b"..."` to the array literal
+`[b'h', b'e', …]` (the equivalent spelling design.md itself names) is far
+cheaper -- three files against ~85 pattern arms in 62 -- but an array
+literal with NO expected type infers `Vec[u8]`, so the spec'd type appeared
+only when the binding happened to be annotated. design.md says the literal
+HAS type `Array[u8, N]`, so the literal has to say so itself: `let b =
+b"hi"` is now `Array[u8, 2]`, measured.
+
+Escape table is shared with the byte-CHAR form by construction -- one table
+in the spec, so `\n \t \r \0 \\ \' \" \xHH` mean the same byte in both, and
+`\u{...}` is refused with the same wording. A raw non-ASCII codepoint is
+refused rather than UTF-8 encoded, because its byte count would silently
+change `N` and `N` is part of the type.
+
+SECOND DEFECT IN THE ROW ALSO FIXED: the section's Rust-syntax array
+spellings. Four sites (`[u8; 2]`, `[u8; 13]`, the type-rule bullet, the
+coercion paragraph) now read `Array[u8, N]`, and `b"..."` moved from the
+reserved-prefix list to the recognized one.
+
+Verified on all three backends (interp / AOT / JIT), byte-identical. Five
+tests added: two lexer (escape resolution, the three refusals), two
+typechecker (intrinsic type with no annotation; the not-a-String rule naming
+`Array[u8, 2]`), one strict E2E pinning runtime bytes.
+
+TWO TESTS ENCODED THE SUPERSEDED READING and were corrected rather than
+weakened -- `test_v60_reserved_string_prefix_diagnostic` keeps its other six
+prefixes, and the self-host oracle case keeps testing a reserved prefix
+mid-expression under a still-reserved letter. |
 | B-2026-08-20-38 | typecheck | medium | A MUTABLE SUB-RANGE slice cannot be formed at a call site -- design.md § Slices' own second example is rejected | FIXED by 1464a6f. The range-index arm of `infer_expr` (src/typechecker/exprs.rs) stamped every `v[a..b]` `Slice { mutable: false }` unconditionally. It now upgrades to `mut Slice[T]` when the parameter is a mutating slot and the base admits it.
 
 BASE ADMISSIBILITY IS ASKED WITH `types_compatible` AGAINST THE VERY SLOT TYPE THE UPGRADE PRODUCES, rather than by re-listing the sources the coercion table already lists. That is the same predicate the argument is checked against a moment later, so the upgrade cannot admit anything the assignability table would reject and the two cannot drift apart: a `ref Vec[T]` base and a read-only `Slice[T]` base both decline, and still report the read-only type they actually have.
