@@ -92,16 +92,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 269 | 0 |
+| miscompile | 270 | 1 |
 | leak | 185 | 0 |
-| run-vs-build | 145 | 1 |
+| run-vs-build | 145 | 0 |
 | missing-feature | 133 | 4 |
 | double-free | 133 | 0 |
 | codegen-gap | 120 | 0 |
 | diagnostics | 92 | 1 |
 | false-positive | 88 | 0 |
 | perf | 82 | 0 |
-| crash | 54 | 0 |
+| crash | 55 | 1 |
 | soundness | 51 | 0 |
 | other | 50 | 0 |
 | use-after-free | 20 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 961 | 1 |
+| codegen | 963 | 2 |
 | typecheck | 222 | 3 |
 | interp | 167 | 0 |
 | ownership | 61 | 0 |
@@ -124,18 +124,19 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 7 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1422 surfaced · 6 open · 1394 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1424 surfaced · 7 open · 1395 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-20-37 | 2026-08-20 | lexer | medium | BYTE-STRING literals `b"..."` are lexed as RESERVED, though design.md § Byte and Byte-String Literals specifies them as shipped with a type rule, three worked examples and an escape table -- while the sibling byte-CHAR literal `b'A'` in the same section works fully. `let eth: Array[u8, 2] = b"\x08\x00";` -> `error[parse]: string prefix 'b"..."' is reserved for future use; only `f"..."` ...`. The section opens by saying the grammar "reserves the `b` prefix FOR THIS PURPOSE (`syntax.md § 1.3`), producing `u8`-typed and `[u8; N]`-typed literals", states "**`b"..."` has type `[u8; N]` where `N` is the byte count of the literal after escape resolution**", and its own "Reserved but not yet implemented" paragraph lists only `r`, `br` and `rb` -- `b"..."` is presented as the working half. Nothing in deferred.md or roadmap.md marks it deferred. Measured working in the same section: `b'U'` is 85, and every escape the spec permits in a byte literal is correct (`\n`=10, `\t`=9, `\r`=13, `\0`=0, `\\`=92, `\'`=39, `\"`=34, `\xFF`=255, `\x41`=65), as is the forbidden case -- `b'\u{FF}'` produces the spec's exact wording, "Unicode escapes are not permitted in byte literals — use \xFF for byte 0xFF", and `r"..."` produces the spec's exact reserved-prefix message. | roadmap.md |
 | B-2026-08-20-38 | 2026-08-20 | typecheck | medium | A MUTABLE SUB-RANGE slice cannot be formed at a call site -- design.md § Slices' own second example is rejected. The spec's block reads `sort_in_place(mut v);` then `sort_in_place(mut v[1..4]);  // sub-range mutable slice`. The first works on all three backends; the second fails `karac check` with `expected 'mut Slice[i64]', found 'Slice[i64]'`, so a range-indexed argument produces a READ-ONLY slice header even under a `mut` marker. There is no alternative spelling: `let s = mut v[1..4];` is `error[parse]: 'mut' is a reserved keyword and cannot be used as an identifier`. The read-only half of the same feature is fine -- `sum(v[1..3])` gives 5 on interp and JIT alike. | roadmap.md |
 | B-2026-08-20-39 | 2026-08-20 | typecheck | medium | `v.last(n)` -- the END-RELATIVE ACCESS design.md prescribes as THE replacement for negative indexing -- takes no argument: `v.last(1)` is rejected with `Vec.last() takes no arguments`. § Numeric Semantics, in the same breath as ruling out Python-style wrap-around: "Negative indices are out-of-bounds errors — they panic at runtime... No Python-style wrap-around; `-1` as an index is always a bug. FOR END-RELATIVE ACCESS, USE `.last(n)` WHERE `n` DEFAULTS TO 0: `v.last()` returns the last element, `v.last(1)` the second-to-last, etc. Negative or out-of-bounds `n` panics." So the spec closes one door and points at another that is not there -- `v.last()` works, `v.last(1)` does not, and the diagnostic states the no-argument form as though it were the intended surface rather than an unimplemented half. | roadmap.md |
-| B-2026-08-20-40 | 2026-08-20 | codegen | medium | `s.bytes()[i]` -- the byte-access form design.md documents for protocol and binary-format parsing -- is check-clean and interp-correct but has NO CODEGEN: `karac run` and `karac build` both die with `codegen failed: Index operator applied to non-array type`. § Strings, Internal representation bullets: "Byte access: `s.bytes()[i]` returns `u8`, panics on out-of-bounds (same as any slice). Use for protocol/binary format parsing, not text processing." Measured on `let s = "hello"; println(f"byte0 = {s.bytes()[0]}")`: `karac check` -> All checks passed; `karac run --interp` -> byte0 = 104; `karac run` and `karac build` -> the codegen failure above. So the documented binary-parsing primitive is available only under the interpreter, which is now the opt-in backend. | roadmap.md |
 | B-2026-08-20-41 | 2026-08-20 | typecheck | medium | `String.normalize` and the `NFC` constant DO NOT EXIST, so the remedy design.md gives for its own Unicode-equality hazard is unwritable. § Strings, Equality bullet: "`String` equality (`==`) compares raw UTF-8 bytes. Two strings with identical visual appearance but different Unicode normalization forms (e.g., NFC vs NFD) are **not** equal. USE `s.normalize(NFC)` FOR NORMALIZATION-AWARE COMPARISON." Measured: `a.normalize(NFC)` -> `error[resolve]: undefined name 'NFC', did you mean 'Neg'?`; the no-argument form `a.normalize()` -> `error[typecheck]: no method 'normalize' on type 'String'`. Neither `normalize` nor `NFC` appears anywhere in `src/`. The hazard the bullet describes is real and reproduces -- `"e\u{0301}" == "\u{00e9}"` is false, exactly as documented -- so the paragraph correctly warns about a trap and then names an escape that was never built. | roadmap.md |
 | B-2026-08-21-2 | 2026-08-21 | cli | medium | SEVEN REGISTERED LINTS STILL HAVE NO EMIT SITE and so can never fire, though all seven are registered `default_level: LintLevel::Warn` -- advertised by `karac lint --list` and accepted in `#[allow(...)]`: `f16_software_emulated`, `float_in_serialized_type`, `implicit_clone`, `module_mut_binding`, `mutual_recursion_note`, `pure_loop_in_par`, `repr_c_layout_ignored`. They are the remainder of B-2026-08-20-36's eight, which wired `redundant_suffix` (the one design.md documents as live) and added the guard that now holds this list. They are VISIBLE IN CODE, not only here: `KNOWN_UNWIRED` in `src/lints.rs`, which `every_registered_lint_is_emitted_or_declared_unwired` fails on if the list grows or goes stale. | roadmap.md |
+| B-2026-08-21-4 | 2026-08-21 | codegen | high | A free function DECLARED to return `Slice[T]` hands back a GARBAGE header in codegen while `--interp` is correct, and MOST uses of it are SILENT. `fn pick(v: ref Vec[i64]) -> Slice[i64] { v.as_slice() }` over `let v: Vec[i64] = [10, 20, 30]`, measured on the JIT: `println(pick(v).len())` prints a pointer-sized number (140208557007525) instead of 3; `let s = pick(v); println(s.len())` the same; `for x in s` floods hundreds of garbage words instead of 10 20 30. No diagnostic, exit 0. Only the INDEX paths fail loudly -- `pick(v)[2]` and `let s = pick(v); s[2]` both report `codegen failed: Index operator applied to non-array type`, because the callee's `Slice[T]` return is never registered as an element type anywhere. So one family reads as a wrong answer or a hard stop purely by which method you call on it. | src/codegen/types_lowering.rs::llvm_return_type (how a `Slice[T]` return is typed at the call boundary — start here, the returned VALUE is what is wrong); src/codegen/functions.rs::compile_function (the return emission that feeds it); src/codegen/types_lowering.rs::infer_slice_elem_from_rhs + ::slice_elem_type_expr_from_rhs (the two element-type resolvers whose missing `Call` arm is the SECOND half, deliberately not landed — see detail); src/codegen/collections.rs::inline_index_recv_slice_te (the B-2026-08-20-40 sibling that must not be widened to a `Call` until the boundary is fixed) |
+| B-2026-08-21-5 | 2026-08-21 | codegen | medium | `compile_cstr_method` PANICS on a `ref CStr` PARAMETER receiver instead of emitting a diagnostic: `fn look(c: ref CStr) -> i64 { c.len() }` aborts karac with `Found IntValue(... %c.deref = load i64, ptr %c1 ...) but expected the StructValue variant` at src/codegen/method_call_ffi.rs:34 (inkwell `BasicValueEnum::into_struct_value`). `--interp` prints 3. Any CStr method on that receiver shape hits it -- `len`, `as_bytes` measured. | src/codegen/method_call_ffi.rs::compile_cstr_method (the `recv.into_struct_value()` unwrap at the top of the fn — the panic site, and the place a structured Err belongs regardless); src/codegen/functions.rs (where a `ref CStr` param's slot is set up — the receiver arrives as a loaded i64 rather than the `{ptr, i64}` aggregate); tests/codegen.rs::test_e2e_cstr_len_is_empty_as_bytes (the literal-receiver coverage that passes, showing the gap is param-only) |
 
 ### Wontfix (8)
 
@@ -154,9 +155,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1422 surfaced
 
 </details>
 
-### Fixed (1394)
+### Fixed (1395)
 
-<details><summary>1394 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1395 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -13333,6 +13334,17 @@ The check is a proxy -- a name could appear only in a comment and pass -- and th
 A NEW DIAGNOSTIC CODE VALIDATED THE PREVIOUS ROW. `RedundantSuffix` needed `W0280`/`E0280`, and `code_table_catalogues_every_code_in_a_covered_band` -- added hours earlier for B-2026-08-20-31 -- is what required the `CODE_TABLE` rows. The guard caught the omission on the first run rather than shipping an `explain`-less code.
 
 LIVE REMAINDER, split to its own row: the seven still-unwired lints (`f16_software_emulated`, `float_in_serialized_type`, `implicit_clone`, `module_mut_binding`, `mutual_recursion_note`, `pure_loop_in_par`, `repr_c_layout_ignored`). They are seven independent detection passes sharing only the shape of the omission, and they are now visible in `KNOWN_UNWIRED` rather than only in a ledger row. |
+| B-2026-08-20-40 | codegen | medium | `s.bytes()[i]` -- the byte-access form design.md documents for protocol and binary-format parsing -- is check-clean and interp-correct but has NO COD… | FIXED by bc2a768. Codegen's index dispatch gained a `Slice` sibling to the inline-temp `Vec` arm it already had -- `inline_index_recv_slice_te` + `compile_inline_temp_slice_index` in `src/codegen/collections.rs`, dispatched immediately after the Vec arm. The identifier-keyed slice path fires only for a NAMED binding, so the `{ptr, len}` header a slice-producing expression evaluates to fell through to the generic tail, which handles only `ArrayType` / `VectorType` -- hence "Index operator applied to non-array type". The new arm materializes the header into a synth slice local, registers it through the same `register_var_from_type_expr` every other synth-binding arm uses, and recurses, so `compile_slice_index` lowers the read (bounds check included) unchanged.
+
+Its own arm rather than a widening of the Vec one, because the two differ in both layout and ownership: a slice is a 16-byte `{ptr,len}` with no `cap` word to read, and it is ALWAYS a borrow -- so nothing is dropped and no element is deep-cloned. Dropping here would free the receiver's buffer out from under the live binding that owns it.
+
+The element type comes from `slice_elem_type_expr_from_rhs`, the SAME resolver the `let b = s.bytes()` binding path uses. That makes the two-step spelling -- which always worked -- the oracle rather than a second implementation: `s.bytes()[i]` and `let b = s.bytes(); b[i]` now read the same byte by construction.
+
+Measured on all four surfaces (interp / JIT / AOT / `KARAC_AUTO_PAR=0` AOT), byte-identical: `s.bytes()[1]` -> 101, the same index inside an f-string -> 111, accumulated over a while loop -> 532, `v.as_slice()[2]` -> 30, `c"abc".as_bytes()[2]` -> 99, a field-rooted receiver `w.s.bytes()[3]` -> 108, and a heap element `hs.as_slice()[1]` -> "cd". An out-of-range index panics on every backend rather than reading past the storage.
+
+Pinned by `test_e2e_index_slice_temporary_matches_the_bound_spelling` and `test_e2e_index_slice_temporary_bounds_checked` (tests/codegen.rs) and `asan_index_into_slice_temporary_frees_nothing` (tests/memory_sanitizer.rs -- LSan-clean over 60 iterations of a heap-element read, pinning the frees-nothing choice from both sides). All three fail without the fix.
+
+`s.bytes()[a..b]` never reaches the new arm and is unchanged: a range slice of a temporary escapes its statement and the ownership checker rejects it upstream with "bind the receiver to a local first". |
 
 </details>
 
