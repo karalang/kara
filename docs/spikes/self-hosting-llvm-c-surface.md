@@ -1,5 +1,25 @@
 # Inventory: LLVM-C surface used by codegen
 
+> ## ⚠ SUPERSEDED (2026-07-12) — the self-hosted backend does NOT use LLVM-C FFI
+>
+> This spike's findings are **correct and were validated end-to-end**; they are
+> simply no longer the plan. The codegen approach was revised on 2026-07-12 to
+> **textual LLVM IR emission**: the self-hosted backend is a pure `AST →
+> IR-string` transform whose `.ll` output the shipped `karac_jit_runner`
+> executes, needing **no inkwell and no LLVM-C bindings**. See
+> [`selfhost-backend-feasibility.md`](selfhost-backend-feasibility.md). The
+> shipped `selfhost/src/codegen.kara` (through slice 64, 8.7k lines) contains
+> **zero** `extern "C"` declarations.
+>
+> Kept in full, not deleted, for two reasons: the binding approach is genuinely
+> viable and someone re-deriving it should find the measurement rather than
+> repeat the work; and the FFI capabilities it drove into the Phase 8 floor
+> (`#[link_name]`, opaque handle types, `Copy` raw pointers, `CStr.to_string`,
+> `kara.toml [link]`) all shipped and are load-bearing for `std.tls` and
+> `std.crypto` regardless.
+>
+> **Do not treat anything below as the current codegen plan.**
+
 **Status:** DONE (initial pass, 2026-06-10). Resolves sub-question 1 (*Surface scope*) of
 [Spike: LLVM-C FFI binding](self-hosting-llvm-c-ffi.md#open-sub-questions-resolve-before-the-codegen-port).
 This is the call-site inventory the spike calls for: "that inventory IS the exact set of

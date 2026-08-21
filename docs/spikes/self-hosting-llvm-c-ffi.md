@@ -1,5 +1,25 @@
 # Spike: LLVM-C FFI binding for self-hosted codegen
 
+> ## ⚠ SUPERSEDED (2026-07-12) — the self-hosted backend does NOT use LLVM-C FFI
+>
+> This spike's findings are **correct and were validated end-to-end**; they are
+> simply no longer the plan. The codegen approach was revised on 2026-07-12 to
+> **textual LLVM IR emission**: the self-hosted backend is a pure `AST →
+> IR-string` transform whose `.ll` output the shipped `karac_jit_runner`
+> executes, needing **no inkwell and no LLVM-C bindings**. See
+> [`selfhost-backend-feasibility.md`](selfhost-backend-feasibility.md). The
+> shipped `selfhost/src/codegen.kara` (through slice 64, 8.7k lines) contains
+> **zero** `extern "C"` declarations.
+>
+> Kept in full, not deleted, for two reasons: the binding approach is genuinely
+> viable and someone re-deriving it should find the measurement rather than
+> repeat the work; and the FFI capabilities it drove into the Phase 8 floor
+> (`#[link_name]`, opaque handle types, `Copy` raw pointers, `CStr.to_string`,
+> `kara.toml [link]`) all shipped and are load-bearing for `std.tls` and
+> `std.crypto` regardless.
+>
+> **Do not treat anything below as the current codegen plan.**
+
 **Status:** ✅ RESOLVED — decision record complete and the **minimal proof runs green (`exit=42`)** under the stage-0 Rust `karac` (2026-06-11; see the [Definition of done](#definition-of-done-this-spike) below). The LLVM-C binding approach is validated end-to-end: a Kāra program drives `libLLVM-18` to build/verify/emit a working object file. Unblocks the **codegen leg** of [Phase 12 Self-Hosting](../implementation_checklist/phase-12-self-hosting.md#port-sequencing); shaped the Phase 8 FFI floor surface ([phase-12 § Pre-pivot blockers, Cluster 2](../implementation_checklist/phase-12-self-hosting.md#pre-pivot-blockers-fix-before)).
 
 ## Question

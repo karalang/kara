@@ -1,8 +1,29 @@
 # Minimal proof: Kāra `extern "C"` → LLVM-C → object file → link → run
 
+> ## ⚠ SUPERSEDED (2026-07-12) — the self-hosted backend does NOT use LLVM-C FFI
+>
+> This spike's findings are **correct and were validated end-to-end**; they are
+> simply no longer the plan. The codegen approach was revised on 2026-07-12 to
+> **textual LLVM IR emission**: the self-hosted backend is a pure `AST →
+> IR-string` transform whose `.ll` output the shipped `karac_jit_runner`
+> executes, needing **no inkwell and no LLVM-C bindings**. See
+> [`selfhost-backend-feasibility.md`](selfhost-backend-feasibility.md). The
+> shipped `selfhost/src/codegen.kara` (through slice 64, 8.7k lines) contains
+> **zero** `extern "C"` declarations.
+>
+> Kept in full, not deleted, for two reasons: the binding approach is genuinely
+> viable and someone re-deriving it should find the measurement rather than
+> repeat the work; and the FFI capabilities it drove into the Phase 8 floor
+> (`#[link_name]`, opaque handle types, `Copy` raw pointers, `CStr.to_string`,
+> `kara.toml [link]`) all shipped and are load-bearing for `std.tls` and
+> `std.crypto` regardless.
+>
+> **Do not treat anything below as the current codegen plan.**
+
 **Status:** ✅ **RUNS GREEN — `exit=42`** under the stage-0 Rust `karac` (2026-06-11). This is the
 spike's [Definition of Done](self-hosting-llvm-c-ffi.md#definition-of-done-this-spike) minimal
-proof, and it is now the **seed of the Kāra codegen module** — a real Kāra program that drives
+proof, and it was *intended* as the **seed of the Kāra codegen module** (superseded — the actual seed
+was the text-emission feasibility spike; see the banner above) — a real Kāra program that drives
 `libLLVM-18` through the FFI binding to build, verify, and emit a working object file. The `.kara`
 body, `kara.toml`, and harness below are the **verified-runnable** versions (the earlier draft was
 aspirational and never compiled; every gate it surfaced — `[link]`, `CStr.from_ptr`, `#[link_name]`
