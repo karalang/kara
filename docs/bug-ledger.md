@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 271 | 0 |
 | leak | 185 | 0 |
-| run-vs-build | 145 | 0 |
+| run-vs-build | 146 | 0 |
 | missing-feature | 139 | 6 |
 | double-free | 133 | 0 |
 | codegen-gap | 120 | 0 |
@@ -102,16 +102,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 91 | 0 |
 | perf | 83 | 0 |
 | crash | 55 | 0 |
+| other | 52 | 2 |
 | soundness | 51 | 0 |
-| other | 51 | 1 |
 | use-after-free | 20 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 966 | 2 |
-| typecheck | 226 | 3 |
+| codegen | 967 | 2 |
+| typecheck | 227 | 4 |
 | interp | 169 | 1 |
 | ownership | 62 | 0 |
 | other | 60 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 7 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1437 surfaced · 8 open · 1407 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1439 surfaced · 9 open · 1408 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (8)
+### Open (9)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -138,6 +138,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1437 surfaced
 | B-2026-08-21-11 | 2026-08-21 | other | low | design.md EXAMPLES ARE WRITTEN IN SYNTAX design.md AND syntax.md THEMSELVES FORBID: `mu.lock()` and `let group = ...` use hard keywords as identifiers, `fillna(0.0, flag = true)` uses `=` where the doc's own rule says labeled `:`, `[u8; 2]` and `r"..."` are Rust idioms the spec explicitly does not have | roadmap.md |
 | B-2026-08-21-17 | 2026-08-21 | lexer | medium | THE SELF-HOSTED KARA LEXER CANNOT LEX `b"..."`, so it now disagrees with the Rust lexer on any input containing one: `selfhost/src/lexer.kara` still routes the `b` prefix down the reserved-string-prefix path and emits `ERROR`, while the Rust lexer emits the byte-string token (550bb1f, B-2026-08-20-37). The self-hosted compiler is behind the language on a construct design.md specifies as shipped. | roadmap.md |
 | B-2026-08-21-18 | 2026-08-21 | codegen+typecheck | low | STRUCT FUNCTIONAL UPDATE `P { x: 1, ..base }` IS STILL UNIMPLEMENTED -- it now says so clearly instead of dropping the base, but the form syntax.md's STRUCT_LITERAL production admits cannot be used; the interpreter already implements the copy and codegen does not, so the remaining work is codegen plus the ownership rules for a spread base | roadmap.md |
+| B-2026-08-21-20 | 2026-08-21 | typecheck | high | `main` IS RED: `selfhost_typechecker_matches_rust_typechecker` fails at 5fee766 on a clean checkout, independent of any local work. Input 126 (`struct P { x: i64, y: i64 } fn f(b: P) -> P { P { x: 1, ..b } }`) -- Kara reports `missing-field @46:15`, Rust now reports `type-mismatch @46:15`. 3b4b97d changed the Rust typechecker's struct-literal-spread diagnostic without teaching the self-hosted Kara typechecker the same rule. | roadmap.md |
 
 ### Wontfix (8)
 
@@ -156,9 +157,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1437 surfaced
 
 </details>
 
-### Fixed (1407)
+### Fixed (1408)
 
-<details><summary>1407 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1408 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -13540,6 +13541,7 @@ The resolver had no notion of a non-fatal diagnostic -- every `ResolveError` was
 W0150 is the resolver's FIRST warning code, which broke two explain band checks asserting resolver codes start with `E01`/`E08` -- an encoding of "the resolver only mints errors". The band exists to stop numeric collision with the typechecker's E02xx, and W0150 is in the resolver's own 01xx band, so both checks now accept `W01` and the code is catalogued so `karac explain W0150` answers.
 
 Verified: unannotated -> `warning[resolve]`, check and build exit 0, binary produced and runs; annotated -> silent. Two regression tests. |
+| B-2026-08-21-19 | codegen | high | RUN/BUILD DIVERGENCE from two independently-green commits meeting: `let a = b"abc"; a.is_sorted();` printed `true` under `--interp` and FAILED TO COM… | FIXED by ca74f17. An un-annotated binding initialised from a byte-string literal now registers `u8` in `array_elem_type_exprs`, so the fixed-array method arms can resolve the receiver's element type. Strict E2E regression test on the UN-ANNOTATED spelling (the annotated one never broke). |
 
 </details>
 
