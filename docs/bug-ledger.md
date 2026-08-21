@@ -92,13 +92,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 274 | 1 |
+| miscompile | 274 | 0 |
 | leak | 186 | 1 |
 | run-vs-build | 148 | 0 |
 | missing-feature | 143 | 7 |
 | double-free | 134 | 0 |
-| codegen-gap | 126 | 3 |
-| diagnostics | 94 | 1 |
+| codegen-gap | 127 | 4 |
+| diagnostics | 95 | 2 |
 | false-positive | 91 | 0 |
 | perf | 83 | 0 |
 | crash | 55 | 0 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 980 | 7 |
-| typecheck | 231 | 4 |
+| codegen | 982 | 8 |
+| typecheck | 232 | 5 |
 | interp | 170 | 1 |
 | other | 62 | 0 |
 | ownership | 62 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 8 | 1 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1459 surfaced · 13 open · 1424 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1461 surfaced · 14 open · 1425 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (13)
+### Open (14)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -139,10 +139,11 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1459 surfaced
 | B-2026-08-21-29 | 2026-08-21 | typecheck | medium | THREE DOCUMENTED SURFACES ARE NOT REACHABLE AS WRITTEN: every spelling of channel construction design.md uses (`Channel.new[T]()`, `Channel.bounded`), its whole `io.` I/O prefix, and `allocates(Heap)` -- whose `Heap` the document never declares and the prelude does not provide | roadmap.md |
 | B-2026-08-21-32 | 2026-08-21 | resolver+effect | medium | EFFECT RESOURCES CANNOT BE ROOTED AT A VALUE, so design.md's whole channel effect model is unwritable: `with sends(tx)` on a channel PARAMETER is `'tx' is not an effect resource (it is a variable)`, and the seven `Sender`/`Receiver` declarations at :6064-:6094 are all written that way | roadmap.md |
 | B-2026-08-21-40 | 2026-08-21 | codegen | medium | A `mut ref String` ARGUMENT ON A **FIELD** PLACE LEAKS THE FIELD'S ORIGINAL BUFFER WHEN THE CALLEE REASSIGNS IT -- `free_app(mut b.name)` with a body of `s = s + "!"` leaks 8 bytes per call under LeakSanitizer while the identical call on an IDENTIFIER place is clean; both the free-function and the method spelling are affected | roadmap.md |
-| B-2026-08-21-41 | 2026-08-21 | codegen | high | ITERATING A FIXED-ARRAY **TEMPORARY** SILENTLY YIELDS ZERO ELEMENTS under `karac build` -- `n.to_ne_bytes().iter().count()` is 0 (interp: 2) and `for x in n.to_ne_bytes()` runs the body ZERO times, while the bound two-line spelling is correct on both backends | roadmap.md |
 | B-2026-08-21-42 | 2026-08-21 | codegen | medium | NO `self.<method>()` DISPATCHER ON AN `impl ... for Array[T, N]` BODY -- `self.get(0)` inside the impl fails codegen with "no handler for method 'get' on non-identifier receiver" while `--interp` runs it, the Array twin of the fixed B-2026-08-18-12 (Map/Set) and -11 | roadmap.md |
 | B-2026-08-21-43 | 2026-08-21 | codegen | low | A USER IMPL ON A **NON-SCALAR** `Array` HEAD IS UNCALLABLE ON A TEMPORARY -- `mk().tag()` for `impl Tag for Array[String, 2]` still loud-fails after B-2026-08-21-25, which admits only scalar-element arrays because a scalar array is the case that owns no heap | roadmap.md |
 | B-2026-08-21-44 | 2026-08-21 | codegen | low | `as_slice()` ON A FIXED-ARRAY **TEMPORARY** HAS NO CODEGEN LOWERING -- `n.to_ne_bytes().as_slice().len()` fails dispatch while `--interp` answers, the one method of the Array surface B-2026-08-21-25 left out | roadmap.md |
+| B-2026-08-21-45 | 2026-08-21 | typecheck+codegen | low | FIVE SHIPPED USER-FACING DIAGNOSTICS CARRY RUNS OF 14-30 SPACES mid-sentence, because rustfmt INTERMITTENTLY rejoins a `\`-continued string literal into one line and keeps the continuation indentation as real spaces | roadmap.md |
+| B-2026-08-21-46 | 2026-08-21 | codegen | low | `enumerate` OVER AN ARRAY **LITERAL** STILL BAILS LOUD -- `for (i, x) in [1, 2, 3].iter().enumerate()` hits the adaptor backstop while `--interp` answers, the one source shape B-2026-08-21-41's widening could not reach | roadmap.md |
 
 ### Wontfix (8)
 
@@ -161,9 +162,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1459 surfaced
 
 </details>
 
-### Fixed (1424)
+### Fixed (1425)
 
-<details><summary>1424 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1425 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -14002,6 +14003,85 @@ belongs in a shared helper the three loops call, not replicated three times; the
 `coerce_to_slice` branch added here is a fourth copy of the same six lines, and
 the right follow-up is to lift argument coercion into one place rather than wait
 for a fifth call form to file a fifth row. |
+| B-2026-08-21-41 | codegen | high | ITERATING A FIXED-ARRAY **TEMPORARY** SILENTLY YIELDS ZERO ELEMENTS under `karac build` -- `n.to_ne_bytes().iter().count()` is 0 (interp: 2) and `for… | Fixed in 521ca182.
+
+THE ROW'S DIAGNOSIS WAS RIGHT, including its pointer at
+`for_receiver_is_indexable`. That predicate requires the (optionally
+`.iter()`-peeled) source to be an `Identifier` or a `FieldAccess`, so an
+array-valued temporary answered false, no arm claimed it, and the source
+reached the dispatch fall-through — which returned unit, i.e. a loop that runs
+zero times. `try_compile_for_array_value` now spills the aggregate to a slot
+and drives `compile_for_array_var`, the loop a NAMED array binding already
+uses, so `for x in mk()` lowers exactly as `let a = mk(); for x in a` does.
+The scalar-element gate carries the same weight it does in B-2026-08-21-25: a
+materialized array of `Int`/`Float` owns no heap, so the spill creates no
+second owner and the loop has no drop to run at exit.
+
+ONE ROOT CAUSE, NOT TWO. The row filed `.iter().count()` (0 vs 2) and the `for`
+loop (0 vs 3) as two symptoms and left open whether they were two defects. They
+are one: the eager terminal desugars through the same for-loop lowering, and a
+single arm fixed both. Worth recording because the reverse guess — patching
+`count` at the method-dispatch layer — would have produced a second lowering
+for the same shape and left the loop wrong.
+
+TWO MORE SILENT ZEROS THE SWEEP FOUND, fixed in the same change:
+
+  * an ARRAY `self`. The `self` dispatch arm checks the five POINTER-backed
+    container tables (String/Vec/Slice/Map/Set); a fixed array is none of them
+    — it is an `[N x T]` slot — so `for x in self` inside an
+    `impl … for Array[i64, 3]` body matched nothing and ran zero times against
+    the interpreter's N. Owned and `ref` receivers both.
+  * `for (i, x) in mk().iter().enumerate()` declined the peel and fell to the
+    adaptor backstop, build-failing a program the interpreter runs. Loud rather
+    than silent, so a smaller bug, but the same missing predicate answer.
+
+THE FALL-THROUGH IS THE ACTUAL DEFECT and is the durable part of this fix. A
+`for` source codegen cannot lower is not an empty collection, and at the call
+site the two are indistinguishable. This failure mode has now been found FIVE
+separate times, once per source shape that happened to fall through:
+B-2026-07-14-9 (`iter_mut`), -14-21 (a rejected `map`/`filter` peel),
+-07-31-30 (a module-level container binding), -08-21-41 (this row), and
+-07-14-7, which is where the loud adaptor backstops came from. Every one of
+those fixes converted ONE shape to loud and left the fall-throughs returning
+unit, so the class kept coming back wearing a new shape. All three
+fall-throughs — the main dispatch catch-all, the `self` arm, and the field arm
+— now share one error naming the source shape and the two ways forward.
+
+WHAT THAT COST, stated plainly: two shapes are newly BUILD ERRORS that used to
+compile — a `String`-element and a tuple-element array temporary. Both ran the
+body zero times and printed a plausible number, so nothing correct stopped
+working; a wrong answer became a diagnostic. Both are genuine deferrals for the
+same reason the `-25` gate excludes them (their elements own heap, so
+materializing the temporary needs drop-tracking not established here).
+
+THE PINS are `test_e2e_for_loop_over_a_fixed_array_temporary` and
+`e2e_for_over_an_unlowerable_source_bails_loud` in `tests/codegen.rs`. The
+first keeps every temporary spelling beside its bound twin — the fix routes the
+temporary onto the binding's loop, so a test covering only the temporary would
+go green with both broken. Four choices in it are load-bearing: the `enumerate`
+cases weight by `i` (a lowering that bound the element but left the index at
+zero still fails); `fs()` has a FLOAT element (the loop cannot be assuming an
+integer array); `.iter().count()` is included because it is not a for-loop and
+is what proves the single root cause; and the `break` case proves the loop
+frame survives an early exit, the shape most likely to break if the
+materialized slot were ever given a scope-exit action. The second test pins the
+FALL-THROUGH rather than any one shape — if its carrier is ever lowered it
+should be re-pointed at whatever still reaches the catch-all, not deleted.
+
+AN ENVIRONMENT NOTE THAT COST REAL TIME, since it will bite the next person
+writing a diagnostic: rustfmt in this repo INTERMITTENTLY rejoins a
+`\`-continued string literal into one line and keeps the continuation
+indentation as REAL SPACES. The first draft of this message emitted 14-space
+runs in the middle of its sentences; a neighbouring `\`-continued message in
+`src/cli/args.rs` is untouched, so it is not a rule one can work around by
+inspection. The diagnostic is built with `concat!`, which is folded at compile
+time and has no such hazard. A scan found five already-shipped user-facing
+messages carrying the same corruption — filed as B-2026-08-21-45.
+
+THE REMAINDER: B-2026-08-21-46 — `for (i, x) in [1, 2, 3].iter().enumerate()` still
+bails loud. The array LITERAL is the one source shape whose element type is not
+recoverable syntactically, and it is typed `Vec` by the synthesis-mode default
+anyway; it failed identically before this change. |
 
 </details>
 
