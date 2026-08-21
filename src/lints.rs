@@ -491,6 +491,103 @@ pub fn effective_level_for_module_lint(
 }
 
 #[cfg(test)]
+mod emit_site_guard {
+    //! A registered lint that nothing emits is a promise the compiler does not
+    //! keep (B-2026-08-20-36).
+    //!
+    //! Registration is three fields — name, default level, description — and
+    //! nothing tied any of them to a detection pass. Eight of the 28 lints were
+    //! registered at `Warn`, advertised by `karac lint --list`, accepted in
+    //! `#[allow(...)]`, and could never fire. design.md documented one of them
+    //! (`redundant_suffix`) as live behaviour for as long as it did not exist.
+    //!
+    //! The check is the one from the filing row, promoted to a test: a lint's
+    //! name must appear somewhere in `src/` OUTSIDE this registry. That is a
+    //! proxy — a name could appear in a comment — but it is the right
+    //! direction, because the failure it guards is a lint with NO mention at
+    //! all, and it is cheap enough to run always.
+
+    use std::collections::BTreeSet;
+    use std::path::Path;
+
+    /// Lints known to have no emit site, tracked in B-2026-08-20-42.
+    ///
+    /// This list may only ever SHRINK. A new entry means a lint was registered
+    /// without its detection pass, which is exactly what this guard exists to
+    /// stop; wire the lint instead. `redundant_suffix` was the ninth and came
+    /// off the list when B-2026-08-20-36 implemented it.
+    const KNOWN_UNWIRED: &[&str] = &[
+        "f16_software_emulated",
+        "float_in_serialized_type",
+        "implicit_clone",
+        "module_mut_binding",
+        "mutual_recursion_note",
+        "pure_loop_in_par",
+        "repr_c_layout_ignored",
+    ];
+
+    fn rust_sources(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                rust_sources(&path, out);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                out.push(path);
+            }
+        }
+    }
+
+    /// Every registered lint is either emitted somewhere or listed as known
+    /// debt. Nothing may be silently neither.
+    #[test]
+    fn every_registered_lint_is_emitted_or_declared_unwired() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        rust_sources(&root, &mut files);
+        let registry = root.join("lints.rs");
+        let corpus: String = files
+            .iter()
+            .filter(|f| **f != registry)
+            .filter_map(|f| std::fs::read_to_string(f).ok())
+            .collect();
+        assert!(
+            corpus.len() > 100_000,
+            "the source scan collected only {} bytes — it is not seeing src/",
+            corpus.len()
+        );
+
+        let mut unwired: BTreeSet<&str> = BTreeSet::new();
+        for lint in super::STARTER_LINTS {
+            if !corpus.contains(lint.name) {
+                unwired.insert(lint.name);
+            }
+        }
+        let known: BTreeSet<&str> = KNOWN_UNWIRED.iter().copied().collect();
+
+        let fresh: Vec<&&str> = unwired.difference(&known).collect();
+        assert!(
+            fresh.is_empty(),
+            "these lints are REGISTERED but nothing emits them: {fresh:?}. \
+             A registered lint is advertised by `karac lint --list` and \
+             accepted in `#[allow(...)]`, so one that cannot fire is a promise \
+             the compiler does not keep. Wire its detection pass, or add it to \
+             KNOWN_UNWIRED and file a row."
+        );
+
+        let fixed: Vec<&&str> = known.difference(&unwired).collect();
+        assert!(
+            fixed.is_empty(),
+            "these lints are listed in KNOWN_UNWIRED but now have an emit \
+             site: {fixed:?}. Remove them from the list — a stale entry hides \
+             the next real regression."
+        );
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

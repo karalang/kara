@@ -808,6 +808,14 @@ pub enum TypeErrorKind {
     /// falls out of that scan as alphabetical, and which nothing ever chose —
     /// is rejected.
     AmbiguousBareVariant,
+    /// `redundant_suffix` lint (B-2026-08-20-36) — a numeric literal carries
+    /// the suffix it would have had anyway. design.md § Numeric Semantics >
+    /// Literal suffixes: "A suffix matching the default type (`42i64`,
+    /// `3.14f64`) is valid but the compiler warns — suppressible with
+    /// `#[allow(redundant_suffix)]`." The lint was registered from the start
+    /// and never wired, so the spec sentence described behaviour that did not
+    /// exist.
+    RedundantSuffix,
     /// Bare `method(args)` call appears in a synthesis position (no expected
     /// type) where the only candidate resolutions are trait associated
     /// functions. The typechecker cannot infer the target type — programmer
@@ -1146,7 +1154,8 @@ pub(crate) fn class_for_type_error_kind(
         | TypeErrorKind::UnstableApi
         | TypeErrorKind::ForbiddenLintAllow
         | TypeErrorKind::ExpectOnUnfulfilled
-        | TypeErrorKind::UnfulfilledLintExpectation => Some(DC::LintWarning),
+        | TypeErrorKind::UnfulfilledLintExpectation
+        | TypeErrorKind::RedundantSuffix => Some(DC::LintWarning),
 
         // Kinds not yet individually classified — `Other` at the JSON
         // emit site. Backfill is incremental; each one is a small
@@ -1919,6 +1928,12 @@ pub struct TypeChecker<'a> {
     /// positive-operand check for that span (bare `128i8` is out of range,
     /// `-128i8` is not).
     pub(super) neg_validated_suffixed_literal: Option<(usize, usize)>,
+    /// Spans that already produced a `redundant_suffix` warning
+    /// (B-2026-08-20-36). `infer_expr` is NOT memoized — bidirectional
+    /// checking re-infers the same literal — so without this the same
+    /// `42i64` warns once per visit. Keyed on `(offset, length)` like the
+    /// other span-keyed state above.
+    pub(super) redundant_suffix_reported: rustc_hash::FxHashSet<(usize, usize)>,
     /// `?` cross-error From conversions (span → target error type name).
     pub(super) question_conversions: FxHashMap<SpanKey, String>,
     /// `?` unwrapped Ok/Some payload type (span → payload `TypeExpr`). See the
@@ -2275,6 +2290,7 @@ impl<'a> TypeChecker<'a> {
             current_self_type: None,
             in_defer: false,
             neg_validated_suffixed_literal: None,
+            redundant_suffix_reported: rustc_hash::FxHashSet::default(),
             question_conversions: FxHashMap::default(),
             question_ok_payload_types: FxHashMap::default(),
             wp_result_types: FxHashMap::default(),

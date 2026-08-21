@@ -3286,6 +3286,35 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// `redundant_suffix` (B-2026-08-20-36). design.md § Numeric Semantics >
+    /// Literal suffixes: "A suffix matching the default type (`42i64`,
+    /// `3.14f64`) is valid but the compiler warns — suppressible with
+    /// `#[allow(redundant_suffix)]`."
+    ///
+    /// Scoped to the DEFAULT type exactly as the spec words it, so `42i64` and
+    /// `3.14f64` warn and `42i32` does not — including `let c: i32 = 42i32`,
+    /// where the suffix is redundant against the ANNOTATION rather than
+    /// against the default. That wider rule is a plausible lint but it is not
+    /// the sentence design.md wrote, and a lint that fires beyond its
+    /// documented trigger is its own defect.
+    ///
+    /// De-duplicated by span: `infer_expr` re-infers the same literal under
+    /// bidirectional checking, and each visit would otherwise warn again.
+    fn warn_redundant_suffix(&mut self, suffix: &str, span: Span) {
+        if !self
+            .redundant_suffix_reported
+            .insert((span.offset, span.length))
+        {
+            return;
+        }
+        self.type_lint_warning(
+            format!("redundant `{suffix}` suffix: {suffix} is the default type for this literal"),
+            span,
+            TypeErrorKind::RedundantSuffix,
+            "redundant_suffix",
+        );
+    }
+
     pub(super) fn infer_expr(&mut self, expr: &Expr) -> Type {
         let ty = self.infer_expr_inner(expr);
         self.record_expr_type(&expr.span, &ty);
@@ -3719,6 +3748,9 @@ impl<'a> super::TypeChecker<'a> {
             // Literals
             ExprKind::Integer(n, sfx) => {
                 let ty = self.type_from_int_suffix(*sfx, expr.span);
+                if matches!(sfx, Some(crate::token::IntSuffix::I64)) {
+                    self.warn_redundant_suffix("i64", expr.span);
+                }
                 // B-2026-07-02-7: a SUFFIXED literal's own suffix defines its
                 // range — `300u8` was admitted and silently diverged (interp
                 // printed 300, codegen truncated to 44). Unsuffixed literals
@@ -3736,7 +3768,12 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 ty
             }
-            ExprKind::Float(_, sfx) => Self::type_from_float_suffix(*sfx),
+            ExprKind::Float(_, sfx) => {
+                if matches!(sfx, Some(crate::token::FloatSuffix::F64)) {
+                    self.warn_redundant_suffix("f64", expr.span);
+                }
+                Self::type_from_float_suffix(*sfx)
+            }
             ExprKind::CharLit(_) => Type::Char,
             ExprKind::ByteLit(_) => Type::UInt(UIntSize::U8),
             ExprKind::StringLit(_) | ExprKind::MultiStringLit(_) => Type::Str,

@@ -3905,10 +3905,10 @@ fn interp_broken_pipe_exits_quietly_like_a_native_binary() {
     write(
         &tmp.join("chatty.kara"),
         "fn main() {\n\
-         \x20   let mut i = 0i64;\n\
-         \x20   while i < 200000i64 {\n\
+         \x20   let mut i = 0;\n\
+         \x20   while i < 200000 {\n\
          \x20       println(f\"line {i}\");\n\
-         \x20       i = i + 1i64;\n\
+         \x20       i = i + 1;\n\
          \x20   }\n\
          }\n",
     );
@@ -3985,10 +3985,10 @@ fn jit_broken_pipe_stops_the_program_like_a_native_binary() {
     write(
         &tmp.join("forever.kara"),
         "fn main() {\n\
-         \x20   let mut i = 0i64;\n\
+         \x20   let mut i = 0;\n\
          \x20   while true {\n\
          \x20       println(f\"tick {i}\");\n\
-         \x20       i = i + 1i64;\n\
+         \x20       i = i + 1;\n\
          \x20   }\n\
          }\n",
     );

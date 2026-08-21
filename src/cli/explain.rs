@@ -529,6 +529,14 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
         ),
     ),
     ("E0279", ty("AmbiguousBareVariant", None)),
+    (
+        "W0280",
+        ty("RedundantSuffix", Some(DiagnosticClass::LintWarning)),
+    ),
+    (
+        "E0280",
+        ty("RedundantSuffix", Some(DiagnosticClass::LintWarning)),
+    ),
     // The catch-all arm of the warning emitter: any `TypeErrorKind` that
     // reaches the warning loop without a code of its own lands here, so this
     // row names the bucket rather than one variant. A warning that deserves

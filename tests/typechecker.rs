@@ -3393,6 +3393,110 @@ fn lint_attrs_slice4b_warn_explicit_keeps_warning_behavior() {
     );
 }
 
+/// `redundant_suffix` fires at all (B-2026-08-20-36).
+///
+/// The lint was REGISTERED at `Warn` from the start and never wired, so
+/// design.md § Numeric Semantics described behaviour that did not exist:
+/// "A suffix matching the default type (`42i64`, `3.14f64`) is valid but the
+/// compiler warns — suppressible with `#[allow(redundant_suffix)]`."
+///
+/// Scoped to the DEFAULT type exactly as the spec words it. `42i32` does NOT
+/// warn, even where the suffix duplicates an annotation (`let c: i32 = 42i32`)
+/// — redundant against the annotation is a different, undocumented rule, and a
+/// lint that fires beyond its stated trigger is its own defect.
+#[test]
+fn redundant_suffix_fires_on_a_default_type_suffix() {
+    let result = typecheck_ok(
+        "fn main() {\n\
+             let a = 42i64;\n\
+             let b = 3.14f64;\n\
+             println(f\"{a} {b}\");\n\
+         }",
+    );
+    let hits: Vec<_> = result
+        .warnings
+        .iter()
+        .filter(|w| w.kind == TypeErrorKind::RedundantSuffix)
+        .collect();
+    assert_eq!(
+        hits.len(),
+        2,
+        "expected one warning per default-suffixed literal; got: {:?}",
+        result.warnings
+    );
+    assert!(
+        hits.iter()
+            .all(|w| w.lint_name.as_deref() == Some("redundant_suffix")),
+        "the lint name must ride on the warning so `#[allow]` and the JSON \
+         feed can route it; got: {hits:?}"
+    );
+}
+
+/// The literals the spec does NOT name stay silent. A suffix that is not the
+/// default carries information — it is the only way to type an inline literal
+/// — so warning on it would be wrong, not merely noisy.
+#[test]
+fn redundant_suffix_ignores_a_non_default_suffix() {
+    let result = typecheck_ok(
+        "fn take(x: i32) -> i32 { return x; }\n\
+         fn main() {\n\
+             let c: i32 = 42i32;\n\
+             let d = take(7i32);\n\
+             let e = 1.5f32;\n\
+             println(f\"{c} {d} {e}\");\n\
+         }",
+    );
+    assert!(
+        !result
+            .warnings
+            .iter()
+            .any(|w| w.kind == TypeErrorKind::RedundantSuffix),
+        "a non-default suffix must not warn; got: {:?}",
+        result.warnings
+    );
+}
+
+/// `#[allow(redundant_suffix)]` suppresses it, and the warning is emitted ONCE
+/// per literal. `infer_expr` is not memoized — bidirectional checking re-infers
+/// the same literal — so the de-duplication is load-bearing, not incidental.
+#[test]
+fn redundant_suffix_is_suppressible_and_emitted_once() {
+    let allowed = typecheck_ok(
+        "#[allow(redundant_suffix)]\n\
+         fn main() {\n\
+             let a = 42i64;\n\
+             println(f\"{a}\");\n\
+         }",
+    );
+    assert!(
+        !allowed
+            .warnings
+            .iter()
+            .any(|w| w.kind == TypeErrorKind::RedundantSuffix),
+        "#[allow(redundant_suffix)] must suppress it; got: {:?}",
+        allowed.warnings
+    );
+
+    // An ANNOTATED binding is the shape that re-infers: the literal is checked
+    // against `i64` and inferred on its own.
+    let annotated = typecheck_ok(
+        "fn main() {\n\
+             let a: i64 = 42i64;\n\
+             println(f\"{a}\");\n\
+         }",
+    );
+    assert_eq!(
+        annotated
+            .warnings
+            .iter()
+            .filter(|w| w.kind == TypeErrorKind::RedundantSuffix)
+            .count(),
+        1,
+        "one literal must warn once, not once per inference visit; got: {:?}",
+        annotated.warnings
+    );
+}
+
 #[test]
 fn lint_attrs_slice4b_unrelated_allow_does_not_suppress() {
     // Pin that the cascade matches on lint name — `#[allow(deprecated)]`

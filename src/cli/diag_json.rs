@@ -1648,6 +1648,10 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::typechecker::TypeErrorKind::CannotInferTypeParam => "E0238",
                 crate::typechecker::TypeErrorKind::AmbiguousMethod => "E0239",
                 crate::typechecker::TypeErrorKind::AmbiguousBareVariant => "E0279",
+                // `redundant_suffix` escalated to an error by `-D`/`#[deny]`;
+                // the warning twin is `W0280` in the loop below
+                // (B-2026-08-20-36).
+                crate::typechecker::TypeErrorKind::RedundantSuffix => "E0280",
                 crate::typechecker::TypeErrorKind::ConflictingImpl => "E0240",
                 crate::typechecker::TypeErrorKind::NonExhaustiveCrossPackageLiteral => "E0241",
                 crate::typechecker::TypeErrorKind::NonExhaustiveCrossPackageMatch => "E0242",
@@ -1821,6 +1825,7 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::typechecker::TypeErrorKind::MissingNonExhaustive => "W0246",
                 crate::typechecker::TypeErrorKind::UnfulfilledLintExpectation => "W0249",
                 crate::typechecker::TypeErrorKind::UnstableApi => "W0255",
+                crate::typechecker::TypeErrorKind::RedundantSuffix => "W0280",
                 // Other kinds aren't expected to appear as warnings today.
                 _ => "W0299",
             };
