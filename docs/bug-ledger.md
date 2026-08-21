@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 273 | 1 |
 | leak | 185 | 0 |
-| run-vs-build | 147 | 1 |
+| run-vs-build | 147 | 0 |
 | missing-feature | 143 | 9 |
 | double-free | 134 | 1 |
 | codegen-gap | 122 | 2 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 973 | 7 |
+| codegen | 973 | 6 |
 | typecheck | 231 | 5 |
 | interp | 169 | 1 |
 | ownership | 62 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 8 | 1 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1451 surfaced · 15 open · 1414 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1451 surfaced · 14 open · 1415 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (15)
+### Open (14)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -136,7 +136,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1451 surfaced
 | B-2026-08-21-9 | 2026-08-21 | parser | medium | design.md WRITES SYNTAX THE PARSER HAS NO PRODUCTION FOR, in two places syntax.md also disagrees with: the inline associated-type binding `Trait[Assoc = T]` (43 lines of design.md, and syntax.md's own comment at :650) has no form in `TRAIT_BOUND = PATH [ "[" TYPE_LIST "]" ]`, and an effect clause on an impl header (`impl From[E] for A with writes(Log) {`) has no form at all | roadmap.md |
 | B-2026-08-21-17 | 2026-08-21 | lexer | medium | THE SELF-HOSTED KARA LEXER CANNOT LEX `b"..."`, so it now disagrees with the Rust lexer on any input containing one: `selfhost/src/lexer.kara` still routes the `b` prefix down the reserved-string-prefix path and emits `ERROR`, while the Rust lexer emits the byte-string token (550bb1f, B-2026-08-20-37). The self-hosted compiler is behind the language on a construct design.md specifies as shipped. | roadmap.md |
 | B-2026-08-21-18 | 2026-08-21 | codegen+typecheck | low | STRUCT FUNCTIONAL UPDATE `P { x: 1, ..base }` IS STILL UNIMPLEMENTED -- it now says so clearly instead of dropping the base, but the form syntax.md's STRUCT_LITERAL production admits cannot be used; the interpreter already implements the copy and codegen does not, so the remaining work is codegen plus the ownership rules for a spread base | roadmap.md |
-| B-2026-08-21-21 | 2026-08-21 | codegen | high | CODEGEN SILENTLY DROPS `requires` / `ensures` CONTRACTS ON A GENERIC FUNCTION -- the monomorphic sibling of the same contract fires on all three surfaces, so a precondition written on a `fn f[T](...)` is enforced under `--interp` and is not enforced by either compiled backend | roadmap.md |
 | B-2026-08-21-22 | 2026-08-21 | codegen | high | `Vec.filled(n, f"...")` DOUBLE-FREES UNDER BOTH COMPILED BACKENDS -- the f-string accumulator is moved into the buffer and ALSO freed at scope exit; `--interp` prints correctly, so it is a silent run-vs-build divergence that aborts the process | roadmap.md |
 | B-2026-08-21-24 | 2026-08-21 | codegen | medium | AN ARRAY **LITERAL** TEMPORARY IN A `ref Slice[T]` PARAMETER FAILS LLVM MODULE VERIFICATION -- `f([1u8, 2u8, 3u8])` builds nothing while the by-value `Slice[T]` spelling of the same call compiles and runs | roadmap.md |
 | B-2026-08-21-25 | 2026-08-21 | codegen | medium | A METHOD CALL ON A FIXED-ARRAY **TEMPORARY** HAS NO CODEGEN LOWERING -- `n.to_ne_bytes().len()` build-fails with the dispatcher's own "this is a codegen bug" message while the bound two-line spelling works | roadmap.md |
@@ -163,9 +162,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1451 surfaced
 
 </details>
 
-### Fixed (1414)
+### Fixed (1415)
 
-<details><summary>1414 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1415 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -13591,6 +13590,28 @@ that another session had already pushed on top of a red main. Cheap guard
 for the next person: after touching a diagnostic's kind, span or ordering,
 run `cargo test --features llvm --test selfhost_typechecker --test
 selfhost_lexer` before pushing -- about 10 s against the ~13 min full suite. |
+| B-2026-08-21-21 | codegen | high | CODEGEN SILENTLY DROPS `requires` / `ensures` CONTRACTS ON A GENERIC FUNCTION -- the monomorphic sibling of the same contract fires on all three surf… | FIXED by bc18fcb.
+
+`compile_mono_function` had NO contract handling at all -- no `requires` asserts, no `old(...)` capture, no `ensures` clauses, no invariants. The setup lived only in `compile_function`, so a monomorphized body simply never got a frame. That is the whole cause; the predicate's shape was never the variable, monomorphization was.
+
+The setup is now ONE function, `install_contract_frame` in `contracts.rs`, called at the same point (params bound, before the body) by BOTH body-emitting paths, rather than a copy in each -- a second copy is precisely what was missing, and a second copy is how it would go missing again. The `strip_contracts` release gate travels inside it, so `--release` still strips every contract in a mono body too (verified).
+
+THE SAVE/RESTORE IS LOAD-BEARING, not hygiene, and this is the part a naive fix gets wrong. A mono body is compiled INLINE inside its caller (`compile_generic_call` reaches `compile_mono_function` mid-body), so the caller's `ensures` clauses and `old(...)` snapshots are live across the call. MEASURED with the restore disabled:
+
+  * a MONOMORPHIC caller's own `ensures` was SILENTLY LOST -- `mono_outer` with
+    `ensures(result) result > 100` calling a generic `helper` printed 3 instead
+    of aborting. Installing the frame without saving trades one silent drop for
+    another.
+  * a GENERIC caller's `ensures` failed codegen outright with "Undefined
+    variable 'result'" as the inner frame leaked outward.
+
+Both directions are now pinned by a test. The mono path already swaps `variables`, `ref_params` and the layout carriers for exactly this reason; the contract frame joins them.
+
+The tail return gains the `emit_ensures_checks` / `emit_invariant_checks` pair in `compile_function`'s order -- before scope cleanup, so the postcondition sees live params and result. An explicit `return` inside the body already fired them through the shared Return arm in `compile_expr`; it simply had an empty frame to read.
+
+VERIFIED byte-identical on interp / JIT / AOT / `KARAC_AUTO_PAR=0` AOT across: a violated and a satisfied `requires`; two instantiations of one generic where only the SECOND violates (so each mono carries its own frame); `ensures` at the tail and through an explicit `return`; `old(...)` capture inside a generic `ensures`, with the correct postcondition passing and the wrong one firing; a struct `invariant` reached through a generic method; a generic caller nesting two generic calls; and a monomorphic caller wrapping a generic one. design.md's own generic `binary_search[T: Ord]` example now aborts on an unsorted haystack and returns 2 on a sorted one.
+
+All five new E2E tests are pinned non-vacuous: with the mono change reverted, all five fail. |
 | B-2026-08-21-23 | codegen | high | A FIXED ARRAY PASSED TO A **METHOD**'s `ref Slice[T]` PARAMETER READS A GARBAGE LENGTH -- `bytes.len()` answers 3 under the interpreter, -1 under AOT… | FIXED by 08f57a7.
 
 B-2026-06-19-1's carve-out, transplanted to the method-call argument loop where it had never been applied: for a `ref Slice[T]` slot fed an Array source, synthesize the `{ptr,len}` header and pass its ADDRESS, instead of letting the identifier fast path hand over `&array[0]` or the slice coercion push a header VALUE into a `ptr` slot. Placed FIRST in the `ref` arm, for the same reason it is first on the free-function path: the fast path below it is what produces the wrong pointer.
