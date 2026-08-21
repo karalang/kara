@@ -60,8 +60,9 @@ pub(super) fn const_value_from_literal_expr(expr: &Expr) -> Option<crate::prelud
             Some(IntSuffix::U32) => Some(ConstValue::U32(*n as u32)),
             Some(IntSuffix::U64) => Some(ConstValue::U64(*n as u64)),
             // `usize` is 64-bit here, so it folds through the same carrier
-            // as `u64` (B-2026-08-19-29).
+            // as `u64` (B-2026-08-19-29); `isize` likewise through `i64`.
             Some(IntSuffix::Usize) => Some(ConstValue::U64(*n as u64)),
+            Some(IntSuffix::Isize) => Some(ConstValue::Isize(narrow_literal_to_i64(*n))),
             Some(IntSuffix::I128) | Some(IntSuffix::U128) => None,
             None => Some(ConstValue::I64(narrow_literal_to_i64(*n))),
         },
@@ -92,6 +93,7 @@ pub(super) fn const_value_as_u32(cv: &crate::prelude::ConstValue) -> Option<u32>
         U64(v) => i64::try_from(*v).ok()?,
         U128(v) => i64::try_from(*v).ok()?,
         Usize(v) => i64::try_from(*v).ok()?,
+        Isize(v) => *v,
         Bool(_) | Char(_) | EnumVariant { .. } | F32(_) | F64(_) => return None,
     };
     if n < 0 {
@@ -118,6 +120,7 @@ pub(super) fn const_value_to_mangle_str(cv: &crate::prelude::ConstValue) -> Stri
         U64(v) => format!("{}u64", v),
         U128(v) => format!("{}u128", v),
         Usize(v) => format!("{}usize", v),
+        Isize(v) => format!("{}isize", v),
         F32(v) => format!("{}f32", v),
         F64(v) => format!("{}f64", v),
         Bool(b) => b.to_string(),

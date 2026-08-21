@@ -1829,6 +1829,7 @@ fn infer_stub_arg_type(expr: &Expr) -> Option<String> {
             Some(IntSuffix::U64) => "u64",
             Some(IntSuffix::U128) => "u128",
             Some(IntSuffix::Usize) => "usize",
+            Some(IntSuffix::Isize) => "isize",
             None => "i64",
         },
         ExprKind::Float(_, suffix) => match suffix {

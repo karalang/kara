@@ -7,7 +7,7 @@
 //     lookup) — a FLAT `Vec` + linear scan (Kāra has no HashMap, and codegen
 //     can't `.push()` onto a nested receiver), the same idiom
 //     `Parser.label_known` uses.
-//   * Seeds the FULL prelude (Slice 2c) — the 16 `PRELUDE_PRIMITIVES` plus
+//   * Seeds the FULL prelude (Slice 2c) — the 17 `PRELUDE_PRIMITIVES` plus
 //     every `PRELUDE_{FUNCTIONS,TYPES,TRAITS,VARIANTS,EFFECT_RESOURCES}` name
 //     and the magic modules / comptime pseudotypes / stdlib module aliases the
 //     seed's `register_primitives` registers — so the corpus may reference real
@@ -188,12 +188,13 @@ impl Resolver {
     fn seed_global(mut ref self) {
         self.parents.push(-1);
         self.current = 0;
-        // prelude primitives (16)
+        // prelude primitives (17)
         self.seed_prim("i8".to_string());
         self.seed_prim("i16".to_string());
         self.seed_prim("i32".to_string());
         self.seed_prim("i64".to_string());
         self.seed_prim("i128".to_string());
+        self.seed_prim("isize".to_string());
         self.seed_prim("u8".to_string());
         self.seed_prim("u16".to_string());
         self.seed_prim("u32".to_string());

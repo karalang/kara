@@ -226,6 +226,7 @@ impl<'a> super::TypeChecker<'a> {
                         | "u32"
                         | "u64"
                         | "usize"
+                        | "isize"
                         | "f32"
                         | "f64"
                         | "bool"
@@ -287,7 +288,15 @@ impl<'a> super::TypeChecker<'a> {
                 if (method == "parse" || method == "from_str_radix")
                     && matches!(
                         type_name.as_str(),
-                        "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "usize"
+                        "i8" | "i16"
+                            | "i32"
+                            | "i64"
+                            | "u8"
+                            | "u16"
+                            | "u32"
+                            | "u64"
+                            | "usize"
+                            | "isize"
                     )
                 {
                     for arg in args {
@@ -376,7 +385,15 @@ impl<'a> super::TypeChecker<'a> {
                 if method == "try_from"
                     && matches!(
                         type_name.as_str(),
-                        "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "usize"
+                        "i8" | "i16"
+                            | "i32"
+                            | "i64"
+                            | "u8"
+                            | "u16"
+                            | "u32"
+                            | "u64"
+                            | "usize"
+                            | "isize"
                     )
                 {
                     if args.len() != 1 {
@@ -465,6 +482,7 @@ impl<'a> super::TypeChecker<'a> {
                         | "u32"
                         | "u64"
                         | "usize"
+                        | "isize"
                         | "f32"
                         | "f64"
                         | "bool"

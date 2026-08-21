@@ -227,6 +227,13 @@ pub enum IntSize {
     I32,
     I64,
     I128,
+    /// Signed pointer-width. The mirror of `UIntSize::Usize`, and like it a
+    /// 64-bit type on every target the compiler currently emits for. design.md
+    /// pairs the two everywhere it names them (§ 2178 method families, § 4000
+    /// `as`-cast rule, § 5356 arithmetic traits, § 13104 the FFI table's
+    /// `size_t` / `ptrdiff_t` row), so a `usize` arm without an `Isize` arm is
+    /// almost always an oversight rather than a decision.
+    Isize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -511,6 +518,7 @@ pub(super) fn impl_table_key(ty: &Type) -> Option<(String, Vec<Type>)> {
                 IntSize::I32 => "i32",
                 IntSize::I64 => "i64",
                 IntSize::I128 => "i128",
+                IntSize::Isize => "isize",
             }
             .to_string(),
             Vec::new(),
@@ -676,6 +684,7 @@ pub fn type_display(ty: &Type) -> String {
             IntSize::I32 => "i32",
             IntSize::I64 => "i64",
             IntSize::I128 => "i128",
+            IntSize::Isize => "isize",
         }
         .to_string(),
         Type::UInt(s) => match s {
@@ -881,6 +890,13 @@ pub(super) fn int_signed_width(ty: &Type) -> Option<(u32, bool)> {
         Type::UInt(UIntSize::U64) => Some((64, false)),
         Type::UInt(UIntSize::U128) => Some((128, false)),
         Type::UInt(UIntSize::Usize) => Some((64, false)),
+        // Pointer-width signed, the mirror of `Usize` above. Without this arm
+        // the whole helper answers `None` for `isize`, so
+        // `int_coercion_is_widening` says "not widening" and the check-mode
+        // gate demands an `as i64` on a coercion that is the identity in both
+        // width and signedness — while `usize` -> `u64` passes silently
+        // (B-2026-08-21-31).
+        Type::Int(IntSize::Isize) => Some((64, true)),
         _ => None,
     }
 }
@@ -970,6 +986,7 @@ pub(super) fn method_callee_type_name(ty: &Type) -> Option<String> {
         Type::UInt(UIntSize::U64) => Some("u64".to_string()),
         Type::UInt(UIntSize::U128) => Some("u128".to_string()),
         Type::UInt(UIntSize::Usize) => Some("usize".to_string()),
+        Type::Int(IntSize::Isize) => Some("isize".to_string()),
         Type::Float(FloatSize::F32) => Some("f32".to_string()),
         Type::Float(FloatSize::F64) => Some("f64".to_string()),
         Type::Ref(inner) | Type::MutRef(inner) | Type::Weak(inner) => {
@@ -1282,6 +1299,10 @@ fn numeric_layout_key(t: &Type) -> Option<(bool, u16)> {
                 IntSize::I32 => 32,
                 IntSize::I64 => 64,
                 IntSize::I128 => 128,
+                // Pointer-width, sharing `Usize`'s sentinel below: the two are
+                // the same width on every target, exactly as `i64` and `u64`
+                // already share `64` here (signedness is not part of the key).
+                IntSize::Isize => 1,
             },
         )),
         Type::UInt(s) => Some((

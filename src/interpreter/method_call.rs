@@ -179,7 +179,7 @@ fn single_scalar_case_map(mut it: impl Iterator<Item = char>) -> Option<char> {
 pub(super) fn is_numeric_try_from_target(name: &str) -> bool {
     matches!(
         name,
-        "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "usize"
+        "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "usize" | "isize"
     )
 }
 
@@ -2186,6 +2186,7 @@ impl<'a> super::Interpreter<'a> {
                     | "u32"
                     | "u64"
                     | "usize"
+                    | "isize"
                     | "f32"
                     | "f64"
                     | "bool"
@@ -2213,7 +2214,15 @@ impl<'a> super::Interpreter<'a> {
                 if method == "parse"
                     && matches!(
                         target,
-                        "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "usize"
+                        "i8" | "i16"
+                            | "i32"
+                            | "i64"
+                            | "u8"
+                            | "u16"
+                            | "u32"
+                            | "u64"
+                            | "usize"
+                            | "isize"
                     )
                 {
                     if let Some(arg) = args.first() {
@@ -2271,7 +2280,15 @@ impl<'a> super::Interpreter<'a> {
                 if method == "from_str_radix"
                     && matches!(
                         target,
-                        "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "usize"
+                        "i8" | "i16"
+                            | "i32"
+                            | "i64"
+                            | "u8"
+                            | "u16"
+                            | "u32"
+                            | "u64"
+                            | "usize"
+                            | "isize"
                     )
                 {
                     let make_none = || Value::EnumVariant {

@@ -1244,6 +1244,7 @@ fn int_suffix(ty: Option<&Type>) -> Option<IntSuffix> {
         Type::UInt(UIntSize::U64) => Some(IntSuffix::U64),
         Type::UInt(UIntSize::U128) => Some(IntSuffix::U128),
         Type::UInt(UIntSize::Usize) => Some(IntSuffix::Usize),
+        Type::Int(IntSize::Isize) => Some(IntSuffix::Isize),
         _ => None,
     }
 }

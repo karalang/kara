@@ -682,6 +682,7 @@ pub(super) fn is_scalar_primitive_type_name(n: &str) -> bool {
             | "u32"
             | "u64"
             | "usize"
+            | "isize"
             | "f32"
             | "f64"
             | "bool"

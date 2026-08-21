@@ -55,6 +55,7 @@ fn const_value_to_i64(cv: &ConstValue) -> Option<i64> {
         U64(v) => i64::try_from(*v).ok(),
         U128(v) => i64::try_from(*v).ok(),
         Usize(v) => i64::try_from(*v).ok(),
+        Isize(v) => Some(*v),
         Bool(b) => Some(*b as i64),
         Char(c) => Some(*c as i64),
         EnumVariant { discriminant, .. } => Some(*discriminant),
@@ -80,6 +81,7 @@ pub(crate) fn const_value_to_i128(cv: &ConstValue) -> Option<i128> {
         U64(v) => Some(*v as i128),
         U128(v) => i128::try_from(*v).ok(),
         Usize(v) => Some(*v as i128),
+        Isize(v) => Some(*v as i128),
         Bool(b) => Some(*b as i128),
         Char(c) => Some(*c as i128),
         EnumVariant { discriminant, .. } => Some(*discriminant as i128),
@@ -174,6 +176,7 @@ pub(super) fn const_value_to_array_size(cv: &ConstValue) -> Option<usize> {
         U64(v) => *v as i128,
         U128(v) => *v as i128,
         Usize(v) => *v as i128,
+        Isize(v) => *v as i128,
         Bool(_) | Char(_) | EnumVariant { .. } | F32(_) | F64(_) => return None,
     };
     if n < 0 {
@@ -199,6 +202,7 @@ pub(super) fn format_const_value(cv: &ConstValue) -> String {
         U64(v) => format!("{}u64", v),
         U128(v) => format!("{}u128", v),
         Usize(v) => format!("{}usize", v),
+        Isize(v) => format!("{}isize", v),
         F32(v) => format!("{}f32", v),
         F64(v) => format!("{}f64", v),
         Bool(b) => b.to_string(),
@@ -263,6 +267,7 @@ pub(super) fn const_value_type(cv: &ConstValue) -> Type {
         U64(_) => Type::UInt(UIntSize::U64),
         U128(_) => Type::UInt(UIntSize::U128),
         Usize(_) => Type::UInt(UIntSize::Usize),
+        Isize(_) => Type::Int(IntSize::Isize),
         F32(_) => Type::Float(FloatSize::F32),
         F64(_) => Type::Float(FloatSize::F64),
         Bool(_) => Type::Bool,
@@ -340,6 +345,7 @@ pub(super) fn integer_to_const_value(
             .map(ConstValue::I32)
             .map_err(|_| out_of_range(target_ty)),
         Type::Int(IntSize::I64) => Ok(ConstValue::I64(n)),
+        Type::Int(IntSize::Isize) => Ok(ConstValue::Isize(n)),
         // Const generics slice 2b: AST `ExprKind::Integer(i64, _)`
         // already bounds the literal to i64 at parse time, so `n as
         // i128` is the full source-level value. Widening of the
@@ -679,6 +685,7 @@ pub(super) fn primitive_const_type(cv: &ConstValue) -> Type {
         U64(_) => Type::UInt(UIntSize::U64),
         U128(_) => Type::UInt(UIntSize::U128),
         Usize(_) => Type::UInt(UIntSize::Usize),
+        Isize(_) => Type::Int(IntSize::Isize),
         F32(_) => Type::Float(FloatSize::F32),
         F64(_) => Type::Float(FloatSize::F64),
         Bool(_) => Type::Bool,

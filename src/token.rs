@@ -34,6 +34,11 @@ pub enum IntSuffix {
     /// mapping it there would move the error rather than remove it
     /// (B-2026-08-19-29).
     Usize,
+    /// `42isize` — pointer-width signed. The `Usize` note above applies
+    /// verbatim with the signs swapped: `isize` is a DISTINCT type from `i64`,
+    /// so lexing the suffix as `I64` would relocate `let n: isize = 42i64`'s
+    /// mismatch rather than remove it.
+    Isize,
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]

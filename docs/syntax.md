@@ -2035,7 +2035,7 @@ let (profile, orders, notifs) = collect_all(
 
 ```
 // Signed integers
-i8  i16  i32  i64  i128
+i8  i16  i32  i64  i128  isize   // isize is FFI-only (maps to C's ptrdiff_t); use i64 for indices/sizes
 
 // Unsigned integers
 u8  u16  u32  u64  u128  usize   // usize is FFI-only (maps to C's size_t); use i64 for indices/sizes

@@ -1328,6 +1328,9 @@ fn cat_of_name(name: ref String) -> i64 {
     if name == "u64" or name == "u128" or name == "usize" {
         return 0;
     }
+    if name == "isize" {
+        return 0;
+    }
     if name == "f32" or name == "f64" {
         return 5;
     }

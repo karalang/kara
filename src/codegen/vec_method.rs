@@ -13615,6 +13615,7 @@ pub(super) fn is_trivially_copyable_te(te: &TypeExpr) -> bool {
             | "u32"
             | "u64"
             | "usize"
+            | "isize"
             | "f32"
             | "f64"
             | "bool"

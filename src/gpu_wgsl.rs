@@ -2715,7 +2715,9 @@ fn reject_trapping_int_arith(func: &Function) -> Result<(), WgslError> {
 
 fn kty_of_type(ty: &TypeExpr) -> KTy {
     match scalar_name(ty).as_deref() {
-        Some("i32" | "u32" | "i64" | "u64" | "i8" | "u8" | "i16" | "u16" | "usize") => KTy::Int,
+        Some("i32" | "u32" | "i64" | "u64" | "i8" | "u8" | "i16" | "u16" | "usize" | "isize") => {
+            KTy::Int
+        }
         Some("f32" | "f64") => KTy::Float,
         _ => KTy::Unknown,
     }

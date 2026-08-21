@@ -76,6 +76,7 @@ fn int_suffix_to_type(sfx: &Option<crate::token::IntSuffix>) -> Option<Type> {
         S::U64 => Type::UInt(UIntSize::U64),
         S::U128 => Type::UInt(UIntSize::U128),
         S::Usize => Type::UInt(UIntSize::Usize),
+        S::Isize => Type::Int(IntSize::Isize),
     })
 }
 
@@ -1470,6 +1471,7 @@ impl<'a> super::TypeChecker<'a> {
             Type::UInt(UIntSize::U32) => path("u32", vec![]),
             Type::UInt(UIntSize::U64) => path("u64", vec![]),
             Type::UInt(UIntSize::Usize) => path("usize", vec![]),
+            Type::Int(IntSize::Isize) => path("isize", vec![]),
             // The 128-bit widths round-trip like every other scalar. Without
             // these arms they fell to the `_ => Error` fallback below, and the
             // resulting `TypeKind::Error` propagated as a payload / element /

@@ -391,6 +391,10 @@ impl<'a> Lexer<'a> {
         use IntSuffix::*;
         let remaining = &self.source[self.current..];
         let candidates: &[(&[u8], IntSuffix)] = &[
+            // `isize` first among the `i*` widths for the same reason `usize`
+            // leads the `u*` ones below — longest-first, so the scan cannot be
+            // short-circuited by a future width that IS a prefix.
+            (b"isize", Isize),
             (b"i128", I128),
             (b"i64", I64),
             (b"i32", I32),

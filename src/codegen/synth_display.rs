@@ -1617,6 +1617,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         | "u64"
                         | "u128"
                         | "usize"
+                        | "isize"
                         | "f32"
                         | "f64"
                         | "bool"

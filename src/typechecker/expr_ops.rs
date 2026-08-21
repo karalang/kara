@@ -60,6 +60,9 @@ fn int_width_range(ty: &Type) -> Option<(u32, u32)> {
                 IntSize::I32 => 32,
                 IntSize::I64 => 64,
                 IntSize::I128 => 128,
+                // Pointer-width, like `Usize` below: wasm32 is a first-class
+                // target, so any repair the compiler names must hold at 32 too.
+                IntSize::Isize => return Some((32, 64)),
             };
             Some((b, b))
         }
@@ -759,7 +762,7 @@ impl<'a> super::TypeChecker<'a> {
             // PRELUDE_PRIMITIVES too but have no cast from an arbitrary value,
             // so the cast advice would be wrong for them.
             "i8" | "i16" | "i32" | "i64" | "i128" | "u8" | "u16" | "u32" | "u64" | "u128"
-            | "usize" | "f16" | "bf16" | "f32" | "f64" => {
+            | "usize" | "isize" | "f16" | "bf16" | "f32" | "f64" => {
                 format!("a numeric conversion is the cast `x as {name}`, not a call")
             }
             "String" => "build a string with `String.from(x)`, `x.to_string()` or an \

@@ -69,7 +69,7 @@ fn int_domain(ty: &Type) -> Option<(i128, i128)> {
             IntSize::I8 => Some((i8::MIN as i128, i8::MAX as i128)),
             IntSize::I16 => Some((i16::MIN as i128, i16::MAX as i128)),
             IntSize::I32 => Some((i32::MIN as i128, i32::MAX as i128)),
-            IntSize::I64 => Some((i64::MIN as i128, i64::MAX as i128)),
+            IntSize::I64 | IntSize::Isize => Some((i64::MIN as i128, i64::MAX as i128)),
             IntSize::I128 => None,
         },
         Type::UInt(s) => match s {

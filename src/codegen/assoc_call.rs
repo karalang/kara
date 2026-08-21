@@ -985,6 +985,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     | "u32"
                     | "u64"
                     | "usize"
+                    | "isize"
                     | "f32"
                     | "f64"
             )
@@ -1001,7 +1002,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if method == "try_from"
             && matches!(
                 type_name,
-                "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "usize"
+                "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "usize" | "isize"
             )
         {
             return self.compile_numeric_try_from(type_name, _args);
@@ -1014,7 +1015,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if method == "parse"
             && matches!(
                 type_name,
-                "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "usize"
+                "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "usize" | "isize"
             )
         {
             if _args.is_empty() {
@@ -1116,7 +1117,7 @@ impl<'ctx> super::Codegen<'ctx> {
         if method == "from_str_radix"
             && matches!(
                 type_name,
-                "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "usize"
+                "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "usize" | "isize"
             )
         {
             if _args.len() < 2 {
@@ -1348,6 +1349,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 | "u32"
                 | "u64"
                 | "usize"
+                | "isize"
                 | "f32"
                 | "f64"
                 | "bool"

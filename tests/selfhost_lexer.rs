@@ -598,6 +598,7 @@ fn int_suffix_str(s: Option<IntSuffix>) -> &'static str {
         Some(IntSuffix::U64) => " u64",
         Some(IntSuffix::U128) => " u128",
         Some(IntSuffix::Usize) => " usize",
+        Some(IntSuffix::Isize) => " isize",
     }
 }
 

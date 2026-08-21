@@ -1897,6 +1897,7 @@ pub(crate) fn primitive_const_to_value(cv: &crate::prelude::ConstValue) -> Value
         U64(v) => Value::Int((*v as i64).into()),
         U128(v) => Value::Int((*v as i64).into()),
         Usize(v) => Value::Int((*v as i64).into()),
+        Isize(v) => Value::Int((*v).into()),
         F32(v) => Value::Float(*v as f64),
         F64(v) => Value::Float(*v),
         Bool(b) => Value::Bool(*b),

@@ -423,6 +423,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 U128 => (128, true),
                 // Pointer-width, 64-bit in Kāra (B-2026-08-19-29).
                 Usize => (64, true),
+                Isize => (64, false),
             };
         }
         (64, false)
@@ -2940,6 +2941,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     | "u32"
                     | "u64"
                     | "usize"
+                    | "isize"
                     // 128-bit (B-2026-08-19-8 stage 4). Their absence made
                     // `u.to_string()` on an `i128`/`u128` fall through method
                     // dispatch entirely — a loud "no handler" codegen error,
@@ -3180,6 +3182,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     | "u32"
                     | "u64"
                     | "usize"
+                    | "isize"
                     | "f32"
                     | "f64"
                     | "bool"
@@ -3200,7 +3203,15 @@ impl<'ctx> super::Codegen<'ctx> {
                 if method == "parse"
                     && matches!(
                         type_name.as_str(),
-                        "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "usize"
+                        "i8" | "i16"
+                            | "i32"
+                            | "i64"
+                            | "u8"
+                            | "u16"
+                            | "u32"
+                            | "u64"
+                            | "usize"
+                            | "isize"
                     )
                 {
                     return self.compile_assoc_call(type_name.as_str(), method, args);
@@ -3210,7 +3221,15 @@ impl<'ctx> super::Codegen<'ctx> {
                 if method == "from_str_radix"
                     && matches!(
                         type_name.as_str(),
-                        "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "usize"
+                        "i8" | "i16"
+                            | "i32"
+                            | "i64"
+                            | "u8"
+                            | "u16"
+                            | "u32"
+                            | "u64"
+                            | "usize"
+                            | "isize"
                     )
                 {
                     return self.compile_assoc_call(type_name.as_str(), method, args);
@@ -3236,7 +3255,15 @@ impl<'ctx> super::Codegen<'ctx> {
                 if method == "try_from"
                     && matches!(
                         type_name.as_str(),
-                        "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "usize"
+                        "i8" | "i16"
+                            | "i32"
+                            | "i64"
+                            | "u8"
+                            | "u16"
+                            | "u32"
+                            | "u64"
+                            | "usize"
+                            | "isize"
                     )
                 {
                     return self.compile_numeric_try_from(type_name.as_str(), args);

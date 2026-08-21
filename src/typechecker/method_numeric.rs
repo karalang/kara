@@ -269,15 +269,21 @@ impl<'a> super::TypeChecker<'a> {
                 // already handle 128. They were simply missed when 128-bit
                 // landed, so `m.wrapping_mul(3i128)` reported "no method
                 // 'wrapping_mul' on type 'i128'" (B-2026-08-19-19).
-                Type::Int(IntSize::I8 | IntSize::I16 | IntSize::I32 | IntSize::I64 | IntSize::I128,)
-                    | Type::UInt(
-                        UIntSize::U8
-                            | UIntSize::U16
-                            | UIntSize::U32
-                            | UIntSize::U64
-                            | UIntSize::U128
-                            | UIntSize::Usize,
-                    )
+                Type::Int(
+                    IntSize::I8
+                        | IntSize::I16
+                        | IntSize::I32
+                        | IntSize::I64
+                        | IntSize::I128
+                        | IntSize::Isize,
+                ) | Type::UInt(
+                    UIntSize::U8
+                        | UIntSize::U16
+                        | UIntSize::U32
+                        | UIntSize::U64
+                        | UIntSize::U128
+                        | UIntSize::Usize,
+                )
             )
         {
             if args.len() != 1 {

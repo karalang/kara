@@ -17712,12 +17712,27 @@ fn test_float_to_int_return_type_is_real_not_error() {
 }
 
 #[test]
-fn test_float_to_int_isize_target_rejected() {
-    // `isize` is not a Kāra type, so `trunc_to_isize` is not a recognized
-    // conversion method and falls through to the numeric NoMethodFound
-    // tightening.
-    let errors = typecheck_errors("fn main() { let _ = (3.7f64).trunc_to_isize(); }");
-    assert!(!errors.is_empty(), "expected trunc_to_isize to be rejected");
+fn test_float_to_int_isize_target_accepted() {
+    // `isize` was NOT a Kāra type when this test was written, and it pinned the
+    // rejection. B-2026-08-21-31 made it one, so `trunc_to_isize` joins the
+    // recognized conversion family — and the result must be a real `isize`,
+    // not `Type::Error` (which unifies with anything and would hide the
+    // regression). A String mismatch is the same proof the `i32` test above
+    // uses.
+    typecheck_ok("fn main() { let _ = (3.7f64).trunc_to_isize(); }");
+    assert!(
+        !typecheck_errors("fn main() { let x: String = (3.7f64).trunc_to_isize(); let _ = x; }")
+            .is_empty(),
+        "expected an isize-vs-String mismatch — the result must be a real type"
+    );
+}
+
+#[test]
+fn test_float_to_int_unknown_target_still_rejected() {
+    // The NoMethodFound tightening the `isize` case used to exercise still
+    // needs a case: an unrecognized width is not a conversion method.
+    let errors = typecheck_errors("fn main() { let _ = (3.7f64).trunc_to_i7(); }");
+    assert!(!errors.is_empty(), "expected trunc_to_i7 to be rejected");
 }
 
 #[test]

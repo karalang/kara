@@ -354,7 +354,7 @@ impl<'a> super::Interpreter<'a> {
                 let ty = segments[0].as_str();
                 let is_int = matches!(
                     ty,
-                    "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "usize"
+                    "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "usize" | "isize"
                 );
                 let is_f64 = ty == "f64";
                 if is_int || is_f64 {
@@ -1480,6 +1480,7 @@ impl<'a> super::Interpreter<'a> {
                                 | "u32"
                                 | "u64"
                                 | "usize"
+                                | "isize"
                                 | "f32"
                                 | "f64"
                         ) {
@@ -1505,6 +1506,7 @@ impl<'a> super::Interpreter<'a> {
                                 | "u32"
                                 | "u64"
                                 | "usize"
+                                | "isize"
                                 | "f32"
                                 | "f64"
                                 | "bool"
@@ -2993,7 +2995,7 @@ impl<'a> super::Interpreter<'a> {
 /// primitive-default constants codegen emits in `compile_assoc_call`.
 fn primitive_default_value(type_name: &str) -> Option<Value> {
     match type_name {
-        "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "usize" => {
+        "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "usize" | "isize" => {
             Some(Value::Int(0))
         }
         "f32" | "f64" => Some(Value::Float(0.0)),

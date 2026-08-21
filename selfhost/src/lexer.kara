@@ -574,6 +574,11 @@ impl Lexer {
     // Longest-match first (`i128` before `i64`, etc.), mirroring the seed's
     // candidate ordering. Returns the consumed suffix lexeme, or `""` if none.
     fn try_int_suffix(mut ref self) -> String {
+        // `isize` leads the `i*` widths for the same longest-first reason
+        // `usize` leads the `u*` ones below. (B-2026-08-21-31)
+        if self.try_consume_suffix("isize") {
+            return "isize".to_string();
+        }
         if self.try_consume_suffix("i128") {
             return "i128".to_string();
         }

@@ -7981,6 +7981,60 @@ fn test_interp_primitive_const_usize_max() {
     assert_eq!(output, "18446744073709551615\n");
 }
 
+#[test]
+fn test_interp_primitive_const_isize_max_and_min() {
+    // B-2026-08-21-31 — `isize` did not exist as a type at all, though
+    // design.md names it a v1 numeric primitive in four normative passages and
+    // three of the compiler's own back-end tables (`cheader.rs` -> `ptrdiff_t`,
+    // `deque_head.rs`, `wasm_glue.rs`) already mapped it. It is pointer-width
+    // SIGNED, so unlike `usize.MAX` it prints the i64 bounds.
+    assert_eq!(
+        run("fn main() { println(isize.MAX); }"),
+        "9223372036854775807\n"
+    );
+    assert_eq!(
+        run("fn main() { println(isize.MIN); }"),
+        "-9223372036854775808\n"
+    );
+}
+
+#[test]
+fn test_interp_isize_is_signed_end_to_end() {
+    // The whole point of the type: negatives, signed division and signed
+    // comparison, none of which `usize` can express. `usize`-style unsigned
+    // reinterpretation of the i64 carrier would answer differently for every
+    // line here.
+    let output = run(
+        "fn f(a: isize, b: isize) -> isize { a / b }\n         fn main() {\n             let a: isize = -7isize;\n             println(a);\n             println(f(a, 2isize));\n             println(a < 0isize);\n             println(a.abs());\n         }",
+    );
+    assert_eq!(output, "-7\n-3\ntrue\n7\n");
+}
+
+#[test]
+fn test_interp_isize_overflow_traps_at_the_signed_boundary() {
+    // Not the unsigned one: `isize.MAX + 1` must trap, where the same bit
+    // pattern is an ordinary mid-range value for `usize`.
+    let errs = runtime_errors("fn main() { let a: isize = isize.MAX; println(a + 1isize); }");
+    assert!(
+        errs.iter().any(|e| e.message.contains("integer overflow")),
+        "isize must trap at the SIGNED boundary, got: {errs:?}"
+    );
+}
+
+#[test]
+fn test_interp_isize_carries_the_four_overflow_method_families() {
+    // design.md:2178 promises `checked_*` / `wrapping_*` / `saturating_*` /
+    // `overflowing_*` on EVERY integer primitive. `wrapping_*` gates on an
+    // explicit width list, so it is the one that silently omitted `isize`.
+    let output = run(
+        "fn main() {\n             println(isize.MAX.checked_add(1isize));\n             println(isize.MAX.wrapping_add(1isize));\n             println(isize.MAX.saturating_add(1isize));\n             println(isize.MAX.overflowing_add(1isize));\n         }",
+    );
+    assert_eq!(
+        output,
+        "None\n-9223372036854775808\n9223372036854775807\n(-9223372036854775808, true)\n"
+    );
+}
+
 // ── u64 model (B-2026-07-04-8) ──────────────────────────────────────
 //
 // The tree-walk interpreter stores every integer width in the i64-carrier

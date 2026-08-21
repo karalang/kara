@@ -12876,6 +12876,75 @@ fn main() {
         run_program_capturing(src).map(|c| c.stdout)
     }
 
+    /// B-2026-08-21-31 — `isize` did not exist as a type. design.md names it a
+    /// v1 numeric primitive in four normative passages (§ 2178 the four method
+    /// families, § 4000 the `as`-cast rule, § 5356 arithmetic traits, § 13104
+    /// the FFI table's `ptrdiff_t` row) and writes it into six signatures, and
+    /// `src/cheader.rs`, `src/deque_head.rs` and `src/wasm_glue.rs` already
+    /// mapped it — three back-end tables carrying a type the resolver refused.
+    ///
+    /// These are AOT parity pins against the interpreter answers in
+    /// `tests/interpreter.rs`. The signed half is what they are for: `usize`
+    /// shares `isize`'s width and its LLVM type, so every lowering that
+    /// reinterpreted the i64 carrier as UNSIGNED would still pass a
+    /// width-only test and answer wrongly here.
+    #[test]
+    fn isize_lowers_as_a_signed_pointer_width_integer() {
+        assert_eq!(
+            run_program("fn main() { println(isize.MAX); println(isize.MIN); }"),
+            Some("9223372036854775807\n-9223372036854775808\n".to_string()),
+            "isize is SIGNED pointer-width — not usize's all-ones MAX"
+        );
+        assert_eq!(
+            run_program(
+                "fn f(a: isize, b: isize) -> isize { a / b }\n                 fn main() {\n                     let a: isize = -7isize;\n                     println(a);\n                     println(f(a, 2isize));\n                     println(a < 0isize);\n                     println(a.abs());\n                 }\n"
+            ),
+            Some("-7\n-3\ntrue\n7\n".to_string()),
+            "negatives, SIGNED division and SIGNED comparison must survive lowering"
+        );
+        assert_eq!(
+            run_program(
+                "fn main() {\n                     println(isize.MAX.checked_add(1isize));\n                     println(isize.MAX.wrapping_add(1isize));\n                     println(isize.MAX.saturating_add(1isize));\n                     println(isize.MAX.overflowing_add(1isize));\n                 }\n"
+            ),
+            Some(
+                "None\n-9223372036854775808\n9223372036854775807\n(-9223372036854775808, true)\n"
+                    .to_string()
+            ),
+            "the four overflow method families design.md:2178 promises"
+        );
+        assert_eq!(
+            run_program(
+                "fn main() {\n                     let c: i64 = 100;\n                     let a: isize = 7isize;\n                     println(c as isize);\n                     println(a as i64);\n                     println((-1isize) as u8);\n                 }\n"
+            ),
+            Some("100\n7\n255\n".to_string()),
+            "`as` casts both ways, including the wrapping narrow"
+        );
+        assert_eq!(
+            run_program(
+                "struct Holder { n: isize }\n                 fn main() {\n                     let o: Option[isize] = Some(-5isize);\n                     match o { Some(x) => println(x), None => println(0) }\n                     println(Holder { n: -9isize }.n);\n                     let mut v: Vec[isize] = [3isize, -1isize, 2isize];\n                     v.sort();\n                     println(f\"{v}\");\n                 }\n"
+            ),
+            Some("-5\n-9\n[-1, 2, 3]\n".to_string()),
+            "as an Option payload, a struct field, and a SIGNED-sorted Vec element"
+        );
+    }
+
+    /// B-2026-08-21-31 — the overflow trap must sit at the SIGNED boundary.
+    /// `isize.MAX + 1` is an ordinary mid-range value for the same bit width
+    /// unsigned, so a lowering that reused `usize`'s trap would not fire here.
+    #[test]
+    fn isize_overflow_traps_at_the_signed_boundary() {
+        let out =
+            run_program_capturing("fn main() { let a: isize = isize.MAX; println(a + 1isize); }");
+        if let Some(c) = out {
+            assert!(
+                c.stdout.contains("integer overflow") || c.stderr.contains("integer overflow"),
+                "isize must trap at the signed boundary, got stdout={:?} stderr={:?}",
+                c.stdout,
+                c.stderr
+            );
+        }
+    }
+
     /// B-2026-08-17-18 — heap-class deferred initialization: String and
     /// Vec (scalar / String elements). Zero-header at the declaration,
     /// sidecar registration from the declared TypeExpr, cap-guarded frees.

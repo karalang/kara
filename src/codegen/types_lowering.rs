@@ -845,9 +845,10 @@ impl<'ctx> super::Codegen<'ctx> {
             Some(IntSuffix::I8) | Some(IntSuffix::U8) => self.context.i8_type(),
             Some(IntSuffix::I16) | Some(IntSuffix::U16) => self.context.i16_type(),
             Some(IntSuffix::I32) | Some(IntSuffix::U32) => self.context.i32_type(),
-            Some(IntSuffix::I64) | Some(IntSuffix::U64) | Some(IntSuffix::Usize) => {
-                self.context.i64_type()
-            }
+            Some(IntSuffix::I64)
+            | Some(IntSuffix::U64)
+            | Some(IntSuffix::Usize)
+            | Some(IntSuffix::Isize) => self.context.i64_type(),
             Some(IntSuffix::I128) | Some(IntSuffix::U128) => self.context.i128_type(),
         }
     }
@@ -928,6 +929,7 @@ impl<'ctx> super::Codegen<'ctx> {
             U16(v) => self.context.i16_type().const_int(*v as u64, false).into(),
             U32(v) => self.context.i32_type().const_int(*v as u64, false).into(),
             U64(v) => self.context.i64_type().const_int(*v, false).into(),
+            Isize(v) => self.context.i64_type().const_int(*v as u64, true).into(),
             U128(v) => self.context.i128_type().const_int(*v as u64, false).into(),
             // v1 is 64-bit only — usize is u64.
             Usize(v) => self.context.i64_type().const_int(*v, false).into(),

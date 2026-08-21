@@ -295,13 +295,6 @@
       "reason": "SPEC GAP — design.md § Bounds-check elision documents `get_unchecked` as \"an `unsafe fn` returning `ref T`\" and the example builds one with `&*ptr.offset(…)`. The implementation returns `T` (`unary '*' … found 'i64'`), and there is no `&` operator: `*p.offset(n)` is accepted, `&*p.offset(n)` is `Expected expression, found Amp`. Neither half of the documented shape is writable, and which half is wrong is a language decision. B-2026-08-21-9",
       "first_diagnostic": "Expected expression, found Amp"
     },
-    "b6883a55cce6": {
-      "line": 12011,
-      "heading": "Unsafe Escape Hatch > Raw Pointer Construction: `ptr.const` / `ptr.mut`",
-      "outcome": "UNDECLARED-NAME",
-      "reason": "SPEC GAP (B-2026-08-21-31) — `isize` is not a type. design.md gives it as a v1 numeric primitive in four normative passages and uses it in this `extern \"C\"` signature.",
-      "first_diagnostic": "undefined type 'isize', did you mean 'usize'?"
-    },
     "54027a815a45": {
       "line": 12148,
       "heading": "member core/kara.toml > Volatile Memory Access (MMIO)",

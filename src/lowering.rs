@@ -1924,6 +1924,7 @@ fn primitive_type_name(ty: &Type) -> Option<String> {
         Type::UInt(UIntSize::U32) => "u32",
         Type::UInt(UIntSize::U64) => "u64",
         Type::UInt(UIntSize::Usize) => "usize",
+        Type::Int(IntSize::Isize) => "isize",
         Type::Float(FloatSize::F32) => "f32",
         Type::Float(FloatSize::F64) => "f64",
         Type::Bool => "bool",

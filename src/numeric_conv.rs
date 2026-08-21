@@ -37,7 +37,7 @@ pub enum FloatToIntFamily {
 }
 
 /// Every integer type a float can convert to: `(name, bit_width, signed)`.
-/// `usize` is modeled as 64-bit (the only supported pointer width).
+/// `usize` and `isize` are modeled as 64-bit (the only supported pointer width).
 pub const INT_TARGETS: &[(&str, u32, bool)] = &[
     ("i8", 8, true),
     ("i16", 16, true),
@@ -50,6 +50,7 @@ pub const INT_TARGETS: &[(&str, u32, bool)] = &[
     ("u64", 64, false),
     ("u128", 128, false),
     ("usize", 64, false),
+    ("isize", 64, true),
 ];
 
 /// `true` iff `name` is one of the integer-conversion target type names.
@@ -285,8 +286,15 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unknown_and_isize() {
-        assert_eq!(parse_float_to_int("trunc_to_isize"), None); // isize is not a Kāra type
+    fn accepts_isize_and_rejects_unknown() {
+        // `isize` was NOT a Kāra type when this test was written, and this
+        // assertion pinned that. B-2026-08-21-31 made it one — pointer-width
+        // SIGNED, so it must resolve at 64 bits with `signed == true`, which is
+        // the half `usize` cannot cover.
+        assert_eq!(
+            parse_float_to_int("trunc_to_isize"),
+            Some((Trunc, "isize", 64, true))
+        );
         assert_eq!(parse_float_to_int("to_i32"), None);
         assert_eq!(parse_float_to_int("saturating_to_"), None);
         assert_eq!(parse_float_to_int("abs"), None);

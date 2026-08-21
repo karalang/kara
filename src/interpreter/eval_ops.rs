@@ -1111,7 +1111,9 @@ impl<'a> super::Interpreter<'a> {
             Type::UInt(UIntSize::U16) => (0, 65_535),
             Type::UInt(UIntSize::U32) => (0, 4_294_967_295),
             // The 64-bit widths, which the i64 carrier used to check for free.
-            Type::Int(IntSize::I64) => (i64::MIN as i128, i64::MAX as i128),
+            Type::Int(IntSize::I64) | Type::Int(IntSize::Isize) => {
+                (i64::MIN as i128, i64::MAX as i128)
+            }
             Type::UInt(UIntSize::U64) | Type::UInt(UIntSize::Usize) => (0, u64::MAX as i128),
             // The carrier is SIGNED (`Value::Int(i128)`), so `u128`'s usable
             // ceiling is `i128::MAX`: the upper half of the range is stored as

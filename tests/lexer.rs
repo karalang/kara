@@ -1026,6 +1026,22 @@ fn test_integer_suffix_usize() {
 }
 
 #[test]
+fn test_integer_suffix_isize() {
+    // B-2026-08-21-31 — `isize` was absent from the suffix table for the same
+    // reason `usize` had been, and is a distinct type from `i64` for the same
+    // reason: aliasing the suffix onto `I64` would relocate the mismatch in
+    // `let n: isize = 42i64` rather than remove it.
+    let tokens = tokens_only("42isize");
+    assert_eq!(tokens[0], Token::Integer(42, Some(IntSuffix::Isize)));
+}
+
+#[test]
+fn test_integer_suffix_isize_negative() {
+    let tokens = tokens_only("-9isize");
+    assert_eq!(tokens[1], Token::Integer(9, Some(IntSuffix::Isize)));
+}
+
+#[test]
 fn test_integer_suffix_usize_upper_half_is_out_of_range_token() {
     // The whole upper half of the range reaches the parser as
     // `IntegerOutOfRange` carrying the suffix, exactly as `u64` does — that is

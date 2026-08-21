@@ -1636,6 +1636,7 @@ impl<'a> super::TypeChecker<'a> {
             ("i16", Type::Int(IntSize::I16)),
             ("i32", Type::Int(IntSize::I32)),
             ("i64", Type::Int(IntSize::I64)),
+            ("isize", Type::Int(IntSize::Isize)),
         ];
         let unsigned_ints: &[(&str, Type)] = &[
             ("u8", Type::UInt(UIntSize::U8)),
@@ -1956,13 +1957,18 @@ impl<'a> super::TypeChecker<'a> {
         // The registration only carries the signature for dispatch + return
         // typing; the fallible value computation lives in the interpreter and
         // codegen (`numeric_conv::fits_in_target`). Sources/targets are the
-        // fixed-width integer set plus `usize` — matching the `is_known_type`
-        // primitive list in `expr_method_call.rs` (no `i128`/`u128`/`isize`).
+        // fixed-width integer set plus `usize` and `isize` (no `i128`/`u128`).
+        // The receiver gate in `method_identifier_receiver.rs` must list exactly
+        // these: a target it admits but this table does not register resolves no
+        // TryFrom impl, and the arm falls through to "expects an integer
+        // argument, got `i64`" — a message that blames the ARGUMENT for a
+        // missing registration of the TARGET (B-2026-08-21-31).
         let int_types: &[(&str, Type)] = &[
             ("i8", Type::Int(IntSize::I8)),
             ("i16", Type::Int(IntSize::I16)),
             ("i32", Type::Int(IntSize::I32)),
             ("i64", Type::Int(IntSize::I64)),
+            ("isize", Type::Int(IntSize::Isize)),
             ("u8", Type::UInt(UIntSize::U8)),
             ("u16", Type::UInt(UIntSize::U16)),
             ("u32", Type::UInt(UIntSize::U32)),

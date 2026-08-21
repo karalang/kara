@@ -62,8 +62,8 @@ pub fn prelude_path() -> Vec<String> {
 /// subsets for their own purposes (numeric widths, etc.); this list is the
 /// canonical surface every module sees.
 pub const PRELUDE_PRIMITIVES: &[&str] = &[
-    "i8", "i16", "i32", "i64", "i128", "u8", "u16", "u32", "u64", "u128", "usize", "f16", "bf16",
-    "f32", "f64", "bool", "char", "String",
+    "i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32", "u64", "u128", "usize", "f16",
+    "bf16", "f32", "f64", "bool", "char", "String",
 ];
 
 /// Stdlib type names visible without import. These are the placeholder
@@ -578,6 +578,8 @@ pub enum ConstValue {
     /// 64-bit only in v1 — when 32-bit targets land, swap to a target-
     /// conditional table.
     Usize(u64),
+    /// Signed pointer-width. Same v1 caveat as `Usize` above.
+    Isize(i64),
     F32(f32),
     F64(f64),
     /// `true` / `false` — produced by the const-expression evaluator
@@ -619,6 +621,8 @@ pub static PRIMITIVE_CONSTS: &[(&str, &str, ConstValue)] = &[
     ("u32", "MAX", ConstValue::U32(u32::MAX)),
     ("u64", "MAX", ConstValue::U64(u64::MAX)),
     ("usize", "MAX", ConstValue::Usize(u64::MAX)),
+    ("isize", "MAX", ConstValue::Isize(i64::MAX)),
+    ("isize", "MIN", ConstValue::Isize(i64::MIN)),
     ("f32", "INFINITY", ConstValue::F32(f32::INFINITY)),
     ("f32", "NEG_INFINITY", ConstValue::F32(f32::NEG_INFINITY)),
     ("f32", "MAX", ConstValue::F32(f32::MAX)),

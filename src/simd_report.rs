@@ -128,6 +128,7 @@ fn element_bits(elem: &Type) -> Option<u32> {
             Some(32)
         }
         Type::Int(IntSize::I64)
+        | Type::Int(IntSize::Isize)
         | Type::UInt(UIntSize::U64)
         | Type::UInt(UIntSize::Usize)
         | Type::Float(FloatSize::F64) => Some(64),
