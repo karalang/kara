@@ -52,12 +52,39 @@ BASELINE = ROOT / "docs" / "design-conformance-baseline.json"
 # An inline annotation that marks the SURROUNDING BLOCK as one the spec expects
 # the compiler to reject. Deliberately narrow: `// error[E0200]: …` and
 # `// compile error: …` are unambiguous, whereas a bare "error" in prose is not.
-EXPECT_ERROR_RE = re.compile(
-    r"//.*?\b(?:compile error|compile-time error|error\[[A-Za-z0-9]+\]|ERROR)\b"
-    r"|//\s*error:"          # design.md's caret-underline convention
-    r"|^\s*//?\s*\^+\s*error",  # ...and the caret line that precedes it
-    re.M,
+ERROR_MARKER_RE = re.compile(
+    r"\b(?:compile error|compile-time error|error\[[A-Za-z0-9]+\]|ERROR)\b|^\s*error:"
 )
+CARET_ERROR_RE = re.compile(r"^\s*//?\s*\^+\s*error", re.I)
+
+
+def expects_error_annotation(code):
+    """True when the block carries an annotation saying the spec expects it
+    REJECTED.
+
+    Deliberately narrow. The marker must be a TRAILING comment on a line that
+    also has code, or a caret-underline line — the two conventions design.md
+    actually uses:
+
+        Map[f64, String]                 // compile error: f64 has no Hash
+        let CONFIG: Config = load_config("app.toml");
+        //                   ^^^^^^^^^^^^^^^^^^^^^^^ error: effectful call
+
+    A standalone prose comment mentioning "compile error" does NOT count. An
+    earlier version accepted those and mis-flagged the `#[no_effect]` block,
+    whose header comment reads "Heap use anywhere below this boundary is a
+    compile error" — a description of what the attribute DOES, in a block that
+    contains no heap use and correctly compiles.
+    """
+    for line in code:
+        if CARET_ERROR_RE.match(line):
+            return True
+        head, sep, tail = line.partition("//")
+        if sep and head.strip() and ERROR_MARKER_RE.search(tail):
+            return True
+    return False
+
+
 # "// OK" / "// ok —" marks a line the spec says is ACCEPTED. A block may carry
 # both, in which case the error annotation wins: it must be rejected somewhere.
 EXPECT_OK_RE = re.compile(r"//\s*OK\b")
@@ -73,7 +100,8 @@ ELISION_RE = re.compile(r"\.\.\.")
 ITEM_START_RE = re.compile(
     r"^pub\b"                      # `pub` can only introduce an item
     r"|^(fn|struct|enum|trait|impl|type|const|static|distinct|shared|layout|"
-    r"effect|resource|module|use|extern|union|macro|import|host|subscript)\b"
+    r"effect|resource|module|use|extern|union|macro|import|host|subscript|"
+    r"unsafe|marker|comptime)\b"
     r"|^#\["
 )
 
@@ -88,9 +116,10 @@ UNRESOLVED_RE = re.compile(r"^undefined (name|type|module|trait|field) '([^']+)'
 
 
 class Block:
-    def __init__(self, line, heading, code, info):
+    def __init__(self, line, heading, code, info, path=()):
         self.line = line
         self.heading = heading
+        self.path = tuple(path)
         self.code = code
         self.info = info
         body = "\n".join(l.rstrip() for l in code).strip()
@@ -106,11 +135,19 @@ class Block:
             return True
         if "expect-ok" in self.info:
             return False
-        return bool(EXPECT_ERROR_RE.search(self.text))
+        return expects_error_annotation(self.code)
 
     @property
     def skipped(self):
         return "ignore" in self.info
+
+    @property
+    def deferred(self):
+        """A block under design.md's own `Deferred Items` section illustrates
+        syntax the compiler is NOT expected to accept yet — `r"..."` raw
+        strings, effect-variable bounds, portable SIMD. Counting those as
+        divergences would be reading the spec's roadmap as its contract."""
+        return any("deferred" in h.lower() for h in self.path)
 
     @property
     def elided(self):
@@ -141,7 +178,8 @@ def parse_blocks(path):
             while j < len(lines) and lines[j].strip() != "```":
                 j += 1
             blocks.append(
-                Block(i + 2, " > ".join(headings[-2:]), lines[i + 1 : j], info)
+                Block(i + 2, " > ".join(headings[-2:]), lines[i + 1 : j], info,
+                      headings)
             )
             i = j + 1
         else:
@@ -160,12 +198,22 @@ def rungs(block):
     """
     body = "\n".join(block.code)
     indented = "\n".join(("    " + l) if l.strip() else l for l in block.code)
+    # Some blocks are a catalogue of TYPES rather than code —
+    # `Tensor[f64, [3, 4, ?]]` and its two siblings, three lines that are not
+    # statements in any framing. Binding each to a throwaway alias is what makes
+    # them checkable at all; without this rung they read as parse failures and
+    # bury a real answer (the shape syntax turns out to be accepted).
+    stripped = [re.sub(r"\s*//.*$", "", l).strip().rstrip(";,")
+                for l in block.code]
+    aliases = "\n".join(f"type _Probe{i} = {t};"
+                         for i, t in enumerate(stripped) if t) + "\n\nfn main() {}\n"
     items = ("items", body, 0)
     items_main = ("items+main", body + "\n\nfn main() {}\n", 0)
     in_main = ("in-main", "fn main() {\n" + indented + "\n}\n", -1)
+    type_rung = ("type-aliases", aliases, 0)
     if block.item_shaped:
         return [items, items_main, in_main]
-    return [in_main, items, items_main]
+    return [in_main, items, items_main, type_rung]
 
 
 def run_karac(karac, source, extra_timeout=60):
@@ -230,10 +278,11 @@ def main():
 
     results = []
     for b in blocks:
-        if b.skipped or b.elided:
+        if b.skipped or b.elided or b.deferred:
+            outcome = ("skipped" if b.skipped
+                       else "deferred" if b.deferred else "elided")
             results.append({"hash": b.hash, "line": b.line, "heading": b.heading,
-                            "outcome": "elided" if b.elided else "skipped",
-                            "rung": None, "diagnostics": []})
+                            "outcome": outcome, "rung": None, "diagnostics": []})
             continue
         status, rung, diags = evaluate(b, args.karac)
         # An expect-error block that WAS rejected is confirmed, whatever phase
@@ -271,7 +320,8 @@ def main():
                 print(f"  -> {d.get('phase')}: {d.get('message')} "
                       f"(design.md:{d.get('design_line')})")
 
-    good = {"conforms", "confirmed-rejection", "skipped", "elided", "unresolved"}
+    good = {"conforms", "confirmed-rejection", "skipped", "elided", "unresolved",
+            "deferred"}
     bad = [r for r in results if r["outcome"] not in good]
 
     if args.update_baseline:
@@ -303,9 +353,11 @@ def main():
     conf = sum(1 for r in results if r["outcome"] == "conforms")
     rej = sum(1 for r in results if r["outcome"] == "confirmed-rejection")
     eli = sum(1 for r in results if r["outcome"] == "elided")
+    dfr = sum(1 for r in results if r["outcome"] == "deferred")
     unres = [r for r in results if r["outcome"] == "unresolved"]
     print(f"\ndesign.md conformance: {total} blocks — {conf} accepted, "
           f"{rej} rejected-as-specified, {eli} elided (prose with `...`), "
+          f"{dfr} under Deferred Items, "
           f"{len(unres)} referencing out-of-block declarations, "
           f"{len(bad)} non-conforming")
     if unres:

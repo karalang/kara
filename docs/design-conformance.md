@@ -40,9 +40,18 @@ let CONFIG: Config = load_config("app.toml");
 ```
 
 A block the spec says must be rejected and the compiler accepts is a divergence
-exactly as much as the reverse. (Current weak spot: the suite checks *that* such
-a block was rejected, not that it was rejected **for the annotated reason**.
-Matching the message is the next increment.)
+exactly as much as the reverse.
+
+The annotation must be a **trailing** comment on a line that also has code, or a
+caret-underline line. A standalone prose comment mentioning "compile error" does
+not count: an earlier version accepted those and mis-flagged the `#[no_effect]`
+block, whose header comment reads *"Heap use anywhere below this boundary is a
+compile error"* — a description of what the attribute does, in a block that
+contains no heap use and compiles correctly.
+
+Current weak spot: the suite checks *that* such a block was rejected, not that it
+was rejected **for the annotated reason**. Matching the message is the next
+increment.
 
 ## The wrapping ladder
 
@@ -54,6 +63,7 @@ against a ladder of framings and passes if any is accepted:
 | `items` | as written, module-level |
 | `items+main` | as written, plus a synthesized empty `fn main` |
 | `in-main` | wrapped in `fn main() { … }` |
+| `type-aliases` | each line bound as `type _ProbeN = …;` |
 
 The block's own shape picks the order: an item keyword or `pub` in column 0
 means declarations, anything else means statements. **Order matters for more
@@ -70,6 +80,7 @@ a `fn main` that was never the right frame.
 | `conforms` | accepted, as the spec implies |
 | `confirmed-rejection` | rejected, as the spec's annotation says it should be |
 | `elided` | contains `...` — prose with holes, not a program |
+| `deferred` | under design.md's own **Deferred Items** heading — future syntax, not a contract |
 | `unresolved` | fails only with `undefined name/type` — names declared in another block |
 | `REJECTED` | rejected, and the spec did not say it would be |
 | `MISSING-REJECTION` | accepted, though the spec annotated it as an error |
@@ -99,7 +110,9 @@ Reasons fall into five kinds, and only two of them are defects:
 - *deferred feature* — documented in `deferred.md` as post-v1.
 
 `UNTRIAGED` means nobody has decided yet. **That count is the queue**, and the
-point of the file is for it to shrink.
+point of the file is for it to shrink. It is currently **zero**: all 94 entries
+carry a reason, 18 of them SPEC GAP and 29 DOC BUG, filed across
+`B-2026-08-21-9` through `-12`.
 
 ## Known limits
 
