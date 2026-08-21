@@ -352,6 +352,38 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: bash scripts/oracle-sync-guard.sh
 
+  # design.md is the authoritative language spec, and its ```kara blocks are the
+  # part of it a machine can read. 12% of the bug ledger (176 rows, 62 of them
+  # high-severity) is some form of "design.md says X, the implementation does Y"
+  # — found, until now, one hand-read section at a time. This job feeds every
+  # block to `karac check` and compares the outcome against a checked-in
+  # baseline, so a spec change that the compiler cannot honour, or a compiler
+  # change that breaks a documented example, fails the build instead of waiting
+  # to be noticed. Front-end only: `karac check` never touches the LLVM backend,
+  # so this needs no `--features llvm` and no runtime archives.
+  design-conformance:
+    name: design.md conformance
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build karac
+        run: cargo build --bin karac
+
+      - name: Check design.md examples against the compiler
+        # Fails on any block that is newly non-conforming — a block not in
+        # docs/design-conformance-baseline.json that karac does not accept.
+        # Blocks that START conforming are reported too (as FIXED) but do not
+        # fail the build; drop them from the baseline in the same PR.
+        run: python3 scripts/design-conformance.py --check
+
   # The `--features llvm` clippy surface — the ENTIRE codegen backend
   # (`src/codegen.rs` + every `src/codegen/*.rs`, the largest and most
   # actively-developed part of the compiler) is gated behind

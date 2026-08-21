@@ -1,0 +1,740 @@
+{
+  "note": "Non-conforming design.md blocks, keyed by content hash. Shrink me. `reason` says why each block is here: a SPEC GAP is a real divergence with a ledger row, a DOC BUG is design.md contradicting syntax.md or itself, and the rest are blocks the harness cannot frame (doc tables, catalogues of alternative forms, deferred features). UNTRIAGED means nobody has decided yet — that count is the work queue.",
+  "blocks": {
+    "7afa736c57ec": {
+      "line": 951,
+      "heading": "Type System and Object Model > Module System",
+      "outcome": "REJECTED",
+      "reason": "catalogue of alternative forms — each line rebinds the same name; not one program",
+      "first_diagnostic": "'Connection' is already defined in this scope (first defined at 1:22)"
+    },
+    "c24b9dea958a": {
+      "line": 974,
+      "heading": "Type System and Object Model > Module System",
+      "outcome": "REJECTED",
+      "reason": "catalogue of alternative forms — each line rebinds the same name; not one program",
+      "first_diagnostic": "'Connection' is already defined in this scope (first defined at 2:26)"
+    },
+    "fe8d5a944b8b": {
+      "line": 1468,
+      "heading": "member core/kara.toml > Module-Level Bindings",
+      "outcome": "REJECTED",
+      "reason": "UNTRIAGED — classify me",
+      "first_diagnostic": "undefined type 'Config'"
+    },
+    "ed8c9978f85e": {
+      "line": 1647,
+      "heading": "Standard Data Structures > Collection Literals",
+      "outcome": "REJECTED",
+      "reason": "signature catalogue — a doc table of method shapes, not compilable code (no bodies); the harness cannot frame it",
+      "first_diagnostic": "Expected expression, found Arrow"
+    },
+    "076e5b770027": {
+      "line": 1662,
+      "heading": "Standard Data Structures > Collection Literals",
+      "outcome": "REJECTED",
+      "reason": "SPEC GAP — documented stdlib surface is absent: no associated function 'from_fn' on type 'Vec'. See B-2026-08-21-10",
+      "first_diagnostic": "no associated function 'from_fn' on type 'Vec'"
+    },
+    "6e9c5bacaac8": {
+      "line": 1727,
+      "heading": "Standard Data Structures > Collection Core Methods",
+      "outcome": "REJECTED",
+      "reason": "signature catalogue — a doc table of method shapes, not compilable code (no bodies); the harness cannot frame it",
+      "first_diagnostic": "Expected LeftBrace, found Fn"
+    },
+    "6e3b84b61afa": {
+      "line": 1742,
+      "heading": "Standard Data Structures > Collection Core Methods",
+      "outcome": "REJECTED",
+      "reason": "UNTRIAGED — classify me",
+      "first_diagnostic": "'self' used outside of impl method"
+    },
+    "b610689ec2ac": {
+      "line": 1865,
+      "heading": "Module-Level Bindings > Fallible Allocation API and OOM Handling",
+      "outcome": "REJECTED",
+      "reason": "UNTRIAGED — classify me",
+      "first_diagnostic": "'?' requires the enclosing function to return `Result` or `Option`, found '()'"
+    },
+    "30ead4ed0160": {
+      "line": 1951,
+      "heading": "Numerical Types (Tensor, Column, DataFrame) > Tensor — shape types",
+      "outcome": "REJECTED",
+      "reason": "UNTRIAGED — classify me",
+      "first_diagnostic": "Expected expression, found Question"
+    },
+    "64f603588d0c": {
+      "line": 2090,
+      "heading": "Numerical Types (Tensor, Column, DataFrame) > Column — nullable 1D data",
+      "outcome": "REJECTED",
+      "reason": "UNTRIAGED — classify me",
+      "first_diagnostic": "Expected RightParen, found Equal"
+    },
+    "c2b8da81f64f": {
+      "line": 2336,
+      "heading": "Module-Level Bindings > Numeric Semantics",
+      "outcome": "REJECTED",
+      "reason": "UNTRIAGED — classify me",
+      "first_diagnostic": "Expected type, found Underscore"
+    },
+    "2026d50fd512": {
+      "line": 2502,
+      "heading": "Module-Level Bindings > `if let` and `let...else`",
+      "outcome": "REJECTED",
+      "reason": "DOC BUG — the example uses `use` as an ordinary identifier, but syntax.md §1.1 reserves it. See B-2026-08-21-11",
+      "first_diagnostic": "'use' is a reserved keyword and cannot be used as an identifier"
+    },
+    "65a22706be3d": {
+      "line": 2514,
+      "heading": "Module-Level Bindings > `if let` and `let...else`",
+      "outcome": "REJECTED",
+      "reason": "DOC BUG — the example uses `use` as an ordinary identifier, but syntax.md §1.1 reserves it. See B-2026-08-21-11",
+      "first_diagnostic": "'use' is a reserved keyword and cannot be used as an identifier"
+    },
+    "d310245969fc": {
+      "line": 2530,
+      "heading": "Module-Level Bindings > `if let` and `let...else`",
+      "outcome": "REJECTED",
+      "reason": "UNTRIAGED — classify me",
+      "first_diagnostic": "Expected expression, found Semicolon"
+    },
+    "73106ad2a678": {
+      "line": 2553,
+      "heading": "Module-Level Bindings > `if let` and `let...else`",
+      "outcome": "REJECTED",
+      "reason": "UNTRIAGED — classify me",
+      "first_diagnostic": "Expected field name or tuple index after '.'"
+    },
+    "82066840d46b": {
+      "line": 2568,
+      "heading": "Module-Level Bindings > `if let` and `let...else`",
+      "outcome": "REJECTED",
+      "reason": "UNTRIAGED — classify me",
+      "first_diagnostic": "Expected field name or tuple index after '.'"
+    },
+    "787094b64a47": {
+      "line": 2582,
+      "heading": "Module-Level Bindings > `if let` and `let...else`",
+      "outcome": "REJECTED",
+      "reason": "UNTRIAGED — classify me",
+      "first_diagnostic": "Expected field name or tuple index after '.'"
+    },
+    "3e92de9d74b9": {
+      "line": 2619,
+      "heading": "Module-Level Bindings > Temporary Lifetime Rules",
+      "outcome": "REJECTED",
+      "reason": "DOC BUG — the example uses `ref` as an ordinary identifier, but syntax.md §1.1 reserves it. See B-2026-08-21-11",
+      "first_diagnostic": "'ref' is a reserved keyword and cannot be used as an identifier"
+    },
+    "9a0de9527541": {
+      "line": 2743,
+      "heading": "Module-Level Bindings > Iterator Traits",
+      "outcome": "REJECTED",
+      "reason": "SPEC GAP — inline associated-type binding `Trait[Assoc = T]`; syntax.md's TRAIT_BOUND grammar has no such form and the parser rejects it. See B-2026-08-21-9",
+      "first_diagnostic": "Expected RightBracket, found Equal"
+    },
+    "d505bb7efa47": {
+      "line": 2762,
+      "heading": "Module-Level Bindings > Iterator Traits",
+      "outcome": "REJECTED",
+      "reason": "SPEC GAP — inline associated-type binding `Trait[Assoc = T]`; syntax.md's TRAIT_BOUND grammar has no such form and the parser rejects it. See B-2026-08-21-9",
+      "first_diagnostic": "Expected RightBracket, found Equal"
+    },
+    "3c869141eebc": {
+      "line": 2773,
+      "heading": "Module-Level Bindings > Iterator Traits",
+      "outcome": "REJECTED",
+      "reason": "DOC BUG — the example uses `use` as an ordinary identifier, but syntax.md §1.1 reserves it. See B-2026-08-21-11",
+      "first_diagnostic": "'use' is a reserved keyword and cannot be used as an identifier"
+    },
+    "eb2089c0a8e5": {
+      "line": 2825,
+      "heading": "Module-Level Bindings > Iterator Adaptors",
+      "outcome": "REJECTED",
+      "reason": "SPEC GAP — inline associated-type binding `Trait[Assoc = T]`; syntax.md's TRAIT_BOUND grammar has no such form and the parser rejects it. See B-2026-08-21-9",
+      "first_diagnostic": "Expected RightBracket, found Equal"
+    },
+    "83c7bc6b937f": {
+      "line": 2875,
+      "heading": "Module-Level Bindings > Iterator Adaptors",
+      "outcome": "REJECTED",
+      "reason": "SPEC GAP — inline associated-type binding `Trait[Assoc = T]`; syntax.md's TRAIT_BOUND grammar has no such form and the parser rejects it. See B-2026-08-21-9",
+      "first_diagnostic": "Expected RightBracket, found Equal"
+    },
+    "cba9c0d81a3e": {
+      "line": 2887,
+      "heading": "Module-Level Bindings > Iterator Adaptors",
+      "outcome": "REJECTED",
+      "reason": "UNTRIAGED — classify me",
+      "first_diagnostic": "undefined type 'Record'"
+    },
+    "54e7604dfd1f": {
+      "line": 3064,
+      "heading": "Derive > Serialization via Derive",
+      "outcome": "REJECTED",
+      "reason": "deferred feature (deferred.md) — the parser is not expected to accept this yet",
+      "first_diagnostic": "error[E_UNKNOWN_ATTRIBUTE]: unknown attribute `serde` — the compiler does not recognise this bare-name attribute. If you intended a diagnostic hint, write `#[diagnostic::serde]`; if you intended a tool attribute, use a namespaced form like `#[your_tool::serde]`."
+    },
+    "395c86d9ecd5": {
+      "line": 3588,
+      "heading": "Module-Level Bindings > Trait Aliases",
+      "outcome": "REJECTED",
+      "reason": "SPEC GAP — inline associated-type binding `Trait[Assoc = T]`; syntax.md's TRAIT_BOUND grammar has no such form and the parser rejects it. See B-2026-08-21-9",
+      "first_diagnostic": "Expected RightBracket, found Equal"
+    },
+    "27578870b939": {
+      "line": 3754,
+      "heading": "Associated Types in Traits > Generic associated types (GATs)",
+      "outcome": "REJECTED",
+      "reason": "UNTRIAGED — classify me",
+      "first_diagnostic": "unknown trait 'Functor' in inline bound on type parameter 'F'"
+    },
+    "60a1c72f647d": {
+      "line": 3806,
+      "heading": "Module-Level Bindings > Conversion Traits (`From`, `Into`, `TryFrom`, `TryInto`)",
+      "outcome": "REJECTED",
+      "reason": "UNTRIAGED — classify me",
+      "first_diagnostic": "user-defined `impl Into for T` is not allowed; `Into` is derived from `From` via a blanket impl"
+    },
+    "daa3e247bbdc": {
+      "line": 3816,
+      "heading": "Module-Level Bindings > Conversion Traits (`From`, `Into`, `TryFrom`, `TryInto`)",
+      "outcome": "REJECTED",
+      "reason": "SPEC GAP — `impl Trait for Type with <effects>`; the parser has no rule for an effect clause on an impl header. See B-2026-08-21-9",
+      "first_diagnostic": "Expected LeftBrace, found With"
+    },
+    "87c3970d7537": {
+      "line": 4215,
+      "heading": "Module-Level Bindings > Contracts (requires / ensures / invariant)",
+      "outcome": "REJECTED",
+      "reason": "UNTRIAGED — classify me",
+      "first_diagnostic": "Expected identifier, found FatArrow"
+    },
+    "a640775e8130": {
+      "line": 4227,
+      "heading": "Module-Level Bindings > Contracts (requires / ensures / invariant)",
+      "outcome": "REJECTED",
+      "reason": "SPEC GAP — documented stdlib surface is absent: no method 'is_sorted' on type 'Vec'. See B-2026-08-21-10",
+      "first_diagnostic": "no method 'is_sorted' on type 'Vec'"
+    },
+    "106fe73eafd0": {
+      "line": 4296,
+      "heading": "Contracts (requires / ensures / invariant) > Contract evaluation semantics",
+      "outcome": "REJECTED",
+      "reason": "UNTRIAGED — classify me",
+      "first_diagnostic": "Expected expression, found Colon"
+    },
+    "25e33c3fcc4f": {
+      "line": 4602,
+      "heading": "Module-Level Bindings > Slices",
+      "outcome": "REJECTED",
+      "reason": "UNTRIAGED — classify me",
+      "first_diagnostic": "expected 'mut Slice[T]', found 'Slice[i64]'"
+    },
+    "fcca4c82794a": {
+      "line": 4618,
+      "heading": "Module-Level Bindings > Slices",
+      "outcome": "REJECTED",
+      "reason": "signature catalogue — a doc table of method shapes, not compilable code (no bodies); the harness cannot frame it",
+      "first_diagnostic": "Expected LeftBrace, found EOF"
+    },
+    "93d5af79609b": {
+      "line": 4634,
+      "heading": "Module-Level Bindings > Byte and Byte-String Literals",
+      "outcome": "REJECTED",
+      "reason": "UNTRIAGED — classify me",
+      "first_diagnostic": "Expected type, found LeftBracket"
+    },
+    "4d182164aab6": {
+      "line": 4747,
+      "heading": "Module-Level Bindings > Standard I/O Surface",
+      "outcome": "REJECTED",
+      "reason": "signature catalogue — a doc table of method shapes, not compilable code (no bodies); the harness cannot frame it",
+      "first_diagnostic": "Expected LeftParen, found Dot"
+    },
+    "a76910b7979b": {
+      "line": 4769,
+      "heading": "Module-Level Bindings > Standard I/O Surface",
+      "outcome": "REJECTED",
+      "reason": "UNTRIAGED — classify me",
+      "first_diagnostic": "`env` is Value-class but enum names must be Type-class (PascalCase); consider renaming to `Env`"
+    },
+    "435bfa67df95": {
+      "line": 5056,
+      "heading": "Module-Level Bindings > Default Parameter Values",
+      "outcome": "REJECTED",
+      "reason": "signature catalogue — a doc table of method shapes, not compilable code (no bodies); the harness cannot frame it",
+      "first_diagnostic": "Expected LeftBrace, found Identifier { name: \"create_server\", raw: false }"
+    },
+    "e0cee3e94da6": {
+      "line": 5077,
+      "heading": "Module-Level Bindings > Default Parameter Values",
+      "outcome": "REJECTED",
+      "reason": "signature catalogue — a doc table of method shapes, not compilable code (no bodies); the harness cannot frame it",
+      "first_diagnostic": "Expected LeftBrace, found EOF"
+    },
+    "39e2aaff0dc9": {
+      "line": 5087,
+      "heading": "Module-Level Bindings > Default Parameter Values",
+      "outcome": "REJECTED",
+      "reason": "signature catalogue — a doc table of method shapes, not compilable code (no bodies); the harness cannot frame it",
+      "first_diagnostic": "Expected LeftBrace, found EOF"
+    },
+    "217ca7b53d20": {
+      "line": 5310,
+      "heading": "Module-Level Bindings > Operator Traits",
+      "outcome": "REJECTED",
+      "reason": "UNTRIAGED — classify me",
+      "first_diagnostic": "conflicting impl: `impl Option[Ordering]` redefines methods `is_eq`, `is_ge`, `is_gt`, `is_le`, `is_lt` already provided by an existing `impl Option`; a specialized inherent impl may only ADD new methods, not redefine or specialize an existing one (v1 has no method specialization)"
+    },
+    "d5d090f660fc": {
+      "line": 5391,
+      "heading": "Module-Level Bindings > `Hash` and `Hasher`",
+      "outcome": "REJECTED",
+      "reason": "SPEC GAP — documented stdlib surface is absent: no method 'to_ne_bytes' on type 'u16'. See B-2026-08-21-10",
+      "first_diagnostic": "no method 'to_ne_bytes' on type 'u16'"
+    },
+    "cc052a60d087": {
+      "line": 5538,
+      "heading": "`#[repr]` — ABI and Physical Layout Control > Enum Discriminant Runtime Surface",
+      "outcome": "REJECTED",
+      "reason": "SPEC GAP — documented stdlib surface is absent: no method 'discriminant' on type 'UsbClass'. See B-2026-08-21-10",
+      "first_diagnostic": "no method 'discriminant' on type 'UsbClass'"
+    },
+    "99452b6946e1": {
+      "line": 5761,
+      "heading": "`#[repr]` — ABI and Physical Layout Control > Field Offsets: `offset_of[T](field)`",
+      "outcome": "REJECTED",
+      "reason": "signature catalogue — a doc table of method shapes, not compilable code (no bodies); the harness cannot frame it",
+      "first_diagnostic": "Expected LeftBrace, found Fn"
+    },
+    "2d7d45a0e81e": {
+      "line": 5842,
+      "heading": "Feature 2: Effect Types (fixed verbs + user-defined resources) > No-Effect Attribute",
+      "outcome": "MISSING-REJECTION",
+      "reason": "UNTRIAGED — classify me",
+      "first_diagnostic": null
+    },
+    "dcf47252f335": {
+      "line": 5889,
+      "heading": "Feature 2: Effect Types (fixed verbs + user-defined resources) > Catching Panics: `catch_panic[T]`",
+      "outcome": "REJECTED",
+      "reason": "deferred feature (deferred.md) — the parser is not expected to accept this yet",
+      "first_diagnostic": "Expected effect verb, effect variable, or group name after 'with'"
+    },
+    "98daf8f0d94f": {
+      "line": 5950,
+      "heading": "Feature 2: Effect Types (fixed verbs + user-defined resources) > Catching Panics: `catch_panic[T]`",
+      "outcome": "REJECTED",
+      "reason": "deferred feature (deferred.md) — the parser is not expected to accept this yet",
+      "first_diagnostic": "undefined type 'UserDb'"
+    },
+    "01a05785e76c": {
+      "line": 6050,
+      "heading": "Feature 2: Effect Types (fixed verbs + user-defined resources) > Channel[T] API",
+      "outcome": "REJECTED",
+      "reason": "signature catalogue — a doc table of method shapes, not compilable code (no bodies); the harness cannot frame it",
+      "first_diagnostic": "Expected expression, found Arrow"
+    },
+    "810bc9155271": {
+      "line": 6062,
+      "heading": "Feature 2: Effect Types (fixed verbs + user-defined resources) > Channel[T] API",
+      "outcome": "REJECTED",
+      "reason": "signature catalogue — a doc table of method shapes, not compilable code (no bodies); the harness cannot frame it",
+      "first_diagnostic": "Expected LeftBrace, found Fn"
+    },
+    "786a6450b033": {
+      "line": 6078,
+      "heading": "Feature 2: Effect Types (fixed verbs + user-defined resources) > Channel[T] API",
+      "outcome": "REJECTED",
+      "reason": "signature catalogue — a doc table of method shapes, not compilable code (no bodies); the harness cannot frame it",
+      "first_diagnostic": "Expected LeftBrace, found Fn"
+    },
+    "e665b19d756a": {
+      "line": 6460,
+      "heading": "Feature 2: Effect Types (fixed verbs + user-defined resources) > Nondeterminism as an Explicit Resource",
+      "outcome": "REJECTED",
+      "reason": "UNTRIAGED — classify me",
+      "first_diagnostic": "undefined effect resource 'Console'; declare `effect resource Console;` or import one (e.g. `import std.web.Console;`)"
+    },
+    "61249709f488": {
+      "line": 6844,
+      "heading": "`impl Trait` (Existential Types) > Return-position `impl Trait` — the existential",
+      "outcome": "REJECTED",
+      "reason": "SPEC GAP — inline associated-type binding `Trait[Assoc = T]`; syntax.md's TRAIT_BOUND grammar has no such form and the parser rejects it. See B-2026-08-21-9",
+      "first_diagnostic": "Expected RightBracket, found Equal"
+    },
+    "d9655b8bddb5": {
+      "line": 6862,
+      "heading": "`impl Trait` (Existential Types) > Return-position `impl Trait` — the existential",
+      "outcome": "REJECTED",
+      "reason": "signature catalogue — a doc table of method shapes, not compilable code (no bodies); the harness cannot frame it",
+      "first_diagnostic": "Expected LeftBrace, found Arrow"
+    },
+    "0d22a0757891": {
+      "line": 6910,
+      "heading": "`impl Trait` (Existential Types) > Capture set — what the existential carries from the surrounding signature",
+      "outcome": "REJECTED",
+      "reason": "signature catalogue — a doc table of method shapes, not compilable code (no bodies); the harness cannot frame it",
+      "first_diagnostic": "Expected LeftBrace, found Arrow"
+    },
+    "20076c1ecd98": {
+      "line": 6933,
+      "heading": "`impl Trait` (Existential Types) > Trait methods returning `impl Trait` (RPITIT)",
+      "outcome": "REJECTED",
+      "reason": "SPEC GAP — inline associated-type binding `Trait[Assoc = T]`; syntax.md's TRAIT_BOUND grammar has no such form and the parser rejects it. See B-2026-08-21-9",
+      "first_diagnostic": "Expected RightBracket, found Equal"
+    },
+    "09377dbbe061": {
+      "line": 6959,
+      "heading": "`impl Trait` (Existential Types) > Type alias `impl Trait` (TAIT)",
+      "outcome": "REJECTED",
+      "reason": "SPEC GAP — inline associated-type binding `Trait[Assoc = T]`; syntax.md's TRAIT_BOUND grammar has no such form and the parser rejects it. See B-2026-08-21-9",
+      "first_diagnostic": "Expected RightBracket, found Equal"
+    },
+    "4b2c0f93966d": {
+      "line": 7019,
+      "heading": "Effect Polymorphism > Trait Coherence and Effects",
+      "outcome": "REJECTED",
+      "reason": "UNTRIAGED — classify me",
+      "first_diagnostic": "undefined type 'Key', did you mean 'key'?"
+    },
+    "f791bf570f0c": {
+      "line": 7255,
+      "heading": "Feature 2: Effect Types (fixed verbs + user-defined resources) > Provider-Rooted Resources (trait-based injection)",
+      "outcome": "REJECTED",
+      "reason": "UNTRIAGED — classify me",
+      "first_diagnostic": "Expected RightBracket, found Colon"
+    },
+    "3bdd7331aaac": {
+      "line": 7359,
+      "heading": "Feature 2: Effect Types (fixed verbs + user-defined resources) > `providers { } in { }` Block (multi-provider bootstrapping)",
+      "outcome": "REJECTED",
+      "reason": "UNTRIAGED — classify me",
+      "first_diagnostic": "undefined type 'AppError', did you mean 'TcpError'?"
+    },
+    "a598c6d2e1ca": {
+      "line": 7412,
+      "heading": "Feature 2: Effect Types (fixed verbs + user-defined resources) > `providers { } in { }` Block (multi-provider bootstrapping)",
+      "outcome": "REJECTED",
+      "reason": "UNTRIAGED — classify me",
+      "first_diagnostic": "undefined type 'AppError', did you mean 'TcpError'?"
+    },
+    "d846d9df31f2": {
+      "line": 8003,
+      "heading": "Feature 4: Tiered Ownership > Match Arm Binding Modes",
+      "outcome": "REJECTED",
+      "reason": "DOC BUG — the example uses `ref` as an ordinary identifier, but syntax.md §1.1 reserves it. See B-2026-08-21-11",
+      "first_diagnostic": "'ref' is a reserved keyword and cannot be used as an identifier"
+    },
+    "ecc43da3a5e5": {
+      "line": 8437,
+      "heading": "Feature 4: Tiered Ownership > Part 5: Shared Types (`shared struct`)",
+      "outcome": "REJECTED",
+      "reason": "UNTRIAGED — classify me",
+      "first_diagnostic": "Expected expression, found RightBrace"
+    },
+    "a2125f4e0d5b": {
+      "line": 8449,
+      "heading": "Feature 4: Tiered Ownership > Part 5: Shared Types (`shared struct`)",
+      "outcome": "REJECTED",
+      "reason": "UNTRIAGED — classify me",
+      "first_diagnostic": "Expected expression, found RightBrace"
+    },
+    "1041ab91c090": {
+      "line": 8467,
+      "heading": "Feature 4: Tiered Ownership > Part 5: Shared Types (`shared struct`)",
+      "outcome": "REJECTED",
+      "reason": "UNTRIAGED — classify me",
+      "first_diagnostic": "Expected expression, found RightBrace"
+    },
+    "ae2286576a6f": {
+      "line": 8575,
+      "heading": "Feature 4: Tiered Ownership > Part 5b: Concurrent Shared Types (`par struct`)",
+      "outcome": "REJECTED",
+      "reason": "UNTRIAGED — classify me",
+      "first_diagnostic": "Expected expression, found Semicolon"
+    },
+    "0b00561248a8": {
+      "line": 8838,
+      "heading": "Feature 4: Tiered Ownership > Part 6: `Copy` Semantics",
+      "outcome": "REJECTED",
+      "reason": "catalogue of alternative forms — each line rebinds the same name; not one program",
+      "first_diagnostic": "'Offset' is already defined in this scope (first defined at 1:1)"
+    },
+    "398d80d0cb9f": {
+      "line": 9225,
+      "heading": "Feature 5: Auto-Concurrency via Effect Analysis > Async I/O in Practice",
+      "outcome": "REJECTED",
+      "reason": "DOC BUG — the example uses `group` as an ordinary identifier, but syntax.md §1.1 reserves it. See B-2026-08-21-11",
+      "first_diagnostic": "'group' is a reserved keyword and cannot be used as an identifier"
+    },
+    "d12127dc4493": {
+      "line": 9521,
+      "heading": "Feature 5: Auto-Concurrency via Effect Analysis > Explicit Concurrency: `par {}` and `spawn()`",
+      "outcome": "REJECTED",
+      "reason": "UNTRIAGED — classify me",
+      "first_diagnostic": "undefined type 'Dashboard'"
+    },
+    "e2defe7ecc3a": {
+      "line": 9598,
+      "heading": "Feature 5: Auto-Concurrency via Effect Analysis > Explicit Concurrency: `par {}` and `spawn()`",
+      "outcome": "REJECTED",
+      "reason": "DOC BUG — the example uses `group` as an ordinary identifier, but syntax.md §1.1 reserves it. See B-2026-08-21-11",
+      "first_diagnostic": "'group' is a reserved keyword and cannot be used as an identifier"
+    },
+    "14a5f68b5380": {
+      "line": 9625,
+      "heading": "Feature 5: Auto-Concurrency via Effect Analysis > Channels",
+      "outcome": "REJECTED",
+      "reason": "signature catalogue — a doc table of method shapes, not compilable code (no bodies); the harness cannot frame it",
+      "first_diagnostic": "Expected LeftBrace, found EOF"
+    },
+    "06cfaed01604": {
+      "line": 9632,
+      "heading": "Feature 5: Auto-Concurrency via Effect Analysis > Channels",
+      "outcome": "REJECTED",
+      "reason": "signature catalogue — a doc table of method shapes, not compilable code (no bodies); the harness cannot frame it",
+      "first_diagnostic": "Expected LeftBrace, found Semicolon"
+    },
+    "c445c2e95fdb": {
+      "line": 9733,
+      "heading": "Feature 5: Auto-Concurrency via Effect Analysis > Structured Concurrency Lifetime Guarantees",
+      "outcome": "REJECTED",
+      "reason": "DOC BUG — the example uses `mut` as an ordinary identifier, but syntax.md §1.1 reserves it. See B-2026-08-21-11",
+      "first_diagnostic": "'mut' is a reserved keyword and cannot be used as an identifier"
+    },
+    "343efa125773": {
+      "line": 9853,
+      "heading": "Feature 5: Auto-Concurrency via Effect Analysis > Concurrency Semantics",
+      "outcome": "REJECTED",
+      "reason": "signature catalogue — a doc table of method shapes, not compilable code (no bodies); the harness cannot frame it",
+      "first_diagnostic": "Expected LeftBrace, found EOF"
+    },
+    "878b2260520f": {
+      "line": 10005,
+      "heading": "Parallel Failure and Cleanup > Drop ordering within a branch",
+      "outcome": "REJECTED",
+      "reason": "UNTRIAGED — classify me",
+      "first_diagnostic": "Expected field name or tuple index after '.'"
+    },
+    "8b8780c6f26a": {
+      "line": 10409,
+      "heading": "Cross-target Compilation > Provider Injection for SSR-shared Code (primary pattern)",
+      "outcome": "REJECTED",
+      "reason": "UNTRIAGED — classify me",
+      "first_diagnostic": "effect items are space-separated, not comma-separated; remove the `,`"
+    },
+    "8c04638b1990": {
+      "line": 10795,
+      "heading": "member core/kara.toml > Panic Strategy: `panic = \"unwind\" | \"abort\"`",
+      "outcome": "REJECTED",
+      "reason": "deferred feature (deferred.md) — the parser is not expected to accept this yet",
+      "first_diagnostic": "error[E_UNKNOWN_ATTRIBUTE]: unknown attribute `panic_handler` — the compiler does not recognise this bare-name attribute. If you intended a diagnostic hint, write `#[diagnostic::panic_handler]`; if you intended a tool attribute, use a namespaced form like `#[your_tool::panic_handler]`."
+    },
+    "9457c8e612c7": {
+      "line": 11300,
+      "heading": "Execution Model and Compilation Targets > Bounds-check elision and the `get_unchecked` escape hatch",
+      "outcome": "REJECTED",
+      "reason": "UNTRIAGED — classify me",
+      "first_diagnostic": "cannot mix integer types 'i64' and 'usize' in arithmetic — they must match; cast explicitly with `as`, choosing the direction deliberately: neither type can represent every value of the other"
+    },
+    "d83dca582a51": {
+      "line": 11591,
+      "heading": "member core/kara.toml > Lint Level Attributes",
+      "outcome": "REJECTED",
+      "reason": "UNTRIAGED — classify me",
+      "first_diagnostic": "attribute `#[expect]` is not valid on a loop expression; only `#[par_order_free]` is recognised here at Phase 1. See `docs/implementation_checklist/phase-7-codegen.md` collect-style reduction follow-on for the surface plan."
+    },
+    "8f06a6945386": {
+      "line": 11919,
+      "heading": "Unsafe Escape Hatch > `unsafe_op_in_unsafe_fn` rule",
+      "outcome": "REJECTED",
+      "reason": "UNTRIAGED — classify me",
+      "first_diagnostic": "Expected expression, found DocComment(\"Read the `n`-th element of `slice` without bounds checking.\")"
+    },
+    "fbff3e2aec68": {
+      "line": 11937,
+      "heading": "Unsafe Escape Hatch > `unsafe_op_in_unsafe_fn` rule",
+      "outcome": "REJECTED",
+      "reason": "signature catalogue — a doc table of method shapes, not compilable code (no bodies); the harness cannot frame it",
+      "first_diagnostic": "Expected LeftBrace, found Fn"
+    },
+    "b6883a55cce6": {
+      "line": 11961,
+      "heading": "Unsafe Escape Hatch > Raw Pointer Construction: `ptr.const` / `ptr.mut`",
+      "outcome": "REJECTED",
+      "reason": "signature catalogue — a doc table of method shapes, not compilable code (no bodies); the harness cannot frame it",
+      "first_diagnostic": "Expected LeftBrace, found Extern"
+    },
+    "39ac8c02f1b7": {
+      "line": 12050,
+      "heading": "Unsafe Escape Hatch > Uninitialised Memory: `MaybeUninit[T]` only",
+      "outcome": "REJECTED",
+      "reason": "signature catalogue — a doc table of method shapes, not compilable code (no bodies); the harness cannot frame it",
+      "first_diagnostic": "Expected LeftBrace, found Pub"
+    },
+    "b81d658bc836": {
+      "line": 12089,
+      "heading": "member core/kara.toml > Volatile Memory Access (MMIO)",
+      "outcome": "REJECTED",
+      "reason": "signature catalogue — a doc table of method shapes, not compilable code (no bodies); the harness cannot frame it",
+      "first_diagnostic": "Expected LeftBrace, found Fn"
+    },
+    "54027a815a45": {
+      "line": 12098,
+      "heading": "member core/kara.toml > Volatile Memory Access (MMIO)",
+      "outcome": "REJECTED",
+      "reason": "UNTRIAGED — classify me",
+      "first_diagnostic": "expected `extern` or `fn` after `unsafe` at module scope — `unsafe` may only prefix an `unsafe extern \"ABI\" { ... }` block or an `unsafe fn` declaration."
+    },
+    "015aa0d54d7a": {
+      "line": 12135,
+      "heading": "Inline Assembly > Syntax",
+      "outcome": "REJECTED",
+      "reason": "DOC BUG — the example uses `asm` as an ordinary identifier, but syntax.md §1.1 reserves it. See B-2026-08-21-11",
+      "first_diagnostic": "'asm' is a reserved keyword and cannot be used as an identifier"
+    },
+    "24705350e558": {
+      "line": 12206,
+      "heading": "Inline Assembly > Clobbers and ABI Clobbers",
+      "outcome": "REJECTED",
+      "reason": "DOC BUG — the example uses `asm` as an ordinary identifier, but syntax.md §1.1 reserves it. See B-2026-08-21-11",
+      "first_diagnostic": "'asm' is a reserved keyword and cannot be used as an identifier"
+    },
+    "5b705eea237c": {
+      "line": 12246,
+      "heading": "Inline Assembly > Effect Integration",
+      "outcome": "REJECTED",
+      "reason": "DOC BUG — the example uses `asm` as an ordinary identifier, but syntax.md §1.1 reserves it. See B-2026-08-21-11",
+      "first_diagnostic": "'asm' is a reserved keyword and cannot be used as an identifier"
+    },
+    "3a5f6133d1f4": {
+      "line": 12275,
+      "heading": "Inline Assembly > `global_asm`",
+      "outcome": "REJECTED",
+      "reason": "DOC BUG — the example uses `global_asm` as an ordinary identifier, but syntax.md §1.1 reserves it. See B-2026-08-21-11",
+      "first_diagnostic": "'global_asm' is a reserved keyword and cannot be used as an identifier"
+    },
+    "a11add6224ae": {
+      "line": 12627,
+      "heading": "C Calling Convention Variants > `extern \"C-unwind\"` and the effect system",
+      "outcome": "REJECTED",
+      "reason": "signature catalogue — a doc table of method shapes, not compilable code (no bodies); the harness cannot frame it",
+      "first_diagnostic": "Expected LeftBrace, found Extern"
+    },
+    "72ea2d63741b": {
+      "line": 12662,
+      "heading": "C Calling Convention Variants > Panic Semantics at the FFI Boundary",
+      "outcome": "REJECTED",
+      "reason": "UNTRIAGED — classify me",
+      "first_diagnostic": "public function 'double' performs effects [panics] but has no effect declaration. Add: with panics to the function signature"
+    },
+    "90bf84af4d8f": {
+      "line": 12682,
+      "heading": "C Calling Convention Variants > Panic Semantics at the FFI Boundary",
+      "outcome": "REJECTED",
+      "reason": "UNTRIAGED — classify me",
+      "first_diagnostic": "undefined name 'parse', did you mean 'Parser'?"
+    },
+    "5fd5483df9a9": {
+      "line": 12692,
+      "heading": "C Calling Convention Variants > Panic Semantics at the FFI Boundary",
+      "outcome": "REJECTED",
+      "reason": "deferred feature (deferred.md) — the parser is not expected to accept this yet",
+      "first_diagnostic": "undefined name 'catch_panic'"
+    },
+    "abd6491d4ddf": {
+      "line": 12847,
+      "heading": "FFI > FFI Unions: `union Foo { ... }`",
+      "outcome": "REJECTED",
+      "reason": "deferred feature (deferred.md) — the parser is not expected to accept this yet",
+      "first_diagnostic": "cannot assign through `x` — `x` is declared without `mut` at line 7:1"
+    },
+    "6b08c218ce98": {
+      "line": 12921,
+      "heading": "FFI > FFI Unions: `union Foo { ... }`",
+      "outcome": "REJECTED",
+      "reason": "deferred feature (deferred.md) — the parser is not expected to accept this yet",
+      "first_diagnostic": "`epoll_data` is Value-class but union names must be Type-class (PascalCase); consider renaming to `EpollData`"
+    },
+    "335e127c698d": {
+      "line": 12948,
+      "heading": "FFI > Opaque Foreign Types: `extern \"C\" { type Foo; }`",
+      "outcome": "REJECTED",
+      "reason": "signature catalogue — a doc table of method shapes, not compilable code (no bodies); the harness cannot frame it",
+      "first_diagnostic": "Expected LeftBrace, found Extern"
+    },
+    "069571babaa8": {
+      "line": 12993,
+      "heading": "FFI > Opaque Foreign Types: `extern \"C\" { type Foo; }`",
+      "outcome": "REJECTED",
+      "reason": "UNTRIAGED — classify me",
+      "first_diagnostic": "the `!` operator is not used in Kāra; use `not` instead"
+    },
+    "5e7d3367b72c": {
+      "line": 13139,
+      "heading": "Host Functions > Syntax",
+      "outcome": "REJECTED",
+      "reason": "UNTRIAGED — classify me",
+      "first_diagnostic": "effect items are space-separated, not comma-separated; remove the `,`"
+    },
+    "c65a34e0beee": {
+      "line": 13289,
+      "heading": "Deferred Items > Effect Variable Bounds",
+      "outcome": "REJECTED",
+      "reason": "UNTRIAGED — classify me",
+      "first_diagnostic": "Expected RightBracket, found Colon"
+    },
+    "c7cedbf5f7d8": {
+      "line": 13299,
+      "heading": "Deferred Items > Effect Variable Bounds",
+      "outcome": "REJECTED",
+      "reason": "UNTRIAGED — classify me",
+      "first_diagnostic": "Expected RightBracket, found Colon"
+    },
+    "6ab4729ef067": {
+      "line": 13349,
+      "heading": "Deferred Items > Portable SIMD — `Vector[T, N]`",
+      "outcome": "REJECTED",
+      "reason": "UNTRIAGED — classify me",
+      "first_diagnostic": "Expected Equal, found Semicolon"
+    },
+    "57fdd906cd41": {
+      "line": 13405,
+      "heading": "Deferred Items > Portable SIMD — `Vector[T, N]`",
+      "outcome": "REJECTED",
+      "reason": "signature catalogue — a doc table of method shapes, not compilable code (no bodies); the harness cannot frame it",
+      "first_diagnostic": "Expected LeftBrace, found Fn"
+    },
+    "f53999de96d5": {
+      "line": 13492,
+      "heading": "Deferred Items > Yielding Subscripts",
+      "outcome": "REJECTED",
+      "reason": "DOC BUG — the example uses `yield` as an ordinary identifier, but syntax.md §1.1 reserves it. See B-2026-08-21-11",
+      "first_diagnostic": "'yield' is a reserved keyword and cannot be used as an identifier"
+    },
+    "2ce5581a96d3": {
+      "line": 13546,
+      "heading": "Deferred Items > `if let` Chains",
+      "outcome": "REJECTED",
+      "reason": "DOC BUG — the example uses `let` as an ordinary identifier, but syntax.md §1.1 reserves it. See B-2026-08-21-11",
+      "first_diagnostic": "'let' is a reserved keyword and cannot be used as an identifier"
+    },
+    "fe879fde1f73": {
+      "line": 13620,
+      "heading": "Deferred Items > Comptime Effect Defaults",
+      "outcome": "REJECTED",
+      "reason": "deferred feature (deferred.md) — the parser is not expected to accept this yet",
+      "first_diagnostic": "expected `{` after `comptime` — the comptime expression form is `comptime { ... }`."
+    },
+    "5d5ffc6f961c": {
+      "line": 13651,
+      "heading": "Deferred Items > Raw String Literals",
+      "outcome": "REJECTED",
+      "reason": "UNTRIAGED — classify me",
+      "first_diagnostic": "Expected expression, found Error(\"string prefix 'r\\\"...\\\"' is reserved for future use; only `f\\\"...\\\"` and `c\\\"...\\\"` are recognized in v1\")"
+    }
+  }
+}
