@@ -598,7 +598,37 @@ impl<'ctx> super::Codegen<'ctx> {
                         if n == 0 {
                             (i64_t.const_zero(), true)
                         } else {
-                            (i64_t.const_int(n - 1, false), false)
+                            // B-2026-08-20-39 — `last(k)` counts BACK from the
+                            // end, `k` defaulting to 0, so the index is
+                            // `(n - 1) - k` against the array's static length.
+                            //
+                            // Both out-of-range directions fall out of the
+                            // UNSIGNED bounds compare below and need no test of
+                            // their own: `k >= n` makes the subtraction wrap to
+                            // a huge unsigned value, and `k < 0` makes the index
+                            // exceed `n - 1` directly. Either way `ULT idx, n`
+                            // is false and the arm yields `None`, which is the
+                            // same answer the interpreter gives.
+                            let last_idx = i64_t.const_int(n - 1, false);
+                            match args.first() {
+                                Some(a) => {
+                                    let raw = self.compile_expr(&a.value)?.into_int_value();
+                                    let k = if raw.get_type().get_bit_width() == 64 {
+                                        raw
+                                    } else {
+                                        self.builder
+                                            .build_int_s_extend(raw, i64_t, "arr.last.k.sext")
+                                            .unwrap()
+                                    };
+                                    (
+                                        self.builder
+                                            .build_int_sub(last_idx, k, "arr.last.idx")
+                                            .unwrap(),
+                                        false,
+                                    )
+                                }
+                                None => (last_idx, false),
+                            }
                         }
                     }
                 };

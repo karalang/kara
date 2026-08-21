@@ -936,20 +936,48 @@ impl<'a> super::Interpreter<'a> {
                 });
             }
             "last" => {
+                // B-2026-08-20-39 — `last(n)` is END-RELATIVE ACCESS, the
+                // replacement design.md § Numeric Semantics names when it rules
+                // out Python-style wrap-around: "`v.last()` returns the last
+                // element, `v.last(1)` the second-to-last". `n` defaults to 0.
+                //
+                // RETURNS `Option[T]`, INCLUDING for an out-of-range `n`, where
+                // that paragraph says "Negative or out-of-bounds `n` panics".
+                // The panic clause reads `last(n)` as an INDEXING form, but the
+                // shipped `last()` is in the Option family — `v.get(i)` and
+                // `v.first()` return `Option` while `v[i]` panics, and `n`
+                // defaults to 0, so honouring it literally would mean
+                // `v.last()` on an empty Vec panics where it returns `None`
+                // today. That would break a working API and split `last` from
+                // `first`. The Option contract is the coherent reading; the
+                // spec sentence has been corrected to state it.
+                let n = match args.first() {
+                    Some(a) => match self.eval_expr_inner(&a.value) {
+                        Value::Int(i) => i,
+                        _ => return None,
+                    },
+                    None => 0,
+                };
+                let from_end = |len: usize| -> Option<usize> {
+                    // A negative `n`, or one at or past the length, has no
+                    // element — `None`, exactly as `get` answers an
+                    // out-of-range index.
+                    if n < 0 || n >= len as i128 {
+                        return None;
+                    }
+                    Some(len - 1 - n as usize)
+                };
                 let elem = match &obj {
-                    Value::Array(rc) => rc.read().unwrap().last().cloned(),
+                    Value::Array(rc) => {
+                        let items = rc.read().unwrap();
+                        from_end(items.len()).map(|i| items[i].clone())
+                    }
                     Value::Slice {
                         storage,
                         start,
                         len,
                         ..
-                    } => {
-                        if *len > 0 {
-                            Some(storage.read().unwrap()[*start + *len - 1].clone())
-                        } else {
-                            None
-                        }
-                    }
+                    } => from_end(*len).map(|i| storage.read().unwrap()[*start + i].clone()),
                     // Not a seq receiver — fall through to the impl-block /
                     // missing-dispatch tail instead of swallowing to Unit.
                     _ => return None,

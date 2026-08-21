@@ -363,14 +363,18 @@ impl<'a> super::TypeChecker<'a> {
                             }
                             return Some(Type::Bool);
                         }
-                        "first" | "last" => {
+                        "first" => {
                             if !args.is_empty() {
                                 self.type_error(
-                                    format!("Array.{}() takes no arguments", method),
+                                    "Array.first() takes no arguments".to_string(),
                                     *span,
                                     TypeErrorKind::WrongNumberOfArgs,
                                 );
                             }
+                            return Some(option_elem);
+                        }
+                        "last" => {
+                            self.expect_optional_index_arg("Array.last", args, span);
                             return Some(option_elem);
                         }
                         "get" => {

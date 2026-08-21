@@ -3503,6 +3503,89 @@ fn redundant_suffix_fires_on_a_default_type_suffix() {
     );
 }
 
+/// B-2026-08-20-39 — `last(n)` takes an optional end-relative index.
+///
+/// design.md § Numeric Semantics rules out Python-style wrap-around (`-1` as
+/// an index is always a bug and panics) and names this as the replacement:
+/// *"For end-relative access, use `.last(n)` where `n` defaults to 0"*. Only
+/// the no-argument half shipped, so the paragraph closed one door and pointed
+/// at a half-built one — and the diagnostic, `Vec.last() takes no arguments`,
+/// stated the unimplemented shape as though it were the intended surface.
+///
+/// The return stays `Option[T]` for every arity, which is the half of this
+/// worth pinning: `n` defaults to 0, so `last(n)` and `last()` must agree, and
+/// `last()` has always answered `None` on an empty sequence.
+#[test]
+fn last_accepts_an_optional_end_relative_index() {
+    for recv in [
+        "let v: Vec[i64] = [1, 2, 3];",
+        "let v: Array[i64, 3] = [1, 2, 3];",
+    ] {
+        for call in ["v.last()", "v.last(0)", "v.last(1)", "v.last(2)"] {
+            typecheck_ok(&format!(
+                "fn main() {{\n {recv}\n match {call} {{ Some(x) => {{ println(x); }} None => {{ }} }}\n}}"
+            ));
+        }
+    }
+    // The `Slice` receiver goes through its own arm.
+    typecheck_ok(
+        "fn main() {\n\
+             let v: Vec[i64] = [1, 2, 3];\n\
+             let s = v.as_slice();\n\
+             match s.last(1) { Some(x) => { println(x); } None => { } }\n\
+         }",
+    );
+}
+
+/// Arity and element type are still checked — the arm was widened by exactly
+/// one optional `i64`, not opened up.
+#[test]
+fn last_rejects_two_args_and_a_non_integer_index() {
+    let two = typecheck_errors(
+        "fn main() {\n\
+             let v: Vec[i64] = [1, 2, 3];\n\
+             match v.last(1, 2) { Some(x) => { println(x); } None => { } }\n\
+         }",
+    );
+    assert!(
+        two.iter()
+            .any(|e| e.message.contains("at most one argument")),
+        "expected an arity error, got {:?}",
+        two.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+
+    let wrong = typecheck_errors(
+        "fn main() {\n\
+             let v: Vec[i64] = [1, 2, 3];\n\
+             match v.last(\"x\") { Some(x) => { println(x); } None => { } }\n\
+         }",
+    );
+    assert!(
+        !wrong.is_empty(),
+        "a String index must not be accepted as an end-relative offset"
+    );
+}
+
+/// `first` is NOT end-relative and keeps its no-argument arity — the two were
+/// one match arm before this change, so splitting them could have widened both.
+#[test]
+fn first_still_takes_no_arguments() {
+    for recv in [
+        "let v: Vec[i64] = [1, 2, 3];",
+        "let v: Array[i64, 3] = [1, 2, 3];",
+    ] {
+        let errs = typecheck_errors(&format!(
+            "fn main() {{\n {recv}\n match v.first(1) {{ Some(x) => {{ println(x); }} None => {{ }} }}\n}}"
+        ));
+        assert!(
+            errs.iter()
+                .any(|e| e.message.contains("takes no arguments")),
+            "first() must still reject an argument; got {:?}",
+            errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+}
+
 /// B-2026-08-21-14 — the warning must carry a MACHINE-APPLICABLE deletion.
 ///
 /// The lint was wired warn-by-default with `fix_it: None`, so it fired 26,094

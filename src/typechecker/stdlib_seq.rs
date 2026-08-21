@@ -1071,14 +1071,18 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 Type::Bool
             }
-            "first" | "last" => {
+            "first" => {
                 if !args.is_empty() {
                     self.type_error(
-                        format!("Slice.{}() takes no arguments", method),
+                        "Slice.first() takes no arguments".to_string(),
                         *span,
                         TypeErrorKind::WrongNumberOfArgs,
                     );
                 }
+                option_elem
+            }
+            "last" => {
+                self.expect_optional_index_arg("Slice.last", args, span);
                 option_elem
             }
             "get" => {
@@ -1471,8 +1475,12 @@ impl<'a> super::TypeChecker<'a> {
                 self.expect_no_args("Vec.is_empty", args, span);
                 Type::Bool
             }
-            "first" | "last" => {
-                self.expect_no_args(&format!("Vec.{}", method), args, span);
+            "first" => {
+                self.expect_no_args("Vec.first", args, span);
+                option_elem
+            }
+            "last" => {
+                self.expect_optional_index_arg("Vec.last", args, span);
                 option_elem
             }
             "get" => {
@@ -1665,6 +1673,32 @@ impl<'a> super::TypeChecker<'a> {
 
     /// Emit a `WrongNumberOfArgs` diagnostic if `args` is non-empty, for a
     /// method that takes none. Shared by the no-arg arms of `infer_vec_method`.
+    /// `last([n])` — end-relative access (B-2026-08-20-39).
+    ///
+    /// design.md § Numeric Semantics rules out Python-style wrap-around
+    /// (`-1` as an index is always a bug, and panics) and names this as the
+    /// replacement: *"For end-relative access, use `.last(n)` where `n`
+    /// defaults to 0: `v.last()` returns the last element, `v.last(1)` the
+    /// second-to-last"*. The no-argument half shipped; the argument half did
+    /// not, so the paragraph closed one door and pointed at a half-built one.
+    ///
+    /// Accepts zero or one `i64`, and returns `Option[T]` either way — see
+    /// the note on the interpreter's `last` arm for why the spec's "panics"
+    /// clause is not what this implements.
+    pub(super) fn expect_optional_index_arg(&mut self, what: &str, args: &[CallArg], span: &Span) {
+        if args.len() > 1 {
+            self.type_error(
+                format!("{}() takes at most one argument", what),
+                *span,
+                TypeErrorKind::WrongNumberOfArgs,
+            );
+        }
+        for arg in args {
+            let at = self.infer_expr(&arg.value);
+            self.check_assignable(&Type::Int(IntSize::I64), &at, arg.value.span);
+        }
+    }
+
     pub(super) fn expect_no_args(&mut self, what: &str, args: &[CallArg], span: &Span) {
         if !args.is_empty() {
             self.type_error(

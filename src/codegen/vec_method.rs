@@ -5298,19 +5298,42 @@ impl<'ctx> super::Codegen<'ctx> {
                     .append_basic_block(fn_val, &format!("{method}.merge"));
 
                 let zero = i64_t.const_int(0, false);
-                let is_empty = self
+                // B-2026-08-20-39 — `last(n)` is end-relative: `n` counts back
+                // from the end and defaults to 0. `first` never takes one.
+                //
+                // The ARGUMENT IS EVALUATED BEFORE THE BRANCH, unconditionally,
+                // so a side-effecting `n` runs exactly once on every path — the
+                // empty receiver included. Sinking it into `some_bb` would make
+                // the effect depend on the length.
+                let n = match (method, args.first()) {
+                    ("last", Some(a)) => self.compile_expr(&a.value)?.into_int_value(),
+                    _ => zero,
+                };
+                // No element when the receiver is empty, when `n` is negative,
+                // or when it reaches past the front. With `n == 0` this is
+                // exactly the `len == 0` test it replaces, so `first` and a
+                // bare `last()` are unchanged.
+                let n_negative = self
                     .builder
-                    .build_int_compare(inkwell::IntPredicate::EQ, len, zero, "is_empty")
+                    .build_int_compare(inkwell::IntPredicate::SLT, n, zero, "n.neg")
+                    .unwrap();
+                let n_past_front = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::SGE, n, len, "n.past")
+                    .unwrap();
+                let no_elem = self
+                    .builder
+                    .build_or(n_negative, n_past_front, "no_elem")
                     .unwrap();
                 self.builder
-                    .build_conditional_branch(is_empty, empty_bb, some_bb)
+                    .build_conditional_branch(no_elem, empty_bb, some_bb)
                     .unwrap();
 
                 // Empty branch — return None.
                 self.builder.position_at_end(empty_bb);
                 self.builder.build_unconditional_branch(merge_bb).unwrap();
 
-                // Some branch — load element at index 0 (first) or len-1 (last).
+                // Some branch — index 0 (first) or `len - 1 - n` (last).
                 self.builder.position_at_end(some_bb);
                 let data = self
                     .builder
@@ -5321,7 +5344,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     zero
                 } else {
                     let one = i64_t.const_int(1, false);
-                    self.builder.build_int_sub(len, one, "last_idx").unwrap()
+                    let last_idx = self.builder.build_int_sub(len, one, "last_idx").unwrap();
+                    self.builder
+                        .build_int_sub(last_idx, n, "last_idx.n")
+                        .unwrap()
                 };
                 let elem_ptr = unsafe {
                     self.builder

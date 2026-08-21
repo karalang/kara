@@ -101249,6 +101249,95 @@ fn main() {
         );
     }
 
+    /// B-2026-08-20-39 — `last(n)` end-relative access, end to end.
+    ///
+    /// The typechecker half is pinned in tests/typechecker.rs; this is the half
+    /// that catches a backend that ACCEPTS the argument and then ignores it,
+    /// which is exactly what codegen did at first: it took `v.last(2)`,
+    /// type-checked it, and returned the last element on every call while the
+    /// interpreter walked back correctly — a silent run-vs-build divergence
+    /// that only differing values expose.
+    ///
+    /// Each receiver has its OWN lowering (`Vec`/`Slice` share the length-driven
+    /// arm; `Array` indexes a static length through a separate one), so all
+    /// three are swept, and every element is distinct so an off-by-one shows up
+    /// as a wrong number rather than a coincidence. The out-of-range and
+    /// NEGATIVE arms matter as much as the hits: `.last` sits on the `Option`
+    /// side of the split design.md draws in this very paragraph — `v[i]`
+    /// panics, `.first`/`.get`/`.last` answer `None` — so walking off either
+    /// end must yield `None` and not a panic or a wild read.
+    #[test]
+    fn test_e2e_last_takes_an_end_relative_index() {
+        let src = r#"
+fn main() {
+    let v: Vec[i64] = [10, 20, 30];
+    match v.last()   { Some(x) => { println(x); } None => { println("none"); } }
+    match v.last(0)  { Some(x) => { println(x); } None => { println("none"); } }
+    match v.last(1)  { Some(x) => { println(x); } None => { println("none"); } }
+    match v.last(2)  { Some(x) => { println(x); } None => { println("none"); } }
+    match v.last(3)  { Some(x) => { println(x); } None => { println("none"); } }
+    match v.last(-1) { Some(x) => { println(x); } None => { println("none"); } }
+
+    let s = v.as_slice();
+    match s.last(1)  { Some(x) => { println(x); } None => { println("none"); } }
+
+    let a: Array[i64, 3] = [7, 8, 9];
+    match a.last(0)  { Some(x) => { println(x); } None => { println("none"); } }
+    match a.last(2)  { Some(x) => { println(x); } None => { println("none"); } }
+    match a.last(3)  { Some(x) => { println(x); } None => { println("none"); } }
+    match a.last(-1) { Some(x) => { println(x); } None => { println("none"); } }
+
+    // An empty receiver has no element at any n, including the default.
+    let e: Vec[i64] = [];
+    match e.last()   { Some(x) => { println(x); } None => { println("none"); } }
+    match e.last(0)  { Some(x) => { println(x); } None => { println("none"); } }
+    match e.last(1)  { Some(x) => { println(x); } None => { println("none"); } }
+
+    // A RUNTIME n, so the index is not a constant the backend can fold —
+    // and one that walks past the front on the last iteration.
+    let mut i = 0i64;
+    while i < 4 {
+        match v.last(i) { Some(x) => { println(x); } None => { println("none"); } }
+        i = i + 1;
+    }
+
+    // `first` is unaffected by the arm split.
+    match v.first()  { Some(x) => { println(x); } None => { println("none"); } }
+}
+"#;
+        assert_eq!(
+            run_program(src).as_deref(),
+            Some(concat!(
+                "30\n30\n20\n10\nnone\nnone\n",
+                "20\n",
+                "9\n7\nnone\nnone\n",
+                "none\nnone\nnone\n",
+                "30\n20\n10\nnone\n",
+                "10\n"
+            ))
+        );
+    }
+
+    /// A heap element through the same path — the `Option` payload for a
+    /// `String` is multi-word, so an end-relative index must carry it as
+    /// intactly as the no-argument form does.
+    #[test]
+    fn test_e2e_last_end_relative_carries_a_heap_element() {
+        let src = r#"
+fn main() {
+    let v: Vec[String] = ["alpha", "beta", "gamma"];
+    match v.last(2) { Some(x) => { println(x); } None => { println("none"); } }
+    match v.last(0) { Some(x) => { println(x); } None => { println("none"); } }
+    match v.last(9) { Some(x) => { println(x); } None => { println("none"); } }
+    println(v[0]);
+}
+"#;
+        assert_eq!(
+            run_program(src).as_deref(),
+            Some("alpha\ngamma\nnone\nalpha\n")
+        );
+    }
+
     /// B-2026-08-20-38 — design.md § Slices' second example, end to end. A
     /// sub-range handed to a `mut Slice[T]` parameter produced a READ-ONLY
     /// header, so `sort_in_place(mut v[1..4])` failed `karac check` with
