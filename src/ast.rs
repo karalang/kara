@@ -371,7 +371,7 @@ pub type GpuDispatchWgslTable = std::collections::HashMap<(usize, usize), String
 /// resolution there keeps ONE layout authority rather than two that can drift
 /// — a buffer uploaded under one grouping and reduced under another would
 /// silently read the wrong field.
-pub type GpuResidentFieldTable = std::collections::HashMap<(usize, usize), (String, String)>;
+pub type GpuResidentFieldTable = std::collections::HashMap<(usize, usize), (String, String, bool)>;
 
 /// Set by the lowering pass from `TypeCheckResult.gpu_reduce_int_elems`. Maps
 /// a `gpu.<reduce>(buffer)` BUFFER-argument span to its INTEGER element

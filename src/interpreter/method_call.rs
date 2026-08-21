@@ -796,6 +796,37 @@ impl<'a> super::Interpreter<'a> {
                 span,
             );
         }
+        // A RESIDENT field reduction (`gpu.sum(buf.mass)`) is compiled-only,
+        // like the `gpu.upload` that produced the buffer: there is no device
+        // buffer here to project a field out of. Reported BEFORE the argument
+        // is evaluated, because evaluating it is what goes wrong — the nested
+        // `gpu.upload` records its own error and yields `Unit`, and the field
+        // access then lands on a non-struct receiver and trips the invariant
+        // assert there. The `let`-bound form happens to stop at the statement
+        // boundary first; a temporary receiver has no such boundary, which is
+        // why this guard is the fix rather than softening that assert.
+        //
+        // The typechecker's own table is the discriminator, so an ordinary
+        // field access that yields a host `Vec[f32]` (`gpu.sum(rec.values)`)
+        // is untouched — it is not a resident reduction and never gets an
+        // entry.
+        if self
+            .typecheck_result
+            .gpu_resident_field
+            .contains_key(&crate::resolver::SpanKey(
+                args[0].value.span.offset,
+                args[0].value.span.length,
+            ))
+        {
+            return self.record_runtime_error(
+                format!(
+                    "gpu.{spelling} over a device buffer's field requires the compiled \
+                     path (`karac build`) — resident GPU buffers have no interpreter \
+                     model"
+                ),
+                span,
+            );
+        }
         let Value::Array(rc) = self.eval_expr_inner(&args[0].value) else {
             return self.record_runtime_error(
                 format!("gpu.{spelling} buffer must be a Vec of f32/i32/u32"),

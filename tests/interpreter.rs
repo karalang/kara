@@ -26794,6 +26794,55 @@ fn gpu_upload_download_get_clean_compiled_only_diagnostic() {
 }
 
 #[test]
+fn gpu_reduce_over_a_temporary_buffer_field_diagnoses_rather_than_panics() {
+    // GPU-SLIP-4b-3b. A resident field reduction is compiled-only like the
+    // `gpu.upload` that made the buffer, and it must SAY so on every receiver
+    // shape.
+    //
+    // The temporary receiver is the one that had no statement boundary to stop
+    // at: the nested `gpu.upload` records its error and yields `Unit`, then the
+    // field access lands on a non-struct receiver and trips the invariant
+    // assert there — an ICE, not a diagnostic. The `let`-bound form only looked
+    // fine because evaluation halted at its own statement first.
+    for receiver in ["gpu.upload(v)", "gpu.dispatch(step, gpu.upload(v))"] {
+        let errors = runtime_errors(&format!(
+            "struct P {{ a: f32 }}\n\
+             #[gpu]\n\
+             fn step(p: P) -> P {{ p }}\n\
+             fn main() {{\n\
+                 let mut v: Vec[P] = Vec.new();\n\
+                 v.push(P {{ a: 1.0 }});\n\
+                 println(f\"{{gpu.sum(({receiver}).a)}}\");\n\
+             }}"
+        ));
+        assert!(
+            !errors.is_empty(),
+            "a resident field reduction over `{receiver}` must produce a runtime error"
+        );
+        assert!(
+            errors[0].message.contains("compiled path"),
+            "expected the compiled-only diagnostic for `{receiver}`, got: {:?}",
+            errors[0].message
+        );
+    }
+}
+
+#[test]
+fn gpu_reduce_over_an_ordinary_struct_field_still_runs_on_the_host() {
+    // The guard above keys on the typechecker's resident-field table, not on
+    // "the argument is a field access" — so a field that holds a host
+    // `Vec[f32]` is an ordinary reduction and must still compute. Reducing
+    // `gpu.sum(rec.values)` to a compiled-only error would be the obvious way
+    // to get this wrong.
+    let out = run("struct Rec { values: Vec[f32] }\n\
+         fn main() {\n\
+             let r = Rec { values: [1.0, 2.0, 3.5] };\n\
+             println(f\"{gpu.sum(r.values)}\");\n\
+         }");
+    assert_eq!(out.trim(), "6.5", "host field reduction must still run");
+}
+
+#[test]
 fn test_dataframe_read_csv_round_trips_types_nulls_and_quoting() {
     // `DataFrame.read_csv` (phase-11 CSV leg, slice 2) inverts `write_csv`:
     // header → names, per-column inference (all-i64 → Column[i64], else

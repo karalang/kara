@@ -38716,6 +38716,65 @@ fn gpu_reduce_over_a_device_buffer_field_typechecks_and_names_unknown_fields() {
 }
 
 #[test]
+fn gpu_reduce_accepts_a_temporary_device_buffer_as_the_receiver() {
+    // GPU-SLIP-4b-3b: the receiver of a resident field reduction does not have
+    // to be a binding. A buffer that a call just produced is reducible in
+    // place, which is the natural phrasing for a one-shot
+    // ("total this field on the device") and for a sim step that only wants a
+    // number out of the buffer it just wrote.
+    //
+    // Each of these infers the RECEIVER once and finds a `GpuBuffer[S]`; the
+    // binding form is the same path with a cheaper object.
+    for receiver in [
+        "gpu.upload(cells)",
+        "gpu.dispatch(k, gpu.upload(cells))",
+        "if true { gpu.upload(cells) } else { gpu.upload(cells) }",
+    ] {
+        typecheck_ok(&format!(
+            "struct Cell {{ m: f32, t: f32 }}\n\
+            #[gpu]\n\
+            fn k(c: Cell) -> Cell {{ c }}\n\
+            fn main() {{\n\
+            \x20   let cells: Vec[Cell] = [Cell {{ m: 1.0, t: 2.0 }}];\n\
+            \x20   let s: f32 = gpu.sum(({receiver}).m);\n\
+            }}"
+        ));
+    }
+}
+
+#[test]
+fn a_non_buffer_field_receiver_is_diagnosed_once_not_twice() {
+    // The reason the receiver is inferred separately from the field access:
+    // `infer_gpu_reduce` has to know whether the object is a device buffer
+    // BEFORE the field is resolved, and inferring it here and again on the
+    // ordinary path would report everything inside it twice.
+    //
+    // `missing` is not a field of `Holder`, so the object is an error — and it
+    // must be reported exactly ONCE. This is the regression that the
+    // infer-the-object-once structure exists to prevent; a naive
+    // "try the buffer path, then fall back" duplicates it.
+    let errs = typecheck_errors(
+        "struct Inner { v: f32 }\n\
+        struct Holder { inner: Inner }\n\
+        fn main() {\n\
+        \x20   let h = Holder { inner: Inner { v: 1.0 } };\n\
+        \x20   let s = gpu.sum(h.missing.v);\n\
+        }",
+    );
+    let about_missing: Vec<String> = errs
+        .iter()
+        .map(|e| e.to_string())
+        .filter(|e| e.contains("missing"))
+        .collect();
+    assert_eq!(
+        about_missing.len(),
+        1,
+        "the unknown field must be reported exactly once, got {}: {errs:?}",
+        about_missing.len()
+    );
+}
+
+#[test]
 fn gpu_sum_takes_exactly_one_buffer() {
     // No kernel argument — the operation is named so its associativity is the
     // compiler's guarantee, not something a user combiner would have to

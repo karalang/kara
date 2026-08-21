@@ -1654,13 +1654,16 @@ impl<'ctx> super::Codegen<'ctx> {
         // ambiguous with a user struct, so the LLVM type cannot be asked. The
         // WGSL just fetched is the CONTIGUOUS fold kernel for this path; the
         // strided level-0 kernel is emitted inside, where the layout is known.
-        if let Some((struct_name, field)) = self.accel.gpu_resident_field.get(&key).cloned() {
+        if let Some((struct_name, field, temporary)) =
+            self.accel.gpu_resident_field.get(&key).cloned()
+        {
             return self.compile_gpu_resident_field_reduce(
                 args,
                 spelling,
                 &struct_name,
                 &field,
                 &wgsl,
+                temporary,
             );
         }
 
@@ -1816,6 +1819,7 @@ impl<'ctx> super::Codegen<'ctx> {
         struct_name: &str,
         field: &str,
         fold_wgsl: &str,
+        temporary: bool,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         // The same layout lookup `gpu.upload` / resident `gpu.dispatch` perform:
         // an explicit `layout` block for `S` if one exists, else the default
@@ -1935,7 +1939,24 @@ impl<'ctx> super::Codegen<'ctx> {
                 .try_as_basic_value()
                 .unwrap_basic()
         };
-        self.finish_gpu_reduce_scalar(spelling, n, call_reduce)
+        let result = self.finish_gpu_reduce_scalar(spelling, n, call_reduce)?;
+
+        // A TEMPORARY receiver — `gpu.upload(cells).m`, `gpu.dispatch(k, b).m`
+        // — made a device buffer that no `let` bound, so no scope-exit cleanup
+        // will ever free it and this is the only site that can. A receiver
+        // that IS a binding must NOT be freed here: its `let` owns it, the
+        // reduction only reads it, and freeing it would leave the binding
+        // holding a dangling handle for the rest of the scope.
+        //
+        // Emitted after `finish_gpu_reduce_scalar` so it sits at the merge
+        // point and runs on BOTH arms of the `min`/`max`/`mean` empty check —
+        // an empty buffer still allocated one. `handle` is computed before
+        // that branch, so it dominates here.
+        if temporary {
+            let free_fn = self.gpu_free_soa_fn();
+            self.builder.build_call(free_fn, &[handle.into()], "").ok();
+        }
+        Ok(result)
     }
 
     /// The INTEGER arm of `compile_gpu_reduce` (B-2026-08-19-13).

@@ -58003,6 +58003,64 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_a_resident_reduction_frees_a_temporary_buffer_but_never_a_binding() {
+        // GPU-SLIP-4b-3b. The receiver of `gpu.<reduce>(<expr>.field)` may be a
+        // binding or a temporary, and the ONLY difference that reaches the
+        // machine is who frees the device buffer. Both halves are failure modes
+        // with no output to betray them — a missed free leaks device memory
+        // silently, and an extra one leaves a live binding holding a dangling
+        // handle — so the count is asserted structurally here rather than left
+        // to an E2E that would print the right answer either way.
+        //
+        // Codegen-only: no GPU is touched, so this is CI-safe. LeakSanitizer
+        // could not cover it in any case; the allocation is on the device, not
+        // in the host heap LSan walks.
+        let bound = r#"
+struct Cell { m: f32, t: f32 }
+
+fn main() {
+    let cells: Vec[Cell] = [Cell { m: 1.0, t: 2.0 }];
+    let buf = gpu.upload(cells);
+    let s = gpu.sum(buf.m);
+    let u = gpu.sum(buf.t);
+    println(s + u);
+}
+"#;
+        let ir = ir_for_with_ownership(bound);
+        let frees = ir.matches("karac_runtime_gpu_free_soa").count();
+        // One `call`, one `declare`. TWO reductions over the binding and still
+        // a single free — the one its `let` registered at scope exit. If a
+        // reduction freed its receiver, `buf` would be dangling for the second.
+        assert_eq!(
+            frees, 2,
+            "a reduction over a BINDING must not free it — expected only the \
+             scope-exit free (one declare + one call), got {frees}:\n{ir}"
+        );
+
+        let temporary = r#"
+struct Cell { m: f32, t: f32 }
+
+fn main() {
+    let a: Vec[Cell] = [Cell { m: 1.0, t: 2.0 }];
+    let b: Vec[Cell] = [Cell { m: 3.0, t: 4.0 }];
+    let s = gpu.sum(gpu.upload(a).m);
+    let u = gpu.sum(gpu.upload(b).t);
+    println(s + u);
+}
+"#;
+        let ir = ir_for_with_ownership(temporary);
+        let frees = ir.matches("karac_runtime_gpu_free_soa").count();
+        // One `declare` + one `call` per temporary. No `let` bound either
+        // buffer, so nothing else will ever free them and the reduction site is
+        // the only place that can.
+        assert_eq!(
+            frees, 3,
+            "each TEMPORARY receiver must be freed exactly once at the \
+             reduction (one declare + two calls), got {frees}:\n{ir}"
+        );
+    }
+
+    #[test]
     fn test_ir_gpu_upload_unlayouted_defaults_to_single_interleaved_group() {
         // GPU-SLIP-4h: `gpu.upload` on a plain `Vec[S]` (no `layout` block for
         // `S` anywhere) synthesizes ONE interleaved device group — the WGSL

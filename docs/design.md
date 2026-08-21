@@ -10318,6 +10318,10 @@ That equality is what makes the feature safe to reach for: it is an optimisation
 
 **Layout groups are resolved, not assumed.** A `layout` block splits `S` across several device buffers, so `mass` is a *(group, stride, offset)* rather than a field index — and the compiler resolves it through the same layout lookup `gpu.upload` and `gpu.dispatch` use. All three must agree: a buffer uploaded under one grouping and reduced under another would read a different field entirely and report a plausible wrong number, with nothing to flag it.
 
+**The receiver may be a binding or a temporary, and that decides who frees it.** `buf.mass` reduces a buffer someone else owns, so the reduction only reads it — freeing it there would leave `buf` holding a dangling handle for the rest of its scope. `gpu.upload(cells).mass` and `gpu.dispatch(k, buf).mass` reduce a buffer that has no owner at all: no `let` bound it, so no scope exit will ever free it, and the reduction is the only site that can. Both forms are accepted and the compiler emits the free for exactly the second.
+
+That distinction is syntactic — a bare identifier is a binding, anything else is a temporary — and it is exact rather than approximate, because `GpuBuffer[S]` is not a *nameable* type. It cannot be written as a struct field, a parameter, or a return type, so the only expressions that can denote a device buffer are a local binding and a call that just produced one. Neither half shows up in a program's output (an unfreed temporary still prints the right number, and so does the first read of a wrongly-freed binding), so the emitted free is asserted structurally in the codegen tests rather than left to an end-to-end run.
+
 This is a **compiled-only** surface, like the rest of the resident API — `karac run` reports that rather than pretending, since there is no device buffer to project a field out of.
 
 ##### Prefix sum — the one that is not a fold

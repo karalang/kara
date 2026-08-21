@@ -149,6 +149,21 @@ use crate::token::Span;
 use std::collections::HashMap;
 
 use super::inference::{resolve_type_var_top, substitute_type_params};
+
+/// Which field of which struct a resident GPU reduction targets, and whether
+/// the buffer it came from has an owner.
+///
+/// Bundled rather than passed loose because the three travel together and mean
+/// nothing apart: `temporary` is only interpretable against the buffer the
+/// other two name. `temporary` is the one bit codegen cannot re-derive — the
+/// `{i64, i64}` handle carries no provenance — so it rides down with them.
+struct ResidentField<'a> {
+    struct_name: &'a str,
+    field: &'a str,
+    /// The receiver was a call, not a binding: nothing else will free this
+    /// buffer, so the reduction site must.
+    temporary: bool,
+}
 use super::types::{
     method_callee_type_name, receiver_for_method_lookup, type_display, ConstArg, FloatSize,
     IntSize, SubstValue, Type, UIntSize,
@@ -3460,13 +3475,20 @@ impl<'a> super::TypeChecker<'a> {
     /// reduction over ONE field, and `buf.mass` already parses as an ordinary
     /// `FieldAccess`, so the surface needs no new syntax.
     ///
-    /// **The receiver must be a plain binding.** The type is read out of scope
-    /// with the local scope instead of by inferring `object`, because
-    /// inferring it here and again on the fall-through path would report any
-    /// error inside it twice. That restricts the form to `binding.field`; a
-    /// deeper receiver (`sim.grid.mass`) falls through and is diagnosed as a
-    /// non-`Vec` argument, which is honest if terse. Widening it wants a
-    /// side-effect-free type peek, which this typechecker does not have yet.
+    /// **The receiver may be a binding or a temporary**, and the difference is
+    /// who frees the buffer. `buf.mass` reduces a buffer someone else owns and
+    /// must not free it; `gpu.upload(cells).mass` and
+    /// `gpu.dispatch(k, buf).mass` reduce a buffer that has no owner at all —
+    /// no `let` bound it, so nothing else will ever free it, and the reduction
+    /// site is the only place that can. `temporary` carries that one bit down
+    /// to codegen, which emits the free after the fold.
+    ///
+    /// The bit is syntactic — a bare identifier is a binding, anything else is
+    /// a temporary — and that is exact rather than approximate, because
+    /// `GpuBuffer` is not a nameable type. It cannot be a struct field, a
+    /// parameter, or a return type, so the only expressions that can denote a
+    /// device buffer are a local binding and a call that just made one. There
+    /// is no `sim.grid.mass` to worry about: no program can construct it.
     ///
     /// Returns the same type the host-side reduction does, and records only
     /// `(struct, field)` — see [`TypeCheckResult::gpu_resident_field`] for why
@@ -3474,12 +3496,16 @@ impl<'a> super::TypeChecker<'a> {
     fn infer_gpu_resident_field_reduce(
         &mut self,
         arg: &Expr,
-        struct_name: &str,
-        field: &str,
+        target: ResidentField<'_>,
         span: &Span,
         op: ReduceOp,
         spelling: &str,
     ) -> Type {
+        let ResidentField {
+            struct_name,
+            field,
+            temporary,
+        } = target;
         let f32_ty = Type::Float(FloatSize::F32);
         let Some(info) = self.env.structs.get(struct_name) else {
             self.type_error(
@@ -3532,7 +3558,7 @@ impl<'a> super::TypeChecker<'a> {
                     .insert(SpanKey(arg.span.offset, arg.span.length), wgsl);
                 self.gpu_resident_field.insert(
                     SpanKey(arg.span.offset, arg.span.length),
-                    (struct_name.to_string(), field.to_string()),
+                    (struct_name.to_string(), field.to_string(), temporary),
                 );
             }
             Err(e) => {
@@ -3551,6 +3577,26 @@ impl<'a> super::TypeChecker<'a> {
         let result = gpu_reduce_result_ty(op, f32_ty);
         self.record_expr_type(span, &result);
         result
+    }
+
+    /// Whether `object` is worth inferring as a possible device buffer, for
+    /// the receiver of `gpu.<reduce>(<object>.field)`.
+    ///
+    /// The point is not to guess the type — it is to leave alone the receivers
+    /// that [`Self::infer_field_access`] handles SYNTACTICALLY, before it ever
+    /// infers the object: a primitive associated const (`i64.MAX`), an
+    /// `ExitCode` constant, a bare type name. All three are identifiers that
+    /// are not local bindings, and routing one through `infer_expr` here would
+    /// bypass the intercept and raise the wrong diagnostic for it.
+    ///
+    /// A device buffer is always either a local binding or a temporary from a
+    /// call, so declining an out-of-scope identifier costs nothing: `GpuBuffer`
+    /// is not a nameable type, so it can never be reached through one.
+    fn may_be_a_device_buffer(&self, object: &Expr) -> bool {
+        match &object.kind {
+            ExprKind::Identifier(name) => self.local_scope.lookup(name).is_some(),
+            _ => true,
+        }
     }
 
     fn infer_gpu_reduce(
@@ -3574,20 +3620,32 @@ impl<'a> super::TypeChecker<'a> {
         }
 
         // GPU-SLIP-4b-3: `gpu.sum(buf.mass)` — a RESIDENT field reduction, which
-        // never uploads. Recognised before the argument is typed as a value,
+        // never uploads. Decided before the argument is typed as a value,
         // because `buf.mass` on a `GpuBuffer[S]` is not a field access the
         // ordinary rules would accept.
-        if let ExprKind::FieldAccess { object, field } = &args[0].value.kind {
-            if let ExprKind::Identifier(binding) = &object.kind {
-                if let Some(Type::Named { name, args: ta }) = self.local_scope.lookup(binding) {
+        //
+        // The RECEIVER is inferred here, exactly once, and its type is handed
+        // to `infer_field_access_on_ty` when it turns out not to be a buffer.
+        // Inferring it and then falling through to `infer_expr` on the whole
+        // field access would infer it a SECOND time and report every error
+        // inside it twice — which is why this reads the object rather than the
+        // field access, and why the ordinary path below is reached with a type
+        // rather than by re-walking the expression.
+        let buf_ty = match &args[0].value.kind {
+            ExprKind::FieldAccess { object, field } if self.may_be_a_device_buffer(object) => {
+                let obj_ty = self.infer_expr(object);
+                if let Type::Named { name, args: ta } = &obj_ty {
                     if name == "GpuBuffer" && ta.len() == 1 {
                         if let Type::Named { name: sname, .. } = &ta[0] {
                             let sname = sname.clone();
                             let field = field.clone();
                             return self.infer_gpu_resident_field_reduce(
                                 &args[0].value,
-                                &sname,
-                                &field,
+                                ResidentField {
+                                    struct_name: &sname,
+                                    field: &field,
+                                    temporary: !matches!(object.kind, ExprKind::Identifier(_)),
+                                },
                                 span,
                                 op,
                                 spelling,
@@ -3595,10 +3653,16 @@ impl<'a> super::TypeChecker<'a> {
                         }
                     }
                 }
+                // Not a buffer after all — an ordinary field access whose
+                // object is already typed. Finish it from that type and record
+                // the result for the whole access, which is the only thing
+                // `infer_expr` would have done on top of `infer_field_access`.
+                let ty = self.infer_field_access_on_ty(obj_ty, field, &args[0].value.span);
+                self.record_expr_type(&args[0].value.span, &ty);
+                ty
             }
-        }
-
-        let buf_ty = self.infer_expr(&args[0].value);
+            _ => self.infer_expr(&args[0].value),
+        };
         let elem = match &buf_ty {
             Type::Named { name, args: ta } if name == "Vec" && ta.len() == 1 => ta[0].clone(),
             _ => {

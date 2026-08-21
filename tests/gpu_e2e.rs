@@ -2607,6 +2607,56 @@ fn a_resident_field_reduction_resolves_layout_groups_and_offsets() {
     );
 }
 
+/// A resident reduction over a TEMPORARY buffer answers correctly, and a
+/// reduction over a BINDING leaves that binding usable (GPU-SLIP-4b-3b).
+///
+/// The two halves are the same question — who owns the device buffer — asked
+/// from both sides, and neither can be answered by the reduction's own output.
+/// A temporary that is never freed still prints the right number, and a binding
+/// that the reduction wrongly freed also prints the right number the FIRST
+/// time. So the binding half reduces twice and then downloads: a freed handle
+/// cannot survive being read three times. `tests/codegen.rs` holds the matching
+/// structural half (the free is emitted once per temporary and never for a
+/// binding), which is the part no execution can show.
+#[test]
+fn a_resident_reduction_frees_temporaries_and_leaves_bindings_alive() {
+    let Some(backend) = gpu_or_skip() else { return };
+
+    let tag = "resident_field_ownership";
+    let dir = scratch(tag);
+    let src = dir.join(format!("{tag}.kara"));
+    std::fs::write(
+        &src,
+        "struct Cell { m: f32, t: f32 }\n\
+        fn main() {\n\
+        \x20   let cells: Vec[Cell] = [Cell { m: 1.0, t: 10.0 },\n\
+        \x20                           Cell { m: 2.0, t: 20.0 },\n\
+        \x20                           Cell { m: 3.0, t: 30.0 }];\n\
+        \x20   let buf = gpu.upload(cells);\n\
+        \x20   println(f\"{gpu.sum(buf.m)}\");\n\
+        \x20   println(f\"{gpu.sum(buf.t)}\");\n\
+        \x20   let back = gpu.download(buf);\n\
+        \x20   println(f\"{back.len()}\");\n\
+        \x20   let one: Vec[Cell] = [Cell { m: 4.0, t: 40.0 }, Cell { m: 5.0, t: 50.0 }];\n\
+        \x20   println(f\"{gpu.sum(gpu.upload(one).m)}\");\n\
+        \x20   let two: Vec[Cell] = [Cell { m: 6.0, t: 60.0 }];\n\
+        \x20   println(f\"{gpu.sum(gpu.upload(two).t)}\");\n\
+        }\n",
+    )
+    .expect("write fixture source");
+
+    let out =
+        build_and_run_on_gpu(&dir, &src, tag, backend).unwrap_or_else(|e| panic!("{tag}: {e}"));
+    let got: Vec<&str> = out.lines().map(str::trim).collect();
+    assert_eq!(
+        got,
+        vec!["6", "60", "3", "9", "60"],
+        "{tag}: expected the binding to answer twice and still download 3 \
+         elements, then the two temporaries to answer 4+5 and 60. Full \
+         output:\n{out}"
+    );
+}
+
 /// An EMPTY resident buffer answers with the operation's identity, and `min`
 /// answers `None` — no device is touched at all (GPU-SLIP-4b-3).
 ///

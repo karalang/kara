@@ -153,7 +153,7 @@ pub(crate) struct Accel<'ctx> {
     /// resident device buffer's field rather than a host `Vec`, so the two
     /// lowerings never have to guess from LLVM types (a `GpuBuffer`'s
     /// `{i64, i64}` is structurally ambiguous — see `gpu_buffer_var_names`).
-    pub(crate) gpu_resident_field: HashMap<(usize, usize), (String, String)>,
+    pub(crate) gpu_resident_field: HashMap<(usize, usize), (String, String, bool)>,
     pub(crate) gpu_buffer_elem_structs: HashMap<String, String>,
     /// Names of variables that are actually a `GpuBuffer` (`{handle, n}` value,
     /// bound by `let buf = gpu.upload(...)` / a resident `gpu.dispatch`). The

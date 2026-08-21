@@ -110,6 +110,27 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
         let obj_ty = self.infer_expr(object);
+        self.infer_field_access_on_ty(obj_ty, field, span)
+    }
+
+    /// Resolve `.field` on an object whose type is ALREADY known, with no
+    /// second look at the expression that produced it.
+    ///
+    /// Split out of [`Self::infer_field_access`] for the one caller that must
+    /// decide something about the receiver *before* the field is resolved:
+    /// `gpu.<reduce>(<expr>.field)` has to know whether `<expr>` is a device
+    /// buffer, and the only way to know is to infer it. Re-inferring it here
+    /// would report every error inside it twice, so the caller infers once and
+    /// hands the type down. Everything from the refinement projection onward is
+    /// a pure function of `obj_ty`, which is what makes the split safe — the
+    /// intercepts that DO need the syntax (primitive consts, a bare type name)
+    /// stay above, in `infer_field_access`.
+    pub(super) fn infer_field_access_on_ty(
+        &mut self,
+        obj_ty: Type,
+        field: &str,
+        span: &Span,
+    ) -> Type {
         if obj_ty == Type::Error {
             return Type::Error;
         }

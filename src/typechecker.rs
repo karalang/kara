@@ -1572,7 +1572,7 @@ pub struct TypeCheckResult {
     /// `group_strides` / `field_src` descriptors for `gpu.upload`. Recording a
     /// name rather than an offset keeps one layout authority instead of two
     /// that can drift.
-    pub gpu_resident_field: FxHashMap<SpanKey, (String, String)>,
+    pub gpu_resident_field: FxHashMap<SpanKey, (String, String, bool)>,
     /// Bare-call dispatch resolutions: span of a `Call(Identifier(name))` →
     /// resolved target type name (e.g. `"Wrapper"`). Populated when expected-
     /// type inference resolves a bare associated-function call to a concrete
@@ -2067,7 +2067,7 @@ pub struct TypeChecker<'a> {
     pub(super) gpu_reduce_int_elems: FxHashMap<SpanKey, String>,
     /// `gpu.<reduce>(buf.field)` arg span → `(struct, field)`. See the public
     /// copy on `TypeCheckResult`.
-    pub(super) gpu_resident_field: FxHashMap<SpanKey, (String, String)>,
+    pub(super) gpu_resident_field: FxHashMap<SpanKey, (String, String, bool)>,
     /// `TaskHandle[T].join()` MethodCall span → result type `T`. See the
     /// public copy on `TypeCheckResult` for the full rationale.
     pub(super) task_join_return_types: FxHashMap<SpanKey, TypeExpr>,
