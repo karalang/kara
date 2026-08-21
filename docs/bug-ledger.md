@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 140 | 6 |
 | double-free | 134 | 1 |
 | codegen-gap | 122 | 2 |
-| diagnostics | 93 | 1 |
+| diagnostics | 94 | 2 |
 | false-positive | 91 | 0 |
 | perf | 83 | 0 |
 | crash | 55 | 0 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 972 | 7 |
-| typecheck | 228 | 3 |
+| typecheck | 229 | 4 |
 | interp | 169 | 1 |
 | ownership | 62 | 0 |
 | other | 60 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 7 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1445 surfaced · 12 open · 1411 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1446 surfaced · 13 open · 1411 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (12)
+### Open (13)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -142,6 +142,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1445 surfaced
 | B-2026-08-21-24 | 2026-08-21 | codegen | medium | AN ARRAY **LITERAL** TEMPORARY IN A `ref Slice[T]` PARAMETER FAILS LLVM MODULE VERIFICATION -- `f([1u8, 2u8, 3u8])` builds nothing while the by-value `Slice[T]` spelling of the same call compiles and runs | roadmap.md |
 | B-2026-08-21-25 | 2026-08-21 | codegen | medium | A METHOD CALL ON A FIXED-ARRAY **TEMPORARY** HAS NO CODEGEN LOWERING -- `n.to_ne_bytes().len()` build-fails with the dispatcher's own "this is a codegen bug" message while the bound two-line spelling works | roadmap.md |
 | B-2026-08-21-26 | 2026-08-21 | typecheck | medium | `TryFrom[intN]` FOR A C-LIKE `#[repr(intN)]` ENUM DOES NOT EXIST -- design.md § Enum Discriminant Runtime Surface commits to auto-generating it and shows the worked `match UsbClass.try_from(raw)`, which fails to compile | roadmap.md |
+| B-2026-08-21-27 | 2026-08-21 | typecheck | medium | self-host typechecker diverges from Rust on a struct-update expression missing a field | selfhost |
 
 ### Wontfix (8)
 
