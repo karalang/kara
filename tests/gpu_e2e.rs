@@ -2400,3 +2400,81 @@ fn gpu_prod_of_an_empty_buffer_is_one_on_both_legs() {
         "1",
     );
 }
+
+/// A reduction over more elements than ONE dispatch grid row can address must
+/// still see every element (B-2026-08-21-13).
+///
+/// `run_compute` caps a dispatch's X extent at 65535 workgroups and spreads
+/// the remainder across grid ROWS. Every reduce/scan shader indexed `gid.x`
+/// alone and wrote its partial to `output[wid.x]`, so above
+/// `65535 * 64 = 4_194_240` elements row 0 was the only row read, and the
+/// rows that did run overwrote each other's partials. Measured before the
+/// fix, on this exact fixture: `5000006 / 7 / 4999999` came back as
+/// `4194240 / 1 / 0`.
+///
+/// **Build-only, deliberately.** The sibling reduction tests compare all
+/// three surfaces, but a dispatch grid exists only on the device path — the
+/// interpreter has no geometry to get wrong — and a tree-walk over five
+/// million elements costs minutes for no added coverage. What replaces the
+/// interpreter here is an oracle that needs no twin: every value is a small
+/// integer and every partial sum stays under 2^24, so the sum is exact in
+/// f32 REGARDLESS of tree order. This test therefore checks element
+/// COVERAGE, not float association, which is the property actually at risk.
+///
+/// Three assertions that fail differently, so the failure names its own
+/// cause: the sum catches a dropped COUNT, while max and argmax catch
+/// dropped DATA — a maximum planted in the very last element is invisible to
+/// any shader that stops at row 0.
+#[test]
+fn a_reduction_past_one_dispatch_row_still_sees_every_element() {
+    let Some(backend) = gpu_or_skip() else { return };
+
+    // The boundary this fixture must clear, spelled out so it cannot rot
+    // below the threshold and start passing for the wrong reason.
+    const ROW_SPAN: usize = 65535 * 64;
+    const N: usize = 5_000_000;
+    // A COMPILE-TIME guard, not a runtime one: shrinking `N` below a single
+    // row would leave this test passing while testing nothing at all, and
+    // that should break the build rather than quietly go green.
+    const _: () = assert!(N > ROW_SPAN);
+
+    let tag = "reduce_two_dispatch_rows";
+    let dir = scratch(tag);
+    let src = dir.join(format!("{tag}.kara"));
+    std::fs::write(
+        &src,
+        "fn main() {\n\
+        \x20   let mut v: Vec[f32] = Vec.new();\n\
+        \x20   let mut i: i64 = 0;\n\
+        \x20   while i < 5000000 {\n\
+        \x20       v.push(1.0);\n\
+        \x20       i = i + 1;\n\
+        \x20   }\n\
+        \x20   v[4999999] = 7.0;\n\
+        \x20   println(f\"{gpu.sum(v)}\");\n\
+        \x20   let m = gpu.max(v);\n\
+        \x20   match m {\n\
+        \x20       Some(x) => println(f\"{x}\"),\n\
+        \x20       None => println(\"none\"),\n\
+        \x20   }\n\
+        \x20   let a = gpu.argmax(v);\n\
+        \x20   match a {\n\
+        \x20       Some(k) => println(f\"{k}\"),\n\
+        \x20       None => println(\"none\"),\n\
+        \x20   }\n\
+        }\n",
+    )
+    .expect("write fixture source");
+
+    let out =
+        build_and_run_on_gpu(&dir, &src, tag, backend).unwrap_or_else(|e| panic!("{tag}: {e}"));
+    let got: Vec<&str> = out.lines().map(str::trim).collect();
+
+    assert_eq!(
+        got,
+        vec!["5000006", "7", "4999999"],
+        "{tag}: a reduction lost the elements past dispatch row 0 \
+         (4_999_999 ones plus a 7 in the LAST slot). Pre-fix this read \
+         `4194240 / 1 / 0` — one row's worth, with the tail unseen."
+    );
+}

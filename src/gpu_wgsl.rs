@@ -82,6 +82,17 @@ const WORKGROUP_SIZE: u32 = 64;
 /// `runtime/src/gpu.rs::run_compute` (the dispatch split must match).
 pub const DISPATCH_X_SPAN: u32 = 65535 * WORKGROUP_SIZE;
 
+/// WORKGROUPS per dispatch-grid X row — the same `65535` cap, counted in
+/// workgroups rather than threads. A kernel that writes ONE value per
+/// workgroup (every reduction partial, every scan chunk-total, every
+/// overflow flag) must index that output by the FLAT workgroup number
+/// `wid.y * DISPATCH_X_WORKGROUPS + wid.x`, because `wid.x` alone repeats
+/// on every row of a 2D dispatch and the rows would overwrite each other.
+/// Degenerates to `wid.x` on a single-row dispatch (`wid.y == 0`), so the
+/// one form is correct at every size — exactly like [`DISPATCH_X_SPAN`].
+/// Runtime twin: `runtime/src/gpu.rs::run_compute` (`x = wg.min(65535)`).
+pub const DISPATCH_X_WORKGROUPS: u32 = DISPATCH_X_SPAN / WORKGROUP_SIZE;
+
 /// Emit the WGSL compute shader for a slice-0 element-wise-map `#[gpu]`
 /// kernel. On success the returned string is a complete, standalone module
 /// with `@group(0) @binding(0)` = read `input: array<f32>`, `@binding(1)` =
@@ -1007,7 +1018,8 @@ pub fn emit_reduce_kernel(op: ReduceOp, elem: &str) -> Result<String, WgslError>
          \x20       @builtin(workgroup_id) wid: vec3<u32>,\n\
          \x20       @builtin(global_invocation_id) gid: vec3<u32>) {{\n\
          \x20   let t = lid.x;\n\
-         \x20   let i = gid.x;\n\
+         \x20   let i = gid.y * {DISPATCH_X_SPAN}u + gid.x;\n\
+         \x20   let wg = wid.y * {DISPATCH_X_WORKGROUPS}u + wid.x;\n\
          \x20   if (i < arrayLength(&input)) {{ scratch[t] = input[i]; }} else {{ scratch[t] = {identity}; }}\n\
          \x20   workgroupBarrier();\n\
          \n\
@@ -1022,7 +1034,7 @@ pub fn emit_reduce_kernel(op: ReduceOp, elem: &str) -> Result<String, WgslError>
          \x20   // Each workgroup writes ITS OWN partial. With one workgroup\n\
          \x20   // that is slot 0 and the answer; with several the host folds\n\
          \x20   // the partials by dispatching this same shader over them.\n\
-         \x20   if (t == 0u) {{ output[wid.x] = scratch[0]; }}\n\
+         \x20   if (t == 0u) {{ output[wg] = scratch[0]; }}\n\
          }}\n"
     ))
 }
@@ -1092,7 +1104,8 @@ pub fn emit_scan_kernel(elem: &str) -> Result<String, WgslError> {
          \x20       @builtin(workgroup_id) wid: vec3<u32>,\n\
          \x20       @builtin(global_invocation_id) gid: vec3<u32>) {{\n\
          \x20   let t = lid.x;\n\
-         \x20   let i = gid.x;\n\
+         \x20   let i = gid.y * {DISPATCH_X_SPAN}u + gid.x;\n\
+         \x20   let wg = wid.y * {DISPATCH_X_WORKGROUPS}u + wid.x;\n\
          \x20   // Every lane loads, including the padding lanes — the scan\n\
          \x20   // reads across the whole width, so a lane left uninitialised\n\
          \x20   // would poison its neighbours. 0.0 is the Sum identity.\n\
@@ -1117,7 +1130,7 @@ pub fn emit_scan_kernel(elem: &str) -> Result<String, WgslError> {
          \x20   if (i < arrayLength(&input)) {{ output[i] = scratch[t]; }}\n\
          \x20   // Lane {last} always holds this chunk's total: a short chunk is\n\
          \x20   // padded with the identity, so the padding adds nothing.\n\
-         \x20   if (t == {last}u) {{ totals[wid.x] = scratch[{last}]; }}\n\
+         \x20   if (t == {last}u) {{ totals[wg] = scratch[{last}]; }}\n\
          }}\n"
     ))
 }
@@ -1185,7 +1198,8 @@ pub fn emit_int_scan_kernel(elem: &str) -> Result<String, WgslError> {
          \x20       @builtin(workgroup_id) wid: vec3<u32>,\n\
          \x20       @builtin(global_invocation_id) gid: vec3<u32>) {{\n\
          \x20   let t = lid.x;\n\
-         \x20   let i = gid.x;\n\
+         \x20   let i = gid.y * {DISPATCH_X_SPAN}u + gid.x;\n\
+         \x20   let wg = wid.y * {DISPATCH_X_WORKGROUPS}u + wid.x;\n\
          \x20   ovf[t] = 0u;\n\
          \x20   // Every lane loads, padding included — the scan reads across\n\
          \x20   // the whole width, so an uninitialised lane would poison its\n\
@@ -1208,7 +1222,7 @@ pub fn emit_int_scan_kernel(elem: &str) -> Result<String, WgslError> {
          \x20   }}\n\
          \n\
          \x20   if (i < arrayLength(&input)) {{ output[i] = scratch[t]; }}\n\
-         \x20   if (t == {last}u) {{ totals[wid.x] = scratch[{last}]; }}\n\
+         \x20   if (t == {last}u) {{ totals[wg] = scratch[{last}]; }}\n\
          \x20   workgroupBarrier();\n\
          \x20   // ONE lane ORs the whole workgroup's flags. A scan's every\n\
          \x20   // lane holds a live output, so `ovf[0]` alone would miss the\n\
@@ -1221,7 +1235,7 @@ pub fn emit_int_scan_kernel(elem: &str) -> Result<String, WgslError> {
          \x20           any = any | ovf[q];\n\
          \x20           q = q + 1u;\n\
          \x20       }}\n\
-         \x20       flags[wid.x] = any;\n\
+         \x20       flags[wg] = any;\n\
          \x20   }}\n\
          }}\n"
     ))
@@ -1266,11 +1280,12 @@ pub fn emit_int_scan_offset_kernel(elem: &str) -> Result<String, WgslError> {
          fn main(@builtin(global_invocation_id) gid: vec3<u32>,\n\
          \x20       @builtin(workgroup_id) wid: vec3<u32>,\n\
          \x20       @builtin(local_invocation_id) lid: vec3<u32>) {{\n\
-         \x20   let i = gid.x;\n\
+         \x20   let i = gid.y * {DISPATCH_X_SPAN}u + gid.x;\n\
+         \x20   let wg = wid.y * {DISPATCH_X_WORKGROUPS}u + wid.x;\n\
          \x20   // Lane 0 clears its workgroup's flag word before any lane can\n\
          \x20   // set it. Without this a workgroup whose threads all return\n\
          \x20   // early would leave the slot unwritten.\n\
-         \x20   if (lid.x == 0u) {{ flags[wid.x] = 0u; }}\n\
+         \x20   if (lid.x == 0u) {{ flags[wg] = 0u; }}\n\
          \x20   workgroupBarrier();\n\
          \x20   if (i >= arrayLength(&scanned)) {{ return; }}\n\
          \x20   let c = i / {width}u;\n\
@@ -1282,7 +1297,7 @@ pub fn emit_int_scan_offset_kernel(elem: &str) -> Result<String, WgslError> {
          \x20   {add}\n\
          \x20   output[i] = s;\n\
          \x20   // Any lane may raise it; the host ORs across workgroups.\n\
-         \x20   if (bad) {{ flags[wid.x] = 1u; }}\n\
+         \x20   if (bad) {{ flags[wg] = 1u; }}\n\
          }}\n"
     ))
 }
@@ -1321,7 +1336,7 @@ pub fn emit_scan_offset_kernel(elem: &str) -> Result<String, WgslError> {
          \n\
          @compute @workgroup_size({width})\n\
          fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{\n\
-         \x20   let i = gid.x;\n\
+         \x20   let i = gid.y * {DISPATCH_X_SPAN}u + gid.x;\n\
          \x20   if (i >= arrayLength(&scanned)) {{ return; }}\n\
          \x20   let c = i / {width}u;\n\
          \x20   // `offsets` is the INCLUSIVE prefix of the chunk totals, so\n\
@@ -1372,7 +1387,8 @@ pub fn emit_deviation_kernel(elem: &str) -> Result<String, WgslError> {
          \x20       @builtin(workgroup_id) wid: vec3<u32>,\n\
          \x20       @builtin(global_invocation_id) gid: vec3<u32>) {{\n\
          \x20   let t = lid.x;\n\
-         \x20   let i = gid.x;\n\
+         \x20   let i = gid.y * {DISPATCH_X_SPAN}u + gid.x;\n\
+         \x20   let wg = wid.y * {DISPATCH_X_WORKGROUPS}u + wid.x;\n\
          \x20   // The ONLY difference from the sum shader: the squared\n\
          \x20   // deviation is formed on load, so no n-element intermediate\n\
          \x20   // is written. The mean arrives as a uniform because it cannot\n\
@@ -1395,7 +1411,7 @@ pub fn emit_deviation_kernel(elem: &str) -> Result<String, WgslError> {
          \n\
          \x20   // One partial per workgroup; the host folds them with the\n\
          \x20   // plain SUM shader, exactly as the dot path does.\n\
-         \x20   if (t == 0u) {{ output[wid.x] = scratch[0]; }}\n\
+         \x20   if (t == 0u) {{ output[wg] = scratch[0]; }}\n\
          }}\n"
     ))
 }
@@ -1530,7 +1546,8 @@ pub fn emit_arg_kernel(op: ReduceOp, elem: &str, fold: bool) -> Result<String, W
          \x20       @builtin(workgroup_id) wid: vec3<u32>,\n\
          \x20       @builtin(global_invocation_id) gid: vec3<u32>) {{\n\
          \x20   let t = lid.x;\n\
-         \x20   let i = gid.x;\n\
+         \x20   let i = gid.y * {DISPATCH_X_SPAN}u + gid.x;\n\
+         \x20   let wg = wid.y * {DISPATCH_X_WORKGROUPS}u + wid.x;\n\
          {seed}\n\
          \x20   workgroupBarrier();\n\
          \n\
@@ -1546,7 +1563,7 @@ pub fn emit_arg_kernel(op: ReduceOp, elem: &str, fold: bool) -> Result<String, W
          \n\
          \x20   // One surviving candidate per workgroup, as an ABSOLUTE index\n\
          \x20   // into `input` — so the next level can look its value up again.\n\
-         \x20   if (t == 0u) {{ output[wid.x] = idxs[0]; }}\n\
+         \x20   if (t == 0u) {{ output[wg] = idxs[0]; }}\n\
          }}\n"
     ))
 }
@@ -1702,7 +1719,8 @@ pub fn emit_int_reduce_kernel(op: ReduceOp, elem: &str) -> Result<String, WgslEr
          \x20       @builtin(workgroup_id) wid: vec3<u32>,\n\
          \x20       @builtin(global_invocation_id) gid: vec3<u32>) {{\n\
          \x20   let t = lid.x;\n\
-         \x20   let i = gid.x;\n\
+         \x20   let i = gid.y * {DISPATCH_X_SPAN}u + gid.x;\n\
+         \x20   let wg = wid.y * {DISPATCH_X_WORKGROUPS}u + wid.x;\n\
          \x20   if (i < arrayLength(&input)) {{ scratch[t] = input[i]; }} else {{ scratch[t] = {identity}; }}\n\
          {ovf_init}\
          \x20   workgroupBarrier();\n\
@@ -1719,7 +1737,7 @@ pub fn emit_int_reduce_kernel(op: ReduceOp, elem: &str) -> Result<String, WgslEr
          \n\
          \x20   // One partial AND one overflow bit per workgroup; the host ORs\n\
          \x20   // the bits and re-dispatches over the partials.\n\
-         \x20   if (t == 0u) {{ output[wid.x] = scratch[0]; flags[wid.x] = {ovf_out}; }}\n\
+         \x20   if (t == 0u) {{ output[wg] = scratch[0]; flags[wg] = {ovf_out}; }}\n\
          }}\n"
     ))
 }
@@ -1903,7 +1921,8 @@ pub fn emit_int_deviation_kernel(elem: &str) -> Result<String, WgslError> {
          \x20       @builtin(workgroup_id) wid: vec3<u32>,\n\
          \x20       @builtin(global_invocation_id) gid: vec3<u32>) {{\n\
          \x20   let t = lid.x;\n\
-         \x20   let i = gid.x;\n\
+         \x20   let i = gid.y * {DISPATCH_X_SPAN}u + gid.x;\n\
+         \x20   let wg = wid.y * {DISPATCH_X_WORKGROUPS}u + wid.x;\n\
          \x20   let k_lo = shift[0];\n\
          \x20   let k_hi = shift[1];\n\
          \x20   ovf[t] = 0u;\n\
@@ -1934,9 +1953,9 @@ pub fn emit_int_deviation_kernel(elem: &str) -> Result<String, WgslError> {
          \n\
          \x20   // Two words per workgroup partial, plus its overflow bit.\n\
          \x20   if (t == 0u) {{\n\
-         \x20       output[2u * wid.x] = scratch[0].x;\n\
-         \x20       output[2u * wid.x + 1u] = scratch[0].y;\n\
-         \x20       flags[wid.x] = ovf[0];\n\
+         \x20       output[2u * wg] = scratch[0].x;\n\
+         \x20       output[2u * wg + 1u] = scratch[0].y;\n\
+         \x20       flags[wg] = ovf[0];\n\
          \x20   }}\n\
          }}\n"
     ))
@@ -1967,7 +1986,8 @@ pub fn emit_wide_fold_kernel() -> String {
          \x20       @builtin(workgroup_id) wid: vec3<u32>,\n\
          \x20       @builtin(global_invocation_id) gid: vec3<u32>) {{\n\
          \x20   let t = lid.x;\n\
-         \x20   let i = gid.x;\n\
+         \x20   let i = gid.y * {DISPATCH_X_SPAN}u + gid.x;\n\
+         \x20   let wg = wid.y * {DISPATCH_X_WORKGROUPS}u + wid.x;\n\
          \x20   ovf[t] = 0u;\n\
          \x20   // Two words per partial, so the element count is half the\n\
          \x20   // array length.\n\
@@ -1994,9 +2014,9 @@ pub fn emit_wide_fold_kernel() -> String {
          \x20   }}\n\
          \n\
          \x20   if (t == 0u) {{\n\
-         \x20       output[2u * wid.x] = scratch[0].x;\n\
-         \x20       output[2u * wid.x + 1u] = scratch[0].y;\n\
-         \x20       flags[wid.x] = ovf[0];\n\
+         \x20       output[2u * wg] = scratch[0].x;\n\
+         \x20       output[2u * wg + 1u] = scratch[0].y;\n\
+         \x20       flags[wg] = ovf[0];\n\
          \x20   }}\n\
          }}\n"
     )
@@ -2386,7 +2406,8 @@ pub fn emit_int_dot_kernel(elem: &str) -> Result<String, WgslError> {
          \x20       @builtin(workgroup_id) wid: vec3<u32>,\n\
          \x20       @builtin(global_invocation_id) gid: vec3<u32>) {{\n\
          \x20   let t = lid.x;\n\
-         \x20   let i = gid.x;\n\
+         \x20   let i = gid.y * {DISPATCH_X_SPAN}u + gid.x;\n\
+         \x20   let wg = wid.y * {DISPATCH_X_WORKGROUPS}u + wid.x;\n\
          \x20   if (i < arrayLength(&a)) {{\n\
          \x20       {body}\n\
          \x20   }} else {{\n\
@@ -2407,7 +2428,7 @@ pub fn emit_int_dot_kernel(elem: &str) -> Result<String, WgslError> {
          \x20       stride = stride / 2u;\n\
          \x20   }}\n\
          \n\
-         \x20   if (t == 0u) {{ output[wid.x] = scratch[0]; flags[wid.x] = ovf[0]; }}\n\
+         \x20   if (t == 0u) {{ output[wg] = scratch[0]; flags[wg] = ovf[0]; }}\n\
          }}\n"
     ))
 }
@@ -2452,7 +2473,8 @@ pub fn emit_dot_kernel(elem: &str) -> Result<String, WgslError> {
          \x20       @builtin(workgroup_id) wid: vec3<u32>,\n\
          \x20       @builtin(global_invocation_id) gid: vec3<u32>) {{\n\
          \x20   let t = lid.x;\n\
-         \x20   let i = gid.x;\n\
+         \x20   let i = gid.y * {DISPATCH_X_SPAN}u + gid.x;\n\
+         \x20   let wg = wid.y * {DISPATCH_X_WORKGROUPS}u + wid.x;\n\
          \x20   // The ONLY difference from the sum shader: the product is\n\
          \x20   // formed on load, so no n-element intermediate is written.\n\
          \x20   if (i < arrayLength(&a)) {{ scratch[t] = a[i] * b[i]; }} else {{ scratch[t] = 0.0; }}\n\
@@ -2468,7 +2490,7 @@ pub fn emit_dot_kernel(elem: &str) -> Result<String, WgslError> {
          \n\
          \x20   // One partial per workgroup; the host folds them with the\n\
          \x20   // plain SUM shader, which is what makes dot and sum agree.\n\
-         \x20   if (t == 0u) {{ output[wid.x] = scratch[0]; }}\n\
+         \x20   if (t == 0u) {{ output[wg] = scratch[0]; }}\n\
          }}\n"
     ))
 }
@@ -5362,9 +5384,97 @@ mod tests {
             "var stride: u32 = 32u;",
             "if (t < stride) { scratch[t] = scratch[t] + scratch[t + stride]; }",
             "stride = stride / 2u;",
-            "if (t == 0u) { output[wid.x] = scratch[0]; }",
+            "if (t == 0u) { output[wg] = scratch[0]; }",
         ] {
             assert!(wgsl.contains(needle), "missing `{needle}` in:\n{wgsl}");
+        }
+    }
+
+    /// Every reduce/scan shader must recover the FLAT thread index and the
+    /// FLAT workgroup number (B-2026-08-21-13).
+    ///
+    /// `run_compute` caps a dispatch's X extent at 65535 workgroups and
+    /// spreads anything longer across grid ROWS. So past
+    /// `65535 * 64 = 4_194_240` elements, a shader reading `gid.x` sees only
+    /// row 0, and one writing `output[wid.x]` has every row overwrite row
+    /// 0's partials. All twelve emitters here did both: `gpu.sum` of
+    /// 5_000_000 ones answered `4_194_240` (exactly one row), and `gpu.max`
+    /// answered 1 with the true maximum planted in the last element.
+    ///
+    /// The three MAP kernels always had this right, which is exactly why it
+    /// hid — the convention is documented on [`DISPATCH_X_SPAN`] and was
+    /// honoured everywhere except the family added last. A structural test
+    /// beats another end-to-end case here: the failure only appears above
+    /// four million elements, so no ordinary fixture reaches it.
+    ///
+    /// **A new reduce/scan emitter must be added to this list** — the
+    /// distinct-emitter count below is what makes that a failure rather
+    /// than an omission.
+    #[test]
+    fn every_reduction_shader_indexes_the_full_2d_dispatch_grid() {
+        let mut shaders: Vec<(&str, String)> = Vec::new();
+        for op in [ReduceOp::Sum, ReduceOp::Prod, ReduceOp::Min, ReduceOp::Max] {
+            if let Ok(w) = emit_reduce_kernel(op, "f32") {
+                shaders.push(("reduce", w));
+            }
+            if let Ok(w) = emit_int_reduce_kernel(op, "i32") {
+                shaders.push(("int_reduce", w));
+            }
+        }
+        for op in [ReduceOp::Argmin, ReduceOp::Argmax] {
+            for fold in [false, true] {
+                if let Ok(w) = emit_arg_kernel(op, "f32", fold) {
+                    shaders.push(("arg", w));
+                }
+            }
+        }
+        for (name, made) in [
+            ("scan", emit_scan_kernel("f32")),
+            ("scan_offset", emit_scan_offset_kernel("f32")),
+            ("int_scan", emit_int_scan_kernel("i32")),
+            ("int_scan_offset", emit_int_scan_offset_kernel("i32")),
+            ("deviation", emit_deviation_kernel("f32")),
+            ("int_deviation", emit_int_deviation_kernel("i32")),
+            ("dot", emit_dot_kernel("f32")),
+            ("int_dot", emit_int_dot_kernel("i32")),
+        ] {
+            shaders.push((name, made.unwrap()));
+        }
+        shaders.push(("wide_fold", emit_wide_fold_kernel()));
+
+        let distinct: std::collections::BTreeSet<&str> = shaders.iter().map(|(n, _)| *n).collect();
+        assert_eq!(
+            distinct.len(),
+            12,
+            "every reduce/scan emitter must be covered; got {distinct:?}"
+        );
+
+        let flat_thread = format!("let i = gid.y * {DISPATCH_X_SPAN}u + gid.x;");
+        let flat_group = format!("let wg = wid.y * {DISPATCH_X_WORKGROUPS}u + wid.x;");
+        for (name, wgsl) in &shaders {
+            assert!(
+                wgsl.contains(&flat_thread),
+                "{name}: reads only row 0 of the dispatch grid\n{wgsl}"
+            );
+            // Only the shaders that actually write a per-workgroup output
+            // bind a workgroup id — `scan_offset` writes `output[i]` per
+            // THREAD and needs none, so demanding `wg` there would emit a
+            // reference to an unbound `wid` and fail shader validation.
+            if wgsl.contains("@builtin(workgroup_id)") {
+                assert!(
+                    wgsl.contains(&flat_group),
+                    "{name}: binds a workgroup id but never forms the flat \
+                     workgroup number\n{wgsl}"
+                );
+            }
+            // The load-bearing half: NOTHING may index an output by `wid.x`,
+            // which repeats on every row of the grid. The binding above is
+            // the single legal mention, so strike it and look for the rest.
+            let stray = wgsl.replace(&flat_group, "");
+            assert!(
+                !stray.contains("wid.x"),
+                "{name}: indexes by `wid.x`, which collides across grid rows\n{wgsl}"
+            );
         }
     }
 
@@ -5387,7 +5497,7 @@ mod tests {
             "if (t >= stride) { scratch[t] = scratch[t] + addend; }",
             "stride = stride * 2u;",
             "if (i < arrayLength(&input)) { output[i] = scratch[t]; }",
-            "if (t == 63u) { totals[wid.x] = scratch[63]; }",
+            "if (t == 63u) { totals[wg] = scratch[63]; }",
         ] {
             assert!(scan.contains(needle), "missing `{needle}` in:\n{scan}");
         }
@@ -5559,7 +5669,7 @@ mod tests {
         for shared in [
             "var<workgroup> idxs: array<u32, 64>;",
             "if (takes_b(idxs[t], idxs[t + stride])) { idxs[t] = idxs[t + stride]; }",
-            "if (t == 0u) { output[wid.x] = idxs[0]; }",
+            "if (t == 0u) { output[wg] = idxs[0]; }",
         ] {
             assert!(seed.contains(shared), "seed missing `{shared}`");
             assert!(fold.contains(shared), "fold missing `{shared}`");
@@ -5593,7 +5703,7 @@ mod tests {
             "@compute @workgroup_size(64)",
             "var stride: u32 = 32u;",
             "if (t < stride) { scratch[t] = scratch[t] + scratch[t + stride]; }",
-            "if (t == 0u) { output[wid.x] = scratch[0]; }",
+            "if (t == 0u) { output[wg] = scratch[0]; }",
         ] {
             assert!(dev.contains(shared), "deviation missing `{shared}`:\n{dev}");
             assert!(sum.contains(shared), "sum missing `{shared}`");
@@ -5709,7 +5819,7 @@ mod tests {
             "if (t < stride) { scratch[t] = scratch[t] + scratch[t + stride]; }",
             "workgroupBarrier();",
             "stride = stride / 2u;",
-            "if (t == 0u) { output[wid.x] = scratch[0]; }",
+            "if (t == 0u) { output[wg] = scratch[0]; }",
         ] {
             assert!(dot.contains(shared), "dot missing `{shared}`:\n{dot}");
             assert!(sum.contains(shared), "sum missing `{shared}`:\n{sum}");
@@ -5804,7 +5914,7 @@ mod tests {
             ),
             "signed add overflow test:\n{sum_i}"
         );
-        assert!(sum_i.contains("flags[wid.x] = ovf[0];"), "{sum_i}");
+        assert!(sum_i.contains("flags[wg] = ovf[0];"), "{sum_i}");
         // Unsigned overflow is a carry, not a sign flip.
         let sum_u = emit_int_reduce_kernel(ReduceOp::Sum, "u32").unwrap();
         assert!(
@@ -5822,7 +5932,7 @@ mod tests {
                 "{op:?} needs no ovf:\n{w}"
             );
             assert!(w.contains("@binding(2) var<storage, read_write> flags:  array<u32>;"));
-            assert!(w.contains("flags[wid.x] = 0u;"), "{op:?}:\n{w}");
+            assert!(w.contains("flags[wg] = 0u;"), "{op:?}:\n{w}");
         }
     }
 
