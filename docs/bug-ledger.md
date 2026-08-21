@@ -96,13 +96,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 185 | 0 |
 | run-vs-build | 147 | 0 |
 | missing-feature | 143 | 9 |
-| double-free | 134 | 1 |
+| double-free | 134 | 0 |
 | codegen-gap | 122 | 2 |
 | diagnostics | 94 | 1 |
 | false-positive | 91 | 0 |
 | perf | 83 | 0 |
 | crash | 55 | 0 |
-| other | 53 | 0 |
+| other | 54 | 0 |
 | soundness | 51 | 0 |
 | use-after-free | 20 | 0 |
 
@@ -110,11 +110,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 973 | 6 |
+| codegen | 973 | 5 |
 | typecheck | 231 | 5 |
 | interp | 169 | 1 |
+| other | 62 | 0 |
 | ownership | 62 | 0 |
-| other | 61 | 0 |
 | cli | 59 | 1 |
 | autopar | 54 | 0 |
 | parser | 35 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 8 | 1 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1451 surfaced · 14 open · 1415 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1452 surfaced · 13 open · 1417 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (14)
+### Open (13)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -136,7 +136,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1451 surfaced
 | B-2026-08-21-9 | 2026-08-21 | parser | medium | design.md WRITES SYNTAX THE PARSER HAS NO PRODUCTION FOR, in two places syntax.md also disagrees with: the inline associated-type binding `Trait[Assoc = T]` (43 lines of design.md, and syntax.md's own comment at :650) has no form in `TRAIT_BOUND = PATH [ "[" TYPE_LIST "]" ]`, and an effect clause on an impl header (`impl From[E] for A with writes(Log) {`) has no form at all | roadmap.md |
 | B-2026-08-21-17 | 2026-08-21 | lexer | medium | THE SELF-HOSTED KARA LEXER CANNOT LEX `b"..."`, so it now disagrees with the Rust lexer on any input containing one: `selfhost/src/lexer.kara` still routes the `b` prefix down the reserved-string-prefix path and emits `ERROR`, while the Rust lexer emits the byte-string token (550bb1f, B-2026-08-20-37). The self-hosted compiler is behind the language on a construct design.md specifies as shipped. | roadmap.md |
 | B-2026-08-21-18 | 2026-08-21 | codegen+typecheck | low | STRUCT FUNCTIONAL UPDATE `P { x: 1, ..base }` IS STILL UNIMPLEMENTED -- it now says so clearly instead of dropping the base, but the form syntax.md's STRUCT_LITERAL production admits cannot be used; the interpreter already implements the copy and codegen does not, so the remaining work is codegen plus the ownership rules for a spread base | roadmap.md |
-| B-2026-08-21-22 | 2026-08-21 | codegen | high | `Vec.filled(n, f"...")` DOUBLE-FREES UNDER BOTH COMPILED BACKENDS -- the f-string accumulator is moved into the buffer and ALSO freed at scope exit; `--interp` prints correctly, so it is a silent run-vs-build divergence that aborts the process | roadmap.md |
 | B-2026-08-21-24 | 2026-08-21 | codegen | medium | AN ARRAY **LITERAL** TEMPORARY IN A `ref Slice[T]` PARAMETER FAILS LLVM MODULE VERIFICATION -- `f([1u8, 2u8, 3u8])` builds nothing while the by-value `Slice[T]` spelling of the same call compiles and runs | roadmap.md |
 | B-2026-08-21-25 | 2026-08-21 | codegen | medium | A METHOD CALL ON A FIXED-ARRAY **TEMPORARY** HAS NO CODEGEN LOWERING -- `n.to_ne_bytes().len()` build-fails with the dispatcher's own "this is a codegen bug" message while the bound two-line spelling works | roadmap.md |
 | B-2026-08-21-26 | 2026-08-21 | typecheck | medium | `TryFrom[intN]` FOR A C-LIKE `#[repr(intN)]` ENUM DOES NOT EXIST -- design.md § Enum Discriminant Runtime Surface commits to auto-generating it and shows the worked `match UsbClass.try_from(raw)`, which fails to compile | roadmap.md |
@@ -162,9 +161,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1451 surfaced
 
 </details>
 
-### Fixed (1415)
+### Fixed (1417)
 
-<details><summary>1415 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1417 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -13612,6 +13611,43 @@ The tail return gains the `emit_ensures_checks` / `emit_invariant_checks` pair i
 VERIFIED byte-identical on interp / JIT / AOT / `KARAC_AUTO_PAR=0` AOT across: a violated and a satisfied `requires`; two instantiations of one generic where only the SECOND violates (so each mono carries its own frame); `ensures` at the tail and through an explicit `return`; `old(...)` capture inside a generic `ensures`, with the correct postcondition passing and the wrong one firing; a struct `invariant` reached through a generic method; a generic caller nesting two generic calls; and a monomorphic caller wrapping a generic one. design.md's own generic `binary_search[T: Ord]` example now aborts on an unsorted haystack and returns 2 on a sorted one.
 
 All five new E2E tests are pinned non-vacuous: with the mono change reverted, all five fail. |
+| B-2026-08-21-22 | codegen | high | `Vec.filled(n, f"...")` DOUBLE-FREES UNDER BOTH COMPILED BACKENDS -- the f-string accumulator is moved into the buffer and ALSO freed at scope exit;… | FIXED by bcdb9cb.
+
+THE FIX IS NOT WHERE THE ROW EXPECTED. `build_vec_filled` receives an
+ALREADY-COMPILED `BasicValueEnum`, not the argument `Expr`, so it cannot
+call `suppress_fstr_acc_if_moved_out(&Expr)` at all -- the suppression has
+to happen at the CALLER, which still holds the expression. THREE callers
+reach it, and all three lacked the call:
+
+  * `Vec.filled(n, v)`            src/codegen/assoc_call.rs
+  * `Vec[v; n]` repeat literal    src/codegen/collections.rs
+  * the annotated-let path        src/codegen/exprs.rs
+
+A one-line fix at only the first would have left `Vec[f"x"; 3]` still
+aborting, which is why both surface spellings get their own asan test.
+Verified live rather than assumed: reverting ONLY the assoc_call site makes
+both tests fail, restoring it makes them pass, with `cc -fsanitize=address`
+confirmed working (so not a vacuous skip, and LSan is active on Linux too).
+
+PLACEMENT IS LOAD-BEARING. `last_fstr_acc` is a single slot that the next
+`compile_expr` overwrites, so the call must sit IMMEDIATELY after the
+value's compile -- before the count's compile in two of the three callers.
+Putting it "somewhere in the function" silently does nothing.
+
+THE SWEEP THE ROW ASKED FOR WAS DONE, AND IS NEGATIVE. Fifteen other
+constructors / movers that take a value expression and store it were probed
+with an f-string value under `karac build`: `Vec.from_fn`, vec literal
+element, array literal, nested `Vec[Vec[String]]`, tuple element, `Some(...)`,
+struct-literal field, `Map.insert`, `Set.insert`, `VecDeque.push_back`,
+`Vec.push`, by-value fn argument, and a returned f-string. ALL CLEAN. So the
+row's closing suspicion -- "the same hole exists at every other
+constructor/mover" -- does NOT reproduce; `filled` was the remaining one.
+Recorded as a measured negative so the next reader does not re-run it.
+
+Full `--features llvm` suite green: 108 binaries, 14,695 passed, 0 failed;
+fmt clean; clippy clean on BOTH legs (the llvm leg initially failed on a
+duplicated `#[test]` my own insertion orphaned -- caught by the gate, fixed
+before push). |
 | B-2026-08-21-23 | codegen | high | A FIXED ARRAY PASSED TO A **METHOD**'s `ref Slice[T]` PARAMETER READS A GARBAGE LENGTH -- `bytes.len()` answers 3 under the interpreter, -1 under AOT… | FIXED by 08f57a7.
 
 B-2026-06-19-1's carve-out, transplanted to the method-call argument loop where it had never been applied: for a `ref Slice[T]` slot fed an Array source, synthesize the `{ptr,len}` header and pass its ADDRESS, instead of letting the identifier fast path hand over `&array[0]` or the slice coercion push a header VALUE into a `ptr` slot. Placed FIRST in the `ref` arm, for the same reason it is first on the free-function path: the fast path below it is what produces the wrong pointer.
@@ -13696,6 +13732,13 @@ WHAT IT FOUND, on its first run:
                    Kāra does not get to choose.
 
 REMAINING LIMIT, stated rather than hidden. The rung answers "does this name resolve", not "does this signature match the implementation's". `Vec.filled(0, 0)` passing proves `filled` exists and takes two arguments; it does not prove the second is a `T` or that the return is `Vec[T]`. Checking that needs the value table this row proposed and this fix skipped, and it is the natural next increment. Nor can the orphan check tell a spec promise from a gesture at a user type — design.md:7021's `Key` / `Wire` are flagged alongside `io`, and are triaged in the baseline as the false positive they are. |
+| B-2026-08-21-33 | other | low | the seven self-host oracles ignore `KARAC_REQUIRE_RUNTIME_ARCHIVE=1` on the one link failure that still soft-skips, and their skip comment wrongly cl… | FIXED by 2947a26 (rebased to e263ef7). The seven self-host oracles now honour `KARAC_REQUIRE_RUNTIME_ARCHIVE=1`: on a link failure the guard panics instead of returning `None` and reporting a pass over zero comparisons.
+
+Scope is what the measurement supports and no more. A MISSING ARCHIVE never took the skip -- `karac` reports `error[link]: libkarac_runtime.a not found`, whose `error[` prefix the oracle's own compile-error heuristic already matches, so it asserts loudly. Verified by moving all seven archives aside: `selfhost_lexer` FAILS rather than skips, with and without the flag. The stale half of the skip comment ("or a link failure from a missing runtime archive") is corrected in place, since it describes behaviour the heuristic three lines above prevents.
+
+What the guard closes is the remainder: a link failure carrying none of those markers -- no linker on PATH, a permissions failure -- which reported a silent pass whatever the flag said.
+
+Verified: all seven oracles green with the archives present; fmt clean. |
 
 </details>
 
