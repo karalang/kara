@@ -28837,6 +28837,132 @@ fn main() {
             &["5650"],
             "channel_try_send_wide_scalar_struct_payload_no_leak",
         );
+
+        // B-2026-08-22-23 — A STRUCT PAYLOAD THAT OWNS HEAP, which is the case
+        // where the reject path's ownership differs from `send`'s.
+        //
+        // Who owns a rejected value depends on the payload kind, and both
+        // answers are the language's existing convention rather than anything
+        // channel-specific: for a `String`/`Vec` the ARM BINDING takes it, so
+        // the source must be disarmed on every path; for a struct the SOURCE
+        // BINDING keeps it and the arm binding takes none. `send` never had to
+        // choose — it always moves into the queue and has no reject path — so a
+        // copy of its unconditional suppression disarms a struct source on a
+        // path where nothing replaced it.
+        //
+        // Measured before the fix: 1480 bytes leaked in 200 objects, the two
+        // `String` field buffers of each rejected `Big`. Measured while getting
+        // it wrong in the other direction (disarming on neither path): a
+        // double free on the `String` and `Vec` cases above. Both directions
+        // are pinned here, so a future edit that collapses the split back into
+        // one unconditional block fails on one case or the other.
+        assert_clean_asan_run(
+            r#"
+struct Big { a: String, b: String }
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 100 {
+        let (tx, rx) = Channel.bounded(1);
+        let x = Big { a: f"one-{i}", b: f"two-{i}" };
+        let r0 = tx.try_send(x);
+        let y = Big { a: f"three-{i}", b: f"four-{i}" };
+        match tx.try_send(y) {
+            Ok(u) => { total = total + 1; }
+            Err(SendError.Full(v)) => { total = total + v.a.len() + v.b.len(); }
+            Err(SendError.Closed(v)) => { total = total + v.a.len(); }
+        }
+        let g = rx.recv();
+        total = total + g.a.len();
+        i = i + 1;
+    }
+    println(total.to_string());
+}
+"#,
+            // Rejected Big gives back "three-{i}" + "four-{i}"; recv drains
+            // "one-{i}". i=0..9: (7+6)+5 = 18 each -> 180.
+            // i=10..99: (8+7)+6 = 21 each -> 1890. Total 2070.
+            &["2070"],
+            "channel_try_send_struct_with_heap_payload_no_leak",
+        );
+
+        // The `Vec` payload, as the third kind and the other side of the
+        // split: like `String` its arm binding owns the rejected value, so it
+        // must be disarmed unconditionally. It is here because it is the case
+        // that regressed to a double free when the struct fix was first applied
+        // to every payload kind at once.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 100 {
+        let (tx, rx) = Channel.bounded(1);
+        let mut a: Vec[i64] = Vec.new();
+        a.push(i);
+        let r0 = tx.try_send(a);
+        let mut b: Vec[i64] = Vec.new();
+        b.push(i);
+        b.push(i);
+        match tx.try_send(b) {
+            Ok(u) => { total = total + 1; }
+            Err(SendError.Full(v)) => { total = total + v.len(); }
+            Err(SendError.Closed(v)) => { total = total + v.len(); }
+        }
+        let g = rx.recv();
+        total = total + g.len();
+        i = i + 1;
+    }
+    println(total.to_string());
+}
+"#,
+            // Rejected Vec has len 2, drained Vec has len 1 -> 3 per iter.
+            &["300"],
+            "channel_try_send_vec_payload_no_double_free",
+        );
+
+        // The `Closed` arm, with a struct-with-heap payload. Reachable only
+        // since B-2026-08-22-24 gave the interpreter per-end liveness and put
+        // the compiled receiver check back, so this ownership split had never
+        // been measured on it — and it is the arm where a rejected value is
+        // MOST likely to be dropped on the floor, because the channel it came
+        // back from is dead.
+        //
+        // It rides the same reject-path rule as `Full`: the source binding
+        // keeps ownership, so the disarm must not fire here either. That falls
+        // out of placing the struct disarm on the Ok branch rather than on
+        // "not Full", which is why the split is written the way it is.
+        assert_clean_asan_run(
+            r#"
+struct Big { a: String, b: String }
+fn orphan(seed: Big) -> Sender[Big] {
+    let (tx, rx) = Channel.new();
+    let t2 = tx.clone();
+    t2.send(seed);
+    return tx;
+}
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 100 {
+        let s = orphan(Big { a: f"seed-{i}", b: f"sd-{i}" });
+        let y = Big { a: f"three-{i}", b: f"four-{i}" };
+        match s.try_send(y) {
+            Ok(u) => { total = total + 1; }
+            Err(SendError.Full(v)) => { total = total + v.a.len(); }
+            Err(SendError.Closed(v)) => { total = total + v.a.len() + v.b.len(); }
+        }
+        i = i + 1;
+    }
+    println(total.to_string());
+}
+"#,
+            // Every send is Closed (the receiver died with `orphan`'s frame),
+            // giving back "three-{i}" + "four-{i}".
+            // i=0..9: 7+6 = 13 each -> 130. i=10..99: 8+7 = 15 -> 1350. Total 1480.
+            &["1480"],
+            "channel_try_send_closed_arm_struct_payload_no_leak",
+        );
     }
 
     #[test]

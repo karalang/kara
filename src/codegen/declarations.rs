@@ -4820,6 +4820,38 @@ impl<'ctx> super::Codegen<'ctx> {
         //
         // Tags follow the stdlib declaration order — Full = 0, Closed = 1.
         if !self.type_decls.enum_layouts.contains_key("SendError") {
+            // THE PAYLOAD AREA IS SIZED FROM THE PROGRAM'S OWN CHANNEL
+            // ELEMENT TYPES, not from the bare `T` the declaration names. A
+            // hand-seeded generic enum gets ONE layout for every `T`, where a
+            // user's generic enum gets one per monomorph, so a mechanical
+            // transcription of `enum SendError[T] { Full(T), Closed(T) }` would
+            // score the payload at `payload_word_count_for_type_expr`'s
+            // unknown-name default of 1 word. Measured, that LEAKED: an
+            // oversize payload is heap-boxed by the pack side, and the box has
+            // no owner, because the drop kind for a bare `T` is `None` and
+            // there is no monomorph to give it a concrete one. Widening puts
+            // the payload inline, so no box exists and there is nothing to own;
+            // the read side stays coherent for free, since it recomputes the
+            // same `word_count > area` predicate and likewise finds it inline.
+            //
+            // The element types come from the typechecker's own per-call-site
+            // table, which is the same source codegen's channel lowering sizes
+            // `elem_size` from — so the layout and the values that go in it are
+            // derived from one fact, not two. Sizing off EVERY channel site
+            // rather than only `try_send` sites is deliberate: it cannot miss
+            // one, and it costs nothing, since `SendError` values exist only
+            // where `try_send` is called. The 3-word floor keeps `String`/`Vec`
+            // and every scalar inline even in a program with no channel sites
+            // at all.
+            //
+            // The payload DROP KIND stays `None`, matching what `declare_enums`
+            // computes for a bare `T`. Deriving a concrete kind here the same
+            // way the width is derived was tried, measured, and removed: with
+            // the payload inline and `compile_channel_try_send` placing its
+            // move-suppression per payload kind, the value always has exactly
+            // one owner already, and arming the enum's own drop on top of that
+            // turned the `String` case into a DOUBLE FREE. The full ownership
+            // table is at that suppression site.
             let mut payload_words = 3usize;
             for te in program.channel_elem_types.values() {
                 payload_words = payload_words.max(self.payload_word_count_for_type_expr(
@@ -4828,16 +4860,6 @@ impl<'ctx> super::Codegen<'ctx> {
                     "Full",
                 ));
             }
-            // `EnumDropKind::None` for the payload, matching what
-            // `declare_enums` computes for a bare `T`. Deriving a real kind
-            // from the channel element types — the same trick the width uses
-            // one line up — WAS TRIED AND IS NOT THE ANSWER: it changed
-            // nothing measurable (byte-identical LSan output with and without
-            // it), so it was dropped rather than landed as plausible-looking
-            // dead code. The one case that still leaks — a struct-with-heap
-            // payload's own `String`/`Vec` fields on the reject path — is not
-            // reached through this kind at all, and is filed separately with
-            // its measurement rather than guessed at here.
             let payload_drop = EnumDropKind::None;
             let fields: Vec<BasicTypeEnum<'ctx>> =
                 std::iter::repeat_n(i64_t, payload_words + 1).collect();

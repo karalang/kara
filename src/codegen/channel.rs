@@ -249,18 +249,50 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap_basic()
             .into_int_value();
 
-        // The value leaves the caller on EVERY path — into the queue when the
-        // send lands, into the `SendError` payload when it does not — so the
-        // source binding must not free it either way. This is the identical
-        // suppressor set `send` applies; without it a `try_send`'d String
-        // double-frees exactly as B-2026-07-13-16's `send` did.
-        self.suppress_source_vec_cleanup_for_arg(&args[0].value);
-        self.suppress_inline_option_result_binding_move(&args[0].value);
+        // WHERE THE MOVE SUPPRESSION GOES DEPENDS ON THE PAYLOAD KIND, and
+        // that is not a quirk of this method — it is the language's existing
+        // convention for who owns a value handed to a callee that may give it
+        // back (B-2026-08-22-23). Measured under LSan, on the reject path:
+        //
+        //   String / Vec payload   the ARM BINDING owns the returned value.
+        //                          The source must be disarmed on every path,
+        //                          exactly as `send` does — leaving it armed
+        //                          double-frees.
+        //   struct payload         the SOURCE BINDING keeps ownership and the
+        //                          arm binding takes none. Disarming it leaves
+        //                          the value owned by nobody — a leak.
+        //
+        // Both are internally consistent (exactly one owner); they simply put
+        // the owner in different places, and an ordinary `fn f(x: T) ->
+        // Result[(), E[T]]` call shows the same split. `send` never had to care
+        // because it always moves into the queue and has no reject path.
+        //
+        // `NestedStruct` is precisely "an inline user struct whose own drop fn
+        // frees its heap", which is the class that keeps its source owner, so
+        // the classifier that decides enum payload drops decides this too
+        // rather than a second hand-rolled type test drifting away from it.
+        let elem_keeps_source_owner = self
+            .conc
+            .channel_elem_types
+            .get(&(call_span.offset, call_span.length))
+            .map(|te| self.enum_drop_kind_for_type_expr(te))
+            .is_some_and(|k| k == crate::codegen::state::EnumDropKind::NestedStruct);
+
+        // The MAP/SET half is unconditional regardless: it edits the
+        // compile-time cleanup QUEUE (Map cleanup is queue-driven — there is no
+        // in-slot `cap = 0` sentinel for a walker to skip), so it applies to
+        // both outcomes or neither. Unconditional is the safe direction — on
+        // the Ok path the queue owns the handle and a second free would be a
+        // double free, while on the reject path the cost is a leaked handle.
         if let ExprKind::Identifier(n) = &args[0].value.kind {
             let n = n.clone();
             self.suppress_map_cleanup_for_tail_identifier(&n);
         }
-        self.suppress_fstr_acc_if_moved_out(&args[0].value);
+        if !elem_keeps_source_owner {
+            self.suppress_source_vec_cleanup_for_arg(&args[0].value);
+            self.suppress_inline_option_result_binding_move(&args[0].value);
+            self.suppress_fstr_acc_if_moved_out(&args[0].value);
+        }
 
         let one_i8 = self.context.i8_type().const_int(1, false);
         let sent = self
@@ -288,6 +320,18 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // Sent → `Ok(())`. Unit is the i64-zero unit value, as everywhere else.
         self.builder.position_at_end(ok_bb);
+        // The struct payload's disarm, which belongs on THIS branch only — the
+        // send landed, so the queue is now the owner and the source must stop
+        // freeing. On the reject branches it is deliberately absent, leaving
+        // the source binding as the owner (see the classifier above). The
+        // suppressors write a runtime `cap = 0` into the source's slot, so they
+        // are position-dependent and this placement is what makes the split
+        // work at all.
+        if elem_keeps_source_owner {
+            self.suppress_source_vec_cleanup_for_arg(&args[0].value);
+            self.suppress_inline_option_result_binding_move(&args[0].value);
+            self.suppress_fstr_acc_if_moved_out(&args[0].value);
+        }
         let unit_val = self.context.i64_type().const_zero().into();
         let ok_val = self.build_nonshared_enum_value("Result", "Ok", &[unit_val])?;
         let ok_end = self.builder.get_insert_block().unwrap();
