@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 149 | 4 |
 | double-free | 134 | 0 |
 | codegen-gap | 128 | 2 |
-| diagnostics | 97 | 3 |
+| diagnostics | 97 | 2 |
 | false-positive | 91 | 0 |
 | perf | 83 | 0 |
 | crash | 55 | 0 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 990 | 5 |
-| typecheck | 238 | 4 |
+| codegen | 990 | 4 |
+| typecheck | 238 | 3 |
 | interp | 172 | 0 |
 | other | 63 | 1 |
 | ownership | 62 | 0 |
@@ -124,14 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1481 surfaced · 12 open · 1447 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1481 surfaced · 11 open · 1448 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (12)
+### Open (11)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-21-43 | 2026-08-21 | codegen | low | A USER IMPL ON A **NON-SCALAR** `Array` HEAD IS UNCALLABLE ON A TEMPORARY -- `mk().tag()` for `impl Tag for Array[String, 2]` still loud-fails after B-2026-08-21-25, which admits only scalar-element arrays because a scalar array is the case that owns no heap | roadmap.md |
-| B-2026-08-21-45 | 2026-08-21 | typecheck+codegen | low | FIVE SHIPPED USER-FACING DIAGNOSTICS CARRY RUNS OF 14-30 SPACES mid-sentence, because rustfmt INTERMITTENTLY rejoins a `\`-continued string literal into one line and keeps the continuation indentation as real spaces | roadmap.md |
 | B-2026-08-21-46 | 2026-08-21 | codegen | low | `enumerate` OVER AN ARRAY **LITERAL** STILL BAILS LOUD -- `for (i, x) in [1, 2, 3].iter().enumerate()` hits the adaptor backstop while `--interp` answers, the one source shape B-2026-08-21-41's widening could not reach | roadmap.md |
 | B-2026-08-22-5 | 2026-08-22 | parser | medium | AN EFFECT CLAUSE ON AN IMPL HEADER HAS NO PRODUCTION -- design.md:3817 writes `impl From[ParseError] for AppError with writes(Log) {` and the parser rejects it with `Expected LeftBrace, found With` | parser |
 | B-2026-08-21-52 | 2026-08-22 | effect | medium | CHANNEL EFFECT RESOURCES HAVE NO PER-VALUE IDENTITY -- every channel collapses to the single `Channel` resource, so conflict analysis cannot tell `sends(tx1)` from `sends(tx2)` and design.md :6095's producer-against-consumer parallelization argument is not backed by the compiler | roadmap.md |
@@ -160,9 +159,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1481 surfaced
 
 </details>
 
-### Fixed (1447)
+### Fixed (1448)
 
-<details><summary>1447 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1448 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -14754,6 +14753,102 @@ NOT ADDRESSED: `as_slice_mut` on a temporary, deliberately. A writable view
 into a value with no name accepts writes that are then discarded, which is a
 question about whether the call is meaningful rather than about lowering it --
 different from the read-only view this row asked for. |
+| B-2026-08-21-45 | typecheck+codegen | low | SIX SHIPPED USER-FACING DIAGNOSTICS (eight messages) CARRIED RUNS OF 18-34 SPACES mid-sentence, because rustfmt INTERMITTENTLY rejoins a `\`-continue… | FIXED by ae306218. Six sites / EIGHT messages, not the five the row listed -- the row's own
+grep covered only `src/`, so it missed `runtime/src/lib.rs:10852` ("chunk {chunk}
+is below the" + 22sp + "over-decomposition target").
+
+THE PRESCRIBED `concat!` FIX DOES NOT APPLY EVERYWHERE. Two of the six take a
+different remedy, and both are worth knowing before the next one of these:
+
+  * `src/codegen/method_call.rs:4028` used IMPLICIT format captures
+    (`{enum_name}`, `{other:?}`). A `format!` with implicit captures requires a
+    string LITERAL and does not survive `concat!` -- it fails to compile with
+    "there is no argument named `enum_name`". Converted to positional args.
+  * `src/codegen/runtime.rs:1730` is a `#[allow(.., reason = "..")]` ATTRIBUTE
+    value, where `concat!` is not expanded at all. Collapsed in place instead;
+    with no continuation left there is nothing for rustfmt to rejoin.
+    `runtime/src/lib.rs:10852` was collapsed in place too, for a simpler reason:
+    once the frozen indent is gone the message fits in 99 columns, so it needs
+    no continuation to begin with.
+
+The other four (typechecker/expr_method_call.rs:4465, codegen/provider.rs:1102
+and :1108) took `concat!` directly. Shortening the provider.rs literal had a
+side benefit: rustfmt could finally break the 262-column method chain that the
+inline literal had been pinning, so that call site now formats normally.
+
+CONFIRMATION OF THE INTERMITTENCY the row flagged, twice over. Two files each
+carry BOTH spellings of nearly the same message a few dozen lines apart:
+`src/codegen/provider.rs` :1052 intact vs :1108 rejoined, and
+`src/codegen/runtime.rs` :1730 rejoined vs :1785 intact -- the latter pair being
+the SAME `reason = "each parameter is a distinct layout coordinate of the
+two-tag ..."` text on two adjacent overloads. Nothing distinguishes the members
+of either pair but which way rustfmt happened to go.
+
+That intact twin at :1785 was collapsed to one line as well, though it was not
+corrupted. Attribute position is the residual risk surface here, being the one
+place the `concat!` remedy is unavailable, and a survey of `src/`,
+`runtime/src/` and `hash/src` found it was the ONLY `\`-continued literal left
+in an attribute anywhere in the tree. One line of prophylaxis closes that
+surface completely rather than leaving a proven-susceptible string in it.
+
+THE PERMANENT GUARD: `tests/diagnostic_text_hygiene.rs` (unfeatured, so it runs
+on CI's plain `cargo test --all` leg, like tests/no_tracked_binaries.rs).
+
+The row's suggested detection -- "a run of 4+ spaces inside a literal not
+preceded by a `\n`" -- is not usable as a gate: run properly (decoding each
+literal the way rustc does, so an INTACT continuation contributes nothing) it
+still returns ~80 hits, essentially all innocent. Help text, `--flag <desc>`
+tables, report printers and WGSL templates are full of deliberate column runs,
+and the widest of them (23 spaces) is wider than four of the six real ones.
+
+What separates them is a SECOND condition, on the source rather than the string:
+the spaces must sit on a source line past rustfmt's `max_width` (100). That is
+the rejoin's own signature -- rustfmt cannot split a string literal, so
+collapsing a continued one leaves a line far over the limit. Measured: every
+legitimate site 10-72 columns, every corrupted one 120-262. The two conditions
+together give zero false positives across `src/`, `runtime/src/` and `hash/src`.
+
+`tests/` is deliberately NOT scanned: its literals are embedded `.kara` fixture
+programs, where a run of spaces inside a one-line program is ordinary (14 such).
+
+Two things keep the guard from rotting, both lessons from B-2026-08-21-2's
+close-out (where a guard proved only that a NAME appeared):
+
+  * A positive control, `detector_fires_on_a_synthetic_rejoin_and_not_on_its_
+    intact_twin`, pins the detector against a synthetic 34-space rejoin, its
+    intact `\`-continued twin, deliberate help-text alignment, and content
+    inside comments and raw strings. A clean tree and a dead detector both make
+    the main test pass; only this one tells them apart.
+  * The test file itself is written free of `\`-continued literals -- its own
+    four messages use `concat!` with positional args. It is the one file where a
+    corrupted message would go unnoticed, since the guard does not scan tests/.
+
+Verified by stashing the six fixes and re-running: the guard reports exactly the
+eight pre-fix messages, each with its run width and source-line width, and names
+`concat!` plus the two exceptions above in the failure text.
+
+GATES. fmt clean; clippy clean on BOTH legs (`--all --all-targets`, default and
+`--features llvm`); `KARAC_REQUIRE_RUNTIME_ARCHIVE=1 cargo test --features llvm
+--no-fail-fast` = 125 binaries, 14742 passed; `scripts/asan-o0-leg.sh` = 1139
+passed, 0 failed, quarantine list matched exactly.
+
+The only failures in that run were 60 in `tests/gpu_e2e.rs`, every one panicking
+at the SAME line (gpu_e2e.rs:372) -- the optional GPU archive's presence gate,
+which `KARAC_REQUIRE_RUNTIME_ARCHIVE=1` turns from a skip into a failure. None
+reached a shader. Checked rather than assumed, since one of the six edits is the
+`gpu.matmul` rank-2 typechecker error: no test in the tree asserts on ANY of the
+six changed messages (the `rank-2` strings that do appear are other
+diagnostics), and the `typechecker` binary itself passed.
+
+ENVIRONMENT NOTE, not a bug but costly to rediscover. This cloud container
+shipped `libkarac_runtime_wasm.a` built 17 days earlier and NO
+`libkarac_runtime_wasm_threads.a` at all, so the first suite run failed 43 wasm
+E2E tests on `undefined symbol: karac_runtime_install_stack_guard` -- the stale-
+archive signature. Rebuilding both per CLAUDE.md § Commands cleared all 43.
+Worth knowing: without `KARAC_REQUIRE_RUNTIME_ARCHIVE=1` those 43 do not fail,
+they SKIP, and the run reports green -- the vacuous-pass hazard, live by default
+in a fresh container. Set the variable when a run has to prove it exercised real
+binaries. |
 | B-2026-08-21-48 | codegen | medium | AN **UN-ANNOTATED** SLICE BINDING CANNOT CALL A USER METHOD ON THE `Slice` HEAD -- `let s = v[0..2]; s.f()` fails with "no handler for method 'f' on… | FIXED by e66ce9f — one arm in `src/codegen/expr_ops.rs`'s `type_name_of`:
 `ExprKind::Index { object, .. }` now binds `index` and answers "Slice" for a
 RANGE index over a non-String receiver.
