@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 277 | 1 |
 | leak | 187 | 1 |
-| run-vs-build | 149 | 1 |
+| run-vs-build | 149 | 0 |
 | missing-feature | 144 | 6 |
 | double-free | 134 | 0 |
 | codegen-gap | 128 | 3 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | codegen | 988 | 8 |
 | typecheck | 233 | 4 |
-| interp | 172 | 2 |
+| interp | 172 | 1 |
 | other | 62 | 0 |
 | ownership | 62 | 0 |
 | cli | 59 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 8 | 1 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1468 surfaced · 14 open · 1432 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1468 surfaced · 13 open · 1433 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (14)
+### Open (13)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -143,7 +143,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1468 surfaced
 | B-2026-08-21-50 | 2026-08-21 | codegen | high | A C-LIKE ENUM BOUND OUT OF `Ok(...)` MATCHES THE WRONG VARIANT UNDER CODEGEN -- `Ok(UsbClass.Hid)` selects the FIRST variant, and passing the binding to a function taking the enum fails LLVM verification outright; the interpreter is correct, so this is a silent run-vs-build divergence | codegen |
 | B-2026-08-21-51 | 2026-08-21 | typecheck | medium | A GENERIC ENUM'S STRUCT-SHAPED VARIANT DOES NOT BIND ITS TYPE PARAMETER: constructing one infers the BARE head (`MyErr`, not `MyErr[u8]`) and a pattern binds the payload as the uninstantiated `D`, so `value as i64` is rejected with "cannot cast 'D' to 'i64'" | typecheck |
 | B-2026-08-21-47 | 2026-08-22 | codegen | medium | A `shared struct` FIELD SOURCE LEAKS A DIFFERENT BUFFER THAN THE PLAIN-STRUCT ONE DID -- `last = s.name` off a `shared struct` leaks the POST-append body (3 bytes/call) where the plain-struct shape leaked the PRE-append one, so the fix for B-2026-08-21-40 does not reach it | roadmap.md |
-| B-2026-08-22-2 | 2026-08-22 | interp | high | A BARE UNIT-VARIANT PATTERN OF A BAKED-STDLIB ENUM MAKES THE **INTERPRETER** MATCH THE FIRST ARM ALWAYS -- `match e { NotFound => .., PermissionDenied => .. }` on an `IoError.PermissionDenied` prints `NotFound` under `--interp` and `PermissionDenied` under AOT; the qualified spelling is correct on both, `karac check` reports nothing, and the interpreter is the wrong one | roadmap.md |
 
 ### Wontfix (8)
 
@@ -162,9 +161,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1468 surfaced
 
 </details>
 
-### Fixed (1432)
+### Fixed (1433)
 
-<details><summary>1432 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1433 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -14372,6 +14371,21 @@ THE GUARD PAID FOR ITSELF IMMEDIATELY: it turned `WaitTarget` into a build error
 THE BARE SPELLING IS NOT GUARDED and the code says so: a bare PascalCase name is indistinguishable from a legitimate binding without the typechecker's resolution. Reverting the seed with the guard in place gives the honest split -- the qualified probe errors loudly, the bare probe still answers `a=Relaxed b=Relaxed c=Relaxed`. Closing that half needs resolution information codegen does not have at this point, and is left rather than half-done.
 
 Five tests. Four fail with the seeds reverted; the fifth (`Stdio` + `PoolError`) is the CONTROL that must pass either way -- it is what pins the cause to the missing layout rather than to stdlib enums generally, and it would catch a regression that dropped either module from `compiled_stdlib_programs`. |
+| B-2026-08-22-2 | interp | high | A BARE UNIT-VARIANT PATTERN OF A BAKED-STDLIB ENUM MAKES THE **INTERPRETER** MATCH THE FIRST ARM ALWAYS -- `match e { NotFound => .., PermissionDenie… | FIXED by 28bd239. One predicate, one added case, and the two copies of it merged so they cannot drift again.
+
+CAUSE, exactly as the row diagnosed. `pattern_match.rs` decides a `PatternKind::Binding` is a unit-variant pattern (rather than a fresh value binding) from two signals: a dotted name is unambiguously a variant, and a BARE name is one only when `env.get(name)` returns a unit `EnumVariant`. Baked-stdlib enum variants are registered under their QUALIFIED path only, so the bare lookup missed every one of them and the name fell through to `true // actual binding — matches anything`. The first arm always won.
+
+THE FIX IS A THIRD CASE, keyed on the SCRUTINEE: a bare PascalCase name is also a variant pattern when the scrutinee's OWN enum declares it (`variant_payload_decls(enum_name, variant)` with an empty payload — the existing program-then-`STDLIB_PROGRAMS` scan).
+
+SCRUTINEE-DIRECTED RATHER THAN A GLOBAL TABLE, and that choice is the substance of this fix. The obvious alternative — register every baked-stdlib variant unqualified, the way `Ordering` / `MemoryOrdering` / `NormalizationForm` already are — would put ~20 enums into one namespace where `NotFound` belongs to BOTH `IoError` and `TlsError`, and one of them would have to silently win. Asking the value being matched has nothing to disambiguate, adds no names to any scope, and cannot collide by construction.
+
+WHAT IT DELIBERATELY DOES NOT DO. The row asked whether bare variants of a non-prelude stdlib enum should resolve at all, noting the resolver already REJECTS the bare TUPLE-variant form (`match s { Start(n) => … }` on a `SeekFrom` gives "undefined name 'Start'"). Rejecting the unit form would also close the divergence, by refusing the program instead of computing the right answer. This took the permissive side because codegen ALREADY accepts and correctly compiles the bare unit form, so making the interpreter agree fixes the oracle without changing what any working program means — and no `.kara` in this repo or in kara-katas matches on a bare stdlib unit variant today (swept), so neither direction had existing code to protect. The rejecting direction remains available and is now the only inconsistency left in this area: bare tuple variants are refused, bare unit variants are accepted.
+
+THE TWO COPIES ARE NOW ONE. `try_match_pattern` and `bind_pattern` held byte-identical inlined copies of this predicate, and the hole was in both. They now share `binding_is_unit_variant`, which is where the three cases and their rationale live.
+
+Verified byte-identical on --interp / JIT / AOT / `KARAC_AUTO_PAR=0` AOT across ten programs: `IoError` bare and qualified, `Stdio` bare and qualified, a user enum, `MemoryOrdering` both spellings, `WaitTarget`, `PoolError`, and `Utf8Error`.
+
+Six tests — five interpreter, one codegen. The two positive interpreter tests fail with the new case removed. The other THREE pass either way BY DESIGN and are the point of the exercise: a user enum (scopes the bug to baked-stdlib enums), a lowercase sub-binding shadowed by a same-named local holding a unit-variant value (the hazard the PascalCase gate exists for, carried across the extraction), and a PascalCase name that is NOT one of the scrutinee's variants (pins how narrow the new case is — that shape keeps its old catch-all-binding behaviour). The codegen test pins the side that was already right, so a regression in the enum-layout lookup cannot quietly re-align the backends on the wrong answer. |
 
 </details>
 
