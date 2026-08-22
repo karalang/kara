@@ -94,12 +94,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 278 | 0 |
 | leak | 187 | 0 |
-| missing-feature | 151 | 3 |
+| missing-feature | 152 | 4 |
 | run-vs-build | 151 | 1 |
 | double-free | 135 | 1 |
 | codegen-gap | 128 | 1 |
 | diagnostics | 97 | 2 |
-| false-positive | 93 | 1 |
+| false-positive | 94 | 1 |
 | perf | 83 | 0 |
 | crash | 55 | 0 |
 | other | 55 | 0 |
@@ -116,22 +116,22 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | other | 63 | 0 |
 | ownership | 62 | 0 |
 | cli | 61 | 1 |
-| autopar | 54 | 0 |
+| autopar | 55 | 0 |
 | parser | 38 | 0 |
 | runtime | 28 | 0 |
 | resolver | 26 | 0 |
-| effect | 10 | 2 |
+| effect | 11 | 3 |
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1487 surfaced · 9 open · 1456 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1489 surfaced · 10 open · 1457 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (9)
+### Open (10)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-21-43 | 2026-08-21 | codegen | low | A USER IMPL ON A **NON-SCALAR** `Array` HEAD IS UNCALLABLE ON A TEMPORARY -- `mk().tag()` for `impl Tag for Array[String, 2]` still loud-fails after B-2026-08-21-25, which admits only scalar-element arrays because a scalar array is the case that owns no heap | roadmap.md |
-| B-2026-08-21-52 | 2026-08-22 | effect | medium | CHANNEL EFFECT RESOURCES HAVE NO PER-VALUE IDENTITY -- every channel collapses to the single `Channel` resource, so conflict analysis cannot tell `sends(tx1)` from `sends(tx2)` and design.md :6095's producer-against-consumer parallelization argument is not backed by the compiler | roadmap.md |
+| B-2026-08-21-52 | 2026-08-22 | effect | low | CHANNEL EFFECT RESOURCES HAVE NO PER-VALUE IDENTITY -- every channel collapses to the single `Channel` resource. The conflict-analysis motivation this row was filed on has since been REFUTED by measurement (the producer/consumer case already worked; two-producer serialization was a verb-lattice defect, fixed separately) -- what remains is a narrow spec-fidelity gap against design.md:6049, where only the NON-communication verbs on distinct channels over-serialize | roadmap.md |
 | B-2026-08-22-6 | 2026-08-22 | typecheck | low | The `Hasher` and `BuildHasher` TRAITS are not baked, so a user cannot write their own hasher: `Map[K, V, H]` accepts only the two compiler-known selectors `SipHash13BuildHasher` / `FxBuildHasher`, and design.md's "User-extensible hashers" paragraph describes a surface that does not exist | roadmap.md |
 | B-2026-08-22-7 | 2026-08-22 | codegen | low | `f16_software_emulated` IS THE ONE STARTER-SET LINT WHOSE TRIGGER DEPENDS ON THE TARGET, and the target's feature baseline is only reachable behind `#[cfg(feature = "llvm")]` -- so wiring it is a PLACEMENT decision, not the mechanical job the other six were | roadmap.md |
 | B-2026-08-22-8 | 2026-08-22 | cli | low | `implicit_clone` HAS NO TRIGGER IN THE SPEC AND CANNOT BE DE-REGISTERED WITHOUT A design.md EDIT -- the one starter-set lint whose resolution is a SPEC decision, not a compiler change | roadmap.md |
@@ -139,6 +139,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1487 surfaced
 | B-2026-08-22-15 | 2026-08-22 | typecheck | medium | A `-> Self` TRAIT METHOD CALLED ON AN EXISTENTIAL RECEIVER LOSES THE TRAIT -- `make().bumped()` types as a BARE type parameter named after the trait, so the builder shape is rejected with two diagnostics that point at the caller's correct code and name a spelling the source never contains | typecheck |
 | B-2026-08-22-16 | 2026-08-22 | typecheck | medium | `Channel.bounded(cap)` DOES NOT EXIST IN ANY SPELLING -- design.md documents it with a `requires cap > 0` contract, `bounded_channel.kara` exists in the stdlib, and nothing routes the name to it | typecheck |
 | B-2026-08-22-18 | 2026-08-22 | codegen | high | MOVING A HEAP ELEMENT OUT OF AN OWNED `Array[T, N]` PARAMETER DOUBLE-FREES IT -- `fn take_first(a: Array[String, 2]) -> String { return a[0]; }` frees the returned buffer at the callee's exit AND again in the caller; `karac check` is clean, the program prints the right answer, and only ASAN sees it | roadmap.md |
+| B-2026-08-22-20 | 2026-08-22 | effect | medium | THE BUILTIN CHANNEL METHODS CARRY NO `sends`/`receives` EFFECT -- `Sender.send` is seeded `allocates(Heap)` and nothing else, and the ONLY `EffectVerbKind::Sends` construction in the whole compiler is the `sends(Network)` block, so a real `tx.send(v)` is invisible to conflict analysis, `karac explain` and `query effects`; design.md:6070 declares it `with sends(tx) allocates(Heap)` | roadmap.md |
 
 ### Wontfix (8)
 
@@ -157,9 +158,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1487 surfaced
 
 </details>
 
-### Fixed (1456)
+### Fixed (1457)
 
-<details><summary>1456 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1457 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -15632,6 +15633,17 @@ mattered more than usual here: `try_path_receiver_method` sits in a
 first-match-wins dispatch chain and now returns `Some(..)` for builtin heads
 where it previously returned an error, so anything relying on reaching a later
 arm would surface there rather than in a repro. |
+| B-2026-08-22-19 | autopar | medium | TWO SENDS ON A CHANNEL SPURIOUSLY SERIALIZE -- `ConcurrencyChecker::two_effects_conflict` codes `(Sends,Sends)` and `(Receives,Receives)` as a CONFLI… | 8fcfb64d -- Guard the `(Sends,Sends)` / `(Receives,Receives)` conflict arms in
+`ConcurrencyChecker::two_effects_conflict` (src/concurrency/conflicts.rs) with
+`a.resource == crate::ast::CHANNEL_RESOURCE_CANONICAL`, so the channel
+resource follows design.md:5813's table (Safe) while `Network` keeps the
+conservative shared-socket behaviour. All three concurrency-side wrappers
+(`effects_conflict`, `effects_conflict_excluding_network`, `conflict_detail`)
+funnel through this one predicate, so the diagnostic path inherits the fix
+with no second site to keep in sync. Four pins in tests/concurrency.rs:
+distinct-channel sends fan out, multi-producer on ONE channel fans out,
+multi-consumer fans out, and `writes`+`writes` on a channel still conflicts
+(the narrowness control). |
 
 </details>
 
