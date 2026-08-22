@@ -9983,3 +9983,108 @@ fn distinct_channel_params_collapse_to_one_resource_identity() {
          shared-channel conflict"
     );
 }
+
+/// B-2026-08-22-20 — the builtin channel methods carry their communication
+/// effect.
+///
+/// design.md:6070 declares `send` with `sends(tx)` and the `recv` family with
+/// `receives(rx)`, but the compiler seeded `Sender.send` with
+/// `allocates(Heap)` only and `Receiver.recv` with `suspends` only. The single
+/// `sends`/`receives` construction anywhere in the compiler was the
+/// `sends(Network)` block, so a real `tx.send(v)` produced NO channel effect
+/// and the whole surface was invisible to conflict analysis, `karac explain`
+/// and `query effects`.
+///
+/// The resource is the collapsed `Channel`, matching what a hand-declared
+/// `with sends(tx)` already canonicalizes to (per-value identity is
+/// B-2026-08-21-52); the collapse over-reports conflicts, never under-reports.
+#[test]
+fn test_channel_send_infers_sends_channel() {
+    let result = effectcheck_ok(
+        "fn push() {\n\
+         \x20   let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.new();\n\
+         \x20   tx.send(1);\n\
+         }",
+    );
+    let inferred = result.inferred_effects.get("push").unwrap();
+    assert!(
+        inferred
+            .effects
+            .iter()
+            .any(|e| e.effect.verb == EffectVerbKind::Sends && e.effect.resource == "Channel"),
+        "tx.send should infer sends(Channel), got: {:?}",
+        inferred.effects
+    );
+    // The pre-existing `allocates(Heap)` seed on `Sender.send` must SURVIVE —
+    // the seeds share a key, so a careless `insert` would drop it.
+    assert!(
+        inferred
+            .effects
+            .iter()
+            .any(|e| e.effect.verb == EffectVerbKind::Allocates),
+        "the allocates(Heap) seed must not be clobbered, got: {:?}",
+        inferred.effects
+    );
+}
+
+#[test]
+fn test_channel_recv_infers_receives_channel() {
+    for (call, name) in [("rx.recv()", "r1"), ("rx.try_recv()", "r2")] {
+        let result = effectcheck_ok(&format!(
+            "fn {name}() {{\n\
+             \x20   let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.new();\n\
+             \x20   let v = {call};\n\
+             }}"
+        ));
+        let inferred = result.inferred_effects.get(name).unwrap();
+        assert!(
+            inferred.effects.iter().any(
+                |e| e.effect.verb == EffectVerbKind::Receives && e.effect.resource == "Channel"
+            ),
+            "{call} should infer receives(Channel), got: {:?}",
+            inferred.effects
+        );
+    }
+    // `recv`'s own `suspends` seed shares its key and must survive the merge.
+    let result = effectcheck_ok(
+        "fn r() {\n\
+         \x20   let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.new();\n\
+         \x20   let v = rx.recv();\n\
+         }",
+    );
+    let inferred = result.inferred_effects.get("r").unwrap();
+    assert!(
+        inferred
+            .effects
+            .iter()
+            .any(|e| e.effect.verb == EffectVerbKind::Suspends),
+        "the suspends seed on Receiver.recv must not be clobbered, got: {:?}",
+        inferred.effects
+    );
+}
+
+/// The public-boundary consequence, which is the whole reason the row called
+/// this "not a one-liner": a `pub fn` that sends must now DECLARE it. Pinned
+/// in both directions so the tightening is deliberate rather than incidental.
+#[test]
+fn test_public_fn_must_declare_channel_send() {
+    let errs = effectcheck_errors(
+        "pub fn push(tx: Sender[i64], v: i64) with allocates(Heap) {\n\
+         \x20   tx.send(v);\n\
+         }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.to_string().contains("sends(Channel)")),
+        "a public sender must declare sends, got: {errs:?}"
+    );
+    // The spec's own spelling satisfies it — `sends(tx)` canonicalizes to the
+    // same `Channel` resource the seed names, which is why they agree.
+    // `effectcheck_ok` asserts the clean result, so it is the right helper for
+    // this half; `effectcheck_errors` panics when there are no errors.
+    effectcheck_ok(
+        "pub fn push(tx: Sender[i64], v: i64) with sends(tx) allocates(Heap) {\n\
+         \x20   tx.send(v);\n\
+         }",
+    );
+}

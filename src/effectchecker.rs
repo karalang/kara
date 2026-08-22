@@ -877,6 +877,9 @@ impl<'a> EffectChecker<'a> {
             ("difference", "Set.difference"),
             ("send", "Sender.send"),
             ("recv", "Receiver.recv"),
+            // B-2026-08-22-20 — `try_recv` needs the same method→qualified
+            // routing as `recv`, or its `receives(Channel)` seed is unreachable.
+            ("try_recv", "Receiver.try_recv"),
             ("chunk_by", "Iterator.chunk_by"),
             ("chunks", "Iterator.chunks"),
             ("windows", "Iterator.windows"),
@@ -1223,6 +1226,54 @@ impl<'a> EffectChecker<'a> {
             set.add(suspends_effect.clone(), EffectOrigin::Direct(builtin_span));
             self.inferred_effects
                 .insert(self.interner.intern("Receiver.recv"), set);
+        }
+        // B-2026-08-22-20 — the CHANNEL COMMUNICATION effects. design.md:6070
+        // declares `send` with `sends(tx)` and the `recv` family with
+        // `receives(rx)`, but the compiler seeded `Sender.send` with
+        // `allocates(Heap)` only and `Receiver.recv` with `suspends` only. The
+        // single `sends`/`receives` construction anywhere in the compiler was
+        // the `sends(Network)` block below, so a real `tx.send(v)` produced no
+        // channel effect at all and the whole channel surface was invisible to
+        // conflict analysis, `karac explain` and `query effects` — exactly the
+        // hole that block's comment describes for the network surface and
+        // fixes there, never fixed for channels.
+        //
+        // RESOURCE IS THE COLLAPSED `Channel`, not the per-value identity the
+        // spec writes, and deliberately so: a user-declared `with sends(tx)`
+        // ALREADY canonicalizes to `sends(Channel)` today (verified via
+        // `query effects`), so seeding the same name makes the builtin call
+        // and the hand-declared wrapper agree instead of inventing a second
+        // spelling. Per-value identity is B-2026-08-21-52 and lands for both
+        // at once; the collapse is the SOUND direction meanwhile, since one
+        // shared resource makes two channel-touching tasks always conflict —
+        // over-reporting, never under-reporting.
+        //
+        // MERGED into the existing entries rather than inserted over them: the
+        // two seeds above already own these keys, and `insert` would drop
+        // `send`'s `allocates(Heap)` and `recv`'s `suspends` on the floor.
+        //
+        // `try_send` / `recv_blocking` are spec'd at :6070 but do not exist as
+        // methods yet ("no method 'try_send' on type 'Sender'"), so they are
+        // not seeded — a missing method is a different gap from a missing
+        // effect, and seeding a name nothing resolves to would be inert.
+        {
+            let sends_channel = Effect {
+                verb: EffectVerbKind::Sends,
+                resource: "Channel".to_string(),
+            };
+            let receives_channel = Effect {
+                verb: EffectVerbKind::Receives,
+                resource: "Channel".to_string(),
+            };
+            for (fn_name, effect) in [
+                ("Sender.send", &sends_channel),
+                ("Receiver.recv", &receives_channel),
+                ("Receiver.try_recv", &receives_channel),
+            ] {
+                let key = self.interner.intern(fn_name);
+                let set = self.inferred_effects.entry(key).or_default();
+                set.add(effect.clone(), EffectOrigin::Direct(builtin_span));
+            }
         }
         // `std.time::sleep_ms(ms)` suspends — the leaf timer-park primitive
         // (auto-par divergence slice A2a-2.2). Like the network surface
