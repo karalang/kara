@@ -2083,6 +2083,19 @@ impl<'a> super::TypeChecker<'a> {
                     // ignores this entry; raw-pointer layout is fixed.
                     self.pattern_binding_types
                         .insert(SpanKey::from_span(&pattern.span), type_display(ty));
+                } else if let Type::Existential { origin, .. } = ty {
+                    // `let s = make(7)` where `make` returns a return-position
+                    // `impl Trait`. Every arm above answers with a NAME, and an
+                    // existential has none — so the binding was recorded
+                    // nowhere, codegen's `let` path found no surface to hand
+                    // `record_var_type_name`, and `s.method()` died at dispatch
+                    // while `--interp` ran it. The witness name is the right
+                    // answer and is exactly what the concrete spelling records,
+                    // but it is not known yet: the body that reveals it may be
+                    // checked after this call site. Park it for export.
+                    // B-2026-08-22-12.
+                    self.pending_existential_pattern_bindings
+                        .push((SpanKey::from_span(&pattern.span), *origin));
                 } else if let Some(narrow) = narrow_int_surface_name(ty) {
                     // Sub-64-bit int / `char` payload binding (e.g.
                     // `let Some(b) = vec_u8.pop()`): record the surface

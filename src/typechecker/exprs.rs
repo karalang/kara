@@ -1635,6 +1635,20 @@ impl<'a> super::TypeChecker<'a> {
         for (name, ty) in solutions {
             if let Some(resolved) = type_to_concrete_or_param_name(ty) {
                 frame.insert(name.clone(), resolved);
+            } else if let Type::Existential { origin, .. } = ty {
+                // A generic param bound to a return-position `impl Trait`
+                // VALUE — `fn total(c: impl Counter) -> i64` called as
+                // `total(make(9))`. The existential names no concrete type, so
+                // the mono frame got no entry and codegen had nothing to
+                // instantiate `T` with; the call failed the build while the
+                // interpreter ran it. Park it: the witness is resolved at
+                // export, because this call site may well be checked before
+                // the body that reveals it. B-2026-08-22-12.
+                self.pending_existential_call_subs.push((
+                    SpanKey::from_span(span),
+                    name.clone(),
+                    *origin,
+                ));
             }
             // Element-aware mangle token (B-2026-07-11-35): the head-name `frame`
             // above erases `Vec[i64]` vs `Vec[String]` to `"Vec"`; this keeps the

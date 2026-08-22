@@ -383,3 +383,163 @@ fn test_lower_inside_let_value() {
         value.kind
     );
 }
+
+// ── Return-position `impl Trait` → its concrete witness (B-2026-08-22-12) ──
+//
+// A method call through a return-position existential had NO codegen
+// dispatcher: `make().get()` was check-green, `--interp`-green, and red under
+// both `karac run` and `karac build`. Rather than teach the backend to carry
+// an existential — a parallel dispatch path beside every name-keyed mechanism
+// it has — lowering hands it the concrete type. The opacity is a caller-side
+// abstraction that the TYPECHECKER enforces and that has no work left to do by
+// the time this pass runs, and design.md's one-witness-per-monomorphization
+// rule says the hidden type is a single statically-known type.
+//
+// These tests pin the substitution itself. The behavioural half — four
+// surfaces byte-identical — is `test_e2e_return_position_impl_trait_witness`
+// in tests/codegen.rs.
+
+/// The return type of `fn name` after lowering, rendered as a path segment
+/// (`Some("S")`) or `None` when it is still an `impl Trait`.
+fn return_path_segment(program: &karac::ast::Program, name: &str) -> Option<String> {
+    for item in &program.items {
+        if let Item::Function(f) = item {
+            if f.name == name {
+                return match &f.return_type.as_ref()?.kind {
+                    karac::ast::TypeKind::Path(p) => p.segments.first().cloned(),
+                    _ => None,
+                };
+            }
+        }
+    }
+    panic!("function {name} not found");
+}
+
+const SRC_PREFIX: &str = "trait Src { type Item; fn get(ref self) -> Self.Item; }\n\
+     struct S { v: i64 }\n\
+     impl Src for S { type Item = i64; fn get(ref self) -> i64 { self.v } }\n";
+
+#[test]
+fn impl_trait_return_is_replaced_by_its_witness() {
+    let prog = lower_program(&format!(
+        "{SRC_PREFIX}fn make() -> impl Src[Item = i64] {{ S {{ v: 7 }} }}\n\
+         fn main() {{ let s = make(); println(s.get()); }}"
+    ));
+    assert_eq!(return_path_segment(&prog, "make").as_deref(), Some("S"));
+}
+
+#[test]
+fn impl_trait_return_witness_survives_a_call_site_checked_first() {
+    // `main` is walked BEFORE `make`, so at the moment the call is checked the
+    // witness does not exist yet. The resolution is deferred to export for
+    // exactly this reason; a version that resolved inline would leave this
+    // one unrewritten.
+    let prog = lower_program(&format!(
+        "{SRC_PREFIX}fn main() {{ let s = make(); println(s.get()); }}\n\
+         fn make() -> impl Src[Item = i64] {{ S {{ v: 7 }} }}"
+    ));
+    assert_eq!(return_path_segment(&prog, "make").as_deref(), Some("S"));
+}
+
+#[test]
+fn impl_trait_return_with_branches_agreeing_on_one_witness_is_replaced() {
+    // Two `return` sites, one concrete type: still "one concrete return per
+    // monomorphization", so still substitutable.
+    let prog = lower_program(&format!(
+        "{SRC_PREFIX}fn pick(hi: bool) -> impl Src[Item = i64] {{\n\
+             if hi {{ S {{ v: 9 }} }} else {{ S {{ v: 1 }} }}\n\
+         }}\n\
+         fn main() {{ println(pick(true).get()); }}"
+    ));
+    assert_eq!(return_path_segment(&prog, "pick").as_deref(), Some("S"));
+}
+
+#[test]
+fn impl_trait_return_on_an_impl_method_is_replaced() {
+    let prog = lower_program(&format!(
+        "{SRC_PREFIX}struct F {{}}\n\
+         impl F {{ fn build(ref self) -> impl Src[Item = i64] {{ S {{ v: 3 }} }} }}\n\
+         fn main() {{ let f = F {{}}; println(f.build().get()); }}"
+    ));
+    let mut found = false;
+    for item in &prog.items {
+        if let Item::ImplBlock(imp) = item {
+            for it in &imp.items {
+                if let karac::ast::ImplItem::Method(m) = it {
+                    if m.name == "build" {
+                        found = true;
+                        assert!(
+                            matches!(&m.return_type.as_ref().unwrap().kind,
+                                     karac::ast::TypeKind::Path(p) if p.segments == vec!["S".to_string()]),
+                            "impl-method return not substituted: {:?}",
+                            m.return_type
+                        );
+                    }
+                }
+            }
+        }
+    }
+    assert!(found, "impl method `build` not found");
+}
+
+#[test]
+fn a_contested_existential_is_left_alone() {
+    // Two DISTINCT witnesses is already `E_IMPL_TRAIT_MULTIPLE_WITNESSES`.
+    // Substituting one of them would compile a program the typechecker
+    // rejected, and pick arbitrarily; leaving it keeps codegen's loud
+    // fall-through, which is the honest outcome for an erroring program.
+    let prog = lower_program(
+        "trait Src { fn get(ref self) -> i64; }\n\
+         struct A {}\n\
+         struct B {}\n\
+         impl Src for A { fn get(ref self) -> i64 { 1 } }\n\
+         impl Src for B { fn get(ref self) -> i64 { 2 } }\n\
+         fn pick(hi: bool) -> impl Src { if hi { A {} } else { B {} } }\n\
+         fn main() { println(pick(true).get()); }",
+    );
+    assert_eq!(
+        return_path_segment(&prog, "pick"),
+        None,
+        "a multi-witness existential must not be substituted"
+    );
+}
+
+#[test]
+fn an_existential_declaring_effect_variables_is_left_alone() {
+    // `collect_effect_var_names_in_type` harvests polymorphic effect params
+    // off the `impl Trait` node and nowhere else, so erasing the node erases
+    // the variable's declaration site. Concrete verbs are re-derived from the
+    // witness's own impl methods and do NOT block the rewrite (the test
+    // below); an effect VARIABLE does. B-2026-08-22-13.
+    let prog = lower_program(
+        "trait Emit { fn emit(ref self) -> i64; }\n\
+         struct E { n: i64 }\n\
+         impl Emit for E { fn emit(ref self) -> i64 { self.n } }\n\
+         fn make[with F]() -> impl Emit with F { E { n: 4 } }\n\
+         fn main() { let e = make(); println(e.emit()); }",
+    );
+    assert_eq!(
+        return_path_segment(&prog, "make"),
+        None,
+        "an effect-variable existential must keep its `impl Trait` node"
+    );
+}
+
+#[test]
+fn an_existential_declaring_only_concrete_effects_is_replaced() {
+    // The contrast to the test above. `writes(Log)` names no variable, and
+    // after the rewrite `e.emit()` resolves to `E.emit`, which declares its
+    // own effects — so the caller's inferred set is unchanged or more precise
+    // rather than weaker. Verified behaviourally too: the public-fn
+    // "performs effects [writes(Log)] but has no effect declaration"
+    // rejection is byte-identical with and without the substitution.
+    let prog = lower_program(
+        "effect resource Log;\n\
+         trait Emit { fn emit(ref self) -> i64; }\n\
+         struct E { n: i64 }\n\
+         impl Emit for E { fn emit(ref self) -> i64 with writes(Log) { self.n } }\n\
+         fn make() -> impl Emit with writes(Log) { E { n: 4 } }\n\
+         fn main() { let e = make(); println(e.emit()); }",
+    );
+    assert_eq!(return_path_segment(&prog, "make").as_deref(), Some("E"));
+}

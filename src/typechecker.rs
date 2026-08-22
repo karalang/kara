@@ -1677,6 +1677,34 @@ pub struct TypeCheckResult {
     /// Only `Type::Named` types are recorded (primitives, refs, etc. don't
     /// need the reconstruction step).
     pub pattern_binding_types: FxHashMap<SpanKey, String>,
+    /// Existential `origin` `SpanKey` -> the single concrete witness `TypeExpr`
+    /// that flowed into it. Keyed by `Type::Existential::origin`, which is the
+    /// `SpanKey` of the `impl Trait` `TypeExpr` in the AST — so `lowering.rs`
+    /// can match a function's return type against this map directly.
+    ///
+    /// This is what lets a return-position `impl Trait` compile. The
+    /// existential is a CALLER-SIDE abstraction, enforced entirely in the
+    /// typechecker: `make().v` is a field error, the concrete name is
+    /// unspeakable, `check_assignable` refuses a witness that does not
+    /// implement the trait. Once typechecking has passed, the opacity has done
+    /// its whole job, and design.md's "one concrete return per
+    /// monomorphization" (`E_IMPL_TRAIT_MULTIPLE_WITNESSES`) says the hidden
+    /// type is a single statically-known type — so lowering rewrites the
+    /// return type to that type and every backend mechanism keyed on a
+    /// concrete name works unchanged, with no existential-aware dispatch arm
+    /// anywhere in codegen. Before this the backend had no arm at all and
+    /// `make().get()` was check-green, interpreter-green and build-red
+    /// (B-2026-08-22-12).
+    ///
+    /// An origin that saw two DISTINCT witnesses is absent rather than
+    /// arbitrary: that program is already an
+    /// `E_IMPL_TRAIT_MULTIPLE_WITNESSES` error, and leaving it unrewritten
+    /// keeps codegen's loud fall-through instead of silently picking one.
+    /// Absent, too, for an origin with no concrete witness at all — a TAIT
+    /// (still `E_TAIT_NOT_IMPLEMENTED_YET` at witness-required sites), an RPITIT
+    /// trait declaration, or a body that only ever re-returns another
+    /// existential.
+    pub impl_trait_return_witnesses: FxHashMap<SpanKey, TypeExpr>,
     /// Sibling table to `pattern_binding_types` carrying the inner element
     /// `TypeExpr` for `Vec[T]` / `Slice[T]` pattern bindings only. Keyed by
     /// the same `SpanKey` (the pattern's span). Populated alongside the
@@ -1902,9 +1930,38 @@ pub struct TypeChecker<'a> {
     /// run-vs-build divergence (B-2026-07-08-1). Saved/restored around each
     /// function walk so nested items don't leak state.
     pub(super) current_return_impl_trait: Option<(crate::resolver::SpanKey, String)>,
-    /// Concrete witness types (display name + span) collected for the current
-    /// function's return-position `impl Trait`. See `current_return_impl_trait`.
-    pub(super) return_impl_trait_witnesses: Vec<(String, Span)>,
+    /// Concrete witness types (display name + span + the witness `Type`)
+    /// collected for the current function's return-position `impl Trait`. See
+    /// `current_return_impl_trait`. The display name drives the
+    /// multiple-witness diagnostic; the `Type` is what codegen needs, and is
+    /// published to `impl_trait_return_witnesses` once the function's single
+    /// witness is known.
+    pub(super) return_impl_trait_witnesses: Vec<(String, Span, Type)>,
+    /// Accumulating map: existential `origin` `SpanKey` -> the single concrete
+    /// witness that flowed into it. Held as a `Type` rather than the exported
+    /// `TypeExpr` so two bodies under one origin can be compared for agreement
+    /// (`Type` is `PartialEq`; `TypeKind` is not); converted once at export.
+    /// Published on `TypeCheckResult` for `lowering.rs` — see the public
+    /// field's doc for why the rewrite is sound and why a contested origin is
+    /// dropped.
+    pub(super) impl_trait_return_witnesses: FxHashMap<SpanKey, Type>,
+    /// Call sites whose generic solution bound a type param to an EXISTENTIAL:
+    /// `(call span, param name, existential origin)`. The witness for that
+    /// origin is not necessarily known yet — the defining body may be checked
+    /// after the call site — so the entry is parked here and resolved into
+    /// `call_type_subs` / `call_type_subs_mangle` at export, once every body
+    /// has been walked. B-2026-08-22-12.
+    pub(super) pending_existential_call_subs: Vec<(SpanKey, String, SpanKey)>,
+    /// `let` bindings whose type is an EXISTENTIAL: `(pattern span,
+    /// existential origin)`. Same deferral, same reason, as
+    /// `pending_existential_call_subs` — resolved into `pattern_binding_types`
+    /// at export. B-2026-08-22-12.
+    pub(super) pending_existential_pattern_bindings: Vec<(SpanKey, SpanKey)>,
+    /// Origins that saw two or more DISTINCT witnesses across the program and
+    /// so must never be rewritten. Tracked separately from the map above
+    /// because a later single-witness function must not resurrect an origin an
+    /// earlier one poisoned.
+    pub(super) impl_trait_contested_origins: FxHashSet<SpanKey>,
     /// LB3 — per-label collector stack for labeled-block break-with-value
     /// LUB inference. Pushed at labeled-block entry; each `Break { label:
     /// Some(name), value: Some(e) }` site appends `infer_expr(e)` to the
@@ -2337,6 +2394,10 @@ impl<'a> TypeChecker<'a> {
             mut_through_param_arg: false,
             current_return_type: None,
             current_return_impl_trait: None,
+            impl_trait_return_witnesses: FxHashMap::default(),
+            pending_existential_call_subs: Vec::new(),
+            pending_existential_pattern_bindings: Vec::new(),
+            impl_trait_contested_origins: FxHashSet::default(),
             return_impl_trait_witnesses: Vec::new(),
             current_fn_is_gpu: false,
             current_fn_frozen_params: FxHashSet::default(),
@@ -2562,6 +2623,38 @@ impl<'a> TypeChecker<'a> {
             .filter(|imp| imp.trait_name.as_deref() == Some("Drop"))
             .map(|imp| (imp.target_type.clone(), format!("{}.drop", imp.target_type)))
             .collect();
+        // Resolve the parked existential type-arg bindings now that every
+        // body has been walked and `impl_trait_return_witnesses` is complete
+        // (B-2026-08-22-12). `record_call_type_subs` could not do this inline:
+        // a call site is often checked BEFORE the function whose body reveals
+        // the witness, so at record time the answer did not exist yet. An
+        // origin still without a single witness — contested, or a TAIT — is
+        // skipped, leaving codegen's loud fall-through rather than a guess.
+        for (call, param, origin) in std::mem::take(&mut self.pending_existential_call_subs) {
+            let Some(witness) = self.impl_trait_return_witnesses.get(&origin) else {
+                continue;
+            };
+            if let Some(name) = crate::typechecker::types::type_to_concrete_or_param_name(witness) {
+                self.call_type_subs
+                    .entry(call)
+                    .or_default()
+                    .insert(param.clone(), name);
+            }
+            if let Some(tok) = crate::typechecker::types::type_to_mono_mangle_token(witness) {
+                self.call_type_subs_mangle
+                    .entry(call)
+                    .or_default()
+                    .insert(param, tok);
+            }
+        }
+        for (binding, origin) in std::mem::take(&mut self.pending_existential_pattern_bindings) {
+            let Some(witness) = self.impl_trait_return_witnesses.get(&origin) else {
+                continue;
+            };
+            if let Some(name) = crate::typechecker::types::method_callee_type_name(witness) {
+                self.pattern_binding_types.insert(binding, name);
+            }
+        }
         let distinct_type_traits = self.env.distinct_types.clone();
         let compiler_builtins = self.env.compiler_builtins.clone();
         let must_use_functions = self.env.must_use_functions.clone();
@@ -2617,6 +2710,11 @@ impl<'a> TypeChecker<'a> {
             weak_elem_read_sites: self.weak_elem_read_sites,
             call_type_subs_mangle: self.call_type_subs_mangle,
             pattern_binding_types: self.pattern_binding_types,
+            impl_trait_return_witnesses: self
+                .impl_trait_return_witnesses
+                .iter()
+                .map(|(k, v)| (*k, Self::type_to_type_expr(v)))
+                .collect(),
             pattern_binding_inner_types: self.pattern_binding_inner_types,
             pattern_binding_borrow_modes: self.pattern_binding_borrow_modes,
             compiler_builtins,
@@ -4288,7 +4386,7 @@ impl<'a> TypeChecker<'a> {
             return;
         }
         self.return_impl_trait_witnesses
-            .push((type_display(&f), *span));
+            .push((type_display(&f), *span, f));
     }
 
     /// End-of-body check for a return-position `impl Trait`: reject the
@@ -4303,16 +4401,51 @@ impl<'a> TypeChecker<'a> {
         let Some((_, trait_name)) = self.current_return_impl_trait.clone() else {
             return;
         };
-        let mut distinct: Vec<(String, Span)> = Vec::new();
-        for (name, span) in &self.return_impl_trait_witnesses {
-            if !distinct.iter().any(|(n, _)| n == name) {
-                distinct.push((name.clone(), *span));
+        let mut distinct: Vec<(String, Span, Type)> = Vec::new();
+        for (name, span, ty) in &self.return_impl_trait_witnesses {
+            if !distinct.iter().any(|(n, _, _)| n == name) {
+                distinct.push((name.clone(), *span, ty.clone()));
+            }
+        }
+        // Publish the single witness for `lowering.rs` to rewrite the return
+        // type with (B-2026-08-22-12). Runs before the `< 2` early return so
+        // the contested case is POISONED rather than merely skipped: an origin
+        // shared by two function bodies — an RPITIT trait method's declaration
+        // span, reached once per impl — must not have a second, agreeing body
+        // resurrect an entry the first, disagreeing one invalidated. Once
+        // contested, always contested.
+        let origin = self
+            .current_return_impl_trait
+            .as_ref()
+            .map(|(o, _)| *o)
+            .expect("current_return_impl_trait was matched above");
+        if !self.impl_trait_contested_origins.contains(&origin) {
+            match distinct.as_slice() {
+                [(_, _, witness)] => {
+                    // A second body under the same origin agreeing on the
+                    // witness is fine; disagreeing poisons it.
+                    match self.impl_trait_return_witnesses.get(&origin) {
+                        Some(prev) if prev != witness => {
+                            self.impl_trait_return_witnesses.remove(&origin);
+                            self.impl_trait_contested_origins.insert(origin);
+                        }
+                        _ => {
+                            self.impl_trait_return_witnesses
+                                .insert(origin, witness.clone());
+                        }
+                    }
+                }
+                [] => {}
+                _ => {
+                    self.impl_trait_return_witnesses.remove(&origin);
+                    self.impl_trait_contested_origins.insert(origin);
+                }
             }
         }
         if distinct.len() < 2 {
             return;
         }
-        let names: Vec<&str> = distinct.iter().map(|(n, _)| n.as_str()).collect();
+        let names: Vec<&str> = distinct.iter().map(|(n, _, _)| n.as_str()).collect();
         let second_span = distinct[1].1;
         self.type_error(
             format!(

@@ -83,6 +83,96 @@ pub fn callee_is_string_concat(callee: &Expr) -> bool {
     }
 }
 
+/// Rewrite every return-position `impl Trait` to the single concrete type the
+/// typechecker proved it resolves to (B-2026-08-22-12).
+///
+/// A return-position `impl Trait` is an abstraction over the CALLER, and the
+/// typechecker is where that abstraction is enforced: it refuses to let a
+/// caller name the concrete type, read its fields, or use anything outside the
+/// trait's surface, and it refuses a witness that does not implement the trait.
+/// By the time this pass runs, all of that has been checked and the opacity has
+/// no work left to do. What remains is a function whose return type design.md
+/// guarantees is "one concrete return per monomorphization" — a single type,
+/// statically known, recorded in `impl_trait_return_witnesses`.
+///
+/// So the whole backend problem dissolves into a substitution. Codegen had NO
+/// dispatcher for an existential receiver, with or without an inline
+/// associated-type binding: `make().get()` was check-green, interpreter-green
+/// and build-red under both `karac run` and `karac build`. Teaching codegen to
+/// carry an existential would have meant a parallel dispatch path beside every
+/// name-keyed mechanism it already has — `var_type_names`, `fn_return_type_names`,
+/// struct-shape lookup, the `impl` method tables. Handing it the concrete type
+/// instead means there is nothing new to teach: the function returns `S`, the
+/// binding is an `S`, and `S.get` dispatches through the arm that has always
+/// existed.
+///
+/// Only an origin with an unambiguous witness is rewritten. A contested one
+/// (two distinct witnesses) is already an `E_IMPL_TRAIT_MULTIPLE_WITNESSES`
+/// error and is left alone, as is an origin with no concrete witness at all —
+/// a TAIT, an RPITIT trait declaration, a body that only re-returns another
+/// existential. Those keep codegen's pre-existing loud fall-through, which is
+/// the right outcome: this pass makes the provable case work and changes
+/// nothing about the unprovable ones.
+fn substitute_impl_trait_returns(program: &mut Program, tc: &TypeCheckResult) {
+    if tc.impl_trait_return_witnesses.is_empty() {
+        return;
+    }
+    fn rewrite(f: &mut Function, tc: &TypeCheckResult) {
+        let Some(rt) = f.return_type.as_mut() else {
+            return;
+        };
+        // An existential may declare METHOD-USE effects on the TYPE
+        // (`-> impl Iterator with reads(FileSystem)`, design.md § Effect
+        // surface), and `effectchecker.rs` reads that clause off this very
+        // node — AFTER this pass runs. So the clause has to survive the
+        // rewrite, and only one part of it does not.
+        //
+        // CONCRETE verbs survive by being re-derived: once the return type is
+        // the witness, `e.emit()` resolves to the witness's own impl method,
+        // which declares its own effects, and the caller's inferred set is the
+        // same or more precise. Measured: the public-fn rejection for an
+        // undeclared `writes(Log)` reaching a caller is byte-identical before
+        // and after the rewrite.
+        //
+        // An effect VARIABLE does not. `collect_effect_var_names_in_type`
+        // harvests polymorphic effect params off this node and nowhere else,
+        // so erasing the node erases the variable's declaration site — a
+        // silently weaker analysis. Those keep their `impl Trait` spelling and
+        // codegen's loud fall-through, which is the honest outcome until the
+        // effect surface travels with the substitution (B-2026-08-22-13).
+        let TypeKind::ImplTrait { use_effects, .. } = &rt.kind else {
+            return;
+        };
+        if use_effects
+            .as_ref()
+            .is_some_and(|l| l.items.iter().any(|i| matches!(i, EffectItem::Variable(_))))
+        {
+            return;
+        }
+        // `Type::Existential::origin` is `SpanKey::from_span` of this very
+        // `TypeExpr`, so the lookup is an identity match, not a heuristic.
+        let key = crate::resolver::SpanKey::from_span(&rt.span);
+        if let Some(witness) = tc.impl_trait_return_witnesses.get(&key) {
+            // Keep the original span: diagnostics, `expr_types` and every
+            // other span-keyed side table downstream are keyed on it.
+            rt.kind = witness.kind.clone();
+        }
+    }
+    for item in &mut program.items {
+        match item {
+            Item::Function(f) => rewrite(f, tc),
+            Item::ImplBlock(imp) => {
+                for it in &mut imp.items {
+                    if let ImplItem::Method(m) = it {
+                        rewrite(m, tc);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Rewrite operator expressions across the entire program in place.
 pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
     let mut lowerer = Lowerer { tc };
@@ -102,6 +192,10 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
     // Running after typecheck also means the moved expression keeps its span,
     // and therefore its `expr_types` / `owned_temp_drops` entries.
     inline_single_use_iter_axis_lets(program);
+    // Replace each return-position `impl Trait` with the concrete type the
+    // typechecker proved it resolves to — B-2026-08-22-12. See
+    // `substitute_impl_trait_returns`.
+    substitute_impl_trait_returns(program, tc);
     // Forward the typechecker's `?` cross-error-type conversion table onto
     // the program so codegen can read it without taking a `TypeCheckResult`.
     // Keys are `(span.offset, span.length)`; values are the target type's

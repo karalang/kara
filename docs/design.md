@@ -6865,6 +6865,10 @@ The binding is legal wherever a trait is named: a bound (`[I: Iterator[Item = T]
 
 An inline binding names a type, not a type constructor, so it cannot bind a *generic* associated type: `impl Functor[Mapped = X]` does not answer `Mapped[U]`. Naming something the trait does not declare is rejected where it is written (`E_UNKNOWN_ASSOC_TYPE_BINDING`) rather than silently binding nothing.
 
+**How it compiles: the existential is erased, not carried.** The opacity above is a *caller-side* rule, and the typechecker is where all of it is enforced — the concrete name is unspeakable, the fields are unreadable, a witness that does not implement the trait is refused. Once a program typechecks, that abstraction has no work left to do, and the one-concrete-return-per-monomorphization rule means the hidden type is a single statically-known type. So the compiler substitutes it: after typechecking, each return-position `impl Trait` is rewritten to its witness, and the backend sees an ordinary concrete return type. There is no existential at runtime, no vtable, and no dispatch machinery — which is the whole difference from `dyn Trait`, stated as an implementation fact rather than an aspiration.
+
+Two consequences follow, and both are deliberate. A function whose existential declares polymorphic **effect variables** keeps its `impl Trait` spelling, because the variable's only declaration site is that type node; concrete effect verbs are re-derived from the witness's own impl methods and substitute freely. And an existential with **two distinct witnesses** is not substituted at all — that program is already an `E_IMPL_TRAIT_MULTIPLE_WITNESSES` error, and picking one of the two would compile something the typechecker rejected.
+
 **Effect surface — split construction and use.** A function returning `impl Trait` has two distinct effect surfaces:
 
 1. **Function execution effects** (`with E` on the function signature) — what running the function body itself costs the caller. For `make_counter`, this is empty (`(start..).into_iter()` allocates nothing, reads no resource).

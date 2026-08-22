@@ -102724,6 +102724,134 @@ fn main() {
         assert_eq!(run_program(src).as_deref(), Some("5\n37\n"));
     }
 
+    /// B-2026-08-22-12 — a method call through a return-position `impl Trait`.
+    ///
+    /// The row's own repro (`let s = make(7); s.get()`) had NO codegen
+    /// dispatcher at all: check-green, `--interp`-green, red under both
+    /// `karac run` and `karac build`. The fix is a substitution in
+    /// `lowering.rs` rather than a dispatcher arm — the existential is a
+    /// caller-side abstraction the typechecker has finished enforcing by then,
+    /// and design.md guarantees one concrete witness per monomorphization, so
+    /// the backend can simply be handed the concrete type. `tests/lowering.rs`
+    /// pins the substitution; this pins that programs written against it RUN,
+    /// and run the same everywhere.
+    ///
+    /// The witness matrix is the point. Each row is a different LLVM story,
+    /// and a substitution that only worked for a plain `{i64}` struct would
+    /// pass a thinner test while leaving the interesting cases red:
+    ///
+    ///   - a struct with a HEAP field (`Vec[i64]`) — the shape the
+    ///     LLVM-identity reverse-lookup aliases against every other
+    ///     `{ptr,len,cap}` type;
+    ///   - an ENUM witness — tag+payload, not a struct at all;
+    ///   - a `shared struct` witness — RC, a pointer with refcount discipline;
+    ///   - the value returned from an IMPL METHOD rather than a free fn;
+    ///   - the existential passed INTO an argument-position `impl Trait`,
+    ///     which monomorphizes on a type param the call site could not name;
+    ///   - two branches agreeing on one witness, still substitutable;
+    ///   - an existential declaring CONCRETE method-use effects, whose verbs
+    ///     are re-derived from the witness's own impl method.
+    ///
+    /// Both spellings of the call are exercised throughout — bound to a `let`
+    /// first, and called directly on the return value — because they reach
+    /// codegen through different paths (`var_type_names` vs. a fresh temp).
+    #[test]
+    fn test_e2e_return_position_impl_trait_witness() {
+        let src = r#"
+effect resource Log;
+
+trait Named {
+    type Label;
+    fn label(ref self) -> Self.Label;
+}
+
+struct Holder { items: Vec[i64] }
+impl Named for Holder {
+    type Label = String;
+    fn label(ref self) -> String { f"holder:{self.items.len()}" }
+}
+
+enum Colour { Red, Blue }
+impl Named for Colour {
+    type Label = String;
+    fn label(ref self) -> String {
+        match self { Colour.Red => "red", Colour.Blue => "blue" }
+    }
+}
+
+shared struct Node { name: String }
+impl Named for Node {
+    type Label = String;
+    fn label(ref self) -> String { self.name }
+}
+
+struct Emitter { n: i64 }
+impl Named for Emitter {
+    type Label = String;
+    fn label(ref self) -> String with writes(Log) { f"emit:{self.n}" }
+}
+
+fn a_holder(n: i64) -> impl Named[Label = String] { Holder { items: [n, n] } }
+fn a_colour() -> impl Named[Label = String] { Colour.Blue }
+fn a_node() -> impl Named[Label = String] { Node { name: "n1" } }
+fn an_emitter() -> impl Named[Label = String] with writes(Log) { Emitter { n: 5 } }
+
+// No inline binding — the caller annotates instead. Same substitution.
+fn bare(n: i64) -> impl Named { Holder { items: [n] } }
+
+// Both branches return the same concrete witness.
+fn pick(hi: bool) -> impl Named[Label = String] {
+    if hi { Holder { items: [1, 2, 3] } } else { Holder { items: [7] } }
+}
+
+// The existential flows INTO a generic (argument-position `impl Trait`),
+// which must monomorphize on a type the call site cannot name.
+fn shout(x: impl Named[Label = String]) -> String { x.label() }
+
+struct Factory { seed: i64 }
+impl Factory {
+    fn build(ref self) -> impl Named[Label = String] { Holder { items: [self.seed] } }
+}
+
+fn main() {
+    // Bound to a `let`, then called.
+    let h = a_holder(4);
+    println(h.label());
+    // Called directly on the return value.
+    println(a_holder(4).label());
+
+    println(a_colour().label());
+    println(a_node().label());
+    println(an_emitter().label());
+
+    let b = bare(9);
+    let bl: String = b.label();
+    println(bl);
+
+    println(pick(true).label());
+    println(pick(false).label());
+
+    println(shout(a_holder(1)));
+
+    let f = Factory { seed: 6 };
+    println(f.build().label());
+    let g = f.build();
+    println(g.label());
+}
+"#;
+        let expected =
+            "holder:2\nholder:2\nblue\nn1\nemit:5\nholder:1\nholder:3\nholder:1\nholder:2\nholder:1\nholder:1\n";
+        assert_eq!(run_program(src).as_deref(), Some(expected));
+        // The A/B half, pinned rather than left to a manual check: this bug
+        // WAS a run-vs-build divergence, so the interpreter answering
+        // identically is the property under test, not a side note.
+        assert_eq!(
+            karac::run_program(src).join(""),
+            expected,
+            "interpreter and AOT must agree"
+        );
+    }
+
     /// B-2026-08-21-41 — a fixed-array TEMPORARY as a for-loop source.
     ///
     /// `for_receiver_is_indexable` required the (`.iter()`-peeled) source to be

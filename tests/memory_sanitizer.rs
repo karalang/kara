@@ -51834,4 +51834,50 @@ fn main() {
             "asan_normalize_result_has_exactly_one_owner",
         );
     }
+
+    /// B-2026-08-22-12 — a return-position `impl Trait` whose witness is a
+    /// `shared struct` (RC), driven in a loop.
+    ///
+    /// The fix routes the existential's value onto the WITNESS's ordinary
+    /// codegen path, which for a `shared struct` means the retain/release
+    /// discipline. That is exactly where a substitution can be subtly wrong in
+    /// a way no output comparison catches: hand the backend a concrete type it
+    /// half-recognises and the balancing release can go missing, leaking one
+    /// node per call while every printed line stays correct.
+    ///
+    /// Both call spellings are in the loop, because they reach codegen
+    /// differently: the bound one through `var_type_names`, the direct one as
+    /// a fresh temporary whose owner is the statement. The loop is what turns
+    /// a per-call imbalance into an accumulating leak rather than a single
+    /// block LSan might not distinguish from startup noise.
+    #[test]
+    fn asan_impl_trait_witness_shared_struct_is_balanced() {
+        assert_clean_asan_run(
+            r#"trait Named { fn label(ref self) -> String; }
+
+shared struct Node { name: String }
+impl Named for Node {
+    fn label(ref self) -> String { self.name }
+}
+
+fn a_node(i: i64) -> impl Named { Node { name: f"n{i}" } }
+
+fn main() {
+    let mut i = 0i64;
+    let mut total = 0i64;
+    let mut last: String = "";
+    while i < 50i64 {
+        let held = a_node(i);
+        total = total + held.label().len();
+        last = a_node(i).label();
+        i = i + 1i64;
+    }
+    println(last);
+    println(total);
+}
+"#,
+            &["n49", "140"],
+            "asan_impl_trait_witness_shared_struct_is_balanced",
+        );
+    }
 }
