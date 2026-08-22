@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 277 | 0 |
 | leak | 187 | 0 |
-| missing-feature | 149 | 6 |
+| missing-feature | 149 | 5 |
 | run-vs-build | 149 | 0 |
 | double-free | 134 | 0 |
 | codegen-gap | 128 | 2 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 989 | 5 |
-| typecheck | 238 | 5 |
+| codegen | 989 | 4 |
+| typecheck | 238 | 4 |
 | interp | 172 | 0 |
 | other | 63 | 1 |
 | ownership | 62 | 0 |
@@ -124,13 +124,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1479 surfaced · 13 open · 1444 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1479 surfaced · 12 open · 1445 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (13)
+### Open (12)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-21-18 | 2026-08-21 | codegen+typecheck | low | STRUCT FUNCTIONAL UPDATE `P { x: 1, ..base }` IS STILL UNIMPLEMENTED -- it now says so clearly instead of dropping the base, but the form syntax.md's STRUCT_LITERAL production admits cannot be used; the interpreter already implements the copy and codegen does not, so the remaining work is codegen plus the ownership rules for a spread base | roadmap.md |
 | B-2026-08-21-43 | 2026-08-21 | codegen | low | A USER IMPL ON A **NON-SCALAR** `Array` HEAD IS UNCALLABLE ON A TEMPORARY -- `mk().tag()` for `impl Tag for Array[String, 2]` still loud-fails after B-2026-08-21-25, which admits only scalar-element arrays because a scalar array is the case that owns no heap | roadmap.md |
 | B-2026-08-21-45 | 2026-08-21 | typecheck+codegen | low | FIVE SHIPPED USER-FACING DIAGNOSTICS CARRY RUNS OF 14-30 SPACES mid-sentence, because rustfmt INTERMITTENTLY rejoins a `\`-continued string literal into one line and keeps the continuation indentation as real spaces | roadmap.md |
 | B-2026-08-21-46 | 2026-08-21 | codegen | low | `enumerate` OVER AN ARRAY **LITERAL** STILL BAILS LOUD -- `for (i, x) in [1, 2, 3].iter().enumerate()` hits the adaptor backstop while `--interp` answers, the one source shape B-2026-08-21-41's widening could not reach | roadmap.md |
@@ -161,9 +160,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1479 surfaced
 
 </details>
 
-### Fixed (1444)
+### Fixed (1445)
 
-<details><summary>1444 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1445 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -13854,6 +13853,69 @@ failure was the useful signal -- it prompted a `git blame` that identified
 the existing commit rather than a second, duplicate fix. Worth the reflex:
 when an edit refuses to apply, check whether the change is already in the
 tree before assuming the patch is wrong. |
+| B-2026-08-21-18 | codegen+typecheck | low | STRUCT FUNCTIONAL UPDATE `P { x: 1, ..base }` IS STILL UNIMPLEMENTED -- it now says so clearly instead of dropping the base, but the form syntax.md's… | FIXED by 1d634c6, as a DESUGAR rather than the codegen arm the row anticipated —
+and the choice is the substance of the fix, not a shortcut around it.
+
+`P { x: 1, ..base }` is rewritten to `P { x: 1, y: base.y, z: base.z }` in a new
+pass (`src/struct_spread.rs`), before the resolver runs. Every later phase then
+sees an ordinary complete literal, so the interpreter, the JIT and AOT codegen
+all get the feature at once and cannot disagree about it.
+
+WHY THAT ANSWERS THE ROW'S ACTUAL WORRY. The row said the hard part is not
+emitting the copy but OWNERSHIP: who owns a heap field copied out of the base,
+whether the base is moved or borrowed and when it drops, what a copied RC field
+does to the refcount, whether a partially-spread base may still be used. Those
+are the questions behind a large share of this ledger's double-free and leak
+rows, and a fresh codegen arm would have had to answer all four from scratch.
+
+The desugar answers none of them itself. It inherits the answers, because
+`base.y` is a shape every phase already settles correctly. MEASURED BEFORE
+WRITING ANY OF IT, which is what made this the plan rather than a guess:
+
+    let b = P { x: 1, s: "hi", v: vec![7,8] };
+    let p = P { x: 9, s: b.s, v: b.v };     -> All checks passed; runs
+    println(b.s) afterwards                 -> warning[ownership]: value 'b'
+                                               moved here, used again here
+
+So the hand-written form already handles heap fields AND already reports
+reuse-after-move. It is also exactly what the pre-existing gate diagnostic told
+users to write ("copy the remaining fields explicitly instead: `y: <base>.y`"),
+so the feature and the advice cannot drift apart.
+
+DISTINCT SYNTHETIC SPANS ARE LOAD-BEARING, and the first attempt got this wrong
+in a way worth recording. Giving every synthesized field access the base's own
+span produced a FALSE ownership warning: move tracking is SPAN-KEYED, so two
+heap fields copied from one base read as the same use site used twice, and
+`P { x: 9, ..b }` was reported as moved-and-used-again while the hand-written
+`P { x: 9, s: b.s, v: b.v }` passed clean. The desugar has to be
+INDISTINGUISHABLE from the form it stands for, and with one shared span it was
+not. Fixed with the crate's existing `offset + i` / `length: 0` convention
+(`collect_synth_span`); a zero-length span cannot collide with a real
+expression's.
+
+TWO SHAPES DELIBERATELY KEEP THE GATE:
+
+  * A base that is NOT a re-evaluable place (`..mk()`). Each copied field
+    re-evaluates the base, so a call base would run once per field — a silent
+    change in both effect count and cost. Only a plain binding, `self`, or a
+    field path off one expands.
+  * A base that copies NOTHING (`P { x: 1, y: 2, ..b }`). Still reported, since
+    expanding it to zero fields would quietly accept a base the writer plainly
+    did not intend to be inert. The existing "the base has no effect — drop it"
+    advice survives.
+
+VERIFIED: four surfaces byte-identical (interp / JIT / build / KARAC_AUTO_PAR=0)
+for scalar fields, heap fields (`String` + `Vec[i64]`) and a nested field-path
+base; ASAN clean on a 50-iteration heap-field loop, which is where a double free
+or a leak from the moved fields would show. Full suite 108 binaries / 14,802
+tests / 0 failures; fmt clean; clippy 0 on both feature legs.
+
+NOT DONE, and out of this row's scope: `shared struct` bases. The interpreter's
+own implementation handles `SharedStruct` immutable and mut fields and re-stores
+weak handles without an upgrade/downgrade round trip; the desugar simply routes
+those through `base.field` like any other, which is correct if and only if
+`base.field` is correct for a shared struct. That was not separately exercised
+here. |
 | B-2026-08-21-19 | codegen | high | RUN/BUILD DIVERGENCE from two independently-green commits meeting: `let a = b"abc"; a.is_sorted();` printed `true` under `--interp` and FAILED TO COM… | FIXED by ca74f17. An un-annotated binding initialised from a byte-string literal now registers `u8` in `array_elem_type_exprs`, so the fixed-array method arms can resolve the receiver's element type. Strict E2E regression test on the UN-ANNOTATED spelling (the annotated one never broke). |
 | B-2026-08-21-20 | typecheck | high | `main` IS RED: `selfhost_typechecker_matches_rust_typechecker` fails at 5fee766 on a clean checkout, independent of any local work | FIXED by dda94ff.
 
