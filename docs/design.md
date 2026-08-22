@@ -471,7 +471,7 @@ The lexer reserves identifiers matching `expr_<NNNN>` where `NNNN` is a four-dig
 - **Enums** — algebraic data types with exhaustive pattern matching
 - **Traits** — interfaces that types can implement, with optional default method implementations
 - **`impl` blocks** — methods on types, UFCS bridge (`user.validate()` and `User.validate(user)` are the same call)
-- **Generics** — monomorphization (zero-cost). Syntax: `[T]` not `<T>`. `Vec[i32]`, `fn sort[T: Ord](...)`. No turbofish — `[` is not a comparison operator, so no syntactic ambiguity with less-than. Prior art: Go 1.18. Effect variables are declared in the same generic list using the `with` keyword: `fn map[T, U, with E](list: Vec[T], f: Fn(T) -> U with E) -> Vec[U] with E`. Const generic parameters use `const` prefix: `fn rotated[T, const N: i64](arr: Array[T, N]) -> Array[T, N]` — see *Const generic parameters* below for the full rules (permitted param types, const expressions in bounds and arguments, inference, monomorphization).
+- **Generics** — monomorphization (zero-cost). Syntax: `[T]` not `<T>`. `Vec[i32]`, `fn sort[T: Ord](...)`. No turbofish — `[` is not a comparison operator, so no syntactic ambiguity with less-than. Prior art: Go 1.18. **`[T]` constructs and declares types; it is never applied at a call site.** Choosing `[` over `<` removes the comparison ambiguity but introduces a different one — `[` is also the INDEX operator, and `f[x](args)` is already a legal index-then-call (a `Vec[Fn(i64) -> i64]` element, invoked). A general `f[T](args)` would therefore be ambiguous with indexing, decidable only by asking whether the bracket names a type and the base is generic — a rule that breaks down the moment a binding shadows a type name. So there is no call-site type application. **Explicit selection is by QUALIFYING THE RECEIVER — `Vec[i64].new()`, `Channel[i64].new()` — or by annotating the binding** (`let p: *const u32 = ptr.null();`). The qualified form is unambiguous by construction: a type in receiver position cannot be an index, because a type cannot be indexed. ONE closed exception is grandfathered: the `ptr` prelude constructors (`ptr.null`, `ptr.null_mut`, `ptr.dangling`, `ptr.dangling_mut`) accept a pointee-type argument (`ptr.null[u32]()`). That is unambiguous only because it is a fixed, shadow-guarded set of prelude names, not because the syntax generalizes — do not read it as licence for `f[T](args)` anywhere else. Effect variables are declared in the same generic list using the `with` keyword: `fn map[T, U, with E](list: Vec[T], f: Fn(T) -> U with E) -> Vec[U] with E`. Const generic parameters use `const` prefix: `fn rotated[T, const N: i64](arr: Array[T, N]) -> Array[T, N]` — see *Const generic parameters* below for the full rules (permitted param types, const expressions in bounds and arguments, inference, monomorphization).
 
   **Generic vs. index disambiguation.** `[` serves double duty: generic arguments (`Vec[i32]`) and index access (`arr[0]`). The parser disambiguates by syntactic context, not by naming conventions or name resolution:
 
@@ -2821,7 +2821,7 @@ The same rule applies to `Vec`, `Set`, and all other collections: bare `for` bor
 
 Extension methods on `Iterator` enable functional-style chains. All closure-accepting adaptors are **effect-polymorphic** — the adaptor's effect set includes the closure's effects. For chained adaptors like `.filter(f1).map(f2)`, the effect set is the union of all closure effects (f1's effects ∪ f2's effects), counted once at the loop level per the static-effects rule above.
 
-**Source effects flow through adaptors.** The `with _` ceiling on `Iterator.next()` means an implementing type may bind `next()` to any effect set it needs — `Vec.iter()` stays pure, `io.lines()` binds `reads(Stdin), blocks`, a Kafka consumer binds `receives(Kafka), suspends`. Those source effects thread implicitly through `self` into every adaptor result: a chain like `io.lines().filter(p).map(f)` carries `source ∪ p ∪ f` at the terminal loop, counted once per the static-effects rule. Adaptor signatures are unchanged — the source row is not spelled at call sites. One `Iterator` trait covers pure, blocking, suspending, and remote sources; no separate `Stream` type.
+**Source effects flow through adaptors.** The `with _` ceiling on `Iterator.next()` means an implementing type may bind `next()` to any effect set it needs — `Vec.iter()` stays pure, `stdin.lines()` binds `reads(Stdin), blocks`, a Kafka consumer binds `receives(Kafka), suspends`. Those source effects thread implicitly through `self` into every adaptor result: a chain like `stdin.lines().filter(p).map(f)` carries `source ∪ p ∪ f` at the terminal loop, counted once per the static-effects rule. Adaptor signatures are unchanged — the source row is not spelled at call sites. One `Iterator` trait covers pure, blocking, suspending, and remote sources; no separate `Stream` type.
 
 ```kara
 // Core transformations
@@ -3356,7 +3356,8 @@ error[E_RAW_POINTER_UNRESOLVED_POINTEE]: method 'read' on raw pointer requires a
    |
 help: annotate the pointer type explicitly:
         let p: *const u8 = ptr.null();
-      or use the turbofish-equivalent on the constructor:
+      or pin the pointee on the constructor (the `ptr` exception,
+      § Generics):
         let p = ptr.null[u8]();
 ```
 
@@ -3364,7 +3365,7 @@ help: annotate the pointer type explicitly:
 
 **Concretely, the rule fires when:** the pointer's element-type metavariable has no concrete solution by the time method resolution evaluates the call. Common causes:
 
-- The pointer was constructed by `ptr.null()`, `ptr.null_mut()`, `ptr.dangling()`, or `ptr.dangling_mut()` without a turbofish annotation, and no later use site pins `T`.
+- The pointer was constructed by `ptr.null()`, `ptr.null_mut()`, `ptr.dangling()`, or `ptr.dangling_mut()` without a pointee-type argument, and no later use site pins `T`.
 - The pointer originated from a function that returns `*const _T` for an unrelated reason (e.g., a generic helper whose type parameter is not constrained from the call's arguments).
 - The pointer flowed through a `Vec[*const _T]` or other generic container whose element type is not solved.
 
@@ -3372,7 +3373,7 @@ help: annotate the pointer type explicitly:
 
 - `T` is a generic *parameter* in scope (`fn f[T](p: *const T) { unsafe { p.read() } }`) — `T` is resolved at monomorphization, and the dispatch is checked against `T` symbolically (the per-instantiation method body is type-correct because `T` is known per-instance).
 - The pointer was constructed with an explicit type (`let p: *const u32 = ptr.const(value)`) — `T = u32` is pinned.
-- A turbofish on the constructor pins `T` (`let p = ptr.null[u32]()`) — the metavariable is solved at the constructor.
+- A pointee-type argument on the constructor pins `T` (`let p = ptr.null[u32]()`) — the metavariable is solved at the constructor. This is the ONE closed exception to § Generics' "`[T]` is never applied at a call site" rule, and it is confined to the four `ptr` constructors named above.
 
 **Diagnostic span and fix-it.** The diagnostic underlines the pointer expression at the method-call site (the receiver), not the method name — the user's mental model is "what type is `p`?" Two fix-it suggestions are inlined: (1) annotate the binding's declared type (`let p: *const u8 = ...`), or (2) use turbofish on the originating constructor (`ptr.null[u8]()`). When the originating constructor cannot be identified syntactically (e.g., the pointer came in through a function argument), only the binding-annotation fix-it is offered.
 
@@ -4739,20 +4740,27 @@ let query = """
 
 The stdlib's minimum viable I/O surface — specified as names, module paths, signatures, and effect contracts. Implementation lives in Phase 8; the spec is here because the book tutorials, effect-inference tests, and user code need stable API contracts to write against.
 
-The surface is deliberately slurp-first: one-shot `read_line` / `read_to_string` / `read_to_string(path)` functions, no streaming handle types in MVP. Streaming (`File`, `BufReader`, `io.stdin()` as a handle) and network I/O are Phase 8 (floor) extensions; process spawning ships in Phase 11 (long-tail) alongside `std.process`.
+The surface is deliberately slurp-first: one-shot `read_line` / `read_to_string` / `read_to_string(path)` functions, no streaming handle types in MVP. Streaming (`File`, `BufReader`, a stdin handle type) and network I/O are Phase 8 (floor) extensions; process spawning ships in Phase 11 (long-tail) alongside `std.process`.
 
-**Module paths and prelude.** The I/O surface lives in three prelude-adjacent modules: `io` (stdin + flush), `env` (env vars + args), `fs` (filesystem). None of their *functions* are in the prelude — users write `io.read_line()`, `env.args()`, `fs.read_to_string(path)`. The error types `IoError` and `VarError` are prelude items.
+**Module paths and prelude.** The I/O surface is reached through lowercase module aliases of the effect resources: `stdin`, `stdout`, `stderr` (standard streams), `env` (env vars + args), `fs` (filesystem). None of their *functions* are in the prelude — users write `stdin.read_line()`, `env.args()`, `fs.read_to_string(path)`. The error types `IoError` and `VarError` are prelude items. Each alias resolves to its capitalized resource (`stdin` → `Stdin`), and a local binding of the same name shadows it, per the prelude-shadow rule.
+
+> There is **no `io` module**. Earlier drafts of this section wrote `io.read_line()` / `io.flush()`; that spelling was never implemented and `io` resolves to `undefined name 'io'`. The functions live on the individual stream aliases below (B-2026-08-21-53).
 
 **Function signatures.**
 
 ```kara
 // stdin — reads(Stdin)
-fn io.read_line() -> Result[String, IoError] with reads(Stdin)
-fn io.read_to_string() -> Result[String, IoError] with reads(Stdin)
+fn stdin.read_line() -> Result[String, IoError] with reads(Stdin)
+fn stdin.read_to_string() -> Result[String, IoError] with reads(Stdin)
+fn stdin.lines() -> StdinLines with reads(Stdin) blocks
 
-// stdout / stderr flushing — writes(Stdout) / writes(Stderr)
-fn io.flush() -> Result[(), IoError] with writes(Stdout)
-fn io.flush_stderr() -> Result[(), IoError] with writes(Stderr)
+// stdout / stderr — writes(Stdout) / writes(Stderr)
+fn stdout.print(s: ref String) with writes(Stdout)
+fn stdout.println(s: ref String) with writes(Stdout)
+fn stdout.flush() with writes(Stdout)
+fn stderr.print(s: ref String) with writes(Stderr)
+fn stderr.println(s: ref String) with writes(Stderr)
+fn stderr.flush() with writes(Stderr)
 
 // env — reads(Env)
 fn env.args() -> Vec[String] with reads(Env)
@@ -4786,20 +4794,22 @@ pub enum env.VarError {
 
 Two distinct types, intentional. `IoError` covers stdin + filesystem; `VarError` covers env-var lookup miss / decode failure. The domains overlap on one point (`IoError.InvalidUtf8` and `VarError.NotUnicode` describe the same underlying condition from different sources), and the stdlib provides `impl From[VarError] for IoError` so a CLI tool that chains `?` across both can collapse to a single error type at the call site. Keeping the two enums separate preserves tight per-domain variant sets — `env.var` handlers don't have to consider `NotFound`, `PermissionDenied`, and so on.
 
-**UTF-8 and stdin.** `io.read_line` and `io.read_to_string` return `Result[String, IoError]` — invalid UTF-8 on stdin surfaces as `IoError.InvalidUtf8`. This preserves `String`'s UTF-8 invariant (see [Numeric Semantics](#numeric-semantics) and the `String` entry under [Strings](#strings)). A bytes-level variant (`io.read_line_bytes() -> Result[Vec[u8], IoError]`) is deferred to Phase 8 — the MVP tutorial surface is text. (See [Deferred Items](#deferred-items) — Bytes-level stdin I/O.)
+**UTF-8 and stdin.** `stdin.read_line` and `stdin.read_to_string` return `Result[String, IoError]` — invalid UTF-8 on stdin surfaces as `IoError.InvalidUtf8`. This preserves `String`'s UTF-8 invariant (see [Numeric Semantics](#numeric-semantics) and the `String` entry under [Strings](#strings)). A bytes-level variant (`stdin.read_line_bytes() -> Result[Vec[u8], IoError]`) is deferred to Phase 8 — the MVP tutorial surface is text. (See [Deferred Items](#deferred-items) — Bytes-level stdin I/O.)
 
-**Buffering.** Stdin and stdout are line-buffered by default; file I/O is block-buffered. `io.flush()` forces stdout flush (required when `print("prompt: ")` precedes a stdin read, since the prompt has no terminating newline). `io.flush_stderr()` is the stderr counterpart. Type-level buffered/unbuffered distinctions (`BufRead`-style traits) are deferred to Phase 8 (see [Deferred Items](#deferred-items) — Typed buffering traits).
+**Buffering.** Stdin and stdout are line-buffered by default; file I/O is block-buffered. `stdout.flush()` forces stdout flush (required when `print("prompt: ")` precedes a stdin read, since the prompt has no terminating newline). `stderr.flush()` is the stderr counterpart. Both return `()`, not a `Result` — they are not `?`-chained. Type-level buffered/unbuffered distinctions (`BufRead`-style traits) are deferred to Phase 8 (see [Deferred Items](#deferred-items) — Typed buffering traits).
 
 **Example — guessing game skeleton.**
 
 ```kara
 fn main() -> Result[(), IoError] {
     print("Guess: ");
-    io.flush()?;
-    let line = io.read_line()?;
-    let guess = line.trim().parse[i64]()?;
-    println(f"You guessed {guess}");
-    Ok(())
+    stdout.flush();
+    let line = stdin.read_line()?;
+    match i64.parse(line.trim()) {
+        Some(guess) => println(f"You guessed {guess}"),
+        None => println("not a number"),
+    }
+    return Ok(());
 }
 ```
 
@@ -6054,7 +6064,7 @@ Channels are the primary inter-task communication primitive. A channel is a type
 
 ```kara
 // Construction — produces a matched sender/receiver pair
-Channel.new[T]() -> (Sender[T], Receiver[T])
+Channel[T].new() -> (Sender[T], Receiver[T])
     with allocates(Heap)
 
 Channel.bounded[T](cap: i64) -> (Sender[T], Receiver[T])
@@ -13331,7 +13341,7 @@ Items below are **P0** — they are committed but blocked on prerequisite work. 
 | Bitfield types | `#[repr]` in use | Phase 5+ | `#[repr(C, bitfield)]` with sub-byte fields. See [Bitfield Types](#bitfield-types) below. |
 | Static stack depth analysis | Embedded profile | Phase 6+ | `#[max_stack(N)]` for embedded builds. See [Static Stack Depth Analysis](#static-stack-depth-analysis) below. |
 | Raw string literals | Stdlib regex | Phase 11 | `r"..."` with no escape processing. See [Raw String Literals](#raw-string-literals) below. |
-| Bytes-level stdin I/O | Phase 8 I/O stdlib | Phase 8 | `io.read_line_bytes() -> Result[Vec[u8], IoError]` bypassing UTF-8 validation. MVP stdin surface is text-only. |
+| Bytes-level stdin I/O | Phase 8 I/O stdlib | Phase 8 | `stdin.read_line_bytes() -> Result[Vec[u8], IoError]` bypassing UTF-8 validation. MVP stdin surface is text-only. |
 | Typed buffering traits | Phase 8 I/O stdlib | Phase 8 | `BufRead`-style typed buffered/unbuffered distinctions. Default runtime buffering (line for stdin/stdout, block for files) ships in v1. |
 | Cross-task `?` propagation | Concurrency runtime | Phase 6 | Propagating `?` across task boundaries if/when async is added. No cross-task error flow in v1. |
 | `extern "C-unwind"` exception absorption | LLVM backend unwinding support | Phase 7 | Specced as `catch_panic[T]` per [Catching Panics](#catching-panics-catch_panict) (v60 item 26). Implementation lands with the unwinding substrate in Phase 7. Under `panic = "abort"` builds, `extern "C-unwind"` is rejected at parse and `catch_panic` is rejected at typecheck. |
@@ -13450,19 +13460,19 @@ The fallback is silent by default. A `--simd-report=verbose` flag (Phase 7+) pri
 
 | Category | Operations |
 |---|---|
-| Construction | `Vector::splat(x)` (broadcast scalar), `Vector::from_array([...])`, `Vector::from_slice(s)` |
+| Construction | `Vector[T, N].splat(x)` (broadcast scalar), `Vector[T, N].from_array([...])`, `Vector[T, N].from_slice(s)` |
 | Element-wise arithmetic | `+`, `-`, `*`, `/`, `%` (per `Numeric` trait) |
 | Element-wise comparison | `lt`, `le`, `gt`, `ge`, `eq`, `ne` → `Mask[N]` |
 | Bitwise | `&`, `\|`, `^`, `!` (integer lanes only) |
 | Horizontal reductions | `reduce_sum`, `reduce_product`, `reduce_max`, `reduce_min`, `reduce_and`, `reduce_or`, `reduce_xor` |
 | Lane access / mutation | `v[i]`, `v.set(i, x)`, `v.replace(i, x)` (returns new vector) |
-| Lane shuffling | `v.shuffle::<[i64; M]>()` (compile-time indices), `v.reverse()`, `v.rotate_lanes_left(n)`, `v.rotate_lanes_right(n)` |
-| Masked load/store | `Vector::load_masked(slice, mask)`, `v.store_masked(slice, mask)` |
+| Lane shuffling | `v.shuffle([i0, i1, …, i_{M-1}])` (compile-time index list; result lane `j` = source lane `indices[j]`, so `M` may differ from `N`), `v.reverse()`, `v.rotate_lanes_left(n)`, `v.rotate_lanes_right(n)` |
+| Masked load/store | `Vector[T, N].load_masked(slice, mask)`, `v.store_masked(slice, mask)` |
 | Conditional select | `mask.select(a, b)` — per-lane choice between two vectors |
-| Conversion | `v.cast::<U>()` (lossy where applicable), saturating-cast variants |
+| Conversion | `Vector[U, N].cast_from(v)` (lossy where applicable), saturating-cast variants |
 | Cross product | `v.cross(w)` (`N == 3` only) |
 | Dot product | `v.dot(w) -> T` |
-| Gather / scatter | `Vector::gather(slice, indices)`, `v.scatter(slice_mut, indices)` — **P1 if the target supports native gather/scatter (AVX-2+, AVX-512); P2 otherwise.** Always available semantically; the auto-fallback rule covers the unsupported case. |
+| Gather / scatter | `Vector[T, N].gather(slice, indices)`, `v.scatter(slice_mut, indices)` — **P1 if the target supports native gather/scatter (AVX-2+, AVX-512); P2 otherwise.** Always available semantically; the auto-fallback rule covers the unsupported case. |
 
 The full method-by-method specification lives in the `core::simd` API reference; this table enumerates the surface as a contract.
 
