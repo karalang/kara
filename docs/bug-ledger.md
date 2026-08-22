@@ -92,47 +92,50 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 278 | 0 |
+| miscompile | 279 | 1 |
 | leak | 188 | 1 |
-| missing-feature | 154 | 1 |
+| missing-feature | 154 | 0 |
 | run-vs-build | 151 | 0 |
 | double-free | 135 | 0 |
-| codegen-gap | 128 | 0 |
+| codegen-gap | 129 | 0 |
 | diagnostics | 98 | 1 |
 | false-positive | 94 | 0 |
-| perf | 83 | 0 |
-| other | 56 | 0 |
+| perf | 84 | 1 |
+| other | 57 | 1 |
+| soundness | 55 | 1 |
 | crash | 55 | 0 |
-| soundness | 54 | 0 |
 | use-after-free | 20 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 993 | 1 |
-| typecheck | 244 | 2 |
+| codegen | 996 | 3 |
+| typecheck | 246 | 3 |
 | interp | 174 | 0 |
 | other | 63 | 0 |
 | ownership | 62 | 0 |
 | cli | 62 | 1 |
 | autopar | 55 | 0 |
 | parser | 38 | 0 |
-| runtime | 29 | 0 |
+| runtime | 31 | 2 |
 | resolver | 26 | 0 |
 | effect | 11 | 0 |
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1494 surfaced · 3 open · 1468 fixed · 9 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1499 surfaced · 6 open · 1470 fixed · 9 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-22-6 | 2026-08-22 | typecheck | low | The `Hasher` and `BuildHasher` TRAITS are not baked, so a user cannot write their own hasher: `Map[K, V, H]` accepts only the two compiler-known selectors `SipHash13BuildHasher` / `FxBuildHasher`, and design.md's "User-extensible hashers" paragraph describes a surface that does not exist | roadmap.md |
 | B-2026-08-22-23 | 2026-08-22 | codegen | low | A STRUCT-WITH-HEAP CHANNEL PAYLOAD LEAKS ITS OWN `String`/`Vec` FIELDS ON `try_send`'S REJECT PATH -- the `SendError.Full(v)` binding frees a String or Vec payload correctly, but a struct CARRYING them leaks each field; the identical user-generic-enum program is ASAN-clean | roadmap.md |
 | B-2026-08-22-25 | 2026-08-22 | typecheck+cli | low | `karac fix`'s `redundant_suffix` DELETION SPAN IS ONE CHARACTER SHORT ON THE UNDERSCORE-SEPARATED SUFFIX FORM: `0_i64` is rewritten to `0_`, leaving the separator that existed only to attach the suffix | roadmap.md |
+| B-2026-08-22-27 | 2026-08-22 | codegen+runtime | high | A COMPILED `Map[i64, V, H]` under any NON-DEFAULT hasher stops growing after one resize and silently drops every key past it: `len` still counts them, `contains_key` cannot find them, and the missing keys are the contiguous tail starting at exactly 3/4 of the stalled capacity (196609 at N=200000, 393217 at 400000, 786433 at 800000). `--interp` is correct, so it is a run-vs-build divergence; the default hasher never loses a key at any N | roadmap.md |
+| B-2026-08-22-28 | 2026-08-22 | typecheck | medium | An associated-type bound declared on a STDLIB-BAKED trait is never discharged at an impl site: `trait_assoc_decls` finds the trait declaration only by scanning `program.items`, and a baked trait lives in `env.traits` instead -- so `impl BuildHasher for B { type Hasher = <a type with no Hasher impl> }` type checks, while the same shape on a user-declared trait is correctly rejected with E_GAT_BOUND_NOT_SATISFIED | roadmap.md |
+| B-2026-08-22-29 | 2026-08-22 | codegen+runtime | medium | `FxBuildHasher` is 13.7x SLOWER than the default `SipHash13BuildHasher` on `String` keys (1.23 s vs 0.09 s, 200k inserts + 1M lookups, compiled, arm64) -- the exact opposite of the speed-for-safety trade the stdlib comment and design.md offer it as; a user-written FNV-1a hasher is at parity with the default, so a non-default hasher is not inherently slow | roadmap.md |
+| B-2026-08-22-30 | 2026-08-22 | typecheck | medium | Three `f16_software_emulated` lint tests fail on EVERY aarch64 macOS machine on a clean `main`: the tests assert the emulation warning fires, while `baseline_cpu_and_features` resolves Apple Silicon to `apple-m1`, which `target_has_native_f16` answers `true` for -- so the lint correctly stays quiet. CI is x86_64 and green, leaving a permanently-red local suite | roadmap.md |
 
 ### Wontfix (9)
 
@@ -152,9 +155,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1494 surfaced
 
 </details>
 
-### Fixed (1468)
+### Fixed (1470)
 
-<details><summary>1468 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1470 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -15383,6 +15386,135 @@ Tests: exactly-one-diagnostic (the cascade guard), the two per-shape
 remedies, all four effect spellings (`writes(Log)` / `panics` / `_` /
 `blocks`), and the applied fix edit. Full suite 109 binaries, 14838
 passed, 0 failed; fmt clean; clippy clean on both feature legs. |
+| B-2026-08-22-6 | typecheck | low | The `Hasher` and `BuildHasher` TRAITS are not baked, so a user cannot write their own hasher: `Map[K, V, H]` accepts only the two compiler-known sele… | FIXED by 840f95ef. `Hasher` and `BuildHasher` are baked, and the trailing slot of
+`Map[K, V, H]` / `Set[T, H]` now accepts ANY type that implements
+`BuildHasher`, dispatched through the user's own methods on both backends.
+
+WHAT SHIPPED, against the (a)-(e) plan this row's scoping pass left:
+
+(a) `runtime/stdlib/hash.kara` declares both traits verbatim from design.md --
+`Hasher` with `write` / `finish` plus ten default-bodied `write_*` convenience
+methods, `BuildHasher` with `type Hasher: Hasher` and `build`. The `H: Hasher`
+bound is restored on `Hash.hash`. Both names join the prelude scope-0 list next
+to the two selectors, for the same reason they are there: a user hasher is
+named inline in a type annotation, so its impl blocks would otherwise be the
+one part of the feature needing an import.
+
+(b) `HasherKind::User(String)` carries the BUILDER's type name. The enum loses
+`Copy` (a `String`-carrying variant cannot keep it); the fallout was ~20
+mechanical `.copied()` / field-move sites across `codegen`, `codegen/maps`,
+`interpreter/eval_call` and `interpreter/value`. `runtime_symbol` becomes
+`Option<&'static str>` -- `None` for a user hasher, which is not a gap but the
+whole point: its permutation is user code, so there is no runtime entry point
+to name. `mangle_suffix` returns `Cow` and folds the builder name in, so two
+builders in one program get two synthesized `hash_fn`s instead of colliding in
+the cache.
+
+(c) The whitelist is gone, but NOT where this row expected. The check could not
+stay in `take_hasher_type_arg`, because the PARSER strips the argument before
+the typechecker ever sees it, and the parser has no impl table -- it cannot
+tell `MyBuildHasher` from `i64`. So `take_container_hasher_arg` now strips ANY
+bare trailing path and records the name, and validation moves one phase later
+to `TypeChecker::check_recorded_container_hasher`, which reads the same impl
+table both backends dispatch through. Leaving unknown names in place was the
+alternative and is worse: it would make a legitimate `Map[K, V, MyBuildHasher]`
+stop being a `Map` to every later phase, which is the exact failure the
+deletion exists to prevent.
+
+(d) `emit_hash_bytes_call` gains a user arm emitting three direct calls --
+`B.build()` -> `S.write(bytes)` -> `S.finish()` -- around one stack slot for
+the state and one for the `Slice[u8]` header. The row's read of the codegen
+side was right: this is ONE emit site, and the map's calling convention is
+untouched, because `karac_map_*` was already reaching the hash through a
+function pointer. The builder -> state-type hop comes from a new plain-data
+`Codegen::user_hasher_states` table read off the AST in `compile_program`,
+beside `container_hashers` and for the same reason.
+
+(e) The interpreter twin is a new module, `interpreter::user_hasher`, and it is
+the part this row's scoping did not anticipate. `MapData::hash_key` is a
+`&self` method reached through an `RwLock` guard: there is no interpreter in
+scope and no way to thread one in without changing the signature of every map
+and set operation in the tree. It therefore keeps its own -- a leaked
+`&'static Program` / `&'static TypeCheckResult` (one clone per process,
+installed from `Interpreter::new` only for a program that names a user hasher)
+and a per-thread sub-`Interpreter`. Leaking is what makes the sub-interpreter
+storable in a `thread_local` at all, and it is bounded and one-shot. The two
+alternatives are both worse: a raw pointer to the live interpreter hands out a
+second `&mut` to a value already borrowed up the stack, and rebuilding an
+interpreter per key hash puts `Interpreter::new` + `register_items` on the map
+hot path. `TypeCheckResult` gained `Clone` (and `UnionInfo` with it) for this.
+
+ONE COMPILER BUG HAD TO BE FIXED TO SHIP (a), not worked around. design.md
+writes `Hasher.write_u8`'s default body as `self.write([n])`, and baking that
+made EVERY user `impl Hasher` fail module verification -- "Call parameter type
+does not match function signature" -- while `karac check` accepted the program
+and `--interp` ran it. The spec's own text was the reproducer. It is the
+METHOD-CALL half of B-2026-08-21-24: that row spilled the synthesized
+`{ptr, i64}` header for a `ref Slice[T]` slot on the free-function path and
+never on this one, the same "landed on two of the three call paths" shape as
+B-2026-06-19-1, B-2026-08-05-41 and B-2026-08-21-39 before it. Mapped over a
+3x2x2 matrix (free fn / inherent method / trait default body) x (ref Slice /
+bare Slice) x (literal / call result): exactly the two method-receiver cells
+with a `ref Slice` slot and a literal argument failed, and all twelve pass
+after the fix. Filed as B-2026-08-22-26, fixed in this commit, with a
+regression test covering both receiver shapes. Writing the stdlib body as
+`n.to_ne_bytes()` instead would have made the suite green and left the bug in
+the compiler for the next caller.
+
+TWO RESTRICTIONS, both reported rather than silently accepted:
+
+  * THE BUILDER MUST BE A FIELDLESS STRUCT. The slot names a TYPE, so there is
+    nowhere for per-table configuration to come from and both backends
+    construct the builder themselves. A seed goes inside `build()`.
+  * THE STATE TYPE MUST IMPLEMENT `Hasher`, checked HERE rather than left to
+    the general GAT-bound machinery -- which does not discharge a bound
+    declared on a STDLIB-baked trait (B-2026-08-22-28). Unchecked this is
+    the worst available outcome: codegen finds no symbol and degrades to a
+    constant digest while the interpreter raises a missing-method error, so the
+    two backends disagree on a program `karac check` accepted.
+
+THE ROW'S "ONE UNMEASURED RISK" IS ANSWERED: NO HOISTING NEEDED. Measured on
+the arm64 box this row was pinned to, `--release`, 200 000 `String` inserts
+plus 1 000 000 lookups, five rounds interleaved round-robin after a warm-up,
+1-minute load average under 2:
+
+    default SipHash13BuildHasher   0.09 s   (0.08-0.09 across all five)
+    user FNV-1a hasher             0.09 s   (0.08-0.09 across all five)
+    FxBuildHasher                  1.23 s   (1.22-1.24 across all five)
+
+The per-key `build` / `write` / `finish` frames disappear into the map
+operation around them -- a user hasher is at parity with the builtin it
+replaces, so the per-key construction this row flagged needs no hoisting. The
+`bench/hash_quality/` crate the row pointed at was not the right instrument:
+it compares hash FAMILIES in Rust, not the Kara-level dispatch cost, so the
+measurement above is a fresh three-variant Kara bench instead.
+
+That run also surfaced two pre-existing `FxBuildHasher` defects, both
+reproduced on a clean `main` and neither introduced here: a compiled
+`Map[i64, V, H]` under any non-default hasher stops growing and silently drops
+every key past the last resize (B-2026-08-22-27, high), and `FxBuildHasher` is
+13.7x SLOWER than the default it is advertised as a fast alternative to on
+`String` keys (B-2026-08-22-29).
+
+TESTS. 5 in `tests/typechecker.rs` (accepted shape, type identity preserved,
+the two refusals, and the once-per-write diagnostic), 3 in
+`tests/interpreter.rs` (finds/removes, two hashers order differently, set +
+struct key), 4 in `tests/codegen.rs` (the same three compiled, plus the
+`ref Slice` method-call regression), 4 unit tests on the byte encoding in
+`user_hasher.rs`, and 1 in `tests/cli.rs` that is the one no single-process
+assertion can replace: across six SUBPROCESSES on BOTH surfaces, the
+user-hashed map's order must be FIXED while the default map's keeps moving, and
+must not be INSERTION order -- which is what a hasher that never ran, or one
+whose digest collapsed to a constant, leaves behind.
+
+DOCUMENTED IN design.md, including the property a user should know before
+writing one: the byte image `write` receives is backend-specific. A compiled
+binary feeds the key's memory image; the interpreter feeds a canonical
+flattening of the key `Value`. So a user hasher fixes the order across
+PROCESSES -- which is what a test-deterministic hasher is for -- but does not
+give the same digest under `--interp` as under a compiled binary. That is
+within the existing contract; the two builtins already differ between backends
+the same way, for the same reason. |
 | B-2026-08-22-7 | codegen | low | `f16_software_emulated` IS THE ONE STARTER-SET LINT WHOSE TRIGGER DEPENDS ON THE TARGET -- and the blocker is NOT the placement this row was filed on… | FIXED by 289bc8a3, wiring the lint in the TYPECHECKER, with the capability question
 answered WITHOUT the backend -- which is what dissolved the placement
 dilemma this row was filed on.
@@ -16291,6 +16423,19 @@ fails a test.
 
 Full suite: 109 binaries, 14888 passed, 0 failed. fmt clean; clippy clean on
 both feature legs and on the wasm32-wasip1 arm (the runtime changed). |
+| B-2026-08-22-26 | codegen | high | A collection literal passed to a `ref Slice[T]` parameter through a METHOD CALL fails LLVM module verification -- `coerce_to_slice` builds the `{ptr,… | FIXED by 840f95ef, in the same commit as B-2026-08-22-6, by giving the method-call argument
+loop the arm the free-function path has had since B-2026-08-21-24: when the
+parameter is `ref`, spill `coerce_to_slice`'s synthesized header through
+`materialize_rvalue_for_ref_arg` and pass its address instead of the value.
+Three lines, reusing the existing helper rather than inventing a second
+materialization -- the same shape the free-function fix took.
+
+Regression test `e2e_collection_literal_into_a_ref_slice_param_of_a_method` in
+`tests/codegen.rs`, covering BOTH receiver shapes (a trait default body
+monomorphized into the impl, and an ordinary inherent method) with the
+by-value `Slice[T]` control beside each, since that spelling always worked and
+a regression confined to the `ref` slot would otherwise hide behind it.
+ |
 
 </details>
 
