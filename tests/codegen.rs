@@ -102485,6 +102485,109 @@ impl Sums for Array[i64, 3] {
         );
     }
 
+    /// B-2026-08-21-42 — `self.<method>()` inside an `impl … for Array[T, N]`
+    /// body.
+    ///
+    /// The whole fixed-array method block sits inside an
+    /// `ExprKind::Identifier(name)` arm and reads `variables[name].ty`. A
+    /// `self` receiver parses as `ExprKind::SelfValue`, never as
+    /// `Identifier("self")`, so it could not reach that block and every method
+    /// of the surface failed inside the impl body while `--interp` ran it. It
+    /// is the Array twin of the fixed B-2026-08-18-12 (Map/Set) and -11.
+    ///
+    /// The failure was in the BODY, not at the call site, which is why this
+    /// sweeps methods rather than call spellings: one `a.v_get()` at the top
+    /// would have been enough to reproduce, and would have told you nothing
+    /// about which of the surface's seven methods actually came back.
+    ///
+    /// Three things beyond the read surface are here because each exercises a
+    /// different way the body can reach `self`, and the fix routes all of them
+    /// through one re-dispatch:
+    ///
+    ///   * `self[1]` — indexing, which has its own lowering path, so it
+    ///     confirms the synthetic name reaches more than the method block.
+    ///   * `for x in self` — the loop arm fixed in B-2026-08-21-41, kept here
+    ///     so the two `self` recoveries are pinned against each other rather
+    ///     than in separate files.
+    ///   * `self.v_len() + self.v_get()` — one impl method calling two others.
+    ///     The fix re-dispatches under a synthetic `Identifier("self")`, and
+    ///     this is the case that would loop forever if that recursion were not
+    ///     gated on the receiver provably being an array.
+    ///
+    /// `ref self` is swept beside owned `self` because they recover storage
+    /// differently — the owned slot from `variables`, the borrow from
+    /// `ref_params` + `get_data_ptr` — so a fix that only reached one would
+    /// pass a test that only tried one. `Fl` gives the float element, and the
+    /// two free functions at the end read the same array OUTSIDE any impl, so
+    /// a regression in the general fixed-array read path cannot hide behind a
+    /// green `self` result.
+    #[test]
+    fn test_e2e_self_method_dispatch_in_an_array_impl_body() {
+        let src = r#"
+trait Reads {
+    fn v_get(self) -> i64;
+    fn v_first(self) -> i64;
+    fn v_last(self) -> i64;
+    fn v_len(self) -> i64;
+    fn v_empty(self) -> bool;
+    fn v_has(self, x: i64) -> bool;
+    fn v_sorted(self) -> bool;
+    fn v_index(self) -> i64;
+    fn v_loop(self) -> i64;
+    fn v_chain(self) -> i64;
+    fn b_get(ref self) -> i64;
+    fn b_len(ref self) -> i64;
+    fn b_loop(ref self) -> i64;
+}
+impl Reads for Array[i64, 3] {
+    fn v_get(self) -> i64 { return self.get(0).unwrap(); }
+    fn v_first(self) -> i64 { return self.first().unwrap(); }
+    fn v_last(self) -> i64 { return self.last().unwrap(); }
+    fn v_len(self) -> i64 { return self.len(); }
+    fn v_empty(self) -> bool { return self.is_empty(); }
+    fn v_has(self, x: i64) -> bool { return self.contains(x); }
+    fn v_sorted(self) -> bool { return self.is_sorted(); }
+    fn v_index(self) -> i64 { return self[1]; }
+    fn v_loop(self) -> i64 { let mut n = 0; for x in self { n = n + x; } return n; }
+    fn v_chain(self) -> i64 { return self.v_len() + self.v_get(); }
+    fn b_get(ref self) -> i64 { return self.get(2).unwrap(); }
+    fn b_len(ref self) -> i64 { return self.len(); }
+    fn b_loop(ref self) -> i64 { let mut n = 0; for x in self { n = n + x * 2; } return n; }
+}
+
+trait Fl { fn top(self) -> f64; }
+impl Fl for Array[f64, 2] { fn top(self) -> f64 { return self.first().unwrap(); } }
+
+fn free_get(a: ref Array[i64, 3]) -> i64 { return a.get(0).unwrap(); }
+fn free_len(a: ref Array[i64, 3]) -> i64 { return a.len(); }
+
+fn main() {
+    let a: Array[i64, 3] = [7, 8, 9];
+    println(a.v_get());
+    println(a.v_first());
+    println(a.v_last());
+    println(a.v_len());
+    println(a.v_empty());
+    println(a.v_has(8));
+    println(a.v_sorted());
+    println(a.v_index());
+    println(a.v_loop());
+    println(a.v_chain());
+    println(a.b_get());
+    println(a.b_len());
+    println(a.b_loop());
+    let f: Array[f64, 2] = [1.5, 2.5];
+    println(f.top());
+    println(free_get(a));
+    println(free_len(a));
+}
+"#;
+        assert_eq!(
+            run_program(src).as_deref(),
+            Some("7\n7\n9\n3\nfalse\ntrue\ntrue\n8\n24\n10\n9\n3\n48\n1.5\n7\n3\n")
+        );
+    }
+
     /// B-2026-08-21-10 — `Vec.from_fn(n, f)`, end to end.
     ///
     /// The element type must be settled BEFORE the buffer is allocated,

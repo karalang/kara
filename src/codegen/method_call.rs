@@ -8653,6 +8653,43 @@ impl<'ctx> super::Codegen<'ctx> {
             if self.mapset.set_elem_types.contains_key("self") {
                 return self.compile_set_method("self", method, args);
             }
+            // B-2026-08-21-42 — an ARRAY `self`. The two lookups above are
+            // pointer-handle containers; the whole fixed-array method block
+            // lives inside an `ExprKind::Identifier(name)` arm and reads
+            // `variables[name].ty`, so a `self` receiver — which parses as
+            // `SelfValue`, never as `Identifier("self")` — could not reach it.
+            // Every method of the surface failed inside the body of an
+            // `impl … for Array[T, N]`, independently of how the method was
+            // called, while `--interp` ran it: the Array twin of the fixed
+            // B-2026-08-18-12 (Map/Set) and -11.
+            //
+            // Re-dispatched under the synthetic name rather than duplicating
+            // the block, so the two spellings cannot drift: `self` is
+            // registered under the name "self" in `variables` (owned) and
+            // `ref_params` (borrowed), which is exactly what that block reads,
+            // and it is the same move the for-loop `self` arm makes
+            // (B-2026-08-21-41).
+            //
+            // Gated on the receiver PROVABLY being an array, which is what
+            // makes the recursion safe: a `SelfValue` that is not an array
+            // never re-enters, and one that is an array lands in the
+            // identifier arm, whose own fall-through is the "on variable
+            // 'self'" error rather than a return trip through here.
+            let self_is_array = self
+                .variables
+                .get("self")
+                .is_some_and(|slot| matches!(slot.ty, BasicTypeEnum::ArrayType(_)))
+                || matches!(
+                    self.borrow_vars.ref_params.get("self"),
+                    Some(BasicTypeEnum::ArrayType(_))
+                );
+            if self_is_array {
+                let synth = Expr {
+                    kind: ExprKind::Identifier("self".to_string()),
+                    span: object.span,
+                };
+                return self.compile_method_call(&synth, method, args, call_span, args_close_span);
+            }
         }
 
         let receiver_desc = match &object.kind {
