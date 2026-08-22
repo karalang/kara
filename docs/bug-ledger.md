@@ -15594,7 +15594,7 @@ Pinned by `a_static_assoc_call_does_not_borrow_a_same_named_global_where_clause`
 in `tests/typechecker.rs`, which asserts both halves: the colliding generic
 case is ACCEPTED, and the clause-less case is ACCEPTED. Non-vacuity confirmed
 by reverting the fix -- it fails. |
-| B-2026-08-22-14 | codegen+effect | low | AN EXISTENTIAL DECLARING POLYMORPHIC EFFECT VARIABLES (`-> impl Emit with F`) IS THE ONE RETURN-POSITION `impl Trait` SHAPE STILL WITHOUT A BUILD --… | FIXED by removing the exclusion in `lowering.rs::substitute_impl_trait_returns`
+| B-2026-08-22-14 | codegen+effect | low | AN EXISTENTIAL DECLARING POLYMORPHIC EFFECT VARIABLES (`-> impl Emit with F`) IS THE ONE RETURN-POSITION `impl Trait` SHAPE STILL WITHOUT A BUILD --… | FIXED by 2dd4f972, by removing the exclusion in `lowering.rs::substitute_impl_trait_returns`
 rather than by building the effect-carrying machinery the row anticipated,
 because measurement showed there is no consumer to carry it to.
 
@@ -15816,7 +15816,7 @@ control and the real defect are distinguishable only by FAILURE MODE:
 "unexpected stdout (ASAN passed)" versus an explicit `ERROR:
 AddressSanitizer`. Grepping only for `test result` hides that difference.
 Full suite after the fix: 109 binaries, 14855 passed, 0 failed. |
-| B-2026-08-22-19 | autopar | medium | TWO SENDS ON A CHANNEL SPURIOUSLY SERIALIZE -- `ConcurrencyChecker::two_effects_conflict` codes `(Sends,Sends)` and `(Receives,Receives)` as a CONFLI… | 8fcfb64d -- Guard the `(Sends,Sends)` / `(Receives,Receives)` conflict arms in
+| B-2026-08-22-19 | autopar | medium | TWO SENDS ON A CHANNEL SPURIOUSLY SERIALIZE -- `ConcurrencyChecker::two_effects_conflict` codes `(Sends,Sends)` and `(Receives,Receives)` as a CONFLI… | FIXED by 8fcfb64d. Guard the `(Sends,Sends)` / `(Receives,Receives)` conflict arms in
 `ConcurrencyChecker::two_effects_conflict` (src/concurrency/conflicts.rs) with
 `a.resource == crate::ast::CHANNEL_RESOURCE_CANONICAL`, so the channel
 resource follows design.md:5813's table (Safe) while `Network` keeps the
