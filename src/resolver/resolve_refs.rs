@@ -87,6 +87,7 @@ impl<'a> super::Resolver<'a> {
             TypeKind::ImplTrait {
                 trait_path,
                 args,
+                assoc_bindings,
                 use_effects,
                 ..
             } => {
@@ -103,6 +104,12 @@ impl<'a> super::Resolver<'a> {
                         }
                     }
                 }
+                // An inline associated-type binding's RHS is an ordinary
+                // type and names ordinary things — `impl Src[Item = Foo]`
+                // must resolve `Foo` (B-2026-08-22-4).
+                for b in assoc_bindings {
+                    self.resolve_type_expr(&b.ty);
+                }
                 if let Some(list) = use_effects {
                     self.resolve_effect_list(list);
                 }
@@ -112,7 +119,10 @@ impl<'a> super::Resolver<'a> {
             // RPITIT-conflict check and the P1-deferred stub) can name
             // the trait and any malformed nested types are surfaced.
             TypeKind::Dyn {
-                trait_path, args, ..
+                trait_path,
+                args,
+                assoc_bindings,
+                ..
             } => {
                 self.resolve_path_expr(trait_path);
                 for arg in args {
@@ -126,6 +136,9 @@ impl<'a> super::Resolver<'a> {
                             // cannot see until that lands; deliberately not walked.
                         }
                     }
+                }
+                for b in assoc_bindings {
+                    self.resolve_type_expr(&b.ty);
                 }
             }
             TypeKind::Unit | TypeKind::Error => {}

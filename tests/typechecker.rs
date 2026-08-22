@@ -43888,3 +43888,201 @@ fn allocates_heap_resolves_without_a_local_declaration() {
          fn main() { println(1); }",
     );
 }
+
+// ── Inline associated-type bindings on `impl Trait` (B-2026-08-22-4) ──
+//
+// `fn keys(ref self) -> impl Iterator[Item = ref K]` is design.md's own
+// spelling in the Map method table. Bound position accepted the binding
+// already (B-2026-08-21-9); these pin the type-position half. The two
+// positions are deliberately NOT the same mechanism: an argument-position
+// `impl Trait` desugars to a NAMED synthetic parameter, so its binding is
+// the ordinary `where T.Assoc = U` constraint, while a return-position one
+// has no name and carries the binding on the existential itself.
+
+/// Front-end diagnostics for `source`, desugar included and WITHOUT the
+/// non-empty assertion `typecheck_errors` carries — these tests assert both
+/// directions, and argument-position `impl Trait` only exists after desugar.
+fn assoc_binding_diags(source: &str) -> Vec<TypeError> {
+    let mut parsed = parse(source);
+    assert!(
+        parsed.errors.is_empty(),
+        "Parse errors: {:?}",
+        parsed.errors
+    );
+    desugar_program(&mut parsed.program);
+    let resolved = resolve(&parsed.program);
+    assert!(
+        resolved.errors.is_empty(),
+        "Resolve errors: {:?}",
+        resolved.errors
+    );
+    typecheck(&parsed.program, &resolved).errors
+}
+
+#[test]
+fn impl_trait_inline_binding_resolves_the_projection_at_the_call_site() {
+    // The payoff. `Self.Item` dispatched on an existential receiver becomes
+    // the projection `Src.Item`, keyed on the TRAIT — which resolves to
+    // nothing, so before the binding the caller had to annotate the binding
+    // site or get "cannot infer type parameter 'Src'". With `Item = i64` the
+    // projection resolves and `s.get()` types as `i64`.
+    let errs = assoc_binding_diags(
+        "trait Src { type Item; fn get(ref self) -> Self.Item; }\n\
+         struct S { v: i64 }\n\
+         impl Src for S { type Item = i64; fn get(ref self) -> i64 { self.v } }\n\
+         fn make() -> impl Src[Item = i64] { S { v: 7 } }\n\
+         fn main() { let s = make(); let n: i64 = s.get(); }",
+    );
+    assert!(errs.is_empty(), "expected clean typecheck; got: {errs:?}");
+}
+
+#[test]
+fn impl_trait_without_inline_binding_leaves_the_projection_unresolved() {
+    // The control for the test above: same program minus the binding still
+    // cannot resolve `Src.Item`. Pins that the binding is what does the
+    // work, not some unrelated inference change.
+    let errs = assoc_binding_diags(
+        "trait Src { type Item; fn get(ref self) -> Self.Item; }\n\
+         struct S { v: i64 }\n\
+         impl Src for S { type Item = i64; fn get(ref self) -> i64 { self.v } }\n\
+         fn make() -> impl Src { S { v: 7 } }\n\
+         fn main() { let s = make(); let n = s.get(); }",
+    );
+    assert!(
+        !errs.is_empty(),
+        "expected the unresolved-projection error without the binding"
+    );
+}
+
+#[test]
+fn impl_trait_inline_binding_rejects_a_witness_whose_assoc_type_differs() {
+    // The obligation half. `impl Src[Item = bool]` promises every caller
+    // that `Item` is `bool`; `S` declares `Item = i64`, so `S` is not an
+    // acceptable witness. Named by its own code rather than folded into
+    // E_IMPL_TRAIT_MISSING_BOUND, which would send the reader to add an
+    // impl that is already there.
+    let errs = assoc_binding_diags(
+        "trait Src { type Item; fn get(ref self) -> Self.Item; }\n\
+         struct S { v: i64 }\n\
+         impl Src for S { type Item = i64; fn get(ref self) -> i64 { self.v } }\n\
+         fn make() -> impl Src[Item = bool] { S { v: 7 } }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("E_IMPL_TRAIT_ASSOC_MISMATCH")
+                && e.message.contains("Item = bool")
+                && e.message.contains("Item = i64")),
+        "expected E_IMPL_TRAIT_ASSOC_MISMATCH naming both types; got: {errs:?}"
+    );
+}
+
+#[test]
+fn impl_trait_witness_not_implementing_the_trait_keeps_the_missing_bound_error() {
+    // The two failures are distinguished, not merged: a witness that does
+    // not implement the trait at all still gets E_IMPL_TRAIT_MISSING_BOUND
+    // even though the existential also carries a binding.
+    let errs = assoc_binding_diags(
+        "trait Src { type Item; fn get(ref self) -> Self.Item; }\n\
+         struct S { v: i64 }\n\
+         struct Other {}\n\
+         impl Src for S { type Item = i64; fn get(ref self) -> i64 { self.v } }\n\
+         fn make() -> impl Src[Item = i64] { Other {} }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("E_IMPL_TRAIT_MISSING_BOUND")),
+        "expected E_IMPL_TRAIT_MISSING_BOUND; got: {errs:?}"
+    );
+}
+
+#[test]
+fn impl_trait_inline_binding_naming_no_associated_type_is_rejected() {
+    // A typo binds nothing: the projection it was meant to answer keeps a
+    // different name, so it stays unresolved and the CALLER gets an error
+    // pointing at their own correct code. Rejected where the typo is, once
+    // (the return type is lowered more than once per function).
+    let errs = assoc_binding_diags(
+        "trait Src { type Item; }\n\
+         struct S {}\n\
+         impl Src for S { type Item = i64; }\n\
+         fn make() -> impl Src[Itm = i64] { S {} }",
+    );
+    let hits: Vec<_> = errs
+        .iter()
+        .filter(|e| e.message.contains("E_UNKNOWN_ASSOC_TYPE_BINDING"))
+        .collect();
+    assert_eq!(
+        hits.len(),
+        1,
+        "expected exactly one E_UNKNOWN_ASSOC_TYPE_BINDING; got: {errs:?}"
+    );
+    assert!(
+        hits[0].message.contains("`Src` declares: Item"),
+        "expected the diagnostic to list the real associated types; got: {:?}",
+        hits[0].message
+    );
+}
+
+#[test]
+fn impl_trait_argument_position_inline_binding_matches_the_where_spelling() {
+    // Argument position is the bound-position case wearing different
+    // syntax: the desugar names the parameter, and a binding on a named
+    // parameter IS `where T.Assoc = U`. Both spellings must behave
+    // identically — including where they are still lax (B-2026-08-22-3).
+    let inline = assoc_binding_diags(
+        "trait Src { type Item; fn get(ref self) -> Self.Item; }\n\
+         struct S { v: i64 }\n\
+         impl Src for S { type Item = i64; fn get(ref self) -> i64 { self.v } }\n\
+         fn take(s: impl Src[Item = i64]) -> i64 { s.get() }\n\
+         fn main() { let n = take(S { v: 5 }); }",
+    );
+    let explicit = assoc_binding_diags(
+        "trait Src { type Item; fn get(ref self) -> Self.Item; }\n\
+         struct S { v: i64 }\n\
+         impl Src for S { type Item = i64; fn get(ref self) -> i64 { self.v } }\n\
+         fn take[T: Src](s: T) -> i64 where T.Item = i64 { s.get() }\n\
+         fn main() { let n = take(S { v: 5 }); }",
+    );
+    assert!(
+        inline.is_empty() && explicit.is_empty(),
+        "both spellings should typecheck clean; inline={inline:?} explicit={explicit:?}"
+    );
+}
+
+#[test]
+fn impl_trait_inline_binding_contributes_to_the_capture_set() {
+    // design.md's Map table writes the borrow in the BINDING and nowhere
+    // else — `fn keys(ref self) -> impl Iterator[Item = ref K]`. Walking
+    // only the positional args would record that existential as capturing
+    // no input borrow, so dropping the source while the iterator is live
+    // would go unreported.
+    let result = typecheck_desugared_result(
+        "trait Iter { type Item; fn next(mut ref self) -> Self.Item; }\n\
+         fn first(v: ref Vec[i64]) -> impl Iter[Item = ref i64] { todo() }",
+    );
+    let captures: Vec<_> = result.impl_trait_captures.values().collect();
+    assert_eq!(captures.len(), 1, "got: {captures:?}");
+    assert_eq!(
+        captures[0].input_borrows,
+        vec!["v".to_string()],
+        "expected the `ref` inside the binding to capture `v`; got: {:?}",
+        captures[0].input_borrows
+    );
+}
+
+#[test]
+fn impl_trait_inline_binding_captures_a_type_param_named_only_there() {
+    // Same argument for type params: `T` appears only inside the binding.
+    let result = typecheck_desugared_result(
+        "trait Iter { type Item; fn next(mut ref self) -> Self.Item; }\n\
+         fn make[T](xs: Vec[T]) -> impl Iter[Item = T] { todo() }",
+    );
+    let captures: Vec<_> = result.impl_trait_captures.values().collect();
+    assert_eq!(captures.len(), 1, "got: {captures:?}");
+    assert_eq!(
+        captures[0].type_params,
+        vec!["T".to_string()],
+        "expected `T` captured from the binding; got: {:?}",
+        captures[0].type_params
+    );
+}

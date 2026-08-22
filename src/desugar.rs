@@ -2106,11 +2106,13 @@ fn desugar_impl_trait_args_in_program(program: &mut Program) {
 /// pick it up.
 fn desugar_impl_trait_args_in_function(f: &mut Function) {
     let mut synthetic_params: Vec<GenericParam> = Vec::new();
+    let mut hoisted: Vec<WhereConstraint> = Vec::new();
     let mut counter = 0usize;
     for param in &mut f.params {
         let TypeKind::ImplTrait {
             trait_path,
             args,
+            assoc_bindings,
             span: impl_trait_span,
             ..
         } = &param.ty.kind
@@ -2121,6 +2123,27 @@ fn desugar_impl_trait_args_in_function(f: &mut Function) {
         let synthetic_name = format!("T_impl_arg_{counter}");
         counter += 1;
 
+        // An inline associated-type binding on an ARGUMENT-position
+        // `impl Trait` is the bound-position case wearing different syntax:
+        // the desugar is about to give the parameter a name, and a binding on
+        // a named parameter is exactly `WhereConstraint::AssocTypeEq`
+        // (B-2026-08-22-4). Emitted directly rather than left on the synthetic
+        // bound because `hoist_assoc_bindings_in_program` already ran — it is
+        // the FIRST pass in `desugar_program`, precisely so the later
+        // synthesizing passes see hoisted input.
+        //
+        // Return-position `impl Trait` is NOT covered here: it has no name to
+        // constrain, so its bindings ride the existential itself through
+        // `lower_type_expr` into `Type::Existential::assoc_bindings`.
+        for binding in assoc_bindings {
+            hoisted.push(WhereConstraint::AssocTypeEq {
+                type_name: synthetic_name.clone(),
+                assoc_name: binding.name.clone(),
+                ty: binding.ty.clone(),
+                span: binding.span,
+            });
+        }
+
         let bound = TraitBound {
             path: trait_path.segments.clone(),
             generic_args: if args.is_empty() {
@@ -2128,10 +2151,8 @@ fn desugar_impl_trait_args_in_function(f: &mut Function) {
             } else {
                 Some(args.clone())
             },
-            // Argument-position `impl Trait` carries no inline
-            // associated-type binding yet: `TypeKind::ImplTrait` has no field
-            // for one, so `impl Src[Item = i64]` is still a parse error in
-            // type position (B-2026-08-21-9 item 1c, split out).
+            // Drained into `hoisted` above, in the one form the rest of the
+            // compiler understands.
             assoc_bindings: Vec::new(),
             span: *impl_trait_span,
         };
@@ -2159,6 +2180,22 @@ fn desugar_impl_trait_args_in_function(f: &mut Function) {
 
     if synthetic_params.is_empty() {
         return;
+    }
+
+    if !hoisted.is_empty() {
+        match &mut f.where_clause {
+            Some(wc) => wc.constraints.extend(hoisted),
+            none => {
+                let span = match &hoisted[0] {
+                    WhereConstraint::AssocTypeEq { span, .. } => *span,
+                    _ => Span::default(),
+                };
+                *none = Some(WhereClause {
+                    constraints: hoisted,
+                    span,
+                });
+            }
+        }
     }
 
     match &mut f.generic_params {

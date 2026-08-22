@@ -42,8 +42,7 @@ impl super::Formatter {
                     if i > 0 {
                         self.write_str(" + ");
                     }
-                    self.write_path(&b.path);
-                    self.format_generic_args_opt(&b.generic_args);
+                    self.format_trait_bound(b);
                 }
             }
         }
@@ -67,10 +66,54 @@ impl super::Formatter {
                     if i > 0 {
                         self.write_str(" + ");
                     }
-                    self.write_path(&b.path);
-                    self.format_generic_args_opt(&b.generic_args);
+                    self.format_trait_bound(b);
                 }
             }
+        }
+        self.write_str("]");
+    }
+
+    /// Render one trait bound — path, positional generic args, and inline
+    /// associated-type bindings — in the single bracket list the parser
+    /// accepts them in: `Iterator[T, Item = ref K]`.
+    ///
+    /// Every bound render site goes through here. Rendering the path and the
+    /// args separately, as the sites used to, silently DELETED the bindings:
+    /// `I: Src[Item = i64]` came back out as `I: Src[]`, a weaker constraint
+    /// than the one the author wrote and not the round-trip `karac fmt`
+    /// promises (B-2026-08-22-9). Same class as the dropped provider-bound
+    /// generic args below.
+    pub(super) fn format_trait_bound(&mut self, b: &TraitBound) {
+        self.write_path(&b.path);
+        let args = b.generic_args.clone().unwrap_or_default();
+        self.format_bracket_args(&args, &b.assoc_bindings);
+    }
+
+    /// `[A, B, Assoc = T]` — positional generic args followed by inline
+    /// associated-type bindings. Writes nothing when both are empty, so a
+    /// bound with neither renders as a bare path.
+    pub(super) fn format_bracket_args(&mut self, args: &[GenericArg], bindings: &[AssocBinding]) {
+        if args.is_empty() && bindings.is_empty() {
+            return;
+        }
+        self.write_str("[");
+        for (i, arg) in args.iter().enumerate() {
+            if i > 0 {
+                self.write_str(", ");
+            }
+            match arg {
+                GenericArg::Type(t) => self.format_type_expr(t),
+                GenericArg::Const(e) => self.format_expr(e),
+                GenericArg::Shape(sh) => self.format_shape_lit(sh),
+            }
+        }
+        for (i, b) in bindings.iter().enumerate() {
+            if i > 0 || !args.is_empty() {
+                self.write_str(", ");
+            }
+            self.write_ident(&b.name);
+            self.write_str(" = ");
+            self.format_type_expr(&b.ty);
         }
         self.write_str("]");
     }
@@ -196,14 +239,13 @@ impl super::Formatter {
             TypeKind::ImplTrait {
                 trait_path,
                 args,
+                assoc_bindings,
                 use_effects,
                 ..
             } => {
                 self.write_str("impl ");
                 self.write_path(&trait_path.segments);
-                if !args.is_empty() {
-                    self.format_generic_args_opt(&Some(args.clone()));
-                }
+                self.format_bracket_args(args, assoc_bindings);
                 self.format_effects(use_effects);
             }
             // `dyn Trait` slice 5 stub: round-trip the surface so
@@ -212,13 +254,14 @@ impl super::Formatter {
             // (RPITIT-conflict or P1-deferred stub). See
             // phase-5-diagnostics.md line 401.
             TypeKind::Dyn {
-                trait_path, args, ..
+                trait_path,
+                args,
+                assoc_bindings,
+                ..
             } => {
                 self.write_str("dyn ");
                 self.write_path(&trait_path.segments);
-                if !args.is_empty() {
-                    self.format_generic_args_opt(&Some(args.clone()));
-                }
+                self.format_bracket_args(args, assoc_bindings);
             }
             TypeKind::Unit => self.write_str("()"),
             TypeKind::Error => self.write_str("/* error */"),

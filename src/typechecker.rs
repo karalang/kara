@@ -1978,6 +1978,13 @@ pub struct TypeChecker<'a> {
     /// `42i64` warns once per visit. Keyed on `(offset, length)` like the
     /// other span-keyed state above.
     pub(super) redundant_suffix_reported: rustc_hash::FxHashSet<(usize, usize)>,
+    /// Spans of inline associated-type bindings that already reported
+    /// `E_UNKNOWN_ASSOC_TYPE_BINDING` (B-2026-08-22-4). A signature's return
+    /// type is lowered more than once — once when the function's type is
+    /// registered, again while checking its body — and the check lives in
+    /// lowering, so without this the same typo reports once per lowering.
+    /// Keyed on `(offset, length)` like `redundant_suffix_reported` above.
+    pub(super) assoc_binding_typos_reported: rustc_hash::FxHashSet<(usize, usize)>,
     /// `?` cross-error From conversions (span → target error type name).
     pub(super) question_conversions: FxHashMap<SpanKey, String>,
     /// `?` unwrapped Ok/Some payload type (span → payload `TypeExpr`). See the
@@ -2340,6 +2347,7 @@ impl<'a> TypeChecker<'a> {
             in_defer: false,
             neg_validated_suffixed_literal: None,
             redundant_suffix_reported: rustc_hash::FxHashSet::default(),
+            assoc_binding_typos_reported: rustc_hash::FxHashSet::default(),
             question_conversions: FxHashMap::default(),
             question_ok_payload_types: FxHashMap::default(),
             wp_result_types: FxHashMap::default(),
@@ -4169,6 +4177,7 @@ impl<'a> TypeChecker<'a> {
         if let Type::Existential {
             trait_name,
             origin: super_origin,
+            assoc_bindings,
             ..
         } = &super_resolved
         {
@@ -4178,9 +4187,66 @@ impl<'a> TypeChecker<'a> {
             {
                 return super_origin == sub_origin;
             }
-            return self.type_satisfies_bound(&sub_resolved, trait_name);
+            // An inline associated-type binding is an OBLIGATION on the
+            // witness, not just caller-side sugar: `-> impl Src[Item = i64]`
+            // promises every caller that `Item` is `i64`, and the caller now
+            // types `make().get()` as `i64` on the strength of that promise.
+            // A witness whose own `Item` is something else would make that a
+            // lie, so it is not an acceptable witness (B-2026-08-22-4).
+            return self.type_satisfies_bound(&sub_resolved, trait_name)
+                && self
+                    .existential_binding_mismatch(&sub_resolved, assoc_bindings)
+                    .is_none();
         }
         is_subtype(&super_resolved, &sub_resolved)
+    }
+
+    /// First inline associated-type binding that the concrete witness
+    /// `witness` contradicts, as `(assoc_name, promised, actual)`.
+    ///
+    /// Resolves the witness's own `Assoc` through the ordinary projection
+    /// machinery — `resolve_assoc_projections` over an `AssocProjection`
+    /// keyed on the witness's base name — so an impl-side generic
+    /// (`impl[T] Src for Wrapper[T] { type Item = T; }`) is substituted
+    /// exactly as it is everywhere else.
+    ///
+    /// FAILS OPEN in two cases, both deliberately: a witness with no base
+    /// name to key on (a primitive, a closure), and a projection that stays
+    /// unresolved (the witness is a generic parameter, or the impl declares
+    /// no such associated type). Neither is evidence of a CONTRADICTION —
+    /// reporting one would reject correct generic code — and the missing-
+    /// associated-type case already has its own diagnostic at the impl.
+    pub(super) fn existential_binding_mismatch(
+        &self,
+        witness: &Type,
+        bindings: &[(String, Type)],
+    ) -> Option<(String, Type, Type)> {
+        if bindings.is_empty() {
+            return None;
+        }
+        let (base, recv_args) = match witness {
+            Type::Named { name, args } => (name.clone(), args.clone()),
+            Type::Shared(name) => (name.clone(), Vec::new()),
+            Type::Rc(inner) => ("Rc".to_string(), vec![(**inner).clone()]),
+            Type::Arc(inner) => ("Arc".to_string(), vec![(**inner).clone()]),
+            _ => return None,
+        };
+        for (assoc, promised) in bindings {
+            let projection = Type::AssocProjection {
+                param: base.clone(),
+                assoc: assoc.clone(),
+                args: Vec::new(),
+                receiver_args: recv_args.clone(),
+            };
+            let actual = self.resolve_assoc_projections(&projection);
+            if matches!(actual, Type::AssocProjection { .. } | Type::Error) {
+                continue;
+            }
+            if !types_compatible(promised, &actual) {
+                return Some((assoc.clone(), promised.clone(), actual));
+            }
+        }
+        None
     }
 
     /// Record a concrete witness type flowing into the current function's
@@ -4395,8 +4461,45 @@ impl<'a> TypeChecker<'a> {
         // Concrete, found: Existential) falls through to the generic
         // diagnostic — that case is "caller named the witness", and the
         // expected / found type names are already informative.
-        if let Type::Existential { trait_name, .. } = expected {
+        if let Type::Existential {
+            trait_name,
+            assoc_bindings,
+            ..
+        } = expected
+        {
             if !matches!(found, Type::Existential { .. }) {
+                // Two ways to fail one check, and they want different
+                // messages: the witness may not implement the trait at all,
+                // or it may implement it with a DIFFERENT associated type
+                // than the inline binding promised. Naming the missing trait
+                // in the second case sends the reader to fix an impl that is
+                // already there (B-2026-08-22-4).
+                if let Some((assoc, promised, actual)) = self
+                    .existential_binding_mismatch(found, assoc_bindings)
+                    .filter(|_| self.type_satisfies_bound(found, trait_name))
+                {
+                    self.type_error(
+                        format!(
+                            "error[E_IMPL_TRAIT_ASSOC_MISMATCH]: function returns \
+                             `impl {trait_name}[{assoc} = {}]` but body type `{}` \
+                             declares `{assoc} = {}`. An inline associated-type \
+                             binding is a promise to every caller — they type \
+                             `{assoc}` as `{}` on the strength of it — so the \
+                             witness must match it exactly. Change the binding to \
+                             `{assoc} = {}`, or return a type whose `{assoc}` is \
+                             `{}`.",
+                            type_display(&promised),
+                            type_display(found),
+                            type_display(&actual),
+                            type_display(&promised),
+                            type_display(&actual),
+                            type_display(&promised),
+                        ),
+                        span,
+                        TypeErrorKind::TypeMismatch,
+                    );
+                    return false;
+                }
                 self.type_error(
                     format!(
                         "error[E_IMPL_TRAIT_MISSING_BOUND]: function returns \

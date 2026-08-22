@@ -3156,12 +3156,20 @@ fn existential_capture_indices_for_function(
 
 fn collect_impl_trait_spans<'t>(ty: &'t TypeExpr, out: &mut Vec<&'t Span>) {
     match &ty.kind {
-        TypeKind::ImplTrait { span, args, .. } => {
+        TypeKind::ImplTrait {
+            span,
+            args,
+            assoc_bindings,
+            ..
+        } => {
             out.push(span);
             for arg in args {
                 if let GenericArg::Type(t) = arg {
                     collect_impl_trait_spans(t, out);
                 }
+            }
+            for b in assoc_bindings {
+                collect_impl_trait_spans(&b.ty, out);
             }
         }
         TypeKind::Tuple(types) => {

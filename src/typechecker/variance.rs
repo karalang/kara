@@ -168,11 +168,26 @@ fn collect_occurrences(
         // Anything else (existential / dyn / future kinds): if a
         // tracked parameter appears inside, stay conservative — treat
         // the whole subtree as invariant context.
-        TypeKind::ImplTrait { args, .. } | TypeKind::Dyn { args, .. } => {
+        TypeKind::ImplTrait {
+            args,
+            assoc_bindings,
+            ..
+        }
+        | TypeKind::Dyn {
+            args,
+            assoc_bindings,
+            ..
+        } => {
             for arg in args {
                 if let GenericArg::Type(t) = arg {
                     collect_occurrences(t, Variance::Invariant, tracked, position, out);
                 }
+            }
+            // A tracked parameter can appear ONLY in an inline binding —
+            // `impl Iterator[Item = T]` — and it is no less an occurrence
+            // there (B-2026-08-22-4).
+            for b in assoc_bindings {
+                collect_occurrences(&b.ty, Variance::Invariant, tracked, position, out);
             }
         }
         TypeKind::Unit | TypeKind::Error => {}

@@ -167,7 +167,10 @@ impl<'a> super::TypeChecker<'a> {
             // the receiver-dispatch path. See phase-5-diagnostics.md line
             // 397 for the slice 3 entry.
             TypeKind::ImplTrait {
-                trait_path, args, ..
+                trait_path,
+                args,
+                assoc_bindings,
+                ..
             } => {
                 let trait_args: Vec<Type> = args
                     .iter()
@@ -184,9 +187,35 @@ impl<'a> super::TypeChecker<'a> {
                         GenericArg::Shape(_) => None,
                     })
                     .collect();
+                // Inline associated-type bindings ride the existential —
+                // there is no named parameter to hang a where-constraint on
+                // (B-2026-08-22-4). Argument-position `impl Trait` never
+                // reaches here: the slice-2 desugar already turned it into a
+                // named parameter and hoisted its bindings onto the where
+                // clause, which is why only the return / TAIT positions need
+                // this field at all.
+                let trait_name = trait_path.segments.join(".");
+                let lowered_bindings: Vec<(String, Type)> = assoc_bindings
+                    .iter()
+                    .map(|b| {
+                        (
+                            b.name.clone(),
+                            self.lower_type_expr_inner(&b.ty, generic_scope, false),
+                        )
+                    })
+                    .collect();
+                // A binding that names no associated type of the trait binds
+                // nothing: the projection it was meant to answer keeps a
+                // different name, so it stays unresolved and the caller gets
+                // the pre-binding "cannot infer" error pointing at their own
+                // correct code. Reject it here, where the typo is.
+                for b in assoc_bindings {
+                    self.check_trait_declares_assoc_type(&trait_name, &b.name, b.span);
+                }
                 Type::Existential {
-                    trait_name: trait_path.segments.join("."),
+                    trait_name,
                     trait_args,
+                    assoc_bindings: lowered_bindings,
                     origin: crate::resolver::SpanKey::from_span(&ty.span),
                     // Slice 6: the TAIT marker is set later by
                     // `env_add_type_alias` when this lowering happens
@@ -263,6 +292,50 @@ impl<'a> super::TypeChecker<'a> {
     /// when the name resolves to a non-trait item — slice 5's check
     /// fires only on positively-identified RPITIT traits; the generic
     /// `E_DYN_TRAIT_NOT_IMPLEMENTED_YET` stub covers the rest.
+    /// Emit a diagnostic when `trait_name` is defined in this program and does
+    /// NOT declare an associated type called `assoc`.
+    ///
+    /// Silent when the trait is not found in `program.items` — a baked stdlib
+    /// trait has no AST here, and failing closed would reject every correct
+    /// binding on one. Same fail-open rule as `trait_first_rpitit_method`.
+    fn check_trait_declares_assoc_type(&mut self, trait_name: &str, assoc: &str, span: Span) {
+        let Some(t) = self.program.items.iter().find_map(|item| match item {
+            Item::TraitDef(t) if t.name == trait_name => Some(t),
+            _ => None,
+        }) else {
+            return;
+        };
+        if !self
+            .assoc_binding_typos_reported
+            .insert((span.offset, span.length))
+        {
+            return;
+        }
+        let mut declared: Vec<&str> = Vec::new();
+        for ti in &t.items {
+            if let TraitItem::AssocType(a) = ti {
+                if a.name == assoc {
+                    return;
+                }
+                declared.push(&a.name);
+            }
+        }
+        let known = if declared.is_empty() {
+            format!("trait `{trait_name}` declares no associated types")
+        } else {
+            format!("`{trait_name}` declares: {}", declared.join(", "))
+        };
+        self.type_error(
+            format!(
+                "error[E_UNKNOWN_ASSOC_TYPE_BINDING]: `{assoc}` is not an associated \
+                 type of trait `{trait_name}`, so the binding `{assoc} = ...` \
+                 constrains nothing — {known}"
+            ),
+            span,
+            TypeErrorKind::TypeMismatch,
+        );
+    }
+
     fn trait_first_rpitit_method(
         program: &crate::ast::Program,
         trait_name: &str,

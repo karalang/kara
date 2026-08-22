@@ -185,6 +185,7 @@ impl<'a> super::TypeChecker<'a> {
             Type::Existential {
                 trait_name,
                 tait_alias,
+                assoc_bindings,
                 ..
             } => {
                 // `impl Trait` slice 6 — TAIT and return-position
@@ -202,9 +203,11 @@ impl<'a> super::TypeChecker<'a> {
                 // already covers the lookup machinery.
                 let trait_name_clone = trait_name.clone();
                 let tait_alias_clone = tait_alias.clone();
+                let bindings_clone = assoc_bindings.clone();
                 return self.dispatch_existential_receiver_method(
                     &trait_name_clone,
                     tait_alias_clone.as_deref(),
+                    &bindings_clone,
                     method,
                     args,
                     span,

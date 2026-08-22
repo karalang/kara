@@ -295,7 +295,7 @@ impl super::Parser {
             Token::Dyn => {
                 let dyn_kw_span = self.current_span();
                 self.advance(); // consume `dyn`
-                let trait_path = self.parse_path_type()?;
+                let (trait_path, assoc_bindings) = self.parse_trait_path_with_bindings()?;
                 let (segments, args_opt) = (trait_path.segments, trait_path.generic_args);
                 let args: Vec<GenericArg> = args_opt.unwrap_or_default();
                 let trait_path_clean = PathExpr {
@@ -308,6 +308,7 @@ impl super::Parser {
                     kind: TypeKind::Dyn {
                         trait_path: trait_path_clean,
                         args,
+                        assoc_bindings,
                         span,
                     },
                     span,
@@ -355,8 +356,9 @@ impl super::Parser {
                 }
 
                 // Trait path + generic args (parsed uniformly with
-                // regular path types).
-                let trait_path = self.parse_path_type()?;
+                // regular path types), plus any inline associated-type
+                // bindings — `impl Iterator[Item = i64]` (B-2026-08-22-4).
+                let (trait_path, assoc_bindings) = self.parse_trait_path_with_bindings()?;
                 let (segments, args_opt) = (trait_path.segments, trait_path.generic_args);
                 let args: Vec<GenericArg> = args_opt.unwrap_or_default();
 
@@ -411,6 +413,7 @@ impl super::Parser {
                     kind: TypeKind::ImplTrait {
                         trait_path: trait_path_clean,
                         args,
+                        assoc_bindings,
                         use_effects,
                         span,
                     },
@@ -496,6 +499,30 @@ impl super::Parser {
                 None
             }
         }
+    }
+
+    /// `parse_path_type` for a TRAIT path — the `Src[Item = i64]` after an
+    /// `impl` / `dyn` keyword — returning the positional args on the path and
+    /// the inline associated-type bindings separately.
+    ///
+    /// `impl Trait` and `dyn Trait` name a TRAIT, not a type, so their bracket
+    /// list is the same grammar a trait bound's is: `IDENT = TYPE` inside it
+    /// binds an associated type rather than passing a positional argument
+    /// (syntax.md § BOUND_ARG). Ordinary path types keep the flag off, so
+    /// `Vec[Item = i64]` stays the parse error it should be.
+    ///
+    /// Mirrors `parse_trait_bound`'s save/enable/drain dance exactly, and for
+    /// the same reason: the shared arg parser collects bindings into
+    /// `pending_assoc_bindings`, and the saved/restored pair keeps a nested
+    /// occurrence from inheriting or clobbering an outer one's.
+    fn parse_trait_path_with_bindings(&mut self) -> Option<(PathExpr, Vec<AssocBinding>)> {
+        let saved_allowed = self.assoc_bindings_allowed;
+        let saved_pending = std::mem::take(&mut self.pending_assoc_bindings);
+        self.assoc_bindings_allowed = true;
+        let path = self.parse_path_type();
+        self.assoc_bindings_allowed = saved_allowed;
+        let bindings = std::mem::replace(&mut self.pending_assoc_bindings, saved_pending);
+        Some((path?, bindings))
     }
 
     pub(crate) fn parse_path_type(&mut self) -> Option<PathExpr> {

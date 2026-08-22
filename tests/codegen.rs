@@ -102683,6 +102683,47 @@ fn main() {
         assert_eq!(run_program(src).as_deref(), Some("2\n2\n3\n3\n24\n24\n3\n"));
     }
 
+    /// B-2026-08-22-4 — an inline associated-type binding on an
+    /// ARGUMENT-position `impl Trait`.
+    ///
+    /// Argument position is the half that reaches codegen: the desugar turns
+    /// `impl Src[Item = i64]` into a named synthetic parameter plus the
+    /// ordinary `where T.Item = i64` constraint, so the backend sees the
+    /// monomorphized generic it has always seen and the binding costs it
+    /// nothing. This pins that the binding does not perturb that lowering.
+    ///
+    /// The RETURN-position half is deliberately absent, and not because it
+    /// works: a method call through a return-position existential has no
+    /// codegen dispatcher AT ALL — with or without a binding — so such a
+    /// program is check-green, `run --interp`-green and `build`-red. That
+    /// gap predates this change (the slice-3 entry in phase-5-diagnostics.md
+    /// records "No codegen support") and is filed as B-2026-08-22-10; adding
+    /// a test for it here would pin a failure, not a behaviour.
+    #[test]
+    fn test_e2e_impl_trait_argument_position_inline_assoc_binding() {
+        let src = r#"
+trait Src {
+    type Item;
+    fn get(ref self) -> Self.Item;
+}
+
+struct S { v: i64 }
+
+impl Src for S {
+    type Item = i64;
+    fn get(ref self) -> i64 { self.v }
+}
+
+fn take(s: impl Src[Item = i64]) -> i64 { s.get() }
+
+fn main() {
+    println(take(S { v: 5 }));
+    println(take(S { v: 37 }));
+}
+"#;
+        assert_eq!(run_program(src).as_deref(), Some("5\n37\n"));
+    }
+
     /// B-2026-08-21-41 — a fixed-array TEMPORARY as a for-loop source.
     ///
     /// `for_receiver_is_indexable` required the (`.iter()`-peeled) source to be

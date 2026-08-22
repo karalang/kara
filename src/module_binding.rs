@@ -328,6 +328,13 @@ impl Stripper<'_> {
                 self.generic_arg(a);
             }
         }
+        // Inline associated-type bindings are still on the bound here: this
+        // pass runs during module loading, BEFORE `desugar_program` hoists
+        // them onto the where clause. Their RHS can name an imported type
+        // (`I: Src[Item = other.Thing]`), so it needs the same rewrite.
+        for binding in b.assoc_bindings.iter_mut() {
+            self.ty(&mut binding.ty);
+        }
     }
 
     fn generic_arg(&mut self, a: &mut GenericArg) {
@@ -379,15 +386,27 @@ impl Stripper<'_> {
                 }
             }
             TypeKind::ImplTrait {
-                trait_path, args, ..
+                trait_path,
+                args,
+                assoc_bindings,
+                ..
             }
             | TypeKind::Dyn {
-                trait_path, args, ..
+                trait_path,
+                args,
+                assoc_bindings,
+                ..
             } => {
                 let span = trait_path.span;
                 self.segments(&mut trait_path.segments, span);
                 for a in args.iter_mut() {
                     self.generic_arg(a);
+                }
+                // An inline binding's RHS is an ordinary type and can name an
+                // imported one — `impl Src[Item = other.Thing]`. Rewriting the
+                // path list without it would leave that reference unbound.
+                for b in assoc_bindings.iter_mut() {
+                    self.ty(&mut b.ty);
                 }
             }
             TypeKind::Unit | TypeKind::Error => {}

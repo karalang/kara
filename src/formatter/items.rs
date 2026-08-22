@@ -358,8 +358,7 @@ impl super::Formatter {
                         if j > 0 {
                             self.write_str(" + ");
                         }
-                        self.write_path(&b.path);
-                        self.format_generic_args_opt(&b.generic_args);
+                        self.format_trait_bound(b);
                     }
                 }
                 WhereConstraint::AssocTypeEq {
@@ -383,8 +382,7 @@ impl super::Formatter {
                         if j > 0 {
                             self.write_str(" + ");
                         }
-                        self.write_path(&b.path);
-                        self.format_generic_args_opt(&b.generic_args);
+                        self.format_trait_bound(b);
                     }
                 }
                 WhereConstraint::ConstPredicate { expr, .. } => {
@@ -570,7 +568,7 @@ impl super::Formatter {
             if i > 0 {
                 self.write_str(" + ");
             }
-            self.write_path(&bound.path);
+            self.format_trait_bound(bound);
         }
         self.format_where_clause(&t.where_clause);
         self.write_str(";\n");
@@ -609,7 +607,7 @@ impl super::Formatter {
                             if i > 0 {
                                 self.write_str(" + ");
                             }
-                            self.write_path(&b.path);
+                            self.format_trait_bound(b);
                         }
                     }
                     self.write_str(";\n");

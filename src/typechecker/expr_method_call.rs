@@ -166,8 +166,8 @@ struct ResidentField<'a> {
     temporary: bool,
 }
 use super::types::{
-    method_callee_type_name, receiver_for_method_lookup, type_display, ConstArg, FloatSize,
-    IntSize, SubstValue, Type, UIntSize,
+    method_callee_type_name, receiver_for_method_lookup, substitute_existential_assoc_bindings,
+    type_display, ConstArg, FloatSize, IntSize, SubstValue, Type, UIntSize,
 };
 use super::TypeErrorKind;
 
@@ -591,6 +591,7 @@ impl<'a> super::TypeChecker<'a> {
         &mut self,
         trait_name: &str,
         tait_alias: Option<&str>,
+        assoc_bindings: &[(String, Type)],
         method: &str,
         args: &[CallArg],
         span: &Span,
@@ -607,7 +608,17 @@ impl<'a> super::TypeChecker<'a> {
             Some(m.clone())
         });
         if let Some(m) = trait_method {
-            return self.dispatch_trait_assoc_fn(trait_name, &m, &[], args, span);
+            let ret = self.dispatch_trait_assoc_fn(trait_name, &m, &[], args, span);
+            // `dispatch_trait_assoc_fn` substitutes `Self -> TypeParam(target)`,
+            // so a method declared `-> Self.Item` comes back as the projection
+            // `<trait_name>.Item`. On a concrete receiver that param names a
+            // type and `resolve_assoc_projections` finishes the job; on an
+            // existential it names the TRAIT, which resolves to nothing — the
+            // caller saw "cannot infer type parameter 'Src'" and had to write
+            // an annotation. An inline binding is exactly the missing fact, so
+            // apply it here (B-2026-08-22-4). Without a binding the projection
+            // is left intact and the old behaviour stands.
+            return substitute_existential_assoc_bindings(&ret, trait_name, assoc_bindings);
         }
         // No trait-surface method — surface the focused diagnostic.
         for arg in args {

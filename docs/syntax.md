@@ -2061,6 +2061,7 @@ TYPE = PATH_TYPE
      | TUPLE_TYPE
      | POINTER_TYPE
      | FUNCTION_TYPE
+     | IMPL_TRAIT_TYPE
      | DYN_TYPE
      | "Never"                           // bottom type (diverging functions)
      | "ref" TYPE
@@ -2073,7 +2074,17 @@ PATH_TYPE    = IDENT { "." IDENT } [ "[" GENERIC_ARG_LIST "]" ]
                // Array[T, N] is a PATH_TYPE — generic args accept types, const exprs, or shapes
 TUPLE_TYPE   = "(" TYPE "," TYPE { "," TYPE } ")"
 POINTER_TYPE = "*" "const" TYPE | "*" "mut" TYPE
-DYN_TYPE     = "dyn" IDENT [ "[" TYPE_LIST "]" ]
+IMPL_TRAIT_TYPE = "impl" PATH [ "[" BOUND_ARG { "," BOUND_ARG } "]" ]
+                                   [ "with" EFFECT_LIST ]
+               // Existential / sugar type — see design.md § `impl Trait`.
+               // The bracket list is a TRAIT's, not a type's, so it takes
+               // BOUND_ARGs: `impl Iterator[Item = i64]` binds the
+               // associated type, `impl Reduce[i64]` passes a positional
+               // argument. Legal in argument position, function and
+               // trait-method return position, and the RHS of a `type`
+               // alias; a nested generic-argument position (`Vec[impl T]`,
+               // and equally `Src[Item = impl T]`) is rejected at v1.
+DYN_TYPE     = "dyn" IDENT [ "[" BOUND_ARG { "," BOUND_ARG } "]" ]
                // Future: trait objects for dynamic dispatch.
                // The compiler uses the worst-case union of all known
                // impl effects for effect analysis (see design.md).
@@ -2169,11 +2180,21 @@ TRAIT_BOUND = PATH [ "[" BOUND_ARG { "," BOUND_ARG } "]" ]
 BOUND_ARG   = GENERIC_ARG | ASSOC_BINDING
 ASSOC_BINDING = IDENT "=" TYPE
               // Inline associated-type binding — `Iterator[Item = T]`.
-              // Legal ONLY in a trait bound; a plain type's bracket list
-              // (`Vec[T]`) takes positional args only. Equivalent to, and
-              // lowered to, the where-clause form `T "." IDENT "=" TYPE`
-              // above: `[I: Iterator[Item = T]]` desugars to
-              // `[I: Iterator] where I.Item = T`. B-2026-08-21-9.
+              // Legal wherever a TRAIT is named — a bound, IMPL_TRAIT_TYPE,
+              // DYN_TYPE — and nowhere else: a plain type's bracket list
+              // (`Vec[T]`) takes positional args only. B-2026-08-21-9.
+              //
+              // In a BOUND it is equivalent to, and lowered to, the
+              // where-clause form `T "." IDENT "=" TYPE` above:
+              // `[I: Iterator[Item = T]]` desugars to
+              // `[I: Iterator] where I.Item = T`. Argument-position
+              // `impl Trait` reaches the same place, since its desugar
+              // gives the parameter a name to constrain.
+              //
+              // On a RETURN-position `impl Trait` there is no name, so the
+              // binding stays on the existential and means two things: the
+              // opaque type's `IDENT` IS that type for every caller, and
+              // the concrete witness must declare it so. B-2026-08-22-4.
 ```
 
 Effect parameters (`with E`) are declared in the same generic list as type and const parameters. They propagate to the function's effect clause: `fn map[T, U, with E](list: Vec[T], f: Fn(T) -> U with E) -> Vec[U] with E`. See `design.md § Generics` for the effect-polymorphism rules.

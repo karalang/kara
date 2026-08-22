@@ -6856,6 +6856,15 @@ let first_three: Vec[i64] = it.take(3).collect();   // ✓ Iterator methods are 
 // let r: RangeFromIter[i64] = it;   // ✗ error: cannot name the existential's concrete type
 ```
 
+**Inline associated-type bindings are part of the promise.** The `[Item = i64]` above is not decoration and not a positional type argument — it is a two-sided commitment, and the existential is unusable without it in the common case:
+
+- **To the caller**, it de-opaques the projection. `Iterator.next` is declared `-> Self.Item`; on an existential receiver there is no concrete type to project through, so without the binding `it.next()` has no inferrable type at all and the caller must annotate every binding site. `Item = i64` says the opaque type's `Item` **is** `i64`, and `it.next()` types as `i64` like any other call.
+- **To the definition**, it is an obligation. The concrete witness's own `Item` must equal the bound type; a witness whose `Item` differs is rejected at the return site (`E_IMPL_TRAIT_ASSOC_MISMATCH`), because accepting it would make the promise the caller already relied on a lie.
+
+The binding is legal wherever a trait is named: a bound (`[I: Iterator[Item = T]]`), argument position, and return position. In a bound — and in argument position, whose desugar gives the parameter a name — it is exactly the where-clause spelling `where I.Item = T` and lowers to it. In return position there is no name to constrain, so the binding rides the existential itself; that is why the two positions are different mechanisms rather than one.
+
+An inline binding names a type, not a type constructor, so it cannot bind a *generic* associated type: `impl Functor[Mapped = X]` does not answer `Mapped[U]`. Naming something the trait does not declare is rejected where it is written (`E_UNKNOWN_ASSOC_TYPE_BINDING`) rather than silently binding nothing.
+
 **Effect surface — split construction and use.** A function returning `impl Trait` has two distinct effect surfaces:
 
 1. **Function execution effects** (`with E` on the function signature) — what running the function body itself costs the caller. For `make_counter`, this is empty (`(start..).into_iter()` allocates nothing, reads no resource).

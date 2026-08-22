@@ -10577,12 +10577,13 @@ fn gat_slice9_c_effect_param_on_gat_decl_still_rejected() {
 // trait-method-argument positions). Semantic handling lands in
 // slices 2-4; this slice only verifies the surface and AST shape.
 //
-// Note: design.md spells out `impl Iterator[Item = i64]` as the
-// canonical example, but `[Item = i64]` (assoc-type-binding sugar in
-// generic-args position) is not yet a supported parser surface at v1.
-// These tests use `Iterator` (bare path) and `Iterator[i64]`
-// (positional generic arg) instead — the slice-1 surface they
-// exercise is exactly the same `TypeKind::ImplTrait` arm.
+// Note: these tests use `Iterator` (bare path) and `Iterator[i64]`
+// (positional generic arg). design.md's canonical spelling
+// `impl Iterator[Item = i64]` parses too as of B-2026-08-22-4 — its
+// binding lands in `TypeKind::ImplTrait::assoc_bindings`, a field kept
+// separate from `args` because a binding is not a positional argument.
+// The inline-binding tests live in their own section at the end of this
+// file; the slice-1 surface pinned here is the same `ImplTrait` arm.
 
 /// Helper: extract a `TypeKind::ImplTrait` from the function's
 /// first-parameter type, asserting the kind matches. Returns the
@@ -10779,11 +10780,10 @@ fn impl_trait_slice1_with_effect_clause_parses() {
 #[test]
 fn impl_trait_slice1_with_generic_args_parses() {
     // `fn f() -> impl Iterator[i64]` — single positional generic arg
-    // on the trait path. The `Iterator[Item = i64]` shape spelled
-    // out in design.md uses an assoc-type-binding sugar that is not
-    // yet a parser surface at v1 (see the section comment above);
-    // the positional arg here exercises the same `args` field on
-    // `TypeKind::ImplTrait` so the slice-1 AST shape is pinned.
+    // on the trait path, pinning the `args` field of
+    // `TypeKind::ImplTrait`. design.md's `Iterator[Item = i64]` spelling
+    // populates the sibling `assoc_bindings` field instead
+    // (B-2026-08-22-4) and is covered in its own section.
     let prog = parse_ok("fn f() -> impl Iterator[i64] { iter_empty() }");
     let Item::Function(f) = &prog.items[0] else {
         panic!("Expected Function");
@@ -15146,5 +15146,121 @@ fn test_assoc_binding_is_rejected_inside_a_nested_type_arg() {
     assert!(
         !errors.is_empty(),
         "`Vec[X = i64]` is not a trait bound and must not accept a binding"
+    );
+}
+
+// ── Inline associated-type bindings in TYPE position (B-2026-08-22-4) ──
+
+#[test]
+fn test_inline_assoc_binding_parses_in_impl_trait_return_position() {
+    // design.md's own Map method table spells returns this way:
+    // `fn keys(ref self) -> impl Iterator[Item = ref K]`. Before this it
+    // was `error[parse]: Expected RightBracket, found Equal`.
+    let prog = parse_ok(
+        "trait Src { type Item; }\nstruct S {}\nfn make() -> impl Src[Item = i64] { S {} }",
+    );
+    let Item::Function(f) = &prog.items[2] else {
+        panic!("Expected Function");
+    };
+    let TypeKind::ImplTrait {
+        args,
+        assoc_bindings,
+        ..
+    } = &f.return_type.as_ref().unwrap().kind
+    else {
+        panic!("Expected ImplTrait return type");
+    };
+    assert!(
+        args.is_empty(),
+        "a binding is not a positional arg; got {} args",
+        args.len()
+    );
+    assert_eq!(assoc_bindings.len(), 1);
+    assert_eq!(assoc_bindings[0].name, "Item");
+}
+
+#[test]
+fn test_inline_assoc_binding_parses_in_impl_trait_argument_position() {
+    let prog = parse_ok("trait Src { type Item; }\nfn take(s: impl Src[Item = i64]) -> i64 { 0 }");
+    let Item::Function(f) = &prog.items[1] else {
+        panic!("Expected Function");
+    };
+    let TypeKind::ImplTrait { assoc_bindings, .. } = &f.params[0].ty.kind else {
+        panic!("Expected ImplTrait param type");
+    };
+    assert_eq!(assoc_bindings.len(), 1);
+    assert_eq!(assoc_bindings[0].name, "Item");
+}
+
+#[test]
+fn test_inline_assoc_binding_mixes_with_positional_args() {
+    let prog = parse_ok(
+        "trait Src[U] { type Item; }\nstruct S {}\nfn make() -> impl Src[i64, Item = bool] { S {} }",
+    );
+    let Item::Function(f) = &prog.items[2] else {
+        panic!("Expected Function");
+    };
+    let TypeKind::ImplTrait {
+        args,
+        assoc_bindings,
+        ..
+    } = &f.return_type.as_ref().unwrap().kind
+    else {
+        panic!("Expected ImplTrait return type");
+    };
+    assert_eq!(args.len(), 1, "the `i64` stays positional");
+    assert_eq!(assoc_bindings.len(), 1);
+}
+
+#[test]
+fn test_inline_assoc_binding_rejected_on_an_ordinary_path_type() {
+    // The flag is scoped to trait paths — `impl` / `dyn` / a bound. A
+    // plain type's bracket list is positional args only, so this must stay
+    // the parse error it was.
+    let result = parse("trait Src { type Item; }\nfn f(v: Vec[Item = i64]) {}");
+    assert!(
+        !result.errors.is_empty(),
+        "`Vec[Item = i64]` names no trait and must not accept a binding"
+    );
+}
+
+#[test]
+fn test_impl_trait_inside_an_inline_binding_is_rejected_as_nested() {
+    // `Src[Item = impl Foo]` puts an `impl Trait` in a nested
+    // generic-argument position, which design.md rejects at v1 exactly as
+    // it does `Vec[impl T]`. The binding's RHS gets the same block.
+    let result = parse("trait Src { type Item; }\nfn f() -> impl Src[Item = impl Src] { todo() }");
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| e.to_string().contains("E_IMPL_TRAIT_IN_NESTED_POSITION")),
+        "expected the nested-position rejection; got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn test_formatter_round_trips_an_inline_assoc_binding() {
+    // The formatter rendered a bound's path and its generic args
+    // separately, which DELETED any binding: `I: Src[Item = i64]` came
+    // back as `I: Src[]` — a weaker constraint than the author wrote, from
+    // a command whose whole promise is round-tripping (B-2026-08-22-9).
+    let prog = parse_ok(
+        "trait Src { type Item; }\n\
+         trait Bnd = Src[Item = i64];\n\
+         struct S {}\n\
+         fn f[I: Src[Item = i64]](x: I) -> i64 where I: Src[Item = i64] { 0 }\n\
+         fn g() -> impl Src[Item = i64] { S {} }",
+    );
+    let out = karac::formatter::format_program(&prog);
+    assert_eq!(
+        out.matches("Src[Item = i64]").count(),
+        4,
+        "every binding must survive the round-trip; got:\n{out}"
+    );
+    assert!(
+        !out.contains("Src[]"),
+        "the empty bracket list is the deletion bug; got:\n{out}"
     );
 }

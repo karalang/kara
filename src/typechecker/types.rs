@@ -156,9 +156,27 @@ pub enum Type {
     ///
     /// Fields:
     /// - `trait_name` — joined trait path (`Iterator`, `std.iter.Iterator`).
-    /// - `trait_args` — positional generic args on the trait. Associated-
-    ///   type bindings (`Iterator[Item = i64]`) are not yet parseable so
-    ///   only positional args reach this field.
+    /// - `trait_args` — POSITIONAL generic args on the trait (the `i64` of
+    ///   `impl Reduce[i64]`). An inline associated-type binding is not one
+    ///   of these — see `assoc_bindings`.
+    /// - `assoc_bindings` — inline associated-type bindings written on the
+    ///   existential: the `Item = i64` of `impl Iterator[Item = i64]`
+    ///   (B-2026-08-22-4). Unlike the bound-position spelling, these cannot
+    ///   be desugared away: a bound-position binding constrains a NAMED type
+    ///   parameter, so it lowers to a `WhereConstraint::AssocTypeEq`, while
+    ///   an existential has no name — the binding is a property of the
+    ///   opaque type itself. It does two things, one per side of the
+    ///   abstraction barrier:
+    ///
+    ///   - CALLER side, it de-opaques the projection. A trait method
+    ///     declared `-> Self.Item` dispatches on an existential receiver to
+    ///     `<trait>.Item`, which nothing can resolve (the receiver has no
+    ///     concrete name); with a binding it resolves to the bound type, so
+    ///     `make().get()` types as `i64` instead of forcing the caller to
+    ///     write the annotation that was the only workaround before.
+    ///   - DEFINITION side, it is an obligation: the concrete witness's own
+    ///     `Item` must equal the bound type, checked at the return site in
+    ///     `check_assignable` (`E_IMPL_TRAIT_ASSOC_MISMATCH`).
     /// - `origin` — `SpanKey` of the `TypeKind::ImplTrait` AST node. Two
     ///   distinct `impl Iterator` declarations (e.g., on two different
     ///   functions) yield distinct origins so the typechecker keeps their
@@ -176,6 +194,7 @@ pub enum Type {
     Existential {
         trait_name: String,
         trait_args: Vec<Type>,
+        assoc_bindings: Vec<(String, Type)>,
         origin: crate::resolver::SpanKey,
         tait_alias: Option<String>,
     },
@@ -802,12 +821,22 @@ pub fn type_display(ty: &Type) -> String {
         Type::Existential {
             trait_name,
             trait_args,
+            assoc_bindings,
             ..
         } => {
-            if trait_args.is_empty() {
+            // Render the bracket list the user wrote: positional args first,
+            // then inline bindings, so a diagnostic names the declared type
+            // rather than a truncated `impl Iterator` that matches nothing in
+            // the source.
+            let mut inner: Vec<String> = trait_args.iter().map(type_display).collect();
+            inner.extend(
+                assoc_bindings
+                    .iter()
+                    .map(|(name, ty)| format!("{} = {}", name, type_display(ty))),
+            );
+            if inner.is_empty() {
                 format!("impl {}", trait_name)
             } else {
-                let inner: Vec<String> = trait_args.iter().map(type_display).collect();
                 format!("impl {}[{}]", trait_name, inner.join(", "))
             }
         }
@@ -815,6 +844,103 @@ pub fn type_display(ty: &Type) -> String {
         // the base (`i64`), so diagnostics name the type the user wrote.
         Type::Refinement { name, .. } => name.clone(),
         Type::Error => "<error>".to_string(),
+    }
+}
+
+/// Replace every `AssocProjection { param: <trait_name>, assoc }` in `ty` with
+/// the type an existential's inline binding names for `assoc`.
+///
+/// The projection reaches this shape from `dispatch_trait_assoc_fn`, which
+/// substitutes `Self -> TypeParam(target)` on a trait method's declared
+/// return type; for an existential receiver `target` is the TRAIT's name, so
+/// the projection reads `Src.Item` and nothing downstream can resolve it (a
+/// trait is not a type, so there is no `impl_assoc_types` entry to find).
+/// `impl Src[Item = i64]` supplies exactly the missing fact.
+///
+/// A projection whose `param` is some other name, or whose `assoc` the
+/// existential does not bind, is left untouched — the pre-binding behaviour,
+/// where the caller must annotate.
+///
+/// GAT projections (`args` non-empty) are NOT substituted: an inline binding
+/// spells one type, not a type constructor, so `Src[Mapped = X]` cannot
+/// answer `Src.Mapped[U]`. Those keep their projection and fall through to
+/// the existing diagnostics.
+pub(super) fn substitute_existential_assoc_bindings(
+    ty: &Type,
+    trait_name: &str,
+    bindings: &[(String, Type)],
+) -> Type {
+    if bindings.is_empty() {
+        return ty.clone();
+    }
+    let go = |t: &Type| substitute_existential_assoc_bindings(t, trait_name, bindings);
+    match ty {
+        Type::AssocProjection {
+            param,
+            assoc,
+            args,
+            receiver_args,
+        } => {
+            if param == trait_name && args.is_empty() {
+                if let Some((_, bound)) = bindings.iter().find(|(n, _)| n == assoc) {
+                    return bound.clone();
+                }
+            }
+            Type::AssocProjection {
+                param: param.clone(),
+                assoc: assoc.clone(),
+                args: args.iter().map(&go).collect(),
+                receiver_args: receiver_args.iter().map(&go).collect(),
+            }
+        }
+        Type::Tuple(elems) => Type::Tuple(elems.iter().map(&go).collect()),
+        Type::Array { element, size } => Type::Array {
+            element: Box::new(go(element)),
+            size: size.clone(),
+        },
+        Type::Vector { element, lanes } => Type::Vector {
+            element: Box::new(go(element)),
+            lanes: lanes.clone(),
+        },
+        Type::Slice { element, mutable } => Type::Slice {
+            element: Box::new(go(element)),
+            mutable: *mutable,
+        },
+        Type::Named { name, args } => Type::Named {
+            name: name.clone(),
+            args: args.iter().map(&go).collect(),
+        },
+        Type::Rc(inner) => Type::Rc(Box::new(go(inner))),
+        Type::Arc(inner) => Type::Arc(Box::new(go(inner))),
+        Type::Ref(inner) => Type::Ref(Box::new(go(inner))),
+        Type::MutRef(inner) => Type::MutRef(Box::new(go(inner))),
+        Type::Weak(inner) => Type::Weak(Box::new(go(inner))),
+        Type::Pointer { is_mut, inner } => Type::Pointer {
+            is_mut: *is_mut,
+            inner: Box::new(go(inner)),
+        },
+        Type::Function {
+            params,
+            return_type,
+        } => Type::Function {
+            params: params.iter().map(&go).collect(),
+            return_type: Box::new(go(return_type)),
+        },
+        Type::OnceFunction {
+            params,
+            return_type,
+        } => Type::OnceFunction {
+            params: params.iter().map(&go).collect(),
+            return_type: Box::new(go(return_type)),
+        },
+        Type::Refinement { name, base } => Type::Refinement {
+            name: name.clone(),
+            base: Box::new(go(base)),
+        },
+        // A NESTED existential carries its own bindings and its own trait, so
+        // an outer one's bindings must not reach inside it. Everything else
+        // is a leaf with no `Type` children.
+        _ => ty.clone(),
     }
 }
 

@@ -540,10 +540,16 @@ impl super::Parser {
                 let name = self.expect_identifier()?;
                 self.expect(&Token::Equal)?;
                 // The binding's own type is an ORDINARY type: clear the flag
-                // so `Src[Item = Vec[X = Y]]` rejects the inner form.
+                // so `Src[Item = Vec[X = Y]]` rejects the inner form. The
+                // nested-`impl Trait` block goes on for the same reason it
+                // does on a positional arg below — `Src[Item = impl Foo]` is
+                // an `impl Trait` in a nested generic-argument position and
+                // gets the same v1 rejection (B-2026-08-22-4).
                 let saved = self.assoc_bindings_allowed;
                 self.assoc_bindings_allowed = false;
+                self.push_impl_trait_block(crate::parser::ImplTraitBlockReason::NestedGenericArg);
                 let ty = self.parse_type();
+                self.pop_impl_trait_block();
                 self.assoc_bindings_allowed = saved;
                 self.pending_assoc_bindings.push(crate::ast::AssocBinding {
                     name,

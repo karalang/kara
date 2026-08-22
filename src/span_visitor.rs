@@ -1530,24 +1530,24 @@ fn visit_type_spans_mut(t: &mut TypeExpr, visit: &mut impl FnMut(&mut Span)) {
         crate::ast::TypeKind::ImplTrait {
             trait_path,
             args,
+            assoc_bindings,
             span,
             ..
+        }
+        | crate::ast::TypeKind::Dyn {
+            trait_path,
+            args,
+            assoc_bindings,
+            span,
         } => {
             visit(span);
             visit_path_expr_mut(trait_path, visit);
             for a in args {
                 visit_generic_arg_mut(a, visit);
             }
-        }
-        crate::ast::TypeKind::Dyn {
-            trait_path,
-            args,
-            span,
-        } => {
-            visit(span);
-            visit_path_expr_mut(trait_path, visit);
-            for a in args {
-                visit_generic_arg_mut(a, visit);
+            for b in assoc_bindings {
+                visit(&mut b.span);
+                visit_type_spans_mut(&mut b.ty, visit);
             }
         }
         crate::ast::TypeKind::Unit | crate::ast::TypeKind::Error => {}

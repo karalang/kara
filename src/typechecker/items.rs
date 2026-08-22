@@ -601,12 +601,20 @@ impl<'a> super::TypeChecker<'a> {
             // trait name in an `impl T` public-signature is just as
             // much a leak as in a `T` public-signature.
             TypeKind::ImplTrait {
-                trait_path, args, ..
+                trait_path,
+                args,
+                assoc_bindings,
+                ..
             } => {
                 for a in args {
                     if let GenericArg::Type(t) = a {
                         self.check_type_expr_visibility(t, generic_scope, type_vis, context, owner);
                     }
+                }
+                // A private type named in an inline binding leaks through a
+                // public signature exactly as one named positionally does.
+                for b in assoc_bindings {
+                    self.check_type_expr_visibility(&b.ty, generic_scope, type_vis, context, owner);
                 }
                 if let Some(last) = trait_path.segments.last() {
                     if !(trait_path.segments.len() == 1 && generic_scope.iter().any(|g| g == last))
@@ -1044,7 +1052,16 @@ impl<'a> super::TypeChecker<'a> {
             }
             // `impl Trait` / `dyn Trait` carry generic args we still
             // descend into (same shape as the visibility walker).
-            TypeKind::ImplTrait { args, .. } | TypeKind::Dyn { args, .. } => {
+            TypeKind::ImplTrait {
+                args,
+                assoc_bindings,
+                ..
+            }
+            | TypeKind::Dyn {
+                args,
+                assoc_bindings,
+                ..
+            } => {
                 for a in args {
                     if let GenericArg::Type(t) = a {
                         self.check_type_expr_scope_local(
@@ -1055,6 +1072,15 @@ impl<'a> super::TypeChecker<'a> {
                             owner,
                         );
                     }
+                }
+                for b in assoc_bindings {
+                    self.check_type_expr_scope_local(
+                        &b.ty,
+                        generic_scope,
+                        scope_local_types,
+                        context,
+                        owner,
+                    );
                 }
             }
             _ => {}
@@ -2603,8 +2629,20 @@ impl<'a> super::TypeChecker<'a> {
                         .as_ref()
                         .is_some_and(|rt| Self::type_expr_mentions_type(rt, target))
             }
-            TypeKind::ImplTrait { args, .. } | TypeKind::Dyn { args, .. } => {
+            TypeKind::ImplTrait {
+                args,
+                assoc_bindings,
+                ..
+            }
+            | TypeKind::Dyn {
+                args,
+                assoc_bindings,
+                ..
+            } => {
                 args.iter().any(|a| Self::generic_arg_mentions(a, target))
+                    || assoc_bindings
+                        .iter()
+                        .any(|b| Self::type_expr_mentions_type(&b.ty, target))
             }
             TypeKind::Unit | TypeKind::Error => false,
         }
@@ -4299,7 +4337,7 @@ impl<'a> super::TypeChecker<'a> {
         }
         let generic_param_names: std::collections::HashSet<String> = gp.iter().cloned().collect();
 
-        Self::walk_for_impl_trait(return_ty, &mut |impl_trait_span, args| {
+        Self::walk_for_impl_trait(return_ty, &mut |impl_trait_span, args, bindings| {
             let mut type_params: Vec<String> = Vec::new();
             let mut found_ref_in_args = false;
             for arg in args {
@@ -4311,6 +4349,21 @@ impl<'a> super::TypeChecker<'a> {
                         &mut found_ref_in_args,
                     );
                 }
+            }
+            // An inline associated-type binding carries the same capture
+            // signals a positional arg does, and design.md's own Map method
+            // table puts the borrow THERE and nowhere else —
+            // `fn keys(ref self) -> impl Iterator[Item = ref K]`. Skipping it
+            // would leave that existential recorded as capturing no input
+            // borrow, so dropping the map while the iterator is live would go
+            // unreported (B-2026-08-22-4).
+            for b in bindings {
+                Self::collect_capture_signals(
+                    &b.ty,
+                    &generic_param_names,
+                    &mut type_params,
+                    &mut found_ref_in_args,
+                );
             }
             type_params.sort();
             type_params.dedup();
@@ -4334,18 +4387,25 @@ impl<'a> super::TypeChecker<'a> {
     /// args. Argument-position `impl Trait` was already desugared away
     /// by slice 2, so the only occurrences here are return-position /
     /// RPITIT-return / TAIT-RHS / structurally-similar shapes.
-    fn walk_for_impl_trait<F: FnMut(&Span, &[GenericArg])>(ty: &TypeExpr, f: &mut F) {
+    fn walk_for_impl_trait<F: FnMut(&Span, &[GenericArg], &[AssocBinding])>(
+        ty: &TypeExpr,
+        f: &mut F,
+    ) {
         match &ty.kind {
             TypeKind::ImplTrait {
                 args,
+                assoc_bindings,
                 span: it_span,
                 ..
             } => {
-                f(it_span, args);
+                f(it_span, args, assoc_bindings);
                 for arg in args {
                     if let GenericArg::Type(t) = arg {
                         Self::walk_for_impl_trait(t, f);
                     }
+                }
+                for b in assoc_bindings {
+                    Self::walk_for_impl_trait(&b.ty, f);
                 }
             }
             TypeKind::Tuple(types) => {

@@ -482,9 +482,10 @@ pub enum TypeKind {
     ///   `std.iter.Iterator`). Mirrors the `PathExpr` shape used by
     ///   regular path types so the resolver can route the lookup
     ///   through the same surface.
-    /// - `args` — `[GenericArg, ...]` after the trait path
-    ///   (e.g. the `Item = i64` in `impl Iterator[Item = i64]`). Empty
-    ///   when the bound has no generic args.
+    /// - `args` — POSITIONAL `[GenericArg, ...]` after the trait path
+    ///   (the `i64` in `impl Reduce[i64]`). Empty when the bound has no
+    ///   positional generic args. An inline `Item = i64` is NOT one of
+    ///   these — see `assoc_bindings` below.
     /// - `use_effects` — `with EFFECT_LIST` suffix on the type
     ///   expression. Distinct from the surrounding function's
     ///   execution-effect `with` clause — see design.md §
@@ -494,6 +495,21 @@ pub enum TypeKind {
     ImplTrait {
         trait_path: PathExpr,
         args: Vec<GenericArg>,
+        /// Inline associated-type bindings written inside the bracket list —
+        /// the `Item = i64` of `impl Iterator[Item = i64]` (design.md's own
+        /// Map/Vec method tables spell returns this way; B-2026-08-22-4).
+        /// Kept SEPARATE from `args` for the same reason
+        /// [`TraitBound::assoc_bindings`] is: they are not positional type
+        /// arguments.
+        ///
+        /// Unlike the bound-position form, these are NOT hoisted away by
+        /// `desugar_program` in every position. Argument-position
+        /// `impl Trait` desugars to a named synthetic type parameter, so its
+        /// bindings do hoist onto a `WhereConstraint::AssocTypeEq` like any
+        /// other bound's. A RETURN-position `impl Trait` has no name to
+        /// constrain — the binding is a property of the existential itself —
+        /// so it survives lowering into `Type::Existential::assoc_bindings`.
+        assoc_bindings: Vec<AssocBinding>,
         use_effects: Option<EffectList>,
         span: Span,
     },
@@ -522,6 +538,12 @@ pub enum TypeKind {
     Dyn {
         trait_path: PathExpr,
         args: Vec<GenericArg>,
+        /// Inline associated-type bindings — see the `ImplTrait` field of the
+        /// same name. Parsed for surface parity with `impl Trait` (a parse
+        /// error here would be a strictly worse diagnostic than the focused
+        /// P1-deferred one the lowering already emits) and then dropped:
+        /// `dyn Trait` lowers to `Type::Error` regardless.
+        assoc_bindings: Vec<AssocBinding>,
         span: Span,
     },
     Unit,

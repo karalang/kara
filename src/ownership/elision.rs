@@ -2971,7 +2971,21 @@ fn type_expr_mentions_deep(te: &TypeExpr, name: &str) -> bool {
                     .as_ref()
                     .is_some_and(|t| type_expr_mentions_deep(t, name))
         }
-        TypeKind::ImplTrait { args, .. } | TypeKind::Dyn { args, .. } => args_mention(args),
+        TypeKind::ImplTrait {
+            args,
+            assoc_bindings,
+            ..
+        }
+        | TypeKind::Dyn {
+            args,
+            assoc_bindings,
+            ..
+        } => {
+            args_mention(args)
+                || assoc_bindings
+                    .iter()
+                    .any(|b| type_expr_mentions_deep(&b.ty, name))
+        }
         TypeKind::Unit | TypeKind::Error => false,
     }
 }
