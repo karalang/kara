@@ -94,16 +94,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 277 | 0 |
 | leak | 187 | 0 |
+| missing-feature | 149 | 6 |
 | run-vs-build | 149 | 0 |
-| missing-feature | 148 | 6 |
 | double-free | 134 | 0 |
 | codegen-gap | 128 | 2 |
 | diagnostics | 97 | 3 |
 | false-positive | 91 | 0 |
 | perf | 83 | 0 |
 | crash | 55 | 0 |
+| other | 55 | 1 |
 | soundness | 54 | 1 |
-| other | 54 | 0 |
 | use-after-free | 20 | 0 |
 
 ### By surface
@@ -111,27 +111,26 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 989 | 5 |
-| typecheck | 237 | 5 |
+| typecheck | 238 | 5 |
 | interp | 172 | 0 |
-| other | 62 | 0 |
+| other | 63 | 1 |
 | ownership | 62 | 0 |
 | cli | 60 | 1 |
 | autopar | 54 | 0 |
-| parser | 37 | 2 |
+| parser | 38 | 3 |
 | runtime | 28 | 0 |
 | resolver | 26 | 0 |
 | effect | 9 | 1 |
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1477 surfaced · 12 open · 1443 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1479 surfaced · 13 open · 1444 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (12)
+### Open (13)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-21-18 | 2026-08-21 | codegen+typecheck | low | STRUCT FUNCTIONAL UPDATE `P { x: 1, ..base }` IS STILL UNIMPLEMENTED -- it now says so clearly instead of dropping the base, but the form syntax.md's STRUCT_LITERAL production admits cannot be used; the interpreter already implements the copy and codegen does not, so the remaining work is codegen plus the ownership rules for a spread base | roadmap.md |
-| B-2026-08-21-29 | 2026-08-21 | typecheck | medium | THREE DOCUMENTED SURFACES ARE NOT REACHABLE AS WRITTEN: every spelling of channel construction design.md uses (`Channel.new[T]()`, `Channel.bounded`), its whole `io.` I/O prefix, and `allocates(Heap)` -- whose `Heap` the document never declares and the prelude does not provide | roadmap.md |
 | B-2026-08-21-43 | 2026-08-21 | codegen | low | A USER IMPL ON A **NON-SCALAR** `Array` HEAD IS UNCALLABLE ON A TEMPORARY -- `mk().tag()` for `impl Tag for Array[String, 2]` still loud-fails after B-2026-08-21-25, which admits only scalar-element arrays because a scalar array is the case that owns no heap | roadmap.md |
 | B-2026-08-21-45 | 2026-08-21 | typecheck+codegen | low | FIVE SHIPPED USER-FACING DIAGNOSTICS CARRY RUNS OF 14-30 SPACES mid-sentence, because rustfmt INTERMITTENTLY rejoins a `\`-continued string literal into one line and keeps the continuation indentation as real spaces | roadmap.md |
 | B-2026-08-21-46 | 2026-08-21 | codegen | low | `enumerate` OVER AN ARRAY **LITERAL** STILL BAILS LOUD -- `for (i, x) in [1, 2, 3].iter().enumerate()` hits the adaptor backstop while `--interp` answers, the one source shape B-2026-08-21-41's widening could not reach | roadmap.md |
@@ -142,6 +141,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1477 surfaced
 | B-2026-08-22-7 | 2026-08-22 | codegen | low | `f16_software_emulated` IS THE ONE STARTER-SET LINT WHOSE TRIGGER DEPENDS ON THE TARGET, and the target's feature baseline is only reachable behind `#[cfg(feature = "llvm")]` -- so wiring it is a PLACEMENT decision, not the mechanical job the other six were | roadmap.md |
 | B-2026-08-22-8 | 2026-08-22 | cli | low | `implicit_clone` HAS NO TRIGGER IN THE SPEC AND CANNOT BE DE-REGISTERED WITHOUT A design.md EDIT -- the one starter-set lint whose resolution is a SPEC decision, not a compiler change | roadmap.md |
 | B-2026-08-22-10 | 2026-08-22 | typecheck | high | NO GENERIC BOUND OF ANY CLASS IS DISCHARGED ON A STATIC/ASSOCIATED-FUNCTION CALL -- `Type.assoc_fn(args)` never reaches the call-site engine at all, so `H.take(NotMarked {})` is accepted against `fn take[T: Marker]` while both the free-function and the instance-method spellings correctly reject it | typecheck |
+| B-2026-08-21-53 | 2026-08-22 | typecheck+parser | medium | CALL-SITE TYPE APPLICATION `f[T](args)` IS IMPLEMENTED ONLY FOR THE `ptr.*` BUILTINS -- `Vec.new[i64]()`, `Channel.new[i64]()` and a user generic `id[i64](5)` all parse as an INDEX and then fail, while `ptr.null[u32]()` works; design.md writes both forms and contradicts itself three ways about whether the syntax exists | roadmap.md |
+| B-2026-08-21-54 | 2026-08-22 | other | medium | `test_shortener_example_end_to_end` ASSERTS A JSON KEY ORDER and is RED on main since the FxHash change (8c3c8d6) reordered Map iteration -- and it is order-FLAKY, passing on roughly one run in three, so neither a red nor a green run can be trusted | roadmap.md |
 
 ### Wontfix (8)
 
@@ -160,9 +161,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1477 surfaced
 
 </details>
 
-### Fixed (1443)
+### Fixed (1444)
 
-<details><summary>1443 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1444 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -14165,6 +14166,73 @@ WHAT IT FOUND, on its first run:
                    Kāra does not get to choose.
 
 REMAINING LIMIT, stated rather than hidden. The rung answers "does this name resolve", not "does this signature match the implementation's". `Vec.filled(0, 0)` passing proves `filled` exists and takes two arguments; it does not prove the second is a `T` or that the return is `Vec[T]`. Checking that needs the value table this row proposed and this fix skipped, and it is the natural next increment. Nor can the orphan check tell a spec promise from a gesture at a user type — design.md:7021's `Key` / `Wire` are flagged alongside `io`, and are triaged in the baseline as the false positive they are. |
+| B-2026-08-21-29 | typecheck | medium | THREE DOCUMENTED SURFACES ARE NOT REACHABLE AS WRITTEN: every spelling of channel construction design.md uses (`Channel.new[T]()`, `Channel.bounded`)… | PARTIALLY FIXED by 02dce7a — the two items that needed no decision. The rest is
+split out (see below), because each remaining piece is either a language-surface
+decision or a feature far larger than this row implies.
+
+(3) `allocates(Heap)` — FIXED. `Heap` is now a prelude effect resource, so the
+58 design.md lines that write `allocates(Heap)` without ever declaring it are
+compilable as printed. Registered as a CONFLICT-ONLY resource, the shape
+`Hardware` already had: no provider methods, present so the verb clause resolves
+and participates in conflict analysis. `Heap` is the allocator, not a user
+domain resource, and belongs with `Clock` / `Hardware` rather than with `UserDB`.
+
+  The list's own comment was stale and had been hiding this: it claimed "each
+  name listed here has at least one built-in method implemented by the
+  interpreter" and named `Heap` among the pending primitives. Four of the five
+  it listed had since landed, and the method-surface criterion excludes the
+  conflict-only kind BY CONSTRUCTION — which is precisely why `Heap` sat
+  unregistered while the spec used it everywhere.
+
+  This also completes B-2026-08-02-4, whose subject was a user following the FFI
+  lint's `allocates(Heap)` suggestion verbatim and hitting an undefined
+  resource. That row fixed the MESSAGE; the suggestion now simply works. Its
+  regression test keeps its guarantee on a genuinely-undeclared name, since the
+  guarantee was about the message and not about `Heap`.
+
+(1b) `Channel.new()` ELEMENT INFERENCE — FIXED. It now pins `T` from a later
+`send`, which the builtin's own comment has always claimed ("a later
+`tx.send(x)` / `rx.recv()` pins the same `T`"). It did not: both send paths
+reached `check_assignable`, which CHECKS rather than UNIFIES, so an unsolved
+`?T0` against an `i64` argument reported `expected '?T0', found 'i64'`. The
+ANNOTATED spelling was the only channel construction that worked, and
+design.md:6111 writes the unannotated one. Pinning does not weaken checking —
+once the first send solves the variable a later mismatched send is still
+rejected, pinned by its own test, since trading a false rejection for a false
+acceptance is the worse direction. Verified on all four surfaces.
+
+(1a) `Channel.new[T]()` — NOT Channel-specific, and the row's framing understated
+it. Measured: `Vec.new[i64]()` and `Vec.filled[i64](3, 0)` fail identically, and
+so does a user generic (`id[i64](5)` → "'i64' is a type, not a function"). But
+`ptr.null[u32]()` — which design.md:3375 writes and explicitly CALLS a turbofish
+— WORKS. So call-site type application exists, implemented narrowly for the
+`ptr.*` builtins, and is not a general language feature. Whether it should be is
+a language-surface decision, not a Channel bug; design.md is itself inconsistent
+on the point (line 474 presents `[T]` as the replacement for turbofish, 3412
+says "there is no turbofish — the explicit form is always `T.default()`", and
+13446/13449 use RUST `::<>` syntax outright). Split to B-2026-08-21-53.
+
+(1c) `Channel.bounded[T](cap)` — still missing in every spelling. Left open in
+the split row: `bounded_channel.kara` exists but nothing routes to the name, and
+the design's `requires cap > 0` contract needs deciding against it.
+
+(2) THE `io.` PREFIX — untouched, and deliberately. The row already calls it the
+stdlib owner's decision (grow an `io` facade matching the documented eight, or
+rewrite the section onto `Stdin` / `Stdout` / `Stderr`), and the implementation
+comment quoted in the row suggests the second. Split to B-2026-08-21-53 with
+that framing intact rather than guessed at.
+
+VERIFICATION NOTE, so the suite numbers are not over-read. The full run shows
+14,791 passed / 1 failed, and the failure —
+`http_server_tests::test_shortener_example_end_to_end` — is NOT from this work:
+it reproduces on a clean `origin/main` with these changes stashed. It asserts a
+JSON key ORDER (`{"b":0,"a":1}`) and broke when B-2026-08-21-6's FxHash change
+(8c3c8d6) altered Map iteration order. It is also order-flaky — it passed on one
+of the three runs here. Filed as its own row.
+
+Also encountered: rebuilding the runtime archives was required after 8c3c8d6
+(210 E2E failures, all `undefined reference to karac_hash_bytes_fx`). The
+stale-archive guard fired exactly as designed, with the recipe in the panic. |
 | B-2026-08-21-30 | codegen | high | A `mut Slice[T]` **METHOD** PARAMETER FED A `mut`-MARKED ARRAY LOSES THE WRITE -- the callee's `b[0] = 9u8` never reaches the caller's array under JI… | FIXED by 563fdfb.
 
 ROOT CAUSE, and it is not where this row guessed. `collect_expr_inner_writes`'s `MethodCall` arm recorded a write for the RECEIVER and then merely walked INSIDE each argument for nested mutations — the argument's own mutation-by-borrow was invisible. The `Call` arm immediately below it has had exactly that check since kata 22 (2026-06-06); the method arm never got it.
