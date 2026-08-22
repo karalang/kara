@@ -102,8 +102,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 91 | 0 |
 | perf | 83 | 0 |
 | crash | 55 | 0 |
+| soundness | 54 | 1 |
 | other | 54 | 0 |
-| soundness | 52 | 1 |
 | use-after-free | 20 | 0 |
 
 ### By surface
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 989 | 5 |
-| typecheck | 235 | 5 |
+| typecheck | 237 | 5 |
 | interp | 172 | 0 |
 | other | 62 | 0 |
 | ownership | 62 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1475 surfaced · 12 open · 1441 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1477 surfaced · 12 open · 1443 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (12)
 
@@ -135,13 +135,13 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1475 surfaced
 | B-2026-08-21-43 | 2026-08-21 | codegen | low | A USER IMPL ON A **NON-SCALAR** `Array` HEAD IS UNCALLABLE ON A TEMPORARY -- `mk().tag()` for `impl Tag for Array[String, 2]` still loud-fails after B-2026-08-21-25, which admits only scalar-element arrays because a scalar array is the case that owns no heap | roadmap.md |
 | B-2026-08-21-45 | 2026-08-21 | typecheck+codegen | low | FIVE SHIPPED USER-FACING DIAGNOSTICS CARRY RUNS OF 14-30 SPACES mid-sentence, because rustfmt INTERMITTENTLY rejoins a `\`-continued string literal into one line and keeps the continuation indentation as real spaces | roadmap.md |
 | B-2026-08-21-46 | 2026-08-21 | codegen | low | `enumerate` OVER AN ARRAY **LITERAL** STILL BAILS LOUD -- `for (i, x) in [1, 2, 3].iter().enumerate()` hits the adaptor backstop while `--interp` answers, the one source shape B-2026-08-21-41's widening could not reach | roadmap.md |
-| B-2026-08-22-3 | 2026-08-22 | typecheck | high | AN ASSOCIATED-TYPE-EQUALITY BOUND IS NEVER DISCHARGED AT CALL SITES -- `where I.Item = i64` is validated at the DECLARATION and then ignored, so a call passing an `I` whose `Item` is `String` is accepted; the bound does not bind | typecheck |
 | B-2026-08-22-4 | 2026-08-22 | parser | medium | AN INLINE ASSOCIATED-TYPE BINDING IS STILL REJECTED IN `impl Trait` TYPE POSITION -- `fn keys(ref self) -> impl Iterator[Item = ref K]` (design.md's own Map method table) fails to parse, though the same binding now works in every BOUND position | parser |
 | B-2026-08-22-5 | 2026-08-22 | parser | medium | AN EFFECT CLAUSE ON AN IMPL HEADER HAS NO PRODUCTION -- design.md:3817 writes `impl From[ParseError] for AppError with writes(Log) {` and the parser rejects it with `Expected LeftBrace, found With` | parser |
 | B-2026-08-21-52 | 2026-08-22 | effect | medium | CHANNEL EFFECT RESOURCES HAVE NO PER-VALUE IDENTITY -- every channel collapses to the single `Channel` resource, so conflict analysis cannot tell `sends(tx1)` from `sends(tx2)` and design.md :6095's producer-against-consumer parallelization argument is not backed by the compiler | roadmap.md |
 | B-2026-08-22-6 | 2026-08-22 | typecheck | low | The `Hasher` and `BuildHasher` TRAITS are not baked, so a user cannot write their own hasher: `Map[K, V, H]` accepts only the two compiler-known selectors `SipHash13BuildHasher` / `FxBuildHasher`, and design.md's "User-extensible hashers" paragraph describes a surface that does not exist | roadmap.md |
 | B-2026-08-22-7 | 2026-08-22 | codegen | low | `f16_software_emulated` IS THE ONE STARTER-SET LINT WHOSE TRIGGER DEPENDS ON THE TARGET, and the target's feature baseline is only reachable behind `#[cfg(feature = "llvm")]` -- so wiring it is a PLACEMENT decision, not the mechanical job the other six were | roadmap.md |
 | B-2026-08-22-8 | 2026-08-22 | cli | low | `implicit_clone` HAS NO TRIGGER IN THE SPEC AND CANNOT BE DE-REGISTERED WITHOUT A design.md EDIT -- the one starter-set lint whose resolution is a SPEC decision, not a compiler change | roadmap.md |
+| B-2026-08-22-10 | 2026-08-22 | typecheck | high | NO GENERIC BOUND OF ANY CLASS IS DISCHARGED ON A STATIC/ASSOCIATED-FUNCTION CALL -- `Type.assoc_fn(args)` never reaches the call-site engine at all, so `H.take(NotMarked {})` is accepted against `fn take[T: Marker]` while both the free-function and the instance-method spellings correctly reject it | typecheck |
 
 ### Wontfix (8)
 
@@ -160,9 +160,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1475 surfaced
 
 </details>
 
-### Fixed (1441)
+### Fixed (1443)
 
-<details><summary>1441 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1443 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -14888,6 +14888,88 @@ THE TWO COPIES ARE NOW ONE. `try_match_pattern` and `bind_pattern` held byte-ide
 Verified byte-identical on --interp / JIT / AOT / `KARAC_AUTO_PAR=0` AOT across ten programs: `IoError` bare and qualified, `Stdio` bare and qualified, a user enum, `MemoryOrdering` both spellings, `WaitTarget`, `PoolError`, and `Utf8Error`.
 
 Six tests — five interpreter, one codegen. The two positive interpreter tests fail with the new case removed. The other THREE pass either way BY DESIGN and are the point of the exercise: a user enum (scopes the bug to baked-stdlib enums), a lowercase sub-binding shadowed by a same-named local holding a unit-variant value (the hazard the PascalCase gate exists for, carried across the extraction), and a PascalCase name that is NOT one of the scrutinee's variants (pins how narrow the new case is — that shape keeps its old catch-all-binding behaviour). The codegen test pins the side that was already right, so a regression in the enum-layout lookup cannot quietly re-align the backends on the wrong answer. |
+| B-2026-08-22-3 | typecheck | high | AN ASSOCIATED-TYPE-EQUALITY BOUND IS NEVER DISCHARGED AT CALL SITES -- `where I.Item = i64` is validated at the DECLARATION and then ignored, so a ca… | FIXED by 69be64c.
+
+FIXED IN TWO PLACES, because the bound turned out to be undischarged from TWO
+call paths and the second one is where the spec's own motivating example lives.
+
+(1) THE MISSING CONSTRAINT ARM. `discharge_assoc_type_eq_bounds` in
+`typechecker/exprs.rs`, called from `discharge_type_bounds` right beside the
+`ProjectionBound` sibling the row's reading pointed at. Its shape is that
+sibling's, deliberately: build the projection the constraint names
+(`AssocProjection { param: "I", assoc: "Item" }`), substitute the call's
+solutions into it -- which rewrites the receiver from the type-param name to
+the concrete type's bare name, via the `AssocProjection` arm of
+`substitute_type_params` that already existed for GAT slice 5 -- resolve it
+through `impl_assoc_types`, and compare. Only the last step differs: an
+equality constraint compares TYPES (`types_compatible`) where a projection
+bound asks `type_satisfies_bound`.
+
+Two details worth keeping. The REQUIRED side is lowered against the function's
+FULL type-param list, not just the solved ones: `solutions` holds only the
+params inference pinned, so a reference to an as-yet-unsolved sibling would
+lower as an undefined type and emit a spurious diagnostic on a line the user
+did not write. And either side that has not bottomed out in a concrete type
+(an unresolved projection, a bare param, an inference var, an error) is
+SKIPPED rather than reported -- the sibling's "discharge only when fully
+resolvable" rule. An unsolved receiver already has the unsolved-`T`
+diagnostic, and an impl-table miss means the `I: Src` bound itself failed and
+has its own error; reporting here too would only cascade.
+
+The diagnostic names both sides, because "bound not satisfied" alone leaves
+the reader to go find the impl:
+
+  error[E_WHERE_CLAUSE_ASSOC_TYPE_EQ_NOT_SATISFIED]: associated-type bound
+  `I.Item = i64` is not satisfied; `Ss` has `Item = String`
+
+When the required side is a type parameter solved from another argument
+(`where I.Item = T`), the message renders the SOLVED type, not `T` -- which is
+the more useful half of the pair.
+
+(2) THE METHOD CALL PATH, which discharged NOTHING. Fixing (1) and re-probing
+showed `h.take(Ss {})` still accepted. The cause is not specific to this
+constraint: `method_user_impl.rs` called the thin
+`check_call_args_with_substitution` wrapper, which passes `None` for the
+callee's where clause -- so a method discharged no bound of ANY class. Plain
+`T: Marker`, projection bounds, const predicates and this row's assoc-eq alike
+were all unenforced on a method call while the free-function path
+(`expr_call.rs`, which always passed its clause) rejected the same program.
+MEASURED as its own defect before fixing:
+
+  fn free[T: Marker](x: T) -> i64 { 0 }                   // rejects NotMarked
+  impl Holder { fn take[T: Marker](ref self, x: T) -> i64 { 0 } }
+  h.take(NotMarked {})                                    // ACCEPTED
+
+The wrapper call is now `check_call_args_with_substitution_full` with
+`sig.where_clause` and `sig.generic_params`, both already on `FunctionSig` and
+already in scope at that site. `apply_call_site_marker` stays `false` (the
+`mut` marker rule is free-function-only per design.md) and
+`explicit_generic_args` stays `None` (no turbofish surface on this dispatch).
+
+WHY BOTH LANDED TOGETHER rather than the second being deferred. design.md's
+motivating spelling for this bound is `fn extend[I: Iterator[Item = T]]` -- a
+METHOD. Fixing only free functions would have left the constraint unenforced
+in exactly the position it is written, which is the shape of a fix that reads
+as complete and is not. The second defect is filed as its own row
+(B-2026-08-22-9) because its evidence, class and blast radius are its own.
+
+BLAST RADIUS, measured rather than assumed, since this tightening turns
+previously-accepted programs into errors: the full default suite is 0 failures
+and all 917 `.kara` files in the kata corpus still typecheck clean. That the
+compiler's own corpus never leaned on the hole is the reason both halves could
+land in one commit.
+
+TESTS (`tests/typechecker.rs`), each in both directions -- satisfied accepted,
+violated rejected: the row's verbatim repro; the diagnostic naming both sides;
+the inline `Src[Item = i64]` spelling (through the `*_desugared` helpers,
+since `desugar_program` is what rewrites it onto this constraint); a type-param
+RHS solved from a sibling argument; a generic RHS (`Vec[i64]` vs
+`Vec[String]`, so the comparison is structural rather than by name); and both
+halves on the method path. Non-vacuity checked by reverting each half
+independently: dropping the discharge fails all six assoc-eq tests and leaves
+the pre-existing acceptance test green; dropping only the method wiring fails
+exactly the two method tests and no others. |
+| B-2026-08-22-9 | typecheck | high | NO WHERE-CLAUSE BOUND OF ANY CLASS WAS DISCHARGED ON A METHOD CALL -- the method path passed `None` for the callee's where clause, so `h.take(NotMark… | FIXED by 69be64c, alongside B-2026-08-22-3. `method_user_impl.rs`'s concrete-receiver dispatch now calls `check_call_args_with_substitution_full` with `sig.where_clause` and `sig.generic_params` instead of the thin wrapper that hard-coded `None`. The wrapper itself is DELETED rather than left unused: its whole body was a call to `_full` with three `None`s, and the third is the bug -- with no wrapper to reach for, a future call site has to pass the where clause or write `None` where it is visible in the diff. Blast radius measured before landing, because this converts previously-accepted programs into errors: full default suite 0 failures, `--features llvm` suite 0 failures, and all 917 `.kara` files in the kara-katas corpus still typecheck clean. Pinned by `a_plain_trait_bound_is_discharged_on_a_method_call` and `an_assoc_type_equality_bound_is_discharged_on_a_method_call` in `tests/typechecker.rs`, each with the satisfied direction as the control; reverting only this half fails exactly those two and nothing else. |
 
 </details>
 
