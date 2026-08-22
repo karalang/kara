@@ -9990,6 +9990,26 @@ impl<'ctx> super::Codegen<'ctx> {
     /// found"), so admitting it here would replace an agreement between the
     /// backends with a divergence pointing the other way.
     ///
+    /// `as_slice` IS admitted (B-2026-08-21-44), and the contrast with
+    /// `as_ptr` is the whole argument rather than a matter of taste:
+    ///
+    ///   * the interpreter ACCEPTS `n.to_ne_bytes().as_slice().len()` and
+    ///     answers 2, so this arm CLOSES a run-vs-build divergence where
+    ///     admitting `as_ptr` would open one;
+    ///   * the view cannot outlive the slot. Its filing treated that as the
+    ///     open question — an entry alloca is frame-lived, which is not the
+    ///     rule a slice of a named binding gets — but the ownership checker
+    ///     already answers it: `let s = e.to_ne_bytes().as_slice();` is
+    ///     rejected with "slice from temporary value escapes the enclosing
+    ///     statement". So every program that reaches here uses the view
+    ///     inside the statement that made it, which is strictly inside the
+    ///     slot's lifetime. Nothing about the frame-lived alloca is relied
+    ///     on, and no new lifetime rule is committed to.
+    ///
+    /// The identifier arm this re-dispatches into reads the slot's `ty` and
+    /// builds the header from the array's static length, so a materialized
+    /// temporary needs no separate lowering.
+    ///
     /// Placed last, immediately before the diagnostic, for the reason the
     /// slice sibling records: every other dispatcher has already declined, so
     /// a receiver compiled here and then rejected on shape leaves dead IR in
@@ -10014,7 +10034,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // one, so a user method belongs here exactly as much as a builtin.
         if !matches!(
             method,
-            "len" | "is_empty" | "get" | "first" | "last" | "contains" | "is_sorted"
+            "len" | "is_empty" | "get" | "first" | "last" | "contains" | "is_sorted" | "as_slice"
         ) && !self.user_impl_method_exists(call_span, "Array", method)
         {
             return Ok(None);

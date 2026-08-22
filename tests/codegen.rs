@@ -102622,6 +102622,67 @@ fn main() {
         );
     }
 
+    /// B-2026-08-21-44 — `as_slice()` on a fixed-array TEMPORARY.
+    ///
+    /// The remainder B-2026-08-21-25 left: that fix admits the fixed-array
+    /// READ surface plus user-impl methods on the `Array` head, and
+    /// `as_slice` is on neither list — its result is a `{ptr, len}` VIEW into
+    /// the materialized slot rather than a value read out of the aggregate.
+    ///
+    /// Its filing treated the view's lifetime as the open question, since an
+    /// entry alloca is frame-lived and that is not the rule a slice of a named
+    /// binding gets. The ownership checker already answers it: `let s =
+    /// e.to_ne_bytes().as_slice();` is rejected with "slice from temporary
+    /// value escapes the enclosing statement", so every program that reaches
+    /// codegen uses the view inside the statement that made it — strictly
+    /// inside the slot's lifetime, committing to no new rule.
+    ///
+    /// Pinned beside its bound two-line twin, the oracle the fix is written
+    /// against: the temporary is routed onto the binding's own path, so a
+    /// regression breaking only that path would otherwise still pass.
+    ///
+    /// `as_ptr` stays refused BY BOTH backends on this shape (interpreter:
+    /// "method 'as_ptr' not found"; codegen: dispatch falls through), which is
+    /// the contrast that makes admitting `as_slice` a divergence CLOSED rather
+    /// than one opened — the interpreter answers `as_slice` and always did.
+    #[test]
+    fn test_e2e_as_slice_on_a_fixed_array_temporary() {
+        let src = r#"
+fn mk() -> Array[u8, 3] { return [7u8, 8u8, 9u8]; }
+
+fn total(b: ref Slice[u8]) -> i64 {
+    let mut s = 0;
+    let mut i = 0;
+    while i < b.len() { s = s + b[i] as i64; i = i + 1; }
+    s
+}
+
+fn main() {
+    let e: u16 = 258u16;
+
+    // The row's own repro, beside its bound twin.
+    println(e.to_ne_bytes().as_slice().len());
+    let bound = e.to_ne_bytes();
+    println(bound.as_slice().len());
+
+    // A user fn returning a fixed array — the element type arrives by
+    // signature lookup rather than from `to_ne_bytes`'s fixed `u8`.
+    println(mk().as_slice().len());
+    let m = mk();
+    println(m.as_slice().len());
+
+    // The view must carry the right BASE, not just the right length: a
+    // header built off the wrong place would still say 3 here.
+    println(total(mk().as_slice()));
+    println(total(m.as_slice()));
+
+    // A byte-string literal, the third receiver shape -25 sweeps.
+    println(b"abc".as_slice().len());
+}
+"#;
+        assert_eq!(run_program(src).as_deref(), Some("2\n2\n3\n3\n24\n24\n3\n"));
+    }
+
     /// B-2026-08-21-41 — a fixed-array TEMPORARY as a for-loop source.
     ///
     /// `for_receiver_is_indexable` required the (`.iter()`-peeled) source to be
