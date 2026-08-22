@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 278 | 0 |
 | leak | 187 | 0 |
 | missing-feature | 152 | 4 |
-| run-vs-build | 151 | 1 |
+| run-vs-build | 151 | 0 |
 | double-free | 135 | 0 |
 | codegen-gap | 128 | 0 |
 | diagnostics | 97 | 2 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 992 | 2 |
+| codegen | 992 | 1 |
 | typecheck | 242 | 2 |
 | interp | 172 | 0 |
 | other | 63 | 0 |
@@ -120,13 +120,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | parser | 38 | 0 |
 | runtime | 28 | 0 |
 | resolver | 26 | 0 |
-| effect | 11 | 3 |
+| effect | 11 | 2 |
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1489 surfaced · 7 open · 1460 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1489 surfaced · 6 open · 1461 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (7)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,7 +134,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1489 surfaced
 | B-2026-08-22-6 | 2026-08-22 | typecheck | low | The `Hasher` and `BuildHasher` TRAITS are not baked, so a user cannot write their own hasher: `Map[K, V, H]` accepts only the two compiler-known selectors `SipHash13BuildHasher` / `FxBuildHasher`, and design.md's "User-extensible hashers" paragraph describes a surface that does not exist | roadmap.md |
 | B-2026-08-22-7 | 2026-08-22 | codegen | low | `f16_software_emulated` IS THE ONE STARTER-SET LINT WHOSE TRIGGER DEPENDS ON THE TARGET, and the target's feature baseline is only reachable behind `#[cfg(feature = "llvm")]` -- so wiring it is a PLACEMENT decision, not the mechanical job the other six were | roadmap.md |
 | B-2026-08-22-8 | 2026-08-22 | cli | low | `implicit_clone` HAS NO TRIGGER IN THE SPEC AND CANNOT BE DE-REGISTERED WITHOUT A design.md EDIT -- the one starter-set lint whose resolution is a SPEC decision, not a compiler change | roadmap.md |
-| B-2026-08-22-14 | 2026-08-22 | codegen+effect | low | AN EXISTENTIAL DECLARING POLYMORPHIC EFFECT VARIABLES (`-> impl Emit with F`) IS THE ONE RETURN-POSITION `impl Trait` SHAPE STILL WITHOUT A BUILD -- deliberately excluded from B-2026-08-22-12's witness substitution, because the effect checker reads the variable off the very node the rewrite would erase | codegen |
 | B-2026-08-22-16 | 2026-08-22 | typecheck | medium | `Channel.bounded(cap)` DOES NOT EXIST IN ANY SPELLING -- design.md documents it with a `requires cap > 0` contract, `bounded_channel.kara` exists in the stdlib, and nothing routes the name to it | typecheck |
 | B-2026-08-22-20 | 2026-08-22 | effect | medium | THE BUILTIN CHANNEL METHODS CARRY NO `sends`/`receives` EFFECT -- `Sender.send` is seeded `allocates(Heap)` and nothing else, and the ONLY `EffectVerbKind::Sends` construction in the whole compiler is the `sends(Network)` block, so a real `tx.send(v)` is invisible to conflict analysis, `karac explain` and `query effects`; design.md:6070 declares it `with sends(tx) allocates(Heap)` | roadmap.md |
 
@@ -155,9 +154,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1489 surfaced
 
 </details>
 
-### Fixed (1460)
+### Fixed (1461)
 
-<details><summary>1460 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1461 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -15595,6 +15594,42 @@ Pinned by `a_static_assoc_call_does_not_borrow_a_same_named_global_where_clause`
 in `tests/typechecker.rs`, which asserts both halves: the colliding generic
 case is ACCEPTED, and the clause-less case is ACCEPTED. Non-vacuity confirmed
 by reverting the fix -- it fails. |
+| B-2026-08-22-14 | codegen+effect | low | AN EXISTENTIAL DECLARING POLYMORPHIC EFFECT VARIABLES (`-> impl Emit with F`) IS THE ONE RETURN-POSITION `impl Trait` SHAPE STILL WITHOUT A BUILD --… | FIXED by removing the exclusion in `lowering.rs::substitute_impl_trait_returns`
+rather than by building the effect-carrying machinery the row anticipated,
+because measurement showed there is no consumer to carry it to.
+
+The exclusion (and the test that pinned it) justified itself with
+"`collect_effect_var_names_in_type` harvests polymorphic effect params off the
+`impl Trait` node and nowhere else, so erasing the node erases the variable's
+declaration site". That is true of the HARVESTER and false of every CONSUMER:
+its only caller, `effectchecker::bounds::build_fn_effect_var_positions`, walks
+`f.params` and nothing else, and its own doc comment says "return-position
+`with E` slots are not tracked here -- only param positions participate in
+same-signature unification". A return-position effect variable is inert today,
+so the exclusion bought a run-vs-build divergence for nothing.
+
+MEASURED BOTH WAYS before removing it, on two shapes -- the inert
+`fn make[with F]() -> impl Emit with F` and the param-bound
+`fn wrap[with F](f: Fn() -> i64 with F) -> impl Emit with F`. The public-fn
+"performs effects [writes(Log)] but has no effect declaration" rejection is
+BYTE-IDENTICAL with and without the substitution in both, and the 437-test
+`effectchecker` suite is unchanged. With the exclusion removed the only test
+in the tree that failed was the one pinning the exclusion itself.
+
+TESTS. `an_existential_declaring_effect_variables_is_left_alone` becomes
+`..._is_replaced_too`, and a new paired CONTROL,
+`an_effect_variable_existential_still_reports_its_effects`, asserts the
+substitution does not hide `writes(Log)` from the public-boundary check --
+verified non-vacuous by dropping `pub` from the caller and watching it fail.
+A codegen E2E twin, `test_e2e_return_position_impl_trait_with_effect_variables`,
+pins interpreter/AOT agreement across the inert, param-bound and
+mixed-concrete-plus-variable shapes, because the defect WAS a run-vs-build
+divergence.
+
+FOR PHASE 8: when the `impl Trait` effect ceiling is wired, the clause must be
+harvested BEFORE this pass, which erases the node. Re-adding an exclusion here
+would restore the divergence. That instruction now lives in the code comment,
+not only in this row. |
 | B-2026-08-22-15 | typecheck | medium | A `-> Self` TRAIT METHOD CALLED ON AN EXISTENTIAL RECEIVER LOSES THE TRAIT -- `make().bumped()` types as a BARE type parameter named after the trait,… | FIXED by c4603ac.
 
 ONE SUBSTITUTION, in `dispatch_existential_receiver_method`. The row's reading
