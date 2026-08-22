@@ -99,11 +99,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 134 | 0 |
 | codegen-gap | 128 | 2 |
 | diagnostics | 97 | 2 |
-| false-positive | 91 | 0 |
+| false-positive | 92 | 0 |
 | perf | 83 | 0 |
 | crash | 55 | 0 |
 | other | 55 | 1 |
-| soundness | 54 | 1 |
+| soundness | 54 | 0 |
 | use-after-free | 20 | 0 |
 
 ### By surface
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 990 | 4 |
-| typecheck | 238 | 3 |
+| typecheck | 239 | 2 |
 | interp | 172 | 0 |
 | other | 63 | 1 |
 | ownership | 62 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1481 surfaced · 11 open · 1448 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1482 surfaced · 10 open · 1450 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (11)
+### Open (10)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -137,7 +137,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1481 surfaced
 | B-2026-08-22-6 | 2026-08-22 | typecheck | low | The `Hasher` and `BuildHasher` TRAITS are not baked, so a user cannot write their own hasher: `Map[K, V, H]` accepts only the two compiler-known selectors `SipHash13BuildHasher` / `FxBuildHasher`, and design.md's "User-extensible hashers" paragraph describes a surface that does not exist | roadmap.md |
 | B-2026-08-22-7 | 2026-08-22 | codegen | low | `f16_software_emulated` IS THE ONE STARTER-SET LINT WHOSE TRIGGER DEPENDS ON THE TARGET, and the target's feature baseline is only reachable behind `#[cfg(feature = "llvm")]` -- so wiring it is a PLACEMENT decision, not the mechanical job the other six were | roadmap.md |
 | B-2026-08-22-8 | 2026-08-22 | cli | low | `implicit_clone` HAS NO TRIGGER IN THE SPEC AND CANNOT BE DE-REGISTERED WITHOUT A design.md EDIT -- the one starter-set lint whose resolution is a SPEC decision, not a compiler change | roadmap.md |
-| B-2026-08-22-10 | 2026-08-22 | typecheck | high | NO GENERIC BOUND OF ANY CLASS IS DISCHARGED ON A STATIC/ASSOCIATED-FUNCTION CALL -- `Type.assoc_fn(args)` never reaches the call-site engine at all, so `H.take(NotMarked {})` is accepted against `fn take[T: Marker]` while both the free-function and the instance-method spellings correctly reject it | typecheck |
 | B-2026-08-21-53 | 2026-08-22 | typecheck+parser | medium | CALL-SITE TYPE APPLICATION `f[T](args)` IS IMPLEMENTED ONLY FOR THE `ptr.*` BUILTINS -- `Vec.new[i64]()`, `Channel.new[i64]()` and a user generic `id[i64](5)` all parse as an INDEX and then fail, while `ptr.null[u32]()` works; design.md writes both forms and contradicts itself three ways about whether the syntax exists | roadmap.md |
 | B-2026-08-21-54 | 2026-08-22 | other | medium | `test_shortener_example_end_to_end` ASSERTS A JSON KEY ORDER and is RED on main since the FxHash change (8c3c8d6) reordered Map iteration -- and it is order-FLAKY, passing on roughly one run in three, so neither a red nor a green run can be trusted | roadmap.md |
 | B-2026-08-22-12 | 2026-08-22 | codegen | medium | A METHOD CALL THROUGH A RETURN-POSITION `impl Trait` VALUE HAS NO CODEGEN DISPATCHER -- `make().get()` is check-green and interpreter-green and fails under both `karac run` and `karac build`, so the shipped `impl Trait` epic has a run-vs-build divergence at its most ordinary use | codegen |
@@ -159,9 +158,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1481 surfaced
 
 </details>
 
-### Fixed (1448)
+### Fixed (1450)
 
-<details><summary>1448 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1450 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -15216,9 +15215,103 @@ Tests: 8 in tests/typechecker.rs (projection resolution + its no-binding control
 
 NOT CLOSED HERE, and split out rather than buried: a method call through a RETURN-position existential has no codegen dispatcher at all, with or without a binding -- filed as B-2026-08-22-10. |
 | B-2026-08-22-9 | typecheck | high | NO WHERE-CLAUSE BOUND OF ANY CLASS WAS DISCHARGED ON A METHOD CALL -- the method path passed `None` for the callee's where clause, so `h.take(NotMark… | FIXED by 69be64c, alongside B-2026-08-22-3. `method_user_impl.rs`'s concrete-receiver dispatch now calls `check_call_args_with_substitution_full` with `sig.where_clause` and `sig.generic_params` instead of the thin wrapper that hard-coded `None`. The wrapper itself is DELETED rather than left unused: its whole body was a call to `_full` with three `None`s, and the third is the bug -- with no wrapper to reach for, a future call site has to pass the where clause or write `None` where it is visible in the diff. Blast radius measured before landing, because this converts previously-accepted programs into errors: full default suite 0 failures, `--features llvm` suite 0 failures, and all 917 `.kara` files in the kara-katas corpus still typecheck clean. Pinned by `a_plain_trait_bound_is_discharged_on_a_method_call` and `an_assoc_type_equality_bound_is_discharged_on_a_method_call` in `tests/typechecker.rs`, each with the satisfied direction as the control; reverting only this half fails exactly those two and nothing else. |
+| B-2026-08-22-10 | typecheck | high | NO GENERIC BOUND OF ANY CLASS IS DISCHARGED ON A STATIC/ASSOCIATED-FUNCTION CALL -- `Type.assoc_fn(args)` never reaches the call-site engine at all,… | FIXED by 5514b6f.
+
+ONE LOOKUP, in `typechecker/expr_call.rs`'s `callee_where_clause` resolution.
+The reading in this row was right that the discharge engine was off the path,
+but wrong about WHERE. The row said `method_identifier_receiver.rs`'s
+hand-rolled `infer_expr` + `check_assignable` loop was the culprit. It is not:
+`Type.assoc_fn(args)` never reaches that module at all. Instrumenting the
+whole dispatch chain showed the call arrives at `infer_call` as
+`ExprKind::Path(["H", "take"])` -- a two-segment PATH, not a `MethodCall` with
+an identifier receiver -- and `infer_call` DOES call
+`check_call_args_with_substitution_full`. It was passing a `where_clause` of
+`None`, and that is the whole defect.
+
+The clause was `None` because the Path arm looked the callee up in
+`env.functions` by its LAST SEGMENT. An associated fn lives in the IMPL TABLE,
+under neither `take` nor `H.take` -- both `env.functions` lookups miss.
+Resolving it through `env.find_method(segments[0], &[], segments[1])` -- the
+same lookup the receiver spelling already uses -- recovers it.
+
+WHY ONE LOOKUP COVERS ALL THREE SPELLINGS: inline param bounds are normalized
+into the where clause at `FunctionSig` construction
+(`normalize_bounds_into_where_clause`), so `[T: Marker]`, `where T: Marker`
+and `where I.Item = i64` are one clause by the time this code runs. Measured,
+not assumed -- the recovered sig reported `generics=["T"] where=true` for a
+signature written with an INLINE bound and no `where` at all.
+
+`formal_generic_params` is still passed as `None`, deliberately: both of its
+uses in `_full` are gated on `explicit_generic_args` being `Some`, which this
+path never supplies, and `discharge_type_bounds` takes its param names from
+the instantiated signature's `name_to_id` rather than from that argument.
+Passing it would have changed nothing, so it was left alone.
+
+THE FIX SKETCH IN THIS ROW WAS ATTEMPTED AND REVERTED. Routing
+`method_identifier_receiver.rs`'s loop through `_full` was written first, and
+then measured: instrumenting that arm and running the typechecker suite showed
+it is live but reached ONLY by non-generic primitive comparison entries
+(`i32.eq`, `i32.ne`, `i32.lt`, `i32.le`, `i32.gt`, `i32.ge`) -- no generic
+signature reaches it, so it carries no instance of this defect. Routing it
+through `_full` would have swapped `infer_expr` + `check_assignable` for
+`check_expr`-with-expectation on a live path for no measured gain, so the hunk
+was dropped. The loop remains a hazard IF a generic signature ever reaches
+that arm; nothing does today.
+
+THE INFERENCE WORRY IN THIS ROW WAS UNFOUNDED, and for a better reason than
+"it happened to work": the fix does not replace an inference strategy at all.
+`infer_call` already went through `_full`; only the clause changed. The
+return-type behaviour the row flagged is pinned by a test anyway.
+
+A SECOND DEFECT OF OPPOSITE POLARITY was found while testing this one and is
+filed as B-2026-08-22-13: the bare-name lookup did not merely MISS, it could
+HIT THE WRONG FUNCTION. Fixed in the same commit; see that row.
+
+BLAST RADIUS, measured because this converts previously-accepted programs into
+errors: full default suite 0 failures, `--features llvm` suite 0 failures, all
+917 `.kara` files in the kata corpus typecheck clean, and a per-file
+error-count diff over all 194 `.kara` files in `examples/` + `runtime/stdlib/`
+is byte-identical before and after -- the 46 files that fail there fail
+identically with and without the fix (stdlib source checked as a user program
+trips `#[compiler_builtin]` and variance-marker reservations, unrelated).
+
+TESTS (`tests/typechecker.rs`), each in both directions: the three bound
+classes on the static path
+(`a_plain_trait_bound_is_discharged_on_a_static_assoc_call`,
+`a_where_clause_bound_is_discharged_on_a_static_assoc_call`,
+`an_assoc_type_equality_bound_is_discharged_on_a_static_assoc_call`), the
+first of which also carries the free-function control so a regression that
+silenced BOTH spellings still fails; plus
+`a_generic_static_assoc_call_still_infers_its_return_type` as the inference
+control. Non-vacuity checked by reverting the fix: 4 of the 5 new tests fail,
+and the inference control passes either way, which is exactly what a control
+should do. |
 | B-2026-08-22-11 | cli | medium | `karac fmt` DELETED AN INLINE ASSOCIATED-TYPE BINDING FROM EVERY TRAIT BOUND -- `I: Src[Item = i64]` was rewritten to `I: Src[]`, a weaker contract t… | Every trait-bound render site now goes through one `format_trait_bound(b)` helper (src/formatter/types.rs) that writes the path and then ONE bracket list holding the positional args followed by the inline bindings, via a new `format_bracket_args(args, bindings)`. The five sites that previously wrote `write_path` + `format_generic_args_opt` separately -- generic-param bounds, effect-param bounds (types.rs), where-clause `TypeBound` and `ProjectionBound` (items.rs) -- were the deletion; the two that wrote `write_path` ALONE, `trait X = A + B;` alias bounds and `type Assoc: Bound;` inside a trait, were dropping the bounds' generic args as well and now use the same helper. `TypeKind::ImplTrait` / `TypeKind::Dyn` render through `format_bracket_args` too.
 
 Pinned by `test_formatter_round_trips_an_inline_assoc_binding` (tests/parser.rs), which counts four surviving `Src[Item = i64]` across an alias bound, a generic-param bound, a where-clause bound and an `impl Trait` return, and asserts `Src[]` appears nowhere. |
+| B-2026-08-22-13 | typecheck | high | A STATIC/ASSOCIATED CALL BORROWED AN UNRELATED GLOBAL FUNCTION'S WHERE CLAUSE WHEN THE NAMES COLLIDED -- `H.take(x)` was checked against the stdlib's… | FIXED by 5514b6f, alongside B-2026-08-22-10, in the same three lines of
+`callee_where_clause` resolution. The impl-table lookup that row added is
+consulted FIRST and, when it claims the call, is authoritative; the bare-name
+`env.functions` lookup is now only the fallback for a receiver that names no
+type -- the module-qualified `mem.take(x)` spelling it was written for.
+
+The match is on WHETHER THE IMPL TABLE FOUND A METHOD, not on whether the
+method it found carries a clause. That distinction is the fix's second half
+and it is not cosmetic: resolving `Some(sig) => sig.where_clause.clone()` shuts
+the fallback out even for a bound-less associated fn, whereas an `.or_else`
+chain on the CLAUSE would let `fn take(x: i64)` -- no generics at all -- fall
+through and pick up `mem.take[T: Default]` by the longer route, reproducing the
+same false positive. Pinned by the second half of the regression test.
+
+Blast radius is shared with B-2026-08-22-10 and measured there: full default
+suite 0 failures, `--features llvm` suite 0 failures, 917 kata files clean, and
+a per-file error-count diff over `examples/` + `runtime/stdlib/` identical
+before and after.
+
+Pinned by `a_static_assoc_call_does_not_borrow_a_same_named_global_where_clause`
+in `tests/typechecker.rs`, which asserts both halves: the colliding generic
+case is ACCEPTED, and the clause-less case is ACCEPTED. Non-vacuity confirmed
+by reverting the fix -- it fails. |
 
 </details>
 
