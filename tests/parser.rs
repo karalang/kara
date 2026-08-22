@@ -15264,3 +15264,129 @@ fn test_formatter_round_trips_an_inline_assoc_binding() {
         "the empty bracket list is the deletion bug; got:\n{out}"
     );
 }
+
+// ── impl-header effect clause (B-2026-08-22-5) ───────────────────
+//
+// design.md § From/Into settles the position in the negative: effect
+// polymorphism on a trait method is spelled `with _` on the TRAIT, and the
+// impl block carries nothing. The spec's own example carried a redundant
+// `with writes(Log)` on the header for a while, which is what made this look
+// like a missing production rather than a construct the language rejects.
+//
+// The parser recognizes the clause and reports `ReservedSyntax` — "not yet",
+// not "nonsense" — instead of falling through to `expect(LeftBrace)`.
+
+#[test]
+fn impl_header_effect_clause_is_rejected_as_reserved_syntax() {
+    let (_, errors) = parse_with_errors(
+        "struct A {}\n\
+         struct B {}\n\
+         trait From[T] { fn from(value: T) -> Self with _; }\n\
+         impl From[A] for B with panics {\n\
+         \x20   fn from(a: A) -> B { return B {}; }\n\
+         }\n",
+    );
+    // EXACTLY one error. Before the fix this produced two: the generic
+    // "Expected LeftBrace, found With" plus a cascaded "Expected expression,
+    // found RightBrace" pointing at the block's closing brace — a second
+    // diagnostic on an unrelated line, from one mistake.
+    assert_eq!(
+        errors.len(),
+        1,
+        "expected exactly one diagnostic (no cascade), got: {:?}",
+        errors.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        errors[0].kind,
+        karac::parser::ParseErrorKind::ReservedSyntax
+    );
+    assert!(
+        errors[0].message.contains("not valid v1 syntax"),
+        "message was: {}",
+        errors[0].message
+    );
+    // A trait impl HAS a trait, so the remedy may name `with _` on it.
+    assert!(
+        errors[0].message.contains("trait method `with _`"),
+        "message was: {}",
+        errors[0].message
+    );
+}
+
+#[test]
+fn impl_header_effect_clause_remedy_omits_the_trait_for_an_inherent_impl() {
+    // An inherent impl has no trait to carry `with _`. Naming one would send
+    // the reader looking for something that does not exist, so the remedy
+    // drops that half rather than reusing one string for both shapes.
+    let (_, errors) = parse_with_errors(
+        "struct S {}\n\
+         impl S with panics { fn go(self) -> i64 { return 1; } }\n",
+    );
+    assert_eq!(errors.len(), 1, "got: {errors:?}");
+    assert!(
+        !errors[0].message.contains("trait method"),
+        "inherent-impl remedy must not name a trait; was: {}",
+        errors[0].message
+    );
+    assert!(
+        errors[0].message.contains("impl's own methods"),
+        "message was: {}",
+        errors[0].message
+    );
+}
+
+#[test]
+fn impl_header_effect_clause_covers_every_effect_spelling() {
+    // The clause is parsed with the real effect-list grammar, so a resource
+    // verb, a bare execution verb and the `with _` wildcard all land on the
+    // same diagnostic rather than only the shape someone happened to test.
+    for clause in ["with writes(Log)", "with panics", "with _", "with blocks"] {
+        let src = format!(
+            "resource Log;\n\
+             struct A {{}}\n\
+             struct B {{}}\n\
+             trait From[T] {{ fn from(value: T) -> Self with _; }}\n\
+             impl From[A] for B {clause} {{ fn from(a: A) -> B {{ return B {{}}; }} }}\n"
+        );
+        let (_, errors) = parse_with_errors(&src);
+        assert_eq!(errors.len(), 1, "`{clause}` gave: {errors:?}");
+        assert_eq!(
+            errors[0].kind,
+            karac::parser::ParseErrorKind::ReservedSyntax,
+            "`{clause}` gave kind {:?}",
+            errors[0].kind
+        );
+    }
+}
+
+#[test]
+fn impl_header_effect_clause_carries_a_machine_applicable_deletion() {
+    // The Mend loop's primary path: `karac fix` must be able to repair this
+    // without a human. Deleting is always correct here BECAUSE the position
+    // has no meaning — there is no effect information to relocate.
+    let src = "struct A {}\n\
+               struct B {}\n\
+               trait From[T] { fn from(value: T) -> Self with _; }\n\
+               impl From[A] for B with panics { fn from(a: A) -> B { return B {}; } }\n";
+    let result = parse(src);
+    assert_eq!(result.errors.len(), 1);
+    let key = karac::resolver::SpanKey::from_span(&result.errors[0].span);
+    let edit = result
+        .fix_edits
+        .get(&key)
+        .expect("no machine-applicable edit recorded for the impl-header effect clause");
+    assert!(edit.replacement.is_empty(), "the edit must be a deletion");
+    let mut fixed = src.to_string();
+    fixed.replace_range(edit.offset..edit.offset + edit.length, "");
+    // Applying it leaves the header well-formed AND correctly spaced — a fix
+    // that needs a formatting pass afterwards is one people stop trusting.
+    assert!(
+        fixed.contains("impl From[A] for B { fn from"),
+        "applied edit produced:\n{fixed}"
+    );
+    assert!(
+        parse(&fixed).errors.is_empty(),
+        "the repaired source must parse clean: {:?}",
+        parse(&fixed).errors
+    );
+}

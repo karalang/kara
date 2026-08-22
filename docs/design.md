@@ -3817,7 +3817,7 @@ The rule: **implement `From`, get `Into` for free**. Implementing `Into` directl
 
 ```kara
 // Effectful From impl
-impl From[ParseError] for AppError with writes(Log) {
+impl From[ParseError] for AppError {
     fn from(e: ParseError) -> AppError with writes(Log) {
         log_error(&e);
         AppError.Parse(e)
@@ -3829,7 +3829,7 @@ fn handler(e: ParseError) -> AppError with writes(Log) {
 }
 ```
 
-**No impl-level effect variables in v1.** Writing effect variables on the impl block itself — `impl[T, U: From[T], with E] Into[U] for T` — is not valid v1 syntax. The per-monomorphization inheritance above handles every case the feature would be needed for, and a second spelling would duplicate what `with _` on the trait method already expresses. The compiler rejects impl-level `with E` with a diagnostic suggesting the trait-method `with _` approach. This restriction is reserved for future relaxation only if a concrete use case appears that the monomorphization rule does not cover.
+**No impl-level effect variables in v1.** Writing effect variables on the impl block itself — `impl[T, U: From[T], with E] Into[U] for T` — is not valid v1 syntax. The per-monomorphization inheritance above handles every case the feature would be needed for, and a second spelling would duplicate what `with _` on the trait method already expresses. The compiler rejects impl-level `with E` with a diagnostic suggesting the trait-method `with _` approach. The same applies to a CONCRETE effect clause in the impl-header position — `impl From[A] for B with writes(Log) {` — which is rejected by the parser with the same remedy; the effects belong on the impl's methods, as the example above carries them. The variable spelling reports `E0110` from the resolver; the header-clause spelling reports `E0005` (reserved syntax) from the parser, rather than a generic parse error, and is machine-applicable: `karac fix` deletes the clause, which changes nothing, since the position has no meaning to preserve. This restriction is reserved for future relaxation only if a concrete use case appears that the monomorphization rule does not cover.
 
 **Fallible conversions:**
 

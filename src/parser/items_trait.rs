@@ -6,7 +6,7 @@ use crate::ast::*;
 use crate::lexer::IdentClass;
 use crate::token::{Span, Token};
 
-use super::{FnContext, ParseError};
+use super::{FnContext, ParseError, ParseErrorKind};
 
 impl super::Parser {
     // ── Traits ───────────────────────────────────────────────────
@@ -493,6 +493,40 @@ impl super::Parser {
 
     // ── Impl Blocks ──────────────────────────────────────────────
 
+    /// Consume and reject an effect clause written on an impl HEADER.
+    ///
+    /// Recognized rather than merely refused: the clause is parsed with the
+    /// real effect-list grammar (so `with panics`, `with writes(Log)` and
+    /// `with E` all land here identically), then reported as
+    /// [`ParseErrorKind::ReservedSyntax`] — design.md reserves the position
+    /// for possible future relaxation, so tooling should read this as "not
+    /// yet", not "nonsense".
+    ///
+    /// The edit deletes the clause because a header clause has no meaning to
+    /// preserve: the effects belong on the impl's methods, which is where the
+    /// spec's own example already carries them.
+    fn reject_impl_header_effect_clause(&mut self, effect_vars: &[String], is_trait_impl: bool) {
+        let with_idx = self.pos;
+        let span = self.current_span();
+        // Parse for RECOVERY, not for a value — a malformed clause has already
+        // reported its own errors and `self.pos` still advanced past it.
+        let _ = self.parse_effect_list(effect_vars, true);
+        self.record_token_range_deletion(with_idx, self.pos, &span);
+        // An INHERENT impl has no trait to carry `with _`, so naming one would
+        // send the reader looking for something that does not exist.
+        let remedy = if is_trait_impl {
+            "declare the trait method `with _` and put the effects on the impl's \
+             own methods instead"
+        } else {
+            "put the effects on the impl's own methods instead"
+        };
+        self.error_at_kind(
+            ParseErrorKind::ReservedSyntax,
+            &format!("an effect clause on an impl header is not valid v1 syntax — {remedy}"),
+            span,
+        );
+    }
+
     pub(super) fn parse_impl_block(&mut self, attributes: Vec<Attribute>) -> Option<ImplBlock> {
         let start = self.current_span();
         self.expect(&Token::Impl)?;
@@ -518,6 +552,24 @@ impl super::Parser {
         };
 
         let where_clause = self.parse_optional_where_clause();
+        // `impl T for U with <effects> { … }` — recognized, then rejected.
+        // design.md § From/Into settles this in the negative ("No impl-level
+        // effect variables in v1"): effect polymorphism on a trait method is
+        // spelled `with _` on the TRAIT, and the impl block carries nothing.
+        // The resolver already says exactly that for the effect-VARIABLE
+        // spelling (`impl[T, with E] …`); this is the concrete-clause spelling
+        // of the same mistake, and it used to fall through to the
+        // `expect(LeftBrace)` below as a bare "Expected LeftBrace, found With"
+        // — plus a CASCADED "Expected expression, found RightBrace" once the
+        // block's tail desynchronized. Consuming the clause is what removes
+        // the cascade.
+        if self.check(&Token::With) {
+            let effect_vars: Vec<String> = generic_params
+                .as_ref()
+                .map(|g| g.effect_params.iter().map(|ep| ep.name.clone()).collect())
+                .unwrap_or_default();
+            self.reject_impl_header_effect_clause(&effect_vars, trait_name.is_some());
+        }
 
         self.expect(&Token::LeftBrace)?;
         let mut items = Vec::new();

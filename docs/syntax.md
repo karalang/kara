@@ -733,6 +733,14 @@ IMPL_BLOCK = [ ATTRIBUTES ] "impl" [ GENERIC_PARAMS ] TYPE
            | [ ATTRIBUTES ] "impl" [ GENERIC_PARAMS ] PATH [ GENERIC_ARGS ]
              "for" TYPE [ WHERE_CLAUSE ] "{" { IMPL_ITEM } "}"
 
+                   // No effect clause on the header: effects live on the
+                   // impl's METHODS (see "Trait impl with effects" below).
+                   // `impl T for U with writes(Log) {` produces E0005
+                   // (reserved syntax, machine-applicable: the clause is
+                   // deleted); the effect-VARIABLE spelling
+                   // `impl[T, with E] ...` produces E0110. See design.md
+                   // § From and Into, "No impl-level effect variables in v1".
+
 IMPL_ITEM = FUNCTION | ASSOC_TYPE_BINDING
 ASSOC_TYPE_BINDING = "type" IDENT "=" TYPE ";"
 ```

@@ -711,21 +711,37 @@ impl Parser {
     /// token (malformed tail), fall back to the keyword span so the edit is
     /// still well-formed rather than skipped.
     fn record_call_site_mode_deletion(&mut self, token_idx: usize, diag_span: &Span) {
-        let Some(tok) = self.tokens.get(token_idx) else {
+        self.record_token_range_deletion(token_idx, token_idx + 1, diag_span);
+    }
+
+    /// Record a machine-applicable deletion of the token range
+    /// `[start_idx, end_idx)`, anchored to `diag_span`.
+    ///
+    /// The whitespace-swallowing rule of [`Self::record_call_site_mode_deletion`]
+    /// generalized: delete up to the offset of the token that FOLLOWS the range,
+    /// so `impl T for U with panics {` collapses to `impl T for U {` rather than
+    /// `impl T for U  {` with a doubled space. When the range runs to the end of
+    /// the token stream, fall back to the last token's own extent so the edit is
+    /// still well-formed rather than skipped.
+    fn record_token_range_deletion(&mut self, start_idx: usize, end_idx: usize, diag_span: &Span) {
+        let (Some(first), Some(last)) = (
+            self.tokens.get(start_idx),
+            self.tokens.get(end_idx.saturating_sub(1)),
+        ) else {
             return;
         };
-        let start = tok.span.offset;
+        let start = first.span.offset;
         let end = self
             .tokens
-            .get(token_idx + 1)
+            .get(end_idx)
             .map(|next| next.span.offset)
             .filter(|next_off| *next_off > start)
-            .unwrap_or(tok.span.offset + tok.span.length);
+            .unwrap_or(last.span.offset + last.span.length);
         self.fix_edits.insert(
             crate::resolver::SpanKey::from_span(diag_span),
             crate::resolver::TextEdit {
                 offset: start,
-                length: end - start,
+                length: end.saturating_sub(start),
                 replacement: String::new(),
             },
         );
