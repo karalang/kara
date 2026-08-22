@@ -123,9 +123,8 @@ fn substitute_impl_trait_returns(program: &mut Program, tc: &TypeCheckResult) {
         };
         // An existential may declare METHOD-USE effects on the TYPE
         // (`-> impl Iterator with reads(FileSystem)`, design.md § Effect
-        // surface), and `effectchecker.rs` reads that clause off this very
-        // node — AFTER this pass runs. So the clause has to survive the
-        // rewrite, and only one part of it does not.
+        // surface), and this pass erases the node that clause is written on.
+        // Both kinds of clause survive it anyway, by different routes.
         //
         // CONCRETE verbs survive by being re-derived: once the return type is
         // the witness, `e.emit()` resolves to the witness's own impl method,
@@ -134,21 +133,34 @@ fn substitute_impl_trait_returns(program: &mut Program, tc: &TypeCheckResult) {
         // undeclared `writes(Log)` reaching a caller is byte-identical before
         // and after the rewrite.
         //
-        // An effect VARIABLE does not. `collect_effect_var_names_in_type`
-        // harvests polymorphic effect params off this node and nowhere else,
-        // so erasing the node erases the variable's declaration site — a
-        // silently weaker analysis. Those keep their `impl Trait` spelling and
-        // codegen's loud fall-through, which is the honest outcome until the
-        // effect surface travels with the substitution (B-2026-08-22-14).
-        let TypeKind::ImplTrait { use_effects, .. } = &rt.kind else {
+        // An effect VARIABLE survives too, because in RETURN position nothing
+        // reads it. This arm used to exclude such existentials, on the
+        // rationale that `collect_effect_var_names_in_type` harvests
+        // polymorphic effect params off this node "and nowhere else", so
+        // erasing the node would erase the variable's declaration site. That
+        // is true of the HARVESTER but not of any CONSUMER: its only caller,
+        // `effectchecker::bounds::build_fn_effect_var_positions`, walks
+        // `f.params` and nothing else, and its own doc says "return-position
+        // `with E` slots are not tracked here — only param positions
+        // participate in same-signature unification". A return-position effect
+        // variable is therefore inert today, and the exclusion bought a
+        // check-green / interp-green / build-RED divergence for nothing
+        // (B-2026-08-22-14).
+        //
+        // MEASURED both ways before removing it, on the inert shape
+        // (`fn make[with F]() -> impl Emit with F`) and on the param-bound one
+        // (`fn wrap[with F](f: Fn() -> i64 with F) -> impl Emit with F`): the
+        // public-fn "performs effects [writes(Log)] but has no effect
+        // declaration" rejection is byte-identical with and without the
+        // substitution, and the 437-test `effectchecker` suite is unchanged.
+        //
+        // FOR WHOEVER WIRES THE `impl Trait` EFFECT CEILING (Phase 8 — see the
+        // `TypeKind::ImplTrait` arm in `effectchecker.rs`): harvest the clause
+        // BEFORE this pass runs, because this pass erases the node. Re-adding
+        // an exclusion here instead would restore the run-vs-build divergence.
+        let TypeKind::ImplTrait { .. } = &rt.kind else {
             return;
         };
-        if use_effects
-            .as_ref()
-            .is_some_and(|l| l.items.iter().any(|i| matches!(i, EffectItem::Variable(_))))
-        {
-            return;
-        }
         // `Type::Existential::origin` is `SpanKey::from_span` of this very
         // `TypeExpr`, so the lookup is an identity match, not a heuristic.
         let key = crate::resolver::SpanKey::from_span(&rt.span);

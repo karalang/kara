@@ -505,12 +505,18 @@ fn a_contested_existential_is_left_alone() {
 }
 
 #[test]
-fn an_existential_declaring_effect_variables_is_left_alone() {
+fn an_existential_declaring_effect_variables_is_replaced_too() {
+    // Was `..._is_left_alone`, pinning an exclusion that has been removed
+    // (B-2026-08-22-14). The exclusion's rationale was that
     // `collect_effect_var_names_in_type` harvests polymorphic effect params
-    // off the `impl Trait` node and nowhere else, so erasing the node erases
-    // the variable's declaration site. Concrete verbs are re-derived from the
-    // witness's own impl methods and do NOT block the rewrite (the test
-    // below); an effect VARIABLE does. B-2026-08-22-14.
+    // off the `impl Trait` node "and nowhere else", so erasing the node would
+    // erase the variable's declaration site. True of the HARVESTER, but its
+    // only caller (`effectchecker::bounds::build_fn_effect_var_positions`)
+    // walks `f.params` and documents that return-position `with E` slots are
+    // deliberately NOT tracked. So the clause is inert in return position, and
+    // excluding it bought a check-green / interp-green / build-RED divergence
+    // for nothing. `an_effect_variable_existential_still_reports_its_effects`
+    // below is the control that keeps the analysis honest.
     let prog = lower_program(
         "trait Emit { fn emit(ref self) -> i64; }\n\
          struct E { n: i64 }\n\
@@ -519,9 +525,51 @@ fn an_existential_declaring_effect_variables_is_left_alone() {
          fn main() { let e = make(); println(e.emit()); }",
     );
     assert_eq!(
-        return_path_segment(&prog, "make"),
-        None,
-        "an effect-variable existential must keep its `impl Trait` node"
+        return_path_segment(&prog, "make").as_deref(),
+        Some("E"),
+        "an effect-variable existential must be substituted like any other"
+    );
+}
+
+#[test]
+fn an_effect_variable_existential_still_reports_its_effects() {
+    // THE CONTROL for the test above, and the thing that would actually have
+    // been at stake if the removed exclusion had been load-bearing: the
+    // substitution must not hide an effect from the public-boundary check.
+    // `E.emit` performs `writes(Log)`, `caller` is public and declares
+    // nothing, so the effect checker must still reject it AFTER the rewrite.
+    // Measured byte-identical with and without the substitution, on this
+    // shape and on the param-bound `fn wrap[with F](f: Fn() -> i64 with F)`
+    // one.
+    let src = "effect resource Log;\n\
+         trait Emit { fn emit(ref self) -> i64; }\n\
+         struct E { n: i64 }\n\
+         impl Emit for E { fn emit(ref self) -> i64 with writes(Log) { self.n } }\n\
+         fn make[with F]() -> impl Emit with F { E { n: 4 } }\n\
+         pub fn caller() -> i64 { let e = make(); e.emit() }\n\
+         fn main() { println(caller()); }";
+    let mut parsed = parse(src);
+    assert!(
+        parsed.errors.is_empty(),
+        "parse errors: {:?}",
+        parsed.errors
+    );
+    let resolved = resolve(&parsed.program);
+    let typed = typecheck(&parsed.program, &resolved);
+    lower(&mut parsed.program, &typed);
+    let effects = karac::effectcheck(&parsed.program);
+    assert!(
+        effects
+            .errors
+            .iter()
+            .any(|e| e.to_string().contains("writes(Log)")),
+        "the substitution must not hide `writes(Log)` from the public-boundary \
+         check; got {:?}",
+        effects
+            .errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
     );
 }
 

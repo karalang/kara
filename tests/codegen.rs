@@ -103158,6 +103158,60 @@ fn main() {
         );
     }
 
+    /// B-2026-08-22-14 — the one return-position `impl Trait` shape that had
+    /// no build: an existential declaring polymorphic effect VARIABLES.
+    ///
+    /// `substitute_impl_trait_returns` excluded it, so it stayed check-green
+    /// and `--interp`-green while both `karac run` and `karac build` failed.
+    /// The exclusion guarded a consumer that does not exist: the effect-var
+    /// harvester's only caller walks PARAMETER types and documents that
+    /// return-position `with E` slots are deliberately not tracked.
+    ///
+    /// Pinned as an interp/AOT agreement test because the defect WAS a
+    /// run-vs-build divergence — the two backends answering identically is the
+    /// property under test. `an_effect_variable_existential_still_reports_its_effects`
+    /// in tests/lowering.rs is the paired control proving the substitution
+    /// does not hide an effect from the public-boundary check.
+    #[test]
+    fn test_e2e_return_position_impl_trait_with_effect_variables() {
+        let src = r#"
+effect resource Log;
+
+trait Emit { fn emit(ref self) -> i64; }
+
+struct S { v: i64 }
+impl Emit for S { fn emit(ref self) -> i64 { self.v } }
+
+struct L { v: i64 }
+impl Emit for L { fn emit(ref self) -> i64 with writes(Log) { self.v } }
+
+// The inert shape: `F` appears only in return position.
+fn make[with F]() -> impl Emit with F { S { v: 7 } }
+
+// The param-bound shape: `F` is bound by a parameter, so it is not inert.
+fn wrap[with F](f: Fn() -> i64 with F) -> impl Emit with F { S { v: f() } }
+fn src_pure() -> i64 { 5 }
+
+// An effect variable alongside a concrete verb on the same clause.
+fn mixed[with F]() -> impl Emit with writes(Log) F { L { v: 9 } }
+
+fn main() {
+    let e = make();
+    println(e.emit());
+    println(make().emit());
+    println(wrap(src_pure).emit());
+    println(mixed().emit());
+}
+"#;
+        let expected = "7\n7\n5\n9\n";
+        assert_eq!(run_program(src).as_deref(), Some(expected));
+        assert_eq!(
+            karac::run_program(src).join(""),
+            expected,
+            "interpreter and AOT must agree"
+        );
+    }
+
     /// B-2026-08-21-41 — a fixed-array TEMPORARY as a for-loop source.
     ///
     /// `for_receiver_is_indexable` required the (`.iter()`-peeled) source to be
