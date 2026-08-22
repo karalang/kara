@@ -102,7 +102,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 93 | 1 |
 | perf | 83 | 0 |
 | crash | 55 | 0 |
-| other | 55 | 1 |
+| other | 55 | 0 |
 | soundness | 54 | 0 |
 | use-after-free | 20 | 0 |
 
@@ -113,7 +113,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen | 991 | 3 |
 | typecheck | 240 | 3 |
 | interp | 172 | 0 |
-| other | 63 | 1 |
+| other | 63 | 0 |
 | ownership | 62 | 0 |
 | cli | 61 | 1 |
 | autopar | 54 | 0 |
@@ -137,7 +137,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1484 surfaced
 | B-2026-08-22-7 | 2026-08-22 | codegen | low | `f16_software_emulated` IS THE ONE STARTER-SET LINT WHOSE TRIGGER DEPENDS ON THE TARGET, and the target's feature baseline is only reachable behind `#[cfg(feature = "llvm")]` -- so wiring it is a PLACEMENT decision, not the mechanical job the other six were | roadmap.md |
 | B-2026-08-22-8 | 2026-08-22 | cli | low | `implicit_clone` HAS NO TRIGGER IN THE SPEC AND CANNOT BE DE-REGISTERED WITHOUT A design.md EDIT -- the one starter-set lint whose resolution is a SPEC decision, not a compiler change | roadmap.md |
 | B-2026-08-21-53 | 2026-08-22 | typecheck+parser | medium | CALL-SITE TYPE APPLICATION `f[T](args)` IS IMPLEMENTED ONLY FOR THE `ptr.*` BUILTINS -- `Vec.new[i64]()`, `Channel.new[i64]()` and a user generic `id[i64](5)` all parse as an INDEX and then fail, while `ptr.null[u32]()` works; design.md writes both forms and contradicts itself three ways about whether the syntax exists | roadmap.md |
-| B-2026-08-21-54 | 2026-08-22 | other | medium | `test_shortener_example_end_to_end` ASSERTS A JSON KEY ORDER and is RED on main since the FxHash change (8c3c8d6) reordered Map iteration -- and it is order-FLAKY, passing on roughly one run in three, so neither a red nor a green run can be trusted | roadmap.md |
 | B-2026-08-22-14 | 2026-08-22 | codegen+effect | low | AN EXISTENTIAL DECLARING POLYMORPHIC EFFECT VARIABLES (`-> impl Emit with F`) IS THE ONE RETURN-POSITION `impl Trait` SHAPE STILL WITHOUT A BUILD -- deliberately excluded from B-2026-08-22-12's witness substitution, because the effect checker reads the variable off the very node the rewrite would erase | codegen |
 | B-2026-08-22-15 | 2026-08-22 | typecheck | medium | A `-> Self` TRAIT METHOD CALLED ON AN EXISTENTIAL RECEIVER LOSES THE TRAIT -- `make().bumped()` types as a BARE type parameter named after the trait, so the builder shape is rejected with two diagnostics that point at the caller's correct code and name a spelling the source never contains | typecheck |
 
@@ -15352,6 +15351,24 @@ silenced BOTH spellings still fails; plus
 control. Non-vacuity checked by reverting the fix: 4 of the 5 new tests fail,
 and the inference control passes either way, which is exactly what a control
 should do. |
+| B-2026-08-21-54 | other | medium | `test_shortener_example_end_to_end` ASSERTS A JSON KEY ORDER and is RED on main since the FxHash change (8c3c8d6) reordered Map iteration -- and it i… | Fixed in 69be64c as a drive-by of B-2026-08-22-10, not by this row's own
+work: the `/stats` assertion in `test_shortener_example_end_to_end`
+(tests/http_server.rs) moved off exact-equality onto a contents check --
+`starts_with` the ordered prefix, `ends_with("}}")`, `contains` for both
+pairs, and `matches(':').count() == 4`.
+
+VERIFIED TIGHT, NOT MERELY PERMISSIVE, before closing on it. An
+order-insensitive rewrite is the obvious place to lose assertion
+strength, so the replacement was checked against the corruptions it has
+to keep rejecting. It accepts exactly the two legal orderings and rejects
+a wrong hit count, a missing key, an extra key, a wrong `links`, an
+uncounted follow, and -- the one that matters -- `"hits":{}`, the
+B-2026-07-31-30 regression this assertion exists to pin. The
+`count(':') == 4` clause is what carries that: without it, `contains`
+alone would admit an extra key.
+
+This row's own contribution is the audit it asked for, plus the doc fix
+that audit turned up (kara-katas 9a29660) -- see the appended note. |
 | B-2026-08-22-11 | cli | medium | `karac fmt` DELETED AN INLINE ASSOCIATED-TYPE BINDING FROM EVERY TRAIT BOUND -- `I: Src[Item = i64]` was rewritten to `I: Src[]`, a weaker contract t… | Every trait-bound render site now goes through one `format_trait_bound(b)` helper (src/formatter/types.rs) that writes the path and then ONE bracket list holding the positional args followed by the inline bindings, via a new `format_bracket_args(args, bindings)`. The five sites that previously wrote `write_path` + `format_generic_args_opt` separately -- generic-param bounds, effect-param bounds (types.rs), where-clause `TypeBound` and `ProjectionBound` (items.rs) -- were the deletion; the two that wrote `write_path` ALONE, `trait X = A + B;` alias bounds and `type Assoc: Bound;` inside a trait, were dropping the bounds' generic args as well and now use the same helper. `TypeKind::ImplTrait` / `TypeKind::Dyn` render through `format_bracket_args` too.
 
 Pinned by `test_formatter_round_trips_an_inline_assoc_binding` (tests/parser.rs), which counts four surviving `Src[Item = i64]` across an alias bound, a generic-param bound, a where-clause bound and an `impl Trait` return, and asserts `Src[]` appears nowhere. |
