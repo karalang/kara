@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 278 | 0 |
 | leak | 188 | 1 |
-| missing-feature | 154 | 2 |
+| missing-feature | 154 | 1 |
 | run-vs-build | 151 | 0 |
 | double-free | 135 | 0 |
 | codegen-gap | 128 | 0 |
@@ -112,27 +112,26 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | codegen | 993 | 1 |
 | typecheck | 244 | 2 |
-| interp | 174 | 1 |
+| interp | 174 | 0 |
 | other | 63 | 0 |
 | ownership | 62 | 0 |
 | cli | 62 | 1 |
 | autopar | 55 | 0 |
 | parser | 38 | 0 |
-| runtime | 29 | 1 |
+| runtime | 29 | 0 |
 | resolver | 26 | 0 |
 | effect | 11 | 0 |
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1494 surfaced · 4 open · 1467 fixed · 9 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1494 surfaced · 3 open · 1468 fixed · 9 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-22-6 | 2026-08-22 | typecheck | low | The `Hasher` and `BuildHasher` TRAITS are not baked, so a user cannot write their own hasher: `Map[K, V, H]` accepts only the two compiler-known selectors `SipHash13BuildHasher` / `FxBuildHasher`, and design.md's "User-extensible hashers" paragraph describes a surface that does not exist | roadmap.md |
 | B-2026-08-22-23 | 2026-08-22 | codegen | low | A STRUCT-WITH-HEAP CHANNEL PAYLOAD LEAKS ITS OWN `String`/`Vec` FIELDS ON `try_send`'S REJECT PATH -- the `SendError.Full(v)` binding frees a String or Vec payload correctly, but a struct CARRYING them leaks each field; the identical user-generic-enum program is ASAN-clean | roadmap.md |
-| B-2026-08-22-24 | 2026-08-22 | interp+runtime | low | THE INTERPRETER CANNOT MODEL RECEIVER LIVENESS, SO `SendError.Closed` AND `send`'S NO-RECEIVER PANIC ARE BOTH UNREACHABLE -- the compiled runtime has the counters and had to give them up to keep run == build | roadmap.md |
 | B-2026-08-22-25 | 2026-08-22 | typecheck+cli | low | `karac fix`'s `redundant_suffix` DELETION SPAN IS ONE CHARACTER SHORT ON THE UNDERSCORE-SEPARATED SUFFIX FORM: `0_i64` is rewritten to `0_`, leaving the separator that existed only to attach the suffix | roadmap.md |
 
 ### Wontfix (9)
@@ -153,9 +152,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1494 surfaced
 
 </details>
 
-### Fixed (1467)
+### Fixed (1468)
 
-<details><summary>1467 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1468 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -16232,6 +16231,66 @@ the right one is caught by the LOOKUP assertion ("Fx map lost key zulu"). A
 selector ignored CONSISTENTLY -- index and `get` both on the default -- keeps
 every lookup working and is caught ONLY by the ORDER assertion. So the flaky
 assertion could not simply be deleted in favour of the deterministic one. |
+| B-2026-08-22-24 | interp+runtime | low | THE INTERPRETER CANNOT MODEL RECEIVER LIVENESS, SO `SendError.Closed` AND `send`'S NO-RECEIVER PANIC ARE BOTH UNREACHABLE -- the compiled runtime has… | FIXED by d6fe527. The row's central claim -- that the interpreter CANNOT
+model receiver liveness -- is refuted; it can, and the mechanism is about
+twenty lines.
+
+WHAT THE ROW EXPECTED: "deterministic drop semantics for `Value::Receiver` in
+a tree-walk evaluator whose values are freely `Clone`d ... a per-end counter
+inside `ChannelBuf` plus a real drop hook on the two endpoint `Value`
+variants", explicitly flagged as "not a small slice".
+
+WHAT IT ACTUALLY TOOK: the per-end counter, and the drop hook is just `Drop`
+on a newtype. `Value::Sender(Arc<ChannelBuf>)` becomes
+`Value::Sender(SenderHandle)`, where `SenderHandle`'s `Clone` and `Drop` are
+the only things that move `ChannelBuf::senders`; same for the receiver. The
+row is right that `Arc::strong_count` cannot answer the question -- both ends
+hold the same `Arc` -- but a count only the handle touches can.
+
+THE PART THE ROW TREATED AS THE HARD ONE TURNED OUT NOT TO BE. A tree-walk
+evaluator drops the `Receiver` value when its scope is torn down, which is
+exactly the moment the compiled backend drops its own end. No new drop
+discipline, no region analysis. The row's own repro was the test:
+
+  fn orphan() -> Sender[i64] { let (tx, rx) = Channel.new(); ...; return tx }
+  orphan().try_send(9)
+
+  before:  karac build -> "closed 9"   --interp -> "sent"     (the divergence)
+  after:   interp / JIT / build / KARAC_AUTO_PAR=0 build -> "closed 9"
+
+BLAST RADIUS: 20 call sites across 5 files, all mechanical (`h.buf()` where
+the code had an `Arc`). The one that mattered was `Sender.clone()`, which had
+to become a HANDLE clone rather than an `Arc::clone` -- a cloned sender is a
+second live endpoint and the count has to say so.
+
+THREE THINGS MOVED TOGETHER, as the row specified. The compiled check went
+back into `karac_runtime_channel_try_send`, ahead of the capacity arm (a
+receiver-less channel is closed whether or not it is also full; reporting
+`Full` would invite a retry that can never succeed). `send` gained its spec'd
+panic on both backends. design.md's "v1 status of the no-receiver case"
+paragraph is gone, replaced by a statement of what now holds.
+
+ONE EXISTING ASAN FIXTURE CHANGED, and the reason is worth keeping. `asan_
+channel_end_explicit_return_single_free` returned a SENDER from `mk` and then
+did `s.send(22)` in `main` -- on a channel whose receiver had died with `mk`'s
+frame. It was depending on the unspecified behaviour this row removes. Its
+subject is the `ExprKind::Return` drop suppression, not send semantics, and
+its own comment already described returning `rx` while the code returned
+`tx`; the fixture had drifted from its description. It now returns the
+receiver, matching both its comment and its sibling
+`asan_channel_end_returned_from_fn_single_free`, with both sends made while
+`rx` is alive. All ten channel ASAN fixtures green.
+
+TESTS pair the two backends on purpose, because their AGREEMENT is what makes
+the behaviour shippable at all: four in tests/interpreter.rs -- `Closed`, the
+live-receiver control (an always-zero count would satisfy the first and break
+every real program), `send`'s error, and a sender-CLONE case that one shared
+count would pass and a per-end one must not -- plus `e2e_channel_closed_when_
+the_receiver_is_gone` as the compiled twin. A regression on either side now
+fails a test.
+
+Full suite: 109 binaries, 14888 passed, 0 failed. fmt clean; clippy clean on
+both feature legs and on the wasm32-wasip1 arm (the runtime changed). |
 
 </details>
 
