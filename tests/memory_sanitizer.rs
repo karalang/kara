@@ -789,6 +789,74 @@ fn main() {
         );
     }
 
+    /// B-2026-08-21-47 — the `shared struct` column of B-2026-08-21-40's
+    /// five-shape table, pinned because that row predicted the `-40` fix would
+    /// NOT reach it and nothing held the answer either way.
+    ///
+    /// It does reach it. Measured by reverting `e6d0dbe`'s one-line gate
+    /// (`rhs_is_place_field_move` back to `obj_name.is_none()`) and re-running:
+    /// both legs below leak 147 bytes (49 x 3) with the gate reverted and are
+    /// clean with it restored, alongside the plain-struct test above going
+    /// 392 -> 0 in the same pair of runs. One line, both shapes, both
+    /// directions.
+    ///
+    /// So the differing byte counts — 8/call for the plain struct, 3/call here
+    /// — are two differently-sized buffers going missing through ONE accounting
+    /// error, not the two separate defects the count difference was read as.
+    /// The buffer at risk is the one the TARGET (`last`) already held, and the
+    /// receiver's shape only changes how big it is.
+    ///
+    /// Leg (b) is the one that names the bug and the reason this is not just
+    /// leg (a): `mut ref` is INCIDENTAL. Deleting the `mut ref` call entirely
+    /// leaks the identical 147 bytes, and deleting `last = b.name` instead —
+    /// keeping the `mut ref` — is CLEAN even pre-fix. A pin built only from the
+    /// filed `mut ref` repro would therefore have passed against a fix aimed at
+    /// the wrong path.
+    ///
+    /// A `shared struct` field must be declared `mut` to be assignable, so the
+    /// shape differs from the plain-struct twin by more than the keyword.
+    #[test]
+    fn asan_shared_struct_field_source_frees_the_targets_old_buffer() {
+        // (a) the shape as filed, with `mut ref` — 147 bytes (49 x 3) before.
+        assert_clean_asan_run(
+            r#"
+shared struct Box { mut name: String }
+fn free_app(s: mut ref String) { s = s + "!"; }
+fn main() {
+    let mut i = 0i64;
+    let mut last: String = "";
+    while i < 50i64 {
+        let mut b = Box { name: "n" };
+        free_app(mut b.name);
+        last = b.name;
+        i = i + 1i64;
+    }
+    println(last);
+}
+"#,
+            &["n!"],
+            "asan_shared_struct_field_source_frees_the_targets_old_buffer/mut_ref",
+        );
+        // (b) the SAME defect with no `mut ref` at all — also 147 bytes.
+        assert_clean_asan_run(
+            r#"
+shared struct Box { mut name: String }
+fn main() {
+    let mut i = 0i64;
+    let mut last: String = "";
+    while i < 50i64 {
+        let b = Box { name: "n" + "!" };
+        last = b.name;
+        i = i + 1i64;
+    }
+    println(last);
+}
+"#,
+            &["n!"],
+            "asan_shared_struct_field_source_frees_the_targets_old_buffer/plain",
+        );
+    }
+
     #[test]
     fn asan_shared_struct_vec_tensor_field_drop() {
         // (a) push-only — the shared-struct `Vec[Tensor]` field drop must free
