@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 148 | 0 |
 | missing-feature | 143 | 6 |
 | double-free | 134 | 0 |
-| codegen-gap | 127 | 4 |
+| codegen-gap | 128 | 4 |
 | diagnostics | 95 | 2 |
 | false-positive | 91 | 0 |
 | perf | 83 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 985 | 9 |
+| codegen | 986 | 9 |
 | typecheck | 232 | 4 |
 | interp | 171 | 1 |
 | other | 62 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 8 | 1 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1463 surfaced · 14 open · 1427 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1464 surfaced · 14 open · 1428 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (14)
 
@@ -137,11 +137,11 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1463 surfaced
 | B-2026-08-21-26 | 2026-08-21 | typecheck | medium | `TryFrom[intN]` FOR A C-LIKE `#[repr(intN)]` ENUM DOES NOT EXIST -- design.md § Enum Discriminant Runtime Surface commits to auto-generating it and shows the worked `match UsbClass.try_from(raw)`, which fails to compile | roadmap.md |
 | B-2026-08-21-29 | 2026-08-21 | typecheck | medium | THREE DOCUMENTED SURFACES ARE NOT REACHABLE AS WRITTEN: every spelling of channel construction design.md uses (`Channel.new[T]()`, `Channel.bounded`), its whole `io.` I/O prefix, and `allocates(Heap)` -- whose `Heap` the document never declares and the prelude does not provide | roadmap.md |
 | B-2026-08-21-32 | 2026-08-21 | resolver+effect | medium | EFFECT RESOURCES CANNOT BE ROOTED AT A VALUE, so design.md's whole channel effect model is unwritable: `with sends(tx)` on a channel PARAMETER is `'tx' is not an effect resource (it is a variable)`, and the seven `Sender`/`Receiver` declarations at :6064-:6094 are all written that way | roadmap.md |
-| B-2026-08-21-42 | 2026-08-21 | codegen | medium | NO `self.<method>()` DISPATCHER ON AN `impl ... for Array[T, N]` BODY -- `self.get(0)` inside the impl fails codegen with "no handler for method 'get' on non-identifier receiver" while `--interp` runs it, the Array twin of the fixed B-2026-08-18-12 (Map/Set) and -11 | roadmap.md |
 | B-2026-08-21-43 | 2026-08-21 | codegen | low | A USER IMPL ON A **NON-SCALAR** `Array` HEAD IS UNCALLABLE ON A TEMPORARY -- `mk().tag()` for `impl Tag for Array[String, 2]` still loud-fails after B-2026-08-21-25, which admits only scalar-element arrays because a scalar array is the case that owns no heap | roadmap.md |
 | B-2026-08-21-44 | 2026-08-21 | codegen | low | `as_slice()` ON A FIXED-ARRAY **TEMPORARY** HAS NO CODEGEN LOWERING -- `n.to_ne_bytes().as_slice().len()` fails dispatch while `--interp` answers, the one method of the Array surface B-2026-08-21-25 left out | roadmap.md |
 | B-2026-08-21-45 | 2026-08-21 | typecheck+codegen | low | FIVE SHIPPED USER-FACING DIAGNOSTICS CARRY RUNS OF 14-30 SPACES mid-sentence, because rustfmt INTERMITTENTLY rejoins a `\`-continued string literal into one line and keeps the continuation indentation as real spaces | roadmap.md |
 | B-2026-08-21-46 | 2026-08-21 | codegen | low | `enumerate` OVER AN ARRAY **LITERAL** STILL BAILS LOUD -- `for (i, x) in [1, 2, 3].iter().enumerate()` hits the adaptor backstop while `--interp` answers, the one source shape B-2026-08-21-41's widening could not reach | roadmap.md |
+| B-2026-08-21-48 | 2026-08-21 | codegen | medium | AN **UN-ANNOTATED** SLICE BINDING CANNOT CALL A USER METHOD ON THE `Slice` HEAD -- `let s = v[0..2]; s.f()` fails with "no handler for method 'f' on variable 's'" while the ANNOTATED and PARAMETER spellings of the same call both work | roadmap.md |
 | B-2026-08-22-1 | 2026-08-22 | codegen | high | A BAKED-STDLIB ENUM WITH NO CODEGEN LAYOUT SEED LOWERS EVERY VARIANT'S TAG TO **0**, SILENTLY -- `let m = MemoryOrdering.Acquire; match m { ... }` prints `Acquire` under `--interp` and `Relaxed` under AOT, with no diagnostic; the bare form (`let m = SeqCst`) is a loud `Undefined variable 'SeqCst'` on the same axis, so the type has both halves of the defect | roadmap.md |
 | B-2026-08-21-47 | 2026-08-22 | codegen | medium | A `shared struct` FIELD SOURCE LEAKS A DIFFERENT BUFFER THAN THE PLAIN-STRUCT ONE DID -- `last = s.name` off a `shared struct` leaks the POST-append body (3 bytes/call) where the plain-struct shape leaked the PRE-append one, so the fix for B-2026-08-21-40 does not reach it | roadmap.md |
 
@@ -162,9 +162,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1463 surfaced
 
 </details>
 
-### Fixed (1427)
+### Fixed (1428)
 
-<details><summary>1427 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1428 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -14190,6 +14190,53 @@ THE REMAINDER: B-2026-08-21-46 — `for (i, x) in [1, 2, 3].iter().enumerate()` 
 bails loud. The array LITERAL is the one source shape whose element type is not
 recoverable syntactically, and it is typed `Vec` by the synthesis-mode default
 anyway; it failed identically before this change. |
+| B-2026-08-21-42 | codegen | medium | NO `self.<method>()` DISPATCHER ON AN `impl .. | Fixed in 6cfd52f5.
+
+THE ROW'S DIAGNOSIS WAS RIGHT AND COMPLETE, including the remedy it named. The
+fixed-array method block sits inside an `ExprKind::Identifier(name)` arm and
+reads `variables[name].ty`; `self` parses as `ExprKind::SelfValue`, never as
+`Identifier("self")`, so it could not reach that block. The fix lands in the
+same last-resort `SelfValue` arm B-2026-08-18-12 (Map/Set) and -11 added, and
+re-dispatches under a synthetic `Identifier("self")` rather than duplicating the
+block — `self` is registered under the name "self" in `variables` (owned) and
+`ref_params` (borrowed), which is exactly what that block reads.
+
+THE GATE IS THE PART THAT NEEDED CARE. The re-dispatch fires only when the
+receiver is PROVABLY an array. Without that, a `SelfValue` the identifier arm
+also declines would bounce back into this arm forever. With it, a non-array
+`self` never re-enters, and an array `self` lands in the identifier arm whose
+own fall-through is the "on variable 'self'" error. `self.v_len() +
+self.v_get()` in the pin is the shape that would hang without the gate.
+
+WHAT THE SWEEP ADDED BEYOND THE ROW. The row's repro used `self.get(0)`; the
+whole surface was broken the same way, and three non-method paths reach `self`
+too, all now covered and all working: `self[1]` (indexing has its own lowering),
+`for x in self` (the arm fixed in B-2026-08-21-41, pinned here beside the method
+recovery rather than in a separate file), and one impl method calling another.
+Owned `self` and `ref self` both, since they recover storage differently — the
+owned slot from `variables`, the borrow from `ref_params` plus `get_data_ptr` —
+so a fix reaching only one would pass a test trying only one.
+
+THE PIN is `test_e2e_self_method_dispatch_in_an_array_impl_body`. It sweeps
+METHODS rather than call spellings, because the failure was in the BODY: a
+single call at the top reproduces it and tells you nothing about which of the
+seven methods actually came back. Two free functions read the same array outside
+any impl, so a regression in the general fixed-array read path cannot pass as
+green behind a working `self`.
+
+WHAT THIS DOES NOT COVER, checked rather than assumed. Every other container
+head was probed for the same defect: `Vec` and `String` `self` bodies already
+worked (B-2026-08-18-11), and `Map`/`Set` were fixed by -18-12. A `Slice` head
+with an ANNOTATED binding (`let s: Slice[i64] = v[0..2]`) or a `Slice` parameter
+receiver also already worked, body and call site both.
+
+The one Slice spelling that does NOT work turned out to be a different defect at
+a different site, filed as B-2026-08-21-48: with an UN-ANNOTATED `let s = v[0..2]`,
+the failure is at the CALL SITE (`no handler for method 'f' on variable 's'`),
+not in the body — the binding is not registered as a slice, so the call cannot
+qualify `Slice.f`. Verified pre-existing against pre-fix source. It is the same
+under-registered-binding family as the `Array` half fixed in B-2026-08-21-25,
+which is why it is worth its own row rather than a note here. |
 
 </details>
 
