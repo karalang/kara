@@ -394,6 +394,118 @@ impl<'a> super::Resolver<'a> {
             }
         }
 
+        // B-2026-08-21-2 — `repr_c_layout_ignored`. design.md § Interaction
+        // with layout blocks: "`#[repr(C)]` disables SoA transformation. A
+        // layout block on a `#[repr(C)]` struct becomes documentation-only …
+        // The ABI layout takes precedence." Both halves of that rule were
+        // missing — a `#[repr(C)]` struct with a layout block compiled
+        // silently, so the layout looked effective and was not.
+        //
+        // The split is by VISIBILITY and it is not cosmetic:
+        //
+        //   * `pub` — a COMPILE ERROR, because "a `pub` type may be consumed
+        //     by FFI code that depends on the exact field order; silently
+        //     ignoring the layout block risks a misleading contract". No
+        //     suppression: `#[allow(repr_c_layout_ignored)]` deliberately does
+        //     NOT reach this arm, or the FFI contract becomes silenceable.
+        //   * private — a WARNING "listing which groups are being ignored",
+        //     suppressible, because a private struct "cannot be observed via
+        //     FFI, so the layout block is redundant but not harmful".
+        //
+        // The groups are listed by name because the spec asks for exactly
+        // that, and because the name is what the reader has to go delete.
+        if let Some(def) = self.program.items.iter().find_map(|it| match it {
+            crate::ast::Item::StructDef(d) if d.name == struct_name => Some(d),
+            _ => None,
+        }) {
+            if def.attributes.iter().any(|a| a.is_repr_c()) {
+                let groups: Vec<&str> = layout
+                    .items
+                    .iter()
+                    .filter_map(|it| match it {
+                        LayoutItem::Group { name, .. } => Some(name.as_str()),
+                        _ => None,
+                    })
+                    .collect();
+                let group_list = if groups.is_empty() {
+                    "(no groups)".to_string()
+                } else {
+                    groups.join(", ")
+                };
+                // Suppression is read off the LAYOUT, matching the
+                // `layout_unassigned_fields` sibling directly above and the
+                // spec's own wording — it is the layout block that is "kept as
+                // documentation", so that is where the author annotates.
+                let allowed = layout.attributes.iter().any(|a| {
+                    a.is_bare("allow")
+                        && a.args.iter().any(|arg| {
+                            matches!(
+                                &arg.value,
+                                Some(crate::ast::Expr {
+                                    kind: crate::ast::ExprKind::Identifier(name),
+                                    ..
+                                }) if name == "repr_c_layout_ignored"
+                            )
+                        })
+                });
+                if def.is_pub {
+                    self.errors.push(ResolveError {
+                        // `concat!`, not a `\`-continued literal: rustfmt in
+                        // this repo intermittently rejoins a continued string
+                        // onto one line and keeps the continuation indentation
+                        // as REAL SPACES, so the rendered diagnostic comes out
+                        // with 30-space runs mid-sentence. This message shipped
+                        // that way in draft — see B-2026-08-21-45.
+                        message: format!(
+                            concat!(
+                                "layout '{}' applies to `pub struct {}`, which is ",
+                                "`#[repr(C)]`: the ABI layout takes precedence and these ",
+                                "groups are ignored: {}. A `pub` `#[repr(C)]` type may be ",
+                                "consumed by FFI code that depends on the exact field ",
+                                "order, so this is an error rather than a warning."
+                            ),
+                            layout.name, struct_name, group_list
+                        ),
+                        span: layout.span,
+                        kind: ResolveErrorKind::LayoutReprCOnPubStruct,
+                        suggestion: Some(format!(
+                            concat!(
+                                "remove the layout block, or remove `#[repr(C)]` from ",
+                                "`{}` (`#[allow(repr_c_layout_ignored)]` does not apply ",
+                                "to a `pub` type)"
+                            ),
+                            struct_name
+                        )),
+                        replacement: None,
+                        stub_hint: None,
+                    });
+                } else if !allowed {
+                    self.errors.push(ResolveError {
+                        message: format!(
+                            concat!(
+                                "layout '{}' applies to `{}`, which is `#[repr(C)]`: the ",
+                                "ABI layout takes precedence, so no SoA transformation ",
+                                "occurs and these groups are documentation-only: {}."
+                            ),
+                            layout.name, struct_name, group_list
+                        ),
+                        span: layout.span,
+                        kind: ResolveErrorKind::LayoutReprCIgnored,
+                        suggestion: Some(
+                            concat!(
+                                "remove `#[repr(C)]` to enable the layout, or suppress ",
+                                "with #[allow(repr_c_layout_ignored)] to keep the block ",
+                                "as documentation"
+                            )
+                            .to_string(),
+                        ),
+                        replacement: None,
+                        stub_hint: None,
+                    });
+                }
+            }
+        }
+
         // Warn about unassigned fields (fields not in any group or cold section).
         let unassigned: Vec<&String> = struct_fields
             .iter()
@@ -949,6 +1061,82 @@ impl<'a> super::Resolver<'a> {
         self.reject_codegen_hint_attrs(&s.attributes, "struct");
         self.reject_profile_attr(&s.attributes, "struct");
         self.reject_no_effect_attr(&s.attributes, "struct");
+
+        // B-2026-08-21-2 — `float_in_serialized_type`. design.md § Floating
+        // point > Serialization: "`f32`/`f64` fields in `#[derive(Serialize,
+        // Deserialize)]` types trigger the `float_in_serialized_type` lint —
+        // JSON has no NaN encoding, MessagePack/Protobuf carry IEEE bits but
+        // consumers may diverge. The lint is a warning, suppressible per-field
+        // with `#[allow(float_in_serialized_type)]`."
+        //
+        // PER-FIELD suppression, which is why this walks fields rather than
+        // reporting once on the struct: a type may carry one float the author
+        // has reasoned about beside another they have not, and the annotation
+        // has to land where the reasoning is.
+        //
+        // The derive MACHINERY is deferred post-v1, but the attribute parses
+        // and typechecks today, so the trigger is decidable now — the lint is
+        // not vacuous, it was simply never written.
+        let derives = crate::typechecker::extract_derived_traits(&s.attributes);
+        if derives.contains("Serialize") || derives.contains("Deserialize") {
+            for f in &s.fields {
+                let is_float = matches!(
+                    &f.ty.kind,
+                    TypeKind::Path(p)
+                        if p.generic_args.is_none()
+                            && matches!(
+                                p.segments.first().map(|x| x.as_str()),
+                                Some("f32") | Some("f64")
+                            )
+                );
+                if !is_float {
+                    continue;
+                }
+                let allowed = f.attributes.iter().any(|a| {
+                    a.is_bare("allow")
+                        && a.args.iter().any(|arg| {
+                            matches!(
+                                &arg.value,
+                                Some(crate::ast::Expr {
+                                    kind: crate::ast::ExprKind::Identifier(name),
+                                    ..
+                                }) if name == "float_in_serialized_type"
+                            )
+                        })
+                });
+                if allowed {
+                    continue;
+                }
+                let ty_name = match &f.ty.kind {
+                    TypeKind::Path(p) => p.segments.first().cloned().unwrap_or_default(),
+                    _ => String::new(),
+                };
+                self.errors.push(ResolveError {
+                    message: format!(
+                        concat!(
+                            "field '{}.{}' is `{}` in a type deriving Serialize/",
+                            "Deserialize: JSON has no NaN encoding, and MessagePack/",
+                            "Protobuf carry IEEE bits that consumers may decode ",
+                            "differently, so a round-trip through this field is not ",
+                            "guaranteed to preserve NaN or signed zero."
+                        ),
+                        s.name, f.name, ty_name
+                    ),
+                    span: f.span,
+                    kind: ResolveErrorKind::FloatInSerializedType,
+                    suggestion: Some(
+                        concat!(
+                            "store a lossless encoding (integer bits, or a string) if ",
+                            "round-trip fidelity matters, or suppress with ",
+                            "#[allow(float_in_serialized_type)] on the field"
+                        )
+                        .to_string(),
+                    ),
+                    replacement: None,
+                    stub_hint: None,
+                });
+            }
+        }
         // Field-level `#[non_exhaustive]` is post-v1 (Rust accepts it
         // on fields too; we ship type-level only). Reject so users get
         // a focused message instead of a silent acceptance that does

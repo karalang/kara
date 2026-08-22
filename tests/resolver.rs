@@ -1337,6 +1337,204 @@ layout entities: Vec[Entity] {
     );
 }
 
+/// `repr_c_layout_ignored` (B-2026-08-21-2). design.md § Interaction with
+/// layout blocks: "`#[repr(C)]` disables SoA transformation. A layout block on
+/// a `#[repr(C)]` struct becomes documentation-only … The ABI layout takes
+/// precedence." BOTH halves of the rule were missing — such a program compiled
+/// in silence, so the layout looked effective and was not.
+///
+/// The severity split is by visibility and is the whole point of the rule, so
+/// all four combinations are pinned here rather than just the lint:
+///
+///   * private + `#[repr(C)]` → WARNING listing the ignored groups
+///   * `pub` + `#[repr(C)]`   → ERROR (an FFI consumer depends on field order)
+///   * no `#[repr(C)]`        → silent (the layout is live)
+///   * private + `#[allow]`   → suppressed
+///
+/// The fifth case is the one worth stating out loud: `#[allow]` on the `pub`
+/// form does NOT suppress it. The spec gives the escape hatch only to the
+/// private case, and a suppressible FFI-contract error would be worse than no
+/// error at all.
+#[test]
+fn repr_c_layout_ignored_warns_private_errors_pub_and_respects_allow() {
+    // Private: a warning that LISTS the groups, and never fatal.
+    let result = resolve_ok(
+        r#"
+#[repr(C)]
+struct P { a: i64, b: f64, c: i64 }
+layout ps: Vec[P] {
+    group hot { a, c }
+    group cold { b }
+}
+"#,
+    );
+    let notes: Vec<_> = result
+        .errors
+        .iter()
+        .filter(|e| e.kind == ResolveErrorKind::LayoutReprCIgnored)
+        .collect();
+    assert_eq!(
+        notes.len(),
+        1,
+        "expected one repr(C) layout note; got: {:?}",
+        result.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+    assert!(
+        notes[0].message.contains("hot") && notes[0].message.contains("cold"),
+        "the spec asks for the IGNORED GROUPS by name; got: {}",
+        notes[0].message
+    );
+    assert!(
+        karac::resolver::resolve_kind_is_note(&notes[0].kind),
+        "private is a warning — a redundant-but-harmless layout must still compile"
+    );
+
+    // `pub`: an error, and NOT the note kind. `resolve_errors`, not
+    // `resolve_ok` — the latter asserts the program resolves clean, which is
+    // exactly what this case must not do.
+    let all = resolve_errors(
+        r#"
+#[repr(C)]
+pub struct Q { a: i64, b: f64, c: i64 }
+layout qs: Vec[Q] {
+    group hot { a, c }
+    group cold { b }
+}
+"#,
+    );
+    let errs: Vec<_> = all
+        .iter()
+        .filter(|e| e.kind == ResolveErrorKind::LayoutReprCOnPubStruct)
+        .collect();
+    assert_eq!(errs.len(), 1, "expected the pub repr(C) layout ERROR");
+    assert!(
+        !karac::resolver::resolve_kind_is_note(&errs[0].kind),
+        "the pub half must be fatal — it guards an FFI field-order contract"
+    );
+
+    // No `#[repr(C)]`: the layout is live, so nothing is reported.
+    let result = resolve_ok(
+        r#"
+struct R { a: i64, b: f64, c: i64 }
+layout rs: Vec[R] {
+    group hot { a, c }
+    group cold { b }
+}
+"#,
+    );
+    assert!(
+        !result.errors.iter().any(|e| matches!(
+            e.kind,
+            ResolveErrorKind::LayoutReprCIgnored | ResolveErrorKind::LayoutReprCOnPubStruct
+        )),
+        "a layout without #[repr(C)] is effective and must be silent; got: {:?}",
+        result.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+
+    // `#[allow]` suppresses the private warning …
+    let result = resolve_ok(
+        r#"
+#[repr(C)]
+struct S { a: i64, b: f64, c: i64 }
+#[allow(repr_c_layout_ignored)]
+layout ss: Vec[S] {
+    group hot { a, c }
+    group cold { b }
+}
+"#,
+    );
+    assert!(
+        !result
+            .errors
+            .iter()
+            .any(|e| e.kind == ResolveErrorKind::LayoutReprCIgnored),
+        "#[allow(repr_c_layout_ignored)] must suppress the private warning; got: {:?}",
+        result.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+
+    // … and must NOT suppress the pub error.
+    let all = resolve_errors(
+        r#"
+#[repr(C)]
+pub struct T { a: i64, b: f64, c: i64 }
+#[allow(repr_c_layout_ignored)]
+layout ts: Vec[T] {
+    group hot { a, c }
+    group cold { b }
+}
+"#,
+    );
+    assert_eq!(
+        all.iter()
+            .filter(|e| e.kind == ResolveErrorKind::LayoutReprCOnPubStruct)
+            .count(),
+        1,
+        "the pub error takes no suppression, or the FFI contract it protects \
+         becomes opt-out; got: {:?}",
+        all.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+/// `float_in_serialized_type` (B-2026-08-21-2). design.md § Floating point >
+/// Serialization: "`f32`/`f64` fields in `#[derive(Serialize, Deserialize)]`
+/// types trigger the `float_in_serialized_type` lint … The lint is a warning,
+/// suppressible PER-FIELD with `#[allow(float_in_serialized_type)]`."
+///
+/// The per-field granularity is the part worth pinning: `Pt` below carries two
+/// floats and suppresses exactly one, so a per-STRUCT implementation — the
+/// obvious shortcut — silences both and fails here.
+///
+/// The derive machinery is deferred post-v1, which is presumably why nobody
+/// wrote this. It does not make the lint vacuous: the ATTRIBUTE parses and
+/// typechecks today, so the trigger is decidable, and `Plain` confirms the
+/// converse — a float in a type that derives nothing says nothing.
+#[test]
+fn float_in_serialized_type_warns_per_field_and_respects_allow() {
+    let result = resolve_ok(
+        r#"
+#[derive(Serialize, Deserialize)]
+struct Pt { x: f64, #[allow(float_in_serialized_type)] y: f32, n: i64 }
+
+#[derive(Serialize)]
+struct One { v: f32 }
+
+struct Plain { z: f64 }
+"#,
+    );
+    let hits: Vec<&str> = result
+        .errors
+        .iter()
+        .filter(|e| e.kind == ResolveErrorKind::FloatInSerializedType)
+        .map(|e| e.message.as_str())
+        .collect();
+    assert_eq!(
+        hits.len(),
+        2,
+        "expected exactly `Pt.x` and `One.v`; got: {hits:?}"
+    );
+    assert!(
+        hits.iter().any(|m| m.contains("Pt.x")),
+        "the unsuppressed float field must warn; got: {hits:?}"
+    );
+    assert!(
+        !hits.iter().any(|m| m.contains("Pt.y")),
+        "#[allow] is PER-FIELD — `Pt.y` carries it and must be silent while \
+         `Pt.x` warns; got: {hits:?}"
+    );
+    assert!(
+        !hits.iter().any(|m| m.contains("Plain")),
+        "a float in a type deriving nothing is not this lint; got: {hits:?}"
+    );
+    assert!(
+        result
+            .errors
+            .iter()
+            .filter(|e| e.kind == ResolveErrorKind::FloatInSerializedType)
+            .all(|e| karac::resolver::resolve_kind_is_note(&e.kind)),
+        "warning severity — a float in a serialized type is legal"
+    );
+}
+
 /// `#[allow(layout_unassigned_fields)]` on the layout block suppresses it —
 /// the attribute the diagnostic's own suggestion names.
 #[test]

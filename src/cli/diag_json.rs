@@ -1531,6 +1531,9 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
             id_counter += 1;
             let code = match err.kind {
                 crate::resolver::ResolveErrorKind::LayoutUnassignedFields => "W0150",
+                crate::resolver::ResolveErrorKind::LayoutReprCIgnored => "W0151",
+                crate::resolver::ResolveErrorKind::LayoutReprCOnPubStruct => "E0151",
+                crate::resolver::ResolveErrorKind::FloatInSerializedType => "W0152",
                 crate::resolver::ResolveErrorKind::UndefinedName => "E0100",
                 crate::resolver::ResolveErrorKind::DuplicateDefinition => "E0101",
                 crate::resolver::ResolveErrorKind::ReservedIdentifier => "E0102",

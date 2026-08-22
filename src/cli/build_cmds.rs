@@ -2489,6 +2489,11 @@ pub(super) fn resolve_error_code(kind: &ResolveErrorKind) -> &'static str {
         // NOTE severity — the spec calls this a warning, so it gets a `W`
         // code, not an `E` one (B-2026-08-21-2 follow-up).
         ResolveErrorKind::LayoutUnassignedFields => "W0150",
+        // The private half is a lint (W); the `pub` half is the hard
+        // FFI-contract error the spec mandates (E) — B-2026-08-21-2.
+        ResolveErrorKind::LayoutReprCIgnored => "W0151",
+        ResolveErrorKind::LayoutReprCOnPubStruct => "E0151",
+        ResolveErrorKind::FloatInSerializedType => "W0152",
         ResolveErrorKind::UnknownModule => "E0112",
         ResolveErrorKind::UnknownItemInModule => "E0113",
         ResolveErrorKind::PrivateItemAccess => "E0111",

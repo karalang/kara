@@ -217,6 +217,23 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
         "W0150",
         res("LayoutUnassignedFields", Some(DiagnosticClass::LintWarning)),
     ),
+    // B-2026-08-21-2 — the `#[repr(C)]` + layout rule, split by visibility:
+    // the private half is the `repr_c_layout_ignored` lint, the `pub` half is
+    // the hard FFI-contract error the spec mandates, which takes no
+    // suppression.
+    (
+        "W0151",
+        res("LayoutReprCIgnored", Some(DiagnosticClass::LintWarning)),
+    ),
+    // Class `None`, not `LintWarning`: this is the ERROR half. Classing it as
+    // a lint would advertise `LINT_WARNING` for a diagnostic that takes no
+    // suppression and is fatal — the same false promise the row it comes from
+    // is about.
+    ("E0151", res("LayoutReprCOnPubStruct", None)),
+    (
+        "W0152",
+        res("FloatInSerializedType", Some(DiagnosticClass::LintWarning)),
+    ),
     (
         "E0100",
         res("UndefinedName", Some(DiagnosticClass::UndefinedName)),

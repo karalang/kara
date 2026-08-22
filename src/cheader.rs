@@ -881,23 +881,11 @@ fn is_unit(ty: &TypeExpr) -> bool {
 }
 
 /// True iff the attribute list carries `#[repr(C)]`.
+///
+/// Delegates to `Attribute::is_repr_c` so this and the resolver's
+/// `repr_c_layout_ignored` check cannot drift (B-2026-08-21-2).
 fn attrs_have_repr_c(attributes: &[crate::ast::Attribute]) -> bool {
-    use crate::ast::ExprKind;
-    attributes.iter().any(|a| {
-        a.is_bare("repr")
-            && a.args.iter().any(|arg| {
-                if arg.name.is_some() {
-                    return false;
-                }
-                match arg.value.as_ref().map(|e| &e.kind) {
-                    Some(ExprKind::Identifier(s)) => s == "C",
-                    Some(ExprKind::Path { segments, .. }) => {
-                        segments.len() == 1 && segments[0] == "C"
-                    }
-                    _ => false,
-                }
-            })
-    })
+    attributes.iter().any(|a| a.is_repr_c())
 }
 
 /// True iff a struct carries `#[repr(C)]`.

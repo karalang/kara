@@ -713,6 +713,47 @@ pub enum ResolveErrorKind {
     /// program fail to compile, and the attached suggestion told the user to
     /// suppress it with an attribute that was never read.
     LayoutUnassignedFields,
+    /// `repr_c_layout_ignored` (B-2026-08-21-2) — a `layout` block names a
+    /// struct carrying `#[repr(C)]`. design.md § Interaction with layout
+    /// blocks: "`#[repr(C)]` disables SoA transformation. A layout block on a
+    /// `#[repr(C)]` struct becomes documentation-only … The ABI layout takes
+    /// precedence." Severity is split by VISIBILITY, and only the private half
+    /// is this kind:
+    ///
+    ///   * private struct — "the compiler emits a WARNING listing which groups
+    ///     are being ignored … Suppress with `#[allow(repr_c_layout_ignored)]`
+    ///     when the layout block is intentionally kept as documentation."
+    ///   * `pub` struct — a COMPILE ERROR, because "a `pub` type may be
+    ///     consumed by FFI code that depends on the exact field order". That
+    ///     half is `ReprCLayoutOnPubStruct`, not a lint, and takes no
+    ///     suppression.
+    ///
+    /// NOTE severity for the private case, for the reason the sibling above
+    /// records: the spec calls it redundant-but-not-harmful, so the program is
+    /// legal and must still compile.
+    LayoutReprCIgnored,
+    /// The `pub` half of the rule documented on `LayoutReprCIgnored` — a
+    /// `layout` block on a `#[repr(C)]` **`pub`** struct. A hard error by
+    /// spec, and deliberately NOT the lint: `#[allow(repr_c_layout_ignored)]`
+    /// must not silence it, or the FFI contract it protects becomes
+    /// suppressible.
+    LayoutReprCOnPubStruct,
+    /// `float_in_serialized_type` (B-2026-08-21-2) — an `f32`/`f64` field in a
+    /// `#[derive(Serialize)]` / `#[derive(Deserialize)]` struct. design.md
+    /// § Floating point > Serialization: "JSON has no NaN encoding,
+    /// MessagePack/Protobuf carry IEEE bits but consumers may diverge. The
+    /// lint is a warning, suppressible PER-FIELD with
+    /// `#[allow(float_in_serialized_type)]`."
+    ///
+    /// Per-FIELD, not per-struct: a type may legitimately carry one float that
+    /// the author has reasoned about beside others that they have not, so the
+    /// suppression has to land where the reasoning is. NOTE severity — a float
+    /// in a serialized type is legal, just worth knowing about.
+    ///
+    /// The derive machinery itself is deferred post-v1, but the ATTRIBUTE
+    /// parses and typechecks today, so the trigger is decidable now and the
+    /// lint is not vacuous.
+    FloatInSerializedType,
     UndefinedName,
     DuplicateDefinition,
     ReservedIdentifier,
@@ -887,7 +928,12 @@ pub enum ResolveErrorKind {
 /// (B-2026-08-21-2) — every gate consults this rather than open-coding the
 /// list, which is how the effect side accumulated seventeen copies.
 pub fn resolve_kind_is_note(kind: &ResolveErrorKind) -> bool {
-    matches!(kind, ResolveErrorKind::LayoutUnassignedFields)
+    matches!(
+        kind,
+        ResolveErrorKind::LayoutUnassignedFields
+            | ResolveErrorKind::LayoutReprCIgnored
+            | ResolveErrorKind::FloatInSerializedType
+    )
 }
 
 impl std::fmt::Display for ResolveError {

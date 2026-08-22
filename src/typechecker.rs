@@ -131,7 +131,11 @@ pub(super) fn render_attribute(attr: &Attribute) -> String {
 /// Extract trait names from `#[derive(Eq, Hash, ...)]` attributes.
 /// Also handles call-form args like `Display(snake_case)` — the trait name
 /// (`"Display"`) is inserted regardless of arguments.
-pub(super) fn extract_derived_traits(attributes: &[Attribute]) -> HashSet<String> {
+/// Visible outside the typechecker (B-2026-08-21-2) so the resolver's
+/// `float_in_serialized_type` check reads derives through this one parser
+/// rather than open-coding a second one that could disagree about the
+/// call-form (`Display(snake_case)`) spelling.
+pub(crate) fn extract_derived_traits(attributes: &[Attribute]) -> HashSet<String> {
     let mut traits = HashSet::new();
     for attr in attributes {
         if attr.is_bare("derive") {

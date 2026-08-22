@@ -44,6 +44,31 @@ impl Attribute {
         self.path.len() == 1 && self.path[0] == name
     }
 
+    /// True iff this attribute is `#[repr(C)]`.
+    ///
+    /// Hoisted onto `Attribute` (B-2026-08-21-2) so the C-header emitter and
+    /// the resolver's `repr_c_layout_ignored` check answer one question one
+    /// way. They disagree about `#[repr(C)]` at their peril: the header
+    /// emitter decides a struct crosses the C ABI, and the resolver decides
+    /// that the same struct's layout block is therefore ignored — a copy that
+    /// drifted would let one of them act on a repr the other did not see.
+    pub fn is_repr_c(&self) -> bool {
+        use super::ExprKind;
+        self.is_bare("repr")
+            && self.args.iter().any(|arg| {
+                if arg.name.is_some() {
+                    return false;
+                }
+                match arg.value.as_ref().map(|e| &e.kind) {
+                    Some(ExprKind::Identifier(s)) => s == "C",
+                    Some(ExprKind::Path { segments, .. }) => {
+                        segments.len() == 1 && segments[0] == "C"
+                    }
+                    _ => false,
+                }
+            })
+    }
+
     /// True for the loop attribute that opts a Collect-shaped loop into
     /// parallel fan-out: canonical `#[par_order_free]`, or its
     /// deprecated pre-rename spelling `#[par_unordered]`.
