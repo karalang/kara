@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 278 | 0 |
 | leak | 187 | 0 |
-| missing-feature | 153 | 3 |
+| missing-feature | 153 | 2 |
 | run-vs-build | 151 | 0 |
 | double-free | 135 | 0 |
 | codegen-gap | 128 | 0 |
@@ -120,23 +120,22 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | parser | 38 | 0 |
 | runtime | 28 | 0 |
 | resolver | 26 | 0 |
-| effect | 11 | 1 |
+| effect | 11 | 0 |
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1491 surfaced · 3 open · 1466 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1491 surfaced · 2 open · 1466 fixed · 9 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-21-52 | 2026-08-22 | effect | low | CHANNEL EFFECT RESOURCES HAVE NO PER-VALUE IDENTITY -- every channel collapses to the single `Channel` resource. The conflict-analysis motivation this row was filed on has since been REFUTED by measurement (the producer/consumer case already worked; two-producer serialization was a verb-lattice defect, fixed separately) -- what remains is a narrow spec-fidelity gap against design.md:6049, where only the NON-communication verbs on distinct channels over-serialize | roadmap.md |
 | B-2026-08-22-6 | 2026-08-22 | typecheck | low | The `Hasher` and `BuildHasher` TRAITS are not baked, so a user cannot write their own hasher: `Map[K, V, H]` accepts only the two compiler-known selectors `SipHash13BuildHasher` / `FxBuildHasher`, and design.md's "User-extensible hashers" paragraph describes a surface that does not exist | roadmap.md |
 | B-2026-08-22-21 | 2026-08-22 | typecheck | low | `Sender.try_send` AND `Receiver.recv_blocking` ARE SPEC'D BUT DO NOT EXIST -- design.md:6070 declares both with effects, and each is "no method '<name>' on type '<Sender|Receiver>'" | roadmap.md |
 
-### Wontfix (8)
+### Wontfix (9)
 
-<details><summary>8 wontfix — real and reproduced, measured to a standstill, no action left. Titles are kept in full: they carry the measurements that closed the question, so read one before reopening its subject.</summary>
+<details><summary>9 wontfix — real and reproduced, measured to a standstill, no action left. Titles are kept in full: they carry the measurements that closed the question, so read one before reopening its subject.</summary>
 
 | id | date | surface | sev | title |
 |---|---|---|---|---|
@@ -148,6 +147,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1491 surfaced
 | B-2026-08-16-11 | 2026-08-16 | codegen | medium | The default integer overflow check is emitted inside the loop, blocking auto-vectorisation of EVERY integer reduction |
 | B-2026-08-17-40 | 2026-08-17 | codegen | medium | Kata 236's 14.5% kāra-only slowdown is CODE PLACEMENT, not a codegen regression — hot code byte-identical, moved 152 bytes; instructions flat to 0.002% |
 | B-2026-08-21-3 | 2026-08-21 | codegen | low | MEASURED NEGATIVE RESULT -- hoisting the ASCII test to the top of the `String.push` codegen arm removes 34% of the program's retired instructions and makes it 10% SLOWER; the string-build inner loop is latency-bound, not instruction-bound, so instruction-count reasoning does not predict its wall time |
+| B-2026-08-21-52 | 2026-08-22 | effect | low | CHANNEL EFFECT RESOURCES HAVE NO PER-VALUE IDENTITY -- every channel collapses to the single `Channel` resource. The conflict-analysis motivation this row was filed on has since been REFUTED by measurement (the producer/consumer case already worked; two-producer serialization was a verb-lattice defect, fixed separately) -- what remains is a narrow spec-fidelity gap against design.md:6049, where only the NON-communication verbs on distinct channels over-serialize |
 
 </details>
 
