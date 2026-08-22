@@ -96,8 +96,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 187 | 0 |
 | missing-feature | 152 | 4 |
 | run-vs-build | 151 | 1 |
-| double-free | 135 | 1 |
-| codegen-gap | 128 | 1 |
+| double-free | 135 | 0 |
+| codegen-gap | 128 | 0 |
 | diagnostics | 97 | 2 |
 | false-positive | 94 | 0 |
 | perf | 83 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 992 | 4 |
+| codegen | 992 | 2 |
 | typecheck | 242 | 2 |
 | interp | 172 | 0 |
 | other | 63 | 0 |
@@ -124,20 +124,18 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1489 surfaced · 9 open · 1458 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1489 surfaced · 7 open · 1460 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (9)
+### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-21-43 | 2026-08-21 | codegen | low | A USER IMPL ON A **NON-SCALAR** `Array` HEAD IS UNCALLABLE ON A TEMPORARY -- `mk().tag()` for `impl Tag for Array[String, 2]` still loud-fails after B-2026-08-21-25, which admits only scalar-element arrays because a scalar array is the case that owns no heap | roadmap.md |
 | B-2026-08-21-52 | 2026-08-22 | effect | low | CHANNEL EFFECT RESOURCES HAVE NO PER-VALUE IDENTITY -- every channel collapses to the single `Channel` resource. The conflict-analysis motivation this row was filed on has since been REFUTED by measurement (the producer/consumer case already worked; two-producer serialization was a verb-lattice defect, fixed separately) -- what remains is a narrow spec-fidelity gap against design.md:6049, where only the NON-communication verbs on distinct channels over-serialize | roadmap.md |
 | B-2026-08-22-6 | 2026-08-22 | typecheck | low | The `Hasher` and `BuildHasher` TRAITS are not baked, so a user cannot write their own hasher: `Map[K, V, H]` accepts only the two compiler-known selectors `SipHash13BuildHasher` / `FxBuildHasher`, and design.md's "User-extensible hashers" paragraph describes a surface that does not exist | roadmap.md |
 | B-2026-08-22-7 | 2026-08-22 | codegen | low | `f16_software_emulated` IS THE ONE STARTER-SET LINT WHOSE TRIGGER DEPENDS ON THE TARGET, and the target's feature baseline is only reachable behind `#[cfg(feature = "llvm")]` -- so wiring it is a PLACEMENT decision, not the mechanical job the other six were | roadmap.md |
 | B-2026-08-22-8 | 2026-08-22 | cli | low | `implicit_clone` HAS NO TRIGGER IN THE SPEC AND CANNOT BE DE-REGISTERED WITHOUT A design.md EDIT -- the one starter-set lint whose resolution is a SPEC decision, not a compiler change | roadmap.md |
 | B-2026-08-22-14 | 2026-08-22 | codegen+effect | low | AN EXISTENTIAL DECLARING POLYMORPHIC EFFECT VARIABLES (`-> impl Emit with F`) IS THE ONE RETURN-POSITION `impl Trait` SHAPE STILL WITHOUT A BUILD -- deliberately excluded from B-2026-08-22-12's witness substitution, because the effect checker reads the variable off the very node the rewrite would erase | codegen |
 | B-2026-08-22-16 | 2026-08-22 | typecheck | medium | `Channel.bounded(cap)` DOES NOT EXIST IN ANY SPELLING -- design.md documents it with a `requires cap > 0` contract, `bounded_channel.kara` exists in the stdlib, and nothing routes the name to it | typecheck |
-| B-2026-08-22-18 | 2026-08-22 | codegen | high | MOVING A HEAP ELEMENT OUT OF AN OWNED `Array[T, N]` PARAMETER DOUBLE-FREES IT -- `fn take_first(a: Array[String, 2]) -> String { return a[0]; }` frees the returned buffer at the callee's exit AND again in the caller; `karac check` is clean, the program prints the right answer, and only ASAN sees it | roadmap.md |
 | B-2026-08-22-20 | 2026-08-22 | effect | medium | THE BUILTIN CHANNEL METHODS CARRY NO `sends`/`receives` EFFECT -- `Sender.send` is seeded `allocates(Heap)` and nothing else, and the ONLY `EffectVerbKind::Sends` construction in the whole compiler is the `sends(Network)` block, so a real `tx.send(v)` is invisible to conflict analysis, `karac explain` and `query effects`; design.md:6070 declares it `with sends(tx) allocates(Heap)` | roadmap.md |
 
 ### Wontfix (8)
@@ -157,9 +155,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1489 surfaced
 
 </details>
 
-### Fixed (1458)
+### Fixed (1460)
 
-<details><summary>1458 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1460 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -14705,6 +14703,51 @@ not in the body — the binding is not registered as a slice, so the call cannot
 qualify `Slice.f`. Verified pre-existing against pre-fix source. It is the same
 under-registered-binding family as the `Array` half fixed in B-2026-08-21-25,
 which is why it is worth its own row rather than a note here. |
+| B-2026-08-21-43 | codegen | low | A USER IMPL ON A **NON-SCALAR** `Array` HEAD IS UNCALLABLE ON A TEMPORARY -- `mk().tag()` for `impl Tag for Array[String, 2]` still loud-fails after… | Fixed in 9d53994 by DELETING the scalar-element gate outright -- four lines.
+The row's blocking question turned out to be already answered.
+
+It asked who frees an `Array[String, N]` temporary's element buffers, and
+treated that as unestablished. It was established, by the BOUND spelling
+`let a = mk(); a.tag()`, which compiles and is ASAN-balanced. This arm
+materializes the temporary into a slot and re-dispatches BY IDENTIFIER into
+exactly that path, so it inherits the answer rather than inventing one --
+precisely the relationship it already had for scalar elements. Nothing about
+an owned-`self` array ABI needed deciding.
+
+Verified across all four surfaces -- `--interp`, JIT, `build`, and
+`KARAC_AUTO_PAR=0 build`: 42 everywhere.
+
+IT ALSO AGREES WITH THE BOUND FORM ON WHAT IT REFUSES, which is the stronger
+statement: `impl ... { fn first_len(self) -> i64 { return self[0].len(); } }`
+fails identically under both spellings ("indexed-receiver method 'len'
+requires the indexed container to be a named variable in v1"). That is an
+unrelated indexed-receiver gap in the CALLEE BODY, checked against the bound
+twin rather than assumed, and this arm neither causes nor hides it.
+
+SEQUENCED BEHIND B-2026-08-22-18, and that ordering was the substance of this
+row rather than bookkeeping. Measuring this one is what surfaced that double
+free: with the gate removed, `mk().tag()` was clean but `mk().take_first()`
+-- an element flowing OUT of the consumed temporary -- double-freed. The
+bound spelling double-freed identically on unmodified main, so this arm was
+not the cause; but landing it first would have handed an already-unsafe
+lowering a second spelling. -18 fixed the real defect (an f-string element's
+accumulator cleanup was never suppressed when the array took ownership),
+after which the materialization carries no obligation the bound path does not
+already discharge, for scalar and heap elements alike.
+
+TESTS pair the two spellings deliberately, because the whole argument is that
+they must be balanced the same way and a test of only the new one would not
+show that: E2E for the scalar-returning and element-returning shapes, each
+with its bound twin as the control, plus ASAN twins for both -- the printed
+value is correct either way, so only the sanitizer distinguishes a working
+lowering from a corrupting one.
+
+The `as_ptr` / `as_slice` reasoning recorded on this arm by B-2026-08-21-25 is
+untouched and still applies: the gate that is gone is the ELEMENT-TYPE gate,
+not the method allow-list.
+
+Full suite: 109 binaries, 14855 passed, 0 failed. fmt clean; clippy clean on
+both feature legs. |
 | B-2026-08-21-44 | codegen | low | `as_slice()` ON A FIXED-ARRAY **TEMPORARY** HAS NO CODEGEN LOWERING -- `n.to_ne_bytes().as_slice().len()` fails dispatch while `--interp` answers, th… | FIXED by 9b079fb0 (pre-rebase). A one-entry widening of the gate B-2026-08-21-25 built:
 `as_slice` joins the fixed-array read surface admitted for an array-valued
 TEMPORARY, and the identifier arm it re-dispatches into already handles an
@@ -15688,6 +15731,56 @@ mattered more than usual here: `try_path_receiver_method` sits in a
 first-match-wins dispatch chain and now returns `Some(..)` for builtin heads
 where it previously returned an error, so anything relying on reaching a later
 arm would surface there rather than in a repro. |
+| B-2026-08-22-18 | codegen | high | MOVING A HEAP ELEMENT OUT OF AN OWNED `Array[T, N]` PARAMETER DOUBLE-FREES IT -- `fn take_first(a: Array[String, 2]) -> String { return a[0]; }` free… | Fixed in 1b75e99, and the ROOT CAUSE IN THE FILED ROW WAS WRONG in both
+halves. The row read the IR's three cleanup blocks as "the callee frees the
+whole array including the element it returned, and the caller frees it
+again." Reading the actual IR:
+
+  * the CALLEE emits no frees at all -- it loads element 0 and returns it;
+  * the two extra cleanups are not on the array. They are on `%fstr.acc` and
+    `%fstr.acc2`, the F-STRING ACCUMULATOR temporaries that built the two
+    elements.
+
+So nothing about owned-`self`, partial moves, or an array ABI is involved.
+`compile_array_literal` simply never suppressed an element's independent
+scope-exit cleanup once the array took ownership of its buffer, so that free
+and the array's owner released the same pointer.
+
+That makes this a missing MEMBER of an existing family rather than a new
+defect class: the Vec literal and the tuple literal both call
+`suppress_fstr_acc_if_moved_out(e)` immediately after `compile_expr(e)`, and
+both carry comments explaining that the call must sit exactly there, while
+`last_fstr_acc` still holds THIS element's accumulator rather than the next
+one's (the slot is single and overwritten per element). The array literal was
+the one aggregate that never joined. The fix is that one call, in that
+position.
+
+SIBLING CHECKED, not assumed: the Vec path carries a SECOND protection for
+this class (B-2026-07-18-38, an owned caller-retains param used as a literal
+element). Probed `fn dup(x: String) -> Array[String, 1] { return [x]; }` --
+already balanced, so there is no second gap on the array path.
+
+WHY THE LITERAL FORM LOOKED FINE. `["xx", "yy"]` never reproduced it: static
+string literals carry `cap == 0`, so the owned-heap predicate is false and no
+free is emitted either way. Only a heap-constructed element (an f-string)
+exposes it, which is why the shape had to be built deliberately.
+
+TESTS. `asan_array_elem_moved_out_of_an_owned_param_is_balanced` is the
+repro, landed RED and `#[ignore]`d one commit earlier so the finding could
+not be lost, un-ignored here. Its sibling
+`asan_struct_field_moved_out_of_owned_self_is_balanced` is the passing
+CONTRAST that localizes the defect to the array path -- kept precisely so a
+later reader does not go looking for it in the struct path, which was clean
+all along.
+
+A NOTE ON THE MEASUREMENT, because it nearly produced a much worse row.
+Three probes appeared to fail together, which read as a broad
+owned-self-extraction bug. One of those "failures" was a wrong expected value
+in the probe itself -- 50 f-strings `a0..a49` total 140 bytes, not 150. The
+control and the real defect are distinguishable only by FAILURE MODE:
+"unexpected stdout (ASAN passed)" versus an explicit `ERROR:
+AddressSanitizer`. Grepping only for `test result` hides that difference.
+Full suite after the fix: 109 binaries, 14855 passed, 0 failed. |
 | B-2026-08-22-19 | autopar | medium | TWO SENDS ON A CHANNEL SPURIOUSLY SERIALIZE -- `ConcurrencyChecker::two_effects_conflict` codes `(Sends,Sends)` and `(Receives,Receives)` as a CONFLI… | 8fcfb64d -- Guard the `(Sends,Sends)` / `(Receives,Receives)` conflict arms in
 `ConcurrencyChecker::two_effects_conflict` (src/concurrency/conflicts.rs) with
 `a.resource == crate::ast::CHANNEL_RESOURCE_CANONICAL`, so the channel
