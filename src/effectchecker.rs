@@ -727,6 +727,11 @@ pub struct EffectChecker<'a> {
     /// the note describes the CYCLE, not one function, so annotating any
     /// participant is the user saying that cycle is intentional.
     pub(crate) mutual_recursion_allow: FxHashSet<Symbol>,
+    /// Every channel-endpoint parameter name declared anywhere in the program
+    /// (B-2026-08-21-32) — the precise signal for "this verb's resource is
+    /// value-rooted". See `canonical_resource_name` for why the cheaper
+    /// "not locally declared" test is unsound.
+    pub(crate) channel_param_names: std::collections::HashSet<String>,
     /// Functions and their AST bodies (for inference). [`FnHandle`]
     /// borrows the AST directly (the SCC convergence loop and
     /// whole-program walks clone the HANDLE, never the body — review
@@ -910,6 +915,7 @@ impl<'a> EffectChecker<'a> {
             function_visibility: FxHashMap::default(),
             function_spans: FxHashMap::default(),
             mutual_recursion_allow: FxHashSet::default(),
+            channel_param_names: std::collections::HashSet::new(),
             function_bodies: FxHashMap::default(),
             method_bodies: FxHashMap::default(),
             method_name_index: FxHashMap::default(),
@@ -977,6 +983,36 @@ impl<'a> EffectChecker<'a> {
     }
 
     pub fn check(mut self) -> EffectCheckResult {
+        // Value-rooted channel resources (B-2026-08-21-32): collect every
+        // channel-endpoint parameter name in the program up front, so
+        // `canonical_resource_name` can tell a value-rooted resource from an
+        // imported one. Walks the same three signature shapes the resolver
+        // pushes its frame around, so the two phases admit the same set.
+        for item in &self.program.items {
+            match item {
+                crate::ast::Item::Function(f) => {
+                    self.channel_param_names
+                        .extend(crate::ast::channel_endpoint_param_names(&f.params));
+                }
+                crate::ast::Item::TraitDef(t) => {
+                    for it in &t.items {
+                        if let crate::ast::TraitItem::Method(m) = it {
+                            self.channel_param_names
+                                .extend(crate::ast::channel_endpoint_param_names(&m.params));
+                        }
+                    }
+                }
+                crate::ast::Item::ImplBlock(i) => {
+                    for it in &i.items {
+                        if let crate::ast::ImplItem::Method(m) = it {
+                            self.channel_param_names
+                                .extend(crate::ast::channel_endpoint_param_names(&m.params));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
         // Seed built-in diverging functions with their known effects.
         // todo() and unreachable() always panic — any function calling them inherits panics.
         let builtin_span = Span {
@@ -1675,7 +1711,7 @@ impl<'a> EffectChecker<'a> {
                             );
                         }
                         for resource in &verb.resources {
-                            let res_name = resource.path.join(".");
+                            let res_name = self.canonical_resource_name(&resource.path);
                             result.add(
                                 Effect {
                                     verb: verb.kind.clone(),
@@ -1830,7 +1866,7 @@ impl<'a> EffectChecker<'a> {
                         );
                     }
                     for resource in &verb.resources {
-                        let res_name = resource.path.join(".");
+                        let res_name = self.canonical_resource_name(&resource.path);
                         result.add(
                             Effect {
                                 verb: verb.kind.clone(),
@@ -2072,6 +2108,50 @@ impl<'a> EffectChecker<'a> {
     /// so that `Fn(...) with E` slots can be checked against concrete sets
     /// rather than treated as `[pure]`. Pass `None` to get the legacy behavior
     /// (Variable contributes nothing to the slot set).
+    /// The resource identity a verb's resource path denotes.
+    ///
+    /// B-2026-08-21-32 — a bare single-segment name that is NOT a declared
+    /// `effect resource` is a VALUE-ROOTED channel resource (`with sends(tx)`
+    /// on a `tx: Sender[T]` parameter). The resolver has already rejected
+    /// every other reading of a bare name by this point, so reaching here with
+    /// one means the channel-endpoint arm accepted it.
+    ///
+    /// It collapses to one identity for every channel — see
+    /// [`crate::ast::CHANNEL_RESOURCE_CANONICAL`] for why that is the SOUND
+    /// direction and keying on the parameter name would not be.
+    fn canonical_resource_name(&self, path: &[String]) -> String {
+        let joined = path.join(".");
+        if path.len() != 1 {
+            return joined;
+        }
+        let declared = self
+            .program
+            .items
+            .iter()
+            .any(|i| matches!(i, crate::ast::Item::EffectResource(r) if r.name == joined));
+        // The test is MEMBERSHIP IN THE PROGRAM'S CHANNEL-ENDPOINT PARAMETER
+        // NAMES, not "absent from the local resource declarations".
+        //
+        // The looser rule was tried and is wrong: an IMPORTED resource
+        // (`std.web.Display` and friends) is equally absent from this
+        // program's `Item::EffectResource` list, so treating absence as
+        // "value-rooted" silently rewrote every imported resource to
+        // `Channel` — and the target gate keys on the resource NAME it is
+        // handed, so eight violations it exists to catch went green
+        // (`check_targets_*`, `wasm_*_gate_violation_aborts`,
+        // `run_raii_across_yield_violation_aborts`). Measured, not
+        // hypothesised.
+        //
+        // A declared resource still wins, so a program declaring its own
+        // `Channel` keeps that identity — and merges with this one, which is
+        // the conservative direction.
+        if !declared && self.channel_param_names.contains(&joined) {
+            crate::ast::CHANNEL_RESOURCE_CANONICAL.to_string()
+        } else {
+            joined
+        }
+    }
+
     fn resolve_effect_list_to_set(
         &self,
         list: &EffectList,
@@ -2100,7 +2180,7 @@ impl<'a> EffectChecker<'a> {
                     for resource in &verb.resources {
                         result.insert(Effect {
                             verb: verb.kind.clone(),
-                            resource: resource.path.join("."),
+                            resource: self.canonical_resource_name(&resource.path),
                         });
                     }
                 }

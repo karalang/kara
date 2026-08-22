@@ -1073,6 +1073,16 @@ pub struct Resolver<'a> {
     pub(crate) table: SymbolTable,
     pub(crate) resolutions: FxHashMap<SpanKey, SymbolId>,
     pub(crate) errors: Vec<ResolveError>,
+    /// Names of the CURRENT signature's channel-endpoint parameters, so a
+    /// `with sends(tx)` clause can resolve `tx` against the `tx: Sender[T]`
+    /// parameter beside it (B-2026-08-21-32).
+    ///
+    /// Set around each effect-list resolution that has a parameter list in
+    /// hand and cleared after, exactly like the statement-scoped lint frames:
+    /// a resource name is only value-rooted for the signature that declares
+    /// it, and leaking the set across signatures would let one function's
+    /// `tx` satisfy another's verb clause.
+    pub(crate) channel_resource_params: Vec<String>,
     /// The target type name when inside an impl block.
     pub(crate) current_impl_type: Option<String>,
     /// Stack of label-stack entries for validating `break` / `continue`
@@ -1211,6 +1221,7 @@ impl<'a> Resolver<'a> {
             table: SymbolTable::new(),
             resolutions: FxHashMap::default(),
             errors: Vec::new(),
+            channel_resource_params: Vec::new(),
             current_impl_type: None,
             loop_labels: Vec::new(),
             par_sibling_bindings: FxHashMap::default(),

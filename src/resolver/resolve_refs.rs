@@ -565,6 +565,21 @@ impl<'a> super::Resolver<'a> {
                 // single-file mode there is no tree to chase the target's
                 // kind through, and in tree mode the import-site
                 // validation already confirmed the item exists.
+                // B-2026-08-21-32 — a VALUE-ROOTED channel resource. design.md
+                // :6049 attaches `sends` / `receives` to the channel VALUE, and
+                // writes the whole `Sender`/`Receiver` API in that vocabulary
+                // (`with sends(tx)` on a `tx: Sender[T]` parameter). Checked
+                // before the kind table below, because the symbol IS a
+                // variable — the arm that used to reject it.
+                //
+                // Purely syntactic: the parameter's declared type is right
+                // there in the signature, which is what lets the resolver
+                // answer this at all, running as it does before typecheck.
+                if resource.path.len() == 1
+                    && self.channel_resource_params.iter().any(|p| p == first)
+                {
+                    continue;
+                }
                 let kind_label = match &sym.kind {
                     SymbolKind::EffectResource | SymbolKind::Import { .. } => None,
                     // Dotted resource paths (`reads(net.Conn)`) resolve

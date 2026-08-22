@@ -1634,3 +1634,69 @@ pub fn fn_returns_param_payload(f: &Function, arg_index: usize) -> bool {
     }
     walk_block_for(&f.body, param_name)
 }
+
+/// The channel-endpoint type heads whose PARAMETERS may be named directly in
+/// an effect verb — `with sends(tx)` on a `tx: Sender[T]` (B-2026-08-21-32).
+///
+/// design.md:6049 states the model normatively: "The `sends(ch)` and
+/// `receives(ch)` effects that the effect system tracks attach to the *channel
+/// value* — each channel is its own effect resource", and the seven
+/// `Sender`/`Receiver` declarations at :6064-:6094 are all written that way.
+/// Before this, every one of them was `'tx' is not an effect resource (it is a
+/// variable)`, and the diagnostic's suggested remedy (`effect resource tx;`)
+/// declared ONE GLOBAL resource named `tx` — the opposite of per-value
+/// identity, so there was no spelling that got the documented behaviour.
+pub const CHANNEL_ENDPOINT_TYPE_HEADS: &[&str] = &["Sender", "Receiver", "Channel"];
+
+/// The single resource identity every value-rooted channel resource collapses
+/// to, for now (B-2026-08-21-32).
+///
+/// THE COLLAPSE IS DELIBERATE AND IT IS THE SOUND DIRECTION. Per-value
+/// identity — telling `sends(tx1)` apart from `sends(tx2)` — is what design.md
+/// :6095's producer/consumer parallelization argument actually needs, and it
+/// is a real type-system feature (mapping call-site arguments to resource
+/// identities, i.e. alias reasoning). Until that exists, the alternative to
+/// collapsing is to key the resource on the PARAMETER NAME, and that is
+/// unsound in the dangerous direction: two functions whose channel params
+/// happen to be named `tx` and `out` would look like disjoint resources, so
+/// conflict analysis would report NO conflict between tasks that genuinely
+/// share a channel.
+///
+/// Collapsing over-reports instead: every channel is the same resource, so
+/// two channel-touching tasks always conflict. Sound, and pessimistic in the
+/// direction that refuses to parallelize rather than the direction that
+/// parallelizes something it should not.
+///
+/// A user's own `effect resource Channel;` merges with this name rather than
+/// colliding, which is the same conservative direction.
+pub const CHANNEL_RESOURCE_CANONICAL: &str = "Channel";
+
+/// Names of the parameters whose declared type head is a channel endpoint.
+/// Purely syntactic — it reads the declared type off the signature, so the
+/// resolver (which runs before typecheck and has no types) and the effect
+/// checker can both ask the same question and get the same answer.
+pub fn channel_endpoint_param_names(params: &[Param]) -> Vec<String> {
+    let mut out = Vec::new();
+    for p in params {
+        let Some(name) = p.name() else { continue };
+        if type_head_is_channel_endpoint(&p.ty) {
+            out.push(name.to_string());
+        }
+    }
+    out
+}
+
+/// True when the type's root head (after stripping `ref` / `mut ref` / `weak`)
+/// is a channel endpoint.
+pub fn type_head_is_channel_endpoint(ty: &TypeExpr) -> bool {
+    match &ty.kind {
+        crate::ast::TypeKind::Path(p) => p
+            .segments
+            .last()
+            .is_some_and(|s| CHANNEL_ENDPOINT_TYPE_HEADS.contains(&s.as_str())),
+        crate::ast::TypeKind::Ref(inner)
+        | crate::ast::TypeKind::MutRef(inner)
+        | crate::ast::TypeKind::Weak(inner) => type_head_is_channel_endpoint(inner),
+        _ => false,
+    }
+}

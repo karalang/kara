@@ -9900,3 +9900,86 @@ fn pure_loop_in_par_is_silent_when_every_loop_has_a_boundary() {
         "a loop whose body calls an effectful fn IS cancellable and must not warn"
     );
 }
+
+/// B-2026-08-21-32 — VALUE-ROOTED channel effect resources.
+///
+/// design.md:6049 states the model normatively: "The `sends(ch)` and
+/// `receives(ch)` effects that the effect system tracks attach to the *channel
+/// value* — each channel is its own effect resource", and the seven
+/// `Sender`/`Receiver` declarations at :6064-:6094 are written that way. Every
+/// one of them used to be `'tx' is not an effect resource (it is a variable)`,
+/// and the diagnostic's suggested remedy (`effect resource tx;`) declared ONE
+/// GLOBAL resource named `tx` — the opposite of per-value identity — so there
+/// was no spelling that got the documented behaviour.
+#[test]
+fn channel_endpoint_param_is_a_valid_effect_resource() {
+    let parsed = parse(
+        "fn snd(tx: Sender[i64], v: i64) with sends(tx) { tx.send(v); }\n\
+         fn rcv(rx: Receiver[i64]) -> i64 with receives(rx) suspends { return rx.recv(); }\n\
+         fn rcvb(rx: Receiver[i64]) -> i64 with receives(rx) blocks { return rx.recv(); }\n\
+         fn byref(tx: ref Sender[i64]) with sends(tx) { }\n",
+    );
+    let resolved = karac::resolve(&parsed.program);
+    assert!(
+        resolved.errors.is_empty(),
+        "the spec's own declaration forms must resolve: {:?}",
+        resolved
+            .errors
+            .iter()
+            .map(|e| &e.message)
+            .collect::<Vec<_>>()
+    );
+}
+
+/// The gate stays CLOSED for anything that is not a channel endpoint. This is
+/// the half that keeps the change from being "any variable is a resource":
+/// `sends(x)` on an `x: i64` is still the original error.
+#[test]
+fn a_non_channel_param_is_still_not_an_effect_resource() {
+    let parsed = parse("fn f(x: i64) with sends(x) { }\n");
+    let resolved = karac::resolve(&parsed.program);
+    assert!(
+        resolved
+            .errors
+            .iter()
+            .any(|e| e.message.contains("is not an effect resource")),
+        "a non-channel variable must still be rejected, else every in-scope \
+         name would satisfy a verb clause"
+    );
+}
+
+/// THE SOUNDNESS PROPERTY, and the reason this is not keyed on the parameter
+/// name. Two channels collapse to ONE resource identity, so conflict analysis
+/// OVER-reports (refuses to parallelize things it could) rather than
+/// UNDER-reporting (parallelizing two tasks that genuinely share a channel).
+///
+/// Keying on the name would have produced `sends(tx)` and `sends(out)` — two
+/// disjoint resources for what may well be the same channel, which is the
+/// unsound direction. Per-value identity is the real fix and is filed
+/// separately; until it exists, this collapse is what keeps the answer honest.
+#[test]
+fn distinct_channel_params_collapse_to_one_resource_identity() {
+    let parsed = parse(
+        "pub fn a(tx: Sender[i64]) with sends(tx) { tx.send(1); }\n\
+         pub fn b(out: Sender[i64]) with sends(out) { out.send(2); }\n",
+    );
+    let result = karac::effectcheck(&parsed.program);
+    // Read the declared sets directly — both must name the SAME resource.
+    let resources: std::collections::BTreeSet<String> = result
+        .declared_effects
+        .values()
+        .filter_map(|d| match d {
+            karac::effectchecker::DeclaredEffects::Explicit(set) => Some(set),
+            _ => None,
+        })
+        .flat_map(|set| set.effects.iter().map(|t| t.effect.resource.clone()))
+        .filter(|r| !r.is_empty() && r != "Heap")
+        .collect();
+    assert_eq!(
+        resources,
+        ["Channel".to_string()].into_iter().collect(),
+        "both channel params must collapse to the single canonical resource; \
+         two identities here would mean conflict analysis can miss a genuine \
+         shared-channel conflict"
+    );
+}
