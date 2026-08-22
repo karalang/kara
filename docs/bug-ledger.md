@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 151 | 0 |
 | double-free | 135 | 0 |
 | codegen-gap | 128 | 0 |
-| diagnostics | 97 | 1 |
+| diagnostics | 97 | 0 |
 | false-positive | 94 | 0 |
 | perf | 83 | 0 |
 | other | 56 | 0 |
@@ -115,7 +115,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | interp | 173 | 0 |
 | other | 63 | 0 |
 | ownership | 62 | 0 |
-| cli | 61 | 1 |
+| cli | 61 | 0 |
 | autopar | 55 | 0 |
 | parser | 38 | 0 |
 | runtime | 28 | 0 |
@@ -124,15 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1491 surfaced · 4 open · 1465 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1491 surfaced · 3 open · 1466 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-21-52 | 2026-08-22 | effect | low | CHANNEL EFFECT RESOURCES HAVE NO PER-VALUE IDENTITY -- every channel collapses to the single `Channel` resource. The conflict-analysis motivation this row was filed on has since been REFUTED by measurement (the producer/consumer case already worked; two-producer serialization was a verb-lattice defect, fixed separately) -- what remains is a narrow spec-fidelity gap against design.md:6049, where only the NON-communication verbs on distinct channels over-serialize | roadmap.md |
 | B-2026-08-22-6 | 2026-08-22 | typecheck | low | The `Hasher` and `BuildHasher` TRAITS are not baked, so a user cannot write their own hasher: `Map[K, V, H]` accepts only the two compiler-known selectors `SipHash13BuildHasher` / `FxBuildHasher`, and design.md's "User-extensible hashers" paragraph describes a surface that does not exist | roadmap.md |
-| B-2026-08-22-8 | 2026-08-22 | cli | low | `implicit_clone` HAS NO TRIGGER IN THE SPEC AND CANNOT BE DE-REGISTERED WITHOUT A design.md EDIT -- the one starter-set lint whose resolution is a SPEC decision, not a compiler change | roadmap.md |
 | B-2026-08-22-21 | 2026-08-22 | typecheck | low | `Sender.try_send` AND `Receiver.recv_blocking` ARE SPEC'D BUT DO NOT EXIST -- design.md:6070 declares both with effects, and each is "no method '<name>' on type '<Sender|Receiver>'" | roadmap.md |
 
 ### Wontfix (8)
@@ -152,9 +151,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1491 surfaced
 
 </details>
 
-### Fixed (1465)
+### Fixed (1466)
 
-<details><summary>1465 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1466 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -15450,6 +15449,71 @@ REMAINING, and deliberate: an unmeasured user-named `--target-cpu` fails OPEN
 sends someone rewriting code that was already fast, which is worse than a
 missing perf note. `implicit_clone` is now the only entry left in
 `KNOWN_UNWIRED` (B-2026-08-22-8, a spec decision). |
+| B-2026-08-22-8 | cli | low | `implicit_clone` HAS NO TRIGGER IN THE SPEC AND CANNOT BE DE-REGISTERED WITHOUT A design.md EDIT -- the one starter-set lint whose resolution is a SP… | Resolved in 85ce532 by option (a) -- `implicit_clone` REMOVED from the v1
+starter set -- with the owner's go-ahead, since dropping a lint from the
+spec is a language decision rather than a compiler cleanup.
+
+BOTH OF THIS ROW'S PREMISES WERE WRONG, and the removal is right anyway --
+for a stronger reason than the row gave.
+
+  1. "The spec states 'No implicit clones' for compiled code." That sentence
+     is REPL-SCOPED (design.md:11469). It sits in the REPL section
+     contrasting default strictness against `karac repl --auto-clone`, and
+     says REPL strictness is identical to compiled code -- not that compiled
+     code has been given a no-implicit-clones guarantee.
+
+  2. "The only place compiled Kara gains a copy the author did not write is
+     codegen's use-after-move defensive copy -- and those sites ALREADY emit
+     `warning[ownership]` at the same span, so wiring here would
+     double-report." That site DOES NOT ALLOCATE. Measured with the ASAN
+     allocation counter against a non-reusing baseline:
+
+       move, no reuse ....................... 10 / 13 allocations
+       move + reuse via `v.len()` ........... 13   (same as baseline)
+       move + reuse via `v[0].len()` ........ 13   (same as baseline)
+       owned param as a literal element ..... 10   (same as baseline)
+
+     The fourth shape is one this row never considered:
+     `maybe_defensive_copy_param_arg`, the mechanism added by B-2026-07-18-38
+     to fix a real double free. `fn dup(x: String) -> Vec[String] { [x] }`
+     allocates exactly as its baseline does.
+
+So the "double-report" objection is moot -- there is nothing at those spans
+to report. The real case is that the lint NAMES SOMETHING THAT DOES NOT
+OCCUR. That distinction matters for the decision: a merely redundant lint
+can be worth keeping, while a vacuous one is a false promise, because
+`#[deny(implicit_clone)]` passes and reads as a guarantee of no hidden
+allocations in a hot path.
+
+LIMIT STATED RATHER THAN OVERCLAIMED: `maybe_defensive_copy_param_arg`
+exists and was added for a real defect, so SOME shape must copy. Four were
+probed and none allocated. design.md now carries that measurement verbatim
+next to the roster, so a future trigger can be added without re-deriving it,
+and so nobody reads the removal as "no implicit clone can ever occur".
+
+FIVE EDITS, not one. The row scoped this as a roster change; two of the
+three design.md mentions are `#[allow(implicit_clone)]` EXAMPLES, which
+would have documented an attribute that now warns, and syntax.md:2368
+carried the same example. Plus the registry entry, `KNOWN_UNWIRED`, and the
+spec-coverage list in `src/lints.rs`. Parser-test fixtures using the name as
+a bare identifier moved to `module_mut_binding`, so no fixture cites a
+removed lint.
+
+COST, accepted deliberately: `#[allow(implicit_clone)]` now emits
+`warning[unknown_lint]`. That is the honest outcome for an attribute that
+was already a no-op -- silence was the worse failure mode.
+
+`KNOWN_UNWIRED` IS NOW EMPTY. The last two entries left in the same window:
+`f16_software_emulated` was WIRED (B-2026-08-22-7, landed concurrently in
+another session and met on rebase), and this one was REMOVED. The rebase
+conflict was the two edits to that one line; resolved to `&[]`, with a
+comment recording that an empty list is the intended steady state rather
+than a gap -- a lint that cannot be wired belongs out of the registry.
+Both guards (`starter_set_covers_spec_listed_lints`,
+`every_registered_lint_is_emitted_or_declared_unwired`) agree.
+
+Full suite post-rebase: 109 binaries, 14879 passed, 0 failed. fmt clean;
+clippy clean on both feature legs. |
 | B-2026-08-22-9 | typecheck | high | NO WHERE-CLAUSE BOUND OF ANY CLASS WAS DISCHARGED ON A METHOD CALL -- the method path passed `None` for the callee's where clause, so `h.take(NotMark… | FIXED by 69be64c, alongside B-2026-08-22-3. `method_user_impl.rs`'s concrete-receiver dispatch now calls `check_call_args_with_substitution_full` with `sig.where_clause` and `sig.generic_params` instead of the thin wrapper that hard-coded `None`. The wrapper itself is DELETED rather than left unused: its whole body was a call to `_full` with three `None`s, and the third is the bug -- with no wrapper to reach for, a future call site has to pass the where clause or write `None` where it is visible in the diff. Blast radius measured before landing, because this converts previously-accepted programs into errors: full default suite 0 failures, `--features llvm` suite 0 failures, and all 917 `.kara` files in the kara-katas corpus still typecheck clean. Pinned by `a_plain_trait_bound_is_discharged_on_a_method_call` and `an_assoc_type_equality_bound_is_discharged_on_a_method_call` in `tests/typechecker.rs`, each with the satisfied direction as the control; reverting only this half fails exactly those two and nothing else. |
 | B-2026-08-22-10 | typecheck | high | NO GENERIC BOUND OF ANY CLASS IS DISCHARGED ON A STATIC/ASSOCIATED-FUNCTION CALL -- `Type.assoc_fn(args)` never reaches the call-site engine at all,… | FIXED by 5514b6f.
 
