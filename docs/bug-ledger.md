@@ -93,8 +93,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 278 | 0 |
-| leak | 187 | 0 |
-| missing-feature | 153 | 2 |
+| leak | 188 | 1 |
+| missing-feature | 154 | 2 |
 | run-vs-build | 151 | 0 |
 | double-free | 135 | 0 |
 | codegen-gap | 128 | 0 |
@@ -110,28 +110,29 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 992 | 0 |
-| typecheck | 243 | 2 |
-| interp | 173 | 0 |
+| codegen | 993 | 1 |
+| typecheck | 243 | 1 |
+| interp | 174 | 1 |
 | other | 63 | 0 |
 | ownership | 62 | 0 |
 | cli | 61 | 0 |
 | autopar | 55 | 0 |
 | parser | 38 | 0 |
-| runtime | 28 | 0 |
+| runtime | 29 | 1 |
 | resolver | 26 | 0 |
 | effect | 11 | 0 |
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1491 surfaced · 2 open · 1466 fixed · 9 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1493 surfaced · 3 open · 1467 fixed · 9 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-22-6 | 2026-08-22 | typecheck | low | The `Hasher` and `BuildHasher` TRAITS are not baked, so a user cannot write their own hasher: `Map[K, V, H]` accepts only the two compiler-known selectors `SipHash13BuildHasher` / `FxBuildHasher`, and design.md's "User-extensible hashers" paragraph describes a surface that does not exist | roadmap.md |
-| B-2026-08-22-21 | 2026-08-22 | typecheck | low | `Sender.try_send` AND `Receiver.recv_blocking` ARE SPEC'D BUT DO NOT EXIST -- design.md:6070 declares both with effects, and each is "no method '<name>' on type '<Sender|Receiver>'" | roadmap.md |
+| B-2026-08-22-23 | 2026-08-22 | codegen | low | A STRUCT-WITH-HEAP CHANNEL PAYLOAD LEAKS ITS OWN `String`/`Vec` FIELDS ON `try_send`'S REJECT PATH -- the `SendError.Full(v)` binding frees a String or Vec payload correctly, but a struct CARRYING them leaks each field; the identical user-generic-enum program is ASAN-clean | roadmap.md |
+| B-2026-08-22-24 | 2026-08-22 | interp+runtime | low | THE INTERPRETER CANNOT MODEL RECEIVER LIVENESS, SO `SendError.Closed` AND `send`'S NO-RECEIVER PANIC ARE BOTH UNREACHABLE -- the compiled runtime has the counters and had to give them up to keep run == build | roadmap.md |
 
 ### Wontfix (9)
 
@@ -151,9 +152,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1491 surfaced
 
 </details>
 
-### Fixed (1466)
+### Fixed (1467)
 
-<details><summary>1466 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1467 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -16105,6 +16106,107 @@ pre-existing `allocates`/`suspends` seed survived the merge), and
 `test_public_fn_must_declare_channel_send` for both boundary directions.
 Non-vacuity: reverting the seed fails all three and leaves the four
 pre-existing channel tests green. |
+| B-2026-08-22-21 | typecheck | low | `Sender.try_send` AND `Receiver.recv_blocking` ARE SPEC'D BUT DO NOT EXIST -- design.md:6070 declares both with effects, and each is "no method '<nam… | FIXED by bde5935.
+
+BOTH METHODS IMPLEMENTED end to end — typecheck, interpreter, runtime,
+codegen, effect seeds — plus the `SendError[T]` type design.md's `try_send`
+signature names but never defined.
+
+  tx.try_send(v)      -> Result[(), SendError[T]]   sends(Channel) allocates(Heap)
+  rx.recv_blocking()  -> T                          receives(Channel) blocks
+
+Effects measured with `query effects`, which is also how the row's own claims
+were checked before any code was written. `recv_blocking` carries `blocks` and
+NOT `suspends`, asserted in both directions — the two execution verbs are the
+entire observable difference between it and `recv`, which lowers to the same
+runtime entry and returns the same value (`karac_runtime_channel_recv` already
+parks on a condvar on every threads-target, so `recv_blocking` is honest about
+what happens now while `recv` keeps the forward-looking verb).
+
+`SendError.Closed` IS DELIBERATELY UNREACHABLE ON BOTH BACKENDS, and this was
+the one real design decision. The compiled runtime CAN detect a dropped
+receiver — receivers are `total - senders` in its live-end counters — and an
+earlier draft did exactly that. Measured against the interpreter, it produced a
+RUN-VS-BUILD DIVERGENCE:
+
+  fn orphan() -> Sender[i64] { let (tx, rx) = Channel.new(); ...; return tx }
+  orphan().try_send(9)   ->  karac build: "closed 9"   --interp: "sent"
+
+because the interpreter's `ChannelBuf` is one `Arc` shared by both ends with no
+per-end liveness; giving it that means deterministic drop semantics for
+`Value::Receiver`, which a tree-walk evaluator with freely-`Clone`d values does
+not have. This project does not accept a run-vs-build divergence — the same
+rule that made the bounded `send` fail fast instead of park (B-2026-08-22-16,
+whose reasoning reads identically) — so the receiver check was REMOVED rather
+than kept. Both backends now agree on `Ok` and `Full`, and design.md § Channel
+lifetimes says so explicitly instead of claiming a panic that does not happen.
+Split as B-2026-08-24 below.
+
+THREE DEFECTS FOUND ON THE WAY IN, each pinned by a test that fails without it:
+
+1. PRE-EXISTING, and the reason `try_send` could not work on a heap payload at
+   all. `infer_channel_method` recorded `channel_elem_types[span]` BEFORE the
+   per-method arm ran, and on an unannotated `Channel.new()` the element is
+   still `?T0` at that point — the arm's `pin_channel_elem_from_arg` is what
+   solves it, from the first send's argument. So the first send recorded a
+   1-word placeholder and codegen sized a 24-byte `String` at 8 bytes.
+   MEASURED ON CLEAN `main`, before any of this row's work:
+
+     let (tx, rx) = Channel.new(); let a = "alpha"; tx.send(a);
+     println(f"got {rx.recv()}")
+       --interp     -> "got alpha"
+       karac build  -> "got "            (silently dropped payload)
+       karac run    -> abort: "receiver elem_size 24 exceeds sent blob 8"
+
+   Every pre-existing String-channel test ANNOTATES its pair, which is exactly
+   why none of them could see it. Fixed by re-recording the element after the
+   arm has pinned it; the dispatch-gate write stays unconditional, because
+   codegen's channel dispatch keys on an entry being PRESENT.
+
+2. `try_send` is the only channel method that BOTH pins the element from its
+   argument AND returns a type mentioning it, so it handed a match a
+   `Result[(), SendError[?T0]]` scrutinee. The payload binding then had no
+   recorded type and surfaced far downstream as `codegen: no handler for method
+   'len' on variable 'v'`. Only visible when the match is on the FIRST
+   `try_send` in the function — a preceding bare `let r = tx.try_send(x)` pins
+   the element and hides it entirely.
+
+3. LEAK, found by the ASAN fixture and fixed rather than filed. A hand-seeded
+   generic enum has ONE layout for every `T`, so unlike a monomorphized user
+   enum it has no per-instantiation drop kind, and an oversize payload's
+   heap box has no owner. The seeded `SendError` payload area is therefore
+   sized from the program's own channel element types (floor 3 words) instead
+   of a bare `T`'s 1, so the payload is inline and no box exists. LSan before:
+   24 bytes per rejected `String` send (2400 in 100 objects), 48 per struct
+   (4800 in 100). A `NestedStruct`-style drop kind derived the same way WAS
+   tried and changed nothing measurable, so it was dropped rather than landed
+   as plausible dead code.
+
+ALSO: `SendError[+T]` is covariant, like `Option[+T]`/`Result[+T, +E]` — `T`
+occurs only in producer position. Caught by the stdlib variance hygiene gate,
+which is the gate doing its job.
+
+BLAST RADIUS. Per-file error-count diff over all 194 `.kara` files in
+`examples/` + `runtime/stdlib/`: ONE line changed, `runtime/stdlib/channel.kara`
+0 -> 1, and it is not a regression — checking a baked stdlib file as a loose
+user file rejects its variance marker (`E_VARIANCE_USER_DECL_NOT_YET`), which
+is why `option.kara` already reported 1 and `result.kara` 2 in the SAME
+baseline. `channel.kara` joined that by-design set by gaining a marker. 917
+kata files typecheck clean. Full default suite 0 failures; full `--features
+llvm` suite 0 failures under KARAC_REQUIRE_RUNTIME_ARCHIVE=1 (codegen 3181,
+memory_sanitizer 1146, par_codegen 267, cli 651); both clippy legs and fmt
+clean.
+
+TESTS. `tests/codegen.rs`: `e2e_channel_try_send_and_recv_blocking` (scalar
+Ok/Full round-trip, heap payload on an unannotated pair, and a typed-payload
+case calling a method on the bound payload) and
+`e2e_channel_unannotated_heap_send_pins_element_size` (defect 1, with the
+annotated pair as the control). `tests/effectchecker.rs`:
+`test_try_send_and_recv_blocking_effects`. `tests/memory_sanitizer.rs`:
+`asan_channel_try_send_heap_payload_both_arms_no_double_free` (String payload,
+both arms, 100 iterations; plus a 4-word scalar struct that pins the dynamic
+sizing — without it, 3200 bytes leak). Non-vacuity: each of the five pieces
+reverted independently fails its own test and nothing else. |
 | B-2026-08-22-22 | interp | low | FLAKY TEST -- `a_map_hashes_through_the_hasher_it_was_built_with` asserts that SipHash13 and Fx produce DIFFERENT iteration orders over six keys, but… | FIXED by d80540b6, by widening the key set from six to sixteen so the
 coincidence the assertion trips on becomes combinatorially negligible.
 
