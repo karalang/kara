@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 277 | 0 |
 | leak | 187 | 0 |
 | run-vs-build | 149 | 0 |
-| missing-feature | 146 | 6 |
+| missing-feature | 147 | 6 |
 | double-free | 134 | 0 |
 | codegen-gap | 128 | 3 |
 | diagnostics | 95 | 2 |
@@ -119,12 +119,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | autopar | 54 | 0 |
 | parser | 37 | 2 |
 | runtime | 28 | 0 |
-| resolver | 26 | 1 |
+| resolver | 26 | 0 |
+| effect | 9 | 1 |
 | lexer | 8 | 0 |
-| effect | 8 | 1 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1471 surfaced · 12 open · 1437 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1472 surfaced · 12 open · 1438 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (12)
 
@@ -134,7 +134,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1471 surfaced
 | B-2026-08-21-6 | 2026-08-21 | codegen+interp | medium | `Map`/`Set` DO NOT USE THE SPEC'S DEFAULT HASHER: design.md mandates `SipHash13BuildHasher` seeded from a per-process random source, codegen emits FxHash with a COMPILE-TIME-CONSTANT seed and the interpreter hashes not at all -- so there is no hash-flooding resistance, iteration order is fully deterministic across runs (design.md says it must vary), the two backends order differently from each other, and `Map[K, V, FxBuildHasher]` -- design.md's own spelling -- does not resolve, so there is no opt-in either way | roadmap.md |
 | B-2026-08-21-18 | 2026-08-21 | codegen+typecheck | low | STRUCT FUNCTIONAL UPDATE `P { x: 1, ..base }` IS STILL UNIMPLEMENTED -- it now says so clearly instead of dropping the base, but the form syntax.md's STRUCT_LITERAL production admits cannot be used; the interpreter already implements the copy and codegen does not, so the remaining work is codegen plus the ownership rules for a spread base | roadmap.md |
 | B-2026-08-21-29 | 2026-08-21 | typecheck | medium | THREE DOCUMENTED SURFACES ARE NOT REACHABLE AS WRITTEN: every spelling of channel construction design.md uses (`Channel.new[T]()`, `Channel.bounded`), its whole `io.` I/O prefix, and `allocates(Heap)` -- whose `Heap` the document never declares and the prelude does not provide | roadmap.md |
-| B-2026-08-21-32 | 2026-08-21 | resolver+effect | medium | EFFECT RESOURCES CANNOT BE ROOTED AT A VALUE, so design.md's whole channel effect model is unwritable: `with sends(tx)` on a channel PARAMETER is `'tx' is not an effect resource (it is a variable)`, and the seven `Sender`/`Receiver` declarations at :6064-:6094 are all written that way | roadmap.md |
 | B-2026-08-21-43 | 2026-08-21 | codegen | low | A USER IMPL ON A **NON-SCALAR** `Array` HEAD IS UNCALLABLE ON A TEMPORARY -- `mk().tag()` for `impl Tag for Array[String, 2]` still loud-fails after B-2026-08-21-25, which admits only scalar-element arrays because a scalar array is the case that owns no heap | roadmap.md |
 | B-2026-08-21-44 | 2026-08-21 | codegen | low | `as_slice()` ON A FIXED-ARRAY **TEMPORARY** HAS NO CODEGEN LOWERING -- `n.to_ne_bytes().as_slice().len()` fails dispatch while `--interp` answers, the one method of the Array surface B-2026-08-21-25 left out | roadmap.md |
 | B-2026-08-21-45 | 2026-08-21 | typecheck+codegen | low | FIVE SHIPPED USER-FACING DIAGNOSTICS CARRY RUNS OF 14-30 SPACES mid-sentence, because rustfmt INTERMITTENTLY rejoins a `\`-continued string literal into one line and keeps the continuation indentation as real spaces | roadmap.md |
@@ -142,6 +141,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1471 surfaced
 | B-2026-08-22-3 | 2026-08-22 | typecheck | high | AN ASSOCIATED-TYPE-EQUALITY BOUND IS NEVER DISCHARGED AT CALL SITES -- `where I.Item = i64` is validated at the DECLARATION and then ignored, so a call passing an `I` whose `Item` is `String` is accepted; the bound does not bind | typecheck |
 | B-2026-08-22-4 | 2026-08-22 | parser | medium | AN INLINE ASSOCIATED-TYPE BINDING IS STILL REJECTED IN `impl Trait` TYPE POSITION -- `fn keys(ref self) -> impl Iterator[Item = ref K]` (design.md's own Map method table) fails to parse, though the same binding now works in every BOUND position | parser |
 | B-2026-08-22-5 | 2026-08-22 | parser | medium | AN EFFECT CLAUSE ON AN IMPL HEADER HAS NO PRODUCTION -- design.md:3817 writes `impl From[ParseError] for AppError with writes(Log) {` and the parser rejects it with `Expected LeftBrace, found With` | parser |
+| B-2026-08-21-52 | 2026-08-22 | effect | medium | CHANNEL EFFECT RESOURCES HAVE NO PER-VALUE IDENTITY -- every channel collapses to the single `Channel` resource, so conflict analysis cannot tell `sends(tx1)` from `sends(tx2)` and design.md :6095's producer-against-consumer parallelization argument is not backed by the compiler | roadmap.md |
 
 ### Wontfix (8)
 
@@ -160,9 +160,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1471 surfaced
 
 </details>
 
-### Fixed (1437)
+### Fixed (1438)
 
-<details><summary>1437 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1438 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -14046,6 +14046,68 @@ SELF-HOST PORT UPDATED IN LOCKSTEP: `selfhost/src/lexer.kara`'s suffix table, `r
 DOC SIDE: design.md needed no change — it already specified the type correctly in four normative passages, which is what made this an implementation gap rather than a spec question. `docs/syntax.md`'s primitive-type list DID omit `isize` while its own FFI examples at :962 and :965 used it; the list now carries it with the same "FFI-only, use i64 for indices/sizes" note `usize` has.
 
 NOT DONE, deliberately: `isize` is absent from `Vector[T, N]`'s SIMD element set and from the const-generic parameter types, in both cases matching `usize`, which design.md:586 excludes from const-params by name. |
+| B-2026-08-21-32 | resolver+effect | medium | EFFECT RESOURCES CANNOT BE ROOTED AT A VALUE, so design.md's whole channel effect model is unwritable: `with sends(tx)` on a channel PARAMETER is `'t… | FIXED by 6efbaa0, to the scope the owner chose when this row's decision was put
+to them: ACCEPT THE SYNTAX, DEFER PER-VALUE IDENTITY. The four spec'd
+declaration forms compile and run; `sends(tx1)` and `sends(tx2)` are not yet
+told apart. The remainder is filed as B-2026-08-21-51.
+
+WHAT LANDED. The resolver accepts a bare resource name that matches a parameter
+whose declared type head is a channel endpoint (`Sender` / `Receiver` /
+`Channel`, through any `ref` / `mut ref` / `weak` wrapper). Purely syntactic —
+the parameter's type is right there in the signature, which is what lets a
+phase running before typecheck answer the question at all. The frame is pushed
+around the effect list ALONE, so one function's `tx` cannot satisfy another
+function's verb clause.
+
+Verified against the spec's own forms (all four now `All checks passed` and run):
+
+  fn snd(tx: Sender[i64], v: i64) with sends(tx) allocates(Heap)
+  fn rcv(rx: Receiver[i64]) -> i64 with receives(rx) suspends
+  fn rcvb(rx: Receiver[i64]) -> i64 with receives(rx) blocks
+  fn rcvp(rx: Receiver[i64]) -> i64 with receives(rx)
+
+THE GATE STAYS CLOSED. `sends(x)` on an `x: i64` is still 'x' is not an effect
+resource (it is a variable). This does not make every in-scope name a resource;
+it admits exactly the channel-endpoint types design.md writes the model in.
+
+THE COLLAPSE IS THE SOUND DIRECTION, and is why this is NOT keyed on the
+parameter name. Every value-rooted channel resource canonicalizes to a single
+identity (`Channel`), so two channel-touching tasks ALWAYS conflict: conflict
+analysis OVER-reports (refuses to parallelize something it could) rather than
+UNDER-reporting (parallelizing two tasks that genuinely share a channel).
+Keying on the name would have produced `sends(tx)` and `sends(out)` as disjoint
+resources for what may well be the same channel -- unsound in the dangerous
+direction. Measured: two functions with differently-named channel params both
+report `sends(Channel)`.
+
+A NARROWER TEST THAN THE OBVIOUS ONE WAS REQUIRED, and the obvious one is a
+trap worth recording. Canonicalizing on "a bare name absent from this program's
+`effect resource` declarations" looks equivalent and is not: an IMPORTED
+resource (`std.web.Display` and friends) is equally absent, so that rule
+silently rewrote every imported resource to `Channel`. The target gate keys on
+the resource NAME it is handed, so eight violations it exists to catch went
+GREEN -- `check_targets_flag_tags_per_target_findings`,
+`check_targets_json_splits_shared_and_per_target`,
+`check_targets_jsonl_brackets_each_target`,
+`check_targets_single_target_parameterizes_resource_set`,
+`check_manifest_build_targets_drives_multi_target`,
+`wasm_browser_build_aborts_on_target_gate_violation`,
+`wasm_project_gate_violation_aborts`, `run_raii_across_yield_violation_aborts`.
+The correct test is membership in the program's channel-endpoint PARAMETER
+names. Caught by the suite, not by review.
+
+A user's own `effect resource Channel;` still wins and merges with this
+identity rather than colliding -- the same conservative direction.
+
+FOUND IN PASSING, not filed separately because it is one line of the same
+spec paragraph: design.md's seven declarations write `allocates(Heap)`, but
+`Heap` is not a predeclared resource -- a program must declare
+`effect resource Heap;` itself or the signature fails to resolve. Worth
+confirming against the spec's intent before anyone treats the seven
+declarations as copy-pasteable.
+
+Full suite 108 binaries / 14,771 tests / 0 failures; fmt clean; clippy 0 on
+both feature legs. |
 | B-2026-08-21-33 | other | low | the seven self-host oracles ignore `KARAC_REQUIRE_RUNTIME_ARCHIVE=1` on the one link failure that still soft-skips, and their skip comment wrongly cl… | FIXED by 2947a26 (rebased to e263ef7). The seven self-host oracles now honour `KARAC_REQUIRE_RUNTIME_ARCHIVE=1`: on a link failure the guard panics instead of returning `None` and reporting a pass over zero comparisons.
 
 Scope is what the measurement supports and no more. A MISSING ARCHIVE never took the skip -- `karac` reports `error[link]: libkarac_runtime.a not found`, whose `error[` prefix the oracle's own compile-error heuristic already matches, so it asserts loudly. Verified by moving all seven archives aside: `selfhost_lexer` FAILS rather than skips, with and without the flag. The stale half of the skip comment ("or a link failure from a missing runtime archive") is corrected in place, since it describes behaviour the heuristic three lines above prevents.
