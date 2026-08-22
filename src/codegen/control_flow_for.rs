@@ -83,6 +83,38 @@ impl<'ctx> super::Codegen<'ctx> {
         if self.array_elem_type_expr_from_rhs(inner).is_some() {
             return true;
         }
+        // B-2026-08-21-46 — a bracketed LITERAL source
+        // (`for (i, x) in [1, 2, 3].iter().enumerate()`).
+        //
+        // NOTE WHICH NODE THIS IS. An un-annotated bracketed literal does not
+        // reach codegen as `ArrayLiteral` at all: synthesis mode types it as a
+        // Vec, so it arrives as `PrefixCollectionLiteral { type_name: "Vec" }`.
+        // B-2026-08-21-46's row predicted the fix would need the typechecker's
+        // recorded type plumbed into this predicate, on the reasoning that
+        // "Array" cannot be guessed from the syntax. It does not: the literal
+        // already carries its resolved type name in the node, so the answer is
+        // read off the AST rather than inferred from it.
+        //
+        // Accepting it only decides to PEEL the `.enumerate()`. The recursion
+        // then lands on the Vec-valued-temporary path below, which materializes
+        // the literal into a synth binding and drives `compile_for_vec_var` —
+        // whose induction variable IS the enumerate index. Nothing is
+        // registered as Array, so the mis-registration the row worried about
+        // cannot arise.
+        //
+        // Deliberately NOT widened to `ExprKind::ArrayLiteral`. `compile_for`
+        // has an arm for that node, but no shape measured for this row reaches
+        // it — `b"abc"` and an annotated `Array[i64, N]` binding both route
+        // through the array-VAR path instead, and both already worked. Its
+        // helper (`compile_for_array_values`) unrolls and binds no enumerate
+        // index, so accepting the node here without also teaching that helper
+        // would leave the index unbound. Left alone, such a shape keeps the
+        // pre-existing loud backstop, which is the honest outcome for a case
+        // with no reproducer.
+        if matches!(&inner.kind, ExprKind::PrefixCollectionLiteral { type_name, .. } if type_name == "Vec")
+        {
+            return true;
+        }
         false
     }
 

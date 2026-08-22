@@ -102821,6 +102821,61 @@ impl Sums for Array[i64, 3] {
         );
     }
 
+    /// B-2026-08-21-46 — `for (i, x) in [1, 2, 3].iter().enumerate()`.
+    ///
+    /// The one source shape B-2026-08-21-41's widening could not reach. The
+    /// plain `for x in [1, 2, 3]` and `for x in [1, 2, 3].iter()` both lowered
+    /// fine; only the `.enumerate()` peel declined and fell to the loud adaptor
+    /// backstop, build-failing a program `--interp` answers.
+    ///
+    /// WHAT THE ROW GOT WRONG, and why the pin is written this way. It reasoned
+    /// that a bracketed literal "carries no declared element anywhere" so the
+    /// predicate would need the typechecker's recorded type plumbed in. It does
+    /// not: such a literal never reaches codegen as `ArrayLiteral` at all —
+    /// synthesis mode types it as a Vec, so it arrives already labelled,
+    /// `PrefixCollectionLiteral { type_name: "Vec" }`. The type is read off the
+    /// node, not guessed from syntax.
+    ///
+    /// The cases, and what each is here to catch:
+    ///   * the row's own repro (`e`), which is the regression proper.
+    ///   * a SECOND loop whose body uses `i` multiplicatively, because the
+    ///     failure this replaces would have been an index stuck at 0 — and
+    ///     `0 * x` is 0, which a sum-only assertion could not tell from a
+    ///     correct run. `i * 100 + x` makes every index observable.
+    ///   * a NESTED loop in the body: the index binding is `take()`n exactly so
+    ///     an inner loop does not re-bind it, and this is the shape that proves
+    ///     the recursion still honours that.
+    ///   * a float element, so the lowering cannot be assuming integers.
+    ///   * `.into_iter()` alongside `.iter()`, since the peel accepts both.
+    #[test]
+    fn test_e2e_enumerate_over_a_bracketed_literal() {
+        let src = r#"
+fn main() {
+    let mut e = 0;
+    for (i, x) in [1, 2, 3].iter().enumerate() { e = e + i * x; }
+    println(e);
+
+    for (i, x) in [10, 20, 30].iter().enumerate() { println(i * 100 + x); }
+
+    let mut d = 0;
+    for (i, x) in [4, 5].into_iter().enumerate() { d = d + i * x; }
+    println(d);
+
+    for (i, x) in [1, 2].iter().enumerate() {
+        for y in [100, 200] { println(i * 1000 + x * 10 + y); }
+    }
+
+    let mut f = 0.0;
+    for (i, x) in [1.5, 2.25].iter().enumerate() { f = f + (i as f64) * x; }
+    println(f);
+}
+"#;
+        assert_eq!(
+            run_program(src).as_deref(),
+            Some("8\n10\n120\n230\n5\n110\n210\n1120\n1220\n2.25\n")
+        );
+    }
+
     /// B-2026-08-21-41, the class half: a `for` source that codegen cannot
     /// lower must be an ERROR, not a loop that runs zero times.
     ///
