@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 151 | 0 |
 | double-free | 135 | 0 |
 | codegen-gap | 128 | 0 |
-| diagnostics | 97 | 0 |
+| diagnostics | 98 | 1 |
 | false-positive | 94 | 0 |
 | perf | 83 | 0 |
 | other | 56 | 0 |
@@ -111,11 +111,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 993 | 1 |
-| typecheck | 243 | 1 |
+| typecheck | 244 | 2 |
 | interp | 174 | 1 |
 | other | 63 | 0 |
 | ownership | 62 | 0 |
-| cli | 61 | 0 |
+| cli | 62 | 1 |
 | autopar | 55 | 0 |
 | parser | 38 | 0 |
 | runtime | 29 | 1 |
@@ -124,15 +124,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1493 surfaced · 3 open · 1467 fixed · 9 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1494 surfaced · 4 open · 1467 fixed · 9 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-22-6 | 2026-08-22 | typecheck | low | The `Hasher` and `BuildHasher` TRAITS are not baked, so a user cannot write their own hasher: `Map[K, V, H]` accepts only the two compiler-known selectors `SipHash13BuildHasher` / `FxBuildHasher`, and design.md's "User-extensible hashers" paragraph describes a surface that does not exist | roadmap.md |
 | B-2026-08-22-23 | 2026-08-22 | codegen | low | A STRUCT-WITH-HEAP CHANNEL PAYLOAD LEAKS ITS OWN `String`/`Vec` FIELDS ON `try_send`'S REJECT PATH -- the `SendError.Full(v)` binding frees a String or Vec payload correctly, but a struct CARRYING them leaks each field; the identical user-generic-enum program is ASAN-clean | roadmap.md |
 | B-2026-08-22-24 | 2026-08-22 | interp+runtime | low | THE INTERPRETER CANNOT MODEL RECEIVER LIVENESS, SO `SendError.Closed` AND `send`'S NO-RECEIVER PANIC ARE BOTH UNREACHABLE -- the compiled runtime has the counters and had to give them up to keep run == build | roadmap.md |
+| B-2026-08-22-25 | 2026-08-22 | typecheck+cli | low | `karac fix`'s `redundant_suffix` DELETION SPAN IS ONE CHARACTER SHORT ON THE UNDERSCORE-SEPARATED SUFFIX FORM: `0_i64` is rewritten to `0_`, leaving the separator that existed only to attach the suffix | roadmap.md |
 
 ### Wontfix (9)
 
