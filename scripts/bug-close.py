@@ -141,10 +141,20 @@ def main() -> None:
 
     fix_text = read_text_arg(args.fix).rstrip("\n")
     if args.sha not in fix_text:
-        print(
-            f"bug-close: note — the fix prose does not mention {args.sha}; "
-            f"conventionally it opens 'FIXED by {args.sha}.'",
-            file=sys.stderr,
+        # HARD failure, not a note. This was advisory, printed to stderr, and
+        # was missed twice in one session — both times because the prose
+        # already opened with the words "FIXED by" (just followed by an
+        # explanation rather than the SHA), which reads correct at a glance.
+        # The result is a `fixed` row whose commit is unrecoverable from the
+        # ledger, and no lint catches it: `bug-lint`'s "fixed but no fix SHA"
+        # check did not fire on either row. Same reasoning as `--expect` —
+        # a guard that only warns is a guard that gets skipped.
+        sys.exit(
+            f"bug-close: the fix prose does not mention {args.sha}.\n"
+            f"  Ledger convention is for it to OPEN with 'FIXED by {args.sha}.'\n"
+            f"  so a closed row stays traceable to the commit that closed it.\n"
+            f"  Add the SHA to the prose and re-run — do not work around this by\n"
+            f"  passing a SHA that happens to appear in the text."
         )
 
     new = dict(row)

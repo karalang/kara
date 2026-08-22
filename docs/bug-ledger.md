@@ -15384,7 +15384,7 @@ Tests: exactly-one-diagnostic (the cascade guard), the two per-shape
 remedies, all four effect spellings (`writes(Log)` / `panics` / `_` /
 `blocks`), and the applied fix edit. Full suite 109 binaries, 14838
 passed, 0 failed; fmt clean; clippy clean on both feature legs. |
-| B-2026-08-22-7 | codegen | low | `f16_software_emulated` IS THE ONE STARTER-SET LINT WHOSE TRIGGER DEPENDS ON THE TARGET -- and the blocker is NOT the placement this row was filed on… | FIXED by wiring the lint in the TYPECHECKER, with the capability question
+| B-2026-08-22-7 | codegen | low | `f16_software_emulated` IS THE ONE STARTER-SET LINT WHOSE TRIGGER DEPENDS ON THE TARGET -- and the blocker is NOT the placement this row was filed on… | FIXED by 289bc8a3, wiring the lint in the TYPECHECKER, with the capability question
 answered WITHOUT the backend -- which is what dissolved the placement
 dilemma this row was filed on.
 
