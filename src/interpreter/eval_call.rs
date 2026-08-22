@@ -11,7 +11,7 @@
 //!
 //! Lives in a sibling `impl<'a> super::Interpreter<'a>` block.
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex, RwLock};
 
 use regex::Regex as RustRegex;
@@ -698,10 +698,32 @@ impl<'a> super::Interpreter<'a> {
                         .unwrap_or_default();
                     return eval_http_post(&url, &body);
                 }
-                "Channel.new" => {
-                    let queue: Arc<Mutex<VecDeque<Value>>> = Arc::new(Mutex::new(VecDeque::new()));
-                    let sender = Value::Sender(Arc::clone(&queue));
-                    let receiver = Value::Receiver(queue);
+                "Channel.new" | "Channel.bounded" => {
+                    // `Channel.bounded(cap)` is `Channel.new()` plus a queue
+                    // bound (design.md § `Channel[T]` API; B-2026-08-22-16) —
+                    // same `(Sender[T], Receiver[T])` pair, so one arm serves
+                    // both. Capacity 0 marks the unbounded constructor.
+                    let capacity = if path_str == "Channel.bounded" {
+                        match args.first().map(|a| self.eval_expr_inner(&a.value)) {
+                            Some(Value::Int(n)) if n > 0 => n as usize,
+                            // `requires cap > 0` is a typecheck-time contract,
+                            // enforced there for a literal. A non-literal that
+                            // turns out non-positive at runtime cannot silently
+                            // become "unbounded", so it is reported.
+                            _ => {
+                                return self.record_runtime_error(
+                                    "`Channel.bounded` requires a capacity greater than 0"
+                                        .to_string(),
+                                    span,
+                                );
+                            }
+                        }
+                    } else {
+                        0
+                    };
+                    let buf = crate::interpreter::value::ChannelBuf::new(capacity);
+                    let sender = Value::Sender(Arc::clone(&buf));
+                    let receiver = Value::Receiver(buf);
                     return Value::Tuple(vec![sender, receiver]);
                 }
                 "File.open" | "File.create" | "File.append" => {

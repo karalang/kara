@@ -4172,6 +4172,17 @@ impl<'ctx> Codegen<'ctx> {
             Some(Linkage::External),
         );
 
+        // `karac_runtime_channel_new_bounded(cap: i64) -> ptr` — the
+        // capacity-bounded sibling backing `Channel.bounded(cap)`
+        // (B-2026-08-22-16). Same refcount-2 contract; the bound makes a full
+        // `send` apply backpressure instead of growing the queue.
+        let channel_new_bounded_ty = ptr_type.fn_type(&[i64_type.into()], false);
+        module.add_function(
+            "karac_runtime_channel_new_bounded",
+            channel_new_bounded_ty,
+            Some(Linkage::External),
+        );
+
         // `karac_runtime_channel_clone(ch: ptr) -> ptr` — backs
         // `Sender.clone()`: same pointer, sender + total count++.
         let channel_clone_ty = ptr_type.fn_type(&[ptr_type.into()], false);

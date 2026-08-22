@@ -96115,6 +96115,49 @@ fn main() {
         }
     }
 
+    /// B-2026-08-22-16 — `Channel.bounded(cap)`.
+    ///
+    /// design.md § `Channel[T]` API documents it with a `requires cap > 0`
+    /// contract, and nothing routed the name: `grep '"bounded"' src/` returned
+    /// nothing, so both spellings reported "no associated function 'bounded'".
+    /// It returns the SAME `(Sender[T], Receiver[T])` pair as `Channel.new()` —
+    /// the bound changes the queue's behaviour, not construction's shape.
+    ///
+    /// The qualified spelling is covered here too because it is the one
+    /// design.md settles on for explicit type selection, and it only became
+    /// reachable for builtin heads with B-2026-08-22-17 — this row was blocked
+    /// behind that one.
+    #[test]
+    fn e2e_bounded_channel_construction_and_capacity() {
+        // Within capacity, both spellings, interleaved send/recv so the queue
+        // drains and refills rather than only ever growing.
+        let src = "fn main() {\n\
+            \x20   let (tx, rx) = Channel.bounded(2);\n\
+            \x20   tx.send(1); tx.send(2);\n\
+            \x20   println(rx.recv());\n\
+            \x20   tx.send(3);\n\
+            \x20   println(rx.recv());\n\
+            \x20   println(rx.recv());\n\
+            \x20   let (qx, qr) = Channel[i64].bounded(3);\n\
+            \x20   qx.send(7);\n\
+            \x20   println(qr.recv());\n\
+            }\n";
+        assert_eq!(run_program(src).as_deref(), Some("1\n2\n3\n7\n"));
+
+        // The unbounded twin, as the control: `bounded` must not have changed
+        // what `new` does, and a capacity of 0 is what marks "unbounded"
+        // internally — so a regression there would surface as `new` suddenly
+        // rejecting its second send.
+        let twin = "fn main() {\n\
+            \x20   let (tx, rx) = Channel.new();\n\
+            \x20   tx.send(1); tx.send(2); tx.send(3);\n\
+            \x20   println(rx.recv());\n\
+            \x20   println(rx.recv());\n\
+            \x20   println(rx.recv());\n\
+            }\n";
+        assert_eq!(run_program(twin).as_deref(), Some("1\n2\n3\n"));
+    }
+
     #[test]
     fn e2e_channel_send_recv_tryrecv_clone() {
         // Phase 6 "Channel AOT codegen lowering": `Channel.new()` destructure,

@@ -401,6 +401,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
     // `Sender.send` / `Receiver.recv` call sites.
     keep!(
         channel::karac_runtime_channel_new,
+        channel::karac_runtime_channel_new_bounded,
         channel::karac_runtime_channel_clone,
         channel::karac_runtime_channel_drop_sender,
         channel::karac_runtime_channel_drop_receiver,

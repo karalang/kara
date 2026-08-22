@@ -286,6 +286,32 @@ pub fn narrow_to_i64(n: i128) -> i64 {
     }
 }
 
+/// Shared buffer behind a `Channel[T]`'s `Sender`/`Receiver` pair.
+///
+/// Carries the queue AND the bound so that `Channel.bounded(cap)` is a real
+/// bound in the interpreter rather than a name that behaves like
+/// `Channel.new()` (B-2026-08-22-16). Holding the capacity INSIDE the `Arc`
+/// (rather than as a second variant field) keeps every existing
+/// `Value::Sender(_)` pattern and the `Arc::ptr_eq` identity test working
+/// unchanged — only the three sites that actually lock the queue moved.
+#[derive(Debug)]
+pub struct ChannelBuf {
+    pub queue: Mutex<VecDeque<Value>>,
+    /// 0 = unbounded (`Channel.new()`); positive = the `Channel.bounded(cap)`
+    /// bound. `requires cap > 0` is enforced in the typechecker, so 0 means
+    /// "unbounded" without ambiguity.
+    pub capacity: usize,
+}
+
+impl ChannelBuf {
+    pub fn new(capacity: usize) -> Arc<Self> {
+        Arc::new(ChannelBuf {
+            queue: Mutex::new(VecDeque::new()),
+            capacity,
+        })
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Value {
     /// Every integer width's runtime carrier (B-2026-08-19-8 stage 1).
@@ -611,12 +637,12 @@ pub enum Value {
     },
     /// Sender[T] end of a Channel[T]. Wraps a shared queue so that cloning a
     /// Sender creates an additional producer that shares the same buffer.
-    Sender(Arc<Mutex<VecDeque<Value>>>),
+    Sender(Arc<ChannelBuf>),
     /// Receiver[T] end of a Channel[T]. `recv()` blocks until an item is
     /// available; `try_recv()` returns immediately as `Option[T]`. In the
     /// single-threaded tree-walk interpreter the test pattern is always
     /// send-before-recv, so the queue already has items when recv fires.
-    Receiver(Arc<Mutex<VecDeque<Value>>>),
+    Receiver(Arc<ChannelBuf>),
     /// File handle wrapping a live OS file descriptor. The `Arc<Mutex<...>>`
     /// layout keeps `Value` clone-friendly without requiring `Clone` on
     /// `std::fs::File` (which is intentionally non-Clone — cloning a file

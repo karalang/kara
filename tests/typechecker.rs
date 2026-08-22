@@ -15037,6 +15037,46 @@ fn test_sorted_map_unknown_method_now_errors() {
 
 // ── Channel[T] / Sender[T] / Receiver[T] typechecking ─────────────────────────
 
+/// B-2026-08-22-16 — `Channel.bounded(cap)`'s `requires cap > 0` contract.
+///
+/// A LITERAL capacity is checked at compile time. The negative case is here
+/// because it is the one that got away first: `-1` parses as
+/// `Unary { Neg, Integer(1) }`, not `Integer(-1)`, so a check that only
+/// inspected `ExprKind::Integer` accepted `bounded(-1)` while correctly
+/// rejecting `bounded(0)`.
+#[test]
+fn bounded_channel_requires_a_positive_capacity() {
+    for (src, what) in [
+        ("fn main() { let (tx, rx) = Channel.bounded(0); }", "zero"),
+        (
+            "fn main() { let (tx, rx) = Channel.bounded(-1); }",
+            "negative",
+        ),
+    ] {
+        let errs = typecheck_errors(src);
+        assert!(
+            errs.iter()
+                .any(|e| e.message.contains("requires a capacity greater than 0")),
+            "a {what} capacity must be rejected, got: {errs:?}"
+        );
+    }
+    // A positive literal, and a NON-literal, both pass the compile-time gate.
+    // The non-literal case matters: the contract is checked only where the
+    // capacity is statically known, and a variable must not be rejected for
+    // being unknowable rather than for being wrong.
+    for src in [
+        "fn main() { let (tx, rx) = Channel.bounded(1); }",
+        "fn main() { let n = 4; let (tx, rx) = Channel.bounded(n); }",
+    ] {
+        let result = typecheck_ok(src);
+        assert!(
+            result.errors.is_empty(),
+            "a valid capacity must typecheck: {src} -> {:?}",
+            result.errors
+        );
+    }
+}
+
 #[test]
 fn test_sender_send_returns_unit() {
     typecheck_ok("fn f(s: Sender[i64]) { s.send(1_i64); }");

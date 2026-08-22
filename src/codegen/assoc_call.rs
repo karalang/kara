@@ -879,14 +879,31 @@ impl<'ctx> super::Codegen<'ctx> {
         // `DropChannelEnd` cleanups the destructured `tx`/`rx` bindings emit.
         // Element type erases here — it travels per send/recv call — so this
         // path needs no generic-arg info.
-        if type_name == "Channel" && method == "new" && _args.is_empty() {
+        //
+        // `Channel.bounded(cap)` (B-2026-08-22-16) shares every line of this:
+        // it differs only in which extern mints the channel and in passing the
+        // bound through. The tuple shape, the refcount-2 contract and the
+        // element-type erasure are all identical, so it rides the same arm
+        // rather than a near-duplicate one.
+        let is_chan_new = type_name == "Channel" && method == "new" && _args.is_empty();
+        let is_chan_bounded = type_name == "Channel" && method == "bounded" && _args.len() == 1;
+        if is_chan_new || is_chan_bounded {
+            let (fn_name, call_args) = if is_chan_bounded {
+                let cap = self.compile_expr(&_args[0].value)?;
+                (
+                    "karac_runtime_channel_new_bounded",
+                    vec![cap.into_int_value().into()],
+                )
+            } else {
+                ("karac_runtime_channel_new", Vec::new())
+            };
             let new_fn = self
                 .module
-                .get_function("karac_runtime_channel_new")
-                .expect("karac_runtime_channel_new declared in Codegen::new");
+                .get_function(fn_name)
+                .unwrap_or_else(|| panic!("{fn_name} declared in Codegen::new"));
             let call = self
                 .builder
-                .build_call(new_fn, &[], "__channel_new")
+                .build_call(new_fn, &call_args, "__channel_new")
                 .unwrap();
             let ch_ptr = call
                 .try_as_basic_value()

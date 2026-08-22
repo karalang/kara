@@ -1317,11 +1317,50 @@ impl<'a> super::TypeChecker<'a> {
         // under the typecheck-bypassing interpreter path before the AOT
         // codegen lowering; `karac build` runs the typechecker.
         if let ExprKind::Path { segments, .. } = &callee.kind {
-            if segments.len() == 2
-                && segments[0] == "Channel"
-                && segments[1] == "new"
-                && args.is_empty()
-            {
+            // `Channel.new()` and its capacity-bounded sibling
+            // `Channel.bounded(cap)` (design.md § `Channel[T]` API;
+            // B-2026-08-22-16) produce the SAME `(Sender[T], Receiver[T])`
+            // pair — the bound changes the queue's behaviour, not the shape of
+            // what construction hands back — so one arm covers both.
+            let ctor = segments.len() == 2 && segments[0] == "Channel";
+            let is_new = ctor && segments[1] == "new" && args.is_empty();
+            let is_bounded = ctor && segments[1] == "bounded" && args.len() == 1;
+            if is_new || is_bounded {
+                if is_bounded {
+                    // `requires cap > 0` (design.md). Checked here because the
+                    // argument is an ordinary runtime expression: a literal is
+                    // rejected outright, anything else is left to the runtime,
+                    // which clamps rather than trusting the value.
+                    let cap_ty = self.infer_expr(&args[0].value);
+                    self.check_assignable(&Type::Int(IntSize::I64), &cap_ty, args[0].value.span);
+                    // A negative literal is `Unary { Neg, Integer }`, not an
+                    // `Integer` with a negative value — checking only the
+                    // latter let `Channel.bounded(-1)` through the contract
+                    // while correctly rejecting `bounded(0)`.
+                    let literal_cap = match &args[0].value.kind {
+                        ExprKind::Integer(n, _) => Some(*n),
+                        ExprKind::Unary {
+                            op: UnaryOp::Neg,
+                            operand,
+                        } => match &operand.kind {
+                            ExprKind::Integer(n, _) => Some(-*n),
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                    if let Some(n) = literal_cap {
+                        if n <= 0 {
+                            self.type_error(
+                                format!(
+                                    "`Channel.bounded` requires a capacity greater than 0, \
+                                     found {n}"
+                                ),
+                                args[0].value.span,
+                                TypeErrorKind::TypeMismatch,
+                            );
+                        }
+                    }
+                }
                 let elem = self.env.fresh_type_var();
                 let sender = Type::Named {
                     name: "Sender".to_string(),

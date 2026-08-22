@@ -75,6 +75,13 @@ pub struct KaracChannel {
     /// Receivers park here when the queue is empty; `send` / last-sender-drop
     /// wake them. Unused on sequential wasm (recv never blocks there).
     not_empty: Condvar,
+    /// Queue bound from `Channel.bounded(cap)`, or 0 for the unbounded
+    /// `Channel.new()`. Immutable after construction, so it needs no
+    /// synchronization — every reader holds the queue lock anyway.
+    ///
+    /// `requires cap > 0` is a source-level contract the typechecker enforces,
+    /// so 0 unambiguously means "unbounded" here rather than "a bound of zero".
+    capacity: usize,
     /// Element drop fn (`karac_drop_<T>`), or null. Set by codegen at each
     /// `send` of a HEAP-payload channel (`karac_runtime_channel_set_elem_drop`).
     /// A payload sent but never received has no owner to free it — the channel
@@ -121,6 +128,12 @@ unsafe impl Sync for KaracChannel {}
 
 impl KaracChannel {
     fn new() -> *mut Self {
+        Self::with_capacity(0)
+    }
+
+    /// `capacity == 0` is the unbounded `Channel.new()`; any positive value is
+    /// the bound from `Channel.bounded(cap)` (B-2026-08-22-16).
+    fn with_capacity(capacity: usize) -> *mut Self {
         let ch = Box::new(KaracChannel {
             // Two ends from a single `Channel.new()`: the Sender and the
             // Receiver the tuple destructure binds. See module docs.
@@ -131,6 +144,7 @@ impl KaracChannel {
                 closed: false,
             }),
             not_empty: Condvar::new(),
+            capacity,
             elem_drop: AtomicPtr::new(std::ptr::null_mut()),
         });
         Box::into_raw(ch)
@@ -198,6 +212,24 @@ unsafe fn deliver_empty(out_ptr: *mut u8, elem_size: usize) {
 #[no_mangle]
 pub extern "C" fn karac_runtime_channel_new() -> *mut KaracChannel {
     KaracChannel::new()
+}
+
+/// `karac_runtime_channel_new_bounded(cap) -> *mut KaracChannel` — the
+/// capacity-bounded sibling backing `Channel.bounded(cap)`
+/// (design.md § `Channel[T]` API; B-2026-08-22-16). Identical to
+/// `karac_runtime_channel_new` in every respect except the queue bound.
+///
+/// `cap` arrives as `i64` because that is the source-level type of the
+/// argument. `requires cap > 0` is enforced by the typechecker, so a
+/// non-positive value cannot reach here from a well-typed program; it is
+/// clamped to 1 rather than trusted, since this is an FFI boundary and a 0
+/// would silently mean "unbounded" — the one misreading with no loud symptom.
+///
+/// # Safety
+/// FFI entry point. Same release contract as `karac_runtime_channel_new`.
+#[no_mangle]
+pub extern "C" fn karac_runtime_channel_new_bounded(cap: i64) -> *mut KaracChannel {
+    KaracChannel::with_capacity(cap.max(1) as usize)
 }
 
 /// `karac_runtime_channel_clone(ch) -> *mut KaracChannel` — second `Sender`
@@ -292,12 +324,34 @@ pub unsafe extern "C" fn karac_runtime_channel_send(
         }
         // Enqueue UNDER the lock (sets the non-empty condition the receiver's
         // park predicate checks), then signal one waiter.
-        (*ch)
-            .inner
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .queue
-            .push_back(blob);
+        let mut inner = (*ch).inner.lock().unwrap_or_else(|p| p.into_inner());
+        // BOUNDED capacity (B-2026-08-22-16): a full queue FAILS FAST on every
+        // target rather than parking the sender.
+        //
+        // Parking was implemented first and then measured, because `recv`
+        // already parks on a condvar here and the symmetry is tempting. It is
+        // wrong at v1: a single-threaded program that overfills its own
+        // channel has no peer to drain it, so the send waits forever — the
+        // compiled binary HANGS (measured: exit 124 under `timeout`) while the
+        // tree-walk interpreter, which cannot park at all, reports an error.
+        // That is a run-vs-build divergence, which this project does not
+        // accept, and it trades a loud error for a silent deadlock.
+        //
+        // So both backends fail fast, and they agree. This is the v1
+        // `Block` -> `FailFast` collapse `runtime/stdlib/bounded_channel.kara`
+        // already documents for its own bounded queue, applied here for the
+        // same reason it was chosen there. `send` returns unit, so a panic is
+        // the only channel a failure has; real parking becomes possible once
+        // the `suspends` scheduler lands, at which point this is the site to
+        // revisit.
+        if (*ch).capacity != 0 && inner.queue.len() >= (*ch).capacity {
+            panic!(
+                "send on a full bounded channel (capacity {})",
+                (*ch).capacity
+            );
+        }
+        inner.queue.push_back(blob);
+        drop(inner);
         (*ch).not_empty.notify_one();
     }
 }
