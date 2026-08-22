@@ -722,8 +722,11 @@ impl<'a> super::Interpreter<'a> {
                         0
                     };
                     let buf = crate::interpreter::value::ChannelBuf::new(capacity);
-                    let sender = Value::Sender(Arc::clone(&buf));
-                    let receiver = Value::Receiver(buf);
+                    let sender = Value::Sender(crate::interpreter::value::SenderHandle::new(
+                        Arc::clone(&buf),
+                    ));
+                    let receiver =
+                        Value::Receiver(crate::interpreter::value::ReceiverHandle::new(buf));
                     return Value::Tuple(vec![sender, receiver]);
                 }
                 "File.open" | "File.create" | "File.append" => {

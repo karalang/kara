@@ -21,7 +21,18 @@ impl<'a> super::Interpreter<'a> {
                     .first()
                     .map(|a| self.eval_expr_inner(&a.value))
                     .unwrap_or(Value::Unit);
-                if let Value::Sender(ref buf) = obj {
+                if let Value::Sender(ref h) = obj {
+                    let buf = h.buf();
+                    // design.md: `send` panics if all receivers are dropped
+                    // (B-2026-08-22-24). Same condition `try_send` reports as
+                    // `SendError.Closed`; `send` returns unit, so an error is
+                    // the only channel a failure has.
+                    if buf.receivers_gone() {
+                        return Some(self.record_runtime_error(
+                            "send on a channel with no live receiver".to_string(),
+                            _span,
+                        ));
+                    }
                     let mut q = buf.queue.lock().unwrap();
                     // Bounded backpressure (B-2026-08-22-16). The tree-walk
                     // interpreter is single-threaded, so there is no peer that
@@ -67,7 +78,23 @@ impl<'a> super::Interpreter<'a> {
                     .first()
                     .map(|a| self.eval_expr_inner(&a.value))
                     .unwrap_or(Value::Unit);
-                if let Value::Sender(ref buf) = obj {
+                if let Value::Sender(ref h) = obj {
+                    let buf = h.buf();
+                    // B-2026-08-22-24 — the `Closed` arm, now reachable. Checked
+                    // BEFORE the capacity arm: a channel whose receivers are all
+                    // gone is closed whether or not it also happens to be full,
+                    // and `Full` would invite a retry that can never succeed.
+                    if buf.receivers_gone() {
+                        return Some(Value::EnumVariant {
+                            enum_name: "Result".to_string(),
+                            variant: "Err".to_string(),
+                            data: EnumData::Tuple(vec![Value::EnumVariant {
+                                enum_name: "SendError".to_string(),
+                                variant: "Closed".to_string(),
+                                data: EnumData::Tuple(vec![val]),
+                            }]),
+                        });
+                    }
                     let mut q = buf.queue.lock().unwrap();
                     if buf.capacity != 0 && q.len() >= buf.capacity {
                         drop(q);
@@ -95,7 +122,8 @@ impl<'a> super::Interpreter<'a> {
             // difference lives in the EFFECT each carries (`blocks` vs
             // `suspends`), which the effect checker seeds separately.
             "recv" | "recv_blocking" => {
-                if let Value::Receiver(ref buf) = obj {
+                if let Value::Receiver(ref h) = obj {
+                    let buf = h.buf();
                     // In the tree-walk interpreter tests the sender always
                     // fires before recv, so the queue has an item. If empty
                     // (would deadlock in a real runtime) return Unit rather
@@ -105,8 +133,8 @@ impl<'a> super::Interpreter<'a> {
                 }
             }
             "try_recv" => {
-                if let Value::Receiver(ref buf) = obj {
-                    let opt = buf.queue.lock().unwrap().pop_front();
+                if let Value::Receiver(ref h) = obj {
+                    let opt = h.buf().queue.lock().unwrap().pop_front();
                     return Some(match opt {
                         Some(v) => Value::EnumVariant {
                             enum_name: "Option".to_string(),

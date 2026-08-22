@@ -304,6 +304,15 @@ pub unsafe extern "C" fn karac_runtime_channel_drop_receiver(ch: *mut KaracChann
 /// is `u64` (ABI-identical on wasm32 + native — the `__karac_malloc64` size_t
 /// discipline).
 ///
+/// PANICS WHEN EVERY RECEIVER IS GONE, per design.md's `send` ("panics if all
+/// receivers are dropped"). `try_send` is the non-panicking form and reports
+/// the same condition as `SendError.Closed`; `send` returns unit, so a panic
+/// is the only channel a failure has — the same argument the full-bounded case
+/// below makes. Checked before the blob is allocated, so the failing path
+/// copies nothing. Reachable only since B-2026-08-22-24 gave the interpreter
+/// per-end liveness; before that this would have been a run-vs-build
+/// divergence, which is why it went unimplemented rather than being wrong.
+///
 /// # Safety
 /// `ch` must be live; `val_ptr` must point to at least `elem_size`
 /// readable bytes.
@@ -316,6 +325,13 @@ pub unsafe extern "C" fn karac_runtime_channel_send(
     unsafe {
         if ch.is_null() {
             return;
+        }
+        // design.md: `send` panics if all receivers are dropped. Ahead of the
+        // allocation so the failing path copies nothing.
+        let total = (*ch).total.load(Ordering::Acquire);
+        let senders = (*ch).senders.load(Ordering::Acquire);
+        if total.saturating_sub(senders) == 0 {
+            panic!("send on a channel with no live receiver");
         }
         let elem_size = elem_size as usize;
         let mut blob = vec![0u8; elem_size].into_boxed_slice();
@@ -375,29 +391,21 @@ pub unsafe extern "C" fn karac_runtime_channel_send(
 /// the program inside `SendError` without any risk of the channel destructor
 /// and the program both freeing one payload.
 ///
-/// **STATUS 2 DELIBERATELY DOES NOT MEAN "no live receiver", and that is the
-/// one non-obvious decision in this function.** The counters to detect it are
-/// right here — receivers are `total - senders` (module header, "two
-/// counters") — and an earlier draft of this used them. Measured against the
-/// tree-walk interpreter, that produced a RUN-VS-BUILD DIVERGENCE: an orphaned
-/// sender (`fn f() -> Sender[i64] { let (tx, rx) = Channel.new(); … return tx }`,
-/// so `rx` dies at scope exit) reported `closed 9` under `karac build` and
-/// `sent` under `karac run --interp`, because the interpreter's `ChannelBuf` is
-/// one `Arc` shared by both ends with no per-end liveness at all — it cannot
-/// tell a dropped receiver from a live one, and giving it that would mean
-/// deterministic drop semantics for `Value::Receiver`, which a tree-walk
-/// interpreter with freely-`Clone`d values does not have.
+/// **STATUS 2 MEANS "no live receiver"** (B-2026-08-22-24), and it is checked
+/// BEFORE the capacity arm: a channel with no receiver left is closed whether
+/// or not it also happens to be full, and reporting `Full` there would invite
+/// a retry that can never succeed.
 ///
-/// This project does not accept a run-vs-build divergence — the same rule that
-/// made the bounded `send` above fail fast instead of parking (B-2026-08-22-16,
-/// and the reasoning there reads identically). So both backends ignore receiver
-/// liveness and enqueue, which also matches what plain `send` does today
-/// (design.md says `send` panics when every receiver is gone; the runtime does
-/// not implement that either). The queued value is not leaked — the channel
-/// destructor frees it through `elem_drop`. `SendError.Closed` therefore stays
-/// declared, reachable, and lowered on both backends, but nothing a Kāra
-/// program can write produces it until the interpreter can model receiver
-/// liveness. Tracked as its own ledger row rather than buried here.
+/// Receivers are `total - senders` (module header, "two counters"). An earlier
+/// draft of this check was REMOVED because it diverged from the tree-walk
+/// interpreter, whose `ChannelBuf` was one `Arc` shared by both ends with no
+/// per-end liveness — an orphaned sender reported `closed` here and `sent`
+/// there. The interpreter now carries its own per-end counts (`SenderHandle` /
+/// `ReceiverHandle` in `src/interpreter/value.rs`, whose `Clone` and `Drop` are
+/// the only things that move them), so the two backends agree by construction
+/// and the check is back. That is the same discipline the bounded `send` above
+/// follows — the divergence was the reason to wait, not a reason to give the
+/// behaviour up.
 ///
 /// # Safety
 /// Same contract as `karac_runtime_channel_send`: `ch` must be live (or null,
@@ -411,6 +419,12 @@ pub unsafe extern "C" fn karac_runtime_channel_try_send(
 ) -> u8 {
     unsafe {
         if ch.is_null() {
+            return 2;
+        }
+        // No receiver left -> Closed, ahead of the capacity check (see above).
+        let total = (*ch).total.load(Ordering::Acquire);
+        let senders = (*ch).senders.load(Ordering::Acquire);
+        if total.saturating_sub(senders) == 0 {
             return 2;
         }
         let elem_size = elem_size as usize;

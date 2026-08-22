@@ -37312,3 +37312,111 @@ fn indexing_a_value_binding_is_not_type_application() {
         "11\n12\n"
     );
 }
+
+// ── channel receiver liveness (B-2026-08-22-24) ──────────────────
+//
+// design.md's `send` ("panics if all receivers are dropped") and `try_send`'s
+// `SendError.Closed` both need to know whether any receiver is still alive.
+// Neither was implemented, because the interpreter's channel was ONE `Arc`
+// shared by both ends: it could not tell a dropped receiver from a live one,
+// and wiring only the compiled side made an orphaned sender print `closed`
+// under `karac build` and `sent` here.
+//
+// The fix is a per-END count on the endpoint handles, whose `Clone` and `Drop`
+// are the only things that move them. That is enough — a tree-walk evaluator
+// drops the `Receiver` value when its scope goes, which is exactly the moment
+// the compiled backend drops its own end.
+//
+// These pin the INTERPRETER half. The compiled twin lives in tests/codegen.rs;
+// the two must agree, which is the whole point of the row.
+
+#[test]
+fn channel_try_send_reports_closed_when_the_receiver_is_gone() {
+    // `rx` is local to `orphan`, so it dies when `orphan` returns and the
+    // sender that escapes has no peer left.
+    let out = run_no_errors(
+        "fn orphan() -> Sender[i64] {\n\
+         \x20   let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.new();\n\
+         \x20   return tx;\n\
+         }\n\
+         fn main() {\n\
+         \x20   match orphan().try_send(9) {\n\
+         \x20       Ok(u) => println(\"sent\"),\n\
+         \x20       Err(SendError.Closed(v)) => println(f\"closed {v}\"),\n\
+         \x20       Err(SendError.Full(v)) => println(f\"full {v}\"),\n\
+         \x20   }\n\
+         }",
+    );
+    assert_eq!(out.trim(), "closed 9", "orphaned sender must report Closed");
+}
+
+#[test]
+fn channel_try_send_is_ok_while_a_receiver_is_alive() {
+    // The control that keeps the test above honest: a count that was simply
+    // always zero would satisfy it and break every working program.
+    let out = run_no_errors(
+        "fn main() {\n\
+         \x20   let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.new();\n\
+         \x20   match tx.try_send(9) {\n\
+         \x20       Ok(u) => println(\"sent\"),\n\
+         \x20       Err(SendError.Closed(v)) => println(f\"closed {v}\"),\n\
+         \x20       Err(SendError.Full(v)) => println(f\"full {v}\"),\n\
+         \x20   }\n\
+         \x20   match rx.try_recv() { Some(v) => println(v), None => println(\"empty\") }\n\
+         }",
+    );
+    assert_eq!(
+        out.trim(),
+        "sent\n9",
+        "a live receiver must accept the send"
+    );
+}
+
+#[test]
+fn channel_send_errors_when_every_receiver_is_gone() {
+    // design.md: `send` panics if all receivers are dropped. `send` returns
+    // unit, so an error is the only channel a failure has — the same argument
+    // the full-bounded case makes.
+    let errors = runtime_errors(
+        "fn orphan() -> Sender[i64] {\n\
+         \x20   let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.new();\n\
+         \x20   return tx;\n\
+         }\n\
+         fn main() {\n\
+         \x20   orphan().send(9);\n\
+         \x20   println(\"unreachable\");\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("no live receiver")),
+        "expected a no-live-receiver error, got: {errors:?}"
+    );
+}
+
+#[test]
+fn channel_sender_clone_keeps_the_receiver_count_independent() {
+    // The counts are PER END, so cloning a `Sender` must not make the channel
+    // look like it has a receiver. One handle type for both ends would pass
+    // the tests above and fail this one.
+    let out = run_no_errors(
+        "fn orphan() -> Sender[i64] {\n\
+         \x20   let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.new();\n\
+         \x20   let extra = tx.clone();\n\
+         \x20   return extra;\n\
+         }\n\
+         fn main() {\n\
+         \x20   match orphan().try_send(9) {\n\
+         \x20       Ok(u) => println(\"sent\"),\n\
+         \x20       Err(SendError.Closed(v)) => println(f\"closed {v}\"),\n\
+         \x20       Err(SendError.Full(v)) => println(f\"full {v}\"),\n\
+         \x20   }\n\
+         }",
+    );
+    assert_eq!(
+        out.trim(),
+        "closed 9",
+        "a cloned SENDER must not count as a receiver"
+    );
+}

@@ -6119,19 +6119,14 @@ fn try_recv(self, rx: Receiver[T]) -> Option[T]
 
 **Channel lifetimes and drop semantics.** When the last `Sender[T]` is dropped, future `recv` calls on `Receiver[T]` drain any remaining messages and then return a `ChannelClosed` panic (or `Err` via `try_recv` returning `None`). When the last `Receiver[T]` is dropped, `send` panics with `SendError`.
 
-**v1 status of the no-receiver case.** The receiver half of that sentence is
-declared, not implemented: neither `send` nor `try_send` consults receiver
-liveness, so `send` does not panic and `try_send`'s `SendError.Closed` is not
-produced by anything a program can write. That is a deliberate hold rather than
-an oversight. The compiled runtime *can* detect it — receivers are its live-end
-counters — but the tree-walk interpreter cannot: its channel is one shared
-handle with no per-end liveness, and giving it that means deterministic drop
-semantics for `Receiver[T]` which a tree-walk evaluator does not have. Wiring
-only the compiled side produced a measured run-vs-build divergence (an orphaned
-sender reported `closed` under `karac build` and `sent` under `karac run
---interp`), and this language does not ship those. `Full` behaves as specified
-on both backends; `Closed` becomes reachable when the interpreter can model
-receiver liveness.
+Both halves are implemented on both backends (B-2026-08-22-24). Receiver
+liveness is a PER-END count on each backend — the compiled runtime's live-end
+counters, and matching counts on the interpreter's `Sender`/`Receiver` handles,
+whose clone and drop are the only things that move them. An orphaned sender
+(`fn f() -> Sender[i64] { let (tx, rx) = Channel.new(); ...; return tx }`)
+therefore reports the closed channel identically under `karac run`,
+`karac run --interp`, and `karac build`: `send` panics, and `try_send` returns
+`SendError.Closed(v)` with the rejected value handed back.
 
 **Typical usage:**
 

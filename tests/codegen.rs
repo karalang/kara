@@ -96169,12 +96169,58 @@ fn main() {
     /// failure that dropped the value would leave nothing to retry with. That
     /// hand-back is the half worth asserting, so every arm prints the payload.
     ///
-    /// `SendError.Closed` is deliberately unreachable from source on BOTH
-    /// backends and is asserted nowhere: deciding it from the runtime's
-    /// receiver counters made an orphaned sender print `closed` under `build`
-    /// and `sent` under `--interp`, so the check was removed rather than kept
-    /// as a run-vs-build divergence (full measurement in
-    /// `karac_runtime_channel_try_send`'s doc comment).
+    /// `SendError.Closed` IS reachable since B-2026-08-22-24 gave the
+    /// interpreter per-end receiver counts; it has its own test below, and the
+    /// arms here print it so a misfire in THIS test's shapes (all of which
+    /// hold a live `rx`) shows up as a wrong string rather than silently.
+    /// B-2026-08-22-24 — the COMPILED twin of
+    /// `tests/interpreter.rs::channel_try_send_reports_closed_when_the_receiver_is_gone`.
+    ///
+    /// Both backends must agree here, and that agreement is the entire reason
+    /// the behaviour could land: the compiled runtime always had the live-end
+    /// counters and an earlier draft used them, but the interpreter's channel
+    /// was one shared handle with no per-end liveness, so wiring only this
+    /// side printed `closed` under `build` and `sent` under `--interp`. The
+    /// check came back only once the interpreter could answer too, so a
+    /// regression on EITHER side must fail a test — hence the pair.
+    #[test]
+    fn e2e_channel_closed_when_the_receiver_is_gone() {
+        // `rx` dies when `orphan` returns; the escaping sender has no peer.
+        let orphaned = "fn orphan() -> Sender[i64] {\n\
+            \x20   let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.new();\n\
+            \x20   return tx;\n\
+            }\n\
+            fn main() {\n\
+            \x20   match orphan().try_send(9) {\n\
+            \x20       Ok(u) => println(\"sent\"),\n\
+            \x20       Err(SendError.Closed(v)) => println(f\"closed {v}\"),\n\
+            \x20       Err(SendError.Full(v)) => println(f\"full {v}\"),\n\
+            \x20   }\n\
+            }\n";
+        assert_eq!(
+            run_program(orphaned).as_deref(),
+            Some("closed 9\n"),
+            "an orphaned sender must report Closed under the compiled backend"
+        );
+
+        // Control: a live receiver still accepts. Without this an always-zero
+        // count would satisfy the assertion above and break every real program.
+        let live = "fn main() {\n\
+            \x20   let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.new();\n\
+            \x20   match tx.try_send(9) {\n\
+            \x20       Ok(u) => println(\"sent\"),\n\
+            \x20       Err(SendError.Closed(v)) => println(f\"closed {v}\"),\n\
+            \x20       Err(SendError.Full(v)) => println(f\"full {v}\"),\n\
+            \x20   }\n\
+            \x20   match rx.try_recv() { Some(v) => println(v), None => println(\"empty\") }\n\
+            }\n";
+        assert_eq!(
+            run_program(live).as_deref(),
+            Some("sent\n9\n"),
+            "a live receiver must still accept the send"
+        );
+    }
+
     #[test]
     fn e2e_channel_try_send_and_recv_blocking() {
         // Scalar payload, capacity 1: first `try_send` lands, second is

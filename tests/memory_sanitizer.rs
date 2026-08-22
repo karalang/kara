@@ -31204,23 +31204,32 @@ fn main() {
         // `ExprKind::Return` arm. `cond` is always true so `mk` always returns
         // `rx` (the moved-out end) — a single free with the fix, an ASAN
         // double-free without it.
+        //
+        // RETURNS THE RECEIVER, matching this comment and the sibling above.
+        // It used to return the SENDER and then `s.send(22)` in `main`, on a
+        // channel whose receiver had already died with `mk`'s frame — which
+        // B-2026-08-22-24 makes panic, per design.md's "`send` panics if all
+        // receivers are dropped". That send was incidental to the drop-
+        // suppression this test exists for, and the fixture had drifted from
+        // its own description; both sends now happen while `rx` is alive.
         assert_clean_asan_run(
             r#"
-fn mk(cond: bool) -> Sender[i64] {
+fn mk(cond: bool) -> Receiver[i64] {
     let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.new();
     tx.send(11);
-    println(rx.recv());
+    tx.send(22);
     if cond {
-        return tx;
+        return rx;
     }
-    tx
+    rx
 }
 fn main() {
-    let s = mk(true);
-    s.send(22);
+    let r = mk(true);
+    println(r.recv());
+    println(r.recv());
 }
 "#,
-            &["11"],
+            &["11", "22"],
             "channel_end_explicit_return_single_free",
         );
     }

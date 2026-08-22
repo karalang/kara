@@ -1838,8 +1838,10 @@ impl<'a> super::Interpreter<'a> {
             // rejects `clone()` on those receivers via
             // `clone_receiver_self_type`.
             "clone" => {
-                if let Value::Sender(ref queue) = obj {
-                    return Some(Value::Sender(Arc::clone(queue)));
+                if let Value::Sender(ref h) = obj {
+                    // Handle clone, not `Arc::clone`: cloning a `Sender` makes
+                    // a second live endpoint, and the count has to say so.
+                    return Some(Value::Sender(h.clone()));
                 }
                 // B-2026-07-29-27 / B-2026-07-29-31 — a user struct / enum
                 // (and `Option`, which is an `EnumVariant` too) whose

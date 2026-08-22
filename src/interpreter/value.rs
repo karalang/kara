@@ -5,6 +5,7 @@
 //! free helpers `try_write_or_panic` / `primitive_const_to_value`.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard};
 
 use crate::ast::*;
@@ -301,6 +302,16 @@ pub struct ChannelBuf {
     /// bound. `requires cap > 0` is enforced in the typechecker, so 0 means
     /// "unbounded" without ambiguity.
     pub capacity: usize,
+    /// Live endpoint counts, PER END (B-2026-08-22-24).
+    ///
+    /// `Arc::strong_count` cannot answer "is a receiver still alive" — both
+    /// ends hold the same `Arc`, so one count cannot tell a live sender from a
+    /// live receiver. These are maintained by [`SenderHandle`] /
+    /// [`ReceiverHandle`], whose `Clone` and `Drop` are the only things that
+    /// move them, which is what makes `receivers == 0` mean exactly "every
+    /// receiver went away".
+    pub senders: AtomicUsize,
+    pub receivers: AtomicUsize,
 }
 
 impl ChannelBuf {
@@ -308,9 +319,61 @@ impl ChannelBuf {
         Arc::new(ChannelBuf {
             queue: Mutex::new(VecDeque::new()),
             capacity,
+            senders: AtomicUsize::new(0),
+            receivers: AtomicUsize::new(0),
         })
     }
+
+    /// True when no `Receiver` handle is left alive — the condition
+    /// design.md's `send` ("panics if all receivers are dropped") and
+    /// `try_send` (`SendError.Closed`) are specified against.
+    pub fn receivers_gone(&self) -> bool {
+        self.receivers.load(Ordering::Relaxed) == 0
+    }
 }
+
+/// An owning `Sender` endpoint. The COUNT is the point: `Value` is freely
+/// `Clone`d as it moves through a tree-walk evaluator, so the only way to
+/// know how many endpoints are live is to make cloning and dropping the
+/// handle the events that maintain it. A bare `Arc<ChannelBuf>` cannot,
+/// which is why the endpoints stopped being one.
+#[derive(Debug)]
+pub struct SenderHandle(Arc<ChannelBuf>);
+
+/// The `Receiver` twin of [`SenderHandle`]. Kept as two types rather than one
+/// generic handle so a miscount is a type error rather than a wrong constant.
+#[derive(Debug)]
+pub struct ReceiverHandle(Arc<ChannelBuf>);
+
+macro_rules! channel_endpoint_handle {
+    ($handle:ident, $field:ident) => {
+        impl $handle {
+            pub fn new(buf: Arc<ChannelBuf>) -> Self {
+                buf.$field.fetch_add(1, Ordering::Relaxed);
+                $handle(buf)
+            }
+            /// The shared buffer. Read-only on purpose: handing out an owned
+            /// `Arc` would let a caller resurrect an endpoint without the
+            /// count moving.
+            pub fn buf(&self) -> &Arc<ChannelBuf> {
+                &self.0
+            }
+        }
+        impl Clone for $handle {
+            fn clone(&self) -> Self {
+                $handle::new(Arc::clone(&self.0))
+            }
+        }
+        impl Drop for $handle {
+            fn drop(&mut self) {
+                self.0.$field.fetch_sub(1, Ordering::Relaxed);
+            }
+        }
+    };
+}
+
+channel_endpoint_handle!(SenderHandle, senders);
+channel_endpoint_handle!(ReceiverHandle, receivers);
 
 #[derive(Debug, Clone)]
 pub enum Value {
@@ -637,12 +700,12 @@ pub enum Value {
     },
     /// Sender[T] end of a Channel[T]. Wraps a shared queue so that cloning a
     /// Sender creates an additional producer that shares the same buffer.
-    Sender(Arc<ChannelBuf>),
+    Sender(SenderHandle),
     /// Receiver[T] end of a Channel[T]. `recv()` blocks until an item is
     /// available; `try_recv()` returns immediately as `Option[T]`. In the
     /// single-threaded tree-walk interpreter the test pattern is always
     /// send-before-recv, so the queue already has items when recv fires.
-    Receiver(Arc<ChannelBuf>),
+    Receiver(ReceiverHandle),
     /// File handle wrapping a live OS file descriptor. The `Arc<Mutex<...>>`
     /// layout keeps `Value` clone-friendly without requiring `Clone` on
     /// `std::fs::File` (which is intentionally non-Clone — cloning a file
@@ -1512,8 +1575,8 @@ impl PartialEq for Value {
             }
             // Channel ends compare by pointer identity — two Senders are equal
             // only when they wrap the exact same Arc allocation.
-            (Value::Sender(a), Value::Sender(b)) => Arc::ptr_eq(a, b),
-            (Value::Receiver(a), Value::Receiver(b)) => Arc::ptr_eq(a, b),
+            (Value::Sender(a), Value::Sender(b)) => Arc::ptr_eq(a.buf(), b.buf()),
+            (Value::Receiver(a), Value::Receiver(b)) => Arc::ptr_eq(a.buf(), b.buf()),
             (Value::Function { .. }, Value::Function { .. }) => false,
             // Iterators have no meaningful equality — like closures, two
             // iterator values aren't compared structurally.
