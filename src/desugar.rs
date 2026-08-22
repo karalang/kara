@@ -30,6 +30,11 @@ pub fn desugar_program(program: &mut Program) {
     // inside synthesized bodies (trait default methods, multiversion thunks)
     // are filled too.
     crate::default_args::fill_default_args_in_program(program);
+    // Struct functional update (B-2026-08-21-18): `P { x: 1, ..base }` becomes
+    // the explicit field copies it stands for. Runs LAST so a spread inside a
+    // synthesized body (trait default method, multiversion thunk) is expanded
+    // too, on the same rule as the default-arg fill above.
+    crate::struct_spread::expand_struct_spreads(program);
 }
 
 /// Hoist every inline associated-type binding written inside a trait bound

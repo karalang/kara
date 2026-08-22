@@ -103688,6 +103688,66 @@ fn main() {
             Some("PermissionDenied\na=Inherit\nc=Piped\n".to_string())
         );
     }
+
+    /// B-2026-08-21-18 — struct functional update `P { x: 1, ..base }`.
+    ///
+    /// The parser already stored the base and the interpreter already
+    /// implemented the copy; codegen ignored it, so the form was gated off
+    /// with `E_STRUCT_LITERAL_SPREAD_UNSUPPORTED`. It is implemented as a
+    /// DESUGAR to the explicit field copies it stands for — `y: base.y` —
+    /// rather than a codegen arm, because the row's own account of the risk
+    /// was that the hard part is not emitting the copy but OWNERSHIP, and
+    /// `base.y` is a shape every phase already settles correctly. It is also
+    /// exactly what the gate's diagnostic told users to write by hand, so the
+    /// feature and the advice cannot disagree.
+    ///
+    /// Heap fields are the point of the second case: `s` and `v` are MOVED out
+    /// of the base, which is the double-free/leak shape. `run_program` agrees
+    /// the interpreter and the compiled backends; the ASAN corpus carries the
+    /// allocation-balance half separately.
+    #[test]
+    fn test_e2e_struct_functional_update() {
+        assert_eq!(
+            run_program(
+                "struct P { x: i64, y: i64, z: i64 }\n\
+                 fn main() {\n\
+                 let b = P { x: 1, y: 2, z: 3 };\n\
+                 let p = P { x: 10, ..b };\n\
+                 println(f\"{p.x} {p.y} {p.z}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("10 2 3\n"),
+            "the explicit field wins and every other field comes from the base"
+        );
+        assert_eq!(
+            run_program(
+                "struct P { x: i64, s: String, v: Vec[i64] }\n\
+                 fn main() {\n\
+                 let b = P { x: 1, s: \"hi\", v: vec![7, 8] };\n\
+                 let p = P { x: 9, ..b };\n\
+                 println(f\"{p.x} {p.s} {p.v.len()}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("9 hi 2\n"),
+            "HEAP fields move out of the base — the shape the row flagged as the risk"
+        );
+        assert_eq!(
+            run_program(
+                "struct I { a: i64, b: i64 }\n\
+                 struct O { inner: I }\n\
+                 fn main() {\n\
+                 let o = O { inner: I { a: 1, b: 2 } };\n\
+                 let q = I { a: 5, ..o.inner };\n\
+                 println(f\"{q.a} {q.b}\");\n\
+                 }"
+            )
+            .as_deref(),
+            Some("5 2\n"),
+            "a FIELD-PATH base is a place too, so it is re-evaluable and expands"
+        );
+    }
 }
 
 #[cfg(feature = "llvm")]

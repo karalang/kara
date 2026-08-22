@@ -80,6 +80,7 @@ pub mod missing_track_caller_lint;
 pub mod presize;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod pubgrub_solve;
+pub mod struct_spread;
 // `module`, `walker`, `manifest` carry data types consumed by `resolver`
 // and `typechecker`, so they stay always-on. The fs-reading entry points
 // inside them (`build_program_tree_with`'s `fs::read_to_string`,

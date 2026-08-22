@@ -857,6 +857,44 @@ fn main() {
         );
     }
 
+    /// B-2026-08-21-18 — struct functional update with HEAP fields.
+    ///
+    /// `P { x: 9, ..base }` expands to `x: 9, s: base.s, v: base.v`, so each
+    /// heap field is MOVED out of the base. That is the shape the row named as
+    /// the whole risk of implementing this — "who owns a heap-typed field
+    /// copied out of the base, whether the base is moved or borrowed and when
+    /// it drops" — and it is the shape behind a large share of this ledger's
+    /// double-free and leak rows.
+    ///
+    /// The desugar inherits its answer from the hand-written `s: base.s`
+    /// rather than reimplementing it, so this fixture is what proves the two
+    /// really do agree: the base must not free what it no longer owns, and the
+    /// new struct must free it exactly once.
+    ///
+    /// 50 iterations so a per-construction imbalance accumulates rather than
+    /// hiding in one allocation.
+    #[test]
+    fn asan_struct_spread_moves_heap_fields_exactly_once() {
+        assert_clean_asan_run(
+            r#"
+struct P { x: i64, s: String, v: Vec[i64] }
+fn main() {
+    let mut i = 0i64;
+    let mut last: String = "";
+    while i < 50i64 {
+        let b = P { x: 1, s: "n" + "!", v: vec![7, 8] };
+        let p = P { x: 9, ..b };
+        last = p.s;
+        i = i + 1i64;
+    }
+    println(last);
+}
+"#,
+            &["n!"],
+            "asan_struct_spread_moves_heap_fields_exactly_once",
+        );
+    }
+
     #[test]
     fn asan_shared_struct_vec_tensor_field_drop() {
         // (a) push-only — the shared-struct `Vec[Tensor]` field drop must free
