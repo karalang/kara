@@ -3675,6 +3675,64 @@ fn discriminant_returns_the_repr_type() {
     );
 }
 
+/// B-2026-08-21-26 — the auto-generated `TryFrom[intN]` exists, and its type
+/// is `Result[Enum, DiscriminantError[reprTy]]` at the DECLARED repr width.
+#[test]
+fn enum_try_from_is_generated_for_a_repr_enum() {
+    typecheck_ok(
+        "#[repr(u8)]\n         enum UsbClass { Audio = 0x01, Hid = 0x03 }\n         fn main() {\n             let raw: u8 = 3u8;\n             match UsbClass.try_from(raw) { Ok(_) => println(\"ok\"), Err(_) => println(\"err\") }\n         }",
+    );
+}
+
+/// The argument must be the repr type EXACTLY. A narrower or wider integer
+/// would silently convert, turning "is this a declared variant?" into a
+/// question about a different value than the caller asked about.
+#[test]
+fn enum_try_from_rejects_an_argument_of_the_wrong_width() {
+    let errs = typecheck_errors(
+        "#[repr(u8)]\n         enum UsbClass { Audio = 0x01 }\n         fn main() {\n             let wide: u64 = 1u64;\n             match UsbClass.try_from(wide) { Ok(_) => println(\"ok\"), Err(_) => println(\"err\") }\n         }",
+    );
+    assert!(
+        !errs.is_empty(),
+        "a u64 argument to a #[repr(u8)] enum's try_from must be refused"
+    );
+}
+
+/// A C-like enum with NO `#[repr]` does not get the impl — the spec withholds
+/// it because the compiler-chosen discriminant space is not stable across
+/// versions. The refusal must say so, and must point out that the OUTBOUND
+/// `.discriminant()` is still available: that asymmetry is the whole point.
+#[test]
+fn enum_try_from_refuses_a_repr_less_enum_and_explains_the_asymmetry() {
+    let errs = typecheck_errors(
+        "enum Plain { A, B }\n         fn main() {\n             match Plain.try_from(1u32) { Ok(_) => println(\"ok\"), Err(_) => println(\"err\") }\n         }",
+    );
+    assert!(
+        errs.iter().any(|e| e.message.contains("no `#[repr(intN)]`")
+            && e.message.contains("may shift between versions")
+            && e.message.contains("`.discriminant()` is still available")),
+        "the refusal must name the missing repr, the instability reason, and the \
+         still-available outbound direction; got {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+/// A PAYLOAD-carrying enum is excluded from `try_from` for the same v1 reason
+/// it is excluded from `.discriminant()`, and names a remedy.
+#[test]
+fn enum_try_from_refuses_a_payload_enum_with_a_remedy() {
+    let errs = typecheck_errors(
+        "#[repr(u8)]\n         enum Shape { Circle { r: i64 } = 1, Square = 2 }\n         fn main() {\n             match Shape.try_from(1u8) { Ok(_) => println(\"ok\"), Err(_) => println(\"err\") }\n         }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("payload-carrying variants")
+                && e.message.contains("from_tag")),
+        "the refusal must name the restriction and a hand-written remedy; got {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
 /// A PAYLOAD-carrying enum is excluded at v1 — the spec's own restriction —
 /// and says why, plus the remedy it recommends.
 #[test]

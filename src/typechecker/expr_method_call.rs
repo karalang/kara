@@ -1827,8 +1827,8 @@ impl<'a> super::TypeChecker<'a> {
         // method, is the spec's own advice.
         if method == "discriminant" && args.is_empty() {
             if let Type::Named { name, .. } = &receiver_for_lookup {
-                if let Some((repr, _)) = self.enum_discriminants.get(name.as_str()) {
-                    let ty = match repr.as_str() {
+                if let Some(disc) = self.enum_discriminants.get(name.as_str()) {
+                    let ty = match disc.repr.as_str() {
                         "i8" => Type::Int(IntSize::I8),
                         "i16" => Type::Int(IntSize::I16),
                         "i32" => Type::Int(IntSize::I32),

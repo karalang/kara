@@ -301,13 +301,31 @@ pub type MethodUnwrapInnerTypesTable = std::collections::HashMap<(usize, usize),
 /// through `compile_vec_method` (general-owned-temp-tracking spike, slice 3b).
 pub type TempRecvElemTypesTable = std::collections::HashMap<(usize, usize), TypeExpr>;
 
-/// The runtime discriminant surface of every C-LIKE (payload-free) enum:
-/// enum name → (repr type name, `(variant name, declared value)` in
-/// declaration order). Populated by the typechecker (`TypeCheckResult::
-/// enum_discriminants`) and forwarded here by the lowering pass so codegen can
-/// read it. B-2026-08-21-10; see the typechecker field's doc for why the
-/// values are folded once rather than per backend.
-pub type EnumDiscriminantTable = std::collections::HashMap<String, (String, Vec<(String, i64)>)>;
+/// The runtime discriminant surface of ONE C-LIKE (payload-free) enum.
+/// Populated by the typechecker (`TypeCheckResult::enum_discriminants`) and
+/// forwarded here by the lowering pass so codegen can read it. B-2026-08-21-10;
+/// see the typechecker field's doc for why the values are folded once rather
+/// than per backend.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnumDiscriminants {
+    /// The EFFECTIVE repr type name — the declared `#[repr(intN)]` head, or
+    /// the spec's conservative `u32` when none is declared.
+    pub repr: String,
+    /// Whether `repr` came from an actual `#[repr(intN)]` declaration rather
+    /// than the default. The two are otherwise indistinguishable for a
+    /// `#[repr(u32)]` enum, and the distinction is load-bearing: design.md
+    /// § Enum Discriminant Runtime Surface withholds the auto-generated
+    /// `TryFrom[intN]` from enums without a declared `#[repr]`, because their
+    /// compiler-chosen discriminant space is not stable across versions
+    /// (B-2026-08-21-26). `.discriminant()` is NOT gated on this — the spec
+    /// grants it to every C-like enum and only notes the weaker guarantee.
+    pub repr_declared: bool,
+    /// `(variant name, declared value)` in declaration order.
+    pub values: Vec<(String, i64)>,
+}
+
+/// Every C-like enum's discriminant surface, keyed by enum name.
+pub type EnumDiscriminantTable = std::collections::HashMap<String, EnumDiscriminants>;
 
 /// Side-table populated by the lowering pass from the typechecker's
 /// `index_recv_vec_types` map. Maps the span of an `Index` RECEIVER that is a

@@ -4013,9 +4013,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // the typechecker's folded table, never from a second fold here.
         if args.is_empty() && method == "discriminant" {
             if let Some(enum_name) = self.expr_user_enum_name(object) {
-                if let Some((repr, values)) =
-                    self.type_decls.enum_discriminants.get(&enum_name).cloned()
-                {
+                if let Some(disc) = self.type_decls.enum_discriminants.get(&enum_name).cloned() {
+                    let (repr, values) = (disc.repr, disc.values);
                     let val = self.compile_expr(object)?;
                     let tag = match val {
                         BasicValueEnum::IntValue(iv) => iv,

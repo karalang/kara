@@ -118,6 +118,12 @@ pub const PRELUDE_TYPES: &[&str] = &[
     "SeekFrom",
     "VarError",
     "AllocError",
+    // `DiscriminantError` — the `Err` payload of the auto-generated
+    // `TryFrom[intN]` on a C-like `#[repr(intN)]` enum (design.md § Enum
+    // Discriminant Runtime Surface, B-2026-08-21-26). Scope-0 so
+    // `match UsbClass.try_from(raw)` resolves without an import, peer to
+    // `AllocError`. Stdlib enum in `runtime/stdlib/discriminant_error.kara`.
+    "DiscriminantError",
     "Utf8Error",
     // `NulError` — returned by `String.to_cstring(ref self)` (design.md §
     // C-String Literals). Stdlib enum in `runtime/stdlib/nul_error.kara`;
@@ -772,6 +778,10 @@ pub const STDLIB_SOURCES: &[(&str, &str)] = &[
         include_str!("../runtime/stdlib/normalization_form.kara"),
     ),
     ("entry.kara", include_str!("../runtime/stdlib/entry.kara")),
+    (
+        "discriminant_error.kara",
+        include_str!("../runtime/stdlib/discriminant_error.kara"),
+    ),
     (
         "io_error.kara",
         include_str!("../runtime/stdlib/io_error.kara"),

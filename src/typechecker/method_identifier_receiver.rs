@@ -34,7 +34,7 @@ use crate::token::Span;
 
 use super::env::{FunctionSig, ImplInfo};
 use super::inference::substitute_type_params;
-use super::types::{type_display, SubstValue, Type};
+use super::types::{type_display, IntSize, SubstValue, Type, UIntSize};
 use super::TypeErrorKind;
 use std::collections::HashMap;
 
@@ -431,6 +431,21 @@ impl<'a> super::TypeChecker<'a> {
                     );
                     return Some(Type::Error);
                 }
+                // `<C-like #[repr(intN)] enum>.try_from(v) ->
+                // Result[Enum, DiscriminantError[intN]]` — design.md § Enum
+                // Discriminant Runtime Surface (B-2026-08-21-26). The inbound
+                // twin of `.discriminant()`: the same folded table read
+                // backwards, value -> variant.
+                //
+                // Placed before the general associated-call lookup so the
+                // generated conversion cannot be shadowed, matching where
+                // `.discriminant()` sits on the instance chain. The primitive
+                // `try_from` arms above key on primitive `type_name`s and the
+                // `char` arm on `char`, so none of them can collide with an
+                // enum name here.
+                if method == "try_from" && self.env.enums.contains_key(type_name) {
+                    return Some(self.infer_enum_try_from(type_name, args, span));
+                }
                 // General associated call: look up the method on the target
                 // type with inherent-beats-trait priority per design.md
                 // § Method Resolution Step 3. Multi-inherent / multi-trait
@@ -515,6 +530,150 @@ impl<'a> super::TypeChecker<'a> {
     ///
     /// Returns `None` when the receiver is not such a path, leaving the
     /// call to later links in the `infer_method_call` chain.
+    /// Type of `<enum>.try_from(v)` — design.md § Enum Discriminant Runtime
+    /// Surface's auto-generated `impl TryFrom[intN] for Foo`
+    /// (B-2026-08-21-26).
+    ///
+    /// The spec grants this to C-like enums with a DECLARED `#[repr(intN)]`
+    /// and to no others, so there are two distinct refusals rather than one
+    /// generic "no method", and each names the reason the spec gives:
+    ///
+    ///   * a PAYLOAD enum is absent from the discriminant table by
+    ///     construction (`record_enum_discriminant_surface` skips it), because
+    ///     the compiler may elide or move its tag — same v1 restriction that
+    ///     excludes it from `.discriminant()`;
+    ///   * a C-like enum with NO `#[repr]` is in the table (its variants take
+    ///     declaration positions) but `repr_declared` is false. `.discriminant()`
+    ///     is still granted there — reading a local property is fine — but the
+    ///     INBOUND direction is not, because the compiler-chosen discriminant
+    ///     space is not stable across versions, so a value that maps today may
+    ///     not tomorrow. That asymmetry is the spec's, and it is why the table
+    ///     records `repr_declared` at all.
+    pub(super) fn infer_enum_try_from(
+        &mut self,
+        type_name: &str,
+        args: &[CallArg],
+        span: &Span,
+    ) -> Type {
+        let Some(disc) = self.enum_discriminants.get(type_name).cloned() else {
+            for arg in args {
+                self.infer_expr(&arg.value);
+            }
+            self.type_error(
+                format!(
+                    "'{type_name}' has payload-carrying variants, and `try_from` is generated \
+                     for C-like (payload-free) enums only — the compiler may elide, reorder or \
+                     move a payload enum's tag, so there is no stable integer to convert from. \
+                     Write an explicit `fn from_tag(v: u8) -> Option[{type_name}]` with a \
+                     `match` instead"
+                ),
+                *span,
+                TypeErrorKind::NoMethodFound,
+            );
+            return Type::Error;
+        };
+        if !disc.repr_declared {
+            for arg in args {
+                self.infer_expr(&arg.value);
+            }
+            self.type_error(
+                format!(
+                    "'{type_name}' has no `#[repr(intN)]`, and `try_from` is generated only for \
+                     enums that declare one — without it the discriminant values are chosen by \
+                     the compiler and may shift between versions, so converting an integer back \
+                     to a variant would be reading a number nobody promised. Add \
+                     `#[repr(u8)]` (or the width you mean) to '{type_name}', or write an \
+                     explicit `match`. `.discriminant()` is still available: reading the current \
+                     value is a local property, but round-tripping through it is not"
+                ),
+                *span,
+                TypeErrorKind::NoMethodFound,
+            );
+            return Type::Error;
+        }
+        if args.len() != 1 {
+            self.type_error(
+                format!(
+                    "{type_name}.try_from expects 1 argument, got {}",
+                    args.len()
+                ),
+                *span,
+                TypeErrorKind::WrongNumberOfArgs,
+            );
+            for arg in args {
+                self.infer_expr(&arg.value);
+            }
+            return Type::Error;
+        }
+        let repr_ty = Self::int_type_named(&disc.repr);
+        let arg_ty = self.infer_expr(&args[0].value);
+        if arg_ty == Type::Error {
+            return Type::Error;
+        }
+        // The argument must be the repr type EXACTLY, and this is checked here
+        // rather than left to `check_assignable`, which admits the mismatch
+        // silently. A narrower integer would widen and a wider one would
+        // truncate, and either turns "is this a declared variant?" into a
+        // question about a different value than the caller asked about — the
+        // one thing a conversion whose entire job is range-checking must not
+        // do quietly.
+        let arg_bare = Self::peel_refs_for_try_from(&arg_ty);
+        if arg_bare != repr_ty {
+            self.type_error(
+                format!(
+                    "`{type_name}.try_from` expects its `#[repr]` type `{}`, got `{}` — an \
+                     implicit conversion here would range-check a DIFFERENT value than the one \
+                     passed. Write `{} as {}` if that is what you mean",
+                    disc.repr,
+                    type_display(&arg_ty),
+                    type_display(&arg_ty),
+                    disc.repr,
+                ),
+                args[0].value.span,
+                TypeErrorKind::TypeMismatch,
+            );
+            return Type::Error;
+        }
+        Type::Named {
+            name: "Result".to_string(),
+            args: vec![
+                Type::Named {
+                    name: type_name.to_string(),
+                    args: Vec::new(),
+                },
+                Type::Named {
+                    name: "DiscriminantError".to_string(),
+                    args: vec![repr_ty],
+                },
+            ],
+        }
+    }
+
+    /// `ref`/`mut ref` peeled off an argument type, so a borrowed integer is
+    /// compared at its bare width rather than rejected for its binding mode.
+    fn peel_refs_for_try_from(t: &Type) -> Type {
+        match t {
+            Type::Ref(inner) | Type::MutRef(inner) => Self::peel_refs_for_try_from(inner),
+            other => other.clone(),
+        }
+    }
+
+    /// The `Type` for a repr head name from the discriminant table. The table
+    /// only ever holds the eight integer heads plus the conservative `u32`
+    /// default, so the fallback is unreachable rather than lossy.
+    fn int_type_named(repr: &str) -> Type {
+        match repr {
+            "i8" => Type::Int(IntSize::I8),
+            "i16" => Type::Int(IntSize::I16),
+            "i32" => Type::Int(IntSize::I32),
+            "i64" => Type::Int(IntSize::I64),
+            "u8" => Type::UInt(UIntSize::U8),
+            "u16" => Type::UInt(UIntSize::U16),
+            "u64" => Type::UInt(UIntSize::U64),
+            _ => Type::UInt(UIntSize::U32),
+        }
+    }
+
     pub(super) fn try_path_receiver_method(
         &mut self,
         object: &Expr,

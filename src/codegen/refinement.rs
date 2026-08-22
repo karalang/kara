@@ -18,7 +18,7 @@
 //! to that local via `subst_self`, avoiding any clobber of a real method
 //! receiver at the cast site.
 
-use crate::ast::{CallArg, Expr, ExprKind};
+use crate::ast::{CallArg, Expr, ExprKind, FieldInit};
 use crate::token::Span;
 
 use inkwell::values::{BasicValueEnum, IntValue};
@@ -157,6 +157,153 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `Result[Refined, String]` — `Ok(x)` when the predicate holds,
     /// `Err(<message>)` otherwise. Returns `Ok(None)` when `rname` is not a
     /// refinement so the caller falls through to normal dispatch.
+    /// `<C-like #[repr(intN)] enum>.try_from(v)` — design.md § Enum
+    /// Discriminant Runtime Surface (B-2026-08-21-26). Returns `Ok(None)` for
+    /// any head that is not a C-like enum in the discriminant table, so a
+    /// refinement / distinct / primitive `try_from` falls through untouched.
+    ///
+    /// Shape: one comparison per declared variant, each with its own `Ok`
+    /// block, and a single trailing `Err` block, joined by a phi. Both arms
+    /// are built through the ORDINARY variant constructors
+    /// (`try_compile_enum_variant` for `Ok`, `compile_enum_struct_variant_init`
+    /// for `OutOfRange { value }`) rather than by stamping tags by hand, so
+    /// the payload layouts stay whatever the rest of codegen decided — the
+    /// `.discriminant()` twin reads those same layouts in the other direction.
+    ///
+    /// The argument is compiled ONCE into a synthetic local and referenced by
+    /// name afterwards: it may carry side effects, and it is read again on the
+    /// `Err` path to fill `value`.
+    pub(super) fn compile_enum_try_from(
+        &mut self,
+        enum_name: &str,
+        arg: &Expr,
+        span: &Span,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        let Some(disc) = self.type_decls.enum_discriminants.get(enum_name).cloned() else {
+            return Ok(None);
+        };
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "enum try_from emitted outside a function".to_string())?;
+
+        // Compile the argument once, into a named slot the synthesized
+        // `Identifier` expressions below resolve against.
+        let raw = self.compile_expr(arg)?;
+        let raw_int = match raw {
+            BasicValueEnum::IntValue(iv) => iv,
+            other => {
+                return Err(format!(
+                    "enum try_from: '{enum_name}' argument has non-integer representation {other:?}"
+                ))
+            }
+        };
+        let slot_name = format!("__karac_tryfrom_{enum_name}");
+        let alloca = self.create_entry_alloca(fn_val, &slot_name, raw.get_type());
+        self.builder.build_store(alloca, raw).unwrap();
+        self.variables.insert(
+            slot_name.clone(),
+            VarSlot {
+                ptr: alloca,
+                ty: raw.get_type(),
+            },
+        );
+        let raw_ident = Expr {
+            kind: ExprKind::Identifier(slot_name.clone()),
+            span: *span,
+        };
+
+        let cont_bb = self.context.append_basic_block(fn_val, "enumtryfrom.cont");
+        let mut incoming: Vec<(BasicValueEnum<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)> =
+            Vec::with_capacity(disc.values.len() + 1);
+
+        for (variant, declared) in &disc.values {
+            let hit_bb = self.context.append_basic_block(fn_val, "enumtryfrom.hit");
+            let next_bb = self.context.append_basic_block(fn_val, "enumtryfrom.next");
+            let want = raw_int.get_type().const_int(*declared as u64, true);
+            let eq = self
+                .builder
+                .build_int_compare(inkwell::IntPredicate::EQ, raw_int, want, "enumtryfrom.eq")
+                .unwrap();
+            self.builder
+                .build_conditional_branch(eq, hit_bb, next_bb)
+                .unwrap();
+
+            self.builder.position_at_end(hit_bb);
+            let variant_expr = Expr {
+                kind: ExprKind::Path {
+                    segments: vec![enum_name.to_string(), variant.clone()],
+                    generic_args: None,
+                },
+                span: *span,
+            };
+            let ok_arg = CallArg {
+                label: None,
+                mut_marker: false,
+                mut_marker_span: None,
+                value: variant_expr,
+                span: *span,
+            };
+            let ok_val = self
+                .try_compile_enum_variant("Ok", Some("Result"), std::slice::from_ref(&ok_arg))?
+                .ok_or_else(|| {
+                    format!("enum try_from: failed to build Ok({enum_name}.{variant})")
+                })?;
+            incoming.push((ok_val, self.builder.get_insert_block().unwrap()));
+            self.builder.build_unconditional_branch(cont_bb).unwrap();
+
+            self.builder.position_at_end(next_bb);
+        }
+
+        // Err(DiscriminantError.OutOfRange { value: <raw> }) — reached when no
+        // declared value matched.
+        let field = FieldInit {
+            name: "value".to_string(),
+            value: raw_ident.clone(),
+            shorthand: false,
+            span: *span,
+        };
+        let payload = self.compile_enum_struct_variant_init(
+            "DiscriminantError",
+            "OutOfRange",
+            std::slice::from_ref(&field),
+        )?;
+        let err_slot = format!("__karac_tryfrom_err_{enum_name}");
+        let err_alloca = self.create_entry_alloca(fn_val, &err_slot, payload.get_type());
+        self.builder.build_store(err_alloca, payload).unwrap();
+        self.variables.insert(
+            err_slot.clone(),
+            VarSlot {
+                ptr: err_alloca,
+                ty: payload.get_type(),
+            },
+        );
+        let err_arg = CallArg {
+            label: None,
+            mut_marker: false,
+            mut_marker_span: None,
+            value: Expr {
+                kind: ExprKind::Identifier(err_slot),
+                span: *span,
+            },
+            span: *span,
+        };
+        let err_val = self
+            .try_compile_enum_variant("Err", Some("Result"), std::slice::from_ref(&err_arg))?
+            .ok_or_else(|| "enum try_from: failed to build Err(DiscriminantError…)".to_string())?;
+        incoming.push((err_val, self.builder.get_insert_block().unwrap()));
+        self.builder.build_unconditional_branch(cont_bb).unwrap();
+
+        self.builder.position_at_end(cont_bb);
+        let phi = self
+            .builder
+            .build_phi(incoming[0].0.get_type(), "enumtryfrom.res")
+            .unwrap();
+        for (val, bb) in &incoming {
+            phi.add_incoming(&[(val, *bb)]);
+        }
+        Ok(Some(phi.as_basic_value()))
+    }
+
     pub(super) fn compile_refinement_try_from(
         &mut self,
         rname: &str,

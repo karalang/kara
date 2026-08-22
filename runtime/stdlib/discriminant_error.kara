@@ -1,0 +1,22 @@
+// runtime/stdlib/discriminant_error.kara
+//
+// The `Err` payload of the auto-generated `TryFrom[intN]` on a C-like
+// `#[repr(intN)]` enum — design.md § Enum Discriminant Runtime Surface, which
+// specifies it verbatim as "a prelude error type (`enum DiscriminantError {
+// OutOfRange { value: D } }`, parameterized by the repr type)".
+// B-2026-08-21-26.
+//
+// Lives in the prelude so `match UsbClass.try_from(raw)` needs no import,
+// parallel to `AllocError` / `IoError`. `D` is the source enum's repr type, so
+// the value that failed to map comes back at the width it was read at rather
+// than widened to `i64` — a `#[repr(u8)]` enum reports a `u8`.
+//
+// One variant, not two: the only way an `intN -> enum` conversion fails is a
+// value outside the declared set. It derives the same set as `AllocError`,
+// whose payload is likewise a single integer, so an out-of-range value is
+// printable and comparable in a test without a hand-written `impl`.
+
+#[derive(Debug, Display, Eq, Copy)]
+enum DiscriminantError[=D] {
+    OutOfRange { value: D },
+}

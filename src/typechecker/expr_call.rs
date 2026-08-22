@@ -899,6 +899,33 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // `<C-like #[repr(intN)] enum>.try_from(v)` — design.md § Enum
+        // Discriminant Runtime Surface (B-2026-08-21-26). The parser folds an
+        // uppercase-led dotted chain into a single `Path`, so the spec's own
+        // `UsbClass.try_from(raw)` arrives here as `Call(Path([Enum,
+        // try_from]))` and never reaches the `MethodCall` shape the
+        // instance-side `.discriminant()` is dispatched from. Without this arm
+        // it falls through to `resolve_path_type`'s generic "no associated
+        // function" diagnostic, which is what the bug reported.
+        //
+        // The value-binding route above has already returned for a `Path`
+        // whose head is a local shadowing the enum name, so reaching here
+        // means the head really is the type.
+        if let ExprKind::Path {
+            segments,
+            generic_args: None,
+        } = &callee.kind
+        {
+            if segments.len() == 2
+                && segments[1] == "try_from"
+                && self.env.enums.contains_key(&segments[0])
+            {
+                let ty = self.infer_enum_try_from(&segments[0].clone(), args, span);
+                self.record_expr_type(span, &ty);
+                return ty;
+            }
+        }
+
         // B-2026-07-13-4: a method called directly on an enum UNIT-VARIANT
         // LITERAL — `Dir.North.code()` — parses as `Call(Path([Enum, Variant,
         // method]))`. Type it as a method call on the enum-literal receiver so

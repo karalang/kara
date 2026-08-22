@@ -4349,6 +4349,51 @@ impl<'ctx> super::Codegen<'ctx> {
                 .insert("NulError".to_string());
         }
 
+        // Stdlib `DiscriminantError` enum
+        // (`runtime/stdlib/discriminant_error.kara`) — the `Err` payload of the
+        // auto-generated `TryFrom[intN]` on a C-like `#[repr(intN)]` enum
+        // (design.md § Enum Discriminant Runtime Surface, B-2026-08-21-26).
+        // Seeded here for the same reason as `AllocError`: it is baked into
+        // `STDLIB_PROGRAMS` so the typechecker sees it, but `declare_enums`
+        // only walks the user's `program.items`.
+        //
+        // The declaration is generic (`DiscriminantError[=D]`), but every `D`
+        // it is ever instantiated at is one of the eight integer reprs, so a
+        // single payload word covers all of them and ONE layout suffices —
+        // the same reason `AllocError`'s `usize` payload needs no
+        // monomorphization. Variant layout (2 i64 words — tag + payload):
+        //   OutOfRange (tag=0) — 1 payload word (the intN that failed to map)
+        // The payload is a pure integer, so drop kinds are None.
+        if !self
+            .type_decls
+            .enum_layouts
+            .contains_key("DiscriminantError")
+        {
+            let disc_error_type = self.context.struct_type(&[i64_t, i64_t], false);
+            let mut tags = HashMap::new();
+            tags.insert("OutOfRange".to_string(), 0u64);
+            let mut field_counts = HashMap::new();
+            field_counts.insert("OutOfRange".to_string(), 1usize);
+            let mut field_word_offsets = HashMap::new();
+            field_word_offsets.insert("OutOfRange".to_string(), vec![(0, 1usize)]);
+            let mut field_drop_kinds = HashMap::new();
+            field_drop_kinds.insert("OutOfRange".to_string(), vec![EnumDropKind::None]);
+            self.type_decls.enum_layouts.insert(
+                "DiscriminantError".to_string(),
+                EnumLayout {
+                    llvm_type: disc_error_type,
+                    tags,
+                    field_counts,
+                    field_word_offsets,
+                    field_drop_kinds,
+                    is_shared: false,
+                },
+            );
+            self.type_decls
+                .seeded_enum_names
+                .insert("DiscriminantError".to_string());
+        }
+
         // Stdlib `AllocError` enum (`runtime/stdlib/alloc_error.kara`) — the
         // `Err` payload of the fallible-allocation API (phase-8 § Fallible
         // Allocation API and OOM Handling). Baked into `STDLIB_PROGRAMS` so the

@@ -25,6 +25,7 @@ use super::helpers::{
     eval_http_post, eval_stats_fn, eval_stats_fn_int, hex_decode, hex_encode, make_json_error,
     serde_json_to_kara_json, url_decode, url_encode,
 };
+use super::method_call::result_ok;
 use super::value::narrow_to_i64;
 use super::value::{EnumData, Value};
 
@@ -280,6 +281,45 @@ impl<'a> super::Interpreter<'a> {
             if segments.len() == 2 && segments[1] == "try_from" {
                 if let Some(v) = self.eval_refinement_try_from(&segments[0], args) {
                     return v;
+                }
+                // `<C-like #[repr(intN)] enum>.try_from(v)` — design.md § Enum
+                // Discriminant Runtime Surface (B-2026-08-21-26). The inbound
+                // twin of `.discriminant()`, reading the SAME folded table
+                // backwards, so a declared `Audio = BASE + 1` maps here
+                // exactly as it reads there. Placed ahead of the numeric arm
+                // because an enum name can never be a numeric target, and the
+                // typechecker has already refused a payload enum or one with
+                // no declared `#[repr]`.
+                if let Some(disc) = self
+                    .typecheck_result
+                    .enum_discriminants
+                    .get(&segments[0])
+                    .cloned()
+                {
+                    let raw = match args.first().map(|a| self.eval_expr_inner(&a.value)) {
+                        Some(Value::Int(n)) => n,
+                        _ => 0,
+                    };
+                    return match disc.values.iter().find(|(_, v)| i128::from(*v) == raw) {
+                        Some((variant, _)) => result_ok(Value::EnumVariant {
+                            enum_name: segments[0].clone(),
+                            variant: variant.clone(),
+                            data: EnumData::Unit,
+                        }),
+                        None => Value::EnumVariant {
+                            enum_name: "Result".to_string(),
+                            variant: "Err".to_string(),
+                            data: EnumData::Tuple(vec![Value::EnumVariant {
+                                enum_name: "DiscriminantError".to_string(),
+                                variant: "OutOfRange".to_string(),
+                                data: EnumData::Struct(
+                                    [("value".to_string(), Value::Int(raw))]
+                                        .into_iter()
+                                        .collect(),
+                                ),
+                            }]),
+                        },
+                    };
                 }
                 // Numeric narrowing `<int>.try_from(x)` in path form — the
                 // `.try_into()` desugar (`x.try_into()` → `T.try_from(x)`)

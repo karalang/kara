@@ -36777,6 +36777,46 @@ fn to_ne_bytes_feeds_a_slice_parameter() {
     assert_eq!(out, "10\n");
 }
 
+// ── B-2026-08-21-26: auto-generated `TryFrom[intN]` ─────────────
+//
+// design.md § Enum Discriminant Runtime Surface. The inbound twin of
+// `.discriminant()` below, reading the same folded table backwards.
+
+#[test]
+fn enum_try_from_maps_a_declared_value_to_its_variant() {
+    // The spec's own example, plus a value in no variant. The declared values
+    // are non-positional, so a lowering that compared layout TAGS would answer
+    // `Ok` for 0 and `Err` for 8.
+    let out = run("#[repr(u8)]\n\
+    enum UsbClass { Audio = 0x01, Hid = 0x03, MassStorage = 0x08 }\n\
+    fn probe(raw: u8) {\n\
+        match UsbClass.try_from(raw) {\n\
+            Ok(c) => println(f\"ok{c.discriminant()}\"),\n\
+            Err(e) => match e {\n\
+                DiscriminantError.OutOfRange { value } => println(f\"no{value}\"),\n\
+            },\n\
+        }\n\
+    }\n\
+    fn main() {\n\
+        probe(0u8); probe(1u8); probe(3u8); probe(8u8); probe(255u8);\n\
+    }");
+    assert_eq!(out, "no0\nok1\nok3\nok8\nno255\n");
+}
+
+#[test]
+fn enum_try_from_round_trips_through_discriminant() {
+    // The two halves of the surface are inverses on every declared value.
+    let out = run("#[repr(u8)]\n\
+    enum UsbClass { Audio = 0x01, Hid = 0x03, MassStorage = 0x08 }\n\
+    fn main() {\n\
+        match UsbClass.try_from(UsbClass.MassStorage.discriminant()) {\n\
+            Ok(c) => println(c.discriminant()),\n\
+            Err(_) => println(999),\n\
+        }\n\
+    }");
+    assert_eq!(out, "8\n");
+}
+
 // ── B-2026-08-21-10: C-like enum `.discriminant()` ──────────────
 //
 // design.md § Enum Discriminant Runtime Surface. The values come from the

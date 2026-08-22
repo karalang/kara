@@ -195,6 +195,22 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // `<C-like #[repr(intN)] enum>.try_from(v)` — design.md § Enum
+        // Discriminant Runtime Surface (B-2026-08-21-26). Sibling of the
+        // refinement intercept above and of the interpreter's arm in
+        // `eval_call.rs`; a non-enum head returns `None` and falls through.
+        if let ExprKind::Path { segments, .. } = &callee.kind {
+            if segments.len() == 2 && segments[1] == "try_from" {
+                if let Some(arg) = args.first() {
+                    if let Some(v) =
+                        self.compile_enum_try_from(&segments[0].clone(), &arg.value, call_span)?
+                    {
+                        return Ok(v);
+                    }
+                }
+            }
+        }
+
         // `ExitCode.from(code)` — the stdlib `from` constructor on the
         // `ExitCode` distinct type (Phase-8 entry-point contract Slice B).
         // Its Kāra body is the zero-cost wrap `{ ExitCode(code) }`, so the

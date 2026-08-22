@@ -102282,6 +102282,92 @@ fn main() {
         );
     }
 
+    /// B-2026-08-21-26 — auto-generated `TryFrom[intN]`, end to end.
+    ///
+    /// The inbound twin of `.discriminant()` above, reading the SAME folded
+    /// table backwards, so the declared values are deliberately non-positional
+    /// again: a lowering that compared against layout TAGS would answer `Ok`
+    /// for 0/1/2 and `Err` for 0x08.
+    ///
+    /// Two shapes are deliberately avoided, and neither is a `try_from` gap:
+    ///
+    ///   * the converted variant is read back through `.discriminant()` rather
+    ///     than bound and re-matched, because matching a C-like enum bound out
+    ///     of `Ok(...)` MISCOMPILES today (B-2026-08-21-50) — `Ok(UsbClass.Hid)`
+    ///     selects the first variant under codegen and the right one under the
+    ///     interpreter, with no `try_from` anywhere;
+    ///   * the `Err` payload is printed, not cast, because the `value` binding
+    ///     comes back as the uninstantiated type parameter `D` rather than the
+    ///     enum's repr type (B-2026-08-21-51), so `value as i64` fails the
+    ///     check-gate.
+    ///
+    /// Reading the discriminant back is exact — it separates all three
+    /// variants — so nothing here is weaker for the detour.
+    #[test]
+    fn test_e2e_enum_try_from_maps_declared_values_back_to_variants() {
+        let src = r#"
+const BASE: i64 = 16;
+
+#[repr(u8)]
+enum UsbClass { Audio = 0x01, Hid = 0x03, MassStorage = 0x08 }
+
+#[repr(i8)]
+enum Neg { Down = -128, Up = 127 }
+
+#[repr(u16)]
+enum Wide { A = 1000, B = 65535 }
+
+#[repr(u8)]
+enum Op { Add = BASE + 1, Sub = BASE + 2 }
+
+fn probe(raw: u8) {
+    match UsbClass.try_from(raw) {
+        Ok(c) => println(f"ok{c.discriminant()}"),
+        Err(e) => match e {
+            DiscriminantError.OutOfRange { value } => println(f"no{value}"),
+        },
+    }
+}
+
+fn main() {
+    // Every declared value round-trips; every gap reports the value it saw.
+    probe(0u8);
+    probe(1u8);
+    probe(2u8);
+    probe(3u8);
+    probe(8u8);
+    probe(255u8);
+
+    // Signed repr at both boundaries, including a NEGATIVE declared value.
+    let lo: i8 = (0 - 128) as i8;
+    match Neg.try_from(lo) { Ok(n) => println(n.discriminant()), Err(_) => println(999) }
+    let hi: i8 = 127 as i8;
+    match Neg.try_from(hi) { Ok(n) => println(n.discriminant()), Err(_) => println(999) }
+    let mid: i8 = 0 as i8;
+    match Neg.try_from(mid) { Ok(n) => println(n.discriminant()), Err(_) => println(999) }
+
+    // Wide repr at the top of its range, and a near miss.
+    let top: u16 = 65535 as u16;
+    match Wide.try_from(top) { Ok(w) => println(w.discriminant()), Err(_) => println(999) }
+    let near: u16 = 1001 as u16;
+    match Wide.try_from(near) { Ok(w) => println(w.discriminant()), Err(_) => println(999) }
+
+    // A folded constant expression — the same fold both backends read.
+    match Op.try_from(17u8) { Ok(o) => println(o.discriminant()), Err(_) => println(999) }
+
+    // Round-trip against the outbound direction.
+    match UsbClass.try_from(UsbClass.MassStorage.discriminant()) {
+        Ok(c) => println(c.discriminant()),
+        Err(_) => println(999),
+    }
+}
+"#;
+        assert_eq!(
+            run_program(src).as_deref(),
+            Some("no0\nok1\nno2\nok3\nok8\nno255\n-128\n127\n999\n65535\n999\n17\n8\n")
+        );
+    }
+
     /// B-2026-08-21-10 — `to_ne_bytes()`, end to end.
     ///
     /// Lowered as store-then-reload, so the answer IS the native byte order by

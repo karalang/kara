@@ -3504,8 +3504,8 @@ impl<'a> super::Interpreter<'a> {
                 enum_name, variant, ..
             } = &obj
             {
-                if let Some((_, values)) = self.typecheck_result.enum_discriminants.get(enum_name) {
-                    if let Some((_, v)) = values.iter().find(|(n, _)| n == variant) {
+                if let Some(disc) = self.typecheck_result.enum_discriminants.get(enum_name) {
+                    if let Some((_, v)) = disc.values.iter().find(|(n, _)| n == variant) {
                         return Value::Int(i128::from(*v));
                     }
                 }

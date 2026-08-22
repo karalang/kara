@@ -2213,15 +2213,16 @@ impl<'a> super::TypeChecker<'a> {
         // `u32` when no `#[repr]` is declared — the spec's "conservative"
         // default. A `#[repr(C)]` / `#[repr(align(N))]` head is not an integer
         // repr and leaves the default in place.
-        let repr = super::repr_arg_head_names(&e.attributes)
+        let declared_repr = super::repr_arg_head_names(&e.attributes)
             .into_iter()
             .find(|n| {
                 matches!(
                     n.as_str(),
                     "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64"
                 )
-            })
-            .unwrap_or_else(|| "u32".to_string());
+            });
+        let repr_declared = declared_repr.is_some();
+        let repr = declared_repr.unwrap_or_else(|| "u32".to_string());
 
         // Same constant environment `check_enum_discriminants` folds against,
         // so a declared `Audio = BASE + 1` resolves identically here and there.
@@ -2250,8 +2251,14 @@ impl<'a> super::TypeChecker<'a> {
                 .unwrap_or(i as i64);
             values.push((v.name.clone(), value));
         }
-        self.enum_discriminants
-            .insert(e.name.clone(), (repr, values));
+        self.enum_discriminants.insert(
+            e.name.clone(),
+            crate::ast::EnumDiscriminants {
+                repr,
+                repr_declared,
+                values,
+            },
+        );
     }
 
     fn check_enum_discriminants(&mut self, e: &EnumDef) {
