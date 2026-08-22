@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 149 | 0 |
 | missing-feature | 148 | 6 |
 | double-free | 134 | 0 |
-| codegen-gap | 128 | 3 |
+| codegen-gap | 128 | 2 |
 | diagnostics | 97 | 3 |
 | false-positive | 91 | 0 |
 | perf | 83 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 989 | 6 |
+| codegen | 989 | 5 |
 | typecheck | 235 | 5 |
 | interp | 172 | 0 |
 | other | 62 | 0 |
@@ -124,16 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1475 surfaced · 13 open · 1440 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1475 surfaced · 12 open · 1441 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (13)
+### Open (12)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-21-18 | 2026-08-21 | codegen+typecheck | low | STRUCT FUNCTIONAL UPDATE `P { x: 1, ..base }` IS STILL UNIMPLEMENTED -- it now says so clearly instead of dropping the base, but the form syntax.md's STRUCT_LITERAL production admits cannot be used; the interpreter already implements the copy and codegen does not, so the remaining work is codegen plus the ownership rules for a spread base | roadmap.md |
 | B-2026-08-21-29 | 2026-08-21 | typecheck | medium | THREE DOCUMENTED SURFACES ARE NOT REACHABLE AS WRITTEN: every spelling of channel construction design.md uses (`Channel.new[T]()`, `Channel.bounded`), its whole `io.` I/O prefix, and `allocates(Heap)` -- whose `Heap` the document never declares and the prelude does not provide | roadmap.md |
 | B-2026-08-21-43 | 2026-08-21 | codegen | low | A USER IMPL ON A **NON-SCALAR** `Array` HEAD IS UNCALLABLE ON A TEMPORARY -- `mk().tag()` for `impl Tag for Array[String, 2]` still loud-fails after B-2026-08-21-25, which admits only scalar-element arrays because a scalar array is the case that owns no heap | roadmap.md |
-| B-2026-08-21-44 | 2026-08-21 | codegen | low | `as_slice()` ON A FIXED-ARRAY **TEMPORARY** HAS NO CODEGEN LOWERING -- `n.to_ne_bytes().as_slice().len()` fails dispatch while `--interp` answers, the one method of the Array surface B-2026-08-21-25 left out | roadmap.md |
 | B-2026-08-21-45 | 2026-08-21 | typecheck+codegen | low | FIVE SHIPPED USER-FACING DIAGNOSTICS CARRY RUNS OF 14-30 SPACES mid-sentence, because rustfmt INTERMITTENTLY rejoins a `\`-continued string literal into one line and keeps the continuation indentation as real spaces | roadmap.md |
 | B-2026-08-21-46 | 2026-08-21 | codegen | low | `enumerate` OVER AN ARRAY **LITERAL** STILL BAILS LOUD -- `for (i, x) in [1, 2, 3].iter().enumerate()` hits the adaptor backstop while `--interp` answers, the one source shape B-2026-08-21-41's widening could not reach | roadmap.md |
 | B-2026-08-22-3 | 2026-08-22 | typecheck | high | AN ASSOCIATED-TYPE-EQUALITY BOUND IS NEVER DISCHARGED AT CALL SITES -- `where I.Item = i64` is validated at the DECLARATION and then ignored, so a call passing an `I` whose `Item` is `String` is accepted; the bound does not bind | typecheck |
@@ -161,9 +160,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1475 surfaced
 
 </details>
 
-### Fixed (1440)
+### Fixed (1441)
 
-<details><summary>1440 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1441 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -14579,6 +14578,52 @@ not in the body — the binding is not registered as a slice, so the call cannot
 qualify `Slice.f`. Verified pre-existing against pre-fix source. It is the same
 under-registered-binding family as the `Array` half fixed in B-2026-08-21-25,
 which is why it is worth its own row rather than a note here. |
+| B-2026-08-21-44 | codegen | low | `as_slice()` ON A FIXED-ARRAY **TEMPORARY** HAS NO CODEGEN LOWERING -- `n.to_ne_bytes().as_slice().len()` fails dispatch while `--interp` answers, th… | FIXED by 9b079fb0 (063d9d07 pre-rebase). A one-entry widening of the gate B-2026-08-21-25 built:
+`as_slice` joins the fixed-array read surface admitted for an array-valued
+TEMPORARY, and the identifier arm it re-dispatches into already handles an
+`ArrayType` slot by building a slice header from the place plus the array's
+static length -- so a materialized temporary needed no lowering of its own.
+
+THE ROW'S OPEN QUESTION IS ALREADY ANSWERED, and that is what unblocked this.
+It treated the view's lifetime as the thing to pin: the synth slot is an entry
+alloca, so the view is frame-lived, and "valid until the function returns" is
+not the rule a slice of a named binding gets. But the ownership checker already
+rejects the escaping shape --
+
+  let s = e.to_ne_bytes().as_slice();
+  -> error[ownership]: slice from temporary value escapes the enclosing
+     statement
+     help: bind the receiver to a local first, then take a slice into it
+
+-- so every program that reaches codegen uses the view inside the statement
+that made it, which is strictly inside the slot's lifetime. The fix relies on
+that existing rule, not on the alloca being frame-lived, and commits to no new
+lifetime rule. The difference the row wanted pinned turns out to be
+unobservable: no program can hold the view long enough to see it.
+
+`as_ptr` / `as_mut_ptr` STAY OUT, and the contrast is the argument. Both
+backends refuse `as_ptr` on this shape (interpreter: "method 'as_ptr' not
+found"; codegen: dispatch falls through), so admitting it would replace an
+agreement with a divergence -- exactly the reasoning -25 recorded. The
+interpreter has always ANSWERED `as_slice`, so admitting it closes a divergence
+instead of opening one. Both directions measured, not assumed.
+
+VERIFIED: run == build == `KARAC_AUTO_PAR=0` build. The E2E pins each temporary
+beside its bound two-line twin (the oracle the fix is written against) across
+the three receiver shapes -25 sweeps -- `to_ne_bytes`, a user fn returning
+`Array[T, N]`, and a byte-string literal -- and passes the slice to a
+`ref Slice[u8]` parameter that sums it, so a header built off the wrong BASE
+fails rather than silently reporting the right length.
+
+fmt + clippy clean on both feature legs. Codegen suite 2945 passed / 215
+failed; the same run with these changes stashed is 2944 / 215, so the failures
+are pre-existing (Map/Set/hasher tests that arrived with `src/hasher_kind.rs`)
+and this adds one passing test and no failures.
+
+NOT ADDRESSED: `as_slice_mut` on a temporary, deliberately. A writable view
+into a value with no name accepts writes that are then discarded, which is a
+question about whether the call is meaningful rather than about lowering it --
+different from the read-only view this row asked for. |
 | B-2026-08-21-48 | codegen | medium | AN **UN-ANNOTATED** SLICE BINDING CANNOT CALL A USER METHOD ON THE `Slice` HEAD -- `let s = v[0..2]; s.f()` fails with "no handler for method 'f' on… | FIXED by e66ce9f — one arm in `src/codegen/expr_ops.rs`'s `type_name_of`:
 `ExprKind::Index { object, .. }` now binds `index` and answers "Slice" for a
 RANGE index over a non-String receiver.
