@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 278 | 0 |
 | leak | 187 | 0 |
-| missing-feature | 152 | 3 |
+| missing-feature | 153 | 3 |
 | run-vs-build | 151 | 0 |
 | double-free | 135 | 0 |
 | codegen-gap | 128 | 0 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 992 | 1 |
-| typecheck | 242 | 1 |
+| typecheck | 243 | 2 |
 | interp | 172 | 0 |
 | other | 63 | 0 |
 | ownership | 62 | 0 |
@@ -120,11 +120,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | parser | 38 | 0 |
 | runtime | 28 | 0 |
 | resolver | 26 | 0 |
-| effect | 11 | 2 |
+| effect | 11 | 1 |
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1489 surfaced · 5 open · 1462 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1490 surfaced · 5 open · 1463 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (5)
 
@@ -134,7 +134,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1489 surfaced
 | B-2026-08-22-6 | 2026-08-22 | typecheck | low | The `Hasher` and `BuildHasher` TRAITS are not baked, so a user cannot write their own hasher: `Map[K, V, H]` accepts only the two compiler-known selectors `SipHash13BuildHasher` / `FxBuildHasher`, and design.md's "User-extensible hashers" paragraph describes a surface that does not exist | roadmap.md |
 | B-2026-08-22-7 | 2026-08-22 | codegen | low | `f16_software_emulated` IS THE ONE STARTER-SET LINT WHOSE TRIGGER DEPENDS ON THE TARGET -- and the blocker is NOT the placement this row was filed on: the specified feature-string check reads only the `features` half of `default_cpu_and_features`, so it is blind to CPU-implied support (`aarch64-apple-darwin` resolves to `("apple-m1", "")`), and no inkwell/LLVM-C call reports a CPU's resolved subtarget features to fix that | roadmap.md |
 | B-2026-08-22-8 | 2026-08-22 | cli | low | `implicit_clone` HAS NO TRIGGER IN THE SPEC AND CANNOT BE DE-REGISTERED WITHOUT A design.md EDIT -- the one starter-set lint whose resolution is a SPEC decision, not a compiler change | roadmap.md |
-| B-2026-08-22-20 | 2026-08-22 | effect | medium | THE BUILTIN CHANNEL METHODS CARRY NO `sends`/`receives` EFFECT -- `Sender.send` is seeded `allocates(Heap)` and nothing else, and the ONLY `EffectVerbKind::Sends` construction in the whole compiler is the `sends(Network)` block, so a real `tx.send(v)` is invisible to conflict analysis, `karac explain` and `query effects`; design.md:6070 declares it `with sends(tx) allocates(Heap)` | roadmap.md |
+| B-2026-08-22-21 | 2026-08-22 | typecheck | low | `Sender.try_send` AND `Receiver.recv_blocking` ARE SPEC'D BUT DO NOT EXIST -- design.md:6070 declares both with effects, and each is "no method '<name>' on type '<Sender|Receiver>'" | roadmap.md |
 
 ### Wontfix (8)
 
@@ -153,9 +153,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1489 surfaced
 
 </details>
 
-### Fixed (1462)
+### Fixed (1463)
 
-<details><summary>1462 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1463 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -15906,6 +15906,75 @@ with no second site to keep in sync. Four pins in tests/concurrency.rs:
 distinct-channel sends fan out, multi-producer on ONE channel fans out,
 multi-consumer fans out, and `writes`+`writes` on a channel still conflicts
 (the narrowness control). |
+| B-2026-08-22-20 | effect | medium | THE BUILTIN CHANNEL METHODS CARRY NO `sends`/`receives` EFFECT -- `Sender.send` is seeded `allocates(Heap)` and nothing else, and the ONLY `EffectVer… | FIXED by e576a8c.
+
+ONE SEEDING BLOCK in `effectchecker.rs`, modelled on the `sends(Network)` block
+this row identified as the only such construction in the compiler:
+
+  Sender.send       + sends(Channel)
+  Receiver.recv     + receives(Channel)
+  Receiver.try_recv + receives(Channel)
+
+Measured before and after with `query effects`, which is also how the row's
+own claims were verified before any code was written:
+
+  tx.send(1)     [allocates Heap]           -> + sends(Channel)
+  rx.recv()      [allocates Heap, suspends] -> + receives(Channel)
+  rx.try_recv()  [allocates Heap]           -> + receives(Channel)
+
+THE RESOURCE IS THE COLLAPSED `Channel`, and choosing it was the one real
+design question. The row correctly framed per-value identity as out of scope
+(B-2026-08-21-52), but that leaves "seed WHAT resource?" open. Answered by
+measurement rather than by picking: a hand-declared `with sends(tx)` ALREADY
+canonicalizes to `sends(Channel)` today, so seeding the same name makes the
+builtin call and the user's wrapper agree, instead of introducing a second
+spelling that per-value identity would later have to reconcile. When
+B-2026-08-21-52 lands, both move together. The collapse remains the SOUND
+direction meanwhile — one shared resource means two channel-touching tasks
+always conflict, over-reporting rather than under-reporting.
+
+MERGED, NOT INSERTED. The seeding idiom next door is `insert`, and these two
+keys were already owned by the `allocates(Heap)` and `suspends` seeds — a
+copy of the neighbouring pattern would have silently dropped both. The block
+uses `entry().or_default()` and adds; that both survivals hold is ASSERTED in
+the tests, not assumed.
+
+`try_recv` additionally needed a `STDLIB_METHOD_MAP` entry. Without the
+method-name-to-qualified-name routing its seed is unreachable, so the row's
+list of three would have silently been a list of two.
+
+`try_send` and `recv_blocking` are spec'd at design.md:6070 but DO NOT EXIST
+as methods today ("no method 'try_send' on type 'Sender'"), so they are not
+seeded — seeding a name nothing resolves to is inert, and a missing method is
+a different gap from a missing effect. Split out as B-2026-08-22-21.
+
+THE PUBLIC-BOUNDARY TIGHTENING, which is what the row meant by "not a
+one-liner", behaves as intended and is pinned in both directions:
+
+  public function 'push' performs sends(Channel) but does not declare it
+  (via call to 'Sender.send' at line 2)
+
+and the spec's own `with sends(tx)` satisfies it.
+
+BLAST RADIUS, measured because this converts previously-accepted programs into
+errors — which was the row's stated reason for deferring it. A per-file
+error-count diff over all 194 `.kara` files in `examples/` + `runtime/stdlib/`
+is IDENTICAL before and after; 917 kata files typecheck clean; full default
+suite 0 failures; `--features llvm` suite 0 failures. The predicted breakage
+did not materialize because the affected surface is small (4 example files, 5
+stdlib files, 0 katas reference the channel methods at all) and those callers
+either are not public or already declare their effects.
+
+NOT ADDRESSED, and left as the row recorded it: the
+`channel_param_names` program-wide-name looseness noted at the end of the row
+is untouched and still accurate.
+
+TESTS in tests/effectchecker.rs: `test_channel_send_infers_sends_channel` and
+`test_channel_recv_infers_receives_channel` (each also asserting the
+pre-existing `allocates`/`suspends` seed survived the merge), and
+`test_public_fn_must_declare_channel_send` for both boundary directions.
+Non-vacuity: reverting the seed fails all three and leaves the four
+pre-existing channel tests green. |
 
 </details>
 
