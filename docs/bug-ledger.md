@@ -94,8 +94,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 278 | 0 |
 | leak | 187 | 0 |
+| missing-feature | 151 | 5 |
 | run-vs-build | 151 | 1 |
-| missing-feature | 149 | 4 |
 | double-free | 134 | 0 |
 | codegen-gap | 128 | 1 |
 | diagnostics | 97 | 2 |
@@ -111,20 +111,20 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 991 | 3 |
-| typecheck | 240 | 3 |
+| typecheck | 242 | 4 |
 | interp | 172 | 0 |
 | other | 63 | 0 |
 | ownership | 62 | 0 |
 | cli | 61 | 1 |
 | autopar | 54 | 0 |
-| parser | 38 | 2 |
+| parser | 38 | 1 |
 | runtime | 28 | 0 |
 | resolver | 26 | 0 |
 | effect | 10 | 2 |
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1484 surfaced · 10 open · 1452 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1486 surfaced · 10 open · 1454 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (10)
 
@@ -136,9 +136,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1484 surfaced
 | B-2026-08-22-6 | 2026-08-22 | typecheck | low | The `Hasher` and `BuildHasher` TRAITS are not baked, so a user cannot write their own hasher: `Map[K, V, H]` accepts only the two compiler-known selectors `SipHash13BuildHasher` / `FxBuildHasher`, and design.md's "User-extensible hashers" paragraph describes a surface that does not exist | roadmap.md |
 | B-2026-08-22-7 | 2026-08-22 | codegen | low | `f16_software_emulated` IS THE ONE STARTER-SET LINT WHOSE TRIGGER DEPENDS ON THE TARGET, and the target's feature baseline is only reachable behind `#[cfg(feature = "llvm")]` -- so wiring it is a PLACEMENT decision, not the mechanical job the other six were | roadmap.md |
 | B-2026-08-22-8 | 2026-08-22 | cli | low | `implicit_clone` HAS NO TRIGGER IN THE SPEC AND CANNOT BE DE-REGISTERED WITHOUT A design.md EDIT -- the one starter-set lint whose resolution is a SPEC decision, not a compiler change | roadmap.md |
-| B-2026-08-21-53 | 2026-08-22 | typecheck+parser | medium | CALL-SITE TYPE APPLICATION `f[T](args)` IS IMPLEMENTED ONLY FOR THE `ptr.*` BUILTINS -- `Vec.new[i64]()`, `Channel.new[i64]()` and a user generic `id[i64](5)` all parse as an INDEX and then fail, while `ptr.null[u32]()` works; design.md writes both forms and contradicts itself three ways about whether the syntax exists | roadmap.md |
 | B-2026-08-22-14 | 2026-08-22 | codegen+effect | low | AN EXISTENTIAL DECLARING POLYMORPHIC EFFECT VARIABLES (`-> impl Emit with F`) IS THE ONE RETURN-POSITION `impl Trait` SHAPE STILL WITHOUT A BUILD -- deliberately excluded from B-2026-08-22-12's witness substitution, because the effect checker reads the variable off the very node the rewrite would erase | codegen |
 | B-2026-08-22-15 | 2026-08-22 | typecheck | medium | A `-> Self` TRAIT METHOD CALLED ON AN EXISTENTIAL RECEIVER LOSES THE TRAIT -- `make().bumped()` types as a BARE type parameter named after the trait, so the builder shape is rejected with two diagnostics that point at the caller's correct code and name a spelling the source never contains | typecheck |
+| B-2026-08-22-16 | 2026-08-22 | typecheck | medium | `Channel.bounded(cap)` DOES NOT EXIST IN ANY SPELLING -- design.md documents it with a `requires cap > 0` contract, `bounded_channel.kara` exists in the stdlib, and nothing routes the name to it | typecheck |
+| B-2026-08-22-17 | 2026-08-22 | typecheck | high | THE BLESSED EXPLICIT SPELLING DOES NOT WORK FOR BUILTIN TYPES -- `Vec[i64].new()`, `Map[String, i64].new()` and `Channel[i64].new()` all report "no method 'new' on `Vec[…]`", so the form design.md now names as THE way to select a type explicitly is unavailable on exactly the types that need it most | typecheck |
 
 ### Wontfix (8)
 
@@ -157,9 +158,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1484 surfaced
 
 </details>
 
-### Fixed (1452)
+### Fixed (1454)
 
-<details><summary>1452 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1454 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -15351,6 +15352,80 @@ silenced BOTH spellings still fails; plus
 control. Non-vacuity checked by reverting the fix: 4 of the 5 new tests fail,
 and the inference control passes either way, which is exactly what a control
 should do. |
+| B-2026-08-21-53 | typecheck+parser | medium | CALL-SITE TYPE APPLICATION `f[T](args)` IS IMPLEMENTED ONLY FOR THE `ptr.*` BUILTINS -- `Vec.new[i64]()`, `Channel.new[i64]()` and a user generic `id… | DECIDED and FIXED across f666fe7 (compiler) and 5d6c1c9 (spec).
+
+THE DECISION, which the row correctly said had to come first: **Kāra has NO
+call-site type application. `[T]` constructs and declares types; it is never
+applied at a call site.**
+
+DECIDED ON A MEASUREMENT, not on taste. `fs[0](10)` is legal Kāra today and
+returns 11, so `f[X](args)` is genuinely ambiguous with INDEXING — and
+design.md:474's stated rationale ("`[` is not a comparison operator, so no
+syntactic ambiguity") only rules out the `<` ambiguity while missing the `[`
+one it introduces. A general `f[T](args)` is decidable only by asking whether
+the bracket names a type and the base is generic, and that rule is defeated
+the moment a binding shadows a type name.
+
+The qualified form has no ambiguity BY CONSTRUCTION — a type in receiver
+position cannot be an index, because a type cannot be indexed — and it is
+already what the compiler implements: `Vector[T, N].splat(x)` is the real SIMD
+constructor and `i64.parse(s)` the real parse. :3413's "the explicit form is
+always `T.default()`, never `default::<T>()`" was already saying it. The
+annotation escape hatch was checked before committing to this, since it is
+what makes the option complete: `let p: *const u32 = ptr.null();` and a
+generic fn whose param appears ONLY in its return both typecheck clean.
+
+`ptr.null[u32]()` IS GRANDFATHERED, NOT REMOVED, which is where this departs
+from the row's sketch. It works, is documented and has 11 test references;
+nothing in the compiler repo or the 917-file kata corpus uses it in `.kara`
+source, but deleting tested, working, documented behaviour is a larger call
+than resolving a contradiction requires. It is unambiguous only because it is
+a fixed, shadow-guarded prelude set of four constructors, and :474 now says
+exactly that, so it cannot be read as licence for `f[T](args)` generally.
+
+THE DECISION EXPOSED A LIVE CRASH, fixed in f666fe7. `Type[Args].fn(args)` — the
+spelling just blessed — passed `karac check` and then failed in BOTH backends:
+the interpreter with "internal: path 'Box' has no interpreter evaluation
+rule", and codegen with an LLVM module-verification failure, because the
+fresh-temp receiver helper compiled the TYPE as a value and passed it as
+`self`:
+
+  Incorrect number of arguments passed to called function!
+    %call = call { i64 } @"Box.make$i64"(i64 %__urecv_tmp_0, i64 7)
+
+Both backends now re-form the node as the two-segment callee `Path([Type, fn])`
+the unqualified `Box.make(7)` already parses to, so the two spellings share
+one dispatch. Calling `compile_assoc_call` directly was tried first and is
+wrong: it takes only a type NAME, so a generic impl's `Box.make$i64` monomorph
+is unreachable — which let the non-generic `Box[String].zero()` pass while the
+generic case still failed, exactly the partial success that hides a bug.
+
+SPEC CORRECTIONS, each verified by compiling it: `Channel.new[T]()` ->
+`Channel[T].new()`; the SIMD table's Rust syntax (`Vector::splat`,
+`v.shuffle::<[i64; M]>()`, `v.cast::<U>()`, `Vector::gather`, …) replaced with
+the implemented spellings.
+
+THE `io.` PREFIX, the row's third sub-issue, is also resolved — as the spec
+being wrong, not the stdlib being incomplete. There is no `io` module and
+never was (`io.read_line()` is `undefined name 'io'`); the functions live on
+the lowercase stream aliases. § Standard I/O Surface is rewritten onto
+`stdin.` / `stdout.` / `stderr.`, with signatures matching the stdlib rather
+than the wish (`flush` returns `()`, not `Result`, so it is not `?`-chained).
+The guessing-game example did not compile on THREE counts and is rewritten and
+compiled clean.
+
+BLAST RADIUS: full default suite 0 failures, `--features llvm` suite 0
+failures, 917 kata files typecheck clean, `design_md_code_blocks` green. (An
+earlier llvm run showed 19 `cli.rs` failures; that was a concurrent rebuild of
+`target/debug/karac` during the suite, not a regression — `cli.rs` alone is
+651/651.)
+
+TWO REMAINDERS ARE SPLIT OUT rather than buried here: `Channel.bounded` still
+does not exist in any spelling (B-2026-08-22-16), and the BUILTIN constructors
+are not reachable through the spelling this row just blessed —
+`Vec[i64].new()`, `Map[String, i64].new()` and `Channel[i64].new()` all report
+"no method 'new' on `Vec[…]`" (B-2026-08-22-17). The second is the more
+important of the two now, precisely because of this decision. |
 | B-2026-08-21-54 | other | medium | `test_shortener_example_end_to_end` ASSERTS A JSON KEY ORDER and is RED on main since the FxHash change (8c3c8d6) reordered Map iteration -- and it i… | Fixed in 69be64c as a drive-by of B-2026-08-22-10, not by this row's own
 work: the `/stats` assertion in `test_shortener_example_end_to_end`
 (tests/http_server.rs) moved off exact-equality onto a contents check --
