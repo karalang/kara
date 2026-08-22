@@ -801,6 +801,12 @@ pub(super) fn cmd_run(
                         "warning[effect]: {}:{}:{}: {}",
                         filename, err.span.line, err.span.column, err.message
                     ),
+                    // Lint-warning band (`kind_is_lint_warning`,
+                    // B-2026-08-21-2) — advisory, named by its lint.
+                    ref k if crate::effectchecker::kind_is_lint_warning(k) => eprintln!(
+                        "warning[pure_loop_in_par]: {}:{}:{}: {}",
+                        filename, err.span.line, err.span.column, err.message
+                    ),
                     // Note-severity kinds, per the one shared predicate
                     // (`kind_is_note`, B-2026-08-21-2).
                     ref k if crate::effectchecker::kind_is_note(k) => eprintln!(

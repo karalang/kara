@@ -53,18 +53,49 @@ pub(super) fn json_string_list(items: &[String]) -> String {
 pub(super) fn build_callee_effectful_table(
     effects: &EffectCheckResult,
 ) -> std::collections::HashMap<String, bool> {
-    fn set_is_effectful(set: &crate::effectchecker::EffectSet) -> bool {
-        set.effects.iter().any(|t| {
-            matches!(
-                t.effect.verb,
-                EffectVerbKind::Reads
-                    | EffectVerbKind::Writes
-                    | EffectVerbKind::Sends
-                    | EffectVerbKind::Receives
-            )
-        })
-    }
+    // One classifier, shared with the `pure_loop_in_par` lint so the warning
+    // and the checks actually emitted cannot disagree (B-2026-08-21-2).
+    use crate::effectchecker::effect_set_is_effectful as set_is_effectful;
     let mut table = std::collections::HashMap::new();
+    // Seed the LOWERED BUILTIN OPERATORS as effect-free (B-2026-08-21-2).
+    //
+    // The lowering pass rewrites `a + b` on a numeric primitive into
+    // `Call(Path(["i64", "add"]), ...)`, and codegen recovers exactly that
+    // `i64.add` key for its cooperative-cancel narrowing. Nothing ever put such
+    // a key in this table -- builtins have no declaration to infer from -- so
+    // every arithmetic operation inside a `par` branch looked like an
+    // unclassifiable callee and had a cancel check emitted before it.
+    //
+    // Measured on a `par` branch whose body is
+    // `while i < 1000 { acc = acc + i; i = i + 1; }`: SIX cancel checks, two of
+    // them INSIDE the loop (`while.cond` and `while.body`), so the flag was
+    // loaded and tested twice per iteration of pure arithmetic.
+    //
+    // design.md is explicit that this must not happen: "Tight pure loops
+    // without effect boundaries are not cancellable mid-iteration -- this is a
+    // deliberate tradeoff, because inserting preemption points into pure
+    // computation would defeat the single-pass compilation and zero-runtime-tax
+    // goals", and "the compiler does not automatically insert effect-boundary
+    // checks at loop backedges -- doing so would add overhead to pure
+    // computation, which is the exact case where zero overhead matters most".
+    // Seeding these keys makes codegen match the spec it documents, and is what
+    // makes `pure_loop_in_par` able to fire at all: with every arithmetic op
+    // counting as a boundary, no loop was ever "pure" by the compiler's own
+    // test.
+    //
+    // Seeded FIRST so the real entries below overwrite on any collision: a user
+    // impl supplying one of these operator methods for its OWN type is a real
+    // function with real inferred effects. Only primitive heads are seeded, and
+    // a primitive cannot carry a user impl.
+    //
+    // Overflow-trapping does not make these effectful: a trap is `panics`,
+    // which the classifier already excludes along with `allocates` and the
+    // execution verbs.
+    for head in crate::effectchecker::LOWERED_OP_HEADS {
+        for op in crate::effectchecker::LOWERED_PURE_OPS {
+            table.insert(format!("{head}.{op}"), false);
+        }
+    }
     for (name, set) in &effects.inferred_effects {
         table.insert(name.clone(), set_is_effectful(set));
     }
@@ -1970,6 +2001,11 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 // `mutual_recursion_note` — a note, never an error, exactly as
                 // design.md words it ("emits a note (not an error)").
                 crate::effectchecker::EffectErrorKind::MutualRecursionNote => ("L0002", "note"),
+                // `pure_loop_in_par` — design.md spells it `warn[...]`, so it
+                // is a WARNING: advisory like the two notes above (it never
+                // blocks a build), but rendered and counted as a warning
+                // rather than a note (B-2026-08-21-2).
+                crate::effectchecker::EffectErrorKind::PureLoopInPar => ("L0003", "warning"),
                 crate::effectchecker::EffectErrorKind::EffectVariableConflict => ("E0406", "error"),
                 crate::effectchecker::EffectErrorKind::ProfileIncompatibleEffect => {
                     ("E0407", "error")

@@ -9816,3 +9816,87 @@ fn effect_sets_agree_with_and_without_the_threaded_tables() {
         assert_eq!(key(&bare), key(&rich), "effect sets diverged for:\n{src}");
     }
 }
+
+/// B-2026-08-21-2 slice 4 — `pure_loop_in_par`.
+///
+/// design.md § Parallel Failure and Cleanup: "The compiler emits
+/// `warn[pure_loop_in_par]` when it detects a loop body with no effect
+/// boundaries inside a `par` branch."
+///
+/// THE TRIGGER IS CANCELLABILITY, NOT PARALLELISM — the registered description
+/// said "a loop whose body has no parallelisable work", a different and
+/// unimplementable rule, and is corrected alongside this pass. The row that
+/// tracks this lint class warns that a registry description is not a reliable
+/// statement of a trigger; this is the second confirmed instance.
+///
+/// The boundary test is not restated here: it calls the same
+/// `effect_set_is_effectful` that builds codegen's `callee_effectful` table,
+/// so the warning and the cancel checks actually emitted answer one question
+/// one way.
+#[test]
+fn pure_loop_in_par_warns_only_on_a_loop_with_no_effect_boundary() {
+    let src = "effect resource Stdout;\n\
+               fn sink(x: i64) -> i64 with writes(Stdout) { return x; }\n\
+               fn main() {\n\
+               let (a, b) = par {\n\
+               let a = { let mut acc = 0; let mut i = 0; while i < 10 { acc = acc + i; i = i + 1; } acc };\n\
+               let b = { let mut t = 0; let mut j = 0; while j < 3 { t = t + sink(j); j = j + 1; } t };\n\
+               (a, b)\n\
+               };\n\
+               println(a + b);\n\
+               }\n";
+    let parsed = parse(src);
+    let result = karac::effectcheck(&parsed.program);
+    let warns: Vec<_> = result
+        .errors
+        .iter()
+        .filter(|e| matches!(e.kind, karac::effectchecker::EffectErrorKind::PureLoopInPar))
+        .collect();
+    assert_eq!(
+        warns.len(),
+        1,
+        "exactly one warning: the PURE branch's loop. The sibling branch calls \
+         an effectful fn, which is a boundary, and must stay silent — a lint \
+         that fired on both would be noise on every real `par` block. Got: {:?}",
+        warns.iter().map(|w| w.span.line).collect::<Vec<_>>()
+    );
+    assert_eq!(warns[0].span.line, 5, "the pure branch is on line 5");
+    // Advisory: never blocks a build, and never counts toward an exit code.
+    assert!(
+        !karac::effectchecker::kind_blocks_production(&warns[0].kind),
+        "spelled `warn[...]` in the spec, so it must not stop a build"
+    );
+    // …but it is NOT a note: the note band is the `note[effect]` renderings,
+    // and routing a warning through it mislabels it (B-2026-08-21-2).
+    assert!(
+        !karac::effectchecker::kind_is_note(&warns[0].kind),
+        "a warning is not a note — the two bands render differently"
+    );
+    assert!(karac::effectchecker::kind_is_lint_warning(&warns[0].kind));
+}
+
+/// The same program with every loop carrying an effect boundary must be
+/// silent — the negative half, so a regression that fired unconditionally
+/// would be caught rather than looking like "the lint works".
+#[test]
+fn pure_loop_in_par_is_silent_when_every_loop_has_a_boundary() {
+    let src = "effect resource Stdout;\n\
+               fn sink(x: i64) -> i64 with writes(Stdout) { return x; }\n\
+               fn main() {\n\
+               let (a, b) = par {\n\
+               let a = { let mut t = 0; let mut j = 0; while j < 3 { t = t + sink(j); j = j + 1; } t };\n\
+               let b = 7;\n\
+               (a, b)\n\
+               };\n\
+               println(a + b);\n\
+               }\n";
+    let parsed = parse(src);
+    let result = karac::effectcheck(&parsed.program);
+    assert!(
+        !result
+            .errors
+            .iter()
+            .any(|e| matches!(e.kind, karac::effectchecker::EffectErrorKind::PureLoopInPar)),
+        "a loop whose body calls an effectful fn IS cancellable and must not warn"
+    );
+}

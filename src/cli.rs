@@ -1650,7 +1650,15 @@ impl Pipeline {
             n += e
                 .errors
                 .iter()
-                .filter(|e| !crate::effectchecker::kind_is_note(&e.kind))
+                .filter(|e| {
+                    // Neither the note band nor the WARNING band counts toward
+                    // the exit code: `pure_loop_in_par` is advisory, and
+                    // `check` reporting a nonzero status for it would make
+                    // every Mend/`karac fix` cycle treat an intentional bounded
+                    // loop as a failure (B-2026-08-21-2).
+                    !crate::effectchecker::kind_is_note(&e.kind)
+                        && !crate::effectchecker::kind_is_lint_warning(&e.kind)
+                })
                 .count();
         }
         if let Some(ref o) = self.ownership {
@@ -2023,7 +2031,21 @@ fn render_text_diagnostics(pipeline: &Pipeline) -> Vec<String> {
             // this renderer cannot drift from the exit-code count above
             // (B-2026-08-21-2). Not `kind_blocks_production`:
             // `TargetGateViolation` prints `error[effect]` on this path.
-            if crate::effectchecker::kind_is_note(&err.kind) {
+            if crate::effectchecker::kind_is_lint_warning(&err.kind) {
+                // design.md spells this band `warn[<lint>]`, so it renders as a
+                // warning rather than the `error[effect]` default below — it
+                // blocks nothing (B-2026-08-21-2).
+                out.push(with_snippet(
+                    format!(
+                        "warning[pure_loop_in_par]: {}:{}:{}: {}",
+                        filename, err.span.line, err.span.column, err.message
+                    ),
+                    source,
+                    err.span.line,
+                    err.span.column,
+                    err.span.length,
+                ));
+            } else if crate::effectchecker::kind_is_note(&err.kind) {
                 out.push(with_snippet(
                     format!(
                         "note[effect]: {}:{}:{}: {}",

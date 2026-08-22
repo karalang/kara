@@ -158,7 +158,7 @@ pub const STARTER_LINTS: &[LintInfo] = &[
     LintInfo {
         name: "pure_loop_in_par",
         default_level: LintLevel::Warn,
-        description: "A `par { }` block contains a loop whose body has no parallelisable work.",
+        description: "A loop inside a `par { }` branch has no effect boundary, so cooperative cancellation cannot be observed inside it.",
     },
     LintInfo {
         name: "undocumented_unsafe",
@@ -520,7 +520,6 @@ mod emit_site_guard {
         "f16_software_emulated",
         "float_in_serialized_type",
         "implicit_clone",
-        "pure_loop_in_par",
         "repr_c_layout_ignored",
     ];
 

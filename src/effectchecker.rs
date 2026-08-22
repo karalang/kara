@@ -22,6 +22,7 @@ mod inference;
 mod modbind_synth;
 mod no_effect;
 mod profile_compat;
+mod pure_loop;
 mod subtyping;
 mod target_gate;
 mod verify;
@@ -192,7 +193,7 @@ pub struct EffectError {
 /// hoisted once more so the test harnesses cannot drift from the CLI either
 /// (B-2026-08-19-5).
 ///
-/// Three kinds stay advisory, all by explicit design:
+/// Four kinds stay advisory, all by explicit design:
 ///
 ///   * [`EffectErrorKind::FfiLintHint`] — declared "never a compile error" at
 ///     its definition; rendered as `note[effect]`.
@@ -203,13 +204,70 @@ pub struct EffectError {
 ///     supports by design.
 ///   * [`EffectErrorKind::MutualRecursionNote`] — design.md calls it "a note
 ///     (not an error)"; rendered as `note[effect]` (B-2026-08-21-2).
+///   * [`EffectErrorKind::PureLoopInPar`] — design.md spells it
+///     `warn[pure_loop_in_par]`; rendered as a WARNING, not a note, and never
+///     counted toward an exit code (B-2026-08-21-2).
 pub fn kind_blocks_production(kind: &EffectErrorKind) -> bool {
     !matches!(
         kind,
         EffectErrorKind::FfiLintHint
             | EffectErrorKind::TargetGateViolation
             | EffectErrorKind::MutualRecursionNote
+            | EffectErrorKind::PureLoopInPar
     )
+}
+
+/// True when an effect set carries a RESOURCE verb — the single definition of
+/// "this call is an effect boundary", shared by codegen's cooperative-cancel
+/// check and the `pure_loop_in_par` lint.
+///
+/// Hoisted out of `cli::diag_json::build_callee_effectful_table`
+/// (B-2026-08-21-2) so the lint cannot drift from the checks actually
+/// emitted. A lint that disagreed would be worse than none: it would report a
+/// loop as uncancellable while codegen had placed a check inside it.
+///
+/// `allocates` / `panics` and the execution verbs `blocks` / `suspends` are
+/// deliberately excluded, matching the table codegen reads.
+pub fn effect_set_is_effectful(set: &EffectSet) -> bool {
+    set.effects.iter().any(|t| {
+        matches!(
+            t.effect.verb,
+            EffectVerbKind::Reads
+                | EffectVerbKind::Writes
+                | EffectVerbKind::Sends
+                | EffectVerbKind::Receives
+        )
+    })
+}
+
+/// The lowered builtin operator methods on primitive heads — `i64.add`,
+/// `f64.lt`, and the rest of the set [`crate::lowering`] rewrites `a OP b`
+/// into.
+///
+/// These have no declaration to infer effects from, so every table keyed by
+/// callee name misses them, and a miss means "unclassifiable" — which the
+/// cooperative-cancel narrowing treats as an effect boundary. That put a
+/// cancel check before every arithmetic operation inside a `par` branch
+/// (B-2026-08-21-2). They are pure by construction; a trapping overflow is
+/// `panics`, which [`effect_set_is_effectful`] already excludes.
+///
+/// Shared by `build_callee_effectful_table` (which seeds the codegen table
+/// from it) and the `pure_loop_in_par` lint (which asks it directly), so the
+/// warning and the emitted checks answer the same question the same way.
+pub const LOWERED_PURE_OPS: &[&str] = &[
+    "add", "sub", "mul", "div", "rem", "eq", "ne", "lt", "le", "gt", "ge", "bitand", "bitor",
+    "bitxor", "shl", "shr",
+];
+pub const LOWERED_OP_HEADS: &[&str] = &[
+    "i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32", "u64", "u128", "usize", "f16",
+    "bf16", "f32", "f64", "bool", "char",
+];
+
+pub fn lowered_builtin_op_is_pure(key: &str) -> bool {
+    let Some((head, op)) = key.split_once('.') else {
+        return false;
+    };
+    LOWERED_OP_HEADS.contains(&head) && LOWERED_PURE_OPS.contains(&op)
 }
 
 /// True for the NOTE-severity effect diagnostics — the ones rendered
@@ -228,6 +286,20 @@ pub fn kind_blocks_production(kind: &EffectErrorKind) -> bool {
 /// harness — so adding a second note kind silently broke every one of them at
 /// once. Same one-classifier discipline as `kind_blocks_production`
 /// (B-2026-08-19-5) and the ownership gate (B-2026-07-31-29).
+/// True for the WARNING-severity effect diagnostics — advisory like the notes
+/// (they never block production) but rendered and counted as warnings.
+///
+/// A third band was needed because the renderers were binary, note-or-error,
+/// and `pure_loop_in_par` is spelled `warn[pure_loop_in_par]` in design.md:
+/// routing it through `kind_is_note` would have mislabelled it, and leaving it
+/// out made it print `error[effect]` for a diagnostic that stops nothing
+/// (B-2026-08-21-2). Hoisted rather than open-coded for the reason the note
+/// predicate was: the last time a band was added, fifteen open-coded copies of
+/// the test went stale at once.
+pub fn kind_is_lint_warning(kind: &EffectErrorKind) -> bool {
+    matches!(kind, EffectErrorKind::PureLoopInPar)
+}
+
 pub fn kind_is_note(kind: &EffectErrorKind) -> bool {
     matches!(
         kind,
@@ -283,6 +355,13 @@ pub enum EffectErrorKind {
     /// sentence promises was already populated; only the note was missing, so
     /// `#[allow]` had nothing to suppress and `#[deny]` passed vacuously.
     MutualRecursionNote,
+    /// `pure_loop_in_par` (B-2026-08-21-2) — a loop inside a `par { }` branch
+    /// whose body has no effect boundary, so cooperative cancellation has
+    /// nowhere to observe the flag. design.md § Parallel Failure and Cleanup
+    /// spells it `warn[pure_loop_in_par]`, so it is a WARNING, not a note: it
+    /// never blocks production, but it is not routed through `kind_is_note`
+    /// either (that set is the `note[effect]` renderings).
+    PureLoopInPar,
     /// An impl method's inferred effects exceed the trait method's declared ceiling.
     ImplExceedsTraitCeiling,
     /// A trait default method body's inferred effects exceed the method's declared ceiling.
@@ -441,6 +520,7 @@ pub(crate) fn class_for_effect_error_kind(
         // `mutual_recursion_note` is a lint like `FfiLintHint` — same class,
         // same never-blocking path (B-2026-08-21-2).
         EffectErrorKind::MutualRecursionNote => Some(DC::LintWarning),
+        EffectErrorKind::PureLoopInPar => Some(DC::LintWarning),
 
         // Deliberately unclassified. `OverDeclaredEffect` is the INVERSE of
         // `EffectUndeclared` and would be actively misleading under it;
@@ -1467,6 +1547,13 @@ impl<'a> EffectChecker<'a> {
         // Phase C: Detect mutual recursion groups and build resolution traces
         let mutual_recursion_groups = self.detect_mutual_recursion_groups();
         self.emit_mutual_recursion_notes(&mutual_recursion_groups);
+        // `pure_loop_in_par` runs HERE, after inference has settled, because
+        // its boundary test reads the same resolved effect sets that
+        // `build_callee_effectful_table` will later hand codegen. Running it
+        // earlier would classify a not-yet-inferred callee as unknown, and
+        // unknown counts as a boundary, so the lint would go quiet exactly on
+        // the programs it exists for.
+        self.emit_pure_loop_in_par_warnings();
 
         // Internal working tables are Symbol-keyed (name-interning spike
         // stage 3); the public result stays String-keyed std HashMap, so
