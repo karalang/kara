@@ -51950,4 +51950,65 @@ fn main() {
             "asan_struct_field_moved_out_of_owned_self_is_balanced",
         );
     }
+
+    /// B-2026-08-21-43 — the TEMPORARY spelling of the same ownership question:
+    /// a user impl on a non-scalar `Array` head, called on a value with no
+    /// name (`mk().tag()`). The arm spills the temporary into a slot and
+    /// re-dispatches by identifier, so what it must not do is create a second
+    /// owner of the element buffers.
+    ///
+    /// Paired with the bound twin deliberately: the two spellings have to be
+    /// balanced the SAME way, and this arm's whole justification is that it
+    /// inherits the bound path's answer rather than inventing one.
+    #[test]
+    fn asan_nonscalar_array_user_impl_on_a_temporary_is_balanced() {
+        assert_clean_asan_run(
+            r#"trait Tag { fn tag(self) -> i64; }
+impl Tag for Array[String, 2] { fn tag(self) -> i64 { return 42i64; } }
+fn mk(i: i64) -> Array[String, 2] { return [f"a{i}", f"b{i}"]; }
+
+fn main() {
+    let mut i = 0i64;
+    let mut total = 0i64;
+    while i < 50i64 {
+        total = total + mk(i).tag();
+        i = i + 1i64;
+    }
+    println(total);
+}
+"#,
+            &["2100"],
+            "asan_nonscalar_array_user_impl_on_a_temporary_is_balanced",
+        );
+    }
+
+    /// The harder half of B-2026-08-21-43: a `String` flows OUT of the consumed
+    /// temporary. The returned element must survive while its SIBLING is still
+    /// freed exactly once — the shape where "free the whole array" and "free
+    /// nothing" are both wrong, in opposite directions. This is the case that
+    /// double-freed before B-2026-08-22-18, under BOTH spellings.
+    #[test]
+    fn asan_nonscalar_array_temp_returning_an_element_frees_only_the_rest() {
+        assert_clean_asan_run(
+            r#"trait Tag { fn take_first(self) -> String; }
+impl Tag for Array[String, 2] { fn take_first(self) -> String { return self[0]; } }
+fn mk(i: i64) -> Array[String, 2] { return [f"a{i}", f"b{i}"]; }
+
+fn main() {
+    let mut i = 0i64;
+    let mut n = 0i64;
+    let mut last: String = "";
+    while i < 50i64 {
+        last = mk(i).take_first();
+        n = n + last.len();
+        i = i + 1i64;
+    }
+    println(last);
+    println(n);
+}
+"#,
+            &["a49", "140"],
+            "asan_nonscalar_array_temp_returning_an_element_frees_only_the_rest",
+        );
+    }
 }

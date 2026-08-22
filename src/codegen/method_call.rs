@@ -10069,20 +10069,24 @@ impl<'ctx> super::Codegen<'ctx> {
     /// aggregate into a slot, register the synthetic name, re-dispatch by
     /// IDENTIFIER, unregister. Nothing here is method-specific.
     ///
-    /// The SCALAR-element gate is not a shortcut, it is what makes the
-    /// materialization free of any cleanup obligation. An array of `Int` /
-    /// `Float` (which covers `bool` and `char`, both lowered to `IntType`)
-    /// owns no heap, so spilling it to an alloca creates no second owner and
-    /// no drop to track — the same property that made the slice sibling safe,
-    /// arrived at differently (a slice owns nothing because it is a view; a
-    /// scalar array owns nothing because its elements are scalars). It is
-    /// also exactly the gate the typechecker puts on the builtin surface
-    /// (`method_sequence_mutation.rs`, B-2026-07-17-19) and the one
-    /// `compile_fixed_array_read` is written against, so for those methods it
-    /// excludes nothing reachable. A USER impl on a non-scalar head —
-    /// `impl Tag for Array[String, 2]` — is reachable and stays loud here
-    /// (B-2026-08-21-43): giving it a lowering means answering who frees the
-    /// temporary's element buffers, which this arm does not establish.
+    /// THE SCALAR-ELEMENT GATE IS GONE (B-2026-08-21-43). It was never about
+    /// this arm: it stood because who frees an `Array[String, N]` temporary's
+    /// element buffers was unestablished, and guessing is a leak or a double
+    /// free. The answer was already settled by the BOUND spelling
+    /// (`let a = mk(); a.tag()`), which this arm re-dispatches into — so it
+    /// inherits the answer rather than inventing one, exactly as it does for
+    /// scalars. Measured: with the gate removed the temporary agrees with the
+    /// bound form on every shape, INCLUDING the ones the bound form refuses
+    /// (`self[0].len()` in the callee body is an unrelated indexed-receiver
+    /// gap that rejects both spellings identically).
+    ///
+    /// The widening waited on B-2026-08-22-18, found while measuring this: an
+    /// f-string element's accumulator cleanup was never suppressed when the
+    /// array took ownership, so `Array[String, N]` double-freed under the
+    /// BOUND spelling too. Landing this arm first would have given an unsafe
+    /// lowering a second spelling rather than causing the unsafety. With that
+    /// fixed, the materialization carries no cleanup obligation the bound path
+    /// does not already discharge, for scalar and heap elements alike.
     ///
     /// `as_ptr` / `as_mut_ptr` are deliberately absent from the gate even
     /// though the identifier arm answers them. Handing out the interior
@@ -10145,15 +10149,9 @@ impl<'ctx> super::Codegen<'ctx> {
             .ok_or_else(|| "Array method on a temporary outside a fn".to_string())?;
 
         let recv_val = self.compile_expr(object)?;
-        let BasicTypeEnum::ArrayType(at) = recv_val.get_type() else {
+        let BasicTypeEnum::ArrayType(_) = recv_val.get_type() else {
             return Ok(None);
         };
-        if !matches!(
-            at.get_element_type(),
-            BasicTypeEnum::IntType(_) | BasicTypeEnum::FloatType(_)
-        ) {
-            return Ok(None);
-        }
         let slot = self.create_entry_alloca(cur_fn, "__arecv_tmp", recv_val.get_type());
         self.builder.build_store(slot, recv_val).unwrap();
 

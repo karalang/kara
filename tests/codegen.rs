@@ -13111,6 +13111,55 @@ fn main() {
     ///
     /// Every case here is asserted against the value the UNQUALIFIED spelling
     /// produces, since the two must agree by construction.
+    /// B-2026-08-21-43 — a user impl on a NON-SCALAR `Array` head, called on a
+    /// TEMPORARY. B-2026-08-21-25 admitted only scalar elements and left this
+    /// loud, because who frees an `Array[String, N]` temporary's element
+    /// buffers was unestablished. It was in fact already established by the
+    /// BOUND spelling, which this arm re-dispatches into — the widening only
+    /// waited on B-2026-08-22-18, the double free that made the bound path
+    /// unsafe for heap elements in the first place.
+    ///
+    /// The bound twin is asserted alongside, as the control: it always
+    /// compiled, so a regression that broke both would still be caught.
+    #[test]
+    fn test_e2e_user_impl_on_a_nonscalar_array_temporary() {
+        const DECLS: &str = "trait Tag { fn tag(self) -> i64; }\n\
+                             impl Tag for Array[String, 2] { fn tag(self) -> i64 { return 42i64; } }\n\
+                             fn mk() -> Array[String, 2] { return [\"a\", \"b\"]; }\n";
+        assert_eq!(
+            run_program(&format!("{DECLS}fn main() {{ println(mk().tag()); }}\n")).as_deref(),
+            Some("42\n"),
+            "the temporary spelling must build and run"
+        );
+        assert_eq!(
+            run_program(&format!(
+                "{DECLS}fn main() {{ let a = mk(); println(a.tag()); }}\n"
+            ))
+            .as_deref(),
+            Some("42\n"),
+            "the bound spelling is the control and must keep working"
+        );
+    }
+
+    /// The heap half: an element flows OUT of the consumed temporary. Pinned
+    /// separately from the scalar-returning case above because it is the shape
+    /// that was memory-unsafe until B-2026-08-22-18 — the value is right here
+    /// either way, so only the ASAN twin proves the buffers are balanced.
+    #[test]
+    fn test_e2e_nonscalar_array_temporary_returning_an_element() {
+        assert_eq!(
+            run_program(
+                "trait Tag { fn take_first(self) -> String; }\n\
+                 impl Tag for Array[String, 2] { fn take_first(self) -> String { return self[0]; } }\n\
+                 fn mk() -> Array[String, 2] { return [\"abc\", \"de\"]; }\n\
+                 fn main() { println(mk().take_first()); }\n"
+            )
+            .as_deref(),
+            Some("abc\n"),
+            "an element returned out of an array temporary must survive the call"
+        );
+    }
+
     mod type_qualified_assoc_call {
         use super::run_program;
 
