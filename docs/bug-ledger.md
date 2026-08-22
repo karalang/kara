@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 277 | 0 |
 | leak | 187 | 0 |
 | run-vs-build | 149 | 0 |
-| missing-feature | 147 | 6 |
+| missing-feature | 148 | 6 |
 | double-free | 134 | 0 |
 | codegen-gap | 128 | 3 |
 | diagnostics | 95 | 2 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 988 | 6 |
-| typecheck | 234 | 4 |
-| interp | 172 | 1 |
+| codegen | 988 | 5 |
+| typecheck | 235 | 5 |
+| interp | 172 | 0 |
 | other | 62 | 0 |
 | ownership | 62 | 0 |
 | cli | 59 | 1 |
@@ -124,14 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1472 surfaced · 12 open · 1438 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1473 surfaced · 12 open · 1439 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (12)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-21-2 | 2026-08-21 | cli | medium | TWO REGISTERED LINTS STILL HAVE NO EMIT SITE and so can never fire, though both are registered `default_level: LintLevel::Warn` -- accepted in `#[allow(...)]` and passing vacuously under `#[deny(...)]`: `f16_software_emulated`, `implicit_clone`. They are the remainder of B-2026-08-20-36's eight. They are VISIBLE IN CODE, not only here: `KNOWN_UNWIRED` in `src/lints.rs`, which `every_registered_lint_is_emitted_or_declared_unwired` fails on if the list grows or goes stale. | roadmap.md |
-| B-2026-08-21-6 | 2026-08-21 | codegen+interp | medium | `Map`/`Set` DO NOT USE THE SPEC'S DEFAULT HASHER: design.md mandates `SipHash13BuildHasher` seeded from a per-process random source, codegen emits FxHash with a COMPILE-TIME-CONSTANT seed and the interpreter hashes not at all -- so there is no hash-flooding resistance, iteration order is fully deterministic across runs (design.md says it must vary), the two backends order differently from each other, and `Map[K, V, FxBuildHasher]` -- design.md's own spelling -- does not resolve, so there is no opt-in either way | roadmap.md |
 | B-2026-08-21-18 | 2026-08-21 | codegen+typecheck | low | STRUCT FUNCTIONAL UPDATE `P { x: 1, ..base }` IS STILL UNIMPLEMENTED -- it now says so clearly instead of dropping the base, but the form syntax.md's STRUCT_LITERAL production admits cannot be used; the interpreter already implements the copy and codegen does not, so the remaining work is codegen plus the ownership rules for a spread base | roadmap.md |
 | B-2026-08-21-29 | 2026-08-21 | typecheck | medium | THREE DOCUMENTED SURFACES ARE NOT REACHABLE AS WRITTEN: every spelling of channel construction design.md uses (`Channel.new[T]()`, `Channel.bounded`), its whole `io.` I/O prefix, and `allocates(Heap)` -- whose `Heap` the document never declares and the prelude does not provide | roadmap.md |
 | B-2026-08-21-43 | 2026-08-21 | codegen | low | A USER IMPL ON A **NON-SCALAR** `Array` HEAD IS UNCALLABLE ON A TEMPORARY -- `mk().tag()` for `impl Tag for Array[String, 2]` still loud-fails after B-2026-08-21-25, which admits only scalar-element arrays because a scalar array is the case that owns no heap | roadmap.md |
@@ -142,6 +141,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1472 surfaced
 | B-2026-08-22-4 | 2026-08-22 | parser | medium | AN INLINE ASSOCIATED-TYPE BINDING IS STILL REJECTED IN `impl Trait` TYPE POSITION -- `fn keys(ref self) -> impl Iterator[Item = ref K]` (design.md's own Map method table) fails to parse, though the same binding now works in every BOUND position | parser |
 | B-2026-08-22-5 | 2026-08-22 | parser | medium | AN EFFECT CLAUSE ON AN IMPL HEADER HAS NO PRODUCTION -- design.md:3817 writes `impl From[ParseError] for AppError with writes(Log) {` and the parser rejects it with `Expected LeftBrace, found With` | parser |
 | B-2026-08-21-52 | 2026-08-22 | effect | medium | CHANNEL EFFECT RESOURCES HAVE NO PER-VALUE IDENTITY -- every channel collapses to the single `Channel` resource, so conflict analysis cannot tell `sends(tx1)` from `sends(tx2)` and design.md :6095's producer-against-consumer parallelization argument is not backed by the compiler | roadmap.md |
+| B-2026-08-22-6 | 2026-08-22 | typecheck | low | The `Hasher` and `BuildHasher` TRAITS are not baked, so a user cannot write their own hasher: `Map[K, V, H]` accepts only the two compiler-known selectors `SipHash13BuildHasher` / `FxBuildHasher`, and design.md's "User-extensible hashers" paragraph describes a surface that does not exist | roadmap.md |
 
 ### Wontfix (8)
 
@@ -160,9 +160,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1472 surfaced
 
 </details>
 
-### Fixed (1438)
+### Fixed (1439)
 
-<details><summary>1438 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1439 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -13494,6 +13494,120 @@ Verified on all THREE backends -- --interp, AOT build, and JIT -- for
 the originating B-2026-08-20-40 probe. One regression test added, using the
 STRICT assert form so a missing runtime archive cannot make it pass
 vacuously. |
+| B-2026-08-21-6 | codegen+interp | medium | `Map`/`Set` DO NOT USE THE SPEC'S DEFAULT HASHER: design.md mandates `SipHash13BuildHasher` seeded from a per-process random source, codegen emits Fx… | FIXED by 8c3c8d6 (this commit) on top of 59c8d30, which landed defects 1 and 2.
+
+FIXED IN THREE PARTS, one per defect, plus the fallout the third one exposed.
+
+(1) THE HASH ITSELF, ONCE, SHARED. New `karac-hash` crate (`hash/`) implements
+SipHash-1-3 with a 128-bit key. The interpreter calls it directly; codegen emits
+`call @karac_hash_bytes` (a `karac-runtime` shim over the same crate) in place of
+the FxHash byte loop it used to inline into every per-type `hash_fn`. One
+implementation, so the two backends agree by construction rather than by
+convention -- the rule the Arrow IPC twin and `String.normalize` already follow.
+Zero dependencies, `no_std`-clean, because it has to cross wasm32-wasip1,
+wasm32-wasip1-threads and the embedded targets. Verified against an ORACLE
+rather than transcribed constants: Rust's `DefaultHasher` IS SipHash-1-3, so the
+test compares against it for every length 0..=40, which catches a transposed
+rotation constant that copied vectors would only catch if the copying were
+itself right.
+
+(2) THE SEED, PER PROCESS. `hash/src/seed.rs` draws a key once per process from
+ASLR + clock + thread id. `KARAC_HASH_SEED=<n>` (decimal or `0x`; `0` is a legal
+pin) reproduces a run exactly, which is what lets the suites and the kata A/B
+harness compare output at all. The interpreter had a second, separate half of
+this defect: it hashed nothing observable -- it walked `entries` in INSERTION
+order -- so `MapData`/`SetData` grew an `iter_observable()` that orders by the
+seeded hash, and every observable walk now goes through it (`for` loops,
+`.iter()`, `.keys()`, `.values()`, `Display`, `debug_fmt`, and the separate
+`println` formatter in `builtin.rs`, which was its own missed path).
+
+(3) THE THIRD PARAMETER. `Map[K, V, H]` / `Set[T, H]` accept exactly two
+selectors -- `SipHash13BuildHasher` (default) and `FxBuildHasher` (unkeyed,
+floodable, stable across runs of one binary) -- declared as zero-field structs
+in `runtime/stdlib/hash.kara` and prelude-visible, since design.md writes the
+spelling bare in its own prose. Anything else in that slot is now a compile
+error naming both, as is a hasher on `SortedMap`/`SortedSet` (ordered
+containers compare; they never hash). `FxBuildHasher` routes to
+`karac_hash_bytes_fx` -- FxHash living in the same shared crate, so the fast
+path is a second entry point rather than a second implementation.
+
+WHERE THE THIRD PART GOT INTERESTING, and the reason the parser is involved.
+The obvious shape -- leave `Map[K, V, H]` in the AST -- is wrong, and quietly
+so. Codegen and the interpreter recognize a `Map` by matching the head name AND
+requiring EXACTLY two generic arguments (`extract_map_kv_types`,
+`map_kv_type_exprs`, `extract_set_elem_type`, and every drop / clone / layout
+path funnelling through them). A three-argument `Map` fails all of those tests,
+so it is not a `Map` to any of them -- not "a Map with a different hasher" but a
+different and WRONG answer about how to free the thing. Measured directly: with
+the argument left in place, `Map[String, i64, FxBuildHasher]` compiled and ran,
+but `nm` on the binary showed no `karac_hash_bytes_fx` at all; the annotation
+had not been recognized as a Map anywhere, and the program only worked because
+inference re-registered it from `Map.new()`. Relaxing each arity gate is a hunt
+across 564 `args.len()` sites with no way to prove it finished.
+
+So the PARSER deletes the argument and records the choice on
+`Program::container_hashers`, keyed by the container path's span (the
+`freeze_spans` / `stmt_lint_overrides` precedent). After the parse, the AST of
+`Map[K, V, FxBuildHasher]` is byte-identical to `Map[K, V]` -- no later phase
+can tell them apart, so none can get it wrong -- and one bit of difference lives
+in a table that exactly two places read: codegen's `container_hasher_for` and
+the interpreter's `new_hash_container`. Only a RECOGNIZED selector in the
+trailing position is stripped, so misspellings keep their argument and still
+reach the typechecker's diagnostic.
+
+Codegen selects at CONSTRUCTION and stores the chosen `hash_fn` in the control
+block `karac_map_new` returns, so every later insert/get uses it without
+re-deciding; the synthesized per-key-type symbol carries a `_fx` suffix, without
+which the second map would silently reuse the first's function. The interpreter
+stamps `MapData`/`SetData` at `Map.new()` / `Set.new()`, reading the same table
+off the same span, through the existing `pending_let_ty` channel -- extended to
+struct-literal fields so it covers the two positions codegen reads (a `let`
+annotation and a field's declared type).
+
+FALLOUT, and the part worth remembering. Six tests in the compiler's own suite
+asserted `Map`/`Set` iteration order, and FIVE OF THEM PASSED on the run that
+introduced the seeding -- a two-key map has a 50% chance of looking stable, so
+"the suite is green" proved nothing. They surfaced one at a time across runs
+under different seeds. All six now compare CONTENTS (sorted) and keep exact
+ordering only for the statements around the walk. The lesson is written into
+CLAUDE.md with the sweep that finds them:
+`for seed in 1 2 3 5; do KARAC_HASH_SEED=$seed cargo test; done`.
+
+TESTS. `hash/`: oracle agreement over lengths 0..=40, the length byte (so `"a"`
+and `"a\0"` cannot collide), the key actually keying, Fx pinned to constants --
+which is what proves Fx is UNSEEDED, since the test binary seeds itself randomly
+and a pinned digest would fail on almost every run otherwise. `tests/cli.rs`:
+two subprocess tests, because both properties are about what differs between one
+process and the next -- the default varies and a pin reproduces; an
+`FxBuildHasher` map's order does NOT move across six processes while the default
+map in the SAME program does, asserted under `--interp` and against a compiled
+binary. `tests/codegen.rs`: the two hashers order the same ten keys differently
+in ONE process (the symbol-mangling pin -- reverting `runtime_symbol()` fails
+it), and Fx maps/sets still find, remove and dedupe. `tests/typechecker.rs`:
+both spellings accepted, an opted-out map still assignable to `Map[K, V]`, and
+each of the three refusals. Non-vacuity checked by reverting each half and
+watching the matching test fail.
+
+DELIBERATELY NOT DONE, and recorded in design.md rather than implied: the
+`Hasher` and `BuildHasher` traits are still not baked, so the two names are
+type-level SELECTORS, not user-implementable hashers. A user naming their own
+type in that slot is rejected with a diagnostic that says exactly this. That is
+a separate feature -- an ordinary trait with default method bodies, dispatched
+per hash -- not a widening of this parameter.
+
+CROSS-BACKEND ORDER, stated plainly so the "one shared implementation"
+sentence above is not over-read. The two backends share the HASH FUNCTION,
+not the walk: the interpreter orders its observable walk by the seeded hash
+of each key, while the compiled backends walk an open-addressed table's
+buckets. Measured under one pinned seed (`KARAC_HASH_SEED=7`, same program):
+
+    interp {alpha: 1, mike: 2, bravo: 3, charlie: 5, zulu: 0, yankee: 4}
+    AOT    {yankee: 4, alpha: 1, mike: 2, charlie: 5, zulu: 0, bravo: 3}
+
+Both are reproducible under that pin within their own backend, and both vary
+without it. design.md leaves the order unspecified, so this is conformant --
+but a reader should not expect `karac run` and `karac build` to emit the same
+permutation, and no test should be written as if they would. |
 | B-2026-08-21-7 | ownership | medium | A call-site `mut` MARKER BYPASSES THE `let mut` REQUIREMENT, so a binding declared without `mut` can be mutated through any mutating parameter while… | FIXED by cefc213. The rule this bug was missing already existed -- B-2026-07-27-9 built `report_write_to_immutable_binding` (src/ownership.rs), with the `immutable_lets` table, the reference-handle exemption, and a machine-applicable `let` -> `let mut` edit. It was wired to the write forms design.md § Variable Binding Rules ENUMERATES -- reassignment (`v[0] = 1`, `x += 1`) and a `mut ref self` method (`v.push(x)`) -- and to nothing else. The call-site `mut` marker is the third write form and had no call site into it.
 
 ONE SHARED HELPER, `report_mut_marked_arg_write`, called from BOTH `ExprKind::Call` arms of src/ownership/expr_check.rs (the reading arm and the consuming arm, which are otherwise identical and would silently drift if hooked separately). It reuses the existing reporter wholesale, so the new diagnostic inherits the phrasing, the `MutateImmutableBinding` kind, the shared-handle exemption, and the auto-fix for free: `cannot pass `x` as `mut` -- `x` is declared without `mut` at line 2:5`, and `karac fix` inserts the `mut` at the declaration in one edit (verified end to end: fix, then check clean, then run correct).
