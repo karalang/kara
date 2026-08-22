@@ -92,9 +92,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 276 | 1 |
+| miscompile | 276 | 0 |
 | leak | 187 | 1 |
-| run-vs-build | 148 | 0 |
+| run-vs-build | 149 | 1 |
 | missing-feature | 143 | 6 |
 | double-free | 134 | 0 |
 | codegen-gap | 128 | 3 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 987 | 8 |
+| codegen | 987 | 7 |
 | typecheck | 232 | 4 |
-| interp | 171 | 1 |
+| interp | 172 | 2 |
 | other | 62 | 0 |
 | ownership | 62 | 0 |
 | cli | 59 | 1 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 8 | 1 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1465 surfaced · 13 open · 1430 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1466 surfaced · 13 open · 1431 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (13)
 
@@ -141,8 +141,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1465 surfaced
 | B-2026-08-21-44 | 2026-08-21 | codegen | low | `as_slice()` ON A FIXED-ARRAY **TEMPORARY** HAS NO CODEGEN LOWERING -- `n.to_ne_bytes().as_slice().len()` fails dispatch while `--interp` answers, the one method of the Array surface B-2026-08-21-25 left out | roadmap.md |
 | B-2026-08-21-45 | 2026-08-21 | typecheck+codegen | low | FIVE SHIPPED USER-FACING DIAGNOSTICS CARRY RUNS OF 14-30 SPACES mid-sentence, because rustfmt INTERMITTENTLY rejoins a `\`-continued string literal into one line and keeps the continuation indentation as real spaces | roadmap.md |
 | B-2026-08-21-46 | 2026-08-21 | codegen | low | `enumerate` OVER AN ARRAY **LITERAL** STILL BAILS LOUD -- `for (i, x) in [1, 2, 3].iter().enumerate()` hits the adaptor backstop while `--interp` answers, the one source shape B-2026-08-21-41's widening could not reach | roadmap.md |
-| B-2026-08-22-1 | 2026-08-22 | codegen | high | A BAKED-STDLIB ENUM WITH NO CODEGEN LAYOUT SEED LOWERS EVERY VARIANT'S TAG TO **0**, SILENTLY -- `let m = MemoryOrdering.Acquire; match m { ... }` prints `Acquire` under `--interp` and `Relaxed` under AOT, with no diagnostic; the bare form (`let m = SeqCst`) is a loud `Undefined variable 'SeqCst'` on the same axis, so the type has both halves of the defect | roadmap.md |
 | B-2026-08-21-47 | 2026-08-22 | codegen | medium | A `shared struct` FIELD SOURCE LEAKS A DIFFERENT BUFFER THAN THE PLAIN-STRUCT ONE DID -- `last = s.name` off a `shared struct` leaks the POST-append body (3 bytes/call) where the plain-struct shape leaked the PRE-append one, so the fix for B-2026-08-21-40 does not reach it | roadmap.md |
+| B-2026-08-22-2 | 2026-08-22 | interp | high | A BARE UNIT-VARIANT PATTERN OF A BAKED-STDLIB ENUM MAKES THE **INTERPRETER** MATCH THE FIRST ARM ALWAYS -- `match e { NotFound => .., PermissionDenied => .. }` on an `IoError.PermissionDenied` prints `NotFound` under `--interp` and `PermissionDenied` under AOT; the qualified spelling is correct on both, `karac check` reports nothing, and the interpreter is the wrong one | roadmap.md |
 
 ### Wontfix (8)
 
@@ -161,9 +161,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1465 surfaced
 
 </details>
 
-### Fixed (1430)
+### Fixed (1431)
 
-<details><summary>1430 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1431 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -14297,6 +14297,31 @@ GATED by `every_reduction_shader_bounds_its_workgroup_output_write`, a sibling o
 VERIFIED: negative control -- reverting the guard in the strided emitter alone makes the new gate FAIL, so it catches the defect that shipped rather than merely passing. 103 emitter unit tests and the full 62-case `gpu_e2e` suite green on lavapipe (`KARAC_GPU_BACKEND=cpu`, `KARAC_REQUIRE_GPU_ADAPTER=1`); clippy clean on both feature legs.
 
 NOT VERIFIED HERE, and this is the honest limit: the failing surface is Metal, which this Linux container has no adapter for. lavapipe cannot reproduce the bug (it discards the out-of-bounds write), so a green local run proves NO REGRESSION, not the fix. The fix rests on the mechanism being established by construction -- tight sizing plus an overshoot grid equals an out-of-bounds store, and the guard makes that store impossible on any backend. CONFIRMATION IS THE `gpu-e2e-metal` CI JOB on this commit; if it still fails, the clamp hypothesis is wrong and the 64-element shortfall needs a different explanation. |
+| B-2026-08-22-1 | codegen | high | `MemoryOrdering` REACHED CODEGEN WITH NO ENUM LAYOUT, so every match arm compiled to a BINDING pattern instead of a tag test and the first arm always… | FIXED by fb328c9. TWO PARTS: seed the one affected enum, and make the failure mode loud so the next one cannot be silent.
+
+THIS ROW'S CAUSE AND SCOPE WERE BOTH WRONG, and measuring them is what produced the real fix. The row said the cause was a missing SEED in `declarations.rs` and named six candidate enums. Neither held:
+
+  enum             layout comes from                      affected?
+  MemoryOrdering   nothing at all                         YES -- the only one
+  Stdio            `compiled_stdlib_programs` (process)   no
+  PoolError        `compiled_stdlib_programs` (pool)      no
+  Utf8Error        (has one)                              no
+  Entry            payload variants; Struct patterns      no
+  WaitTarget       nothing at all                         not observably -- see below
+
+A seed is only ONE of the routes to a layout. `compiled_stdlib_programs` is the other, and it is what `Stdio` and `PoolError` ride. `MemoryOrdering` is in neither, which is what actually singled it out.
+
+THE MECHANISM IS ALSO NOT "the tag lowers to 0". The IR shows something more specific and more dangerous: with no layout, `compile_pattern_condition` fails BOTH tag lookups and falls through to "not a variant — true binding, always matches", so every arm becomes a BINDING (`%MemoryOrdering.Relaxed = alloca i64` in the pre-fix IR, for the QUALIFIED spelling). The first arm always matches. That is why all five orderings printed `Relaxed`, and why the qualified spelling was no safer than the bare one — the row's Repro B suggested the two halves were different bugs; they were one.
+
+FIX 1 -- seed `MemoryOrdering` through the `seed_unit_enum` helper B-2026-08-20-41 added. Verified byte-identical on --interp / JIT / AOT / `KARAC_AUTO_PAR=0` AOT for all five variants, both match spellings, and the `Atomic.load`/`store` call site (which `parse_memory_ordering` reads off the AST and which was never affected -- pinned so seeding cannot disturb it).
+
+FIX 2 -- FAIL CLOSED, which is the part worth keeping. A `Binding` pattern whose name contains a DOT is never a real binding: Kāra bindings are single identifiers, so a dotted one is an `Enum.Variant` pattern whose enum has no layout. It is now a codegen error naming both ways to supply one, instead of a catch-all that silently swallows every arm.
+
+THE GUARD PAID FOR ITSELF IMMEDIATELY: it turned `WaitTarget` into a build error, revealing a SECOND enum reaching codegen with no layout. It had never produced a wrong answer only because it has a single variant, where the always-matching fallback and a correct tag test agree. A second variant would have made it the next silent miscompile. Seeded alongside `MemoryOrdering`.
+
+THE BARE SPELLING IS NOT GUARDED and the code says so: a bare PascalCase name is indistinguishable from a legitimate binding without the typechecker's resolution. Reverting the seed with the guard in place gives the honest split -- the qualified probe errors loudly, the bare probe still answers `a=Relaxed b=Relaxed c=Relaxed`. Closing that half needs resolution information codegen does not have at this point, and is left rather than half-done.
+
+Five tests. Four fail with the seeds reverted; the fifth (`Stdio` + `PoolError`) is the CONTROL that must pass either way -- it is what pins the cause to the missing layout rather than to stdlib enums generally, and it would catch a regression that dropped either module from `compiled_stdlib_programs`. |
 
 </details>
 
