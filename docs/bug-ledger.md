@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 278 | 0 |
 | leak | 187 | 0 |
-| missing-feature | 151 | 4 |
+| missing-feature | 151 | 3 |
 | run-vs-build | 151 | 1 |
 | double-free | 135 | 1 |
 | codegen-gap | 128 | 1 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 992 | 4 |
-| typecheck | 242 | 4 |
+| typecheck | 242 | 3 |
 | interp | 172 | 0 |
 | other | 63 | 0 |
 | ownership | 62 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1487 surfaced · 10 open · 1455 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1487 surfaced · 9 open · 1456 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (10)
+### Open (9)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -138,7 +138,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1487 surfaced
 | B-2026-08-22-14 | 2026-08-22 | codegen+effect | low | AN EXISTENTIAL DECLARING POLYMORPHIC EFFECT VARIABLES (`-> impl Emit with F`) IS THE ONE RETURN-POSITION `impl Trait` SHAPE STILL WITHOUT A BUILD -- deliberately excluded from B-2026-08-22-12's witness substitution, because the effect checker reads the variable off the very node the rewrite would erase | codegen |
 | B-2026-08-22-15 | 2026-08-22 | typecheck | medium | A `-> Self` TRAIT METHOD CALLED ON AN EXISTENTIAL RECEIVER LOSES THE TRAIT -- `make().bumped()` types as a BARE type parameter named after the trait, so the builder shape is rejected with two diagnostics that point at the caller's correct code and name a spelling the source never contains | typecheck |
 | B-2026-08-22-16 | 2026-08-22 | typecheck | medium | `Channel.bounded(cap)` DOES NOT EXIST IN ANY SPELLING -- design.md documents it with a `requires cap > 0` contract, `bounded_channel.kara` exists in the stdlib, and nothing routes the name to it | typecheck |
-| B-2026-08-22-17 | 2026-08-22 | typecheck | high | THE BLESSED EXPLICIT SPELLING DOES NOT WORK FOR BUILTIN TYPES -- `Vec[i64].new()`, `Map[String, i64].new()` and `Channel[i64].new()` all report "no method 'new' on `Vec[…]`", so the form design.md now names as THE way to select a type explicitly is unavailable on exactly the types that need it most | typecheck |
 | B-2026-08-22-18 | 2026-08-22 | codegen | high | MOVING A HEAP ELEMENT OUT OF AN OWNED `Array[T, N]` PARAMETER DOUBLE-FREES IT -- `fn take_first(a: Array[String, 2]) -> String { return a[0]; }` frees the returned buffer at the callee's exit AND again in the caller; `karac check` is clean, the program prints the right answer, and only ASAN sees it | roadmap.md |
 
 ### Wontfix (8)
@@ -158,9 +157,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1487 surfaced
 
 </details>
 
-### Fixed (1455)
+### Fixed (1456)
 
-<details><summary>1455 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1456 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -15553,6 +15552,86 @@ Pinned by `a_static_assoc_call_does_not_borrow_a_same_named_global_where_clause`
 in `tests/typechecker.rs`, which asserts both halves: the colliding generic
 case is ACCEPTED, and the clause-less case is ACCEPTED. Non-vacuity confirmed
 by reverting the fix -- it fails. |
+| B-2026-08-22-17 | typecheck | high | THE BLESSED EXPLICIT SPELLING DID NOT WORK FOR BUILTIN TYPES -- `Vec[i64].new()` / `Map[K, V].new()` / `Channel[T].new()` all reported "no method 'ne… | FIXED by 6f02f211. Two arms, one in each backend, both delegating rather than
+re-implementing.
+
+THE SPLIT IS A PARSE-SHAPE ONE, which is why it fell exactly along the
+user-vs-builtin line and why B-2026-08-21-53 could wire one without the other:
+
+  * `Vec.new()`      -> a CALL over a two-segment path `Path(["Vec", "new"])`,
+                        answered by `infer_call`'s constructor arm, which returns
+                        `Vec[<fresh metavar>]` and lets inference settle it.
+  * `Vec[i64].new()` -> a METHOD CALL whose receiver is a ONE-segment path
+                        carrying generic args, routed to
+                        `try_path_receiver_method`, which resolves against
+                        `env.impls` -- where a builtin container has no entry at
+                        all, because its associated functions are special-cased
+                        in `infer_call` instead.
+
+So the qualified form never reached the arm that knows how to build a `Vec`. Its
+own fall-through comment said as much ("Built-in types ... are out of scope for
+this slice"); the scoping was harmless until -53 made the form the documented
+answer to "how do I pin the type".
+
+THE FIX rebuilds the call in the two-segment form the builtin arm already
+understands, infers THAT, then pins the explicit args onto the result. One
+implementation of every builtin constructor (`new`, `with_capacity`, the
+fallible `try_*` companions, `Channel`'s tuple return) rather than a second copy
+that would drift from the first.
+
+THREE THINGS THE ROW'S FIX SKETCH DID NOT ANTICIPATE, each found by running the
+code rather than reading it:
+
+1. PINNING MUST UNIFY, NOT CHECK. The first attempt used `check_assignable`,
+   which reported `expected 'Vec[i64]', found 'Vec[?T0]'` -- the very metavar it
+   was supposed to be solving. `unify_types` binds it instead.
+
+2. `Channel` BREAKS THE OBVIOUS RULE, and is the reason the pin is two-step.
+   Every other builtin constructor returns a value NAMED after the head
+   (`Vec.new() -> Vec[?T]`), so pinning is one unification against `Head[args]`.
+   `Channel.new()` returns `(Sender[?T], Receiver[?T])`: the head name appears
+   nowhere in the result and the pinned element sits inside a tuple, so that
+   unification reports a mismatch on a well-formed call. The fallback pairs the
+   explicit args with the result's ORDERED, DEDUPLICATED free metavars -- dedup
+   because `Channel[i64]` supplies one argument for one metavar that occurs
+   twice, and positional pairing without it would see two. It also forced a
+   second correction: the expression's type must stay the TUPLE, since handing
+   back `Channel[i64]` breaks the destructuring on the next token.
+
+3. CODEGEN NEEDED THE MATCHING MOVE. The row scoped this to the typechecker.
+   Fixing only that surface makes a program check clean and fail to build -- a
+   run-vs-build divergence, strictly worse than the error being removed.
+   Measured: `no handler for method 'new' on non-identifier receiver`. Codegen
+   already performed this exact re-form for user types; the gate simply excluded
+   builtin heads, so the fix is the same widening on both sides.
+
+UNPLANNED IMPROVEMENT worth noting: the error for an unsupported method on a
+builtin head got BETTER, because the delegated path reports against the real
+problem. `Vec[i64].bogus()` now says "no associated function 'bogus' on type
+'Vec'" instead of the old, vaguer "no method 'bogus' on `Vec[…]`". A nonsense
+pin is still rejected: `String[i64].new()` -> "cannot construct `String` as
+`String[i64]`".
+
+TESTS: `builtin_type_qualified_assoc_call` in tests/codegen.rs, a sibling of
+-53's `type_qualified_assoc_call` module. All three verified in BOTH directions
+(FAILED with the fix stashed, ok with it restored):
+  * Vec / Map / Set / `with_capacity`, each asserted against the value its
+    UNQUALIFIED twin produces, so a delegation that changed the meaning of the
+    spelling it delegates to would fail rather than pass.
+  * `Channel` on its own, because it is the case that broke the obvious
+    implementation.
+  * ARGUMENT POSITION, which is what makes this worth fixing rather than
+    documenting: `take(Vec[String].new())` cannot be expressed by the
+    `let v: Vec[i64] = Vec.new()` annotation workaround at all.
+
+GATES. fmt clean; clippy clean on BOTH legs; `KARAC_REQUIRE_RUNTIME_ARCHIVE=1
+cargo test --features llvm --no-fail-fast` = 125 binaries, 14782 passed, the only
+failures being 60 in `tests/gpu_e2e.rs` all at the SAME line (gpu_e2e.rs:372),
+the opt-in GPU archive's presence gate; zero non-GPU failures. The full-suite run
+mattered more than usual here: `try_path_receiver_method` sits in a
+first-match-wins dispatch chain and now returns `Some(..)` for builtin heads
+where it previously returned an error, so anything relying on reaching a later
+arm would surface there rather than in a repro. |
 
 </details>
 
