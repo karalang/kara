@@ -37108,3 +37108,93 @@ fn test_normalize_leaves_empty_and_ascii_untouched() {
         }");
     assert_eq!(out, "0\nplain ascii\nplain ascii\n");
 }
+
+#[test]
+fn test_bare_stdlib_variant_pattern_selects_the_right_arm() {
+    // B-2026-08-22-2 — baked-stdlib enum variants are registered in the
+    // interpreter's env ONLY under their qualified path, so a BARE pattern
+    // name missed the lookup and fell through to "true binding — matches
+    // anything": the first arm always won. `IoError` is prelude and matching
+    // on it is ordinary code, so this printed `NotFound` for a
+    // `PermissionDenied` under `--interp` while both compiled backends
+    // printed the right answer — the interpreter, which is the A/B oracle,
+    // was the wrong one.
+    let out = run("fn main() {\n\
+            let e = IoError.PermissionDenied;\n\
+            match e {\n\
+                NotFound => println(\"NotFound\"),\n\
+                PermissionDenied => println(\"PermissionDenied\"),\n\
+                _ => println(\"other\"),\n\
+            }\n\
+        }");
+    assert_eq!(out, "PermissionDenied\n");
+}
+
+#[test]
+fn test_bare_and_qualified_stdlib_variant_patterns_agree() {
+    // The qualified spelling was always correct, which is what isolated the
+    // trigger to the bare form rather than to the type. Both spellings of one
+    // program, so a fix that only moved the bug would show up here.
+    let out = run("fn main() {\n\
+            let a = Stdio.Inherit;\n\
+            let c = Stdio.Piped;\n\
+            match a { Inherit => println(\"bare:a=Inherit\"), Null => println(\"bare:a=Null\"), Piped => println(\"bare:a=Piped\") }\n\
+            match c { Inherit => println(\"bare:c=Inherit\"), Null => println(\"bare:c=Null\"), Piped => println(\"bare:c=Piped\") }\n\
+            match a { Stdio.Inherit => println(\"qual:a=Inherit\"), Stdio.Null => println(\"qual:a=Null\"), Stdio.Piped => println(\"qual:a=Piped\") }\n\
+            match c { Stdio.Inherit => println(\"qual:c=Inherit\"), Stdio.Null => println(\"qual:c=Null\"), Stdio.Piped => println(\"qual:c=Piped\") }\n\
+        }");
+    assert_eq!(
+        out,
+        "bare:a=Inherit\nbare:c=Piped\nqual:a=Inherit\nqual:c=Piped\n"
+    );
+}
+
+#[test]
+fn test_user_enum_bare_variant_patterns_were_never_affected() {
+    // The control that scopes the bug to BAKED-STDLIB enums: a user enum's
+    // variants are registered unqualified as well, so the env lookup always
+    // found them and bare patterns were correct throughout.
+    let out = run("enum Color { Red, Green, Blue }\n\
+        fn main() {\n\
+            let c = Color.Blue;\n\
+            match c { Red => println(\"Red\"), Green => println(\"Green\"), Blue => println(\"Blue\") }\n\
+        }");
+    assert_eq!(out, "Blue\n");
+}
+
+#[test]
+fn test_a_lowercase_sub_binding_is_still_a_binding_not_a_variant_test() {
+    // The hazard the PascalCase gate exists for, kept as a negative control
+    // across the predicate's extraction: an ordinary local holding a
+    // unit-variant VALUE (`c`) must not turn a constructor's sub-binding of
+    // the same name into a variant test. Before that gate this surfaced as a
+    // spurious "non-exhaustive match" — the arm neither matched nor bound.
+    let out = run("enum Color { Red, Green, Blue }\n\
+        enum Msg { Info(Color), Quiet }\n\
+        fn main() {\n\
+            let c = Color.Green;\n\
+            let m = Msg.Info(Color.Red);\n\
+            match m {\n\
+                Msg.Info(c) => match c { Red => println(\"payload=Red\"), Green => println(\"payload=Green\"), Blue => println(\"payload=Blue\") },\n\
+                Msg.Quiet => println(\"quiet\"),\n\
+            }\n\
+            match c { Red => println(\"outer=Red\"), Green => println(\"outer=Green\"), Blue => println(\"outer=Blue\") }\n\
+        }");
+    assert_eq!(out, "payload=Red\nouter=Green\n");
+}
+
+#[test]
+fn test_a_pascalcase_name_that_is_not_the_scrutinees_variant_still_binds() {
+    // How NARROW the fix is: the scrutinee-directed lookup fires only when the
+    // scrutinee's own enum declares that variant. A PascalCase name that does
+    // not name one of its variants keeps the pre-existing catch-all-binding
+    // behaviour, so nothing outside the reported shape moved. (Whether such a
+    // pattern should be a resolve error at all is a separate question this fix
+    // deliberately does not answer.)
+    let out = run("enum Color { Red, Green, Blue }\n\
+        fn main() {\n\
+            let c = Color.Blue;\n\
+            match c { Red => println(\"Red\"), NotAVariantOfColor => println(\"caught\") }\n\
+        }");
+    assert_eq!(out, "caught\n");
+}

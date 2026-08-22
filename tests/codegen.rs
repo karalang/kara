@@ -103406,6 +103406,34 @@ fn main() {
             Some("a=Inherit\nb=Null\nc=Piped\nPoolClosed\n".to_string())
         );
     }
+
+    /// B-2026-08-22-2 — the COMPILED half of the bare-stdlib-variant bug.
+    /// Codegen was always right here (it resolves the bare name through the
+    /// enum layout), and the interpreter was the one selecting the first arm,
+    /// so this pins the side that was already correct: it is what the
+    /// interpreter fix has to agree WITH, and it fails loudly if a future
+    /// change to the enum-layout lookup regresses the compiled side into
+    /// matching the old interpreter behaviour.
+    #[test]
+    fn bare_stdlib_variant_pattern_selects_the_right_arm() {
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let e = IoError.PermissionDenied;\n\
+                     match e {\n\
+                         NotFound => println(\"NotFound\"),\n\
+                         PermissionDenied => println(\"PermissionDenied\"),\n\
+                         _ => println(\"other\"),\n\
+                     }\n\
+                     let a = Stdio.Inherit;\n\
+                     let c = Stdio.Piped;\n\
+                     match a { Inherit => println(\"a=Inherit\"), Null => println(\"a=Null\"), Piped => println(\"a=Piped\") }\n\
+                     match c { Inherit => println(\"c=Inherit\"), Null => println(\"c=Null\"), Piped => println(\"c=Piped\") }\n\
+                 }"
+            ),
+            Some("PermissionDenied\na=Inherit\nc=Piped\n".to_string())
+        );
+    }
 }
 
 #[cfg(feature = "llvm")]

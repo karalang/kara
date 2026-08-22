@@ -727,45 +727,13 @@ impl<'a> super::Interpreter<'a> {
         match &pattern.kind {
             PatternKind::Wildcard => true,
             PatternKind::Binding(name) => {
-                // A `Binding` node doubles as a unit-variant pattern. The name
-                // may be dotted (`Side.Left`) or bare (`Left`). A dotted name
-                // is unambiguously a variant — a real value binding can never
-                // contain `.` — so we strip the enum prefix and compare the
-                // last segment to the scrutinee's tag. A bare name is a
-                // variant only when one is in scope (otherwise it's a true
-                // binding that matches anything). Before this, dotted names
-                // failed the `env.get(name)` lookup and fell through to the
-                // catch-all `true`, so `Side.Left` matched EVERY value (a
-                // silent wrong-arm-selection bug for any enum with >1 unit
-                // variant matched by dotted name).
+                // A `Binding` node doubles as a unit-variant pattern; see
+                // [`Self::binding_is_unit_variant`] for which spellings count
+                // and why. When it IS one, compare the last path segment to
+                // the scrutinee's tag; otherwise it is a true binding and
+                // matches anything.
                 let variant_name = name.rsplit('.').next().unwrap_or(name);
-                // A bare name is a unit-variant pattern only when it is
-                // PascalCase — Kāra's case-class invariant (design.md) makes
-                // Type/variant identifiers PascalCase and value bindings
-                // snake_case, so a lowercase name is ALWAYS a fresh binding,
-                // never a variant. Gating on this is load-bearing: the prior
-                // heuristic checked only `env.get(name)`, which also matches an
-                // ordinary local that happens to hold a unit-variant *value*
-                // (e.g. `let c = Color.Green` shadowing the binding `c` inside
-                // `match m { Info(c) => … }`) — that made the constructor's
-                // sub-binding misfire as a unit-variant test, so the arm failed
-                // to match/bind and surfaced as a spurious runtime
-                // "non-exhaustive match". A dotted name (`Side.Left`) is
-                // unambiguously a variant.
-                let bare_could_be_variant = variant_name
-                    .chars()
-                    .next()
-                    .is_some_and(|ch| ch.is_uppercase());
-                let is_unit_variant = name.contains('.')
-                    || (bare_could_be_variant
-                        && matches!(
-                            self.env.get(variant_name),
-                            Some(Value::EnumVariant {
-                                data: EnumData::Unit,
-                                ..
-                            })
-                        ));
-                if is_unit_variant {
+                if self.binding_is_unit_variant(name, value) {
                     if let Value::EnumVariant { variant: v2, .. } = value {
                         return variant_name == v2.as_str();
                     }
@@ -890,43 +858,76 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
+    /// Whether a `PatternKind::Binding` node is really a UNIT-VARIANT pattern
+    /// rather than a fresh value binding — the one predicate both
+    /// [`Self::try_match_pattern`] and [`Self::bind_pattern`] key on. They held
+    /// byte-identical copies of it, and B-2026-08-22-2 was a hole in both.
+    ///
+    /// Three ways a `Binding` is a variant:
+    ///
+    /// 1. **Dotted** (`Side.Left`). A real value binding can never contain a
+    ///    `.`, so this is unambiguous.
+    /// 2. **Bare and in scope** (`Left`, `Less`, `Nfc`). Registered by
+    ///    `Interpreter::new` for user enums and the three prelude enums.
+    /// 3. **Bare and declared by the SCRUTINEE's enum** (`NotFound` against an
+    ///    `IoError`). This is B-2026-08-22-2's fix. Baked-stdlib enum variants
+    ///    are registered ONLY under their qualified path, so case 2 misses
+    ///    every one of them and the name fell through to "true binding —
+    ///    matches anything": the FIRST arm always matched, and
+    ///    `match e { NotFound => …, PermissionDenied => … }` on an
+    ///    `IoError.PermissionDenied` printed `NotFound` under `--interp` while
+    ///    both compiled backends printed the right answer.
+    ///
+    /// Case 3 asks the SCRUTINEE rather than a global table on purpose. The
+    /// alternative — registering every stdlib variant unqualified — would put
+    /// ~20 enums' variants in one namespace, where `NotFound` belongs to both
+    /// `IoError` and `TlsError` and one of them would have to win. Keyed on the
+    /// scrutinee's own enum there is nothing to disambiguate.
+    ///
+    /// PascalCase is required for the bare cases and is load-bearing: Kāra's
+    /// case-class invariant (design.md) makes variant identifiers PascalCase
+    /// and value bindings snake_case, so a lowercase name is ALWAYS a fresh
+    /// binding. Without that gate an ordinary local holding a unit-variant
+    /// value (`let c = Color.Green` shadowing the `c` in
+    /// `match m { Info(c) => … }`) turned the constructor's sub-binding into a
+    /// variant test and surfaced as a spurious "non-exhaustive match".
+    pub(crate) fn binding_is_unit_variant(&self, name: &str, scrutinee: &Value) -> bool {
+        if name.contains('.') {
+            return true;
+        }
+        let variant_name = name.rsplit('.').next().unwrap_or(name);
+        if !variant_name
+            .chars()
+            .next()
+            .is_some_and(|ch| ch.is_uppercase())
+        {
+            return false;
+        }
+        if matches!(
+            self.env.get(variant_name),
+            Some(Value::EnumVariant {
+                data: EnumData::Unit,
+                ..
+            })
+        ) {
+            return true;
+        }
+        match scrutinee {
+            Value::EnumVariant { enum_name, .. } => self
+                .variant_payload_decls(enum_name, variant_name)
+                .is_some_and(|decls| decls.is_empty()),
+            _ => false,
+        }
+    }
+
     pub(crate) fn bind_pattern(&mut self, pattern: &Pattern, value: Value) {
         match &pattern.kind {
             PatternKind::Wildcard => {}
             PatternKind::Binding(name) => {
-                // Don't create a binding for a unit-variant pattern (dotted
-                // `Side.Left`, or a bare name resolving to a unit variant in
-                // scope) — mirrors the detection in `try_match_pattern`. The
-                // dotted case previously fell through and defined a spurious
-                // `"Side.Left"` binding.
-                let variant_name = name.rsplit('.').next().unwrap_or(name);
-                // A bare name is a unit-variant pattern only when it is
-                // PascalCase — Kāra's case-class invariant (design.md) makes
-                // Type/variant identifiers PascalCase and value bindings
-                // snake_case, so a lowercase name is ALWAYS a fresh binding,
-                // never a variant. Gating on this is load-bearing: the prior
-                // heuristic checked only `env.get(name)`, which also matches an
-                // ordinary local that happens to hold a unit-variant *value*
-                // (e.g. `let c = Color.Green` shadowing the binding `c` inside
-                // `match m { Info(c) => … }`) — that made the constructor's
-                // sub-binding misfire as a unit-variant test, so the arm failed
-                // to match/bind and surfaced as a spurious runtime
-                // "non-exhaustive match". A dotted name (`Side.Left`) is
-                // unambiguously a variant.
-                let bare_could_be_variant = variant_name
-                    .chars()
-                    .next()
-                    .is_some_and(|ch| ch.is_uppercase());
-                let is_unit_variant = name.contains('.')
-                    || (bare_could_be_variant
-                        && matches!(
-                            self.env.get(variant_name),
-                            Some(Value::EnumVariant {
-                                data: EnumData::Unit,
-                                ..
-                            })
-                        ));
-                if is_unit_variant {
+                // Don't create a binding for a unit-variant pattern — the
+                // same [`Self::binding_is_unit_variant`] predicate
+                // `try_match_pattern` uses, so the two can never drift.
+                if self.binding_is_unit_variant(name, &value) {
                     return;
                 }
                 self.env.define(name.clone(), value);
