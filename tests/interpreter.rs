@@ -37241,3 +37241,74 @@ fn test_a_pascalcase_name_that_is_not_the_scrutinees_variant_still_binds() {
         }");
     assert_eq!(out, "caught\n");
 }
+
+/// B-2026-08-21-53 — the TYPE-QUALIFIED associated call `Type[Args].fn(a)`,
+/// the spelling design.md § Generics settles on for explicit type selection.
+///
+/// The interpreter had no rule for it: a type is not a value, but the receiver
+/// `Box[i64]` was evaluated as an ordinary expression and fell through
+/// `eval_expr`'s `Path` arm to
+/// "internal: path 'Box' has no interpreter evaluation rule". It now re-forms
+/// the call as the two-segment callee the UNQUALIFIED `Box.make(7)` already
+/// parses to, so both spellings share one dispatch and cannot drift.
+#[test]
+fn a_type_qualified_associated_call_evaluates() {
+    let decls = "struct Box[T] { value: T }\n\
+                 impl[T] Box[T] {\n\
+                     fn make(v: T) -> Box[T] { return Box { value: v }; }\n\
+                     fn zero() -> i64 { return 0i64; }\n\
+                 }\n";
+    // Qualified and unqualified must agree — the unqualified is the control.
+    assert_eq!(
+        run_no_errors(&format!(
+            "{decls}fn main() {{ let b = Box[i64].make(7i64); println(f\"{{b.value}}\"); }}"
+        )),
+        "7\n"
+    );
+    assert_eq!(
+        run_no_errors(&format!(
+            "{decls}fn main() {{ let b = Box.make(7i64); println(f\"{{b.value}}\"); }}"
+        )),
+        "7\n"
+    );
+    // An associated fn whose return type is not the generic type.
+    assert_eq!(
+        run_no_errors(&format!(
+            "{decls}fn main() {{ println(f\"{{Box[String].zero()}}\"); }}"
+        )),
+        "0\n"
+    );
+    // A generic ENUM receiver dispatches the same way.
+    assert_eq!(
+        run_no_errors(
+            "enum Opt2[T] { Nothing, Just(T) }\n\
+             impl[T] Opt2[T] { fn none() -> Opt2[T] { return Opt2.Nothing; } }\n\
+             fn main() {\n\
+                 let o = Opt2[i64].none();\n\
+                 match o { Opt2.Nothing => println(\"nothing\"), Opt2.Just(v) => println(f\"just {v}\") }\n\
+             }"
+        ),
+        "nothing\n"
+    );
+}
+
+/// The guard both backends apply: a local binding must still shadow a type
+/// name, so `fs[0](10)` stays an index-then-call and never reads as type
+/// application. This is also why design.md's `[T]` cannot be applied at a call
+/// site — the two forms are genuinely ambiguous, and only the receiver
+/// position (where a type cannot be indexed) disambiguates by construction.
+#[test]
+fn indexing_a_value_binding_is_not_type_application() {
+    assert_eq!(
+        run_no_errors(
+            "fn add1(x: i64) -> i64 { return x + 1i64; }\n\
+             fn add2(x: i64) -> i64 { return x + 2i64; }\n\
+             fn main() {\n\
+                 let fs: Vec[Fn(i64) -> i64] = [add1, add2];\n\
+                 println(f\"{fs[0](10i64)}\");\n\
+                 println(f\"{fs[1](10i64)}\");\n\
+             }"
+        ),
+        "11\n12\n"
+    );
+}

@@ -964,6 +964,76 @@ impl<'ctx> super::Codegen<'ctx> {
         // together, never one alone.
         args_close_span: &crate::token::Span,
     ) -> Result<BasicValueEnum<'ctx>, String> {
+        // B-2026-08-21-53 — TYPE-QUALIFIED ASSOCIATED CALL: `Type[Args].fn(a)`,
+        // the spelling design.md § Generics settles on for explicit type
+        // selection. The typechecker accepts it; codegen did not recognise the
+        // receiver as a TYPE, so it fell through to
+        // `try_compile_freshtemp_user_method`, which exists to materialise a
+        // fresh-temp VALUE receiver (`mk().tag()`). That helper compiled the
+        // type path as an expression and passed the result as `self`, emitting
+        // a call with one argument too many:
+        //
+        //   Incorrect number of arguments passed to called function!
+        //     %call = call { i64 } @"Box.make$i64"(i64 %__urecv_tmp_0, i64 7)
+        //
+        // which failed LLVM module verification — so the program passed
+        // `karac check` and then died at build time. An associated function
+        // has no `self`, so the fix is to never form a receiver at all:
+        // delegate to `compile_assoc_call`, the same entry the UNQUALIFIED
+        // `Box.make(7)` already reaches as a two-segment callee `Path`. That
+        // keeps one dispatch for both spellings — including its generic-param
+        // resolution through `type_subst_names` — rather than a second copy
+        // that could drift.
+        //
+        // Placed FIRST because a type receiver cannot be any of the things the
+        // arms below test for (an iterator binding, a collection, a value).
+        // Guarded on the head naming a user type that carries `impl` methods
+        // AND no local shadowing it, mirroring the interpreter's twin guard.
+        if let ExprKind::Path {
+            segments,
+            generic_args: Some(_),
+        } = &object.kind
+        {
+            if segments.len() == 1 && !self.variables.contains_key(segments[0].as_str()) {
+                let t = &segments[0];
+                let is_user_type = self.type_decls.shared_types.contains_key(t)
+                    || self.type_decls.enum_layouts.contains_key(t)
+                    || self.type_decls.struct_types.contains_key(t);
+                if is_user_type {
+                    // Re-form the whole node as the `Call` the UNQUALIFIED
+                    // `Box.make(7)` spelling already parses to, and compile
+                    // THAT. Calling `compile_assoc_call` directly was tried
+                    // first and is wrong for a generic impl: it takes only a
+                    // type NAME, so it looks up `Box.make` — which does not
+                    // exist, because a generic impl's methods are
+                    // monomorphized on demand and the emitted symbol is
+                    // `Box.make$i64`. A non-generic associated fn survived
+                    // that (`Box[String].zero()` worked), which is exactly the
+                    // kind of partial success that hides the bug.
+                    //
+                    // Going through the full call path instead reuses the
+                    // monomorphization machinery, and reusing `call_span`
+                    // keeps every span-keyed side table aligned — including
+                    // the call's recorded instantiation, which is what lets
+                    // the right monomorph be selected at all.
+                    let callee = Expr {
+                        kind: ExprKind::Path {
+                            segments: vec![t.clone(), method.to_string()],
+                            generic_args: None,
+                        },
+                        span: object.span,
+                    };
+                    let synthetic = Expr {
+                        kind: ExprKind::Call {
+                            callee: Box::new(callee),
+                            args: args.to_vec(),
+                        },
+                        span: *call_span,
+                    };
+                    return self.compile_expr(&synthetic);
+                }
+            }
+        }
         // Materialized iterator binding (B-2026-07-11-19): `let it =
         // <iter-chain>` recorded its chain instead of codegen'ing a runtime
         // iterator; if this call's receiver bottoms out at such a name, inline

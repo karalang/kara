@@ -3883,16 +3883,60 @@ impl<'ctx> super::Codegen<'ctx> {
                 // instead. Gated on the identifier NOT being a live variable,
                 // so a variable that shadows a type name keeps the variable
                 // path.
-                if let ExprKind::Identifier(recv) = &object.kind {
+                //
+                // B-2026-08-21-53 — the TYPE-QUALIFIED spelling of that same
+                // root, `Type[Args].new(...)`, reaches here as a `Path`
+                // receiver carrying the type arguments instead of a bare
+                // `Identifier`. It resolves through the IDENTICAL
+                // `Type.method` entry, because the type arguments select the
+                // monomorph and not the return type's NAME — which is all this
+                // function reports. Without this shape the qualified call fell
+                // to the recursive `type_name_of_expr(object)` below, which
+                // cannot type a type, so the binding went unrecorded and a
+                // later field read (`Box[i64].make(7).value`, or the bound
+                // `let b = …; b.value`) died on the loud "cannot resolve
+                // field" gap.
+                let assoc_recv: Option<&String> = match &object.kind {
+                    ExprKind::Identifier(recv) => Some(recv),
+                    ExprKind::Path {
+                        segments,
+                        generic_args: Some(_),
+                    } if segments.len() == 1 => segments.first(),
+                    _ => None,
+                };
+                if let Some(recv) = assoc_recv {
                     if !self.var_types.var_type_names.contains_key(recv.as_str())
                         && (self.type_decls.struct_types.contains_key(recv.as_str())
                             || self.type_decls.enum_layouts.contains_key(recv.as_str()))
                     {
-                        return self
+                        if let Some(n) = self
                             .fn_sig
                             .fn_return_type_names
                             .get(&format!("{recv}.{method}"))
-                            .cloned();
+                        {
+                            return Some(n.clone());
+                        }
+                        // A GENERIC impl's methods are monomorphized on demand
+                        // and never declared under the bare `Type.method` key,
+                        // so `fn_return_type_names` misses every one of them —
+                        // and the receiver here is generic by construction,
+                        // since the qualified spelling only exists for a type
+                        // that takes arguments. Fall back to the call's own
+                        // instantiated type, which the typechecker records at
+                        // this span and `lowering.rs` carries into
+                        // `enum_inst_type_exprs`.
+                        //
+                        // This is what types a DIRECT chain on the result —
+                        // `Box[String].make("hi").value` — where there is no
+                        // binding for `var_type_names` to answer from. Measured:
+                        // reverting just this block leaves the bound spelling
+                        // working and fails the chained one.
+                        if let Some(te) = self.enum_inst_type_from_span(expr) {
+                            if let TypeKind::Path(p) = &te.kind {
+                                return p.segments.last().cloned();
+                            }
+                        }
+                        return None;
                     }
                 }
                 let recv_ty = self.type_name_of_expr(object)?;

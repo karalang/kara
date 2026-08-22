@@ -12975,6 +12975,133 @@ fn main() {
         run_program_capturing(src).map(|c| c.stdout)
     }
 
+    /// B-2026-08-21-53 — the TYPE-QUALIFIED associated call `Type[Args].fn(a)`.
+    ///
+    /// This is the spelling design.md § Generics settles on for explicit type
+    /// selection, and it passed `karac check` and then died in BOTH backends: the
+    /// interpreter with "path 'Box' has no interpreter evaluation rule", and
+    /// codegen with an LLVM module-verification failure, because the fresh-temp
+    /// receiver helper compiled the TYPE as a value and passed it as `self`:
+    ///
+    ///   Incorrect number of arguments passed to called function!
+    ///     %call = call { i64 } @"Box.make$i64"(i64 %__urecv_tmp_0, i64 7)
+    ///
+    /// Every case here is asserted against the value the UNQUALIFIED spelling
+    /// produces, since the two must agree by construction.
+    mod type_qualified_assoc_call {
+        use super::run_program;
+
+        const DECLS: &str = "struct Box[T] { value: T }\n\
+                             impl[T] Box[T] {\n\
+                             \x20   fn make(v: T) -> Box[T] { return Box { value: v }; }\n\
+                             \x20   fn zero() -> i64 { return 0i64; }\n\
+                             }\n";
+
+        #[test]
+        fn a_qualified_assoc_call_binds_and_reads_its_field() {
+            assert_eq!(
+                run_program(&format!(
+                    "{DECLS}fn main() {{ let b = Box[i64].make(7i64); println(f\"{{b.value}}\"); }}\n"
+                ))
+                .as_deref(),
+                Some("7\n"),
+                "the qualified spelling must build and run"
+            );
+            // The unqualified twin, as the control: it always worked, so a
+            // regression that broke BOTH would still be caught here.
+            assert_eq!(
+                run_program(&format!(
+                    "{DECLS}fn main() {{ let b = Box.make(7i64); println(f\"{{b.value}}\"); }}\n"
+                ))
+                .as_deref(),
+                Some("7\n"),
+                "the unqualified spelling is the control and must keep working"
+            );
+        }
+
+        /// A DIRECT chain on the call result, with no binding for the codegen
+        /// side-tables to answer from. This is the case a generic impl makes hard:
+        /// its methods are monomorphized on demand and never registered under the
+        /// bare `Type.method` key, so the return type has to come from the call's
+        /// own recorded instantiation.
+        #[test]
+        fn a_qualified_assoc_call_types_a_direct_field_chain() {
+            assert_eq!(
+                run_program(&format!(
+                    "{DECLS}fn main() {{ let d = Box[String].make(\"hi\").value; println(d); }}\n"
+                ))
+                .as_deref(),
+                Some("hi\n"),
+                "a field read directly off the call result must resolve"
+            );
+        }
+
+        /// An associated fn whose return type is NOT the generic type. This one
+        /// survived the first (wrong) fix — `compile_assoc_call` by name alone —
+        /// which is exactly why it is pinned separately from the generic case.
+        #[test]
+        fn a_qualified_assoc_call_returning_a_scalar_runs() {
+            assert_eq!(
+                run_program(&format!(
+                    "{DECLS}fn main() {{ println(f\"{{Box[String].zero()}}\"); }}\n"
+                ))
+                .as_deref(),
+                Some("0\n"),
+                "a scalar-returning associated fn must run under the qualified spelling"
+            );
+        }
+
+        #[test]
+        fn a_qualified_assoc_call_works_on_a_generic_enum() {
+            assert_eq!(
+                run_program(
+                    "enum Opt2[T] { Nothing, Just(T) }\n\
+                     impl[T] Opt2[T] { fn none() -> Opt2[T] { return Opt2.Nothing; } }\n\
+                     fn main() {\n\
+                     \x20   let o = Opt2[i64].none();\n\
+                     \x20   match o { Opt2.Nothing => println(\"nothing\"), Opt2.Just(v) => println(f\"just {v}\") }\n\
+                     }\n"
+                )
+                .as_deref(),
+                Some("nothing\n"),
+                "an enum receiver must dispatch the same way a struct one does"
+            );
+        }
+
+        /// Nesting — a qualified call supplying the argument of another. Pins that
+        /// the re-formed call node is compiled through the ordinary expression
+        /// path rather than intercepted only at statement level.
+        #[test]
+        fn a_qualified_assoc_call_nests_as_an_argument() {
+            assert_eq!(
+                run_program(&format!(
+                    "{DECLS}fn main() {{ let c = Box[i64].make(Box[i64].zero()); println(f\"{{c.value}}\"); }}\n"
+                ))
+                .as_deref(),
+                Some("0\n"),
+                "a qualified call must work in argument position"
+            );
+        }
+
+        /// A local binding must still shadow the type name — the guard both
+        /// backends apply before treating a receiver as a type.
+        #[test]
+        fn a_binding_still_shadows_the_type_name() {
+            assert_eq!(
+                run_program(
+                    "struct Holder { value: i64 }\n\
+                     fn main() {\n\
+                     \x20   let fs: Vec[i64] = [10i64, 20i64];\n\
+                     \x20   println(f\"{fs[1]}\");\n\
+                     }\n"
+                )
+                .as_deref(),
+                Some("20\n"),
+                "indexing a value binding must not be read as type application"
+            );
+        }
+    }
+
     /// B-2026-08-21-31 — `isize` did not exist as a type. design.md names it a
     /// v1 numeric primitive in four normative passages (§ 2178 the four method
     /// families, § 4000 the `as`-cast rule, § 5356 arithmetic traits, § 13104

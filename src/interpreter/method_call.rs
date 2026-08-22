@@ -2445,6 +2445,54 @@ impl<'a> super::Interpreter<'a> {
             }
         }
 
+        // B-2026-08-21-53 — TYPE-QUALIFIED ASSOCIATED CALL: `Type[Args].fn(a)`.
+        //
+        // This is the spelling design.md § Generics settles on for explicit
+        // type selection (`[T]` constructs and declares types; it is never
+        // applied at a call site), so it has to evaluate. It did not: the
+        // typechecker accepted it via `try_path_receiver_method`, then the
+        // receiver `Box[i64]` was evaluated as an ordinary expression, fell
+        // through `eval_expr`'s `Path` arm, and produced
+        // "internal: path 'Box' has no interpreter evaluation rule".
+        //
+        // A type is not a value, so — exactly like the effect-resource arm
+        // just above — the receiver must NOT be evaluated. The call is
+        // re-formed as the two-segment callee `Path([Type, fn])` that the
+        // UNQUALIFIED spelling `Box.make(7)` already parses to, and handed to
+        // `eval_call`. Delegating rather than re-implementing is the point:
+        // enum-variant constructors, primitive `T.default()`, baked-stdlib
+        // arms and user impls all keep their existing single dispatch, and a
+        // qualified call can never drift from its unqualified twin.
+        //
+        // The type ARGUMENTS are dropped, which is correct here and only
+        // here: the tree-walk interpreter carries no monomorphization: values
+        // are dynamically typed, and the typechecker has already solved and
+        // checked the instantiation this call site names. They still matter
+        // to codegen, which mangles them into the symbol.
+        //
+        // Guarded on the head naming a known type AND no binding shadowing it,
+        // the same `env.get(..).is_none()` rule the resource-alias arm above
+        // applies — a local `let Box = ...` must keep winning.
+        if let ExprKind::Path {
+            segments,
+            generic_args: Some(_),
+        } = &object.kind
+        {
+            if segments.len() == 1
+                && self.is_known_type_name(&segments[0])
+                && self.env.get(&segments[0]).is_none()
+            {
+                let callee = Expr {
+                    kind: ExprKind::Path {
+                        segments: vec![segments[0].clone(), method.to_string()],
+                        generic_args: None,
+                    },
+                    span: object.span,
+                };
+                return self.eval_call(&callee, args, span);
+            }
+        }
+
         let obj = self.eval_expr_inner(object);
 
         // B-2026-08-09-18 — a faulted RECEIVER (index OOB, unwrap of `None`,
