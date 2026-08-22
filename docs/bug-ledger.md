@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 278 | 0 |
 | leak | 187 | 0 |
-| missing-feature | 152 | 4 |
+| missing-feature | 152 | 3 |
 | run-vs-build | 151 | 0 |
 | double-free | 135 | 0 |
 | codegen-gap | 128 | 0 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 992 | 1 |
-| typecheck | 242 | 2 |
+| typecheck | 242 | 1 |
 | interp | 172 | 0 |
 | other | 63 | 0 |
 | ownership | 62 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1489 surfaced · 6 open · 1461 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1489 surfaced · 5 open · 1462 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,7 +134,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1489 surfaced
 | B-2026-08-22-6 | 2026-08-22 | typecheck | low | The `Hasher` and `BuildHasher` TRAITS are not baked, so a user cannot write their own hasher: `Map[K, V, H]` accepts only the two compiler-known selectors `SipHash13BuildHasher` / `FxBuildHasher`, and design.md's "User-extensible hashers" paragraph describes a surface that does not exist | roadmap.md |
 | B-2026-08-22-7 | 2026-08-22 | codegen | low | `f16_software_emulated` IS THE ONE STARTER-SET LINT WHOSE TRIGGER DEPENDS ON THE TARGET -- and the blocker is NOT the placement this row was filed on: the specified feature-string check reads only the `features` half of `default_cpu_and_features`, so it is blind to CPU-implied support (`aarch64-apple-darwin` resolves to `("apple-m1", "")`), and no inkwell/LLVM-C call reports a CPU's resolved subtarget features to fix that | roadmap.md |
 | B-2026-08-22-8 | 2026-08-22 | cli | low | `implicit_clone` HAS NO TRIGGER IN THE SPEC AND CANNOT BE DE-REGISTERED WITHOUT A design.md EDIT -- the one starter-set lint whose resolution is a SPEC decision, not a compiler change | roadmap.md |
-| B-2026-08-22-16 | 2026-08-22 | typecheck | medium | `Channel.bounded(cap)` DOES NOT EXIST IN ANY SPELLING -- design.md documents it with a `requires cap > 0` contract, `bounded_channel.kara` exists in the stdlib, and nothing routes the name to it | typecheck |
 | B-2026-08-22-20 | 2026-08-22 | effect | medium | THE BUILTIN CHANNEL METHODS CARRY NO `sends`/`receives` EFFECT -- `Sender.send` is seeded `allocates(Heap)` and nothing else, and the ONLY `EffectVerbKind::Sends` construction in the whole compiler is the `sends(Network)` block, so a real `tx.send(v)` is invisible to conflict analysis, `karac explain` and `query effects`; design.md:6070 declares it `with sends(tx) allocates(Heap)` | roadmap.md |
 
 ### Wontfix (8)
@@ -154,9 +153,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1489 surfaced
 
 </details>
 
-### Fixed (1461)
+### Fixed (1462)
 
-<details><summary>1461 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1462 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -15686,6 +15685,86 @@ row's repro, the chained form, and the concrete spelling as control) and
 `self_returning_existential` E2E module in tests/codegen.rs pins that it runs.
 Non-vacuity: reverting the fix fails both E2E tests and the main typechecker
 test, and the opacity control passes either way. |
+| B-2026-08-22-16 | typecheck | medium | `Channel.bounded(cap)` EXISTED IN NO SPELLING -- implemented across runtime, typechecker, interpreter and codegen, returning the same `(Sender[T], Re… | FIXED by 555495c9. Implemented across runtime, typechecker, interpreter and
+codegen; the row's "not attempted / wants its own slice" scoping was right, and
+this is that slice.
+
+WHAT IT IS. `Channel.bounded(cap)` returns the SAME `(Sender[T], Receiver[T])`
+pair as `Channel.new()` -- the bound changes the queue's behaviour, not the
+shape of what construction hands back -- so the two share one arm in each
+backend rather than getting a near-duplicate. `capacity == 0` marks the
+unbounded constructor internally, which is unambiguous precisely because
+`requires cap > 0` rejects a literal 0 at the source level.
+
+THE ROW'S READING OF THE EXISTING MACHINERY NEEDED CORRECTING. It said
+`bounded_channel.kara` means "the machinery is present and simply unreachable
+by the documented name". Not quite: that file is a DIFFERENT SURFACE. Its
+`BoundedChannel[T]` is a struct whose `send`/`recv` return `Result`/`Option`,
+with its own `bounded_channel_table` and `karac_runtime_bounded_channel_new`.
+`Channel.bounded` has to produce a Sender/Receiver PAIR over a bounded queue,
+and the plain `KaracChannel` had no capacity concept at all (`grep capacity
+runtime/src/channel.rs` returned nothing). So this is not routing a name to
+machinery that exists -- it is adding the bound to the primary channel.
+
+THE SEND-ON-FULL POLICY, and the measurement that settled it. `send` FAILS FAST
+on every target.
+
+Blocking was implemented FIRST and looked better: `recv` already parks on a
+condvar here (module docs, threads-targets), so a `not_full` mirror is the
+symmetric design, and it gives real backpressure where threads exist. The
+supporting machinery went in too -- a `not_full` condvar, a `recv_gone` flag so
+a vanished receiver releases a parked sender instead of stranding it, and
+wakeups at all three dequeue sites including `try_recv`.
+
+Then it was measured. A single-threaded program that overfills its own channel
+has no peer to drain it, so the send waits forever: the compiled binary HUNG
+(exit 124 under `timeout`) while the tree-walk interpreter, which cannot park
+at all, reported an error. That is a deadlock AND a run-vs-build divergence --
+the class this project treats as non-negotiable -- and it trades a loud error
+for a silent hang. The whole condvar apparatus was reverted rather than left in
+as dead code, and both backends now fail fast and agree (compiled: abort with
+"send on a full bounded channel (capacity 1)", exit 134).
+
+This is the same `Block` -> `FailFast` collapse `bounded_channel.kara` already
+documents for its own queue, reached independently and for the same reason:
+`send` returns unit, so a panic is the only channel a failure has. The runtime
+comment records the measurement and names this as the site to revisit when the
+`suspends` scheduler makes parking viable.
+
+CONTRACT BUG CAUGHT BEFORE SHIPPING. `requires cap > 0` initially accepted
+`bounded(-1)` while correctly rejecting `bounded(0)`, because a negative
+literal is `Unary { Neg, Integer(1) }` and not `Integer(-1)`. Both are rejected
+now; the typechecker test covers the negative case specifically because it is
+the one that got away. A NON-literal capacity passes the compile-time gate (it
+cannot be known there) and is rejected at runtime rather than silently
+degrading to "unbounded", which is the one misreading with no loud symptom.
+
+INTERPRETER SHAPE. Capacity rides INSIDE the `Arc` (a new `ChannelBuf { queue,
+capacity }`) rather than as a second variant field. That keeps all 18 existing
+`Value::Sender(_)` / `Value::Receiver(_)` patterns and the `Arc::ptr_eq`
+identity test compiling untouched; only the three sites that actually lock the
+queue moved.
+
+WHAT THE FULL SUITE CAUGHT, and why it was worth holding the commit for: the
+new `karac_runtime_channel_new_bounded` extern failed
+`extern_keep_list::every_declared_symbol_is_force_preserved` -- a missing
+`__preserve_no_mangle_symbols` entry in `runtime/src/lib.rs`, the
+`karac_realloc_or_panic` / B-2026-07-12-22 class CLAUDE.md warns about. Nothing
+in the repro set would have surfaced it; it presents later as a JIT
+"Symbols not found".
+
+BLOCKED-ON NOTE RESOLVED. The row observed it was blocked twice over, the
+second blocker being that the qualified spelling is unreachable for builtin
+heads (B-2026-08-22-17). That landed first this session, so
+`Channel[i64].bounded(3)` works here and is covered by the test.
+
+GATES. fmt clean; clippy clean on BOTH legs; `KARAC_REQUIRE_RUNTIME_ARCHIVE=1
+cargo test --features llvm --no-fail-fast` = 125 binaries, 14791 passed, with
+the keep-list failure fixed and the only remaining failures being the 60 in
+`tests/gpu_e2e.rs` at the opt-in GPU archive gate (all one line, none reaching a
+shader); `scripts/asan-o0-leg.sh` clean, quarantine matched exactly. Archives
+rebuilt lean-then-full twice -- once for the new extern, once for the keep-list
+entry. |
 | B-2026-08-22-17 | typecheck | high | THE BLESSED EXPLICIT SPELLING DID NOT WORK FOR BUILTIN TYPES -- `Vec[i64].new()` / `Map[K, V].new()` / `Channel[T].new()` all reported "no method 'ne… | FIXED by 6f02f211. Two arms, one in each backend, both delegating rather than
 re-implementing.
 
