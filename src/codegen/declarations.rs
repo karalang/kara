@@ -4109,6 +4109,50 @@ impl<'ctx> super::Codegen<'ctx> {
             &["Nfc", "Nfd", "Nfkc", "Nfkd"],
         );
 
+        // Stdlib `MemoryOrdering` enum (`runtime/stdlib/memory_ordering.kara`)
+        // — the ordering argument to every `Atomic[T]` operation
+        // (B-2026-08-22-1). It is the ONE stdlib enum that fell through every
+        // route to a layout: it is not in `compiled_stdlib_programs` (which is
+        // what gives `Stdio` and `PoolError` theirs) and had no seed here.
+        //
+        // The consequence was a SILENT MISCOMPILE, and in a concurrency type.
+        // With no layout, a `MemoryOrdering.X` value lowered to a bare `i64`
+        // rather than the `{ i64 tag }` enum, and — worse — every match arm,
+        // qualified `MemoryOrdering.Relaxed` and bare `Relaxed` alike, compiled
+        // to a BINDING pattern (`%MemoryOrdering.Relaxed = alloca i64` is
+        // visible in the pre-fix IR), so the first arm always matched.
+        // Measured: `let m = MemoryOrdering.SeqCst; match m { … }` printed
+        // `SeqCst` under `--interp` and `Relaxed` under AOT, with no
+        // diagnostic. A silently weakened memory barrier is a race that only
+        // shows under contention, not a wrong printed value.
+        //
+        // The direct `a.load(MemoryOrdering.SeqCst)` spelling was never
+        // affected: `parse_memory_ordering` reads the qualified variant literal
+        // straight off the AST at the atomic call site. Only an ordering that
+        // flows through a binding or any other value position was exposed.
+        seed_unit_enum(
+            &mut self.type_decls,
+            self.context,
+            i64_t,
+            "MemoryOrdering",
+            &["Relaxed", "Acquire", "Release", "AcqRel", "SeqCst"],
+        );
+
+        // Stdlib `WaitTarget` enum (`runtime/stdlib/runtime.kara`) — found by
+        // the fail-closed guard this same row added, which is the whole point
+        // of having it. `WaitTarget` was ALSO reaching codegen without a
+        // layout; it merely never produced a wrong answer, because it has a
+        // single variant and the always-matching binding fallback and the
+        // correct tag test agree when there is only one arm to pick. A second
+        // variant would have made it the next silent miscompile.
+        seed_unit_enum(
+            &mut self.type_decls,
+            self.context,
+            i64_t,
+            "WaitTarget",
+            &["Running"],
+        );
+
         // Stdlib `SeekFrom` enum (`runtime/stdlib/io.kara`) — the `whence`
         // selector for `File.seek` (B-2026-08-10-3). Same story as `VarError`
         // directly above: it reaches the typechecker through `STDLIB_PROGRAMS`

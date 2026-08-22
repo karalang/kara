@@ -5008,6 +5008,33 @@ impl<'ctx> super::Codegen<'ctx> {
                         .unwrap()
                         .into());
                 }
+                // B-2026-08-22-1 — FAIL CLOSED on a QUALIFIED name that
+                // resolved to no tag. A Kāra binding is a single identifier,
+                // so a `Binding` carrying a dot is never a real binding: it is
+                // an `Enum.Variant` pattern (the shape this arm's comment
+                // describes) whose enum has no `enum_layouts` entry. Treating
+                // it as a catch-all is what made `MemoryOrdering` a SILENT
+                // miscompile — every arm always matched, so
+                // `match m { MemoryOrdering.SeqCst => … }` ran the first arm
+                // and AOT printed `Relaxed` where `--interp` printed `SeqCst`,
+                // with no diagnostic anywhere.
+                //
+                // Seeding that enum fixed the instance; this fixes the CLASS,
+                // so the next stdlib enum that reaches codegen without a layout
+                // is a build error naming the missing piece instead of a wrong
+                // answer. The BARE spelling (`SeqCst`) cannot be guarded here —
+                // a bare PascalCase name is indistinguishable from a legitimate
+                // binding without the typechecker's resolution — which is
+                // exactly why the qualified half is worth catching.
+                if name.contains('.') {
+                    return Err(format!(
+                        "codegen: `{name}` is an enum-variant pattern whose enum has no layout, \
+                         so it cannot be compiled to a tag test. The enum reaches the \
+                         typechecker through STDLIB_PROGRAMS but not codegen — add it to \
+                         `compiled_stdlib_programs` or seed it with `seed_unit_enum` in \
+                         `declarations.rs`."
+                    ));
+                }
                 // Not a variant — true binding, always matches.
                 Ok(tru.into())
             }

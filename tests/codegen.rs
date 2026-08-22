@@ -103198,6 +103198,128 @@ fn main() {
             Some("0\nplain ascii\nplain ascii\n".to_string())
         );
     }
+
+    /// B-2026-08-22-1 — `MemoryOrdering` reached codegen with NO enum layout:
+    /// it is absent from `compiled_stdlib_programs` (which is what gives
+    /// `Stdio` and `PoolError` theirs) and had no seed. Every match arm,
+    /// qualified and bare alike, then compiled to a BINDING pattern instead of
+    /// a tag test, so the first arm always matched and all five orderings
+    /// printed `Relaxed` — silently, in a concurrency type. Measured before
+    /// the seed: `a=Relaxed b=Relaxed c=Relaxed` against the interpreter's
+    /// `a=Relaxed b=Acquire c=SeqCst`.
+    #[test]
+    fn memory_ordering_through_a_binding_keeps_its_variant() {
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let a = MemoryOrdering.Relaxed;\n\
+                     let b = MemoryOrdering.Acquire;\n\
+                     let c = MemoryOrdering.Release;\n\
+                     let d = MemoryOrdering.AcqRel;\n\
+                     let e = MemoryOrdering.SeqCst;\n\
+                     println(name(a));\n\
+                     println(name(b));\n\
+                     println(name(c));\n\
+                     println(name(d));\n\
+                     println(name(e));\n\
+                 }\n\
+                 fn name(m: MemoryOrdering) -> String {\n\
+                     match m {\n\
+                         Relaxed => \"Relaxed\",\n\
+                         Acquire => \"Acquire\",\n\
+                         Release => \"Release\",\n\
+                         AcqRel => \"AcqRel\",\n\
+                         SeqCst => \"SeqCst\",\n\
+                     }\n\
+                 }"
+            ),
+            Some("Relaxed\nAcquire\nRelease\nAcqRel\nSeqCst\n".to_string())
+        );
+    }
+
+    /// The QUALIFIED match spelling of the same thing. It collapsed
+    /// identically before the seed, which is what ruled out "the bare spelling
+    /// is the problem" and pointed at the missing layout instead.
+    #[test]
+    fn memory_ordering_qualified_patterns_keep_their_variant() {
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let m = MemoryOrdering.SeqCst;\n\
+                     match m {\n\
+                         MemoryOrdering.Relaxed => println(\"Relaxed\"),\n\
+                         MemoryOrdering.Acquire => println(\"Acquire\"),\n\
+                         MemoryOrdering.Release => println(\"Release\"),\n\
+                         MemoryOrdering.AcqRel => println(\"AcqRel\"),\n\
+                         MemoryOrdering.SeqCst => println(\"SeqCst\"),\n\
+                     }\n\
+                 }"
+            ),
+            Some("SeqCst\n".to_string())
+        );
+    }
+
+    /// The atomics call site was never affected — `parse_memory_ordering`
+    /// reads the qualified variant literal straight off the AST — but it
+    /// shares the type, so this pins that seeding the layout did not disturb
+    /// it. A load/store round-trip plus an ordering that flows through a
+    /// binding, in one program.
+    #[test]
+    fn atomic_ordering_at_the_call_site_and_through_a_binding_agree() {
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let a = Atomic.new(0);\n\
+                     a.store(7, MemoryOrdering.SeqCst);\n\
+                     println(a.load(MemoryOrdering.SeqCst));\n\
+                     let m = MemoryOrdering.Acquire;\n\
+                     match m { Relaxed => println(\"Relaxed\"), Acquire => println(\"Acquire\"), Release => println(\"Release\"), AcqRel => println(\"AcqRel\"), SeqCst => println(\"SeqCst\") }\n\
+                 }"
+            ),
+            Some("7\nAcquire\n".to_string())
+        );
+    }
+
+    /// `WaitTarget` was the SECOND enum reaching codegen with no layout, found
+    /// by the fail-closed guard rather than by a wrong answer: with a single
+    /// variant, the always-matching binding fallback and a correct tag test
+    /// agree, so it was right by luck. Seeded alongside `MemoryOrdering`; this
+    /// keeps it honest if a second variant is ever added.
+    #[test]
+    fn wait_target_matches_on_its_only_variant() {
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let w = WaitTarget.Running;\n\
+                     match w { WaitTarget.Running => println(\"Running\") }\n\
+                 }"
+            ),
+            Some("Running\n".to_string())
+        );
+    }
+
+    /// The stdlib enums that were NEVER affected, kept as the control that
+    /// isolates the cause. `Stdio` and `PoolError` get their layouts from
+    /// `compiled_stdlib_programs`; a regression that removed either module
+    /// from that list would surface here rather than in a user program.
+    #[test]
+    fn stdlib_enums_with_module_supplied_layouts_still_match() {
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let a = Stdio.Inherit;\n\
+                     let b = Stdio.Null;\n\
+                     let c = Stdio.Piped;\n\
+                     match a { Stdio.Inherit => println(\"a=Inherit\"), Stdio.Null => println(\"a=Null\"), Stdio.Piped => println(\"a=Piped\") }\n\
+                     match b { Stdio.Inherit => println(\"b=Inherit\"), Stdio.Null => println(\"b=Null\"), Stdio.Piped => println(\"b=Piped\") }\n\
+                     match c { Stdio.Inherit => println(\"c=Inherit\"), Stdio.Null => println(\"c=Null\"), Stdio.Piped => println(\"c=Piped\") }\n\
+                     let p = PoolError.PoolClosed;\n\
+                     match p { PoolError.Timeout => println(\"Timeout\"), PoolError.PoolClosed => println(\"PoolClosed\"), _ => println(\"other\") }\n\
+                 }"
+            ),
+            Some("a=Inherit\nb=Null\nc=Piped\nPoolClosed\n".to_string())
+        );
+    }
 }
 
 #[cfg(feature = "llvm")]
