@@ -176,7 +176,7 @@ pub unsafe extern "C" fn karac_string_slice(
 ///
 /// # Safety
 /// `out_len` must point to a writable `i64`.
-unsafe fn alloc_string_result(bytes: &[u8], out_len: *mut i64) -> *mut u8 {
+pub(crate) unsafe fn alloc_string_result(bytes: &[u8], out_len: *mut i64) -> *mut u8 {
     unsafe {
         let n = bytes.len();
         *out_len = n as i64;
@@ -197,7 +197,7 @@ unsafe fn alloc_string_result(bytes: &[u8], out_len: *mut i64) -> *mut u8 {
 ///
 /// # Safety
 /// `data` must point to a readable buffer of at least `len` bytes when `len > 0`.
-unsafe fn str_from_raw<'a>(data: *const u8, len: i64) -> &'a str {
+pub(crate) unsafe fn str_from_raw<'a>(data: *const u8, len: i64) -> &'a str {
     unsafe {
         let bytes: &[u8] = if len <= 0 {
             &[]

@@ -304,6 +304,15 @@ wasi-preview1-component-adapter-provider = "45.0.1"
 # cfg-gated off on wasm32).
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 ureq = "2"
+# Unicode normalization for the interpreter's `String.normalize(form)`
+# (B-2026-08-20-41). NOT a new crate in this graph: `icu_normalizer` is already
+# here transitively via `ureq -> url -> idna -> idna_adapter`, so naming it
+# directly costs zero additional dependencies and only pins the version. The
+# runtime's opt-in `unicode` feature pins the same major, which is what makes
+# the interpreter and codegen normalize identically by construction rather than
+# by convention (the Arrow IPC twin's rule). `compiled_data` bakes the tables
+# in rather than requiring a runtime data provider.
+icu_normalizer = { version = "2", features = ["compiled_data"] }
 rustyline = "18.0.0"
 # PubGrub version-solving algorithm for the dependency resolver
 # (`src/pubgrub_solve.rs`; phase-5 resolver follow-up (a)). Drives

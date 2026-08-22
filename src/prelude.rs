@@ -106,6 +106,11 @@ pub const PRELUDE_TYPES: &[&str] = &[
     "CriticalSectionGuard",
     "Ordering",
     "MemoryOrdering",
+    // `NormalizationForm` — the `form` selector for `String.normalize(form)`
+    // (design.md § Strings, Equality). Prelude-visible like `MemoryOrdering`,
+    // since every call site names a variant and the spec's spelling is the bare
+    // `s.normalize(Nfc)`.
+    "NormalizationForm",
     "IoError",
     // `SeekFrom` — the `whence` selector for `File.seek` (B-2026-08-10-3).
     // Prelude-visible like `IoError`, since every `seek` call site names a
@@ -437,7 +442,8 @@ pub const PRELUDE_TRAITS: &[&str] = &[
 ];
 
 /// Enum variant names from prelude enums (`Option`, `Result`, `Ordering`,
-/// `MemoryOrdering`) surfaced unqualified per design.md § Prelude.
+/// `MemoryOrdering`, `NormalizationForm`) surfaced unqualified per design.md
+/// § Prelude.
 pub const PRELUDE_VARIANTS: &[&str] = &[
     "Some", "None", "Ok", "Err",
     // Ordering — comparison ordering, returned by Ord.cmp
@@ -446,6 +452,10 @@ pub const PRELUDE_VARIANTS: &[&str] = &[
     "Relaxed", "Acquire", "Release", "AcqRel", "SeqCst",
     // Entry[K, V] — Map.entry(k) returns one of these
     "Occupied", "Vacant",
+    // NormalizationForm — Unicode normalization form, taken by String.normalize.
+    // Acronyms fold to Type-class per design.md CN-4 (`Nfc`, not `NFC`), which
+    // the identifier-class check enforces.
+    "Nfc", "Nfd", "Nfkc", "Nfkd",
 ];
 
 /// Ambient program-rooted effect resources — resources whose provider is
@@ -756,6 +766,10 @@ pub const STDLIB_SOURCES: &[(&str, &str)] = &[
     (
         "memory_ordering.kara",
         include_str!("../runtime/stdlib/memory_ordering.kara"),
+    ),
+    (
+        "normalization_form.kara",
+        include_str!("../runtime/stdlib/normalization_form.kara"),
     ),
     ("entry.kara", include_str!("../runtime/stdlib/entry.kara")),
     (

@@ -51619,4 +51619,39 @@ fn main() {
             "asan_mut_ref_heap_field_into_a_method_is_a_borrow",
         );
     }
+    /// B-2026-08-20-41 — `String.normalize(form)` returns a FRESH runtime
+    /// allocation (`karac_unicode_normalize` -> `alloc_string_result`), so the
+    /// caller owns it and must free it exactly once. Same ownership contract as
+    /// the `karac_string_to_lowercase` family this arm was modelled on.
+    ///
+    /// Three shapes in one loop, because they take different cleanup paths: a
+    /// bare temporary whose result is consumed and dropped at the statement, a
+    /// binding that lives to the end of the iteration, and a CHAIN whose
+    /// intermediate normalize result must be freed while the outer
+    /// `to_uppercase` result is handed on. The loop makes a per-call imbalance
+    /// accumulate rather than hide in one iteration; the growing NFD case makes
+    /// the allocation a real one rather than something an optimizer can fold.
+    #[test]
+    fn asan_normalize_result_has_exactly_one_owner() {
+        assert_clean_asan_run(
+            r#"fn main() {
+    let mut i = 0i64;
+    let mut total = 0i64;
+    let mut last: String = "";
+    while i < 50i64 {
+        let src = "e\u{0301}fg";
+        total = total + src.normalize(Nfc).len();
+        let held = src.normalize(Nfd);
+        total = total + held.len();
+        last = src.normalize(Nfc).to_uppercase();
+        i = i + 1i64;
+    }
+    println(last);
+    println(total);
+}
+"#,
+            &["\u{00C9}FG", "450"],
+            "asan_normalize_result_has_exactly_one_owner",
+        );
+    }
 }

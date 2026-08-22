@@ -564,6 +564,58 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 Type::Str
             }
+            "normalize" => {
+                // normalize(form: NormalizationForm) -> String: a fresh owned
+                // String in the requested Unicode normalization form — the
+                // normalization-aware comparison design.md § Strings (Equality)
+                // points at, since `==` compares raw UTF-8 bytes and NFC/NFD
+                // spellings of the same text are different byte strings
+                // (B-2026-08-20-41).
+                //
+                // Both backends normalize through the SAME `icu_normalizer`
+                // version — the interpreter in-process, codegen via
+                // `karac_unicode_normalize` from the opt-in
+                // `libkarac_runtime_unicode.a` — so they agree by construction,
+                // the rule the Arrow IPC twin and the `to_lowercase` family
+                // already follow.
+                //
+                // The `form` argument is CHECKED here rather than deferred to
+                // codegen (the looser `MemoryOrdering` posture): it is an
+                // ordinary prelude enum with no implicit default, so a wrong
+                // type has a precise span available at typecheck time.
+                if args.len() != 1 {
+                    self.type_error(
+                        format!(
+                            "'normalize' expects one NormalizationForm argument \
+                             (Nfc / Nfd / Nfkc / Nfkd), found {}",
+                            args.len()
+                        ),
+                        *span,
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                } else {
+                    let arg_ty = self.infer_expr(&args[0].value);
+                    let is_form = matches!(
+                        &arg_ty,
+                        Type::Named { name, .. } if name == "NormalizationForm"
+                    ) || matches!(arg_ty, Type::Error);
+                    if !is_form {
+                        self.type_error(
+                            format!(
+                                "'normalize' expects a NormalizationForm (Nfc / Nfd / Nfkc / \
+                                 Nfkd), found '{}'",
+                                type_display(&arg_ty)
+                            ),
+                            args[0].value.span,
+                            TypeErrorKind::TypeMismatch,
+                        );
+                    }
+                }
+                Type::Str
+            }
             "replace" => {
                 // replace(from: String, to: String) -> String: every
                 // non-overlapping occurrence of `from` replaced with `to`

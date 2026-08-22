@@ -43381,3 +43381,55 @@ fn test_fulfilled_statement_expect_is_silent() {
             .collect::<Vec<_>>()
     );
 }
+
+#[test]
+fn test_normalize_returns_string_and_takes_a_normalization_form() {
+    // B-2026-08-20-41: design.md § Strings (Equality) tells the reader to use
+    // `s.normalize(...)` for normalization-aware comparison, and until this
+    // slice neither the method nor the form enum existed. All four forms type,
+    // and the result is a `String` a further String method can chain onto.
+    for form in ["Nfc", "Nfd", "Nfkc", "Nfkd"] {
+        let src = format!("fn main() {{ println(\"x\".normalize({form}).len()); }}");
+        typecheck_ok(&src);
+    }
+    // The qualified spelling resolves to the same enum.
+    typecheck_ok("fn main() { println(\"x\".normalize(NormalizationForm.Nfd)); }");
+}
+
+#[test]
+fn test_normalize_rejects_a_wrong_arity_or_a_non_form_argument() {
+    // The `form` is checked HERE rather than deferred to codegen (the looser
+    // `MemoryOrdering` posture), so the diagnostic carries the argument's own
+    // span. `Ordering` is the sharp case: it is an enum, and a check that only
+    // asked "is this some enum?" would let it through.
+    let no_args = typecheck_errors("fn main() { println(\"x\".normalize()); }");
+    assert_eq!(no_args.len(), 1);
+    assert!(
+        no_args[0]
+            .message
+            .contains("expects one NormalizationForm argument"),
+        "got {no_args:?}"
+    );
+
+    let two_args = typecheck_errors("fn main() { println(\"x\".normalize(Nfc, Nfd)); }");
+    assert_eq!(two_args.len(), 1);
+    assert!(two_args[0].message.contains("found 2"), "got {two_args:?}");
+
+    let int_arg = typecheck_errors("fn main() { println(\"x\".normalize(42)); }");
+    assert_eq!(int_arg.len(), 1);
+    assert!(
+        int_arg[0].message.contains("expects a NormalizationForm")
+            && int_arg[0].message.contains("i64"),
+        "got {int_arg:?}"
+    );
+
+    let other_enum = typecheck_errors("fn main() { println(\"x\".normalize(Less)); }");
+    assert_eq!(other_enum.len(), 1);
+    assert!(
+        other_enum[0]
+            .message
+            .contains("expects a NormalizationForm")
+            && other_enum[0].message.contains("Ordering"),
+        "a sibling prelude enum must be rejected, got {other_enum:?}"
+    );
+}

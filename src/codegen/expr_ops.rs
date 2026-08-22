@@ -4084,7 +4084,7 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::MethodCall { method, object, .. }
                 if matches!(
                     method.as_str(),
-                    "trim" | "trim_start" | "trim_end" | "to_string"
+                    "trim" | "trim_start" | "trim_end" | "to_string" | "normalize"
                 ) || (matches!(method.as_str(), "to_lowercase" | "to_uppercase")
                     && !self.expr_is_char(object)) =>
             {

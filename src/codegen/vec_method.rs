@@ -1681,6 +1681,69 @@ impl<'ctx> super::Codegen<'ctx> {
                     "str.xform",
                 ))
             }
+            // `String.normalize(form) -> String` — design.md § Strings
+            // (Equality)'s normalization-aware comparison (B-2026-08-20-41).
+            // Same allocating-transform shape as the arm above, plus an i32
+            // form selector, and resolved from the opt-in
+            // `libkarac_runtime_unicode.a` rather than the ordinary archive.
+            //
+            // The form is COMPILED, not pattern-matched on a literal: it is an
+            // ordinary C-like enum value, so `let f = Nfd; s.normalize(f)` and
+            // `s.normalize(Nfd)` both lower to the same discriminant. Matching
+            // a variant literal instead — the narrower `parse_memory_ordering`
+            // posture — would have compiled the literal spelling and failed the
+            // variable one, which the interpreter accepts: a run-vs-build
+            // divergence manufactured at the call site. The discriminant IS the
+            // ABI here; `runtime/stdlib/normalization_form.kara` carries the
+            // note that its declaration order is load-bearing.
+            "normalize" if self.var_types.string_vars.contains(var_name) => {
+                // A `NormalizationForm` value is the seeded 1-word
+                // `{ i64 tag }` enum struct (`declarations.rs`'s
+                // `seed_unit_enum`), so the discriminant is field 0. A bare
+                // integer is accepted too — some paths hand back the tag
+                // already unwrapped.
+                let form = self.compile_expr(&args[0].value)?;
+                let form_iv = match form {
+                    BasicValueEnum::IntValue(iv) => iv,
+                    BasicValueEnum::StructValue(sv) => self
+                        .builder
+                        .build_extract_value(sv, 0, "nform.tag")
+                        .ok()
+                        .and_then(|v| match v {
+                            BasicValueEnum::IntValue(iv) => Some(iv),
+                            _ => None,
+                        })
+                        .ok_or_else(|| {
+                            "codegen: String.normalize form argument has no integer tag".to_string()
+                        })?,
+                    _ => {
+                        return Err(
+                            "codegen: String.normalize expects a NormalizationForm (Nfc / Nfd / \
+                             Nfkc / Nfkd)"
+                                .to_string(),
+                        )
+                    }
+                };
+                let i32_t = self.context.i32_type();
+                let form_i32 = match form_iv.get_type().get_bit_width() {
+                    32 => form_iv,
+                    w if w < 32 => self
+                        .builder
+                        .build_int_z_extend(form_iv, i32_t, "nform.z")
+                        .unwrap(),
+                    _ => self
+                        .builder
+                        .build_int_truncate(form_iv, i32_t, "nform.t")
+                        .unwrap(),
+                };
+                let (recv_data, recv_len) = self.load_string_data_len(vec_ty, data_ptr, "snorm");
+                let func = self.runtime_fns.karac_unicode_normalize_fn;
+                Ok(self.build_string_xform_result(
+                    func,
+                    vec![recv_data.into(), recv_len.into(), form_i32.into()],
+                    "str.normalize",
+                ))
+            }
             // `String.sorted() -> String` — chars sorted ascending, the anagram
             // key (LeetCode #49). Guarded on `string_vars` so a String receiver
             // routes to `karac_string_sorted` while a `Vec[T].sorted()` still

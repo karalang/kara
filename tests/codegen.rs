@@ -102912,6 +102912,110 @@ fn main() {
             Some("5\n4\n11\n11\n1\n".to_string())
         );
     }
+
+    /// B-2026-08-20-41 — `String.normalize(form)`, the remedy design.md §
+    /// Strings (Equality) names for its own byte-equality hazard. Codegen
+    /// lowers it to `karac_unicode_normalize` from the opt-in
+    /// `libkarac_runtime_unicode.a`; the interpreter normalizes in-process.
+    /// BOTH link the same `icu_normalizer`, so this asserts real byte equality
+    /// rather than approximate agreement.
+    #[test]
+    fn normalize_makes_the_spec_hazard_comparable() {
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let a = \"e\\u{0301}\";\n\
+                     let b = \"\\u{00e9}\";\n\
+                     println(a == b);\n\
+                     println(a.normalize(Nfc) == b.normalize(Nfc));\n\
+                     println(a.normalize(Nfd) == b.normalize(Nfd));\n\
+                     println(a.len());\n\
+                     println(a.normalize(Nfc).len());\n\
+                     println(b.normalize(Nfd).len());\n\
+                 }"
+            ),
+            Some("false\ntrue\ntrue\n3\n2\n3\n".to_string())
+        );
+    }
+
+    /// All four forms through codegen, with the compatibility pair doing
+    /// something the canonical pair does not — a K/non-K mix-up in the
+    /// discriminant wiring would otherwise pass silently.
+    #[test]
+    fn normalize_compatibility_forms_differ_from_canonical_ones() {
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let lig = \"\\u{FB01}\";\n\
+                     println(lig.normalize(Nfc));\n\
+                     println(lig.normalize(Nfd));\n\
+                     println(lig.normalize(Nfkc));\n\
+                     println(lig.normalize(Nfkd));\n\
+                 }"
+            ),
+            Some("\u{FB01}\n\u{FB01}\nfi\nfi\n".to_string())
+        );
+    }
+
+    /// The form reaches codegen three ways, and the BINDING is the one with a
+    /// history: `NormalizationForm` is a baked-stdlib enum, so before
+    /// `declarations.rs` seeded its layout a variant expression lowered its tag
+    /// to 0 and every bound form silently normalized as `Nfc`. Measured then:
+    /// this program printed `2 2 2 2` where the interpreter printed `2 2 3 3`.
+    #[test]
+    fn normalize_form_reaches_codegen_bare_qualified_and_bound() {
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let a = \"e\\u{0301}\";\n\
+                     let bound_c = Nfc;\n\
+                     let bound_d = NormalizationForm.Nfd;\n\
+                     println(a.normalize(Nfc).len());\n\
+                     println(a.normalize(NormalizationForm.Nfc).len());\n\
+                     println(a.normalize(bound_c).len());\n\
+                     println(a.normalize(bound_d).len());\n\
+                 }"
+            ),
+            Some("2\n2\n2\n3\n".to_string())
+        );
+    }
+
+    /// A String-typed BINDING receiver, not just a literal: the literal path
+    /// materializes the receiver into a synthetic slot first, so the two reach
+    /// `compile_vec_method` differently and both need covering. Chaining onto
+    /// the result pins that the returned value is a real owned String.
+    #[test]
+    fn normalize_works_on_a_binding_receiver_and_chains() {
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     let s = \"e\\u{0301}fg\";\n\
+                     let n = s.normalize(Nfc);\n\
+                     println(n.len());\n\
+                     println(n.to_uppercase());\n\
+                     println(s.normalize(Nfc).to_uppercase().len());\n\
+                 }"
+            ),
+            Some("4\n\u{00C9}FG\n4\n".to_string())
+        );
+    }
+
+    /// Identity cases across every form — empty and pure ASCII. Catches a
+    /// transform that rewrites text it should leave alone, and an empty result
+    /// whose `{null, 0, 0}` String body would otherwise go unexercised.
+    #[test]
+    fn normalize_leaves_empty_and_ascii_untouched() {
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                     println(\"\".normalize(Nfc).len());\n\
+                     println(\"plain ascii\".normalize(Nfd));\n\
+                     println(\"plain ascii\".normalize(Nfkd));\n\
+                 }"
+            ),
+            Some("0\nplain ascii\nplain ascii\n".to_string())
+        );
+    }
 }
 
 #[cfg(feature = "llvm")]

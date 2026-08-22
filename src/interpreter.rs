@@ -1629,8 +1629,7 @@ impl<'a> Interpreter<'a> {
             },
         );
 
-        // Register built-in comparison-Ordering enum variants
-        // (Less / Equal / Greater — returned by `Ord.cmp`).
+        // Register the built-in prelude enums' unit variants.
         //
         // Bind BOTH the qualified (`Ordering.Less`) and bare (`Less`) names.
         // The pattern matcher classifies a bare PascalCase identifier as a
@@ -1642,27 +1641,33 @@ impl<'a> Interpreter<'a> {
         // silently returned Less under `karac run` while codegen was correct —
         // a run/build divergence for every `.cmp()` consumer, int and String
         // alike (bug-ledger B-2026-06-30-14). MemoryOrdering shared the bug.
-        for variant in ["Less", "Equal", "Greater"] {
-            let value = Value::EnumVariant {
-                enum_name: "Ordering".to_string(),
-                variant: variant.to_string(),
-                data: EnumData::Unit,
-            };
-            self.env
-                .define(format!("Ordering.{}", variant), value.clone());
-            self.env.define(variant.to_string(), value);
-        }
-        // Register built-in MemoryOrdering enum variants
-        // (Relaxed / Acquire / Release / AcqRel / SeqCst — used by Atomic[T]).
-        for variant in ["Relaxed", "Acquire", "Release", "AcqRel", "SeqCst"] {
-            let value = Value::EnumVariant {
-                enum_name: "MemoryOrdering".to_string(),
-                variant: variant.to_string(),
-                data: EnumData::Unit,
-            };
-            self.env
-                .define(format!("MemoryOrdering.{}", variant), value.clone());
-            self.env.define(variant.to_string(), value);
+        //
+        // Table-driven over every prelude enum whose variants are visible
+        // unqualified, so a NEW one cannot land with only half the
+        // registration — which is precisely the shape B-2026-06-30-14 took,
+        // and it hit BOTH enums that existed at the time.
+        for (enum_name, variants) in [
+            // Ordering — comparison ordering, returned by `Ord.cmp`.
+            ("Ordering", &["Less", "Equal", "Greater"][..]),
+            // MemoryOrdering — used by `Atomic[T]` operations.
+            (
+                "MemoryOrdering",
+                &["Relaxed", "Acquire", "Release", "AcqRel", "SeqCst"][..],
+            ),
+            // NormalizationForm — the `form` selector for
+            // `String.normalize(form)` (B-2026-08-20-41).
+            ("NormalizationForm", &["Nfc", "Nfd", "Nfkc", "Nfkd"][..]),
+        ] {
+            for variant in variants {
+                let value = Value::EnumVariant {
+                    enum_name: enum_name.to_string(),
+                    variant: (*variant).to_string(),
+                    data: EnumData::Unit,
+                };
+                self.env
+                    .define(format!("{}.{}", enum_name, variant), value.clone());
+                self.env.define((*variant).to_string(), value);
+            }
         }
 
         // Ambient program-rooted resources: register the names and install

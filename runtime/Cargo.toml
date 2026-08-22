@@ -149,6 +149,22 @@ regex = ["dep:regex"]
 # `karac_arrow_*` symbol, so non-arrow binaries never carry the dep.
 arrow = ["dep:arrow-array", "dep:arrow-schema", "dep:arrow-ipc"]
 
+# Unicode normalization backend for `String.normalize(form)` (design.md §
+# Strings, Equality; B-2026-08-20-41). Opt-in ONLY, like `gpu` / `regex` /
+# `arrow`: never in `default` / lean / wasm archives. Pulls `icu_normalizer`
+# plus its compiled data tables (~100 KB in a stripped fat-LTO staticlib,
+# measured). Built into `libkarac_runtime_unicode.a`, which `karac` selects
+# only when the emitted object references a `karac_unicode_*` symbol, so
+# non-normalizing binaries never carry the tables.
+#
+# ICU rather than `unicode-normalization` for two measured reasons: it is
+# SMALLER here (+99 KB vs +136 KB), and it is already in the `karac`
+# compiler's dependency graph via `ureq -> url -> idna -> idna_adapter`, so
+# the interpreter half of this feature costs zero new crates. Both backends
+# linking the same crate is what makes their output identical by
+# construction rather than by convention -- the Arrow IPC twin's rule.
+unicode = ["dep:icu_normalizer"]
+
 [dependencies]
 # Slice F (`std.json`): backing impl for `karac_runtime_json_parse` /
 # `karac_runtime_json_stringify`. Locked design choice (iii) — use
@@ -276,6 +292,14 @@ regex = { version = "1", optional = true }
 arrow-array = { version = "55", optional = true }
 arrow-schema = { version = "55", optional = true }
 arrow-ipc = { version = "55", optional = true }
+
+# Unicode normalization backend (opt-in `unicode` feature ->
+# `libkarac_runtime_unicode.a`). Same major as the `icu_normalizer` the
+# `karac` compiler crate pins for the interpreter, so the two backends
+# normalize through one implementation and one Unicode version.
+# `compiled_data` bakes the tables in rather than requiring a runtime data
+# provider -- an FFI entrypoint has nowhere to thread one from.
+icu_normalizer = { version = "2", optional = true, features = ["compiled_data"] }
 
 [dev-dependencies]
 # Hermetic test-cert generation for `src/tls.rs`'s unit tests. Slice 4

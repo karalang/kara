@@ -1173,7 +1173,16 @@ pub(super) fn cmd_run(
                 let uses_regex = ir
                     .lines()
                     .any(|l| l.contains("@karac_regex_") && l.contains("call"));
-                if !uses_regex {
+                // B-2026-08-20-41 — `String.normalize(form)` has the same
+                // shape: its `karac_unicode_*` symbols live only in the opt-in
+                // `libkarac_runtime_unicode.a`, which the JIT runner does not
+                // build, so the dlsym generator cannot materialize them. The
+                // interpreter normalizes through the same `icu_normalizer`, so
+                // routing there is byte-identical rather than merely close.
+                let uses_unicode = ir
+                    .lines()
+                    .any(|l| l.contains("@karac_unicode_") && l.contains("call"));
+                if !uses_regex && !uses_unicode {
                     let mut jit_argv = Vec::with_capacity(program_args.len() + 1);
                     jit_argv.push(filename.to_string());
                     jit_argv.extend_from_slice(program_args);

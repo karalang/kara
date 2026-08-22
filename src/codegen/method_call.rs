@@ -9236,6 +9236,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     | "split"
                     | "split_whitespace"
                     | "lines"
+                    // `normalize` is String-only and always will be — the
+                    // premise this list rests on (B-2026-08-20-41).
+                    | "normalize"
             ) && !self.expr_is_char(object));
         if !recv_is_string {
             return Ok(None);

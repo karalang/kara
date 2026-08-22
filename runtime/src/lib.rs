@@ -106,8 +106,12 @@ pub mod arrow_ipc;
 // Regex FFI (`karac_regex_*`) — opt-in `regex` feature → `libkarac_runtime_regex.a`.
 #[cfg(feature = "regex")]
 pub mod regex;
+// Unicode normalization FFI (`karac_unicode_*`) — opt-in `unicode` feature →
+// `libkarac_runtime_unicode.a`.
 #[cfg(feature = "net")]
 pub mod scheduler;
+#[cfg(feature = "unicode")]
+pub mod unicode;
 // Small-String Optimization encoding — the executable contract shared with
 // codegen (`src/codegen/sso.rs`). Target-independent; see the module doc
 // and `docs/spikes/small-string-optimization.md`.
@@ -260,6 +264,15 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         regex::karac_regex_find_all,
         regex::karac_regex_replace_all,
     );
+    // Unicode normalization FFI (`runtime/src/unicode.rs`, opt-in `unicode`
+    // feature) — same keep-list class as the regex surface above. AOT links
+    // `libkarac_runtime_unicode.a`; the JIT would need this resolvable from the
+    // running `karac_jit_runner`, which does NOT build the opt-in `unicode`
+    // feature — so `karac run` routes normalizing programs to the interpreter
+    // (the `gpu` / `regex` / `arrow` JIT posture). The entry is here so the
+    // symbol survives `-dead_strip` in any build that does carry the feature.
+    #[cfg(feature = "unicode")]
+    keep!(unicode::karac_unicode_normalize);
     // Arrow IPC FFI (`runtime/src/arrow_ipc.rs`, opt-in `arrow` feature) — same
     // keep-list class as the regex surface above. AOT links
     // `libkarac_runtime_arrow.a`; the JIT would need these resolvable from the

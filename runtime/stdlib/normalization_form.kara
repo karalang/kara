@@ -1,0 +1,46 @@
+// runtime/stdlib/normalization_form.kara
+//
+// Unicode normalization form. Carried by `String.normalize(form)`, the
+// normalization-aware comparison design.md § Strings (Equality) points at:
+// `==` compares raw UTF-8 bytes, so two strings that look identical but are
+// spelled in different normalization forms are NOT equal.
+//
+// The four forms are the ones Unicode Annex #15 defines, along the two
+// independent axes the names encode:
+//
+//   * COMPOSED (C) vs DECOMPOSED (D) — whether `é` is one codepoint (U+00E9)
+//     or two (`e` + U+0301 COMBINING ACUTE).
+//   * CANONICAL vs COMPATIBILITY (K) — canonical forms preserve the exact
+//     character identity; the K forms additionally fold formatting
+//     distinctions, so the ligature `ﬁ` (U+FB01) becomes `fi`. That is lossy
+//     and not round-trippable, which is why it is not the default anyone
+//     reaches for.
+//
+// NFC is what you want for comparison unless you know otherwise: it is the
+// form the web platform, most filesystems, and most text editors emit.
+//
+// Prelude-visible with its variants UNQUALIFIED (`Nfc`, not
+// `NormalizationForm.Nfc`), like `MemoryOrdering`'s `Relaxed` — every call
+// site names a variant and would otherwise need an import for a four-value
+// enum.
+//
+// SPELLED `Nfc`, NOT `NFC`, and design.md's Equality bullet was corrected to
+// match (B-2026-08-20-41). The bullet originally wrote `s.normalize(NFC)`,
+// which breaks design.md's OWN naming rule CN-4 (acronyms as words:
+// `HttpClient` not `HTTPClient`, `IoError` not `IOError`) — and the
+// identifier-class check enforces CN-4, so an all-caps variant name is a hard
+// parse error, in the baked stdlib and in user code alike. The spec named an
+// API that could not have been declared as written.
+//
+// DECLARATION ORDER IS THE ABI. The variants' discriminants are what codegen
+// passes to `karac_unicode_normalize` and what the interpreter mirrors; the
+// constants in `runtime/src/unicode.rs` and the mapping in
+// `src/interpreter/method_call_seq.rs` must stay in step with this order.
+
+#[derive(Eq, Copy)]
+enum NormalizationForm {
+    Nfc,
+    Nfd,
+    Nfkc,
+    Nfkd,
+}

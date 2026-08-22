@@ -2264,6 +2264,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         | "repeat"
                         | "replace"
                         | "replacen"
+                        | "normalize"
                 ) || (matches!(method.as_str(), "to_lowercase" | "to_uppercase")
                     && !Self::expr_is_syntactically_char(object))
             }

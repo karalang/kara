@@ -21,6 +21,54 @@ use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, FunctionValue, Poi
 use inkwell::AddressSpace;
 
 use super::state::{EnumDropKind, EnumLayout, SharedTypeInfo, SoaGroup, SoaLayout};
+
+/// Seed the codegen layout for a baked-stdlib UNIT-ONLY enum — every variant
+/// payload-free, so the whole value is the 1-word `{ i64 tag }` struct with no
+/// field offsets and no drop kinds.
+///
+/// `declare_enums` walks only the user's `program.items`, so a `STDLIB_PROGRAMS`
+/// enum that never appears in user source has no layout, and a variant
+/// expression then lowers its tag to 0 — silently the FIRST variant, with no
+/// diagnostic. `Ordering`, `VarError`, `SeekFrom` and a dozen siblings above
+/// each hand-roll this same block; new seeds should call this instead, because
+/// the hand-rolled form repeats every variant name across four maps and a
+/// single transcription slip there is a wrong tag rather than a compile error.
+///
+/// `variants` is in DECLARATION ORDER: index i becomes tag i, which is the
+/// discriminant the interpreter and any FFI must agree on.
+fn seed_unit_enum<'ctx>(
+    type_decls: &mut crate::codegen::TypeDecls<'ctx>,
+    context: &'ctx inkwell::context::Context,
+    i64_t: BasicTypeEnum<'ctx>,
+    name: &str,
+    variants: &[&str],
+) {
+    if type_decls.enum_layouts.contains_key(name) {
+        return;
+    }
+    let mut tags = HashMap::new();
+    let mut field_counts = HashMap::new();
+    let mut field_word_offsets = HashMap::new();
+    let mut field_drop_kinds = HashMap::new();
+    for (tag, variant) in variants.iter().enumerate() {
+        tags.insert((*variant).to_string(), tag as u64);
+        field_counts.insert((*variant).to_string(), 0usize);
+        field_word_offsets.insert((*variant).to_string(), Vec::new());
+        field_drop_kinds.insert((*variant).to_string(), Vec::new());
+    }
+    type_decls.enum_layouts.insert(
+        name.to_string(),
+        EnumLayout {
+            llvm_type: context.struct_type(&[i64_t], false),
+            tags,
+            field_counts,
+            field_word_offsets,
+            field_drop_kinds,
+            is_shared: false,
+        },
+    );
+    type_decls.seeded_enum_names.insert(name.to_string());
+}
 use crate::ast::narrow_literal_to_i64;
 
 /// Phase 6 line 17 slice 6: name of the compiler-recognised leaf
@@ -4037,6 +4085,29 @@ impl<'ctx> super::Codegen<'ctx> {
                 .seeded_enum_names
                 .insert("VarError".to_string());
         }
+
+        // Stdlib `NormalizationForm` enum
+        // (`runtime/stdlib/normalization_form.kara`) — the `form` selector for
+        // `String.normalize(form)` (B-2026-08-20-41). Same story as `VarError`
+        // above: it reaches the typechecker through `STDLIB_PROGRAMS` but not
+        // codegen's `declare_enums`, which walks only the user's
+        // `program.items`.
+        //
+        // WITHOUT THIS SEED THE FAILURE IS SILENT, not a build error. A
+        // variant expression with no layout lowers its tag to 0, so
+        // `let f = Nfd; s.normalize(f)` normalized to Nfc — the wrong form,
+        // no diagnostic, and a different answer from `--interp`. (Measured
+        // before the seed: `"e\u{0301}".normalize(f).len()` gave 2 under AOT
+        // against the interpreter's 3.) The tags below ARE the ABI the
+        // `karac_unicode_normalize` extern reads; they follow the stdlib
+        // declaration order, which that file flags as load-bearing.
+        seed_unit_enum(
+            &mut self.type_decls,
+            self.context,
+            i64_t,
+            "NormalizationForm",
+            &["Nfc", "Nfd", "Nfkc", "Nfkd"],
+        );
 
         // Stdlib `SeekFrom` enum (`runtime/stdlib/io.kara`) — the `whence`
         // selector for `File.seek` (B-2026-08-10-3). Same story as `VarError`

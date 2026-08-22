@@ -248,6 +248,10 @@ pub(crate) struct RuntimeFns<'ctx> {
     /// interpreter's Rust stdlib). Each `(data, len, *mut out_len) -> ptr`
     /// returns a fresh NUL-terminated buffer and writes the result byte length
     /// to `out_len` (null + 0 for an empty result). See `runtime/src/clone.rs`.
+    /// `karac_unicode_normalize(data, len, form, out_len) -> ptr` —
+    /// `String.normalize(form)`. Opt-in `libkarac_runtime_unicode.a` only;
+    /// see `driver.rs § SpecialArchive::Unicode`.
+    pub(crate) karac_unicode_normalize_fn: FunctionValue<'ctx>,
     pub(crate) karac_string_to_lowercase_fn: FunctionValue<'ctx>,
     pub(crate) karac_string_to_uppercase_fn: FunctionValue<'ctx>,
     pub(crate) karac_string_trim_fn: FunctionValue<'ctx>,

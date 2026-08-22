@@ -36991,3 +36991,80 @@ fn test_method_owned_arg_reassigned_in_body_is_not_written_back() {
         }");
     assert_eq!(out, "9\n5\n9\n5\n");
 }
+
+#[test]
+fn test_normalize_makes_the_spec_hazard_comparable() {
+    // B-2026-08-20-41 — the exact example design.md § Strings (Equality) warns
+    // about, and the remedy it names. `e` + COMBINING ACUTE and the precomposed
+    // `é` are different byte strings, so `==` is false; normalizing both to a
+    // common form makes them compare equal. Until this slice the bullet
+    // described a real trap and pointed at an API that did not exist.
+    let out = run("fn main() {\n\
+            let a = \"e\\u{0301}\";\n\
+            let b = \"\\u{00e9}\";\n\
+            println(a == b);\n\
+            println(a.normalize(Nfc) == b.normalize(Nfc));\n\
+            println(a.normalize(Nfd) == b.normalize(Nfd));\n\
+        }");
+    assert_eq!(out, "false\ntrue\ntrue\n");
+}
+
+#[test]
+fn test_normalize_changes_byte_length_in_both_directions() {
+    // Composition shrinks and decomposition grows, which is why the result is
+    // always a fresh String rather than an in-place edit. Lengths, not just
+    // equality, so a normalize that returned its receiver unchanged would fail.
+    let out = run("fn main() {\n\
+            let nfd = \"e\\u{0301}\";\n\
+            let nfc = \"\\u{00e9}\";\n\
+            println(nfd.len());\n\
+            println(nfd.normalize(Nfc).len());\n\
+            println(nfc.len());\n\
+            println(nfc.normalize(Nfd).len());\n\
+        }");
+    assert_eq!(out, "3\n2\n2\n3\n");
+}
+
+#[test]
+fn test_normalize_compatibility_forms_differ_from_canonical_ones() {
+    // U+FB01 LATIN SMALL LIGATURE FI is untouched by the canonical forms and
+    // folds to `fi` under the compatibility ones. Without this, swapping NFC
+    // for NFKC anywhere in the wiring would pass every other test here.
+    let out = run("fn main() {\n\
+            let lig = \"\\u{FB01}\";\n\
+            println(lig.normalize(Nfc));\n\
+            println(lig.normalize(Nfd));\n\
+            println(lig.normalize(Nfkc));\n\
+            println(lig.normalize(Nfkd));\n\
+        }");
+    assert_eq!(out, "\u{FB01}\n\u{FB01}\nfi\nfi\n");
+}
+
+#[test]
+fn test_normalize_accepts_a_bare_variant_a_qualified_one_and_a_binding() {
+    // design.md's spelling is the bare `Nfc`; the qualified path and a
+    // variable holding a form must reach the same implementation. The binding
+    // is the interesting one — codegen lowers it through the enum's
+    // discriminant rather than a matched literal, and a mismatch there was a
+    // silent wrong-form miscompile before the layout seed.
+    let out = run("fn main() {\n\
+            let a = \"e\\u{0301}\";\n\
+            let bound = Nfc;\n\
+            println(a.normalize(Nfc).len());\n\
+            println(a.normalize(NormalizationForm.Nfc).len());\n\
+            println(a.normalize(bound).len());\n\
+        }");
+    assert_eq!(out, "2\n2\n2\n");
+}
+
+#[test]
+fn test_normalize_leaves_empty_and_ascii_untouched() {
+    // Nothing to compose or decompose, on every form — the identity cases that
+    // catch a transform accidentally rewriting text it should not.
+    let out = run("fn main() {\n\
+            println(\"\".normalize(Nfc).len());\n\
+            println(\"plain ascii\".normalize(Nfd));\n\
+            println(\"plain ascii\".normalize(Nfkd));\n\
+        }");
+    assert_eq!(out, "0\nplain ascii\nplain ascii\n");
+}

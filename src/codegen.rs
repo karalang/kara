@@ -5037,6 +5037,20 @@ impl<'ctx> Codegen<'ctx> {
         // interpreter). `(data: ptr, len: i64, out_len: ptr) -> ptr`: returns a
         // fresh NUL-terminated buffer, writes the result byte length to `out_len`.
         let string_xform_ty = ptr_type.fn_type(&[ptr_md, i64_ty, ptr_md], false);
+        // `String.normalize(form)` — the same shape plus an i32 form selector
+        // (design.md § Strings, Equality; B-2026-08-20-41). Resolved from the
+        // opt-in `libkarac_runtime_unicode.a`, which `karac` selects on any
+        // `karac_unicode_*` reference (`driver.rs § SpecialArchive::Unicode`),
+        // so the ICU normalization tables stay out of every other binary.
+        //   `ptr karac_unicode_normalize(*const u8 data, i64 len, i32 form,
+        //                                *mut i64 out_len)`
+        let string_normalize_ty =
+            ptr_type.fn_type(&[ptr_md, i64_ty, i32_type.into(), ptr_md], false);
+        let karac_unicode_normalize_fn = module.add_function(
+            "karac_unicode_normalize",
+            string_normalize_ty,
+            Some(Linkage::External),
+        );
         let karac_string_to_lowercase_fn = module.add_function(
             "karac_string_to_lowercase",
             string_xform_ty,
@@ -5319,6 +5333,7 @@ impl<'ctx> Codegen<'ctx> {
                 karac_string_clone_fn,
                 karac_string_slice_fn,
                 karac_string_slice_borrow_fn,
+                karac_unicode_normalize_fn,
                 karac_string_to_lowercase_fn,
                 karac_string_to_uppercase_fn,
                 karac_string_trim_fn,

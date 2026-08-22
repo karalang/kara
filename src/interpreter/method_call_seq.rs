@@ -486,6 +486,46 @@ impl<'a> super::Interpreter<'a> {
                 }
                 return None;
             }
+            "normalize" => {
+                // `String.normalize(form) -> String` (typed in stdlib_seq.rs) —
+                // design.md § Strings (Equality)'s normalization-aware
+                // comparison, B-2026-08-20-41.
+                //
+                // Same `icu_normalizer` the AOT backend links
+                // (`runtime/src/unicode.rs`, opt-in `unicode` feature), so the
+                // two produce identical bytes for the same input and form: one
+                // implementation, one Unicode version. Normalization tables are
+                // NOT in Rust's std — unlike the case mapping `to_lowercase`
+                // above gets for free — which is why this needs a crate at all.
+                //
+                // The `form` argument arrives as the prelude `NormalizationForm`
+                // enum; its variant NAME is matched here rather than its
+                // discriminant, so this stays correct if the declaration order
+                // in `runtime/stdlib/normalization_form.kara` ever changes (the
+                // codegen path, which passes an integer, does not have that
+                // luxury — see that file's ABI note).
+                if let Value::String(s) = &obj {
+                    if let [form_a] = args {
+                        if let Value::EnumVariant { variant, .. } =
+                            self.eval_expr_inner(&form_a.value)
+                        {
+                            let normalized = match variant.as_str() {
+                                "Nfc" => icu_normalizer::ComposingNormalizerBorrowed::new_nfc()
+                                    .normalize(s),
+                                "Nfd" => icu_normalizer::DecomposingNormalizerBorrowed::new_nfd()
+                                    .normalize(s),
+                                "Nfkc" => icu_normalizer::ComposingNormalizerBorrowed::new_nfkc()
+                                    .normalize(s),
+                                "Nfkd" => icu_normalizer::DecomposingNormalizerBorrowed::new_nfkd()
+                                    .normalize(s),
+                                _ => return None,
+                            };
+                            return Some(Value::String(normalized.into_owned()));
+                        }
+                    }
+                }
+                return None;
+            }
             "replace" => {
                 // `String.replace(from, to) -> String` (typed in stdlib_seq.rs):
                 // every non-overlapping `from` replaced with `to`, Rust

@@ -494,12 +494,18 @@ pub(super) fn link_executable_impl(
     let references_arrow = !references_gpu && object_references_arrow(obj_path);
     let references_regex =
         !references_gpu && !references_arrow && object_references_regex(obj_path);
+    let references_unicode = !references_gpu
+        && !references_arrow
+        && !references_regex
+        && object_references_unicode(obj_path);
     let special = if references_gpu {
         SpecialArchive::Gpu
     } else if references_arrow {
         SpecialArchive::Arrow
     } else if references_regex {
         SpecialArchive::Regex
+    } else if references_unicode {
+        SpecialArchive::Unicode
     } else {
         SpecialArchive::None
     };
@@ -708,12 +714,18 @@ pub fn link_native_library(
     let references_arrow = !references_gpu && object_references_arrow(obj_path);
     let references_regex =
         !references_gpu && !references_arrow && object_references_regex(obj_path);
+    let references_unicode = !references_gpu
+        && !references_arrow
+        && !references_regex
+        && object_references_unicode(obj_path);
     let special = if references_gpu {
         SpecialArchive::Gpu
     } else if references_arrow {
         SpecialArchive::Arrow
     } else if references_regex {
         SpecialArchive::Regex
+    } else if references_unicode {
+        SpecialArchive::Unicode
     } else {
         SpecialArchive::None
     };
@@ -1225,6 +1237,25 @@ fn symbol_listing_references_arrow(nm_output: &str) -> bool {
     nm_output.lines().any(|line| line.contains("karac_arrow_"))
 }
 
+/// Whether the emitted object references a `karac_unicode_*` symbol — i.e. the
+/// program calls `String.normalize(form)`. Those symbols live only in the
+/// opt-in `libkarac_runtime_unicode.a`, so a hit selects that archive
+/// (B-2026-08-20-41). Mirrors `object_references_regex`.
+fn object_references_unicode(obj_path: &str) -> bool {
+    match std::process::Command::new("nm").arg(obj_path).output() {
+        Ok(o) if o.status.success() => {
+            symbol_listing_references_unicode(&String::from_utf8_lossy(&o.stdout))
+        }
+        _ => false,
+    }
+}
+
+fn symbol_listing_references_unicode(nm_output: &str) -> bool {
+    nm_output
+        .lines()
+        .any(|line| line.contains("karac_unicode_"))
+}
+
 /// Pure predicate over `nm`-style symbol-listing text: true iff any line
 /// names a TLS-only runtime symbol. Split out from the `nm` shell-out so
 /// the marker matching — in particular the `serve_http` vs `serve_https`
@@ -1271,6 +1302,9 @@ pub(super) enum SpecialArchive {
     Regex,
     /// `karac_arrow_*` — `libkarac_runtime_arrow.a` (the arrow-rs IPC crates).
     Arrow,
+    /// `karac_unicode_*` — `libkarac_runtime_unicode.a` (the ICU normalization
+    /// tables).
+    Unicode,
 }
 
 pub(super) fn resolve_runtime_path(
@@ -1290,6 +1324,8 @@ pub(super) fn resolve_runtime_path(
     const REGEX: &str = "karac_runtime_regex.lib";
     #[cfg(windows)]
     const ARROW: &str = "karac_runtime_arrow.lib";
+    #[cfg(windows)]
+    const UNICODE: &str = "karac_runtime_unicode.lib";
     #[cfg(not(windows))]
     const FULL: &str = "libkarac_runtime.a";
     #[cfg(not(windows))]
@@ -1300,6 +1336,8 @@ pub(super) fn resolve_runtime_path(
     const REGEX: &str = "libkarac_runtime_regex.a";
     #[cfg(not(windows))]
     const ARROW: &str = "libkarac_runtime_arrow.a";
+    #[cfg(not(windows))]
+    const UNICODE: &str = "libkarac_runtime_unicode.a";
 
     // Pick the archive name within a directory. An opt-in superset archive
     // (GPU / regex / Arrow) is a distinct artifact: only it resolves the symbol
@@ -1311,6 +1349,7 @@ pub(super) fn resolve_runtime_path(
             SpecialArchive::Gpu => Some(GPU),
             SpecialArchive::Regex => Some(REGEX),
             SpecialArchive::Arrow => Some(ARROW),
+            SpecialArchive::Unicode => Some(UNICODE),
             SpecialArchive::None => None,
         };
         if let Some(name) = special_name {
@@ -1393,6 +1432,20 @@ pub(super) fn resolve_runtime_path(
              canonical name is the non-arrow archive again. Or set KARAC_RUNTIME to an explicit \
              arrow archive path. The arrow archive carries the arrow-rs IPC crates, so it is \
              opt-in — only programs that serialize Arrow link it."
+                .to_string(),
+        );
+    }
+    if special == SpecialArchive::Unicode {
+        return Err(
+            "this program calls `String.normalize(form)`, which needs the Unicode runtime \
+             archive `libkarac_runtime_unicode.a` — not found. Build it with `cargo rustc -p \
+             karac-runtime --release --features unicode --crate-type staticlib` then `cp \
+             target/release/libkarac_runtime.a target/release/libkarac_runtime_unicode.a` (the \
+             `--features unicode` build reuses the canonical archive name; the rename keeps it \
+             distinct from the non-Unicode archives). Re-run the plain full build afterward so \
+             the canonical name is the non-Unicode archive again. Or set KARAC_RUNTIME to an \
+             explicit unicode archive path. The Unicode archive carries the ICU normalization \
+             tables, so it is opt-in — only programs that normalize link them."
                 .to_string(),
         );
     }
