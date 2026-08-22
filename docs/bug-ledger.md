@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 135 | 1 |
 | codegen-gap | 128 | 1 |
 | diagnostics | 97 | 2 |
-| false-positive | 94 | 1 |
+| false-positive | 94 | 0 |
 | perf | 83 | 0 |
 | crash | 55 | 0 |
 | other | 55 | 0 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 992 | 4 |
-| typecheck | 242 | 3 |
+| typecheck | 242 | 2 |
 | interp | 172 | 0 |
 | other | 63 | 0 |
 | ownership | 62 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1489 surfaced · 10 open · 1457 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1489 surfaced · 9 open · 1458 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (10)
+### Open (9)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -136,7 +136,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1489 surfaced
 | B-2026-08-22-7 | 2026-08-22 | codegen | low | `f16_software_emulated` IS THE ONE STARTER-SET LINT WHOSE TRIGGER DEPENDS ON THE TARGET, and the target's feature baseline is only reachable behind `#[cfg(feature = "llvm")]` -- so wiring it is a PLACEMENT decision, not the mechanical job the other six were | roadmap.md |
 | B-2026-08-22-8 | 2026-08-22 | cli | low | `implicit_clone` HAS NO TRIGGER IN THE SPEC AND CANNOT BE DE-REGISTERED WITHOUT A design.md EDIT -- the one starter-set lint whose resolution is a SPEC decision, not a compiler change | roadmap.md |
 | B-2026-08-22-14 | 2026-08-22 | codegen+effect | low | AN EXISTENTIAL DECLARING POLYMORPHIC EFFECT VARIABLES (`-> impl Emit with F`) IS THE ONE RETURN-POSITION `impl Trait` SHAPE STILL WITHOUT A BUILD -- deliberately excluded from B-2026-08-22-12's witness substitution, because the effect checker reads the variable off the very node the rewrite would erase | codegen |
-| B-2026-08-22-15 | 2026-08-22 | typecheck | medium | A `-> Self` TRAIT METHOD CALLED ON AN EXISTENTIAL RECEIVER LOSES THE TRAIT -- `make().bumped()` types as a BARE type parameter named after the trait, so the builder shape is rejected with two diagnostics that point at the caller's correct code and name a spelling the source never contains | typecheck |
 | B-2026-08-22-16 | 2026-08-22 | typecheck | medium | `Channel.bounded(cap)` DOES NOT EXIST IN ANY SPELLING -- design.md documents it with a `requires cap > 0` contract, `bounded_channel.kara` exists in the stdlib, and nothing routes the name to it | typecheck |
 | B-2026-08-22-18 | 2026-08-22 | codegen | high | MOVING A HEAP ELEMENT OUT OF AN OWNED `Array[T, N]` PARAMETER DOUBLE-FREES IT -- `fn take_first(a: Array[String, 2]) -> String { return a[0]; }` frees the returned buffer at the callee's exit AND again in the caller; `karac check` is clean, the program prints the right answer, and only ASAN sees it | roadmap.md |
 | B-2026-08-22-20 | 2026-08-22 | effect | medium | THE BUILTIN CHANNEL METHODS CARRY NO `sends`/`receives` EFFECT -- `Sender.send` is seeded `allocates(Heap)` and nothing else, and the ONLY `EffectVerbKind::Sends` construction in the whole compiler is the `sends(Network)` block, so a real `tx.send(v)` is invisible to conflict analysis, `karac explain` and `query effects`; design.md:6070 declares it `with sends(tx) allocates(Heap)` | roadmap.md |
@@ -158,9 +157,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1489 surfaced
 
 </details>
 
-### Fixed (1457)
+### Fixed (1458)
 
-<details><summary>1457 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1458 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -15553,6 +15552,62 @@ Pinned by `a_static_assoc_call_does_not_borrow_a_same_named_global_where_clause`
 in `tests/typechecker.rs`, which asserts both halves: the colliding generic
 case is ACCEPTED, and the clause-less case is ACCEPTED. Non-vacuity confirmed
 by reverting the fix -- it fails. |
+| B-2026-08-22-15 | typecheck | medium | A `-> Self` TRAIT METHOD CALLED ON AN EXISTENTIAL RECEIVER LOSES THE TRAIT -- `make().bumped()` types as a BARE type parameter named after the trait,… | FIXED by c4603ac.
+
+ONE SUBSTITUTION, in `dispatch_existential_receiver_method`. The row's reading
+was correct and is worth restating as the fix's justification:
+`dispatch_trait_assoc_fn` substitutes `Self -> TypeParam(<target>)`, which is
+right for a type PARAMETER receiver (the param carries its bounds) and wrong
+for an existential, where the result is a BARE `TypeParam("Counter")` with no
+bounds attached. Putting the receiver existential back in is the exact INVERSE
+of that substitution, so it covers nested positions (`-> Vec[Self]`) as well as
+the bare case.
+
+IDENTITY MATTERS, which is why the dispatcher now takes the RECEIVER WHOLE
+rather than the three destructured fields it had before (`trait_name` /
+`tait_alias` / `assoc_bindings`). `origin` and `trait_args` are part of an
+existential's identity; a rebuild from the parts would be an equal-LOOKING type,
+not the same one, and the result has to stay the same opaque existential. The
+three fields are read back out inside. Collapsing the signature also kept the
+parameter count under clippy's 7-argument limit, which the naive "add one more
+param" shape had broken.
+
+OPACITY IS ASSERTED SEPARATELY, because the obvious failure mode of this fix is
+trading a false positive for a false negative: `make(1).bumped().secret()` —
+a method the concrete `Ctr` has and the trait does not — is still rejected.
+Recovering `Self` restores the TRAIT SURFACE, not the concrete type.
+
+ONE GUARD, KEPT ON A READING RATHER THAN A REPRO, and labelled that way in the
+code so nobody mistakes it for tested behaviour. An unresolved `Self.Assoc`
+projection is left untouched: `substitute_type_params` rewrites an
+`AssocProjection`'s receiver whenever the substitution map has an entry for it,
+and for a receiver that is not `Named`/`Shared`/`Rc`/`Arc` it falls to
+`other => (type_display(other), vec![])` — so the projection's `param` would
+become the DISPLAY STRING of an existential (`"impl Src"`) and then fail the
+bare-name lookup in `resolve_assoc_projections`, reading worse than the `"Src"`
+it replaced. Measured: disabling the guard changes nothing on any probe I could
+construct, because a return-position `impl Trait` has exactly ONE witness by
+construction and its projections therefore always resolve. It is kept for the
+shapes that lack that property (a TAIT whose witness inference is deferred);
+deleting it should be paired with a case that proves it dead.
+
+THE ROW'S "SHOULD ALSO RUN" PREDICTION HELD, and was asserted rather than
+assumed: B-2026-08-22-12's substitution already gives codegen a concrete
+witness, so no backend change was needed. Verified on interpreter, JIT, AOT and
+`KARAC_AUTO_PAR=0`, single-step (`2`) and three-deep chained (`4`), all four
+agreeing.
+
+BLAST RADIUS: full default suite 0 failures, `--features llvm` suite 0
+failures, 917 kata files typecheck clean. This fix only LOOSENS acceptance (it
+removes a false positive), so the risk was a leak rather than a rejection —
+which the opacity test is what covers.
+
+TESTS: `a_self_returning_trait_method_on_an_existential_keeps_the_trait` (the
+row's repro, the chained form, and the concrete spelling as control) and
+`a_self_returning_existential_stays_opaque` in tests/typechecker.rs; the
+`self_returning_existential` E2E module in tests/codegen.rs pins that it runs.
+Non-vacuity: reverting the fix fails both E2E tests and the main typechecker
+test, and the opacity control passes either way. |
 | B-2026-08-22-17 | typecheck | high | THE BLESSED EXPLICIT SPELLING DID NOT WORK FOR BUILTIN TYPES -- `Vec[i64].new()` / `Map[K, V].new()` / `Channel[T].new()` all reported "no method 'ne… | FIXED by 6f02f211. Two arms, one in each backend, both delegating rather than
 re-implementing.
 
