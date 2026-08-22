@@ -29077,3 +29077,139 @@ fn a_pinned_fx_hasher_stops_the_order_moving_while_the_default_keeps_moving() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// B-2026-08-22-6 — a USER-written hasher, end to end, in SUBPROCESSES,
+/// because the property that proves it ran is a cross-process one.
+///
+/// design.md § `Hash` and `Hasher`, "User-extensible hashers": `Hasher` is an
+/// ordinary trait, implemented "for FxHash-style speed … or for
+/// test-deterministic hashers". A stateless user hasher has no per-process key,
+/// so its order must be FIXED across runs while the default map beside it keeps
+/// moving — and it must not be INSERTION order, which is what a hasher that
+/// never ran (or degraded to a constant digest) would leave behind. Those two
+/// together are what no single-process assertion can establish.
+///
+/// Both surfaces, because they reach the user's `build` / `write` / `finish`
+/// through entirely different machinery: codegen emits three direct calls into
+/// the impl's LLVM symbols, and the interpreter drives the same three methods
+/// from a sub-interpreter in `interpreter::user_hasher`.
+#[test]
+fn a_user_written_hasher_fixes_the_order_across_processes_on_both_surfaces() {
+    let dir = std::env::temp_dir().join(format!("kara_userhasher_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let src = dir.join("userhasher.kara");
+    let inserted = "zulu alpha mike bravo yankee charlie xray delta whiskey echo";
+    std::fs::write(
+        &src,
+        "struct Fnv { h: u64 }\n\
+         impl Hasher for Fnv {\n\
+             fn write(mut ref self, bytes: ref Slice[u8]) {\n\
+                 for b in bytes { self.h = (self.h ^ (b as u64)).wrapping_mul(1099511628211u64); }\n\
+             }\n\
+             fn finish(ref self) -> u64 { self.h }\n\
+         }\n\
+         struct FnvBuild { }\n\
+         impl BuildHasher for FnvBuild {\n\
+             type Hasher = Fnv;\n\
+             fn build(ref self) -> Fnv { Fnv { h: 14695981039346656037u64 } }\n\
+         }\n\
+         fn main() {\n\
+             let mut u: Map[String, i64, FnvBuild] = Map.new();\n\
+             let mut sip: Map[String, i64] = Map.new();\n\
+             let names = [\"zulu\", \"alpha\", \"mike\", \"bravo\", \"yankee\",\n\
+                          \"charlie\", \"xray\", \"delta\", \"whiskey\", \"echo\"];\n\
+             for n in names {\n\
+                 u.insert(n.to_string(), 1);\n\
+                 sip.insert(n.to_string(), 1);\n\
+             }\n\
+             let mut a = \"\";\n\
+             for k in u.keys() { a = a + k + \" \"; }\n\
+             println(a);\n\
+             let mut b = \"\";\n\
+             for k in sip.keys() { b = b + k + \" \"; }\n\
+             println(b);\n\
+         }",
+    )
+    .unwrap();
+
+    let split = |stdout: String| -> (String, String) {
+        let mut it = stdout.lines();
+        let u = it.next().unwrap_or_default().trim().to_string();
+        let sip = it.next().unwrap_or_default().trim().to_string();
+        (u, sip)
+    };
+
+    let check = |lines: Vec<(String, String)>, surface: &str| {
+        assert_eq!(
+            lines[0].0.split_whitespace().count(),
+            10,
+            "{surface}: the user-hashed map lost keys — {:?}",
+            lines[0].0
+        );
+        assert!(
+            lines.iter().all(|(u, _)| *u == lines[0].0),
+            "{surface}: the user-hashed map's order moved between processes; a \
+             stateless user hasher has no per-process key to move with — \
+             samples {lines:?}"
+        );
+        assert_ne!(
+            lines[0].0, inserted,
+            "{surface}: the user-hashed map walked in INSERTION order, which is \
+             what a hasher that never ran — or one whose digest collapsed to a \
+             constant, leaving every key in one bucket — leaves behind"
+        );
+        assert!(
+            lines.iter().any(|(_, sip)| *sip != lines[0].1),
+            "{surface}: the DEFAULT map's order did not vary across 6 processes, \
+             so the stability of the user-hashed one proves nothing — samples \
+             {lines:?}"
+        );
+    };
+
+    let interp: Vec<(String, String)> = (0..6)
+        .map(|_| {
+            let out = Command::new(env!("CARGO_BIN_EXE_karac"))
+                .arg("run")
+                .arg("--interp")
+                .arg(&src)
+                // An inherited pin would freeze the CONTROL too and make the
+                // "default varies" half vacuously false.
+                .env_remove("KARAC_HASH_SEED")
+                .output()
+                .expect("karac run --interp");
+            split(String::from_utf8_lossy(&out.stdout).into_owned())
+        })
+        .collect();
+    check(interp, "karac run --interp");
+
+    // Same soft-skip contract as the sibling test above: no runtime archive
+    // means no binary, and the compiled assertions would be vacuous.
+    let build = Command::new(env!("CARGO_BIN_EXE_karac"))
+        .arg("build")
+        .arg(&src)
+        .current_dir(&dir)
+        .output()
+        .expect("karac build");
+    let exe = dir.join("userhasher");
+    if !build.status.success() || !exe.exists() {
+        eprintln!(
+            "skipping the compiled half: karac build did not produce a binary \
+             (build the runtime archives per CLAUDE.md to exercise it)\n{}",
+            String::from_utf8_lossy(&build.stderr)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        return;
+    }
+    let aot: Vec<(String, String)> = (0..6)
+        .map(|_| {
+            let out = Command::new(&exe)
+                .env_remove("KARAC_HASH_SEED")
+                .output()
+                .expect("run the built binary");
+            split(String::from_utf8_lossy(&out.stdout).into_owned())
+        })
+        .collect();
+    check(aot, "karac build");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

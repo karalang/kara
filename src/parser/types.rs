@@ -546,17 +546,32 @@ impl super::Parser {
         })
     }
 
-    /// Remove a `Map[K, V, H]` / `Set[T, H]` trailing hasher selector from the
-    /// path's generic arguments and record it on the parser (B-2026-08-21-6).
+    /// Remove a `Map[K, V, H]` / `Set[T, H]` trailing hasher argument from the
+    /// path's generic arguments and record it on the parser (B-2026-08-21-6,
+    /// B-2026-08-22-6).
     ///
     /// See [`crate::ast::Program::container_hashers`] for why the argument is
     /// deleted here rather than left in the tree. In one sentence: every later
     /// phase recognizes a `Map` by "head name plus exactly two arguments", so
     /// an extra one stops the type from being a `Map` to any of them.
     ///
-    /// Removes ONLY a recognized selector in exactly the trailing position, so
-    /// `Map[K, V, i64]`, `Map[K, V, H, X]` and `SortedMap[K, V, H]` all keep
-    /// their arguments and reach the typechecker, which reports them.
+    /// WHY THIS TAKES AN UNRECOGNIZED NAME TOO. Before user hashers, only the
+    /// two compiler-known selectors were removed and everything else fell
+    /// through to `take_hasher_type_arg`, whose whitelist reported it. A user
+    /// hasher is any type that `impl BuildHasher for`, and the parser has no
+    /// impl table — it runs before resolution — so it cannot tell
+    /// `MyBuildHasher` from `i64`. It therefore removes ANY single trailing
+    /// path argument and records the name; validation moves one phase later to
+    /// `TypeChecker::check_recorded_container_hasher`, which does have the
+    /// impl table
+    /// and reports `Map[K, V, i64]` there instead. The alternative — leaving
+    /// unknown names in place — would make a legitimate `Map[K, V,
+    /// MyBuildHasher]` stop being a `Map` to every later phase, which is the
+    /// exact failure this deletion exists to avoid.
+    ///
+    /// Still removes ONLY a bare path in exactly the trailing position, so
+    /// `Map[K, V, H, X]`, `Map[K, V, Vec[u8]]` and `SortedMap[K, V, H]` all keep
+    /// their arguments and reach `take_hasher_type_arg`, which reports them.
     fn take_container_hasher_arg(
         &mut self,
         segments: &[String],
@@ -588,11 +603,17 @@ impl super::Parser {
         let TypeKind::Path(p) = &te.kind else {
             return;
         };
+        if p.generic_args.is_some() {
+            return;
+        }
         let kind = match p.segments.last().map(String::as_str) {
-            _ if p.generic_args.is_some() => return,
             Some("FxBuildHasher") => crate::hasher_kind::HasherKind::Fx,
             Some("SipHash13BuildHasher") => crate::hasher_kind::HasherKind::SipHash13,
-            _ => return,
+            // Anything else is a candidate user hasher. Keyed on the LAST
+            // segment so a qualified `my.hashers.MyBuildHasher` records the
+            // same name the impl table is keyed by.
+            Some(name) => crate::hasher_kind::HasherKind::User(name.to_string()),
+            None => return,
         };
         args.truncate(base);
         self.container_hashers

@@ -43679,6 +43679,147 @@ fn an_ordered_container_rejects_a_hasher_argument() {
     }
 }
 
+// ── B-2026-08-22-6: a USER-written hasher in the same slot ───────────
+//
+// design.md § `Hash` and `Hasher`, "User-extensible hashers": `Hasher` and
+// `BuildHasher` are ordinary traits, so the trailing slot accepts any type that
+// implements `BuildHasher` and not only the two compiler-known selectors. These
+// pin what the typechecker owns: the shape it must ACCEPT, and the shapes it
+// must refuse because accepting them would degrade silently at run time rather
+// than fail.
+
+/// The `Hasher` / `BuildHasher` pair the accepting tests build on. FNV-1a with
+/// `wrapping_mul`, because overflowing is a hasher's whole job.
+const USER_HASHER_PRELUDE: &str = "\
+struct Fnv { h: u64 }\n\
+impl Hasher for Fnv {\n\
+    fn write(mut ref self, bytes: ref Slice[u8]) {\n\
+        for b in bytes { self.h = (self.h ^ (b as u64)).wrapping_mul(1099511628211u64); }\n\
+    }\n\
+    fn finish(ref self) -> u64 { self.h }\n\
+}\n\
+struct FnvBuild { }\n\
+impl BuildHasher for FnvBuild {\n\
+    type Hasher = Fnv;\n\
+    fn build(ref self) -> Fnv { Fnv { h: 14695981039346656037u64 } }\n\
+}\n";
+
+#[test]
+fn a_user_written_build_hasher_is_accepted_on_map_and_set() {
+    typecheck_ok(&format!(
+        "{USER_HASHER_PRELUDE}\
+         fn main() {{\n\
+             let mut a: Map[String, i64, FnvBuild] = Map.new();\n\
+             a.insert(\"x\", 1);\n\
+             let mut b: Set[i64, FnvBuild] = Set.new();\n\
+             b.insert(7);\n\
+             println(a.len() + b.len());\n\
+         }}"
+    ));
+}
+
+#[test]
+fn a_user_hashed_map_is_still_the_same_type_as_a_plain_one() {
+    // Same rule as the two selectors: the hasher is a CONSTRUCTION-time
+    // property carried by the value, not part of its shape. If it forked the
+    // type, every library taking a `Map[K, V]` would stop accepting one.
+    typecheck_ok(&format!(
+        "{USER_HASHER_PRELUDE}\
+         fn take(m: Map[String, i64]) -> i64 {{ m.len() }}\n\
+         fn main() {{\n\
+             let mut a: Map[String, i64, FnvBuild] = Map.new();\n\
+             a.insert(\"x\", 1);\n\
+             println(take(a));\n\
+         }}"
+    ));
+}
+
+#[test]
+fn a_builder_with_fields_is_refused() {
+    // The container names a TYPE, so both backends construct the builder
+    // themselves and neither has anywhere to get a field value from. Accepting
+    // it would run the hasher against whatever the uninitialized slot held.
+    let errs = typecheck_errors(
+        "struct Fnv { h: u64 }\n\
+         impl Hasher for Fnv {\n\
+             fn write(mut ref self, bytes: ref Slice[u8]) { self.h = self.h + 1u64; }\n\
+             fn finish(ref self) -> u64 { self.h }\n\
+         }\n\
+         struct Seeded { seed: u64 }\n\
+         impl BuildHasher for Seeded {\n\
+             type Hasher = Fnv;\n\
+             fn build(ref self) -> Fnv { Fnv { h: self.seed } }\n\
+         }\n\
+         fn main() {\n\
+             let m: Map[String, i64, Seeded] = Map.new();\n\
+             println(m.len());\n\
+         }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("must be a struct with NO fields")),
+        "expected the stateful-builder refusal, got {errs:?}"
+    );
+}
+
+#[test]
+fn a_builder_whose_state_type_is_not_a_hasher_is_refused() {
+    // `type Hasher: Hasher` — the bound has to hold, because both backends call
+    // `write` / `finish` on what `build()` returns. Unchecked, this is the worst
+    // available outcome: codegen finds no symbol and degrades to a constant
+    // digest while the interpreter raises a missing-method error, so the two
+    // backends disagree on a program `karac check` accepted.
+    let errs = typecheck_errors(
+        "struct NotAHasher { h: u64 }\n\
+         struct BadBuild { }\n\
+         impl BuildHasher for BadBuild {\n\
+             type Hasher = NotAHasher;\n\
+             fn build(ref self) -> NotAHasher { NotAHasher { h: 0u64 } }\n\
+         }\n\
+         fn main() {\n\
+             let m: Map[String, i64, BadBuild] = Map.new();\n\
+             println(m.len());\n\
+         }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("does not implement 'Hasher'")),
+        "expected the unbound-state-type refusal, got {errs:?}"
+    );
+}
+
+#[test]
+fn an_unimplemented_hasher_name_still_names_the_two_selectors() {
+    // The parser now strips ANY bare trailing path, so `i64` and a misspelled
+    // selector reach the typechecker through the SAME channel a real user hasher
+    // does. The diagnostic must still name the two built-ins and say what
+    // writing your own would take — and fire ONCE, since one annotation is
+    // lowered more than once.
+    for bad in ["i64", "Fxbuildhasher"] {
+        let errs = typecheck_errors(&format!(
+            "fn main() {{\n\
+                 let m: Map[String, i64, {bad}] = Map.new();\n\
+                 println(m.len());\n\
+             }}"
+        ));
+        let hits: Vec<_> = errs
+            .iter()
+            .filter(|e| e.message.contains("does not implement 'BuildHasher'"))
+            .collect();
+        assert_eq!(
+            hits.len(),
+            1,
+            "expected exactly one hasher-slot diagnostic for {bad}, got {errs:?}"
+        );
+        assert!(
+            hits[0].message.contains("FxBuildHasher")
+                && hits[0].message.contains("impl BuildHasher for"),
+            "the diagnostic must name the built-ins and the way out, got {:?}",
+            hits[0]
+        );
+    }
+}
+
 // ── B-2026-08-22-3: associated-type-equality bounds are discharged ──
 //
 // `where I.Item = i64` used to be validated at the DECLARATION and then

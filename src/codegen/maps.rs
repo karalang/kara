@@ -91,12 +91,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // resulting function pointer is stored in the control block, which is
         // what makes this a construction-time decision: every later `insert` /
         // `get` on the handle reaches the same hash without re-deciding.
-        let saved_hasher = self.hash_hasher;
+        let saved_hasher = self.hash_hasher.clone();
         self.hash_hasher = self
             .mapset
             .map_hashers
             .get(var_name)
-            .copied()
+            .cloned()
             .unwrap_or_default();
         let (hash_fn, eq_fn) = if let Some(key_te) = key_te {
             (
@@ -147,7 +147,7 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         self.container_hashers
             .get(&crate::resolver::SpanKey::from_span(&p.span))
-            .copied()
+            .cloned()
             .unwrap_or_default()
     }
 
@@ -207,7 +207,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // The declared hasher comes straight off this `TypeExpr` — a struct
         // field's or a let annotation's `Map[K, V, H]` / `Set[T, H]`. Same
         // save/restore contract as the name-keyed sibling above.
-        let saved_hasher = self.hash_hasher;
+        let saved_hasher = self.hash_hasher.clone();
         self.hash_hasher = self.container_hasher_for(te);
         let (hash_fn, eq_fn) = if let Some(kte) = key_te {
             (

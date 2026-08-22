@@ -900,10 +900,15 @@ pub struct SharedStructInner {
 /// hasher differs, so a key that is `Eq` to another still hashes equal under
 /// either — the consistency contract holds per-container, which is the only
 /// place it has to.
-pub(crate) fn hash_value_with(kind: HasherKind, v: &Value) -> u64 {
+pub(crate) fn hash_value_with(kind: &HasherKind, v: &Value) -> u64 {
     match kind {
         HasherKind::SipHash13 => hash_value_generic::<karac_hash::KaraHasher>(v),
         HasherKind::Fx => hash_value_generic::<karac_hash::FxHasher>(v),
+        // A user hasher is not a leaf permutation at all — it is user code, and
+        // it consumes BYTES rather than a `Value` tree. See
+        // `interpreter::user_hasher` for the flattening and for how an
+        // interpreter is found this deep inside a container (B-2026-08-22-6).
+        HasherKind::User(builder) => super::user_hasher::hash_value(builder, v),
     }
 }
 
@@ -1019,7 +1024,7 @@ impl Clone for MapData {
     /// The clone keeps the ORIGINAL's hasher: a copy of an `FxBuildHasher` map
     /// is still one, so its iteration order is the same as its source's.
     fn clone(&self) -> Self {
-        Self::from_entries_with_hasher(self.hasher, self.entries.clone())
+        Self::from_entries_with_hasher(self.hasher.clone(), self.entries.clone())
     }
 }
 
@@ -1035,7 +1040,10 @@ impl MapData {
     pub fn from_entries_with_hasher(hasher: HasherKind, entries: Vec<(Value, Value)>) -> Self {
         let mut index: HashMap<u64, Vec<usize>> = HashMap::with_capacity(entries.len());
         for (i, (k, _)) in entries.iter().enumerate() {
-            index.entry(hash_value_with(hasher, k)).or_default().push(i);
+            index
+                .entry(hash_value_with(&hasher, k))
+                .or_default()
+                .push(i);
         }
         Self {
             entries,
@@ -1046,7 +1054,7 @@ impl MapData {
 
     /// The hasher this map was built with.
     pub fn hasher(&self) -> HasherKind {
-        self.hasher
+        self.hasher.clone()
     }
 
     /// Switch the hasher and rebuild the index under it. Called once, on a
@@ -1062,7 +1070,7 @@ impl MapData {
     }
 
     fn hash_key(&self, key: &Value) -> u64 {
-        hash_value_with(self.hasher, key)
+        hash_value_with(&self.hasher, key)
     }
 
     pub fn entries(&self) -> &[(Value, Value)] {
@@ -1187,11 +1195,11 @@ impl MapData {
     /// Rebuild `index` from `entries`. Required after anything that moves an
     /// entry to a different position.
     fn reindex(&mut self) {
-        let hasher = self.hasher;
+        let hasher = self.hasher.clone();
         self.index.clear();
         for (i, (k, _)) in self.entries.iter().enumerate() {
             self.index
-                .entry(hash_value_with(hasher, k))
+                .entry(hash_value_with(&hasher, k))
                 .or_default()
                 .push(i);
         }
@@ -1213,7 +1221,7 @@ pub struct SetData {
 
 impl Clone for SetData {
     fn clone(&self) -> Self {
-        Self::from_items_with_hasher(self.hasher, self.items.clone())
+        Self::from_items_with_hasher(self.hasher.clone(), self.items.clone())
     }
 }
 
@@ -1230,7 +1238,7 @@ impl SetData {
         let mut index: HashMap<u64, Vec<usize>> = HashMap::with_capacity(items.len());
         for (i, item) in items.iter().enumerate() {
             index
-                .entry(hash_value_with(hasher, item))
+                .entry(hash_value_with(&hasher, item))
                 .or_default()
                 .push(i);
         }
@@ -1243,7 +1251,7 @@ impl SetData {
 
     /// The hasher this set was built with.
     pub fn hasher(&self) -> HasherKind {
-        self.hasher
+        self.hasher.clone()
     }
 
     /// The items in OBSERVABLE order — [`MapData::iter_observable`]'s twin,
@@ -1265,7 +1273,7 @@ impl SetData {
     }
 
     fn hash_item(&self, item: &Value) -> u64 {
-        hash_value_with(self.hasher, item)
+        hash_value_with(&self.hasher, item)
     }
 
     /// Build from items that may contain DUPLICATES, keeping the first
@@ -1343,11 +1351,11 @@ impl SetData {
     }
 
     fn reindex(&mut self) {
-        let hasher = self.hasher;
+        let hasher = self.hasher.clone();
         self.index.clear();
         for (i, item) in self.items.iter().enumerate() {
             self.index
-                .entry(hash_value_with(hasher, item))
+                .entry(hash_value_with(&hasher, item))
                 .or_default()
                 .push(i);
         }
@@ -2512,7 +2520,7 @@ mod map_data_tests {
     /// would miss lookups exactly as badly as the default one would.
     #[test]
     fn hash_value_agrees_with_equality_under_every_hasher() {
-        for kind in [HasherKind::SipHash13, HasherKind::Fx] {
+        for kind in &[HasherKind::SipHash13, HasherKind::Fx] {
             for (a, b) in equal_pairs() {
                 assert!(
                     a == b,

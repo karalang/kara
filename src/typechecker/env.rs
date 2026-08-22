@@ -277,6 +277,9 @@ pub struct ImplAssocTypeEntry {
 /// Use-site rules (`unsafe { }` for field reads, etc.) are not yet
 /// wired (see phase-5 tracker line 549 follow-ups) — this entry is
 /// the substrate they will read.
+///
+/// `Clone` only so `TypeCheckResult` can derive it — see that type.
+#[derive(Clone)]
 pub struct UnionInfo {
     /// Field name → type → is_pub. Mirrors `StructInfo.fields` shape
     /// so per-field codegen and unsafe-rule passes can iterate in a

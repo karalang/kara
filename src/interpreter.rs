@@ -55,6 +55,7 @@ mod pattern_match;
 mod reflection;
 mod resource_method;
 mod type_order;
+pub(crate) mod user_hasher;
 mod value;
 
 use exec::{deep_clone_value, option_value_from, ControlFlow, Env};
@@ -750,6 +751,11 @@ impl<'a> Interpreter<'a> {
         // — including each par-branch interpreter constructed on its own thread
         // — funnels through `new`, so this is the universal chokepoint.
         type_order::install(typecheck_result);
+        // B-2026-08-22-6 — same chokepoint, same reason: a user-written hasher
+        // is executed from `MapData` / `SetData`, which have no interpreter, so
+        // `user_hasher` keeps its own and needs the program to build it from.
+        // No-op unless this program names a user hasher.
+        user_hasher::install(program, typecheck_result);
         Interpreter {
             program,
             impl_dispatch_names: crate::impl_dispatch::collect_impl_dispatch_names(program),

@@ -7164,7 +7164,34 @@ impl<'ctx> super::Codegen<'ctx> {
                     // `{ ptr, i64 }` header from an Array/Vec/slice arg.
                     if let Some(Some(elem_ty)) = slice_elems.get(pidx).cloned() {
                         if let Some(slice_val) = self.coerce_to_slice(&a.value, elem_ty)? {
-                            compiled_args.push(slice_val.into());
+                            // A `ref Slice[T]` slot takes a POINTER to a header,
+                            // and `coerce_to_slice` produces the header as a
+                            // VALUE — pushing it straight into a `ptr` parameter
+                            // is a module-verification failure. This is
+                            // B-2026-08-21-24's fix, which landed on the
+                            // free-function path (`call_dispatch.rs`) and never
+                            // on this one, exactly as B-2026-06-19-1 and
+                            // B-2026-08-05-41 did before it:
+                            //
+                            //   trait Sink {
+                            //       fn write(mut ref self, b: ref Slice[u8]);
+                            //       fn put(mut ref self, n: u8) { self.write([n]) }
+                            //   }
+                            //
+                            // `karac check` accepts it and `--interp` runs it;
+                            // `karac build` failed with "Call parameter type does
+                            // not match function signature". Reached only by a
+                            // NON-place argument: the place arms above already
+                            // pass a pointer, and a literal owns no storage for
+                            // them to borrow. Found via design.md's own
+                            // `Hasher.write_u8` body (B-2026-08-22-6); the fix
+                            // is B-2026-08-22-26.
+                            let to_push = if is_ref {
+                                self.materialize_rvalue_for_ref_arg(slice_val, i)
+                            } else {
+                                slice_val
+                            };
+                            compiled_args.push(to_push.into());
                             continue;
                         }
                     }

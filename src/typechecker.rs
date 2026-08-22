@@ -1249,7 +1249,11 @@ pub struct ImplTraitCaptures {
 /// `karac test` JIT path uses it to lower a no-fixture synth `main` (which
 /// needs no typecheck side-tables) without running the typechecker at all;
 /// see `test_jit_dispatch::build_test_main_ir`'s `skip_typecheck` arm.
-#[derive(Default)]
+/// `Clone` is load-bearing for B-2026-08-22-6: `interpreter::user_hasher` leaks
+/// one clone of the program and its side tables so a user-written hasher can be
+/// executed from inside `MapData`, which has no interpreter and no way to reach
+/// the live one. See that module for why a clone is the safe shape.
+#[derive(Default, Clone)]
 pub struct TypeCheckResult {
     pub errors: Vec<TypeError>,
     /// Non-fatal diagnostics: typecheck-time signals that don't block
@@ -2072,6 +2076,12 @@ pub struct TypeChecker<'a> {
     /// not a unique identity, computed once from the program AST via the same
     /// shared helper codegen and the interpreter use. Keyed by impl-target span.
     pub(super) impl_dispatch_names: crate::impl_dispatch::ImplDispatchNames,
+    /// Container-path spans whose recorded USER hasher has already been
+    /// validated (B-2026-08-22-6). One annotation can be lowered more than once
+    /// — a `let`'s declared type is lowered again when inference re-visits the
+    /// slot — and the "does not implement `BuildHasher`" error is attached to
+    /// the path span, so without this the same misspelling reports twice.
+    pub(super) checked_container_hashers: FxHashSet<SpanKey>,
     /// See [`TypeCheckResult::direct_iter_terminals`].
     pub(super) direct_iter_terminals: FxHashSet<SpanKey>,
     /// MethodCall span → receiver type-parameter name. See the matching field
@@ -2419,6 +2429,7 @@ impl<'a> TypeChecker<'a> {
             method_callee_types: FxHashMap::default(),
             method_impl_dispatch: FxHashMap::default(),
             impl_dispatch_names: crate::impl_dispatch::ImplDispatchNames::default(),
+            checked_container_hashers: FxHashSet::default(),
             direct_iter_terminals: FxHashSet::default(),
             method_typeparam_receiver: FxHashMap::default(),
             method_typeparam_trait_key: FxHashMap::default(),

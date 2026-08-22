@@ -443,6 +443,120 @@ impl<'a> super::TypeChecker<'a> {
             if args.is_empty() && Self::HASHER_SELECTORS.contains(&name.as_str()))
     }
 
+    /// True when `ty` is anything that may legally sit in a container's hasher
+    /// slot — one of the two builtin selectors, or a user type that
+    /// `impl BuildHasher for` (B-2026-08-22-6).
+    ///
+    /// Only reachable for an argument the PARSER left in place, which today
+    /// means the ordered-container arm below: a `Map` / `Set` hasher is already
+    /// gone by the time lowering runs, and is validated against the same impl
+    /// table by [`Self::check_recorded_container_hasher`].
+    pub(crate) fn is_hasher_argument(&self, ty: &Type) -> bool {
+        if Self::is_hasher_selector(ty) {
+            return true;
+        }
+        matches!(ty, Type::Named { name, args }
+            if args.is_empty() && self.env.has_impl("BuildHasher", name, &[]))
+    }
+
+    /// Report a `Map[K, V, H]` / `Set[T, H]` whose trailing argument names a
+    /// type that does not `impl BuildHasher` (B-2026-08-22-6).
+    ///
+    /// WHY THE CHECK IS HERE AND NOT IN THE PARSER. The parser has no impl
+    /// table, so it strips ANY bare trailing path and records the name (see
+    /// `Parser::take_container_hasher_arg`); `Map[K, V, i64]`, `Map[K, V,
+    /// Fxbuildhasher]` and a legitimate `Map[K, V, MyBuildHasher]` all arrive
+    /// here indistinguishable. This is the first phase that can tell them
+    /// apart, and it reads the impl table both backends will later dispatch
+    /// through, so an accepted spelling is one they can both actually run.
+    ///
+    /// Keyed off `path.span`, which is the same span the parser recorded under
+    /// — `PathExpr::span` covers the whole `Map[…]` write and is built once, in
+    /// `parse_path_type`, before the argument is removed.
+    fn check_recorded_container_hasher(&mut self, name: &str, path: &PathExpr) {
+        if name != "Map" && name != "Set" {
+            return;
+        }
+        let key = crate::resolver::SpanKey::from_span(&path.span);
+        let Some(crate::hasher_kind::HasherKind::User(builder)) =
+            self.program.container_hashers.get(&key).cloned()
+        else {
+            return;
+        };
+        if !self.checked_container_hashers.insert(key) {
+            return;
+        }
+        if !self.env.has_impl("BuildHasher", &builder, &[]) {
+            self.type_error(
+                format!(
+                    "the last type argument of '{name}' is the hasher, and '{builder}' cannot \
+                     be one: it does not implement 'BuildHasher'. Use 'SipHash13BuildHasher' \
+                     (the default: SipHash-1-3, keyed per process) or 'FxBuildHasher' (unkeyed \
+                     and floodable, but stable across runs), or write \
+                     `impl BuildHasher for {builder} {{ type Hasher = …; \
+                     fn build(ref self) -> … }}`"
+                ),
+                path.span,
+                TypeErrorKind::TypeMismatch,
+            );
+            return;
+        }
+
+        // The slot names a TYPE, not a value, so there is nowhere for a
+        // stateful builder's fields to come from: both backends construct the
+        // builder themselves before calling `build()`, and neither has a
+        // constructor argument to pass. A field-carrying builder would
+        // therefore be read as whatever its default construction happened to
+        // be, which is exactly the silent-wrong-answer this rejects. A seed
+        // belongs inside `build()`, where it can be read from wherever it
+        // actually lives.
+        if let Some(info) = self.env.structs.get(&builder) {
+            if !info.fields.is_empty() {
+                let field = info.fields[0].0.clone();
+                self.type_error(
+                    format!(
+                        "'{builder}' cannot be a hasher for '{name}': a 'BuildHasher' named in a \
+                         container's type must be a struct with NO fields, but '{builder}' has \
+                         '{field}'. The container names a TYPE, so there is no value to carry \
+                         per-table configuration — construct the state inside \
+                         `{builder}.build()` instead"
+                    ),
+                    path.span,
+                    TypeErrorKind::TypeMismatch,
+                );
+            }
+        }
+
+        // `trait BuildHasher { type Hasher: Hasher; … }` — and the bound has to
+        // hold, because both backends call `write` / `finish` on whatever
+        // `build()` returns. Checked HERE rather than left to the general
+        // associated-type-bound machinery, which does not discharge an
+        // `AssocTypeDecl` bound today (B-2026-08-22-28): without this, a state
+        // type with no `Hasher` impl type-checks, then degrades to a constant
+        // digest in codegen and to a missing-method error in the interpreter —
+        // the two-backend silent divergence this whole design exists to avoid.
+        let state = self
+            .env
+            .impl_assoc_types
+            .get(&(builder.clone(), "Hasher".to_string()))
+            .map(|e| e.ty.clone());
+        if let Some(Type::Named { name: state, args }) = state {
+            if args.is_empty() && !self.env.has_impl("Hasher", &state, &[]) {
+                self.type_error(
+                    format!(
+                        "'{builder}' cannot be a hasher: its `type Hasher = {state}` names a type \
+                         that does not implement 'Hasher', so there is no 'write' / 'finish' to \
+                         hash through. Add `impl Hasher for {state} {{ \
+                         fn write(mut ref self, bytes: ref Slice[u8]) {{ … }} \
+                         fn finish(ref self) -> u64 {{ … }} }}`"
+                    ),
+                    path.span,
+                    TypeErrorKind::TypeMismatch,
+                );
+            }
+        }
+    }
+
     /// Validate and STRIP the trailing hasher argument of `Map[K, V, H]` /
     /// `Set[T, H]` (B-2026-08-21-6).
     ///
@@ -461,7 +575,16 @@ impl<'a> super::TypeChecker<'a> {
     /// checked silently — extra arguments were dropped on the floor — which
     /// would have made this feature indistinguishable from a no-op for anyone
     /// who mistyped the hasher name.
+    ///
+    /// Since B-2026-08-22-6 the parser strips a bare trailing path from a `Map`
+    /// / `Set` whatever it names, so the `args.len() == base + 1` arms below are
+    /// reachable only for an argument that is NOT a bare path — a parameterized
+    /// `Map[K, V, Vec[u8]]`, a tuple, a function type. The plain-name cases
+    /// (including `Map[K, V, i64]` and every misspelling) are reported by
+    /// [`Self::check_recorded_container_hasher`], called first from here so the
+    /// two halves cannot both fire on one write.
     fn take_hasher_type_arg(&mut self, name: &str, args: Vec<Type>, path: &PathExpr) -> Vec<Type> {
+        self.check_recorded_container_hasher(name, path);
         let base = match name {
             "Map" => 2,
             "Set" => 1,
@@ -469,7 +592,7 @@ impl<'a> super::TypeChecker<'a> {
             // one is a misunderstanding worth reporting rather than ignoring.
             "SortedMap" | "SortedSet" => {
                 let base = if name == "SortedMap" { 2 } else { 1 };
-                if args.len() == base + 1 && Self::is_hasher_selector(&args[base]) {
+                if args.len() == base + 1 && self.is_hasher_argument(&args[base]) {
                     self.type_error(
                         format!(
                             "'{name}' is an ordered container and does not hash its keys, so \
@@ -512,14 +635,13 @@ impl<'a> super::TypeChecker<'a> {
             return args;
         }
 
-        if !Self::is_hasher_selector(&args[base]) {
+        if !self.is_hasher_argument(&args[base]) {
             self.type_error(
                 format!(
-                    "the last type argument of '{name}' is the hasher and must be one of \
-                     'SipHash13BuildHasher' (the default: SipHash-1-3, keyed per process) \
-                     or 'FxBuildHasher' (unkeyed and floodable, but stable across runs); \
-                     found '{}'. A user-written hasher is not supported yet — the \
-                     'BuildHasher' trait is not implemented",
+                    "the last type argument of '{name}' is the hasher and must be \
+                     'SipHash13BuildHasher' (the default: SipHash-1-3, keyed per process), \
+                     'FxBuildHasher' (unkeyed and floodable, but stable across runs), or a \
+                     type that implements 'BuildHasher'; found '{}'",
                     type_display(&args[base])
                 ),
                 path.span,

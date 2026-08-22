@@ -415,6 +415,13 @@ pub const PRELUDE_TRAITS: &[&str] = &[
     "Ord",
     // CR-202 slice 5e.
     "Hash",
+    // B-2026-08-22-6 — the two companion traits from design.md § `Hash` and
+    // `Hasher`. Prelude-visible for the same reason the two selectors are: a
+    // user hasher is named inline in a `Map[K, V, H]` annotation, so its
+    // `impl BuildHasher for …` / `impl Hasher for …` blocks would otherwise be
+    // the only part of the feature needing an import.
+    "Hasher",
+    "BuildHasher",
     "BitAnd",
     "BitOr",
     "BitXor",

@@ -73,12 +73,18 @@ impl<'ctx> super::Codegen<'ctx> {
     /// direct call per hash; the `karac_map_*` table was already calling its
     /// `hash_fn` through a function POINTER, so this adds a call frame, not a
     /// new indirection class.
+    ///
+    /// A USER hasher (B-2026-08-22-6) takes the other arm: it has no runtime
+    /// entry point, because its permutation is user code. See
+    /// [`Self::emit_user_hash_call`].
     pub(super) fn emit_hash_bytes_call(
         &mut self,
         data_ptr: PointerValue<'ctx>,
         byte_count: IntValue<'ctx>,
     ) -> IntValue<'ctx> {
-        let sym = self.hash_hasher.runtime_symbol();
+        let Some(sym) = self.hash_hasher.runtime_symbol() else {
+            return self.emit_user_hash_call(data_ptr, byte_count);
+        };
         let f = self
             .module
             .get_function(sym)
@@ -89,6 +95,152 @@ impl<'ctx> super::Codegen<'ctx> {
             .try_as_basic_value()
             .unwrap_basic()
             .into_int_value()
+    }
+
+    /// Emit `B.build()` → `S.write(bytes)` → `S.finish()` for a user hasher
+    /// (design.md § `Hash` and `Hasher`, "User-extensible hashers";
+    /// B-2026-08-22-6).
+    ///
+    /// Three direct calls into functions the impl-block pass already declared
+    /// under their `Type.method` symbols, wrapped around one stack slot for the
+    /// per-hash state and one for the `Slice[u8]` header. The map's calling
+    /// convention is untouched: `karac_map_*` still reaches this through the
+    /// `hash_fn` POINTER in its control block, exactly as it reaches the
+    /// builtin arm — the difference is entirely inside the synthesized
+    /// `hash_fn`'s body.
+    ///
+    /// A fresh state PER HASH is what `BuildHasher` means: `build()` is the
+    /// per-hash constructor and the builder is the per-table configuration. It
+    /// is also what makes the result a function of the key alone, which the
+    /// index depends on.
+    ///
+    /// Emits `0` if any of the three symbols is missing. That is unreachable
+    /// through a checked program — `check_recorded_container_hasher` rejects a
+    /// builder with no `BuildHasher` impl, and the trait's own conformance
+    /// check requires the methods — and `0` degrades to "every key in one
+    /// bucket", where `==` still decides, rather than to a miscompile.
+    fn emit_user_hash_call(
+        &mut self,
+        data_ptr: PointerValue<'ctx>,
+        byte_count: IntValue<'ctx>,
+    ) -> IntValue<'ctx> {
+        let i64_t = self.context.i64_type();
+        let Some(builder) = self.hash_hasher.user_builder().map(str::to_string) else {
+            return i64_t.const_zero();
+        };
+        let Some(state) = self.user_hasher_states.get(&builder).cloned() else {
+            return i64_t.const_zero();
+        };
+        let (Some(build_fn), Some(write_fn), Some(finish_fn)) = (
+            self.module.get_function(&format!("{builder}.build")),
+            self.module.get_function(&format!("{state}.write")),
+            self.module.get_function(&format!("{state}.finish")),
+        ) else {
+            return i64_t.const_zero();
+        };
+
+        // `build(ref self)` — the builder is a zero-field struct (the
+        // typechecker rejects any other shape, because a container names a TYPE
+        // and so has no value to carry fields), which is what makes an
+        // uninitialized slot a complete value of it: the callee reads nothing
+        // out of it. The slot still gets the builder's own LLVM type where one
+        // is registered, so the IR says what it means.
+        let builder_ty: BasicTypeEnum<'ctx> = self
+            .type_decls
+            .struct_types
+            .get(builder.as_str())
+            .map(|t| (*t).into())
+            .unwrap_or_else(|| self.context.i8_type().into());
+        let builder_slot = self
+            .builder
+            .build_alloca(builder_ty, "hasher.builder")
+            .unwrap();
+        let built = self
+            .builder
+            .build_call(build_fn, &[builder_slot.into()], "hasher.built")
+            .unwrap()
+            .try_as_basic_value()
+            .basic();
+        let Some(built) = built else {
+            return i64_t.const_zero();
+        };
+        let built_ty: BasicTypeEnum<'ctx> = built.get_type();
+        let state_slot = self.builder.build_alloca(built_ty, "hasher").unwrap();
+        self.builder.build_store(state_slot, built).unwrap();
+
+        // `write(mut ref self, bytes: ref Slice[u8])` — the slice header is
+        // `{ ptr data, i64 len }` (`slice_struct_type`). Whether the parameter
+        // arrives as that struct by value or as a pointer to it is a property
+        // of how the signature lowered, so read it off the declared type rather
+        // than assuming: getting it wrong is a verifier failure, not a bug that
+        // waits for a particular key type.
+        let slice_ty = self.slice_struct_type();
+        let slice_slot = self.builder.build_alloca(slice_ty, "hasher.bytes").unwrap();
+        let data_gep = self
+            .builder
+            .build_struct_gep(slice_ty, slice_slot, 0, "hasher.bytes.ptr")
+            .unwrap();
+        self.builder.build_store(data_gep, data_ptr).unwrap();
+        let len_gep = self
+            .builder
+            .build_struct_gep(slice_ty, slice_slot, 1, "hasher.bytes.len")
+            .unwrap();
+        self.builder.build_store(len_gep, byte_count).unwrap();
+        let slice_arg: inkwell::values::BasicMetadataValueEnum<'ctx> =
+            match write_fn.get_type().get_param_types().get(1) {
+                Some(inkwell::types::BasicMetadataTypeEnum::StructType(st)) => self
+                    .builder
+                    .build_load(*st, slice_slot, "hasher.bytes.val")
+                    .unwrap()
+                    .into(),
+                _ => slice_slot.into(),
+            };
+        self.builder
+            .build_call(write_fn, &[state_slot.into(), slice_arg], "")
+            .unwrap();
+
+        // `finish(ref self) -> u64`.
+        self.builder
+            .build_call(finish_fn, &[state_slot.into()], "hasher.finish")
+            .unwrap()
+            .try_as_basic_value()
+            .basic()
+            .map(|v: inkwell::values::BasicValueEnum<'ctx>| v.into_int_value())
+            .unwrap_or_else(|| i64_t.const_zero())
+    }
+
+    /// Read every `impl BuildHasher for B { type Hasher = S }` out of the
+    /// program into [`Codegen::user_hasher_states`] (B-2026-08-22-6).
+    ///
+    /// Keyed on the LAST path segment of both sides, which is the same key the
+    /// `Type.method` symbols and the parser's `HasherKind::User` recording use,
+    /// so all three agree on what names a hasher.
+    pub(crate) fn collect_user_hasher_states(&mut self, program: &Program) {
+        for item in &program.items {
+            let Item::ImplBlock(imp) = item else { continue };
+            let Some(tn) = &imp.trait_name else { continue };
+            if tn.segments.last().map(String::as_str) != Some("BuildHasher") {
+                continue;
+            }
+            let TypeKind::Path(target) = &imp.target_type.kind else {
+                continue;
+            };
+            let Some(builder) = target.segments.last() else {
+                continue;
+            };
+            for it in &imp.items {
+                let ImplItem::AssocType(b) = it else { continue };
+                if b.name != "Hasher" {
+                    continue;
+                }
+                if let TypeKind::Path(p) = &b.ty.kind {
+                    if let Some(state) = p.segments.last() {
+                        self.user_hasher_states
+                            .insert(builder.clone(), state.clone());
+                    }
+                }
+            }
+        }
     }
 
     /// Emit (or reuse) a module-level `karac_hash_{type_name}(ptr) -> i64` function.

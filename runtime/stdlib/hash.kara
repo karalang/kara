@@ -1,18 +1,55 @@
 // runtime/stdlib/hash.kara
 //
-// CR-202 slice 5e. Per design.md § Hash — Hash is parameterized over
-// the hasher type so that `Map[K, V, FxBuildHasher]` and
-// `Map[K, V, SipHashBuildHasher]` can share key impls. The actual
-// `Hasher` trait is not yet baked, so this declaration omits the
-// `H: Hasher` bound — the bound resurfaces when slice 5+ migrates the
-// `Hasher` trait alongside the rest of the hashing infrastructure.
+// CR-202 slice 5e / B-2026-08-22-6. Per design.md § `Hash` and `Hasher`, the
+// surface is three traits: `Hash` says how to feed a value into a hasher,
+// `Hasher` says how to absorb bytes and produce a digest, and `BuildHasher`
+// says how a table mints a fresh `Hasher` per hash. The split is why
+// `Map[K, V, FxBuildHasher]` and `Map[K, V, SipHash13BuildHasher]` can share
+// every key impl — the key never learns which hasher is in force.
 //
-// Pre-5e Hash was not registered in `env.traits` at all
-// (register_stdlib_traits's array doesn't list it). Slice 5e is
-// strictly additive.
+// Pre-5e Hash was not registered in `env.traits` at all. Slice 5e added it
+// without the `H: Hasher` bound, because `Hasher` was not baked; B-2026-08-22-6
+// bakes both companion traits and restores the bound.
+
+// How bytes become a digest. A `Map` calls `write` once per key with that key's
+// byte image and then `finish` — see `Codegen::emit_hash_bytes_call` for the
+// compiled shape and `interpreter::user_hasher` for the interpreted twin.
+//
+// The convenience methods carry DEFAULT BODIES, so an impl supplies only
+// `write` and `finish`. They exist so a `Hash` impl can feed a scalar without
+// spelling the byte conversion at every call site.
+trait Hasher {
+    fn write(mut ref self, bytes: ref Slice[u8]);
+    fn finish(ref self) -> u64;
+
+    fn write_u8(mut ref self, n: u8) { self.write([n]) }
+    fn write_u16(mut ref self, n: u16) { self.write(n.to_ne_bytes()) }
+    fn write_u32(mut ref self, n: u32) { self.write(n.to_ne_bytes()) }
+    fn write_u64(mut ref self, n: u64) { self.write(n.to_ne_bytes()) }
+    fn write_usize(mut ref self, n: usize) { self.write(n.to_ne_bytes()) }
+    fn write_i8(mut ref self, n: i8) { self.write(n.to_ne_bytes()) }
+    fn write_i16(mut ref self, n: i16) { self.write(n.to_ne_bytes()) }
+    fn write_i32(mut ref self, n: i32) { self.write(n.to_ne_bytes()) }
+    fn write_i64(mut ref self, n: i64) { self.write(n.to_ne_bytes()) }
+    fn write_isize(mut ref self, n: isize) { self.write(n.to_ne_bytes()) }
+}
+
+// Per-table configuration, separate from per-hash state: the `BuildHasher` is
+// what `Map[K, V, H]` names, and `build()` is what mints the `Hasher` a single
+// hash runs through.
+//
+// A builder named in a container's type must be a struct with NO FIELDS. The
+// slot names a TYPE, not a value, so there is nowhere for fields to come from —
+// both backends construct the builder themselves before calling `build()`. Put
+// a seed inside `build()`, where it can be read from wherever it actually
+// lives. A field-carrying builder is rejected at the container, not here.
+trait BuildHasher {
+    type Hasher: Hasher;
+    fn build(ref self) -> Self.Hasher;
+}
 
 trait Hash {
-    fn hash[H](ref self, hasher: mut ref H);
+    fn hash[H: Hasher](ref self, hasher: mut ref H);
 }
 
 // ── The two hasher selectors ──────────────────────────────────────────
@@ -23,19 +60,18 @@ trait Hash {
 // who pin the hasher (`Map[K, V, FxBuildHasher]`) opt out of both the
 // DoS-resistance guarantee and the version-stability escape hatch."
 //
-// WHAT THESE ARE TODAY: type-level SELECTORS, not user-implementable hashers.
-// The trailing type argument of `Map[K, V, H]` / `Set[T, H]` must name one of
-// exactly these two; the typechecker rejects anything else, and the choice
-// picks which hash the two backends emit. `trait BuildHasher` and the
-// `Hasher` trait design.md also declares are NOT baked, so a user cannot yet
-// write their own hasher and name it here — that is a separate, larger
-// feature (an ordinary trait with default method bodies, dispatched per
-// hash), tracked on its own ledger row rather than half-shipped here.
+// WHAT THESE ARE: type-level SELECTORS for the two hashes the compiler ships
+// in the runtime. They are NOT `impl BuildHasher` sites, and they never will
+// be — naming one routes the container straight at `karac_hash_bytes` /
+// `karac_hash_bytes_fx`, a single call per hash with no user frame in it.
+// A user hasher (B-2026-08-22-6) takes the OTHER path: name any type that
+// `impl BuildHasher for` in the same slot and both backends dispatch through
+// its `build` / `write` / `finish`. So the trailing argument now accepts three
+// things — these two, and anything the user implements.
 //
-// They are declared as zero-field structs because that is what they will be
-// when `BuildHasher` does land: `impl BuildHasher for FxBuildHasher` needs a
-// nominal type to hang off, and a config-free hasher holds no state. Nothing
-// constructs one today.
+// They stay zero-field structs because a config-free selector holds no state
+// and nothing ever constructs one; they exist so that intent can be written
+// down in the type.
 
 // SipHash-1-3 with a per-process random key — the DEFAULT for every `Map` and
 // `Set` that does not name a hasher, and the reason iteration order differs
@@ -43,9 +79,15 @@ trait Hash {
 // leaving the parameter off; it exists so that intent can be written down.
 struct SipHash13BuildHasher { }
 
-// FxHash — rotate-xor-multiply against a fixed multiplier, no key. Faster on
-// short keys, and floodable by anyone who can read the multiplier out of the
-// compiler's source. Because it is unkeyed, iteration order is stable across
-// runs of one binary. Reach for it only when the keys cannot come from an
-// adversary, and never for `Map[String, _]` keyed on request data.
+// FxHash — rotate-xor-multiply against a fixed multiplier, no key. Floodable by
+// anyone who can read the multiplier out of the compiler's source. Because it
+// is unkeyed, iteration order is stable across runs of one binary. Reach for it
+// only when the keys cannot come from an adversary, and never for
+// `Map[String, _]` keyed on request data.
+//
+// IT IS NOT CURRENTLY FASTER, which is what this was offered for. Measured
+// compiled on arm64, 200 000 `String` inserts plus 1 000 000 lookups: 1.23 s
+// against the default's 0.09 s — 13.7x SLOWER (B-2026-08-22-29). There is also
+// a correctness defect on the non-default path (B-2026-08-22-27). Until both
+// are closed, pinning this buys nothing but the stable order.
 struct FxBuildHasher { }

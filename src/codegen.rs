@@ -1178,6 +1178,14 @@ pub(super) struct Codegen<'ctx> {
     /// program in hand. Empty for every program that never names a hasher.
     pub(crate) container_hashers:
         rustc_hash::FxHashMap<crate::resolver::SpanKey, crate::hasher_kind::HasherKind>,
+    /// `impl BuildHasher for B { type Hasher = S; … }` → `B` ⇒ `S`
+    /// (B-2026-08-22-6). The trailing slot of `Map[K, V, B]` names the BUILDER,
+    /// but `write` / `finish` live on the per-hash STATE type, so
+    /// `emit_hash_bytes_call`'s user arm needs this hop to find the two symbols
+    /// it calls. Loaded alongside `container_hashers` at the top of
+    /// `compile_program`, and for the same reason: it is a plain-data reading
+    /// of the AST, which `Codegen::new` does not have.
+    pub(crate) user_hasher_states: rustc_hash::FxHashMap<String, String>,
     pub(crate) mod_bindings: ModBindings<'ctx>,
     pub(crate) borrow_vars: BorrowVars<'ctx>,
     pub(crate) span_tables: SpanTables,
@@ -5242,6 +5250,7 @@ impl<'ctx> Codegen<'ctx> {
         Codegen {
             hash_hasher: crate::hasher_kind::HasherKind::default(),
             container_hashers: rustc_hash::FxHashMap::default(),
+            user_hasher_states: rustc_hash::FxHashMap::default(),
             context,
             module,
             builder,
@@ -6603,8 +6612,15 @@ impl<'ctx> Codegen<'ctx> {
         // argument and left the choice here, keyed by the container path's
         // span. Every `Codegen::new` entry funnels through this method, so one
         // load covers the AOT, JIT, REPL-cell and test-module paths alike.
-        self.container_hashers
-            .extend(program.container_hashers.iter().map(|(k, v)| (*k, *v)));
+        self.container_hashers.extend(
+            program
+                .container_hashers
+                .iter()
+                .map(|(k, v)| (*k, v.clone())),
+        );
+        // B-2026-08-22-6 — and the builder → per-hash-state hop a USER hasher
+        // needs, read off the same AST in the same place.
+        self.collect_user_hasher_states(program);
         // B-2026-08-07-10 — `KARAC_TEXT_PAD=<bytes>`: a filler function ahead
         // of the program's own code, so a measurement can move `main` (and the
         // hot loop inside it) by a CHOSEN number of bytes while every

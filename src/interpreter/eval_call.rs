@@ -3122,7 +3122,7 @@ impl super::Interpreter<'_> {
             .program
             .container_hashers
             .get(&crate::resolver::SpanKey::from_span(&p.span))
-            .copied()
+            .cloned()
             .unwrap_or_default();
         if kind == HasherKind::default() {
             return container;

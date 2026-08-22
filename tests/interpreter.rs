@@ -37420,3 +37420,138 @@ fn channel_sender_clone_keeps_the_receiver_count_independent() {
         "a cloned SENDER must not count as a receiver"
     );
 }
+
+// ── B-2026-08-22-6: a USER-written hasher, interpreted ───────────────
+//
+// `MapData::hash_key` is a `&self` method reached through an `RwLock` guard,
+// with no interpreter anywhere in sight, so running user code from there needs
+// `interpreter::user_hasher`: the key `Value` is flattened to a canonical byte
+// string and fed to a sub-interpreter that drives `build` / `write` / `finish`.
+// These pin the two halves — that the map still WORKS, and that the user's
+// permutation is what orders it.
+
+/// FNV-1a and a 31-multiplier hash, as a source prefix.
+const USER_HASHERS: &str = "\
+struct Fnv { h: u64 }\n\
+impl Hasher for Fnv {\n\
+    fn write(mut ref self, bytes: ref Slice[u8]) {\n\
+        for b in bytes { self.h = (self.h ^ (b as u64)).wrapping_mul(1099511628211u64); }\n\
+    }\n\
+    fn finish(ref self) -> u64 { self.h }\n\
+}\n\
+struct FnvBuild { }\n\
+impl BuildHasher for FnvBuild {\n\
+    type Hasher = Fnv;\n\
+    fn build(ref self) -> Fnv { Fnv { h: 14695981039346656037u64 } }\n\
+}\n\
+struct Sum { h: u64 }\n\
+impl Hasher for Sum {\n\
+    fn write(mut ref self, bytes: ref Slice[u8]) {\n\
+        for b in bytes { self.h = self.h.wrapping_mul(31u64).wrapping_add(b as u64); }\n\
+    }\n\
+    fn finish(ref self) -> u64 { self.h }\n\
+}\n\
+struct SumBuild { }\n\
+impl BuildHasher for SumBuild {\n\
+    type Hasher = Sum;\n\
+    fn build(ref self) -> Sum { Sum { h: 0u64 } }\n\
+}\n";
+
+#[test]
+fn a_user_hashed_map_still_finds_and_removes_its_keys_in_the_interpreter() {
+    assert_eq!(
+        run_no_errors(&format!(
+            "{USER_HASHERS}\
+             fn main() {{\n\
+                 let mut m: Map[String, i64, FnvBuild] = Map.new();\n\
+                 m.insert(\"alpha\", 1);\n\
+                 m.insert(\"bravo\", 2);\n\
+                 m.insert(\"charlie\", 3);\n\
+                 m.remove(\"bravo\");\n\
+                 println(m.get(\"alpha\").unwrap());\n\
+                 println(m.get(\"charlie\").unwrap());\n\
+                 println(m.contains_key(\"bravo\"));\n\
+                 println(m.len());\n\
+             }}"
+        )),
+        "1\n3\nfalse\n2\n"
+    );
+}
+
+#[test]
+fn two_user_hashers_order_the_same_keys_differently_in_the_interpreter() {
+    // The discriminating assertion. A hasher that never ran — or one that
+    // degraded to a constant digest — leaves every key in one bucket, and the
+    // observable walk falls back to insertion order for BOTH maps, making the
+    // two equal. Ten keys make a coincidental agreement 1 in 10!.
+    let out = run_no_errors(&format!(
+        "{USER_HASHERS}\
+         fn main() {{\n\
+             let mut a: Map[String, i64, FnvBuild] = Map.new();\n\
+             let mut b: Map[String, i64, SumBuild] = Map.new();\n\
+             let names = [\"zulu\", \"alpha\", \"mike\", \"bravo\", \"yankee\",\n\
+                          \"charlie\", \"xray\", \"delta\", \"whiskey\", \"echo\"];\n\
+             for n in names {{\n\
+                 a.insert(n.to_string(), 1);\n\
+                 b.insert(n.to_string(), 1);\n\
+             }}\n\
+             let mut x = \"\";\n\
+             for k in a.keys() {{ x = x + k + \" \"; }}\n\
+             println(x);\n\
+             let mut y = \"\";\n\
+             for k in b.keys() {{ y = y + k + \" \"; }}\n\
+             println(y);\n\
+         }}"
+    ));
+    let mut lines = out.lines();
+    let fnv = lines.next().unwrap_or_default();
+    let sum = lines.next().unwrap_or_default();
+    assert_eq!(
+        fnv.split_whitespace().count(),
+        10,
+        "the FnvBuild map lost keys: {out}"
+    );
+    assert_ne!(
+        fnv, sum,
+        "both maps walked in the same order — either the user hasher never ran \
+         or its digest degraded to a constant"
+    );
+    let mut fnv_sorted: Vec<&str> = fnv.split_whitespace().collect();
+    let mut sum_sorted: Vec<&str> = sum.split_whitespace().collect();
+    fnv_sorted.sort_unstable();
+    sum_sorted.sort_unstable();
+    assert_eq!(
+        fnv_sorted, sum_sorted,
+        "the two maps hold different keys, so the order comparison proves \
+         nothing: {out}"
+    );
+}
+
+#[test]
+fn a_user_hasher_serves_a_set_and_a_struct_key_in_the_interpreter() {
+    // A struct key is the encoding's sharpest case: `Value::Struct` holds its
+    // fields in a `HashMap`, so `encode_value` sorts by field name to keep two
+    // equal structs byte-identical. If it did not, a lookup would miss on most
+    // runs rather than deterministically, which is exactly the shape of bug a
+    // single green run hides.
+    assert_eq!(
+        run_no_errors(&format!(
+            "{USER_HASHERS}\
+             struct Point {{ x: i64, y: i64 }}\n\
+             fn main() {{\n\
+                 let mut s: Set[String, SumBuild] = Set.new();\n\
+                 s.insert(\"alpha\");\n\
+                 s.insert(\"bravo\");\n\
+                 s.insert(\"alpha\");\n\
+                 println(s.len());\n\
+                 println(s.contains(\"bravo\"));\n\
+                 let mut m: Map[Point, String, FnvBuild] = Map.new();\n\
+                 m.insert(Point {{ x: 1, y: 2 }}, \"a\");\n\
+                 m.insert(Point {{ x: 3, y: 4 }}, \"b\");\n\
+                 println(m.get(Point {{ x: 3, y: 4 }}).unwrap());\n\
+                 println(m.contains_key(Point {{ x: 9, y: 9 }}));\n\
+             }}"
+        )),
+        "2\ntrue\nb\nfalse\n"
+    );
+}

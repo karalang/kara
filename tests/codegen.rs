@@ -12963,6 +12963,149 @@ fn main() {
         assert_eq!(out, Some("2\n1\n0\n".to_string()));
     }
 
+    // ── B-2026-08-22-6: a USER-written hasher, compiled ──────────────
+    //
+    // The compiled arm of `emit_hash_bytes_call` calls no runtime entry point
+    // at all: it emits `B.build()` → `S.write(bytes)` → `S.finish()` into the
+    // synthesized per-key-type `hash_fn`, whose pointer the `karac_map_*`
+    // control block already held. These pin that the three calls land, that
+    // the result is a usable index, and that two builders do not collide in
+    // the `hash_fn` symbol cache.
+
+    /// FNV-1a over the key's bytes, and a second builder that reverses it, as
+    /// a source prefix. `wrapping_mul` because a hasher's job is to overflow —
+    /// a plain `*` traps under the default overflow checks.
+    const USER_HASHERS: &str = "\
+struct Fnv { h: u64 }\n\
+impl Hasher for Fnv {\n\
+    fn write(mut ref self, bytes: ref Slice[u8]) {\n\
+        for b in bytes { self.h = (self.h ^ (b as u64)).wrapping_mul(1099511628211u64); }\n\
+    }\n\
+    fn finish(ref self) -> u64 { self.h }\n\
+}\n\
+struct FnvBuild { }\n\
+impl BuildHasher for FnvBuild {\n\
+    type Hasher = Fnv;\n\
+    fn build(ref self) -> Fnv { Fnv { h: 14695981039346656037u64 } }\n\
+}\n\
+struct Sum { h: u64 }\n\
+impl Hasher for Sum {\n\
+    fn write(mut ref self, bytes: ref Slice[u8]) {\n\
+        for b in bytes { self.h = self.h.wrapping_mul(31u64).wrapping_add(b as u64); }\n\
+    }\n\
+    fn finish(ref self) -> u64 { self.h }\n\
+}\n\
+struct SumBuild { }\n\
+impl BuildHasher for SumBuild {\n\
+    type Hasher = Sum;\n\
+    fn build(ref self) -> Sum { Sum { h: 0u64 } }\n\
+}\n";
+
+    /// The whole point: a map hashed by user code still finds, removes and
+    /// counts. If any of the three emitted calls were missing the digest would
+    /// collapse to a constant, which this would NOT catch — every lookup still
+    /// succeeds through `==` — so the ordering test below is the one that
+    /// proves the user's permutation is actually running.
+    #[test]
+    fn a_user_hashed_map_still_finds_and_removes_its_keys() {
+        let out = run_program(&format!(
+            "{USER_HASHERS}\
+             fn main() {{\n\
+                 let mut m: Map[String, i64, FnvBuild] = Map.new();\n\
+                 m.insert(\"alpha\", 1);\n\
+                 m.insert(\"bravo\", 2);\n\
+                 m.insert(\"charlie\", 3);\n\
+                 m.remove(\"bravo\");\n\
+                 match m.get(\"alpha\") {{ Some(v) => {{ println(v); }} None => {{ println(-1); }} }}\n\
+                 match m.get(\"charlie\") {{ Some(v) => {{ println(v); }} None => {{ println(-1); }} }}\n\
+                 match m.get(\"bravo\") {{ Some(v) => {{ println(v); }} None => {{ println(-1); }} }}\n\
+                 println(m.len());\n\
+             }}"
+        ));
+        assert_eq!(out, Some("1\n3\n-1\n2\n".to_string()));
+    }
+
+    /// Two user builders, one process, same ten keys in the same order.
+    ///
+    /// `hash_fn` is synthesized once per (key type, hasher) and CACHED under a
+    /// symbol name, so if `HasherKind::mangle_suffix` did not carry the
+    /// builder's name the second map would silently reuse the first's function
+    /// and the walks would match. This is also the test that shows the user's
+    /// permutation runs at all: a degraded constant digest would put every key
+    /// in one bucket and make both walks insertion-ordered, hence equal.
+    #[test]
+    fn two_user_hashers_order_the_same_keys_differently_in_one_process() {
+        let out = run_program(&format!(
+            "{USER_HASHERS}\
+             fn main() {{\n\
+                 let mut a: Map[String, i64, FnvBuild] = Map.new();\n\
+                 let mut b: Map[String, i64, SumBuild] = Map.new();\n\
+                 let names = [\"zulu\", \"alpha\", \"mike\", \"bravo\", \"yankee\",\n\
+                              \"charlie\", \"xray\", \"delta\", \"whiskey\", \"echo\"];\n\
+                 for n in names {{\n\
+                     a.insert(n.to_string(), 1);\n\
+                     b.insert(n.to_string(), 1);\n\
+                 }}\n\
+                 let mut x = \"\";\n\
+                 for k in a.keys() {{ x = x + k + \" \"; }}\n\
+                 println(x);\n\
+                 let mut y = \"\";\n\
+                 for k in b.keys() {{ y = y + k + \" \"; }}\n\
+                 println(y);\n\
+             }}"
+        ));
+        if let Some(out) = out {
+            let mut lines = out.lines();
+            let fnv = lines.next().unwrap_or_default();
+            let sum = lines.next().unwrap_or_default();
+            assert_eq!(
+                fnv.split_whitespace().count(),
+                10,
+                "the FnvBuild map lost keys: {out}"
+            );
+            assert_ne!(
+                fnv, sum,
+                "both maps walked in the same order, so either the two builders \
+                 share one cached hash_fn or the digest degraded to a constant"
+            );
+            let mut fnv_sorted: Vec<&str> = fnv.split_whitespace().collect();
+            let mut sum_sorted: Vec<&str> = sum.split_whitespace().collect();
+            fnv_sorted.sort_unstable();
+            sum_sorted.sort_unstable();
+            assert_eq!(
+                fnv_sorted, sum_sorted,
+                "the two maps hold different keys, so the order comparison above \
+                 proves nothing: {out}"
+            );
+        }
+    }
+
+    /// An integer key takes a different arm of `emit_hash_fn_for_type` from a
+    /// `String` one (the key's own byte width in place, no header load), and a
+    /// `Set` takes the selector in its own trailing position. Both reach the
+    /// same user hasher.
+    #[test]
+    fn a_user_hasher_serves_integer_keys_and_sets_too() {
+        let out = run_program(&format!(
+            "{USER_HASHERS}\
+             fn main() {{\n\
+                 let mut m: Map[i64, String, FnvBuild] = Map.new();\n\
+                 m.insert(10, \"ten\");\n\
+                 m.insert(20, \"twenty\");\n\
+                 println(m.get(10).unwrap());\n\
+                 println(m.get(20).unwrap());\n\
+                 if m.contains_key(30) {{ println(1); }} else {{ println(0); }}\n\
+                 let mut s: Set[String, SumBuild] = Set.new();\n\
+                 s.insert(\"alpha\");\n\
+                 s.insert(\"bravo\");\n\
+                 s.insert(\"alpha\");\n\
+                 println(s.len());\n\
+                 if s.contains(\"bravo\") {{ println(1); }} else {{ println(0); }}\n\
+             }}"
+        ));
+        assert_eq!(out, Some("ten\ntwenty\n0\n2\n1\n".to_string()));
+    }
+
     /// Spawn a built kara test binary and capture stdout+stderr, with a
     /// per-spawn 15s hang watchdog. Thin wrapper over the shared helper
     /// in `tests/common/mod.rs` — see the module doc there for the full
@@ -20013,6 +20156,63 @@ fn main() {
                    println(total_val([1u8, 2u8, 3u8, 4u8]));\n\
                    }";
         assert_eq!(run_program(src).as_deref(), Some("3\n4\n"));
+    }
+
+    /// The METHOD-CALL half of B-2026-08-21-24 (found while building
+    /// B-2026-08-22-6). That row spilled the synthesized header for a `ref
+    /// Slice[T]` slot on the free-function path and never on this one — the
+    /// same "landed on two of the three call paths" shape as B-2026-06-19-1,
+    /// B-2026-08-05-41 and B-2026-08-21-39 before it.
+    ///
+    /// Found through design.md § `Hash` and `Hasher`, whose `Hasher.write_u8`
+    /// default body is literally `self.write([n])`. Baking that trait therefore
+    /// made EVERY user `impl Hasher` fail module verification with "Call
+    /// parameter type does not match function signature", while `karac check`
+    /// accepted the program and `--interp` ran it — so the spec's own text was
+    /// the reproducer.
+    ///
+    /// Both receiver shapes, because they are separate arms: a trait DEFAULT
+    /// body monomorphized into the impl, and an ordinary inherent method. The
+    /// by-value `Slice[T]` control sits beside each, since that spelling always
+    /// worked and a regression confined to the `ref` slot would otherwise hide
+    /// behind it.
+    #[test]
+    fn e2e_collection_literal_into_a_ref_slice_param_of_a_method() {
+        let src = "trait Sink {\n\
+                   fn write(mut ref self, b: ref Slice[u8]);\n\
+                   fn write_val(mut ref self, b: Slice[u8]);\n\
+                   fn total(ref self) -> u64;\n\
+                   fn put(mut ref self, n: u8) { self.write([n]) }\n\
+                   fn put_val(mut ref self, n: u8) { self.write_val([n]) }\n\
+                   }\n\
+                   struct Acc { n: u64 }\n\
+                   impl Sink for Acc {\n\
+                   fn write(mut ref self, b: ref Slice[u8]) {\n\
+                   for x in b { self.n = self.n + (x as u64); }\n\
+                   }\n\
+                   fn write_val(mut ref self, b: Slice[u8]) {\n\
+                   for x in b { self.n = self.n + (x as u64); }\n\
+                   }\n\
+                   fn total(ref self) -> u64 { self.n }\n\
+                   }\n\
+                   struct Own { n: u64 }\n\
+                   impl Own {\n\
+                   fn write(mut ref self, b: ref Slice[u8]) {\n\
+                   for x in b { self.n = self.n + (x as u64); }\n\
+                   }\n\
+                   fn put(mut ref self, n: u8) { self.write([n]) }\n\
+                   fn total(ref self) -> u64 { self.n }\n\
+                   }\n\
+                   fn main() {\n\
+                   let mut a = Acc { n: 0u64 };\n\
+                   a.put(3u8);\n\
+                   a.put_val(4u8);\n\
+                   println(a.total());\n\
+                   let mut o = Own { n: 0u64 };\n\
+                   o.put(5u8);\n\
+                   println(o.total());\n\
+                   }";
+        assert_eq!(run_program(src).as_deref(), Some("7\n5\n"));
     }
 
     /// B-2026-08-21-39 — an `Array[T, N]` argument to a `mut Slice[T]`
