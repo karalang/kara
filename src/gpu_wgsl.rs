@@ -1111,7 +1111,7 @@ pub fn emit_reduce_field_kernel(
          \x20   // so the host folds them with the ordinary contiguous kernel.\n\
          \x20   //\n\
          \x20   // The `wg < arrayLength(&output)` half of the guard is NOT\n\
-         \x20   // redundant (B-2026-08-21-47). The grid pins x at 65535 and\n\
+         \x20   // redundant (B-2026-08-21-49). The grid pins x at 65535 and\n\
          \x20   // rounds y up, so it dispatches `65535 * ceil(groups/65535)`\n\
          \x20   // workgroups -- 131070 for a 5M-record buffer that needs only\n\
          \x20   // 78125 partials. Every overshoot group still runs, computes\n\
@@ -5632,7 +5632,7 @@ mod tests {
         }
     }
 
-    /// Every per-workgroup output write is BOUNDED (B-2026-08-21-47).
+    /// Every per-workgroup output write is BOUNDED (B-2026-08-21-49).
     ///
     /// The grid pins x at 65535 and rounds y up, so it dispatches
     /// `65535 * ceil(groups / 65535)` workgroups — 131070 for a 5M-record

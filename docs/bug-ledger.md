@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 275 | 1 |
+| miscompile | 276 | 1 |
 | leak | 187 | 1 |
 | run-vs-build | 148 | 0 |
 | missing-feature | 143 | 6 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 986 | 9 |
+| codegen | 987 | 9 |
 | typecheck | 232 | 4 |
 | interp | 171 | 1 |
 | other | 62 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 8 | 1 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1464 surfaced · 14 open · 1428 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1465 surfaced · 14 open · 1429 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (14)
 
@@ -162,9 +162,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1464 surfaced
 
 </details>
 
-### Fixed (1428)
+### Fixed (1429)
 
-<details><summary>1428 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1429 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -14237,6 +14237,13 @@ not in the body — the binding is not registered as a slice, so the call cannot
 qualify `Slice.f`. Verified pre-existing against pre-fix source. It is the same
 under-registered-binding family as the `Array` half fixed in B-2026-08-21-25,
 which is why it is worth its own row rather than a note here. |
+| B-2026-08-21-49 | codegen | high | EVERY REDUCE/SCAN SHADER WROTE ITS PER-WORKGROUP SLOT UNBOUNDED, so an overshoot workgroup stored past a tightly sized output buffer -- Metal CLAMPS… | FIXED by bounding the write in the SHADER, which is the only layer that can enforce it: `if (t == 0u && wg < arrayLength(&output))`, and the analogous bound against `&totals`, `&flags`, or `2u * wg + 1u < arrayLength(&output)` for the wide pairs. Fourteen writes across all thirteen reduce/scan emitters. Sizing the buffer to the dispatched grid instead would fix the one caller and leave the coupling -- the next tightly sized caller reintroduces it.
+
+GATED by `every_reduction_shader_bounds_its_workgroup_output_write`, a sibling of the existing 2-D-grid structural test; the shader enumeration both use is now a shared helper so a new emitter cannot be covered by one gate and missed by the other. A structural gate is right here (unlike for its sibling defect) because the property is textual and uniform. Its limit is recorded in the test: where two per-workgroup buffers are written under one condition the bound names only one, and their lengths agree only because every caller sizes both to the partial count -- a property of the callers, not of the shader text.
+
+VERIFIED: negative control -- reverting the guard in the strided emitter alone makes the new gate FAIL, so it catches the defect that shipped rather than merely passing. 103 emitter unit tests and the full 62-case `gpu_e2e` suite green on lavapipe (`KARAC_GPU_BACKEND=cpu`, `KARAC_REQUIRE_GPU_ADAPTER=1`); clippy clean on both feature legs.
+
+NOT VERIFIED HERE, and this is the honest limit: the failing surface is Metal, which this Linux container has no adapter for. lavapipe cannot reproduce the bug (it discards the out-of-bounds write), so a green local run proves NO REGRESSION, not the fix. The fix rests on the mechanism being established by construction -- tight sizing plus an overshoot grid equals an out-of-bounds store, and the guard makes that store impossible on any backend. CONFIRMATION IS THE `gpu-e2e-metal` CI JOB on this commit; if it still fails, the clamp hypothesis is wrong and the 64-element shortfall needs a different explanation. |
 
 </details>
 
