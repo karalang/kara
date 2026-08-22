@@ -92,10 +92,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 274 | 0 |
+| miscompile | 275 | 1 |
 | leak | 186 | 1 |
 | run-vs-build | 148 | 0 |
-| missing-feature | 143 | 7 |
+| missing-feature | 143 | 6 |
 | double-free | 134 | 0 |
 | codegen-gap | 127 | 4 |
 | diagnostics | 95 | 2 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 982 | 8 |
-| typecheck | 232 | 5 |
-| interp | 170 | 1 |
+| codegen | 984 | 9 |
+| typecheck | 232 | 4 |
+| interp | 171 | 1 |
 | other | 62 | 0 |
 | ownership | 62 | 0 |
 | cli | 59 | 1 |
@@ -124,13 +124,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 8 | 1 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1461 surfaced · 14 open · 1425 fixed · 8 wontfix** (2026-05-20 → 2026-08-21). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1462 surfaced · 14 open · 1426 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (14)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-20-41 | 2026-08-20 | typecheck | medium | `String.normalize` and the `NFC` constant DO NOT EXIST, so the remedy design.md gives for its own Unicode-equality hazard is unwritable. § Strings, Equality bullet: "`String` equality (`==`) compares raw UTF-8 bytes. Two strings with identical visual appearance but different Unicode normalization forms (e.g., NFC vs NFD) are **not** equal. USE `s.normalize(NFC)` FOR NORMALIZATION-AWARE COMPARISON." Measured: `a.normalize(NFC)` -> `error[resolve]: undefined name 'NFC', did you mean 'Neg'?`; the no-argument form `a.normalize()` -> `error[typecheck]: no method 'normalize' on type 'String'`. Neither `normalize` nor `NFC` appears anywhere in `src/`. The hazard the bullet describes is real and reproduces -- `"e\u{0301}" == "\u{00e9}"` is false, exactly as documented -- so the paragraph correctly warns about a trap and then names an escape that was never built. | roadmap.md |
 | B-2026-08-21-2 | 2026-08-21 | cli | medium | FIVE REGISTERED LINTS STILL HAVE NO EMIT SITE and so can never fire, though all seven are registered `default_level: LintLevel::Warn` -- advertised by `karac lint --list` and accepted in `#[allow(...)]`: `f16_software_emulated`, `float_in_serialized_type`, `implicit_clone`, `pure_loop_in_par`, `repr_c_layout_ignored`. They are the remainder of B-2026-08-20-36's eight, which wired `redundant_suffix` (the one design.md documents as live) and added the guard that now holds this list. They are VISIBLE IN CODE, not only here: `KNOWN_UNWIRED` in `src/lints.rs`, which `every_registered_lint_is_emitted_or_declared_unwired` fails on if the list grows or goes stale. | roadmap.md |
 | B-2026-08-21-6 | 2026-08-21 | codegen+interp | medium | `Map`/`Set` DO NOT USE THE SPEC'S DEFAULT HASHER: design.md mandates `SipHash13BuildHasher` seeded from a per-process random source, codegen emits FxHash with a COMPILE-TIME-CONSTANT seed and the interpreter hashes not at all -- so there is no hash-flooding resistance, iteration order is fully deterministic across runs (design.md says it must vary), the two backends order differently from each other, and `Map[K, V, FxBuildHasher]` -- design.md's own spelling -- does not resolve, so there is no opt-in either way | roadmap.md |
 | B-2026-08-21-9 | 2026-08-21 | parser | medium | design.md WRITES SYNTAX THE PARSER HAS NO PRODUCTION FOR, in two places syntax.md also disagrees with: the inline associated-type binding `Trait[Assoc = T]` (43 lines of design.md, and syntax.md's own comment at :650) has no form in `TRAIT_BOUND = PATH [ "[" TYPE_LIST "]" ]`, and an effect clause on an impl header (`impl From[E] for A with writes(Log) {`) has no form at all | roadmap.md |
@@ -144,6 +143,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1461 surfaced
 | B-2026-08-21-44 | 2026-08-21 | codegen | low | `as_slice()` ON A FIXED-ARRAY **TEMPORARY** HAS NO CODEGEN LOWERING -- `n.to_ne_bytes().as_slice().len()` fails dispatch while `--interp` answers, the one method of the Array surface B-2026-08-21-25 left out | roadmap.md |
 | B-2026-08-21-45 | 2026-08-21 | typecheck+codegen | low | FIVE SHIPPED USER-FACING DIAGNOSTICS CARRY RUNS OF 14-30 SPACES mid-sentence, because rustfmt INTERMITTENTLY rejoins a `\`-continued string literal into one line and keeps the continuation indentation as real spaces | roadmap.md |
 | B-2026-08-21-46 | 2026-08-21 | codegen | low | `enumerate` OVER AN ARRAY **LITERAL** STILL BAILS LOUD -- `for (i, x) in [1, 2, 3].iter().enumerate()` hits the adaptor backstop while `--interp` answers, the one source shape B-2026-08-21-41's widening could not reach | roadmap.md |
+| B-2026-08-22-1 | 2026-08-22 | codegen | high | A BAKED-STDLIB ENUM WITH NO CODEGEN LAYOUT SEED LOWERS EVERY VARIANT'S TAG TO **0**, SILENTLY -- `let m = MemoryOrdering.Acquire; match m { ... }` prints `Acquire` under `--interp` and `Relaxed` under AOT, with no diagnostic; the bare form (`let m = SeqCst`) is a loud `Undefined variable 'SeqCst'` on the same axis, so the type has both halves of the defect | roadmap.md |
 
 ### Wontfix (8)
 
@@ -162,9 +162,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1461 surfaced
 
 </details>
 
-### Fixed (1425)
+### Fixed (1426)
 
-<details><summary>1425 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1426 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -13422,6 +13422,32 @@ Measured on all four surfaces (interp / JIT / AOT / `KARAC_AUTO_PAR=0` AOT), byt
 Pinned by `test_e2e_index_slice_temporary_matches_the_bound_spelling` and `test_e2e_index_slice_temporary_bounds_checked` (tests/codegen.rs) and `asan_index_into_slice_temporary_frees_nothing` (tests/memory_sanitizer.rs -- LSan-clean over 60 iterations of a heap-element read, pinning the frees-nothing choice from both sides). All three fail without the fix.
 
 `s.bytes()[a..b]` never reaches the new arm and is unchanged: a range slice of a temporary escapes its statement and the ownership checker rejects it upstream with "bind the receiver to a local first". |
+| B-2026-08-20-41 | typecheck+interp+codegen | medium | `String.normalize` and the `NFC` constant DO NOT EXIST, so the remedy design.md gives for its own Unicode-equality hazard is unwritable | FIXED by 410d6f5 — IMPLEMENTED, on the owner's call, rather than narrowing the sentence. `String.normalize(form)` and the `NormalizationForm` prelude enum now exist, so the remedy the Equality bullet names is real on every surface.
+
+THE ROW LEFT THE CHOICE OPEN BECAUSE IT COSTED IT AS "pulls in Unicode tables (a real dependency decision)". Measured, it is much cheaper than that reads:
+
+  crate                          stripped fat-LTO staticlib   already in a graph?
+  icu_normalizer 2.2             +99 KB                       YES — `karac` already
+                                                              has it via
+                                                              ureq -> url -> idna ->
+                                                              idna_adapter
+  unicode-normalization 0.1.25   +136 KB                      no
+
+So the INTERPRETER half cost zero new crates — naming `icu_normalizer` directly only pins a version. The AOT half is an eighth OPT-IN archive (`libkarac_runtime_unicode.a`, +161 KiB on the archive), auto-selected only when the emitted object references `karac_unicode_*`, exactly like `gpu` / `regex` / `arrow`; nothing else links the tables. Both halves link the SAME crate and version, which is what makes interpreter and codegen byte-identical by construction rather than by convention — the Arrow IPC twin's rule.
+
+THE SPEC'S SPELLING WAS NOT EXPRESSIBLE, which this row did not catch and which no amount of implementing could have satisfied as written. `s.normalize(NFC)` violates design.md's OWN naming rule CN-4 (acronyms as words: `HttpClient` not `HTTPClient`, `IoError` not `IOError`), and the identifier-class check enforces CN-4 — an all-caps enum variant is a hard parse error in the baked stdlib and in user code alike. The bullet named an API that could not have been declared in the language it documents. Corrected to `s.normalize(Nfc)`, with the four variants `Nfc` / `Nfd` / `Nfkc` / `Nfkd` visible unqualified like `Ordering`'s `Less` and `MemoryOrdering`'s `Relaxed`.
+
+TWO CODEGEN DEFECTS FOUND AND FIXED ON THE WAY, both discovered by verifying the four surfaces rather than by reading:
+
+1. BAKED-STDLIB ENUM VARIANTS LOWERED THEIR TAG TO 0, SILENTLY. `declare_enums` walks only the user's `program.items`, so a `STDLIB_PROGRAMS` enum absent from user source had no layout and every variant expression compiled to the FIRST variant with no diagnostic. Measured: `let f = Nfd; s.normalize(f)` normalized as `Nfc` — AOT answered 2 where `--interp` answered 3. Fixed by seeding the layout, and the fifteen hand-rolled seeds already in `declarations.rs` (Ordering, VarError, SeekFrom, …) gained a `seed_unit_enum` helper so a sixteenth cannot repeat the four-map transcription by hand. Pinned by `normalize_form_reaches_codegen_bare_qualified_and_bound`, which fails with the seed removed.
+
+2. A NON-IDENTIFIER RECEIVER HAD NO DISPATCH. `"literal".normalize(f)` fell through to "no handler for method on non-identifier receiver"; `normalize` needed adding to the String-only name list that materializes such a receiver, and to the two heap-String classifiers (`expr_is_string_like`, `closure_body_produces_heap_string`) so the fresh allocation is cleaned up once.
+
+Verified byte-identical on --interp / JIT / AOT / `KARAC_AUTO_PAR=0` AOT across all four forms, the spec's own `e`+U+0301 vs U+00E9 hazard, both length directions (composition shrinks 3->2, decomposition grows 2->3), the compatibility pair doing what the canonical pair does not (U+FB01 -> `fi`), all three ways the form reaches the call (bare, qualified, bound), a literal and a binding receiver, chaining onto the result, and the empty / pure-ASCII identities. `karac run` routes a normalizing program to the interpreter (the regex / Arrow JIT posture, since the JIT runner does not build the opt-in feature).
+
+ARCHIVE SELECTION VERIFIED THREE WAYS, not assumed: hiding the archive produces the actionable "build `libkarac_runtime_unicode.a`" error; a non-normalizing program still links lean and `nm` finds zero `karac_unicode_*` in it; a normalizing binary has them.
+
+Twelve tests — 2 typechecker, 5 interpreter, 5 codegen — plus 4 runtime unit tests and an ASAN fixture pinning that the malloc'd result has exactly one owner across a bare temporary, a live binding, and a chain. |
 | B-2026-08-21-4 | codegen | high | A free function DECLARED to return `Slice[T]` hands back a GARBAGE header in codegen while `--interp` is correct, and MOST uses of it are SILENT | FIXED by b538966 (header from the receiver's place) and c5469bb (method-return element type).
 
 Two defects, both in codegen's Slice[T] lowering.
