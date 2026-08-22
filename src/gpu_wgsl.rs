@@ -1034,7 +1034,7 @@ pub fn emit_reduce_kernel(op: ReduceOp, elem: &str) -> Result<String, WgslError>
          \x20   // Each workgroup writes ITS OWN partial. With one workgroup\n\
          \x20   // that is slot 0 and the answer; with several the host folds\n\
          \x20   // the partials by dispatching this same shader over them.\n\
-         \x20   if (t == 0u) {{ output[wg] = scratch[0]; }}\n\
+         \x20   if (t == 0u && wg < arrayLength(&output)) {{ output[wg] = scratch[0]; }}\n\
          }}\n"
     ))
 }
@@ -1109,7 +1109,19 @@ pub fn emit_reduce_field_kernel(
          \n\
          \x20   // Level 0 only. The partials this leaves behind are CONTIGUOUS,\n\
          \x20   // so the host folds them with the ordinary contiguous kernel.\n\
-         \x20   if (t == 0u) {{ output[wg] = scratch[0]; }}\n\
+         \x20   //\n\
+         \x20   // The `wg < arrayLength(&output)` half of the guard is NOT\n\
+         \x20   // redundant (B-2026-08-21-47). The grid pins x at 65535 and\n\
+         \x20   // rounds y up, so it dispatches `65535 * ceil(groups/65535)`\n\
+         \x20   // workgroups -- 131070 for a 5M-record buffer that needs only\n\
+         \x20   // 78125 partials. Every overshoot group still runs, computes\n\
+         \x20   // the identity, and writes `output[wg]` past the end of a\n\
+         \x20   // TIGHTLY sized buffer. Vulkan discards that write; Metal\n\
+         \x20   // clamps it onto the last slot, silently destroying a real\n\
+         \x20   // partial. Whether it is caught depends only on how generously\n\
+         \x20   // the caller allocated, which is not a property this shader\n\
+         \x20   // can see -- so it bounds its own write.\n\
+         \x20   if (t == 0u && wg < arrayLength(&output)) {{ output[wg] = scratch[0]; }}\n\
          }}\n"
     ))
 }
@@ -1205,7 +1217,7 @@ pub fn emit_scan_kernel(elem: &str) -> Result<String, WgslError> {
          \x20   if (i < arrayLength(&input)) {{ output[i] = scratch[t]; }}\n\
          \x20   // Lane {last} always holds this chunk's total: a short chunk is\n\
          \x20   // padded with the identity, so the padding adds nothing.\n\
-         \x20   if (t == {last}u) {{ totals[wg] = scratch[{last}]; }}\n\
+         \x20   if (t == {last}u && wg < arrayLength(&totals)) {{ totals[wg] = scratch[{last}]; }}\n\
          }}\n"
     ))
 }
@@ -1297,12 +1309,12 @@ pub fn emit_int_scan_kernel(elem: &str) -> Result<String, WgslError> {
          \x20   }}\n\
          \n\
          \x20   if (i < arrayLength(&input)) {{ output[i] = scratch[t]; }}\n\
-         \x20   if (t == {last}u) {{ totals[wg] = scratch[{last}]; }}\n\
+         \x20   if (t == {last}u && wg < arrayLength(&totals)) {{ totals[wg] = scratch[{last}]; }}\n\
          \x20   workgroupBarrier();\n\
          \x20   // ONE lane ORs the whole workgroup's flags. A scan's every\n\
          \x20   // lane holds a live output, so `ovf[0]` alone would miss the\n\
          \x20   // overflows that matter most.\n\
-         \x20   if (t == 0u) {{\n\
+         \x20   if (t == 0u && wg < arrayLength(&flags)) {{\n\
          \x20       var any: u32 = 0u;\n\
          \x20       var q: u32 = 0u;\n\
          \x20       loop {{\n\
@@ -1360,7 +1372,7 @@ pub fn emit_int_scan_offset_kernel(elem: &str) -> Result<String, WgslError> {
          \x20   // Lane 0 clears its workgroup's flag word before any lane can\n\
          \x20   // set it. Without this a workgroup whose threads all return\n\
          \x20   // early would leave the slot unwritten.\n\
-         \x20   if (lid.x == 0u) {{ flags[wg] = 0u; }}\n\
+         \x20   if (lid.x == 0u && wg < arrayLength(&flags)) {{ flags[wg] = 0u; }}\n\
          \x20   workgroupBarrier();\n\
          \x20   if (i >= arrayLength(&scanned)) {{ return; }}\n\
          \x20   let c = i / {width}u;\n\
@@ -1372,7 +1384,7 @@ pub fn emit_int_scan_offset_kernel(elem: &str) -> Result<String, WgslError> {
          \x20   {add}\n\
          \x20   output[i] = s;\n\
          \x20   // Any lane may raise it; the host ORs across workgroups.\n\
-         \x20   if (bad) {{ flags[wg] = 1u; }}\n\
+         \x20   if (bad && wg < arrayLength(&flags)) {{ flags[wg] = 1u; }}\n\
          }}\n"
     ))
 }
@@ -1486,7 +1498,7 @@ pub fn emit_deviation_kernel(elem: &str) -> Result<String, WgslError> {
          \n\
          \x20   // One partial per workgroup; the host folds them with the\n\
          \x20   // plain SUM shader, exactly as the dot path does.\n\
-         \x20   if (t == 0u) {{ output[wg] = scratch[0]; }}\n\
+         \x20   if (t == 0u && wg < arrayLength(&output)) {{ output[wg] = scratch[0]; }}\n\
          }}\n"
     ))
 }
@@ -1638,7 +1650,7 @@ pub fn emit_arg_kernel(op: ReduceOp, elem: &str, fold: bool) -> Result<String, W
          \n\
          \x20   // One surviving candidate per workgroup, as an ABSOLUTE index\n\
          \x20   // into `input` — so the next level can look its value up again.\n\
-         \x20   if (t == 0u) {{ output[wg] = idxs[0]; }}\n\
+         \x20   if (t == 0u && wg < arrayLength(&output)) {{ output[wg] = idxs[0]; }}\n\
          }}\n"
     ))
 }
@@ -1812,7 +1824,7 @@ pub fn emit_int_reduce_kernel(op: ReduceOp, elem: &str) -> Result<String, WgslEr
          \n\
          \x20   // One partial AND one overflow bit per workgroup; the host ORs\n\
          \x20   // the bits and re-dispatches over the partials.\n\
-         \x20   if (t == 0u) {{ output[wg] = scratch[0]; flags[wg] = {ovf_out}; }}\n\
+         \x20   if (t == 0u && wg < arrayLength(&output)) {{ output[wg] = scratch[0]; flags[wg] = {ovf_out}; }}\n\
          }}\n"
     ))
 }
@@ -2027,7 +2039,7 @@ pub fn emit_int_deviation_kernel(elem: &str) -> Result<String, WgslError> {
          \x20   }}\n\
          \n\
          \x20   // Two words per workgroup partial, plus its overflow bit.\n\
-         \x20   if (t == 0u) {{\n\
+         \x20   if (t == 0u && 2u * wg + 1u < arrayLength(&output)) {{\n\
          \x20       output[2u * wg] = scratch[0].x;\n\
          \x20       output[2u * wg + 1u] = scratch[0].y;\n\
          \x20       flags[wg] = ovf[0];\n\
@@ -2088,7 +2100,7 @@ pub fn emit_wide_fold_kernel() -> String {
          \x20       stride = stride / 2u;\n\
          \x20   }}\n\
          \n\
-         \x20   if (t == 0u) {{\n\
+         \x20   if (t == 0u && 2u * wg + 1u < arrayLength(&output)) {{\n\
          \x20       output[2u * wg] = scratch[0].x;\n\
          \x20       output[2u * wg + 1u] = scratch[0].y;\n\
          \x20       flags[wg] = ovf[0];\n\
@@ -2503,7 +2515,7 @@ pub fn emit_int_dot_kernel(elem: &str) -> Result<String, WgslError> {
          \x20       stride = stride / 2u;\n\
          \x20   }}\n\
          \n\
-         \x20   if (t == 0u) {{ output[wg] = scratch[0]; flags[wg] = ovf[0]; }}\n\
+         \x20   if (t == 0u && wg < arrayLength(&output)) {{ output[wg] = scratch[0]; flags[wg] = ovf[0]; }}\n\
          }}\n"
     ))
 }
@@ -2565,7 +2577,7 @@ pub fn emit_dot_kernel(elem: &str) -> Result<String, WgslError> {
          \n\
          \x20   // One partial per workgroup; the host folds them with the\n\
          \x20   // plain SUM shader, which is what makes dot and sum agree.\n\
-         \x20   if (t == 0u) {{ output[wg] = scratch[0]; }}\n\
+         \x20   if (t == 0u && wg < arrayLength(&output)) {{ output[wg] = scratch[0]; }}\n\
          }}\n"
     ))
 }
@@ -5461,7 +5473,7 @@ mod tests {
             "var stride: u32 = 32u;",
             "if (t < stride) { scratch[t] = scratch[t] + scratch[t + stride]; }",
             "stride = stride / 2u;",
-            "if (t == 0u) { output[wg] = scratch[0]; }",
+            "if (t == 0u && wg < arrayLength(&output)) { output[wg] = scratch[0]; }",
         ] {
             assert!(wgsl.contains(needle), "missing `{needle}` in:\n{wgsl}");
         }
@@ -5512,28 +5524,11 @@ mod tests {
         );
     }
 
-    /// Every reduce/scan shader must recover the FLAT thread index and the
-    /// FLAT workgroup number (B-2026-08-21-13).
-    ///
-    /// `run_compute` caps a dispatch's X extent at 65535 workgroups and
-    /// spreads anything longer across grid ROWS. So past
-    /// `65535 * 64 = 4_194_240` elements, a shader reading `gid.x` sees only
-    /// row 0, and one writing `output[wid.x]` has every row overwrite row
-    /// 0's partials. All twelve emitters here did both: `gpu.sum` of
-    /// 5_000_000 ones answered `4_194_240` (exactly one row), and `gpu.max`
-    /// answered 1 with the true maximum planted in the last element.
-    ///
-    /// The three MAP kernels always had this right, which is exactly why it
-    /// hid — the convention is documented on [`DISPATCH_X_SPAN`] and was
-    /// honoured everywhere except the family added last. A structural test
-    /// beats another end-to-end case here: the failure only appears above
-    /// four million elements, so no ordinary fixture reaches it.
-    ///
-    /// **A new reduce/scan emitter must be added to this list** — the
-    /// distinct-emitter count below is what makes that a failure rather
-    /// than an omission.
-    #[test]
-    fn every_reduction_shader_indexes_the_full_2d_dispatch_grid() {
+    /// Every reduce/scan shader the emitters can produce, built once and
+    /// shared by the structural gates over them. Extracted so a second gate
+    /// cannot drift from the first on WHICH shaders it covers — the failure
+    /// mode both are written to catch is an emitter nobody enumerated.
+    fn all_reduction_shaders() -> Vec<(&'static str, String)> {
         let mut shaders: Vec<(&str, String)> = Vec::new();
         for op in [ReduceOp::Sum, ReduceOp::Prod, ReduceOp::Min, ReduceOp::Max] {
             if let Ok(w) = emit_reduce_kernel(op, "f32") {
@@ -5575,6 +5570,32 @@ mod tests {
             }
         }
 
+        shaders
+    }
+
+    /// Every reduce/scan shader must recover the FLAT thread index and the
+    /// FLAT workgroup number (B-2026-08-21-13).
+    ///
+    /// `run_compute` caps a dispatch's X extent at 65535 workgroups and
+    /// spreads anything longer across grid ROWS. So past
+    /// `65535 * 64 = 4_194_240` elements, a shader reading `gid.x` sees only
+    /// row 0, and one writing `output[wid.x]` has every row overwrite row
+    /// 0's partials. All twelve emitters here did both: `gpu.sum` of
+    /// 5_000_000 ones answered `4_194_240` (exactly one row), and `gpu.max`
+    /// answered 1 with the true maximum planted in the last element.
+    ///
+    /// The three MAP kernels always had this right, which is exactly why it
+    /// hid — the convention is documented on [`DISPATCH_X_SPAN`] and was
+    /// honoured everywhere except the family added last. A structural test
+    /// beats another end-to-end case here: the failure only appears above
+    /// four million elements, so no ordinary fixture reaches it.
+    ///
+    /// **A new reduce/scan emitter must be added to this list** — the
+    /// distinct-emitter count below is what makes that a failure rather
+    /// than an omission.
+    #[test]
+    fn every_reduction_shader_indexes_the_full_2d_dispatch_grid() {
+        let shaders = all_reduction_shaders();
         let distinct: std::collections::BTreeSet<&str> = shaders.iter().map(|(n, _)| *n).collect();
         assert_eq!(
             distinct.len(),
@@ -5611,6 +5632,56 @@ mod tests {
         }
     }
 
+    /// Every per-workgroup output write is BOUNDED (B-2026-08-21-47).
+    ///
+    /// The grid pins x at 65535 and rounds y up, so it dispatches
+    /// `65535 * ceil(groups / 65535)` workgroups — 131070 for a 5M-record
+    /// buffer needing only 78125 partials. Each overshoot group still runs and
+    /// writes `output[wg]`, so a caller that sizes its output to the partial
+    /// count exactly (the resident field path does; the contiguous path
+    /// over-allocates to the input length and is safe only by accident) gets
+    /// an out-of-bounds store. Vulkan discards it and Metal CLAMPS it onto the
+    /// last slot, destroying a real partial — which is why this surfaced as a
+    /// Metal-only 64-element shortfall while lavapipe stayed green.
+    ///
+    /// A structural gate is right for THIS defect, unlike its sibling above:
+    /// the property is textual and uniform, and the shader is the only layer
+    /// that can enforce it, since it cannot see how generously its caller
+    /// allocated.
+    ///
+    /// WHAT THIS GATE DOES NOT CHECK: that each per-workgroup buffer is bounded
+    /// against ITS OWN length. Where a shader writes two of them under one
+    /// condition (`output[wg]` and `flags[wg]` together), the bound names only
+    /// one, and their lengths agree solely because every caller sizes both to
+    /// the partial count. That equivalence is a property of the callers, not of
+    /// the shader text, so it is out of reach here — this gate catches the
+    /// emitter that bounds NOTHING, which is the defect that shipped.
+    #[test]
+    fn every_reduction_shader_bounds_its_workgroup_output_write() {
+        for (name, wgsl) in all_reduction_shaders() {
+            // Every buffer a shader indexes BY WORKGROUP rather than by thread:
+            // the reduction partials, the scan's per-workgroup totals, and the
+            // overflow flag words. All three are sized to the partial count by
+            // at least one caller.
+            let per_workgroup = ["output", "flags", "totals"]
+                .into_iter()
+                .filter(|b| {
+                    wgsl.contains(&format!("{b}[wg] =")) || wgsl.contains(&format!("{b}[2u * wg"))
+                })
+                .collect::<Vec<_>>();
+            if per_workgroup.is_empty() {
+                continue;
+            }
+            assert!(
+                wgsl.lines()
+                    .any(|l| l.contains("wg") && l.contains("< arrayLength(&")),
+                "{name}: writes {per_workgroup:?} by workgroup but never bounds \
+                 `wg` against an array length, so an overshoot workgroup stores \
+                 past a tightly sized buffer\n{wgsl}"
+            );
+        }
+    }
+
     #[test]
     fn scan_kernel_matches_the_hand_validated_shader() {
         // Same contract as `reduce_kernel_matches_the_hand_validated_shader`:
@@ -5630,7 +5701,7 @@ mod tests {
             "if (t >= stride) { scratch[t] = scratch[t] + addend; }",
             "stride = stride * 2u;",
             "if (i < arrayLength(&input)) { output[i] = scratch[t]; }",
-            "if (t == 63u) { totals[wg] = scratch[63]; }",
+            "if (t == 63u && wg < arrayLength(&totals)) { totals[wg] = scratch[63]; }",
         ] {
             assert!(scan.contains(needle), "missing `{needle}` in:\n{scan}");
         }
@@ -5802,7 +5873,7 @@ mod tests {
         for shared in [
             "var<workgroup> idxs: array<u32, 64>;",
             "if (takes_b(idxs[t], idxs[t + stride])) { idxs[t] = idxs[t + stride]; }",
-            "if (t == 0u) { output[wg] = idxs[0]; }",
+            "if (t == 0u && wg < arrayLength(&output)) { output[wg] = idxs[0]; }",
         ] {
             assert!(seed.contains(shared), "seed missing `{shared}`");
             assert!(fold.contains(shared), "fold missing `{shared}`");
@@ -5836,7 +5907,7 @@ mod tests {
             "@compute @workgroup_size(64)",
             "var stride: u32 = 32u;",
             "if (t < stride) { scratch[t] = scratch[t] + scratch[t + stride]; }",
-            "if (t == 0u) { output[wg] = scratch[0]; }",
+            "if (t == 0u && wg < arrayLength(&output)) { output[wg] = scratch[0]; }",
         ] {
             assert!(dev.contains(shared), "deviation missing `{shared}`:\n{dev}");
             assert!(sum.contains(shared), "sum missing `{shared}`");
@@ -5952,7 +6023,7 @@ mod tests {
             "if (t < stride) { scratch[t] = scratch[t] + scratch[t + stride]; }",
             "workgroupBarrier();",
             "stride = stride / 2u;",
-            "if (t == 0u) { output[wg] = scratch[0]; }",
+            "if (t == 0u && wg < arrayLength(&output)) { output[wg] = scratch[0]; }",
         ] {
             assert!(dot.contains(shared), "dot missing `{shared}`:\n{dot}");
             assert!(sum.contains(shared), "sum missing `{shared}`:\n{sum}");
