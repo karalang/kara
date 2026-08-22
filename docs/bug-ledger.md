@@ -14344,7 +14344,7 @@ GATED by `every_reduction_shader_bounds_its_workgroup_output_write`, a sibling o
 VERIFIED: negative control -- reverting the guard in the strided emitter alone makes the new gate FAIL, so it catches the defect that shipped rather than merely passing. 103 emitter unit tests and the full 62-case `gpu_e2e` suite green on lavapipe (`KARAC_GPU_BACKEND=cpu`, `KARAC_REQUIRE_GPU_ADAPTER=1`); clippy clean on both feature legs.
 
 NOT VERIFIED HERE, and this is the honest limit: the failing surface is Metal, which this Linux container has no adapter for. lavapipe cannot reproduce the bug (it discards the out-of-bounds write), so a green local run proves NO REGRESSION, not the fix. The fix rests on the mechanism being established by construction -- tight sizing plus an overshoot grid equals an out-of-bounds store, and the guard makes that store impossible on any backend. CONFIRMATION IS THE `gpu-e2e-metal` CI JOB on this commit; if it still fails, the clamp hypothesis is wrong and the 64-element shortfall needs a different explanation. |
-| B-2026-08-21-51 | typecheck | medium | A GENERIC ENUM'S STRUCT-SHAPED VARIANT DOES NOT BIND ITS TYPE PARAMETER: constructing one infers the BARE head (`MyErr`, not `MyErr[u8]`) and a patte… | FIXED by 0a8cea90, at both sites the row described.
+| B-2026-08-21-51 | typecheck | medium | A GENERIC ENUM'S STRUCT-SHAPED VARIANT DOES NOT BIND ITS TYPE PARAMETER: constructing one infers the BARE head (`MyErr`, not `MyErr[u8]`) and a patte… | FIXED by c9f5115d (0a8cea90 pre-rebase), at both sites the row described.
 
 CONSTRUCTION. `infer_enum_struct_variant_literal` returned
 `args: Vec::new()` unconditionally, so the literal could only ever type as the
