@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 151 | 0 |
 | double-free | 135 | 0 |
 | codegen-gap | 129 | 0 |
-| diagnostics | 98 | 1 |
+| diagnostics | 98 | 0 |
 | false-positive | 94 | 0 |
 | perf | 84 | 1 |
 | other | 57 | 1 |
@@ -111,11 +111,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 996 | 3 |
-| typecheck | 246 | 3 |
+| typecheck | 246 | 2 |
 | interp | 174 | 0 |
 | other | 63 | 0 |
 | ownership | 62 | 0 |
-| cli | 62 | 1 |
+| cli | 62 | 0 |
 | autopar | 55 | 0 |
 | parser | 38 | 0 |
 | runtime | 31 | 2 |
@@ -124,14 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1499 surfaced · 6 open · 1470 fixed · 9 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1499 surfaced · 5 open · 1471 fixed · 9 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-22-23 | 2026-08-22 | codegen | low | A STRUCT-WITH-HEAP CHANNEL PAYLOAD LEAKS ITS OWN `String`/`Vec` FIELDS ON `try_send`'S REJECT PATH -- the `SendError.Full(v)` binding frees a String or Vec payload correctly, but a struct CARRYING them leaks each field; the identical user-generic-enum program is ASAN-clean | roadmap.md |
-| B-2026-08-22-25 | 2026-08-22 | typecheck+cli | low | `karac fix`'s `redundant_suffix` DELETION SPAN IS ONE CHARACTER SHORT ON THE UNDERSCORE-SEPARATED SUFFIX FORM: `0_i64` is rewritten to `0_`, leaving the separator that existed only to attach the suffix | roadmap.md |
 | B-2026-08-22-27 | 2026-08-22 | codegen+runtime | high | A COMPILED `Map[i64, V, H]` under any NON-DEFAULT hasher stops growing after one resize and silently drops every key past it: `len` still counts them, `contains_key` cannot find them, and the missing keys are the contiguous tail starting at exactly 3/4 of the stalled capacity (196609 at N=200000, 393217 at 400000, 786433 at 800000). `--interp` is correct, so it is a run-vs-build divergence; the default hasher never loses a key at any N | roadmap.md |
 | B-2026-08-22-28 | 2026-08-22 | typecheck | medium | An associated-type bound declared on a STDLIB-BAKED trait is never discharged at an impl site: `trait_assoc_decls` finds the trait declaration only by scanning `program.items`, and a baked trait lives in `env.traits` instead -- so `impl BuildHasher for B { type Hasher = <a type with no Hasher impl> }` type checks, while the same shape on a user-declared trait is correctly rejected with E_GAT_BOUND_NOT_SATISFIED | roadmap.md |
 | B-2026-08-22-29 | 2026-08-22 | codegen+runtime | medium | `FxBuildHasher` is 13.7x SLOWER than the default `SipHash13BuildHasher` on `String` keys (1.23 s vs 0.09 s, 200k inserts + 1M lookups, compiled, arm64) -- the exact opposite of the speed-for-safety trade the stdlib comment and design.md offer it as; a user-written FNV-1a hasher is at parity with the default, so a non-default hasher is not inherently slow | roadmap.md |
@@ -155,9 +154,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1499 surfaced
 
 </details>
 
-### Fixed (1470)
+### Fixed (1471)
 
-<details><summary>1470 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1471 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -16423,6 +16422,62 @@ fails a test.
 
 Full suite: 109 binaries, 14888 passed, 0 failed. fmt clean; clippy clean on
 both feature legs and on the wasm32-wasip1 arm (the runtime changed). |
+| B-2026-08-22-25 | typecheck+cli | low | `karac fix`'s `redundant_suffix` DELETION SPAN IS ONE CHARACTER SHORT ON THE UNDERSCORE-SEPARATED SUFFIX FORM: `0_i64` is rewritten to `0_`, leaving… | Fixed in 098daf6. `0_i64` -> `0` and `1_000_i64` -> `1_000`; `42i64` -> `42`
+was already right and stays so.
+
+WHERE IT IS FIXED IS THE ONE INTERESTING PART, because the obvious place does
+not work. `warn_redundant_suffix` derives the deletion as the last
+`suffix.len()` bytes of the literal token, and to widen it over the separator
+it would have to look at the byte before -- which it CANNOT SEE:
+`typecheck(program, resolve_result)` takes no source text, and the token
+carries a numeric VALUE plus a suffix enum rather than the author's digits, so
+`0_i64`, `0i64` and `0x0i64` are indistinguishable there. Threading source
+through every caller of `typecheck` to recover one underscore is not a trade
+worth making for a cosmetic defect.
+
+`Pipeline` already holds the text for exactly this purpose. Its `source`
+field's own doc says "Span-driven lints need the author's own spelling", and
+the `map_value_clone_reinsert` lint one block above already reads it the same
+way; the widening runs immediately after, in the same place and pattern.
+
+THAT ALSO SERVES BOTH CONSUMERS FROM ONE PLACE, which a fix inside `cmd_fix`
+would not have. `karac fix` and `--output=json`'s `fix_it` object read the
+same span, so correcting only the CLI would have left every IDE applying the
+published edit still producing `0_`. There is a test pinning the JSON offset
+and length for that reason, separate from the CLI one.
+
+WHY WALKING BACK CANNOT OVER-DELETE: an underscore directly abutting the
+suffix can only be the attaching separator, because a digit separator has a
+digit after it. `1_000_i64` keeps its digit separators and loses only the
+attaching one -- asserted, not assumed, since that is the case a careless
+"strip trailing underscores" would get wrong.
+
+COSMETIC CONFIRMED, NOT ASSUMED: the tests assert the rewritten file still
+runs and prints the same values (`0 1000 42`), which is what keeps this low
+severity. It is worth fixing because `karac fix` is the primary fix path the
+Mend loop tells authors to trust, and a rewrite that emits syntax nobody would
+write undermines exactly the surface it sells.
+
+THE LIVE REPRODUCTION IS CLEANED UP. The row left six dangling literals in
+kara-katas bespoke/word-frequency/word_frequency.kara deliberately, as the
+in-tree repro; that is now redundant with the tests, and `karac fix` cannot
+remove them (there is no suffix left to delete), so they were hand-edited in
+kara-katas 19484c5. Verified byte-identical before and after on all three
+surfaces -- `run --interp`, `build`, and `KARAC_AUTO_PAR=0 build` -- with
+KARAC_HASH_SEED pinned because the kata walks a Map, and all three agree.
+
+METHOD NOTE, because the first A/B run reported a difference that did not
+exist: the comparison harness redirected `karac build` to /dev/null, the
+`karac` under test had been built WITHOUT `--features llvm` so `build` fell
+back to type-check and emitted no binary, and the script then hashed bash's
+"./before: No such file or directory" -- which differs from the `after`
+message by the filename alone. Every "before != after" number in that pass was
+an artifact of the two file names. Rebuilding with `--features llvm` gave
+identical output on all three surfaces. Do not swallow the build output of a
+comparison harness.
+
+Full suite after rebasing onto B-2026-08-22-6's hasher work: 109 binaries,
+14907 passed, 0 failed. fmt clean; clippy clean on both feature legs. |
 | B-2026-08-22-26 | codegen | high | A collection literal passed to a `ref Slice[T]` parameter through a METHOD CALL fails LLVM module verification -- `coerce_to_slice` builds the `{ptr,… | FIXED by 840f95ef, in the same commit as B-2026-08-22-6, by giving the method-call argument
 loop the arm the free-function path has had since B-2026-08-21-24: when the
 parameter is `ref`, spill `coerce_to_slice`'s synthesized header through
