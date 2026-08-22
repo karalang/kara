@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 275 | 1 |
-| leak | 186 | 1 |
+| leak | 187 | 1 |
 | run-vs-build | 148 | 0 |
 | missing-feature | 143 | 6 |
 | double-free | 134 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 984 | 9 |
+| codegen | 985 | 9 |
 | typecheck | 232 | 4 |
 | interp | 171 | 1 |
 | other | 62 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 8 | 1 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1462 surfaced · 14 open · 1426 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1463 surfaced · 14 open · 1427 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (14)
 
@@ -137,13 +137,13 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1462 surfaced
 | B-2026-08-21-26 | 2026-08-21 | typecheck | medium | `TryFrom[intN]` FOR A C-LIKE `#[repr(intN)]` ENUM DOES NOT EXIST -- design.md § Enum Discriminant Runtime Surface commits to auto-generating it and shows the worked `match UsbClass.try_from(raw)`, which fails to compile | roadmap.md |
 | B-2026-08-21-29 | 2026-08-21 | typecheck | medium | THREE DOCUMENTED SURFACES ARE NOT REACHABLE AS WRITTEN: every spelling of channel construction design.md uses (`Channel.new[T]()`, `Channel.bounded`), its whole `io.` I/O prefix, and `allocates(Heap)` -- whose `Heap` the document never declares and the prelude does not provide | roadmap.md |
 | B-2026-08-21-32 | 2026-08-21 | resolver+effect | medium | EFFECT RESOURCES CANNOT BE ROOTED AT A VALUE, so design.md's whole channel effect model is unwritable: `with sends(tx)` on a channel PARAMETER is `'tx' is not an effect resource (it is a variable)`, and the seven `Sender`/`Receiver` declarations at :6064-:6094 are all written that way | roadmap.md |
-| B-2026-08-21-40 | 2026-08-21 | codegen | medium | A `mut ref String` ARGUMENT ON A **FIELD** PLACE LEAKS THE FIELD'S ORIGINAL BUFFER WHEN THE CALLEE REASSIGNS IT -- `free_app(mut b.name)` with a body of `s = s + "!"` leaks 8 bytes per call under LeakSanitizer while the identical call on an IDENTIFIER place is clean; both the free-function and the method spelling are affected | roadmap.md |
 | B-2026-08-21-42 | 2026-08-21 | codegen | medium | NO `self.<method>()` DISPATCHER ON AN `impl ... for Array[T, N]` BODY -- `self.get(0)` inside the impl fails codegen with "no handler for method 'get' on non-identifier receiver" while `--interp` runs it, the Array twin of the fixed B-2026-08-18-12 (Map/Set) and -11 | roadmap.md |
 | B-2026-08-21-43 | 2026-08-21 | codegen | low | A USER IMPL ON A **NON-SCALAR** `Array` HEAD IS UNCALLABLE ON A TEMPORARY -- `mk().tag()` for `impl Tag for Array[String, 2]` still loud-fails after B-2026-08-21-25, which admits only scalar-element arrays because a scalar array is the case that owns no heap | roadmap.md |
 | B-2026-08-21-44 | 2026-08-21 | codegen | low | `as_slice()` ON A FIXED-ARRAY **TEMPORARY** HAS NO CODEGEN LOWERING -- `n.to_ne_bytes().as_slice().len()` fails dispatch while `--interp` answers, the one method of the Array surface B-2026-08-21-25 left out | roadmap.md |
 | B-2026-08-21-45 | 2026-08-21 | typecheck+codegen | low | FIVE SHIPPED USER-FACING DIAGNOSTICS CARRY RUNS OF 14-30 SPACES mid-sentence, because rustfmt INTERMITTENTLY rejoins a `\`-continued string literal into one line and keeps the continuation indentation as real spaces | roadmap.md |
 | B-2026-08-21-46 | 2026-08-21 | codegen | low | `enumerate` OVER AN ARRAY **LITERAL** STILL BAILS LOUD -- `for (i, x) in [1, 2, 3].iter().enumerate()` hits the adaptor backstop while `--interp` answers, the one source shape B-2026-08-21-41's widening could not reach | roadmap.md |
 | B-2026-08-22-1 | 2026-08-22 | codegen | high | A BAKED-STDLIB ENUM WITH NO CODEGEN LAYOUT SEED LOWERS EVERY VARIANT'S TAG TO **0**, SILENTLY -- `let m = MemoryOrdering.Acquire; match m { ... }` prints `Acquire` under `--interp` and `Relaxed` under AOT, with no diagnostic; the bare form (`let m = SeqCst`) is a loud `Undefined variable 'SeqCst'` on the same axis, so the type has both halves of the defect | roadmap.md |
+| B-2026-08-21-47 | 2026-08-22 | codegen | medium | A `shared struct` FIELD SOURCE LEAKS A DIFFERENT BUFFER THAN THE PLAIN-STRUCT ONE DID -- `last = s.name` off a `shared struct` leaks the POST-append body (3 bytes/call) where the plain-struct shape leaked the PRE-append one, so the fix for B-2026-08-21-40 does not reach it | roadmap.md |
 
 ### Wontfix (8)
 
@@ -162,9 +162,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1462 surfaced
 
 </details>
 
-### Fixed (1426)
+### Fixed (1427)
 
-<details><summary>1426 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1427 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -14029,6 +14029,88 @@ belongs in a shared helper the three loops call, not replicated three times; the
 `coerce_to_slice` branch added here is a fourth copy of the same six lines, and
 the right follow-up is to lift argument coercion into one place rather than wait
 for a fifth call form to file a fifth row. |
+| B-2026-08-21-40 | codegen | medium | A `mut ref String` ARGUMENT ON A **FIELD** PLACE LEAKS THE FIELD'S ORIGINAL BUFFER WHEN THE CALLEE REASSIGNS IT -- `free_app(mut b.name)` with a body… | FIXED by e6d0dbe — one gate widened in `src/codegen/stmts.rs`:
+`rhs_is_place_field_move = obj_name.is_none()` becomes `= true`.
+
+THE ROW'S DIAGNOSIS WAS WRONG, and correcting it is most of what this fix is.
+The row read the leak as a `mut ref` defect: the callee holds a pointer to the
+caller's field slot, reassigns through it, and nothing frees what the slot held
+before the store. `mut ref` turns out to be INCIDENTAL.
+
+WHAT THE IR SHOWED. The struct literal's `"n"` is a STATIC — `{ptr @str.1, i64
+1, i64 0}`, cap 0 — so the field holds no heap buffer at all when `free_app` is
+called, and there is nothing for the callee to leak. The callee's append is
+lowered IN PLACE (`try_compile_string_append_in_place`), takes the fresh-alloc
+branch because cap is 0, and correctly leaves the static alone. The leak is
+entirely in the caller's NEXT statement, `last = b.name`, which emits
+`store %name, ptr %last` with no preceding release of `%last`'s buffer.
+
+So it reproduces with NO `mut ref` anywhere:
+
+    struct Box { name: String }
+    fn main() {
+        let mut i = 0i64;
+        let mut last: String = "";
+        while i < 50i64 {
+            let b = Box { name: "n" + "!" };
+            last = b.name;
+            i = i + 1i64;
+        }
+        println(last);
+    }
+
+    Direct leak of 98 byte(s) in 49 object(s)   (49 x 2, the "n!" body)
+
+This matters beyond bookkeeping: a fix aimed at the reported `mut ref` path
+would have made the reported repro pass and left the real defect in place. Both
+spellings are now pinned as separate fixtures for that reason.
+
+THE ACTUAL GATE. `trigger_eager_free` frees the LHS's displaced buffer, and its
+`rhs_is_place_field_move` classifier was armed for DEEP places only
+(`stats[0].region`), with this justification:
+
+    // Only the deeper-place branch. The shallow `obj.field` forms above are
+    // already covered — their source struct is itself a local whose scope-exit
+    // drop reclaims the displaced buffer — and arming this for them would free
+    // a buffer that still has an owner.
+
+That conflates two different buffers. The source struct's drop reclaims the
+SOURCE's field — which the `suppress_struct_field_move_into_literal` call
+immediately above has just handed to the target anyway — whereas the buffer at
+risk is the one the TARGET already held, on which the source never had any
+claim. The shallow form needs the same arming as the deep one, and the
+`keep_aliased_slot_ownership` neutralization already sitting in that branch
+covers the case the comment was really guarding against (a RHS that reads the
+very slot it is about to overwrite, `cur = stats[0].region` run twice).
+
+THE COMMENT'S PREDICTION WAS TESTED, NOT ASSUMED. It said arming this would free
+a buffer that still has an owner — i.e. a double free. Measured against the full
+LeakSanitizer corpus after the change: 1137 passed, 0 failed, 0 double-frees, 0
+use-after-frees. Full suite 108 binaries / 14,726 tests / 0 failures; fmt clean;
+clippy 0 on both feature legs.
+
+THE ROW'S FIVE-SHAPE TABLE WAS RIGHT ABOUT WHAT LEAKS AND WRONG ABOUT WHY, and
+the corrected boundary is narrower still. The leak needs all three of: a ONE-HOP
+field RHS, a String payload, and a LIVE target. Re-measured with the `mut ref`
+removed so the RHS shape is the only variable:
+
+    RHS of `last = ...`            result
+    one-hop struct field           LEAKS
+    identifier                     clean
+    call                           clean
+    NESTED field (b.inner.name)    clean
+    one-hop field, Vec payload     clean
+
+The three clean columns the row flagged as "the interesting part" are explained
+by this: nested and Vec take different classifier arms that were already armed,
+and the identifier/call RHS shapes are classified by `rhs_is_moved_alias` /
+`rhs_is_fresh`. Only the one-hop-field + String intersection fell through every
+arm, which is how it survived a corpus of ~1150 memory fixtures.
+
+RESIDUAL, unchanged and still open: the row's `shared struct` column leaks a
+DIFFERENT amount (3 bytes/call, the post-append body rather than the pre-append
+one) and routes through `shared_mut_ref_place_arg_ptr`, a different entry point.
+That was not touched here and is not covered by either fixture. |
 | B-2026-08-21-41 | codegen | high | ITERATING A FIXED-ARRAY **TEMPORARY** SILENTLY YIELDS ZERO ELEMENTS under `karac build` -- `n.to_ne_bytes().iter().count()` is 0 (interp: 2) and `for… | Fixed in 521ca182.
 
 THE ROW'S DIAGNOSIS WAS RIGHT, including its pointer at
