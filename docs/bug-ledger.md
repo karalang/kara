@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 277 | 1 |
 | leak | 187 | 0 |
 | run-vs-build | 149 | 0 |
-| missing-feature | 144 | 6 |
+| missing-feature | 144 | 5 |
 | double-free | 134 | 0 |
 | codegen-gap | 128 | 3 |
 | diagnostics | 95 | 2 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 988 | 7 |
-| typecheck | 233 | 4 |
+| typecheck | 233 | 3 |
 | interp | 172 | 1 |
 | other | 62 | 0 |
 | ownership | 62 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 8 | 1 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1468 surfaced · 12 open · 1434 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1468 surfaced · 11 open · 1435 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (12)
+### Open (11)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -141,7 +141,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1468 surfaced
 | B-2026-08-21-45 | 2026-08-21 | typecheck+codegen | low | FIVE SHIPPED USER-FACING DIAGNOSTICS CARRY RUNS OF 14-30 SPACES mid-sentence, because rustfmt INTERMITTENTLY rejoins a `\`-continued string literal into one line and keeps the continuation indentation as real spaces | roadmap.md |
 | B-2026-08-21-46 | 2026-08-21 | codegen | low | `enumerate` OVER AN ARRAY **LITERAL** STILL BAILS LOUD -- `for (i, x) in [1, 2, 3].iter().enumerate()` hits the adaptor backstop while `--interp` answers, the one source shape B-2026-08-21-41's widening could not reach | roadmap.md |
 | B-2026-08-21-50 | 2026-08-21 | codegen | high | A C-LIKE ENUM BOUND OUT OF `Ok(...)` MATCHES THE WRONG VARIANT UNDER CODEGEN -- `Ok(UsbClass.Hid)` selects the FIRST variant, and passing the binding to a function taking the enum fails LLVM verification outright; the interpreter is correct, so this is a silent run-vs-build divergence | codegen |
-| B-2026-08-21-51 | 2026-08-21 | typecheck | medium | A GENERIC ENUM'S STRUCT-SHAPED VARIANT DOES NOT BIND ITS TYPE PARAMETER: constructing one infers the BARE head (`MyErr`, not `MyErr[u8]`) and a pattern binds the payload as the uninstantiated `D`, so `value as i64` is rejected with "cannot cast 'D' to 'i64'" | typecheck |
 
 ### Wontfix (8)
 
@@ -160,9 +159,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1468 surfaced
 
 </details>
 
-### Fixed (1434)
+### Fixed (1435)
 
-<details><summary>1434 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1435 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -14345,6 +14344,52 @@ GATED by `every_reduction_shader_bounds_its_workgroup_output_write`, a sibling o
 VERIFIED: negative control -- reverting the guard in the strided emitter alone makes the new gate FAIL, so it catches the defect that shipped rather than merely passing. 103 emitter unit tests and the full 62-case `gpu_e2e` suite green on lavapipe (`KARAC_GPU_BACKEND=cpu`, `KARAC_REQUIRE_GPU_ADAPTER=1`); clippy clean on both feature legs.
 
 NOT VERIFIED HERE, and this is the honest limit: the failing surface is Metal, which this Linux container has no adapter for. lavapipe cannot reproduce the bug (it discards the out-of-bounds write), so a green local run proves NO REGRESSION, not the fix. The fix rests on the mechanism being established by construction -- tight sizing plus an overshoot grid equals an out-of-bounds store, and the guard makes that store impossible on any backend. CONFIRMATION IS THE `gpu-e2e-metal` CI JOB on this commit; if it still fails, the clamp hypothesis is wrong and the 64-element shortfall needs a different explanation. |
+| B-2026-08-21-51 | typecheck | medium | A GENERIC ENUM'S STRUCT-SHAPED VARIANT DOES NOT BIND ITS TYPE PARAMETER: constructing one infers the BARE head (`MyErr`, not `MyErr[u8]`) and a patte… | FIXED by 0a8cea90, at both sites the row described.
+
+CONSTRUCTION. `infer_enum_struct_variant_literal` returned
+`args: Vec::new()` unconditionally, so the literal could only ever type as the
+bare head. Its struct-literal sibling has solved params from the field values
+since B-2026-07-03-23 -- whose comment names the same hazard, a bare `Box`
+laid out with a default i64 element that silently mis-reads a non-i64 field
+under build. The enum path now runs the same instantiate -> check -> resolve
+idiom (fresh metavar per param, RAW declared type pushed at `check_expr` so an
+unresolved slot cannot report a spurious mismatch, unify the recorded actual
+against the substituted slot, resolve). It also carries the struct path's
+conflicting-second-field diagnostic (B-2026-07-18-51): a `String` in a second
+`T` field already bound to `i64` is REPORTED rather than silently resolved to
+the greedy first binding, which on the struct side had been a miscompile.
+
+PATTERNS. The `TupleVariant` arm already substituted the scrutinee's concrete
+args into the variant's declared field types -- its comment cites `Err(e)`
+against `Result[i64, MyError]` binding `e: MyError` rather than
+`TypeParam("E")`. The struct-shaped arm cloned the declared types untouched.
+It now performs the same substitution, guarded on matching arity so an
+unsolved or error scrutinee leaves the declared types alone.
+
+GENERIC STRUCTS took that identical pattern path and had the identical gap.
+Fixed and covered in the same change rather than left to be rediscovered under
+a separate id.
+
+CLOSES A LOOP: B-2026-08-21-26's E2E printed the `Err` payload instead of
+casting it precisely because of this bug, and said so. That test now casts,
+which is the stronger assertion -- it proves the payload arrives at the enum's
+repr width rather than merely that some number was stored.
+
+VERIFIED: both halves, plus a generic struct pattern and the
+`DiscriminantError.OutOfRange { value } as i64` case, byte-identical under
+`run --interp`, `build` and `KARAC_AUTO_PAR=0 build`. 4 new typechecker tests
+(construction, enum pattern, struct pattern, conflicting field); suite 2416,
+was 2412. fmt + clippy clean on both feature legs; interpreter (1665),
+resolver, lowering, monomorphization and design.md conformance green. Codegen
+3150 passed with the same 5 pre-existing `normalize_*` failures that fail
+identically with these changes stashed.
+
+NOT ADDRESSED, and out of scope for this row: seeding the params from an
+EXPECTED type's args, which the struct path does (B-2026-07-18-17) and this
+does not. Inference from the field values covers every case in the row and
+both repros; an expected-type seed would additionally let a field value be
+checked against a concrete slot (so `Vec.new()` in a generic enum variant
+could infer its element). Worth doing if that shape ever shows up. |
 | B-2026-08-22-1 | codegen | high | `MemoryOrdering` REACHED CODEGEN WITH NO ENUM LAYOUT, so every match arm compiled to a BINDING pattern instead of a tag test and the first arm always… | FIXED by fb328c9. TWO PARTS: seed the one affected enum, and make the failure mode loud so the next one cannot be silent.
 
 THIS ROW'S CAUSE AND SCOPE WERE BOTH WRONG, and measuring them is what produced the real fix. The row said the cause was a missing SEED in `declarations.rs` and named six candidate enums. Neither held:
