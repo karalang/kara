@@ -270,6 +270,24 @@ pub struct EffectParam {
 pub struct TraitBound {
     pub path: Vec<String>,
     pub generic_args: Option<Vec<GenericArg>>,
+    /// Inline associated-type bindings written inside the bound's bracket
+    /// list — the `Item = T` of `Iterator[Item = T]` (design.md § Iterator
+    /// and the Vec/Map/SortedMap method tables; B-2026-08-21-9). Kept
+    /// SEPARATE from `generic_args` because they are not positional type
+    /// arguments: the desugar pass hoists each one into an equivalent
+    /// `WhereConstraint::AssocTypeEq` on the enclosing item, which is the
+    /// form the rest of the compiler already understands, so nothing
+    /// downstream of `desugar_program` ever sees this field non-empty.
+    pub assoc_bindings: Vec<AssocBinding>,
+    pub span: Span,
+}
+
+/// One `IDENT = TYPE` inside a trait bound's bracket list. See
+/// [`TraitBound::assoc_bindings`].
+#[derive(Debug, Clone)]
+pub struct AssocBinding {
+    pub name: String,
+    pub ty: TypeExpr,
     pub span: Span,
 }
 

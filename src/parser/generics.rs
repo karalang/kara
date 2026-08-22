@@ -234,14 +234,28 @@ impl super::Parser {
     pub(crate) fn parse_trait_bound(&mut self) -> Option<TraitBound> {
         let start = self.current_span();
         let path = self.parse_path_segments()?;
+        // A trait bound's bracket list is the ONE position where `IDENT =
+        // TYPE` is an associated-type binding rather than a positional type
+        // argument (B-2026-08-21-9). Enable it for exactly this list and drain
+        // whatever the shared arg parser collected; the saved/restored pair
+        // keeps a nested bound (a supertrait list, a projection bound) from
+        // inheriting or clobbering an outer one's bindings.
+        let saved_allowed = self.assoc_bindings_allowed;
+        let saved_pending = std::mem::take(&mut self.pending_assoc_bindings);
         let generic_args = if self.check(&Token::LeftBracket) {
-            Some(self.parse_generic_type_args()?)
+            self.assoc_bindings_allowed = true;
+            let args = self.parse_generic_type_args();
+            self.assoc_bindings_allowed = saved_allowed;
+            Some(args?)
         } else {
             None
         };
+        let assoc_bindings = std::mem::replace(&mut self.pending_assoc_bindings, saved_pending);
+        self.assoc_bindings_allowed = saved_allowed;
         Some(TraitBound {
             path,
             generic_args,
+            assoc_bindings,
             span: self.span_from(&start),
         })
     }
@@ -510,6 +524,36 @@ impl super::Parser {
         loop {
             if self.check(&Token::RightBracket) {
                 break;
+            }
+            // Inline associated-type binding — `Src[Item = i64]`. Only in a
+            // trait bound (the flag), and only for `IDENT =`: a positional
+            // arg may also be a bare identifier (`Vec[T]`), so the `=` two
+            // tokens ahead is what disambiguates. B-2026-08-21-9.
+            if self.assoc_bindings_allowed
+                && matches!(self.peek_token_ref(), Token::Identifier { .. })
+                && matches!(
+                    self.tokens.get(self.pos + 1).map(|t| &t.token),
+                    Some(Token::Equal)
+                )
+            {
+                let bstart = self.current_span();
+                let name = self.expect_identifier()?;
+                self.expect(&Token::Equal)?;
+                // The binding's own type is an ORDINARY type: clear the flag
+                // so `Src[Item = Vec[X = Y]]` rejects the inner form.
+                let saved = self.assoc_bindings_allowed;
+                self.assoc_bindings_allowed = false;
+                let ty = self.parse_type();
+                self.assoc_bindings_allowed = saved;
+                self.pending_assoc_bindings.push(crate::ast::AssocBinding {
+                    name,
+                    ty: ty?,
+                    span: self.span_from(&bstart),
+                });
+                if !self.eat(&Token::Comma) {
+                    break;
+                }
+                continue;
             }
             // Shape literal args: a `[` starting a generic argument is a
             // SHAPE_LIT (`Tensor[f64, [3, 4, ?]]`) — no other generic-arg

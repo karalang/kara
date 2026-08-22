@@ -19,6 +19,7 @@ use crate::token::Span;
 /// Today: argument-position `impl Trait` desugar (slice 2) and
 /// parallel/destructuring-assignment desugar.
 pub fn desugar_program(program: &mut Program) {
+    hoist_assoc_bindings_in_program(program);
     synthesize_default_impls(program);
     synthesize_trait_default_methods(program);
     propagate_codegen_hints(program);
@@ -29,6 +30,123 @@ pub fn desugar_program(program: &mut Program) {
     // inside synthesized bodies (trait default methods, multiversion thunks)
     // are filled too.
     crate::default_args::fill_default_args_in_program(program);
+}
+
+/// Hoist every inline associated-type binding written inside a trait bound
+/// (`[I: Iterator[Item = T]]`, `where I: Iterator[Item = T]`) into the
+/// equivalent `WhereConstraint::AssocTypeEq` on the enclosing item
+/// (B-2026-08-21-9).
+///
+/// design.md writes the inline form on 43 lines — the Vec/Map/SortedMap
+/// stdlib method tables among them — and syntax.md's own prose uses it, but
+/// syntax.md's `TRAIT_BOUND` grammar never defined it and the parser
+/// implemented the grammar. The WHERE-CLAUSE spelling (`where I.Item = T`)
+/// was already accepted and fully wired, so the surface syntax is lowered
+/// onto it rather than given semantics of its own: after this pass no
+/// `TraitBound::assoc_bindings` is ever non-empty, and every downstream
+/// consumer — declaration-site validation, call-site discharge, the
+/// resolver, the formatter, the catalog — sees only the constraint form it
+/// already handles.
+///
+/// Runs FIRST in `desugar_program` so the later passes (which synthesize
+/// items and rewrite `impl Trait` arguments) operate on already-hoisted
+/// input.
+fn hoist_assoc_bindings_in_program(program: &mut Program) {
+    for item in &mut program.items {
+        match item {
+            Item::Function(f) => hoist_fn_assoc_bindings(f),
+            Item::StructDef(s) => {
+                hoist_bounds_into_where(&mut s.generic_params, &mut s.where_clause)
+            }
+            Item::EnumDef(e) => hoist_bounds_into_where(&mut e.generic_params, &mut e.where_clause),
+            Item::TraitDef(t) => {
+                hoist_bounds_into_where(&mut t.generic_params, &mut t.where_clause);
+                for ti in &mut t.items {
+                    if let TraitItem::Method(m) = ti {
+                        hoist_bounds_into_where(&mut m.generic_params, &mut m.where_clause);
+                    }
+                }
+            }
+            Item::ImplBlock(b) => {
+                hoist_bounds_into_where(&mut b.generic_params, &mut b.where_clause);
+                for ii in &mut b.items {
+                    if let ImplItem::Method(m) = ii {
+                        hoist_fn_assoc_bindings(m);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn hoist_fn_assoc_bindings(f: &mut Function) {
+    hoist_bounds_into_where(&mut f.generic_params, &mut f.where_clause);
+}
+
+/// Drain the bindings off every bound in `generic_params` and in the where
+/// clause's own `TypeBound`s, appending one `AssocTypeEq` per binding.
+///
+/// The constraint's `type_name` is the parameter the bound applies to — `I`
+/// for `I: Iterator[Item = T]` — which is why this runs here rather than in
+/// `parse_trait_bound`: a bound does not know what it bounds.
+fn hoist_bounds_into_where(
+    generic_params: &mut Option<GenericParams>,
+    where_clause: &mut Option<WhereClause>,
+) {
+    let mut hoisted: Vec<WhereConstraint> = Vec::new();
+
+    if let Some(gp) = generic_params.as_mut() {
+        for p in &mut gp.params {
+            let owner = p.name.clone();
+            for b in &mut p.bounds {
+                drain_bound(&owner, b, &mut hoisted);
+            }
+        }
+    }
+    if let Some(wc) = where_clause.as_mut() {
+        for c in &mut wc.constraints {
+            if let WhereConstraint::TypeBound {
+                type_name, bounds, ..
+            } = c
+            {
+                let owner = type_name.clone();
+                for b in bounds {
+                    drain_bound(&owner, b, &mut hoisted);
+                }
+            }
+        }
+    }
+
+    if hoisted.is_empty() {
+        return;
+    }
+    match where_clause {
+        Some(wc) => wc.constraints.extend(hoisted),
+        // No `where` was written: synthesize one spanning the first
+        // constraint, so diagnostics still point at real source.
+        none => {
+            let span = match &hoisted[0] {
+                WhereConstraint::AssocTypeEq { span, .. } => *span,
+                _ => Span::default(),
+            };
+            *none = Some(WhereClause {
+                constraints: hoisted,
+                span,
+            });
+        }
+    }
+}
+
+fn drain_bound(owner: &str, bound: &mut TraitBound, out: &mut Vec<WhereConstraint>) {
+    for binding in std::mem::take(&mut bound.assoc_bindings) {
+        out.push(WhereConstraint::AssocTypeEq {
+            type_name: owner.to_string(),
+            assoc_name: binding.name,
+            ty: binding.ty,
+            span: binding.span,
+        });
+    }
 }
 
 /// Where a `#[multiversion]` function lives — decides how the dispatch thunk
@@ -2005,6 +2123,11 @@ fn desugar_impl_trait_args_in_function(f: &mut Function) {
             } else {
                 Some(args.clone())
             },
+            // Argument-position `impl Trait` carries no inline
+            // associated-type binding yet: `TypeKind::ImplTrait` has no field
+            // for one, so `impl Src[Item = i64]` is still a parse error in
+            // type position (B-2026-08-21-9 item 1c, split out).
+            assoc_bindings: Vec::new(),
             span: *impl_trait_span,
         };
         synthetic_params.push(GenericParam {

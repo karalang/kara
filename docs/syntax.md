@@ -2165,7 +2165,15 @@ GENERIC_ARGS     = "[" GENERIC_ARG_LIST "]"
 GENERIC_ARG_LIST = GENERIC_ARG { "," GENERIC_ARG }
 GENERIC_ARG      = TYPE | EXPR | SHAPE_LIT   // type arg, const expression, or shape literal
 
-TRAIT_BOUND = PATH [ "[" TYPE_LIST "]" ]
+TRAIT_BOUND = PATH [ "[" BOUND_ARG { "," BOUND_ARG } "]" ]
+BOUND_ARG   = GENERIC_ARG | ASSOC_BINDING
+ASSOC_BINDING = IDENT "=" TYPE
+              // Inline associated-type binding — `Iterator[Item = T]`.
+              // Legal ONLY in a trait bound; a plain type's bracket list
+              // (`Vec[T]`) takes positional args only. Equivalent to, and
+              // lowered to, the where-clause form `T "." IDENT "=" TYPE`
+              // above: `[I: Iterator[Item = T]]` desugars to
+              // `[I: Iterator] where I.Item = T`. B-2026-08-21-9.
 ```
 
 Effect parameters (`with E`) are declared in the same generic list as type and const parameters. They propagate to the function's effect clause: `fn map[T, U, with E](list: Vec[T], f: Fn(T) -> U with E) -> Vec[U] with E`. See `design.md § Generics` for the effect-polymorphism rules.

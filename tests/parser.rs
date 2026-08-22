@@ -15078,3 +15078,73 @@ fn test_loop_attribute_still_parses_after_statement_attributes_landed() {
         "fn main() { let mut acc = 0i64; #[par_order_free] for i in 0..4i64 { acc = acc + i; } }",
     );
 }
+
+// ── Inline associated-type bindings (B-2026-08-21-9) ────────────
+
+/// design.md writes `Iterator[Item = T]` on 43 lines — the Vec/Map/SortedMap
+/// stdlib method tables among them — and syntax.md's own prose uses it, but
+/// syntax.md's `TRAIT_BOUND` grammar never defined the form and the parser
+/// implemented the grammar. Three artifacts disagreed; the grammar now has
+/// the production and the parser accepts it.
+#[test]
+fn test_inline_assoc_binding_parses_in_a_generic_param_bound() {
+    let _ = parse_ok("trait Src { type Item; }\nfn take[I: Src[Item = i64]](it: I) -> i64 { 0 }");
+}
+
+#[test]
+fn test_inline_assoc_binding_parses_in_a_where_clause_bound() {
+    let _ = parse_ok(
+        "trait Src { type Item; }\nfn take[I](it: I) -> i64 where I: Src[Item = i64] { 0 }",
+    );
+}
+
+/// The binding is lowered onto the where-clause spelling that was already
+/// wired (`where I.Item = i64`), so nothing downstream of `desugar_program`
+/// needs to know the inline form exists. Asserted on the DESUGARED program:
+/// the bound keeps its trait, and the constraint appears in the where clause.
+#[test]
+fn test_inline_assoc_binding_desugars_to_an_assoc_type_eq_constraint() {
+    let mut program =
+        parse_ok("trait Src { type Item; }\nfn take[I: Src[Item = i64]](it: I) -> i64 { 0 }");
+    karac::desugar_program(&mut program);
+    let f = program
+        .items
+        .iter()
+        .find_map(|i| match i {
+            Item::Function(f) if f.name == "take" => Some(f),
+            _ => None,
+        })
+        .expect("fn take");
+    let gp = f.generic_params.as_ref().expect("generic params");
+    assert!(
+        gp.params[0].bounds[0].assoc_bindings.is_empty(),
+        "the binding must be drained off the bound, not left for downstream phases"
+    );
+    let wc = f
+        .where_clause
+        .as_ref()
+        .expect("a where clause is synthesized");
+    assert!(
+        wc.constraints.iter().any(|c| matches!(
+            c,
+            WhereConstraint::AssocTypeEq { type_name, assoc_name, .. }
+                if type_name == "I" && assoc_name == "Item"
+        )),
+        "expected `I.Item = i64` hoisted into the where clause, got {:?}",
+        wc.constraints
+    );
+}
+
+/// A plain type's bracket list takes positional args only — the binding form
+/// is legal in a TRAIT BOUND and nowhere else, so the flag that enables it is
+/// cleared while the binding's own type is parsed.
+#[test]
+fn test_assoc_binding_is_rejected_inside_a_nested_type_arg() {
+    let (_, errors) = parse_with_errors(
+        "trait Src { type Item; }\nfn take[I: Src[Item = Vec[X = i64]]](it: I) -> i64 { 0 }",
+    );
+    assert!(
+        !errors.is_empty(),
+        "`Vec[X = i64]` is not a trait bound and must not accept a binding"
+    );
+}

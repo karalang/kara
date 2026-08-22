@@ -170,6 +170,15 @@ pub struct Parser {
     /// is sticky (stage 2), and accepting them now would let programs depend
     /// on a spelling whose semantics are still undecided. Fail-closed.
     pub(crate) frozen_ok: bool,
+    /// `true` only while parsing the bracket list of a TRAIT BOUND, which is
+    /// the one position where `IDENT = TYPE` means an associated-type binding
+    /// rather than a positional type argument (B-2026-08-21-9). Cleared while
+    /// the binding's own type is parsed, so a nested `Vec[X = Y]` inside
+    /// `Src[Item = Vec[...]]` stays the error it should be.
+    pub(crate) assoc_bindings_allowed: bool,
+    /// Bindings collected by [`Parser::parse_generic_type_args`] while
+    /// `assoc_bindings_allowed` is set; drained by `parse_trait_bound`.
+    pub(crate) pending_assoc_bindings: Vec<crate::ast::AssocBinding>,
     /// Set by `parse_type` when it consumes a *permitted* `frozen` keyword,
     /// read and cleared by `parse_param` into [`Param::is_frozen`]. The
     /// keyword is recognized deep inside the type parse (so the misplaced-use
@@ -316,6 +325,8 @@ impl Parser {
             recursion_depth: 0,
             pending_extra_items: Vec::new(),
             frozen_ok: false,
+            assoc_bindings_allowed: false,
+            pending_assoc_bindings: Vec::new(),
             frozen_consumed: false,
             frozen_self_consumed: false,
             freeze_spans: rustc_hash::FxHashSet::default(),

@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 277 | 0 |
 | leak | 187 | 0 |
 | run-vs-build | 149 | 0 |
-| missing-feature | 144 | 5 |
+| missing-feature | 146 | 7 |
 | double-free | 134 | 0 |
 | codegen-gap | 128 | 3 |
 | diagnostics | 95 | 2 |
@@ -103,7 +103,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | perf | 83 | 0 |
 | crash | 55 | 0 |
 | other | 54 | 0 |
-| soundness | 51 | 0 |
+| soundness | 52 | 1 |
 | use-after-free | 20 | 0 |
 
 ### By surface
@@ -111,22 +111,22 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 988 | 6 |
-| typecheck | 233 | 3 |
+| typecheck | 234 | 4 |
 | interp | 172 | 1 |
 | other | 62 | 0 |
 | ownership | 62 | 0 |
 | cli | 59 | 1 |
 | autopar | 54 | 0 |
-| parser | 35 | 1 |
+| parser | 37 | 3 |
 | runtime | 28 | 0 |
 | resolver | 26 | 1 |
 | lexer | 8 | 0 |
 | effect | 8 | 1 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1468 surfaced · 10 open · 1436 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1471 surfaced · 13 open · 1436 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (10)
+### Open (13)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -140,6 +140,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1468 surfaced
 | B-2026-08-21-44 | 2026-08-21 | codegen | low | `as_slice()` ON A FIXED-ARRAY **TEMPORARY** HAS NO CODEGEN LOWERING -- `n.to_ne_bytes().as_slice().len()` fails dispatch while `--interp` answers, the one method of the Array surface B-2026-08-21-25 left out | roadmap.md |
 | B-2026-08-21-45 | 2026-08-21 | typecheck+codegen | low | FIVE SHIPPED USER-FACING DIAGNOSTICS CARRY RUNS OF 14-30 SPACES mid-sentence, because rustfmt INTERMITTENTLY rejoins a `\`-continued string literal into one line and keeps the continuation indentation as real spaces | roadmap.md |
 | B-2026-08-21-46 | 2026-08-21 | codegen | low | `enumerate` OVER AN ARRAY **LITERAL** STILL BAILS LOUD -- `for (i, x) in [1, 2, 3].iter().enumerate()` hits the adaptor backstop while `--interp` answers, the one source shape B-2026-08-21-41's widening could not reach | roadmap.md |
+| B-2026-08-22-3 | 2026-08-22 | typecheck | high | AN ASSOCIATED-TYPE-EQUALITY BOUND IS NEVER DISCHARGED AT CALL SITES -- `where I.Item = i64` is validated at the DECLARATION and then ignored, so a call passing an `I` whose `Item` is `String` is accepted; the bound does not bind | typecheck |
+| B-2026-08-22-4 | 2026-08-22 | parser | medium | AN INLINE ASSOCIATED-TYPE BINDING IS STILL REJECTED IN `impl Trait` TYPE POSITION -- `fn keys(ref self) -> impl Iterator[Item = ref K]` (design.md's own Map method table) fails to parse, though the same binding now works in every BOUND position | parser |
+| B-2026-08-22-5 | 2026-08-22 | parser | medium | AN EFFECT CLAUSE ON AN IMPL HEADER HAS NO PRODUCTION -- design.md:3817 writes `impl From[ParseError] for AppError with writes(Log) {` and the parser rejects it with `Expected LeftBrace, found With` | parser |
 
 ### Wontfix (8)
 
