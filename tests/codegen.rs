@@ -26309,6 +26309,85 @@ fn main() {
         );
     }
 
+    /// B-2026-08-21-48 — the UN-ANNOTATED slice binding, sibling of
+    /// `test_e2e_user_trait_impl_on_slice_dispatches` below.
+    ///
+    /// `let s = v[0..2]; s.f()` failed dispatch ("no handler for method 'f' on
+    /// variable 's'") while the ANNOTATED binding and the PARAMETER spelling of
+    /// the same call both worked, and `--interp` printed the right answer.
+    ///
+    /// The row read this as a MISSING registration — "an un-annotated
+    /// `let s = v[0..2]` does not register `s` in `slice_elem_types`". It
+    /// does; that table was correct all along. The defect is an overwrite of a
+    /// DIFFERENT table: `type_name_of`'s `Index` arm ignored the index
+    /// expression, so a RANGE index reported the ELEMENT name ("i64"), the
+    /// `let` path wrote that into `var_type_names`, and it clobbered the
+    /// "Slice" a correct earlier registration had already recorded.
+    /// `inferred_receiver_type` reads `var_type_names` FIRST and only falls
+    /// back to `slice_elem_types`, so the wrong name shadowed the right one and
+    /// the fallback never ran.
+    ///
+    /// Both controls are asserted beside the fixed shape, because they are what
+    /// makes the bug legible as annotation-sensitive rather than a missing
+    /// feature — and a regression that broke only the un-annotated path would
+    /// otherwise still look plausible.
+    ///
+    /// The last two rows are the ones a careless widening breaks: a String
+    /// range subscript is a String view, NOT a `Slice`, and a SCALAR index
+    /// still has to report its element type.
+    #[test]
+    fn test_e2e_user_trait_impl_on_an_unannotated_slice_binding() {
+        let prelude = "trait H { fn f(self) -> i64; }\n\
+                       impl H for Slice[i64] { fn f(self) -> i64 { return self.len(); } }\n";
+        assert_eq!(
+            run_program(&format!(
+                "{prelude}\
+                 fn main() {{\n\
+                 let v: Vec[i64] = Vec[5, 6, 7];\n\
+                 let s = v[0..2];\n\
+                 println(s.f());\n\
+                 }}"
+            ))
+            .as_deref(),
+            Some("2\n"),
+            "un-annotated binding — the shape that failed dispatch"
+        );
+        assert_eq!(
+            run_program(&format!(
+                "{prelude}\
+                 fn take(s: Slice[i64]) -> i64 {{ return s.f(); }}\n\
+                 fn main() {{\n\
+                 let v: Vec[i64] = Vec[5, 6, 7];\n\
+                 let a: Slice[i64] = v[0..2];\n\
+                 println(a.f());\n\
+                 println(take(v[0..2]));\n\
+                 }}"
+            ))
+            .as_deref(),
+            Some("2\n2\n"),
+            "annotated binding and parameter receiver — the two controls"
+        );
+        assert_eq!(
+            run_program(
+                "fn main() {\n\
+                 let v: Vec[i64] = Vec[5, 6, 7];\n\
+                 let s = v[0..2];\n\
+                 println(s.len());\n\
+                 println(s[0]);\n\
+                 let x = v[1];\n\
+                 println(x);\n\
+                 let t: String = \"hello\";\n\
+                 let w = t[1..3];\n\
+                 println(w);\n\
+                 }"
+            )
+            .as_deref(),
+            Some("2\n5\n6\nel\n"),
+            "builtins on the same binding, plus the SCALAR-index and STRING-range \
+             shapes the range arm must not claim"
+        );
+    }
+
     #[test]
     fn test_e2e_user_trait_impl_on_slice_dispatches() {
         // B-2026-08-13-7 — DIRECT dispatch of a user trait impl on `Slice[T]`,

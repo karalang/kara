@@ -4154,8 +4154,30 @@ impl<'ctx> super::Codegen<'ctx> {
             // pick up `x: char`. Generalises to any single-path element
             // type, e.g. `let p = points[0]` → "Point" — same shape the
             // shared-struct field-access machinery already relies on.
-            ExprKind::Index { object, .. } => {
+            ExprKind::Index { object, index } => {
                 if let ExprKind::Identifier(n) = &object.kind {
+                    // B-2026-08-21-48 — a RANGE index is a VIEW, not an
+                    // element. This arm ignored the index entirely, so
+                    // `let s = v[0..2]` reported the ELEMENT name ("i64"),
+                    // which the `let` path then wrote into `var_type_names`
+                    // — overwriting the "Slice" a correct earlier
+                    // registration had already put there. `inferred_receiver_type`
+                    // reads `var_type_names` FIRST and only falls back to
+                    // `slice_elem_types` when it misses, so the wrong name
+                    // shadowed the right one and `s.f()` on an
+                    // `impl … for Slice[i64]` failed dispatch with "no handler
+                    // for method 'f' on variable 's'" — while the ANNOTATED
+                    // binding and the PARAMETER spelling both worked, and
+                    // `--interp` printed the right answer.
+                    //
+                    // A String receiver keeps the old answer: `s[0..2]` over a
+                    // String is a String view, not a `Slice`, and claiming
+                    // "Slice" for it would send it down the wrong dispatch.
+                    if matches!(&index.kind, ExprKind::Range { .. })
+                        && !self.var_types.string_vars.contains(n.as_str())
+                    {
+                        return Some("Slice".to_string());
+                    }
                     if let Some(te) = self.var_types.var_elem_type_exprs.get(n.as_str()) {
                         if let TypeKind::Path(p) = &te.kind {
                             return p.segments.last().cloned();
