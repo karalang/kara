@@ -102754,6 +102754,92 @@ fn main() {
         );
     }
 
+    /// B-2026-08-21-50 — a C-like enum bound out of an `Ok(...)` / `Some(...)`
+    /// / `Err(...)` payload.
+    ///
+    /// `bind_pattern_values` re-wraps a single-i64-field payload word back into
+    /// its aggregate, but consulted only `struct_types`. A C-like enum's layout
+    /// is `{ i64 }` — structurally the same shape — so nothing re-wrapped it:
+    /// the binding's slot became a bare `i64`, the inner match compared that raw
+    /// word against variant tags and selected the FIRST variant, and a call
+    /// boundary rejected `i64` against the `{ i64 }` parameter outright. The
+    /// interpreter was right throughout, so the match half was a SILENT
+    /// run-vs-build divergence on a program with no unsafe, FFI or concurrency.
+    ///
+    /// THE FIRST-VARIANT CASE IS THE TRAP THIS TEST IS BUILT AROUND. Pre-fix
+    /// every shape below printed the first variant, so `Ok(UsbClass.Audio)` —
+    /// whose correct answer IS the first variant — passed against the broken
+    /// compiler. A pin that happened to pick the first variant would have been
+    /// green on the bug. `ok_audio` is still here, but as a control that the fix
+    /// did not invert the selection rather than as evidence it works; the
+    /// load-bearing cases are `ok_hid` and `ok_mass`.
+    ///
+    /// `name_of(c)` covers the second, louder symptom — the call boundary that
+    /// failed module verification — and `tag(c)` reads the discriminant through
+    /// a different arm shape, so a fix that satisfied the verifier while still
+    /// binding the wrong word would fail here.
+    ///
+    /// The last two cases are the paths this must NOT disturb, and both were
+    /// already correct pre-fix: a DATA-CARRYING enum (layout `{ tag, words… }`,
+    /// excluded by the same `count_fields() == 1` gate the struct path uses,
+    /// because one word cannot rebuild it) and the single-field struct payload
+    /// the block was originally written for.
+    #[test]
+    fn test_e2e_c_like_enum_bound_out_of_a_result_payload() {
+        let src = r#"
+#[repr(u8)]
+enum UsbClass { Audio = 0x01, Hid = 0x03, MassStorage = 0x08 }
+enum Plain { P, Q, R }
+enum Data { N(i64), S(i64) }
+struct W { v: i64 }
+
+fn name_of(c: UsbClass) -> String {
+    match c {
+        UsbClass.Audio => return "audio",
+        UsbClass.Hid => return "hid",
+        UsbClass.MassStorage => return "mass",
+    }
+}
+fn ok_hid() -> Result[UsbClass, String] { Ok(UsbClass.Hid) }
+fn ok_mass() -> Result[UsbClass, String] { Ok(UsbClass.MassStorage) }
+fn ok_audio() -> Result[UsbClass, String] { Ok(UsbClass.Audio) }
+fn some_r() -> Option[Plain] { Some(Plain.R) }
+fn err_q() -> Result[i64, Plain] { Err(Plain.Q) }
+fn ok_data() -> Result[Data, String] { Ok(Data.S(7)) }
+fn ok_struct() -> Result[W, String] { Ok(W { v: 9 }) }
+
+fn tag(c: UsbClass) -> i64 {
+    match c {
+        UsbClass.Audio => 1,
+        UsbClass.Hid => 3,
+        UsbClass.MassStorage => 8,
+    }
+}
+
+fn main() {
+    match ok_hid() { Ok(c) => println(name_of(c)), Err(_) => println("err") }
+    match ok_mass() { Ok(c) => println(name_of(c)), Err(_) => println("err") }
+    match ok_audio() { Ok(c) => println(name_of(c)), Err(_) => println("err") }
+    match ok_hid() { Ok(c) => println(tag(c)), Err(_) => println(-1) }
+    match some_r() {
+        Some(p) => match p { Plain.P => println("p"), Plain.Q => println("q"), Plain.R => println("r") },
+        None => println("none"),
+    }
+    match err_q() {
+        Ok(_) => println("ok"),
+        Err(e) => match e { Plain.P => println("ep"), Plain.Q => println("eq"), Plain.R => println("er") },
+    }
+    if let Ok(c) = ok_mass() { println(name_of(c)); }
+    match ok_data() { Ok(d) => match d { Data.N(v) => println(v), Data.S(v) => println(v * 2) }, Err(_) => println("e") }
+    match ok_struct() { Ok(w) => println(w.v), Err(_) => println("e") }
+}
+"#;
+        assert_eq!(
+            run_program(src).as_deref(),
+            Some("hid\nmass\naudio\n3\nr\neq\nmass\n14\n9\n")
+        );
+    }
+
     /// B-2026-08-21-10 — `Vec.from_fn(n, f)`, end to end.
     ///
     /// The element type must be settled BEFORE the buffer is allocated,

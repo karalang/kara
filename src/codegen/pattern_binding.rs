@@ -312,19 +312,49 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                 }
 
-                // Struct-payload reconstruction: when the typechecker
-                // recorded a struct surface type for this binding, the
-                // enum-payload codegen has handed us the i64 word that
-                // held the (single-field) struct. Wrap it back into the
-                // struct shape so subsequent `.field` access dispatches
-                // through the right LLVM struct type. Limited to the
-                // single-i64-field case for now — wider error wrappers
-                // can't survive the i64-payload-word lowering anyway, so
-                // there's nothing to reconstitute beyond this shape.
+                // Single-word AGGREGATE-payload reconstruction: when the
+                // typechecker recorded a struct or enum surface type for this
+                // binding, the enum-payload codegen has handed us the i64 word
+                // that held it. Wrap it back into the aggregate shape so
+                // subsequent `.field` access, variant-tag comparison and call
+                // boundaries all see the right LLVM type. Limited to the
+                // single-i64-field case — wider error wrappers can't survive
+                // the i64-payload-word lowering anyway, so there's nothing to
+                // reconstitute beyond this shape, and it is what excludes a
+                // data-carrying enum (B-2026-08-21-50).
                 let key = (pattern.span.offset, pattern.span.length);
                 if let Some(type_name) = self.pattern_state.pattern_binding_types.get(&key).cloned()
                 {
-                    if let Some(&st) = self.type_decls.struct_types.get(&type_name) {
+                    // B-2026-08-21-50 — an ENUM surface type reaches here on
+                    // the same footing as a struct. A C-like enum's layout is
+                    // `{ i64 }` (tag only), structurally identical to the
+                    // single-i64-field struct this block was written for, so
+                    // `Ok(UsbClass.Hid)` handed the tag word down and nothing
+                    // re-wrapped it: the binding's slot became a bare `i64`,
+                    // the arm compared that raw word against variant tags and
+                    // selected the FIRST variant, and a call boundary rejected
+                    // `i64` against the `{ i64 }` parameter outright. The
+                    // interpreter was right throughout, so the match half was a
+                    // silent run-vs-build divergence.
+                    //
+                    // A DATA-CARRYING enum is excluded by the same
+                    // `count_fields() == 1` gate the struct path uses: its
+                    // layout is `{ tag, words… }`, which cannot be rebuilt from
+                    // one word, and those bindings already reconstruct through
+                    // `pattern_payload_llvm_type` / `reconstruct_payload_value`
+                    // rather than arriving here as a bare `IntValue`.
+                    let agg = self
+                        .type_decls
+                        .struct_types
+                        .get(&type_name)
+                        .copied()
+                        .or_else(|| {
+                            self.type_decls
+                                .enum_layouts
+                                .get(&type_name)
+                                .map(|layout| layout.llvm_type)
+                        });
+                    if let Some(st) = agg {
                         if let BasicValueEnum::IntValue(iv) = scrut {
                             if st.count_fields() == 1
                                 && matches!(
