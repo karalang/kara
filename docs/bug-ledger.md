@@ -94,12 +94,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 278 | 0 |
 | leak | 187 | 0 |
-| run-vs-build | 150 | 1 |
+| run-vs-build | 151 | 1 |
 | missing-feature | 149 | 4 |
 | double-free | 134 | 0 |
 | codegen-gap | 128 | 2 |
 | diagnostics | 97 | 2 |
-| false-positive | 92 | 0 |
+| false-positive | 93 | 1 |
 | perf | 83 | 0 |
 | crash | 55 | 0 |
 | other | 55 | 1 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 990 | 4 |
-| typecheck | 239 | 2 |
+| codegen | 991 | 4 |
+| typecheck | 240 | 3 |
 | interp | 172 | 0 |
 | other | 63 | 1 |
 | ownership | 62 | 0 |
@@ -120,13 +120,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | parser | 38 | 2 |
 | runtime | 28 | 0 |
 | resolver | 26 | 0 |
-| effect | 9 | 1 |
+| effect | 10 | 2 |
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1482 surfaced · 10 open · 1450 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1484 surfaced · 11 open · 1451 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (10)
+### Open (11)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -139,7 +139,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1482 surfaced
 | B-2026-08-22-8 | 2026-08-22 | cli | low | `implicit_clone` HAS NO TRIGGER IN THE SPEC AND CANNOT BE DE-REGISTERED WITHOUT A design.md EDIT -- the one starter-set lint whose resolution is a SPEC decision, not a compiler change | roadmap.md |
 | B-2026-08-21-53 | 2026-08-22 | typecheck+parser | medium | CALL-SITE TYPE APPLICATION `f[T](args)` IS IMPLEMENTED ONLY FOR THE `ptr.*` BUILTINS -- `Vec.new[i64]()`, `Channel.new[i64]()` and a user generic `id[i64](5)` all parse as an INDEX and then fail, while `ptr.null[u32]()` works; design.md writes both forms and contradicts itself three ways about whether the syntax exists | roadmap.md |
 | B-2026-08-21-54 | 2026-08-22 | other | medium | `test_shortener_example_end_to_end` ASSERTS A JSON KEY ORDER and is RED on main since the FxHash change (8c3c8d6) reordered Map iteration -- and it is order-FLAKY, passing on roughly one run in three, so neither a red nor a green run can be trusted | roadmap.md |
-| B-2026-08-22-12 | 2026-08-22 | codegen | medium | A METHOD CALL THROUGH A RETURN-POSITION `impl Trait` VALUE HAS NO CODEGEN DISPATCHER -- `make().get()` is check-green and interpreter-green and fails under both `karac run` and `karac build`, so the shipped `impl Trait` epic has a run-vs-build divergence at its most ordinary use | codegen |
+| B-2026-08-22-14 | 2026-08-22 | codegen+effect | low | AN EXISTENTIAL DECLARING POLYMORPHIC EFFECT VARIABLES (`-> impl Emit with F`) IS THE ONE RETURN-POSITION `impl Trait` SHAPE STILL WITHOUT A BUILD -- deliberately excluded from B-2026-08-22-12's witness substitution, because the effect checker reads the variable off the very node the rewrite would erase | codegen |
+| B-2026-08-22-15 | 2026-08-22 | typecheck | medium | A `-> Self` TRAIT METHOD CALLED ON AN EXISTENTIAL RECEIVER LOSES THE TRAIT -- `make().bumped()` types as a BARE type parameter named after the trait, so the builder shape is rejected with two diagnostics that point at the caller's correct code and name a spelling the source never contains | typecheck |
 
 ### Wontfix (8)
 
@@ -158,9 +159,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1482 surfaced
 
 </details>
 
-### Fixed (1450)
+### Fixed (1451)
 
-<details><summary>1450 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1451 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -15289,6 +15290,25 @@ should do. |
 | B-2026-08-22-11 | cli | medium | `karac fmt` DELETED AN INLINE ASSOCIATED-TYPE BINDING FROM EVERY TRAIT BOUND -- `I: Src[Item = i64]` was rewritten to `I: Src[]`, a weaker contract t… | Every trait-bound render site now goes through one `format_trait_bound(b)` helper (src/formatter/types.rs) that writes the path and then ONE bracket list holding the positional args followed by the inline bindings, via a new `format_bracket_args(args, bindings)`. The five sites that previously wrote `write_path` + `format_generic_args_opt` separately -- generic-param bounds, effect-param bounds (types.rs), where-clause `TypeBound` and `ProjectionBound` (items.rs) -- were the deletion; the two that wrote `write_path` ALONE, `trait X = A + B;` alias bounds and `type Assoc: Bound;` inside a trait, were dropping the bounds' generic args as well and now use the same helper. `TypeKind::ImplTrait` / `TypeKind::Dyn` render through `format_bracket_args` too.
 
 Pinned by `test_formatter_round_trips_an_inline_assoc_binding` (tests/parser.rs), which counts four surviving `Src[Item = i64]` across an alias bound, a generic-param bound, a where-clause bound and an `impl Trait` return, and asserts `Src[]` appears nowhere. |
+| B-2026-08-22-12 | codegen | medium | A METHOD CALL THROUGH A RETURN-POSITION `impl Trait` VALUE HAS NO CODEGEN DISPATCHER -- `make().get()` is check-green and interpreter-green and fails… | FIXED by a3ee407e, with NO codegen change at all -- the diagnosis in the row ("the fix is a dispatcher arm in `compile_method_call`") was wrong about the remedy, and the better one falls out of what the row itself noted: the single-witness rule means the receiver's real type is statically known.
+
+`lowering::substitute_impl_trait_returns` rewrites each return-position `impl Trait` to that type. A return-position existential is a CALLER-SIDE abstraction and the typechecker is where every part of it is enforced -- `make().v` is a field error, the concrete name is unspeakable, `check_assignable` refuses a witness that does not implement the trait. By the time lowering runs, all of that has been checked and the opacity has no work left to do; design.md's "one concrete return per monomorphization" (`E_IMPL_TRAIT_MULTIPLE_WITNESSES`) says what remains is a single statically-known type. Handing the backend that type means there is nothing new to teach it: the function returns `S`, the binding is an `S`, and `S.get` dispatches through the arm that has always existed. Teaching codegen to CARRY an existential would instead have meant a parallel path beside every name-keyed mechanism it has -- `var_type_names`, `fn_return_type_names`, struct-shape lookup, the impl method tables -- which is four places to get wrong instead of zero.
+
+THE WITNESS IS NOT KNOWN WHEN IT IS NEEDED, which is the one real difficulty. A call site is routinely checked BEFORE the body that reveals the witness (`fn main` above `fn make` is enough), so nothing can be resolved inline. Everything is therefore recorded against the existential's `origin` `SpanKey` and resolved at EXPORT, once every body has been walked:
+
+  - `TypeCheckResult::impl_trait_return_witnesses` (origin -> witness `TypeExpr`), accumulated in `check_impl_trait_single_witness`, which was already collecting the witnesses for the multiple-witness diagnostic and now keeps the `Type` beside the display name.
+  - `pattern_binding_types` -- a `let`-bound existential (`let s = make(7)`). Every arm of `bind_pattern_types` answers with a NAME and an existential has none, so the binding was recorded nowhere and codegen's `let` path had no surface to hand `record_var_type_name`.
+  - `call_type_subs` / `call_type_subs_mangle` -- an existential passed INTO a generic (`fn total(c: impl Counter)` called as `total(make(9))`). `type_to_concrete_or_param_name` returns None for an existential, so the mono frame got no entry and codegen had nothing to instantiate the type param with.
+
+An origin that saw two DISTINCT witnesses is POISONED rather than merely skipped, and once contested stays contested -- an origin shared by two bodies (an RPITIT trait method's declaration span, reached once per impl) must not have a second, agreeing body resurrect an entry the first invalidated.
+
+MEASURED across a witness matrix, because a substitution that only works for a plain `{i64}` struct passes a thin test while leaving the interesting cases red: a struct with a heap `Vec[i64]` field, an ENUM witness, a `shared struct` (RC) witness, an impl-method return position, two branches agreeing on one witness, an existential passed into an argument-position `impl Trait`, and both call spellings throughout (`let`-bound vs. called directly on the return value, which reach codegen through different paths). All four surfaces -- `run --interp`, `run` (JIT), `build`, `build` under `KARAC_AUTO_PAR=0` -- byte-identical on every one.
+
+A first attempt also widened codegen's `let` handler to read `fn_return_type_names` for a bare free-function call. It was REVERTED after the `pattern_binding_types` half landed and made it dead: worth recording because that arm would have changed the binding path for every bare call returning a struct in the language, and the narrower typechecker fix covers the same ground with no backend surface at all.
+
+Tests: 7 in tests/lowering.rs pinning the substitution itself (including the call-site-checked-first ordering, the contested case left alone, and both effect arms), 1 codegen E2E over the full witness matrix asserting interpreter/AOT parity in the same test, and 1 ASAN fixture driving the shared-struct witness in a loop in both call spellings -- the RC path is where a substitution can be wrong in a way no output comparison catches.
+
+NOT CLOSED HERE, split out rather than buried: an existential declaring polymorphic effect VARIABLES (B-2026-08-22-14) and a `-> Self` trait method on an existential receiver (B-2026-08-22-15). |
 | B-2026-08-22-13 | typecheck | high | A STATIC/ASSOCIATED CALL BORROWED AN UNRELATED GLOBAL FUNCTION'S WHERE CLAUSE WHEN THE NAMES COLLIDED -- `H.take(x)` was checked against the stdlib's… | FIXED by 5514b6f, alongside B-2026-08-22-10, in the same three lines of
 `callee_where_clause` resolution. The impl-table lookup that row added is
 consulted FIRST and, when it claims the call, is authoritative; the bare-name

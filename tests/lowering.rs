@@ -510,7 +510,7 @@ fn an_existential_declaring_effect_variables_is_left_alone() {
     // off the `impl Trait` node and nowhere else, so erasing the node erases
     // the variable's declaration site. Concrete verbs are re-derived from the
     // witness's own impl methods and do NOT block the rewrite (the test
-    // below); an effect VARIABLE does. B-2026-08-22-13.
+    // below); an effect VARIABLE does. B-2026-08-22-14.
     let prog = lower_program(
         "trait Emit { fn emit(ref self) -> i64; }\n\
          struct E { n: i64 }\n\

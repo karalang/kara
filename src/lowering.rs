@@ -139,7 +139,7 @@ fn substitute_impl_trait_returns(program: &mut Program, tc: &TypeCheckResult) {
         // so erasing the node erases the variable's declaration site — a
         // silently weaker analysis. Those keep their `impl Trait` spelling and
         // codegen's loud fall-through, which is the honest outcome until the
-        // effect surface travels with the substitution (B-2026-08-22-13).
+        // effect surface travels with the substitution (B-2026-08-22-14).
         let TypeKind::ImplTrait { use_effects, .. } = &rt.kind else {
             return;
         };
