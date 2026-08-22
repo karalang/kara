@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 148 | 6 |
 | double-free | 134 | 0 |
 | codegen-gap | 128 | 3 |
-| diagnostics | 95 | 2 |
+| diagnostics | 97 | 3 |
 | false-positive | 91 | 0 |
 | perf | 83 | 0 |
 | crash | 55 | 0 |
@@ -110,12 +110,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 988 | 5 |
+| codegen | 989 | 6 |
 | typecheck | 235 | 5 |
 | interp | 172 | 0 |
 | other | 62 | 0 |
 | ownership | 62 | 0 |
-| cli | 59 | 1 |
+| cli | 60 | 1 |
 | autopar | 54 | 0 |
 | parser | 37 | 2 |
 | runtime | 28 | 0 |
@@ -124,13 +124,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1473 surfaced · 12 open · 1439 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1475 surfaced · 13 open · 1440 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (12)
+### Open (13)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-21-2 | 2026-08-21 | cli | medium | TWO REGISTERED LINTS STILL HAVE NO EMIT SITE and so can never fire, though both are registered `default_level: LintLevel::Warn` -- accepted in `#[allow(...)]` and passing vacuously under `#[deny(...)]`: `f16_software_emulated`, `implicit_clone`. They are the remainder of B-2026-08-20-36's eight. They are VISIBLE IN CODE, not only here: `KNOWN_UNWIRED` in `src/lints.rs`, which `every_registered_lint_is_emitted_or_declared_unwired` fails on if the list grows or goes stale. | roadmap.md |
 | B-2026-08-21-18 | 2026-08-21 | codegen+typecheck | low | STRUCT FUNCTIONAL UPDATE `P { x: 1, ..base }` IS STILL UNIMPLEMENTED -- it now says so clearly instead of dropping the base, but the form syntax.md's STRUCT_LITERAL production admits cannot be used; the interpreter already implements the copy and codegen does not, so the remaining work is codegen plus the ownership rules for a spread base | roadmap.md |
 | B-2026-08-21-29 | 2026-08-21 | typecheck | medium | THREE DOCUMENTED SURFACES ARE NOT REACHABLE AS WRITTEN: every spelling of channel construction design.md uses (`Channel.new[T]()`, `Channel.bounded`), its whole `io.` I/O prefix, and `allocates(Heap)` -- whose `Heap` the document never declares and the prelude does not provide | roadmap.md |
 | B-2026-08-21-43 | 2026-08-21 | codegen | low | A USER IMPL ON A **NON-SCALAR** `Array` HEAD IS UNCALLABLE ON A TEMPORARY -- `mk().tag()` for `impl Tag for Array[String, 2]` still loud-fails after B-2026-08-21-25, which admits only scalar-element arrays because a scalar array is the case that owns no heap | roadmap.md |
@@ -142,6 +141,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1473 surfaced
 | B-2026-08-22-5 | 2026-08-22 | parser | medium | AN EFFECT CLAUSE ON AN IMPL HEADER HAS NO PRODUCTION -- design.md:3817 writes `impl From[ParseError] for AppError with writes(Log) {` and the parser rejects it with `Expected LeftBrace, found With` | parser |
 | B-2026-08-21-52 | 2026-08-22 | effect | medium | CHANNEL EFFECT RESOURCES HAVE NO PER-VALUE IDENTITY -- every channel collapses to the single `Channel` resource, so conflict analysis cannot tell `sends(tx1)` from `sends(tx2)` and design.md :6095's producer-against-consumer parallelization argument is not backed by the compiler | roadmap.md |
 | B-2026-08-22-6 | 2026-08-22 | typecheck | low | The `Hasher` and `BuildHasher` TRAITS are not baked, so a user cannot write their own hasher: `Map[K, V, H]` accepts only the two compiler-known selectors `SipHash13BuildHasher` / `FxBuildHasher`, and design.md's "User-extensible hashers" paragraph describes a surface that does not exist | roadmap.md |
+| B-2026-08-22-7 | 2026-08-22 | codegen | low | `f16_software_emulated` IS THE ONE STARTER-SET LINT WHOSE TRIGGER DEPENDS ON THE TARGET, and the target's feature baseline is only reachable behind `#[cfg(feature = "llvm")]` -- so wiring it is a PLACEMENT decision, not the mechanical job the other six were | roadmap.md |
+| B-2026-08-22-8 | 2026-08-22 | cli | low | `implicit_clone` HAS NO TRIGGER IN THE SPEC AND CANNOT BE DE-REGISTERED WITHOUT A design.md EDIT -- the one starter-set lint whose resolution is a SPEC decision, not a compiler change | roadmap.md |
 
 ### Wontfix (8)
 
@@ -160,9 +161,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1473 surfaced
 
 </details>
 
-### Fixed (1439)
+### Fixed (1440)
 
-<details><summary>1439 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1440 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -13446,6 +13447,77 @@ Verified byte-identical on --interp / JIT / AOT / `KARAC_AUTO_PAR=0` AOT across 
 ARCHIVE SELECTION VERIFIED THREE WAYS, not assumed: hiding the archive produces the actionable "build `libkarac_runtime_unicode.a`" error; a non-normalizing program still links lean and `nm` finds zero `karac_unicode_*` in it; a normalizing binary has them.
 
 Twelve tests — 2 typechecker, 5 interpreter, 5 codegen — plus 4 runtime unit tests and an ASAN fixture pinning that the malloc'd result has exactly one owner across a bare temporary, a live binding, and a chain. |
+| B-2026-08-21-2 | cli | medium | SIX OF THE EIGHT REGISTERED-BUT-UNWIRED LINTS ARE NOW WIRED (`redundant_suffix`, `module_mut_binding`, `mutual_recursion_note`, `pure_loop_in_par`, `… | RESOLVED as a work item: six of the eight lints B-2026-08-20-36 found registered
+with no emit site are now WIRED, and the two that remain are not wiring problems
+— each needs a decision, and each is now its own row so the decision has
+somewhere to live. `KNOWN_UNWIRED` in `src/lints.rs` still names both, so
+`every_registered_lint_is_emitted_or_declared_unwired` keeps them honest.
+
+THE SIX, in the order they landed:
+
+  redundant_suffix       (B-2026-08-20-36)
+  module_mut_binding     17ff5c0  — per-binding suppression via the cascade frame
+  mutual_recursion_note  2a12881  — only the NOTE was missing; the JSON field
+                                    had been populated all along
+  pure_loop_in_par       fe3b242  — unwritable until a codegen defect under it
+                                    was fixed: every arithmetic op in a `par`
+                                    branch was emitting a cancel check
+  repr_c_layout_ignored  666d3d41 — and its `pub` sibling, an ERROR
+  float_in_serialized_type 666d3d41 — per-field
+
+THE TWO THAT REMAIN, split out per the ledger's live-remainder rule:
+
+  * B-2026-08-22-7 — `f16_software_emulated`. The trigger is well defined and
+    decidable from real data (`combined_features()` already merges a per-target
+    baseline with `--target-features`), but the baseline table lives in
+    `src/codegen/driver.rs`, behind `#[cfg(feature = "llvm")]`. The typechecker
+    — where the other five live and where `#[allow]` cascades for free — cannot
+    reach it without breaking codegen containment; codegen can, but no codegen
+    site reads `#[allow]` today. It is a placement decision with a real
+    trade-off either way. Also measured: under every current default baseline
+    (`+v8a` on aarch64, the x86_64 baseline, wasm `+simd128`) there is NO native
+    f16, so the lint would fire on essentially all f16 arithmetic until someone
+    widens the baseline — worth deciding on before building the plumbing.
+  * B-2026-08-22-8 — `implicit_clone`. Cannot be resolved in the compiler at all:
+    design.md defines no trigger for it, and `starter_set_covers_spec_listed_lints`
+    pins the registration because the spec lists it, so de-registering needs a
+    design.md edit first.
+
+WHAT THIS ROW COST, WHICH IS THE PART WORTH KEEPING. Every slice of it turned up
+something the registry itself was lying about:
+
+  * THE DESCRIPTION IS NOT A RELIABLE STATEMENT OF THE TRIGGER. Twice measured
+    on this row — `module_mut_binding`'s described a different lint entirely,
+    and `pure_loop_in_par`'s described an unimplementable rule ("a loop whose
+    body has no parallelisable work") where the spec's actual trigger is
+    CANCELLABILITY. Read the spec section, never the registry blurb.
+  * ONE-LINE SUMMARIES HIDE SPLIT RULES. `repr_c_layout_ignored` read as one
+    lint and was two rules: a suppressible warning for a private struct AND a
+    hard error for a `pub` one, because a `pub` `#[repr(C)]` type's field order
+    is an FFI contract. Neither existed. Wiring only the lint would have left
+    the error missing and looked complete.
+  * "DEFERRED" IS NOT THE SAME AS "UNFIREABLE". `float_in_serialized_type`'s
+    derive machinery is deferred post-v1, which reads like grounds for wontfix.
+    The ATTRIBUTE parses and typechecks today, so the trigger is decidable and
+    the promise is already being made.
+  * ADDING A SEVERITY BAND BREAKS OPEN-CODED SEVERITY TESTS. The `note` band
+    broke seventeen sites that had spelled "is this advisory" as
+    `!= FfiLintHint`; the `warn` band needed a third. Both are now single hoisted
+    predicates (`kind_is_note`, `kind_is_lint_warning`, `resolve_kind_is_note`)
+    precisely so the next band does not repeat it.
+  * THE GUARD PROVES A NAME, NOT A BEHAVIOUR. `every_registered_lint_is_emitted_
+    or_declared_unwired` only checks that a lint NAME appears outside lints.rs.
+    It cannot see that an emit has the wrong SEVERITY or that its `#[allow]` is
+    inert — which is how `layout_unassigned_fields` sat "wired" while being a
+    hard error whose suppression was never read (filed and fixed separately).
+    The other 'wired' lints are still worth spot-checking on that axis.
+
+A CORRECTION TO THIS ROW'S OWN TEXT, recorded because it propagated: it claimed
+these lints are "advertised by `karac lint --list`". THERE IS NO `karac lint`
+COMMAND (measured: `error: unknown command 'lint'`). The real exposure is
+narrower and still real — `#[allow(<name>)]` is accepted rather than reported as
+`unknown_lint`, `#[deny(<name>)]` passes vacuously, and only `#[expect(...)]`
+tells the truth, which is how B-2026-08-20-36 found the class to begin with. |
 | B-2026-08-21-4 | codegen | high | A free function DECLARED to return `Slice[T]` hands back a GARBAGE header in codegen while `--interp` is correct, and MOST uses of it are SILENT | FIXED by b538966 (header from the receiver's place) and c5469bb (method-return element type).
 
 Two defects, both in codegen's Slice[T] lowering.
