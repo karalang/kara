@@ -13724,7 +13724,7 @@ REGRESSION SURFACE MEASURED, because Arc-backing changes how storage is shared a
 HOW MUCH THIS ROW'S OWN EXAMPLE GAINS, measured rather than assumed, because the row's "WHY IT MATTERS" leans on it: kata #294's differential runs 234 s before and 168 s after on the same machine -- a real 1.4x, not an order of magnitude. Its memo map holds ~1492 entries over ~8900 calls, so the scan was never where its time went; that kata is dominated by general tree-walk overhead. The 58x figure above is what MAP-BOUND work gains. The row's claim that "essentially all of that difference is memo lookups scanning a list" does not survive measurement, and the coverage that kata cut (exhaustive band 14 -> 12) is not restored by this fix alone.
 
 Pinned by nine E2E tests in tests/interpreter.rs -- insertion order, overwrite-keeps-position, survivors-findable-after-remove (the case a stale index breaks silently), value-semantics for `Map`, `Set`, and a map inside a struct field, the `entry`/`or_insert` slot chain, distinct tuple keys sharing a bucket, and a 400-key volume case -- plus four unit tests in src/interpreter/value.rs, of which `hash_value_agrees_with_equality` is the one guarding the whole design. |
-| B-2026-08-21-9 | parser | medium | design.md WRITES SYNTAX THE PARSER HAS NO PRODUCTION FOR, in two places syntax.md also disagrees with: the inline associated-type binding `Trait[Asso… | FIXED by 18e39e0e (645c22a1 pre-rebase) for ITEM 1 IN BOUND POSITIONS; the remainder is split into
+| B-2026-08-21-9 | parser | medium | design.md WRITES SYNTAX THE PARSER HAS NO PRODUCTION FOR, in two places syntax.md also disagrees with: the inline associated-type binding `Trait[Asso… | FIXED by 18e39e0e (pre-rebase) for ITEM 1 IN BOUND POSITIONS; the remainder is split into
 its own rows rather than left implicit here.
 
 WHAT LANDED. The inline associated-type binding now parses in both bound
@@ -13781,7 +13781,7 @@ All four entry points implemented, each through typecheck + the interpreter + co
 
 `to_ne_bytes()` (87a90e6) -- on every integer scalar, not just `u16`. Returns `Array[u8, N]`, not `Vec[u8]`, which is what makes design.md's `Hasher` body work as written: the fixed array coerces to the `ref Slice[u8]` that `write` declares, and allocates nothing. Codegen lowers it as store-then-reload, so the answer IS native order by construction and no endianness constant is baked in. Three codegen gaps had to close for the value to be usable, all about a fixed array that is not a named binding: an unannotated `let b = n.to_ne_bytes()` had no registered element type and striding at the i64 default SEGFAULTED when handed to a slice parameter; a fixed-array RVALUE at a call boundary reached the callee as a raw `[N x i8]` and failed module verification; and `arg_is_array_source` recognized only named bindings, so B-2026-06-19-1's `ref Slice[T]` carve-out skipped every temporary.
 
-`<enum>.discriminant()` (55c6ca9) -- on C-like (payload-free) enums, returning the repr type: `u8` for `#[repr(u8)]`, `i32` for `#[repr(i32)]`, conservative `u32` with no `#[repr]`. THE ANSWER IS NOT THE TAG: codegen lays these enums out at declaration positions 0/1/2 (design.md is explicit that declared discriminants are not layout commitments at v1), so `UsbClass { Audio = 0x01, Hid = 0x03, MassStorage = 0x08 }` must answer 1/3/8 from tags 0/1/2. Both backends map tag to declared value; the values are folded ONCE, in the typechecker (`TypeCheckResult::enum_discriminants`), because a declared discriminant may be a constant expression and two independent folds is exactly how the backends would come to disagree. Payload enums are excluded -- the spec's own v1 restriction -- with a diagnostic that names the reason and the hand-written `fn tag(ref self)` remedy design.md recommends. |
+`<enum>.discriminant()` (pre-rebase) -- on C-like (payload-free) enums, returning the repr type: `u8` for `#[repr(u8)]`, `i32` for `#[repr(i32)]`, conservative `u32` with no `#[repr]`. THE ANSWER IS NOT THE TAG: codegen lays these enums out at declaration positions 0/1/2 (design.md is explicit that declared discriminants are not layout commitments at v1), so `UsbClass { Audio = 0x01, Hid = 0x03, MassStorage = 0x08 }` must answer 1/3/8 from tags 0/1/2. Both backends map tag to declared value; the values are folded ONCE, in the typechecker (`TypeCheckResult::enum_discriminants`), because a declared discriminant may be a constant expression and two independent folds is exactly how the backends would come to disagree. Payload enums are excluded -- the spec's own v1 restriction -- with a diagnostic that names the reason and the hand-written `fn tag(ref self)` remedy design.md recommends. |
 | B-2026-08-21-11 | other | low | design.md EXAMPLES ARE WRITTEN IN SYNTAX design.md AND syntax.md THEMSELVES FORBID: `mu.lock()` and `let group = ...` use hard keywords as identifier… | FIXED in design.md. 19 blocks rewritten; the conformance suite's non-conforming count went 90 -> 71 and its DOC BUG bucket to ZERO. Reserved keywords out of identifier position: `use(x)` -> `observe(x)`, `let group = TaskGroup.new()` -> `let tasks = ...`. The MutexGuard model, which design.md itself rules out four sections away ("No `.lock()` method or guard values -- scope is always visible"), re-cast onto a `Lease` type with an `impl Drop` across six examples and their prose -- the temporary-scope lesson is unchanged, and it is now written in the language. `=` -> `:` for a labeled argument, per design.md:8773's own rule. Comma-separated effect lists -> space-separated, in six places. `!` -> `not`. `mut T` dropped from two parameter lists (not a mode; the modes are bare `T` / `ref T` / `mut ref T` / `mut Slice[T]`, and the `mut` at the CALL site is the marker Feature 4 Part 1.5 describes). `usize` -> `i64` for indices, per the doc's own Numeric Semantics rule. `({ ... }, x)` -> `(Account { ... }, x)`. Bare `..` removed from three struct CONSTRUCTIONS (legal in the patterns beside them; syntax.md:1774 requires a base EXPR in a literal). And the statement terminators those fixes exposed -- a `;` after a `let`, two inside `lock` bodies, and a stray `;;` removed.
 
 RECLASSIFIED, NOT EDITED -- seven blocks this row listed as doc bugs are not. `asm(...)` / `global_asm(...)` (4 blocks) is the INTENDED inline-assembly surface; syntax.md 1.1 lists both under "Reserved for future use", so documenting unimplemented syntax is the spec doing its job. `ref` as an expression prefix and `ref` in a match-arm pattern (2 blocks) are forms syntax.md's grammar never defines -- that is B-2026-08-21-9's shape, and they moved there. `&*ptr.offset(...)` likewise: see the note appended to B-2026-08-21-9 about `get_unchecked`. |
@@ -14107,7 +14107,7 @@ THE LIVE REMAINDER, split into rows rather than buried here:
   * B-2026-08-21-43 -- the non-scalar-element user impl the gate excludes.
   * B-2026-08-21-44 -- `as_slice()` on a temporary, excluded for the same
     hands-out-an-interior-pointer reason as `as_ptr`. |
-| B-2026-08-21-26 | typecheck | medium | `TryFrom[intN]` FOR A C-LIKE `#[repr(intN)]` ENUM DOES NOT EXIST -- design.md § Enum Discriminant Runtime Surface commits to auto-generating it and s… | FIXED by 5e323df1 (8b264344 pre-rebase). `Enum.try_from(v)` is now generated for every C-like enum with a
+| B-2026-08-21-26 | typecheck | medium | `TryFrom[intN]` FOR A C-LIKE `#[repr(intN)]` ENUM DOES NOT EXIST -- design.md § Enum Discriminant Runtime Surface commits to auto-generating it and s… | FIXED by 5e323df1 (pre-rebase). `Enum.try_from(v)` is now generated for every C-like enum with a
 DECLARED `#[repr(intN)]`, typed `Result[Enum, DiscriminantError[intN]]`, and
 lowered on all three surfaces.
 
@@ -14421,7 +14421,7 @@ declarations as copy-pasteable.
 
 Full suite 108 binaries / 14,771 tests / 0 failures; fmt clean; clippy 0 on
 both feature legs. |
-| B-2026-08-21-33 | other | low | the seven self-host oracles ignore `KARAC_REQUIRE_RUNTIME_ARCHIVE=1` on the one link failure that still soft-skips, and their skip comment wrongly cl… | FIXED by 2947a26 (rebased to e263ef7). The seven self-host oracles now honour `KARAC_REQUIRE_RUNTIME_ARCHIVE=1`: on a link failure the guard panics instead of returning `None` and reporting a pass over zero comparisons.
+| B-2026-08-21-33 | other | low | the seven self-host oracles ignore `KARAC_REQUIRE_RUNTIME_ARCHIVE=1` on the one link failure that still soft-skips, and their skip comment wrongly cl… | FIXED by 910a2af9. The seven self-host oracles now honour `KARAC_REQUIRE_RUNTIME_ARCHIVE=1`: on a link failure the guard panics instead of returning `None` and reporting a pass over zero comparisons.
 
 Scope is what the measurement supports and no more. A MISSING ARCHIVE never took the skip -- `karac` reports `error[link]: libkarac_runtime.a not found`, whose `error[` prefix the oracle's own compile-error heuristic already matches, so it asserts loudly. Verified by moving all seven archives aside: `selfhost_lexer` FAILS rather than skips, with and without the flag. The stale half of the skip comment ("or a link failure from a missing runtime archive") is corrected in place, since it describes behaviour the heuristic three lines above prevents.
 
@@ -14706,7 +14706,7 @@ not in the body — the binding is not registered as a slice, so the call cannot
 qualify `Slice.f`. Verified pre-existing against pre-fix source. It is the same
 under-registered-binding family as the `Array` half fixed in B-2026-08-21-25,
 which is why it is worth its own row rather than a note here. |
-| B-2026-08-21-44 | codegen | low | `as_slice()` ON A FIXED-ARRAY **TEMPORARY** HAS NO CODEGEN LOWERING -- `n.to_ne_bytes().as_slice().len()` fails dispatch while `--interp` answers, th… | FIXED by 9b079fb0 (063d9d07 pre-rebase). A one-entry widening of the gate B-2026-08-21-25 built:
+| B-2026-08-21-44 | codegen | low | `as_slice()` ON A FIXED-ARRAY **TEMPORARY** HAS NO CODEGEN LOWERING -- `n.to_ne_bytes().as_slice().len()` fails dispatch while `--interp` answers, th… | FIXED by 9b079fb0 (pre-rebase). A one-entry widening of the gate B-2026-08-21-25 built:
 `as_slice` joins the fixed-array read surface admitted for an array-valued
 TEMPORARY, and the identifier arm it re-dispatches into already handles an
 `ArrayType` slot by building a slice header from the place plus the array's
@@ -14909,7 +14909,7 @@ GATED by `every_reduction_shader_bounds_its_workgroup_output_write`, a sibling o
 VERIFIED: negative control -- reverting the guard in the strided emitter alone makes the new gate FAIL, so it catches the defect that shipped rather than merely passing. 103 emitter unit tests and the full 62-case `gpu_e2e` suite green on lavapipe (`KARAC_GPU_BACKEND=cpu`, `KARAC_REQUIRE_GPU_ADAPTER=1`); clippy clean on both feature legs.
 
 NOT VERIFIED HERE, and this is the honest limit: the failing surface is Metal, which this Linux container has no adapter for. lavapipe cannot reproduce the bug (it discards the out-of-bounds write), so a green local run proves NO REGRESSION, not the fix. The fix rests on the mechanism being established by construction -- tight sizing plus an overshoot grid equals an out-of-bounds store, and the guard makes that store impossible on any backend. CONFIRMATION IS THE `gpu-e2e-metal` CI JOB on this commit; if it still fails, the clamp hypothesis is wrong and the 64-element shortfall needs a different explanation. |
-| B-2026-08-21-50 | codegen | high | A C-LIKE ENUM BOUND OUT OF `Ok(...)` MATCHES THE WRONG VARIANT UNDER CODEGEN -- `Ok(UsbClass.Hid)` selects the FIRST variant, and passing the binding… | Fixed in c00a1308 (1541eea0 pre-rebase) — one lookup widened in `src/codegen/pattern_binding.rs`:
+| B-2026-08-21-50 | codegen | high | A C-LIKE ENUM BOUND OUT OF `Ok(...)` MATCHES THE WRONG VARIANT UNDER CODEGEN -- `Ok(UsbClass.Hid)` selects the FIRST variant, and passing the binding… | Fixed in c00a1308 (pre-rebase) — one lookup widened in `src/codegen/pattern_binding.rs`:
 `bind_pattern_values`'s single-word aggregate reconstruction now falls back from
 `struct_types` to `enum_layouts`.
 
@@ -14967,7 +14967,7 @@ SEVERITY was correctly filed high. The silent half is the dangerous one, and the
 row's framing of it holds up: a wire-protocol enum arriving through a `Result`
 dispatched to the wrong branch with `karac check` clean, exit 0, and no
 diagnostic, on a program with no unsafe, no FFI and no concurrency. |
-| B-2026-08-21-51 | typecheck | medium | A GENERIC ENUM'S STRUCT-SHAPED VARIANT DOES NOT BIND ITS TYPE PARAMETER: constructing one infers the BARE head (`MyErr`, not `MyErr[u8]`) and a patte… | FIXED by c9f5115d (0a8cea90 pre-rebase), at both sites the row described.
+| B-2026-08-21-51 | typecheck | medium | A GENERIC ENUM'S STRUCT-SHAPED VARIANT DOES NOT BIND ITS TYPE PARAMETER: constructing one infers the BARE head (`MyErr`, not `MyErr[u8]`) and a patte… | FIXED by c9f5115d (pre-rebase), at both sites the row described.
 
 CONSTRUCTION. `infer_enum_struct_variant_literal` returned
 `args: Vec::new()` unconditionally, so the literal could only ever type as the
@@ -15013,7 +15013,7 @@ does not. Inference from the field values covers every case in the row and
 both repros; an expected-type seed would additionally let a field value be
 checked against a concrete slot (so `Vec.new()` in a generic enum variant
 could infer its element). Worth doing if that shape ever shows up. |
-| B-2026-08-22-1 | codegen | high | `MemoryOrdering` REACHED CODEGEN WITH NO ENUM LAYOUT, so every match arm compiled to a BINDING pattern instead of a tag test and the first arm always… | FIXED by fb328c9. TWO PARTS: seed the one affected enum, and make the failure mode loud so the next one cannot be silent.
+| B-2026-08-22-1 | codegen | high | `MemoryOrdering` REACHED CODEGEN WITH NO ENUM LAYOUT, so every match arm compiled to a BINDING pattern instead of a tag test and the first arm always… | FIXED by 8fb7cec7. TWO PARTS: seed the one affected enum, and make the failure mode loud so the next one cannot be silent.
 
 THIS ROW'S CAUSE AND SCOPE WERE BOTH WRONG, and measuring them is what produced the real fix. The row said the cause was a missing SEED in `declarations.rs` and named six candidate enums. Neither held:
 
