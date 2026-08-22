@@ -1727,7 +1727,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// nested box.
     #[allow(
         clippy::too_many_arguments,
-        reason = "each parameter is a distinct layout coordinate of the two-tag                   walk (outer/inner enum and variant, plus the deeper tag chain);                   bundling them into a struct would move the arity, not remove it"
+        reason = "each parameter is a distinct layout coordinate of the two-tag walk (outer/inner enum and variant, plus the deeper tag chain); bundling them into a struct would move the arity, not remove it"
     )]
     pub(super) fn track_nested_boxed_enum_var(
         &mut self,
@@ -1782,10 +1782,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// any other contents shape, keeps the historical box-only free.
     #[allow(
         clippy::too_many_arguments,
-        reason = "each parameter is a distinct layout coordinate of the two-tag \
-                  walk (outer/inner enum and variant, the inner tag's field \
-                  index, the deeper tag chain, and the boxed contents type); \
-                  bundling them into a struct would move the arity, not remove it"
+        reason = "each parameter is a distinct layout coordinate of the two-tag walk (outer/inner enum and variant, the inner tag's field index, the deeper tag chain, and the boxed contents type); bundling them into a struct would move the arity, not remove it"
     )]
     pub(super) fn track_nested_boxed_enum_var_at_field(
         &mut self,

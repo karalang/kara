@@ -1099,16 +1099,27 @@ impl<'ctx> super::Codegen<'ctx> {
             .infer_provider_type_name(provider_expr)
             .ok_or_else(|| {
                 format!(
-                    "providers[{}]: ambient-resource override requires a statically-typed                  provider (struct literal or typed binding); runtime-typed providers                  (e.g. a function return) are not supported on the codegen path in v1",
+                    concat!(
+                        "providers[{}]: ambient-resource override requires a statically-typed ",
+                        "provider (struct literal or typed binding); runtime-typed providers ",
+                        "(e.g. a function return) are not supported on the codegen path in v1"
+                    ),
                     resource
                 )
             })?;
-        let resource_id = *self.provider_state.provider_resource_ids.get(resource).ok_or_else(|| {
-            format!(
-                "providers[{}]: ambient resource has no minted resource ID — add it to                  `prelude::AMBIENT_RESOURCE_METHODS` (codegen bug)",
-                resource
-            )
-        })?;
+        let resource_id = *self
+            .provider_state
+            .provider_resource_ids
+            .get(resource)
+            .ok_or_else(|| {
+                format!(
+                    concat!(
+                        "providers[{}]: ambient resource has no minted resource ID — add it to ",
+                        "`prelude::AMBIENT_RESOURCE_METHODS` (codegen bug)"
+                    ),
+                    resource
+                )
+            })?;
         let vtable_ptr = self.emit_ambient_vtable(&provider_type_name, resource)?;
         let data_ptr = self.compile_provider_data_ptr(provider_expr, &provider_type_name)?;
         Ok((resource_id, data_ptr, vtable_ptr))

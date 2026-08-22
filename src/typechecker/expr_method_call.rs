@@ -4462,7 +4462,10 @@ impl<'a> super::TypeChecker<'a> {
         if a_shape.len() != 2 {
             self.type_error(
                 format!(
-                    "error[E_GPU_REDUCE_BUFFER]: `gpu.matmul` requires a rank-2 left                      operand, found rank {} — batched matmul is v1.5, on both surfaces",
+                    concat!(
+                        "error[E_GPU_REDUCE_BUFFER]: `gpu.matmul` requires a rank-2 left ",
+                        "operand, found rank {} — batched matmul is v1.5, on both surfaces"
+                    ),
                     a_shape.len()
                 ),
                 args[0].value.span,

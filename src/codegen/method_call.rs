@@ -4025,7 +4025,11 @@ impl<'ctx> super::Codegen<'ctx> {
                             .into_int_value(),
                         other => {
                             return Err(format!(
-                                "discriminant: enum '{enum_name}' value has unexpected                                  representation {other:?}"
+                                concat!(
+                                    "discriminant: enum '{}' value has unexpected ",
+                                    "representation {:?}"
+                                ),
+                                enum_name, other
                             ))
                         }
                     };

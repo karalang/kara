@@ -10849,7 +10849,7 @@ mod tests {
                 // static split unless over-decomposition asked for it.
                 assert!(
                     chunk >= n.div_ceil(workers.saturating_mul(8)).max(1),
-                    "n={n} workers={workers}: chunk {chunk} is below the                      over-decomposition target"
+                    "n={n} workers={workers}: chunk {chunk} is below the over-decomposition target"
                 );
             }
         }
