@@ -13053,6 +13053,51 @@ fn main() {
         }
     }
 
+    /// B-2026-08-22-15 — a `-> Self` trait method on an EXISTENTIAL receiver
+    /// must RUN, not just typecheck. The row predicted this: B-2026-08-22-12's
+    /// substitution already hands codegen a concrete witness for the
+    /// existential, and the impl method is ordinary, so recovering the type is
+    /// the whole job. Asserted rather than assumed.
+    mod self_returning_existential {
+        use super::run_program;
+
+        const DECLS: &str =
+            "trait Counter { fn bumped(self) -> Self; fn value(ref self) -> i64; }\n\
+                             struct Ctr { n: i64 }\n\
+                             impl Counter for Ctr {\n\
+                             \x20   fn bumped(self) -> Ctr { Ctr { n: self.n + 1 } }\n\
+                             \x20   fn value(ref self) -> i64 { self.n }\n\
+                             }\n\
+                             fn make(n: i64) -> impl Counter { Ctr { n: n } }\n";
+
+        #[test]
+        fn a_bound_self_returning_existential_runs() {
+            assert_eq!(
+                run_program(&format!(
+                    "{DECLS}fn main() {{ let c = make(1); let d = c.bumped(); println(f\"{{d.value()}}\"); }}\n"
+                ))
+                .as_deref(),
+                Some("2\n"),
+                "the builder shape must build and run"
+            );
+        }
+
+        /// Chained — each link returns the existential again, so this fails
+        /// differently from the single-step case if `Self` is only recovered
+        /// once.
+        #[test]
+        fn a_chained_self_returning_existential_runs() {
+            assert_eq!(
+                run_program(&format!(
+                    "{DECLS}fn main() {{ println(f\"{{make(1).bumped().bumped().bumped().value()}}\"); }}\n"
+                ))
+                .as_deref(),
+                Some("4\n"),
+                "three chained `-> Self` calls must each keep the existential"
+            );
+        }
+    }
+
     /// B-2026-08-21-53 — the TYPE-QUALIFIED associated call `Type[Args].fn(a)`.
     ///
     /// This is the spelling design.md § Generics settles on for explicit type

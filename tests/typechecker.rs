@@ -44249,3 +44249,63 @@ fn a_static_assoc_call_does_not_borrow_a_same_named_global_where_clause() {
         "{plain}fn main() {{ let a: i64 = H2.take(1); println(a); }}"
     ));
 }
+
+/// B-2026-08-22-15 — a `-> Self` trait method on an EXISTENTIAL receiver.
+///
+/// `dispatch_trait_assoc_fn` substitutes `Self -> TypeParam(<target>)`, which
+/// is right for a type-PARAMETER receiver (the param carries its bounds) and
+/// wrong for an existential: the result was a BARE `TypeParam("Counter")` with
+/// no bounds, so the value lost the one thing the existential guaranteed —
+/// that it implements the trait. The most ordinary builder shape there is was
+/// rejected with two diagnostics that point at the caller's correct code and
+/// name a spelling ("type parameter 'Counter'") the source never contains.
+///
+/// `Self` on an existential receiver IS that existential, so the call now
+/// types as the same `impl Counter` and stays opaque.
+#[test]
+fn a_self_returning_trait_method_on_an_existential_keeps_the_trait() {
+    let src = "trait Counter { fn bumped(self) -> Self; fn value(ref self) -> i64; }\n\
+               struct Ctr { n: i64 }\n\
+               impl Counter for Ctr {\n\
+               \x20   fn bumped(self) -> Ctr { Ctr { n: self.n + 1 } }\n\
+               \x20   fn value(ref self) -> i64 { self.n }\n\
+               }\n\
+               fn make(n: i64) -> impl Counter { Ctr { n: n } }\n";
+    typecheck_ok(&format!(
+        "{src}fn main() {{ let c = make(1); let d = c.bumped(); println(d.value()); }}"
+    ));
+    // CHAINED — each `-> Self` must come back as the same existential, or the
+    // second link loses the trait surface again.
+    typecheck_ok(&format!(
+        "{src}fn main() {{ println(make(1).bumped().bumped().value()); }}"
+    ));
+    // The concrete spelling is the control: it always worked, so a regression
+    // that broke BOTH would still fail here.
+    let concrete = src.replace("-> impl Counter", "-> Ctr");
+    typecheck_ok(&format!(
+        "{concrete}fn main() {{ let c = make(1); let d = c.bumped(); println(d.value()); }}"
+    ));
+}
+
+/// The existential must stay OPAQUE — recovering `Self` must not leak the
+/// concrete witness. Calling a method the witness has but the trait does not
+/// still has to be rejected, or the fix would have traded a false positive for
+/// a false negative.
+#[test]
+fn a_self_returning_existential_stays_opaque() {
+    let src = "trait Counter { fn bumped(self) -> Self; fn value(ref self) -> i64; }\n\
+               struct Ctr { n: i64 }\n\
+               impl Ctr { fn secret(ref self) -> i64 { 99 } }\n\
+               impl Counter for Ctr {\n\
+               \x20   fn bumped(self) -> Ctr { Ctr { n: self.n + 1 } }\n\
+               \x20   fn value(ref self) -> i64 { self.n }\n\
+               }\n\
+               fn make(n: i64) -> impl Counter { Ctr { n: n } }\n";
+    let errs = typecheck_errors(&format!(
+        "{src}fn main() {{ println(make(1).bumped().secret()); }}"
+    ));
+    assert!(
+        errs.iter().any(|e| e.message.contains("secret")),
+        "a non-trait method must stay unreachable through the existential, got {errs:?}"
+    );
+}

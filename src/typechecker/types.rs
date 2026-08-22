@@ -1918,6 +1918,51 @@ pub(super) fn types_compatible(a: &Type, b: &Type) -> bool {
     }
 }
 
+/// Does `ty` contain an `AssocProjection` whose receiver is the type parameter
+/// `name` — i.e. an unresolved `Self.Assoc` on an existential's trait?
+///
+/// B-2026-08-22-15 guard. `substitute_type_params` rewrites an
+/// `AssocProjection`'s `param` whenever the substitution map has an entry for
+/// it, so substituting the receiver existential back in for `Self` would also
+/// retarget any projection that `substitute_existential_assoc_bindings` could
+/// not resolve. Those belong to B-2026-08-22-4's inline-binding channel; this
+/// predicate lets the `-> Self` fix step aside and leave them exactly as they
+/// were.
+pub(super) fn type_mentions_assoc_projection_on(ty: &Type, name: &str) -> bool {
+    let go = |t: &Type| type_mentions_assoc_projection_on(t, name);
+    match ty {
+        Type::AssocProjection {
+            param,
+            args,
+            receiver_args,
+            ..
+        } => param == name || args.iter().any(&go) || receiver_args.iter().any(&go),
+        Type::Tuple(elems) => elems.iter().any(&go),
+        Type::Array { element, .. } => go(element),
+        Type::Vector { element, .. } => go(element),
+        Type::Slice { element, .. } => go(element),
+        Type::Named { args, .. } => args.iter().any(&go),
+        Type::Rc(inner)
+        | Type::Arc(inner)
+        | Type::Ref(inner)
+        | Type::MutRef(inner)
+        | Type::Weak(inner) => go(inner),
+        Type::Pointer { inner, .. } => go(inner),
+        Type::Function {
+            params,
+            return_type,
+        }
+        | Type::OnceFunction {
+            params,
+            return_type,
+        } => params.iter().any(&go) || go(return_type),
+        Type::Refinement { base, .. } => go(base),
+        // A NESTED existential owns its own trait surface; an outer trait's
+        // `Self` never reaches inside it. Everything else is a leaf.
+        _ => false,
+    }
+}
+
 // ── Local Type Scope ────────────────────────────────────────────
 
 #[cfg(test)]

@@ -182,12 +182,7 @@ impl<'a> super::TypeChecker<'a> {
                 // the enclosing trait being defined, not just bounds.
                 return self.dispatch_typeparam_receiver_method(name, method, args, span);
             }
-            Type::Existential {
-                trait_name,
-                tait_alias,
-                assoc_bindings,
-                ..
-            } => {
+            Type::Existential { .. } => {
                 // `impl Trait` slice 6 — TAIT and return-position
                 // existentials dispatch through the declared trait
                 // surface. Find the trait's own method by name; if
@@ -201,13 +196,9 @@ impl<'a> super::TypeChecker<'a> {
                 // receiver were a `Type::TypeParam` with the trait as
                 // its only bound — slice 3's `enclosing_bounds` story
                 // already covers the lookup machinery.
-                let trait_name_clone = trait_name.clone();
-                let tait_alias_clone = tait_alias.clone();
-                let bindings_clone = assoc_bindings.clone();
+                let receiver_existential = receiver_for_lookup.clone();
                 return self.dispatch_existential_receiver_method(
-                    &trait_name_clone,
-                    tait_alias_clone.as_deref(),
-                    &bindings_clone,
+                    &receiver_existential,
                     method,
                     args,
                     span,

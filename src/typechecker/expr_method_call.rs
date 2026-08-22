@@ -167,7 +167,8 @@ struct ResidentField<'a> {
 }
 use super::types::{
     method_callee_type_name, receiver_for_method_lookup, substitute_existential_assoc_bindings,
-    type_display, ConstArg, FloatSize, IntSize, SubstValue, Type, UIntSize,
+    type_display, type_mentions_assoc_projection_on, ConstArg, FloatSize, IntSize, SubstValue,
+    Type, UIntSize,
 };
 use super::TypeErrorKind;
 
@@ -587,15 +588,40 @@ impl<'a> super::TypeChecker<'a> {
     /// - **Return-position** (`tait_alias = None`): emit the generic
     ///   `NoMethodFound` naming the trait — slice 3 caller-side opacity
     ///   already covers the rest of the diagnostic surface.
+    ///
+    /// B-2026-08-22-15 widened this from three destructured fields
+    /// (`trait_name` / `tait_alias` / `assoc_bindings`) to the WHOLE receiver
+    /// existential, because `-> Self` has to come back as that same
+    /// existential — `origin` and `trait_args` are part of its identity, and
+    /// an equal-looking rebuild is not the same type. Taking the receiver
+    /// whole also keeps the parameter count down; the three fields are read
+    /// back out below.
     pub(super) fn dispatch_existential_receiver_method(
         &mut self,
-        trait_name: &str,
-        tait_alias: Option<&str>,
-        assoc_bindings: &[(String, Type)],
+        receiver: &Type,
         method: &str,
         args: &[CallArg],
         span: &Span,
     ) -> Type {
+        let (trait_name, tait_alias, assoc_bindings) = match receiver {
+            Type::Existential {
+                trait_name,
+                tait_alias,
+                assoc_bindings,
+                ..
+            } => (
+                trait_name.clone(),
+                tait_alias.clone(),
+                assoc_bindings.clone(),
+            ),
+            // Only an existential reaches this dispatcher (its single caller
+            // matches on `Type::Existential`); anything else is a caller bug,
+            // not a user error, so decline rather than invent a diagnostic.
+            _ => return Type::Error,
+        };
+        let trait_name = trait_name.as_str();
+        let tait_alias = tait_alias.as_deref();
+        let assoc_bindings = assoc_bindings.as_slice();
         // Trait-surface lookup: the existential's only callable methods
         // are those declared on `trait_name`. `find_trait_method`
         // walks `program.items` for the trait def and returns the
@@ -618,7 +644,50 @@ impl<'a> super::TypeChecker<'a> {
             // an annotation. An inline binding is exactly the missing fact, so
             // apply it here (B-2026-08-22-4). Without a binding the projection
             // is left intact and the old behaviour stands.
-            return substitute_existential_assoc_bindings(&ret, trait_name, assoc_bindings);
+            let ret = substitute_existential_assoc_bindings(&ret, trait_name, assoc_bindings);
+            // B-2026-08-22-15 — `-> Self` ON AN EXISTENTIAL RECEIVER IS THAT
+            // EXISTENTIAL. `dispatch_trait_assoc_fn` substituted
+            // `Self -> TypeParam(trait_name)`, which is right for a type
+            // PARAMETER receiver (the param carries its bounds) and wrong
+            // here: it hands back a BARE `TypeParam("Counter")` with no bounds
+            // attached, so the value loses the one thing the existential
+            // guaranteed — that it implements the trait. The ordinary builder
+            // shape `make().bumped().value()` was then rejected with "cannot
+            // infer type parameter 'Counter'" and "no method 'value' on type
+            // parameter 'Counter'; add a trait bound" — diagnostics that point
+            // at the caller's correct code and name a spelling the source
+            // never contains.
+            //
+            // Substituting the receiver back in is the exact inverse of that
+            // `Self` substitution, so it also covers nested positions
+            // (`-> Vec[Self]`, `-> Option[Self]`) rather than just the bare
+            // case. The result keeps the receiver's `origin`, so it stays the
+            // same opaque existential and the trait surface remains callable.
+            //
+            // SKIPPED when an unresolved `Self.Assoc` projection on this trait
+            // survives. `substitute_type_params` rewrites an
+            // `AssocProjection`'s receiver whenever the map has an entry for
+            // it, and for a receiver that is not `Named`/`Shared`/`Rc`/`Arc`
+            // it falls to `other => (type_display(other), vec![])` — so the
+            // projection's `param` would become the DISPLAY STRING of an
+            // existential (`"impl Src"`), which then fails the bare-name
+            // lookup in `resolve_assoc_projections` and reads worse than the
+            // `"Src"` it replaced. Those projections are B-2026-08-22-4's
+            // inline-binding channel, not this one.
+            //
+            // HONEST NOTE: no test reaches this guard today, and it is kept on
+            // the reading above rather than on a repro. A return-position
+            // `impl Trait` has exactly ONE witness by construction, so its
+            // projections always resolve; the guard is here for the shapes
+            // that do not have that property (a TAIT whose witness inference
+            // is still deferred) rather than for anything reproducible now.
+            // Deleting it should be paired with a case that proves it dead.
+            if type_mentions_assoc_projection_on(&ret, trait_name) {
+                return ret;
+            }
+            let mut self_sub: HashMap<String, SubstValue> = HashMap::new();
+            self_sub.insert(trait_name.to_string(), SubstValue::Type(receiver.clone()));
+            return substitute_type_params(&ret, &self_sub);
         }
         // No trait-surface method — surface the focused diagnostic.
         for arg in args {
