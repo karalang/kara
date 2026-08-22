@@ -837,10 +837,135 @@ impl<'a> super::TypeChecker<'a> {
                     }
                     return Some(return_ty);
                 }
-                // No matching impl-table entry. Built-in types (Vec, Option,
-                // etc.) whose methods dispatch through special-case infer
-                // paths rather than `env.impls` are out of scope for this
-                // slice; falling through to a focused diagnostic.
+                // No matching impl-table entry. A BUILT-IN container's
+                // associated functions do not live in `env.impls` at all: the
+                // unqualified `Vec.new()` parses as a CALL over a two-segment
+                // path (`Path(["Vec", "new"])`) and is answered by
+                // `infer_call`'s constructor arm, which hands back
+                // `Vec[<fresh type var>]` and lets inference settle the
+                // element. The qualified `Vec[i64].new()` parses as a
+                // METHOD CALL whose receiver is a one-segment path carrying
+                // generic args, so it never reached that arm and died here
+                // instead (B-2026-08-22-17).
+                //
+                // That was harmless while the qualified form was a niche
+                // spelling. B-2026-08-21-53 made it THE documented way to pin a
+                // type, at which point the spec was telling users to write a
+                // form that failed on `Vec`, `Map` and `Channel` — the types
+                // most likely to need pinning, since their element cannot
+                // always be inferred from context.
+                //
+                // So delegate rather than re-implement: rebuild the call in the
+                // two-segment form the builtin arm already understands, infer
+                // it, and then PIN the result's inferred args to the ones the
+                // user wrote by unifying against the receiver's own type. That
+                // keeps one implementation of every builtin constructor
+                // (`new`, `with_capacity`, the fallible `try_*` companions,
+                // `Channel`'s tuple return) instead of a second copy that
+                // would drift from the first.
+                if is_builtin_container_head(&type_name) {
+                    let delegated_callee = Expr {
+                        kind: ExprKind::Path {
+                            segments: vec![type_name.clone(), method.to_string()],
+                            generic_args: None,
+                        },
+                        span: object.span,
+                    };
+                    let ret = self.infer_call(&delegated_callee, args, span);
+                    if ret == Type::Error {
+                        // The builtin arm already reported against its own
+                        // name; adding a second diagnostic for the same call
+                        // would only be noise.
+                        return Some(Type::Error);
+                    }
+                    // Pin the explicit args by UNIFYING, not by checking. The
+                    // constructor hands back `Vec[?T0]`, and binding `?T0` to
+                    // the `i64` the user wrote is the entire point of the
+                    // qualified spelling — `check_assignable` would instead
+                    // report `expected 'Vec[i64]', found 'Vec[?T0]'`, which is
+                    // exactly the metavar it is supposed to be solving.
+                    //
+                    // A pin the constructor cannot satisfy (`String[i64].new()`,
+                    // or the wrong arity) fails unification and is reported
+                    // here, so a nonsense qualification is still rejected.
+                    if !target_args.is_empty() {
+                        let pinned = Type::Named {
+                            name: type_name.clone(),
+                            args: target_args.clone(),
+                        };
+                        // `Channel[i64].new()` is why this is two-step. Most
+                        // builtin constructors return a value NAMED after the
+                        // head (`Vec.new() -> Vec[?T]`), so unifying
+                        // `Head[args]` against the result binds the metavars
+                        // directly. `Channel.new()` does not: it returns
+                        // `(Sender[?T], Receiver[?T])`, where the head name
+                        // appears nowhere and the pinned element sits inside a
+                        // tuple. Unifying against `Channel[i64]` there reports a
+                        // mismatch on a call that is perfectly well-formed.
+                        //
+                        // So fall back to pairing the explicit args with the
+                        // result's own free metavars in order. One distinct
+                        // metavar shared by `Sender` and `Receiver` pairs with
+                        // the single `i64`, and binding it once fixes both —
+                        // which is exactly the meaning of `Channel[i64]`.
+                        let head_named = matches!(
+                            &ret,
+                            Type::Named { name, .. } if *name == type_name
+                        );
+                        let pinned_ok = if head_named {
+                            crate::typechecker::inference::unify_types(
+                                &pinned,
+                                &ret,
+                                &mut self.env.substitutions,
+                                &mut self.env.const_substitutions,
+                            )
+                        } else {
+                            let vars = ordered_free_type_vars(&ret);
+                            vars.len() == target_args.len()
+                                && vars.iter().zip(target_args.iter()).all(|(v, t)| {
+                                    crate::typechecker::inference::unify_types(
+                                        v,
+                                        t,
+                                        &mut self.env.substitutions,
+                                        &mut self.env.const_substitutions,
+                                    )
+                                })
+                        };
+                        if !pinned_ok {
+                            self.type_error(
+                                format!(
+                                    "cannot construct `{}` as `{}`",
+                                    type_display(&ret),
+                                    type_display(&pinned)
+                                ),
+                                *span,
+                                TypeErrorKind::TypeMismatch,
+                            );
+                            return Some(Type::Error);
+                        }
+                        // The expression's type is the CONSTRUCTOR's result, not
+                        // the receiver spelling: `Channel[i64].new()` evaluates
+                        // to `(Sender[i64], Receiver[i64])`, and handing back
+                        // `Channel[i64]` would make the tuple destructuring
+                        // below it fail. `pinned` is returned only when the head
+                        // genuinely names the result type.
+                        if head_named {
+                            return Some(pinned);
+                        }
+                        // The name maps only supply display names for vars
+                        // that stay UNRESOLVED; these came from
+                        // `env.fresh_type_var()` and were just bound, so there
+                        // are no names to carry and empty maps are correct.
+                        return Some(crate::typechecker::inference::resolve_type_vars(
+                            &ret,
+                            &self.env.substitutions,
+                            &HashMap::new(),
+                            &self.env.const_substitutions,
+                            &HashMap::new(),
+                        ));
+                    }
+                    return Some(ret);
+                }
                 self.type_error(
                     format!("no method '{}' on `{}[…]`", method, type_name),
                     *span,
@@ -854,4 +979,66 @@ impl<'a> super::TypeChecker<'a> {
         }
         None
     }
+}
+
+/// Built-in container heads whose associated functions are answered by
+/// `infer_call`'s constructor arms rather than by an `env.impls` entry, so a
+/// qualified `Head[Args].method(..)` call has to be routed there instead of
+/// resolved against the impl table (B-2026-08-22-17).
+///
+/// Kept as an explicit list rather than "try the delegation and see": a failed
+/// delegation emits its own diagnostic, so speculatively delegating an unknown
+/// head would report against a name the user did not write before this arm
+/// could produce its own focused message.
+fn is_builtin_container_head(name: &str) -> bool {
+    matches!(
+        name,
+        "Vec"
+            | "VecDeque"
+            | "Map"
+            | "SortedMap"
+            | "Set"
+            | "SortedSet"
+            | "String"
+            | "Channel"
+            | "Option"
+            | "Result"
+    )
+}
+
+/// Free metavars of `ty` in first-appearance order, deduplicated.
+///
+/// Used to pin a qualified builtin constructor whose result is not named after
+/// the head — `Channel.new() -> (Sender[?T], Receiver[?T])`. Order and dedup
+/// both matter: `Channel[i64]` supplies ONE argument for ONE distinct metavar
+/// that occurs twice, and pairing positionally without dedup would see two.
+fn ordered_free_type_vars(ty: &Type) -> Vec<Type> {
+    fn walk(t: &Type, out: &mut Vec<Type>) {
+        match t {
+            Type::TypeVar(id) => {
+                if !out.iter().any(|s| matches!(s, Type::TypeVar(i) if i == id)) {
+                    out.push(t.clone());
+                }
+            }
+            Type::Named { args, .. } => args.iter().for_each(|a| walk(a, out)),
+            Type::Ref(i) | Type::MutRef(i) => walk(i, out),
+            Type::Tuple(ts) => ts.iter().for_each(|t| walk(t, out)),
+            Type::Array { element, .. } | Type::Slice { element, .. } => walk(element, out),
+            Type::Function {
+                params,
+                return_type,
+            }
+            | Type::OnceFunction {
+                params,
+                return_type,
+            } => {
+                params.iter().for_each(|p| walk(p, out));
+                walk(return_type, out);
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    walk(ty, &mut out);
+    out
 }

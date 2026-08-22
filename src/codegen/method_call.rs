@@ -999,7 +999,34 @@ impl<'ctx> super::Codegen<'ctx> {
                 let is_user_type = self.type_decls.shared_types.contains_key(t)
                     || self.type_decls.enum_layouts.contains_key(t)
                     || self.type_decls.struct_types.contains_key(t);
-                if is_user_type {
+                // B-2026-08-22-17 — the same re-form is what a BUILT-IN
+                // container head needs, and for the same reason. The
+                // typechecker now accepts `Vec[i64].new()` by delegating to the
+                // two-segment `Vec.new()` form; if codegen did not make the
+                // matching move, a program that checks clean would fail to
+                // build — trading the original error for a run-vs-build
+                // divergence, which is worse than the bug being fixed.
+                //
+                // Nothing below this needs to change: the re-formed `Call` is
+                // byte-identical to the unqualified spelling, so it lands on
+                // the constructor lowering that already exists. The generic
+                // args are dropped here deliberately — the typechecker has
+                // already pinned them into the recorded expression type, and
+                // that is what codegen reads the element layout from.
+                let is_builtin_head = matches!(
+                    t.as_str(),
+                    "Vec"
+                        | "VecDeque"
+                        | "Map"
+                        | "SortedMap"
+                        | "Set"
+                        | "SortedSet"
+                        | "String"
+                        | "Channel"
+                        | "Option"
+                        | "Result"
+                );
+                if is_user_type || is_builtin_head {
                     // Re-form the whole node as the `Call` the UNQUALIFIED
                     // `Box.make(7)` spelling already parses to, and compile
                     // THAT. Calling `compile_assoc_call` directly was tried

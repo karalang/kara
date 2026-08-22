@@ -12975,6 +12975,84 @@ fn main() {
         run_program_capturing(src).map(|c| c.stdout)
     }
 
+    /// B-2026-08-22-17 — the same qualified spelling over a BUILT-IN head.
+    ///
+    /// B-2026-08-21-53 made `Type[Args].fn(..)` the documented way to pin a type
+    /// explicitly, and wired it for USER types. It stayed broken for the
+    /// builtins — `Vec[i64].new()`, `Map[String, i64].new()`,
+    /// `Channel[i64].new()` all reported "no method 'new' on `Vec[…]`" — i.e.
+    /// the spec named a form that failed on exactly the types whose element
+    /// cannot always be inferred from context.
+    ///
+    /// WHY IT SPLIT ALONG USER-vs-BUILTIN. `Vec.new()` parses as a CALL over a
+    /// two-segment path and is answered by `infer_call`'s constructor arm;
+    /// `Vec[i64].new()` parses as a METHOD CALL whose receiver is a one-segment
+    /// path with generic args, which resolved against `env.impls` — where a
+    /// builtin has no entry at all. The fix routes the second form to the
+    /// first and then pins the args, so there is still ONE implementation of
+    /// each constructor.
+    ///
+    /// Each case is asserted against the value the UNQUALIFIED spelling
+    /// produces, because the two must agree by construction.
+    mod builtin_type_qualified_assoc_call {
+        use super::run_program;
+
+        #[test]
+        fn qualified_builtin_constructors_match_their_unqualified_twins() {
+            // Vec / Map / Set, plus `with_capacity` to show it is not just `new`.
+            let src = "fn main() {\n\
+                \x20   let mut v = Vec[i64].new(); v.push(3); v.push(4); println(v.len());\n\
+                \x20   let mut m = Map[String, i64].new(); m.insert(\"a\", 1); println(m.len());\n\
+                \x20   let mut s = Set[i64].new(); let _ = s.insert(7); println(s.len());\n\
+                \x20   let mut w = Vec[i64].with_capacity(4); w.push(9); println(w.len());\n\
+                }\n";
+            assert_eq!(run_program(src).as_deref(), Some("2\n1\n1\n1\n"));
+
+            // The unqualified twins, as the control: these always worked, so a
+            // difference here would mean the delegation changed the meaning of
+            // the spelling it delegates to.
+            let twin = "fn main() {\n\
+                \x20   let mut v: Vec[i64] = Vec.new(); v.push(3); v.push(4); println(v.len());\n\
+                \x20   let mut m: Map[String, i64] = Map.new(); m.insert(\"a\", 1); println(m.len());\n\
+                \x20   let mut s: Set[i64] = Set.new(); let _ = s.insert(7); println(s.len());\n\
+                \x20   let mut w: Vec[i64] = Vec.with_capacity(4); w.push(9); println(w.len());\n\
+                }\n";
+            assert_eq!(run_program(twin).as_deref(), Some("2\n1\n1\n1\n"));
+        }
+
+        /// `Channel` is the case that broke the obvious implementation, so it
+        /// gets its own test rather than a line in the one above.
+        ///
+        /// Every other builtin constructor returns a value NAMED after the head
+        /// (`Vec.new() -> Vec[?T]`), so pinning is a unification against
+        /// `Head[args]`. `Channel.new()` returns `(Sender[?T], Receiver[?T])` —
+        /// the head name appears nowhere in the result and the pinned element
+        /// sits inside a tuple, so that unification reports a mismatch on a
+        /// perfectly well-formed call. The fix pairs the explicit args with the
+        /// result's own free metavars instead, which also means the expression's
+        /// type must stay the TUPLE: handing back `Channel[i64]` would break the
+        /// destructuring on the very next token.
+        #[test]
+        fn a_qualified_channel_pins_through_a_tuple_return() {
+            let src = "fn main() {\n\
+                \x20   let (tx, rx) = Channel[i64].new();\n\
+                \x20   tx.send(5);\n\
+                \x20   println(rx.recv());\n\
+                }\n";
+            assert_eq!(run_program(src).as_deref(), Some("5\n"));
+        }
+
+        /// The qualified form has to work where the ANNOTATION workaround
+        /// cannot: an argument position with no binding to annotate. This is
+        /// the case that makes the row worth fixing rather than documenting.
+        #[test]
+        fn a_qualified_builtin_works_in_argument_position() {
+            let src = "fn take(v: Vec[String]) -> i64 { return v.len(); }\n\
+                fn main() { println(take(Vec[String].new())); }\n";
+            assert_eq!(run_program(src).as_deref(), Some("0\n"));
+        }
+    }
+
     /// B-2026-08-21-53 — the TYPE-QUALIFIED associated call `Type[Args].fn(a)`.
     ///
     /// This is the spelling design.md § Generics settles on for explicit type
