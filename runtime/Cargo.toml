@@ -75,6 +75,11 @@ default = ["tls", "net"]
 # concurrency lowering — sequential default"), no native net. `tls`
 # requires `net` (tokio-rustls wraps tokio streams).
 net = [
+    # The hash seed's env override + entropy source. On the native axis only:
+    # the wasm / embedded archives build `--no-default-features` and take the
+    # fixed-key fallback, which is the honest answer where there is no clock,
+    # no allocator to mine for ASLR and no adversarial-key threat model.
+    "karac-hash/std",
     "dep:hyper",
     "dep:hyper-util",
     "dep:tokio",
@@ -140,6 +145,12 @@ gpu = ["dep:wgpu", "dep:pollster"]
 # carry the dep.
 regex = ["dep:regex"]
 
+# `karac-hash/std` gives the seed its environment override and entropy source.
+# Folded into `net` (the native axis) rather than into `default`, so the wasm
+# and embedded archives — which build with `--no-default-features` — get the
+# fixed-key fallback without having to opt out of anything.
+hash-std = ["karac-hash/std"]
+
 # Arrow IPC interchange backend for `Column`/`DataFrame`/`Tensor`
 # `to_arrow_ipc` (phase-11 Arrow IPC codegen twin). Opt-in ONLY, like `gpu`
 # and `regex`: never in `default` / lean / wasm archives. Pulls the
@@ -172,6 +183,12 @@ unicode = ["dep:icu_normalizer"]
 # `preserve_order` feature backs the `Map<_, _>` with `IndexMap` instead
 # of `BTreeMap`, satisfying locked design choice (ii) — Json.Object
 # iterates in input insertion order, not alphabetical.
+# The ONE SipHash-1-3 implementation, shared with the `karac` compiler so the
+# interpreter and the compiled backends hash identically by construction
+# (B-2026-08-21-6). Zero-dependency and `no_std`-capable, which is what lets it
+# cross the wasm and Cortex-M targets the rest of this manifest has to reach.
+karac-hash = { path = "../hash", default-features = false }
+
 serde_json = { version = "1", features = ["preserve_order"] }
 
 # Slice B (`std.http` server, minimal): backing impl for

@@ -48,75 +48,46 @@ impl<'ctx> super::Codegen<'ctx> {
     /// (Vec, String, Slice) fall through to this byte loop.
     pub(super) fn emit_fxhash_over_bytes(
         &mut self,
-        hash_fn_val: FunctionValue<'ctx>,
+        _hash_fn_val: FunctionValue<'ctx>,
         data_ptr: PointerValue<'ctx>,
         byte_count: IntValue<'ctx>,
     ) -> IntValue<'ctx> {
-        let i64_t = self.context.i64_type();
-        let i8_t = self.context.i8_type();
-        let seed = i64_t.const_int(Self::FXHASH_SEED, false);
-        let rotate_amt = i64_t.const_int(Self::FXHASH_ROTATE, false);
-        let rotate_inv = i64_t.const_int(64 - Self::FXHASH_ROTATE, false);
+        self.emit_hash_bytes_call(data_ptr, byte_count)
+    }
 
-        let pre_bb = self.builder.get_insert_block().unwrap();
-        let hdr_bb = self.context.append_basic_block(hash_fn_val, "fx.hdr");
-        let bdy_bb = self.context.append_basic_block(hash_fn_val, "fx.bdy");
-        let exit_bb = self.context.append_basic_block(hash_fn_val, "fx.exit");
-
-        self.builder.build_unconditional_branch(hdr_bb).unwrap();
-
-        self.builder.position_at_end(hdr_bb);
-        let i_phi = self.builder.build_phi(i64_t, "fx.i").unwrap();
-        let hash_phi = self.builder.build_phi(i64_t, "fx.hash").unwrap();
-        i_phi.add_incoming(&[(&i64_t.const_zero(), pre_bb)]);
-        hash_phi.add_incoming(&[(&i64_t.const_zero(), pre_bb)]);
-        let i_val = i_phi.as_basic_value().into_int_value();
-        let hash_val = hash_phi.as_basic_value().into_int_value();
-        let cond = self
-            .builder
-            .build_int_compare(IntPredicate::ULT, i_val, byte_count, "fx.cond")
-            .unwrap();
+    /// Emit `call @karac_hash_bytes(ptr, len)` — SipHash-1-3 under the process
+    /// seed, from `runtime/src/hashing.rs` over the shared `karac-hash` crate
+    /// the interpreter also uses (B-2026-08-21-6).
+    ///
+    /// WHAT THIS REPLACED, and why a call rather than inline IR. Codegen used
+    /// to inline an FxHash byte loop — `h = h.rotate_left(5) ^ byte; h *=
+    /// 0x517cc1b727220a95` — into every per-type `hash_fn`. The seed was a
+    /// compile-time CONSTANT sitting in the compiler's own source, so colliding
+    /// keys could be generated offline and used to drive any `Map[String, _]`
+    /// keyed on request data quadratic. design.md § `Hash` and `Hasher` names
+    /// that exact threat and mandates a per-process-seeded DoS-resistant hash.
+    ///
+    /// Emitting a CALL keeps the permutation in ONE place shared with the
+    /// interpreter rather than hand-written a second time in IR — the rule the
+    /// Arrow IPC twin and `String.normalize` already follow. It costs one
+    /// direct call per hash; the `karac_map_*` table was already calling its
+    /// `hash_fn` through a function POINTER, so this adds a call frame, not a
+    /// new indirection class.
+    pub(super) fn emit_hash_bytes_call(
+        &mut self,
+        data_ptr: PointerValue<'ctx>,
+        byte_count: IntValue<'ctx>,
+    ) -> IntValue<'ctx> {
+        let f = self
+            .module
+            .get_function("karac_hash_bytes")
+            .expect("karac_hash_bytes extern declared in Codegen::new");
         self.builder
-            .build_conditional_branch(cond, bdy_bb, exit_bb)
-            .unwrap();
-
-        self.builder.position_at_end(bdy_bb);
-        let byte_ptr = unsafe {
-            self.builder
-                .build_gep(i8_t, data_ptr, &[i_val], "fx.bp")
-                .unwrap()
-        };
-        let byte = self
-            .builder
-            .build_load(i8_t, byte_ptr, "fx.b")
+            .build_call(f, &[data_ptr.into(), byte_count.into()], "hash.bytes")
             .unwrap()
-            .into_int_value();
-        let byte64 = self
-            .builder
-            .build_int_z_extend(byte, i64_t, "fx.b64")
-            .unwrap();
-        // rotate_left(h, 5) == (h << 5) | (h >> 59)
-        let shl = self
-            .builder
-            .build_left_shift(hash_val, rotate_amt, "fx.shl")
-            .unwrap();
-        let shr = self
-            .builder
-            .build_right_shift(hash_val, rotate_inv, false, "fx.shr")
-            .unwrap();
-        let rotated = self.builder.build_or(shl, shr, "fx.rot").unwrap();
-        let xored = self.builder.build_xor(rotated, byte64, "fx.xor").unwrap();
-        let new_hash = self.builder.build_int_mul(xored, seed, "fx.mul").unwrap();
-        let i_next = self
-            .builder
-            .build_int_add(i_val, i64_t.const_int(1, false), "fx.i1")
-            .unwrap();
-        i_phi.add_incoming(&[(&i_next, bdy_bb)]);
-        hash_phi.add_incoming(&[(&new_hash, bdy_bb)]);
-        self.builder.build_unconditional_branch(hdr_bb).unwrap();
-
-        self.builder.position_at_end(exit_bb);
-        hash_val
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value()
     }
 
     /// Emit (or reuse) a module-level `karac_hash_{type_name}(ptr) -> i64` function.
@@ -200,18 +171,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_load(int_ty, key_ptr, "fx.prim.raw")
                     .unwrap()
                     .into_int_value();
-                let value64 = if bit_width == 64 {
-                    raw
-                } else {
-                    self.builder
-                        .build_int_z_extend(raw, i64_t, "fx.prim.zext")
-                        .unwrap()
-                };
-                let seed = i64_t.const_int(Self::FXHASH_SEED, false);
-                let hash = self
-                    .builder
-                    .build_int_mul(value64, seed, "fx.prim.mul")
-                    .unwrap();
+                // The loaded value is unused now that the hash reads the
+                // key's BYTES in place rather than its numeric value.
+                let _ = raw;
+                // Exactly the integer's own bytes: no store, no widening. Two
+                // keys of one monomorphic K always present the same byte
+                // count, and a width mixed into the digest would be
+                // meaningless across maps that can never share a key type.
+                let nbytes = i64_t.const_int(u64::from(bit_width).div_ceil(8), false);
+                let hash = self.emit_hash_bytes_call(key_ptr, nbytes);
                 self.builder.build_return(Some(&hash)).unwrap();
             } else {
                 // Wider integers (i128 / u128): fall back to byte loop.

@@ -1271,6 +1271,7 @@ dependencies = [
  "icu_normalizer",
  "inkwell",
  "kara-registry-proxy",
+ "karac-hash",
  "karac-runtime",
  "libc",
  "llvm-sys",
@@ -1291,6 +1292,10 @@ dependencies = [
  "ureq",
  "wasi-preview1-component-adapter-provider",
 ]
+
+[[package]]
+name = "karac-hash"
+version = "0.1.0"
 
 [[package]]
 name = "karac-kernel"
@@ -1328,6 +1333,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "icu_normalizer",
+ "karac-hash",
  "libc",
  "mio",
  "pollster",

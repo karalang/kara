@@ -102,7 +102,11 @@ impl<'a> super::Interpreter<'a> {
             "keys" => {
                 if let Value::Map(ref m) = obj {
                     return Some(Value::array_of(
-                        m.read().unwrap().iter().map(|(k, _)| k.clone()).collect(),
+                        m.read()
+                            .unwrap()
+                            .iter_observable()
+                            .map(|(k, _)| k.clone())
+                            .collect(),
                     ));
                 }
                 if let Value::SortedMap(ref m) = obj {
@@ -112,7 +116,11 @@ impl<'a> super::Interpreter<'a> {
             "values" => {
                 if let Value::Map(ref m) = obj {
                     return Some(Value::array_of(
-                        m.read().unwrap().iter().map(|(_, v)| v.clone()).collect(),
+                        m.read()
+                            .unwrap()
+                            .iter_observable()
+                            .map(|(_, v)| v.clone())
+                            .collect(),
                     ));
                 }
                 if let Value::SortedMap(ref m) = obj {

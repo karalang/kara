@@ -802,7 +802,7 @@ pub struct SharedStructInner {
 /// iteration order is not stable, so their per-field hashes are combined with
 /// XOR — commutative, hence order-independent.
 pub(crate) fn hash_value(v: &Value) -> u64 {
-    use std::collections::hash_map::DefaultHasher;
+    use karac_hash::KaraHasher as DefaultHasher;
     use std::hash::{Hash, Hasher};
 
     fn field_map_hash(fields: &HashMap<String, Value>) -> u64 {
@@ -934,6 +934,33 @@ impl MapData {
 
     pub fn iter(&self) -> std::slice::Iter<'_, (Value, Value)> {
         self.entries.iter()
+    }
+
+    /// The entries in OBSERVABLE order — what `keys()` / `values()` /
+    /// `entries()` / a `for` loop / `Display` walk (B-2026-08-21-6).
+    ///
+    /// design.md § Map: "Iteration order is unspecified and varies across
+    /// process runs — the default hasher is DoS-resistant and seeded fresh per
+    /// process ... so bucket placement and therefore iteration order differ
+    /// from one run to the next." Ordering by the SEEDED hash is how the
+    /// interpreter delivers that; the compiled backends get it for free,
+    /// because `karac_map_*` is an open-addressed table and its walk already
+    /// follows bucket placement.
+    ///
+    /// STORAGE stays insertion-ordered on purpose. `entries` is indexed
+    /// positionally by the `Entry` chain's `slot_idx` and by `position_of`, and
+    /// reordering it would invalidate every stored position — the same hazard
+    /// that makes `remove` reindex. Only the observable walk is permuted, so
+    /// the two concerns stay separate.
+    ///
+    /// Ties break on insertion index, so the order is a deterministic function
+    /// of (seed, contents) rather than of hash-map internals — two runs with
+    /// the same pinned `KARAC_HASH_SEED` agree exactly, which is what lets the
+    /// test suites and the kata A/B harness compare output at all.
+    pub fn iter_observable(&self) -> impl Iterator<Item = &(Value, Value)> {
+        let mut order: Vec<usize> = (0..self.entries.len()).collect();
+        order.sort_by_key(|&i| (hash_value(&self.entries[i].0), i));
+        order.into_iter().map(move |i| &self.entries[i])
     }
 
     /// Position of `key` in `entries`, or `None`. The hash narrows the search

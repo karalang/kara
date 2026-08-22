@@ -1,0 +1,20 @@
+[package]
+name = "karac-hash"
+version = "0.1.0"
+edition = "2021"
+
+# ZERO DEPENDENCIES, deliberately. This crate is linked into BOTH the `karac`
+# compiler (for the interpreter's `Map`/`Set`) and `karac-runtime` (for the
+# compiled backends' `karac_map_*` tables), and the runtime has to build for
+# wasm32-wasip1, wasm32-wasip1-threads and Cortex-M as well as native. Anything
+# added here has to clear that whole target matrix, so the bar for a dep is:
+# there isn't one.
+[dependencies]
+
+[features]
+# `std` is what the environment override and the entropy source need. ON by
+# default for the compiler and the native runtime; the runtime's wasm and
+# embedded archives turn it off, and the seed falls back to a fixed key there
+# (see `seed.rs` — the flooding threat model does not describe those targets).
+default = ["std"]
+std = []

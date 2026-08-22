@@ -103,6 +103,9 @@ pub mod once;
 // `libkarac_runtime_arrow.a`.
 #[cfg(feature = "arrow")]
 pub mod arrow_ipc;
+// Hash FFI (`karac_hash_*`) — SipHash-1-3 over the shared `karac-hash` crate.
+// NOT feature-gated: every archive needs it, because every `Map`/`Set` does.
+pub mod hashing;
 // Regex FFI (`karac_regex_*`) — opt-in `regex` feature → `libkarac_runtime_regex.a`.
 #[cfg(feature = "regex")]
 pub mod regex;
@@ -256,6 +259,12 @@ pub fn __preserve_no_mangle_symbols() -> usize {
     // pairs above. cfg-gated because the `regex` module only exists under the
     // feature; the `llvm` feature now pulls `karac-runtime/regex` so the JIT
     // runtime actually carries these.
+    // Hash FFI (`runtime/src/hashing.rs`). Every emitted per-type `hash_fn`
+    // calls `karac_hash_bytes`, so the JIT must resolve it from the running
+    // `karac_jit_runner` via `dlsym` — without the keep-list entry, `karac run`
+    // on ANY program with a `Map` or `Set` fails at lookup while `karac build`
+    // is fine. Same class as the realloc / critical-section pairs.
+    keep!(hashing::karac_hash_bytes, hashing::karac_hash_seed);
     #[cfg(feature = "regex")]
     keep!(
         regex::karac_regex_validate,

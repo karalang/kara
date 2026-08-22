@@ -28875,3 +28875,88 @@ fn test_singular_target_and_profiles_keep_their_project_mode_behaviour() {
         "expected the profiles refusal, got: {stderr}"
     );
 }
+
+/// B-2026-08-21-6 — the two properties design.md § Map states and that only a
+/// SUBPROCESS can check, because both are about what differs between one
+/// process and the next.
+///
+/// 1. "Iteration order is unspecified and **varies across process runs**" —
+///    the observable consequence of a per-process-seeded hasher, and the thing
+///    that makes an accidental order dependency loud instead of a latent bug
+///    that breaks on the next hasher change.
+/// 2. `KARAC_HASH_SEED` pins it, which is what lets the compiler's own suites
+///    and the kata A/B harness compare output at all.
+///
+/// Runs under `--interp`; the compiled backends get the same property from
+/// `karac_map_*`'s bucket walk and are covered by the codegen suite.
+#[test]
+fn map_iteration_order_varies_per_process_and_a_pinned_seed_reproduces() {
+    let dir = std::env::temp_dir().join(format!("kara_hashseed_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let src = dir.join("order.kara");
+    std::fs::write(
+        &src,
+        "fn main() {\n\
+             let mut m: Map[String, i64] = Map.new();\n\
+             m.insert(\"zulu\", 1);\n\
+             m.insert(\"alpha\", 2);\n\
+             m.insert(\"mike\", 3);\n\
+             m.insert(\"bravo\", 4);\n\
+             m.insert(\"yankee\", 5);\n\
+             m.insert(\"charlie\", 6);\n\
+             m.insert(\"xray\", 7);\n\
+             m.insert(\"delta\", 8);\n\
+             m.insert(\"whiskey\", 9);\n\
+             m.insert(\"echo\", 10);\n\
+             let mut out = \"\";\n\
+             for k in m.keys() { out = out + k + \" \"; }\n\
+             println(out);\n\
+         }",
+    )
+    .unwrap();
+
+    let run = |seed: Option<&str>| -> String {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_karac"));
+        c.arg("run").arg("--interp").arg(&src);
+        match seed {
+            Some(s) => {
+                c.env("KARAC_HASH_SEED", s);
+            }
+            // Explicitly CLEAR it: the harness itself may pin a seed, and an
+            // inherited pin would make the "varies" half vacuously false.
+            None => {
+                c.env_remove("KARAC_HASH_SEED");
+            }
+        }
+        String::from_utf8_lossy(&c.output().expect("karac run").stdout).into_owned()
+    };
+
+    // A pinned seed is reproducible, and a DIFFERENT pin gives a different
+    // order — which is what proves the seed reaches bucket placement rather
+    // than being read and ignored.
+    let pinned_a1 = run(Some("7"));
+    let pinned_a2 = run(Some("7"));
+    let pinned_b = run(Some("99"));
+    assert_eq!(pinned_a1, pinned_a2, "a pinned seed must reproduce exactly");
+    assert!(
+        !pinned_a1.trim().is_empty(),
+        "expected keys, got empty output"
+    );
+    assert_ne!(
+        pinned_a1, pinned_b,
+        "two different pinned seeds must order differently"
+    );
+
+    // Unpinned, order must vary. Sampling several runs rather than two: with
+    // 10 keys a coincidental repeat is possible, and a test that fails once in
+    // a while is worse than no test. Seeing ANY difference across the sample
+    // proves the seed is per-process; seeing none across this many is not
+    // chance.
+    let samples: Vec<String> = (0..6).map(|_| run(None)).collect();
+    assert!(
+        samples.iter().any(|s| *s != samples[0]),
+        "iteration order did not vary across 6 processes — the per-process \
+         seed is not reaching bucket placement (design.md § Map requires it to)"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

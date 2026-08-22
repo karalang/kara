@@ -5037,6 +5037,14 @@ impl<'ctx> Codegen<'ctx> {
         // interpreter). `(data: ptr, len: i64, out_len: ptr) -> ptr`: returns a
         // fresh NUL-terminated buffer, writes the result byte length to `out_len`.
         let string_xform_ty = ptr_type.fn_type(&[ptr_md, i64_ty, ptr_md], false);
+        // `karac_hash_bytes(ptr, len) -> u64` — SipHash-1-3 under the
+        // per-process seed (B-2026-08-21-6). Every emitted per-type `hash_fn`
+        // bottoms out here, so the compiled backends and the interpreter share
+        // one implementation. In EVERY archive, not an opt-in one: every
+        // `Map`/`Set` needs it.
+        let hash_bytes_ty = i64_type.fn_type(&[ptr_md, i64_ty], false);
+        module.add_function("karac_hash_bytes", hash_bytes_ty, Some(Linkage::External));
+
         // `String.normalize(form)` — the same shape plus an i32 form selector
         // (design.md § Strings, Equality; B-2026-08-20-41). Resolved from the
         // opt-in `libkarac_runtime_unicode.a`, which `karac` selects on any
