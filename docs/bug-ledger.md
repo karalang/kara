@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 277 | 0 |
 | leak | 187 | 0 |
 | run-vs-build | 149 | 0 |
-| missing-feature | 146 | 7 |
+| missing-feature | 146 | 6 |
 | double-free | 134 | 0 |
 | codegen-gap | 128 | 3 |
 | diagnostics | 95 | 2 |
@@ -117,22 +117,21 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | ownership | 62 | 0 |
 | cli | 59 | 1 |
 | autopar | 54 | 0 |
-| parser | 37 | 3 |
+| parser | 37 | 2 |
 | runtime | 28 | 0 |
 | resolver | 26 | 1 |
 | lexer | 8 | 0 |
 | effect | 8 | 1 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1471 surfaced · 13 open · 1436 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1471 surfaced · 12 open · 1437 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (13)
+### Open (12)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-21-2 | 2026-08-21 | cli | medium | FOUR REGISTERED LINTS STILL HAVE NO EMIT SITE and so can never fire, though all are registered `default_level: LintLevel::Warn` -- accepted in `#[allow(...)]` and passing vacuously under `#[deny(...)]`: `f16_software_emulated`, `float_in_serialized_type`, `implicit_clone`, `repr_c_layout_ignored`. They are the remainder of B-2026-08-20-36's eight. They are VISIBLE IN CODE, not only here: `KNOWN_UNWIRED` in `src/lints.rs`, which `every_registered_lint_is_emitted_or_declared_unwired` fails on if the list grows or goes stale. | roadmap.md |
 | B-2026-08-21-6 | 2026-08-21 | codegen+interp | medium | `Map`/`Set` DO NOT USE THE SPEC'S DEFAULT HASHER: design.md mandates `SipHash13BuildHasher` seeded from a per-process random source, codegen emits FxHash with a COMPILE-TIME-CONSTANT seed and the interpreter hashes not at all -- so there is no hash-flooding resistance, iteration order is fully deterministic across runs (design.md says it must vary), the two backends order differently from each other, and `Map[K, V, FxBuildHasher]` -- design.md's own spelling -- does not resolve, so there is no opt-in either way | roadmap.md |
-| B-2026-08-21-9 | 2026-08-21 | parser | medium | design.md WRITES SYNTAX THE PARSER HAS NO PRODUCTION FOR, in two places syntax.md also disagrees with: the inline associated-type binding `Trait[Assoc = T]` (43 lines of design.md, and syntax.md's own comment at :650) has no form in `TRAIT_BOUND = PATH [ "[" TYPE_LIST "]" ]`, and an effect clause on an impl header (`impl From[E] for A with writes(Log) {`) has no form at all | roadmap.md |
 | B-2026-08-21-18 | 2026-08-21 | codegen+typecheck | low | STRUCT FUNCTIONAL UPDATE `P { x: 1, ..base }` IS STILL UNIMPLEMENTED -- it now says so clearly instead of dropping the base, but the form syntax.md's STRUCT_LITERAL production admits cannot be used; the interpreter already implements the copy and codegen does not, so the remaining work is codegen plus the ownership rules for a spread base | roadmap.md |
 | B-2026-08-21-29 | 2026-08-21 | typecheck | medium | THREE DOCUMENTED SURFACES ARE NOT REACHABLE AS WRITTEN: every spelling of channel construction design.md uses (`Channel.new[T]()`, `Channel.bounded`), its whole `io.` I/O prefix, and `allocates(Heap)` -- whose `Heap` the document never declares and the prelude does not provide | roadmap.md |
 | B-2026-08-21-32 | 2026-08-21 | resolver+effect | medium | EFFECT RESOURCES CANNOT BE ROOTED AT A VALUE, so design.md's whole channel effect model is unwritable: `with sends(tx)` on a channel PARAMETER is `'tx' is not an effect resource (it is a variable)`, and the seven `Sender`/`Receiver` declarations at :6064-:6094 are all written that way | roadmap.md |
@@ -161,9 +160,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1471 surfaced
 
 </details>
 
-### Fixed (1436)
+### Fixed (1437)
 
-<details><summary>1436 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1437 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -13542,6 +13541,53 @@ REGRESSION SURFACE MEASURED, because Arc-backing changes how storage is shared a
 HOW MUCH THIS ROW'S OWN EXAMPLE GAINS, measured rather than assumed, because the row's "WHY IT MATTERS" leans on it: kata #294's differential runs 234 s before and 168 s after on the same machine -- a real 1.4x, not an order of magnitude. Its memo map holds ~1492 entries over ~8900 calls, so the scan was never where its time went; that kata is dominated by general tree-walk overhead. The 58x figure above is what MAP-BOUND work gains. The row's claim that "essentially all of that difference is memo lookups scanning a list" does not survive measurement, and the coverage that kata cut (exhaustive band 14 -> 12) is not restored by this fix alone.
 
 Pinned by nine E2E tests in tests/interpreter.rs -- insertion order, overwrite-keeps-position, survivors-findable-after-remove (the case a stale index breaks silently), value-semantics for `Map`, `Set`, and a map inside a struct field, the `entry`/`or_insert` slot chain, distinct tuple keys sharing a bucket, and a 400-key volume case -- plus four unit tests in src/interpreter/value.rs, of which `hash_value_agrees_with_equality` is the one guarding the whole design. |
+| B-2026-08-21-9 | parser | medium | design.md WRITES SYNTAX THE PARSER HAS NO PRODUCTION FOR, in two places syntax.md also disagrees with: the inline associated-type binding `Trait[Asso… | FIXED by 645c22a1 for ITEM 1 IN BOUND POSITIONS; the remainder is split into
+its own rows rather than left implicit here.
+
+WHAT LANDED. The inline associated-type binding now parses in both bound
+positions -- `fn take[I: Src[Item = i64]](...)` and `where I: Src[Item = i64]`
+-- across functions, impl and trait methods, structs and enums. The row noted
+that the WHERE-CLAUSE spelling (`where I.Item = i64`) was already accepted, and
+that is what made this a surface-syntax change rather than a semantics one: the
+bindings are collected by `parse_trait_bound` and hoisted by a new first pass
+in `desugar_program` into the equivalent `WhereConstraint::AssocTypeEq`. After
+that pass `TraitBound::assoc_bindings` is always empty, so no downstream
+consumer -- declaration validation, resolver, formatter, catalog -- needed to
+learn a new shape. The hoist is at the item level because a bound does not know
+what it bounds; the constraint's `type_name` is the parameter, which only the
+enclosing generic-param list or where clause knows.
+
+syntax.md:2168 gains the production (`BOUND_ARG = GENERIC_ARG | ASSOC_BINDING`).
+Of the three artifacts the row said disagreed, the grammar was the one that was
+missing rather than wrong, and design.md's 43 lines did not need rewriting.
+
+The form is legal in a trait bound and nowhere else: the flag enabling it is
+cleared while the binding's own type is parsed, so `Src[Item = Vec[X = i64]]`
+stays an error. Pinned by a test.
+
+SPLIT OUT, not done:
+  * B-2026-08-22-4 -- `impl Trait[Item = T]` in TYPE position (design.md's own
+    `fn keys(ref self) -> impl Iterator[Item = ref K]`). Separate parse path,
+    separate AST node, and an opaque return type has no named parameter to hang
+    the constraint on, so it is a semantics question rather than a grammar one.
+  * B-2026-08-22-5 -- item 2, the impl-header effect clause. The spec writes it
+    but does not say what it means, and the candidate readings differ
+    observably for a method declaring fewer effects than the header. Guessing
+    would bake a semantics into the parser the effect checker must then live
+    with.
+
+FOUND WHILE TESTING, filed as B-2026-08-22-3 (high): the constraint this
+lowers onto is never DISCHARGED at call sites -- `where I.Item = i64` accepts
+an `I` whose `Item` is `String`. Pre-existing and independent (the reproducer
+contains no inline binding and is accepted with these changes stashed), so the
+inline form is exactly as enforced as the spelling the spec already sanctions.
+Worth knowing when reading this row as "fixed": the SYNTAX is now accepted
+everywhere design.md writes it in bound position, and the CHECKING behind it is
+tracked separately.
+
+VERIFIED: 4 new parser tests (both bound positions, the desugared constraint,
+the nested rejection); parser 865, typechecker 2416, resolver, lowering and
+design.md conformance green; fmt + clippy clean on both feature legs. |
 | B-2026-08-21-10 | typecheck | medium | FOUR STDLIB ENTRY POINTS design.md DOCUMENTS DO NOT EXIST -- `Vec.from_fn` (in the Vec method table, with a worked example), `Vec.is_sorted` (used in… | FIXED by 5fee766 (`is_sorted`), 820175a (`Vec.from_fn`), 87a90e6 (`to_ne_bytes`) and 41f7b70 (`.discriminant()`).
 
 All four entry points implemented, each through typecheck + the interpreter + codegen, and each verified byte-identical on interp / JIT / AOT / `KARAC_AUTO_PAR=0` AOT.
