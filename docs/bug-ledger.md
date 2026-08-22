@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 148 | 0 |
 | missing-feature | 143 | 6 |
 | double-free | 134 | 0 |
-| codegen-gap | 128 | 4 |
+| codegen-gap | 128 | 3 |
 | diagnostics | 95 | 2 |
 | false-positive | 91 | 0 |
 | perf | 83 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 987 | 9 |
+| codegen | 987 | 8 |
 | typecheck | 232 | 4 |
 | interp | 171 | 1 |
 | other | 62 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 8 | 1 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1465 surfaced · 14 open · 1429 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1465 surfaced · 13 open · 1430 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (14)
+### Open (13)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -141,7 +141,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1465 surfaced
 | B-2026-08-21-44 | 2026-08-21 | codegen | low | `as_slice()` ON A FIXED-ARRAY **TEMPORARY** HAS NO CODEGEN LOWERING -- `n.to_ne_bytes().as_slice().len()` fails dispatch while `--interp` answers, the one method of the Array surface B-2026-08-21-25 left out | roadmap.md |
 | B-2026-08-21-45 | 2026-08-21 | typecheck+codegen | low | FIVE SHIPPED USER-FACING DIAGNOSTICS CARRY RUNS OF 14-30 SPACES mid-sentence, because rustfmt INTERMITTENTLY rejoins a `\`-continued string literal into one line and keeps the continuation indentation as real spaces | roadmap.md |
 | B-2026-08-21-46 | 2026-08-21 | codegen | low | `enumerate` OVER AN ARRAY **LITERAL** STILL BAILS LOUD -- `for (i, x) in [1, 2, 3].iter().enumerate()` hits the adaptor backstop while `--interp` answers, the one source shape B-2026-08-21-41's widening could not reach | roadmap.md |
-| B-2026-08-21-48 | 2026-08-21 | codegen | medium | AN **UN-ANNOTATED** SLICE BINDING CANNOT CALL A USER METHOD ON THE `Slice` HEAD -- `let s = v[0..2]; s.f()` fails with "no handler for method 'f' on variable 's'" while the ANNOTATED and PARAMETER spellings of the same call both work | roadmap.md |
 | B-2026-08-22-1 | 2026-08-22 | codegen | high | A BAKED-STDLIB ENUM WITH NO CODEGEN LAYOUT SEED LOWERS EVERY VARIANT'S TAG TO **0**, SILENTLY -- `let m = MemoryOrdering.Acquire; match m { ... }` prints `Acquire` under `--interp` and `Relaxed` under AOT, with no diagnostic; the bare form (`let m = SeqCst`) is a loud `Undefined variable 'SeqCst'` on the same axis, so the type has both halves of the defect | roadmap.md |
 | B-2026-08-21-47 | 2026-08-22 | codegen | medium | A `shared struct` FIELD SOURCE LEAKS A DIFFERENT BUFFER THAN THE PLAIN-STRUCT ONE DID -- `last = s.name` off a `shared struct` leaks the POST-append body (3 bytes/call) where the plain-struct shape leaked the PRE-append one, so the fix for B-2026-08-21-40 does not reach it | roadmap.md |
 
@@ -162,9 +161,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1465 surfaced
 
 </details>
 
-### Fixed (1429)
+### Fixed (1430)
 
-<details><summary>1429 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1430 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -14237,6 +14236,60 @@ not in the body — the binding is not registered as a slice, so the call cannot
 qualify `Slice.f`. Verified pre-existing against pre-fix source. It is the same
 under-registered-binding family as the `Array` half fixed in B-2026-08-21-25,
 which is why it is worth its own row rather than a note here. |
+| B-2026-08-21-48 | codegen | medium | AN **UN-ANNOTATED** SLICE BINDING CANNOT CALL A USER METHOD ON THE `Slice` HEAD -- `let s = v[0..2]; s.f()` fails with "no handler for method 'f' on… | FIXED by e66ce9f — one arm in `src/codegen/expr_ops.rs`'s `type_name_of`:
+`ExprKind::Index { object, .. }` now binds `index` and answers "Slice" for a
+RANGE index over a non-String receiver.
+
+THE ROW'S DIAGNOSIS WAS WRONG, and the correction is the useful part. The row
+said an un-annotated `let s = v[0..2]` "does not register `s` in
+`slice_elem_types`", and proposed registering it from the RHS shape the way the
+`Array` half of B-2026-08-21-25 does. Measured: that table WAS registered and
+WAS correct. `infer_slice_elem_from_rhs` already has an `ExprKind::Index` +
+`Range` arm, the `let` path at `stmts.rs` already calls it, and instrumenting
+the insert confirmed it fires for exactly this program.
+
+WHAT ACTUALLY HAPPENS is an OVERWRITE of a different table, and the traced
+sequence is the whole bug:
+
+    DBG record_var_type_name s = "Slice"      <- correct, recorded first
+    DBG slice-rhs var=s infer=true            <- slice_elem_types registered too
+    DBG type_hint overwrite s -> "i64"        <- clobbered here
+    DBG irt s -> var_type_names="i64" slice_tbl=true
+    DBG dispatch m=f recv=Some("i64")         <- dispatch never sees "Slice"
+
+`type_name_of`'s `Index` arm destructured as `{ object, .. }`, DISCARDING the
+index expression, so it reported the ELEMENT name for any index — right for
+`v[0]`, wrong for `v[0..2]`. The `let` path feeds that into `type_hint` and
+writes it into `var_type_names` unconditionally. `inferred_receiver_type` reads
+`var_type_names` FIRST and only falls back to `slice_elem_types` when it MISSES
+(B-2026-08-13-7 added that fallback), so a wrong entry is strictly worse than no
+entry: it shadows the fallback that would have answered correctly.
+
+That also explains the two controls the row recorded without explaining. The
+ANNOTATED binding takes `register_var_from_type_expr`, whose Slice arm returns
+early and never reaches the overwrite. The PARAMETER receiver is registered from
+its declared type and never passes through the `let` path at all. Both were
+right for the same reason: neither one runs the clobbering write.
+
+SCOPE, deliberately narrow. A String receiver keeps the OLD answer: `s[0..2]`
+over a String is a String view, not a `Slice`, and claiming "Slice" there would
+route it into the wrong dispatch. The gate is `!string_vars.contains(n)`. Both
+that shape and the SCALAR-index shape are asserted in the regression test,
+because they are precisely what a careless widening of this arm breaks.
+
+VERIFIED: the new test fails without the fix (dispatch error) and passes with
+it. Six shapes checked byte-identical across interp / JIT / build. Full suite
+108 binaries / 14,742 tests / 0 failures; fmt clean; clippy 0 on both feature
+legs.
+
+NOTE FOR THE NEXT SESSION ON THIS FILE: five `String.normalize` E2E tests that
+landed with B-2026-08-20-41 need a runtime archive that did not exist in this
+container yet. Under `KARAC_REQUIRE_RUNTIME_ARCHIVE=1` they fail loudly (as
+designed) rather than green-skipping. Build it with
+`cargo rustc -p karac-runtime --release --features unicode --crate-type staticlib`,
+`cp target/release/libkarac_runtime.a target/release/libkarac_runtime_unicode.a`,
+then re-run the plain full build so the canonical name is the non-Unicode
+archive again. That is now a SIXTH opt-in archive alongside gpu / regex / arrow. |
 | B-2026-08-21-49 | codegen | high | EVERY REDUCE/SCAN SHADER WROTE ITS PER-WORKGROUP SLOT UNBOUNDED, so an overshoot workgroup stored past a tightly sized output buffer -- Metal CLAMPS… | FIXED by bounding the write in the SHADER, which is the only layer that can enforce it: `if (t == 0u && wg < arrayLength(&output))`, and the analogous bound against `&totals`, `&flags`, or `2u * wg + 1u < arrayLength(&output)` for the wide pairs. Fourteen writes across all thirteen reduce/scan emitters. Sizing the buffer to the dispatched grid instead would fix the one caller and leave the coupling -- the next tightly sized caller reintroduces it.
 
 GATED by `every_reduction_shader_bounds_its_workgroup_output_write`, a sibling of the existing 2-D-grid structural test; the shader enumeration both use is now a shared helper so a new emitter cannot be covered by one gate and missed by the other. A structural gate is right here (unlike for its sibling defect) because the property is textual and uniform. Its limit is recorded in the test: where two per-workgroup buffers are written under one condition the bound names only one, and their lengths agree only because every caller sizes both to the partial count -- a property of the callers, not of the shader text.
