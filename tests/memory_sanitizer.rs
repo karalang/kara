@@ -51885,8 +51885,10 @@ fn main() {
     /// parameter double-frees it. The callee frees the whole array at exit,
     /// including the element it just returned, and the caller frees it again.
     ///
-    /// IGNORED because it is RED on `main`: this is the repro, kept in-tree so
-    /// it cannot rot, not a passing gate. Un-ignore with the fix.
+    /// The array literal was simply a missing member of the move-aware
+    /// element-ownership family the Vec and tuple literals already belong to
+    /// (B-2026-07-04-1): it never suppressed an f-string element's accumulator
+    /// cleanup, so that free and the array's owner released the same pointer.
     ///
     /// Found while measuring B-2026-08-21-43, which wants to admit a user impl
     /// on a non-scalar `Array` head called on a TEMPORARY. It is not caused by
@@ -51894,7 +51896,6 @@ fn main() {
     /// that gate would only add a second spelling for an already-unsafe
     /// lowering. -43 is blocked on this.
     #[test]
-    #[ignore = "B-2026-08-22-18: red on main — array element moved out of an owned param double-frees"]
     fn asan_array_elem_moved_out_of_an_owned_param_is_balanced() {
         assert_clean_asan_run(
             r#"fn take_first(a: Array[String, 2]) -> String { return a[0]; }

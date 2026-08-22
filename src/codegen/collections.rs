@@ -1331,6 +1331,23 @@ impl<'ctx> super::Codegen<'ctx> {
             .iter()
             .map(|e| {
                 let v = self.compile_expr(e)?;
+                // B-2026-08-22-18 — the fixed-array member of the move-aware
+                // element-ownership family the Vec and tuple literals already
+                // belong to (B-2026-07-04-1). The array takes ownership of each
+                // element, so an f-string element's accumulator must have its
+                // INDEPENDENT scope-exit free suppressed once its buffer is
+                // bit-copied in; otherwise that free and the array's owner
+                // release the same pointer. Reachable through an owned
+                // `Array[String, N]` param: `fn take_first(a: Array[String, 2])
+                // -> String { return a[0]; }` double-freed the returned buffer,
+                // silently — `karac check` clean, right answer printed, visible
+                // only under ASAN.
+                //
+                // Must run right after `compile_expr(e)`, while `last_fstr_acc`
+                // still holds THIS element's accumulator — the single slot is
+                // overwritten by the next element. No-ops for fresh temps and
+                // POD elements.
+                self.suppress_fstr_acc_if_moved_out(e);
                 // B-2026-07-02-6 — see `literal_pending_elem_hint`.
                 Ok(match elem_hint {
                     Some(h) => self.coerce_literal_elem_to_type_from(v, h, e),
