@@ -102697,7 +102697,7 @@ fn main() {
     /// codegen dispatcher AT ALL — with or without a binding — so such a
     /// program is check-green, `run --interp`-green and `build`-red. That
     /// gap predates this change (the slice-3 entry in phase-5-diagnostics.md
-    /// records "No codegen support") and is filed as B-2026-08-22-10; adding
+    /// records "No codegen support") and is filed as B-2026-08-22-12; adding
     /// a test for it here would pin a failure, not a behaviour.
     #[test]
     fn test_e2e_impl_trait_argument_position_inline_assoc_binding() {

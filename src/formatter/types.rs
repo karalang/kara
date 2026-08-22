@@ -81,7 +81,7 @@ impl super::Formatter {
     /// args separately, as the sites used to, silently DELETED the bindings:
     /// `I: Src[Item = i64]` came back out as `I: Src[]`, a weaker constraint
     /// than the one the author wrote and not the round-trip `karac fmt`
-    /// promises (B-2026-08-22-9). Same class as the dropped provider-bound
+    /// promises (B-2026-08-22-11). Same class as the dropped provider-bound
     /// generic args below.
     pub(super) fn format_trait_bound(&mut self, b: &TraitBound) {
         self.write_path(&b.path);

@@ -15245,7 +15245,7 @@ fn test_formatter_round_trips_an_inline_assoc_binding() {
     // The formatter rendered a bound's path and its generic args
     // separately, which DELETED any binding: `I: Src[Item = i64]` came
     // back as `I: Src[]` — a weaker constraint than the author wrote, from
-    // a command whose whole promise is round-tripping (B-2026-08-22-9).
+    // a command whose whole promise is round-tripping (B-2026-08-22-11).
     let prog = parse_ok(
         "trait Src { type Item; }\n\
          trait Bnd = Src[Item = i64];\n\

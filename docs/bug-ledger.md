@@ -92,10 +92,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 277 | 0 |
+| miscompile | 278 | 0 |
 | leak | 187 | 0 |
-| missing-feature | 149 | 5 |
-| run-vs-build | 149 | 0 |
+| run-vs-build | 150 | 1 |
+| missing-feature | 149 | 4 |
 | double-free | 134 | 0 |
 | codegen-gap | 128 | 2 |
 | diagnostics | 97 | 3 |
@@ -110,21 +110,21 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 989 | 4 |
+| codegen | 990 | 5 |
 | typecheck | 238 | 4 |
 | interp | 172 | 0 |
 | other | 63 | 1 |
 | ownership | 62 | 0 |
-| cli | 60 | 1 |
+| cli | 61 | 1 |
 | autopar | 54 | 0 |
-| parser | 38 | 3 |
+| parser | 38 | 2 |
 | runtime | 28 | 0 |
 | resolver | 26 | 0 |
 | effect | 9 | 1 |
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1479 surfaced · 12 open · 1445 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1481 surfaced · 12 open · 1447 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (12)
 
@@ -133,7 +133,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1479 surfaced
 | B-2026-08-21-43 | 2026-08-21 | codegen | low | A USER IMPL ON A **NON-SCALAR** `Array` HEAD IS UNCALLABLE ON A TEMPORARY -- `mk().tag()` for `impl Tag for Array[String, 2]` still loud-fails after B-2026-08-21-25, which admits only scalar-element arrays because a scalar array is the case that owns no heap | roadmap.md |
 | B-2026-08-21-45 | 2026-08-21 | typecheck+codegen | low | FIVE SHIPPED USER-FACING DIAGNOSTICS CARRY RUNS OF 14-30 SPACES mid-sentence, because rustfmt INTERMITTENTLY rejoins a `\`-continued string literal into one line and keeps the continuation indentation as real spaces | roadmap.md |
 | B-2026-08-21-46 | 2026-08-21 | codegen | low | `enumerate` OVER AN ARRAY **LITERAL** STILL BAILS LOUD -- `for (i, x) in [1, 2, 3].iter().enumerate()` hits the adaptor backstop while `--interp` answers, the one source shape B-2026-08-21-41's widening could not reach | roadmap.md |
-| B-2026-08-22-4 | 2026-08-22 | parser | medium | AN INLINE ASSOCIATED-TYPE BINDING IS STILL REJECTED IN `impl Trait` TYPE POSITION -- `fn keys(ref self) -> impl Iterator[Item = ref K]` (design.md's own Map method table) fails to parse, though the same binding now works in every BOUND position | parser |
 | B-2026-08-22-5 | 2026-08-22 | parser | medium | AN EFFECT CLAUSE ON AN IMPL HEADER HAS NO PRODUCTION -- design.md:3817 writes `impl From[ParseError] for AppError with writes(Log) {` and the parser rejects it with `Expected LeftBrace, found With` | parser |
 | B-2026-08-21-52 | 2026-08-22 | effect | medium | CHANNEL EFFECT RESOURCES HAVE NO PER-VALUE IDENTITY -- every channel collapses to the single `Channel` resource, so conflict analysis cannot tell `sends(tx1)` from `sends(tx2)` and design.md :6095's producer-against-consumer parallelization argument is not backed by the compiler | roadmap.md |
 | B-2026-08-22-6 | 2026-08-22 | typecheck | low | The `Hasher` and `BuildHasher` TRAITS are not baked, so a user cannot write their own hasher: `Map[K, V, H]` accepts only the two compiler-known selectors `SipHash13BuildHasher` / `FxBuildHasher`, and design.md's "User-extensible hashers" paragraph describes a surface that does not exist | roadmap.md |
@@ -142,6 +141,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1479 surfaced
 | B-2026-08-22-10 | 2026-08-22 | typecheck | high | NO GENERIC BOUND OF ANY CLASS IS DISCHARGED ON A STATIC/ASSOCIATED-FUNCTION CALL -- `Type.assoc_fn(args)` never reaches the call-site engine at all, so `H.take(NotMarked {})` is accepted against `fn take[T: Marker]` while both the free-function and the instance-method spellings correctly reject it | typecheck |
 | B-2026-08-21-53 | 2026-08-22 | typecheck+parser | medium | CALL-SITE TYPE APPLICATION `f[T](args)` IS IMPLEMENTED ONLY FOR THE `ptr.*` BUILTINS -- `Vec.new[i64]()`, `Channel.new[i64]()` and a user generic `id[i64](5)` all parse as an INDEX and then fail, while `ptr.null[u32]()` works; design.md writes both forms and contradicts itself three ways about whether the syntax exists | roadmap.md |
 | B-2026-08-21-54 | 2026-08-22 | other | medium | `test_shortener_example_end_to_end` ASSERTS A JSON KEY ORDER and is RED on main since the FxHash change (8c3c8d6) reordered Map iteration -- and it is order-FLAKY, passing on roughly one run in three, so neither a red nor a green run can be trusted | roadmap.md |
+| B-2026-08-22-12 | 2026-08-22 | codegen | medium | A METHOD CALL THROUGH A RETURN-POSITION `impl Trait` VALUE HAS NO CODEGEN DISPATCHER -- `make().get()` is check-green and interpreter-green and fails under both `karac run` and `karac build`, so the shipped `impl Trait` epic has a run-vs-build divergence at its most ordinary use | codegen |
 
 ### Wontfix (8)
 
@@ -160,9 +160,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1479 surfaced
 
 </details>
 
-### Fixed (1445)
+### Fixed (1447)
 
-<details><summary>1445 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1447 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -14945,7 +14945,7 @@ THE BARE SPELLING IS NOT GUARDED and the code says so: a bare PascalCase name is
 
 Five tests. Four fail with the seeds reverted; the fifth (`Stdio` + `PoolError`) is the CONTROL that must pass either way -- it is what pins the cause to the missing layout rather than to stdlib enums generally, and it would catch a regression that dropped either module from `compiled_stdlib_programs`. |
 | B-2026-08-21-47 | codegen | medium | A `shared struct` FIELD SOURCE LEAKS A DIFFERENT BUFFER THAN THE PLAIN-STRUCT ONE DID -- `last = s.name` off a `shared struct` leaks the POST-append… | ALREADY FIXED by e6d0dbe (B-2026-08-21-40's fix). No production change was
-needed; b5e3be74 adds the regression pin that was missing.
+needed; 27b2a821 adds the regression pin that was missing.
 
 THE ROW'S CENTRAL PREDICTION WAS WRONG, and correcting it is the first thing the
 reader needs. It said "a `shared struct` receiver never reaches that branch at
@@ -15002,7 +15002,9 @@ FAILURE, which reads exactly like a leak until the output is read carefully.
 WHY IT WAS COMMITTED AS A TEST rather than closed on inspection: nothing held
 this answer either way. The shape was measured once, before the fix existed, and
 never again -- which is how the ledger ended up carrying a confident structural
-prediction that a two-minute experiment refutes. |
+prediction that a two-minute experiment refutes.
+
+SHA CORRECTION: the pin commit was first cited by its pre-rebase hash, which resolves to nothing; it landed as 27b2a821. `bug-lint.sh` flags a citation that resolves to no commit, which is how it was caught — and the dead hash is deliberately not repeated here, since the check greps the fix text. |
 | B-2026-08-22-2 | interp | high | A BARE UNIT-VARIANT PATTERN OF A BAKED-STDLIB ENUM MAKES THE **INTERPRETER** MATCH THE FIRST ARM ALWAYS -- `match e { NotFound => .., PermissionDenie… | FIXED by 28bd239. One predicate, one added case, and the two copies of it merged so they cannot drift again.
 
 CAUSE, exactly as the row diagnosed. `pattern_match.rs` decides a `PatternKind::Binding` is a unit-variant pattern (rather than a fresh value binding) from two signals: a dotted name is unambiguously a variant, and a BARE name is one only when `env.get(name)` returns a unit `EnumVariant`. Baked-stdlib enum variants are registered under their QUALIFIED path only, so the bare lookup missed every one of them and the name fell through to `true // actual binding — matches anything`. The first arm always won.
@@ -15099,7 +15101,29 @@ halves on the method path. Non-vacuity checked by reverting each half
 independently: dropping the discharge fails all six assoc-eq tests and leaves
 the pre-existing acceptance test green; dropping only the method wiring fails
 exactly the two method tests and no others. |
+| B-2026-08-22-4 | parser | medium | AN INLINE ASSOCIATED-TYPE BINDING IS STILL REJECTED IN `impl Trait` TYPE POSITION -- `fn keys(ref self) -> impl Iterator[Item = ref K]` (design.md's… | FIXED by 02e73282.
+
+`TypeKind::ImplTrait` and `TypeKind::Dyn` gain an `assoc_bindings: Vec<AssocBinding>` field, kept separate from `args` for the same reason `TraitBound::assoc_bindings` is: a binding is not a positional argument. The parser reaches it through `parse_trait_path_with_bindings` (src/parser/types.rs), which wraps `parse_path_type` in the same save/enable/drain dance `parse_trait_bound` uses -- so the form is legal exactly where a TRAIT is named and `Vec[Item = i64]` stays the parse error it was. A binding's RHS gets the `NestedGenericArg` block, so `Src[Item = impl Foo]` is rejected like `Vec[impl T]`.
+
+The two positions are DIFFERENT MECHANISMS, which is what the row asked to settle:
+
+  - ARGUMENT position lowers onto the existing where-clause machinery. `desugar_impl_trait_args_in_function` is already giving the parameter a name, and a binding on a named parameter IS `WhereConstraint::AssocTypeEq` -- emitted directly rather than left on the synthetic bound, because `hoist_assoc_bindings_in_program` is the FIRST pass in `desugar_program` and has already run. Measured equivalent to the explicit `where T.Item = i64` spelling, including where both are still lax (that laxness is B-2026-08-22-3's, not this row's).
+
+  - RETURN position has no name to constrain, so the binding rides the existential: `Type::Existential` gains `assoc_bindings: Vec<(String, Type)>`. It does two things, one per side of the abstraction barrier. CALLER side it de-opaques the projection -- `dispatch_trait_assoc_fn` substitutes `Self -> TypeParam(target)`, so a method declared `-> Self.Item` comes back as `Src.Item`, keyed on the TRAIT, which resolves to nothing; measured, `let x = make().get()` was `cannot infer type parameter 'Src'` and the ONLY workaround was annotating the binding site. `substitute_existential_assoc_bindings` (src/typechecker/types.rs) supplies the missing fact. DEFINITION side it is an obligation: `existential_binding_mismatch` resolves the concrete witness's own `Assoc` through the ordinary projection machinery and `is_subtype_with_projections` rejects a witness that contradicts it, with a distinct `E_IMPL_TRAIT_ASSOC_MISMATCH` -- folding it into `E_IMPL_TRAIT_MISSING_BOUND` would have sent the reader to add an impl that is already there.
+
+Four walks that previously visited only `args` now visit the bindings too, each because a binding is the one place design.md's own Map table puts the thing being looked for: the CAPTURE SET (`walk_for_impl_trait`, typechecker/items.rs -- `fn keys(ref self) -> impl Iterator[Item = ref K]` has its `ref` nowhere else, so the existential was being recorded as capturing no input borrow), VARIANCE occurrences, SCOPE-LOCAL escape, and public-signature VISIBILITY. Name resolution (`resolve_refs.rs`) and cross-module path rewriting (`module_binding.rs`, which runs BEFORE desugar and so still sees bound-position bindings) walk them as well.
+
+A binding naming no associated type of the trait is rejected at the binding (`E_UNKNOWN_ASSOC_TYPE_BINDING`), listing the ones the trait does declare; deduped on span because a signature's return type is lowered more than once.
+
+syntax.md gains an `IMPL_TRAIT_TYPE` production (the TYPE grammar had none at all) and both it and `DYN_TYPE` take `BOUND_ARG`; design.md's `impl Trait` section states the two-sided meaning.
+
+Tests: 8 in tests/typechecker.rs (projection resolution + its no-binding control, the witness-mismatch rejection, the missing-bound error staying distinct, the typo rejection, argument-vs-where equivalence, and both capture-set halves), 6 in tests/parser.rs (return/argument/mixed-positional AST shape, ordinary-path rejection, nested-`impl` rejection, formatter round-trip), 1 codegen E2E for the argument-position half across all surfaces.
+
+NOT CLOSED HERE, and split out rather than buried: a method call through a RETURN-position existential has no codegen dispatcher at all, with or without a binding -- filed as B-2026-08-22-10. |
 | B-2026-08-22-9 | typecheck | high | NO WHERE-CLAUSE BOUND OF ANY CLASS WAS DISCHARGED ON A METHOD CALL -- the method path passed `None` for the callee's where clause, so `h.take(NotMark… | FIXED by 69be64c, alongside B-2026-08-22-3. `method_user_impl.rs`'s concrete-receiver dispatch now calls `check_call_args_with_substitution_full` with `sig.where_clause` and `sig.generic_params` instead of the thin wrapper that hard-coded `None`. The wrapper itself is DELETED rather than left unused: its whole body was a call to `_full` with three `None`s, and the third is the bug -- with no wrapper to reach for, a future call site has to pass the where clause or write `None` where it is visible in the diff. Blast radius measured before landing, because this converts previously-accepted programs into errors: full default suite 0 failures, `--features llvm` suite 0 failures, and all 917 `.kara` files in the kara-katas corpus still typecheck clean. Pinned by `a_plain_trait_bound_is_discharged_on_a_method_call` and `an_assoc_type_equality_bound_is_discharged_on_a_method_call` in `tests/typechecker.rs`, each with the satisfied direction as the control; reverting only this half fails exactly those two and nothing else. |
+| B-2026-08-22-11 | cli | medium | `karac fmt` DELETED AN INLINE ASSOCIATED-TYPE BINDING FROM EVERY TRAIT BOUND -- `I: Src[Item = i64]` was rewritten to `I: Src[]`, a weaker contract t… | Every trait-bound render site now goes through one `format_trait_bound(b)` helper (src/formatter/types.rs) that writes the path and then ONE bracket list holding the positional args followed by the inline bindings, via a new `format_bracket_args(args, bindings)`. The five sites that previously wrote `write_path` + `format_generic_args_opt` separately -- generic-param bounds, effect-param bounds (types.rs), where-clause `TypeBound` and `ProjectionBound` (items.rs) -- were the deletion; the two that wrote `write_path` ALONE, `trait X = A + B;` alias bounds and `type Assoc: Bound;` inside a trait, were dropping the bounds' generic args as well and now use the same helper. `TypeKind::ImplTrait` / `TypeKind::Dyn` render through `format_bracket_args` too.
+
+Pinned by `test_formatter_round_trips_an_inline_assoc_binding` (tests/parser.rs), which counts four surviving `Src[Item = i64]` across an alias bound, a generic-param bound, a where-clause bound and an `impl Trait` return, and asserts `Src[]` appears nowhere. |
 
 </details>
 
