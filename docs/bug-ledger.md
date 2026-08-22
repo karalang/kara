@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 278 | 0 |
 | leak | 187 | 0 |
-| missing-feature | 151 | 5 |
+| missing-feature | 151 | 4 |
 | run-vs-build | 151 | 1 |
 | double-free | 134 | 0 |
 | codegen-gap | 128 | 1 |
@@ -117,21 +117,20 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | ownership | 62 | 0 |
 | cli | 61 | 1 |
 | autopar | 54 | 0 |
-| parser | 38 | 1 |
+| parser | 38 | 0 |
 | runtime | 28 | 0 |
 | resolver | 26 | 0 |
 | effect | 10 | 2 |
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1486 surfaced · 10 open · 1454 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1486 surfaced · 9 open · 1455 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (10)
+### Open (9)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-21-43 | 2026-08-21 | codegen | low | A USER IMPL ON A **NON-SCALAR** `Array` HEAD IS UNCALLABLE ON A TEMPORARY -- `mk().tag()` for `impl Tag for Array[String, 2]` still loud-fails after B-2026-08-21-25, which admits only scalar-element arrays because a scalar array is the case that owns no heap | roadmap.md |
-| B-2026-08-22-5 | 2026-08-22 | parser | medium | AN EFFECT CLAUSE ON AN IMPL HEADER HAS NO PRODUCTION -- design.md:3817 writes `impl From[ParseError] for AppError with writes(Log) {` and the parser rejects it with `Expected LeftBrace, found With` | parser |
 | B-2026-08-21-52 | 2026-08-22 | effect | medium | CHANNEL EFFECT RESOURCES HAVE NO PER-VALUE IDENTITY -- every channel collapses to the single `Channel` resource, so conflict analysis cannot tell `sends(tx1)` from `sends(tx2)` and design.md :6095's producer-against-consumer parallelization argument is not backed by the compiler | roadmap.md |
 | B-2026-08-22-6 | 2026-08-22 | typecheck | low | The `Hasher` and `BuildHasher` TRAITS are not baked, so a user cannot write their own hasher: `Map[K, V, H]` accepts only the two compiler-known selectors `SipHash13BuildHasher` / `FxBuildHasher`, and design.md's "User-extensible hashers" paragraph describes a surface that does not exist | roadmap.md |
 | B-2026-08-22-7 | 2026-08-22 | codegen | low | `f16_software_emulated` IS THE ONE STARTER-SET LINT WHOSE TRIGGER DEPENDS ON THE TARGET, and the target's feature baseline is only reachable behind `#[cfg(feature = "llvm")]` -- so wiring it is a PLACEMENT decision, not the mechanical job the other six were | roadmap.md |
@@ -158,9 +157,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1486 surfaced
 
 </details>
 
-### Fixed (1454)
+### Fixed (1455)
 
-<details><summary>1454 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1455 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -15280,6 +15279,70 @@ syntax.md gains an `IMPL_TRAIT_TYPE` production (the TYPE grammar had none at al
 Tests: 8 in tests/typechecker.rs (projection resolution + its no-binding control, the witness-mismatch rejection, the missing-bound error staying distinct, the typo rejection, argument-vs-where equivalence, and both capture-set halves), 6 in tests/parser.rs (return/argument/mixed-positional AST shape, ordinary-path rejection, nested-`impl` rejection, formatter round-trip), 1 codegen E2E for the argument-position half across all surfaces.
 
 NOT CLOSED HERE, and split out rather than buried: a method call through a RETURN-position existential has no codegen dispatcher at all, with or without a binding -- filed as B-2026-08-22-10. |
+| B-2026-08-22-5 | parser | medium | AN EFFECT CLAUSE ON AN IMPL HEADER IS CORRECTLY ABSENT FROM THE GRAMMAR -- but the parser rejected it with a generic `Expected LeftBrace, found With`… | Fixed in 70168ff -- but NOT by adding the production the row asked for.
+The row's premise is refuted: the construct is not in the language, and
+three independent parts of the spec already said so.
+
+  syntax.md IMPL_BLOCK ......... grammar has NO effect clause on the header
+  syntax.md "Trait impl with     puts the effects on the METHOD, with a
+    effects" example ........... plain `impl Processor for RemoteProcessor {`
+  design.md, 12 lines below      "impl-level effect syntax is not valid v1 ...
+    the cited example .......... the compiler rejects it with a diagnostic
+                                 suggesting the trait-method `with _`"
+
+design.md:3819 was the LONE outlier in the whole spec -- a single
+occurrence -- and its header clause was redundant with the very next
+line's `fn from(...) -> AppError with writes(Log)`. An authoring slip, not
+a specified feature. So the "what needs deciding first" the row raised
+(default row vs upper bound vs documentation) did not need deciding: the
+reading was already settled, in the negative, immediately below the
+example that misled the reader.
+
+WHAT WAS ACTUALLY BROKEN was the diagnostic the spec promises. The parser
+fell through to `expect(LeftBrace)`:
+
+    error[parse]: Expected LeftBrace, found With
+    error[parse]: Expected expression, found RightBrace   <- CASCADE
+
+Two diagnostics from one mistake, the second pointing at the block's
+closing brace on an unrelated line, and neither mentioning effects or the
+remedy. Now: the clause is parsed with the real effect-list grammar and
+reported as `ParseErrorKind::ReservedSyntax` (E0005) -- "not yet", not
+"nonsense", which is what design.md's "reserved for future relaxation"
+warrants. Consuming the clause is what removes the cascade.
+
+MACHINE-APPLICABLE. `karac fix` deletes the clause. Safe precisely BECAUSE
+the position carries no meaning -- there is no effect information to
+relocate, unlike a genuine syntax error where deleting would lose intent.
+Verified end to end: fix rewrites the header, spacing stays correct
+(`impl From[ParseError] for AppError {`, not a doubled space), the file
+then checks clean.
+
+REMEDY TAILORED PER SHAPE. An INHERENT impl (`impl S with panics {`) has
+no trait to carry `with _`, so it gets "put the effects on the impl's own
+methods instead" rather than being told to edit a trait that does not
+exist. One string for both shapes would have been a diagnostic that lies
+in one of them.
+
+The effect-VARIABLE spelling `impl[T, with E] ...` is untouched and keeps
+its existing resolver diagnostic (E0110); `tests/resolver.rs` already
+covers it.
+
+DOCS BROUGHT INTO LINE, since the doc is what generated this report:
+design.md's example restored to the shape its own prose describes, its
+normative paragraph extended to name the concrete-clause spelling and both
+diagnostic codes, and the IMPL_BLOCK production in syntax.md annotated
+with the rejection -- following the E_MARKER_IMPL_HAS_METHOD convention
+already used there.
+
+CLASS NOTE: filed `missing-feature`, which survives only on a reading
+where the missing feature is the DIAGNOSTIC. The syntax is correctly
+absent and stays absent; nothing was added to the language.
+
+Tests: exactly-one-diagnostic (the cascade guard), the two per-shape
+remedies, all four effect spellings (`writes(Log)` / `panics` / `_` /
+`blocks`), and the applied fix edit. Full suite 109 binaries, 14838
+passed, 0 failed; fmt clean; clippy clean on both feature legs. |
 | B-2026-08-22-9 | typecheck | high | NO WHERE-CLAUSE BOUND OF ANY CLASS WAS DISCHARGED ON A METHOD CALL -- the method path passed `None` for the callee's where clause, so `h.take(NotMark… | FIXED by 69be64c, alongside B-2026-08-22-3. `method_user_impl.rs`'s concrete-receiver dispatch now calls `check_call_args_with_substitution_full` with `sig.where_clause` and `sig.generic_params` instead of the thin wrapper that hard-coded `None`. The wrapper itself is DELETED rather than left unused: its whole body was a call to `_full` with three `None`s, and the third is the bug -- with no wrapper to reach for, a future call site has to pass the where clause or write `None` where it is visible in the diff. Blast radius measured before landing, because this converts previously-accepted programs into errors: full default suite 0 failures, `--features llvm` suite 0 failures, and all 917 `.kara` files in the kara-katas corpus still typecheck clean. Pinned by `a_plain_trait_bound_is_discharged_on_a_method_call` and `an_assoc_type_equality_bound_is_discharged_on_a_method_call` in `tests/typechecker.rs`, each with the satisfied direction as the control; reverting only this half fails exactly those two and nothing else. |
 | B-2026-08-22-10 | typecheck | high | NO GENERIC BOUND OF ANY CLASS IS DISCHARGED ON A STATIC/ASSOCIATED-FUNCTION CALL -- `Type.assoc_fn(args)` never reaches the call-site engine at all,… | FIXED by 5514b6f.
 
