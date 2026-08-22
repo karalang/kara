@@ -1138,7 +1138,7 @@ fn expand_module_binding_imports(m: &mut Module, known: &std::collections::HashS
     if spliced.is_empty() {
         return;
     }
-    spliced.sort_by(|a, b| b.0.cmp(&a.0));
+    spliced.sort_by_key(|a| std::cmp::Reverse(a.0));
     for (idx, item) in spliced {
         m.items.insert(idx + 1, item);
     }
