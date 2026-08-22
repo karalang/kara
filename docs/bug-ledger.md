@@ -14343,7 +14343,7 @@ GATED by `every_reduction_shader_bounds_its_workgroup_output_write`, a sibling o
 VERIFIED: negative control -- reverting the guard in the strided emitter alone makes the new gate FAIL, so it catches the defect that shipped rather than merely passing. 103 emitter unit tests and the full 62-case `gpu_e2e` suite green on lavapipe (`KARAC_GPU_BACKEND=cpu`, `KARAC_REQUIRE_GPU_ADAPTER=1`); clippy clean on both feature legs.
 
 NOT VERIFIED HERE, and this is the honest limit: the failing surface is Metal, which this Linux container has no adapter for. lavapipe cannot reproduce the bug (it discards the out-of-bounds write), so a green local run proves NO REGRESSION, not the fix. The fix rests on the mechanism being established by construction -- tight sizing plus an overshoot grid equals an out-of-bounds store, and the guard makes that store impossible on any backend. CONFIRMATION IS THE `gpu-e2e-metal` CI JOB on this commit; if it still fails, the clamp hypothesis is wrong and the 64-element shortfall needs a different explanation. |
-| B-2026-08-21-50 | codegen | high | A C-LIKE ENUM BOUND OUT OF `Ok(...)` MATCHES THE WRONG VARIANT UNDER CODEGEN -- `Ok(UsbClass.Hid)` selects the FIRST variant, and passing the binding… | Fixed in 1541eea0 — one lookup widened in `src/codegen/pattern_binding.rs`:
+| B-2026-08-21-50 | codegen | high | A C-LIKE ENUM BOUND OUT OF `Ok(...)` MATCHES THE WRONG VARIANT UNDER CODEGEN -- `Ok(UsbClass.Hid)` selects the FIRST variant, and passing the binding… | Fixed in c00a1308 (1541eea0 pre-rebase) — one lookup widened in `src/codegen/pattern_binding.rs`:
 `bind_pattern_values`'s single-word aggregate reconstruction now falls back from
 `struct_types` to `enum_layouts`.
 
