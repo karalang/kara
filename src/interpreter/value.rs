@@ -2468,9 +2468,28 @@ mod map_data_tests {
     /// A map built with the Fx selector must actually USE it: the two hashers
     /// disagree on these keys, so an `FxBuildHasher` map whose index was still
     /// keyed on the seeded hash would show the default's order here.
+    ///
+    /// THE KEY COUNT IS LOAD-BEARING (B-2026-08-22-22). This detects the
+    /// regression by asserting the two hashers produce DIFFERENT iteration
+    /// orders, and SipHash13 is seeded per process — so with few enough keys
+    /// the seeded order coincides with Fx's now and then and the `assert_ne!`
+    /// fires on correct code. It did, once, with six keys: both sides came
+    /// back `["charlie", "yankee", "mike", "bravo", "alpha", "zulu"]`.
+    ///
+    /// Six keys admit 720 orderings; the observed rate was under 1 in 400
+    /// runs of the compiled test binary (each a fresh process, i.e. a fresh
+    /// seed), consistent with that. Sixteen keys admit ~2e13, which puts the
+    /// coincidence far below every other source of flake in this suite. This
+    /// is a probability argument, not a proof — the alternative, pinning the
+    /// exact expected Fx walk as a constant, would be fully deterministic but
+    /// would couple the test to the index's bucket layout, which is precisely
+    /// what the order comparison was written to avoid.
     #[test]
     fn a_map_hashes_through_the_hasher_it_was_built_with() {
-        let keys = ["zulu", "alpha", "mike", "bravo", "yankee", "charlie"];
+        let keys = [
+            "zulu", "alpha", "mike", "bravo", "yankee", "charlie", "delta", "echo", "foxtrot",
+            "golf", "hotel", "india", "juliett", "kilo", "lima", "november",
+        ];
         let entries: Vec<(Value, Value)> = keys
             .iter()
             .enumerate()
