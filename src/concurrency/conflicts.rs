@@ -265,8 +265,11 @@ impl<'a> super::ConcurrencyChecker<'a> {
     ///   - reads + reads = NO conflict
     ///   - reads + writes = CONFLICT
     ///   - writes + writes = CONFLICT
-    ///   - sends + sends = CONFLICT
-    ///   - receives + receives = CONFLICT
+    ///   - sends + sends = CONFLICT, EXCEPT on the channel resource, where it
+    ///     is safe (design.md:5813's table + :6109; an MPMC queue synchronizes
+    ///     internally). The conservative default exists for socket-like
+    ///     resources such as `Network` — see the arm below.
+    ///   - receives + receives = CONFLICT, with the same channel exception
     ///   - allocates + allocates = CONFLICT (same resource)
     ///   - panics + panics = CONFLICT
     ///   - blocks + blocks = NO conflict — execution verb drives placement, not
@@ -325,6 +328,37 @@ impl<'a> super::ConcurrencyChecker<'a> {
             // writes + writes = CONFLICT
             (Writes, Writes) => true,
 
+            // sends + sends / receives + receives on a CHANNEL = safe.
+            //
+            // design.md:5813's table says both are Safe on the same resource,
+            // and :6109 spells out why for channels specifically: a channel is
+            // an MPMC queue that synchronizes internally, so "multiple
+            // producers and multiple consumers are both valid channel
+            // patterns". The two conservative arms below deviate from that
+            // table deliberately — but the deviation is only *justified* for a
+            // socket-like resource such as `Network`, where two sends on a
+            // POSSIBLY-SHARED connection interleave and corrupt the stream and
+            // this pass carries no connection identity to tell one socket from
+            // another (see `is_ephemeral_network_fanout` and
+            // `test_a2b2_borrow_param_network_sends_receives_stays_serial`).
+            //
+            // A channel needs no such deviation: the runtime queue does the
+            // synchronization, so it follows the table as written. Keying the
+            // relaxation on the RESOURCE — not on the verbs — is what keeps
+            // `Network` conservative while making the documented channel
+            // behaviour true (B-2026-08-21-52).
+            //
+            // NOTE this is deliberately narrower than "the channel resource
+            // never conflicts": `writes(Channel)` + `writes(Channel)` still
+            // conflicts, because the table only blesses the communication
+            // verbs. Per-VALUE channel identity is NOT needed to get here —
+            // every channel-verb pair is Safe regardless of which channel it
+            // is, so telling `tx1` from `tx2` buys conflict analysis nothing.
+            (Sends, Sends) | (Receives, Receives)
+                if a.resource == crate::ast::CHANNEL_RESOURCE_CANONICAL =>
+            {
+                false
+            }
             // sends + sends = CONFLICT
             (Sends, Sends) => true,
             // receives + receives = CONFLICT

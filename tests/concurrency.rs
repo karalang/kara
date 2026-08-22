@@ -5335,3 +5335,123 @@ fn only_a_mut_method_arg_adds_the_call_to_read_edge() {
         "a read-only `ref Slice` argument must NOT add that edge"
     );
 }
+
+// ── B-2026-08-21-52: channel sends/receives follow the spec table ──
+
+// design.md:5813's conflict table lists `sends`+`sends`, `sends`+`receives`
+// and `receives`+`receives` as **Safe** on the same resource, and :6109 says
+// why for channels: an MPMC queue synchronizes internally, so "multiple
+// producers and multiple consumers are both valid channel patterns".
+//
+// The concurrency lattice deviated from that table on two of the three rows
+// (`(Sends,Sends)`/`(Receives,Receives)` => CONFLICT). The deviation is
+// justified for a socket-like resource — `test_a2b2_borrow_param_network_
+// sends_receives_stays_serial` pins that `Network` must keep it — but it was
+// applied to EVERY resource, so two sends on two different channels
+// serialized. The compiler's own `effectchecker::effects_conflict` had the
+// table right, which made the two lattices disagree.
+
+#[test]
+fn test_channel_sends_on_distinct_channels_fan_out() {
+    let analysis = analyze(
+        r#"
+        fn push_a(tx: Sender[i64]) -> i64 with sends(tx) { return 1; }
+        fn push_b(out: Sender[i64]) -> i64 with sends(out) { return 2; }
+        fn main() {
+            let c1 = 0;
+            let c2 = 0;
+            let x = push_a(c1);
+            let y = push_b(c2);
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert!(
+        main_fc
+            .parallel_groups
+            .iter()
+            .any(|g| g.statement_indices.contains(&2) && g.statement_indices.contains(&3)),
+        "two channel sends must fan out (design.md:5813 `sends`+`sends` = Safe), got {:?}",
+        main_fc.parallel_groups
+    );
+}
+
+#[test]
+fn test_channel_multiple_producers_on_one_channel_fan_out() {
+    // The case per-VALUE channel identity could NOT have fixed: both sends go
+    // to the SAME channel, so distinguishing `tx1` from `tx2` is irrelevant.
+    // design.md:6109 blesses it explicitly ("multiple producers ... are both
+    // valid channel patterns") because the queue is MPMC.
+    let analysis = analyze(
+        r#"
+        fn push_a(tx: Sender[i64]) -> i64 with sends(tx) { return 1; }
+        fn push_b(tx: Sender[i64]) -> i64 with sends(tx) { return 2; }
+        fn main() {
+            let c = 0;
+            let x = push_a(c);
+            let y = push_b(c);
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert!(
+        main_fc
+            .parallel_groups
+            .iter()
+            .any(|g| g.statement_indices.contains(&1) && g.statement_indices.contains(&2)),
+        "multiple producers on ONE channel must fan out (design.md:6109), got {:?}",
+        main_fc.parallel_groups
+    );
+}
+
+#[test]
+fn test_channel_multiple_consumers_fan_out() {
+    let analysis = analyze(
+        r#"
+        fn take_a(rx: Receiver[i64]) -> i64 with receives(rx) { return 1; }
+        fn take_b(rx: Receiver[i64]) -> i64 with receives(rx) { return 2; }
+        fn main() {
+            let c = 0;
+            let x = take_a(c);
+            let y = take_b(c);
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert!(
+        main_fc
+            .parallel_groups
+            .iter()
+            .any(|g| g.statement_indices.contains(&1) && g.statement_indices.contains(&2)),
+        "multiple consumers on one channel must fan out (design.md:6109), got {:?}",
+        main_fc.parallel_groups
+    );
+}
+
+#[test]
+fn test_channel_relaxation_is_scoped_to_the_communication_verbs() {
+    // NARROWNESS CONTROL. The relaxation keys on the channel RESOURCE but must
+    // still respect the verb table: `writes`+`writes` is a Conflict on every
+    // resource (design.md:5813), the channel resource included. A blanket
+    // "channel never conflicts" would silently parallelize this pair.
+    let analysis = analyze(
+        r#"
+        fn clobber_a(tx: Sender[i64]) -> i64 with writes(tx) { return 1; }
+        fn clobber_b(tx: Sender[i64]) -> i64 with writes(tx) { return 2; }
+        fn main() {
+            let c = 0;
+            let x = clobber_a(c);
+            let y = clobber_b(c);
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert!(
+        !main_fc
+            .parallel_groups
+            .iter()
+            .any(|g| g.statement_indices.contains(&1) && g.statement_indices.contains(&2)),
+        "writes+writes must still conflict on the channel resource, got {:?}",
+        main_fc.parallel_groups
+    );
+}
