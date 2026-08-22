@@ -482,7 +482,7 @@ jobs:
       # build emits the canonical name, so each rename happens before the
       # next build, and the plain full build runs LAST so the canonical
       # archive ends up as the non-opt-in full one.
-      - name: Build runtime staticlib archives (lean → regex → arrow → full)
+      - name: Build runtime staticlib archives (lean → regex → arrow → unicode → full)
         run: |
           cargo rustc -p karac-runtime --release --no-default-features --features net --crate-type staticlib
           cp target/release/libkarac_runtime.a target/release/libkarac_runtime_min.a
@@ -490,6 +490,8 @@ jobs:
           cp target/release/libkarac_runtime.a target/release/libkarac_runtime_regex.a
           cargo rustc -p karac-runtime --release --features arrow --crate-type staticlib
           cp target/release/libkarac_runtime.a target/release/libkarac_runtime_arrow.a
+          cargo rustc -p karac-runtime --release --features unicode --crate-type staticlib
+          cp target/release/libkarac_runtime.a target/release/libkarac_runtime_unicode.a
           cargo rustc -p karac-runtime --release --crate-type staticlib
 
       - name: Codegen E2E + interpreter + typechecker + self-host oracle
@@ -675,7 +677,7 @@ jobs:
       # build emits the canonical name, so each rename happens before the
       # next build, and the plain full build runs LAST so the canonical
       # archive ends up as the non-opt-in full one.
-      - name: Build runtime staticlib archives (lean → regex → arrow → full)
+      - name: Build runtime staticlib archives (lean → regex → arrow → unicode → full)
         run: |
           cargo rustc -p karac-runtime --release --no-default-features --features net --crate-type staticlib
           cp target/release/libkarac_runtime.a target/release/libkarac_runtime_min.a
@@ -683,6 +685,8 @@ jobs:
           cp target/release/libkarac_runtime.a target/release/libkarac_runtime_regex.a
           cargo rustc -p karac-runtime --release --features arrow --crate-type staticlib
           cp target/release/libkarac_runtime.a target/release/libkarac_runtime_arrow.a
+          cargo rustc -p karac-runtime --release --features unicode --crate-type staticlib
+          cp target/release/libkarac_runtime.a target/release/libkarac_runtime_unicode.a
           cargo rustc -p karac-runtime --release --crate-type staticlib
 
       # Broad arm64 codegen/ABI oracle.
@@ -776,7 +780,7 @@ jobs:
       # build emits the canonical name, so each rename happens before the
       # next build, and the plain full build runs LAST so the canonical
       # archive ends up as the non-opt-in full one.
-      - name: Build runtime staticlib archives (lean → regex → arrow → full)
+      - name: Build runtime staticlib archives (lean → regex → arrow → unicode → full)
         run: |
           cargo rustc -p karac-runtime --release --no-default-features --features net --crate-type staticlib
           cp target/release/libkarac_runtime.a target/release/libkarac_runtime_min.a
@@ -784,6 +788,8 @@ jobs:
           cp target/release/libkarac_runtime.a target/release/libkarac_runtime_regex.a
           cargo rustc -p karac-runtime --release --features arrow --crate-type staticlib
           cp target/release/libkarac_runtime.a target/release/libkarac_runtime_arrow.a
+          cargo rustc -p karac-runtime --release --features unicode --crate-type staticlib
+          cp target/release/libkarac_runtime.a target/release/libkarac_runtime_unicode.a
           cargo rustc -p karac-runtime --release --crate-type staticlib
 
       - name: Codegen E2E (arm64)
@@ -882,7 +888,7 @@ jobs:
       # build emits the canonical name, so each rename happens before the
       # next build, and the plain full build runs LAST so the canonical
       # archive ends up as the non-opt-in full one.
-      - name: Build runtime staticlib archives (lean → regex → arrow → full)
+      - name: Build runtime staticlib archives (lean → regex → arrow → unicode → full)
         run: |
           cargo rustc -p karac-runtime --release --no-default-features --features net --crate-type staticlib
           cp target/release/libkarac_runtime.a target/release/libkarac_runtime_min.a
@@ -890,6 +896,8 @@ jobs:
           cp target/release/libkarac_runtime.a target/release/libkarac_runtime_regex.a
           cargo rustc -p karac-runtime --release --features arrow --crate-type staticlib
           cp target/release/libkarac_runtime.a target/release/libkarac_runtime_arrow.a
+          cargo rustc -p karac-runtime --release --features unicode --crate-type staticlib
+          cp target/release/libkarac_runtime.a target/release/libkarac_runtime_unicode.a
           cargo rustc -p karac-runtime --release --crate-type staticlib
 
       - name: Memory sanitizer (UAF / double-free + Linux leaks)
@@ -943,7 +951,7 @@ jobs:
       # build emits the canonical name, so each rename happens before the
       # next build, and the plain full build runs LAST so the canonical
       # archive ends up as the non-opt-in full one.
-      - name: Build runtime staticlib archives (lean → regex → arrow → full)
+      - name: Build runtime staticlib archives (lean → regex → arrow → unicode → full)
         run: |
           cargo rustc -p karac-runtime --release --no-default-features --features net --crate-type staticlib
           cp target/release/libkarac_runtime.a target/release/libkarac_runtime_min.a
@@ -951,6 +959,8 @@ jobs:
           cp target/release/libkarac_runtime.a target/release/libkarac_runtime_regex.a
           cargo rustc -p karac-runtime --release --features arrow --crate-type staticlib
           cp target/release/libkarac_runtime.a target/release/libkarac_runtime_arrow.a
+          cargo rustc -p karac-runtime --release --features unicode --crate-type staticlib
+          cp target/release/libkarac_runtime.a target/release/libkarac_runtime_unicode.a
           cargo rustc -p karac-runtime --release --crate-type staticlib
 
       - name: Memory sanitizer arm64 (UAF / double-free + Linux leaks)
@@ -1026,7 +1036,7 @@ jobs:
       # build emits the canonical name, so each rename happens before the
       # next build, and the plain full build runs LAST so the canonical
       # archive ends up as the non-opt-in full one.
-      - name: Build runtime staticlib archives (lean → regex → arrow → full)
+      - name: Build runtime staticlib archives (lean → regex → arrow → unicode → full)
         run: |
           cargo rustc -p karac-runtime --release --no-default-features --features net --crate-type staticlib
           cp target/release/libkarac_runtime.a target/release/libkarac_runtime_min.a
@@ -1034,6 +1044,8 @@ jobs:
           cp target/release/libkarac_runtime.a target/release/libkarac_runtime_regex.a
           cargo rustc -p karac-runtime --release --features arrow --crate-type staticlib
           cp target/release/libkarac_runtime.a target/release/libkarac_runtime_arrow.a
+          cargo rustc -p karac-runtime --release --features unicode --crate-type staticlib
+          cp target/release/libkarac_runtime.a target/release/libkarac_runtime_unicode.a
           cargo rustc -p karac-runtime --release --crate-type staticlib
 
       - name: Memory sanitizer at KARAC_OPT_LEVEL=0 (ratcheted against known failures)
