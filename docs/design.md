@@ -11625,7 +11625,7 @@ perf[layout-opportunity]: src/physics.kara:12
 
 **Tier 2: Summary report** (opt-in, `karac build --perf-report`).
 
-**Tier 3: Suppression** via `#[allow(rc_fallback)]`, `#[allow(implicit_clone)]`.
+**Tier 3: Suppression** via `#[allow(rc_fallback)]`.
 
 ### Cumulative Cost Surface
 
@@ -11658,7 +11658,7 @@ Lints are warnings the compiler can emit but the user can suppress, escalate, or
 | `#[deny(NAME)]` | Emit at error level — fails the build. |
 | `#[expect(NAME)]` | Suppress the lint *and* track whether it fired. If the lint did **not** fire anywhere inside the attributed scope, emit `unfulfilled_lint_expectation` pointing at the `#[expect]` attribute itself. |
 
-**Scope.** All four attach to any item, expression block, statement, or module-level position. The level set on an outer scope cascades to inner scopes; an inner scope's attribute overrides the outer one for the named lint only. Multiple lints may be named in one attribute: `#[allow(rc_fallback, implicit_clone)]`. Naming the same lint twice in the same scope is a compile error (`error[E_DUPLICATE_LINT_LEVEL]`).
+**Scope.** All four attach to any item, expression block, statement, or module-level position. The level set on an outer scope cascades to inner scopes; an inner scope's attribute overrides the outer one for the named lint only. Multiple lints may be named in one attribute: `#[allow(rc_fallback, module_mut_binding)]`. Naming the same lint twice in the same scope is a compile error (`error[E_DUPLICATE_LINT_LEVEL]`).
 
 **Project-wide policy.** The `karac build` CLI accepts `-A NAME` / `-W NAME` / `-D NAME` / `-F NAME` (forbid — same as deny but disallows further `#[allow]` overrides) flags that set the level for the build. `-D warnings` is the canonical "treat all warnings as errors" CI flag. Project-level policy in `kara.toml` is post-v1.
 
@@ -11688,7 +11688,7 @@ The unfulfilled-expectation warning is itself a lint named `unfulfilled_lint_exp
 
 **Naming.** Lint names are part of the language's reported-behavior surface (Layered Specification, § Layers): adding new lints across editions is non-breaking *only* if the new lint is `warn`-by-default and the name does not collide with any prior name. Renaming or removing a lint requires an edition boundary and changelog entry — code with `#[allow(removed_lint)]` continues to compile (the attribute targets an unknown lint, which is itself the `unknown_lint` warning, suppressible with `#[allow(unknown_lint)]`). This guarantees `#[allow(...)]` / `#[expect(...)]` from older code never breaks a build silently.
 
-**Built-in lints (v1 starter set).** Each lint introduced in this spec is named where it appears; the canonical registry — name, default level, what triggers it, suppression form — is generated from spec annotations and exposed via `karac lint --list`. The v1 starter set includes (non-exhaustive): `deprecated`, `rc_fallback`, `implicit_clone`, `mutual_recursion_note`, `module_mut_binding`, `redundant_suffix`, `float_in_serialized_type`, `f16_software_emulated`, `pure_loop_in_par`, `undocumented_unsafe`, `repr_c_layout_ignored`, `layout_unassigned_fields`, `malformed_diagnostic_attribute`, `unfulfilled_lint_expectation`, `unknown_lint`. `unsafe_op_in_unsafe_fn` is a *hard rule*, not a lint, and accepts no level override (see § `unsafe_op_in_unsafe_fn` rule).
+**Built-in lints (v1 starter set).** Each lint introduced in this spec is named where it appears; the canonical registry — name, default level, what triggers it, suppression form — is generated from spec annotations and exposed via `karac lint --list`. The v1 starter set includes (non-exhaustive): `deprecated`, `rc_fallback`, `mutual_recursion_note`, `module_mut_binding`, `redundant_suffix`, `float_in_serialized_type`, `f16_software_emulated`, `pure_loop_in_par`, `undocumented_unsafe`, `repr_c_layout_ignored`, `layout_unassigned_fields`, `malformed_diagnostic_attribute`, `unfulfilled_lint_expectation`, `unknown_lint`. `unsafe_op_in_unsafe_fn` is a *hard rule*, not a lint, and accepts no level override (see § `unsafe_op_in_unsafe_fn` rule). `implicit_clone` was listed here through v1 drafting and was REMOVED (B-2026-08-22-8): the spec never defined a trigger for it, and compiled Kāra was measured not to insert an implicit heap copy at any of the candidate sites — a use-after-move read (by length and by element) and an owned param used as a literal element all allocate exactly as their non-copying baselines do. A registered lint that cannot fire is worse than an absent one, because `#[deny(...)]` on it passes vacuously and reads as a guarantee. Re-add it only together with a trigger.
 
 ---
 

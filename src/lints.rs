@@ -126,11 +126,6 @@ pub const STARTER_LINTS: &[LintInfo] = &[
         description: "An owned binding fell back to RC because a closure or borrow conflict made stack ownership infeasible.",
     },
     LintInfo {
-        name: "implicit_clone",
-        default_level: LintLevel::Warn,
-        description: "A copyable value was implicitly cloned at a consume site.",
-    },
-    LintInfo {
         name: "mutual_recursion_note",
         default_level: LintLevel::Warn,
         description: "Per-SCC mutual recursion advisory — the effect ceiling spans a recursion group.",
@@ -516,7 +511,16 @@ mod emit_site_guard {
     /// without its detection pass, which is exactly what this guard exists to
     /// stop; wire the lint instead. `redundant_suffix` was the ninth and came
     /// off the list when B-2026-08-20-36 implemented it.
-    const KNOWN_UNWIRED: &[&str] = &["implicit_clone"];
+    ///
+    /// IT IS NOW EMPTY: every registered lint has an emit site. The last two
+    /// left together — `f16_software_emulated` was wired (B-2026-08-22-7), and
+    /// `implicit_clone` was REMOVED from the registry rather than wired
+    /// (B-2026-08-22-8), because compiled Kāra was measured not to insert an
+    /// implicit heap copy at any candidate site, so there was nothing for it to
+    /// name. An empty list is the intended steady state, not a gap: a lint that
+    /// cannot be wired belongs out of the registry, since `#[deny(...)]` on an
+    /// unwired lint passes vacuously and reads as a guarantee.
+    const KNOWN_UNWIRED: &[&str] = &[];
 
     fn rust_sources(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
         let Ok(entries) = std::fs::read_dir(dir) else {
@@ -604,7 +608,6 @@ mod tests {
             "deprecated",
             "unstable_api",
             "rc_fallback",
-            "implicit_clone",
             "mutual_recursion_note",
             "module_mut_binding",
             "redundant_suffix",

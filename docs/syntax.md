@@ -2365,7 +2365,7 @@ Known attributes:
 | `#[tailrec]` | Function | Guarantee tail-call optimization — compile error if any recursive call is not in tail position |
 | `#[no_rc]` | Function | Reject any RC fallback in this function |
 | `#[rc_budget(max: N)]` | Module | Limit total RC values in this module |
-| `#[allow(LINT)]` / `#[warn(LINT)]` / `#[deny(LINT)]` / `#[expect(LINT)]` | Item/Block/Module | Override level of named lint within scope. `#[expect]` additionally tracks whether the lint fired — emits `unfulfilled_lint_expectation` if it did not. See design.md § Lint Level Attributes. Multiple lints per attribute: `#[allow(rc_fallback, implicit_clone)]`. |
+| `#[allow(LINT)]` / `#[warn(LINT)]` / `#[deny(LINT)]` / `#[expect(LINT)]` | Item/Block/Module | Override level of named lint within scope. `#[expect]` additionally tracks whether the lint fired — emits `unfulfilled_lint_expectation` if it did not. See design.md § Lint Level Attributes. Multiple lints per attribute: `#[allow(rc_fallback, module_mut_binding)]`. |
 | `#[concurrency(max_tasks: N)]` | Function | Limit concurrent tasks spawned |
 | `#[gpu]` | Function | Assert this function uses only GPU-compatible features |
 | `#[inline]`, `#[inline(always)]`, `#[inline(never)]` | Function/Method/Trait method | Codegen hint controlling inlining at call sites. `#[inline]` is non-binding; `(always)` and `(never)` are strong directives. Only one inline-axis attribute per function (others are `error[E_INLINE_HINT_CONFLICT]`). See design.md § Codegen Hint Attributes. |

@@ -4131,7 +4131,7 @@ fn lint_attrs_slice1_all_four_attribute_names_recognized() {
     let prog = parse_ok(
         "#[allow(deprecated)]\n\
          #[warn(rc_fallback)]\n\
-         #[deny(implicit_clone)]\n\
+         #[deny(module_mut_binding)]\n\
          #[expect(unfulfilled_lint_expectation)]\n\
          fn f() { }",
     );
@@ -4147,13 +4147,16 @@ fn lint_attrs_slice1_all_four_attribute_names_recognized() {
 
 #[test]
 fn lint_attrs_slice1_comma_separated_list_produces_multiple_overrides() {
-    let prog = parse_ok("#[allow(deprecated, rc_fallback, implicit_clone)]\nfn f() { }");
+    let prog = parse_ok("#[allow(deprecated, rc_fallback, module_mut_binding)]\nfn f() { }");
     let Item::Function(f) = &prog.items[0] else {
         panic!("Expected Function");
     };
     assert_eq!(f.lint_overrides.len(), 3);
     let names: Vec<&str> = f.lint_overrides.iter().map(|o| o.lint.as_str()).collect();
-    assert_eq!(names, vec!["deprecated", "rc_fallback", "implicit_clone"]);
+    assert_eq!(
+        names,
+        vec!["deprecated", "rc_fallback", "module_mut_binding"]
+    );
     for o in &f.lint_overrides {
         assert_eq!(o.level, LintLevel::Allow);
     }
@@ -4319,12 +4322,12 @@ fn lint_attrs_slice4a_enum_captures_overrides() {
 
 #[test]
 fn lint_attrs_slice4a_trait_captures_overrides() {
-    let prog = parse_ok("#[deny(implicit_clone)]\npub trait OldFmt { fn fmt(ref self); }");
+    let prog = parse_ok("#[deny(module_mut_binding)]\npub trait OldFmt { fn fmt(ref self); }");
     let Item::TraitDef(t) = &prog.items[0] else {
         panic!("Expected TraitDef");
     };
     assert_eq!(t.lint_overrides.len(), 1);
-    assert_eq!(t.lint_overrides[0].lint, "implicit_clone");
+    assert_eq!(t.lint_overrides[0].lint, "module_mut_binding");
 }
 
 #[test]
@@ -4391,7 +4394,7 @@ fn lint_attrs_slice4a_multi_lint_list_on_struct() {
     // pinned on `Function` works uniformly on every attribute-
     // bearing item — `scan_lint_level_attrs` is the single helper.
     let prog =
-        parse_ok("#[allow(deprecated, rc_fallback, implicit_clone)]\npub struct S { x: i64, }");
+        parse_ok("#[allow(deprecated, rc_fallback, module_mut_binding)]\npub struct S { x: i64, }");
     let Item::StructDef(s) = &prog.items[0] else {
         panic!("Expected StructDef");
     };
@@ -4399,7 +4402,7 @@ fn lint_attrs_slice4a_multi_lint_list_on_struct() {
     let names: Vec<&str> = s.lint_overrides.iter().map(|o| o.lint.as_str()).collect();
     assert!(names.contains(&"deprecated"));
     assert!(names.contains(&"rc_fallback"));
-    assert!(names.contains(&"implicit_clone"));
+    assert!(names.contains(&"module_mut_binding"));
 }
 
 // ── TypeAliasDef + ConstDecl attributes enabling change ──────────
@@ -5075,7 +5078,7 @@ fn test_lint_level_attrs_with_other_lint_names_still_accepted() {
     let prog = parse_ok(
         "#[warn(deprecated)]\n\
          #[deny(rc_fallback)]\n\
-         #[expect(implicit_clone)]\n\
+         #[expect(module_mut_binding)]\n\
          fn f() { }",
     );
     let f = match &prog.items[0] {
