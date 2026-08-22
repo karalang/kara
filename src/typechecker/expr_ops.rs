@@ -1935,6 +1935,45 @@ impl<'a> super::TypeChecker<'a> {
     /// (for `Add`) / distinct-numeric — all of which codegen already lowers for
     /// this operator once the generic body is monomorphized. Result type is
     /// `T`, mirroring the `Numeric`-bound arm.
+    /// Warn when `f16` / `bf16` arithmetic will be promoted to `f32` (or,
+    /// on wasm, routed through `__extendhfsf2` / `__truncsfhf2` libcalls)
+    /// because the active target has no hardware half-precision.
+    ///
+    /// Fires per arithmetic operation, which is what makes the cost visible
+    /// where it is paid; `#[allow(f16_software_emulated)]` on the enclosing
+    /// item silences the whole region through the normal cascade.
+    fn warn_if_f16_is_software_emulated(&mut self, left: &Type, right: &Type, span: &Span) {
+        let half = |t: &Type| {
+            matches!(
+                t,
+                Type::Float(crate::typechecker::types::FloatSize::F16)
+                    | Type::Float(crate::typechecker::types::FloatSize::BF16)
+            )
+        };
+        if !half(left) && !half(right) {
+            return;
+        }
+        if crate::target::target_has_native_f16() {
+            return;
+        }
+        let width = if half(left) { left } else { right };
+        let (cpu, _) = crate::target::baseline_cpu_and_features();
+        self.type_lint_warning(
+            format!(
+                "`{}` arithmetic is software-emulated on this target (cpu `{}`): \
+                 LLVM promotes each operation to `f32` and rounds back. Store in \
+                 `{}` if you need the space, but compute in `f32` to make the \
+                 conversions explicit",
+                type_display(width),
+                cpu,
+                type_display(width),
+            ),
+            *span,
+            TypeErrorKind::TypeMismatch,
+            "f16_software_emulated",
+        );
+    }
+
     pub(super) fn arithmetic_operator_trait(op: &BinOp) -> Option<&'static str> {
         match op {
             BinOp::Add => Some("Add"),
@@ -1987,6 +2026,23 @@ impl<'a> super::TypeChecker<'a> {
 
         if left_ty == Type::Error || right_ty == Type::Error {
             return Type::Error;
+        }
+
+        // `f16_software_emulated` (design.md:2347) — the last starter-set
+        // lint that was target-dependent rather than mechanical, and so
+        // outlived the other seven (B-2026-08-22-7). Emitted HERE, in the
+        // typechecker, and not from codegen: `#[allow(...)]` cascade support
+        // lives on `effective_lint_level` and has no counterpart under
+        // `src/codegen/`, and a lint that only exists in `--features llvm`
+        // builds would be silently absent from a default `karac check`.
+        //
+        // That is only possible because the capability question is answered
+        // WITHOUT the backend — see `target::target_has_native_f16`, whose
+        // CPU list is measured with `llc` rather than inferred, precisely
+        // because no LLVM-C entry point expands a CPU name to its resolved
+        // subtarget features.
+        if Self::arithmetic_operator_trait(op).is_some() {
+            self.warn_if_f16_is_software_emulated(&left_ty, &right_ty, span);
         }
 
         // Pull-side closure-param inference (B-2026-07-12-10). A let-bound

@@ -44349,3 +44349,90 @@ fn a_self_returning_existential_stays_opaque() {
         "a non-trait method must stay unreachable through the existential, got {errs:?}"
     );
 }
+
+// ── B-2026-08-22-7: `f16_software_emulated` ──────────────────────────
+
+/// The last starter-set lint without an emit site. It fires from the
+/// TYPECHECKER, not codegen, because `#[allow(...)]` cascade support lives
+/// on `effective_lint_level` and has no counterpart under `src/codegen/` —
+/// and a codegen-only lint would be silently absent from a default
+/// `karac check`. That is only possible because the capability question is
+/// answered without the backend (`target::target_has_native_f16`).
+///
+/// These assert on the CI/host baseline, where half-precision is emulated
+/// on every `cpu-baseline` level of both x86_64 and aarch64 (measured with
+/// `llc`). `f16_is_quiet_where_the_target_has_hardware_support` covers the
+/// other direction without depending on the host.
+#[test]
+fn f16_arithmetic_warns_that_it_is_software_emulated() {
+    let warns =
+        type_warnings_of("fn main() { let a: f16 = 1.5; let b: f16 = 2.0; let c = a + b; }");
+    assert!(
+        warns.iter().any(|w| w.contains("software-emulated")),
+        "expected the f16 emulation lint, got {warns:?}"
+    );
+}
+
+#[test]
+fn bf16_arithmetic_warns_too() {
+    let warns =
+        type_warnings_of("fn main() { let a: bf16 = 1.5; let b: bf16 = 2.0; let c = a * b; }");
+    assert!(
+        warns.iter().any(|w| w.contains("software-emulated")),
+        "bf16 is emulated on the same targets as f16, got {warns:?}"
+    );
+}
+
+#[test]
+fn wider_floats_do_not_trip_the_f16_lint() {
+    // NARROWNESS CONTROL. `f32`/`f64` are native everywhere the compiler
+    // targets; a lint that fired here would be pure noise.
+    let warns = type_warnings_of(
+        "fn main() { let a: f32 = 1.5; let b: f32 = 2.0; let c = a + b; \
+         let d: f64 = 1.0; let e = d + d; }",
+    );
+    assert!(
+        !warns.iter().any(|w| w.contains("software-emulated")),
+        "f32/f64 arithmetic must not trip the f16 lint, got {warns:?}"
+    );
+}
+
+#[test]
+fn comparing_f16_is_not_arithmetic_and_does_not_warn() {
+    // The lint keys on `arithmetic_operator_trait`, so a comparison — which
+    // LLVM does not promote-and-round the way it does an add — stays quiet.
+    let warns =
+        type_warnings_of("fn main() { let a: f16 = 1.5; let b: f16 = 2.0; let c = a < b; }");
+    assert!(
+        !warns.iter().any(|w| w.contains("software-emulated")),
+        "an f16 COMPARISON is not emulated arithmetic, got {warns:?}"
+    );
+}
+
+#[test]
+fn allow_attribute_suppresses_the_f16_lint() {
+    let warns = type_warnings_of(
+        "#[allow(f16_software_emulated)]\n\
+         fn quiet() -> f16 { let a: f16 = 1.5; let b: f16 = 2.0; return a + b; }\n\
+         fn main() { let _x = quiet(); }",
+    );
+    assert!(
+        !warns.iter().any(|w| w.contains("software-emulated")),
+        "`#[allow]` must cascade over the whole fn body, got {warns:?}"
+    );
+}
+
+#[test]
+fn the_f16_lint_names_the_cpu_it_judged() {
+    // design.md asks for the cost not to be silent; a bare "emulated" with
+    // no target named reads as a compiler opinion rather than a fact about
+    // THIS build, and the answer is genuinely target-dependent (aarch64
+    // macOS resolves to `apple-m1`, which IS native).
+    let warns =
+        type_warnings_of("fn main() { let a: f16 = 1.5; let b: f16 = 2.0; let c = a + b; }");
+    let (cpu, _) = karac::target::baseline_cpu_and_features();
+    assert!(
+        warns.iter().any(|w| w.contains(cpu)),
+        "the diagnostic must name the cpu it judged ({cpu}), got {warns:?}"
+    );
+}

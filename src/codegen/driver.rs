@@ -1801,7 +1801,7 @@ fn create_native_target_machine(cpu_override: Option<&str>) -> Result<TargetMach
 /// that won't load.
 ///
 /// See `design.md § CPU Baseline Targeting`.
-fn default_cpu_and_features(triple: &str) -> (&'static str, &'static str) {
+pub(crate) fn default_cpu_and_features(triple: &str) -> (&'static str, &'static str) {
     // Triples vary in suffix shape (`arm64-apple-darwin25.0.0` vs
     // `aarch64-apple-darwin`), so match on the arch prefix and OS
     // substring instead of equality on the full string.

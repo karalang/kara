@@ -82,7 +82,7 @@ mod debug_info;
 mod declarations;
 mod disjoint_par;
 mod display;
-mod driver;
+pub(crate) mod driver;
 pub mod drop_obs;
 mod drop_rc;
 mod entry_chains;

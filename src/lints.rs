@@ -516,7 +516,7 @@ mod emit_site_guard {
     /// without its detection pass, which is exactly what this guard exists to
     /// stop; wire the lint instead. `redundant_suffix` was the ninth and came
     /// off the list when B-2026-08-20-36 implemented it.
-    const KNOWN_UNWIRED: &[&str] = &["f16_software_emulated", "implicit_clone"];
+    const KNOWN_UNWIRED: &[&str] = &["implicit_clone"];
 
     fn rust_sources(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
         let Ok(entries) = std::fs::read_dir(dir) else {

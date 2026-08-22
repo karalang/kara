@@ -75,6 +75,115 @@ pub fn set_active_target(name: &str) -> Result<(), String> {
 /// design.md § Host Functions), so the codegen driver's wasm decisions
 /// (target machine, link path, allocator symbol, entry shim) key on
 /// this predicate rather than on either name.
+/// CPUs measured to execute scalar `f16`/`bf16` arithmetic in HARDWARE.
+///
+/// MEASURED, not inferred, with `llc -mcpu=<cpu>` on `fadd half` (LLVM 18):
+/// a native CPU emits a half-width add (`fadd h0, h0, h1` on AArch64,
+/// `vaddsh` on x86), an emulated one emits `fcvt`-to-`f32` promotion —
+/// or, on wasm, `__extendhfsf2` / `__truncsfhf2` libcalls, which is
+/// costlier still.
+///
+/// WHY AN EXPLICIT LIST rather than asking LLVM. There is no LLVM-C or
+/// inkwell entry point that expands a CPU name to its resolved subtarget
+/// features: `TargetMachine::get_feature_string` echoes back the string the
+/// machine was CONSTRUCTED with, and `get_host_cpu_features` describes the
+/// HOST, which is wrong under cross-compilation. Reading the feature string
+/// alone is not a substitute — it is exactly the trap B-2026-08-22-7 was
+/// filed on, because the aarch64 macOS baseline is `("apple-m1", "")`: an
+/// EMPTY feature string with the whole capability carried by the CPU name.
+const CPUS_WITH_NATIVE_F16: &[&str] = &["apple-m1", "sapphirerapids"];
+
+/// CPUs measured to PROMOTE `f16`/`bf16` arithmetic to `f32`. Same `llc`
+/// method as the list above.
+///
+/// This list exists so the DEFAULT build path is decided by measurement
+/// rather than by the fail-open fallback. `karac build` always installs a
+/// CPU override — `resolve_native_cpu_baseline` applies `cpu-baseline =
+/// "v3"` when nothing is configured — so "no explicit `--target-cpu`" is
+/// not the same as "no CPU override set", and treating an unlisted CPU as
+/// native would have silenced the lint on every ordinary build. Measured:
+/// x86-64, -v2, -v3 and -v4 all promote (no `avx512fp16` at any level), as
+/// does aarch64 `generic` at `+v8.2a` / `+v8.4a` / `+v8.6a` — an arch
+/// version does not imply the OPTIONAL `FEAT_FP16`.
+const CPUS_WITHOUT_NATIVE_F16: &[&str] = &[
+    "x86-64",
+    "x86-64-v2",
+    "x86-64-v3",
+    "x86-64-v4",
+    "core2",
+    "generic",
+];
+
+/// Feature flags that turn on hardware half-precision when named
+/// explicitly via `--target-features`. Measured the same way: `+fullfp16`
+/// on an AArch64 baseline flips `fadd s` to `fadd h`, and `+avx512fp16`
+/// does the same on x86 **once its prerequisites are present** (alone it
+/// stays emulated; with `+avx512f,+avx512vl` it emits `vaddsh`). Naming a
+/// prerequisite-less `+avx512fp16` therefore under-reports rather than
+/// over-reports, which is the safe direction.
+const F16_FEATURE_FLAGS: &[&str] = &["+fullfp16", "+avx512fp16"];
+
+/// The `(cpu, features)` baseline the active target compiles against.
+///
+/// Deliberately derived from `std::env::consts` for `native` rather than
+/// from a triple: the triple is only resolved inside the LLVM driver, and
+/// this has to be answerable from the TYPECHECKER, which is upstream of the
+/// backend and where `#[allow(...)]` cascades already work. Kept in sync
+/// with `codegen::driver::default_cpu_and_features` by
+/// `native_baseline_matches_the_codegen_table`.
+pub fn baseline_cpu_and_features() -> (&'static str, &'static str) {
+    if active_target_is_wasm() {
+        // No wasm proposal gives scalar half-precision arithmetic; LLVM
+        // lowers it to `__extendhfsf2`/`__truncsfhf2` libcalls even with
+        // `+simd128`.
+        return ("generic", "+simd128");
+    }
+    match (std::env::consts::ARCH, std::env::consts::OS) {
+        ("aarch64", "macos") => ("apple-m1", ""),
+        ("aarch64", _) => ("generic", "+v8a,+outline-atomics"),
+        ("x86_64", "macos") => ("core2", ""),
+        ("x86_64", _) => ("x86-64", ""),
+        _ => ("generic", ""),
+    }
+}
+
+/// Does the active target execute `f16` / `bf16` arithmetic in hardware?
+///
+/// `false` means LLVM will promote every such operation to `f32` (or call
+/// out to a libcall on wasm), which is what the `f16_software_emulated`
+/// lint reports — design.md:2347.
+///
+/// UNKNOWN `--target-cpu` VALUES ANSWER `true` (i.e. do not lint). A user
+/// naming a CPU this list has never measured is an expert action, and a
+/// false "your f16 is emulated" on hardware that runs it natively is a
+/// worse failure than a missing perf note: it sends someone rewriting code
+/// that was already fast. Every CPU the default build path can install is
+/// in one of the two measured lists, so fail-open is reached only when a
+/// user names a CPU by hand that neither list has been measured against.
+pub fn target_has_native_f16() -> bool {
+    let (default_cpu, default_features) = baseline_cpu_and_features();
+    let cpu = target_cpu_override().unwrap_or(default_cpu);
+
+    let mut features = String::from(default_features);
+    if let Some(user) = target_features_override() {
+        if !features.is_empty() {
+            features.push(',');
+        }
+        features.push_str(user);
+    }
+    if F16_FEATURE_FLAGS.iter().any(|f| features.contains(f)) {
+        return true;
+    }
+    if CPUS_WITH_NATIVE_F16.contains(&cpu) {
+        return true;
+    }
+    if CPUS_WITHOUT_NATIVE_F16.contains(&cpu) {
+        return false;
+    }
+    // An unmeasured CPU: fail open (see the doc comment above).
+    true
+}
+
 pub fn active_target_is_wasm() -> bool {
     matches!(active_target(), "wasm_wasi" | "wasm_browser")
 }
@@ -617,5 +726,74 @@ mod extra_check_target_tests {
             ),
             vec!["wasm_browser"],
         );
+    }
+}
+
+#[cfg(test)]
+mod f16_capability_tests {
+    use super::*;
+
+    /// The two baseline tables must agree, or the lint judges a different
+    /// machine than the one codegen builds for.
+    ///
+    /// `target::baseline_cpu_and_features` exists because the TYPECHECKER
+    /// cannot reach the codegen driver (containment, and the driver is
+    /// `#[cfg(feature = "llvm")]`), so it classifies by
+    /// `std::env::consts` instead of by an LLVM-resolved triple. Two
+    /// producers is exactly the drift this codebase keeps paying for, so
+    /// they are pinned against each other here rather than trusted to stay
+    /// in sync.
+    #[cfg(feature = "llvm")]
+    #[test]
+    fn native_baseline_matches_the_codegen_table() {
+        let host_triple = format!(
+            "{}-{}",
+            std::env::consts::ARCH,
+            if std::env::consts::OS == "macos" {
+                "apple-darwin"
+            } else {
+                "unknown-linux-gnu"
+            }
+        );
+        let from_codegen = crate::codegen::driver::default_cpu_and_features(&host_triple);
+        let from_target = baseline_cpu_and_features();
+        assert_eq!(
+            from_target, from_codegen,
+            "the typechecker's baseline ({from_target:?}) disagrees with the codegen \
+             table ({from_codegen:?}) for {host_triple}"
+        );
+    }
+
+    #[test]
+    fn every_default_baseline_cpu_is_measured() {
+        // The fail-open branch must be unreachable on a default build: if a
+        // CPU the build path installs is in NEITHER measured list, the lint
+        // silently stops firing. Covers the `cpu-baseline` levels
+        // `resolve_native_cpu_baseline` can pick, plus the per-OS defaults.
+        for cpu in [
+            "x86-64",
+            "x86-64-v2",
+            "x86-64-v3",
+            "x86-64-v4",
+            "core2",
+            "generic",
+            "apple-m1",
+        ] {
+            assert!(
+                CPUS_WITH_NATIVE_F16.contains(&cpu) || CPUS_WITHOUT_NATIVE_F16.contains(&cpu),
+                "`{cpu}` is reachable from the default build path but is in neither \
+                 measured list, so the lint would fail open on it"
+            );
+        }
+    }
+
+    #[test]
+    fn the_two_measured_lists_are_disjoint() {
+        for cpu in CPUS_WITH_NATIVE_F16 {
+            assert!(
+                !CPUS_WITHOUT_NATIVE_F16.contains(cpu),
+                "`{cpu}` is listed as both native and emulated"
+            );
+        }
     }
 }
