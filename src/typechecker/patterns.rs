@@ -791,6 +791,51 @@ impl<'a> super::TypeChecker<'a> {
                         None
                     };
 
+                // Substitute the head's generic params with the scrutinee's
+                // concrete args, exactly as the `TupleVariant` arm above does
+                // (B-2026-08-21-51). Without this a STRUCT-shaped variant's
+                // sub-patterns saw the DECLARED param — `DiscriminantError[u8]`
+                // bound `value` at `D`, so `value as i64` was refused with
+                // "cannot cast 'D' to 'i64'" while the tuple-shaped `Err(e)`
+                // against `Result[i64, MyError]` resolved correctly. Generic
+                // structs take the same path and had the same gap.
+                let head_params: Vec<String> =
+                    if let Some(info) = self.env.structs.get(&struct_name) {
+                        info.generic_params.clone()
+                    } else if let Type::Named { name, .. } = expected {
+                        self.env
+                            .enums
+                            .get(name)
+                            .map(|e| e.generic_params.clone())
+                            .unwrap_or_default()
+                    } else {
+                        Vec::new()
+                    };
+                let field_types = field_types.map(|ft| {
+                    let args: &[Type] = match expected {
+                        Type::Named { args, .. } => args,
+                        _ => &[],
+                    };
+                    // An arity mismatch means the scrutinee is not a solved
+                    // instantiation of this head (an unannotated literal, or an
+                    // error type). Leave the declared types alone rather than
+                    // substitute a wrong-length arg list.
+                    if head_params.is_empty() || head_params.len() != args.len() {
+                        return ft;
+                    }
+                    let subs: HashMap<String, SubstValue> = head_params
+                        .iter()
+                        .cloned()
+                        .zip(args.iter().cloned().map(SubstValue::Type))
+                        .collect();
+                    ft.into_iter()
+                        .map(|(n, t)| {
+                            let r = substitute_type_params(&t, &subs);
+                            (n, r)
+                        })
+                        .collect()
+                });
+
                 if let Some(ft) = field_types {
                     for field in fields {
                         let field_ty = ft

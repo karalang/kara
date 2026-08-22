@@ -102296,10 +102296,11 @@ fn main() {
     ///     of `Ok(...)` MISCOMPILES today (B-2026-08-21-50) — `Ok(UsbClass.Hid)`
     ///     selects the first variant under codegen and the right one under the
     ///     interpreter, with no `try_from` anywhere;
-    ///   * the `Err` payload is printed, not cast, because the `value` binding
-    ///     comes back as the uninstantiated type parameter `D` rather than the
-    ///     enum's repr type (B-2026-08-21-51), so `value as i64` fails the
-    ///     check-gate.
+    ///   * the `Err` payload was printed rather than cast while
+    ///     B-2026-08-21-51 was open (the `value` binding came back as the
+    ///     uninstantiated `D`). That is FIXED, so the arm now casts, which is
+    ///     the stronger assertion: it proves the payload arrives at the enum's
+    ///     repr width and not merely that some number was stored.
     ///
     /// Reading the discriminant back is exact — it separates all three
     /// variants — so nothing here is weaker for the detour.
@@ -102324,7 +102325,7 @@ fn probe(raw: u8) {
     match UsbClass.try_from(raw) {
         Ok(c) => println(f"ok{c.discriminant()}"),
         Err(e) => match e {
-            DiscriminantError.OutOfRange { value } => println(f"no{value}"),
+            DiscriminantError.OutOfRange { value } => println(f"no{0 - (value as i64)}"),
         },
     }
 }
@@ -102364,7 +102365,7 @@ fn main() {
 "#;
         assert_eq!(
             run_program(src).as_deref(),
-            Some("no0\nok1\nno2\nok3\nok8\nno255\n-128\n127\n999\n65535\n999\n17\n8\n")
+            Some("no0\nok1\nno-2\nok3\nok8\nno-255\n-128\n127\n999\n65535\n999\n17\n8\n")
         );
     }
 

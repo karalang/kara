@@ -1188,9 +1188,96 @@ impl<'a> super::TypeChecker<'a> {
                 );
             }
         }
+        // Solve the ENUM's generic args from the field values, exactly as
+        // `infer_struct_literal_expected` does for a generic struct literal
+        // (B-2026-07-03-23). Without this the literal typed as the bare head
+        // (`MyErr`, never `MyErr[u8]`), so an annotated binding failed with
+        // "expected 'MyErr[u8]', found 'MyErr'" and a pattern bound the
+        // payload at the DECLARED param `D` rather than the instantiated type
+        // — `value as i64` was refused with "cannot cast 'D' to 'i64'"
+        // (B-2026-08-21-51). Each param becomes a fresh metavar that the
+        // field check binds; a non-generic enum builds an empty `param_subs`
+        // and behaves exactly as before.
+        let generic_params: Vec<String> = self
+            .env
+            .enums
+            .get(enum_name)
+            .map(|e| e.generic_params.clone())
+            .unwrap_or_default();
+        let mut param_subs: HashMap<String, SubstValue> = HashMap::new();
+        let mut id_to_name: HashMap<TypeVarId, String> = HashMap::new();
+        for p in &generic_params {
+            let var = self.env.fresh_type_var();
+            if let Type::TypeVar(id) = var {
+                id_to_name.insert(id, p.clone());
+                param_subs.insert(p.clone(), SubstValue::Type(var));
+            }
+        }
+
         for f in fields {
             if let Some((_, expected_ty)) = declared_fields.iter().find(|(n, _)| n == &f.name) {
-                self.check_expr(&f.value, &expected_ty.clone());
+                // Never push a slot that is still a bare metavar or a
+                // param-bearing type at `check_expr`: it reports a spurious
+                // mismatch instead of binding. Push the RAW declared type
+                // there and let the post-check unify do the binding — the
+                // same split the struct path documents at B-2026-07-18-50.
+                let raw = expected_ty.clone();
+                let push_ty = if param_subs.is_empty() {
+                    raw.clone()
+                } else {
+                    let sub = substitute_type_params(&raw, &param_subs);
+                    let resolved = resolve_type_var_top(&sub, &self.env.substitutions);
+                    if matches!(resolved, Type::TypeVar(_) | Type::TypeParam(_))
+                        || super::types::contains_type_param(&raw)
+                    {
+                        raw.clone()
+                    } else {
+                        resolved
+                    }
+                };
+                self.check_expr(&f.value, &push_ty);
+                if !param_subs.is_empty() {
+                    if let Some(actual) = self
+                        .expr_types
+                        .get(&crate::resolver::SpanKey::from_span(&f.value.span))
+                        .cloned()
+                    {
+                        let slot = substitute_type_params(expected_ty, &param_subs);
+                        // A field that CONFLICTS with a param already bound by
+                        // an earlier field must be reported, not silently
+                        // dropped in favour of the greedy first binding — the
+                        // struct path's B-2026-07-18-51.
+                        if !unify_types(
+                            &slot,
+                            &actual,
+                            &mut self.env.substitutions,
+                            &mut self.env.const_substitutions,
+                        ) && !matches!(actual, Type::Error | Type::Never)
+                        {
+                            let empty_const_names = HashMap::new();
+                            let rslot = resolve_type_vars(
+                                &slot,
+                                &self.env.substitutions,
+                                &id_to_name,
+                                &self.env.const_substitutions,
+                                &empty_const_names,
+                            );
+                            if !matches!(rslot, Type::Error | Type::TypeVar(_)) {
+                                self.type_error(
+                                    format!(
+                                        "field '{}' has type '{}', which conflicts with '{}' \
+                                         already bound for '{enum_name}.{variant}'",
+                                        f.name,
+                                        super::types::type_display(&actual),
+                                        super::types::type_display(&rslot),
+                                    ),
+                                    f.span,
+                                    TypeErrorKind::TypeMismatch,
+                                );
+                            }
+                        }
+                    }
+                }
             } else {
                 self.type_error(
                     format!(
@@ -1203,9 +1290,33 @@ impl<'a> super::TypeChecker<'a> {
                 self.infer_expr(&f.value);
             }
         }
+
+        if generic_params.is_empty() {
+            return Type::Named {
+                name: enum_name.to_string(),
+                args: Vec::new(),
+            };
+        }
+        // An unsolved param resolves back to its own `TypeParam(name)`, which
+        // is the prior bare-arg behaviour for that position — a partially
+        // inferable literal is no worse off than before.
+        let empty_const_names = HashMap::new();
+        let args: Vec<Type> = generic_params
+            .iter()
+            .map(|p| match param_subs.get(p).and_then(SubstValue::as_type) {
+                Some(var) => resolve_type_vars(
+                    var,
+                    &self.env.substitutions,
+                    &id_to_name,
+                    &self.env.const_substitutions,
+                    &empty_const_names,
+                ),
+                None => Type::TypeParam(p.clone()),
+            })
+            .collect();
         Type::Named {
             name: enum_name.to_string(),
-            args: Vec::new(),
+            args,
         }
     }
 }

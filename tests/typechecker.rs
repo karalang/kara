@@ -3675,6 +3675,55 @@ fn discriminant_returns_the_repr_type() {
     );
 }
 
+/// B-2026-08-21-51 — a GENERIC enum's struct-shaped variant binds its type
+/// parameter, both when constructed and when matched.
+///
+/// The construction half typed as the bare head (`MyErr`, never `MyErr[u8]`),
+/// so an annotated binding failed with "expected 'MyErr[u8]', found 'MyErr'".
+/// Its struct-literal sibling has solved params from the field values since
+/// B-2026-07-03-23; the enum path returned `args: Vec::new()` unconditionally.
+#[test]
+fn generic_enum_struct_variant_binds_its_type_param_at_construction() {
+    typecheck_ok(
+        "enum MyErr[=D] { Bad { value: D } }\n         fn main() {\n             let e: MyErr[u8] = MyErr.Bad { value: 7u8 };\n             println(\"built\");\n         }",
+    );
+}
+
+/// The matching half: a struct-shaped variant's sub-pattern must see the
+/// INSTANTIATED payload type, as the tuple-shaped one already did (`Err(e)`
+/// against `Result[i64, MyError]`). Binding at the declared `D` made
+/// `value as i64` a hard error.
+#[test]
+fn generic_enum_struct_variant_pattern_binds_the_instantiated_payload() {
+    typecheck_ok(
+        "enum MyErr[=D] { Bad { value: D } }\n         fn make() -> MyErr[u8] { MyErr.Bad { value: 7u8 } }\n         fn main() {\n             match make() { MyErr.Bad { value } => println(f\"{value as i64}\") }\n         }",
+    );
+}
+
+/// A GENERIC STRUCT's pattern took the same code path and had the same gap, so
+/// it is covered here rather than left to be rediscovered separately.
+#[test]
+fn generic_struct_pattern_binds_the_instantiated_field_type() {
+    typecheck_ok(
+        "struct Wrap[=T] { inner: T }\n         fn main() {\n             let w: Wrap[u8] = Wrap { inner: 9u8 };\n             match w { Wrap { inner } => println(f\"{inner as i64}\") }\n         }",
+    );
+}
+
+/// A field value that CONFLICTS with a param already bound by an earlier field
+/// must be reported, not silently resolved to the greedy first binding — the
+/// enum twin of the struct path's B-2026-07-18-51, whose absence there was a
+/// miscompile (a `String` stored in an `i64`-typed slot).
+#[test]
+fn generic_enum_struct_variant_rejects_a_conflicting_second_field() {
+    let errs = typecheck_errors(
+        "enum Two[=T] { Both { a: T, b: T } }\n         fn main() {\n             let x: Two[i64] = Two.Both { a: 1, b: \"s\" };\n             println(\"built\");\n         }",
+    );
+    assert!(
+        !errs.is_empty(),
+        "a String in a second `T` field already bound to i64 must be refused"
+    );
+}
+
 /// B-2026-08-21-26 — the auto-generated `TryFrom[intN]` exists, and its type
 /// is `Result[Enum, DiscriminantError[reprTy]]` at the DECLARED repr width.
 #[test]
