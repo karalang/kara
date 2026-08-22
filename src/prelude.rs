@@ -104,6 +104,13 @@ pub const PRELUDE_TYPES: &[&str] = &[
     // (`runtime/stdlib/critical_section.kara`); its Drop re-enables interrupts.
     // Prelude-visible like its sibling hardware primitives.
     "CriticalSectionGuard",
+    // The two hasher SELECTORS for `Map[K, V, H]` / `Set[T, H]`
+    // (`runtime/stdlib/hash.kara`). design.md § `Hash` and `Hasher` spells
+    // `Map[K, V, FxBuildHasher]` bare in its own prose, so both names have to
+    // resolve without an import — the parameter is written inline in a type
+    // annotation, where an import would be pure ceremony.
+    "SipHash13BuildHasher",
+    "FxBuildHasher",
     "Ordering",
     "MemoryOrdering",
     // `NormalizationForm` — the `form` selector for `String.normalize(form)`

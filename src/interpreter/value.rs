@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard};
 
 use crate::ast::*;
+use crate::hasher_kind::HasherKind;
 use crate::token::Span;
 
 use super::helpers::value_compare;
@@ -801,20 +802,35 @@ pub struct SharedStructInner {
 /// `Struct` fields and `EnumData::Struct` payloads live in a `HashMap`, whose
 /// iteration order is not stable, so their per-field hashes are combined with
 /// XOR — commutative, hence order-independent.
-pub(crate) fn hash_value(v: &Value) -> u64 {
-    use karac_hash::KaraHasher as DefaultHasher;
-    use std::hash::{Hash, Hasher};
+/// The interpreter's `Value` hash under an explicitly chosen hasher — the `Map[K, V, H]` /
+/// `Set[T, H]` selector (B-2026-08-21-6). A container hashes every key through
+/// the kind it was BUILT with, so its index and its observable order can never
+/// disagree about which permutation is in force.
+///
+/// The two arms are the same walk over the same `Value` tree; only the leaf
+/// hasher differs, so a key that is `Eq` to another still hashes equal under
+/// either — the consistency contract holds per-container, which is the only
+/// place it has to.
+pub(crate) fn hash_value_with(kind: HasherKind, v: &Value) -> u64 {
+    match kind {
+        HasherKind::SipHash13 => hash_value_generic::<karac_hash::KaraHasher>(v),
+        HasherKind::Fx => hash_value_generic::<karac_hash::FxHasher>(v),
+    }
+}
 
-    fn field_map_hash(fields: &HashMap<String, Value>) -> u64 {
+fn hash_value_generic<H: std::hash::Hasher + Default>(v: &Value) -> u64 {
+    use std::hash::Hash;
+
+    fn field_map_hash<H: std::hash::Hasher + Default>(fields: &HashMap<String, Value>) -> u64 {
         fields.iter().fold(0u64, |acc, (name, val)| {
-            let mut h = DefaultHasher::new();
+            let mut h = H::default();
             name.hash(&mut h);
-            hash_value(val).hash(&mut h);
+            hash_value_generic::<H>(val).hash(&mut h);
             acc ^ h.finish()
         })
     }
 
-    let mut h = DefaultHasher::new();
+    let mut h = H::default();
     std::mem::discriminant(v).hash(&mut h);
     match v {
         Value::Int(i) => i.hash(&mut h),
@@ -825,7 +841,7 @@ pub(crate) fn hash_value(v: &Value) -> u64 {
         Value::CStr(bytes) | Value::CString(bytes) => bytes.hash(&mut h),
         Value::Tuple(items) => {
             for item in items {
-                hash_value(item).hash(&mut h);
+                hash_value_generic::<H>(item).hash(&mut h);
             }
         }
         // Equality is CONTENTS-based (`Arc::ptr_eq` is only its fast path), so
@@ -833,7 +849,7 @@ pub(crate) fn hash_value(v: &Value) -> u64 {
         // two equal arrays into different buckets.
         Value::Array(rc) => {
             for item in rc.read().unwrap().iter() {
-                hash_value(item).hash(&mut h);
+                hash_value_generic::<H>(item).hash(&mut h);
             }
         }
         Value::Slice {
@@ -844,7 +860,7 @@ pub(crate) fn hash_value(v: &Value) -> u64 {
         } => {
             let items = storage.read().unwrap();
             for item in &items[*start..*start + *len] {
-                hash_value(item).hash(&mut h);
+                hash_value_generic::<H>(item).hash(&mut h);
             }
         }
         Value::EnumVariant {
@@ -858,15 +874,15 @@ pub(crate) fn hash_value(v: &Value) -> u64 {
                 EnumData::Unit => {}
                 EnumData::Tuple(items) => {
                     for item in items {
-                        hash_value(item).hash(&mut h);
+                        hash_value_generic::<H>(item).hash(&mut h);
                     }
                 }
-                EnumData::Struct(fields) => field_map_hash(fields).hash(&mut h),
+                EnumData::Struct(fields) => field_map_hash::<H>(fields).hash(&mut h),
             }
         }
         Value::Struct { name, fields } => {
             name.hash(&mut h);
-            field_map_hash(fields).hash(&mut h);
+            field_map_hash::<H>(fields).hash(&mut h);
         }
         // Discriminant only — see the doc comment. Correct, deliberately coarse.
         _ => {}
@@ -892,14 +908,29 @@ pub(crate) fn hash_value(v: &Value) -> u64 {
 pub struct MapData {
     entries: Vec<(Value, Value)>,
     index: HashMap<u64, Vec<usize>>,
+    /// Which hash this map was BUILT with — the `Map[K, V, H]` selector
+    /// (B-2026-08-21-6). Defaults to the spec's `SipHash13BuildHasher`, so a
+    /// map created anywhere no type annotation is in sight lands on the
+    /// DoS-resistant hasher rather than inheriting the fast one by accident.
+    ///
+    /// Carried by the value rather than looked up per operation because the
+    /// hasher stops being visible in the type: `take_hasher_type_arg` strips
+    /// it, so `Map[String, i64, FxBuildHasher]` and `Map[String, i64]` are one
+    /// type and a map keeps its own hasher wherever it is passed. That mirrors
+    /// codegen, where the chosen hash function is a field of the control block
+    /// `karac_map_new` returns.
+    hasher: HasherKind,
 }
 
 impl Clone for MapData {
     /// Clones the entries and REBUILDS the index rather than cloning it. The
     /// index is derived state; rebuilding is the same O(n) the entry clone
     /// already costs and removes any way for the two halves to disagree.
+    ///
+    /// The clone keeps the ORIGINAL's hasher: a copy of an `FxBuildHasher` map
+    /// is still one, so its iteration order is the same as its source's.
     fn clone(&self) -> Self {
-        Self::from_entries(self.entries.clone())
+        Self::from_entries_with_hasher(self.hasher, self.entries.clone())
     }
 }
 
@@ -909,11 +940,40 @@ impl MapData {
     }
 
     pub fn from_entries(entries: Vec<(Value, Value)>) -> Self {
+        Self::from_entries_with_hasher(HasherKind::default(), entries)
+    }
+
+    pub fn from_entries_with_hasher(hasher: HasherKind, entries: Vec<(Value, Value)>) -> Self {
         let mut index: HashMap<u64, Vec<usize>> = HashMap::with_capacity(entries.len());
         for (i, (k, _)) in entries.iter().enumerate() {
-            index.entry(hash_value(k)).or_default().push(i);
+            index.entry(hash_value_with(hasher, k)).or_default().push(i);
         }
-        Self { entries, index }
+        Self {
+            entries,
+            index,
+            hasher,
+        }
+    }
+
+    /// The hasher this map was built with.
+    pub fn hasher(&self) -> HasherKind {
+        self.hasher
+    }
+
+    /// Switch the hasher and rebuild the index under it. Called once, on a
+    /// FRESH map, when the construction site's type annotation names a hasher
+    /// (`Map.new()` in `eval_call`); the reindex makes it correct even if it
+    /// were ever called on a populated map.
+    pub fn set_hasher(&mut self, hasher: HasherKind) {
+        if self.hasher == hasher {
+            return;
+        }
+        self.hasher = hasher;
+        self.reindex();
+    }
+
+    fn hash_key(&self, key: &Value) -> u64 {
+        hash_value_with(self.hasher, key)
     }
 
     pub fn entries(&self) -> &[(Value, Value)] {
@@ -959,7 +1019,7 @@ impl MapData {
     /// test suites and the kata A/B harness compare output at all.
     pub fn iter_observable(&self) -> impl Iterator<Item = &(Value, Value)> {
         let mut order: Vec<usize> = (0..self.entries.len()).collect();
-        order.sort_by_key(|&i| (hash_value(&self.entries[i].0), i));
+        order.sort_by_key(|&i| (self.hash_key(&self.entries[i].0), i));
         order.into_iter().map(move |i| &self.entries[i])
     }
 
@@ -967,7 +1027,7 @@ impl MapData {
     /// to one bucket; `==` decides, so a collision is a slower answer and never
     /// a wrong one.
     pub fn position_of(&self, key: &Value) -> Option<usize> {
-        let bucket = self.index.get(&hash_value(key))?;
+        let bucket = self.index.get(&self.hash_key(key))?;
         bucket.iter().copied().find(|&i| self.entries[i].0 == *key)
     }
 
@@ -1009,7 +1069,7 @@ impl MapData {
             Some(i) => Some(std::mem::replace(&mut self.entries[i].1, value)),
             None => {
                 self.index
-                    .entry(hash_value(&key))
+                    .entry(self.hash_key(&key))
                     .or_default()
                     .push(self.entries.len());
                 self.entries.push((key, value));
@@ -1038,9 +1098,13 @@ impl MapData {
     /// Rebuild `index` from `entries`. Required after anything that moves an
     /// entry to a different position.
     fn reindex(&mut self) {
+        let hasher = self.hasher;
         self.index.clear();
         for (i, (k, _)) in self.entries.iter().enumerate() {
-            self.index.entry(hash_value(k)).or_default().push(i);
+            self.index
+                .entry(hash_value_with(hasher, k))
+                .or_default()
+                .push(i);
         }
     }
 }
@@ -1053,11 +1117,14 @@ impl MapData {
 pub struct SetData {
     items: Vec<Value>,
     index: HashMap<u64, Vec<usize>>,
+    /// The `Set[T, H]` selector — see [`MapData::hasher`] for the whole
+    /// rationale; this is the same field for the same reason.
+    hasher: HasherKind,
 }
 
 impl Clone for SetData {
     fn clone(&self) -> Self {
-        Self::from_items(self.items.clone())
+        Self::from_items_with_hasher(self.hasher, self.items.clone())
     }
 }
 
@@ -1067,11 +1134,49 @@ impl SetData {
     }
 
     pub fn from_items(items: Vec<Value>) -> Self {
+        Self::from_items_with_hasher(HasherKind::default(), items)
+    }
+
+    pub fn from_items_with_hasher(hasher: HasherKind, items: Vec<Value>) -> Self {
         let mut index: HashMap<u64, Vec<usize>> = HashMap::with_capacity(items.len());
         for (i, item) in items.iter().enumerate() {
-            index.entry(hash_value(item)).or_default().push(i);
+            index
+                .entry(hash_value_with(hasher, item))
+                .or_default()
+                .push(i);
         }
-        Self { items, index }
+        Self {
+            items,
+            index,
+            hasher,
+        }
+    }
+
+    /// The hasher this set was built with.
+    pub fn hasher(&self) -> HasherKind {
+        self.hasher
+    }
+
+    /// The items in OBSERVABLE order — [`MapData::iter_observable`]'s twin,
+    /// same contract and same reasons. `items` stays insertion-ordered because
+    /// the index addresses it positionally; only the walk is permuted.
+    pub fn iter_observable(&self) -> impl Iterator<Item = &Value> {
+        let mut order: Vec<usize> = (0..self.items.len()).collect();
+        order.sort_by_key(|&i| (self.hash_item(&self.items[i]), i));
+        order.into_iter().map(move |i| &self.items[i])
+    }
+
+    /// Switch the hasher and rebuild the index — [`MapData::set_hasher`]'s twin.
+    pub fn set_hasher(&mut self, hasher: HasherKind) {
+        if self.hasher == hasher {
+            return;
+        }
+        self.hasher = hasher;
+        self.reindex();
+    }
+
+    fn hash_item(&self, item: &Value) -> u64 {
+        hash_value_with(self.hasher, item)
     }
 
     /// Build from items that may contain DUPLICATES, keeping the first
@@ -1106,7 +1211,7 @@ impl SetData {
     }
 
     pub fn position_of(&self, item: &Value) -> Option<usize> {
-        let bucket = self.index.get(&hash_value(item))?;
+        let bucket = self.index.get(&self.hash_item(item))?;
         bucket.iter().copied().find(|&i| self.items[i] == *item)
     }
 
@@ -1120,7 +1225,7 @@ impl SetData {
             return false;
         }
         self.index
-            .entry(hash_value(&item))
+            .entry(self.hash_item(&item))
             .or_default()
             .push(self.items.len());
         self.items.push(item);
@@ -1149,9 +1254,13 @@ impl SetData {
     }
 
     fn reindex(&mut self) {
+        let hasher = self.hasher;
         self.index.clear();
         for (i, item) in self.items.iter().enumerate() {
-            self.index.entry(hash_value(item)).or_default().push(i);
+            self.index
+                .entry(hash_value_with(hasher, item))
+                .or_default()
+                .push(i);
         }
     }
 }
@@ -1687,7 +1796,7 @@ impl std::fmt::Display for Value {
             }
             Value::Map(entries) => {
                 write!(f, "{{")?;
-                for (i, (k, v)) in entries.read().unwrap().iter().enumerate() {
+                for (i, (k, v)) in entries.read().unwrap().iter_observable().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
@@ -1815,7 +1924,7 @@ impl std::fmt::Display for Value {
             }
             Value::Set(elems) => {
                 write!(f, "Set{{")?;
-                for (i, v) in elems.read().unwrap().iter().enumerate() {
+                for (i, v) in elems.read().unwrap().iter_observable().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
@@ -2096,7 +2205,7 @@ impl Value {
                 let pairs: Vec<String> = entries
                     .read()
                     .unwrap()
-                    .iter()
+                    .iter_observable()
                     .map(|(k, v)| format!("{}: {}", k.debug_fmt(), v.debug_fmt()))
                     .collect();
                 format!("{{{}}}", pairs.join(", "))
@@ -2168,7 +2277,7 @@ impl Value {
                 let inner: Vec<String> = elems
                     .read()
                     .unwrap()
-                    .iter()
+                    .iter_observable()
                     .map(|v| v.debug_fmt())
                     .collect();
                 format!("Set{{{}}}", inner.join(", "))
@@ -2308,17 +2417,76 @@ mod map_data_tests {
         ]
     }
 
+    /// design.md § `Hash` and `Hasher`, "`Eq` consistency contract": `a == b`
+    /// must feed identical bytes to the hasher. Checked under BOTH selectors,
+    /// because a `Map[K, V, FxBuildHasher]` whose keys hashed inconsistently
+    /// would miss lookups exactly as badly as the default one would.
     #[test]
-    fn hash_value_agrees_with_equality() {
-        for (a, b) in equal_pairs() {
-            assert!(
-                a == b,
-                "fixture is not actually an equal pair: {a:?} vs {b:?}"
-            );
+    fn hash_value_agrees_with_equality_under_every_hasher() {
+        for kind in [HasherKind::SipHash13, HasherKind::Fx] {
+            for (a, b) in equal_pairs() {
+                assert!(
+                    a == b,
+                    "fixture is not actually an equal pair: {a:?} vs {b:?}"
+                );
+                assert_eq!(
+                    hash_value_with(kind, &a),
+                    hash_value_with(kind, &b),
+                    "equal values hashed differently under {kind:?} — a Map lookup \
+                     would miss: {a:?} vs {b:?}"
+                );
+            }
+        }
+    }
+
+    /// A map built with the Fx selector must actually USE it: the two hashers
+    /// disagree on these keys, so an `FxBuildHasher` map whose index was still
+    /// keyed on the seeded hash would show the default's order here.
+    #[test]
+    fn a_map_hashes_through_the_hasher_it_was_built_with() {
+        let keys = ["zulu", "alpha", "mike", "bravo", "yankee", "charlie"];
+        let entries: Vec<(Value, Value)> = keys
+            .iter()
+            .enumerate()
+            .map(|(i, k)| (Value::String(k.to_string()), Value::Int(i as i128)))
+            .collect();
+
+        let sip = MapData::from_entries_with_hasher(HasherKind::SipHash13, entries.clone());
+        let fx = MapData::from_entries_with_hasher(HasherKind::Fx, entries);
+        assert_eq!(fx.hasher(), HasherKind::Fx);
+
+        let order = |m: &MapData| -> Vec<String> {
+            m.iter_observable()
+                .map(|(k, _)| match k {
+                    Value::String(s) => s.clone(),
+                    other => panic!("unexpected key {other:?}"),
+                })
+                .collect()
+        };
+        assert_ne!(
+            order(&sip),
+            order(&fx),
+            "both hashers produced the same order — the selector is not reaching the index"
+        );
+
+        // And the Fx order is REPRODUCIBLE, which is the property being opted
+        // into: rebuilding the same map gives the same walk, in a process
+        // whose seed is random.
+        let fx_again = MapData::from_entries_with_hasher(
+            HasherKind::Fx,
+            keys.iter()
+                .enumerate()
+                .map(|(i, k)| (Value::String(k.to_string()), Value::Int(i as i128)))
+                .collect(),
+        );
+        assert_eq!(order(&fx), order(&fx_again));
+
+        // Lookup still works through the non-default index.
+        for (i, k) in keys.iter().enumerate() {
             assert_eq!(
-                hash_value(&a),
-                hash_value(&b),
-                "equal values hashed differently — a Map lookup would miss: {a:?} vs {b:?}"
+                fx.get(&Value::String(k.to_string())),
+                Some(&Value::Int(i as i128)),
+                "Fx map lost key {k}"
             );
         }
     }

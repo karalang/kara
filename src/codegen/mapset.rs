@@ -108,6 +108,17 @@ pub(crate) struct MapSet<'ctx> {
     /// to register the per-iteration `k` binding when iterating with a tuple
     /// pattern `for (k, v) in m`.
     pub(crate) map_key_type_exprs: HashMap<String, TypeExpr>,
+    /// Which hasher each `Map` / `Set` binding was DECLARED with — the
+    /// `Map[K, V, H]` / `Set[T, H]` selector (B-2026-08-21-6). Recorded
+    /// alongside `map_key_type_exprs` from the same container `TypeExpr`, and
+    /// read at `karac_map_new` time to pick which per-key-type hash function
+    /// goes into the control block.
+    ///
+    /// Written for EVERY map/set binding, including the ones that take the
+    /// default: an entry that is merely absent would let an outer
+    /// `Map[K, V, FxBuildHasher]` leak its hasher into an inner shadowing
+    /// binding of the same name that asked for the default.
+    pub(crate) map_hashers: HashMap<String, crate::hasher_kind::HasherKind>,
     /// Per-variable Set element LLVM type (variable name → T LLVM type).
     /// Mirrors `map_key_types` — `Set[T]` lowers to `Map[T, ()]` at codegen,
     /// reusing the `karac_map_*` C runtime, but the surface type identity is

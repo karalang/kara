@@ -107,6 +107,12 @@ pub fn seed_override_from_env() -> Option<u64> {
     None
 }
 
+/// Only the `std` build has an environment to read a pin OUT of, so under
+/// `no_std` this is dead — and `cargo clippy --target wasm32-wasip1
+/// --no-default-features` says so. Gated on `std` OR `test` rather than
+/// deleted, because the parsing rules (hex, decimal, whitespace, and `0` as a
+/// legal pin) are exactly the part worth unit-testing.
+#[cfg(any(feature = "std", test))]
 fn parse_seed(raw: &str) -> Option<u64> {
     let t = raw.trim();
     if let Some(hex) = t.strip_prefix("0x").or_else(|| t.strip_prefix("0X")) {

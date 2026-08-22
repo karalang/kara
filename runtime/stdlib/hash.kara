@@ -14,3 +14,38 @@
 trait Hash {
     fn hash[H](ref self, hasher: mut ref H);
 }
+
+// ── The two hasher selectors ──────────────────────────────────────────
+//
+// design.md § `Hash` and `Hasher`, "Default hasher for v1", spells both:
+// "`Map[K, V]` and `Set[T]` without an explicit hasher use
+// `SipHash13BuildHasher`, seeded from a per-process random source ... Users
+// who pin the hasher (`Map[K, V, FxBuildHasher]`) opt out of both the
+// DoS-resistance guarantee and the version-stability escape hatch."
+//
+// WHAT THESE ARE TODAY: type-level SELECTORS, not user-implementable hashers.
+// The trailing type argument of `Map[K, V, H]` / `Set[T, H]` must name one of
+// exactly these two; the typechecker rejects anything else, and the choice
+// picks which hash the two backends emit. `trait BuildHasher` and the
+// `Hasher` trait design.md also declares are NOT baked, so a user cannot yet
+// write their own hasher and name it here — that is a separate, larger
+// feature (an ordinary trait with default method bodies, dispatched per
+// hash), tracked on its own ledger row rather than half-shipped here.
+//
+// They are declared as zero-field structs because that is what they will be
+// when `BuildHasher` does land: `impl BuildHasher for FxBuildHasher` needs a
+// nominal type to hang off, and a config-free hasher holds no state. Nothing
+// constructs one today.
+
+// SipHash-1-3 with a per-process random key — the DEFAULT for every `Map` and
+// `Set` that does not name a hasher, and the reason iteration order differs
+// from one process to the next. Naming it explicitly is exactly equivalent to
+// leaving the parameter off; it exists so that intent can be written down.
+struct SipHash13BuildHasher { }
+
+// FxHash — rotate-xor-multiply against a fixed multiplier, no key. Faster on
+// short keys, and floodable by anyone who can read the multiplier out of the
+// compiler's source. Because it is unkeyed, iteration order is stable across
+// runs of one binary. Reach for it only when the keys cannot come from an
+// adversary, and never for `Map[String, _]` keyed on request data.
+struct FxBuildHasher { }

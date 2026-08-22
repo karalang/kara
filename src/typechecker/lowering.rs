@@ -358,6 +358,105 @@ impl<'a> super::TypeChecker<'a> {
             .unwrap_or_default()
     }
 
+    /// The two hasher SELECTORS a `Map` / `Set` may name in its trailing type
+    /// argument (`runtime/stdlib/hash.kara`). design.md § `Hash` and `Hasher`
+    /// spells both.
+    pub(crate) const HASHER_SELECTORS: [&'static str; 2] =
+        ["SipHash13BuildHasher", "FxBuildHasher"];
+
+    /// True when `ty` names one of [`Self::HASHER_SELECTORS`].
+    pub(crate) fn is_hasher_selector(ty: &Type) -> bool {
+        matches!(ty, Type::Named { name, args }
+            if args.is_empty() && Self::HASHER_SELECTORS.contains(&name.as_str()))
+    }
+
+    /// Validate and STRIP the trailing hasher argument of `Map[K, V, H]` /
+    /// `Set[T, H]` (B-2026-08-21-6).
+    ///
+    /// Stripping rather than carrying `H` in the `Type` is the whole trick.
+    /// `Map.new()` mints `Map[?K, ?V]`, hundreds of sites index `args[0]` /
+    /// `args[1]`, and `Map[String, i64]` must stay the SAME type as
+    /// `Map[String, i64, SipHash13BuildHasher]` — naming the default cannot
+    /// change what a value is assignable to. A third `Type` argument would
+    /// have to be threaded through unification, substitution, display and
+    /// every one of those sites to buy nothing, because the hasher is not part
+    /// of the value's shape: it decides which hash function the CONSTRUCTOR
+    /// installs, and both backends read that off the syntactic `TypeExpr` at
+    /// the construction site. So the choice never needs to survive inference.
+    ///
+    /// The arity check here is new. Before it, `Map[String, i64, i64]` type
+    /// checked silently — extra arguments were dropped on the floor — which
+    /// would have made this feature indistinguishable from a no-op for anyone
+    /// who mistyped the hasher name.
+    fn take_hasher_type_arg(&mut self, name: &str, args: Vec<Type>, path: &PathExpr) -> Vec<Type> {
+        let base = match name {
+            "Map" => 2,
+            "Set" => 1,
+            // Ordered containers compare, they do not hash. Naming a hasher on
+            // one is a misunderstanding worth reporting rather than ignoring.
+            "SortedMap" | "SortedSet" => {
+                let base = if name == "SortedMap" { 2 } else { 1 };
+                if args.len() == base + 1 && Self::is_hasher_selector(&args[base]) {
+                    self.type_error(
+                        format!(
+                            "'{name}' is an ordered container and does not hash its keys, so \
+                             it takes no hasher argument; drop it, or use \
+                             '{}' if you want a hash container",
+                            if name == "SortedMap" { "Map" } else { "Set" }
+                        ),
+                        path.span,
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    let mut args = args;
+                    args.truncate(base);
+                    return args;
+                }
+                return args;
+            }
+            _ => return args,
+        };
+
+        // Zero args is the inference-driven form (`Map.new()` before the slots
+        // are solved) and `base` args is the ordinary spelling; neither has a
+        // hasher to take.
+        if args.len() <= base {
+            return args;
+        }
+
+        let mut args = args;
+        if args.len() > base + 1 {
+            self.type_error(
+                format!(
+                    "'{name}' takes {base} type argument{} plus an optional hasher, but {} \
+                     were supplied",
+                    if base == 1 { "" } else { "s" },
+                    args.len()
+                ),
+                path.span,
+                TypeErrorKind::WrongNumberOfArgs,
+            );
+            args.truncate(base);
+            return args;
+        }
+
+        if !Self::is_hasher_selector(&args[base]) {
+            self.type_error(
+                format!(
+                    "the last type argument of '{name}' is the hasher and must be one of \
+                     'SipHash13BuildHasher' (the default: SipHash-1-3, keyed per process) \
+                     or 'FxBuildHasher' (unkeyed and floodable, but stable across runs); \
+                     found '{}'. A user-written hasher is not supported yet — the \
+                     'BuildHasher' trait is not implemented",
+                    type_display(&args[base])
+                ),
+                path.span,
+                TypeErrorKind::TypeMismatch,
+            );
+        }
+        args.truncate(base);
+        args
+    }
+
     pub(super) fn lower_path_type(&mut self, path: &PathExpr, generic_scope: &[String]) -> Type {
         if path.segments.len() == 1 {
             let name = &path.segments[0];
@@ -410,7 +509,12 @@ impl<'a> super::TypeChecker<'a> {
                 return body;
             }
             // Named type (struct/enum/import)
-            let args = self.lower_generic_args_named(&path.generic_args, generic_scope, Some(name));
+            let mut args =
+                self.lower_generic_args_named(&path.generic_args, generic_scope, Some(name));
+            // `Map[K, V, H]` / `Set[T, H]` — validate the trailing hasher
+            // selector and STRIP it, so every downstream consumer keeps seeing
+            // the two-ary `Map` / one-ary `Set` it always has (B-2026-08-21-6).
+            args = self.take_hasher_type_arg(name, args, path);
             // Intercept stdlib Rc[T] / Arc[T] wrappers — sub-item 2 of the
             // Type::Shared/Rc/Arc representation work. Single-arg form
             // only; zero/multi-arg keeps flowing through Type::Named so

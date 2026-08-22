@@ -43540,3 +43540,101 @@ fn test_normalize_rejects_a_wrong_arity_or_a_non_form_argument() {
         "a sibling prelude enum must be rejected, got {other_enum:?}"
     );
 }
+
+// ── B-2026-08-21-6: the `Map[K, V, H]` / `Set[T, H]` hasher selector ──
+//
+// design.md § `Hash` and `Hasher` writes `Map[K, V, FxBuildHasher]` twice in
+// its own prose. Before this it did not resolve at all, and — worse — a
+// three-argument `Map` type checked SILENTLY because extra type arguments were
+// dropped on the floor, so a misspelled hasher was indistinguishable from a
+// correct one. Both halves are pinned here: the two spellings the spec names
+// are accepted, and everything else is reported rather than ignored.
+
+#[test]
+fn both_spec_named_hashers_are_accepted_on_map_and_set() {
+    typecheck_ok(
+        "fn main() {\n\
+             let mut a: Map[String, i64, FxBuildHasher] = Map.new();\n\
+             a.insert(\"x\", 1);\n\
+             let mut b: Map[String, i64, SipHash13BuildHasher] = Map.new();\n\
+             b.insert(\"y\", 2);\n\
+             let mut c: Set[String, FxBuildHasher] = Set.new();\n\
+             c.insert(\"z\");\n\
+             println(a.len() + b.len() + c.len());\n\
+         }",
+    );
+}
+
+#[test]
+fn naming_the_default_hasher_does_not_change_what_a_map_is_assignable_to() {
+    // The hasher is a CONSTRUCTION-time property, not part of the value's
+    // shape: it decides which hash function the container is built with, and
+    // the container carries that with it. So an opted-out map still satisfies
+    // a plain `Map[K, V]` parameter — anything else would fork the type system
+    // over a choice that has no bearing on layout or on what operations apply.
+    typecheck_ok(
+        "fn take(m: Map[String, i64]) -> i64 { m.len() }\n\
+         fn main() {\n\
+             let mut a: Map[String, i64, FxBuildHasher] = Map.new();\n\
+             a.insert(\"x\", 1);\n\
+             println(take(a));\n\
+         }",
+    );
+}
+
+#[test]
+fn a_type_that_is_not_a_hasher_in_the_hasher_slot_is_reported() {
+    // The regression that matters most: this used to type check silently.
+    let errs = typecheck_errors(
+        "fn main() {\n\
+             let m: Map[String, i64, i64] = Map.new();\n\
+             println(m.len());\n\
+         }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("the hasher") && e.message.contains("FxBuildHasher")),
+        "expected the hasher-slot diagnostic naming both selectors, got {errs:?}"
+    );
+}
+
+#[test]
+fn too_many_type_arguments_on_a_map_are_reported() {
+    let errs = typecheck_errors(
+        "fn main() {\n\
+             let m: Map[String, i64, FxBuildHasher, i64] = Map.new();\n\
+             println(m.len());\n\
+         }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("plus an optional hasher")),
+        "expected the arity diagnostic, got {errs:?}"
+    );
+}
+
+#[test]
+fn an_ordered_container_rejects_a_hasher_argument() {
+    // `SortedMap` / `SortedSet` compare their keys; they never hash one. A
+    // hasher there is a misunderstanding worth naming, and it is also the case
+    // that proves the parser's strip is scoped — if it fired here, the
+    // argument would vanish and no diagnostic could be produced.
+    for head in [
+        "SortedMap[String, i64, FxBuildHasher]",
+        "SortedSet[String, FxBuildHasher]",
+    ] {
+        let src = format!(
+            "fn main() {{\n\
+                 let m: {head} = {}.new();\n\
+                 println(m.len());\n\
+             }}",
+            head.split('[').next().unwrap()
+        );
+        let errs = typecheck_errors(&src);
+        assert!(
+            errs.iter()
+                .any(|e| e.message.contains("does not hash its keys")),
+            "expected the ordered-container refusal for {head}, got {errs:?}"
+        );
+    }
+}

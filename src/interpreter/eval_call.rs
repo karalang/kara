@@ -541,7 +541,7 @@ impl<'a> super::Interpreter<'a> {
                     );
                 }
                 "Map.new" => {
-                    return Value::empty_map();
+                    return self.new_hash_container(Value::empty_map());
                 }
                 "Vec.new" => {
                     return Value::array_of(Vec::new());
@@ -662,7 +662,7 @@ impl<'a> super::Interpreter<'a> {
                     return Value::SortedMap(BTreeMap::new());
                 }
                 "Set.new" => {
-                    return Value::empty_set();
+                    return self.new_hash_container(Value::empty_set());
                 }
                 "Client.new" => {
                     return Value::Struct {
@@ -3057,5 +3057,56 @@ fn log_level_rank(level: &str) -> Option<i64> {
         "warn" => Some(3),
         "error" => Some(4),
         _ => None,
+    }
+}
+
+impl super::Interpreter<'_> {
+    /// Stamp a freshly built `Map` / `Set` with the hasher its construction
+    /// site's type annotation names (B-2026-08-21-6).
+    ///
+    /// `pending_let_ty` is the interpreter's existing channel for "the
+    /// declared type of the slot this expression is initializing" — a `let`'s
+    /// annotation (`eval_stmt`) or a struct field's declared type
+    /// (`eval_struct_literal`). Those are exactly the two positions from which
+    /// codegen reads the same argument, so the two backends select from the
+    /// same information rather than each guessing.
+    ///
+    /// Every other construction site defaults to `SipHash13BuildHasher`, which
+    /// is both the spec's default and the safe direction to fail: a container
+    /// that cannot see an annotation gets the DoS-resistant hasher, never the
+    /// fast one.
+    pub(crate) fn new_hash_container(
+        &mut self,
+        container: crate::interpreter::Value,
+    ) -> crate::interpreter::Value {
+        use crate::hasher_kind::HasherKind;
+        use crate::interpreter::Value;
+
+        let Some(te) = self.pending_let_ty.as_ref() else {
+            return container;
+        };
+        // The hasher is NOT in the type expression any more — the parser
+        // deleted it and recorded it on the program, keyed by the container
+        // path's span (see `Program::container_hashers`). Codegen reads the
+        // same table off the same span, so the two backends cannot disagree
+        // about what a spelling means.
+        let crate::ast::TypeKind::Path(p) = &te.kind else {
+            return container;
+        };
+        let kind = self
+            .program
+            .container_hashers
+            .get(&crate::resolver::SpanKey::from_span(&p.span))
+            .copied()
+            .unwrap_or_default();
+        if kind == HasherKind::default() {
+            return container;
+        }
+        match &container {
+            Value::Map(m) => m.write().unwrap().set_hasher(kind),
+            Value::Set(t) => t.write().unwrap().set_hasher(kind),
+            _ => {}
+        }
+        container
     }
 }

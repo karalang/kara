@@ -70,6 +70,7 @@ pub(super) struct VarMetadataSnapshot<'ctx> {
     map_key_type_names: Option<String>,
     var_elem_type_exprs: Option<TypeExpr>,
     map_key_type_exprs: Option<TypeExpr>,
+    map_hashers: Option<crate::hasher_kind::HasherKind>,
     set_elem_types: Option<BasicTypeEnum<'ctx>>,
     set_elem_type_names: Option<String>,
     set_elem_type_exprs: Option<TypeExpr>,
@@ -112,6 +113,7 @@ impl<'ctx> super::Codegen<'ctx> {
             map_key_type_names: self.mapset.map_key_type_names.remove(name),
             var_elem_type_exprs: self.var_types.var_elem_type_exprs.remove(name),
             map_key_type_exprs: self.mapset.map_key_type_exprs.remove(name),
+            map_hashers: self.mapset.map_hashers.remove(name),
             set_elem_types: self.mapset.set_elem_types.remove(name),
             set_elem_type_names: self.mapset.set_elem_type_names.remove(name),
             set_elem_type_exprs: self.mapset.set_elem_type_exprs.remove(name),
@@ -204,6 +206,9 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         if let Some(v) = snap.map_key_type_exprs {
             self.mapset.map_key_type_exprs.insert(key.clone(), v);
+        }
+        if let Some(v) = snap.map_hashers {
+            self.mapset.map_hashers.insert(key.clone(), v);
         }
         if let Some(v) = snap.set_elem_types {
             self.mapset.set_elem_types.insert(key.clone(), v);
@@ -316,6 +321,7 @@ pub(super) struct VarEnvSnapshot<'ctx> {
     map_key_type_names: HashMap<String, String>,
     var_elem_type_exprs: HashMap<String, TypeExpr>,
     map_key_type_exprs: HashMap<String, TypeExpr>,
+    map_hashers: HashMap<String, crate::hasher_kind::HasherKind>,
     set_elem_types: HashMap<String, BasicTypeEnum<'ctx>>,
     set_elem_type_names: HashMap<String, String>,
     set_elem_type_exprs: HashMap<String, TypeExpr>,
@@ -359,6 +365,7 @@ impl<'ctx> super::Codegen<'ctx> {
             map_key_type_names: self.mapset.map_key_type_names.clone(),
             var_elem_type_exprs: self.var_types.var_elem_type_exprs.clone(),
             map_key_type_exprs: self.mapset.map_key_type_exprs.clone(),
+            map_hashers: self.mapset.map_hashers.clone(),
             set_elem_types: self.mapset.set_elem_types.clone(),
             set_elem_type_names: self.mapset.set_elem_type_names.clone(),
             set_elem_type_exprs: self.mapset.set_elem_type_exprs.clone(),
@@ -411,6 +418,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.mapset.map_key_type_names = snap.map_key_type_names;
         self.var_types.var_elem_type_exprs = snap.var_elem_type_exprs;
         self.mapset.map_key_type_exprs = snap.map_key_type_exprs;
+        self.mapset.map_hashers = snap.map_hashers;
         self.mapset.set_elem_types = snap.set_elem_types;
         self.mapset.set_elem_type_names = snap.set_elem_type_names;
         self.mapset.set_elem_type_exprs = snap.set_elem_type_exprs;

@@ -28960,3 +28960,120 @@ fn map_iteration_order_varies_per_process_and_a_pinned_seed_reproduces() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// B-2026-08-21-6 — the `Map[K, V, FxBuildHasher]` opt-out, end to end, in a
+/// SUBPROCESS because the whole property is about what differs between one
+/// process and the next.
+///
+/// design.md § `Hash` and `Hasher`: "Users who pin the hasher
+/// (`Map[K, V, FxBuildHasher]`) opt out of both the DoS-resistance guarantee
+/// and the version-stability escape hatch." Opting out of a per-process key is
+/// observable as exactly one thing — the order stops moving — so that is what
+/// is asserted, against the default map in the SAME program as the control.
+///
+/// Both surfaces, because they select the hasher through different machinery
+/// off one shared table: the interpreter stamps `MapData` at `Map.new()`, and
+/// codegen stores a different synthesized hash function in the control block.
+#[test]
+fn a_pinned_fx_hasher_stops_the_order_moving_while_the_default_keeps_moving() {
+    let dir = std::env::temp_dir().join(format!("kara_fxhasher_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let src = dir.join("hasher.kara");
+    std::fs::write(
+        &src,
+        "fn main() {\n\
+             let mut fx: Map[String, i64, FxBuildHasher] = Map.new();\n\
+             let mut sip: Map[String, i64] = Map.new();\n\
+             let names = [\"zulu\", \"alpha\", \"mike\", \"bravo\", \"yankee\",\n\
+                          \"charlie\", \"xray\", \"delta\", \"whiskey\", \"echo\"];\n\
+             for n in names {\n\
+                 fx.insert(n.to_string(), 1);\n\
+                 sip.insert(n.to_string(), 1);\n\
+             }\n\
+             let mut a = \"fx:\";\n\
+             for k in fx.keys() { a = a + \" \" + k; }\n\
+             println(a);\n\
+             let mut b = \"sip:\";\n\
+             for k in sip.keys() { b = b + \" \" + k; }\n\
+             println(b);\n\
+         }",
+    )
+    .unwrap();
+
+    // Six samples: with ten keys a coincidental repeat of the SEEDED order is
+    // possible across two runs, and a test that fails once in a while is worse
+    // than no test. The Fx half is asserted the other way — every sample must
+    // agree — so it needs no such allowance.
+    let check = |lines: Vec<(String, String)>, surface: &str| {
+        assert!(
+            lines.iter().all(|(fx, _)| *fx == lines[0].0),
+            "{surface}: the FxBuildHasher map's order moved between processes; \
+             an unkeyed hasher has nothing to move with — samples {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|(_, sip)| *sip != lines[0].1),
+            "{surface}: the DEFAULT map's order did not vary across 6 \
+             processes, so this run proves nothing about Fx — samples {lines:?}"
+        );
+        assert!(
+            !lines[0].0.trim_start_matches("fx:").trim().is_empty(),
+            "{surface}: expected keys, got {:?}",
+            lines[0].0
+        );
+    };
+
+    let split = |stdout: String| -> (String, String) {
+        let mut it = stdout.lines();
+        let fx = it.next().unwrap_or_default().to_string();
+        let sip = it.next().unwrap_or_default().to_string();
+        (fx, sip)
+    };
+
+    let interp: Vec<(String, String)> = (0..6)
+        .map(|_| {
+            let out = Command::new(env!("CARGO_BIN_EXE_karac"))
+                .arg("run")
+                .arg("--interp")
+                .arg(&src)
+                // An inherited pin would freeze the CONTROL too and make the
+                // "default varies" half vacuously false.
+                .env_remove("KARAC_HASH_SEED")
+                .output()
+                .expect("karac run --interp");
+            split(String::from_utf8_lossy(&out.stdout).into_owned())
+        })
+        .collect();
+    check(interp, "karac run --interp");
+
+    // The compiled half. `link_or_skip`'s soft-skip contract: no runtime
+    // archive / no linker means no binary, and the assertions below would be
+    // vacuous, so skip loudly rather than pass.
+    let build = Command::new(env!("CARGO_BIN_EXE_karac"))
+        .arg("build")
+        .arg(&src)
+        .current_dir(&dir)
+        .output()
+        .expect("karac build");
+    let exe = dir.join("hasher");
+    if !build.status.success() || !exe.exists() {
+        eprintln!(
+            "skipping the compiled half: karac build did not produce a binary \
+             (build the runtime archives per CLAUDE.md to exercise it)\n{}",
+            String::from_utf8_lossy(&build.stderr)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        return;
+    }
+    let aot: Vec<(String, String)> = (0..6)
+        .map(|_| {
+            let out = Command::new(&exe)
+                .env_remove("KARAC_HASH_SEED")
+                .output()
+                .expect("run the built binary");
+            split(String::from_utf8_lossy(&out.stdout).into_owned())
+        })
+        .collect();
+    check(aot, "karac build");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

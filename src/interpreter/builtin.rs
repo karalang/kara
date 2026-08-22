@@ -181,8 +181,11 @@ impl<'a> super::Interpreter<'a> {
                     }
                     _ => (None, None),
                 };
+                // Hash order — the `Display` / `for` / `.iter()` walks all
+                // agree, and design.md § Map requires it to vary per process
+                // (B-2026-08-21-6).
                 let body = entries
-                    .iter()
+                    .iter_observable()
                     .map(|(k, val)| {
                         format!(
                             "{}: {}",

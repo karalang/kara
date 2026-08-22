@@ -172,6 +172,38 @@ Key Kāra language concepts the compiler must implement:
 - **`shared struct`/`shared enum`:** reference-semantics types using RC.
 - **Layout blocks:** separate logical struct definition from physical memory layout (SoA, field grouping for cache locality).
 
+## `Map` / `Set` iteration order is random per process — never assert it
+
+`Map` and `Set` hash through **SipHash-1-3 under a per-process random key**
+(design.md § `Hash` and `Hasher`, "Default hasher for v1"; B-2026-08-21-6). The
+one shared implementation lives in the **`karac-hash` crate** (`hash/`) — the
+interpreter calls it directly, the compiled backends reach it through
+`karac_hash_bytes` in `karac-runtime` — so the two backends agree by
+construction, the same rule the Arrow IPC twin and `String.normalize` follow.
+
+The consequence is a test-writing rule with teeth: **iteration order differs
+between two runs of the same binary**, so an assertion that pins it fails on
+most runs. It is not enough to check that a test passes once — a two-key map has
+a 50% chance of looking stable. Compare CONTENTS: sort the walked lines, or
+compare as a set, and keep exact ordering only for the statements around the
+walk. (`tests/interpreter.rs`'s `sorted_prefix` helper does the first half.)
+Four such tests existed when the seeding landed and every one of them passed on
+the run that introduced it.
+
+**`KARAC_HASH_SEED=<n>` pins the key** (decimal or `0x…`; `0` is a legal pin), so
+a run can be reproduced exactly — that is how a suspected order-dependence is
+confirmed, and how the kata A/B harness compares output at all. Sweeping the
+suite under several pinned seeds is the way to *find* order dependencies:
+
+```bash
+for seed in 1 2 3 5; do KARAC_HASH_SEED=$seed cargo test 2>&1 | grep FAILED; done
+```
+
+Do not set it outside testing: a published key is the same as no key, which is
+the DoS-resistance the default exists to provide. `Map[K, V, FxBuildHasher]`
+opts out deliberately (unkeyed, stable across runs of one binary) — see
+`runtime/stdlib/hash.kara` for what that gives up.
+
 ## Coding Standards
 
 - Idiomatic Rust; follow `rustfmt` conventions.

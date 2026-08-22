@@ -78,10 +78,11 @@ impl<'ctx> super::Codegen<'ctx> {
         data_ptr: PointerValue<'ctx>,
         byte_count: IntValue<'ctx>,
     ) -> IntValue<'ctx> {
+        let sym = self.hash_hasher.runtime_symbol();
         let f = self
             .module
-            .get_function("karac_hash_bytes")
-            .expect("karac_hash_bytes extern declared in Codegen::new");
+            .get_function(sym)
+            .expect("karac_hash_bytes / _fx externs declared in Codegen::new");
         self.builder
             .build_call(f, &[data_ptr.into(), byte_count.into()], "hash.bytes")
             .unwrap()
@@ -116,7 +117,7 @@ impl<'ctx> super::Codegen<'ctx> {
         type_name: &str,
         key_ty: BasicTypeEnum<'ctx>,
     ) -> FunctionValue<'ctx> {
-        let fn_name = format!("karac_hash_{type_name}");
+        let fn_name = format!("karac_hash_{type_name}{}", self.hash_hasher.mangle_suffix());
         if let Some(f) = self.module.get_function(&fn_name) {
             return f;
         }
@@ -469,7 +470,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
     pub(super) fn emit_hash_fn_for_type_expr(&mut self, te: &TypeExpr) -> FunctionValue<'ctx> {
         let type_name = Self::mangled_type_name(te);
-        let fn_name = format!("karac_hash_{type_name}");
+        let fn_name = format!("karac_hash_{type_name}{}", self.hash_hasher.mangle_suffix());
         if let Some(f) = self.module.get_function(&fn_name) {
             return f;
         }
@@ -587,7 +588,10 @@ impl<'ctx> super::Codegen<'ctx> {
     /// per-element-loop shape; the eq sibling is `emit_eq_fn_for_vec`.
     pub(super) fn emit_hash_fn_for_vec(&mut self, elem_te: &TypeExpr) -> FunctionValue<'ctx> {
         let elem_name = Self::display_mangle_te(elem_te);
-        let fn_name = format!("karac_hash_Vec_{elem_name}");
+        let fn_name = format!(
+            "karac_hash_Vec_{elem_name}{}",
+            self.hash_hasher.mangle_suffix()
+        );
         if let Some(f) = self.module.get_function(&fn_name) {
             return f;
         }
@@ -887,7 +891,10 @@ impl<'ctx> super::Codegen<'ctx> {
     /// route through `emit_hash_fn_for_type`'s integer/pointer path,
     /// not here.
     pub(super) fn emit_hash_fn_for_struct(&mut self, struct_name: &str) -> FunctionValue<'ctx> {
-        let fn_name = format!("karac_hash_{struct_name}");
+        let fn_name = format!(
+            "karac_hash_{struct_name}{}",
+            self.hash_hasher.mangle_suffix()
+        );
         if let Some(f) = self.module.get_function(&fn_name) {
             return f;
         }
@@ -1214,7 +1221,7 @@ impl<'ctx> super::Codegen<'ctx> {
         type_name: &str,
         elems: &[TypeExpr],
     ) -> FunctionValue<'ctx> {
-        let fn_name = format!("karac_hash_{type_name}");
+        let fn_name = format!("karac_hash_{type_name}{}", self.hash_hasher.mangle_suffix());
         if let Some(f) = self.module.get_function(&fn_name) {
             return f;
         }

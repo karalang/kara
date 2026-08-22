@@ -1302,13 +1302,15 @@ impl<'a> super::Interpreter<'a> {
                             .into_iter()
                             .map(|(k, v)| Value::Tuple(vec![k.0, v]))
                             .collect(),
-                        // Set iterates in insertion order
-                        Value::Set(s) => s.read().unwrap().items().to_vec(),
-                        // Map iterates as (key, value) tuples in insertion order
+                        // Set / Map iterate in the hash order their own hasher
+                        // gives, NOT insertion order: design.md § Map leaves the
+                        // order unspecified and requires it to vary across
+                        // process runs (B-2026-08-21-6).
+                        Value::Set(s) => s.read().unwrap().iter_observable().cloned().collect(),
                         Value::Map(m) => m
                             .read()
                             .unwrap()
-                            .iter()
+                            .iter_observable()
                             .map(|(k, v)| Value::Tuple(vec![k.clone(), v.clone()]))
                             .collect(),
                         // String iterates per Unicode scalar value, matching the

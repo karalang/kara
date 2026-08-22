@@ -753,6 +753,32 @@ pub struct Program {
     /// existing `frozen_alias_bindings` hint, so codegen learns nothing new.
     /// Empty for every program that does not use the statement.
     pub freeze_spans: rustc_hash::FxHashSet<crate::resolver::SpanKey>,
+    /// The hasher each `Map[K, V, H]` / `Set[T, H]` type expression named
+    /// (design.md § `Hash` and `Hasher`; B-2026-08-21-6), keyed by the
+    /// container path's own span. Set by the PARSER, which also REMOVES the
+    /// hasher argument from the path's generic arguments.
+    ///
+    /// The removal is the point, and it is why this table exists rather than
+    /// the argument simply staying in the tree. Dozens of consumers in codegen
+    /// and the interpreter recognize a `Map` by matching its head name and then
+    /// requiring EXACTLY two generic arguments — `extract_map_kv_types`,
+    /// `map_kv_type_exprs`, `extract_set_elem_type`, and their callers, plus
+    /// every drop / clone / layout path that funnels through them. A
+    /// three-argument `Map` silently fails all of those tests, so it is not a
+    /// `Map` to them at all: not merely a different hasher, but a different
+    /// (and wrong) answer about how to free the thing. Relaxing every such test
+    /// is a hunt with no way to prove it finished. Deleting the argument in the
+    /// parser means no later phase can tell `Map[K, V, FxBuildHasher]` from
+    /// `Map[K, V]` — the AST is byte-identical to the program that never named
+    /// a hasher — and the one bit of difference lives here, where exactly two
+    /// places read it.
+    ///
+    /// Only a RECOGNIZED selector in the trailing position is removed, so a
+    /// misspelling keeps its argument and still reaches the typechecker's
+    /// arity/name diagnostic (`take_hasher_type_arg`). Empty for every program
+    /// that never names a hasher, which is almost all of them.
+    pub container_hashers:
+        rustc_hash::FxHashMap<crate::resolver::SpanKey, crate::hasher_kind::HasherKind>,
     /// Lint-level overrides written on a STATEMENT — `#[allow(lint)] stmt;` or
     /// `#[expect(lint)] let x = …;`. Set by the PARSER, and kept beside the
     /// tree for the same reason as [`Self::freeze_spans`] above: the

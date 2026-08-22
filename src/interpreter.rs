@@ -2399,7 +2399,18 @@ impl<'a> Interpreter<'a> {
             })
             .unwrap_or_default();
         for field in fields {
+            // B-2026-08-21-6 — thread the field's DECLARED type through the
+            // same `pending_let_ty` channel a `let` annotation uses, so a
+            // `Map.new()` in field position sees `Map[K, V, H]`'s hasher.
+            // Codegen reads the field type at exactly this position
+            // (`build_map_new_handle_from_type_expr`), so without this the two
+            // backends would select from different information. Saved and
+            // restored around each field so a nested `let` in a block-expr
+            // initializer still wins for its own RHS.
+            let saved_let_ty = self.pending_let_ty.take();
+            self.pending_let_ty = field_tys.get(&field.name).cloned();
             let val = self.eval_expr_inner(&field.value);
+            self.pending_let_ty = saved_let_ty;
             let val = match field_tys.get(&field.name) {
                 Some(te) => exec::coerce_int_value_to_declared_float(val, te),
                 None => val,

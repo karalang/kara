@@ -28,6 +28,24 @@ pub unsafe extern "C" fn karac_hash_bytes(ptr: *const u8, len: usize) -> u64 {
     karac_hash::hash_bytes(bytes)
 }
 
+/// `karac_hash_bytes_fx(ptr, len) -> u64` — FxHash of `len` bytes at `ptr`,
+/// UNSEEDED. The `Map[K, V, FxBuildHasher]` opt-out; see
+/// [`karac_hash::fx_hash_bytes`] for what is being given up.
+///
+/// Same null/empty contract as [`karac_hash_bytes`].
+///
+/// # Safety
+/// `ptr` must be null, or point to `len` initialized readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn karac_hash_bytes_fx(ptr: *const u8, len: usize) -> u64 {
+    let bytes: &[u8] = if ptr.is_null() || len == 0 {
+        &[]
+    } else {
+        unsafe { core::slice::from_raw_parts(ptr, len) }
+    };
+    karac_hash::fx_hash_bytes(bytes)
+}
+
 /// `karac_hash_seed() -> u64` — the low half of the process seed, for
 /// diagnostics and for the tests that assert a pin took effect. Not used for
 /// hashing; the seed reaches the hash through `karac-hash` directly.
@@ -52,6 +70,16 @@ mod tests {
         assert_eq!(direct, viaffi);
     }
 
+    /// The Fx shim has the same agreement obligation, and must NOT be the
+    /// seeded one wearing a different name.
+    #[test]
+    fn the_fx_shim_agrees_with_the_crate_and_differs_from_the_seeded_one() {
+        let msg = b"the quick brown fox";
+        let viaffi = unsafe { karac_hash_bytes_fx(msg.as_ptr(), msg.len()) };
+        assert_eq!(karac_hash::fx_hash_bytes(msg), viaffi);
+        assert_ne!(unsafe { karac_hash_bytes(msg.as_ptr(), msg.len()) }, viaffi);
+    }
+
     /// An empty key arrives as `(null, 0)` from codegen and must hash, not
     /// trap.
     #[test]
@@ -59,5 +87,12 @@ mod tests {
         let empty = karac_hash::hash_bytes(&[]);
         assert_eq!(unsafe { karac_hash_bytes(core::ptr::null(), 0) }, empty);
         assert_eq!(unsafe { karac_hash_bytes(b"x".as_ptr(), 0) }, empty);
+
+        let empty_fx = karac_hash::fx_hash_bytes(&[]);
+        assert_eq!(
+            unsafe { karac_hash_bytes_fx(core::ptr::null(), 0) },
+            empty_fx
+        );
+        assert_eq!(unsafe { karac_hash_bytes_fx(b"x".as_ptr(), 0) }, empty_fx);
     }
 }

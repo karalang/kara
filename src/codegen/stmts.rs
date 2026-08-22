@@ -3930,6 +3930,11 @@ impl<'ctx> super::Codegen<'ctx> {
                             detected = true;
                         }
                         if let Some((k_ty, v_ty)) = self.extract_map_kv_types(te) {
+                            // B-2026-08-21-6 — see the twin in
+                            // `types_lowering::register_var_types_from_type_expr`.
+                            self.mapset
+                                .map_hashers
+                                .insert(var_name.clone(), self.container_hasher_for(te));
                             self.mapset.map_key_types.insert(var_name.clone(), k_ty);
                             self.mapset.map_val_types.insert(var_name.clone(), v_ty);
                             if let Some(k_name) = Self::extract_map_key_name(te) {
@@ -3948,6 +3953,9 @@ impl<'ctx> super::Codegen<'ctx> {
                             detected = true;
                         }
                         if let Some(elem_ty) = self.extract_set_elem_type(te) {
+                            self.mapset
+                                .map_hashers
+                                .insert(var_name.clone(), self.container_hasher_for(te));
                             self.mapset.set_elem_types.insert(var_name.clone(), elem_ty);
                             if let Some(elem_name) = Self::extract_set_elem_name(te) {
                                 self.mapset

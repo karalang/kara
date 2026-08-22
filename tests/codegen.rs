@@ -12864,6 +12864,105 @@ fn main() {
         assert_eq!(out, "1\ndG1\n2\ndG2\nend\n");
     }
 
+    /// B-2026-08-21-6 — codegen actually SELECTS on the `Map[K, V, H]` hasher.
+    ///
+    /// One process, two maps, identical `String` keys inserted in identical
+    /// order, differing only in the declared hasher. The per-key-type hash
+    /// function is synthesized once and CACHED under a symbol name, and stored
+    /// in the map's control block at construction — so if the name did not
+    /// carry the hasher, the second map would silently reuse the first's
+    /// function and the two walks would come out identical. That is the exact
+    /// failure this pins, and it is checkable in a single process, unlike the
+    /// across-process properties (which `tests/cli.rs` covers by subprocess).
+    ///
+    /// Ten keys: two hash functions agreeing on the whole permutation by
+    /// coincidence is 1 in 10!, not a flake.
+    #[test]
+    fn the_two_hashers_order_the_same_keys_differently_in_one_process() {
+        let out = run_program(
+            "fn main() {\n\
+                 let mut fx: Map[String, i64, FxBuildHasher] = Map.new();\n\
+                 let mut sip: Map[String, i64, SipHash13BuildHasher] = Map.new();\n\
+                 let names = [\"zulu\", \"alpha\", \"mike\", \"bravo\", \"yankee\",\n\
+                              \"charlie\", \"xray\", \"delta\", \"whiskey\", \"echo\"];\n\
+                 for n in names {\n\
+                     fx.insert(n.to_string(), 1);\n\
+                     sip.insert(n.to_string(), 1);\n\
+                 }\n\
+                 let mut a = \"\";\n\
+                 for k in fx.keys() { a = a + k + \" \"; }\n\
+                 println(a);\n\
+                 let mut b = \"\";\n\
+                 for k in sip.keys() { b = b + k + \" \"; }\n\
+                 println(b);\n\
+             }",
+        );
+        if let Some(out) = out {
+            let mut lines = out.lines();
+            let fx = lines.next().unwrap_or_default();
+            let sip = lines.next().unwrap_or_default();
+            assert_eq!(
+                fx.split_whitespace().count(),
+                10,
+                "the Fx map lost keys: {out}"
+            );
+            assert_ne!(
+                fx, sip,
+                "both maps walked in the same order, so the FxBuildHasher one \
+                 is using the default's hash function — the synthesized \
+                 symbol name is not keyed on the hasher"
+            );
+            let mut fx_sorted: Vec<&str> = fx.split_whitespace().collect();
+            let mut sip_sorted: Vec<&str> = sip.split_whitespace().collect();
+            fx_sorted.sort_unstable();
+            sip_sorted.sort_unstable();
+            assert_eq!(
+                fx_sorted, sip_sorted,
+                "the two maps hold different keys, so the order comparison \
+                 above proves nothing: {out}"
+            );
+        }
+    }
+
+    /// The opted-out map still has to WORK — a different hash is only useful
+    /// if every key it stored is still findable through it, and a removal
+    /// still rebuilds the right buckets.
+    #[test]
+    fn an_fx_hashed_map_still_finds_and_removes_its_keys() {
+        let out = run_program(
+            "fn main() {\n\
+                 let mut m: Map[String, i64, FxBuildHasher] = Map.new();\n\
+                 m.insert(\"alpha\", 1);\n\
+                 m.insert(\"bravo\", 2);\n\
+                 m.insert(\"charlie\", 3);\n\
+                 m.remove(\"bravo\");\n\
+                 match m.get(\"alpha\") { Some(v) => { println(v); } None => { println(-1); } }\n\
+                 match m.get(\"charlie\") { Some(v) => { println(v); } None => { println(-1); } }\n\
+                 match m.get(\"bravo\") { Some(v) => { println(v); } None => { println(-1); } }\n\
+                 println(m.len());\n\
+             }",
+        );
+        assert_eq!(out, Some("1\n3\n-1\n2\n".to_string()));
+    }
+
+    /// A `Set[T, H]` takes the selector in its own trailing position, and an
+    /// Fx-hashed set is still a set.
+    #[test]
+    fn an_fx_hashed_set_still_dedupes_and_answers_contains() {
+        let out = run_program(
+            "fn main() {\n\
+                 let mut s: Set[String, FxBuildHasher] = Set.new();\n\
+                 s.insert(\"alpha\");\n\
+                 s.insert(\"bravo\");\n\
+                 s.insert(\"alpha\");\n\
+                 println(s.len());\n\
+                 if s.contains(\"bravo\") { println(1); } else { println(0); }\n\
+                 if s.contains(\"charlie\") { println(1); } else { println(0); }\n\
+             }",
+        );
+        assert_eq!(out, Some("2\n1\n0\n".to_string()));
+    }
+
     /// Spawn a built kara test binary and capture stdout+stderr, with a
     /// per-spawn 15s hang watchdog. Thin wrapper over the shared helper
     /// in `tests/common/mod.rs` — see the module doc there for the full
@@ -16519,7 +16618,7 @@ fn main() {
         if let Some(out) = run_program(
             "struct H { m: Map[String, Vec[String]] }\n\
              fn firstk(m: ref Map[String, i64]) -> i64 {\n\
-             \x20   for k in m.keys() { return k.len(); }\n\
+             \x20   for k in m.keys() { if k.len() > 0i64 { return 1i64; } }\n\
              \x20   return 0i64;\n\
              }\n\
              fn main() {\n\
@@ -16555,7 +16654,14 @@ fn main() {
              \x20   println(a.len());\n\
              }",
         ) {
-            assert_eq!(out, "5\n2\n3\n8\n5\n2\n2\n2\n");
+            // The seventh line was `firstk`'s `k.len()` — 2 or 3 depending on
+            // WHICH key came out first, which is now the per-process hash order
+            // (B-2026-08-21-6). It returns a constant instead: the borrow of
+            // `k` still happens inside the loop (the `k.len() > 0` test), so
+            // the early `return` out of a `keys()` walk — the iterator-cleanup
+            // path this line exists to exercise — is unchanged. Every other
+            // line is a SUM over the whole map and was never order-dependent.
+            assert_eq!(out, "5\n2\n3\n8\n5\n2\n1\n2\n");
         }
     }
 

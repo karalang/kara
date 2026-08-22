@@ -1159,6 +1159,25 @@ pub(crate) struct TabulateAliasScopes<'ctx> {
 }
 
 pub(super) struct Codegen<'ctx> {
+    /// The hasher currently being synthesized FOR — the `Map[K, V, H]` /
+    /// `Set[T, H]` selector (B-2026-08-21-6). Set around the hash-function
+    /// synthesis at each container-construction site and restored after.
+    ///
+    /// A field rather than a parameter because the five `emit_hash_fn_for_*`
+    /// synthesizers recurse into one another (a tuple key hashes its fields, a
+    /// `Vec[T]` key hashes its elements), so a parameter would have to be
+    /// threaded through every one of them and every recursive call to reach
+    /// the single leaf that consumes it — `emit_hash_bytes_call`. It also
+    /// participates in the emitted symbol NAME, so a program using both
+    /// hashers on the same key type gets two distinct cached functions rather
+    /// than whichever one was synthesized first.
+    pub(crate) hash_hasher: crate::hasher_kind::HasherKind,
+    /// The program's `Map[K, V, H]` / `Set[T, H]` selectors, keyed by the
+    /// container path's span — a clone of [`crate::ast::Program::container_hashers`],
+    /// loaded at the top of `compile_program` because `Codegen::new` has no
+    /// program in hand. Empty for every program that never names a hasher.
+    pub(crate) container_hashers:
+        rustc_hash::FxHashMap<crate::resolver::SpanKey, crate::hasher_kind::HasherKind>,
     pub(crate) mod_bindings: ModBindings<'ctx>,
     pub(crate) borrow_vars: BorrowVars<'ctx>,
     pub(crate) span_tables: SpanTables,
@@ -5044,6 +5063,15 @@ impl<'ctx> Codegen<'ctx> {
         // `Map`/`Set` needs it.
         let hash_bytes_ty = i64_type.fn_type(&[ptr_md, i64_ty], false);
         module.add_function("karac_hash_bytes", hash_bytes_ty, Some(Linkage::External));
+        // The `Map[K, V, FxBuildHasher]` sibling — unseeded FxHash. Declared
+        // unconditionally like its default twin; LLVM drops the declaration
+        // when nothing calls it, so a program that never names the selector
+        // emits exactly what it emitted before the parameter existed.
+        module.add_function(
+            "karac_hash_bytes_fx",
+            hash_bytes_ty,
+            Some(Linkage::External),
+        );
 
         // `String.normalize(form)` — the same shape plus an i32 form selector
         // (design.md § Strings, Equality; B-2026-08-20-41). Resolved from the
@@ -5189,6 +5217,8 @@ impl<'ctx> Codegen<'ctx> {
         );
 
         Codegen {
+            hash_hasher: crate::hasher_kind::HasherKind::default(),
+            container_hashers: rustc_hash::FxHashMap::default(),
             context,
             module,
             builder,
@@ -5498,6 +5528,7 @@ impl<'ctx> Codegen<'ctx> {
                 map_val_types: HashMap::new(),
                 map_key_type_names: HashMap::new(),
                 map_key_type_exprs: HashMap::new(),
+                map_hashers: HashMap::new(),
                 set_elem_types: HashMap::new(),
                 sorted_collection_vars: std::collections::HashSet::new(),
                 set_elem_type_names: HashMap::new(),
@@ -6545,6 +6576,12 @@ impl<'ctx> Codegen<'ctx> {
     }
 
     fn compile_program(&mut self, program: &Program) -> Result<(), String> {
+        // B-2026-08-21-6 — the parser deleted each `Map[K, V, H]` hasher
+        // argument and left the choice here, keyed by the container path's
+        // span. Every `Codegen::new` entry funnels through this method, so one
+        // load covers the AOT, JIT, REPL-cell and test-module paths alike.
+        self.container_hashers
+            .extend(program.container_hashers.iter().map(|(k, v)| (*k, *v)));
         // B-2026-08-07-10 — `KARAC_TEXT_PAD=<bytes>`: a filler function ahead
         // of the program's own code, so a measurement can move `main` (and the
         // hot loop inside it) by a CHOSEN number of bytes while every

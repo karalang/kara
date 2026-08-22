@@ -264,7 +264,11 @@ pub fn __preserve_no_mangle_symbols() -> usize {
     // `karac_jit_runner` via `dlsym` — without the keep-list entry, `karac run`
     // on ANY program with a `Map` or `Set` fails at lookup while `karac build`
     // is fine. Same class as the realloc / critical-section pairs.
-    keep!(hashing::karac_hash_bytes, hashing::karac_hash_seed);
+    keep!(
+        hashing::karac_hash_bytes,
+        hashing::karac_hash_bytes_fx,
+        hashing::karac_hash_seed
+    );
     #[cfg(feature = "regex")]
     keep!(
         regex::karac_regex_validate,

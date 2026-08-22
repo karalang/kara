@@ -83,6 +83,21 @@ impl<'ctx> super::Codegen<'ctx> {
         } else {
             self.mapset.map_key_type_exprs.get(var_name).cloned()
         };
+        // B-2026-08-21-6 — synthesize the hash function FOR the hasher this
+        // binding was declared with. `hash_hasher` is read by every
+        // `emit_hash_fn_for_*` below (including the recursive ones), both to
+        // pick the runtime entry point and to key the emitted symbol, so it is
+        // set for the whole synthesis and restored immediately after. The
+        // resulting function pointer is stored in the control block, which is
+        // what makes this a construction-time decision: every later `insert` /
+        // `get` on the handle reaches the same hash without re-deciding.
+        let saved_hasher = self.hash_hasher;
+        self.hash_hasher = self
+            .mapset
+            .map_hashers
+            .get(var_name)
+            .copied()
+            .unwrap_or_default();
         let (hash_fn, eq_fn) = if let Some(key_te) = key_te {
             (
                 self.emit_hash_fn_for_type_expr(&key_te),
@@ -100,6 +115,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.emit_eq_fn_for_type(&type_name, key_ty),
             )
         };
+        self.hash_hasher = saved_hasher;
         let hash_fn_ptr = hash_fn.as_global_value().as_pointer_value();
         let eq_fn_ptr = eq_fn.as_global_value().as_pointer_value();
 
@@ -118,6 +134,21 @@ impl<'ctx> super::Codegen<'ctx> {
             .try_as_basic_value()
             .unwrap_basic()
             .into_pointer_value()
+    }
+
+    /// The hasher a `Map` / `Set` type expression named, from the table the
+    /// parser filled (B-2026-08-21-6). The argument itself is gone from the
+    /// tree by the time codegen runs — see `Program::container_hashers` — so
+    /// this span lookup is the only way to see it, and it is the SAME lookup
+    /// the interpreter does, off the same span.
+    pub(super) fn container_hasher_for(&self, te: &TypeExpr) -> crate::hasher_kind::HasherKind {
+        let TypeKind::Path(p) = &te.kind else {
+            return crate::hasher_kind::HasherKind::default();
+        };
+        self.container_hashers
+            .get(&crate::resolver::SpanKey::from_span(&p.span))
+            .copied()
+            .unwrap_or_default()
     }
 
     /// Build a fresh `Map`/`Set` handle from a `Map[K, V]` / `Set[T]`
@@ -173,6 +204,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 .size_of()
                 .unwrap_or_else(|| i64_t.const_int(8, false))
         };
+        // The declared hasher comes straight off this `TypeExpr` — a struct
+        // field's or a let annotation's `Map[K, V, H]` / `Set[T, H]`. Same
+        // save/restore contract as the name-keyed sibling above.
+        let saved_hasher = self.hash_hasher;
+        self.hash_hasher = self.container_hasher_for(te);
         let (hash_fn, eq_fn) = if let Some(kte) = key_te {
             (
                 self.emit_hash_fn_for_type_expr(&kte),
@@ -184,6 +220,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.emit_eq_fn_for_type("i64", key_ty),
             )
         };
+        self.hash_hasher = saved_hasher;
         let hash_fn_ptr = hash_fn.as_global_value().as_pointer_value();
         let eq_fn_ptr = eq_fn.as_global_value().as_pointer_value();
         Some(

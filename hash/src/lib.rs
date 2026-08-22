@@ -88,6 +88,70 @@ impl core::hash::Hasher for KaraHasher {
     }
 }
 
+/// FxHash — the UNSEEDED, non-DoS-resistant hasher `Map[K, V, FxBuildHasher]`
+/// opts into (design.md § `Hash` and `Hasher`, "Default hasher for v1":
+/// "Users who pin the hasher (`Map[K, V, FxBuildHasher]`) opt out of both the
+/// DoS-resistance guarantee and the version-stability escape hatch").
+///
+/// Same rotate-xor-multiply mixer rustc-hash uses, and the same one karac's
+/// codegen inlined for every map before SipHash-1-3 became the default. The
+/// multiplier is a compile-time constant and there is no key, which is
+/// precisely the property being opted into: iteration order is then stable
+/// across runs of one binary, and colliding keys can be generated offline by
+/// anyone who reads this source. Never reach for it on a map keyed by input
+/// you did not produce.
+///
+/// Eight-byte little-endian chunks, then the 0..=7 tail one byte at a time.
+/// The tail is NOT length-mixed, so `b"a"` and `b"a\0"` collide — an
+/// acceptable weakness for a hasher whose whole contract is "fast and
+/// unkeyed", and a further reason this is opt-in rather than the default.
+pub fn fx_hash_bytes(bytes: &[u8]) -> u64 {
+    let mut h: u64 = 0;
+    let mut chunks = bytes.chunks_exact(8);
+    for c in &mut chunks {
+        // `chunks_exact(8)` yields exactly 8 bytes; the conversion cannot fail.
+        h = fx_add(h, u64::from_le_bytes(c.try_into().unwrap()));
+    }
+    for &b in chunks.remainder() {
+        h = fx_add(h, u64::from(b));
+    }
+    h
+}
+
+/// FxHash multiplier — rustc-hash's, and the one karac's codegen carried as
+/// `FXHASH_SEED`. Named a "seed" there, but it is a fixed odd multiplier, not
+/// a key: it is identical in every process and every build.
+const FX_MULTIPLIER: u64 = 0x517c_c1b7_2722_0a95;
+
+#[inline]
+fn fx_add(h: u64, word: u64) -> u64 {
+    (h.rotate_left(5) ^ word).wrapping_mul(FX_MULTIPLIER)
+}
+
+/// A [`core::hash::Hasher`] over [`fx_hash_bytes`], the unseeded sibling of
+/// [`KaraHasher`]. Buffers for the same reason, and agrees with
+/// [`fx_hash_bytes`] on the same bytes by the same construction.
+#[derive(Default)]
+pub struct FxHasher {
+    buf: alloc_vec::Vec<u8>,
+}
+
+impl FxHasher {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl core::hash::Hasher for FxHasher {
+    fn write(&mut self, bytes: &[u8]) {
+        self.buf.extend_from_slice(bytes);
+    }
+
+    fn finish(&self) -> u64 {
+        fx_hash_bytes(&self.buf)
+    }
+}
+
 /// SipHash-1-3 with an explicit key. Exposed so tests can pin a key without
 /// touching process state, and so the KATs below can run the published
 /// reference vectors.
@@ -201,6 +265,46 @@ mod tests {
                 oracle.finish(),
                 "length {n} disagrees with std's SipHash-1-3"
             );
+        }
+    }
+
+    /// The Fx digest is PINNED to constants, and the pin is what proves it
+    /// never reads the process seed: this test binary seeds itself randomly
+    /// like any other process, so a `fx_hash_bytes` that consulted `seed()`
+    /// would fail here on almost every run rather than intermittently in the
+    /// field. It doubles as a change-detector for the mixer.
+    ///
+    /// The four lengths straddle the 8-byte chunk boundary (empty, short tail,
+    /// exactly one chunk, one chunk + tail) so a broken remainder loop cannot
+    /// slip past.
+    #[test]
+    fn fx_is_pinned_and_therefore_unseeded() {
+        assert_eq!(fx_hash_bytes(b""), 0x0000_0000_0000_0000);
+        assert_eq!(fx_hash_bytes(b"abc"), 0x62FD_7437_241E_1ADF);
+        assert_eq!(fx_hash_bytes(b"12345678"), 0xE871_2E7A_8344_2085);
+        assert_eq!(fx_hash_bytes(b"123456789"), 0x8980_204C_4B0A_C4D4);
+    }
+
+    /// The two selectors must actually select different things — otherwise
+    /// `Map[K, V, FxBuildHasher]` would resolve and mean nothing.
+    #[test]
+    fn fx_and_siphash_disagree() {
+        let m = b"the quick brown fox";
+        assert_ne!(fx_hash_bytes(m), hash_bytes(m));
+        assert_ne!(fx_hash_bytes(m), hash_bytes_with_key(m, 0, 0));
+    }
+
+    /// `FxHasher` (the tree-walk interpreter's route) and `fx_hash_bytes`
+    /// (codegen's, through `karac_hash_bytes_fx`) must agree on the same
+    /// bytes, for the same reason `KaraHasher` and `hash_bytes` must.
+    #[test]
+    fn fx_hasher_agrees_with_fx_hash_bytes() {
+        use core::hash::Hasher;
+        for n in 0..=24usize {
+            let input: Vec<u8> = (0..n).map(|i| (i as u8).wrapping_mul(17)).collect();
+            let mut h = FxHasher::new();
+            h.write(&input);
+            assert_eq!(h.finish(), fx_hash_bytes(&input), "length {n} disagrees");
         }
     }
 

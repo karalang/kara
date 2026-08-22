@@ -503,16 +503,72 @@ impl super::Parser {
         let segments = self.parse_path_segments()?;
 
         // Check for generic args [T, U] — unambiguous in type position
-        let generic_args = if self.check(&Token::LeftBracket) {
+        let mut generic_args = if self.check(&Token::LeftBracket) {
             Some(self.parse_generic_type_args()?)
         } else {
             None
         };
 
+        let span = self.span_from(&start);
+        self.take_container_hasher_arg(&segments, &mut generic_args, span);
+
         Some(PathExpr {
             segments,
             generic_args,
-            span: self.span_from(&start),
+            span,
         })
+    }
+
+    /// Remove a `Map[K, V, H]` / `Set[T, H]` trailing hasher selector from the
+    /// path's generic arguments and record it on the parser (B-2026-08-21-6).
+    ///
+    /// See [`crate::ast::Program::container_hashers`] for why the argument is
+    /// deleted here rather than left in the tree. In one sentence: every later
+    /// phase recognizes a `Map` by "head name plus exactly two arguments", so
+    /// an extra one stops the type from being a `Map` to any of them.
+    ///
+    /// Removes ONLY a recognized selector in exactly the trailing position, so
+    /// `Map[K, V, i64]`, `Map[K, V, H, X]` and `SortedMap[K, V, H]` all keep
+    /// their arguments and reach the typechecker, which reports them.
+    fn take_container_hasher_arg(
+        &mut self,
+        segments: &[String],
+        generic_args: &mut Option<Vec<GenericArg>>,
+        span: crate::token::Span,
+    ) {
+        // Single-segment only: `Map` / `Set` are prelude types written bare, so
+        // a qualified `some.module.Map` is somebody ELSE's type and its third
+        // argument is not a hasher. Falling through leaves the argument in
+        // place, which is the safe direction — the typechecker then reports it
+        // rather than this quietly eating it.
+        if segments.len() != 1 {
+            return;
+        }
+        let base = match segments[0].as_str() {
+            "Map" => 2,
+            "Set" => 1,
+            _ => return,
+        };
+        let Some(args) = generic_args.as_mut() else {
+            return;
+        };
+        if args.len() != base + 1 {
+            return;
+        }
+        let GenericArg::Type(te) = &args[base] else {
+            return;
+        };
+        let TypeKind::Path(p) = &te.kind else {
+            return;
+        };
+        let kind = match p.segments.last().map(String::as_str) {
+            _ if p.generic_args.is_some() => return,
+            Some("FxBuildHasher") => crate::hasher_kind::HasherKind::Fx,
+            Some("SipHash13BuildHasher") => crate::hasher_kind::HasherKind::SipHash13,
+            _ => return,
+        };
+        args.truncate(base);
+        self.container_hashers
+            .insert(crate::resolver::SpanKey::from_span(&span), kind);
     }
 }

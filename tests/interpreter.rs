@@ -16448,7 +16448,10 @@ fn main() {
 
 #[test]
 fn test_iter_on_map_yields_kv_tuples() {
-    // Map.iter() yields (K, V) tuples in insertion order at the interpreter.
+    // Map.iter() yields (K, V) tuples. The ORDER they come out in is the
+    // per-process hash order (B-2026-08-21-6), so this pins that `next()`
+    // yields each PAIR intact and destructures — the two pairs are compared as
+    // a set.
     let output = run_no_errors(
         r#"
 fn main() {
@@ -16458,14 +16461,14 @@ fn main() {
     let mut it = m.iter();
     let (k1, v1) = it.next().unwrap();
     let (k2, v2) = it.next().unwrap();
-    println(k1);
-    println(v1);
-    println(k2);
-    println(v2);
+    println(f"{k1}{v1}");
+    println(f"{k2}{v2}");
 }
 "#,
     );
-    assert_eq!(output, "a\n1\nb\n2\n");
+    let mut pairs: Vec<&str> = output.lines().collect();
+    pairs.sort_unstable();
+    assert_eq!(pairs, vec!["a1", "b2"]);
 }
 
 #[test]
@@ -16528,7 +16531,10 @@ fn main() {
 
 #[test]
 fn test_for_loop_on_map_iter_destructures_kv() {
-    // Map.iter() yields (K, V) tuples; for-loop binds via tuple pattern.
+    // Map.iter() yields (K, V) tuples; for-loop binds via tuple pattern. The
+    // ORDER is the per-process hash order (B-2026-08-21-6), so the pairs are
+    // collected and sorted rather than pinned — what this test is about is the
+    // destructuring, not the walk.
     let output = run_no_errors(
         r#"
 fn main() {
@@ -16536,13 +16542,14 @@ fn main() {
     m.insert("x", 1);
     m.insert("y", 2);
     for (k, v) in m.iter() {
-        println(k);
-        println(v);
+        println(f"{k}{v}");
     }
 }
 "#,
     );
-    assert_eq!(output, "x\n1\ny\n2\n");
+    let mut pairs: Vec<&str> = output.lines().collect();
+    pairs.sort_unstable();
+    assert_eq!(pairs, vec!["x1", "y2"]);
 }
 
 #[test]
@@ -16791,7 +16798,11 @@ fn main() {
 }
 "#,
     );
-    assert_eq!(output, "a=1\nb=2\n");
+    // Hash order, not insertion order (B-2026-08-21-6) — what this pins is
+    // the tuple reaching the closure destructured, not the sequence.
+    let mut lines: Vec<&str> = output.lines().collect();
+    lines.sort_unstable();
+    assert_eq!(lines, vec!["a=1", "b=2"]);
 }
 
 #[test]
@@ -36404,16 +36415,40 @@ fn upper_half_unsigned_patterns_match_the_right_arm() {
 //
 // The representation moved from a bare `Vec` (a by-value association list) to
 // `Arc<RwLock<MapData>>` / `Arc<RwLock<SetData>>` — insertion-ordered storage
-// with a hash index beside it. Two properties had to survive that: the
-// observable ORDER, and VALUE SEMANTICS. The second is the one the change put
-// at risk, because the derived `Clone` now shares storage the way `Array`'s
-// always has, and only `deep_clone_value` at binding sites keeps two bindings
-// independent.
+// with a hash index beside it. VALUE SEMANTICS is what the change put at risk,
+// because the derived `Clone` now shares storage the way `Array`'s always has,
+// and only `deep_clone_value` at binding sites keeps two bindings independent.
+//
+// These tests ORIGINALLY also pinned the observable order to insertion order.
+// They no longer can, and the reason is B-2026-08-21-6: the observable walk is
+// now ordered by the per-process-seeded hash, because design.md § Map says
+// "iteration order is unspecified and varies across process runs". A test that
+// pinned a particular order would fail on most runs — and, worse, asserting one
+// would re-assert the very contract the spec denies, which is how a whole
+// codebase quietly grows an order dependency. What survives is what is actually
+// promised: every entry is visited exactly once, and every survivor of a
+// removal is still findable. Hence the sorting below.
+
+/// Sort the first `n` lines of `out` and rejoin, so an assertion can pin
+/// CONTENTS without pinning the unspecified iteration order. The remaining
+/// lines (lookups, membership checks) keep their exact positions, since those
+/// ARE ordered — they are separate statements.
+fn sorted_prefix(out: &str, n: usize) -> String {
+    let mut lines: Vec<&str> = out.lines().collect();
+    let n = n.min(lines.len());
+    lines[..n].sort_unstable();
+    let mut joined = lines.join("\n");
+    if out.ends_with('\n') {
+        joined.push('\n');
+    }
+    joined
+}
 
 #[test]
-fn map_iteration_stays_in_insertion_order() {
-    // Keys chosen so insertion order, sorted order, and hash order all differ
-    // — printing them sorted, or in bucket order, fails here.
+fn map_iteration_visits_every_entry_exactly_once() {
+    // Order is unspecified and varies per process (B-2026-08-21-6), so what is
+    // pinned is the multiset: four distinct pairs, none dropped, none doubled.
+    // A walk that skipped or repeated an entry still fails here.
     let out = run("fn main() {\n\
         let mut m: Map[i64, i64] = Map.new();\n\
         m.insert(30, 3);\n\
@@ -36422,14 +36457,15 @@ fn map_iteration_stays_in_insertion_order() {
         m.insert(5, 0);\n\
         for (k, v) in m { println(f\"{k}={v}\"); }\n\
     }");
-    assert_eq!(out, "30=3\n10=1\n20=2\n5=0\n");
+    assert_eq!(sorted_prefix(&out, 4), "10=1\n20=2\n30=3\n5=0\n");
 }
 
 #[test]
-fn map_overwrite_keeps_the_original_position() {
-    // An overwrite updates in place rather than moving the key to the end —
-    // the behaviour the `Vec`-scan code had, since it assigned through the
-    // pair it found.
+fn map_overwrite_replaces_rather_than_duplicates() {
+    // An overwrite updates the existing entry rather than appending a second
+    // one for the same key. Position is no longer observable (the walk is hash
+    // ordered), but "two entries for key 1" would still show up here as three
+    // lines instead of two.
     let out = run("fn main() {\n\
         let mut m: Map[i64, i64] = Map.new();\n\
         m.insert(1, 1);\n\
@@ -36437,11 +36473,11 @@ fn map_overwrite_keeps_the_original_position() {
         m.insert(1, 99);\n\
         for (k, v) in m { println(f\"{k}={v}\"); }\n\
     }");
-    assert_eq!(out, "1=99\n2=2\n");
+    assert_eq!(sorted_prefix(&out, 2), "1=99\n2=2\n");
 }
 
 #[test]
-fn map_remove_keeps_the_survivors_findable_and_ordered() {
+fn map_remove_keeps_the_survivors_findable() {
     // The index stores POSITIONS, and removing an entry shifts every later one
     // down. Without the rebuild that follows the removal, the survivors would
     // still print (the `Vec` is walked directly) but would no longer be found
@@ -36457,7 +36493,10 @@ fn map_remove_keeps_the_survivors_findable_and_ordered() {
         match m.get(20) { Some(v) => { println(f\"found20={v}\"); } None => { println(\"LOST20\"); } }\n\
         match m.get(10) { Some(v) => { println(f\"found10={v}\"); } None => { println(\"gone10\"); } }\n\
     }");
-    assert_eq!(out, "20=2\n30=3\nfound30=3\nfound20=2\ngone10\n");
+    assert_eq!(
+        sorted_prefix(&out, 2),
+        "20=2\n30=3\nfound30=3\nfound20=2\ngone10\n"
+    );
 }
 
 #[test]
@@ -36506,9 +36545,10 @@ fn map_in_a_struct_field_is_independent_per_struct() {
 #[test]
 fn set_iteration_and_membership_survive_a_removal() {
     // `Set.remove` used to `swap_remove`, moving the last element into the
-    // hole; it now preserves order like every other container. Either is legal
-    // (design.md § Map leaves `Set` order unspecified) — this pins the one that
-    // shipped and, more importantly, that every survivor is still a member.
+    // hole. What matters — and all that is specified — is that every survivor
+    // is still walked and still a member; the order they come out in is the
+    // per-process hash order (B-2026-08-21-6), so it is sorted before the
+    // comparison rather than pinned.
     let out = run("fn main() {\n\
         let mut s: Set[i64] = Set.new();\n\
         s.insert(9); s.insert(3); s.insert(7); s.insert(1);\n\
@@ -36518,7 +36558,7 @@ fn set_iteration_and_membership_survive_a_removal() {
         if s.contains(7) { println(\"has7\"); } else { println(\"LOST7\"); }\n\
         if s.contains(3) { println(\"BAD3\"); } else { println(\"gone3\"); }\n\
     }");
-    assert_eq!(out, "9\n7\n1\nhas1\nhas7\ngone3\n");
+    assert_eq!(sorted_prefix(&out, 3), "1\n7\n9\nhas1\nhas7\ngone3\n");
 }
 
 #[test]
@@ -36533,7 +36573,10 @@ fn map_entry_chain_still_reaches_the_live_slot() {
         m.entry(\"b\").or_insert(7);\n\
         for (k, v) in m { println(f\"{k}={v}\"); }\n\
     }");
-    assert_eq!(out, "a=1\nb=7\n");
+    // Sorted: the walk order is the per-process hash order (B-2026-08-21-6).
+    // What is pinned is that `a` kept its ORIGINAL value (`or_insert` on a
+    // present key must not overwrite) and that `b` was created with 7.
+    assert_eq!(sorted_prefix(&out, 2), "a=1\nb=7\n");
 }
 
 #[test]

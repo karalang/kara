@@ -5407,7 +5407,7 @@ trait Hash {
 }
 ```
 
-Rationale for the parameterized form over a simpler `fn hash(ref self) -> u64`: the `-> u64` shape locks in a 64-bit digest width, forces every composite type to reinvent its own mixing strategy (`h1 ^ h2.rotate_left(13)` is not composable), and prevents the choice of hash algorithm from being a property of the *hash table*, where it belongs. The parameterized form lets `Map[K, V, FxBuildHasher]` and `Map[K, V, SipHashBuildHasher]` share the same key impls — the key does not know which hasher is in use.
+Rationale for the parameterized form over a simpler `fn hash(ref self) -> u64`: the `-> u64` shape locks in a 64-bit digest width, forces every composite type to reinvent its own mixing strategy (`h1 ^ h2.rotate_left(13)` is not composable), and prevents the choice of hash algorithm from being a property of the *hash table*, where it belongs. The parameterized form lets `Map[K, V, FxBuildHasher]` and `Map[K, V, SipHash13BuildHasher]` share the same key impls — the key does not know which hasher is in use.
 
 **Stability policy.** The default hasher shipped with `Map` and `Set` is **DoS-resistant and seeded per process**. Hash values are **not stable across runs**, **not stable across Kāra versions**, and **not stable across targets**. This matches Python and modern Java: the overwhelmingly common use case is in-memory keying, and the overwhelmingly common attack vector is hash-flooding from adversarial input.
 
@@ -5426,7 +5426,11 @@ trait BuildHasher {
 
 This keeps per-hash state (the `Hasher` instance) separate from per-table configuration (the `BuildHasher` instance — cheap to clone, holds the seed).
 
-**Default hasher for v1.** `Map[K, V]` and `Set[T]` without an explicit hasher use `SipHash13BuildHasher`, seeded from a per-process random source. This default **may change** in future Kāra versions if a better DoS-resistant algorithm becomes standard — that is why hash values are explicitly not stable across versions. Users who pin the hasher (`Map[K, V, FxBuildHasher]`) opt out of both the DoS-resistance guarantee and the version-stability escape hatch.
+**Default hasher for v1.** `Map[K, V]` and `Set[T]` without an explicit hasher use `SipHash13BuildHasher`, seeded from a per-process random source. `Set[T, H]` takes the selector in its own trailing position. This default **may change** in future Kāra versions if a better DoS-resistant algorithm becomes standard — that is why hash values are explicitly not stable across versions. Users who pin the hasher (`Map[K, V, FxBuildHasher]`) opt out of both the DoS-resistance guarantee and the version-stability escape hatch.
+
+**What is implemented today (B-2026-08-21-6).** Both defaults are real: `Map` and `Set` hash through SipHash-1-3 under a per-process random key in the interpreter and in the compiled backends alike, via one shared implementation (the `karac-hash` crate, reached from codegen through `karac_hash_bytes`), and the trailing parameter selects between the two named hashers. `KARAC_HASH_SEED` pins the key for a reproducible run — a testing and debugging affordance, never something a deployment should set, since a published key is the same as no key.
+
+`SipHash13BuildHasher` and `FxBuildHasher` are, for now, type-level **selectors** rather than user-implementable hashers: they are declared as zero-field structs in `runtime/stdlib/hash.kara`, the trailing argument must name one of exactly those two, and anything else is a compile error. The `Hasher` and `BuildHasher` traits above are **not** baked yet, so the "user-extensible hashers" paragraph describes an intended surface rather than a shipped one; naming your own type in the hasher slot is rejected with a diagnostic that says so. Bringing them up is separate work — an ordinary trait with default method bodies, dispatched per hash — not a widening of this parameter.
 
 **Derive.** `#[derive(Hash)]` on a struct feeds each field through the hasher in declaration order. On an enum, it feeds the discriminant first, then the active variant's fields in declaration order. Every field type must itself be `Hash`. This is the only automatic way to construct a `Hash` impl — manual impls are allowed but should be rare.
 

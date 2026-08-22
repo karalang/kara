@@ -108,12 +108,14 @@ impl<'a> super::Interpreter<'a> {
                     len,
                     ..
                 } => storage.read().unwrap()[*start..*start + *len].to_vec(),
-                Value::Set(s) => s.read().unwrap().items().to_vec(),
+                // Hash order, not insertion order — the `for x in set` twin
+                // in `eval_expr` (B-2026-08-21-6).
+                Value::Set(s) => s.read().unwrap().iter_observable().cloned().collect(),
                 Value::SortedSet(s) => s.keys().map(|k| k.0.clone()).collect(),
                 Value::Map(m) => m
                     .read()
                     .unwrap()
-                    .iter()
+                    .iter_observable()
                     .map(|(k, v)| Value::Tuple(vec![k.clone(), v.clone()]))
                     .collect(),
                 Value::SortedMap(m) => m

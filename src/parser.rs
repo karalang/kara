@@ -202,6 +202,11 @@ pub struct Parser {
     /// [`crate::ast::Program::stmt_lint_overrides`] at the end.
     pub(crate) stmt_lint_overrides:
         rustc_hash::FxHashMap<crate::resolver::SpanKey, Vec<crate::lints::LintLevelOverride>>,
+    /// `Map[K, V, H]` / `Set[T, H]` hasher selectors collected during the
+    /// parse, moved onto [`crate::ast::Program::container_hashers`] at the end.
+    /// B-2026-08-21-6.
+    pub(crate) container_hashers:
+        rustc_hash::FxHashMap<crate::resolver::SpanKey, crate::hasher_kind::HasherKind>,
     /// Script mode (design.md § Script mode): when `true` (the default —
     /// root source files), top-level statements synthesize a unit
     /// `fn main()`. Item-only contexts — comptime `ast.item` quotes,
@@ -331,6 +336,7 @@ impl Parser {
             frozen_self_consumed: false,
             freeze_spans: rustc_hash::FxHashSet::default(),
             stmt_lint_overrides: rustc_hash::FxHashMap::default(),
+            container_hashers: rustc_hash::FxHashMap::default(),
             allow_script_mode: true,
             pending_doc: None,
             fn_context_stack: Vec::new(),
@@ -627,6 +633,7 @@ impl Parser {
             inner_attrs,
             freeze_spans: std::mem::take(&mut self.freeze_spans),
             stmt_lint_overrides: std::mem::take(&mut self.stmt_lint_overrides),
+            container_hashers: std::mem::take(&mut self.container_hashers),
             ..Program::default()
         }
     }
