@@ -1221,6 +1221,54 @@ impl Pipeline {
             );
             typed.warnings.extend(extra);
         }
+        self.widen_redundant_suffix_fixes();
+    }
+
+    /// B-2026-08-22-25 — extend each `redundant_suffix` deletion back over the
+    /// `_` that attaches the suffix to the digits.
+    ///
+    /// The producer (`warn_redundant_suffix`) derives the span as the last
+    /// `suffix.len()` bytes of the literal token, which is right for `42i64`
+    /// and one character short for `0_i64` — `karac fix` turned that into
+    /// `0_`, leaving a separator whose only reason to exist was the suffix
+    /// just deleted. Cosmetic (`0_` still lexes and evaluates to `0`), but
+    /// `karac fix` is the primary fix path the Mend loop tells authors to
+    /// trust, and syntax nobody would write undermines exactly that.
+    ///
+    /// IT IS FIXED HERE, NOT AT THE PRODUCER, because the producer cannot see
+    /// the source: `typecheck(program, resolve_result)` takes no text, the
+    /// token carries a numeric VALUE plus a suffix rather than the author's
+    /// digits, and threading source through every caller for a trailing
+    /// underscore is not a trade worth making. This is the same spot, and the
+    /// same `self.source` field, that the `map_value_clone_reinsert` lint
+    /// above already uses for the same reason — its doc calls it "the author's
+    /// own spelling". Refining here also serves BOTH consumers at once:
+    /// `karac fix` and the `--output=json` `fix_it` object read the one span
+    /// this corrects, so an editor applying the published edit gets the same
+    /// result as the CLI.
+    ///
+    /// An underscore directly abutting the suffix can only be the suffix
+    /// separator — a digit separator has a digit after it — so walking back
+    /// over the run cannot eat anything meaningful.
+    fn widen_redundant_suffix_fixes(&mut self) {
+        let (Some(source), Some(typed)) = (self.source.as_ref(), self.typed.as_mut()) else {
+            return;
+        };
+        let bytes = source.as_bytes();
+        for warn in &mut typed.warnings {
+            if warn.kind != crate::typechecker::TypeErrorKind::RedundantSuffix {
+                continue;
+            }
+            let Some(fix) = warn.fix_it.as_mut() else {
+                continue;
+            };
+            let mut start = fix.span.offset;
+            while start > 0 && bytes.get(start - 1) == Some(&b'_') {
+                start -= 1;
+            }
+            fix.span.length += fix.span.offset - start;
+            fix.span.offset = start;
+        }
     }
 
     /// Apply the operator-lowering pass. Runs after typecheck (uses inferred

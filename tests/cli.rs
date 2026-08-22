@@ -29213,3 +29213,97 @@ fn a_user_written_hasher_fixes_the_order_across_processes_on_both_surfaces() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// B-2026-08-22-25 — the deletion must take the `_` that ATTACHES the suffix.
+///
+/// `test_fix_deletes_redundant_literal_suffixes` above covers `1_000i64`,
+/// where the underscores separate digits and the suffix abuts the last one.
+/// The other spelling puts a separator immediately before the suffix
+/// (`1_000_i64`), and the producer's "delete the last `suffix.len()` bytes"
+/// left it behind: `0_i64` became `0_`.
+///
+/// Cosmetic — `0_` still lexes and evaluates to `0`, which is why this is a
+/// low-severity row and why the check below asserts the file still runs. But
+/// `karac fix` is the PRIMARY fix path the Mend loop tells authors to trust,
+/// and a rewrite that emits syntax nobody would write undermines exactly the
+/// surface it is meant to sell.
+#[test]
+fn test_fix_deletes_the_underscore_that_attaches_a_redundant_suffix() {
+    let path = fix_scratch_file(
+        "redundant_suffix_sep",
+        "fn main() {\n\
+         \x20   let a = 0_i64;\n\
+         \x20   let b = 1_000_i64;\n\
+         \x20   let c = 42i64;\n\
+         \x20   println(f\"{a} {b} {c}\");\n\
+         }\n",
+    );
+    let out = karac_bin()
+        .args(["fix", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "fix failed: stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let rewritten = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        rewritten.contains("let a = 0;"),
+        "separator must go with the suffix, got: {rewritten}"
+    );
+    assert!(
+        rewritten.contains("let b = 1_000;"),
+        "digit separators must SURVIVE — only the attaching one goes: {rewritten}"
+    );
+    assert!(
+        rewritten.contains("let c = 42;"),
+        "the un-separated form must be unaffected: {rewritten}"
+    );
+    assert!(
+        !rewritten.contains("0_;") && !rewritten.contains("1_000_;"),
+        "no dangling separator may remain: {rewritten}"
+    );
+
+    // A rewrite that produced a broken file would still "apply", so pin that
+    // the result is check-clean and evaluates to the same numbers.
+    let run = karac_bin()
+        .args(["run", "--interp", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout).trim(),
+        "0 1000 42",
+        "values must be unchanged by the rewrite"
+    );
+}
+
+/// The EDITOR-facing half of B-2026-08-22-25. `karac fix` and
+/// `--output=json`'s `fix_it` read the same span, so an IDE applying the
+/// published edit must land on the same text the CLI produces. Fixing only
+/// the CLI would have left every JSON consumer emitting `0_`.
+#[test]
+fn test_json_redundant_suffix_fix_span_covers_the_separator() {
+    let path = fix_scratch_file(
+        "redundant_suffix_json",
+        "fn main() {\n\
+         \x20   let a = 0_i64;\n\
+         \x20   println(f\"{a}\");\n\
+         }\n",
+    );
+    let src = std::fs::read_to_string(&path).unwrap();
+    let lit = src.find("0_i64").expect("literal present");
+
+    let out = karac_bin()
+        .args(["check", "--output=json", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // The edit must start at the `_` (one past the digit) and cover `_i64`.
+    let expected = format!("\"offset\":{},\"length\":4", lit + 1);
+    assert!(
+        stdout.contains(&expected),
+        "expected fix_it span {expected} covering `_i64`, got: {stdout}"
+    );
+}
