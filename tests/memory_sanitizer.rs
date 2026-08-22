@@ -51880,4 +51880,73 @@ fn main() {
             "asan_impl_trait_witness_shared_struct_is_balanced",
         );
     }
+
+    /// B-2026-08-22-18 — moving a heap ELEMENT out of an owned `Array[T, N]`
+    /// parameter double-frees it. The callee frees the whole array at exit,
+    /// including the element it just returned, and the caller frees it again.
+    ///
+    /// IGNORED because it is RED on `main`: this is the repro, kept in-tree so
+    /// it cannot rot, not a passing gate. Un-ignore with the fix.
+    ///
+    /// Found while measuring B-2026-08-21-43, which wants to admit a user impl
+    /// on a non-scalar `Array` head called on a TEMPORARY. It is not caused by
+    /// that arm — the BOUND spelling double-frees identically — so widening
+    /// that gate would only add a second spelling for an already-unsafe
+    /// lowering. -43 is blocked on this.
+    #[test]
+    #[ignore = "B-2026-08-22-18: red on main — array element moved out of an owned param double-frees"]
+    fn asan_array_elem_moved_out_of_an_owned_param_is_balanced() {
+        assert_clean_asan_run(
+            r#"fn take_first(a: Array[String, 2]) -> String { return a[0]; }
+fn mk(i: i64) -> Array[String, 2] { return [f"a{i}", f"b{i}"]; }
+
+fn main() {
+    let mut i = 0i64;
+    let mut n = 0i64;
+    let mut last: String = "";
+    while i < 50i64 {
+        last = take_first(mk(i));
+        n = n + last.len();
+        i = i + 1i64;
+    }
+    println(last);
+    println(n);
+}
+"#,
+            &["a49", "140"],
+            "asan_array_elem_moved_out_of_an_owned_param_is_balanced",
+        );
+    }
+
+    /// The CONTRAST that localizes B-2026-08-22-18 to the array path: the
+    /// STRUCT analogue of the same move — a heap field returned out of an
+    /// owned `self` — is already balanced. So the defect is not a general
+    /// hole in owned-param drop tracking; it is specific to moving out of a
+    /// fixed array, and this test is what keeps that distinction honest if
+    /// someone later "fixes" the struct path looking for it.
+    #[test]
+    fn asan_struct_field_moved_out_of_owned_self_is_balanced() {
+        assert_clean_asan_run(
+            r#"struct Pair { a: String, b: String }
+impl Pair { fn take_a(self) -> String { return self.a; } }
+fn mk(i: i64) -> Pair { return Pair { a: f"a{i}", b: f"b{i}" }; }
+
+fn main() {
+    let mut i = 0i64;
+    let mut n = 0i64;
+    let mut last: String = "";
+    while i < 50i64 {
+        let p = mk(i);
+        last = p.take_a();
+        n = n + last.len();
+        i = i + 1i64;
+    }
+    println(last);
+    println(n);
+}
+"#,
+            &["a49", "140"],
+            "asan_struct_field_moved_out_of_owned_self_is_balanced",
+        );
+    }
 }

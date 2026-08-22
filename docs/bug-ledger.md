@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 187 | 0 |
 | missing-feature | 151 | 4 |
 | run-vs-build | 151 | 1 |
-| double-free | 134 | 0 |
+| double-free | 135 | 1 |
 | codegen-gap | 128 | 1 |
 | diagnostics | 97 | 2 |
 | false-positive | 93 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 991 | 3 |
+| codegen | 992 | 4 |
 | typecheck | 242 | 4 |
 | interp | 172 | 0 |
 | other | 63 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1486 surfaced · 9 open · 1455 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1487 surfaced · 10 open · 1455 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (9)
+### Open (10)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -139,6 +139,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1486 surfaced
 | B-2026-08-22-15 | 2026-08-22 | typecheck | medium | A `-> Self` TRAIT METHOD CALLED ON AN EXISTENTIAL RECEIVER LOSES THE TRAIT -- `make().bumped()` types as a BARE type parameter named after the trait, so the builder shape is rejected with two diagnostics that point at the caller's correct code and name a spelling the source never contains | typecheck |
 | B-2026-08-22-16 | 2026-08-22 | typecheck | medium | `Channel.bounded(cap)` DOES NOT EXIST IN ANY SPELLING -- design.md documents it with a `requires cap > 0` contract, `bounded_channel.kara` exists in the stdlib, and nothing routes the name to it | typecheck |
 | B-2026-08-22-17 | 2026-08-22 | typecheck | high | THE BLESSED EXPLICIT SPELLING DOES NOT WORK FOR BUILTIN TYPES -- `Vec[i64].new()`, `Map[String, i64].new()` and `Channel[i64].new()` all report "no method 'new' on `Vec[…]`", so the form design.md now names as THE way to select a type explicitly is unavailable on exactly the types that need it most | typecheck |
+| B-2026-08-22-18 | 2026-08-22 | codegen | high | MOVING A HEAP ELEMENT OUT OF AN OWNED `Array[T, N]` PARAMETER DOUBLE-FREES IT -- `fn take_first(a: Array[String, 2]) -> String { return a[0]; }` frees the returned buffer at the callee's exit AND again in the caller; `karac check` is clean, the program prints the right answer, and only ASAN sees it | roadmap.md |
 
 ### Wontfix (8)
 
