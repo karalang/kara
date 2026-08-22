@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 279 | 1 |
-| leak | 188 | 1 |
+| leak | 188 | 0 |
 | missing-feature | 154 | 0 |
 | run-vs-build | 151 | 0 |
 | double-free | 135 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 996 | 3 |
+| codegen | 996 | 2 |
 | typecheck | 246 | 2 |
 | interp | 174 | 0 |
 | other | 63 | 0 |
@@ -124,13 +124,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1499 surfaced · 5 open · 1471 fixed · 9 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1499 surfaced · 4 open · 1472 fixed · 9 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-22-23 | 2026-08-22 | codegen | low | A STRUCT-WITH-HEAP CHANNEL PAYLOAD LEAKS ITS OWN `String`/`Vec` FIELDS ON `try_send`'S REJECT PATH -- the `SendError.Full(v)` binding frees a String or Vec payload correctly, but a struct CARRYING them leaks each field; the identical user-generic-enum program is ASAN-clean | roadmap.md |
 | B-2026-08-22-27 | 2026-08-22 | codegen+runtime | high | A COMPILED `Map[i64, V, H]` under any NON-DEFAULT hasher stops growing after one resize and silently drops every key past it: `len` still counts them, `contains_key` cannot find them, and the missing keys are the contiguous tail starting at exactly 3/4 of the stalled capacity (196609 at N=200000, 393217 at 400000, 786433 at 800000). `--interp` is correct, so it is a run-vs-build divergence; the default hasher never loses a key at any N | roadmap.md |
 | B-2026-08-22-28 | 2026-08-22 | typecheck | medium | An associated-type bound declared on a STDLIB-BAKED trait is never discharged at an impl site: `trait_assoc_decls` finds the trait declaration only by scanning `program.items`, and a baked trait lives in `env.traits` instead -- so `impl BuildHasher for B { type Hasher = <a type with no Hasher impl> }` type checks, while the same shape on a user-declared trait is correctly rejected with E_GAT_BOUND_NOT_SATISFIED | roadmap.md |
 | B-2026-08-22-29 | 2026-08-22 | codegen+runtime | medium | `FxBuildHasher` is 13.7x SLOWER than the default `SipHash13BuildHasher` on `String` keys (1.23 s vs 0.09 s, 200k inserts + 1M lookups, compiled, arm64) -- the exact opposite of the speed-for-safety trade the stdlib comment and design.md offer it as; a user-written FNV-1a hasher is at parity with the default, so a non-default hasher is not inherently slow | roadmap.md |
@@ -154,9 +153,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1499 surfaced
 
 </details>
 
-### Fixed (1471)
+### Fixed (1472)
 
-<details><summary>1471 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1472 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -16362,6 +16361,89 @@ the right one is caught by the LOOKUP assertion ("Fx map lost key zulu"). A
 selector ignored CONSISTENTLY -- index and `get` both on the default -- keeps
 every lookup working and is caught ONLY by the ORDER assertion. So the flaky
 assertion could not simply be deleted in favour of the deterministic one. |
+| B-2026-08-22-23 | codegen | low | A STRUCT-WITH-HEAP CHANNEL PAYLOAD LEAKS ITS OWN `String`/`Vec` FIELDS ON `try_send`'S REJECT PATH -- the `SendError.Full(v)` binding frees a String… | FIXED by 0e5dca3.
+
+ONE CHANGE, in `compile_channel_try_send`: WHERE the move-suppression is
+emitted now depends on the payload kind, because who owns a rejected value
+does.
+
+MEASURED under LSan, and both directions are wrong in different ways:
+
+  payload        reject path              disarming the source gives
+  -------------  -----------------------  ---------------------------------
+  String / Vec   ARM BINDING owns it      correct (leaving it armed = DOUBLE FREE)
+  struct+heap    SOURCE BINDING owns it   LEAK (1480 bytes / 200 objects)
+
+Both are internally consistent — exactly one owner each — they just put the
+owner in different places, and an ordinary `fn f(x: T) -> Result[(), E[T]]`
+call shows the SAME split. So this is not channel semantics; it is the
+language's existing convention, and `try_send` now follows it instead of
+copying `send`.
+
+`send` never had to choose: it ALWAYS moves into the queue and has no reject
+path, so its unconditional disarm (B-2026-07-13-16) is right for it and wrong
+here. The suppressors write a runtime `cap = 0` into the source's slot, so
+they are position-dependent — the fix is which basic block they land in, not
+new machinery. `NestedStruct` is precisely "an inline user struct whose own
+drop fn frees its heap", so the classifier that decides enum payload drops
+decides this too, rather than a second hand-rolled type test drifting from it.
+
+THE MAP/SET HALF STAYS UNCONDITIONAL and that is deliberate: it edits the
+compile-time cleanup QUEUE (Map cleanup is queue-driven — no in-slot sentinel
+for a walker to skip), so it cannot be branch-conditional at all. On the Ok
+path the queue owns the handle and a second free would be a double free; on
+the reject path the cost is a leaked handle. Wrong-free versus leak, and it
+picks leak.
+
+TWO THINGS TRIED, MEASURED, AND REMOVED rather than landed as plausible dead
+code:
+
+  * Deriving the payload's `EnumDropKind` from the channel element types, the
+    way the payload WIDTH already is. With the payload inline and the
+    suppression split by kind, the value already has exactly one owner, and
+    arming the enum's own drop on top turned the `String` case into a DOUBLE
+    FREE. (An earlier attempt at this looked inert; that measurement was
+    CONFOUNDED — the seed ran before `register_struct_metadata`, so it scored
+    every user struct at the unknown-name default and derived nothing. Moving
+    the seed made the derivation real, and only then could it be measured
+    honestly. Recorded because "I tested it and it changed nothing" was true
+    of the experiment and false of the claim.)
+  * A `seeded_enum_variant_field_type_exprs` override so
+    `emit_enum_drop_switch`'s `NestedStruct` arm could resolve the payload's
+    concrete struct name instead of the declaration's bare `T` — real (the arm
+    emits a GEP and NO call without it, which is a genuine hole for any future
+    seeded generic enum that needs a drop), but unreachable once the drop kind
+    is `None`. Removed with the derivation it existed to serve.
+
+HOW IT WAS FOUND — the diagnosis that actually mattered, since three plausible
+mechanisms were wrong first. The IR of a leaking program was diffed against
+the same program written through a helper function (`fn mk(x: Big, n: i64) ->
+Result[(), SendError[Big]]`), which is ASAN-clean. The clean version emits
+`__karac_drop_struct_Big(ptr %y)` on the SOURCE at scope exit and never emits
+an enum drop at all; the leaking one emits the same call but the source's
+fields were already zeroed by the disarm. That is what identified the owner as
+the source binding rather than anything about the enum.
+
+THE `Closed` ARM is covered by the same rule and is verified separately: it
+became reachable only with B-2026-08-22-24 (landed while this was in flight),
+so the split had never been measured on it. It rides the reject-path rule, and
+that falls out of placing the struct disarm on the OK branch rather than on
+"not Full" — which is why the split is written that way.
+
+TESTS in tests/memory_sanitizer.rs, all inside
+`asan_channel_try_send_heap_payload_both_arms_no_double_free`: the
+struct-with-heap payload (the leak), the `Vec` payload (the double free the
+first fix attempt caused), and the `Closed` arm with a struct payload.
+Non-vacuity in BOTH directions: collapsing the split to always-disarm leaks
+1480 bytes on the struct case; collapsing it to Ok-branch-only double-frees on
+the String and Vec cases. Four-surface parity (`--interp` / JIT / `build` /
+`KARAC_AUTO_PAR=0 build`) re-checked on eight channel programs including the
+`Closed` orphaned-sender shape.
+
+Full default suite 0 failures; full `--features llvm` suite 0 failures under
+KARAC_REQUIRE_RUNTIME_ARCHIVE=1; both clippy legs and fmt clean; 917 kata
+files typecheck clean; per-file error-count diff over `examples/` +
+`runtime/stdlib/` identical to the B-2026-08-22-21 baseline. |
 | B-2026-08-22-24 | interp+runtime | low | THE INTERPRETER CANNOT MODEL RECEIVER LIVENESS, SO `SendError.Closed` AND `send`'S NO-RECEIVER PANIC ARE BOTH UNREACHABLE -- the compiled runtime has… | FIXED by d6fe527. The row's central claim -- that the interpreter CANNOT
 model receiver liveness -- is refuted; it can, and the mechanism is about
 twenty lines.
