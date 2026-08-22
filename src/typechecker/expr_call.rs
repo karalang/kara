@@ -1740,12 +1740,66 @@ impl<'a> super::TypeChecker<'a> {
                 .functions
                 .get(name)
                 .and_then(|sig| sig.where_clause.clone()),
-            ExprKind::Path { segments, .. } => segments.last().and_then(|name| {
-                self.env
-                    .functions
-                    .get(name)
-                    .and_then(|sig| sig.where_clause.clone())
-            }),
+            // A two-segment path is `Receiver.callee`, and the receiver half
+            // decides which table holds the signature. Both orders here are
+            // load-bearing, and each fixes a bug of OPPOSITE polarity.
+            //
+            // B-2026-08-22-10 (false NEGATIVE) — a STATIC/ASSOCIATED call
+            // `Type.assoc_fn(args)` arrives here as a two-segment `Path`, and
+            // an associated fn lives in the IMPL TABLE, not in `env.functions`
+            // under either its bare name (`take`) or its dotted one
+            // (`H.take`). Both `env.functions` lookups miss, so the clause
+            // resolved to `None` and the call discharged NO bound of any class
+            // — inline `[T: Marker]`, `where T: Marker` and `where I.Item = i64`
+            // alike — while the free-function spelling in the same program was
+            // correctly rejected. Inline param bounds are normalized into the
+            // where clause at `FunctionSig` construction
+            // (`normalize_bounds_into_where_clause`), which is why recovering
+            // this one clause fixes all three spellings at once.
+            //
+            // B-2026-08-22-11 (false POSITIVE) — and the impl table must be
+            // consulted FIRST, not as a fallback. The bare-name lookup keys on
+            // the LAST segment alone, so `H.take(x)` found the unrelated
+            // global `mem.take[T: Default]` and discharged ITS bound against
+            // the argument: a valid program was rejected with
+            // "`Marked` does not implement `Default`", naming a trait its
+            // author never mentioned. Ordering impl-first makes the receiver
+            // decide, and the bare-name lookup keeps working for the case it
+            // was written for — a MODULE-qualified path like `mem.take(x)`,
+            // where the receiver names no type and the impl lookup misses.
+            //
+            // Only `formal_generic_params` is still passed as `None` below,
+            // and that is deliberate rather than an oversight: both of its
+            // uses in `check_call_args_with_substitution_full` are gated on
+            // `explicit_generic_args` being `Some`, which this path never
+            // supplies (an explicit `H.take[i64](x)` routes through
+            // `infer_explicit_generic_args_call` instead), and
+            // `discharge_type_bounds` takes its param names from the
+            // instantiated signature's `name_to_id` rather than from that
+            // argument. Passing it here would change nothing.
+            ExprKind::Path { segments, .. } => {
+                // Resolve on WHETHER THE IMPL TABLE CLAIMS THE CALL, not on
+                // whether the method it found happens to carry a clause. An
+                // associated fn with no bounds at all must still shut the
+                // bare-name fallback out — otherwise `H.take(x)` for a
+                // clause-less `fn take` falls through and picks up the global
+                // `mem.take[T: Default]` again, which is the same false
+                // positive by a longer route.
+                let impl_sig = if segments.len() == 2 {
+                    self.env.find_method(&segments[0], &[], &segments[1])
+                } else {
+                    None
+                };
+                match impl_sig {
+                    Some(sig) => sig.where_clause.clone(),
+                    None => segments.last().and_then(|name| {
+                        self.env
+                            .functions
+                            .get(name)
+                            .and_then(|sig| sig.where_clause.clone())
+                    }),
+                }
+            }
             _ => None,
         };
 

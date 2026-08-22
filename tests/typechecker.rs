@@ -44086,3 +44086,166 @@ fn impl_trait_inline_binding_captures_a_type_param_named_only_there() {
         captures[0].type_params
     );
 }
+
+/// B-2026-08-22-10 — the STATIC/ASSOCIATED-function path. Sibling of the two
+/// method-path tests above, and a different cause: `Type.assoc_fn(args)`
+/// reaches the checker as a two-segment `Path`, so it never entered the
+/// discharge engine at all rather than entering it with the clause missing.
+///
+/// The free function in the same program is the control — it always rejected,
+/// which is what made the gap a divergence between two spellings of one bound
+/// rather than a uniformly missing check.
+#[test]
+fn a_plain_trait_bound_is_discharged_on_a_static_assoc_call() {
+    let src = "trait Marker {}\n\
+               struct Marked {}\n\
+               impl Marker for Marked {}\n\
+               struct NotMarked {}\n\
+               struct H {}\n\
+               impl H {\n\
+               \x20   fn take[T: Marker](x: T) -> i64 { 0 }\n\
+               }\n\
+               fn free[T: Marker](x: T) -> i64 { 0 }\n";
+    typecheck_ok(&format!(
+        "{src}fn main() {{ let a: i64 = H.take(Marked {{}}); println(a); }}"
+    ));
+    let errs = typecheck_errors(&format!(
+        "{src}fn main() {{ let a: i64 = H.take(NotMarked {{}}); println(a); }}"
+    ));
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("trait bound") && e.message.contains("Marker")),
+        "an associated fn's inline trait bound must be discharged, got {errs:?}"
+    );
+    // The control: the identical bound on a free function was never the
+    // broken half, so a regression that silenced BOTH would still fail here.
+    let control = typecheck_errors(&format!(
+        "{src}fn main() {{ let a: i64 = free(NotMarked {{}}); println(a); }}"
+    ));
+    assert!(
+        control
+            .iter()
+            .any(|e| e.message.contains("trait bound") && e.message.contains("Marker")),
+        "free-function control must still reject, got {control:?}"
+    );
+}
+
+/// The `where`-clause spelling of the same bound on the same path. Worth its
+/// own test because the fix recovers ONE clause and inline bounds are
+/// normalized into it at `FunctionSig` construction — so if that normalization
+/// ever stops happening, this test and the inline one above fail separately
+/// and say which spelling broke.
+#[test]
+fn a_where_clause_bound_is_discharged_on_a_static_assoc_call() {
+    let src = "trait Marker {}\n\
+               struct Marked {}\n\
+               impl Marker for Marked {}\n\
+               struct NotMarked {}\n\
+               struct H {}\n\
+               impl H {\n\
+               \x20   fn take[T](x: T) -> i64 where T: Marker { 0 }\n\
+               }\n";
+    typecheck_ok(&format!(
+        "{src}fn main() {{ let a: i64 = H.take(Marked {{}}); println(a); }}"
+    ));
+    let errs = typecheck_errors(&format!(
+        "{src}fn main() {{ let a: i64 = H.take(NotMarked {{}}); println(a); }}"
+    ));
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("trait bound") && e.message.contains("Marker")),
+        "an associated fn's where-clause bound must be discharged, got {errs:?}"
+    );
+}
+
+/// The associated-type-equality arm (B-2026-08-22-3) on the static path —
+/// the third bound class, and the one whose diagnostic names both sides.
+#[test]
+fn an_assoc_type_equality_bound_is_discharged_on_a_static_assoc_call() {
+    let src = "trait Src { type Item; }\n\
+               struct Si {}\n\
+               impl Src for Si { type Item = i64; }\n\
+               struct Ss {}\n\
+               impl Src for Ss { type Item = String; }\n\
+               struct H {}\n\
+               impl H {\n\
+               \x20   fn take[I: Src](it: I) -> i64 where I.Item = i64 { 0 }\n\
+               }\n";
+    typecheck_ok(&format!(
+        "{src}fn main() {{ let a: i64 = H.take(Si {{}}); println(a); }}"
+    ));
+    let errs = typecheck_errors(&format!(
+        "{src}fn main() {{ let a: i64 = H.take(Ss {{}}); println(a); }}"
+    ));
+    assert!(
+        errs.iter().any(|e| e
+            .message
+            .contains("E_WHERE_CLAUSE_ASSOC_TYPE_EQ_NOT_SATISFIED")),
+        "the static path must discharge the assoc-type-equality bound, got {errs:?}"
+    );
+}
+
+/// The inference control. The hand-rolled loop this fix bypassed LOOKED
+/// generic-aware because a return-type mismatch was still caught — the let
+/// binding's expected type pinned the param and the error surfaced at the
+/// argument. That behaviour must survive the change, or the fix would have
+/// traded a silent acceptance for a silent regression.
+#[test]
+fn a_generic_static_assoc_call_still_infers_its_return_type() {
+    let src = "struct H {}\n\
+               impl H {\n\
+               \x20   fn ident[T](x: T) -> T { x }\n\
+               }\n";
+    typecheck_ok(&format!(
+        "{src}fn main() {{ let s: String = H.ident(\"hi\"); println(s); }}"
+    ));
+    typecheck_ok(&format!(
+        "{src}fn main() {{ let n: i64 = H.ident(7); println(n); }}"
+    ));
+    let errs = typecheck_errors(&format!(
+        "{src}fn main() {{ let bad: String = H.ident(7); println(bad); }}"
+    ));
+    assert!(
+        !errs.is_empty(),
+        "a solved-to-i64 param assigned to String must still be rejected"
+    );
+}
+
+/// B-2026-08-22-11 — the OPPOSITE polarity, found by B-2026-08-22-10's own
+/// test naming its method `take`. The where clause for a two-segment path was
+/// looked up by the LAST SEGMENT alone, so `H.take(x)` picked up the unrelated
+/// global `mem.take[T: Default]` from the stdlib and discharged ITS bound: a
+/// valid program was rejected citing `Default`, a trait its author never
+/// mentioned and whose name appears nowhere in the source.
+///
+/// Both directions matter here. The impl-table lookup must WIN (the call is
+/// accepted), and the module-qualified spelling that the bare-name lookup was
+/// written for must keep working — otherwise the fix trades one silent
+/// misresolution for another.
+#[test]
+fn a_static_assoc_call_does_not_borrow_a_same_named_global_where_clause() {
+    // `take` deliberately collides with `runtime/stdlib/mem.kara`'s
+    // `pub fn take[T: Default](dest: mut ref T) -> T`.
+    let src = "trait Marker {}\n\
+               struct Marked {}\n\
+               impl Marker for Marked {}\n\
+               struct H {}\n\
+               impl H {\n\
+               \x20   fn take[T: Marker](x: T) -> i64 { 0 }\n\
+               }\n";
+    // `Marked` implements `Marker` but NOT `Default`. Before the fix this was
+    // rejected with "`Marked` does not implement `Default`".
+    typecheck_ok(&format!(
+        "{src}fn main() {{ let a: i64 = H.take(Marked {{}}); println(a); }}"
+    ));
+
+    // A clause-less associated fn must shut the fallback out too — otherwise
+    // it falls through to the global and picks up `Default` by a longer route.
+    let plain = "struct H2 {}\n\
+                 impl H2 {\n\
+                 \x20   fn take(x: i64) -> i64 { x }\n\
+                 }\n";
+    typecheck_ok(&format!(
+        "{plain}fn main() {{ let a: i64 = H2.take(1); println(a); }}"
+    ));
+}
