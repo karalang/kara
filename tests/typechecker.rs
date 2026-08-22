@@ -43638,3 +43638,188 @@ fn an_ordered_container_rejects_a_hasher_argument() {
         );
     }
 }
+
+// ── B-2026-08-22-3: associated-type-equality bounds are discharged ──
+//
+// `where I.Item = i64` used to be validated at the DECLARATION and then
+// ignored: `bounds.rs` checked that the type parameter existed and that the
+// required type lowered, and nothing ever compared the call's solved `I`
+// against it. A bound that is accepted, documented and silently unenforced is
+// worse than one that is rejected — callers rely on it — and design.md
+// § Iterator plus the stdlib method tables lean on exactly this form
+// (`fn extend[I: Iterator[Item = T]]`), so the constraint most likely to be
+// written was the one not checked.
+//
+// Fixing it surfaced a SECOND, broader hole: the method-call path passed
+// `None` for the callee's where clause, so NO bound of any class discharged
+// there — a plain `T: Marker` was unenforced on `h.take(x)` while the free
+// function correctly rejected it. Both are pinned below, because a fix that
+// only reached free functions would miss the spec's own motivating example
+// (`extend` is a method).
+
+/// The shape from the ledger row, verbatim. `Si` satisfies the bound and `Ss`
+/// does not; before the fix BOTH were accepted.
+#[test]
+fn an_assoc_type_equality_bound_rejects_a_mismatched_item() {
+    let src = "trait Src { type Item; }\n\
+               struct Si {}\n\
+               impl Src for Si { type Item = i64; }\n\
+               struct Ss {}\n\
+               impl Src for Ss { type Item = String; }\n\
+               fn take[I: Src](it: I) -> i64 where I.Item = i64 { 0 }\n";
+    typecheck_ok(&format!("{src}fn main() {{ println(take(Si {{}})); }}"));
+    let errs = typecheck_errors(&format!("{src}fn main() {{ println(take(Ss {{}})); }}"));
+    assert!(
+        errs.iter().any(|e| e
+            .message
+            .contains("E_WHERE_CLAUSE_ASSOC_TYPE_EQ_NOT_SATISFIED")),
+        "expected the assoc-type-equality refusal, got {errs:?}"
+    );
+}
+
+/// The message has to name BOTH sides — what was required and what the
+/// concrete receiver actually has. "bound not satisfied" alone leaves the
+/// reader to go find the impl.
+#[test]
+fn the_assoc_type_equality_diagnostic_names_both_sides() {
+    let errs = typecheck_errors(
+        "trait Src { type Item; }\n\
+         struct Ss {}\n\
+         impl Src for Ss { type Item = String; }\n\
+         fn take[I: Src](it: I) -> i64 where I.Item = i64 { 0 }\n\
+         fn main() { println(take(Ss {})); }",
+    );
+    let msg = errs
+        .iter()
+        .find(|e| {
+            e.message
+                .contains("E_WHERE_CLAUSE_ASSOC_TYPE_EQ_NOT_SATISFIED")
+        })
+        .map(|e| e.message.clone())
+        .unwrap_or_else(|| format!("no assoc-eq error at all: {errs:?}"));
+    for needle in ["I.Item = i64", "`Ss`", "Item = String"] {
+        assert!(
+            msg.contains(needle),
+            "diagnostic should name `{needle}`, got: {msg}"
+        );
+    }
+}
+
+/// The inline spelling desugars onto the same constraint, so it must be
+/// exactly as enforced — no better and no worse. Uses the `*_desugared`
+/// helpers because `desugar_program` is what rewrites `Src[Item = i64]` into
+/// the `where I.Item = i64` this discharge reads; the plain helpers skip that
+/// pass, so the inline form would reach the typechecker as a bare `I: Src`.
+#[test]
+fn the_inline_assoc_binding_spelling_is_equally_enforced() {
+    let src = "trait Src { type Item; }\n\
+               struct Si {}\n\
+               impl Src for Si { type Item = i64; }\n\
+               struct Ss {}\n\
+               impl Src for Ss { type Item = String; }\n\
+               fn c[I: Src[Item = i64]](it: I) -> i64 { 0 }\n";
+    typecheck_ok_desugared(&format!("{src}fn main() {{ println(c(Si {{}})); }}"));
+    let errs = typecheck_errors_desugared(&format!("{src}fn main() {{ println(c(Ss {{}})); }}"));
+    assert!(
+        errs.iter().any(|e| e
+            .message
+            .contains("E_WHERE_CLAUSE_ASSOC_TYPE_EQ_NOT_SATISFIED")),
+        "the inline spelling must reject what the where-clause spelling rejects, got {errs:?}"
+    );
+}
+
+/// The required side is often another type parameter, solved from a different
+/// argument (`fn extend[I: Iterator[Item = T]](.., T)`). That RHS has to be
+/// substituted before the comparison, or the check would compare against the
+/// bare parameter name and never fire.
+#[test]
+fn a_type_param_on_the_required_side_is_solved_before_comparison() {
+    let src = "trait Src { type Item; }\n\
+               struct Si {}\n\
+               impl Src for Si { type Item = i64; }\n\
+               struct Ss {}\n\
+               impl Src for Ss { type Item = String; }\n\
+               fn b[I: Src, T](it: I, seed: T) -> i64 where I.Item = T { 0 }\n";
+    typecheck_ok(&format!("{src}fn main() {{ println(b(Si {{}}, 7)); }}"));
+    let errs = typecheck_errors(&format!("{src}fn main() {{ println(b(Ss {{}}, 7)); }}"));
+    assert!(
+        errs.iter().any(|e| e
+            .message
+            .contains("E_WHERE_CLAUSE_ASSOC_TYPE_EQ_NOT_SATISFIED")),
+        "a param RHS solved to i64 must reject an Item of String, got {errs:?}"
+    );
+}
+
+/// A generic required type (`I.Item = Vec[i64]`) has to compare structurally,
+/// not by name.
+#[test]
+fn a_generic_required_type_compares_structurally() {
+    let src = "trait Src { type Item; }\n\
+               struct Sv {}\n\
+               impl Src for Sv { type Item = Vec[i64]; }\n\
+               struct Ss {}\n\
+               impl Src for Ss { type Item = Vec[String]; }\n\
+               fn d[I: Src](it: I) -> i64 where I.Item = Vec[i64] { 0 }\n";
+    typecheck_ok(&format!("{src}fn main() {{ println(d(Sv {{}})); }}"));
+    let errs = typecheck_errors(&format!("{src}fn main() {{ println(d(Ss {{}})); }}"));
+    assert!(
+        errs.iter().any(|e| e
+            .message
+            .contains("E_WHERE_CLAUSE_ASSOC_TYPE_EQ_NOT_SATISFIED")),
+        "Vec[String] must not satisfy `= Vec[i64]`, got {errs:?}"
+    );
+}
+
+/// THE METHOD PATH. `check_call_args_with_substitution` passed `None` for the
+/// callee's where clause, so a method discharged nothing at all. This is the
+/// assoc-eq half.
+#[test]
+fn an_assoc_type_equality_bound_is_discharged_on_a_method_call() {
+    let src = "trait Src { type Item; }\n\
+               struct Si {}\n\
+               impl Src for Si { type Item = i64; }\n\
+               struct Ss {}\n\
+               impl Src for Ss { type Item = String; }\n\
+               struct Holder {}\n\
+               impl Holder {\n\
+               \x20   fn take[I: Src](ref self, it: I) -> i64 where I.Item = i64 { 0 }\n\
+               }\n";
+    typecheck_ok(&format!(
+        "{src}fn main() {{ let h = Holder {{}}; println(h.take(Si {{}})); }}"
+    ));
+    let errs = typecheck_errors(&format!(
+        "{src}fn main() {{ let h = Holder {{}}; println(h.take(Ss {{}})); }}"
+    ));
+    assert!(
+        errs.iter().any(|e| e
+            .message
+            .contains("E_WHERE_CLAUSE_ASSOC_TYPE_EQ_NOT_SATISFIED")),
+        "the method path must discharge the bound too, got {errs:?}"
+    );
+}
+
+/// The broader half of the method-path hole, and the reason it is worth its
+/// own test: a PLAIN trait bound was unenforced there as well. The free
+/// function in the same program is the control — it always rejected.
+#[test]
+fn a_plain_trait_bound_is_discharged_on_a_method_call() {
+    let src = "trait Marker {}\n\
+               struct Marked {}\n\
+               impl Marker for Marked {}\n\
+               struct NotMarked {}\n\
+               struct Holder {}\n\
+               impl Holder {\n\
+               \x20   fn take[T: Marker](ref self, x: T) -> i64 { 0 }\n\
+               }\n";
+    typecheck_ok(&format!(
+        "{src}fn main() {{ let h = Holder {{}}; println(h.take(Marked {{}})); }}"
+    ));
+    let errs = typecheck_errors(&format!(
+        "{src}fn main() {{ let h = Holder {{}}; println(h.take(NotMarked {{}})); }}"
+    ));
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("trait bound") && e.message.contains("Marker")),
+        "a method's plain trait bound must be discharged, got {errs:?}"
+    );
+}

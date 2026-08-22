@@ -26,8 +26,8 @@ use super::inference::{
 use super::types::{
     contains_type_param, float_width_rank, impl_args_match, impl_table_key,
     int_coercion_is_widening, int_signed_width, is_integer, lub_block_type, type_display,
-    type_is_fully_concrete, type_to_concrete_or_param_name, type_to_mono_mangle_token, ConstArg,
-    DimArg, IntSize, ScrutineeMode, SubstValue, Type, UIntSize,
+    type_is_fully_concrete, type_to_concrete_or_param_name, type_to_mono_mangle_token,
+    types_compatible, ConstArg, DimArg, IntSize, ScrutineeMode, SubstValue, Type, UIntSize,
 };
 use super::TypeErrorKind;
 
@@ -1652,6 +1652,18 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    // B-2026-08-22-3 — the thin `check_call_args_with_substitution` wrapper
+    // that used to live here is GONE, not merely unused. Its whole body was a
+    // call to `_full` with `None` for `explicit_generic_args`,
+    // `formal_generic_params` and `where_clause`, and that last `None` is the
+    // bug it caused: the method-call path reached for the convenient wrapper
+    // and thereby discharged no bound of any class — plain `T: Trait`,
+    // projection bounds, const predicates and assoc-type equalities alike.
+    // Deleting it rather than keeping it behind an `#[allow(dead_code)]` is
+    // the point: with no wrapper to reach for, a future call site has to pass
+    // the where clause (or write `None` deliberately, where it is visible in
+    // the diff) and cannot silently re-open the hole.
+
     /// Type-check call arguments against `(params, return_type)` with the
     /// round-10.1 closure-pushdown logic, returning the (possibly-substituted)
     /// return type. Shared by `infer_call` and the user-defined-method branch
@@ -1671,29 +1683,8 @@ impl<'a> super::TypeChecker<'a> {
     /// `apply_call_site_marker` controls the `mut` marker check; pass `false`
     /// for method calls (per design.md, the call-site marker rule applies only
     /// to free-function calls).
-    pub(super) fn check_call_args_with_substitution(
-        &mut self,
-        args: &[CallArg],
-        params: &[Type],
-        return_type: &Type,
-        record_subs_for_span: &Span,
-        apply_call_site_marker: bool,
-    ) -> Type {
-        self.check_call_args_with_substitution_full(
-            args,
-            params,
-            return_type,
-            record_subs_for_span,
-            apply_call_site_marker,
-            None,
-            None,
-            None,
-            record_subs_for_span,
-        )
-    }
-
-    /// Extended variant of `check_call_args_with_substitution` that
-    /// accepts explicit call-site generic args + the function's
+    ///
+    /// Additionally accepts explicit call-site generic args + the function's
     /// declaration-order generic-param names (const generics slice 1c)
     /// and the callee's where-clause for bound discharge (slice 3c).
     /// When `explicit_generic_args` and `formal_generic_params` are
@@ -2385,6 +2376,103 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
         self.discharge_projection_bounds(where_clause, solutions, discharge_span);
+        self.discharge_assoc_type_eq_bounds(
+            where_clause,
+            solutions,
+            all_param_names,
+            discharge_span,
+        );
+    }
+
+    /// B-2026-08-22-3 — discharge `WhereConstraint::AssocTypeEq`
+    /// (`where I.Item = i64`) at call sites.
+    ///
+    /// The declaration site (`bounds.rs`) only checks that the type
+    /// PARAMETER exists and that the required type expression lowers. Nothing
+    /// used to compare the call's solved `I` against the required associated
+    /// type, so `fn take[I: Src](it: I) where I.Item = i64` accepted an `I`
+    /// whose `Item` was `String`: the bound was accepted, documented, and
+    /// silently unenforced, which is worse than a bound that is rejected —
+    /// callers rely on it. design.md § Iterator and the stdlib method tables
+    /// lean on this form (`fn extend[I: Iterator[Item = T]]`), so the
+    /// constraint most likely to be written was the one not checked.
+    ///
+    /// The shape is `discharge_projection_bounds`'s, deliberately: build the
+    /// projection the constraint names, substitute the call's solutions into
+    /// it (which rewrites the receiver from a type-param name to the concrete
+    /// type's bare name — see `substitute_type_params`'s `AssocProjection`
+    /// arm), resolve it through `impl_assoc_types`, and compare. Only the last
+    /// step differs — an equality constraint compares TYPES where a projection
+    /// bound asks `type_satisfies_bound`.
+    ///
+    /// Anything not fully resolvable is skipped rather than reported, matching
+    /// the sibling's "discharge only when fully resolvable" rule: an unsolved
+    /// receiver is already covered by the unsolved-`T` diagnostic, and an
+    /// impl-table miss means the `I: Src` bound itself failed and has its own
+    /// error. Reporting here too would only cascade.
+    fn discharge_assoc_type_eq_bounds(
+        &mut self,
+        where_clause: &WhereClause,
+        solutions: &HashMap<String, Type>,
+        all_param_names: &[String],
+        discharge_span: &Span,
+    ) {
+        let subs: HashMap<String, SubstValue> = solutions
+            .iter()
+            .map(|(k, v)| (k.clone(), SubstValue::Type(v.clone())))
+            .collect();
+        for constraint in &where_clause.constraints {
+            let WhereConstraint::AssocTypeEq {
+                type_name,
+                assoc_name,
+                ty,
+                ..
+            } = constraint
+            else {
+                continue;
+            };
+            if !solutions.contains_key(type_name) {
+                continue;
+            }
+            let projection = Type::AssocProjection {
+                param: type_name.clone(),
+                assoc: assoc_name.clone(),
+                args: Vec::new(),
+                receiver_args: Vec::new(),
+            };
+            let found = self.resolve_assoc_projections(&substitute_type_params(&projection, &subs));
+            if !assoc_eq_bound_is_comparable(&found) {
+                continue;
+            }
+            // Lower the REQUIRED type against the function's full type-param
+            // list, not just the solved ones: a partial scope would make a
+            // reference to an as-yet-unsolved sibling param read as an
+            // undefined type and emit a spurious diagnostic here, on a line
+            // the user did not write.
+            let required = self.lower_type_expr(ty, all_param_names);
+            let required =
+                self.resolve_assoc_projections(&substitute_type_params(&required, &subs));
+            if !assoc_eq_bound_is_comparable(&required) {
+                continue;
+            }
+            if types_compatible(&found, &required) {
+                continue;
+            }
+            self.type_error(
+                format!(
+                    "error[E_WHERE_CLAUSE_ASSOC_TYPE_EQ_NOT_SATISFIED]: associated-type \
+                     bound `{}.{} = {}` is not satisfied; `{}` has `{} = {}`",
+                    type_name,
+                    assoc_name,
+                    type_display(&required),
+                    type_display(&solutions[type_name]),
+                    assoc_name,
+                    type_display(&found),
+                ),
+                *discharge_span,
+                TypeErrorKind::TypeMismatch,
+            );
+        }
     }
 
     /// Render the message for an unsatisfied `type_name: trait_name`
@@ -5801,4 +5889,17 @@ fn type_contains_assoc_projection(ty: &Type) -> bool {
         | Type::Shape(_)
         | Type::Error => false,
     }
+}
+
+/// A side of an `AssocTypeEq` discharge is only worth comparing once it has
+/// bottomed out in a concrete type. An unresolved projection, a bare type
+/// param, an inference variable, or an already-reported error means the
+/// comparison would be against a placeholder — see
+/// `discharge_assoc_type_eq_bounds` for why those are skipped rather than
+/// reported.
+fn assoc_eq_bound_is_comparable(ty: &Type) -> bool {
+    !matches!(
+        ty,
+        Type::AssocProjection { .. } | Type::TypeParam(_) | Type::TypeVar(_) | Type::Error
+    )
 }

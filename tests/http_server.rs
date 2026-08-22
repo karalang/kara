@@ -3397,7 +3397,19 @@ fn main() with sends(Network) receives(Network) {{
             // `/stats` — B-2026-07-31-30's regression pin. `a` was followed
             // once, `b` never, and both must appear.
             let (status, body) = http_get(port, "/stats")?;
-            if status != 200 || body != "{\"links\":2,\"hits\":{\"a\":1,\"b\":0}}" {
+            // The `hits` object is built from a `Map`, whose iteration order is
+            // the per-process hash order (B-2026-08-21-6) — `{"a":1,"b":0}` and
+            // `{"b":0,"a":1}` are the same answer and which one appears varies
+            // from run to run. Pin the CONTENTS: the wrapper and `links` are
+            // ordered (they are separate writes), and both hit counts must be
+            // present with the right values.
+            let hits_ok = status == 200
+                && body.starts_with("{\"links\":2,\"hits\":{")
+                && body.ends_with("}}")
+                && body.contains("\"a\":1")
+                && body.contains("\"b\":0")
+                && body.matches(':').count() == 4;
+            if !hits_ok {
                 return Err(format!("GET /stats: got {status} {body:?}"));
             }
 

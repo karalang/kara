@@ -568,12 +568,37 @@ impl<'a> super::TypeChecker<'a> {
                 // before checking closure args. `apply_call_site_marker` is
                 // `false`: per design.md, the call-site `mut` marker rule
                 // applies only to free-function calls, never to method calls.
-                self.check_call_args_with_substitution(
+                // B-2026-08-22-3 — hand the method's OWN where clause and
+                // formal generic-param names to the substitution checker, so
+                // the call-site bound discharge actually runs here.
+                //
+                // This path used to call the thin `check_call_args_with_substitution`
+                // wrapper, which passes `None` for the where clause — so a
+                // method discharged NOTHING: not the assoc-type-equality bound
+                // this row is about, not a plain `T: Trait`, not a projection
+                // bound, not a const predicate. The free-function path
+                // (`expr_call.rs`) always passed its clause, so the same
+                // program was checked on one spelling and unchecked on the
+                // other. Found while fixing the assoc-eq discharge and fixed
+                // with it, because the spec's motivating example for that
+                // bound (`fn extend[I: Iterator[Item = T]]`) is a METHOD —
+                // fixing only free functions would have left it unenforced
+                // exactly where it is written.
+                //
+                // `apply_call_site_marker` stays `false`: per design.md the
+                // call-site `mut` marker rule applies only to free-function
+                // calls. `explicit_generic_args` stays `None` — this dispatch
+                // has no turbofish surface to pass along.
+                self.check_call_args_with_substitution_full(
                     args,
                     &params,
                     &return_type,
                     span,
                     /* apply_call_site_marker = */ false,
+                    None,
+                    Some(&sig.generic_params),
+                    sig.where_clause.as_ref(),
+                    span,
                 )
             }
             None => {
