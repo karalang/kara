@@ -8461,12 +8461,27 @@ impl<'ctx> super::Codegen<'ctx> {
                                 self.disarm_struct_field_move_bodies(value);
                             }
                         }
-                        // Only the deeper-place branch. The shallow `obj.field`
-                        // forms above are already covered — their source struct
-                        // is itself a local whose scope-exit drop reclaims the
-                        // displaced buffer — and arming this for them would free
-                        // a buffer that still has an owner.
-                        rhs_is_place_field_move = obj_name.is_none();
+                        // B-2026-08-21-40 — this used to be
+                        // `obj_name.is_none()`, i.e. the DEEPER-place branch
+                        // only, on the reasoning that for a shallow
+                        // `obj.field` "their source struct is itself a local
+                        // whose scope-exit drop reclaims the displaced
+                        // buffer". That conflates two different buffers. The
+                        // source struct's drop reclaims the SOURCE's field —
+                        // and the suppression call just above has handed that
+                        // field to the target anyway — whereas the buffer at
+                        // risk is the one the TARGET already held, which the
+                        // source has never had any claim on. So `last =
+                        // b.name` over a live `last` orphaned the old buffer
+                        // once per execution: 49 x 8 bytes under LSan for a
+                        // 50-iteration loop, with correct output throughout.
+                        //
+                        // The shallow form needs the same arming as the deep
+                        // one, and the aliasing neutralization below covers
+                        // the case the old comment was really guarding
+                        // against (a RHS that reads the very slot it is about
+                        // to overwrite).
+                        rhs_is_place_field_move = true;
                         self.suppress_place_field_struct_move_source(value);
                     }
                 }

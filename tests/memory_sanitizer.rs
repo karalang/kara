@@ -715,6 +715,80 @@ fn main() {
         );
     }
 
+    /// B-2026-08-21-40 — `local = obj.field` over a live `String` local
+    /// orphaned the local's OLD buffer.
+    ///
+    /// THE ROW'S DIAGNOSIS WAS WRONG, and the correction is the point of this
+    /// test. It was filed as a `mut ref` defect: `free_app(mut b.name)` with a
+    /// callee that reassigns the parameter, leaking the field's original
+    /// buffer. `mut ref` turned out to be incidental — it only served to put a
+    /// HEAP buffer into the field (the struct literal's `"n"` is a static with
+    /// `cap == 0`, so nothing was allocated until the callee appended). The
+    /// leak is entirely in the caller's next statement, `last = b.name`, and
+    /// reproduces with no `mut ref` anywhere.
+    ///
+    /// The gate was `rhs_is_place_field_move = obj_name.is_none()` — deep
+    /// places only — justified by "the shallow forms are already covered,
+    /// their source struct is itself a local whose scope-exit drop reclaims
+    /// the displaced buffer". That conflates two buffers: the source's field
+    /// (which the suppression call immediately above has just handed to the
+    /// target anyway) and the one the TARGET already held, which the source
+    /// never had a claim on.
+    ///
+    /// Boundary, measured — the leak needed all three of a one-hop field RHS,
+    /// a String payload, and a live target. An identifier RHS, a call RHS, a
+    /// NESTED field RHS, and a `Vec` payload were each already clean, which is
+    /// why the shape survived a corpus with ~1150 memory fixtures.
+    ///
+    /// 50 iterations so a per-call imbalance accumulates into an unmissable
+    /// number rather than hiding in one allocation; `last` deliberately
+    /// escapes the final iteration's buffer, so a correct run leaks nothing.
+    #[test]
+    fn asan_string_local_reassign_from_a_struct_field_frees_the_old_buffer() {
+        // (a) the shape as filed, with `mut ref` — 392 bytes (49 x 8) before.
+        assert_clean_asan_run(
+            r#"
+struct Box { name: String }
+fn free_app(s: mut ref String) { s = s + "!"; }
+fn main() {
+    let mut i = 0i64;
+    let mut last: String = "";
+    while i < 50i64 {
+        let mut b = Box { name: "n" };
+        free_app(mut b.name);
+        last = b.name;
+        i = i + 1i64;
+    }
+    println(last);
+}
+"#,
+            &["n!"],
+            "asan_string_local_reassign_from_a_struct_field_frees_the_old_buffer/mut_ref",
+        );
+        // (b) the SAME defect with no `mut ref` at all — 98 bytes (49 x 2)
+        // before. This is the one that names the real bug, and it is the
+        // reason (a) alone would have been a misleading regression test: a fix
+        // aimed at the `mut ref` path would have made (a) pass and left this
+        // leaking.
+        assert_clean_asan_run(
+            r#"
+struct Box { name: String }
+fn main() {
+    let mut i = 0i64;
+    let mut last: String = "";
+    while i < 50i64 {
+        let b = Box { name: "n" + "!" };
+        last = b.name;
+        i = i + 1i64;
+    }
+    println(last);
+}
+"#,
+            &["n!"],
+            "asan_string_local_reassign_from_a_struct_field_frees_the_old_buffer/plain",
+        );
+    }
+
     #[test]
     fn asan_shared_struct_vec_tensor_field_drop() {
         // (a) push-only — the shared-struct `Vec[Tensor]` field drop must free
