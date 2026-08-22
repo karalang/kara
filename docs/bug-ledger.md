@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | diagnostics | 97 | 1 |
 | false-positive | 94 | 0 |
 | perf | 83 | 0 |
-| other | 56 | 1 |
+| other | 56 | 0 |
 | crash | 55 | 0 |
 | soundness | 54 | 0 |
 | use-after-free | 20 | 0 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | codegen | 992 | 0 |
 | typecheck | 243 | 2 |
-| interp | 173 | 1 |
+| interp | 173 | 0 |
 | other | 63 | 0 |
 | ownership | 62 | 0 |
 | cli | 61 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1491 surfaced · 5 open · 1464 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1491 surfaced · 4 open · 1465 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,7 +134,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1491 surfaced
 | B-2026-08-22-6 | 2026-08-22 | typecheck | low | The `Hasher` and `BuildHasher` TRAITS are not baked, so a user cannot write their own hasher: `Map[K, V, H]` accepts only the two compiler-known selectors `SipHash13BuildHasher` / `FxBuildHasher`, and design.md's "User-extensible hashers" paragraph describes a surface that does not exist | roadmap.md |
 | B-2026-08-22-8 | 2026-08-22 | cli | low | `implicit_clone` HAS NO TRIGGER IN THE SPEC AND CANNOT BE DE-REGISTERED WITHOUT A design.md EDIT -- the one starter-set lint whose resolution is a SPEC decision, not a compiler change | roadmap.md |
 | B-2026-08-22-21 | 2026-08-22 | typecheck | low | `Sender.try_send` AND `Receiver.recv_blocking` ARE SPEC'D BUT DO NOT EXIST -- design.md:6070 declares both with effects, and each is "no method '<name>' on type '<Sender|Receiver>'" | roadmap.md |
-| B-2026-08-22-22 | 2026-08-22 | interp | low | FLAKY TEST -- `a_map_hashes_through_the_hasher_it_was_built_with` asserts that SipHash13 and Fx produce DIFFERENT iteration orders over six keys, but SipHash13 is seeded per process, so the two orders coincide on some runs and the `assert_ne!` fires with two identical vectors | roadmap.md |
 
 ### Wontfix (8)
 
@@ -153,9 +152,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1491 surfaced
 
 </details>
 
-### Fixed (1464)
+### Fixed (1465)
 
-<details><summary>1464 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1465 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -16042,6 +16041,30 @@ pre-existing `allocates`/`suspends` seed survived the merge), and
 `test_public_fn_must_declare_channel_send` for both boundary directions.
 Non-vacuity: reverting the seed fails all three and leaves the four
 pre-existing channel tests green. |
+| B-2026-08-22-22 | interp | low | FLAKY TEST -- `a_map_hashes_through_the_hasher_it_was_built_with` asserts that SipHash13 and Fx produce DIFFERENT iteration orders over six keys, but… | FIXED by d80540b6, by widening the key set from six to sixteen so the
+coincidence the assertion trips on becomes combinatorially negligible.
+
+The detector is "SipHash13 and Fx produce different iteration orders", and
+SipHash13 is seeded per process. Six keys admit 720 orderings, so the seeded
+order coincides with Fx's now and then. Measured directly by running the
+compiled test binary 400 times, each a fresh process and therefore a fresh
+seed: 0 failures, consistent with the ~1/720 estimate. (The first attempt at
+that measurement was VACUOUS -- `--exact` with a bare test name filtered all
+1362 tests out, so every run "passed" without running anything. Caught by
+checking the "N passed" line rather than the exit code.)
+
+Sixteen keys admit ~2e13 orderings. This is a probability argument, not a
+proof, and the comment now says so along with the alternative that was
+rejected: pinning the expected Fx walk as a constant would be fully
+deterministic but would couple the test to the index's bucket layout, which
+is what the order comparison was written to avoid.
+
+BOTH ASSERTIONS ARE LOAD-BEARING, established by simulating each regression
+rather than assuming. An index built under the wrong hasher while `get` uses
+the right one is caught by the LOOKUP assertion ("Fx map lost key zulu"). A
+selector ignored CONSISTENTLY -- index and `get` both on the default -- keeps
+every lookup working and is caught ONLY by the ORDER assertion. So the flaky
+assertion could not simply be deleted in favour of the deterministic one. |
 
 </details>
 
