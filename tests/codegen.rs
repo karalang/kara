@@ -96158,6 +96158,138 @@ fn main() {
         assert_eq!(run_program(twin).as_deref(), Some("1\n2\n3\n"));
     }
 
+    /// B-2026-08-22-21 — `Sender.try_send` and `Receiver.recv_blocking`, the
+    /// two methods design.md:6070 declares that had no implementation at all
+    /// ("no method 'try_send' on type 'Sender'").
+    ///
+    /// `try_send` is the NON-PANICKING send: where `send` returns unit and
+    /// therefore panics on a full bounded channel (B-2026-08-22-16's fail-fast
+    /// collapse), this returns `Result[(), SendError[T]]` and hands the
+    /// REJECTED VALUE back inside it — `send` consumes its argument, so a
+    /// failure that dropped the value would leave nothing to retry with. That
+    /// hand-back is the half worth asserting, so every arm prints the payload.
+    ///
+    /// `SendError.Closed` is deliberately unreachable from source on BOTH
+    /// backends and is asserted nowhere: deciding it from the runtime's
+    /// receiver counters made an orphaned sender print `closed` under `build`
+    /// and `sent` under `--interp`, so the check was removed rather than kept
+    /// as a run-vs-build divergence (full measurement in
+    /// `karac_runtime_channel_try_send`'s doc comment).
+    #[test]
+    fn e2e_channel_try_send_and_recv_blocking() {
+        // Scalar payload, capacity 1: first `try_send` lands, second is
+        // rejected `Full` and gives `2` back, then the queue drains.
+        let scalar = "fn main() {\n\
+            \x20   let (tx, rx) = Channel.bounded(1);\n\
+            \x20   match tx.try_send(1) {\n\
+            \x20       Ok(u) => println(\"sent 1\"),\n\
+            \x20       Err(SendError.Full(v)) => println(f\"full, got back {v}\"),\n\
+            \x20       Err(SendError.Closed(v)) => println(f\"closed {v}\"),\n\
+            \x20   }\n\
+            \x20   match tx.try_send(2) {\n\
+            \x20       Ok(u) => println(\"sent 2\"),\n\
+            \x20       Err(SendError.Full(v)) => println(f\"full, got back {v}\"),\n\
+            \x20       Err(SendError.Closed(v)) => println(f\"closed {v}\"),\n\
+            \x20   }\n\
+            \x20   println(f\"drained {rx.recv_blocking()}\");\n\
+            }\n";
+        assert_eq!(
+            run_program(scalar).as_deref(),
+            Some("sent 1\nfull, got back 2\ndrained 1\n")
+        );
+
+        // HEAP payload on an UNANNOTATED pair — the shape that exercises both
+        // the `SendError[String]` payload (wider than the seeded 1-word area,
+        // so it boxes) and the element-type pinning fix below.
+        let heap = "fn main() {\n\
+            \x20   let (tx, rx) = Channel.bounded(1);\n\
+            \x20   let a = \"alpha\";\n\
+            \x20   match tx.try_send(a) {\n\
+            \x20       Ok(u) => println(\"sent alpha\"),\n\
+            \x20       Err(SendError.Full(v)) => println(f\"full, kept {v}\"),\n\
+            \x20       Err(SendError.Closed(v)) => println(f\"closed {v}\"),\n\
+            \x20   }\n\
+            \x20   let b = \"beta\";\n\
+            \x20   match tx.try_send(b) {\n\
+            \x20       Ok(u) => println(\"sent beta\"),\n\
+            \x20       Err(SendError.Full(v)) => println(f\"full, kept {v}\"),\n\
+            \x20       Err(SendError.Closed(v)) => println(f\"closed {v}\"),\n\
+            \x20   }\n\
+            \x20   println(f\"drained {rx.recv_blocking()}\");\n\
+            }\n";
+        assert_eq!(
+            run_program(heap).as_deref(),
+            Some("sent alpha\nfull, kept beta\ndrained alpha\n")
+        );
+
+        // The payload binding must carry its real TYPE, not just its bytes —
+        // so call a method on it. This shape (a match on the FIRST `try_send`
+        // in the function, on an unannotated channel) is the one that broke:
+        // `try_send` is the only channel method that both pins the element
+        // from its argument and returns a type mentioning it, so it handed the
+        // match a `Result[(), SendError[?T0]]` scrutinee, the payload binding
+        // got no recorded type, and `v.len()` died with `codegen: no handler
+        // for method 'len' on variable 'v'`. A PRECEDING bare
+        // `let r = tx.try_send(x)` pins the element and hides the whole thing,
+        // which is why the match comes first here and a second `try_send`
+        // follows it.
+        let typed_payload = "fn main() {\n\
+            \x20   let mut total: i64 = 0;\n\
+            \x20   let (tx, rx) = Channel.bounded(1);\n\
+            \x20   let first = \"first\";\n\
+            \x20   match tx.try_send(first) {\n\
+            \x20       Ok(u) => { total = total + 1; }\n\
+            \x20       Err(SendError.Full(v)) => { total = total + v.len(); }\n\
+            \x20       Err(SendError.Closed(v)) => { total = total + v.len(); }\n\
+            \x20   }\n\
+            \x20   let second = \"second\";\n\
+            \x20   match tx.try_send(second) {\n\
+            \x20       Ok(u) => { total = total + 1; }\n\
+            \x20       Err(SendError.Full(v)) => { total = total + v.len(); }\n\
+            \x20       Err(SendError.Closed(v)) => { total = total + v.len(); }\n\
+            \x20   }\n\
+            \x20   println(total.to_string());\n\
+            }\n";
+        // First lands (+1); second is Full and gives back "second" (+6) = 7.
+        assert_eq!(run_program(typed_payload).as_deref(), Some("7\n"));
+    }
+
+    /// B-2026-08-22-21, the PRE-EXISTING `send` defect the row's `try_send`
+    /// work uncovered and had to fix to proceed — measured on clean `main`
+    /// before any of that work landed.
+    ///
+    /// `infer_channel_method` recorded `channel_elem_types[span]` BEFORE the
+    /// per-method arm ran, and on an unannotated `Channel.new()` the element is
+    /// still an unsolved `?T0` at that point — only the arm's
+    /// `pin_channel_elem_from_arg` solves it, from the first send's argument.
+    /// So the first send recorded a 1-word placeholder and codegen sized its
+    /// `elem_size` at 8 bytes for a 24-byte `String`: `karac build` printed an
+    /// EMPTY payload (silently dropped) against the interpreter's correct one,
+    /// and `karac run` aborted in the runtime with
+    /// `receiver elem_size 24 exceeds sent blob 8`.
+    ///
+    /// The ANNOTATED pair is the control, and it is why this went unnoticed:
+    /// every pre-existing String-channel test annotates, so none of them could
+    /// see it.
+    #[test]
+    fn e2e_channel_unannotated_heap_send_pins_element_size() {
+        let unannotated = "fn main() {\n\
+            \x20   let (tx, rx) = Channel.new();\n\
+            \x20   let a = \"alpha\";\n\
+            \x20   tx.send(a);\n\
+            \x20   println(f\"got {rx.recv()}\");\n\
+            }\n";
+        assert_eq!(run_program(unannotated).as_deref(), Some("got alpha\n"));
+
+        let annotated = "fn main() {\n\
+            \x20   let (tx, rx): (Sender[String], Receiver[String]) = Channel.new();\n\
+            \x20   let a = \"alpha\";\n\
+            \x20   tx.send(a);\n\
+            \x20   println(f\"got {rx.recv()}\");\n\
+            }\n";
+        assert_eq!(run_program(annotated).as_deref(), Some("got alpha\n"));
+    }
+
     #[test]
     fn e2e_channel_send_recv_tryrecv_clone() {
         // Phase 6 "Channel AOT codegen lowering": `Channel.new()` destructure,

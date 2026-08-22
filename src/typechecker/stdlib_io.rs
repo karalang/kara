@@ -497,6 +497,15 @@ impl<'a> super::TypeChecker<'a> {
             method,
             "send"
                 | "recv"
+                // B-2026-08-22-21 — `recv_blocking` must pass this gate too.
+                // The entry in `channel_elem_types` is what codegen's
+                // method-call dispatch keys on to recognise a channel op at
+                // all, so without it the call reaches the user-impl path and
+                // dies with "no handler for method 'recv_blocking'" — which is
+                // how this was found, since the typecheck and interpreter arms
+                // were already in place by then.
+                | "recv_blocking"
+                | "try_send"
                 | "try_recv"
                 | "clone"
                 | "__schedule_after"
@@ -522,6 +531,55 @@ impl<'a> super::TypeChecker<'a> {
             self.channel_elem_types.insert(SpanKey::from_span(span), te);
         }
 
+        // B-2026-08-22-21 — RE-RECORD the element type after the arm below has
+        // run, and read the doc comment on `pin_channel_elem_from_arg` for why
+        // that is not redundant with the write above.
+        //
+        // On an UNANNOTATED `Channel.new()` the element is still an unsolved
+        // `?T0` when the dispatch-gate write happens, and only the arm's
+        // `pin_channel_elem_from_arg` solves it — from the FIRST send's
+        // argument. So the first send recorded `?T0`, which
+        // `type_to_type_expr` renders as a 1-word placeholder, and codegen
+        // sized that call's `elem_size` at 8 bytes for a 24-byte `String`.
+        //
+        // MEASURED on clean `main`, so this is a pre-existing `send` defect
+        // that `try_send` merely inherits: `let (tx, rx) = Channel.new(); let
+        // a = "alpha"; tx.send(a); println(f"got {rx.recv()}")` printed
+        // `got alpha` under `--interp` and `got ` under `karac build` — a
+        // silently dropped payload — while `karac run` aborted in the runtime
+        // with `receiver elem_size 24 exceeds sent blob 8`. An ANNOTATED
+        // `(Sender[String], Receiver[String])` pair was unaffected, which is
+        // why every existing String-channel test passes: they all annotate.
+        //
+        // The gate write above STAYS, unconditionally and even when `T` is
+        // unsolved: codegen's channel dispatch keys on an entry merely being
+        // PRESENT at this span, so removing or deferring it would change which
+        // calls are recognised as channel ops at all. This second write only
+        // upgrades the recorded type once the arm has pinned it, so the
+        // dispatch behaviour is untouched and only the size is corrected.
+        let result = self.infer_channel_method_arm(is_sender, &elem, method, args, span);
+        if matches!(
+            method,
+            "send" | "recv" | "recv_blocking" | "try_send" | "try_recv" | "clone"
+        ) {
+            let resolved = resolve_type_var_top(&elem, &self.env.substitutions);
+            let te = Self::type_to_type_expr(&resolved);
+            self.channel_elem_types.insert(SpanKey::from_span(span), te);
+        }
+        result
+    }
+
+    /// The per-method body of [`infer_channel_method`], split out so the
+    /// caller can re-record the (now-pinned) element type afterwards.
+    fn infer_channel_method_arm(
+        &mut self,
+        is_sender: bool,
+        elem: &Type,
+        method: &str,
+        args: &[CallArg],
+        span: &Span,
+    ) -> Type {
+        let elem = elem.clone();
         let sender_elem = Type::Named {
             name: "Sender".to_string(),
             args: vec![elem.clone()],
@@ -530,7 +588,6 @@ impl<'a> super::TypeChecker<'a> {
             name: "Option".to_string(),
             args: vec![elem.clone()],
         };
-
         if is_sender {
             match method {
                 "send" => {
@@ -896,7 +953,95 @@ impl<'a> super::TypeChecker<'a> {
                     }
                     Type::Unit
                 }
-                _ => self.require_known_method("Sender", method, &["clone", "send"], args, span),
+                // B-2026-08-22-21 — design.md:6083's `try_send`, the
+                // NON-PANICKING send. `send` returns unit, so a full bounded
+                // channel has nowhere to report failure and panics
+                // (`runtime/src/channel.rs` documents that fail-fast choice);
+                // `try_send` returns a `Result`, which is the whole reason the
+                // spec gives it one.
+                //
+                // Both `SendError` variants carry the REJECTED VALUE back:
+                // `send` consumes its argument, so a failure that dropped the
+                // value would leave the caller unable to retry or recover it.
+                //
+                // The two element-safety checks `send` performs
+                // (ScopeLocal escape, cross-task-safety) apply identically —
+                // a value that cannot cross a channel boundary cannot cross it
+                // fallibly either — so this arm runs the same pair rather than
+                // being a laxer door to the same place.
+                "try_send" => {
+                    if let Type::Named { name, .. } = &elem {
+                        if matches!(name.as_str(), "TaskHandle" | "TaskGroup") {
+                            self.type_error(
+                                format!(
+                                    "ScopeLocal type '{}' cannot be sent across a channel; the \
+                                     value is bound to the scope that created it",
+                                    name
+                                ),
+                                *span,
+                                TypeErrorKind::ScopeLocalEscape,
+                            );
+                        }
+                    }
+                    if let Err(path) =
+                        is_cross_task_safe_with(&elem, &self.env.structs, &self.env.enums)
+                    {
+                        self.emit_cross_task_unsafe_value(
+                            "value sent across a channel",
+                            &elem,
+                            &path,
+                            span,
+                        );
+                    }
+                    if args.len() != 1 {
+                        self.type_error(
+                            "Sender.try_send expects exactly one argument".to_string(),
+                            *span,
+                            TypeErrorKind::WrongNumberOfArgs,
+                        );
+                    }
+                    for arg in args {
+                        let at = self.infer_expr(&arg.value);
+                        if !pin_channel_elem_from_arg(&mut self.env, &elem, &at) {
+                            self.check_assignable(&elem, &at, arg.value.span);
+                        }
+                    }
+                    // RE-RESOLVE, because `try_send` is the only channel
+                    // method that both PINS the element from its argument and
+                    // RETURNS a type mentioning it. On an unannotated
+                    // `Channel.new()` / `.bounded(n)`, `elem` is still `?T0`
+                    // when this arm is entered, and the loop above is what
+                    // solves it — so `elem.clone()` here would hand the match
+                    // a scrutinee of `Result[(), SendError[?T0]]`.
+                    //
+                    // MEASURED: the failure only showed when the match was on
+                    // the FIRST `try_send` in the function (a preceding
+                    // `let r = tx.try_send(x)` pins `?T0` and hides it), and it
+                    // surfaced far downstream as `codegen: no handler for
+                    // method 'len' on variable 'v'` — the payload binding had
+                    // no recorded type, so `v.len()` on a `String` payload
+                    // found no dispatcher. `send` cannot hit this (it returns
+                    // unit) and `recv`/`try_recv` cannot either (no argument to
+                    // pin from), which is why it is new with this method.
+                    let pinned = resolve_type_var_top(&elem, &self.env.substitutions);
+                    Type::Named {
+                        name: "Result".to_string(),
+                        args: vec![
+                            Type::Unit,
+                            Type::Named {
+                                name: "SendError".to_string(),
+                                args: vec![pinned],
+                            },
+                        ],
+                    }
+                }
+                _ => self.require_known_method(
+                    "Sender",
+                    method,
+                    &["clone", "send", "try_send"],
+                    args,
+                    span,
+                ),
             }
         } else {
             // Receiver
@@ -905,6 +1050,32 @@ impl<'a> super::TypeChecker<'a> {
                     if !args.is_empty() {
                         self.type_error(
                             "Receiver.recv() takes no arguments".to_string(),
+                            *span,
+                            TypeErrorKind::WrongNumberOfArgs,
+                        );
+                    }
+                    elem
+                }
+                // B-2026-08-22-21 — design.md:6099's `recv_blocking`, the
+                // `blocks`-flavoured sibling of `recv`. Same signature and
+                // same value: the difference is the EXECUTION VERB it carries
+                // (`blocks` vs `recv`'s `suspends`), which is what design.md's
+                // two execution verbs exist to drive — scheduler placement.
+                // It is not a synonym.
+                //
+                // The two lower identically today because the runtime's
+                // `karac_runtime_channel_recv` already PARKS ON A CONDVAR on
+                // every threads-target — i.e. `recv` blocks a thread in
+                // practice, and `suspends` describes the scheduler that has
+                // not landed yet (the `send` fail-fast comment in
+                // `runtime/src/channel.rs` says as much). So `recv_blocking`
+                // is honest about what happens now, and `recv` keeps the
+                // forward-looking verb; when the suspending scheduler lands,
+                // `recv` changes and this stays put.
+                "recv_blocking" => {
+                    if !args.is_empty() {
+                        self.type_error(
+                            "Receiver.recv_blocking() takes no arguments".to_string(),
                             *span,
                             TypeErrorKind::WrongNumberOfArgs,
                         );
@@ -921,9 +1092,13 @@ impl<'a> super::TypeChecker<'a> {
                     }
                     option_elem
                 }
-                _ => {
-                    self.require_known_method("Receiver", method, &["recv", "try_recv"], args, span)
-                }
+                _ => self.require_known_method(
+                    "Receiver",
+                    method,
+                    &["recv", "recv_blocking", "try_recv"],
+                    args,
+                    span,
+                ),
             }
         }
     }

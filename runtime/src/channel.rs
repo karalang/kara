@@ -356,6 +356,79 @@ pub unsafe extern "C" fn karac_runtime_channel_send(
     }
 }
 
+/// `karac_runtime_channel_try_send(ch, val_ptr, elem_size) -> u8` — the
+/// NON-PANICKING send (design.md:6083, B-2026-08-22-21). Status codes:
+///
+///   1 → sent
+///   0 → the bounded queue is FULL       (`SendError.Full(v)`)
+///   2 → the channel handle is null      (`SendError.Closed(v)`)
+///
+/// This is the escape hatch for the fail-fast rule `karac_runtime_channel_send`
+/// documents above: a full bounded channel PANICS there, because `send` returns
+/// unit and a panic is the only channel a failure has. `try_send` returns a
+/// `Result`, so it has somewhere to put the failure — which is exactly why the
+/// spec gives it one.
+///
+/// ON FAILURE NOTHING IS COPIED AT ALL — the status is decided before the blob
+/// is allocated, so the queue never sees the value and the caller's bytes stay
+/// the only copy. That is what lets the caller hand the ORIGINAL value back to
+/// the program inside `SendError` without any risk of the channel destructor
+/// and the program both freeing one payload.
+///
+/// **STATUS 2 DELIBERATELY DOES NOT MEAN "no live receiver", and that is the
+/// one non-obvious decision in this function.** The counters to detect it are
+/// right here — receivers are `total - senders` (module header, "two
+/// counters") — and an earlier draft of this used them. Measured against the
+/// tree-walk interpreter, that produced a RUN-VS-BUILD DIVERGENCE: an orphaned
+/// sender (`fn f() -> Sender[i64] { let (tx, rx) = Channel.new(); … return tx }`,
+/// so `rx` dies at scope exit) reported `closed 9` under `karac build` and
+/// `sent` under `karac run --interp`, because the interpreter's `ChannelBuf` is
+/// one `Arc` shared by both ends with no per-end liveness at all — it cannot
+/// tell a dropped receiver from a live one, and giving it that would mean
+/// deterministic drop semantics for `Value::Receiver`, which a tree-walk
+/// interpreter with freely-`Clone`d values does not have.
+///
+/// This project does not accept a run-vs-build divergence — the same rule that
+/// made the bounded `send` above fail fast instead of parking (B-2026-08-22-16,
+/// and the reasoning there reads identically). So both backends ignore receiver
+/// liveness and enqueue, which also matches what plain `send` does today
+/// (design.md says `send` panics when every receiver is gone; the runtime does
+/// not implement that either). The queued value is not leaked — the channel
+/// destructor frees it through `elem_drop`. `SendError.Closed` therefore stays
+/// declared, reachable, and lowered on both backends, but nothing a Kāra
+/// program can write produces it until the interpreter can model receiver
+/// liveness. Tracked as its own ledger row rather than buried here.
+///
+/// # Safety
+/// Same contract as `karac_runtime_channel_send`: `ch` must be live (or null,
+/// which reports status 2), and `val_ptr` must point to `elem_size` readable
+/// bytes.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_channel_try_send(
+    ch: *mut KaracChannel,
+    val_ptr: *const u8,
+    elem_size: u64,
+) -> u8 {
+    unsafe {
+        if ch.is_null() {
+            return 2;
+        }
+        let elem_size = elem_size as usize;
+        let mut inner = (*ch).inner.lock().unwrap_or_else(|p| p.into_inner());
+        if (*ch).capacity != 0 && inner.queue.len() >= (*ch).capacity {
+            return 0;
+        }
+        let mut blob = vec![0u8; elem_size].into_boxed_slice();
+        if elem_size != 0 && !val_ptr.is_null() {
+            std::ptr::copy_nonoverlapping(val_ptr, blob.as_mut_ptr(), elem_size);
+        }
+        inner.queue.push_back(blob);
+        drop(inner);
+        (*ch).not_empty.notify_one();
+        1
+    }
+}
+
 /// `karac_runtime_channel_set_elem_drop(ch, drop_fn)` — record the element's
 /// drop fn (`karac_drop_<T>`) so the channel destructor can free any payloads
 /// that were SENT but never RECEIVED (B-2026-07-13-17). Codegen calls this at

@@ -10063,6 +10063,77 @@ fn test_channel_recv_infers_receives_channel() {
     );
 }
 
+/// B-2026-08-22-21 — the two channel methods that did not exist when
+/// B-2026-08-22-20 seeded the other three. `try_send` joins `send`'s
+/// `sends(Channel)` + `allocates(Heap)` pair; `recv_blocking` joins `recv`'s
+/// `receives(Channel)` but with `blocks` where `recv` has `suspends`.
+///
+/// THE `blocks` / `suspends` SPLIT IS THE POINT, not a detail: design.md's two
+/// execution verbs drive scheduler placement, so `recv_blocking` is not a
+/// synonym for `recv`. The two lower to the same runtime entry and return the
+/// same value — the effect is the entire observable difference — so this
+/// asserts `recv_blocking` carries `blocks` AND NOT `suspends`, which is the
+/// half a "does it have the effect?" test would miss.
+#[test]
+fn test_try_send_and_recv_blocking_effects() {
+    let result = effectcheck_ok(
+        "fn t() {\n\
+         \x20   let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.bounded(1);\n\
+         \x20   let r = tx.try_send(1);\n\
+         }",
+    );
+    let inferred = result.inferred_effects.get("t").unwrap();
+    assert!(
+        inferred
+            .effects
+            .iter()
+            .any(|e| e.effect.verb == EffectVerbKind::Sends && e.effect.resource == "Channel"),
+        "tx.try_send should infer sends(Channel), got: {:?}",
+        inferred.effects
+    );
+    assert!(
+        inferred
+            .effects
+            .iter()
+            .any(|e| e.effect.verb == EffectVerbKind::Allocates),
+        "tx.try_send should infer allocates(Heap), got: {:?}",
+        inferred.effects
+    );
+
+    let result = effectcheck_ok(
+        "fn b() {\n\
+         \x20   let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.new();\n\
+         \x20   let v = rx.recv_blocking();\n\
+         }",
+    );
+    let inferred = result.inferred_effects.get("b").unwrap();
+    assert!(
+        inferred
+            .effects
+            .iter()
+            .any(|e| e.effect.verb == EffectVerbKind::Receives && e.effect.resource == "Channel"),
+        "rx.recv_blocking should infer receives(Channel), got: {:?}",
+        inferred.effects
+    );
+    assert!(
+        inferred
+            .effects
+            .iter()
+            .any(|e| e.effect.verb == EffectVerbKind::Blocks),
+        "rx.recv_blocking should infer blocks, got: {:?}",
+        inferred.effects
+    );
+    assert!(
+        !inferred
+            .effects
+            .iter()
+            .any(|e| e.effect.verb == EffectVerbKind::Suspends),
+        "rx.recv_blocking must NOT carry recv's suspends — the two execution \
+         verbs are the entire difference between the methods, got: {:?}",
+        inferred.effects
+    );
+}
+
 /// The public-boundary consequence, which is the whole reason the row called
 /// this "not a one-liner": a `pub fn` that sends must now DECLARE it. Pinned
 /// in both directions so the tightening is deliberate rather than incidental.

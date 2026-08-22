@@ -6082,7 +6082,16 @@ fn send(self, tx: Sender[T], val: T)
 
 fn try_send(self, tx: Sender[T], val: T) -> Result[(), SendError[T]]
     with sends(tx) allocates(Heap)
-    // Non-blocking; returns Err if the bounded channel is full or no receiver exists.
+    // Non-blocking. Returns Err if the bounded channel is full, handing the
+    // rejected value back inside it — `send` consumes its argument, so a
+    // failure that dropped the value would leave nothing to retry with.
+
+// The error half of `try_send`. Covariant in `T` like `Option`/`Result`:
+// both variants hand the value OUT and neither consumes one.
+enum SendError[+T] {
+    Full(T),     // the bounded queue is at capacity
+    Closed(T),   // no live receiver remains
+}
 
 fn clone(ref self) -> Sender[T]
     // Produce an additional sender on the same channel; cheaply shareable.
@@ -6109,6 +6118,20 @@ fn try_recv(self, rx: Receiver[T]) -> Option[T]
 **Effect annotations explain the model.** The `sends(ch)` / `receives(ch)` pair is what makes channels the canonical example of communication effects — two tasks sharing a channel have `sends` and `receives` on the *same* resource. Per the conflict table, `sends + receives` on the same resource is **Safe** (full-duplex communication), so the scheduler can parallelize the producer and consumer freely. `sends + sends` and `receives + receives` on the same resource are similarly safe — multiple producers and multiple consumers are both valid channel patterns.
 
 **Channel lifetimes and drop semantics.** When the last `Sender[T]` is dropped, future `recv` calls on `Receiver[T]` drain any remaining messages and then return a `ChannelClosed` panic (or `Err` via `try_recv` returning `None`). When the last `Receiver[T]` is dropped, `send` panics with `SendError`.
+
+**v1 status of the no-receiver case.** The receiver half of that sentence is
+declared, not implemented: neither `send` nor `try_send` consults receiver
+liveness, so `send` does not panic and `try_send`'s `SendError.Closed` is not
+produced by anything a program can write. That is a deliberate hold rather than
+an oversight. The compiled runtime *can* detect it — receivers are its live-end
+counters — but the tree-walk interpreter cannot: its channel is one shared
+handle with no per-end liveness, and giving it that means deterministic drop
+semantics for `Receiver[T]` which a tree-walk evaluator does not have. Wiring
+only the compiled side produced a measured run-vs-build divergence (an orphaned
+sender reported `closed` under `karac build` and `sent` under `karac run
+--interp`), and this language does not ship those. `Full` behaves as specified
+on both backends; `Closed` becomes reachable when the interpreter can model
+receiver liveness.
 
 **Typical usage:**
 

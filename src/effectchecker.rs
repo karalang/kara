@@ -880,6 +880,8 @@ impl<'a> EffectChecker<'a> {
             // B-2026-08-22-20 — `try_recv` needs the same method→qualified
             // routing as `recv`, or its `receives(Channel)` seed is unreachable.
             ("try_recv", "Receiver.try_recv"),
+            ("recv_blocking", "Receiver.recv_blocking"),
+            ("try_send", "Sender.try_send"),
             ("chunk_by", "Iterator.chunk_by"),
             ("chunks", "Iterator.chunks"),
             ("windows", "Iterator.windows"),
@@ -1200,6 +1202,12 @@ impl<'a> EffectChecker<'a> {
             "Interner.intern",
             "Channel.new",
             "Sender.send",
+            // B-2026-08-22-21 — `try_send` allocates the same queue blob
+            // `send` does when it succeeds, and design.md:6084 declares it
+            // `allocates(Heap)` alongside `sends(tx)`. Seeded unconditionally:
+            // the checker cannot tell a landed send from a rejected one
+            // statically, and over-approximating is the sound direction.
+            "Sender.try_send",
             "Iterator.chunk_by",
             "Iterator.chunks",
             "Iterator.windows",
@@ -1267,12 +1275,28 @@ impl<'a> EffectChecker<'a> {
             };
             for (fn_name, effect) in [
                 ("Sender.send", &sends_channel),
+                ("Sender.try_send", &sends_channel),
                 ("Receiver.recv", &receives_channel),
+                ("Receiver.recv_blocking", &receives_channel),
                 ("Receiver.try_recv", &receives_channel),
             ] {
                 let key = self.interner.intern(fn_name);
                 let set = self.inferred_effects.entry(key).or_default();
                 set.add(effect.clone(), EffectOrigin::Direct(builtin_span));
+            }
+            // B-2026-08-22-21 — `recv_blocking` additionally carries `blocks`,
+            // where `recv` carries `suspends` (design.md:6099 vs :6094). The
+            // two execution verbs are what drive scheduler placement, so this
+            // is the entire observable difference between the two methods:
+            // they lower to the same runtime entry and return the same value.
+            {
+                let blocks_effect = Effect {
+                    verb: EffectVerbKind::Blocks,
+                    resource: String::new(),
+                };
+                let key = self.interner.intern("Receiver.recv_blocking");
+                let set = self.inferred_effects.entry(key).or_default();
+                set.add(blocks_effect, EffectOrigin::Direct(builtin_span));
             }
         }
         // `std.time::sleep_ms(ms)` suspends — the leaf timer-park primitive

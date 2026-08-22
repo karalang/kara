@@ -409,6 +409,9 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         channel::karac_runtime_channel_set_elem_drop,
         channel::karac_runtime_channel_recv,
         channel::karac_runtime_channel_try_recv,
+        // B-2026-08-22-21 — the non-panicking send. Keep-listed like its
+        // siblings so the JIT runner's `dlsym` can resolve it.
+        channel::karac_runtime_channel_try_send,
     );
     // Write-once cell runtime (`runtime/src/once.rs`). Backs
     // `OnceLock`/`OnceCell` `new` / `set` / `get` / `is_set` + the local

@@ -28739,6 +28739,107 @@ fn main() {
     }
 
     #[test]
+    fn asan_channel_try_send_heap_payload_both_arms_no_double_free() {
+        // B-2026-08-22-21. `try_send` has an ownership shape `send` does not:
+        // the value leaves the caller on BOTH paths, but to two different
+        // owners — into the queue when the send lands, into the `SendError`
+        // payload handed back to the program when it does not. So the source's
+        // scope-exit free must be suppressed either way (it is, via the same
+        // suppressor set `send` uses), and exactly one owner must free.
+        //
+        // The pair is UNANNOTATED on purpose, and not only to exercise the
+        // element-size pinning fix this row also made: an explicit
+        // `(Sender[String], Receiver[String])` on `Channel.bounded(cap)` is
+        // REJECTED today (`found '(Sender[?T0], Receiver[?T0])'`), which
+        // B-2026-08-22-21 recorded as annotation-fighting-inference rather than
+        // a gap in `bounded`.
+        //
+        // The FULL arm is the one worth an ASAN fixture: it is the path where
+        // the value comes back out of the call, and getting it wrong is a
+        // double free (source frees + the `SendError` binding frees the same
+        // aliased buffer) rather than a wrong printed value. Both arms churn
+        // 100 iterations on a capacity-1 channel so each iteration lands one
+        // `Ok` and one `Full` with owned `String` payloads.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 100 {
+        let (tx, rx) = Channel.bounded(1);
+        let first = f"first-{i}";
+        match tx.try_send(first) {
+            Ok(u) => { total = total + 1; }
+            Err(SendError.Full(v)) => { total = total + v.len(); }
+            Err(SendError.Closed(v)) => { total = total + v.len(); }
+        }
+        let second = f"second-{i}";
+        match tx.try_send(second) {
+            Ok(u) => { total = total + 1; }
+            Err(SendError.Full(v)) => { total = total + v.len(); }
+            Err(SendError.Closed(v)) => { total = total + v.len(); }
+        }
+        let got = rx.recv();
+        total = total + got.len();
+        i = i + 1;
+    }
+    println(total.to_string());
+}
+"#,
+            // Per iteration: first `try_send` lands (+1); second is rejected
+            // Full, so `v` is "second-{i}" (len 8 for i=0..9, 9 for i=10..99);
+            // `recv` drains "first-{i}" (len 7 / 8).
+            // i=0..9   : 10 * (1 + 8 + 7)  = 160
+            // i=10..99 : 90 * (1 + 9 + 8)  = 1620
+            &["1780"],
+            "channel_try_send_heap_payload_both_arms_no_double_free",
+        );
+
+        // A payload WIDER than the 3-word String/Vec floor: a four-`i64`
+        // struct is 4 words. This pins the `SendError` payload area being
+        // sized from the program's channel element types rather than fixed —
+        // with a fixed floor the `Full` arm heap-boxes this struct into the
+        // payload, and that box has no owner (the seeded layout's drop kind
+        // for a bare `T` is `None`, and unlike a user generic enum there is no
+        // monomorph to give it a concrete one). Measured on the 6-word
+        // two-`String` version before the sizing landed: 4800 bytes leaked in
+        // 100 objects, one box per rejected send.
+        //
+        // The payload here owns NO heap of its own, which is deliberate: the
+        // struct-with-heap case leaks its own `String` fields on the reject
+        // path for a separate reason the sizing does not touch, and that is
+        // filed as its own row rather than folded in here. A plain `send` of
+        // either struct was clean throughout, so neither is the transport.
+        assert_clean_asan_run(
+            r#"
+struct Quad { a: i64, b: i64, c: i64, d: i64 }
+fn main() {
+    let mut i: i64 = 0;
+    let mut total: i64 = 0;
+    while i < 100 {
+        let (tx, rx) = Channel.bounded(1);
+        let x = Quad { a: i, b: i, c: i, d: i };
+        let r1 = tx.try_send(x);
+        let y = Quad { a: i, b: i, c: i, d: 7 };
+        match tx.try_send(y) {
+            Ok(u) => { total = total + 1; }
+            Err(SendError.Full(v)) => { total = total + v.d; }
+            Err(SendError.Closed(v)) => { total = total + v.a; }
+        }
+        let g = rx.recv();
+        total = total + g.a;
+        i = i + 1;
+    }
+    println(total.to_string());
+}
+"#,
+            // Rejected `Quad.d` is 7 each (700); `recv` drains `a` = i (4950).
+            &["5650"],
+            "channel_try_send_wide_scalar_struct_payload_no_leak",
+        );
+    }
+
+    #[test]
     fn asan_vec_insert_heap_no_double_free() {
         // `Vec[String].insert(idx, value)` MOVES the heap value into the
         // container (the `insert` codegen arm carries push's ownership-

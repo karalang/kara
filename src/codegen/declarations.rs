@@ -4748,6 +4748,127 @@ impl<'ctx> super::Codegen<'ctx> {
     ///
     /// Phase-8 line 17 slice 4 — seeds `Client`, `Response`, and
     /// `HttpError` from `runtime/stdlib/http.kara`.
+    /// Seeds the `SendError[T]` enum layout (B-2026-08-22-21). Split out of
+    /// [`Self::seed_builtin_enum_layouts`] and called LATER, from
+    /// `compile_program`, because it is the one seed whose width depends on
+    /// the user's own types: it sizes the payload area from the program's
+    /// channel element types, and `payload_word_count_for_type_expr` can only
+    /// measure a user struct once `register_struct_metadata` has registered
+    /// its field `TypeExpr`s. Seeded from the earlier slot it scored every
+    /// user struct at the unknown-name default of 1 word — measured, that
+    /// silently kept the 3-word floor and left the leak this sizing exists to
+    /// close.
+    pub(super) fn seed_send_error_enum_layout(&mut self, program: &Program) {
+        let i64_t: BasicTypeEnum<'ctx> = self.context.i64_type().into();
+        // `SendError[T]` (`runtime/stdlib/channel.kara`) — the error half of
+        // `Sender.try_send`, B-2026-08-22-21. Same "typechecker sees it via
+        // STDLIB_PROGRAMS, `declare_enums` never walks it" story as
+        // `ChannelError` directly above, but it is the FIRST channel seed that
+        // CARRIES A PAYLOAD, and the failure shape is different because of it.
+        //
+        // A unit-only enum with no layout at least fails loudly now: the
+        // B-2026-08-22-1 guard in `control_flow_match.rs` catches a qualified
+        // `Enum.Variant` *binding* pattern that resolved to no tag. A
+        // payload-carrying `SendError.Full(v)` is an `EnumVariant` pattern, not
+        // a `Binding`, so it slips past that guard entirely — measured before
+        // this seed, `match e { SendError.Full(v) => … }` reported
+        // `codegen failed: Undefined variable 'v'` (the payload never bound),
+        // and the same pattern nested under `Err(...)` panicked outright in
+        // `bind_pattern_values` on an out-of-range `build_extract_value`.
+        //
+        // THE PAYLOAD AREA IS 3 WORDS, NOT THE 1 WORD `declare_enums` WOULD
+        // COMPUTE, and that difference is the whole reason this seed is worth
+        // reading. A bare type parameter `T` scores 1 word in
+        // `payload_word_count_for_type_expr` (it is an unknown path name), so
+        // a mechanical transcription of `enum SendError[T] { Full(T),
+        // Closed(T) }` would give `{ i64 tag, i64 w0 }`. Measured, that
+        // LEAKED: 24 bytes per rejected `try_send` under LSan, one box per
+        // `SendError.Full(<String>)`.
+        //
+        // The mechanism is documented at the boxing site itself
+        // (`coerce_to_payload_words`): a payload wider than the area is
+        // heap-boxed, and "the drop sites recompute the SAME
+        // `llvm_type_word_count(T) > area` predicate ... and `inttoptr` word 0
+        // to load / free `T`". That coherence needs a DROP KIND to hang the
+        // free on, and a bare `T` has none — `enum_drop_kind_for_type_expr`
+        // returns `EnumDropKind::None`, because the concrete payload type is
+        // not known at layout time. A user's own `enum E[T] { A(T), B(T) }`
+        // escapes this because it is MONOMORPHIZED: `E[String]` gets a layout
+        // whose payload really is a `String`, so the box has an owner. A
+        // hand-seeded stdlib enum has exactly one layout for every `T`, so it
+        // cannot.
+        //
+        // WIDENING DISSOLVES THE PROBLEM rather than patching it. Size the
+        // payload area to the WIDEST channel element type the program actually
+        // uses, floored at 3 words so `String`/`Vec` (`{ptr, len, cap}`) and
+        // every scalar always fit. The element types come from the
+        // typechecker's own per-call-site table, which is the same source
+        // codegen's channel lowering sizes `elem_size` from — so the area and
+        // the values that go in it are derived from one fact, not two. With
+        // the payload inline there is no box, nothing to own, and the read
+        // side stays coherent for free because it recomputes the same
+        // `word_count > area` predicate and likewise finds the payload inline.
+        //
+        // Sizing off EVERY channel site rather than only `try_send` sites is
+        // deliberate: it cannot miss one, and it costs nothing — `SendError`
+        // values exist only where `try_send` is called, so a program that
+        // never calls it never materializes the wider type.
+        //
+        // Verified with LSan on both arms (`asan_channel_try_send_*`) for
+        // `String` payloads and for a two-`String` struct, which is 6 words
+        // and therefore the case a fixed 3-word floor would have missed.
+        //
+        // Tags follow the stdlib declaration order — Full = 0, Closed = 1.
+        if !self.type_decls.enum_layouts.contains_key("SendError") {
+            let mut payload_words = 3usize;
+            for te in program.channel_elem_types.values() {
+                payload_words = payload_words.max(self.payload_word_count_for_type_expr(
+                    te,
+                    "SendError",
+                    "Full",
+                ));
+            }
+            // `EnumDropKind::None` for the payload, matching what
+            // `declare_enums` computes for a bare `T`. Deriving a real kind
+            // from the channel element types — the same trick the width uses
+            // one line up — WAS TRIED AND IS NOT THE ANSWER: it changed
+            // nothing measurable (byte-identical LSan output with and without
+            // it), so it was dropped rather than landed as plausible-looking
+            // dead code. The one case that still leaks — a struct-with-heap
+            // payload's own `String`/`Vec` fields on the reject path — is not
+            // reached through this kind at all, and is filed separately with
+            // its measurement rather than guessed at here.
+            let payload_drop = EnumDropKind::None;
+            let fields: Vec<BasicTypeEnum<'ctx>> =
+                std::iter::repeat_n(i64_t, payload_words + 1).collect();
+            let ty = self.context.struct_type(&fields, false);
+            let mut tags = HashMap::new();
+            let mut field_counts = HashMap::new();
+            let mut field_word_offsets = HashMap::new();
+            let mut field_drop_kinds = HashMap::new();
+            for (i, v) in ["Full", "Closed"].iter().enumerate() {
+                tags.insert((*v).to_string(), i as u64);
+                field_counts.insert((*v).to_string(), 1usize);
+                field_word_offsets.insert((*v).to_string(), vec![(0usize, payload_words)]);
+                field_drop_kinds.insert((*v).to_string(), vec![payload_drop]);
+            }
+            self.type_decls.enum_layouts.insert(
+                "SendError".to_string(),
+                EnumLayout {
+                    llvm_type: ty,
+                    tags,
+                    field_counts,
+                    field_word_offsets,
+                    field_drop_kinds,
+                    is_shared: false,
+                },
+            );
+            self.type_decls
+                .seeded_enum_names
+                .insert("SendError".to_string());
+        }
+    }
+
     pub(super) fn seed_builtin_struct_types(&mut self) {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let i64_t = self.context.i64_type();

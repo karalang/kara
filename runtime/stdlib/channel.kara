@@ -6,3 +6,25 @@
 // `infer_channel_method`.
 
 struct Channel[=T] { }
+
+// B-2026-08-22-21. The error half of `try_send` (design.md:6083):
+//
+//     fn try_send(self, tx: Sender[T], val: T) -> Result[(), SendError[T]]
+//
+// Both variants CARRY THE REJECTED VALUE back to the caller, which is the
+// whole point of a fallible send: `send` consumes its argument, so a failure
+// that dropped the value would leave the caller no way to retry or recover it.
+// `Full` is the bounded-channel backpressure case (design.md:6072's
+// `Channel.bounded(cap)`); `Closed` is the no-live-receiver case that plain
+// `send` panics on.
+//
+// COVARIANT in `T`, like `Option[+T]` and `Result[+T, +E]` next door and for
+// the same reason: `T` occurs only in producer position — both variants HAND
+// THE VALUE OUT and neither ever consumes one — so a `SendError[Cat]` is
+// safely readable as a `SendError[Animal]`. The stdlib variance gate
+// (`E_STDLIB_VARIANCE_IMPLICIT`) requires the marker to be written rather than
+// inferred, which is what caught this enum on the way in.
+pub enum SendError[+T] {
+    Full(T),
+    Closed(T),
+}

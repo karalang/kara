@@ -4257,6 +4257,18 @@ impl<'ctx> Codegen<'ctx> {
             Some(Linkage::External),
         );
 
+        // `karac_runtime_channel_try_send(ch: ptr, val_ptr: ptr,
+        // elem_size: u64) -> u8` — the NON-PANICKING send (B-2026-08-22-21).
+        // Same shape as `send` but with a status return: 1 sent, 0 full,
+        // 2 no live receiver. It reuses `channel_recv_ty` because the two
+        // signatures coincide (three args, `u8` back) — the direction the
+        // pointer is read in is the caller's business, not the type's.
+        module.add_function(
+            "karac_runtime_channel_try_send",
+            channel_recv_ty,
+            Some(Linkage::External),
+        );
+
         // Write-once cell runtime (`runtime/src/once.rs`), backing
         // `OnceLock[T]` / `OnceCell[T]` (compiled into every archive — a cell
         // behind a lock has no scheduler dependency). The opaque
@@ -6730,6 +6742,10 @@ impl<'ctx> Codegen<'ctx> {
         // Name-only `shared`/`par` set, before `declare_enums` — see the field doc.
         self.collect_shared_type_names(program);
         self.register_struct_metadata(program);
+        // AFTER `register_struct_metadata`, because this seed measures the
+        // program's channel element types — including user structs — to size
+        // its payload area. See the fn's own doc comment.
+        self.seed_send_error_enum_layout(program);
         self.register_ord_orderable_types(program);
         self.declare_enums(program);
         self.build_struct_types(program);

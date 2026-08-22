@@ -148,6 +148,10 @@ pub const PRELUDE_TYPES: &[&str] = &[
     "Channel",
     "Sender",
     "Receiver",
+    // B-2026-08-22-21 — `try_send`'s error type, `SendError[T]`, defined as a
+    // generic enum in `runtime/stdlib/channel.kara`. Scope-0 so the `Err` arm
+    // of a `try_send` match resolves without an import, like `IoError`.
+    "SendError",
     "Stats",
     "Regex",
     "RegexError",

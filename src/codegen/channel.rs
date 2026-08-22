@@ -29,7 +29,15 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> Result<BasicValueEnum<'ctx>, String> {
         match method {
             "send" => self.compile_channel_send(object, args, call_span),
-            "recv" => self.compile_channel_recv(object, call_span),
+            // B-2026-08-22-21 — the fallible sibling of `send`. Different
+            // runtime entry (a status return instead of a panic) and a
+            // `Result[(), SendError[T]]` build on top of it.
+            "try_send" => self.compile_channel_try_send(object, args, call_span),
+            // B-2026-08-22-21 — `recv_blocking` lowers to the SAME runtime
+            // entry as `recv`, because `karac_runtime_channel_recv` already
+            // parks on a condvar on every threads-target. The two differ in
+            // the effect they carry, not in what they emit.
+            "recv" | "recv_blocking" => self.compile_channel_recv(object, call_span),
             "try_recv" => self.compile_channel_try_recv(object, call_span),
             "clone" => self.compile_channel_clone(object),
             "__schedule_after" => self.compile_channel_schedule_after(object, args),
@@ -165,6 +173,168 @@ impl<'ctx> super::Codegen<'ctx> {
         self.suppress_fstr_acc_if_moved_out(&args[0].value);
         // Unit return (the i64-zero unit value).
         Ok(self.context.i64_type().const_zero().into())
+    }
+
+    /// `tx.try_send(v)` → `Result[(), SendError[T]]` (design.md:6083,
+    /// B-2026-08-22-21). Spills `v` exactly as `send` does, then routes through
+    /// the **status-returning** `karac_runtime_channel_try_send` (1 sent,
+    /// 0 full, 2 no live receiver) and builds the three-way result from the
+    /// discriminant. The `Semaphore.acquire` template, with one extra arm.
+    ///
+    /// THE REJECTED VALUE COMES BACK inside `SendError`, which is the whole
+    /// reason the spec gives this method a `Result`: `send` consumes its
+    /// argument, so a failure that dropped the value would leave the caller
+    /// nothing to retry with. Both failure arms therefore re-use `arg_val` —
+    /// the same LLVM value that was stored to the send slot, not a re-
+    /// evaluation of the argument expression (which would run its side effects
+    /// twice).
+    fn compile_channel_try_send(
+        &mut self,
+        object: &Expr,
+        args: &[CallArg],
+        call_span: &crate::token::Span,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        if args.len() != 1 {
+            return Err("Sender.try_send expects exactly one argument".to_string());
+        }
+        let (elem_ty, elem_size) = self.channel_elem_ty_and_size(call_span)?;
+        let fn_val = self.current_fn.unwrap();
+        let ch = self.compile_expr(object)?.into_pointer_value();
+        let arg_val = self.compile_expr(&args[0].value)?;
+        let slot = self.create_entry_alloca(fn_val, "chan.trysend.val", elem_ty);
+        self.builder.build_store(slot, arg_val).unwrap();
+
+        // Same heap-payload ownership handoff as `send` (B-2026-07-13-17): a
+        // payload that IS enqueued and never received is the channel's to
+        // free. Registering the drop fn unconditionally is right even though
+        // this call may not enqueue — `set_elem_drop` is idempotent and
+        // describes the channel's element type, not this one send.
+        if let Some(elem_te) = self
+            .conc
+            .channel_elem_types
+            .get(&(call_span.offset, call_span.length))
+            .cloned()
+        {
+            if self.te_owns_heap_below_buffer(&elem_te) {
+                let drop_fn = self.emit_drop_fn_for_type_expr(&elem_te);
+                let set_drop_fn = self
+                    .module
+                    .get_function("karac_runtime_channel_set_elem_drop")
+                    .expect("karac_runtime_channel_set_elem_drop declared in Codegen::new");
+                let drop_ptr = drop_fn.as_global_value().as_pointer_value();
+                self.builder
+                    .build_call(
+                        set_drop_fn,
+                        &[ch.into(), drop_ptr.into()],
+                        "chan.set_elem_drop",
+                    )
+                    .unwrap();
+            }
+        }
+
+        let size_const = self.context.i64_type().const_int(elem_size, false);
+        let try_send_fn = self
+            .module
+            .get_function("karac_runtime_channel_try_send")
+            .expect("karac_runtime_channel_try_send declared in Codegen::new");
+        let status = self
+            .builder
+            .build_call(
+                try_send_fn,
+                &[ch.into(), slot.into(), size_const.into()],
+                "chan.trysend.status",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+
+        // The value leaves the caller on EVERY path — into the queue when the
+        // send lands, into the `SendError` payload when it does not — so the
+        // source binding must not free it either way. This is the identical
+        // suppressor set `send` applies; without it a `try_send`'d String
+        // double-frees exactly as B-2026-07-13-16's `send` did.
+        self.suppress_source_vec_cleanup_for_arg(&args[0].value);
+        self.suppress_inline_option_result_binding_move(&args[0].value);
+        if let ExprKind::Identifier(n) = &args[0].value.kind {
+            let n = n.clone();
+            self.suppress_map_cleanup_for_tail_identifier(&n);
+        }
+        self.suppress_fstr_acc_if_moved_out(&args[0].value);
+
+        let one_i8 = self.context.i8_type().const_int(1, false);
+        let sent = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, status, one_i8, "chan.trysend.sent")
+            .unwrap();
+        let ok_bb = self
+            .context
+            .append_basic_block(fn_val, "chan.trysend.ok.bb");
+        let err_bb = self
+            .context
+            .append_basic_block(fn_val, "chan.trysend.err.bb");
+        let full_bb = self
+            .context
+            .append_basic_block(fn_val, "chan.trysend.full.bb");
+        let closed_bb = self
+            .context
+            .append_basic_block(fn_val, "chan.trysend.closed.bb");
+        let merge_bb = self
+            .context
+            .append_basic_block(fn_val, "chan.trysend.merge");
+        self.builder
+            .build_conditional_branch(sent, ok_bb, err_bb)
+            .unwrap();
+
+        // Sent → `Ok(())`. Unit is the i64-zero unit value, as everywhere else.
+        self.builder.position_at_end(ok_bb);
+        let unit_val = self.context.i64_type().const_zero().into();
+        let ok_val = self.build_nonshared_enum_value("Result", "Ok", &[unit_val])?;
+        let ok_end = self.builder.get_insert_block().unwrap();
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+        // Not sent → split `full` (status 0) from `closed` (status 2). Both
+        // arms are lowered, but only `full` is reachable from Kāra source
+        // today: the runtime returns 2 solely for a null channel handle,
+        // because deciding "closed" from the receiver counters produced a
+        // run-vs-build divergence the interpreter cannot match (the full
+        // measurement is in `karac_runtime_channel_try_send`'s doc comment).
+        // Testing for 0 rather than 2 leaves any future status value on the
+        // `closed` side, which is the conservative one — a caller that stops
+        // retrying rather than one that spins.
+        self.builder.position_at_end(err_bb);
+        let zero_i8 = self.context.i8_type().const_zero();
+        let is_full = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, status, zero_i8, "chan.trysend.full")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(is_full, full_bb, closed_bb)
+            .unwrap();
+
+        self.builder.position_at_end(full_bb);
+        let full_inner = self.build_nonshared_enum_value("SendError", "Full", &[arg_val])?;
+        let full_val = self.build_nonshared_enum_value("Result", "Err", &[full_inner])?;
+        let full_end = self.builder.get_insert_block().unwrap();
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+        self.builder.position_at_end(closed_bb);
+        let closed_inner = self.build_nonshared_enum_value("SendError", "Closed", &[arg_val])?;
+        let closed_val = self.build_nonshared_enum_value("Result", "Err", &[closed_inner])?;
+        let closed_end = self.builder.get_insert_block().unwrap();
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+        self.builder.position_at_end(merge_bb);
+        let phi = self
+            .builder
+            .build_phi(ok_val.get_type(), "chan.trysend.result")
+            .unwrap();
+        phi.add_incoming(&[
+            (&ok_val, ok_end),
+            (&full_val, full_end),
+            (&closed_val, closed_end),
+        ]);
+        Ok(phi.as_basic_value())
     }
 
     /// `rx.recv()` → `karac_runtime_channel_recv` into a stack slot, then load
