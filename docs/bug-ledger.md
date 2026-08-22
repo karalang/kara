@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 277 | 1 |
-| leak | 187 | 1 |
+| leak | 187 | 0 |
 | run-vs-build | 149 | 0 |
 | missing-feature | 144 | 6 |
 | double-free | 134 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 988 | 8 |
+| codegen | 988 | 7 |
 | typecheck | 233 | 4 |
 | interp | 172 | 1 |
 | other | 62 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 8 | 1 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1468 surfaced · 13 open · 1433 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1468 surfaced · 12 open · 1434 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (13)
+### Open (12)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -142,7 +142,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1468 surfaced
 | B-2026-08-21-46 | 2026-08-21 | codegen | low | `enumerate` OVER AN ARRAY **LITERAL** STILL BAILS LOUD -- `for (i, x) in [1, 2, 3].iter().enumerate()` hits the adaptor backstop while `--interp` answers, the one source shape B-2026-08-21-41's widening could not reach | roadmap.md |
 | B-2026-08-21-50 | 2026-08-21 | codegen | high | A C-LIKE ENUM BOUND OUT OF `Ok(...)` MATCHES THE WRONG VARIANT UNDER CODEGEN -- `Ok(UsbClass.Hid)` selects the FIRST variant, and passing the binding to a function taking the enum fails LLVM verification outright; the interpreter is correct, so this is a silent run-vs-build divergence | codegen |
 | B-2026-08-21-51 | 2026-08-21 | typecheck | medium | A GENERIC ENUM'S STRUCT-SHAPED VARIANT DOES NOT BIND ITS TYPE PARAMETER: constructing one infers the BARE head (`MyErr`, not `MyErr[u8]`) and a pattern binds the payload as the uninstantiated `D`, so `value as i64` is rejected with "cannot cast 'D' to 'i64'" | typecheck |
-| B-2026-08-21-47 | 2026-08-22 | codegen | medium | A `shared struct` FIELD SOURCE LEAKS A DIFFERENT BUFFER THAN THE PLAIN-STRUCT ONE DID -- `last = s.name` off a `shared struct` leaks the POST-append body (3 bytes/call) where the plain-struct shape leaked the PRE-append one, so the fix for B-2026-08-21-40 does not reach it | roadmap.md |
 
 ### Wontfix (8)
 
@@ -161,9 +160,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1468 surfaced
 
 </details>
 
-### Fixed (1433)
+### Fixed (1434)
 
-<details><summary>1433 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1434 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -14371,6 +14370,65 @@ THE GUARD PAID FOR ITSELF IMMEDIATELY: it turned `WaitTarget` into a build error
 THE BARE SPELLING IS NOT GUARDED and the code says so: a bare PascalCase name is indistinguishable from a legitimate binding without the typechecker's resolution. Reverting the seed with the guard in place gives the honest split -- the qualified probe errors loudly, the bare probe still answers `a=Relaxed b=Relaxed c=Relaxed`. Closing that half needs resolution information codegen does not have at this point, and is left rather than half-done.
 
 Five tests. Four fail with the seeds reverted; the fifth (`Stdio` + `PoolError`) is the CONTROL that must pass either way -- it is what pins the cause to the missing layout rather than to stdlib enums generally, and it would catch a regression that dropped either module from `compiled_stdlib_programs`. |
+| B-2026-08-21-47 | codegen | medium | A `shared struct` FIELD SOURCE LEAKS A DIFFERENT BUFFER THAN THE PLAIN-STRUCT ONE DID -- `last = s.name` off a `shared struct` leaks the POST-append… | ALREADY FIXED by e6d0dbe (B-2026-08-21-40's fix). No production change was
+needed; b5e3be74 adds the regression pin that was missing.
+
+THE ROW'S CENTRAL PREDICTION WAS WRONG, and correcting it is the first thing the
+reader needs. It said "a `shared struct` receiver never reaches that branch at
+all -- `mut_ref_place_arg_ptr` routes it to `shared_mut_ref_place_arg_ptr` ...
+Nothing in e6d0dbe touched that path." The routing claim is accurate. The
+conclusion does not follow, because the defect was never on that path.
+
+MEASURED, not inspected. Reverting e6d0dbe's single gate line
+(`rhs_is_place_field_move = true` back to `= obj_name.is_none()`) and re-running
+at KARAC_OPT_LEVEL=0:
+
+  shape                                    gate reverted     gate restored
+  plain struct field, `mut ref`            392 (49 x 8)      clean
+  SHARED struct field, `mut ref`           147 (49 x 3)      clean
+  SHARED struct field, NO `mut ref`        147 (49 x 3)      clean
+  SHARED struct field, `mut ref`, no escape  clean            clean
+
+One line, both shapes, both directions. The 147 figure also CONFIRMS the row's
+3-bytes-per-call number, which it had flagged as stale and asked to re-measure.
+
+WHY THE PREDICTION MISSED, since the reasoning was careful. It described the
+CALLEE's argument path -- how `mut b.name` reaches `free_app`. The defect is in
+the CALLER's next statement, `last = b.name`, which is a `StmtKind::Assign` in
+`src/codegen/stmts.rs` and is exactly what e6d0dbe changed. The receiver's
+shared-vs-plain shape never enters into it.
+
+THE 3-VS-8 BYTE DIFFERENCE, which the row read as "two different buffers going
+missing means two different accounting errors, not one bug with two spellings,"
+is one accounting error over two differently-sized buffers. The buffer at risk
+is the one the TARGET (`last`) already held; the receiver's shape only changes
+how big that buffer is. A size difference is not evidence of a second defect.
+
+THE ROW'S OWN WARNING WOULD HAVE CAUGHT THIS. It carried forward, from -40, that
+"the `mut ref` in that row's repro was INCIDENTAL ... The cheap discriminator is
+to delete the `mut ref` call entirely and see whether the leak survives." It
+survives, identically: 147 bytes with no `mut ref` anywhere in the program. The
+converse also holds -- deleting `last = b.name` while KEEPING the `mut ref` is
+clean even with the gate reverted. So `mut ref` is incidental here for the same
+reason it was there, and applying that discriminator to the row's own structural
+argument would have predicted the shared fix from the plain one.
+
+THE PIN is `asan_shared_struct_field_source_frees_the_targets_old_buffer`
+(`tests/memory_sanitizer.rs`), two legs. Leg (b) -- no `mut ref` at all -- is
+the one that names the bug, and is why the pin is not just leg (a): a test built
+only from the filed `mut ref` repro would pass against a fix aimed at the callee
+path, which is precisely the fix this row was predicting someone would need to
+write.
+
+A NOTE ON THE FIXTURE for anyone re-deriving this: a `shared struct` field must
+be declared `mut` to be assignable (`shared struct Box { mut name: String }`).
+Without it the program fails typecheck, and the harness reports that as a test
+FAILURE, which reads exactly like a leak until the output is read carefully.
+
+WHY IT WAS COMMITTED AS A TEST rather than closed on inspection: nothing held
+this answer either way. The shape was measured once, before the fix existed, and
+never again -- which is how the ledger ended up carrying a confident structural
+prediction that a two-minute experiment refutes. |
 | B-2026-08-22-2 | interp | high | A BARE UNIT-VARIANT PATTERN OF A BAKED-STDLIB ENUM MAKES THE **INTERPRETER** MATCH THE FIRST ARM ALWAYS -- `match e { NotFound => .., PermissionDenie… | FIXED by 28bd239. One predicate, one added case, and the two copies of it merged so they cannot drift again.
 
 CAUSE, exactly as the row diagnosed. `pattern_match.rs` decides a `PatternKind::Binding` is a unit-variant pattern (rather than a fresh value binding) from two signals: a dotted name is unambiguously a variant, and a BARE name is one only when `env.get(name)` returns a unit `EnumVariant`. Baked-stdlib enum variants are registered under their QUALIFIED path only, so the bare lookup missed every one of them and the name fell through to `true // actual binding — matches anything`. The first arm always won.
