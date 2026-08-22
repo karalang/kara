@@ -98,11 +98,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 151 | 0 |
 | double-free | 135 | 0 |
 | codegen-gap | 128 | 0 |
-| diagnostics | 97 | 2 |
+| diagnostics | 97 | 1 |
 | false-positive | 94 | 0 |
 | perf | 83 | 0 |
+| other | 56 | 1 |
 | crash | 55 | 0 |
-| other | 55 | 0 |
 | soundness | 54 | 0 |
 | use-after-free | 20 | 0 |
 
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 992 | 1 |
+| codegen | 992 | 0 |
 | typecheck | 243 | 2 |
-| interp | 172 | 0 |
+| interp | 173 | 1 |
 | other | 63 | 0 |
 | ownership | 62 | 0 |
 | cli | 61 | 1 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1490 surfaced · 5 open · 1463 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1491 surfaced · 5 open · 1464 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (5)
 
@@ -132,9 +132,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1490 surfaced
 |---|---|---|---|---|---|
 | B-2026-08-21-52 | 2026-08-22 | effect | low | CHANNEL EFFECT RESOURCES HAVE NO PER-VALUE IDENTITY -- every channel collapses to the single `Channel` resource. The conflict-analysis motivation this row was filed on has since been REFUTED by measurement (the producer/consumer case already worked; two-producer serialization was a verb-lattice defect, fixed separately) -- what remains is a narrow spec-fidelity gap against design.md:6049, where only the NON-communication verbs on distinct channels over-serialize | roadmap.md |
 | B-2026-08-22-6 | 2026-08-22 | typecheck | low | The `Hasher` and `BuildHasher` TRAITS are not baked, so a user cannot write their own hasher: `Map[K, V, H]` accepts only the two compiler-known selectors `SipHash13BuildHasher` / `FxBuildHasher`, and design.md's "User-extensible hashers" paragraph describes a surface that does not exist | roadmap.md |
-| B-2026-08-22-7 | 2026-08-22 | codegen | low | `f16_software_emulated` IS THE ONE STARTER-SET LINT WHOSE TRIGGER DEPENDS ON THE TARGET -- and the blocker is NOT the placement this row was filed on: the specified feature-string check reads only the `features` half of `default_cpu_and_features`, so it is blind to CPU-implied support (`aarch64-apple-darwin` resolves to `("apple-m1", "")`), and no inkwell/LLVM-C call reports a CPU's resolved subtarget features to fix that | roadmap.md |
 | B-2026-08-22-8 | 2026-08-22 | cli | low | `implicit_clone` HAS NO TRIGGER IN THE SPEC AND CANNOT BE DE-REGISTERED WITHOUT A design.md EDIT -- the one starter-set lint whose resolution is a SPEC decision, not a compiler change | roadmap.md |
 | B-2026-08-22-21 | 2026-08-22 | typecheck | low | `Sender.try_send` AND `Receiver.recv_blocking` ARE SPEC'D BUT DO NOT EXIST -- design.md:6070 declares both with effects, and each is "no method '<name>' on type '<Sender|Receiver>'" | roadmap.md |
+| B-2026-08-22-22 | 2026-08-22 | interp | low | FLAKY TEST -- `a_map_hashes_through_the_hasher_it_was_built_with` asserts that SipHash13 and Fx produce DIFFERENT iteration orders over six keys, but SipHash13 is seeded per process, so the two orders coincide on some runs and the `assert_ne!` fires with two identical vectors | roadmap.md |
 
 ### Wontfix (8)
 
@@ -153,9 +153,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1490 surfaced
 
 </details>
 
-### Fixed (1463)
+### Fixed (1464)
 
-<details><summary>1463 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1464 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -15384,6 +15384,73 @@ Tests: exactly-one-diagnostic (the cascade guard), the two per-shape
 remedies, all four effect spellings (`writes(Log)` / `panics` / `_` /
 `blocks`), and the applied fix edit. Full suite 109 binaries, 14838
 passed, 0 failed; fmt clean; clippy clean on both feature legs. |
+| B-2026-08-22-7 | codegen | low | `f16_software_emulated` IS THE ONE STARTER-SET LINT WHOSE TRIGGER DEPENDS ON THE TARGET -- and the blocker is NOT the placement this row was filed on… | FIXED by wiring the lint in the TYPECHECKER, with the capability question
+answered WITHOUT the backend -- which is what dissolved the placement
+dilemma this row was filed on.
+
+THE ROW FRAMED IT AS typechecker-vs-codegen, and both options looked bad
+because each phase holds half of what is needed: the typechecker owns the
+`#[allow]` cascade (`effective_lint_level`) but not the target; codegen owns
+the target but has no `#[allow]` reader and no diagnostics channel at all
+(measured: no `warnings`/`Diagnostic` producer under `src/codegen/driver.rs`),
+and a codegen-only lint would be silently absent from a default `karac check`.
+
+The way out is that the capability question does not actually need LLVM.
+`target::target_has_native_f16()` answers it from `(cpu, features)` alone:
+`baseline_cpu_and_features()` classifies the native target from
+`std::env::consts::ARCH`/`OS` (not from a triple, which only the LLVM driver
+resolves), then two MEASURED CPU lists plus the explicit feature flags decide.
+Nothing crosses the containment boundary.
+
+EVERY TABLE ENTRY IS MEASURED, with `llc -mcpu=... ` on `fadd half` (LLVM 18) --
+native emits `fadd h0, h0, h1` (AArch64) or `vaddsh` (x86), emulated emits
+`fcvt` promotion, and wasm emits `__extendhfsf2`/`__truncsfhf2` libcalls:
+
+  apple-m1                                   NATIVE
+  sapphirerapids                             NATIVE
+  generic +v8a,+outline-atomics              emulated
+  x86-64 / -v2 / -v3 / -v4                   emulated
+  core2, generic                             emulated
+  generic +v8.2a / +v8.4a / +v8.6a           emulated
+  generic +v8a,+fullfp16                     NATIVE
+  x86-64 +avx512f,+avx512vl,+avx512fp16      NATIVE
+  wasm32-wasip1 (+simd128 or not)            emulated (libcalls)
+
+TWO CORRECTIONS TO THIS ROW, both from that table -- see the appended
+"RE-SCOPED" section for the full write-up:
+  * `apple-m1` IS native, so "under EVERY current default baseline there is
+    no native f16" was wrong, and the feature-string check this row specified
+    would have been a FALSE POSITIVE on Apple Silicon (that baseline is
+    `("apple-m1", "")` -- an empty feature string).
+  * `+avx512fp16` alone does NOT enable it; it needs `+avx512f,+avx512vl`
+    too. Naming it prerequisite-less under-reports, which is the safe
+    direction, but the row's one-flag framing was incomplete.
+
+A THIRD CORRECTION, found only by running the thing: the fail-open rule for
+an unmeasured CPU was first written as "unreachable without an explicit
+`--target-cpu`". That is false -- `karac build` ALWAYS installs a CPU
+override, because `resolve_native_cpu_baseline` applies `cpu-baseline = "v3"`
+by default. The first implementation therefore went silent on every ordinary
+build. Caught by testing `karac build` rather than only `karac check`; fixed
+by adding the measured `CPUS_WITHOUT_NATIVE_F16` list so every CPU the
+default path can install is decided by measurement, and pinned by
+`every_default_baseline_cpu_is_measured`.
+
+TESTS. Six in tests/typechecker.rs (fires on f16 and bf16; quiet on f32/f64
+and on an f16 COMPARISON, which is not promoted arithmetic; `#[allow]`
+cascades; the message names the cpu it judged) and three unit tests in
+`target.rs`, including `native_baseline_matches_the_codegen_table`, which
+pins the new baseline classifier against
+`codegen::driver::default_cpu_and_features` so the two producers cannot
+drift. Removed from `KNOWN_UNWIRED` in `src/lints.rs`, so
+`every_registered_lint_is_emitted_or_declared_unwired` now holds it to being
+wired.
+
+REMAINING, and deliberate: an unmeasured user-named `--target-cpu` fails OPEN
+(no lint). A false "your f16 is emulated" on hardware that runs it natively
+sends someone rewriting code that was already fast, which is worse than a
+missing perf note. `implicit_clone` is now the only entry left in
+`KNOWN_UNWIRED` (B-2026-08-22-8, a spec decision). |
 | B-2026-08-22-9 | typecheck | high | NO WHERE-CLAUSE BOUND OF ANY CLASS WAS DISCHARGED ON A METHOD CALL -- the method path passed `None` for the callee's where clause, so `h.take(NotMark… | FIXED by 69be64c, alongside B-2026-08-22-3. `method_user_impl.rs`'s concrete-receiver dispatch now calls `check_call_args_with_substitution_full` with `sig.where_clause` and `sig.generic_params` instead of the thin wrapper that hard-coded `None`. The wrapper itself is DELETED rather than left unused: its whole body was a call to `_full` with three `None`s, and the third is the bug -- with no wrapper to reach for, a future call site has to pass the where clause or write `None` where it is visible in the diff. Blast radius measured before landing, because this converts previously-accepted programs into errors: full default suite 0 failures, `--features llvm` suite 0 failures, and all 917 `.kara` files in the kara-katas corpus still typecheck clean. Pinned by `a_plain_trait_bound_is_discharged_on_a_method_call` and `an_assoc_type_equality_bound_is_discharged_on_a_method_call` in `tests/typechecker.rs`, each with the satisfied direction as the control; reverting only this half fails exactly those two and nothing else. |
 | B-2026-08-22-10 | typecheck | high | NO GENERIC BOUND OF ANY CLASS IS DISCHARGED ON A STATIC/ASSOCIATED-FUNCTION CALL -- `Type.assoc_fn(args)` never reaches the call-site engine at all,… | FIXED by 5514b6f.
 
