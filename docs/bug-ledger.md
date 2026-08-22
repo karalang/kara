@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 277 | 1 |
+| miscompile | 277 | 0 |
 | leak | 187 | 0 |
 | run-vs-build | 149 | 0 |
 | missing-feature | 144 | 5 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 988 | 7 |
+| codegen | 988 | 6 |
 | typecheck | 233 | 3 |
 | interp | 172 | 1 |
 | other | 62 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 8 | 1 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1468 surfaced · 11 open · 1435 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1468 surfaced · 10 open · 1436 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (11)
+### Open (10)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -140,7 +140,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1468 surfaced
 | B-2026-08-21-44 | 2026-08-21 | codegen | low | `as_slice()` ON A FIXED-ARRAY **TEMPORARY** HAS NO CODEGEN LOWERING -- `n.to_ne_bytes().as_slice().len()` fails dispatch while `--interp` answers, the one method of the Array surface B-2026-08-21-25 left out | roadmap.md |
 | B-2026-08-21-45 | 2026-08-21 | typecheck+codegen | low | FIVE SHIPPED USER-FACING DIAGNOSTICS CARRY RUNS OF 14-30 SPACES mid-sentence, because rustfmt INTERMITTENTLY rejoins a `\`-continued string literal into one line and keeps the continuation indentation as real spaces | roadmap.md |
 | B-2026-08-21-46 | 2026-08-21 | codegen | low | `enumerate` OVER AN ARRAY **LITERAL** STILL BAILS LOUD -- `for (i, x) in [1, 2, 3].iter().enumerate()` hits the adaptor backstop while `--interp` answers, the one source shape B-2026-08-21-41's widening could not reach | roadmap.md |
-| B-2026-08-21-50 | 2026-08-21 | codegen | high | A C-LIKE ENUM BOUND OUT OF `Ok(...)` MATCHES THE WRONG VARIANT UNDER CODEGEN -- `Ok(UsbClass.Hid)` selects the FIRST variant, and passing the binding to a function taking the enum fails LLVM verification outright; the interpreter is correct, so this is a silent run-vs-build divergence | codegen |
 
 ### Wontfix (8)
 
@@ -159,9 +158,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1468 surfaced
 
 </details>
 
-### Fixed (1435)
+### Fixed (1436)
 
-<details><summary>1435 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1436 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -14344,6 +14343,64 @@ GATED by `every_reduction_shader_bounds_its_workgroup_output_write`, a sibling o
 VERIFIED: negative control -- reverting the guard in the strided emitter alone makes the new gate FAIL, so it catches the defect that shipped rather than merely passing. 103 emitter unit tests and the full 62-case `gpu_e2e` suite green on lavapipe (`KARAC_GPU_BACKEND=cpu`, `KARAC_REQUIRE_GPU_ADAPTER=1`); clippy clean on both feature legs.
 
 NOT VERIFIED HERE, and this is the honest limit: the failing surface is Metal, which this Linux container has no adapter for. lavapipe cannot reproduce the bug (it discards the out-of-bounds write), so a green local run proves NO REGRESSION, not the fix. The fix rests on the mechanism being established by construction -- tight sizing plus an overshoot grid equals an out-of-bounds store, and the guard makes that store impossible on any backend. CONFIRMATION IS THE `gpu-e2e-metal` CI JOB on this commit; if it still fails, the clamp hypothesis is wrong and the 64-element shortfall needs a different explanation. |
+| B-2026-08-21-50 | codegen | high | A C-LIKE ENUM BOUND OUT OF `Ok(...)` MATCHES THE WRONG VARIANT UNDER CODEGEN -- `Ok(UsbClass.Hid)` selects the FIRST variant, and passing the binding… | Fixed in 1541eea0 — one lookup widened in `src/codegen/pattern_binding.rs`:
+`bind_pattern_values`'s single-word aggregate reconstruction now falls back from
+`struct_types` to `enum_layouts`.
+
+THE ROW'S READING WAS EXACTLY RIGHT: "the enum's own representation is `{ i64 }`
+but the slot created for the `Ok` payload binding is a bare `i64`, so the payload
+word is bound without being re-wrapped." That block re-wraps a single-i64-field
+payload word back into its aggregate, and consulted only `struct_types`. A
+C-like enum's layout is `{ i64 }` — structurally identical to the single-field
+struct the block was written for — so it declined, the binding fell through to
+the generic `create_entry_alloca(name, scrut.get_type())` with a bare `i64`, and
+both filed symptoms follow: the arm compares the raw word against variant tags
+and takes the first, and a call boundary sees `i64` against `{ i64 }`.
+
+WHERE NOT TO LOOK, which cost the most time and is the part worth carrying:
+`pattern_payload_llvm_type` (`control_flow_match.rs`) has a correct enum arm —
+it consults `enum_layouts` and returns the tagged-union type — and it is the
+obvious suspect. It is NEVER CONSULTED for this shape. Instrumenting its
+`Binding` arm produced no output at all on the repro. The binding arrives at
+`bind_pattern_values` as a bare `IntValue` and is rebuilt there or not at all.
+A reader who starts from "which resolver returns the wrong type" finds a
+resolver that returns the right one and no bug.
+
+MEASURED, both directions. The pin fails against pre-fix source and passes
+after. Pre-fix, every shape below printed the FIRST variant:
+
+  shape                                     pre-fix   correct
+  Ok(UsbClass.Hid)      -> match            audio     hid
+  Ok(UsbClass.MassStorage) -> match         audio     mass
+  Ok(UsbClass.Audio)    -> match            audio     audio   (correct BY ACCIDENT)
+  Some(Plain.R)         -> match            p         r
+  Err(Plain.Q)          -> match            ep        eq
+  if let Ok(c) = ...    -> match            audio     mass
+  Ok(c) -> name_of(c)                       BUILD FAILS (module verification)
+  Ok(Data.S(7))         -> match            14        14      (already correct)
+  Ok(W { v: 9 })        -> w.v              9         9       (already correct)
+
+THE THIRD ROW IS WHY THE PIN IS SHAPED AS IT IS. `Ok(UsbClass.Audio)` passes
+against the broken compiler, because the bug selects the first variant and the
+first variant is the right answer. A regression test that happened to use the
+first variant would have been green on a live miscompile. It is still in the pin
+— as a control that the fix did not invert the selection — but the load-bearing
+cases pick the second and third variants. `tag(c)` reads the discriminant
+through a different arm shape as well, so a fix that satisfied the verifier
+while still binding the wrong word fails.
+
+WHAT IS DELIBERATELY EXCLUDED, and by what: a DATA-CARRYING enum, via the same
+`count_fields() == 1` gate the struct path already used. Its layout is
+`{ tag, words… }`, which cannot be rebuilt from a single word, and those
+bindings reconstruct through `pattern_payload_llvm_type` /
+`reconstruct_payload_value` rather than arriving here as a bare `IntValue`. Both
+that case and the single-field struct payload were verified correct before and
+after, so the widening adds a path and disturbs none.
+
+SEVERITY was correctly filed high. The silent half is the dangerous one, and the
+row's framing of it holds up: a wire-protocol enum arriving through a `Result`
+dispatched to the wrong branch with `karac check` clean, exit 0, and no
+diagnostic, on a program with no unsafe, no FFI and no concurrency. |
 | B-2026-08-21-51 | typecheck | medium | A GENERIC ENUM'S STRUCT-SHAPED VARIANT DOES NOT BIND ITS TYPE PARAMETER: constructing one infers the BARE head (`MyErr`, not `MyErr[u8]`) and a patte… | FIXED by c9f5115d (0a8cea90 pre-rebase), at both sites the row described.
 
 CONSTRUCTION. `infer_enum_struct_variant_literal` returned
