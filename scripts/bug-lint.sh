@@ -186,7 +186,21 @@ elif _git("rev-parse", "--is-shallow-repository").stdout.strip() == "true":
         "(needs full history; set `fetch-depth: 0` on actions/checkout)"
     )
 else:
-    cites = {r["id"]: set(SHA.findall(r.get("fix", "") or "")) for r in rows}
+    # A `fix` field may reference a commit in the SIBLING kara-katas repo (an
+    # `audit`/`kata-gap` source often does), written `kara-katas <sha>`. That
+    # sha legitimately does not resolve HERE, and rule 6 is a same-repo check —
+    # flagging it is the "false accusation" the token rule above is written to
+    # avoid. Mask those references out before extracting, so only THIS repo's
+    # fix SHAs are validated. The mask is narrow: it drops a sha ONLY when
+    # immediately preceded by `kara-katas` (with an optional `commit`/`repo`),
+    # so it can never hide a genuine dangling same-repo SHA.
+    KATAS_SHA = re.compile(
+        r"kara-katas\s+(?:commit\s+|repo\s+)?"
+        r"(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b"
+    )
+    def _repo_shas(fix):
+        return set(SHA.findall(KATAS_SHA.sub("kara-katas", fix or "")))
+    cites = {r["id"]: _repo_shas(r.get("fix", "")) for r in rows}
     cites = {k: v for k, v in cites.items() if v}
     every = sorted({t for v in cites.values() for t in v})
     if every:
