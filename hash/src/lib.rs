@@ -107,12 +107,12 @@ impl core::hash::Hasher for KaraHasher {
 /// unkeyed", and a further reason this is opt-in rather than the default.
 pub fn fx_hash_bytes(bytes: &[u8]) -> u64 {
     let mut h: u64 = 0;
-    let mut chunks = bytes.chunks_exact(8);
-    for c in &mut chunks {
-        // `chunks_exact(8)` yields exactly 8 bytes; the conversion cannot fail.
-        h = fx_add(h, u64::from_le_bytes(c.try_into().unwrap()));
+    let (chunks, remainder) = bytes.as_chunks::<8>();
+    for c in chunks {
+        // `as_chunks::<8>()` yields `[u8; 8]` arrays directly — no fallible conversion.
+        h = fx_add(h, u64::from_le_bytes(*c));
     }
-    for &b in chunks.remainder() {
+    for &b in remainder {
         h = fx_add(h, u64::from(b));
     }
     h
@@ -158,18 +158,17 @@ impl core::hash::Hasher for FxHasher {
 pub fn hash_bytes_with_key(bytes: &[u8], k0: u64, k1: u64) -> u64 {
     let mut st = State::new(k0, k1);
     let len = bytes.len();
-    let mut chunks = bytes.chunks_exact(8);
-    for c in &mut chunks {
-        // `chunks_exact(8)` yields exactly 8 bytes, so the array conversion
-        // cannot fail; `unwrap` here is unreachable rather than fallible.
-        let m = u64::from_le_bytes(c.try_into().unwrap());
+    let (chunks, rem) = bytes.as_chunks::<8>();
+    for c in chunks {
+        // `as_chunks::<8>()` yields `[u8; 8]` arrays directly — no fallible conversion.
+        let m = u64::from_le_bytes(*c);
         st.round_msg(m);
     }
     // Final block: the remaining 0..=7 bytes, little-endian, with the low byte
     // of the input LENGTH in the top byte. That length byte is what keeps
     // `"a"` and `"a\0"` apart — without it every trailing-zero extension of a
     // key would collide.
-    let rem = chunks.remainder();
+    // `rem` (the 0..=7 trailing bytes) came from the `as_chunks` split above.
     let mut last = (len as u64 & 0xff) << 56;
     for (i, &b) in rem.iter().enumerate() {
         last |= (b as u64) << (8 * i);
