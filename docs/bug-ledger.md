@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 151 | 1 |
 | missing-feature | 149 | 4 |
 | double-free | 134 | 0 |
-| codegen-gap | 128 | 2 |
+| codegen-gap | 128 | 1 |
 | diagnostics | 97 | 2 |
 | false-positive | 93 | 1 |
 | perf | 83 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 991 | 4 |
+| codegen | 991 | 3 |
 | typecheck | 240 | 3 |
 | interp | 172 | 0 |
 | other | 63 | 1 |
@@ -124,14 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1484 surfaced · 11 open · 1451 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1484 surfaced · 10 open · 1452 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (11)
+### Open (10)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-21-43 | 2026-08-21 | codegen | low | A USER IMPL ON A **NON-SCALAR** `Array` HEAD IS UNCALLABLE ON A TEMPORARY -- `mk().tag()` for `impl Tag for Array[String, 2]` still loud-fails after B-2026-08-21-25, which admits only scalar-element arrays because a scalar array is the case that owns no heap | roadmap.md |
-| B-2026-08-21-46 | 2026-08-21 | codegen | low | `enumerate` OVER AN ARRAY **LITERAL** STILL BAILS LOUD -- `for (i, x) in [1, 2, 3].iter().enumerate()` hits the adaptor backstop while `--interp` answers, the one source shape B-2026-08-21-41's widening could not reach | roadmap.md |
 | B-2026-08-22-5 | 2026-08-22 | parser | medium | AN EFFECT CLAUSE ON AN IMPL HEADER HAS NO PRODUCTION -- design.md:3817 writes `impl From[ParseError] for AppError with writes(Log) {` and the parser rejects it with `Expected LeftBrace, found With` | parser |
 | B-2026-08-21-52 | 2026-08-22 | effect | medium | CHANNEL EFFECT RESOURCES HAVE NO PER-VALUE IDENTITY -- every channel collapses to the single `Channel` resource, so conflict analysis cannot tell `sends(tx1)` from `sends(tx2)` and design.md :6095's producer-against-consumer parallelization argument is not backed by the compiler | roadmap.md |
 | B-2026-08-22-6 | 2026-08-22 | typecheck | low | The `Hasher` and `BuildHasher` TRAITS are not baked, so a user cannot write their own hasher: `Map[K, V, H]` accepts only the two compiler-known selectors `SipHash13BuildHasher` / `FxBuildHasher`, and design.md's "User-extensible hashers" paragraph describes a surface that does not exist | roadmap.md |
@@ -159,9 +158,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1484 surfaced
 
 </details>
 
-### Fixed (1451)
+### Fixed (1452)
 
-<details><summary>1451 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1452 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -14849,6 +14848,72 @@ Worth knowing: without `KARAC_REQUIRE_RUNTIME_ARCHIVE=1` those 43 do not fail,
 they SKIP, and the run reports green -- the vacuous-pass hazard, live by default
 in a fresh container. Set the variable when a run has to prove it exercised real
 binaries. |
+| B-2026-08-21-46 | codegen | low | `enumerate` OVER A BRACKETED LITERAL bailed to the adaptor backstop while `--interp` answered -- and this row's premise was WRONG: the literal is not… | FIXED by e92355bf. One arm in `for_receiver_is_indexable`.
+
+THIS ROW'S OWN DIAGNOSIS WAS WRONG, and correcting it is most of the value here.
+It said the literal "carries no declared element anywhere", concluded that
+guessing "Array" from the syntax would mis-register genuine Vec literals, and
+deferred the fix to "give the predicate access to the typechecker's recorded
+type instead of re-deriving the type from syntax ... worth doing once for every
+syntactic type resolver in codegen".
+
+None of that was needed, because the premise is false. A bracketed literal never
+reaches codegen as `ExprKind::ArrayLiteral` at all: synthesis mode types it as a
+Vec, so it arrives ALREADY LABELLED as
+`PrefixCollectionLiteral { type_name: "Vec" }`. The type is read off the node,
+not inferred from syntax, so there is nothing to guess and nothing to
+mis-register. The row reached the opposite conclusion by reasoning about the
+source text rather than looking at the AST node, and I repeated the same mistake
+before measuring: the first attempt added an `ArrayLiteral` arm, which silently
+matched nothing. A one-line `eprintln!` of `inner.kind` settled it in a minute.
+
+WHY ACCEPTING THE NODE IS SUFFICIENT. The predicate only decides whether to PEEL
+the `.enumerate()`. The recursion then lands on the existing Vec-valued-temporary
+path, which materializes the literal into a synth binding and drives
+`compile_for_vec_var` -- whose induction variable IS the enumerate index. So the
+index binding was already correct for this shape; only the gate was shut.
+
+WHAT WAS DELIBERATELY LEFT OUT, and why the diff is smaller than the first draft.
+`compile_for`'s `ExprKind::ArrayLiteral` arm calls `compile_for_array_values`,
+which UNROLLS and binds no enumerate index at all (`bind_enumerate_index` takes
+an induction `IntValue`, and its `take()` would bind only the first element). A
+draft of this fix accepted `ArrayLiteral` in the predicate too and taught that
+helper to bind a CONSTANT index per unrolled element. Both halves were reverted
+after instrumenting the helper: no shape reaches it with a pending enumerate
+pattern. `b"abc"` and an annotated `Array[i64, N]` binding both route through the
+array-VAR path instead, and both already worked before this fix.
+
+So the ArrayLiteral half would have been dead code dressed as a fix. It is left
+out ENTIRELY rather than left in unexercised -- and, importantly, the predicate
+does not accept `ArrayLiteral` either: accepting the node without teaching the
+helper would leave the index unbound, turning a loud backstop into a new latent
+bug. A shape that does reach that arm keeps the pre-existing loud error, which is
+the honest outcome for a case with no reproducer. If one is ever found, the pair
+lands together.
+
+TEST: `test_e2e_enumerate_over_a_bracketed_literal` in tests/codegen.rs.
+Verified in BOTH directions -- FAILED with the fix stashed, ok with it restored.
+Beyond the row's repro it pins four things the repro alone cannot:
+  * a loop whose body uses `i` MULTIPLICATIVELY. The failure mode this replaces
+    would plausibly present as an index stuck at 0, and `0 * x` is 0 -- a
+    sum-only assertion cannot tell that from a correct run. `i * 100 + x` makes
+    every index observable.
+  * a NESTED loop in the body, since the index pattern is `take()`n precisely so
+    an inner loop does not re-bind it.
+  * `.into_iter()` as well as `.iter()`, both of which the peel accepts.
+  * a float element, so the lowering cannot be assuming integers.
+
+GATES. fmt clean; clippy clean on BOTH legs; `KARAC_REQUIRE_RUNTIME_ARCHIVE=1
+cargo test --features llvm --no-fail-fast` = 125 binaries, 14765 passed, with the
+only failures being 60 in `tests/gpu_e2e.rs` all panicking at the SAME line
+(gpu_e2e.rs:372) -- the opt-in GPU archive's presence gate, which that env var
+turns from a skip into a failure. None reached a shader.
+
+ENVIRONMENT NOTE for the next session in a fresh container: `ad66c081`
+(`refactor(hash): use slice::as_chunks`) changed `hash/src/lib.rs`, which links
+into the runtime archives. Rebuilding lean-then-full was required after rebasing
+onto it; skipping that produces a wave of undefined-symbol E2E failures
+indistinguishable from a real regression. |
 | B-2026-08-21-48 | codegen | medium | AN **UN-ANNOTATED** SLICE BINDING CANNOT CALL A USER METHOD ON THE `Slice` HEAD -- `let s = v[0..2]; s.f()` fails with "no handler for method 'f' on… | FIXED by e66ce9f — one arm in `src/codegen/expr_ops.rs`'s `type_name_of`:
 `ExprKind::Index { object, .. }` now binds `index` and answers "Slice" for a
 RANGE index over a non-String receiver.
