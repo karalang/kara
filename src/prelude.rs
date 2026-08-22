@@ -479,10 +479,19 @@ pub const PRELUDE_VARIANTS: &[&str] = &[
 /// installs a default provider in the base frame so `Clock.now()` etc.
 /// resolve deterministically outside any `with_provider` scope.
 ///
-/// The list is intentionally conservative — each name listed here has at
-/// least one built-in method implemented by the interpreter. Additional
-/// primitives (`FileSystem`, `Network`, `Heap`, `Stdin`, `Env`) are
-/// registered incrementally as their method surfaces land.
+/// The list holds two kinds, and the distinction matters when adding to it:
+/// PROVIDER-ROOTED resources with a built-in method surface (`Clock.now()`,
+/// `RandomSource`), and CONFLICT-ONLY resources with no methods at all
+/// (`Hardware`, `Heap`) that exist so a verb clause naming them resolves and
+/// participates in conflict analysis.
+///
+/// This comment previously read "each name listed here has at least one
+/// built-in method implemented by the interpreter", and named `FileSystem`,
+/// `Network`, `Heap`, `Stdin` and `Env` as pending. It had gone stale on both
+/// counts: four of those five had since landed, and the method-surface
+/// criterion excludes the conflict-only kind by construction — which is why
+/// `Heap` sat unregistered while design.md used it on 58 lines
+/// (B-2026-08-21-29).
 pub const PRELUDE_EFFECT_RESOURCES: &[&str] = &[
     "Clock",
     "RandomSource",
@@ -506,6 +515,24 @@ pub const PRELUDE_EFFECT_RESOURCES: &[&str] = &[
     // visibility so user wrappers can write
     // `with sends(ProcessTable)` without redeclaring it.
     "ProcessTable",
+    // The allocator (B-2026-08-21-29). A *conflict-only* resource in exactly
+    // the sense `Hardware` below is: no provider methods, nothing to call on
+    // it, present so `allocates(Heap)` resolves and participates in conflict
+    // analysis.
+    //
+    // design.md writes `allocates(Heap)` on FIFTY-EIGHT lines and never once
+    // declares `effect resource Heap;` — grepped, zero hits in the whole file,
+    // code blocks and prose alike — so it treats the name as ambient. It was
+    // not, which made every one of those examples uncompilable as printed, for
+    // a reason a reader had no way to discover from the document (the
+    // requirement itself was established by B-2026-08-02-4).
+    //
+    // The list comment above used to name `Heap` among the primitives
+    // "registered incrementally as their method surfaces land". That criterion
+    // never fit: a method surface is what `Clock.now()` has, and `Heap` has no
+    // methods by construction — it is the target of a verb, not a provider.
+    // `Hardware` is the precedent this follows, not `Clock`.
+    "Heap",
     // Memory-mapped I/O (`volatile_read` / `volatile_write` in
     // `runtime/stdlib/intrinsics.kara`). A *conflict-only* resource — it
     // has no provider methods (unlike `Clock`/`RandomSource`), so the

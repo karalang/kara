@@ -43823,3 +43823,68 @@ fn a_plain_trait_bound_is_discharged_on_a_method_call() {
         "a method's plain trait bound must be discharged, got {errs:?}"
     );
 }
+
+/// B-2026-08-21-29 (1b) — `Channel.new()` pins its element type from a later
+/// `send`, as the builtin's own comment has always claimed.
+///
+/// `Channel.new()` mints a fresh type variable shared by the returned
+/// `Sender[T]` / `Receiver[T]`, and the comment above that arm says "a later
+/// `tx.send(x)` / `rx.recv()` pins the same `T`". It did not: both send paths
+/// reached `check_assignable`, which CHECKS rather than UNIFIES, so an
+/// unsolved `?T0` against an `i64` argument reported `expected '?T0', found
+/// 'i64'`.
+///
+/// The consequence was that the ANNOTATED spelling was the only channel
+/// construction that worked — and design.md:6111 writes the unannotated one
+/// (`let (tx, rx) = Channel.new();`), so the documented form did not compile.
+#[test]
+fn channel_new_infers_its_element_from_a_later_send() {
+    typecheck_ok("fn main() { let (tx, rx) = Channel.new(); tx.send(1); println(1); }");
+    typecheck_ok("fn main() { let (tx, rx) = Channel.new(); tx.send(\"hi\"); println(1); }");
+    // The annotated spelling keeps working — it was the only one that did.
+    typecheck_ok(
+        "fn main() { let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.new(); \
+         tx.send(1); println(1); }",
+    );
+}
+
+/// PINNING MUST NOT WEAKEN CHECKING. Once the first `send` solves the
+/// variable, a later `send` of a different type is still an error — otherwise
+/// this would have traded a false rejection for a false acceptance, which is
+/// the worse direction.
+#[test]
+fn channel_element_once_pinned_still_rejects_a_mismatched_send() {
+    assert!(
+        !typecheck_errors(
+            "fn main() { let (tx, rx) = Channel.new(); tx.send(1); tx.send(\"no\"); println(1); }"
+        )
+        .is_empty(),
+        "the second send must be checked against the element the first one pinned"
+    );
+    assert!(
+        !typecheck_errors(
+            "fn main() { let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.new(); \
+             tx.send(\"x\"); println(1); }"
+        )
+        .is_empty(),
+        "an annotated channel must still reject a mismatched send"
+    );
+}
+
+/// B-2026-08-21-29 (3) — `allocates(Heap)` resolves with no local declaration.
+///
+/// design.md writes `allocates(Heap)` on 58 lines and never declares
+/// `effect resource Heap;` anywhere, so it treats the name as ambient. It was
+/// not registered, which made every one of those examples uncompilable as
+/// printed. Registered as a CONFLICT-ONLY resource, the shape `Hardware`
+/// already had: no provider methods, present so the verb clause resolves and
+/// participates in conflict analysis.
+#[test]
+fn allocates_heap_resolves_without_a_local_declaration() {
+    typecheck_ok("fn f(v: Vec[i64]) -> i64 with allocates(Heap) { return v.len(); }\nfn main() { println(1); }");
+    // The spec's own channel line, verbatim — both halves of it now resolve.
+    typecheck_ok(
+        "fn snd(tx: Sender[i64], v: i64) with sends(tx) allocates(Heap) { tx.send(v); }\n\
+         fn main() { println(1); }",
+    );
+}

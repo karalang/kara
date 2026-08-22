@@ -431,7 +431,9 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 for arg in args {
                     let at = self.infer_expr(&arg.value);
-                    self.check_assignable(&elem, &at, arg.value.span);
+                    if !pin_channel_elem_from_arg(&mut self.env, &elem, &at) {
+                        self.check_assignable(&elem, &at, arg.value.span);
+                    }
                 }
                 // `Result[Unit, ChannelError]`.
                 Type::Named {
@@ -595,7 +597,9 @@ impl<'a> super::TypeChecker<'a> {
                     }
                     for arg in args {
                         let at = self.infer_expr(&arg.value);
-                        self.check_assignable(&elem, &at, arg.value.span);
+                        if !pin_channel_elem_from_arg(&mut self.env, &elem, &at) {
+                            self.check_assignable(&elem, &at, arg.value.span);
+                        }
                     }
                     Type::Unit
                 }
@@ -923,4 +927,41 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
     }
+}
+
+/// Pin an as-yet-unsolved channel element type from the value being sent
+/// (B-2026-08-21-29).
+///
+/// `Channel.new()` mints a fresh type variable shared by the `Sender[T]` and
+/// `Receiver[T]` it returns, and the comment above that arm states that "a
+/// later `tx.send(x)` / `rx.recv()` pins the same `T`". It did not. Both send
+/// paths reached `check_assignable(&elem, &at, ..)`, which CHECKS rather than
+/// UNIFIES, so an unsolved `?T0` against an `i64` argument reported
+/// `expected '?T0', found 'i64'` instead of solving `?T0 := i64`.
+///
+/// The consequence was that the annotated spelling
+/// (`let (tx, rx): (Sender[i64], Receiver[i64]) = Channel.new();`) was the
+/// only channel construction that worked — and design.md writes the
+/// unannotated one (`let (tx, rx) = Channel.new();`, :6111).
+///
+/// Returns true when it bound the variable, so the caller can skip the
+/// assignability check it would otherwise fail.
+fn pin_channel_elem_from_arg(
+    env: &mut crate::typechecker::env::TypeEnv,
+    elem: &Type,
+    arg_ty: &Type,
+) -> bool {
+    // Only an UNSOLVED variable is pinnable; a solved one must still be
+    // checked, or `send` would accept any type after the first call.
+    let resolved = resolve_type_var_top(elem, &env.substitutions);
+    let Type::TypeVar(id) = resolved else {
+        return false;
+    };
+    // Never pin to an error or to another unsolved variable — the first
+    // propagates a bogus solution, the second solves nothing.
+    if matches!(arg_ty, Type::Error | Type::TypeVar(_)) {
+        return false;
+    }
+    env.substitutions.insert(id, arg_ty.clone());
+    true
 }

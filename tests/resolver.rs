@@ -163,20 +163,50 @@ fn test_effect_resource_registered() {
 #[test]
 fn test_undefined_effect_resource_suggests_declaration() {
     // B-2026-08-02-4: "undefined effect resource" must name the fix, not
-    // just the failure — the FFI lint suggests `allocates(Heap)` and users
-    // land here when no `effect resource Heap;` declaration exists. Same
-    // guidance shape as the wrong-kind arm ("is not an effect resource").
-    let errors = resolve_errors("pub fn f() with allocates(Heap) {}");
+    // just the failure. Same guidance shape as the wrong-kind arm ("is not
+    // an effect resource").
+    //
+    // The example resource is no longer `Heap` (B-2026-08-21-29). `Heap` is
+    // now PREDECLARED — design.md writes `allocates(Heap)` on 58 lines and
+    // never declares it, so it is ambient like `Clock` and `Hardware`, and
+    // the FFI lint that suggests `allocates(Heap)` now suggests something
+    // that works. The guarantee this test exists for is the MESSAGE, not the
+    // name, so it moved to a resource that is genuinely undeclared;
+    // `heap_is_predeclared_so_the_ffi_lints_suggestion_resolves` below pins
+    // the other half.
+    let errors = resolve_errors("pub fn f() with allocates(ArenaPool) {}");
     assert!(
         errors.iter().any(|e| {
-            e.message.contains("undefined effect resource 'Heap'")
-                && e.message.contains("declare `effect resource Heap;`")
+            e.message.contains("undefined effect resource 'ArenaPool'")
+                && e.message.contains("declare `effect resource ArenaPool;`")
         }),
         "Undefined-resource error must suggest declaring the resource, got: {:?}",
         errors
             .iter()
             .map(|e| e.message.as_str())
             .collect::<Vec<_>>()
+    );
+}
+
+/// B-2026-08-21-29 — `Heap` needs no declaration.
+///
+/// design.md writes `allocates(Heap)` on 58 lines and never once declares
+/// `effect resource Heap;`, so it treats the name as ambient; it was not, and
+/// every one of those examples was uncompilable as printed. Registered as a
+/// CONFLICT-ONLY prelude resource — the shape `Hardware` already had: no
+/// provider methods, present so the verb clause resolves and participates in
+/// conflict analysis.
+///
+/// This also completes B-2026-08-02-4, whose subject was a user following the
+/// FFI lint's `allocates(Heap)` suggestion verbatim and hitting an undefined
+/// resource. That row fixed the MESSAGE; the suggestion now simply works.
+#[test]
+fn heap_is_predeclared_so_the_ffi_lints_suggestion_resolves() {
+    let result = resolve_ok("pub fn f() with allocates(Heap) {}");
+    assert!(
+        result.errors.is_empty(),
+        "`allocates(Heap)` must resolve with no local declaration, got: {:?}",
+        result.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
     );
 }
 
