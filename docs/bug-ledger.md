@@ -92,10 +92,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 276 | 0 |
+| miscompile | 277 | 1 |
 | leak | 187 | 1 |
 | run-vs-build | 149 | 1 |
-| missing-feature | 143 | 6 |
+| missing-feature | 144 | 6 |
 | double-free | 134 | 0 |
 | codegen-gap | 128 | 3 |
 | diagnostics | 95 | 2 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 987 | 7 |
-| typecheck | 232 | 4 |
+| codegen | 988 | 8 |
+| typecheck | 233 | 4 |
 | interp | 172 | 2 |
 | other | 62 | 0 |
 | ownership | 62 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | effect | 8 | 1 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1466 surfaced · 13 open · 1431 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1468 surfaced · 14 open · 1432 fixed · 8 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (13)
+### Open (14)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,13 +134,14 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1466 surfaced
 | B-2026-08-21-6 | 2026-08-21 | codegen+interp | medium | `Map`/`Set` DO NOT USE THE SPEC'S DEFAULT HASHER: design.md mandates `SipHash13BuildHasher` seeded from a per-process random source, codegen emits FxHash with a COMPILE-TIME-CONSTANT seed and the interpreter hashes not at all -- so there is no hash-flooding resistance, iteration order is fully deterministic across runs (design.md says it must vary), the two backends order differently from each other, and `Map[K, V, FxBuildHasher]` -- design.md's own spelling -- does not resolve, so there is no opt-in either way | roadmap.md |
 | B-2026-08-21-9 | 2026-08-21 | parser | medium | design.md WRITES SYNTAX THE PARSER HAS NO PRODUCTION FOR, in two places syntax.md also disagrees with: the inline associated-type binding `Trait[Assoc = T]` (43 lines of design.md, and syntax.md's own comment at :650) has no form in `TRAIT_BOUND = PATH [ "[" TYPE_LIST "]" ]`, and an effect clause on an impl header (`impl From[E] for A with writes(Log) {`) has no form at all | roadmap.md |
 | B-2026-08-21-18 | 2026-08-21 | codegen+typecheck | low | STRUCT FUNCTIONAL UPDATE `P { x: 1, ..base }` IS STILL UNIMPLEMENTED -- it now says so clearly instead of dropping the base, but the form syntax.md's STRUCT_LITERAL production admits cannot be used; the interpreter already implements the copy and codegen does not, so the remaining work is codegen plus the ownership rules for a spread base | roadmap.md |
-| B-2026-08-21-26 | 2026-08-21 | typecheck | medium | `TryFrom[intN]` FOR A C-LIKE `#[repr(intN)]` ENUM DOES NOT EXIST -- design.md § Enum Discriminant Runtime Surface commits to auto-generating it and shows the worked `match UsbClass.try_from(raw)`, which fails to compile | roadmap.md |
 | B-2026-08-21-29 | 2026-08-21 | typecheck | medium | THREE DOCUMENTED SURFACES ARE NOT REACHABLE AS WRITTEN: every spelling of channel construction design.md uses (`Channel.new[T]()`, `Channel.bounded`), its whole `io.` I/O prefix, and `allocates(Heap)` -- whose `Heap` the document never declares and the prelude does not provide | roadmap.md |
 | B-2026-08-21-32 | 2026-08-21 | resolver+effect | medium | EFFECT RESOURCES CANNOT BE ROOTED AT A VALUE, so design.md's whole channel effect model is unwritable: `with sends(tx)` on a channel PARAMETER is `'tx' is not an effect resource (it is a variable)`, and the seven `Sender`/`Receiver` declarations at :6064-:6094 are all written that way | roadmap.md |
 | B-2026-08-21-43 | 2026-08-21 | codegen | low | A USER IMPL ON A **NON-SCALAR** `Array` HEAD IS UNCALLABLE ON A TEMPORARY -- `mk().tag()` for `impl Tag for Array[String, 2]` still loud-fails after B-2026-08-21-25, which admits only scalar-element arrays because a scalar array is the case that owns no heap | roadmap.md |
 | B-2026-08-21-44 | 2026-08-21 | codegen | low | `as_slice()` ON A FIXED-ARRAY **TEMPORARY** HAS NO CODEGEN LOWERING -- `n.to_ne_bytes().as_slice().len()` fails dispatch while `--interp` answers, the one method of the Array surface B-2026-08-21-25 left out | roadmap.md |
 | B-2026-08-21-45 | 2026-08-21 | typecheck+codegen | low | FIVE SHIPPED USER-FACING DIAGNOSTICS CARRY RUNS OF 14-30 SPACES mid-sentence, because rustfmt INTERMITTENTLY rejoins a `\`-continued string literal into one line and keeps the continuation indentation as real spaces | roadmap.md |
 | B-2026-08-21-46 | 2026-08-21 | codegen | low | `enumerate` OVER AN ARRAY **LITERAL** STILL BAILS LOUD -- `for (i, x) in [1, 2, 3].iter().enumerate()` hits the adaptor backstop while `--interp` answers, the one source shape B-2026-08-21-41's widening could not reach | roadmap.md |
+| B-2026-08-21-50 | 2026-08-21 | codegen | high | A C-LIKE ENUM BOUND OUT OF `Ok(...)` MATCHES THE WRONG VARIANT UNDER CODEGEN -- `Ok(UsbClass.Hid)` selects the FIRST variant, and passing the binding to a function taking the enum fails LLVM verification outright; the interpreter is correct, so this is a silent run-vs-build divergence | codegen |
+| B-2026-08-21-51 | 2026-08-21 | typecheck | medium | A GENERIC ENUM'S STRUCT-SHAPED VARIANT DOES NOT BIND ITS TYPE PARAMETER: constructing one infers the BARE head (`MyErr`, not `MyErr[u8]`) and a pattern binds the payload as the uninstantiated `D`, so `value as i64` is rejected with "cannot cast 'D' to 'i64'" | typecheck |
 | B-2026-08-21-47 | 2026-08-22 | codegen | medium | A `shared struct` FIELD SOURCE LEAKS A DIFFERENT BUFFER THAN THE PLAIN-STRUCT ONE DID -- `last = s.name` off a `shared struct` leaks the POST-append body (3 bytes/call) where the plain-struct shape leaked the PRE-append one, so the fix for B-2026-08-21-40 does not reach it | roadmap.md |
 | B-2026-08-22-2 | 2026-08-22 | interp | high | A BARE UNIT-VARIANT PATTERN OF A BAKED-STDLIB ENUM MAKES THE **INTERPRETER** MATCH THE FIRST ARM ALWAYS -- `match e { NotFound => .., PermissionDenied => .. }` on an `IoError.PermissionDenied` prints `NotFound` under `--interp` and `PermissionDenied` under AOT; the qualified spelling is correct on both, `karac check` reports nothing, and the interpreter is the wrong one | roadmap.md |
 
@@ -161,9 +162,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1466 surfaced
 
 </details>
 
-### Fixed (1431)
+### Fixed (1432)
 
-<details><summary>1431 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1432 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -13815,6 +13816,55 @@ THE LIVE REMAINDER, split into rows rather than buried here:
   * B-2026-08-21-43 -- the non-scalar-element user impl the gate excludes.
   * B-2026-08-21-44 -- `as_slice()` on a temporary, excluded for the same
     hands-out-an-interior-pointer reason as `as_ptr`. |
+| B-2026-08-21-26 | typecheck | medium | `TryFrom[intN]` FOR A C-LIKE `#[repr(intN)]` ENUM DOES NOT EXIST -- design.md § Enum Discriminant Runtime Surface commits to auto-generating it and s… | FIXED by 5e323df1 (8b264344 pre-rebase). `Enum.try_from(v)` is now generated for every C-like enum with a
+DECLARED `#[repr(intN)]`, typed `Result[Enum, DiscriminantError[intN]]`, and
+lowered on all three surfaces.
+
+THE ERROR TYPE the row left open is settled by the spec itself, which names it
+verbatim: "a prelude error type (`enum DiscriminantError { OutOfRange { value:
+D } }`, parameterized by the repr type)". It is declared in Kara, in
+`runtime/stdlib/discriminant_error.kara`, modelled on `alloc_error.kara` (a
+struct-shaped payload variant) and `entry.kara` (generic parameters) -- so no
+new machinery, just a new stdlib file plus a `PRELUDE_TYPES` entry. Its codegen
+layout is seeded by hand next to `AllocError`'s, for the same reason:
+`declare_enums` only walks the user's items. One layout covers every
+instantiation, because every `D` it is used at is an integer and so occupies
+one payload word -- the same argument that lets `AllocError`'s `usize` payload
+need no monomorphization.
+
+A PREREQUISITE the row did not anticipate: the discriminant table stored the
+EFFECTIVE repr, defaulting to `u32`, so a genuine `#[repr(u32)]` enum was
+indistinguishable from a repr-less one. The spec withholds `try_from` from
+repr-less enums precisely because their discriminant space is not stable, so
+the gate could not be written until the table recorded which reprs were
+DECLARED. `EnumDiscriminantTable` is now keyed to an `EnumDiscriminants` struct
+carrying `repr_declared`; `.discriminant()` is deliberately NOT gated on it,
+which is the asymmetry the spec describes.
+
+TWO REFUSALS, each naming the spec's reasoning: a payload enum (absent from the
+table by construction) and a repr-less C-like enum (present, but not declared).
+The second says that `.discriminant()` remains available, since reading the
+current value is a local property while round-tripping through it is not. The
+argument must be the repr type EXACTLY, checked explicitly rather than through
+`check_assignable`, which admitted the mismatch silently -- a conversion whose
+whole job is range-checking must not quietly range-check a different value.
+
+VERIFIED: the spec's own worked example, plus signed/wide/folded-constant
+reprs, an out-of-range value at each boundary, and a round-trip against
+`.discriminant()`, byte-identical under `run --interp`, `build`, and
+`KARAC_AUTO_PAR=0 build`. 7 new tests (4 typechecker, 2 interpreter, 1 codegen
+E2E). fmt + clippy clean on both feature legs; typechecker 2412, interpreter
+1660, design.md conformance, lowering and resolver suites green.
+
+TWO PRE-EXISTING DEFECTS FOUND while testing this, both confirmed independent
+of it and filed rather than worked around silently:
+  * B-2026-08-21-50 (high) — a C-like enum bound out of `Ok(...)` matches the
+    WRONG variant under codegen and is right under the interpreter, with no
+    `try_from` in the reproducer. The E2E here reads the converted variant back
+    through `.discriminant()` to stay clear of it, and says so.
+  * B-2026-08-21-51 — a generic enum's struct-shaped variant does not bind its
+    type parameter, so the `Err` payload comes back as `D` and cannot be cast.
+    The E2E prints the value instead of casting it. |
 | B-2026-08-21-27 | typecheck | medium | self-host typechecker diverges from Rust on a struct-update expression missing a field | FIXED by dda94ff — the same commit that closed B-2026-08-21-20, which this row duplicates.
 
 Both rows are the same failure: `selfhost_typechecker_matches_rust_typechecker` at corpus input 126, `struct P { x: i64, y: i64 } fn f(b: P) -> P { P { x: 1, ..b } }`, where the Kara-written typechecker reported `missing-field` and the Rust one `type-mismatch`, both at 46:15. `dda94ff` taught `selfhost/src/typechecker.kara` the struct-spread rule `3b4b97d` introduced. Verified green on a clean checkout at `27735db`: `cargo test --features llvm --test selfhost_typechecker` — 1 passed, 0 failed.
