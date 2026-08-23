@@ -94,15 +94,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 280 | 0 |
 | leak | 189 | 0 |
-| missing-feature | 157 | 2 |
+| missing-feature | 159 | 4 |
 | run-vs-build | 152 | 1 |
 | double-free | 135 | 0 |
 | codegen-gap | 129 | 0 |
-| diagnostics | 99 | 0 |
+| diagnostics | 100 | 1 |
 | false-positive | 95 | 0 |
 | perf | 84 | 0 |
 | other | 58 | 0 |
-| soundness | 56 | 1 |
+| soundness | 56 | 0 |
 | crash | 55 | 0 |
 | use-after-free | 20 | 0 |
 
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 1000 | 0 |
-| typecheck | 247 | 0 |
+| typecheck | 248 | 1 |
 | interp | 175 | 1 |
 | ownership | 64 | 0 |
 | other | 63 | 0 |
@@ -120,20 +120,22 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | parser | 39 | 1 |
 | runtime | 31 | 0 |
 | resolver | 26 | 0 |
-| effect | 13 | 2 |
+| effect | 15 | 3 |
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1509 surfaced · 4 open · 1482 fixed · 9 wontfix** (2026-05-20 → 2026-08-23). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1512 surfaced · 6 open · 1483 fixed · 9 wontfix** (2026-05-20 → 2026-08-23). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-23-7 | 2026-08-23 | effect | high | A declared effect is LOST when a function is reached through a LET BINDING or a CONTAINER ELEMENT, so a public function's effect declaration -- "guaranteed semantics" per § Specification Layers -- is bypassable in two lines. design.md § First-Class Functions: "**Effects carry through.** A function with effects produces a typed function value that includes those effects: `let f = save;  // f: Fn(User) -> () with writes(UserDB)` -- calling f carries the writes(UserDB) effect, SAME AS CALLING SAVE DIRECTLY." Measured against a `fn save(n: i64) -> i64 with writes(UserDB)`: `pub fn direct() -> i64 { save(7) }` correctly errors `public function 'direct' performs effects [writes(UserDB)] but has no effect declaration`; `pub fn via_value() -> i64 { let f = save; f(7) }` reports "All checks passed." A second hop (`let f = save; let g = f; g(7)`) also passes. The CONTAINER leg is worse than silent -- `let mut v: Vec[Fn(i64) -> i64] = Vec.new(); v.push(save); v[0](7)` reports a PARTIAL set, `performs effects [panics]`, naming the indexing panic while dropping the callee's declared `writes(UserDB)`, so the diagnostic reads as an authoritative effect list that is wrong. | roadmap.md |
 | B-2026-08-23-8 | 2026-08-23 | effect | medium | BUILT-IN PRIMITIVE RESOURCE effects are never inferred -- stdout, stdin, stderr, env and the filesystem contribute NOTHING to any effect set, so design.md's own two I/O skeletons report the wrong answer and a `pub fn` that does I/O needs no declaration. § Standard I/O Surface states the results outright for its guessing-game skeleton ("The inferred effect set: `reads(Stdin), writes(Stdout), panics`") and its CLI skeleton ("Inferred effects: `reads(Env), reads(FileSystem), writes(Stdout), writes(Stderr), panics`"). Transcribed VERBATIM, both check clean and `karac check --output=json` reports `program_effects: []` for the first and `['panics()']` for the second. The enforcement half is missing in step: `pub fn emit() -> i64 { println("hi"); 1 }`, `pub fn read_it() { stdin.read_line(); }`, `pub fn envy() { env.args(); }` and `pub fn err_it() { eprintln("e"); }` ALL pass with no effect declaration, while the identical shape over a USER-DEFINED resource is correctly refused (`public function 'p' performs effects [writes(UserDB)] but has no effect declaration`). | roadmap.md |
 | B-2026-08-23-9 | 2026-08-23 | interp | medium | The INTERPRETER SKIPS an `errdefer` block when the function's `Err` comes from its TAIL EXPRESSION, while both compiled backends run it. `fn work() -> Result[i64, String] { errdefer { println("failed"); } defer { println("always"); } Err("bad".to_string()) }` prints `always | err bad` under `karac run --interp` and `failed | always | err bad` under `karac run` (JIT) and the AOT binary alike -- so the cleanup that the shipped binary performs is silently absent under the interpreter. `karac check` is clean. The divergence is specific to the tail-expression form: an `Err` reached via `?` short-circuit and an explicit `return Err(...)` both run the `errdefer` correctly on ALL THREE backends, and the `Ok`-from-tail control correctly skips it on all three. | roadmap.md |
 | B-2026-08-23-10 | 2026-08-23 | parser | low | UNIT STRUCTS (`struct Name;`) do not parse, so design.md § Typestate via Phantom Type Parameters' state markers cannot be written as the spec writes them. `struct Disconnected;` -> `error[parse]: Expected LeftBrace, found Semicolon`. The section introduces them as "// State markers — zero-size phantom types" and they are the first two lines of its worked example. The form appears in design.md exactly twice, both here (lines 8734-8735), and the braced spelling works everywhere else. | roadmap.md |
+| B-2026-08-23-11 | 2026-08-23 | typecheck | medium | `Type::Function` carries NO EFFECT ROW, so design.md § First-Class Functions' `let f = save;  // f: Fn(User) -> () with writes(UserDB)` is not representable and a function value's effects cannot propagate through its TYPE. The typechecker's function type is `Function { params, return_type }` -- no effect field -- while the AST-level `TypeKind::FnType` DOES carry an `effect_spec`, which is why a PARAMETER slot can be checked (E0404 `argument 1 has effect writes(UserDB) not declared in slot [pure]`) but an inferred binding cannot. B-2026-08-23-7 closed the resulting soundness hole with an OVER-APPROXIMATION -- a function mentioned in value position contributes its effects to the enclosing function whether or not it is ever called -- which is sound but imprecise: `let f = save;` with no call still demands the declaration. | roadmap.md |
+| B-2026-08-23-12 | 2026-08-23 | effect | medium | A `let` binding's `Fn(...)` TYPE ANNOTATION is never checked against the assigned function's effects, so `let f: Fn(i64) -> i64 = save;` -- a slot that declares PURITY -- silently accepts an effectful `save`, while the IDENTICAL parameter slot is rejected. Measured against `fn save(n: i64) -> i64 with writes(UserDB)`: `fn apply(f: Fn(i64) -> i64, n: i64)` called as `apply(save, 7)` errors `argument 1 has effect writes(UserDB) not declared in slot [pure]`, but `let f: Fn(i64) -> i64 = save;` in a caller that declares `with writes(UserDB)` reports NOTHING. The same E0404 rule, applied at one site and not the other. | roadmap.md |
+| B-2026-08-23-13 | 2026-08-23 | effect | low | The mutual-recursion NOTE now fires for two functions that merely REFERENCE each other as VALUES, calling them a "mutual recursion group" though neither calls the other. `fn p(n: i64) -> i64 { let f = q; n + 1 }` + `fn q(n: i64) -> i64 { let g = p; n + 2 }` reports `note[effect]: mutual recursion group resolved by fixed-point inference: \`p\` (no effects), \`q\` (no effects)`. The program passes and the note is suppressible with `#[allow(mutual_recursion_note)]`, so this is diagnostic wording, not a check failure -- but "mutual recursion" is a false statement about the program. | roadmap.md |
 
 ### Wontfix (9)
 
@@ -153,9 +155,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1509 surfaced
 
 </details>
 
-### Fixed (1482)
+### Fixed (1483)
 
-<details><summary>1482 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1483 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -17143,6 +17145,11 @@ four fail on the types_lowering revert; the two return-of-unit-call tests fail
 on the exprs revert; none survives both). Each `-> ()` case additionally
 asserts its output equals the annotation-dropped control, so the tests check
 the two spellings AGREE rather than just matching a literal. |
+| B-2026-08-23-7 | effect | high | A declared effect is LOST when a function is reached through a LET BINDING or a CONTAINER ELEMENT, so a public function's effect declaration -- "guar… | FIXED by 67e0e1f. Root cause: the effect model is NAME-BASED -- effects flow along call-graph edges keyed by function symbol -- so a function reached as a VALUE left the model entirely and its declared effects reached nobody. `extract_callee_name` resolves the callee of `f(7)` to the symbol `f`, which names no function, so `callee_effect_sets` found nothing and contributed no effect.
+
+Fix: a mention of a free function in VALUE position now contributes that function's effects to the enclosing function, through a synthetic call edge on the same channel the `__modbind_*` keys already use. Implemented by giving `modbind_synth.rs`'s shadow-aware walker a second table (`fn_value_ref_syms`). That walk was REUSED rather than duplicated because it already has the two properties this rule needs and a fresh 85-arm walker would have had to re-earn: a shadow stack covering every binding form (let / parameter / closure param / match arm / for pattern), and an EXHAUSTIVE `walk_expr` with no catch-all, so a future `ExprKind` is a compile error rather than a silently unwalked path that leaks an effect.
+
+Edges are computed once per function (`fn_value_ref_calls`) and consumed in THREE places. `infer_function_effects` is the obvious one. `build_call_graph` is the non-obvious one and is required: a single-member SCC is inferred in ONE pass on the premise that every callee sits in an earlier SCC and is already resolved, so an edge missing from the GRAPH loses the effect of any mentioned function whose own effects are INFERRED rather than declared (a declared-effect callee is seeded up front and would have masked the bug -- the returned-function test is the shape that pins it). `check_one_par_block` is the third: a par block that reaches a module-binding writer through a function value is the same 1328 conflict, and was missed for exactly the reason the public-boundary check was. |
 
 </details>
 
