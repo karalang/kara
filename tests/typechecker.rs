@@ -44500,28 +44500,35 @@ fn a_self_returning_existential_stays_opaque() {
 /// `karac check`. That is only possible because the capability question is
 /// answered without the backend (`target::target_has_native_f16`).
 ///
-/// These assert on the CI/host baseline, where half-precision is emulated
-/// on every `cpu-baseline` level of both x86_64 and aarch64 (measured with
-/// `llc`). `f16_is_quiet_where_the_target_has_hardware_support` covers the
-/// other direction without depending on the host.
+/// These are host-aware: whether the emulation lint fires depends on the
+/// resolved baseline CPU. x86_64 (and aarch64 baselines below `apple-m1`)
+/// emulate half-precision, so the lint fires; `apple-m1` — what aarch64 macOS
+/// resolves to — has native `FEAT_FP16`, so the lint correctly stays quiet.
+/// Each test asserts the direction its own host is in (via
+/// `target::target_has_native_f16`), so they pass on both CI legs.
 #[test]
 fn f16_arithmetic_warns_that_it_is_software_emulated() {
     let warns =
         type_warnings_of("fn main() { let a: f16 = 1.5; let b: f16 = 2.0; let c = a + b; }");
-    assert!(
-        warns.iter().any(|w| w.contains("software-emulated")),
-        "expected the f16 emulation lint, got {warns:?}"
-    );
+    let emulated = warns.iter().any(|w| w.contains("software-emulated"));
+    if karac::target::target_has_native_f16() {
+        // Native-f16 host (e.g. apple-m1): the lint must stay quiet.
+        assert!(!emulated, "native-f16 host must not emit the lint, got {warns:?}");
+    } else {
+        assert!(emulated, "expected the f16 emulation lint, got {warns:?}");
+    }
 }
 
 #[test]
 fn bf16_arithmetic_warns_too() {
     let warns =
         type_warnings_of("fn main() { let a: bf16 = 1.5; let b: bf16 = 2.0; let c = a * b; }");
-    assert!(
-        warns.iter().any(|w| w.contains("software-emulated")),
-        "bf16 is emulated on the same targets as f16, got {warns:?}"
-    );
+    let emulated = warns.iter().any(|w| w.contains("software-emulated"));
+    if karac::target::target_has_native_f16() {
+        assert!(!emulated, "native-f16 host must not emit the bf16 lint, got {warns:?}");
+    } else {
+        assert!(emulated, "bf16 is emulated wherever f16 is, got {warns:?}");
+    }
 }
 
 #[test]
@@ -44572,8 +44579,16 @@ fn the_f16_lint_names_the_cpu_it_judged() {
     let warns =
         type_warnings_of("fn main() { let a: f16 = 1.5; let b: f16 = 2.0; let c = a + b; }");
     let (cpu, _) = karac::target::baseline_cpu_and_features();
-    assert!(
-        warns.iter().any(|w| w.contains(cpu)),
-        "the diagnostic must name the cpu it judged ({cpu}), got {warns:?}"
-    );
+    if karac::target::target_has_native_f16() {
+        // apple-m1 et al.: no diagnostic is produced, so there is no cpu to name.
+        assert!(
+            !warns.iter().any(|w| w.contains("software-emulated")),
+            "native-f16 host must not emit the emulation lint, got {warns:?}"
+        );
+    } else {
+        assert!(
+            warns.iter().any(|w| w.contains(cpu)),
+            "the diagnostic must name the cpu it judged ({cpu}), got {warns:?}"
+        );
+    }
 }
