@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 279 | 1 |
+| miscompile | 279 | 0 |
 | leak | 189 | 0 |
 | missing-feature | 155 | 1 |
 | run-vs-build | 151 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 997 | 2 |
+| codegen | 997 | 1 |
 | typecheck | 246 | 1 |
 | interp | 174 | 0 |
 | other | 63 | 0 |
@@ -118,19 +118,18 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | cli | 62 | 0 |
 | autopar | 55 | 0 |
 | parser | 38 | 0 |
-| runtime | 31 | 2 |
+| runtime | 31 | 1 |
 | resolver | 26 | 0 |
 | effect | 11 | 0 |
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1501 surfaced · 4 open · 1474 fixed · 9 wontfix** (2026-05-20 → 2026-08-23). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1501 surfaced · 3 open · 1475 fixed · 9 wontfix** (2026-05-20 → 2026-08-23). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-22-27 | 2026-08-22 | codegen+runtime | high | A COMPILED `Map[i64, V, H]` under any NON-DEFAULT hasher stops growing after one resize and silently drops every key past it: `len` still counts them, `contains_key` cannot find them, and the missing keys are the contiguous tail starting at exactly 3/4 of the stalled capacity (196609 at N=200000, 393217 at 400000, 786433 at 800000). `--interp` is correct, so it is a run-vs-build divergence; the default hasher never loses a key at any N | roadmap.md |
 | B-2026-08-22-29 | 2026-08-22 | codegen+runtime | medium | `FxBuildHasher` is 13.7x SLOWER than the default `SipHash13BuildHasher` on `String` keys (1.23 s vs 0.09 s, 200k inserts + 1M lookups, compiled, arm64) -- the exact opposite of the speed-for-safety trade the stdlib comment and design.md offer it as; a user-written FNV-1a hasher is at parity with the default, so a non-default hasher is not inherently slow | roadmap.md |
 | B-2026-08-22-30 | 2026-08-22 | typecheck | medium | Three `f16_software_emulated` lint tests fail on EVERY aarch64 macOS machine on a clean `main`: the tests assert the emulation warning fires, while `baseline_cpu_and_features` resolves Apple Silicon to `apple-m1`, which `target_has_native_f16` answers `true` for -- so the lint correctly stays quiet. CI is x86_64 and green, leaving a permanently-red local suite | roadmap.md |
 | B-2026-08-23-2 | 2026-08-23 | ownership | medium | Ownership oracle does not model fixed-array (Array[T,N]) ownership, so the drop-differential is blind to the array-element-drop class and the planned codegen-consumes-oracle refactor would regress B-2026-08-23-1 | roadmap.md |
@@ -153,9 +152,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1501 surfaced
 
 </details>
 
-### Fixed (1474)
+### Fixed (1475)
 
-<details><summary>1474 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1475 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -16573,6 +16572,100 @@ monomorphized into the impl, and an ordinary inherent method) with the
 by-value `Slice[T]` control beside each, since that spelling always worked and
 a regression confined to the `ref` slot would otherwise hide behind it.
  |
+| B-2026-08-22-27 | codegen+runtime | high | A COMPILED `Map[i64, V, H]` under any NON-DEFAULT hasher stops growing after one resize and silently drops every key past it: `len` still counts them… | FIXED by bab8cf2.
+
+TWO LINES OF MECHANISM: the monomorphized `Map[K, V]` bodies now LOAD the
+map's stored `hash_fn` pointer from its control block and call it indirectly,
+instead of calling a `karac_hash_<K>` symbol baked in at emission time.
+
+THE FIX WAS ALREADY WRITTEN, in the same file, for the sibling containers. The
+Set monos (`emit_mono_set_contains_body` / `_insert_body`) and the String-key
+Map get read `KARAC_MAP_HASH_FN_OFFSET`, and the comment above the Set one
+states the rule the Map bodies broke, verbatim: "the buckets were filled with
+this exact function ... so hardcoding one here would probe the wrong bucket for
+a Set whose stored hash differs." The Map bodies were never brought along.
+
+That is also exactly why the reported symptom was `Map[i64, i64, H]` and
+nothing else. MEASURED, all at N=200000 with FxBuildHasher:
+
+  Map[i64, i64, Fx]     3391 missing   <- the two baked-hash bodies
+  Set[i64, Fx]          0 missing      <- loads the stored fn
+  Map[String, i64, Fx]  0 missing      <- loads the stored fn
+
+WHY THE HASHER MATTERED, which the row correctly flagged as the strange part
+since the resize trigger cannot see a hash. It is not the trigger. The hasher
+is a CONSTRUCTION-time decision: `Map.new` synthesizes the hash fn for the
+declared `H` and stores the pointer, and every erased-path operation --
+`contains_key`, `get`, and crucially `resize`/`rehash_from` -- calls through
+it. The mono fast path called the DEFAULT hash instead. So a non-default map
+FILED keys under one hash and PROBED under another.
+
+THE ROW'S INFERRED DIAGNOSIS WAS WRONG, and it is worth saying so plainly
+because it is the natural reading of the numbers: nothing "stops growing", and
+`find_insert_slot`'s "Should not reach here" fallback is not involved. The
+table resizes normally throughout. What produces the contiguous tail is that
+each resize takes the SLOW path, which rehashes the whole table through the
+stored fn and thereby REPAIRS every previously-misfiled key. Only the keys
+inserted since the last resize stay lost -- hence a tail, and hence one
+beginning at exactly the 3/4 threshold. The row's own control (the default
+hasher never loses a key) is explained by the baked hash being the correct one
+there.
+
+MUCH WORSE THAN THE ROW RECORDED, and this is the correction that matters:
+it is NOT a large-N phenomenon, and it is not only `Map[i64, V]`. Measured on
+the unfixed compiler:
+
+  Map[i64, i64, Fx]   n=16 -> 3 missing   n=64 -> 15   n=100 -> 3   n=1000 -> 231
+  Map[char, i64, Fx]  62 keys -> 13 missing
+
+A SIXTEEN-KEY map already loses keys, and `char` keys share the same emitted
+body (`char` lowers to LLVM i32), so that family was equally broken and shows
+it at 62 keys. The comment the fix deleted had justified sharing one body
+between `char` and `i32` because "both are FNV-1a over 4 bytes and produce
+identical output for identical input" -- true of the default hasher and of
+nothing else. The row's "196609 at N=200000" framing
+made it look like something you reach only at scale; the defect is present
+from the first resize onward, i.e. essentially always. Severity `high` was
+right for a different reason than the one given.
+
+WHY LOADING THE POINTER BEATS MANGLING THE SYMBOL. The obvious alternative --
+put the hasher in `mono_map_cache_key` so each hasher gets its own symbol
+family -- is strictly worse. The mono family is `linkonce_odr` and SHARED by
+every `Map[i64, i64]` in the module, so a program holding one default and one
+Fx map of the same K/V would still need the body to be correct for both, which
+a baked symbol cannot be. Reading the pointer makes the shared symbol correct
+for every hasher at once, needs no cache-key change, and closes the class:
+no future hasher can desync it. Pinned by
+`two_maps_with_different_hashers_share_one_mono_symbol_safely`.
+
+COST, measured rather than waved at. The hash becomes the one indirect call in
+the probe (eq and the bucket walk stay inlined; the erased path this family
+replaces pays an FFI boundary per operation, and the Set monos already pay
+exactly this). On a `Map[i64, i64]` DEFAULT-hasher insert+get loop, 300k
+entries x 6 rounds, 11 interleaved reps of each binary:
+
+  baseline median 207 ms  (min 200, max 237)
+  fixed    median 212 ms  (min 204, max 231)   +2.4%
+
+Interleaving matters: naive back-to-back runs read +10%, which was machine
+drift, not the change.
+
+TESTS in tests/codegen.rs: `an_fx_hashed_i64_map_finds_every_key_across_resizes`
+(n = 16/64/100/1000, asserting presence AND value AND len) and
+`two_maps_with_different_hashers_share_one_mono_symbol_safely`. Non-vacuity
+measured for EACH HALF SEPARATELY, since either alone still desyncs the pair:
+reverting only the insert body gives 504/115 bad, reverting only the get body
+gives 1180/500.
+
+WHY THE EXISTING HASHER TESTS MISSED IT, worth knowing before adding the next
+one: every pre-existing `FxBuildHasher` test uses `String` keys (a different,
+already-correct lowering) with three entries. The mono `Map[i64, V]` family
+and a resize were both required, and no test had either.
+
+Full default suite 0 failures; full `--features llvm` suite 0 failures under
+KARAC_REQUIRE_RUNTIME_ARCHIVE=1 with `--no-fail-fast`; both clippy legs and
+fmt clean; 917 kata files typecheck clean and four map-heavy katas verified
+byte-identical across `--interp` / `build`. |
 | B-2026-08-22-28 | typecheck | medium | An associated-type bound declared on a STDLIB-BAKED trait is never discharged at an impl site: `trait_assoc_decls` finds the trait declaration only b… | Fixed in d0ced1a, following the row's own plan, which was accurate in every
 particular -- including why it was not a one-liner.
 
