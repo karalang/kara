@@ -3678,10 +3678,12 @@ fn sha1(message: &[u8]) -> [u8; 20] {
     padded.extend_from_slice(&bit_len.to_be_bytes());
 
     // Process each 64-byte chunk.
-    for chunk in padded.chunks_exact(64) {
+    let (blocks, _) = padded.as_chunks::<64>();
+    for chunk in blocks {
         let mut w = [0u32; 80];
-        for (i, word) in chunk.chunks_exact(4).enumerate() {
-            w[i] = u32::from_be_bytes([word[0], word[1], word[2], word[3]]);
+        let (words, _) = chunk.as_chunks::<4>();
+        for (i, word) in words.iter().enumerate() {
+            w[i] = u32::from_be_bytes(*word);
         }
         for i in 16..80 {
             w[i] = (w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16]).rotate_left(1);
@@ -3735,8 +3737,8 @@ fn sha1(message: &[u8]) -> [u8; 20] {
 fn base64_encode(input: &[u8]) -> String {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
-    let mut chunks = input.chunks_exact(3);
-    for chunk in chunks.by_ref() {
+    let (chunks, rem) = input.as_chunks::<3>();
+    for chunk in chunks {
         let b0 = chunk[0] as u32;
         let b1 = chunk[1] as u32;
         let b2 = chunk[2] as u32;
@@ -3746,7 +3748,6 @@ fn base64_encode(input: &[u8]) -> String {
         out.push(TABLE[((combined >> 6) & 0x3F) as usize] as char);
         out.push(TABLE[(combined & 0x3F) as usize] as char);
     }
-    let rem = chunks.remainder();
     match rem.len() {
         0 => {}
         1 => {
