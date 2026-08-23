@@ -44728,3 +44728,123 @@ fn a_satisfied_assoc_type_bound_on_a_baked_trait_is_accepted() {
          fn main() { println(\"ok\"); }",
     );
 }
+
+// ── `dbg` is the identity, not a universal cast (B-2026-08-23-16) ──────────
+
+/// `dbg` had NO rule in the typechecker at all. That did not leave it untyped
+/// so much as make it a UNIVERSAL CAST: with the call's type unconstrained,
+/// `dbg(anything)` unified with `anything else`, so a `String` could be bound
+/// straight into an `i64` slot and an `i64` into a `String`.
+///
+/// The consequences were not confined to the type layer. Under `karac build`
+/// the second shape SEGFAULTED — codegen had no lowering for `dbg` either, so
+/// the call returned a constant 0, and 0 is a fine `i64` but a null data
+/// pointer for a `String`, which the first read dereferences. A crash in safe
+/// code with no `unsafe` anywhere, from a debugging helper.
+///
+/// The identity is pinned in the only way that DISCRIMINATES: a mismatched
+/// annotation must be rejected, in both directions, for several unrelated type
+/// pairs. `dbg(x)` having x's type and `dbg(x)` having NO type both satisfy
+/// every positive use — `let n = dbg(41) + 1` type-checks either way — so a
+/// test built only from working programs proves nothing here. It is the
+/// rejections that can only happen if the recorded type is exactly the
+/// argument's.
+///
+/// The positive compositions are asserted too, but as a guard against
+/// OVER-rejection (the rule must not break legitimate use), not as evidence
+/// for the rule. Measured: with the rule removed, the rejection half fails and
+/// the composition half still passes.
+#[test]
+fn dbg_is_the_identity_not_a_universal_cast() {
+    for (annot, arg, want_expected, want_found) in [
+        ("i64", "\"hello\"", "expected 'i64'", "String"),
+        ("String", "42", "expected 'String'", "i64"),
+        ("bool", "1.5", "expected 'bool'", "f64"),
+        ("f64", "true", "expected 'f64'", "bool"),
+    ] {
+        let src = format!("fn main() {{ let v: {annot} = dbg({arg}); }}");
+        let errs = typecheck_errors(&src);
+        assert!(
+            errs.iter().any(|e| {
+                let t = e.to_string();
+                t.contains(want_expected) && t.contains(want_found)
+            }),
+            "`let v: {annot} = dbg({arg})` must be rejected — dbg is the identity, \
+             not a cast; got: {:?}",
+            errs.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+        );
+    }
+
+    // Over-rejection guard: legitimate composition must keep working. These
+    // pass with OR without the rule and are here to catch a too-strict fix.
+    typecheck_ok("fn main() { let n = dbg(41) + 1; println(f\"{n}\"); }");
+    typecheck_ok("fn main() { println(f\"{dbg(\"abc\").len()}\"); }");
+    typecheck_ok("fn main() { let x: i64 = dbg(7); println(f\"{x}\"); }");
+    typecheck_ok("fn main() { let s: String = dbg(\"s\"); println(s); }");
+}
+
+/// Guards against the WRONG fix rather than against the old behaviour: this
+/// passes with no rule at all (there was no bound to violate), and fails the
+/// moment someone copies the console family's `Display` bound onto dbg.
+///
+/// `dbg` takes NO `Display` bound, unlike `println` / `print` / `eprintln`.
+/// It renders through `Debug` (design.md § Debug trait opens with "`dbg(x)`
+/// output"), which every type has, so a plain struct or a data-carrying enum —
+/// neither of which implements Display, and both of which `println` rejects —
+/// must be accepted. Copying the console family's bound would have rejected
+/// most of what dbg exists for, and the accompanying rejection test above
+/// would still have passed.
+#[test]
+fn dbg_accepts_types_that_do_not_implement_display() {
+    typecheck_ok(
+        "struct Plain { a: i64 }\n\
+         enum Shape { Circle(i64), Empty }\n\
+         fn main() {\n\
+             let p = dbg(Plain { a: 1 });\n\
+             let e = dbg(Shape.Circle(3));\n\
+             println(f\"{p.a}\");\n\
+             match e { Shape.Circle(n) => println(f\"c{n}\"), Shape.Empty => println(\"e\") }\n\
+         }",
+    );
+    // The contrast that makes the point: `println` DOES reject them.
+    let errs = typecheck_errors(
+        "struct Plain { a: i64 }\n\
+         fn main() { println(Plain { a: 1 }); }",
+    );
+    assert!(
+        errs.iter().any(|e| e.to_string().contains("Display")),
+        "println must still require Display — otherwise this test proves nothing \
+         about dbg being different; got: {:?}",
+        errs.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+    );
+}
+
+/// Arity, and the zero-argument form the interpreter already accepts (it
+/// evaluates to Unit). Pinned so the new rule cannot quietly start rejecting
+/// `dbg()` or accepting `dbg(a, b)`.
+#[test]
+fn dbg_arity_matches_the_interpreter() {
+    typecheck_ok("fn main() { dbg(); println(\"ok\"); }");
+    let errs = typecheck_errors("fn main() { dbg(1, 2); }");
+    assert!(
+        errs.iter()
+            .any(|e| e.to_string().contains("dbg() takes 0 or 1 argument")),
+        "dbg with two arguments must be an arity error, got: {:?}",
+        errs.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+    );
+}
+
+/// A local binding named `dbg` shadows the builtin, exactly as it does for the
+/// console family (B-2026-08-01-26). Without the shadow guard the new intercept
+/// would hijack the call and hand back the ARGUMENT's type instead of the
+/// closure's return type.
+#[test]
+fn a_local_named_dbg_shadows_the_builtin() {
+    typecheck_ok(
+        "fn main() {\n\
+             let dbg = |x: i64| { \"shadowed\" };\n\
+             let s: String = dbg(1);\n\
+             println(s);\n\
+         }",
+    );
+}

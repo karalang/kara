@@ -606,6 +606,28 @@ impl<'ctx> super::Codegen<'ctx> {
             return self.compile_print(&name, args);
         }
 
+        // `dbg` has no lowering yet, and until it does this MUST refuse rather
+        // than fall through. The fallback below hands back a constant `i64 0`
+        // without compiling the argument at all, which for a value-returning
+        // builtin is not a dropped diagnostic but a miscompile: `dbg(41) + 1`
+        // evaluated to 1, `dbg(side_effect())` never called `side_effect`, and
+        // once the typechecker learned dbg's real (identity) type, binding its
+        // result to a `String` segfaulted the binary on first read — a 0 where
+        // a data pointer belongs. Refusing is strictly better than any of
+        // those, and `--interp` runs the program correctly meanwhile.
+        // B-2026-08-23-16.
+        if name == "dbg" {
+            return Err(format!(
+                "codegen: `dbg` is not lowered by the compiled backends yet, so \
+                 `karac build` / `karac run` cannot compile this call at {}:{}. \
+                 Run it with `karac run --interp`, where `dbg` works, or remove \
+                 the `dbg` for a compiled build. The refusal is deliberate: this \
+                 call used to compile to a constant 0, corrupting the value `dbg` \
+                 is documented to hand back.",
+                call_span.line, call_span.column
+            ));
+        }
+
         // Slice c.1 — prelude `assert` / `assert_eq` / `assert_ne` lowering.
         // The interpreter dispatches these by name in
         // `src/interpreter/eval_call.rs`; before c.1 the codegen path
@@ -1377,8 +1399,33 @@ impl<'ctx> super::Codegen<'ctx> {
         let func = match self.module.get_function(&lookup_name) {
             Some(f) => f,
             None => {
-                // Unknown function — silently return 0 (e.g. stdlib builtins not yet codegen'd)
-                return Ok(self.context.i64_type().const_int(0, false).into());
+                // Fail CLOSED. This arm used to "silently return 0 (e.g. stdlib
+                // builtins not yet codegen'd)", and that silence produced the
+                // same bug three separate times: `eprintln` compiled to nothing
+                // so every stderr write vanished (B-2026-08-23-14), the
+                // `providers { } in { }` block compiled to nothing
+                // (B-2026-07-31-9), and `dbg` compiled to a constant 0 that
+                // corrupted its own return value (B-2026-08-23-16). In each
+                // case no phase reported anything and the divergence was found
+                // by accident, months later.
+                //
+                // Returning `0` is only ever right when the callee returns unit
+                // AND has no side effects — which is never true of a callee
+                // that reached here, because arguments are not even compiled at
+                // this point, so any effect in them is dropped too.
+                //
+                // Measured blast radius before switching: zero callees reach
+                // this arm across 12 example packages, 46 standalone examples
+                // and 398 katas. It is dead for real programs; what it caught
+                // was compiler gaps, silently.
+                return Err(format!(
+                    "codegen: no lowering for call to `{lookup_name}` at {}:{} - the \
+                     callee resolved to no LLVM function. This is a compiler gap, not \
+                     a program error: add a lowering arm in `compile_call`, or run it \
+                     with `karac run --interp`. This arm used to return a constant 0 \
+                     and compile the call away, dropping its arguments and effects.",
+                    call_span.line, call_span.column
+                ));
             }
         };
 

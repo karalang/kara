@@ -1746,6 +1746,49 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // `dbg(x)` — the identity. design.md § dbg() calls it "an identity
+        // function with a side effect": it prints and hands the value straight
+        // back, so `let y = dbg(compute()) + 1` reads as if the `dbg` were not
+        // there. It had NO rule here at all, which did not make it untyped so
+        // much as make it a UNIVERSAL CAST: the call's type was unconstrained,
+        // so `let n: i64 = dbg("hello")` and `let s: String = dbg(42)` both
+        // type-checked, the first binding a String into an `i64` slot and the
+        // second segfaulting the compiled binary on the first read of a String
+        // whose data pointer came from an integer. That is a soundness hole
+        // reachable from safe code, and it is also why codegen could not lower
+        // `dbg` — with no recorded type for the result there was nothing to
+        // lower it to (`dbg("abc").len()` failed with "no handler for method
+        // 'len'"). B-2026-08-23-16.
+        //
+        // Deliberately NO `Display` bound, unlike the console family above:
+        // dbg renders through `Debug` (design.md § Debug trait names "`dbg(x)`
+        // output" as its first consumer), which every type has. Requiring
+        // Display here would reject `dbg(some_struct)` — which the interpreter
+        // accepts and which is most of what dbg is for.
+        if let ExprKind::Identifier(name) = &callee.kind {
+            if name == "dbg" && self.local_scope.lookup(name).is_none() {
+                let ty = match args.len() {
+                    // `dbg()` with no argument mirrors the interpreter, which
+                    // evaluates to Unit rather than erroring.
+                    0 => Type::Unit,
+                    1 => self.infer_expr(&args[0].value),
+                    _ => {
+                        self.type_error(
+                            format!("dbg() takes 0 or 1 argument(s), found {}", args.len()),
+                            *span,
+                            TypeErrorKind::WrongNumberOfArgs,
+                        );
+                        for arg in args {
+                            self.infer_expr(&arg.value);
+                        }
+                        Type::Error
+                    }
+                };
+                self.record_expr_type(span, &ty);
+                return ty;
+            }
+        }
+
         // Look up parameter names for label validation
         let param_names: Option<Vec<Option<String>>> = match &callee.kind {
             ExprKind::Identifier(name) => self

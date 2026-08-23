@@ -4454,6 +4454,115 @@ fn test_zero_argument_console_forms_match_across_backends() {
     );
 }
 
+/// B-2026-08-23-16 — an unlowered builtin must REFUSE, not compile to zero.
+///
+/// `dbg` had no codegen arm, so every call fell through to the end of
+/// `compile_call` and hit the arm that returned a constant `i64 0` with the
+/// comment "silently return 0 (e.g. stdlib builtins not yet codegen'd)". For a
+/// unit-returning builtin that silence costs a diagnostic; for a
+/// VALUE-returning one it is a miscompile, and three distinct symptoms came out
+/// of the one arm:
+///
+///   * `dbg(41) + 1` evaluated to 1 — the identity `dbg` is documented to be
+///     (design.md § dbg(): "an identity function with a side effect") returned
+///     someone else's zero.
+///   * `dbg(side_effect())` never called `side_effect` at all: the arm returns
+///     BEFORE arguments are compiled, so the whole argument expression is
+///     discarded.
+///   * once the typechecker learned dbg's real type, `let s: String = dbg(42)`
+///     SEGFAULTED the binary — 0 is a fine `i64` and a null data pointer.
+///
+/// The refusal is the fix for the CLASS, not just for `dbg`: the same arm
+/// swallowed `eprintln` (B-2026-08-23-14) and the `providers { } in { }` block
+/// (B-2026-07-31-9), each found by accident long afterwards. Blast radius was
+/// measured before switching it — zero callees reach that arm across 12 example
+/// packages, 46 standalone examples and 398 katas — so it was dead for real
+/// programs and live only for compiler gaps, silently.
+///
+/// TWO arms were added and they do different jobs, which this test can only
+/// partly separate. The GENERAL fallback refusal is what fixes the class, and
+/// it alone already refuses this program — measured by removing the
+/// dbg-specific arm and re-running: the build still fails, just with a generic
+/// message. The dbg-specific arm exists for the MESSAGE, since `dbg` is the one
+/// callee a user will actually hit, and the assertions below pin that message.
+/// Nothing here pins the general arm on its own: no other callee reaches it
+/// (every prelude builtin was probed directly and none is refused), which is
+/// precisely why it went unnoticed for three bugs.
+///
+/// The interpreter leg is asserted too, and it is the half that makes the
+/// refusal defensible rather than merely strict: `dbg` still WORKS under
+/// `--interp`, which is where a debugging helper is used, so refusing the
+/// compiled build takes nothing away that worked.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_unlowered_dbg_refuses_instead_of_compiling_to_zero() {
+    let tmp = scratch_project("dbg-refuses");
+    let src = "fn side() -> i64 { println(\"SIDE\"); 5 }\n\
+               fn main() {\n\
+               \x20   let a = dbg(41) + 1;\n\
+               \x20   let b = dbg(side());\n\
+               \x20   println(f\"a={a} b={b}\");\n\
+               }\n";
+    write(&tmp.join("dbgprog.kara"), src);
+
+    // (1) The compiled backends REFUSE, and say why.
+    let built = karac_bin()
+        .current_dir(&tmp)
+        .args(["build", "dbgprog.kara"])
+        .output()
+        .expect("karac build spawn");
+    let berr = String::from_utf8_lossy(&built.stderr).into_owned()
+        + &String::from_utf8_lossy(&built.stdout);
+    assert!(
+        !built.status.success(),
+        "`karac build` must refuse a program it cannot lower, not emit a binary \
+         that returns 0 from dbg; output was:\n{berr}"
+    );
+    assert!(
+        berr.contains("`dbg` is not lowered"),
+        "the refusal must name `dbg` and say it is unlowered, got:\n{berr}"
+    );
+    assert!(
+        berr.contains("--interp"),
+        "the refusal must point at the backend that DOES run it, got:\n{berr}"
+    );
+    assert!(
+        !tmp.join("dbgprog").exists(),
+        "a refused build must not leave a binary behind"
+    );
+
+    // (2) The interpreter still runs it correctly — the identity holds, the
+    // argument's side effect happens, and the dbg lines reach stderr.
+    let run = karac_bin()
+        .current_dir(&tmp)
+        .args(["run", "--interp", "dbgprog.kara"])
+        .output()
+        .expect("karac run spawn");
+    let out = String::from_utf8_lossy(&run.stdout);
+    let err = String::from_utf8_lossy(&run.stderr);
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    assert!(
+        run.status.success(),
+        "interp leg must succeed; stderr={err}"
+    );
+    assert!(
+        out.contains("SIDE"),
+        "dbg's argument must still be evaluated — its side effect is the thing \
+         the constant-0 arm silently deleted; stdout={out:?}"
+    );
+    assert!(
+        out.contains("a=42 b=5"),
+        "dbg must hand its argument back unchanged (42, not 1; 5, not 0); \
+         stdout={out:?}"
+    );
+    assert!(
+        err.contains("41 = 41") && err.contains("side() = 5"),
+        "the dbg lines must reach stderr with expression text and value; \
+         stderr={err:?}"
+    );
+}
+
 /// B-2026-07-31-11 — the parity gate above, extended to an EARLY-RETURN body
 /// for BOTH provider forms (the ledger entry's validation bar).
 ///
