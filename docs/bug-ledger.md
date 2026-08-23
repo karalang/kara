@@ -92,10 +92,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 283 | 1 |
+| miscompile | 283 | 0 |
 | leak | 189 | 0 |
 | missing-feature | 160 | 4 |
-| run-vs-build | 155 | 2 |
+| run-vs-build | 156 | 3 |
 | double-free | 135 | 0 |
 | codegen-gap | 129 | 0 |
 | diagnostics | 100 | 1 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1006 | 3 |
+| codegen | 1006 | 2 |
 | typecheck | 249 | 1 |
-| interp | 177 | 2 |
+| interp | 178 | 3 |
 | ownership | 64 | 0 |
 | other | 63 | 0 |
 | cli | 62 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1519 surfaced · 8 open · 1488 fixed · 9 wontfix** (2026-05-20 → 2026-08-23). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1520 surfaced · 8 open · 1489 fixed · 9 wontfix** (2026-05-20 → 2026-08-23). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (8)
 
@@ -137,7 +137,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1519 surfaced
 | B-2026-08-23-15 | 2026-08-23 | interp | medium | The INTERPRETER does not order `eprintln` output across `par {}` branches, so stderr from a parallel region interleaves NONDETERMINISTICALLY -- 4 distinct orderings in 20 runs of one program -- while the SAME program's stderr under JIT and AOT is replayed in stable source order. design.md line 6242 promises exactly the opposite: it names `eprintln` as the construct to reach for when you need deterministic order under `par` ("For anything that needs deterministic order (snapshot tests, log aggregators, printf-style debugging of a race), use `eprintln`"), in explicit contrast to `dbg()`, whose unordered output it documents as unsupported for snapshot testing. The compiled backends honour that promise; the interpreter does not. | roadmap.md |
 | B-2026-08-23-17 | 2026-08-23 | codegen+interp | medium | A PANIC MESSAGE goes to STDOUT under JIT and AOT but to STDERR under `--interp`, and design.md § Entry Point (line 6423) says stderr for all of them. The compiled backends inject the panic line into the program's DATA stream, so anything parsing a compiled Kara program's stdout gets `panic at f.kara:3:16 in main: unwrap() called on None/Err` mixed into its output, while a consumer watching stderr for faults sees nothing at all. Separately and on ALL THREE surfaces, a panic exits 1, not the 101 the same spec paragraph promises -- so the `$?` distinction it exists to provide ("distinct from the Err-exit-1 path so shell pipelines can distinguish expected failures from bugs") does not exist. | roadmap.md |
 | B-2026-08-23-18 | 2026-08-23 | codegen | medium | `dbg(x)` still has NO CODEGEN LOWERING, so a program containing it cannot be compiled at all -- `karac build` and `karac run` now REFUSE it with an actionable error (B-2026-08-23-16 replaced the silent constant-0 miscompile with that refusal), and only `karac run --interp` executes it. design.md § dbg() specifies a real feature -- a stderr line carrying file, line, expression TEXT and the `Debug` rendering of the value, in a terminal form and a `--output=json`/`jsonl` form, tagged with `task_id` inside a `par` region, stripped from `--release` builds, and returning the value so it composes inline. The interpreter implements all of it; the compiled backends implement none of it. | roadmap.md |
-| B-2026-08-23-20 | 2026-08-23 | codegen | medium | `rebuild_value_from_payload_words` takes exactly THREE payload words, so an Option/Result payload held INLINE in four or more words reconstructs its first three fields and GARBAGE for the rest. `Result[i64, Wide]` with `Wide { a: i64, b: i64, c: i64, d: i64 }` renders `W(1,2,3,140671075672200)` under JIT and `W(1,2,3,0)` under AOT where the interpreter renders `W(1,2,3,4)`. Not errdefer-specific: the helper is called from ~20 sites across `calls.rs`, `exprs.rs`, `expr_ops.rs`, `functions.rs` and `synth_display.rs`, all passing `(w0, w1, w2)`. | roadmap.md |
+| B-2026-08-23-21 | 2026-08-23 | interp | medium | The INTERPRETER's entry-point error line renders `E` through Rust's `Display for Value` instead of the Kāra `Display` impl, so `main() -> Result[(), E]` prints a DIFFERENT string under `karac run --interp` than under JIT/AOT -- and because `Value::Struct` holds its fields in a `HashMap`, the field order is RANDOM PER RUN. Five consecutive interpreter runs of one program printed `Wide { d: 4, a: 1, c: 3, b: 2 }`, `Wide { a: 1, b: 2, c: 3, d: 4 }`, `Wide { d: 4, a: 1, b: 2, c: 3 }`, ... where both compiled backends print the impl's `W(1,2,3,4)`. `KARAC_HASH_SEED` does NOT pin it: this is Rust's own per-process `RandomState`, not the Kāra hasher. | roadmap.md |
 
 ### Wontfix (9)
 
@@ -157,9 +157,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1519 surfaced
 
 </details>
 
-### Fixed (1488)
+### Fixed (1489)
 
-<details><summary>1488 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1489 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -17327,6 +17327,71 @@ than 3 words still reconstructs only its first three (`W(1,2,3,<garbage>)` for a
 ~20 call sites, it predates this fix, and it hits the `?` path identically -- this
 change made it VISIBLE at two more sites rather than causing it, and those sites
 were wholly wrong (one truncated integer) before. |
+| B-2026-08-23-20 | codegen | medium | `rebuild_value_from_payload_words` takes exactly THREE payload words, so an Option/Result payload held INLINE in four or more words reconstructs its… | FIXED by 16312b9.
+
+WHAT WAS ACTUALLY WRONG. `rebuild_value_from_payload_words` took exactly
+`(w0, w1, w2)`, and its generic-struct branch rebuilt from a hardcoded
+`let words = [w0, w1, w2]`, breaking out at whichever field ran past the end.
+The aggregate CARRIED the value intact -- a `Result[i64, Wide]` with four i64
+fields has a four-word payload area -- so this dropped data it had been handed.
+`match`'s arm reconstruction (`reconstruct_payload_value`) has always taken a
+SLICE and was correct on the identical payload, which is why a `match` on the
+value agreed with the interpreter while these paths did not.
+
+THE FIX is that second helper joining the same contract: a width-general core,
+`rebuild_value_from_payload_word_slice(target_ty, &[IntValue])`, with the
+three-word form kept as a pure delegation. Words past the end read as zero, so
+every existing caller keeps its exact previous behaviour and none of the ~20
+call sites needed an edit. The struct branch now walks the caller's real words
+and hands each field the REMAINING window, so a multi-word field no longer has
+to fit inside three.
+
+MEASURED (interp was right in every row; both compiled backends now match it):
+  errdefer(e), E = 4 x i64      jit W(1,2,3,140362891260040)  aot W(1,2,3,0)   -> W(1,2,3,4)
+  errdefer(e), E = 5 x i64      jit F(1,2,3,1,140407567843464) aot F(1,2,3,0,0) -> F(1,2,3,4,5)
+  errdefer(e), E = {String,i64,i64}  truncated                 -> SF(hi,7,9)
+  errdefer(e), E = {i64,String,i64}  truncated                 -> SM(7,hi,9)
+  errdefer(e), E = nested {i64,{i64,i64},i64}  truncated       -> N(1,2,3,4)
+  errdefer(e), E = 4 x f64      truncated                      -> Q(1.5,2.5,3.5,4.5)
+  `?` propagation, E = 4 x i64  jit W(1,2,3,1)  aot W(1,2,3,0) -> W(1,2,3,4)
+  errdefer(e), E = 3 x i64      already correct                -> unchanged (boundary control)
+  errdefer(e), E = {String,String} (BOXED, 6 words)  already correct -> unchanged (regression guard)
+
+A SECOND SITE, which this row did not know about, found by MEASUREMENT rather
+than by reading: instrumenting the core to report any caller supplying fewer
+words than the target type needs, then running it over the corpus and the
+codegen suite, flagged exactly one more -- `emit_main_result_return`. So
+`main() -> Result[(), E]` with a four-word `E` printed
+`Error: W(1,2,3,-9223372036854775808)` under JIT and `Error: W(1,2,3,0)` under
+AOT. It holds the whole aggregate, so it now passes every payload word too.
+That trace is also what proves the fix is COMPLETE rather than merely adequate:
+after it, the same sweep reports zero under-supplied callers across 576 corpus
+programs and the 3,192-test codegen suite.
+
+CORPUS INCIDENCE: ZERO. A sweep of all 576 programs in `examples/` and the
+kata repo found NO reconstruction of a payload needing more than three words at
+all. The bug is real and reproducible from synthetic programs, and no shipped
+program hits it -- which is also why the fix is low risk.
+
+TESTS: 2 in `tests/cli.rs`. `test_wide_inline_payload_reconstructs_every_field`
+covers nine shapes across interp/JIT/AOT -- 4-word, 5-word, a `String` followed
+by fields that fell off the end in BOTH orders, a nested aggregate, all-float
+fields (bitcast per word, not truncated), the 3-word boundary control, the boxed
+payload as a regression guard for B-2026-08-23-19's de-boxing, and the `?` path.
+`test_main_result_err_exit_renders_every_payload_word` pins the entry-point
+site. The three changes -- the slice core, the errdefer staging widening, and
+the main-result widening -- were each reverted independently and their tests
+re-run: all three fail when reverted.
+
+FILED SEPARATELY, found while building the repro for this row: the INTERPRETER's
+entry-point error line renders `E` through Rust's `Display for Value` rather
+than the Kāra `Display` impl the compiled backends use, and because
+`Value::Struct` holds its fields in a `HashMap` the field order is RANDOM PER
+RUN (and `KARAC_HASH_SEED` does not pin it -- that is Rust's own `RandomState`).
+It affects `--output=json` and `jsonl` identically. That is why the entry-point
+test above asserts the two COMPILED backends against the expected text instead
+of asserting parity with `--interp`: the interpreter half of that comparison is
+a separate open defect, not something this fix is responsible for. |
 
 </details>
 
