@@ -78131,14 +78131,28 @@ fn main() {
         // return-struct construction AND again to stage the payload).
         //
         // This test pins single-evaluation via `Self::is_pure_recompilable`:
-        // `make_err()` is an impure call (writes "called" to stdout),
-        // so it routes through the extract-from-v path — the constructed
-        // Err struct's field 1 (`w0`) is the i64-coerced payload. With
-        // the fix, "called" appears exactly once in output; pre-fix it
-        // would have appeared twice.
+        // `make_err()` is an impure call (writes "called" to stdout), so it
+        // routes through the extract-from-v path rather than being
+        // re-compiled. With the fix, "called" appears exactly once in output;
+        // pre-fix it would have appeared twice.
         //
-        // The binding-form errdefer reads the staged i64 payload (`7`
-        // here) and prints it.
+        // B-2026-08-23-19 — WHAT THE BINDING SEES has changed, and the
+        // comment here used to describe the defect. That extract-from-v path
+        // staged the constructed Err struct's field 1 as a raw i64 and the
+        // text called it "the i64-coerced payload", framing it as a precision
+        // trade. It is free only when `E` IS an integer, which is exactly the
+        // case this test uses (`E = i64`, payload `7`) — which is why this
+        // test kept passing while `Err(msg.to_string())` handed its cleanup
+        // block a data pointer. The impure path now reconstructs the
+        // source-typed value through `rebuild_value_from_payload_words`, the
+        // same helper the `?` site uses; for `E = i64` that is still `7`, so
+        // the assertion below is unchanged. The non-integer half of the
+        // matrix — where the old staging was simply wrong — is pinned across
+        // all three backends by `test_errdefer_binding_value_parity_across_backends`
+        // in `tests/cli.rs`.
+        //
+        // The binding-form errdefer reads the staged payload (`7` here) and
+        // prints it.
         let out = run_program(
             r#"
 fn make_err() -> i64 {

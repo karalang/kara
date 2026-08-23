@@ -1467,6 +1467,17 @@ pub(super) struct Codegen<'ctx> {
     /// `None` means no payload is currently staged — only the no-binding
     /// form errdefer can fire (the binding form is gated on `is_some`).
     pub(crate) pending_errdefer_payload: Option<inkwell::values::BasicValueEnum<'ctx>>,
+    /// B-2026-08-23-19. First hard codegen error raised while compiling a
+    /// `defer` / `errdefer` body, if any. The cleanup dispatcher
+    /// (`emit_cleanup_action_at`) and every caller above it are infallible —
+    /// they run on exit paths that have no `Result` to thread — so a failing
+    /// cleanup body used to have its error dropped on the floor and the
+    /// statement simply did not appear in the binary. Recorded here and
+    /// surfaced by `compile_function` so the failure is a diagnostic rather
+    /// than a silently missing statement. Only the FIRST is kept: later
+    /// errors on the same exit path are usually the same cause repeated once
+    /// per drain site.
+    pub(crate) cleanup_body_error: Option<String>,
     /// Set while compiling `main` when its declared return type is
     /// `Result[(), E]` — holds E's source `TypeExpr` (the error type). The
     /// LLVM `main` is the C entry (`i32`), so every Result-returning site —
@@ -5488,6 +5499,7 @@ impl<'ctx> Codegen<'ctx> {
                 tail_ret_inner: None,
                 return_retargets: Vec::new(),
                 current_fn_err_payload_ty: None,
+                current_fn_err_payload_type_name: None,
                 current_fn_returns_ref: false,
                 current_fn_boxes_return: false,
                 current_fn_name: String::new(),
@@ -5659,6 +5671,7 @@ impl<'ctx> Codegen<'ctx> {
             },
             iter_body_retarget_spans: std::collections::HashSet::new(),
             pending_errdefer_payload: None,
+            cleanup_body_error: None,
             main_result_err_te: None,
             main_returns_exitcode: false,
             boxed_enum_export_names: std::collections::HashSet::new(),

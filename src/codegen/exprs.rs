@@ -1184,13 +1184,11 @@ impl<'ctx> super::Codegen<'ctx> {
                             if Self::is_pure_recompilable(payload_expr) {
                                 self.compile_expr(payload_expr).ok()
                             } else {
-                                self.builder
-                                    .build_extract_value(
-                                        v.into_struct_value(),
-                                        1,
-                                        "errdefer_payload_w0",
-                                    )
-                                    .ok()
+                                // B-2026-08-23-19: reconstruct from ALL the
+                                // aggregate's payload words rather than
+                                // staging bare field 1 as an i64. See
+                                // `stage_errdefer_payload_from_err_aggregate`.
+                                self.stage_errdefer_payload_from_err_aggregate(v)
                             }
                         });
                         self.pending_errdefer_payload = staged;
@@ -2022,32 +2020,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 .cleanup_depth;
             self.emit_scope_cleanup_from(depth);
         } else {
-            let staged_payload = match self.fn_ctx.current_fn_err_payload_ty {
-                Some(e_ty) => {
-                    let w0_i = w0.into_int_value();
-                    let payload_word_count = enum_ty.count_fields().saturating_sub(1) as usize;
-                    let zero = i64_t.const_int(0, false);
-                    let w1_i = if payload_word_count >= 2 {
-                        self.builder
-                            .build_extract_value(val.into_struct_value(), 2, "q_w1")
-                            .unwrap()
-                            .into_int_value()
-                    } else {
-                        zero
-                    };
-                    let w2_i = if payload_word_count >= 3 {
-                        self.builder
-                            .build_extract_value(val.into_struct_value(), 3, "q_w2")
-                            .unwrap()
-                            .into_int_value()
-                    } else {
-                        zero
-                    };
-                    self.rebuild_value_from_payload_words(e_ty, w0_i, w1_i, w2_i)
-                        .ok()
-                }
-                None => Some(w0),
-            };
+            // B-2026-08-23-19: all three error-exit sites now stage through
+            // one helper. This site open-coded the same word extraction and
+            // reconstruction, minus the de-boxing an oversized payload needs
+            // — so an `errdefer(e)` binding a `Result[_, Two]` error
+            // (`Two { a: String, b: String }`, six words) segfaulted here too.
+            // Sharing the helper fixes all three places at once and keeps
+            // them from drifting apart again.
+            let staged_payload = self.stage_errdefer_payload_from_err_aggregate(val);
             self.pending_errdefer_payload = staged_payload;
             self.emit_scope_cleanup_for_error_path();
             self.pending_errdefer_payload = None;
@@ -2612,6 +2592,85 @@ impl<'ctx> super::Codegen<'ctx> {
                 | ExprKind::SelfValue
                 | ExprKind::SelfType
         )
+    }
+
+    /// B-2026-08-23-19. Reconstruct an `errdefer(e)` binding value from an
+    /// already-constructed `Err` aggregate, without re-evaluating the payload
+    /// expression.
+    ///
+    /// This is the same reconstruction `compile_question`'s `fail_bb` has done
+    /// since slice 4 follow-up (a): read the payload words the aggregate
+    /// carries (w0/w1/w2 at fields 1/2/3, synthesizing zero for words past the
+    /// struct's field count) and hand them to
+    /// `rebuild_value_from_payload_words` along with E's LLVM type. The two
+    /// early-exit sites — `ExprKind::Return(Err(..))` and the function-tail
+    /// `Err(..)` emitter — used to extract bare field 1 and stage it as a raw
+    /// i64 instead, which the code described as accepting "the i64-coerce trade
+    /// for wider-E impure args". For an integer E the coerced word IS the
+    /// value and the trade is free; for every other E it is simply a wrong
+    /// value, and it reached the cleanup block as one: a `String` payload bound
+    /// its data pointer (`Err(msg.to_string())` — the ordinary way to build a
+    /// String error — printed as a bare integer), an `f64` its raw bit pattern,
+    /// a `bool` its `0`/`1`, a struct or tuple only its first field. Sharing
+    /// the `?` path's reconstruction gives all three error-exit sites the same
+    /// fidelity, which is what makes them agree with the interpreter — the
+    /// interpreter binds the already-evaluated payload and is exact on every
+    /// path by construction.
+    ///
+    /// Returns `None` when the aggregate is not a struct value; the caller
+    /// then stages nothing, exactly as before.
+    pub(super) fn stage_errdefer_payload_from_err_aggregate(
+        &mut self,
+        constructed: BasicValueEnum<'ctx>,
+    ) -> Option<BasicValueEnum<'ctx>> {
+        if !constructed.is_struct_value() {
+            return None;
+        }
+        let sv = constructed.into_struct_value();
+        let field_count = sv.get_type().count_fields();
+        let i64_t = self.context.i64_type();
+        let zero = i64_t.const_zero();
+        let word = |slot: u32, name: &str| {
+            if slot >= field_count {
+                return zero;
+            }
+            match self.builder.build_extract_value(sv, slot, name) {
+                Ok(v) if v.is_int_value() => v.into_int_value(),
+                _ => zero,
+            }
+        };
+        let w0 = word(1, "errdefer_payload_w0");
+        let w1 = word(2, "errdefer_payload_w1");
+        let w2 = word(3, "errdefer_payload_w2");
+        let Some(e_ty) = self.fn_ctx.current_fn_err_payload_ty else {
+            // No recognised `Result[T, E]` annotation — nothing to rebuild
+            // against, so stage the bare word.
+            return Some(w0.into());
+        };
+        // OVERSIZED (heap-boxed) payload. When E needs more words than the
+        // aggregate's payload area holds, `coerce_to_payload_words` does not
+        // store it inline — it heap-boxes the value and puts the BOX POINTER
+        // in word 0 (`out.len() > num_words`, docs/spikes/oversized-enum-
+        // payload.md). Reconstructing from the words in that case reads a
+        // pointer as if it were the first inline word: for `Result[_, Two]`
+        // where `Two { a: String, b: String }` (six words), the rebuilt
+        // String's data pointer is the box pointer and printing it SEGFAULTS.
+        // `match`'s arm reconstruction (`reconstruct_payload_value`) has
+        // de-boxed since the oversized-payload spike, which is why a `match`
+        // on the same value has always been correct; this is the staging path
+        // joining the same contract. The predicate is `llvm_type_word_count`
+        // — the pack side's own — so the two agree by construction rather
+        // than by convention.
+        let payload_area = field_count.saturating_sub(1) as usize;
+        if Self::llvm_type_word_count(e_ty) > payload_area && payload_area > 0 {
+            let ptr_ty = self.context.ptr_type(AddressSpace::default());
+            let boxed = self
+                .builder
+                .build_int_to_ptr(w0, ptr_ty, "errdefer.box.p")
+                .ok()?;
+            return self.builder.build_load(e_ty, boxed, "errdefer.box.ld").ok();
+        }
+        self.rebuild_value_from_payload_words(e_ty, w0, w1, w2).ok()
     }
 
     pub(super) fn err_payload_from_value(expr: &Expr) -> Option<&Expr> {

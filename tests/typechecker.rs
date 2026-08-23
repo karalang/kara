@@ -9602,11 +9602,29 @@ fn test_question_in_errdefer_is_error() {
 
 #[test]
 fn test_errdefer_binding_in_scope() {
-    // errdefer(e) should make `e` available in the body
+    // errdefer(e) should make `e` available in the body.
+    //
+    // B-2026-08-23-19: this used to be written against `fn may_fail() { ... }`
+    // — a UNIT-returning function — which design.md § `defer` and `errdefer`
+    // forbids outright for the binding form ("`errdefer(e)` is only valid in
+    // functions returning `Result[T, E]`"). It typechecked only because the
+    // binding was inserted as the unconstrained `Type::Error`, which is the
+    // same stub that made the binding a universal cast. The test's INTENT —
+    // `e` is in scope inside the body — is preserved here on a legal
+    // signature, and the illegal one it used to assert is now pinned as the
+    // rejection design.md specifies.
     typecheck_ok(
-        "fn may_fail() {\n\
-             errdefer(e) { e; }\n\
+        "fn may_fail() -> Result[i64, String] {\n\
+             errdefer(e) { println(e); }\n\
+             Err(\"x\".to_string())\n\
          }",
+    );
+    let errs = typecheck_errors("fn may_fail() {\n errdefer(e) { println(\"c\"); }\n}");
+    assert!(
+        errs.iter()
+            .any(|e| e.to_string().contains("requires Result return type")),
+        "the binding form on a unit-returning fn must be rejected; got: {:?}",
+        errs.iter().map(|e| e.to_string()).collect::<Vec<_>>()
     );
 }
 
@@ -44846,5 +44864,187 @@ fn a_local_named_dbg_shadows_the_builtin() {
              let s: String = dbg(1);\n\
              println(s);\n\
          }",
+    );
+}
+
+/// B-2026-08-23-19 — the `errdefer(e)` binding is the function's `Err` type,
+/// not the unconstrained error-recovery type.
+///
+/// design.md § `defer` and `errdefer`: "The binding `e` has the type of the
+/// function's `Err` variant." The typechecker used to insert `Type::Error` for
+/// it, with a note that `Result` was not yet fully implemented. `Type::Error`
+/// satisfies every constraint, so the binding silently became a universal cast
+/// — the same shape as `dbg`'s missing rule (B-2026-08-23-16) — and, worse, it
+/// left both backends with no static type for `e` at all.
+///
+/// Each row annotates the binding with a type that is NOT `E`. These are
+/// rejections that can only happen if the recorded type is exactly `E`: under
+/// the old stub every one of them typechecked.
+#[test]
+fn errdefer_binding_has_the_functions_err_type() {
+    for (err_ty, ctor, annot, want_expected, want_found) in [
+        (
+            "String",
+            "\"x\".to_string()",
+            "i64",
+            "expected 'i64'",
+            "String",
+        ),
+        ("i64", "1", "String", "expected 'String'", "i64"),
+        ("f64", "1.5", "bool", "expected 'bool'", "f64"),
+        ("bool", "true", "f64", "expected 'f64'", "bool"),
+    ] {
+        let src = format!(
+            "fn work() -> Result[i64, {err_ty}] {{\n\
+             \x20   errdefer(e) {{ let v: {annot} = e; println(f\"{{v}}\"); }}\n\
+             \x20   return Err({ctor})\n\
+             }}\n\
+             fn main() {{ let _ = work(); }}\n"
+        );
+        let errs = typecheck_errors(&src);
+        assert!(
+            errs.iter().any(|e| {
+                let t = e.to_string();
+                t.contains(want_expected) && t.contains(want_found)
+            }),
+            "`errdefer(e)` in a `Result[i64, {err_ty}]` fn must bind `e: {err_ty}`, \
+             so `let v: {annot} = e` must be rejected; got: {:?}",
+            errs.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+        );
+    }
+
+    // Over-rejection guard: the CORRECTLY typed use of the binding must keep
+    // working. These pass with or without the rule — they are here to catch a
+    // too-strict fix, not as evidence for it.
+    typecheck_ok(
+        "fn work() -> Result[i64, String] {\n\
+         \x20   errdefer(e) { let v: String = e; println(v); }\n\
+         \x20   return Err(\"x\".to_string())\n\
+         }\n\
+         fn main() { let _ = work(); }\n",
+    );
+    typecheck_ok(
+        "fn work() -> Result[i64, i64] {\n\
+         \x20   errdefer(e) { let v: i64 = e + 1; println(f\"{v}\"); }\n\
+         \x20   return Err(1)\n\
+         }\n\
+         fn main() { let _ = work(); }\n",
+    );
+}
+
+/// design.md § `defer` and `errdefer`: "**`errdefer(e)` is only valid in
+/// functions returning `Result[T, E]`** — the binding requires an error value
+/// to bind, and `None` carries none. Using `errdefer(e)` in a function
+/// returning `Option[T]` is a compile error."
+///
+/// The spec even names the diagnostic. Under the `Type::Error` stub there was
+/// nothing to check against, so all three of these compiled and ran.
+#[test]
+fn errdefer_binding_requires_a_result_return_type() {
+    for ret in ["Option[i64]", "i64", "()"] {
+        let tail = if ret == "Option[i64]" {
+            "return None"
+        } else if ret == "i64" {
+            "return 5"
+        } else {
+            "return"
+        };
+        let src = format!(
+            "fn work() -> {ret} {{\n\
+             \x20   errdefer(e) {{ println(\"cleanup\"); }}\n\
+             \x20   {tail}\n\
+             }}\n\
+             fn main() {{ let _ = work(); }}\n"
+        );
+        let errs = typecheck_errors(&src);
+        assert!(
+            errs.iter()
+                .any(|e| e.to_string().contains("requires Result return type")),
+            "`errdefer(e)` in a `-> {ret}` fn must be rejected per design.md; got: {:?}",
+            errs.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+        );
+    }
+
+    // Over-rejection guard, and the half that matters most: the BINDINGLESS
+    // form stays legal on every return type — it is exactly what the spec's
+    // own diagnostic tells the user to switch to, so rejecting it would make
+    // the advice impossible to follow.
+    typecheck_ok(
+        "fn work() -> Option[i64] {\n\
+         \x20   errdefer { println(\"cleanup\"); }\n\
+         \x20   return None\n\
+         }\n\
+         fn main() { let _ = work(); }\n",
+    );
+    typecheck_ok(
+        "fn work() -> i64 {\n\
+         \x20   errdefer { println(\"cleanup\"); }\n\
+         \x20   return 5\n\
+         }\n\
+         fn main() { let _ = work(); }\n",
+    );
+}
+
+/// The binding must carry its type far enough to be USED as that type, not
+/// merely to be annotated. `f"{e}"` on an `E` with no `Display` impl is the
+/// check that fires here, and it is the one the backends care about: it is
+/// also what tells codegen which Display path to lower (B-2026-08-23-19 —
+/// before the fix this compiled, and the JIT/AOT lowering of the interpolation
+/// then failed and was silently discarded, so the `println` vanished from the
+/// binary).
+#[test]
+fn errdefer_binding_carries_its_type_into_the_body() {
+    let errs = typecheck_errors(
+        "struct Opaque { a: i64 }\n\
+         fn work() -> Result[i64, Opaque] {\n\
+         \x20   errdefer(e) { println(f\"{e}\"); }\n\
+         \x20   return Err(Opaque { a: 1 })\n\
+         }\n\
+         fn main() { let _ = work(); }\n",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.to_string().contains("does not implement Display")),
+        "interpolating an `E` with no `Display` impl must be rejected inside the \
+         errdefer body exactly as it is outside one; got: {:?}",
+        errs.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+    );
+
+    // …and is accepted once `E` does implement it.
+    typecheck_ok(
+        "struct Shown { a: i64 }\n\
+         impl Display for Shown { fn to_string(ref self) -> String { f\"S{self.a}\" } }\n\
+         fn work() -> Result[i64, Shown] {\n\
+         \x20   errdefer(e) { println(f\"{e}\"); }\n\
+         \x20   return Err(Shown { a: 1 })\n\
+         }\n\
+         fn main() { let _ = work(); }\n",
+    );
+}
+
+/// design.md: "Its scope is the `errdefer` block only." Guards the scope
+/// push/pop around the newly-typed binding — a leak would shadow an outer
+/// binding of the same name for the rest of the function.
+#[test]
+fn errdefer_binding_is_scoped_to_its_own_block() {
+    // design.md: "Its scope is the `errdefer` block only." Leaking `e` past
+    // the block is caught earlier than this — the RESOLVER reports `undefined
+    // name 'e'` before the typechecker runs, and the harness panics on resolve
+    // errors rather than returning them — so the escape half is not assertable
+    // through `typecheck_errors` and is not restated here.
+    //
+    // What IS this change's regression risk, and what this pins: the binding
+    // is installed into a pushed scope and must not survive it. An outer
+    // binding of the same name has to keep its own type after the block —
+    // which it would not if the newly-typed `e` leaked.
+    typecheck_ok(
+        "fn work() -> Result[i64, String] {\n\
+         \x20   let e = 7;\n\
+         \x20   errdefer(e) { println(e); }\n\
+         \x20   let n: i64 = e + 1;\n\
+         \x20   println(f\"{n}\");\n\
+         \x20   return Err(\"x\".to_string())\n\
+         }\n\
+         fn main() { let _ = work(); }\n",
     );
 }

@@ -8332,7 +8332,8 @@ impl<'ctx> super::Codegen<'ctx> {
             // error-path drain, so the unstaged case is unreachable
             // from a well-formed program; the conservative branch
             // here keeps emission non-fatal.
-            let saved_binding: Option<(String, Option<VarSlot<'ctx>>)> =
+            #[allow(clippy::type_complexity)]
+            let saved_binding: Option<(String, Option<VarSlot<'ctx>>, Option<String>)> =
                 if let Some(name) = &binding {
                     if let Some(payload) = self.pending_errdefer_payload {
                         let payload_ty = payload.get_type();
@@ -8346,7 +8347,22 @@ impl<'ctx> super::Codegen<'ctx> {
                                 ty: payload_ty,
                             },
                         );
-                        Some((name.clone(), prior))
+                        // B-2026-08-23-19: an LLVM slot alone is not a
+                        // binding codegen can render. User-struct and
+                        // user-enum Display dispatch is NAME-keyed through
+                        // `var_type_names` (`expr_user_struct_name` /
+                        // `expr_user_enum_name`), so without an entry here
+                        // `f"{e}"` on a struct or enum `E` fell through to
+                        // the anonymous-aggregate arm and failed to lower.
+                        // Saved and restored with the slot, for the same
+                        // reason: the name is live only for this body.
+                        let mut prior_ty_name = None;
+                        if let Some(tn) = self.fn_ctx.current_fn_err_payload_type_name.clone() {
+                            prior_ty_name =
+                                self.var_types.var_type_names.get(name.as_str()).cloned();
+                            self.record_var_type_name(name.clone(), tn);
+                        }
+                        Some((name.clone(), prior, prior_ty_name))
                     } else {
                         None
                     }
@@ -8362,14 +8378,36 @@ impl<'ctx> super::Codegen<'ctx> {
             // here never fires. The errdefer body (slice 2) reuses this
             // same path so a `defer` inside an errdefer body scopes the
             // same way.
-            let _ = self.compile_block_with_frame(&block);
+            // B-2026-08-23-19: a cleanup body that fails to compile must not
+            // vanish from the binary. This discarded the `Result`, so a hard
+            // codegen error inside a `defer` / `errdefer` body silently
+            // dropped the offending statement and the program ran on without
+            // it — the shape that made an unrenderable `errdefer(e)` binding
+            // look like a missing `println` rather than a compile error.
+            // Recorded rather than returned because this dispatcher and its
+            // callers are all infallible (`emit_scope_cleanup*` return `()`);
+            // `compile_function` surfaces it before the function is
+            // considered compiled.
+            if let Err(e) = self.compile_block_with_frame(&block) {
+                if self.cleanup_body_error.is_none() {
+                    self.cleanup_body_error = Some(e);
+                }
+            }
             // Restore any prior binding the errdefer's `e` shadowed.
             // Removing the slot rather than leaving it in `variables`
             // is required: the alloca is live only for the duration of
             // this body's compile, and a subsequent unrelated reference
             // to the same name (in a later errdefer body or the same
             // body re-entered) must not pick up a stale slot.
-            if let Some((name, prior)) = saved_binding {
+            if let Some((name, prior, prior_ty_name)) = saved_binding {
+                match prior_ty_name {
+                    Some(tn) => {
+                        self.var_types.var_type_names.insert(name.clone(), tn);
+                    }
+                    None => {
+                        self.var_types.var_type_names.remove(name.as_str());
+                    }
+                }
                 match prior {
                     Some(slot) => {
                         self.variables.insert(name, slot);

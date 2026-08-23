@@ -87,6 +87,16 @@ pub(crate) struct FnCtx<'ctx> {
     /// doesn't return `Result[T, E]` (or doesn't return at all) — the
     /// `?` site falls back to staging bare `w0` as i64 in that case.
     pub(crate) current_fn_err_payload_ty: Option<inkwell::types::BasicTypeEnum<'ctx>>,
+    /// The Kāra type NAME of that same `Result[T, E]` payload (E's last
+    /// path segment), recorded next to its LLVM type. The LLVM type alone
+    /// is not enough to install an `errdefer(e)` binding: codegen's
+    /// user-struct / user-enum Display dispatch is NAME-keyed through
+    /// `var_types.var_type_names`, so without this the binding lowers as an
+    /// anonymous aggregate and `f"{e}"` on a struct or enum `E` fails to
+    /// compile (B-2026-08-23-19). `None` when the function does not return
+    /// `Result[T, E]`, or when E is not a simple path type (a tuple E is
+    /// dispatched by the span-keyed table instead, so it needs no name).
+    pub(crate) current_fn_err_payload_type_name: Option<String>,
     /// True while compiling a function whose declared return type is a
     /// borrow (`-> ref T` / `-> mut ref T`). The LLVM signature returns a
     /// thin `ptr`, so the tail / explicit-`return` sites must emit the

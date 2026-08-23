@@ -4253,12 +4253,41 @@ impl<'a> super::TypeChecker<'a> {
             StmtKind::ErrDefer { binding, body } => {
                 let prev = self.in_defer;
                 self.in_defer = true;
-                // If errdefer(e), bind `e` in a new scope — typed as the Err
-                // variant of the enclosing function's return type (stubbed as
-                // Error for now since Result type is not yet fully implemented).
+                // design.md § `defer` and `errdefer`: "The binding `e` has the
+                // type of the function's `Err` variant", and "`errdefer(e)` is
+                // only valid in functions returning `Result[T, E]`".
+                //
+                // B-2026-08-23-19: this used to bind `Type::Error` — the
+                // error-recovery type — with a note that `Result` was not yet
+                // fully implemented. `Type::Error` is unconstrained, so it
+                // satisfied every use: `f"{e}"` typechecked on an `E` with no
+                // `Display` impl, `let n: i32 = e` typechecked on `E = String`
+                // (a universal cast, the B-2026-08-23-16 shape), and
+                // `errdefer(e)` was accepted in `Option`- and non-`Result`-
+                // returning functions the spec forbids outright. It also left
+                // codegen with no static type for the binding, which is why the
+                // backends had to guess the payload from the `Err` aggregate's
+                // raw words and why the span-keyed Display tables had no entry
+                // for `e` (a struct/tuple/enum `f"{e}"` failed to lower).
+                // Binding the real `E` closes all of it at the source.
                 if let Some(name) = binding {
+                    let bound_ty = match &self.current_return_type {
+                        Some(Type::Named { name: n, args }) if n == "Result" && args.len() == 2 => {
+                            args[1].clone()
+                        }
+                        _ => {
+                            self.type_error(
+                                "errdefer with a binding requires Result return type; \
+                                 use errdefer { ... } for cleanup on None-propagation"
+                                    .to_string(),
+                                stmt.span,
+                                TypeErrorKind::TypeMismatch,
+                            );
+                            Type::Error
+                        }
+                    };
                     self.local_scope.push();
-                    self.local_scope.insert(name.clone(), Type::Error);
+                    self.local_scope.insert(name.clone(), bound_ty);
                 }
                 self.infer_block(body);
                 if binding.is_some() {

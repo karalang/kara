@@ -1191,6 +1191,73 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Resolve a function's declared return type to its `Result[T, E]` Err
+    /// payload, as `(E's LLVM type, E's Kāra type name)`.
+    ///
+    /// Both are read while emitting an error exit: the LLVM type drives
+    /// `rebuild_value_from_payload_words` at all three error-exit sites (`?`,
+    /// explicit `return Err(..)`, function-tail `Err(..)`), and the name
+    /// registers the `errdefer(e)` binding in `var_type_names` so its
+    /// user-struct / user-enum Display dispatch resolves.
+    ///
+    /// TYPE ALIASES are resolved first (B-2026-08-23-19). The walk used to
+    /// match `Result` syntactically on `func.return_type`, so a function
+    /// declared `-> MyResult` where `type MyResult = Result[i64, String]`
+    /// yielded `None` and every error exit in it fell back to staging the bare
+    /// i64 payload word — the alias spelling silently opted out of the
+    /// reconstruction. The typechecker resolves the alias, so the binding was
+    /// correctly TYPED as `String` while the value handed to it was a data
+    /// pointer. `plain_alias_bases` is the same table `type_alias_base_name`
+    /// walks; the iteration bound keeps a malformed cyclic alias from hanging
+    /// codegen.
+    ///
+    /// `(None, None)` when the function returns no `Result[T, E]`, which is
+    /// the pre-existing fallback: stage the bare word.
+    fn result_err_payload_of_return_type(
+        &mut self,
+        ret: Option<&TypeExpr>,
+    ) -> (Option<BasicTypeEnum<'ctx>>, Option<String>) {
+        let Some(ret_ty) = ret else {
+            return (None, None);
+        };
+        let mut cur = ret_ty.clone();
+        for _ in 0..8 {
+            let TypeKind::Path(path) = &cur.kind else {
+                return (None, None);
+            };
+            if path.segments.len() == 1 && path.segments[0] == "Result" {
+                break;
+            }
+            let Some(base) = path
+                .segments
+                .last()
+                .and_then(|seg| self.payload_vars.plain_alias_bases.get(seg))
+                .cloned()
+            else {
+                return (None, None);
+            };
+            cur = base;
+        }
+        let TypeKind::Path(path) = &cur.kind else {
+            return (None, None);
+        };
+        if path.segments.len() != 1 || path.segments[0] != "Result" {
+            return (None, None);
+        }
+        let Some(GenericArg::Type(e_te)) = path.generic_args.as_ref().and_then(|a| a.get(1)) else {
+            return (None, None);
+        };
+        // Only a simple path type has a name to dispatch Display on; a tuple
+        // or other structural E is rendered through the span-keyed table
+        // instead, so it needs none.
+        let name = match &e_te.kind {
+            TypeKind::Path(p) => p.segments.last().cloned(),
+            _ => None,
+        };
+        let ty = self.llvm_type_for_type_expr(e_te);
+        (Some(ty), name)
+    }
+
     pub(super) fn compile_function(&mut self, func: &Function) -> Result<(), String> {
         // Heap-closure-env epic (B-2026-06-22-2): refuse to emit a function
         // whose closures escape in a shape the epic has not yet lowered — a
@@ -1211,6 +1278,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // (so its captures outlive the frame). Record its span for
         // `compile_closure`, and reset the per-function heap-env-binding set.
         self.fn_ctx.current_fn_heap_closure_spans.clear();
+        // B-2026-08-23-19: never inherit a parked cleanup-body error from a
+        // function that bailed out before reaching the report site.
+        self.cleanup_body_error = None;
         // B-2026-08-13-10 — per-function map; a constant local from the
         // previous function must not leak into this one's unroll guard.
         self.var_types.int_const_locals.clear();
@@ -1403,24 +1473,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // means the function doesn't return `Result[T, E]` or the
         // annotation isn't recognised — falls back to staging bare
         // `w0` as i64 in the `?` failure branch.
-        self.fn_ctx.current_fn_err_payload_ty =
-            func.return_type
-                .as_ref()
-                .and_then(|ret_ty| match &ret_ty.kind {
-                    TypeKind::Path(path)
-                        if path.segments.len() == 1 && path.segments[0] == "Result" =>
-                    {
-                        path.generic_args
-                            .as_ref()
-                            .and_then(|args| match args.get(1) {
-                                Some(GenericArg::Type(e_te)) => {
-                                    Some(self.llvm_type_for_type_expr(e_te))
-                                }
-                                _ => None,
-                            })
-                    }
-                    _ => None,
-                });
+        // B-2026-08-23-19: one alias-aware walk now yields BOTH E's LLVM type
+        // and its Kāra type name (see `result_err_payload_of_return_type`).
+        let (err_payload_ty, err_payload_type_name) =
+            self.result_err_payload_of_return_type(func.return_type.as_ref());
+        self.fn_ctx.current_fn_err_payload_ty = err_payload_ty;
+        self.fn_ctx.current_fn_err_payload_type_name = err_payload_type_name;
 
         // B-2026-06-12-9: `main() -> Result[(), E]` adaptation. `main` lowers
         // to the C entry `i32 main()`, so a Result-returning body cannot `ret`
@@ -2855,14 +2913,10 @@ impl<'ctx> super::Codegen<'ctx> {
                         if Self::is_pure_recompilable(payload_expr) {
                             self.compile_expr(payload_expr).ok()
                         } else {
-                            let constructed = result?;
-                            self.builder
-                                .build_extract_value(
-                                    constructed.into_struct_value(),
-                                    1,
-                                    "errdefer_tail_payload_w0",
-                                )
-                                .ok()
+                            // B-2026-08-23-19: same reconstruction as the
+                            // explicit-`return` site and the `?` site, rather
+                            // than staging bare field 1 as an i64.
+                            self.stage_errdefer_payload_from_err_aggregate(result?)
                         }
                     });
                 self.pending_errdefer_payload = staged;
@@ -3048,6 +3102,15 @@ impl<'ctx> super::Codegen<'ctx> {
         self.contract_state.contract_old_snapshots.clear();
         self.contract_state.current_method_invariants.clear();
         self.contract_state.constructor_invariant_self_type = None;
+        // B-2026-08-23-19: surface a `defer` / `errdefer` body that failed to
+        // compile. The cleanup drain runs from infallible exit-path emitters,
+        // so the error is parked in `cleanup_body_error` at the point of
+        // failure and reported here — the first place with a `Result` to
+        // carry it. Taken rather than read so it cannot leak into the next
+        // function.
+        if let Some(err) = self.cleanup_body_error.take() {
+            return Err(err);
+        }
         Ok(())
     }
 

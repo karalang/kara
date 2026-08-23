@@ -29838,3 +29838,225 @@ fn test_json_redundant_suffix_fix_span_covers_the_separator() {
         "expected fix_it span {expected} covering `_i64`, got: {stdout}"
     );
 }
+
+/// B-2026-08-23-19 — the `errdefer(e)` binding must hold the ERROR VALUE on
+/// every error-exit path and on every backend.
+///
+/// The two early-exit sites (`return Err(..)` and the function tail) staged the
+/// payload's raw i64 word whenever the payload expression was not on codegen's
+/// `is_pure_recompilable` whitelist. For an integer `E` that word IS the value,
+/// so the trade the code documented cost nothing and the existing tests — which
+/// all use integer or literal payloads — stayed green. For anything else it was
+/// simply a wrong value reaching the cleanup block: `Err(msg.to_string())`, the
+/// ordinary way to build a String error, bound its DATA POINTER and printed as
+/// a bare integer; an `f64` bound its raw bit pattern; a `bool` bound `0`/`1`;
+/// a struct or tuple bound only its first field.
+///
+/// Every row below is a shape that diverged from `--interp` before the fix.
+/// The controls (`H`/`I`, integer and string literal) and the `?` path (`J`)
+/// were already correct and are here so a regression in the whitelist or the
+/// `?` site cannot hide behind the new arms.
+///
+/// `K` and `L` cover the two mechanisms the row's own suggested fix did not
+/// reach. `K`'s `E` is wider than the aggregate's inline payload area, so the
+/// pack side heap-BOXES it and stores the box pointer in word 0; reconstructing
+/// from the words instead of de-boxing built a String around that pointer and
+/// SEGFAULTED under AOT (and it segfaulted on the `?` path too, which had the
+/// same gap). `L` returns a type ALIAS for `Result`, which the syntactic
+/// `Result` match missed entirely — every error exit in such a function
+/// silently opted out of reconstruction, while the typechecker resolved the
+/// alias and typed the binding correctly, so the binding was right and the
+/// value was not.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_errdefer_binding_value_parity_across_backends() {
+    let tmp = scratch_project("errdefer-binding-value-parity");
+    let src = r#"struct Fault { code: i64, msg: String }
+impl Display for Fault {
+    fn to_string(ref self) -> String { f"Fault[{self.code}:{self.msg}]" }
+}
+
+enum Kind { Soft, Hard }
+impl Display for Kind {
+    fn to_string(ref self) -> String {
+        match self { Kind.Soft => { "Soft".to_string() } Kind.Hard => { "Hard".to_string() } }
+    }
+}
+
+fn str_method() -> Result[i64, String] {
+    errdefer(e) { println(f"A {e}"); }
+    return Err("built".to_string())
+}
+fn str_fstring(n: i64) -> Result[i64, String] {
+    errdefer(e) { println(f"B {e}"); }
+    return Err(f"code {n}")
+}
+fn str_tail() -> Result[i64, String] {
+    errdefer(e) { println(f"C {e}"); }
+    Err("tail".to_string())
+}
+fn float_computed(x: f64) -> Result[i64, f64] {
+    errdefer(e) { println(f"D {e}"); }
+    return Err(x * 2.5)
+}
+fn bool_computed(n: i64) -> Result[i64, bool] {
+    errdefer(e) { println(f"E {e}"); }
+    return Err(n > 1)
+}
+fn struct_payload() -> Result[i64, Fault] {
+    errdefer(e) { println(f"F {e}"); }
+    return Err(Fault { code: 3, msg: "bad".to_string() })
+}
+fn enum_payload() -> Result[i64, Kind] {
+    errdefer(e) { println(f"G {e}"); }
+    return Err(Kind.Hard)
+}
+fn int_literal() -> Result[i64, i64] {
+    errdefer(e) { println(f"H {e}"); }
+    return Err(7)
+}
+fn str_literal() -> Result[i64, String] {
+    errdefer(e) { println(f"I {e}"); }
+    return Err("lit")
+}
+fn inner() -> Result[i64, String] { Err("viaq".to_string()) }
+fn via_question() -> Result[i64, String] {
+    errdefer(e) { println(f"J {e}"); }
+    let v = inner()?;
+    return Ok(v)
+}
+struct Two { a: String, b: String }
+impl Display for Two {
+    fn to_string(ref self) -> String { f"T({self.a}/{self.b})" }
+}
+fn mk_two() -> Two { Two { a: "x".to_string(), b: "y".to_string() } }
+fn oversized_payload() -> Result[i64, Two] {
+    errdefer(e) { println(f"K {e}"); }
+    return Err(mk_two())
+}
+
+type Aliased = Result[i64, String];
+fn aliased_return() -> Aliased {
+    errdefer(e) { println(f"L {e}"); }
+    return Err("via-alias".to_string())
+}
+
+fn success() -> Result[i64, String] {
+    errdefer(e) { println(f"NEVER {e}"); }
+    return Ok(1)
+}
+
+fn main() {
+    let _ = str_method();
+    let _ = str_fstring(42);
+    let _ = str_tail();
+    let _ = float_computed(3.0);
+    let _ = bool_computed(5);
+    let _ = struct_payload();
+    let _ = enum_payload();
+    let _ = int_literal();
+    let _ = str_literal();
+    let _ = via_question();
+    let _ = oversized_payload();
+    let _ = aliased_return();
+    let _ = success();
+    println("done");
+}
+"#;
+    write(&tmp.join("ed.kara"), src);
+
+    let stdout_of = |args: &[&str]| -> Option<String> {
+        karac_bin()
+            .current_dir(&tmp)
+            .args(args)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+    };
+    let interp = stdout_of(&["run", "--interp", "ed.kara"]);
+    let jit = stdout_of(&["run", "ed.kara"]);
+
+    let built = karac_bin()
+        .current_dir(&tmp)
+        .args(["build", "ed.kara"])
+        .output();
+    let exe = tmp.join("ed");
+    let aot = if built.map(|o| o.status.success()).unwrap_or(false) && exe.exists() {
+        std::process::Command::new(&exe)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+    } else {
+        None
+    };
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    let (Some(i), Some(j)) = (interp, jit) else {
+        panic!("interp and JIT must both run — neither needs a runtime archive");
+    };
+    // (1) PARITY across the backends — the constraint the staging violated.
+    assert_eq!(i, j, "interp/JIT parity for the errdefer(e) binding value");
+    if let Some(a) = aot.as_ref() {
+        assert_eq!(&i, a, "interp/AOT parity for the errdefer(e) binding value");
+    }
+
+    // (2) WHICH value they agreed on. Asserting the exact text matters as much
+    // as the parity: a shared regression to the raw word would keep the
+    // backends equal to each other while making every line wrong.
+    assert_eq!(
+        i,
+        "A built\nB code 42\nC tail\nD 7.5\nE true\nF Fault[3:bad]\nG Hard\nH 7\nI lit\nJ viaq\n\
+         K T(x/y)\nL via-alias\ndone\n",
+        "each errdefer(e) must see its function's error VALUE, not the payload's \
+         i64-coerced word"
+    );
+    assert!(
+        !i.contains("NEVER"),
+        "an `Ok(...)` return is a success exit and must never fire errdefer"
+    );
+}
+
+/// B-2026-08-23-19 — a `defer` / `errdefer` body that fails to compile must be
+/// a DIAGNOSTIC, not a silently missing statement.
+///
+/// The cleanup dispatcher discarded `compile_block_with_frame`'s `Result` (`let
+/// _ = ...`), and every caller above it is infallible, so a hard codegen error
+/// inside a cleanup body vanished: the binary was emitted without the offending
+/// statement and ran on. That is how the `errdefer(e)` binding failures
+/// presented before the typing fix — as a missing `println`, not as an error.
+///
+/// `dbg` is the trigger here because it is the one construct the compiled
+/// backends refuse outright (B-2026-08-23-16), which makes this test a real
+/// end-to-end check of the fail-closed path rather than a mock.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_unlowerable_defer_body_refuses_instead_of_vanishing() {
+    let tmp = scratch_project("defer-body-fail-closed");
+    write(
+        &tmp.join("d.kara"),
+        "fn main() {\n\x20   defer { dbg(1); }\n\x20   println(\"body\");\n}\n",
+    );
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .args(["build", "d.kara"])
+        .output()
+        .expect("karac build runs");
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    assert!(
+        !out.status.success(),
+        "a cleanup body that cannot be lowered must fail the build, not emit a \
+         binary with the statement silently dropped; got success with: {combined}"
+    );
+    assert!(
+        combined.contains("dbg"),
+        "the refusal must name the construct that could not be lowered; got: {combined}"
+    );
+}
