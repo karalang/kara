@@ -44518,12 +44518,14 @@ fn a_self_returning_existential_stays_opaque() {
 /// `karac check`. That is only possible because the capability question is
 /// answered without the backend (`target::target_has_native_f16`).
 ///
-/// These are host-aware: whether the emulation lint fires depends on the
-/// resolved baseline CPU. x86_64 (and aarch64 baselines below `apple-m1`)
+/// The `f16` tests are host-aware: whether the emulation lint fires depends on
+/// the resolved baseline CPU. x86_64 (and aarch64 baselines below `apple-m1`)
 /// emulate half-precision, so the lint fires; `apple-m1` — what aarch64 macOS
 /// resolves to — has native `FEAT_FP16`, so the lint correctly stays quiet.
-/// Each test asserts the direction its own host is in (via
+/// Each asserts the direction its own host is in (via
 /// `target::target_has_native_f16`), so they pass on both CI legs.
+///
+/// `bf16` is NOT host-aware — see `bf16_is_emulated_on_every_target`.
 #[test]
 fn f16_arithmetic_warns_that_it_is_software_emulated() {
     let warns =
@@ -44540,19 +44542,60 @@ fn f16_arithmetic_warns_that_it_is_software_emulated() {
     }
 }
 
+/// B-2026-08-22-30 — `bf16` is emulated on EVERY target, so this one is
+/// unconditional where its `f16` sibling is host-aware.
+///
+/// The two widths were treated as one capability, and that was a false
+/// negative on every native-`f16` CPU. `bf16` is not a target question:
+/// codegen widens bf16 arithmetic to `f32` and rounds back with the RNE
+/// sequence UNCONDITIONALLY (`expr_ops.rs`), because LLVM 18's AArch64 ISel
+/// cannot select scalar `bfloat` arithmetic (B-2026-07-22-1) and taking the
+/// same path on both architectures is what keeps them bit-identical.
+///
+/// Measured on `apple-m1` before the fix: `test_ir_f16_bf16_arithmetic_lowers_to_half_and_bfloat`
+/// confirms the widen-compute-round sequence is emitted there, while this
+/// program produced NO warning — the program paid the cost and was told
+/// nothing, which is the one outcome the lint exists to prevent.
+///
+/// So a host gate here would re-enshrine the bug: on `apple-m1` it would
+/// assert the lint stays quiet, which is exactly what was wrong.
 #[test]
-fn bf16_arithmetic_warns_too() {
+fn bf16_is_emulated_on_every_target() {
     let warns =
         type_warnings_of("fn main() { let a: bf16 = 1.5; let b: bf16 = 2.0; let c = a * b; }");
-    let emulated = warns.iter().any(|w| w.contains("software-emulated"));
-    if karac::target::target_has_native_f16() {
-        assert!(
-            !emulated,
-            "native-f16 host must not emit the bf16 lint, got {warns:?}"
-        );
-    } else {
-        assert!(emulated, "bf16 is emulated wherever f16 is, got {warns:?}");
+    assert!(
+        warns.iter().any(|w| w.contains("software-emulated")),
+        "bf16 arithmetic is widened to f32 on every target, so the lint must \
+         fire regardless of the host's f16 capability, got {warns:?}"
+    );
+    assert!(
+        warns.iter().any(|w| w.contains("on every target")),
+        "the bf16 diagnostic must say the cost is target-independent rather \
+         than naming a cpu it did not judge, got {warns:?}"
+    );
+}
+
+/// The pair that makes the split legible: on a NATIVE-f16 host the same
+/// program shape is quiet for `f16` and loud for `bf16`. On an emulated host
+/// both are loud, which is why the f16 half is guarded.
+#[test]
+fn f16_and_bf16_are_judged_separately_on_a_native_host() {
+    if !karac::target::target_has_native_f16() {
+        return;
     }
+    let f16_warns =
+        type_warnings_of("fn main() { let a: f16 = 1.5; let b: f16 = 2.0; let c = a + b; }");
+    assert!(
+        !f16_warns.iter().any(|w| w.contains("software-emulated")),
+        "native-f16 host must be quiet for f16, got {f16_warns:?}"
+    );
+    let bf16_warns =
+        type_warnings_of("fn main() { let a: bf16 = 1.5; let b: bf16 = 2.0; let c = a + b; }");
+    assert!(
+        bf16_warns.iter().any(|w| w.contains("software-emulated")),
+        "the SAME host must still warn for bf16, which karac widens itself, \
+         got {bf16_warns:?}"
+    );
 }
 
 #[test]

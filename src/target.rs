@@ -75,7 +75,16 @@ pub fn set_active_target(name: &str) -> Result<(), String> {
 /// design.md § Host Functions), so the codegen driver's wasm decisions
 /// (target machine, link path, allocator symbol, entry shim) key on
 /// this predicate rather than on either name.
-/// CPUs measured to execute scalar `f16`/`bf16` arithmetic in HARDWARE.
+/// CPUs measured to execute scalar `f16` arithmetic in HARDWARE.
+///
+/// `bf16` IS NOT ON THIS AXIS and never consults these lists
+/// (B-2026-08-22-30). karac widens bf16 arithmetic to `f32` and rounds back
+/// unconditionally, on every backend, because LLVM 18's AArch64 ISel cannot
+/// select scalar `bfloat` arithmetic (B-2026-07-22-1) — measured directly:
+/// `llc -mtriple=arm64-apple-macosx -mcpu=apple-m1` on a bare `fadd bfloat`
+/// dies with "Cannot select". So no CPU makes bf16 native, and treating the
+/// two widths as one capability silently dropped the lint for bf16 on every
+/// CPU listed here.
 ///
 /// MEASURED, not inferred, with `llc -mcpu=<cpu>` on `fadd half` (LLVM 18):
 /// a native CPU emits a half-width add (`fadd h0, h0, h1` on AArch64,
@@ -93,8 +102,8 @@ pub fn set_active_target(name: &str) -> Result<(), String> {
 /// EMPTY feature string with the whole capability carried by the CPU name.
 const CPUS_WITH_NATIVE_F16: &[&str] = &["apple-m1", "sapphirerapids"];
 
-/// CPUs measured to PROMOTE `f16`/`bf16` arithmetic to `f32`. Same `llc`
-/// method as the list above.
+/// CPUs measured to PROMOTE `f16` arithmetic to `f32`. Same `llc` method as
+/// the list above, and the same `bf16` carve-out.
 ///
 /// This list exists so the DEFAULT build path is decided by measurement
 /// rather than by the fail-open fallback. `karac build` always installs a
@@ -147,11 +156,31 @@ pub fn baseline_cpu_and_features() -> (&'static str, &'static str) {
     }
 }
 
-/// Does the active target execute `f16` / `bf16` arithmetic in hardware?
+/// The CPU this build is actually judged against: the `--target-cpu` override
+/// where the user set one, otherwise the per-target baseline.
+///
+/// Exists so a capability DECISION and the diagnostic that REPORTS it cannot
+/// name different CPUs. They did (B-2026-08-22-30): `target_has_native_f16`
+/// resolved the override while the `f16_software_emulated` message read
+/// `baseline_cpu_and_features()` directly, so `KARAC_TARGET_CPU=generic` on an
+/// Apple box correctly fired the lint and then blamed `apple-m1` — a CPU it had
+/// not judged, and one whose real answer is the opposite. That is precisely
+/// what `the_f16_lint_names_the_cpu_it_judged` was written to prevent, so the
+/// two callers now read the same function.
+pub fn resolved_cpu() -> &'static str {
+    let (default_cpu, _) = baseline_cpu_and_features();
+    target_cpu_override().unwrap_or(default_cpu)
+}
+
+/// Does the active target execute scalar `f16` arithmetic in hardware?
 ///
 /// `false` means LLVM will promote every such operation to `f32` (or call
 /// out to a libcall on wasm), which is what the `f16_software_emulated`
-/// lint reports — design.md:2347.
+/// lint reports for `f16` — design.md:2347.
+///
+/// NOT a `bf16` predicate: that width is emulated on every target regardless
+/// of the answer here, so the lint's bf16 arm does not call this
+/// (B-2026-08-22-30). See [`CPUS_WITH_NATIVE_F16`].
 ///
 /// UNKNOWN `--target-cpu` VALUES ANSWER `true` (i.e. do not lint). A user
 /// naming a CPU this list has never measured is an expert action, and a
@@ -161,8 +190,8 @@ pub fn baseline_cpu_and_features() -> (&'static str, &'static str) {
 /// in one of the two measured lists, so fail-open is reached only when a
 /// user names a CPU by hand that neither list has been measured against.
 pub fn target_has_native_f16() -> bool {
-    let (default_cpu, default_features) = baseline_cpu_and_features();
-    let cpu = target_cpu_override().unwrap_or(default_cpu);
+    let cpu = resolved_cpu();
+    let (_, default_features) = baseline_cpu_and_features();
 
     let mut features = String::from(default_features);
     if let Some(user) = target_features_override() {

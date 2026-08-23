@@ -20947,6 +20947,54 @@ fn target_cpu_empty_value_rejected() {
     }
 }
 
+/// B-2026-08-22-30 — the `f16_software_emulated` diagnostic must name the CPU
+/// the capability decision actually judged, which is the `--target-cpu`
+/// override when there is one.
+///
+/// `target_has_native_f16` resolved the override; the message read
+/// `baseline_cpu_and_features()` directly. On an Apple box that made
+/// `--target-cpu generic` fire the lint (correct — `generic` promotes f16) and
+/// then blame `apple-m1` (wrong, and its real answer is the opposite). A
+/// diagnostic naming a target it did not judge is worse than one naming none,
+/// because it reads as a fact about this build.
+///
+/// `generic` is the CPU under test because it is valid on BOTH CI legs and is
+/// in `CPUS_WITHOUT_NATIVE_F16` for both, so the lint fires wherever this runs.
+/// The assertion is on the warning only — a cross-CPU build may well fail at
+/// link, and the warning is emitted during typecheck, long before that.
+#[test]
+fn the_f16_lint_names_the_overridden_cpu_not_the_baseline() {
+    let tmp = wasm_test_dir("cpuf16");
+    let path = tmp.join("p.kara");
+    std::fs::write(
+        &path,
+        "fn main() {\n    let a: f16 = 1.5;\n    let b: f16 = 2.0;\n    println(a + b);\n}\n",
+    )
+    .unwrap();
+    let out = karac_bin()
+        .args(["build", path.to_str().unwrap(), "--target-cpu", "generic"])
+        .env_remove("KARAC_TARGET_CPU")
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if let Some(reason) = target_cpu_skip_reason(&stderr) {
+        eprintln!("skip: the_f16_lint_names_the_overridden_cpu_not_the_baseline — {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    assert!(
+        stderr.contains("software-emulated"),
+        "`generic` promotes f16 on both CI arches, so the lint must fire; got: {stderr}",
+    );
+    assert!(
+        stderr.contains("cpu `generic`"),
+        "the diagnostic must name the CPU it judged (`generic`), not the host \
+         baseline; got: {stderr}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// `KARAC_TARGET_CPU` is consulted when the flag is absent — a bogus
 /// env value fails validation with the env-supplied name.
 #[test]

@@ -1937,36 +1937,65 @@ impl<'a> super::TypeChecker<'a> {
     /// `T`, mirroring the `Numeric`-bound arm.
     /// Warn when `f16` / `bf16` arithmetic will be promoted to `f32` (or,
     /// on wasm, routed through `__extendhfsf2` / `__truncsfhf2` libcalls)
-    /// because the active target has no hardware half-precision.
+    /// rather than executed at half width.
     ///
     /// Fires per arithmetic operation, which is what makes the cost visible
     /// where it is paid; `#[allow(f16_software_emulated)]` on the enclosing
     /// item silences the whole region through the normal cascade.
+    ///
+    /// THE TWO WIDTHS ARE NOT THE SAME QUESTION, and treating them as one was
+    /// a false negative on every native-`f16` CPU (B-2026-08-22-30):
+    ///
+    /// * `f16` is a TARGET capability. `apple-m1` executes it natively (`fadd
+    ///   h0, h0, h1`); an x86-64 baseline calls `__extendhfsf2`. So it asks
+    ///   [`crate::target::target_has_native_f16`], and on a native host the
+    ///   lint correctly stays quiet.
+    /// * `bf16` is emulated on EVERY target, because *karac itself* widens it:
+    ///   `Codegen::…` computes bf16 arithmetic in `f32` and rounds back with
+    ///   the RNE sequence unconditionally, since LLVM 18's AArch64 ISel cannot
+    ///   select scalar `bfloat` arithmetic (B-2026-07-22-1) and taking the same
+    ///   path everywhere is what keeps the two architectures bit-identical.
+    ///   No CPU makes that cost go away, so the CPU is not consulted.
+    ///
+    /// Measured on `apple-m1` before the split: a `bf16` multiply emitted the
+    /// widen-compute-round sequence and produced NO warning, which is the one
+    /// outcome the lint exists to prevent.
     fn warn_if_f16_is_software_emulated(&mut self, left: &Type, right: &Type, span: &Span) {
-        let half = |t: &Type| {
-            matches!(
-                t,
-                Type::Float(crate::typechecker::types::FloatSize::F16)
-                    | Type::Float(crate::typechecker::types::FloatSize::BF16)
-            )
+        use crate::typechecker::types::FloatSize;
+        let half_size = |t: &Type| match t {
+            Type::Float(s @ (FloatSize::F16 | FloatSize::BF16)) => Some(*s),
+            _ => None,
         };
-        if !half(left) && !half(right) {
+        let Some(size) = half_size(left).or_else(|| half_size(right)) else {
             return;
-        }
-        if crate::target::target_has_native_f16() {
-            return;
-        }
-        let width = if half(left) { left } else { right };
-        let (cpu, _) = crate::target::baseline_cpu_and_features();
+        };
+        let width = if half_size(left).is_some() {
+            left
+        } else {
+            right
+        };
+        let detail = match size {
+            // Target-dependent: quiet on a CPU measured to run it in hardware.
+            FloatSize::F16 => {
+                if crate::target::target_has_native_f16() {
+                    return;
+                }
+                // `resolved_cpu`, not `baseline_cpu_and_features`: the decision
+                // just above honours `--target-cpu`, so the message has to name
+                // the same CPU or it blames one it never judged.
+                let cpu = crate::target::resolved_cpu();
+                format!("on this target (cpu `{cpu}`): LLVM promotes each operation to `f32`")
+            }
+            // Target-independent: karac widens it on every backend.
+            FloatSize::BF16 => "on every target: each operation is widened to `f32`".to_string(),
+            _ => return,
+        };
         self.type_lint_warning(
             format!(
-                "`{}` arithmetic is software-emulated on this target (cpu `{}`): \
-                 LLVM promotes each operation to `f32` and rounds back. Store in \
-                 `{}` if you need the space, but compute in `f32` to make the \
-                 conversions explicit",
-                type_display(width),
-                cpu,
-                type_display(width),
+                "`{w}` arithmetic is software-emulated {detail} and rounds back. \
+                 Store in `{w}` if you need the space, but compute in `f32` to \
+                 make the conversions explicit",
+                w = type_display(width),
             ),
             *span,
             TypeErrorKind::TypeMismatch,
