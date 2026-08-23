@@ -15,7 +15,7 @@
 
 import grid.Grid;
 
-pub fn render(grid: ref Grid) {
+pub fn render(grid: ref Grid) with writes(Stdout) {
     let mut y: i64 = 0;
     while y < grid.height {
         let mut row = "";
@@ -31,7 +31,7 @@ pub fn render(grid: ref Grid) {
     println(f"population: {grid.population()}");
 }
 
-pub fn clear_screen() {
+pub fn clear_screen() with writes(Stdout) {
     // GAP-L, sharpened 2026-07-29: the raw ANSI escape cannot even be
     // WRITTEN today. Kāra's string literals support `\n`, `\t`, `\r`, `\\`
     // and `\"` and nothing else — there is no `\x1b`, no `\u{1b}`, and no

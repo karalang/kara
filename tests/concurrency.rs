@@ -5455,3 +5455,46 @@ fn test_channel_relaxation_is_scoped_to_the_communication_verbs() {
         main_fc.parallel_groups
     );
 }
+
+/// Console writes are a real effect but must not change any concurrency
+/// decision (B-2026-08-23-8).
+///
+/// Before that row, `println` reached this pass carrying NO effect at all, and
+/// the auto-par design leaned on that: `find_parallel_groups` deliberately
+/// fans console statements out because `karac_par_run` captures each branch's
+/// output and replays it in source order, so parallel prints are
+/// byte-identical to sequential ones. Seeding `writes(Stdout)` — so a public
+/// function that prints must DECLARE it — would have silently undone that
+/// unless both the conflict gate and the cost model carved the console out.
+///
+/// This asserts the combination the two halves have to satisfy together:
+/// the effect IS inferred, and the group is STILL formed and STILL trivial.
+/// The pre-existing `test_direct_println_parallelizes_with_ordered_output`
+/// and the cost-model tests each pin one half; without this, nothing states
+/// why they must both hold at once.
+#[test]
+fn test_console_writes_are_inferred_but_do_not_serialize() {
+    let analysis = analyze(
+        r#"
+        fn main() {
+            println(1);
+            println(2);
+            println(3);
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert_eq!(
+        main_fc.parallel_groups.len(),
+        1,
+        "console writes must not conflict with each other — the runtime \
+         orders the output at the join; got {:?}",
+        main_fc.parallel_groups
+    );
+    assert!(
+        main_fc.parallel_groups[0].is_trivial,
+        "a group of nothing but prints does no measurable work and must stay \
+         trivial so codegen declines it; got {:?}",
+        main_fc.parallel_groups
+    );
+}

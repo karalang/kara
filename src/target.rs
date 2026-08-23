@@ -694,7 +694,29 @@ pub fn target_provides(target: &str, resource: &str) -> bool {
         "gpu" => &["GpuBuffer"],
         _ => &[],
     };
-    provided.contains(&resource)
+    if provided.contains(&resource) {
+        return true;
+    }
+    // Console WRITE sinks under their POSIX names (B-2026-08-23-8).
+    //
+    // design.md's table gives `wasm_browser` `Console` and deliberately not
+    // `Stdout`/`Stderr` — a browser has no file descriptors. But `println` is
+    // a language builtin on every target, and the browser glue implements it
+    // exactly as the console: `fd_write` routes fd 1 to `console.log` and fd 2
+    // to `console.error` (`wasm_glue.rs`). So the capability a browser program
+    // needs to print IS present; the table just names it `Console`.
+    //
+    // This only became observable once `println` carried `writes(Stdout)` at
+    // all. Before that the gate never saw a console effect, so every browser
+    // program printed happily while the table said the resource was absent —
+    // the inconsistency predates the seeding and is what this reconciles.
+    //
+    // WRITE sinks only: `console.log` has no input side, so `Stdin` stays
+    // unprovided on a target that offers only `Console`.
+    if matches!(resource, "Stdout" | "Stderr") && provided.contains(&"Console") {
+        return true;
+    }
+    false
 }
 
 #[cfg(test)]

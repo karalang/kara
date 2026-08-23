@@ -932,9 +932,35 @@ impl<'a> super::EffectChecker<'a> {
                 // map by emitting the capitalized `Env.<method>` call key here
                 // so seeded `inferred_effects` flow to the caller.
                 if let ExprKind::Identifier(mod_name) = &object.kind {
-                    if mod_name == "env" {
-                        calls.push((self.interner.dotted_str("Env", method), expr.span));
-                    } else if mod_name == "critical_section" {
+                    // The lowercase ambient-module alias map, kept in step with
+                    // the typechecker's (`method_identifier_receiver.rs`), the
+                    // interpreter's, and codegen's `ambient_resource_for_alias`.
+                    // Only `env` / `stdin` were routed before B-2026-08-23-8,
+                    // so `fs.read_to_string(...)`, `clock.now()`,
+                    // `rand.next_u64()` and the explicit `stdout.` / `stderr.`
+                    // forms never reached their seeded keys at all.
+                    //
+                    // Receiver-keyed, NOT method-name-keyed: `lines` collides
+                    // with `BufReader.lines` (`reads(FileSystem)`), so routing
+                    // by receiver keeps `stdin.lines`'s `reads(Stdin), blocks`
+                    // seed off File-backed readers. The capitalized forms
+                    // (`Stdin.lines()`) already route via `extract_callee_name`.
+                    // An unseeded method simply finds no entry, so listing a
+                    // whole module here is inert for the ones with no effect.
+                    let ambient = match mod_name.as_str() {
+                        "env" => Some("Env"),
+                        "clock" => Some("Clock"),
+                        "rand" => Some("RandomSource"),
+                        "stdin" => Some("Stdin"),
+                        "stdout" => Some("Stdout"),
+                        "stderr" => Some("Stderr"),
+                        "fs" => Some("FileSystem"),
+                        _ => None,
+                    };
+                    if let Some(res) = ambient {
+                        calls.push((self.interner.dotted_str(res, method), expr.span));
+                    }
+                    if mod_name == "critical_section" {
                         // `critical_section.acquire()` → the dotted seed key
                         // (`writes(Hardware)`, seeded in
                         // `effectchecker.rs::seed_builtin_effects`). Receiver-
@@ -944,17 +970,6 @@ impl<'a> super::EffectChecker<'a> {
                             self.interner.dotted_str("critical_section", method),
                             expr.span,
                         ));
-                    } else if mod_name == "stdin" {
-                        // `stdin.<method>()` → the capitalized `Stdin.<method>`
-                        // seed key (phase-8 `Stdin.lines()` slice). Receiver-keyed,
-                        // NOT method-name-keyed, because `lines` collides with
-                        // `BufReader.lines` (`reads(FileSystem)`) — routing by the
-                        // `stdin` receiver keeps `stdin.lines`'s `reads(Stdin),
-                        // blocks` seed from leaking onto File-backed readers. The
-                        // capitalized `Stdin.lines()` form already routes via
-                        // `extract_callee_name`. (`stdin.read_line`/`read_to_string`
-                        // carry no static seed, so this is inert for them.)
-                        calls.push((self.interner.dotted_str("Stdin", method), expr.span));
                     }
                 }
                 // Stdlib methods whose effects are pre-seeded in inferred_effects.

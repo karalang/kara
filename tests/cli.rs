@@ -17884,7 +17884,7 @@ fn wasm_wasi_build_aborts_on_target_gate_violation() {
     std::fs::write(
         &path,
         "import std.web.{Display};\n\n\
-         pub fn paint() with writes(Display) {\n    println(\"painting\");\n}\n\n\
+         pub fn paint() with writes(Display) writes(Stdout) {\n    println(\"painting\");\n}\n\n\
          fn main() {\n    paint();\n}\n",
     )
     .unwrap();

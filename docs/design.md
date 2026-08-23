@@ -4815,7 +4815,7 @@ fn main() -> Result[(), IoError] {
 }
 ```
 
-The inferred effect set: `reads(Stdin), writes(Stdout), panics`. `main`'s effects are inferred like any private function ([Entry Point](#entry-point-main)).
+The inferred effect set: `reads(Stdin), writes(Stdout), blocks`. `main`'s effects are inferred like any private function ([Entry Point](#entry-point-main)). No `panics`: nothing in this skeleton can panic — `i64.parse` returns an `Option` that the `match` handles exhaustively, and `?` propagates rather than panicking. (The CLI skeleton below *does* infer `panics`, from the `args[1]` index.) `blocks` is the execution verb a stdin read carries, since it parks the OS thread until input or EOF arrives.
 
 **Example — CLI tool skeleton.**
 

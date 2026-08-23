@@ -38357,7 +38357,7 @@ unsafe extern "C" {
     fn puts(s: *const u8) -> i32 with writes(Console);
 }
 
-pub fn main() with writes(Console) blocks {
+pub fn main() with writes(Console) writes(Stdout) blocks {
     let s = "hello, " + "world";
     match s.to_cstring() {
         Ok(cs) => { puts(cs.as_ptr()); }
@@ -104966,7 +104966,7 @@ fn main() {
         // the `Unit`-is-void arm); the defect was the declared function's own
         // signature, so both the by-value call and the direct call must work.
         let fnval = "fn f(n: i64) -> () { println(f\"g{n}\"); }\n\
-             fn run(g: Fn(i64) -> ()) { g(1i64); }\n\
+             fn run(g: Fn(i64) -> () with writes(Stdout)) { g(1i64); }\n\
              fn main() { println(\"before\"); let h = f; h(7i64); run(f); println(\"after\"); }\n";
         assert_eq!(
             run_program(fnval).expect("unit-returning fn used as a value should build and run"),

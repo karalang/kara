@@ -1597,6 +1597,93 @@ impl<'a> EffectChecker<'a> {
             }
         }
 
+        // Built-in primitive resource effects (B-2026-08-23-8). design.md
+        // § Built-in Primitive Resources defines these as the primitives every
+        // user-defined resource is built on, and § Nondeterminism as an
+        // Explicit Resource makes propagation a language-level commitment:
+        // "There is no unmarked path by which nondeterminism can enter a
+        // function body." Until this seed existed, stdout / stdin / stderr /
+        // env-reads / clock / random / the free `fs` functions contributed
+        // NOTHING to any effect set, so a `pub fn` that did I/O needed no
+        // declaration while the identical shape over a user-defined resource
+        // was correctly refused.
+        //
+        // Seeded here for the same reason `File.*` and `Env.set` are: the
+        // baked-stdlib `with` clauses on these `#[compiler_builtin]` stubs are
+        // NOT consumed for propagation — the walker's path-keyed lookup reads
+        // `inferred_effects` — so those clauses are documentation and this is
+        // the mechanism.
+        //
+        // Both key forms are seeded per builtin: the BARE free-function name
+        // (`println`, reached through `extract_callee_name` exactly as `panic`
+        // / `todo` are) and the QUALIFIED resource method (`Stdout.println`,
+        // reached from `Stdout.println(..)` directly and from the lowercase
+        // `stdout.println(..)` alias via the ambient map in `inference.rs`).
+        {
+            let mut seed = |name: &str, effects: &[Effect]| {
+                let mut set = EffectSet::new();
+                for e in effects {
+                    set.add(e.clone(), EffectOrigin::Direct(builtin_span));
+                }
+                self.inferred_effects
+                    .insert(self.interner.intern(name), set);
+            };
+            let w = |r: &str| Effect {
+                verb: EffectVerbKind::Writes,
+                resource: r.to_string(),
+            };
+            let r = |res: &str| Effect {
+                verb: EffectVerbKind::Reads,
+                resource: res.to_string(),
+            };
+            let blocks = Effect {
+                verb: EffectVerbKind::Blocks,
+                resource: String::new(),
+            };
+
+            // Console. `flush` writes too — it is the syscall that actually
+            // drains the buffer.
+            for name in [
+                "println",
+                "print",
+                "Stdout.println",
+                "Stdout.print",
+                "Stdout.flush",
+            ] {
+                seed(name, &[w("Stdout")]);
+            }
+            for name in ["eprintln", "Stderr.println", "Stderr.print", "Stderr.flush"] {
+                seed(name, &[w("Stderr")]);
+            }
+
+            // Stdin. `blocks` alongside `reads(Stdin)` for the same reason
+            // `Stdin.lines` carries it: the read parks the OS thread until
+            // input or EOF arrives.
+            for name in ["Stdin.read_line", "Stdin.read_to_string"] {
+                seed(name, &[r("Stdin"), blocks.clone()]);
+            }
+
+            // Env reads. `Env.set` is seeded `writes(Env)` above; these are the
+            // read half design.md § Nondeterminism names explicitly ("`env.args()`
+            // and `env.var()` are `reads(Env)`"), including the § Entry Point
+            // claim that `env.args()` propagates into `main()` automatically.
+            for name in ["Env.args", "Env.var"] {
+                seed(name, &[r("Env")]);
+            }
+
+            // The other two blessed nondeterminism resources.
+            seed("Clock.now", &[r("Clock")]);
+            seed("RandomSource.next_u64", &[r("RandomSource")]);
+
+            // Free `fs` functions. The stateful `File.*` / `BufReader.*` /
+            // `BufWriter.*` handles are already seeded above; these are the
+            // one-shot module-level forms, which were not.
+            for name in ["FileSystem.read_to_string", "FileSystem.read_lines"] {
+                seed(name, &[r("FileSystem")]);
+            }
+            seed("FileSystem.write", &[w("FileSystem")]);
+        }
+
         // Stdlib conversion traits (`From`, `Into`, `TryFrom`, `TryInto`) are
         // registered as trait names only by the typechecker — they have no
         // AST `TraitDef`, so `collect_declared_effects` skips them. Seed

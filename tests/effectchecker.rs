@@ -10355,3 +10355,239 @@ fn test_par_block_write_through_function_value_rejected() {
             .collect::<Vec<_>>()
     );
 }
+
+// ── Built-in primitive resource effects (B-2026-08-23-8) ────────
+//
+// design.md § Built-in Primitive Resources defines the primitives every
+// user-defined resource is built on, and § Nondeterminism as an Explicit
+// Resource makes their propagation a language-level commitment: "There is no
+// unmarked path by which nondeterminism can enter a function body — no
+// 'ambient' clock, no 'global' RNG, no environment access that slips past the
+// effect system."
+//
+// Until these were seeded, stdout / stdin / stderr / env-reads / clock /
+// random / the free `fs` functions contributed NOTHING to any effect set, so
+// a `pub fn` that did I/O needed no declaration while the identical shape
+// over a user-defined resource was correctly refused.
+
+/// Assert `fn_name` infers exactly one named effect (verb + resource).
+fn assert_infers(src: &str, fn_name: &str, verb: EffectVerbKind, resource: &str) {
+    let result = effectcheck_ok(src);
+    let inferred = result
+        .inferred_effects
+        .get(fn_name)
+        .unwrap_or_else(|| panic!("no inferred entry for `{fn_name}`"));
+    assert!(
+        inferred
+            .effects
+            .iter()
+            .any(|e| e.effect.verb == verb && e.effect.resource == resource),
+        "expected {verb:?}({resource}) for `{fn_name}`, got: {:?}",
+        inferred.effects
+    );
+}
+
+#[test]
+fn test_console_writes_are_inferred() {
+    // The BARE builtin (`println`, keyed like `panic` / `todo`) and the
+    // QUALIFIED resource method both carry the effect.
+    assert_infers(
+        "fn p() { println(\"x\"); }",
+        "p",
+        EffectVerbKind::Writes,
+        "Stdout",
+    );
+    assert_infers(
+        "fn p() { print(\"x\"); }",
+        "p",
+        EffectVerbKind::Writes,
+        "Stdout",
+    );
+    assert_infers(
+        "fn p() { Stdout.println(\"x\"); }",
+        "p",
+        EffectVerbKind::Writes,
+        "Stdout",
+    );
+    assert_infers(
+        "fn p() { eprintln(\"x\"); }",
+        "p",
+        EffectVerbKind::Writes,
+        "Stderr",
+    );
+    // `flush` is the syscall that actually drains the buffer, so it writes.
+    assert_infers(
+        "fn p() { stdout.flush(); }",
+        "p",
+        EffectVerbKind::Writes,
+        "Stdout",
+    );
+}
+
+#[test]
+fn test_stdin_reads_are_inferred() {
+    assert_infers(
+        "fn p() { stdin.read_line(); }",
+        "p",
+        EffectVerbKind::Reads,
+        "Stdin",
+    );
+    // `blocks` alongside, for the same reason `Stdin.lines` carries it: the
+    // read parks the OS thread until input or EOF arrives.
+    assert_infers(
+        "fn p() { stdin.read_line(); }",
+        "p",
+        EffectVerbKind::Blocks,
+        "",
+    );
+    assert_infers(
+        "fn p() { Stdin.read_to_string(); }",
+        "p",
+        EffectVerbKind::Reads,
+        "Stdin",
+    );
+}
+
+#[test]
+fn test_nondeterminism_resources_are_inferred() {
+    // The three resources design.md § Nondeterminism names explicitly. `Env`
+    // writes (`env.set`) already worked; the READ half did not.
+    assert_infers("fn p() { env.args(); }", "p", EffectVerbKind::Reads, "Env");
+    assert_infers(
+        "fn p() { let v = env.var(\"X\"); }",
+        "p",
+        EffectVerbKind::Reads,
+        "Env",
+    );
+    assert_infers(
+        "fn p() { let t = clock.now(); }",
+        "p",
+        EffectVerbKind::Reads,
+        "Clock",
+    );
+    assert_infers(
+        "fn p() { let r = RandomSource.next_u64(); }",
+        "p",
+        EffectVerbKind::Reads,
+        "RandomSource",
+    );
+}
+
+#[test]
+fn test_free_fs_functions_are_inferred() {
+    // The stateful `File.*` / `BufReader.*` handles were already seeded; the
+    // one-shot module-level forms were not.
+    assert_infers(
+        "fn p() { let s = fs.read_to_string(\"f\"); }",
+        "p",
+        EffectVerbKind::Reads,
+        "FileSystem",
+    );
+    assert_infers(
+        "fn p() { fs.write(\"f\", \"x\"); }",
+        "p",
+        EffectVerbKind::Writes,
+        "FileSystem",
+    );
+}
+
+/// The consequence that makes this a bug rather than a cosmetic gap: a public
+/// function that performs I/O must DECLARE it, exactly as one over a
+/// user-defined resource must.
+#[test]
+fn test_public_fn_doing_io_must_declare() {
+    for (src, want) in [
+        ("pub fn p() { println(\"x\"); }", "writes(Stdout)"),
+        ("pub fn p() { eprintln(\"x\"); }", "writes(Stderr)"),
+        ("pub fn p() { env.args(); }", "reads(Env)"),
+        (
+            "pub fn p() { fs.write(\"f\", \"x\"); }",
+            "writes(FileSystem)",
+        ),
+    ] {
+        let errs = effectcheck_errors(src);
+        assert!(
+            errs.iter().any(|e| e.to_string().contains(want)),
+            "a public function doing I/O must declare {want}; got: {errs:?}"
+        );
+    }
+    // And declaring it satisfies the check — the other half, so the rule is
+    // "declare it", not "you can never do I/O in a public function".
+    effectcheck_ok("pub fn p() with writes(Stdout) { println(\"x\"); }");
+}
+
+/// design.md § Standard I/O Surface states the inferred set for its two
+/// skeletons outright. Transcribed verbatim, both must now report what the
+/// spec says they report — the doc claim and the compiler checked against
+/// each other rather than against my expectations.
+#[test]
+fn test_design_md_io_skeletons_infer_documented_effects() {
+    // CLI skeleton: "Inferred effects: reads(Env), reads(FileSystem),
+    // writes(Stdout), writes(Stderr), panics". All five, exactly.
+    let cli = "fn main() -> Result[(), IoError] {\n\
+       \x20   let args = env.args();\n\
+       \x20   if args.len() < 2 {\n\
+       \x20       eprintln(\"usage: tool <path>\");\n\
+       \x20       return Err(IoError.Other(\"missing argument\".to_string()));\n\
+       \x20   }\n\
+       \x20   let content = fs.read_to_string(args[1])?;\n\
+       \x20   println(content);\n\
+       \x20   Ok(())\n\
+       }";
+    let result = effectcheck_ok(cli);
+    let inferred = result.inferred_effects.get("main").unwrap();
+    let have: HashSet<String> = inferred
+        .effects
+        .iter()
+        .map(|e| {
+            let r = &e.effect.resource;
+            format!("{:?}({})", e.effect.verb, r)
+        })
+        .collect();
+    for want in [
+        "Reads(Env)",
+        "Reads(FileSystem)",
+        "Writes(Stdout)",
+        "Writes(Stderr)",
+        "Panics()",
+    ] {
+        assert!(
+            have.contains(want),
+            "design.md's CLI skeleton documents {want}; got: {have:?}"
+        );
+    }
+
+    // Guessing-game skeleton: reads(Stdin), writes(Stdout), blocks — and
+    // NOT panics. design.md used to claim `panics` here; measurement showed
+    // it comes from indexing (which the CLI skeleton has, via `args[1]`, and
+    // this one does not — `i64.parse` returns an Option handled exhaustively,
+    // and `?` propagates rather than panicking). The doc was corrected to
+    // match; this pins the corrected claim in both directions.
+    let guess = "fn main() -> Result[(), IoError] {\n\
+       \x20   print(\"Guess: \");\n\
+       \x20   stdout.flush();\n\
+       \x20   let line = stdin.read_line()?;\n\
+       \x20   match i64.parse(line.trim()) {\n\
+       \x20       Some(guess) => println(f\"You guessed {guess}\"),\n\
+       \x20       None => println(\"not a number\"),\n\
+       \x20   }\n\
+       \x20   return Ok(());\n\
+       }";
+    let result = effectcheck_ok(guess);
+    let inferred = result.inferred_effects.get("main").unwrap();
+    let have: HashSet<String> = inferred
+        .effects
+        .iter()
+        .map(|e| format!("{:?}({})", e.effect.verb, e.effect.resource))
+        .collect();
+    for want in ["Reads(Stdin)", "Writes(Stdout)", "Blocks()"] {
+        assert!(
+            have.contains(want),
+            "design.md's guessing-game skeleton documents {want}; got: {have:?}"
+        );
+    }
+    assert!(
+        !have.contains("Panics()"),
+        "nothing in the guessing-game skeleton can panic; got: {have:?}"
+    );
+}

@@ -10,7 +10,7 @@ fn count_users(user_ids: Vec[i64]) -> i64 {
     total
 }
 
-pub fn send_all(user_ids: Vec[i64]) -> i64 {
+pub fn send_all(user_ids: Vec[i64]) -> i64 with writes(Stdout) {
     let n = count_users(user_ids);
     let mut i: i64 = 0;
     while i < n {

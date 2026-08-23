@@ -593,6 +593,29 @@ fn effect_verb_label(v: &EffectVerbKind) -> &str {
 }
 
 /// An effect associated with a statement.
+/// The console resources (`Stdout` / `Stderr`), whose writes the runtime
+/// serializes for us (B-2026-08-23-8).
+///
+/// Console writes carry a real effect — a public function that prints must
+/// DECLARE `writes(Stdout)`, which is the whole point of seeding them — but
+/// they must not change any CONCURRENCY decision, because they never used to
+/// participate in one: before the seeding they reached this pass as no effect
+/// at all, and the auto-par design leans on that. `karac_par_run` captures
+/// each branch's output and replays it in source order at the join, so
+/// parallel prints are byte-identical to sequential ones.
+///
+/// Two sites consult this, and BOTH are required — missing either would let a
+/// declaration-side seed silently change generated code:
+///   * `conflicts.rs::two_effects_conflict` — so two prints still fan out
+///     rather than serializing (the reversal of B-2026-06-13-18's blanket
+///     suppression that `find_parallel_groups` documents).
+///   * the cost model's `all_pure` below — so a group of nothing but prints is
+///     still TRIVIAL and codegen declines it, instead of paying ~70μs of spawn
+///     per dispatch to run two `println`s in parallel.
+pub(crate) fn is_console_resource(resource: &str) -> bool {
+    resource == "Stdout" || resource == "Stderr"
+}
+
 #[derive(Debug, Clone)]
 struct StmtEffect {
     verb: EffectVerbKind,
@@ -2044,9 +2067,17 @@ impl<'a> ConcurrencyChecker<'a> {
                 //    where `convert_off` was forking three par groups per
                 //    call (each shaped "one big loop + N let-binds"), adding
                 //    2.2s of system-call time over 10K calls for no speedup.
-                let all_pure = group_indices
-                    .iter()
-                    .all(|&i| infos[i].effects.is_empty() && !infos[i].calls_polymorphic);
+                // Console writes do not count against purity here — see
+                // `is_console_resource`. A statement whose only effect is a
+                // print did no measurable work before B-2026-08-23-8 seeded
+                // that effect, and parallelizing it still buys nothing.
+                let all_pure = group_indices.iter().all(|&i| {
+                    infos[i]
+                        .effects
+                        .iter()
+                        .all(|e| is_console_resource(&e.resource))
+                        && !infos[i].calls_polymorphic
+                });
                 let non_constant_count = group_indices
                     .iter()
                     .filter(|&&i| !infos[i].is_constant_init)

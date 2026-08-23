@@ -226,7 +226,7 @@ struct Emitter {
 // newline, the `@fwrite` declare, the collected string globals, and
 // `define i32 @main`. Deliberately NO datalayout or triple: each consumer
 // supplies the host's own.
-pub fn emit_program(items: Vec[Item], stdout_sym: String) -> String with panics {
+pub fn emit_program(items: Vec[Item], stdout_sym: String) -> String with panics writes(Stdout) {
     let mut e = Emitter {
         globals: "".to_string(),
         funcs: "".to_string(),

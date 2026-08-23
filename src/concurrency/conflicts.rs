@@ -325,6 +325,34 @@ impl<'a> super::ConcurrencyChecker<'a> {
             (Reads, Reads) => false,
             // reads + writes or writes + reads = CONFLICT
             (Reads, Writes) | (Writes, Reads) => true,
+            // writes + writes on the CONSOLE = safe, for the same shape of
+            // reason the channel arm below is: the runtime synchronizes the
+            // resource, so the conflict gate does not have to.
+            //
+            // `karac_par_run` captures each branch's console output and
+            // replays it in branch (= source) order at the join, so two
+            // parallel `println`s produce byte-identical output to sequential
+            // execution. `find_parallel_groups` documents this at the
+            // console-output comment in `concurrency.rs` and deliberately
+            // fans such statements out — it is the reversal of
+            // B-2026-06-13-18's blanket suppression, which had traded away the
+            // parallelism of all logging-bearing work.
+            //
+            // Until B-2026-08-23-8, console writes reached here as NO effect
+            // at all, so the gate never saw them and the fan-out happened by
+            // absence. Now that `writes(Stdout)` / `writes(Stderr)` are seeded
+            // — so a public function that prints must DECLARE it — the same
+            // decision has to be made explicitly, or seeding a
+            // declaration-side effect would silently undo a deliberate
+            // optimization. This arm keeps concurrency behaviour exactly as it
+            // was; the seeding is additive for the declaration check only.
+            //
+            // Narrow on purpose: only writes, and only these two resources.
+            // `FileSystem` writes still conflict (two file writes really do
+            // race — there is no ordered-capture equivalent), and a
+            // `reads`/`writes` pair on the console cannot arise since neither
+            // stream is readable.
+            (Writes, Writes) if crate::concurrency::is_console_resource(&a.resource) => false,
             // writes + writes = CONFLICT
             (Writes, Writes) => true,
 
