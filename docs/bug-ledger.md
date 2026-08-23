@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | diagnostics | 99 | 0 |
 | false-positive | 95 | 0 |
 | perf | 84 | 0 |
-| other | 58 | 1 |
+| other | 58 | 0 |
 | soundness | 56 | 1 |
 | crash | 55 | 0 |
 | use-after-free | 20 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1000 | 2 |
+| codegen | 1000 | 1 |
 | typecheck | 247 | 0 |
 | interp | 175 | 1 |
 | ownership | 64 | 0 |
@@ -124,13 +124,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1509 surfaced · 6 open · 1480 fixed · 9 wontfix** (2026-05-20 → 2026-08-23). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1509 surfaced · 5 open · 1481 fixed · 9 wontfix** (2026-05-20 → 2026-08-23). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-23-4 | 2026-08-23 | codegen | low | Codegen owns a LOCAL fixed array element-wise but a PARAM fixed array whole, so the drop-differential cannot gate the array class by place name and needs alignment rule 4 to exclude it | roadmap.md |
 | B-2026-08-23-6 | 2026-08-23 | codegen | high | ANY non-`main` function declared with an EXPLICIT `-> ()` return type miscompiles into UNBOUNDED RECURSION on both compiled backends. `fn f() -> () { println("x"); }` + `fn main() { f(); }` prints `x` ONCE under `--interp` and prints it forever under `karac run` until the stack guard aborts (exit 134); the AOT binary SIGSEGVs (exit 139). `karac check` reports "All checks passed." The control one character away is clean: DROP the `-> ()` and the identical program is correct on all three backends. ROOT CAUSE IS VISIBLE IN THE ONE SHAPE THAT FAILS LOUDLY -- give the body an explicit `return;` and the LLVM verifier catches it: `codegen failed: Module verification failed: "Function return type does not match operand type of return inst!\n  ret void\n i64"`. So codegen gives the function an i64 LLVM return type while emitting `ret void`; without an explicit `return` the mismatch is not caught and control runs off the end of the function. `fn main() -> ()` is UNAFFECTED (main is lowered separately), which is why this survives every hello-world smoke test. | roadmap.md |
 | B-2026-08-23-7 | 2026-08-23 | effect | high | A declared effect is LOST when a function is reached through a LET BINDING or a CONTAINER ELEMENT, so a public function's effect declaration -- "guaranteed semantics" per § Specification Layers -- is bypassable in two lines. design.md § First-Class Functions: "**Effects carry through.** A function with effects produces a typed function value that includes those effects: `let f = save;  // f: Fn(User) -> () with writes(UserDB)` -- calling f carries the writes(UserDB) effect, SAME AS CALLING SAVE DIRECTLY." Measured against a `fn save(n: i64) -> i64 with writes(UserDB)`: `pub fn direct() -> i64 { save(7) }` correctly errors `public function 'direct' performs effects [writes(UserDB)] but has no effect declaration`; `pub fn via_value() -> i64 { let f = save; f(7) }` reports "All checks passed." A second hop (`let f = save; let g = f; g(7)`) also passes. The CONTAINER leg is worse than silent -- `let mut v: Vec[Fn(i64) -> i64] = Vec.new(); v.push(save); v[0](7)` reports a PARTIAL set, `performs effects [panics]`, naming the indexing panic while dropping the callee's declared `writes(UserDB)`, so the diagnostic reads as an authoritative effect list that is wrong. | roadmap.md |
 | B-2026-08-23-8 | 2026-08-23 | effect | medium | BUILT-IN PRIMITIVE RESOURCE effects are never inferred -- stdout, stdin, stderr, env and the filesystem contribute NOTHING to any effect set, so design.md's own two I/O skeletons report the wrong answer and a `pub fn` that does I/O needs no declaration. § Standard I/O Surface states the results outright for its guessing-game skeleton ("The inferred effect set: `reads(Stdin), writes(Stdout), panics`") and its CLI skeleton ("Inferred effects: `reads(Env), reads(FileSystem), writes(Stdout), writes(Stderr), panics`"). Transcribed VERBATIM, both check clean and `karac check --output=json` reports `program_effects: []` for the first and `['panics()']` for the second. The enforcement half is missing in step: `pub fn emit() -> i64 { println("hi"); 1 }`, `pub fn read_it() { stdin.read_line(); }`, `pub fn envy() { env.args(); }` and `pub fn err_it() { eprintln("e"); }` ALL pass with no effect declaration, while the identical shape over a USER-DEFINED resource is correctly refused (`public function 'p' performs effects [writes(UserDB)] but has no effect declaration`). | roadmap.md |
@@ -155,9 +154,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1509 surfaced
 
 </details>
 
-### Fixed (1480)
+### Fixed (1481)
 
-<details><summary>1480 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1481 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -16973,6 +16972,57 @@ both, so the lint fires wherever the test runs.
 Full `--features llvm --no-fail-fast` suite green on aarch64 macOS: 109 test
 binaries, 0 failures.
  |
+| B-2026-08-23-4 | codegen | low | Codegen owns a LOCAL fixed array element-wise but a PARAM fixed array whole, so the drop-differential cannot gate the array class by place name and n… | Fixed in 7102243. A local fixed array now registers the same array-keyed
+`StructDrop` a param one always did, the element sources are suppressed so
+exactly one owner remains, and alignment rule 4 is gone -- the class is gated
+by NAME like every other place.
+
+THE SCOPE PARAGRAPH WAS RIGHT ABOUT WHAT TO DO AND SILENT ABOUT THE HARD
+PART, which was WHERE. An attempt earlier in this session implemented both
+halves, passed every check it had, and was reverted as INERT. The obvious
+hook -- the `!borrow_elided && !matches!(slot_ty, ArrayType(_))` guard in
+`stmts.rs` that visibly SKIPS arrays, and reads exactly like the place the
+array case was excluded from -- sits inside a region already gated on
+`self.var_types.vec_elem_types.get(var_name)`. A fixed-array local never
+populates that table, so the whole region is unreachable for it and a branch
+added inside is dead code. The live site is the `ArrayType` arm of the
+let-binding's aggregate chain, beside the existing heap-env element drops.
+
+SECOND TRAP on the same path: the element `TypeExpr` must come from the
+ANNOTATION. `array_elem_type_exprs` is the UN-annotated path's side table and
+holds nothing for `let a: Array[String, 2] = ...`; the destructure to use is
+the one the array-PARAM path already applies (`GenericArg::Type` +
+`GenericArg::Const`, `n > 0`). Both sources are tried, annotation first.
+
+WHY THE INERT ATTEMPT SURVIVED ITS OWN TESTING, recorded because it is the
+transferable lesson: all four ASAN shapes stayed clean AT IDENTICAL
+ALLOCATION COUNTS. That reads as "no double free, change is sound" and is in
+fact the signature of a change that did nothing -- the suppressions are
+no-ops for those shapes (fresh temps carry no independent cleanup, and an
+f-string accumulator is already neutralized by B-2026-08-22-18) and the
+registration never ran. ASAN cannot distinguish CORRECT from ABSENT here.
+Only the differential can, and it did: with rule 4 removed it still reported
+`place: "a"` missing. After the real fix the same removal leaves it green
+with `drops_checked == 1`.
+
+That is also why the rewritten test asserts `assert_clean(&src) > 0` rather
+than a clean run: 0 means "no divergences" too, which is exactly what the
+excluded state AND the inert attempt both looked like. Only a non-zero count
+proves the place reached the comparison instead of being absent from both
+sides.
+
+TESTS. `owned_fixed_array_of_string_is_gated_by_name_like_every_other_place`
+replaces the rule-4 exclusion test with its inverse, keeping the oracle-side
+assertion because the two sides agreeing proves they MATCH, not that either
+models the array (two empty sets agree too). Four ASAN shapes land as
+standing regression tests rather than one, because the suppression is
+per-element-source-kind: f-string accumulator, named binding moved in, call
+result -- plus the ESCAPE case, which rules out the opposite error, since an
+array returned out must NOT have its slot drop fire (a use-after-free, not a
+leak).
+
+Full suite: 109 binaries, 14917 passed, 0 failed. fmt clean; clippy clean on
+both feature legs. |
 | B-2026-08-23-5 | ownership+codegen | medium | The drop_fuzz oracle-codegen differential corpus reports 94 divergences at the default size (186 at --count 400), against a module doc that states th… | FIXED by f0a55a6.
 
 Two defects, disjoint and both necessary. Measured by reverting each
