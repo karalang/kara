@@ -94,14 +94,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 279 | 0 |
 | leak | 189 | 0 |
-| missing-feature | 155 | 1 |
+| missing-feature | 155 | 0 |
 | run-vs-build | 151 | 0 |
 | double-free | 135 | 0 |
 | codegen-gap | 129 | 0 |
 | diagnostics | 99 | 0 |
 | false-positive | 94 | 0 |
 | perf | 84 | 1 |
-| other | 57 | 0 |
+| other | 59 | 2 |
 | soundness | 55 | 0 |
 | crash | 55 | 0 |
 | use-after-free | 20 | 0 |
@@ -110,11 +110,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 997 | 1 |
+| codegen | 999 | 3 |
 | typecheck | 247 | 0 |
 | interp | 174 | 0 |
+| ownership | 64 | 1 |
 | other | 63 | 0 |
-| ownership | 63 | 1 |
 | cli | 62 | 0 |
 | autopar | 55 | 0 |
 | parser | 38 | 0 |
@@ -124,14 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1502 surfaced · 2 open · 1477 fixed · 9 wontfix** (2026-05-20 → 2026-08-23). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1504 surfaced · 3 open · 1478 fixed · 9 wontfix** (2026-05-20 → 2026-08-23). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-22-29 | 2026-08-22 | codegen+runtime | medium | `FxBuildHasher` is 13.7x SLOWER than the default `SipHash13BuildHasher` on `String` keys (1.23 s vs 0.09 s, 200k inserts + 1M lookups, compiled, arm64) -- the exact opposite of the speed-for-safety trade the stdlib comment and design.md offer it as; a user-written FNV-1a hasher is at parity with the default, so a non-default hasher is not inherently slow | roadmap.md |
-| B-2026-08-23-2 | 2026-08-23 | ownership | medium | Ownership oracle does not model fixed-array (Array[T,N]) ownership, so the drop-differential is blind to the array-element-drop class and the planned codegen-consumes-oracle refactor would regress B-2026-08-23-1 | roadmap.md |
+| B-2026-08-23-4 | 2026-08-23 | codegen | low | Codegen owns a LOCAL fixed array element-wise but a PARAM fixed array whole, so the drop-differential cannot gate the array class by place name and needs alignment rule 4 to exclude it | roadmap.md |
+| B-2026-08-23-5 | 2026-08-23 | ownership+codegen | medium | The drop_fuzz oracle-codegen differential corpus reports 94 divergences at the default size (186 at --count 400), against a module doc that states the corpus reached 0 -- so the corpus-level leak gate is red while the curated 14-shape gate is green | roadmap.md |
 
 ### Wontfix (9)
 
@@ -151,9 +152,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1502 surfaced
 
 </details>
 
-### Fixed (1477)
+### Fixed (1478)
 
-<details><summary>1477 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1478 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -16800,6 +16801,72 @@ covers the override, driving a real `karac build --target-cpu generic`;
 `generic` is the CPU under test because it is valid on BOTH CI arches and is in
 `CPUS_WITHOUT_NATIVE_F16` for both, so the lint fires wherever it runs. |
 | B-2026-08-23-1 | codegen | medium | Owned Array[T, N] with heap elements leaks its element buffers at -O0 -- no scope-exit element drop was ever registered (the -O0 remainder B-2026-08-… | Fixed in 6c3957cf. An owned by-value Array[T, N] whose element owns heap (Array[String, N]) had NO scope-exit element drop registered at any binding site -- no CleanupAction, no synthesize_array_drop_fn, no track_*_array. So every element buffer leaked. Invisible at the default -O2 (the buffers are provably dead and LLVM deletes them) and on macOS ASAN (no LeakSanitizer); caught only by the Linux memory-sanitizer -O0 leg. Modeled the fix on the tuple owned-aggregate machinery but with array-index ([i]) GEP: (1) synthesize_array_drop_fn_te (runtime.rs) emits a drop fn freeing each of the N elements via the element type's own cap-guarded drop; (2) make_array_param_callee_owned (param_own.rs) registers it for an owned Array[heap, N] param/self -- note Array[T,N] parses as Path("Array") with generic args [Type(T), Const(N)], NOT TypeKind::Array (the [T;N] sugar), which is why the first attempt's TypeKind::Array arm never fired; (3) TRANSFER ownership, not deep copy -- the callee is sole owner, so the caller does not also free, which is what the measured single-element (a[1]) leak in take_first(mk(i)) confirmed (a[0] returned had its single owner in last); (4) suppress_array_elem_move_source (param_own.rs) cap-zeros a constant-index element moved out via return a[k] so the array drop skips the returned buffer (else double-free); (5) suppress_array_binding_move_arg retracts the caller's array drop when the whole array is passed by value into another callee (move_declined_copy_struct_arg choke point) so nested passing fn g(a){h(a)} does not free the shared buffers twice. Scalar-element and ref/mut ref array params are untouched. Verified: the three B-2026-08-22-18 fixtures plus a new nested-passing fixture (asan_array_owned_param_moved_into_nested_call_is_balanced) all clean under Linux LSan at -O0; codegen array E2E suite green. |
+| B-2026-08-23-2 | ownership | medium | Ownership oracle does not model fixed-array (Array[T,N]) ownership, so the drop-differential is blind to the array-element-drop class and the planned… | FIXED by 6406ef1, but the row's scope did not survive measurement and the
+corrections matter more than the diff.
+
+WHAT LANDED IS (a) ALONE: `is_heap` learns the `Array[T, N]` PATH spelling.
+Only the `[T; N]` sugar reached the `TypeKind::Array` arm; the path form parses
+as `Path("Array", [Type(T), Const(N)])` and fell through to the unknown-named-
+type `false`. `generic_type_args` already drops the const arg, so the two
+spellings now agree by construction.
+
+(b) WAS NOT NEEDED -- the row's point 2 is REFUTED. It predicted that even with
+`is_heap` corrected the let/value analysis would schedule zero drops for a
+bound `let a: Array[String,2] = [..]`. Measured: it schedules `a` immediately.
+`bind_pattern`'s `Binding` arm makes any binding Owned when its ANNOTATED type
+is heap, and the array was only ever unscheduled because the path spelling
+scored POD. So one line closed both (a) and (b).
+
+That means THE RISK THIS ROW WAS FILED FOR IS CLOSED. The oracle no longer
+believes a fixed array owns nothing, so a codegen refactored to CONSUME the
+schedule will emit an array drop rather than silently dropping the element
+frees on the floor -- which was the whole stated consequence.
+
+THE ROW'S MODEL OF CODEGEN WAS ALSO WRONG, and this is the finding worth
+carrying forward. Scope (b) says to model the local array's ownership "to match
+codegen's synthesize_array_drop_fn_te + suppress_array_elem_move_source +
+suppress_array_binding_move_arg". Those are the PARAM mechanisms:
+`synthesize_array_drop_fn_te` has exactly ONE caller in the tree, and it is
+`make_array_param_callee_owned`. For a LOCAL array codegen emits no array-keyed
+cleanup action at all -- the elements are discharged through whatever owns them
+individually. Dumped from `drop_obs` on three shapes:
+
+  let a: Array[String,2] = ["lit".to_string(), ...]  -> codegen records NOTHING
+  let a: Array[String,2] = [f"..", f".."]            -> records `fstr.acc`, `fstr.acc3`
+  let x = mk(); let y = mk(); let a = [x, y]         -> records `x`, `y`
+  (oracle records `a` in every case)
+
+NOT A LEAK, verified under LSan on four shapes: f-string elements, named
+bindings moved in, call-result elements, and an array RETURNED out of its
+function (which also rules out the use-after-free the source-owns model would
+invite if the escape suppression were missing). All clean.
+
+SO THE DIVERGENCE IS A PLACE-KEY MISMATCH, not a missing drop, and comparing by
+name would false-positive on every local fixed array. Added as differential
+ALIGNMENT RULE 4 (`is_fixed_array_render`, matching both `Array[T]` and the
+sugar's `[T]` rendering), documented explicitly as a KNOWN GAP rather than a
+genuine ownership difference like rules 1-3 -- because it is codegen owning
+local arrays element-wise where it owns param arrays whole, not two correct
+models disagreeing.
+
+(c)/(d) ADJUSTED TO WHAT IS TRUE. The boundary test is retargeted rather than
+merely tightened from `== 0` to `>= 1`: `drops_checked` stays 0 (rule 4 filters
+the place), and the test now asserts against the ORACLE DIRECTLY that its
+schedule contains `a`. That is the half that is newly true; asserting `>= 1` on
+the differential would have been asserting something rule 4 makes false.
+Non-vacuity: reverting the `is_heap` case leaves the schedule `[]` and the
+assertion fails with the rendered drop list.
+
+Full ownership + drop_differential suites green (14/14); default suite 0
+failures; `--features llvm` 109 targets, 0 failures under
+KARAC_REQUIRE_RUNTIME_ARCHIVE=1 with `--no-fail-fast` (only the known
+missing-GPU-archive job); both clippy legs and fmt clean.
+
+TWO REMAINDERS SPLIT OUT rather than folded in: B-2026-08-23-4 (codegen should
+own local arrays whole, which is what lets rule 4 come out) and B-2026-08-23-5
+(the drop_fuzz differential corpus is not at the 0 divergences its module doc
+claims -- found while validating this row, pre-existing, identical before and
+after this change). |
 | B-2026-08-23-3 | typecheck | medium | `f16_software_emulated` asked ONE capability question for TWO widths, so `bf16` arithmetic warned nowhere on a native-`f16` CPU (`apple-m1`, `sapphir… | FIXED by 6cf7be8e.
 
 `warn_if_f16_is_software_emulated` now splits the question by width. `f16` still
