@@ -92,10 +92,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 281 | 0 |
+| miscompile | 282 | 1 |
 | leak | 189 | 0 |
 | missing-feature | 160 | 4 |
-| run-vs-build | 155 | 3 |
+| run-vs-build | 155 | 2 |
 | double-free | 135 | 0 |
 | codegen-gap | 129 | 0 |
 | diagnostics | 100 | 1 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1004 | 2 |
+| codegen | 1005 | 3 |
 | typecheck | 249 | 1 |
-| interp | 177 | 3 |
+| interp | 177 | 2 |
 | ownership | 64 | 0 |
 | other | 63 | 0 |
 | cli | 62 | 0 |
@@ -124,13 +124,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1517 surfaced · 8 open · 1486 fixed · 9 wontfix** (2026-05-20 → 2026-08-23). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1518 surfaced · 8 open · 1487 fixed · 9 wontfix** (2026-05-20 → 2026-08-23). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (8)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-23-9 | 2026-08-23 | interp | medium | The INTERPRETER SKIPS an `errdefer` block when the function's `Err` comes from its TAIL EXPRESSION, while both compiled backends run it. `fn work() -> Result[i64, String] { errdefer { println("failed"); } defer { println("always"); } Err("bad".to_string()) }` prints `always | err bad` under `karac run --interp` and `failed | always | err bad` under `karac run` (JIT) and the AOT binary alike -- so the cleanup that the shipped binary performs is silently absent under the interpreter. `karac check` is clean. The divergence is specific to the tail-expression form: an `Err` reached via `?` short-circuit and an explicit `return Err(...)` both run the `errdefer` correctly on ALL THREE backends, and the `Ok`-from-tail control correctly skips it on all three. | roadmap.md |
 | B-2026-08-23-10 | 2026-08-23 | parser | low | UNIT STRUCTS (`struct Name;`) do not parse, so design.md § Typestate via Phantom Type Parameters' state markers cannot be written as the spec writes them. `struct Disconnected;` -> `error[parse]: Expected LeftBrace, found Semicolon`. The section introduces them as "// State markers — zero-size phantom types" and they are the first two lines of its worked example. The form appears in design.md exactly twice, both here (lines 8734-8735), and the braced spelling works everywhere else. | roadmap.md |
 | B-2026-08-23-11 | 2026-08-23 | typecheck | medium | `Type::Function` carries NO EFFECT ROW, so design.md § First-Class Functions' `let f = save;  // f: Fn(User) -> () with writes(UserDB)` is not representable and a function value's effects cannot propagate through its TYPE. The typechecker's function type is `Function { params, return_type }` -- no effect field -- while the AST-level `TypeKind::FnType` DOES carry an `effect_spec`, which is why a PARAMETER slot can be checked (E0404 `argument 1 has effect writes(UserDB) not declared in slot [pure]`) but an inferred binding cannot. B-2026-08-23-7 closed the resulting soundness hole with an OVER-APPROXIMATION -- a function mentioned in value position contributes its effects to the enclosing function whether or not it is ever called -- which is sound but imprecise: `let f = save;` with no call still demands the declaration. | roadmap.md |
 | B-2026-08-23-12 | 2026-08-23 | effect | medium | A `let` binding's `Fn(...)` TYPE ANNOTATION is never checked against the assigned function's effects, so `let f: Fn(i64) -> i64 = save;` -- a slot that declares PURITY -- silently accepts an effectful `save`, while the IDENTICAL parameter slot is rejected. Measured against `fn save(n: i64) -> i64 with writes(UserDB)`: `fn apply(f: Fn(i64) -> i64, n: i64)` called as `apply(save, 7)` errors `argument 1 has effect writes(UserDB) not declared in slot [pure]`, but `let f: Fn(i64) -> i64 = save;` in a caller that declares `with writes(UserDB)` reports NOTHING. The same E0404 rule, applied at one site and not the other. | roadmap.md |
@@ -138,6 +137,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1517 surfaced
 | B-2026-08-23-15 | 2026-08-23 | interp | medium | The INTERPRETER does not order `eprintln` output across `par {}` branches, so stderr from a parallel region interleaves NONDETERMINISTICALLY -- 4 distinct orderings in 20 runs of one program -- while the SAME program's stderr under JIT and AOT is replayed in stable source order. design.md line 6242 promises exactly the opposite: it names `eprintln` as the construct to reach for when you need deterministic order under `par` ("For anything that needs deterministic order (snapshot tests, log aggregators, printf-style debugging of a race), use `eprintln`"), in explicit contrast to `dbg()`, whose unordered output it documents as unsupported for snapshot testing. The compiled backends honour that promise; the interpreter does not. | roadmap.md |
 | B-2026-08-23-17 | 2026-08-23 | codegen+interp | medium | A PANIC MESSAGE goes to STDOUT under JIT and AOT but to STDERR under `--interp`, and design.md § Entry Point (line 6423) says stderr for all of them. The compiled backends inject the panic line into the program's DATA stream, so anything parsing a compiled Kara program's stdout gets `panic at f.kara:3:16 in main: unwrap() called on None/Err` mixed into its output, while a consumer watching stderr for faults sees nothing at all. Separately and on ALL THREE surfaces, a panic exits 1, not the 101 the same spec paragraph promises -- so the `$?` distinction it exists to provide ("distinct from the Err-exit-1 path so shell pipelines can distinguish expected failures from bugs") does not exist. | roadmap.md |
 | B-2026-08-23-18 | 2026-08-23 | codegen | medium | `dbg(x)` still has NO CODEGEN LOWERING, so a program containing it cannot be compiled at all -- `karac build` and `karac run` now REFUSE it with an actionable error (B-2026-08-23-16 replaced the silent constant-0 miscompile with that refusal), and only `karac run --interp` executes it. design.md § dbg() specifies a real feature -- a stderr line carrying file, line, expression TEXT and the `Debug` rendering of the value, in a terminal form and a `--output=json`/`jsonl` form, tagged with `task_id` inside a `par` region, stripped from `--release` builds, and returning the value so it composes inline. The interpreter implements all of it; the compiled backends implement none of it. | roadmap.md |
+| B-2026-08-23-19 | 2026-08-23 | codegen | high | `errdefer(e) { ... }` BINDS GARBAGE under JIT and AOT whenever the `Err` payload expression is not on codegen's `is_pure_recompilable` whitelist -- most importantly `Err("...".to_string())`, the ordinary way to build a String error. The cleanup block sees the payload's i64-COERCED WORD instead of the value, so `errdefer(e) { println(f"ED {e}") }` prints a raw pointer like `94011862884880` where the interpreter prints `payload`. Affects BOTH the explicit `return Err(...)` path and the function-tail path. A whitelisted payload (integer literal, string LITERAL, a bare identifier) and the `?`-propagation path are all correct, which is why the surrounding tests never caught it. | roadmap.md |
 
 ### Wontfix (9)
 
@@ -157,9 +157,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1517 surfaced
 
 </details>
 
-### Fixed (1486)
+### Fixed (1487)
 
-<details><summary>1486 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1487 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -17163,6 +17163,27 @@ The fix has four parts, and each is FORCED by the one before it -- seeding alone
 3. Carve the console out of BOTH concurrency decisions, via one shared `is_console_resource` predicate. The auto-par design DELIBERATELY relies on console output carrying no resource effect: `find_parallel_groups` fans print statements out because `karac_par_run` captures each branch's output and replays it in source order, which is the documented reversal of B-2026-06-13-18's blanket suppression. Seeding `writes(Stdout)` made two prints conflict (killing that parallelism) AND made a print count as "meaningful work" in the cost model (so a group of nothing but prints stopped being trivial and would pay ~70us of spawn to run two `println`s in parallel). Both halves are needed; each was measured to be independently necessary by reverting it alone.
 
 4. Let a `Console`-providing target satisfy `Stdout` / `Stderr` in the target gate. design.md's table gives `wasm_browser` `Console` and deliberately not `Stdout` -- a browser has no file descriptors -- but `println` is a builtin on every target and the browser glue implements it as exactly that: `fd_write` routes fd 1 to `console.log` and fd 2 to `console.error`. Every printing browser program built fine before only because the gate never saw a console effect; the inconsistency predates the seeding and this reconciles it. WRITE sinks only -- `console.log` has no input side, so `Stdin` stays unprovided. |
+| B-2026-08-23-9 | interp | medium | The INTERPRETER SKIPS an `errdefer` block when the function's `Err` comes from its TAIL EXPRESSION, while both compiled backends run it | FIXED by 9c95c06, on the INTERPRETER side, and the row's supporting citation needs a correction.
+
+WHAT THE ROW CITED, AND WHY IT WAS THE WRONG LINE. The row justified "the compiled backends are right" by quoting design.md's sentence that errdefer fires on "an explicit tail value of an `Err`-typed expression". That sentence (line 914) governs **`defer`/`errdefer` inside a `try` block** -- and `try` is parser-only at v1 (line 920: use sites emit E_TRY_BLOCK_NOT_IMPLEMENTED_YET). The FUNCTION-scope rule is lines 837 and 866, and both enumerate the non-success paths as `?`-propagating Err, `?`-propagating None, explicit `return Err(...)`, explicit `return None` (866 adds panic). NEITHER mentions a tail expression. So the spec does not actually settle this at function scope; it is silent, and its one sentence on the subject is about a construct that does not exist yet.
+
+WHAT SETTLED IT INSTEAD: `tests/codegen.rs::test_e2e_errdefer_fires_on_tail_err_expression`, which has pinned the compiled behaviour since Phase 7 and documents the mechanism ("when the function's final expression is syntactically `Err(...)` ... `compile_function`'s tail emitter routes through `emit_scope_cleanup_for_error_path`"). The compiled behaviour is deliberate and tested; the interpreter simply had no equivalent. The row's CONCLUSION was right even though its citation was not.
+
+THE FIX. `eval_body_growing` -- the documented single chokepoint every function/closure/method body invocation routes through -- sets `next_block_is_fn_body`, and `eval_block_inner` TAKES it on entry. Taking rather than reading is what makes nesting correct: the body's own block consumes the flag, so every block inside it reads false, which matches codegen applying the rule to `func.body.final_expr` and nowhere else. At the tail, a function body whose final expression satisfies the error-exit predicate classifies via the new `ExitPath::classify_tail_value` and runs the errdefer phase before the drop+defer drain.
+
+ONE PREDICATE, NOT TWO. The rule is SYNTACTIC -- `Err(e)` fires, `if c { Err(e) } else { Ok(v) }` does not -- and the temptation was to reimplement it in the interpreter from the runtime value instead. That would have been WORSE THAN THE BUG: it would fire on the four tail shapes codegen does not (`if`, `match`, a tail call returning Err, a nested-block tail), creating a fresh divergence in the opposite direction. So codegen's `is_error_exit_value` was extracted to `ast::is_error_exit_value` -- a plain AST predicate, no backend types, so codegen containment holds -- and both backends now read the same function. Same rule as the SipHash and Arrow twins: agree by construction, not by convention.
+
+The interpreter is also more precise than codegen here for free: it binds an `errdefer(e)` payload from the ALREADY EVALUATED tail value, so the payload expression is never run twice.
+
+MATRIX, all three backends, before -> after. Sixteen programs covering every exit path and payload shape; interp/JIT compared pairwise, AOT spot-checked.
+  tail Err  / tail None / tail Err with two errdefers   DIVERGED -> agree
+  `?` prop / explicit return Err / tail Ok               agreed  -> agree (unchanged)
+  tail `if`, `match`, call, nested block that evaluate to Err   agreed (none fires) -> agree, unchanged
+  errdefer(e) with an impure payload                     DIVERGES -> STILL DIVERGES, filed separately
+
+CORPUS IMPACT: none, and it is the same story as the two rows before it. Exactly three `.kara` files in the repo contain the string `errdefer`, and all three are the SELF-HOSTED COMPILER recognizing the keyword (`"errdefer" => Token.ErrDefer`), not using it. No program in the repo or in kara-katas uses `errdefer` at all, so nothing changes behaviour and the construct has no dogfooding -- which is why a missing cleanup path survived.
+
+CHECKED AND NOT REPRODUCED: `selfhost/src/ast.kara` renames its error-recovery variant from `Err` to `Error` with a comment saying `is_error_exit_value` "would mis-stage errdefer cleanup and panic on the shared-enum return value" -- i.e. a false positive on a USER enum with a variant named `Err`. Probed four shapes (plain and `shared` enum, tail and explicit-return) on both backends: all correct, no panic. Either it was fixed since or the shape is narrower than the comment describes. Not filed, since a hazard that will not reproduce is not a bug report; recorded here so the next reader does not take the comment as current. |
 | B-2026-08-23-14 | codegen | high | `eprintln` output is SILENTLY DROPPED under `karac run` (JIT) and `karac build` (AOT) -- a compiled program loses every stderr write | FIXED by 5786ab6. Two edits, each independently necessary (each was reverted alone and the gate failed).
 
 (1) `src/codegen/call_dispatch.rs` — `eprintln` now joins `println` / `print` on the `compile_print` intercept. It is a prelude FREE function, so no later arm ever claimed it; without the intercept it reached the unknown-callee constant-0 fallback and lowered to nothing at all.
