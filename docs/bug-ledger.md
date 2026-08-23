@@ -98,10 +98,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 151 | 0 |
 | double-free | 135 | 0 |
 | codegen-gap | 129 | 0 |
-| diagnostics | 98 | 0 |
+| diagnostics | 99 | 0 |
 | false-positive | 94 | 0 |
 | perf | 84 | 1 |
-| other | 57 | 1 |
+| other | 57 | 0 |
 | soundness | 55 | 0 |
 | crash | 55 | 0 |
 | use-after-free | 20 | 0 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 997 | 1 |
-| typecheck | 246 | 1 |
+| typecheck | 247 | 0 |
 | interp | 174 | 0 |
 | other | 63 | 0 |
 | ownership | 63 | 1 |
@@ -124,14 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1501 surfaced · 3 open · 1475 fixed · 9 wontfix** (2026-05-20 → 2026-08-23). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1502 surfaced · 2 open · 1477 fixed · 9 wontfix** (2026-05-20 → 2026-08-23). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-22-29 | 2026-08-22 | codegen+runtime | medium | `FxBuildHasher` is 13.7x SLOWER than the default `SipHash13BuildHasher` on `String` keys (1.23 s vs 0.09 s, 200k inserts + 1M lookups, compiled, arm64) -- the exact opposite of the speed-for-safety trade the stdlib comment and design.md offer it as; a user-written FNV-1a hasher is at parity with the default, so a non-default hasher is not inherently slow | roadmap.md |
-| B-2026-08-22-30 | 2026-08-22 | typecheck | medium | Three `f16_software_emulated` lint tests fail on EVERY aarch64 macOS machine on a clean `main`: the tests assert the emulation warning fires, while `baseline_cpu_and_features` resolves Apple Silicon to `apple-m1`, which `target_has_native_f16` answers `true` for -- so the lint correctly stays quiet. CI is x86_64 and green, leaving a permanently-red local suite | roadmap.md |
 | B-2026-08-23-2 | 2026-08-23 | ownership | medium | Ownership oracle does not model fixed-array (Array[T,N]) ownership, so the drop-differential is blind to the array-element-drop class and the planned codegen-consumes-oracle refactor would regress B-2026-08-23-1 | roadmap.md |
 
 ### Wontfix (9)
@@ -152,9 +151,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1501 surfaced
 
 </details>
 
-### Fixed (1475)
+### Fixed (1477)
 
-<details><summary>1475 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1477 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -16718,7 +16717,117 @@ surfaced here.
 
 Full suite: 109 binaries, 14910 passed, 0 failed. fmt clean; clippy clean on
 both feature legs. |
+| B-2026-08-22-30 | typecheck | medium | Three `f16_software_emulated` lint tests fail on EVERY aarch64 macOS machine on a clean `main`: the tests assert the emulation warning fires, while `… | FIXED by 6cf7be8e. The row asked which half was wrong -- the tests or
+the CPU table -- and the honest answer turned out to be "the tests, for `f16`;
+the LINT, for `bf16`". The first half was already fixed upstream while this row
+sat open; the second was not, and was made worse by that fix.
+
+THE MEASUREMENT THE ROW ASKED FOR, `llc` 18.1.8 (the version karac links) on a
+bare `fadd half` / `fadd bfloat`:
+
+    triple / cpu                          f16              bf16
+    arm64-apple-macosx apple-m1           fadd h0, h0, h1  Cannot select
+    aarch64 generic +v8a                  fcvt/fadd s/fcvt Cannot select
+    aarch64 generic +v8a,+fullfp16        fadd h0, h0, h1  Cannot select
+    x86_64 x86-64                         __extendhfsf2    (promoted)
+
+So Apple Silicon DOES execute `f16` natively, the lint was right to stay quiet,
+and the three tests were wrong -- the row's first branch. That much was
+independently fixed by `cf2c4f84` (a parallel session, from the macOS CI leg
+rather than from `llc`), which is why the red suite this row was filed on is
+already gone: all ten f16/bf16 tests pass on aarch64 macOS as of `ed8e5c2d`.
+
+CORRECTION TO THIS ROW'S OWN "WHY". It said `target_has_native_f16` "finds
+`apple-m1` in neither `CPUS_WITH_NATIVE_F16` nor `CPUS_WITHOUT_NATIVE_F16` and
+takes the fail-open default". That is wrong: `apple-m1` is the FIRST ENTRY of
+`CPUS_WITH_NATIVE_F16`, put there deliberately by B-2026-08-22-7. The row was
+written after reading only the `WITHOUT` list and the fallthrough. The verdict
+is unaffected and now rests on measurement rather than on either reading, but
+the mechanism as filed was not what the code does.
+
+WHAT WAS STILL BROKEN, and it is a COMPILER bug rather than a test one, so it
+is filed as B-2026-08-23-3 rather than buried under a row titled after three
+red tests: `bf16` IS NOT ON THE `f16` AXIS AT ALL, and the lint asked one
+question for both.
+
+karac does not hand bf16 arithmetic to LLVM. `codegen/expr_ops.rs` widens it to
+`f32` and rounds back with the RNE sequence UNCONDITIONALLY -- no target test
+anywhere in that path -- because LLVM 18's AArch64 ISel cannot select scalar
+`bfloat` arithmetic at all (B-2026-07-22-1), and taking the same path on both
+architectures is what keeps them bit-identical. The `Cannot select` column
+above is that gap, measured directly.
+
+The consequence: on every CPU in `CPUS_WITH_NATIVE_F16` -- `apple-m1`,
+`sapphirerapids` -- a `bf16` program paid the widen-compute-round cost and was
+told NOTHING, because the lint asked `target_has_native_f16()`, got `true`, and
+returned. Confirmed on this box: `test_ir_f16_bf16_arithmetic_lowers_to_half_and_bfloat`
+passes here (so the widening IS emitted), while `karac check` on a bf16 add
+printed no warning. That is the exact outcome the lint exists to prevent, and
+it was silent on every Apple dev machine since the lint landed.
+
+`cf2c4f84` did not introduce that -- the conflation predates it -- but it
+ENSHRINED it: `bf16_arithmetic_warns_too` was given the same host gate as its
+f16 sibling, so on a native-f16 host it asserted the bf16 lint must stay quiet.
+The test then passed by asserting the bug.
+
+WHAT SHIPPED (in 6cf7be8e; the detail lives on B-2026-08-23-3):
+
+  * `warn_if_f16_is_software_emulated` splits the question. `f16` still asks
+    `target_has_native_f16()`. `bf16` never does -- it is emulated everywhere,
+    so there is no CPU to consult and the message says "on every target"
+    instead of naming one.
+  * A SECOND defect found while verifying the f16 half: the diagnostic named
+    the WRONG CPU under `--target-cpu`. The decision resolved the override
+    (`target_has_native_f16` reads `target_cpu_override()`), the message read
+    `baseline_cpu_and_features()` directly. Measured: `--target-cpu generic` on
+    this Apple box correctly fired the lint and then blamed `apple-m1` -- a CPU
+    it had not judged, and whose real answer is the opposite. Both callers now
+    read one new `target::resolved_cpu()`, so they cannot drift again. This is
+    what `the_f16_lint_names_the_cpu_it_judged` was written to prevent, and it
+    could not catch it: that test never sets an override.
+  * `target.rs`'s two table doc-comments claimed to cover "`f16`/`bf16`". They
+    were measured on `fadd half` only, and the bf16 half of the claim was
+    never true. Corrected, with the `Cannot select` measurement recorded.
+
+TESTS. `bf16_arithmetic_warns_too` becomes `bf16_is_emulated_on_every_target`
+and is UNCONDITIONAL -- a host gate there is what re-enshrines the bug -- and
+also asserts the message says "on every target" rather than naming a cpu it did
+not judge. `f16_and_bf16_are_judged_separately_on_a_native_host` is the pair
+that makes the split legible: same program shape, quiet for f16 and loud for
+bf16, on the same host. And
+`the_f16_lint_names_the_overridden_cpu_not_the_baseline` in `tests/cli.rs`
+covers the override, driving a real `karac build --target-cpu generic`;
+`generic` is the CPU under test because it is valid on BOTH CI arches and is in
+`CPUS_WITHOUT_NATIVE_F16` for both, so the lint fires wherever it runs. |
 | B-2026-08-23-1 | codegen | medium | Owned Array[T, N] with heap elements leaks its element buffers at -O0 -- no scope-exit element drop was ever registered (the -O0 remainder B-2026-08-… | Fixed in 6c3957cf. An owned by-value Array[T, N] whose element owns heap (Array[String, N]) had NO scope-exit element drop registered at any binding site -- no CleanupAction, no synthesize_array_drop_fn, no track_*_array. So every element buffer leaked. Invisible at the default -O2 (the buffers are provably dead and LLVM deletes them) and on macOS ASAN (no LeakSanitizer); caught only by the Linux memory-sanitizer -O0 leg. Modeled the fix on the tuple owned-aggregate machinery but with array-index ([i]) GEP: (1) synthesize_array_drop_fn_te (runtime.rs) emits a drop fn freeing each of the N elements via the element type's own cap-guarded drop; (2) make_array_param_callee_owned (param_own.rs) registers it for an owned Array[heap, N] param/self -- note Array[T,N] parses as Path("Array") with generic args [Type(T), Const(N)], NOT TypeKind::Array (the [T;N] sugar), which is why the first attempt's TypeKind::Array arm never fired; (3) TRANSFER ownership, not deep copy -- the callee is sole owner, so the caller does not also free, which is what the measured single-element (a[1]) leak in take_first(mk(i)) confirmed (a[0] returned had its single owner in last); (4) suppress_array_elem_move_source (param_own.rs) cap-zeros a constant-index element moved out via return a[k] so the array drop skips the returned buffer (else double-free); (5) suppress_array_binding_move_arg retracts the caller's array drop when the whole array is passed by value into another callee (move_declined_copy_struct_arg choke point) so nested passing fn g(a){h(a)} does not free the shared buffers twice. Scalar-element and ref/mut ref array params are untouched. Verified: the three B-2026-08-22-18 fixtures plus a new nested-passing fixture (asan_array_owned_param_moved_into_nested_call_is_balanced) all clean under Linux LSan at -O0; codegen array E2E suite green. |
+| B-2026-08-23-3 | typecheck | medium | `f16_software_emulated` asked ONE capability question for TWO widths, so `bf16` arithmetic warned nowhere on a native-`f16` CPU (`apple-m1`, `sapphir… | FIXED by 6cf7be8e.
+
+`warn_if_f16_is_software_emulated` now splits the question by width. `f16` still
+asks `target::target_has_native_f16()` and stays quiet on a measured-native CPU.
+`bf16` never asks -- it is emulated on every target, so there is no CPU to
+consult, and the message says "on every target" rather than naming one.
+
+The CPU-naming defect is fixed by a new `target::resolved_cpu()`, which applies
+the `--target-cpu` override exactly as the capability decision does. Both the
+decision and the message now read it, so they cannot name different CPUs again.
+
+`target.rs`'s two table doc-comments claimed to cover "`f16`/`bf16`". They were
+measured on `fadd half` only and the bf16 half was never true; corrected, with
+the `Cannot select` measurement recorded so the next reader does not re-derive
+it.
+
+TESTS. `bf16_arithmetic_warns_too` -> `bf16_is_emulated_on_every_target`, now
+UNCONDITIONAL, because a host gate there is precisely what enshrined the bug; it
+also asserts the message says "on every target". `f16_and_bf16_are_judged_separately_on_a_native_host`
+pins the split from the other side: one host, one program shape, quiet for f16
+and loud for bf16. `the_f16_lint_names_the_overridden_cpu_not_the_baseline`
+(`tests/cli.rs`) drives a real `karac build --target-cpu generic` -- `generic`
+because it is valid on BOTH CI arches and is in `CPUS_WITHOUT_NATIVE_F16` for
+both, so the lint fires wherever the test runs.
+
+Full `--features llvm --no-fail-fast` suite green on aarch64 macOS: 109 test
+binaries, 0 failures.
+ |
 
 </details>
 
