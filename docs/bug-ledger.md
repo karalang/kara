@@ -92,10 +92,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 280 | 0 |
+| miscompile | 281 | 1 |
 | leak | 189 | 0 |
 | missing-feature | 159 | 3 |
-| run-vs-build | 153 | 2 |
+| run-vs-build | 155 | 3 |
 | double-free | 135 | 0 |
 | codegen-gap | 129 | 0 |
 | diagnostics | 100 | 1 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1001 | 1 |
+| codegen | 1003 | 2 |
 | typecheck | 248 | 1 |
-| interp | 175 | 1 |
+| interp | 177 | 3 |
 | ownership | 64 | 0 |
 | other | 63 | 0 |
 | cli | 62 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1513 surfaced · 6 open · 1484 fixed · 9 wontfix** (2026-05-20 → 2026-08-23). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1516 surfaced · 8 open · 1485 fixed · 9 wontfix** (2026-05-20 → 2026-08-23). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (8)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -135,7 +135,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1513 surfaced
 | B-2026-08-23-11 | 2026-08-23 | typecheck | medium | `Type::Function` carries NO EFFECT ROW, so design.md § First-Class Functions' `let f = save;  // f: Fn(User) -> () with writes(UserDB)` is not representable and a function value's effects cannot propagate through its TYPE. The typechecker's function type is `Function { params, return_type }` -- no effect field -- while the AST-level `TypeKind::FnType` DOES carry an `effect_spec`, which is why a PARAMETER slot can be checked (E0404 `argument 1 has effect writes(UserDB) not declared in slot [pure]`) but an inferred binding cannot. B-2026-08-23-7 closed the resulting soundness hole with an OVER-APPROXIMATION -- a function mentioned in value position contributes its effects to the enclosing function whether or not it is ever called -- which is sound but imprecise: `let f = save;` with no call still demands the declaration. | roadmap.md |
 | B-2026-08-23-12 | 2026-08-23 | effect | medium | A `let` binding's `Fn(...)` TYPE ANNOTATION is never checked against the assigned function's effects, so `let f: Fn(i64) -> i64 = save;` -- a slot that declares PURITY -- silently accepts an effectful `save`, while the IDENTICAL parameter slot is rejected. Measured against `fn save(n: i64) -> i64 with writes(UserDB)`: `fn apply(f: Fn(i64) -> i64, n: i64)` called as `apply(save, 7)` errors `argument 1 has effect writes(UserDB) not declared in slot [pure]`, but `let f: Fn(i64) -> i64 = save;` in a caller that declares `with writes(UserDB)` reports NOTHING. The same E0404 rule, applied at one site and not the other. | roadmap.md |
 | B-2026-08-23-13 | 2026-08-23 | effect | low | The mutual-recursion NOTE now fires for two functions that merely REFERENCE each other as VALUES, calling them a "mutual recursion group" though neither calls the other. `fn p(n: i64) -> i64 { let f = q; n + 1 }` + `fn q(n: i64) -> i64 { let g = p; n + 2 }` reports `note[effect]: mutual recursion group resolved by fixed-point inference: \`p\` (no effects), \`q\` (no effects)`. The program passes and the note is suppressible with `#[allow(mutual_recursion_note)]`, so this is diagnostic wording, not a check failure -- but "mutual recursion" is a false statement about the program. | roadmap.md |
-| B-2026-08-23-14 | 2026-08-23 | codegen | high | `eprintln` output is SILENTLY DROPPED under `karac run` (JIT) and `karac build` (AOT) -- a compiled program loses every stderr write. `fn main() { eprintln("to-stderr"); println("to-stdout"); }` yields stdout `to-stdout` on all three surfaces, but stderr `to-stderr` ONLY under `--interp`; the JIT and AOT binaries emit NOTHING on fd 2. Not misrouted to stdout (stdout is byte-identical across all three) -- lost. Every compiled Kara program that reports diagnostics, warnings or errors on stderr is silently silent. | roadmap.md |
+| B-2026-08-23-15 | 2026-08-23 | interp | medium | The INTERPRETER does not order `eprintln` output across `par {}` branches, so stderr from a parallel region interleaves NONDETERMINISTICALLY -- 4 distinct orderings in 20 runs of one program -- while the SAME program's stderr under JIT and AOT is replayed in stable source order. design.md line 6242 promises exactly the opposite: it names `eprintln` as the construct to reach for when you need deterministic order under `par` ("For anything that needs deterministic order (snapshot tests, log aggregators, printf-style debugging of a race), use `eprintln`"), in explicit contrast to `dbg()`, whose unordered output it documents as unsupported for snapshot testing. The compiled backends honour that promise; the interpreter does not. | roadmap.md |
+| B-2026-08-23-16 | 2026-08-23 | codegen | high | `dbg(x)` HAS NO CODEGEN LOWERING AT ALL, so under JIT and AOT it returns CONSTANT 0 instead of its argument -- design.md calls it "an identity function with a side effect", and the compiled backends break the identity half silently. `let y = dbg(41) + 1` yields 42 under `--interp` and 1 under `karac run` / `karac build`; `let s = dbg("hello")` binds the String to 0 and prints `s=0`, a wrong-TYPED value flowing on from a wrong-valued call. The stderr line dbg is supposed to emit is lost too, but that is the lesser half: this corrupts data, not just diagnostics. Present in `--release` builds as well, where design.md strips dbg's OUTPUT but still requires the value to pass through. | roadmap.md |
+| B-2026-08-23-17 | 2026-08-23 | codegen+interp | medium | A PANIC MESSAGE goes to STDOUT under JIT and AOT but to STDERR under `--interp`, and design.md § Entry Point (line 6423) says stderr for all of them. The compiled backends inject the panic line into the program's DATA stream, so anything parsing a compiled Kara program's stdout gets `panic at f.kara:3:16 in main: unwrap() called on None/Err` mixed into its output, while a consumer watching stderr for faults sees nothing at all. Separately and on ALL THREE surfaces, a panic exits 1, not the 101 the same spec paragraph promises -- so the `$?` distinction it exists to provide ("distinct from the Err-exit-1 path so shell pipelines can distinguish expected failures from bugs") does not exist. | roadmap.md |
 
 ### Wontfix (9)
 
@@ -155,9 +157,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1513 surfaced
 
 </details>
 
-### Fixed (1484)
+### Fixed (1485)
 
-<details><summary>1484 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1485 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -17161,6 +17163,27 @@ The fix has four parts, and each is FORCED by the one before it -- seeding alone
 3. Carve the console out of BOTH concurrency decisions, via one shared `is_console_resource` predicate. The auto-par design DELIBERATELY relies on console output carrying no resource effect: `find_parallel_groups` fans print statements out because `karac_par_run` captures each branch's output and replays it in source order, which is the documented reversal of B-2026-06-13-18's blanket suppression. Seeding `writes(Stdout)` made two prints conflict (killing that parallelism) AND made a print count as "meaningful work" in the cost model (so a group of nothing but prints stopped being trivial and would pay ~70us of spawn to run two `println`s in parallel). Both halves are needed; each was measured to be independently necessary by reverting it alone.
 
 4. Let a `Console`-providing target satisfy `Stdout` / `Stderr` in the target gate. design.md's table gives `wasm_browser` `Console` and deliberately not `Stdout` -- a browser has no file descriptors -- but `println` is a builtin on every target and the browser glue implements it as exactly that: `fd_write` routes fd 1 to `console.log` and fd 2 to `console.error`. Every printing browser program built fine before only because the gate never saw a console effect; the inconsistency predates the seeding and this reconciles it. WRITE sinks only -- `console.log` has no input side, so `Stdin` stays unprovided. |
+| B-2026-08-23-14 | codegen | high | `eprintln` output is SILENTLY DROPPED under `karac run` (JIT) and `karac build` (AOT) -- a compiled program loses every stderr write | FIXED by 5786ab6. Two edits, each independently necessary (each was reverted alone and the gate failed).
+
+(1) `src/codegen/call_dispatch.rs` — `eprintln` now joins `println` / `print` on the `compile_print` intercept. It is a prelude FREE function, so no later arm ever claimed it; without the intercept it reached the unknown-callee constant-0 fallback and lowered to nothing at all.
+
+(2) `src/codegen/control_flow.rs` — `compile_print` computes `to_stderr = name == "eprintln"` once and threads it into all 22 write sites: 10 `emit_nul_safe_write` calls plus 12 String/collection arms. The stdout-defaulting wrapper `emit_print_and_free_string` was DELETED rather than extended, so every arm now names its stream explicitly and a print arm added later has to decide rather than inherit stdout by omission — the omission is what this bug was.
+
+No new machinery was needed on either side. `emit_nul_safe_write` already took a `to_stderr` flag (`Stderr.println` used it), `stdio_stream` already selected the `stderr` global, and the runtime's auto-par capture already recorded a per-segment `stream` and replayed per stream — its header comment names `eprintln` explicitly. The path existed; nothing was routed into it.
+
+A SECOND, adjacent defect in the same branch was found and fixed with it, tested separately (`test_zero_argument_console_forms_match_across_backends`): the zero-argument branch wrote a hard-coded "\n" whatever the callee was, so a bare `print()` emitted a newline it does not owe — `print("a"); print(); print("b")` compiled to `a\nb` against the interpreter's `ab`. `println()` / `eprintln()` were right only by coincidence. Writing `nl` (already computed as this form's terminator, "" for `print`) is the whole fix; an early return on the empty case was also written, measured to be REDUNDANT with it, and dropped.
+
+VERIFICATION. `tests/cli.rs::test_eprintln_reaches_stderr_on_every_backend` compares interp / JIT / AOT against EACH OTHER on both streams, then pins the exact stderr text, then asserts no cross-talk in either direction. One `eprintln` per write arm `compile_print` can dispatch to — literal, int, float, bool, char, String var, Vec var, Map, Set, Some, None, Ok, tuple, user `impl Display`, Vec temporary, f-string, zero-arg. Map and Set carry a single entry each because iteration order is randomized per process. Non-vacuity was measured three ways: dropping the intercept alone yields compiled stderr `""`; forcing `to_stderr = false` yields `""`; reverting only the 12 String/collection arms drops exactly the 9 lines those arms render, which is what makes the per-arm coverage claim checkable rather than asserted.
+
+Explicit `par {}` ordered replay was verified stream-aware on JIT and AOT (source order, stable over 20 runs), satisfying design.md § dbg() line 6242's promise that `eprintln` is the deterministic-order choice under `par`. The interpreter does NOT satisfy it — filed separately.
+
+wasm32-wasip1 was installed to check the target for real: the module links with `eprintln` (an unresolved `stderr` would have failed there) and differs from its `println` twin, so stream selection happens on that target too; no wasm runtime was available in the container to execute it.
+
+CORPUS FALLOUT: none, and that is the finding. Exactly five `.kara` files mention `eprintln` (one a comment, one a self-host resolver seeding the NAME), and bare `print()` appears zero times corpus-wide. The defect survived because the surface has essentially no coverage — not because it was hard to see.
+
+CONFIRMED IN PASSING: design.md line 6425's claim that `main`'s inferred set includes "`writes(Stderr)` introduced by `eprintln`, `reads(Env)` from `env.args()`" now holds exactly — `karac check --output=json` on that program reports `program_effects: ["reads(Env)","writes(Stderr)","writes(Stdout)"]`. That is B-2026-08-23-8 delivering, and it shows this row's codegen change left effect inference untouched.
+
+TWO STALE design.md MECHANISM CLAIMS were corrected alongside, both falsified by B-2026-08-23-8's console carve-out and both found by checking this row's `par` behaviour against the spec rather than against intuition. Line 6242 said `eprintln`'s "`writes(Stderr)` effect forces sequential execution of callers within a parallel region"; console writes are explicitly NON-conflicting (`conflicts.rs`'s `(Writes, Writes) if is_console_resource => false`), so nothing serializes — the deterministic order the sentence promises is real, but it comes from ordered REPLAY at the join. Line 9948 said a `for` body like `println(i)` is deterministic "because ... rule (2) serializes iterations"; measured deterministic over 12 runs, but by the cost model declining to fork a console-only body, not by conflict. Both now name the actual mechanism and warn against reading the console case as conflict serialization — which matters because the old wording implies the carve-out could be removed without consequence. |
 
 </details>
 
