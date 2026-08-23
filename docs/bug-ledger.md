@@ -100,7 +100,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 129 | 0 |
 | diagnostics | 99 | 0 |
 | false-positive | 94 | 0 |
-| perf | 84 | 1 |
+| perf | 84 | 0 |
 | other | 59 | 2 |
 | soundness | 55 | 0 |
 | crash | 55 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 999 | 3 |
+| codegen | 999 | 2 |
 | typecheck | 247 | 0 |
 | interp | 174 | 0 |
 | ownership | 64 | 1 |
@@ -118,19 +118,18 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | cli | 62 | 0 |
 | autopar | 55 | 0 |
 | parser | 38 | 0 |
-| runtime | 31 | 1 |
+| runtime | 31 | 0 |
 | resolver | 26 | 0 |
 | effect | 11 | 0 |
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1504 surfaced · 3 open · 1478 fixed · 9 wontfix** (2026-05-20 → 2026-08-23). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1504 surfaced · 2 open · 1479 fixed · 9 wontfix** (2026-05-20 → 2026-08-23). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-22-29 | 2026-08-22 | codegen+runtime | medium | `FxBuildHasher` is 13.7x SLOWER than the default `SipHash13BuildHasher` on `String` keys (1.23 s vs 0.09 s, 200k inserts + 1M lookups, compiled, arm64) -- the exact opposite of the speed-for-safety trade the stdlib comment and design.md offer it as; a user-written FNV-1a hasher is at parity with the default, so a non-default hasher is not inherently slow | roadmap.md |
 | B-2026-08-23-4 | 2026-08-23 | codegen | low | Codegen owns a LOCAL fixed array element-wise but a PARAM fixed array whole, so the drop-differential cannot gate the array class by place name and needs alignment rule 4 to exclude it | roadmap.md |
 | B-2026-08-23-5 | 2026-08-23 | ownership+codegen | medium | The drop_fuzz oracle-codegen differential corpus reports 94 divergences at the default size (186 at --count 400), against a module doc that states the corpus reached 0 -- so the corpus-level leak gate is red while the curated 14-shape gate is green | roadmap.md |
 
@@ -152,9 +151,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1504 surfaced
 
 </details>
 
-### Fixed (1478)
+### Fixed (1479)
 
-<details><summary>1478 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1479 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -16718,6 +16717,81 @@ surfaced here.
 
 Full suite: 109 binaries, 14910 passed, 0 failed. fmt clean; clippy clean on
 both feature legs. |
+| B-2026-08-22-29 | codegen+runtime | medium | `FxBuildHasher` WAS 13.7x SLOWER than the default on `String` keys because an Fx digest's low bits -- the ones karac's table takes its bucket index f… | FIXED by d7cc9cfd. A five-op avalanche (`moremur`) applied to every
+`fx_hash_bytes` digest. One file.
+
+REPRODUCED FIRST, on different hardware than the row: this container is Linux
+x86-64, the row measured arm64 macOS. Same program, ~11x there vs the row's
+13.7x -- so the defect is algorithmic, not an arm64 artifact. Both binaries
+printed the same 1000000 throughout, so no keys were ever lost; this was purely
+throughput.
+
+    before   default 0.37-0.41s   fx 4.16-4.75s   (~11x slower)
+    after    default 0.44s        fx 0.38s        (0.87x -- FASTER)
+
+THE ROW'S MECHANISM WAS RIGHT IN KIND AND UNDERSTATED IN DEGREE, which is the
+part worth keeping. It said the low bits are "weakly mixed for keys sharing a
+prefix". Measured, it is not a thin spread but a CEILING: un-finalized Fx yields
+about 1000 distinct low-bit values for `key-N` keys NO MATTER how wide the mask.
+
+        keys / mask      raw Fx   finalized
+       4096 / 12-bit        985        2597
+      16384 / 14-bit       1033       10341
+     200000 / 18-bit       2057      126663
+
+So past ~1024 buckets a growing table cannot spread these keys at all, and every
+further insert lengthens a probe chain. That is why the slowdown scales with map
+size, and it is why the row saw 13.7x at 200k rather than something mild.
+
+THE ROW'S PROPOSED FIX WAS THE WRONG LEVER. It suggested indexing from the HIGH
+bits (fibonacci/multiply-shift). That is a codegen ABI change: the bucket
+encoding is replicated in `src/codegen/mono.rs`, `control_flow_for.rs` and
+`runtime.rs`, and `runtime/src/map.rs`'s own module docs say the failure mode of
+disagreement is a lookup that misses a present key -- a silent wrong answer.
+Worse, the control byte's tag is drawn from the HIGH bits precisely BECAUSE the
+index uses the low ones, so moving the index there would have to move the tag
+too. Fixing the hash instead is one place, changes no ABI, and both backends
+already funnel every leaf hash through `fx_hash_bytes` (codegen and the runtime
+via the `karac_hash_bytes_fx` extern, the interpreter via `FxHasher`), so they
+stay in lockstep by construction.
+
+CONFLICT CHECK, because this row shares a suspect with B-2026-08-22-27, which
+landed (bab8cf2) while this was in progress. That fix is confined to
+`src/codegen/mono.rs` -- mono probes loading the map's stored hasher pointer
+instead of a symbol baked in at emission time. It touches neither the hash nor
+`synth.rs`. The ledger's "separate failure modes, shared suspect" framing held.
+
+DELIBERATE DIVERGENCE FROM rustc-hash. karac's Fx digest no longer matches it
+byte for byte, and the four KATs are updated with a note saying so. That is the
+point rather than a cost: rustc-hash is fine in rustc, whose table indexes from
+the high bits; karac's indexes from the low ones, so byte-identical FxHash is
+the wrong hash for this table. `b""` still hashes to 0 -- the avalanche fixes 0,
+the one value it cannot improve -- a pre-existing wart of the empty key,
+unchanged.
+
+THE FIRST REGRESSION TEST WAS VACUOUS, and catching that produced the sharper
+mechanism above. It asserted low-bit spread over 1024 keys and PASSED with the
+mixer removed, because at that scale the two are indistinguishable (644 vs 632).
+The shipped test uses 16384 keys over a 14-bit mask, where un-finalized Fx gives
+1033 and a mixed digest gives ~10300; it is verified in BOTH directions (FAILED
+at 1033 with the finalizer stashed, ok restored). The measurement table is in
+the test's own comment so the next reader cannot repeat the small-N trap.
+
+WHAT WAS DELIBERATELY NOT CHANGED, and measured rather than assumed. Codegen's
+combiners for Vec elements / struct fields / tuple fields (`src/codegen/synth.rs`)
+end in the same rotate-xor-multiply and were left alone. They consume FINALIZED
+leaves now, and the shape most likely to expose a weak combiner -- tuple keys
+sharing a field, `Map[(i64, i64), i64]` with a constant first element -- measures
+FASTER under Fx than the default (0.10s vs 0.18s median). No remainder to file.
+
+GATES. fmt clean; clippy clean on BOTH legs; `KARAC_REQUIRE_RUNTIME_ARCHIVE=1
+cargo test --features llvm --no-fail-fast` = 125 binaries, 14853 passed, the only
+failures being the 60 in `tests/gpu_e2e.rs` at the opt-in GPU archive gate (all
+one line, none reaching a shader); `scripts/asan-o0-leg.sh` clean, quarantine
+matched exactly. The full suite mattered more than usual here: changing the
+digest changes Map ITERATION ORDER for every `FxBuildHasher` map, and CLAUDE.md
+records that four order-asserting tests once passed on the very run that
+introduced the hash seeding. Nothing moved. |
 | B-2026-08-22-30 | typecheck | medium | Three `f16_software_emulated` lint tests fail on EVERY aarch64 macOS machine on a clean `main`: the tests assert the emulation warning fires, while `… | FIXED by 6cf7be8e. The row asked which half was wrong -- the tests or
 the CPU table -- and the honest answer turned out to be "the tests, for `f16`;
 the LINT, for `bf16`". The first half was already fixed upstream while this row
