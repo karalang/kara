@@ -1327,9 +1327,9 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(self.context.i64_type().const_int(0, false).into());
         }
         let elem_hint = self.literal_pending_elem_hint();
-        let vals: Vec<BasicValueEnum<'ctx>> = elems
-            .iter()
-            .map(|e| {
+        let mut vals: Vec<BasicValueEnum<'ctx>> = Vec::with_capacity(elems.len());
+        for e in elems {
+            let v = (|| -> Result<BasicValueEnum<'ctx>, String> {
                 let v = self.compile_expr(e)?;
                 // B-2026-08-22-18 — the fixed-array member of the move-aware
                 // element-ownership family the Vec and tuple literals already
@@ -1348,13 +1348,31 @@ impl<'ctx> super::Codegen<'ctx> {
                 // overwritten by the next element. No-ops for fresh temps and
                 // POD elements.
                 self.suppress_fstr_acc_if_moved_out(e);
+                // B-2026-08-23-4 — the rest of the move-aware element-ownership
+                // set the Vec literal applies, now that a local fixed array
+                // registers an array-keyed drop of its own (`compile_stmt`'s
+                // `ArrayType` let-binding branch). Before that the array owned
+                // nothing and each element stayed owned by whatever produced
+                // it, so suppressing here would LEAK; arming the array drop
+                // without suppressing here DOUBLE-FREES, because the literal
+                // bit-copies each element's `{ptr,len,cap}` header. The two
+                // halves are only correct together.
+                //
+                // Order mirrors the Vec path deliberately: the defensive copy
+                // runs BEFORE the cap-zero so it reads the source's real `cap`.
+                let v = self.maybe_defensive_copy_param_arg(e, v);
+                self.suppress_source_vec_cleanup_for_arg(e);
+                if let ExprKind::Identifier(name) = &e.kind {
+                    self.suppress_map_cleanup_for_tail_identifier(name);
+                }
                 // B-2026-07-02-6 — see `literal_pending_elem_hint`.
                 Ok(match elem_hint {
                     Some(h) => self.coerce_literal_elem_to_type_from(v, h, e),
                     None => v,
                 })
-            })
-            .collect::<Result<_, String>>()?;
+            })()?;
+            vals.push(v);
+        }
         let elem_ty = vals[0].get_type();
         let arr_ty = elem_ty.array_type(vals.len() as u32);
         let mut agg = arr_ty.get_undef();

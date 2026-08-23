@@ -191,12 +191,20 @@ pub fn differential_check_on(src: &str, tree: OracleTree) -> DiffOutcome {
     for f in &oracle.functions {
         let cg_places = cg.get(f.function.as_str());
         let fn_params = params.get(&f.function).unwrap_or(&empty);
-        // Distinct scheduled LOCAL places (dedup; params discharged caller-side,
-        // fixed arrays discharged element-wise — rules 2 and 4).
+        // Distinct scheduled LOCAL places (dedup; params discharged
+        // caller-side — rule 2).
+        //
+        // Fixed arrays were excluded here too (rule 4) while codegen owned a
+        // LOCAL one element-wise and a PARAM one whole: comparing by PLACE
+        // NAME matched an oracle-scheduled `a` against a codegen-recorded
+        // `x` / `y` / `fstr.acc` and reported a false divergence on every one.
+        // B-2026-08-23-4 gave the local path the same array-keyed drop the
+        // param path already had, so the class is gated by name like every
+        // other and the rule is gone. Unlike rules 1-3 it never recorded two
+        // correct models legitimately disagreeing — it was a known gap.
         let scheduled: BTreeSet<&str> = f
             .drops
             .iter()
-            .filter(|d| !is_fixed_array_render(&d.ty))
             .map(|d| d.place.as_str())
             .filter(|p| !fn_params.contains(*p))
             .collect();
@@ -215,15 +223,6 @@ pub fn differential_check_on(src: &str, tree: OracleTree) -> DiffOutcome {
         drops_checked,
         divergences,
     }
-}
-
-/// True for the oracle's rendered form of a fixed array — both spellings, since
-/// `Array[T, N]` renders as `Array[T]` (the const arg is dropped) and the
-/// `[T; N]` sugar renders as `[T]`. Rule 4: codegen discharges a local fixed
-/// array's elements individually rather than through an array-keyed action, so
-/// comparing this place by name is a false positive until that changes.
-fn is_fixed_array_render(ty: &str) -> bool {
-    ty.starts_with("Array[") || (ty.starts_with('[') && ty.ends_with(']'))
 }
 
 /// Parameter names of every free function and impl method in the surface tree,

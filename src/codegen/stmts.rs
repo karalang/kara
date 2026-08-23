@@ -7073,6 +7073,73 @@ impl<'ctx> super::Codegen<'ctx> {
                                     }
                                 }
                             } else if let BasicTypeEnum::ArrayType(arr_ty) = slot.ty {
+                                // B-2026-08-23-4 — own a LOCAL fixed array the
+                                // same way a PARAM one is owned: ONE array-keyed
+                                // `StructDrop` on the slot, instead of leaving
+                                // each element owned by whatever produced it.
+                                // The two paths disagreeing cost the drop
+                                // differential its gate — it compares by PLACE
+                                // NAME, so an oracle-scheduled `a` against a
+                                // codegen-recorded `x` / `y` / `fstr.acc` was a
+                                // false positive on every local fixed array.
+                                //
+                                // HOOKED HERE, not at the `!matches!(slot_ty,
+                                // ArrayType(_))` guard further up that visibly
+                                // skips arrays: that guard sits inside a region
+                                // already gated on `vec_elem_types`, which a
+                                // fixed-array local never populates, so a branch
+                                // added there is dead code. This chain is the
+                                // one an array binding actually reaches.
+                                //
+                                // Element `TypeExpr` from the ANNOTATION first —
+                                // `array_elem_type_exprs` is the UN-annotated
+                                // path's side table and holds nothing for
+                                // `let a: Array[String, 2] = ...`. Same
+                                // destructure the array-param path uses.
+                                let arr_parts = ty
+                                    .as_ref()
+                                    .and_then(|t| match &t.kind {
+                                        crate::ast::TypeKind::Path(p)
+                                            if p.segments.first().map(String::as_str)
+                                                == Some("Array") =>
+                                        {
+                                            match p
+                                                .generic_args
+                                                .as_ref()
+                                                .map(|a| (a.first(), a.get(1)))
+                                            {
+                                                Some((
+                                                    Some(crate::ast::GenericArg::Type(elem_te)),
+                                                    Some(crate::ast::GenericArg::Const(sz)),
+                                                )) => match &sz.kind {
+                                                    ExprKind::Integer(n, _) if *n > 0 => {
+                                                        Some((elem_te.clone(), *n as u32))
+                                                    }
+                                                    _ => None,
+                                                },
+                                                _ => None,
+                                            }
+                                        }
+                                        _ => None,
+                                    })
+                                    .or_else(|| {
+                                        let te = self
+                                            .var_types
+                                            .array_elem_type_exprs
+                                            .get(var_name.as_str())
+                                            .cloned()?;
+                                        Some((te, arr_ty.len()))
+                                    });
+                                if let Some((elem_te, n)) = arr_parts {
+                                    let elem_ty = self.llvm_type_for_type_expr(&elem_te);
+                                    self.make_array_param_callee_owned(
+                                        var_name.as_str(),
+                                        &elem_te,
+                                        n,
+                                        elem_ty,
+                                        slot.ptr,
+                                    );
+                                }
                                 // Array-store slice (B-2026-06-22-2): a heap-env
                                 // closure stored in a fixed-size array element
                                 // (`let a: Array[Fn,N] = [make(k), ..]` / `[f, ..]`)

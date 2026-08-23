@@ -112,43 +112,37 @@ fn nested_vec_of_vecs() {
 }
 
 #[test]
-fn owned_fixed_array_of_string_schedules_and_is_excluded_by_rule_4() {
-    // B-2026-08-23-2. The oracle NOW models fixed-array ownership: teaching
-    // `is_heap` the `Array[T, N]` path spelling was sufficient on its own, and
-    // the row's expectation that scheduling would need separate work turned out
-    // to be wrong — the let-binding analysis already schedules a drop for any
-    // binding whose annotated type is heap, and the array was only ever
-    // non-heap because the path spelling fell through to POD.
+fn owned_fixed_array_of_string_is_gated_by_name_like_every_other_place() {
+    // B-2026-08-23-2 taught the ORACLE to model fixed-array ownership;
+    // B-2026-08-23-4 taught CODEGEN to own a LOCAL one the way it already
+    // owned a PARAM one — a single array-keyed drop on the slot, rather than
+    // leaving each element owned by whatever produced it.
     //
-    // That closes the risk the row was actually filed for: the oracle no longer
-    // believes a fixed array owns nothing, so a codegen refactored to CONSUME
-    // the schedule will emit an array drop rather than silently dropping the
-    // element frees on the floor.
+    // Until then this class could not be gated by NAME: the differential
+    // compares place names, so an oracle-scheduled `a` against a
+    // codegen-recorded `x` / `y` / `fstr.acc` was a false positive on every
+    // local fixed array, and alignment rule 4 had to exclude them. This test
+    // is that rule's inverse — the place must now be CHECKED, not skipped.
     //
-    // What is NOT closed is the differential's ability to gate the class BY
-    // NAME. Codegen frees a local array's elements individually (source
-    // bindings / f-string temporaries), never through an array-keyed action —
-    // it has `synthesize_array_drop_fn_te` but calls it only for params. So
-    // this place is excluded by alignment rule 4, and the assertion here is
-    // that the schedule is NON-EMPTY (the oracle models it) while the check
-    // stays clean (rule 4 keeps it from false-positiving).
-    //
-    // Verified NOT a leak, under LSan, across four shapes: f-string elements,
-    // named bindings moved in, call-result elements, and an array returned out
-    // of its function. When codegen is taught to own local arrays whole, rule 4
-    // comes out and `drops_checked` picks this up like any other place.
+    // `drops_checked > 0` is the load-bearing half, and the reason it is
+    // spelled that way is worth keeping: a returned 0 ALSO means "no
+    // divergences", which is exactly what the excluded state looked like, and
+    // an earlier attempt at this fix registered no drop at all yet still
+    // produced clean ASAN runs at identical allocation counts. Only a non-zero
+    // count proves the place reached the comparison rather than being absent
+    // from both sides.
     let src = format!(
         "fn main() {{ let a: Array[String, 2] = [{S}, {S}]; \
          println(a[0].len() + a[1].len()); }}"
     );
-    assert_eq!(
-        assert_clean(&src),
-        0,
-        "rule 4 excludes fixed-array locals from the name comparison"
+    assert!(
+        assert_clean(&src) > 0,
+        "a fixed-array local must now be CHECKED by name, not excluded"
     );
 
-    // The half that IS newly true: the oracle's own schedule is non-empty.
-    // Asserted against the oracle directly, since the differential filters it.
+    // And the oracle still schedules it — the half B-2026-08-23-2 established.
+    // Kept because the differential agreeing proves the two sides MATCH, not
+    // that either models the array at all: two empty sets also agree.
     let oracle = karac::ownership_oracle::analyze(&karac::parse(&src).program);
     let main_fn = oracle
         .functions

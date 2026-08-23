@@ -52281,4 +52281,92 @@ fn main() {
             "asan_array_owned_param_moved_into_nested_call_is_balanced",
         );
     }
+
+    /// B-2026-08-23-4 — a LOCAL fixed array is now owned WHOLE (one array-keyed
+    /// drop on the slot) rather than element-wise, matching the param path.
+    ///
+    /// These four exist because the change has a double-free hazard on one side
+    /// and a leak on the other, and neither shows up in stdout. The array
+    /// literal BIT-COPIES each element's `{ptr,len,cap}` header, so arming the
+    /// array drop without disarming the element sources frees each buffer
+    /// twice; disarming without arming leaks. One shape per element-source kind,
+    /// because the suppression is per-kind: an f-string accumulator, a named
+    /// binding moved in, and a call result.
+    #[test]
+    fn asan_local_fixed_array_owned_whole_is_balanced_for_every_element_source() {
+        // f-string elements — accumulator neutralized by B-2026-08-22-18.
+        assert_clean_asan_run(
+            r#"fn mk(i: i64) -> Array[String, 2] { return [f"a{i}", f"b{i}"]; }
+fn main() {
+    let mut i = 0i64; let mut n = 0i64;
+    while i < 50i64 { let a = mk(i); n = n + a[0].len(); i = i + 1i64; }
+    println(n);
+}
+"#,
+            &["140"],
+            "local_fixed_array_fstr_elements",
+        );
+
+        // NAMED bindings moved in — the shape where the source's own scope-exit
+        // free and the array's drop would both fire without suppression.
+        assert_clean_asan_run(
+            r#"fn mk(i: i64) -> String { return f"s{i}"; }
+fn main() {
+    let mut i = 0i64; let mut n = 0i64;
+    while i < 50i64 {
+        let x = mk(i);
+        let y = mk(i);
+        let a: Array[String, 2] = [x, y];
+        n = n + a[0].len() + a[1].len();
+        i = i + 1i64;
+    }
+    println(n);
+}
+"#,
+            &["280"],
+            "local_fixed_array_named_binding_elements",
+        );
+
+        // CALL-RESULT elements — fresh temps with no independent owner.
+        assert_clean_asan_run(
+            r#"fn mk(i: i64) -> String { return f"s{i}"; }
+fn main() {
+    let mut i = 0i64; let mut n = 0i64;
+    while i < 50i64 {
+        let a: Array[String, 2] = [mk(i), mk(i)];
+        n = n + a[0].len();
+        i = i + 1i64;
+    }
+    println(n);
+}
+"#,
+            &["140"],
+            "local_fixed_array_call_result_elements",
+        );
+    }
+
+    /// The ESCAPE case, kept separate because it rules out the opposite error.
+    /// An array built from named bindings and RETURNED out of its function must
+    /// not have its slot drop fire — the caller owns it now. Arming the local
+    /// drop without suppressing it on the escape path is a use-after-free, not
+    /// a leak, so this is the shape that would catch that.
+    #[test]
+    fn asan_local_fixed_array_returned_out_is_not_dropped_twice() {
+        assert_clean_asan_run(
+            r#"fn mk(i: i64) -> Array[String, 2] {
+    let x = f"a{i}";
+    let y = f"b{i}";
+    let a: Array[String, 2] = [x, y];
+    return a;
+}
+fn main() {
+    let mut i = 0i64; let mut n = 0i64;
+    while i < 50i64 { let r = mk(i); n = n + r[0].len(); i = i + 1i64; }
+    println(n);
+}
+"#,
+            &["140"],
+            "local_fixed_array_returned_out",
+        );
+    }
 }
