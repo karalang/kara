@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 279 | 1 |
-| leak | 188 | 0 |
+| leak | 189 | 0 |
 | missing-feature | 154 | 0 |
 | run-vs-build | 151 | 0 |
 | double-free | 135 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 996 | 2 |
+| codegen | 997 | 2 |
 | typecheck | 246 | 2 |
 | interp | 174 | 0 |
 | other | 63 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1499 surfaced · 4 open · 1472 fixed · 9 wontfix** (2026-05-20 → 2026-08-22). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1500 surfaced · 4 open · 1473 fixed · 9 wontfix** (2026-05-20 → 2026-08-23). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (4)
 
@@ -153,9 +153,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1499 surfaced
 
 </details>
 
-### Fixed (1472)
+### Fixed (1473)
 
-<details><summary>1472 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1473 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -16573,6 +16573,7 @@ monomorphized into the impl, and an ordinary inherent method) with the
 by-value `Slice[T]` control beside each, since that spelling always worked and
 a regression confined to the `ref` slot would otherwise hide behind it.
  |
+| B-2026-08-23-1 | codegen | medium | Owned Array[T, N] with heap elements leaks its element buffers at -O0 -- no scope-exit element drop was ever registered (the -O0 remainder B-2026-08-… | Fixed in 6c3957cf. An owned by-value Array[T, N] whose element owns heap (Array[String, N]) had NO scope-exit element drop registered at any binding site -- no CleanupAction, no synthesize_array_drop_fn, no track_*_array. So every element buffer leaked. Invisible at the default -O2 (the buffers are provably dead and LLVM deletes them) and on macOS ASAN (no LeakSanitizer); caught only by the Linux memory-sanitizer -O0 leg. Modeled the fix on the tuple owned-aggregate machinery but with array-index ([i]) GEP: (1) synthesize_array_drop_fn_te (runtime.rs) emits a drop fn freeing each of the N elements via the element type's own cap-guarded drop; (2) make_array_param_callee_owned (param_own.rs) registers it for an owned Array[heap, N] param/self -- note Array[T,N] parses as Path("Array") with generic args [Type(T), Const(N)], NOT TypeKind::Array (the [T;N] sugar), which is why the first attempt's TypeKind::Array arm never fired; (3) TRANSFER ownership, not deep copy -- the callee is sole owner, so the caller does not also free, which is what the measured single-element (a[1]) leak in take_first(mk(i)) confirmed (a[0] returned had its single owner in last); (4) suppress_array_elem_move_source (param_own.rs) cap-zeros a constant-index element moved out via return a[k] so the array drop skips the returned buffer (else double-free); (5) suppress_array_binding_move_arg retracts the caller's array drop when the whole array is passed by value into another callee (move_declined_copy_struct_arg choke point) so nested passing fn g(a){h(a)} does not free the shared buffers twice. Scalar-element and ref/mut ref array params are untouched. Verified: the three B-2026-08-22-18 fixtures plus a new nested-passing fixture (asan_array_owned_param_moved_into_nested_call_is_balanced) all clean under Linux LSan at -O0; codegen array E2E suite green. |
 
 </details>
 
