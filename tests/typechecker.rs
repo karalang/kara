@@ -44513,7 +44513,10 @@ fn f16_arithmetic_warns_that_it_is_software_emulated() {
     let emulated = warns.iter().any(|w| w.contains("software-emulated"));
     if karac::target::target_has_native_f16() {
         // Native-f16 host (e.g. apple-m1): the lint must stay quiet.
-        assert!(!emulated, "native-f16 host must not emit the lint, got {warns:?}");
+        assert!(
+            !emulated,
+            "native-f16 host must not emit the lint, got {warns:?}"
+        );
     } else {
         assert!(emulated, "expected the f16 emulation lint, got {warns:?}");
     }
@@ -44525,7 +44528,10 @@ fn bf16_arithmetic_warns_too() {
         type_warnings_of("fn main() { let a: bf16 = 1.5; let b: bf16 = 2.0; let c = a * b; }");
     let emulated = warns.iter().any(|w| w.contains("software-emulated"));
     if karac::target::target_has_native_f16() {
-        assert!(!emulated, "native-f16 host must not emit the bf16 lint, got {warns:?}");
+        assert!(
+            !emulated,
+            "native-f16 host must not emit the bf16 lint, got {warns:?}"
+        );
     } else {
         assert!(emulated, "bf16 is emulated wherever f16 is, got {warns:?}");
     }
