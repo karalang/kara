@@ -88,6 +88,10 @@ impl<'a> super::Interpreter<'a> {
 
     #[allow(clippy::result_large_err)]
     pub(crate) fn eval_block_inner(&mut self, block: &Block) -> EvalResult {
+        // TAKEN, not read: `eval_body_growing` sets this immediately before a
+        // function/closure/method body, and consuming it here means every
+        // block nested inside that body sees `false`. See the field's doc.
+        let is_fn_body = std::mem::take(&mut self.next_block_is_fn_body);
         self.env.push_scope();
         // Unified drop+defer cleanup stack — entries pushed in program-order
         // as control flow reaches each binding/defer statement, drained LIFO
@@ -291,6 +295,31 @@ impl<'a> super::Interpreter<'a> {
                 self.capture_watched_bindings();
                 self.env.pop_scope();
                 return Err(cf);
+            }
+            // A function body whose TAIL is a syntactic `Err(...)` / `None`
+            // leaves via the failure path even though no `ControlFlow` was
+            // raised — nothing propagated, the value simply IS the error. The
+            // block-exit code below classified that as `ExitPath::Normal`, so
+            // `errdefer` never fired and the interpreter silently skipped
+            // cleanup that both compiled backends performed (B-2026-08-23-9).
+            //
+            // The predicate is `ast::is_error_exit_value`, the same one
+            // codegen's tail emitter uses, so the two agree by construction
+            // rather than by convention. It is syntactic: `Err(e)` fires,
+            // `if c { Err(e) } else { Ok(v) }` does not, on BOTH backends.
+            //
+            // The payload for an `errdefer(e)` binding comes from the ALREADY
+            // EVALUATED tail value, so the argument expression is never run
+            // twice — codegen has to re-compile or word-extract it precisely
+            // because it has no value in hand at that point.
+            if is_fn_body && crate::ast::is_error_exit_value(expr) {
+                let path = ExitPath::classify_tail_value(&v);
+                if path.is_error() {
+                    self.run_cleanup(&cleanup, &errdefers, &path);
+                    self.capture_watched_bindings();
+                    self.env.pop_scope();
+                    return Ok(v);
+                }
             }
             v
         } else {

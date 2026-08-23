@@ -122,6 +122,35 @@ impl ExitPath {
         }
     }
 
+    /// Classify a block's TAIL VALUE (no `ControlFlow` involved) — the
+    /// function-tail failure path. `classify` above answers the same question
+    /// for a propagating `ControlFlow::Return`; this one answers it for a
+    /// value that simply IS the error, which is what a tail `Err(...)` or
+    /// `None` produces. Callers gate on `ast::is_error_exit_value` first, so
+    /// this only ever sees a syntactic error-exit tail; the `Normal` fallback
+    /// covers a value that turned out to be neither variant.
+    ///
+    /// The variant match is by NAME, so a user enum with its own `Err(..)`
+    /// variant classifies as an error exit too. That is harmless rather than
+    /// merely unlikely: the typechecker permits `errdefer` only in
+    /// `Result`/`Option`-returning functions, so a function returning such an
+    /// enum has an EMPTY errdefer list and phase 1 of `run_cleanup` iterates
+    /// nothing — the drop+defer drain that actually runs is identical either
+    /// way.
+    pub(crate) fn classify_tail_value(v: &Value) -> ExitPath {
+        match v {
+            Value::EnumVariant { variant, data, .. } if variant == "Err" => {
+                let payload = match data {
+                    EnumData::Tuple(vs) => vs.first().cloned().unwrap_or(Value::Unit),
+                    _ => Value::Unit,
+                };
+                ExitPath::Err(payload)
+            }
+            Value::EnumVariant { variant, .. } if variant == "None" => ExitPath::NoneProp,
+            _ => ExitPath::Normal,
+        }
+    }
+
     pub(crate) fn is_error(&self) -> bool {
         !matches!(self, ExitPath::Normal)
     }

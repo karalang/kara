@@ -4563,6 +4563,102 @@ fn test_unlowered_dbg_refuses_instead_of_compiling_to_zero() {
     );
 }
 
+/// B-2026-08-23-9 — `errdefer` on a function-TAIL error exit, across all three
+/// backends.
+///
+/// The interpreter classified every tail expression as a normal exit, so a
+/// function failing by returning `Err(...)` as its last expression — no
+/// `return`, no `?` — skipped its `errdefer` while both compiled backends ran
+/// it. The cleanup a shipped binary performed was missing under the backend
+/// people debug in, and nothing was red: `karac check` passed, and `defer`
+/// (which fires on every exit) kept the surrounding output looking correct.
+///
+/// This gate compares the three surfaces against EACH OTHER before asserting
+/// any literal, because the failure was one backend doing less than the others
+/// — the same reason the providers and eprintln gates above are written that
+/// way. The literal is then pinned so a regression that breaks all three
+/// identically is still distinguishable from one that makes them disagree.
+///
+/// Both failure shapes are covered (`Err` and `None`) plus the two-phase LIFO
+/// ordering, since a fix that fired the errdefers in declaration order, or
+/// after the defers, would satisfy a single-block test.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_errdefer_tail_error_exit_parity_across_backends() {
+    let tmp = scratch_project("errdefer-tail-parity");
+    let src = "fn res() -> Result[i64, String] {\n\
+               \x20   defer { println(\"d1\"); }\n\
+               \x20   errdefer { println(\"e1\"); }\n\
+               \x20   defer { println(\"d2\"); }\n\
+               \x20   errdefer { println(\"e2\"); }\n\
+               \x20   Err(\"boom\")\n\
+               }\n\
+               fn opt() -> Option[i64] {\n\
+               \x20   errdefer { println(\"eo\"); }\n\
+               \x20   None\n\
+               }\n\
+               fn good() -> Result[i64, String] {\n\
+               \x20   errdefer { println(\"NEVER\"); }\n\
+               \x20   Ok(1)\n\
+               }\n\
+               fn main() {\n\
+               \x20   let _ = res();\n\
+               \x20   let _ = opt();\n\
+               \x20   let _ = good();\n\
+               \x20   println(\"done\");\n\
+               }\n";
+    write(&tmp.join("ed.kara"), src);
+
+    let stdout_of = |args: &[&str]| -> Option<String> {
+        karac_bin()
+            .current_dir(&tmp)
+            .args(args)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+    };
+    let interp = stdout_of(&["run", "--interp", "ed.kara"]);
+    let jit = stdout_of(&["run", "ed.kara"]);
+
+    let built = karac_bin()
+        .current_dir(&tmp)
+        .args(["build", "ed.kara"])
+        .output();
+    let exe = tmp.join("ed");
+    let aot = if built.map(|o| o.status.success()).unwrap_or(false) && exe.exists() {
+        std::process::Command::new(&exe)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+    } else {
+        None
+    };
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    let (Some(i), Some(j)) = (interp, jit) else {
+        panic!("interp and JIT must both run — neither needs a runtime archive");
+    };
+    // (1) PARITY — the constraint the missing classification violated.
+    assert_eq!(i, j, "interp/JIT parity for errdefer on a tail error exit");
+    if let Some(a) = aot.as_ref() {
+        assert_eq!(&i, a, "interp/AOT parity for errdefer on a tail error exit");
+    }
+
+    // (2) WHICH behaviour they agreed on: errdefer group first in LIFO, then
+    // the drop+defer drain in LIFO; `None` fires it too; `Ok` does not.
+    assert_eq!(
+        i, "e2\ne1\nd2\nd1\neo\ndone\n",
+        "tail `Err` must fire both errdefers LIFO before the defers, tail `None` \
+         must fire its own, and tail `Ok` must fire none"
+    );
+    assert!(
+        !i.contains("NEVER"),
+        "a tail `Ok(...)` is a success exit and must never fire errdefer"
+    );
+}
+
 /// B-2026-07-31-11 — the parity gate above, extended to an EARLY-RETURN body
 /// for BOTH provider forms (the ledger entry's validation bar).
 ///

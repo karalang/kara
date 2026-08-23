@@ -96,6 +96,16 @@ pub struct Interpreter<'a> {
     pub captured_output: Option<Vec<String>>,
     /// Pending control flow signal (return/break/continue)
     pub(crate) pending_cf: Option<ControlFlow>,
+    /// Set by `eval_body_growing` immediately before it evaluates a FUNCTION
+    /// (or closure / method) body, and TAKEN by `eval_block_inner` on entry.
+    ///
+    /// The take is what makes it correct under nesting: the body's own block
+    /// consumes the flag, so every block nested inside it reads `false`. That
+    /// matters because the rule it gates is a function-tail rule — codegen
+    /// applies `is_error_exit_value` to `func.body.final_expr` and nowhere
+    /// else, so a nested block whose tail is `Err(...)` must NOT fire the
+    /// enclosing function's errdefer (B-2026-08-23-9).
+    pub(crate) next_block_is_fn_body: bool,
     /// Runtime effect tracking: records effects performed during execution
     pub tracked_effects: Vec<String>,
     /// Tracks variables that have been moved (ownership simulation)
@@ -762,6 +772,7 @@ impl<'a> Interpreter<'a> {
             typecheck_result,
             env: Env::new(),
             captured_output: None,
+            next_block_is_fn_body: false,
             pending_cf: None,
             tracked_effects: Vec::new(),
             moved_vars: std::collections::HashSet::new(),
@@ -1965,12 +1976,14 @@ impl<'a> Interpreter<'a> {
             // ~10× headroom. 32 MiB segments amortize the switch cost:
             // release frames (~3 KiB/call) fit thousands of calls per
             // segment, debug fits ~100+.
+            self.next_block_is_fn_body = true;
             stacker::maybe_grow(2 * 1024 * 1024, 32 * 1024 * 1024, || {
                 self.eval_block_inner(body)
             })
         }
         #[cfg(target_arch = "wasm32")]
         {
+            self.next_block_is_fn_body = true;
             self.eval_block_inner(body)
         }
     }

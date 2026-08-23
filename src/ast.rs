@@ -1598,3 +1598,40 @@ pub fn collect_mut_method_receiver_roots_expr(
         _ => {}
     }
 }
+
+/// Whether `expr` is the SYNTACTIC shape of an error-exit value: `Err(...)`,
+/// `Result.Err(...)`, `None`, or `Option.None`. These are the four shapes a
+/// `Result`- or `Option`-returning function can produce at a `return` site or
+/// as its tail expression to leave via the failure path, and they are what
+/// decides whether an in-scope `errdefer` fires (design.md § `defer` and
+/// `errdefer`).
+///
+/// **Deliberately syntactic, and deliberately SHARED.** The check inspects the
+/// expression's shape, not the value it evaluates to: `Err(e)` is an error exit
+/// but `if c { Err(e) } else { Ok(v) }` is not, even when the condition makes it
+/// produce the same value at runtime. Codegen chose that rule (the typechecker
+/// has already gated where `errdefer` is legal, so the path segments are enough)
+/// and pinned it in tests; the interpreter now reads the SAME predicate rather
+/// than re-deriving one, because the two rules disagreeing is exactly the bug
+/// this function was extracted to fix — the interpreter classified every tail as
+/// a normal exit and silently skipped the cleanup the compiled binary ran
+/// (B-2026-08-23-9).
+///
+/// Living in `ast.rs` keeps codegen containment intact: it is a plain AST
+/// predicate over `ExprKind`, with no backend types, so the `--features llvm`
+/// module and the tree-walk interpreter can both call it.
+pub fn is_error_exit_value(expr: &Expr) -> bool {
+    fn last_segment_is(segments: &[String], name: &str) -> bool {
+        segments.last().is_some_and(|s| s == name)
+    }
+    match &expr.kind {
+        ExprKind::Call { callee, .. } => match &callee.kind {
+            ExprKind::Path { segments, .. } => last_segment_is(segments, "Err"),
+            ExprKind::Identifier(name) => name == "Err",
+            _ => false,
+        },
+        ExprKind::Path { segments, .. } => last_segment_is(segments, "None"),
+        ExprKind::Identifier(name) => name == "None",
+        _ => false,
+    }
+}

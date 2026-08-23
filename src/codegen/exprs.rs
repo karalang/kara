@@ -2525,19 +2525,11 @@ impl<'ctx> super::Codegen<'ctx> {
     /// functions) and where these variant constructors can appear, so
     /// inspecting the call's path segments is sufficient.
     pub(super) fn is_error_exit_value(expr: &Expr) -> bool {
-        fn last_segment_is(segments: &[String], name: &str) -> bool {
-            segments.last().is_some_and(|s| s == name)
-        }
-        match &expr.kind {
-            ExprKind::Call { callee, .. } => match &callee.kind {
-                ExprKind::Path { segments, .. } => last_segment_is(segments, "Err"),
-                ExprKind::Identifier(name) => name == "Err",
-                _ => false,
-            },
-            ExprKind::Path { segments, .. } => last_segment_is(segments, "None"),
-            ExprKind::Identifier(name) => name == "None",
-            _ => false,
-        }
+        // Delegates to the shared AST predicate so the interpreter and codegen
+        // cannot drift apart on which tails count as an error exit — they did,
+        // and the interpreter silently skipped errdefer on a tail `Err(...)`
+        // the compiled binary ran (B-2026-08-23-9).
+        crate::ast::is_error_exit_value(expr)
     }
 
     /// Materialize a string literal's bytes as an internal, NUL-terminated

@@ -37555,3 +37555,134 @@ fn a_user_hasher_serves_a_set_and_a_struct_key_in_the_interpreter() {
         "2\ntrue\nb\nfalse\n"
     );
 }
+
+// ── errdefer on a function-TAIL error exit (B-2026-08-23-9) ────────────────
+
+/// The interpreter classified every tail expression as a normal exit, so a
+/// function that fails by returning `Err(...)` as its LAST EXPRESSION — no
+/// `return`, no `?` — silently skipped its `errdefer`. Both compiled backends
+/// ran it (codegen's tail emitter routes a syntactic `Err(...)` through
+/// `emit_scope_cleanup_for_error_path`, pinned since Phase 7), so the cleanup
+/// a shipped binary performed was absent under `karac run --interp` — the
+/// backend people debug in. `karac check` was clean.
+///
+/// `defer` was never affected: it fires on every exit, so the surrounding
+/// output looked right and only the rollback went missing.
+#[test]
+fn test_errdefer_fires_on_tail_err_expression() {
+    assert_eq!(
+        run("fn body() -> Result[i64, String] {\n\
+                 defer { print(\"d\"); }\n\
+                 errdefer { print(\"e\"); }\n\
+                 Err(\"boom\")\n\
+             }\n\
+             fn main() { let _ = body(); }"),
+        "ed",
+        "a tail `Err(...)` is a failure exit and must fire errdefer, exactly as \
+         the `return Err(...)` form above does"
+    );
+}
+
+/// The `Option` twin. `None` as a tail expression is the same failure shape,
+/// and the shared predicate matches it for the same reason — so it must fire
+/// the param-less errdefer too.
+#[test]
+fn test_errdefer_fires_on_tail_none_expression() {
+    assert_eq!(
+        run("fn body() -> Option[i64] {\n\
+                 defer { print(\"d\"); }\n\
+                 errdefer { print(\"e\"); }\n\
+                 None\n\
+             }\n\
+             fn main() { let _ = body(); }"),
+        "ed"
+    );
+}
+
+/// The binding form on the tail path, and the reason the interpreter can be
+/// exact here: the payload comes from the ALREADY EVALUATED tail value, so the
+/// argument expression is never re-run. (Codegen has no value in hand at that
+/// point and must re-compile or word-extract it, which is its own problem.)
+#[test]
+fn test_errdefer_binding_sees_the_tail_err_payload() {
+    assert_eq!(
+        run("fn body() -> Result[i64, String] {\n\
+                 errdefer(e) { print(e); }\n\
+                 Err(\"payload\".to_string())\n\
+             }\n\
+             fn main() { let _ = body(); }"),
+        "payload"
+    );
+}
+
+/// Ordering on the tail path must match the `return` path: errdefer group
+/// first, LIFO, then the drop+defer drain, LIFO (design.md § `defer` and
+/// `errdefer` rules). A fix that fired the errdefers but in declaration order,
+/// or after the defers, would pass a single-errdefer test.
+#[test]
+fn test_tail_err_runs_errdefers_lifo_then_defers() {
+    assert_eq!(
+        run("fn body() -> Result[i64, String] {\n\
+                 defer { print(\"d1\"); }\n\
+                 errdefer { print(\"e1\"); }\n\
+                 defer { print(\"d2\"); }\n\
+                 errdefer { print(\"e2\"); }\n\
+                 Err(\"boom\")\n\
+             }\n\
+             fn main() { let _ = body(); }"),
+        "e2e1d2d1"
+    );
+}
+
+/// The negative that keeps the rule honest: a tail `Ok(...)` is a SUCCESS
+/// exit and must still skip errdefer. Without this, "classify every tail as an
+/// error" would pass all four tests above.
+#[test]
+fn test_errdefer_still_skipped_on_tail_ok_expression() {
+    assert_eq!(
+        run("fn body() -> Result[i64, String] {\n\
+                 defer { print(\"d\"); }\n\
+                 errdefer { print(\"e\"); }\n\
+                 Ok(1)\n\
+             }\n\
+             fn main() { let _ = body(); }"),
+        "d"
+    );
+}
+
+/// The rule is SYNTACTIC and applies at the FUNCTION tail only — both of which
+/// are properties of codegen's detector that the interpreter now shares rather
+/// than re-derives, so the two cannot drift.
+///
+/// Two consequences are pinned here because they look like bugs until you know
+/// the rule: an `if` whose taken branch evaluates to `Err` does NOT fire
+/// (the tail is an `If`, not an `Err(...)`), and an `Err(...)` at the tail of a
+/// NESTED block does not fire the enclosing function's errdefer (the function's
+/// tail is the block). Both backends agree on both, so neither is a run/build
+/// divergence — but a "fix" that classified by the runtime VALUE instead of the
+/// syntax would change these and introduce one in the opposite direction.
+#[test]
+fn test_tail_error_exit_is_syntactic_and_function_scoped() {
+    // `if` tail that evaluates to Err — no errdefer.
+    assert_eq!(
+        run("fn body(c: bool) -> Result[i64, String] {\n\
+                 defer { print(\"d\"); }\n\
+                 errdefer { print(\"e\"); }\n\
+                 if c { Err(\"boom\") } else { Ok(1) }\n\
+             }\n\
+             fn main() { let _ = body(true); }"),
+        "d",
+        "the tail is an `if`, not a syntactic `Err(...)` — codegen does not fire \
+         here either, and the interpreter must match it"
+    );
+    // Nested-block tail holding the Err — the FUNCTION's tail is the block.
+    assert_eq!(
+        run("fn body() -> Result[i64, String] {\n\
+                 defer { print(\"d\"); }\n\
+                 errdefer { print(\"e\"); }\n\
+                 { print(\"b\"); Err(\"boom\") }\n\
+             }\n\
+             fn main() { let _ = body(); }"),
+        "bd"
+    );
+}
