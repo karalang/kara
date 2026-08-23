@@ -2932,14 +2932,15 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     fn env_add_trait(&mut self, t: &TraitDef) {
-        let assoc_types: Vec<String> = t
+        let assoc_type_decls: Vec<crate::ast::AssocTypeDecl> = t
             .items
             .iter()
             .filter_map(|item| match item {
-                TraitItem::AssocType(decl) => Some(decl.name.clone()),
+                TraitItem::AssocType(decl) => Some((**decl).clone()),
                 _ => None,
             })
             .collect();
+        let assoc_types: Vec<String> = assoc_type_decls.iter().map(|d| d.name.clone()).collect();
         let supertraits: Vec<String> = t
             .supertraits
             .iter()
@@ -2954,6 +2955,7 @@ impl<'a> super::TypeChecker<'a> {
             t.name.clone(),
             TraitInfo {
                 assoc_types,
+                assoc_type_decls,
                 supertraits,
                 generic_param_names,
                 on_unimplemented: t.on_unimplemented.clone(),
@@ -2981,6 +2983,7 @@ impl<'a> super::TypeChecker<'a> {
             t.name.clone(),
             TraitInfo {
                 assoc_types: Vec::new(),
+                assoc_type_decls: Vec::new(),
                 supertraits,
                 generic_param_names: Vec::new(),
                 on_unimplemented: None,

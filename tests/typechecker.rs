@@ -43769,6 +43769,16 @@ fn a_builder_whose_state_type_is_not_a_hasher_is_refused() {
     // available outcome: codegen finds no symbol and degrades to a constant
     // digest while the interpreter raises a missing-method error, so the two
     // backends disagree on a program `karac check` accepted.
+    //
+    // NOW COVERS THE GENERAL MECHANISM rather than a local workaround
+    // (B-2026-08-22-28). This shipped with a hasher-specific check in
+    // `check_recorded_container_hasher`, because the associated-type-bound
+    // machinery could not discharge a bound declared on a stdlib-BAKED trait.
+    // With that fixed, the refusal comes from the ordinary GAT-bound path and
+    // lands at the IMPL rather than the container annotation — so the
+    // assertion moved to `E_GAT_BOUND_NOT_SATISFIED`, and this test is now
+    // worth more than it was: it pins the general rule through the first
+    // baked trait to have a user-facing impl surface.
     let errs = typecheck_errors(
         "struct NotAHasher { h: u64 }\n\
          struct BadBuild { }\n\
@@ -43783,8 +43793,16 @@ fn a_builder_whose_state_type_is_not_a_hasher_is_refused() {
     );
     assert!(
         errs.iter()
-            .any(|e| e.message.contains("does not implement 'Hasher'")),
-        "expected the unbound-state-type refusal, got {errs:?}"
+            .any(|e| e.message.contains("E_GAT_BOUND_NOT_SATISFIED")
+                && e.message.contains("Hasher: Hasher")),
+        "expected the declared-bound refusal, got {errs:?}"
+    );
+    // ONE error, not two. The workaround used to fire at the container
+    // annotation as well, which reported one mistake twice.
+    assert_eq!(
+        errs.iter().filter(|e| e.message.contains("Hasher")).count(),
+        1,
+        "one mistake must produce one diagnostic, got {errs:?}"
     );
 }
 
@@ -44597,4 +44615,73 @@ fn the_f16_lint_names_the_cpu_it_judged() {
             "the diagnostic must name the cpu it judged ({cpu}), got {warns:?}"
         );
     }
+}
+
+/// B-2026-08-22-28 — a bound declared on a STDLIB-BAKED trait is discharged at
+/// the impl site, exactly as one on a user-declared trait already was.
+///
+/// The impl-site discharge found the trait's `AssocTypeDecl` by scanning
+/// `program.items`, which holds only the USER program. A baked trait lives in
+/// `env.traits`, so the lookup missed, the bound list came back empty, and the
+/// per-binding loop never ran — the bound was accepted, documented, and then
+/// silently unenforced. That is a soundness hole rather than a diagnostics one:
+/// every impl downstream is entitled to rely on a bound the compiler took.
+///
+/// Asserted as a PAIR, because the bug was precisely that the two surfaces
+/// disagreed. A fix that regressed the user-trait half would still satisfy the
+/// baked half on its own.
+#[test]
+fn a_declared_assoc_type_bound_is_discharged_on_baked_and_user_traits_alike() {
+    let baked = typecheck_errors(
+        "struct NotAHasher { h: u64 }\n\
+         struct BadBuild { }\n\
+         impl BuildHasher for BadBuild {\n\
+             type Hasher = NotAHasher;\n\
+             fn build(ref self) -> NotAHasher { NotAHasher { h: 0u64 } }\n\
+         }\n\
+         fn main() { println(\"ok\"); }",
+    );
+    assert!(
+        baked
+            .iter()
+            .any(|e| e.message.contains("E_GAT_BOUND_NOT_SATISFIED")),
+        "a bound on a BAKED trait must be discharged, got {baked:?}"
+    );
+
+    let user = typecheck_errors(
+        "trait Sink { fn put(mut ref self, n: u8); }\n\
+         struct NotASink { }\n\
+         trait Build { type Made: Sink; fn make(ref self) -> Self.Made; }\n\
+         struct B { }\n\
+         impl Build for B { type Made = NotASink; fn make(ref self) -> NotASink { NotASink { } } }\n\
+         fn main() { println(\"ok\"); }",
+    );
+    assert!(
+        user.iter()
+            .any(|e| e.message.contains("E_GAT_BOUND_NOT_SATISFIED")),
+        "the user-declared half must not regress, got {user:?}"
+    );
+}
+
+/// The other half of B-2026-08-22-28, and the one an over-eager fix breaks: a
+/// SATISFIED bound on a baked trait must still be accepted. Enforcing a bound
+/// by rejecting every impl would pass the test above and make the feature
+/// unusable.
+#[test]
+fn a_satisfied_assoc_type_bound_on_a_baked_trait_is_accepted() {
+    // `typecheck_ok`, not `typecheck_errors` — the latter ASSERTS that errors
+    // exist, so it cannot express "this must be clean".
+    typecheck_ok(
+        "struct MyHasher { acc: u64 }\n\
+         impl Hasher for MyHasher {\n\
+             fn write(mut ref self, bytes: ref Slice[u8]) { self.acc = 1u64; }\n\
+             fn finish(ref self) -> u64 { return self.acc; }\n\
+         }\n\
+         struct MyBuild { }\n\
+         impl BuildHasher for MyBuild {\n\
+             type Hasher = MyHasher;\n\
+             fn build(ref self) -> MyHasher { return MyHasher { acc: 0u64 }; }\n\
+         }\n\
+         fn main() { println(\"ok\"); }",
+    );
 }

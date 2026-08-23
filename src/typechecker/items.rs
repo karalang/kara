@@ -3124,34 +3124,61 @@ impl<'a> super::TypeChecker<'a> {
         // GAT slice 7: cache the trait's AssocTypeDecl bounds keyed by
         // assoc-type name so the binding loop can enforce them at impl
         // site without re-walking program.items per binding. Empty when
-        // the impl is inherent (no trait) or the trait isn't found in
-        // the current program's items (e.g., baked stdlib traits, where
-        // the bound enforcement is a no-op — slice 7 v1 scope is the
-        // user-program surface where program.items carries the decl).
+        // the impl is inherent (no trait) or the named trait is unknown.
         //
         // GAT slice 8b carry-forwards (b) + (c): also cache the GAT
         // decl's per-param inline-bound list and the GAT decl's
         // where-clause so `resolve_assoc_projections` can discharge
         // them at projection-resolution time.
-        let trait_assoc_decls: HashMap<String, &AssocTypeDecl> = imp
+        //
+        // TWO SOURCES, and the second one is the fix for B-2026-08-22-28.
+        // `program.items` carries only the USER program, so a trait BAKED
+        // from stdlib source was never found here — every bound it declared
+        // (`type Hasher: Hasher`) was accepted and then silently unenforced,
+        // while the identical shape on a user-declared trait was correctly
+        // rejected with `E_GAT_BOUND_NOT_SATISFIED`. Accepting a bound and
+        // not enforcing it is worse than rejecting it, because every impl
+        // downstream is entitled to rely on it. `env.traits` holds the baked
+        // decls (`TraitInfo::assoc_type_decls`), so falling back to it closes
+        // the gap for both surfaces at once.
+        //
+        // OWNED rather than borrowed: the user-program half could hand out
+        // `&'a AssocTypeDecl` tied to `self.program`, but the baked half
+        // borrows `self.env`, which the per-binding loop below needs mutably.
+        // Cloning a handful of small decls per impl is the cheap way to keep
+        // both sources in one map.
+        let trait_assoc_decls: HashMap<String, AssocTypeDecl> = imp
             .trait_name
             .as_ref()
             .and_then(|tp| tp.segments.last())
-            .and_then(|tn| {
-                self.program.items.iter().find_map(|it| match it {
-                    Item::TraitDef(t) if t.name == *tn => Some(t),
-                    _ => None,
-                })
-            })
-            .map(|trait_def| {
-                trait_def
-                    .items
-                    .iter()
-                    .filter_map(|it| match it {
-                        TraitItem::AssocType(decl) => Some((decl.name.clone(), decl.as_ref())),
+            .map(|tn| {
+                let from_program: Option<HashMap<String, AssocTypeDecl>> =
+                    self.program.items.iter().find_map(|it| match it {
+                        Item::TraitDef(t) if t.name == *tn => Some(
+                            t.items
+                                .iter()
+                                .filter_map(|it| match it {
+                                    TraitItem::AssocType(decl) => {
+                                        Some((decl.name.clone(), (**decl).clone()))
+                                    }
+                                    _ => None,
+                                })
+                                .collect(),
+                        ),
                         _ => None,
-                    })
-                    .collect()
+                    });
+                from_program.unwrap_or_else(|| {
+                    self.env
+                        .traits
+                        .get(tn)
+                        .map(|info| {
+                            info.assoc_type_decls
+                                .iter()
+                                .map(|d| (d.name.clone(), d.clone()))
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                })
             })
             .unwrap_or_default();
         let trait_assoc_bounds: HashMap<String, Vec<TraitBound>> = trait_assoc_decls

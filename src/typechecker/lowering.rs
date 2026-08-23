@@ -527,34 +527,17 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
-        // `trait BuildHasher { type Hasher: Hasher; … }` — and the bound has to
-        // hold, because both backends call `write` / `finish` on whatever
-        // `build()` returns. Checked HERE rather than left to the general
-        // associated-type-bound machinery, which does not discharge an
-        // `AssocTypeDecl` bound today (B-2026-08-22-28): without this, a state
-        // type with no `Hasher` impl type-checks, then degrades to a constant
-        // digest in codegen and to a missing-method error in the interpreter —
-        // the two-backend silent divergence this whole design exists to avoid.
-        let state = self
-            .env
-            .impl_assoc_types
-            .get(&(builder.clone(), "Hasher".to_string()))
-            .map(|e| e.ty.clone());
-        if let Some(Type::Named { name: state, args }) = state {
-            if args.is_empty() && !self.env.has_impl("Hasher", &state, &[]) {
-                self.type_error(
-                    format!(
-                        "'{builder}' cannot be a hasher: its `type Hasher = {state}` names a type \
-                         that does not implement 'Hasher', so there is no 'write' / 'finish' to \
-                         hash through. Add `impl Hasher for {state} {{ \
-                         fn write(mut ref self, bytes: ref Slice[u8]) {{ … }} \
-                         fn finish(ref self) -> u64 {{ … }} }}`"
-                    ),
-                    path.span,
-                    TypeErrorKind::TypeMismatch,
-                );
-            }
-        }
+        // The `type Hasher: Hasher` bound is NOT checked here any more
+        // (B-2026-08-22-28). It used to be, because the general
+        // associated-type-bound machinery could not discharge a bound declared
+        // on a stdlib-BAKED trait — it looked the decl up in `program.items`,
+        // which holds only the user program. That is fixed, so `impl
+        // BuildHasher for B { type Hasher = <not a Hasher> }` is now rejected
+        // at the IMPL, where the mistake is, and keeping this copy produced
+        // two errors for one mistake (measured). The two checks above stay:
+        // neither "does not implement BuildHasher" nor "a builder named in a
+        // container's type must be field-less" is an associated-type bound, so
+        // the general mechanism does not cover them.
     }
 
     /// Validate and STRIP the trailing hasher argument of `Map[K, V, H]` /

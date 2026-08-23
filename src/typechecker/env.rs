@@ -217,6 +217,21 @@ fn bind_impl_param_one(d: &Type, a: &Type, out: &mut HashMap<String, Type>) {
 #[derive(Debug, Clone)]
 pub struct TraitInfo {
     pub assoc_types: Vec<String>,
+    /// The associated-type DECLARATIONS, not just their names
+    /// (B-2026-08-22-28). `assoc_types` above answers "does this trait have
+    /// an assoc type called X"; discharging a declared bound
+    /// (`type Hasher: Hasher`) needs the bound list, the GAT's own generic
+    /// params and its where-clause, none of which a name carries.
+    ///
+    /// Load-bearing for STDLIB-BAKED traits specifically. The impl-site
+    /// discharge in `items.rs` used to find the decl by scanning
+    /// `program.items`, which holds only the USER program — so a bound on a
+    /// baked trait was accepted, documented, and then silently unenforced,
+    /// while the identical shape on a user-declared trait was correctly
+    /// rejected. Every impl downstream is entitled to rely on a bound the
+    /// compiler accepted, which is why that was filed as soundness rather
+    /// than diagnostics.
+    pub assoc_type_decls: Vec<crate::ast::AssocTypeDecl>,
     /// Names of supertraits declared in `trait Foo: Bar + Baz`.
     pub supertraits: Vec<String>,
     /// Trait-level generic param names in declaration order
