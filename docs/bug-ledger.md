@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 282 | 1 |
+| miscompile | 283 | 1 |
 | leak | 189 | 0 |
 | missing-feature | 160 | 4 |
 | run-vs-build | 155 | 2 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1005 | 3 |
+| codegen | 1006 | 3 |
 | typecheck | 249 | 1 |
 | interp | 177 | 2 |
 | ownership | 64 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1518 surfaced · 8 open · 1487 fixed · 9 wontfix** (2026-05-20 → 2026-08-23). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1519 surfaced · 8 open · 1488 fixed · 9 wontfix** (2026-05-20 → 2026-08-23). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (8)
 
@@ -137,7 +137,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1518 surfaced
 | B-2026-08-23-15 | 2026-08-23 | interp | medium | The INTERPRETER does not order `eprintln` output across `par {}` branches, so stderr from a parallel region interleaves NONDETERMINISTICALLY -- 4 distinct orderings in 20 runs of one program -- while the SAME program's stderr under JIT and AOT is replayed in stable source order. design.md line 6242 promises exactly the opposite: it names `eprintln` as the construct to reach for when you need deterministic order under `par` ("For anything that needs deterministic order (snapshot tests, log aggregators, printf-style debugging of a race), use `eprintln`"), in explicit contrast to `dbg()`, whose unordered output it documents as unsupported for snapshot testing. The compiled backends honour that promise; the interpreter does not. | roadmap.md |
 | B-2026-08-23-17 | 2026-08-23 | codegen+interp | medium | A PANIC MESSAGE goes to STDOUT under JIT and AOT but to STDERR under `--interp`, and design.md § Entry Point (line 6423) says stderr for all of them. The compiled backends inject the panic line into the program's DATA stream, so anything parsing a compiled Kara program's stdout gets `panic at f.kara:3:16 in main: unwrap() called on None/Err` mixed into its output, while a consumer watching stderr for faults sees nothing at all. Separately and on ALL THREE surfaces, a panic exits 1, not the 101 the same spec paragraph promises -- so the `$?` distinction it exists to provide ("distinct from the Err-exit-1 path so shell pipelines can distinguish expected failures from bugs") does not exist. | roadmap.md |
 | B-2026-08-23-18 | 2026-08-23 | codegen | medium | `dbg(x)` still has NO CODEGEN LOWERING, so a program containing it cannot be compiled at all -- `karac build` and `karac run` now REFUSE it with an actionable error (B-2026-08-23-16 replaced the silent constant-0 miscompile with that refusal), and only `karac run --interp` executes it. design.md § dbg() specifies a real feature -- a stderr line carrying file, line, expression TEXT and the `Debug` rendering of the value, in a terminal form and a `--output=json`/`jsonl` form, tagged with `task_id` inside a `par` region, stripped from `--release` builds, and returning the value so it composes inline. The interpreter implements all of it; the compiled backends implement none of it. | roadmap.md |
-| B-2026-08-23-19 | 2026-08-23 | codegen | high | `errdefer(e) { ... }` BINDS GARBAGE under JIT and AOT whenever the `Err` payload expression is not on codegen's `is_pure_recompilable` whitelist -- most importantly `Err("...".to_string())`, the ordinary way to build a String error. The cleanup block sees the payload's i64-COERCED WORD instead of the value, so `errdefer(e) { println(f"ED {e}") }` prints a raw pointer like `94011862884880` where the interpreter prints `payload`. Affects BOTH the explicit `return Err(...)` path and the function-tail path. A whitelisted payload (integer literal, string LITERAL, a bare identifier) and the `?`-propagation path are all correct, which is why the surrounding tests never caught it. | roadmap.md |
+| B-2026-08-23-20 | 2026-08-23 | codegen | medium | `rebuild_value_from_payload_words` takes exactly THREE payload words, so an Option/Result payload held INLINE in four or more words reconstructs its first three fields and GARBAGE for the rest. `Result[i64, Wide]` with `Wide { a: i64, b: i64, c: i64, d: i64 }` renders `W(1,2,3,140671075672200)` under JIT and `W(1,2,3,0)` under AOT where the interpreter renders `W(1,2,3,4)`. Not errdefer-specific: the helper is called from ~20 sites across `calls.rs`, `exprs.rs`, `expr_ops.rs`, `functions.rs` and `synth_display.rs`, all passing `(w0, w1, w2)`. | roadmap.md |
 
 ### Wontfix (9)
 
@@ -157,9 +157,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1518 surfaced
 
 </details>
 
-### Fixed (1487)
+### Fixed (1488)
 
-<details><summary>1487 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1488 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -17226,6 +17226,107 @@ WHAT THIS DOES NOT DO: `dbg` still does not RUN in a compiled build — it now r
 HONESTY NOTE ON THE TESTS. The general fallback arm alone already refuses this program — verified by deleting the dbg-specific arm and re-running, which still fails the build, just with a generic message. So the cli gate pins the MESSAGE, not the class fix; nothing pins the general arm on its own, because no other callee reaches it. Of the five typechecker tests, three fail with the rule reverted (identity, arity, laundering) and two are deliberately guards against the WRONG fix rather than against the old behaviour: the Display test fails only if someone copies the console family's bound onto dbg, and the shadow test fails only if the intercept skips the local-binding guard. An earlier version of the identity test asserted only working programs and passed with the rule removed — vacuous, because an unconstrained type satisfies every legal use; it was rewritten around rejections, which only the identity can produce.
 
 ALTERNATIVE CONSIDERED AND REJECTED, recorded so it need not be re-derived: lower `dbg` as the IDENTITY ONLY — evaluate the argument, return it, print nothing — plus a compile-time warning that dbg output is interpreter-only. It is tempting because it fixes the miscompile completely while letting the program still build, and because it is EXACTLY the semantics design.md already specifies for `--release` (line 6218 strips dbg's output there; line 6240 keeps the value). It was rejected because in a non-release build it would knowingly ship an A/B divergence — the interpreter printing lines the compiled binary does not — and "A/B run == build" is the one rule the kata corpus treats as non-negotiable. A warning makes such a gap visible but does not make it absent, and every bug in this cluster began as a surface that was present-looking and partial. Refusing keeps the invariant intact and costs only the ability to compile a program that still has temporary developer instrumentation in it, which design.md calls dbg exactly. If the follow-up row's full lowering turns out to be expensive, identity-plus-warning is the sensible fallback for `--release` ONLY, where it is not a divergence but the specified behaviour. |
+| B-2026-08-23-19 | codegen | high | `errdefer(e) { .. | FIXED by 4aaef4d. The row pointed at codegen's staging, which is where the
+symptom showed; the ROOT was one line upstream in the TYPECHECKER, and fixing only
+what the row described would have left most of the surface broken.
+
+ROOT. `StmtKind::ErrDefer`'s binding was inserted as `Type::Error` -- the
+unconstrained error-recovery type -- under a comment reading "stubbed as Error for
+now since Result type is not yet fully implemented". design.md § `defer` and
+`errdefer` says "The binding `e` has the type of the function's `Err` variant", so
+this was a spec violation, and `Type::Error` satisfies every constraint, which made
+it four defects at once:
+  (1) the wrong VALUE reached the cleanup block (what the row reported);
+  (2) `let n: i32 = e` typechecked on `E = String` -- a universal cast, the same
+      shape as B-2026-08-23-16's `dbg`;
+  (3) `f"{e}"` typechecked on an `E` with no `Display` impl, which the identical
+      expression outside an errdefer body correctly rejects;
+  (4) `errdefer(e)` was accepted in `Option`- and non-`Result`-returning functions,
+      which design.md forbids outright and even writes the diagnostic for.
+It also left codegen with no static type for the binding at all, which is why the
+backends had to guess the payload from the `Err` aggregate's raw words in the first
+place, and why the span-keyed Display tables had no entry for `e`.
+
+MEASURED, every row `--interp` vs JIT vs AOT (all now agree; all diverged before):
+  Err("built".to_string())    ED 94597202404272 -> built          [the row's case]
+  Err(f"code {n}")            ED 94143745913856 -> code 42
+  Err(a + "right")            ED 94398302707984 -> leftright
+  Err(mk())        [String]   ED 94633926911440 -> made
+  tail Err(..)                ED 94873976261600 -> payload
+  Err(x * 2.5)     [f64]      ED 4620130267728707584 -> 7.5   (the RAW BIT PATTERN)
+  Err(n > 1)       [bool]     ED 1 -> true
+  Err(Fault{..})   [struct]   ED 3 -> Fault[3:bad]            (only the 1st field)
+  Err(mk())        [tuple]    ED 4 -> (4, 5)                  (only the 1st elem)
+  Err(Kind.Refused(9))        ED 1 -> Refused(9)              (the TAG)
+  Err(Kind.Hard)   [unit enum]  the whole `println` DROPPED -> Hard
+  Err(mk_two())    [6 words]  SEGFAULT under AOT -> T(x/y)
+  `-> Aliased` (alias)        ED 94788369857344 -> via-alias
+
+FIVE mechanisms, only the first of which the row's suggested direction covers:
+ 1. TYPECHECKER binds `e` to the real `E` from `Result[T, E]`, and rejects the
+    binding form on any other return type with design.md's own wording. Both
+    backends read one rule, so they agree by construction rather than by
+    convention -- the SipHash / Arrow-IPC / `String.normalize` pattern.
+ 2. The two early-exit sites (`return Err(..)`, function tail) reconstruct via
+    `rebuild_value_from_payload_words` instead of staging the bare i64 word --
+    the row's suggested direction, and necessary but far from sufficient.
+ 3. DE-BOXING. When `E` needs more words than the aggregate's inline payload area,
+    `coerce_to_payload_words` heap-BOXES it and puts the box pointer in word 0.
+    Reconstructing from words then builds a String around that pointer: AOT
+    segfaulted. `match`'s arm reconstruction has de-boxed since the oversized-payload
+    spike, which is why a `match` on the same value was always right. The `?` site
+    had this gap too, so this fixed a live crash the row never mentioned. The
+    predicate is `llvm_type_word_count`, the pack side's own, so pack and unpack
+    agree by construction.
+ 4. TYPE ALIASES. The `Result[T, E]` walk matched `Result` syntactically on
+    `func.return_type`, so `-> MyResult` where `type MyResult = Result[i64, String]`
+    yielded `None` and every error exit in that function silently opted out of
+    reconstruction -- while the typechecker resolved the alias and typed the binding
+    correctly. Binding right, value wrong.
+ 5. The binding now registers in `var_type_names`, which is what codegen's
+    user-struct / user-enum Display dispatch keys on. Without it a struct or enum
+    `f"{e}"` could not lower at all.
+All three error-exit sites (`?`, `return Err(..)`, tail) now stage through ONE
+helper, `stage_errdefer_payload_from_err_aggregate`, so they cannot drift apart
+again -- the `?` site had already diverged from the other two once, which is the
+whole history of this bug.
+
+FAIL-CLOSED, and the reason the enum case presented as a vanishing statement rather
+than a wrong value: the cleanup dispatcher ran `let _ = self.compile_block_with_frame(&block)`,
+discarding a hard codegen error, and every caller above it is infallible. A cleanup
+body that would not compile was simply omitted from the binary and the program ran
+on without it. The error is now parked in `cleanup_body_error` and reported by
+`compile_function`. A comment claiming the unstaged case was "unreachable from a
+well-formed program" was false and is gone. Same class of fix as B-2026-08-23-16's
+unlowered-callee refusal.
+
+TESTS. 6 in `tests/typechecker.rs` (the `Err`-type binding over 4 type pairs, the
+three forbidden return types, the `Display` bound reaching into the body, block
+scoping) and 2 in `tests/cli.rs` (a 13-shape interp/JIT/AOT parity program; a
+`defer { dbg(1); }` build that must now REFUSE). Each of the five mechanisms plus
+the fail-closed change was reverted independently and its test re-run: all six fail
+when reverted, so none of them is vacuous.
+
+TWO EXISTING ARTIFACTS ASSERTED THE OLD BEHAVIOUR and were corrected, not deleted:
+`test_errdefer_binding_in_scope` was written against `fn may_fail() { errdefer(e) {..} }`,
+a unit-returning function the spec forbids -- it only typechecked because of the
+stub; its intent is preserved on a legal signature and the illegal form is now
+pinned as the rejection. And `docs/implementation_checklist/phase-7-codegen.md`
+recorded follow-up (b) as "accepts the i64-coerce trade for wider-E impure args
+(folded into (a))" -- it was never folded into (a), which closed the `?` site only,
+and for a non-integer `E` the coerced word is not a lossy value but the wrong one.
+Corrected in place.
+
+CORPUS IMPACT: none. No `.kara` file in either repo uses the `errdefer(e)` binding
+form; the only three files containing the word `errdefer` are the self-hosted
+compiler recognising the keyword. Nothing was contorted around the change.
+
+REMAINDER split into its own row rather than buried here: an INLINE payload wider
+than 3 words still reconstructs only its first three (`W(1,2,3,<garbage>)` for a
+4xi64 `E`). That is `rebuild_value_from_payload_words`'s `(w0, w1, w2)` signature at
+~20 call sites, it predates this fix, and it hits the `?` path identically -- this
+change made it VISIBLE at two more sites rather than causing it, and those sites
+were wholly wrong (one truncated integer) before. |
 
 </details>
 
