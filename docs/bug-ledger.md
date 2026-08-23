@@ -94,8 +94,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 280 | 0 |
 | leak | 189 | 0 |
-| missing-feature | 159 | 4 |
-| run-vs-build | 152 | 1 |
+| missing-feature | 159 | 3 |
+| run-vs-build | 153 | 2 |
 | double-free | 135 | 0 |
 | codegen-gap | 129 | 0 |
 | diagnostics | 100 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1000 | 0 |
+| codegen | 1001 | 1 |
 | typecheck | 248 | 1 |
 | interp | 175 | 1 |
 | ownership | 64 | 0 |
@@ -120,22 +120,22 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | parser | 39 | 1 |
 | runtime | 31 | 0 |
 | resolver | 26 | 0 |
-| effect | 15 | 3 |
+| effect | 15 | 2 |
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1512 surfaced · 6 open · 1483 fixed · 9 wontfix** (2026-05-20 → 2026-08-23). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1513 surfaced · 6 open · 1484 fixed · 9 wontfix** (2026-05-20 → 2026-08-23). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-23-8 | 2026-08-23 | effect | medium | BUILT-IN PRIMITIVE RESOURCE effects are never inferred -- stdout, stdin, stderr, env and the filesystem contribute NOTHING to any effect set, so design.md's own two I/O skeletons report the wrong answer and a `pub fn` that does I/O needs no declaration. § Standard I/O Surface states the results outright for its guessing-game skeleton ("The inferred effect set: `reads(Stdin), writes(Stdout), panics`") and its CLI skeleton ("Inferred effects: `reads(Env), reads(FileSystem), writes(Stdout), writes(Stderr), panics`"). Transcribed VERBATIM, both check clean and `karac check --output=json` reports `program_effects: []` for the first and `['panics()']` for the second. The enforcement half is missing in step: `pub fn emit() -> i64 { println("hi"); 1 }`, `pub fn read_it() { stdin.read_line(); }`, `pub fn envy() { env.args(); }` and `pub fn err_it() { eprintln("e"); }` ALL pass with no effect declaration, while the identical shape over a USER-DEFINED resource is correctly refused (`public function 'p' performs effects [writes(UserDB)] but has no effect declaration`). | roadmap.md |
 | B-2026-08-23-9 | 2026-08-23 | interp | medium | The INTERPRETER SKIPS an `errdefer` block when the function's `Err` comes from its TAIL EXPRESSION, while both compiled backends run it. `fn work() -> Result[i64, String] { errdefer { println("failed"); } defer { println("always"); } Err("bad".to_string()) }` prints `always | err bad` under `karac run --interp` and `failed | always | err bad` under `karac run` (JIT) and the AOT binary alike -- so the cleanup that the shipped binary performs is silently absent under the interpreter. `karac check` is clean. The divergence is specific to the tail-expression form: an `Err` reached via `?` short-circuit and an explicit `return Err(...)` both run the `errdefer` correctly on ALL THREE backends, and the `Ok`-from-tail control correctly skips it on all three. | roadmap.md |
 | B-2026-08-23-10 | 2026-08-23 | parser | low | UNIT STRUCTS (`struct Name;`) do not parse, so design.md § Typestate via Phantom Type Parameters' state markers cannot be written as the spec writes them. `struct Disconnected;` -> `error[parse]: Expected LeftBrace, found Semicolon`. The section introduces them as "// State markers — zero-size phantom types" and they are the first two lines of its worked example. The form appears in design.md exactly twice, both here (lines 8734-8735), and the braced spelling works everywhere else. | roadmap.md |
 | B-2026-08-23-11 | 2026-08-23 | typecheck | medium | `Type::Function` carries NO EFFECT ROW, so design.md § First-Class Functions' `let f = save;  // f: Fn(User) -> () with writes(UserDB)` is not representable and a function value's effects cannot propagate through its TYPE. The typechecker's function type is `Function { params, return_type }` -- no effect field -- while the AST-level `TypeKind::FnType` DOES carry an `effect_spec`, which is why a PARAMETER slot can be checked (E0404 `argument 1 has effect writes(UserDB) not declared in slot [pure]`) but an inferred binding cannot. B-2026-08-23-7 closed the resulting soundness hole with an OVER-APPROXIMATION -- a function mentioned in value position contributes its effects to the enclosing function whether or not it is ever called -- which is sound but imprecise: `let f = save;` with no call still demands the declaration. | roadmap.md |
 | B-2026-08-23-12 | 2026-08-23 | effect | medium | A `let` binding's `Fn(...)` TYPE ANNOTATION is never checked against the assigned function's effects, so `let f: Fn(i64) -> i64 = save;` -- a slot that declares PURITY -- silently accepts an effectful `save`, while the IDENTICAL parameter slot is rejected. Measured against `fn save(n: i64) -> i64 with writes(UserDB)`: `fn apply(f: Fn(i64) -> i64, n: i64)` called as `apply(save, 7)` errors `argument 1 has effect writes(UserDB) not declared in slot [pure]`, but `let f: Fn(i64) -> i64 = save;` in a caller that declares `with writes(UserDB)` reports NOTHING. The same E0404 rule, applied at one site and not the other. | roadmap.md |
 | B-2026-08-23-13 | 2026-08-23 | effect | low | The mutual-recursion NOTE now fires for two functions that merely REFERENCE each other as VALUES, calling them a "mutual recursion group" though neither calls the other. `fn p(n: i64) -> i64 { let f = q; n + 1 }` + `fn q(n: i64) -> i64 { let g = p; n + 2 }` reports `note[effect]: mutual recursion group resolved by fixed-point inference: \`p\` (no effects), \`q\` (no effects)`. The program passes and the note is suppressible with `#[allow(mutual_recursion_note)]`, so this is diagnostic wording, not a check failure -- but "mutual recursion" is a false statement about the program. | roadmap.md |
+| B-2026-08-23-14 | 2026-08-23 | codegen | high | `eprintln` output is SILENTLY DROPPED under `karac run` (JIT) and `karac build` (AOT) -- a compiled program loses every stderr write. `fn main() { eprintln("to-stderr"); println("to-stdout"); }` yields stdout `to-stdout` on all three surfaces, but stderr `to-stderr` ONLY under `--interp`; the JIT and AOT binaries emit NOTHING on fd 2. Not misrouted to stdout (stdout is byte-identical across all three) -- lost. Every compiled Kara program that reports diagnostics, warnings or errors on stderr is silently silent. | roadmap.md |
 
 ### Wontfix (9)
 
@@ -155,9 +155,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1512 surfaced
 
 </details>
 
-### Fixed (1483)
+### Fixed (1484)
 
-<details><summary>1483 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1484 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -17150,6 +17150,17 @@ the two spellings AGREE rather than just matching a literal. |
 Fix: a mention of a free function in VALUE position now contributes that function's effects to the enclosing function, through a synthetic call edge on the same channel the `__modbind_*` keys already use. Implemented by giving `modbind_synth.rs`'s shadow-aware walker a second table (`fn_value_ref_syms`). That walk was REUSED rather than duplicated because it already has the two properties this rule needs and a fresh 85-arm walker would have had to re-earn: a shadow stack covering every binding form (let / parameter / closure param / match arm / for pattern), and an EXHAUSTIVE `walk_expr` with no catch-all, so a future `ExprKind` is a compile error rather than a silently unwalked path that leaks an effect.
 
 Edges are computed once per function (`fn_value_ref_calls`) and consumed in THREE places. `infer_function_effects` is the obvious one. `build_call_graph` is the non-obvious one and is required: a single-member SCC is inferred in ONE pass on the premise that every callee sits in an earlier SCC and is already resolved, so an edge missing from the GRAPH loses the effect of any mentioned function whose own effects are INFERRED rather than declared (a declared-effect callee is seeded up front and would have masked the bug -- the returned-function test is the shape that pins it). `check_one_par_block` is the third: a par block that reaches a module-binding writer through a function value is the same 1328 conflict, and was missed for exactly the reason the public-boundary check was. |
+| B-2026-08-23-8 | effect | medium | BUILT-IN PRIMITIVE RESOURCE effects are never inferred -- stdout, stdin, stderr, env and the filesystem contribute NOTHING to any effect set, so desi… | FIXED by 72b91bb. Root cause: the built-in primitive resources simply had no seeds in `inferred_effects`. The seeding machinery was mature -- `File.*`, `BufReader.*`, `BufWriter.*`, `DataFrame.*`, the whole `Network` surface and `Env.set` were all hand-seeded -- but the console, stdin, the env READ half, `Clock`, `RandomSource` and the free `fs` functions were absent, so they contributed nothing to any effect set. A second, independent hole compounded it: the effect walker's lowercase ambient-module map routed only `env` / `stdin` / `critical_section`, so `fs.` / `clock.` / `rand.` / the explicit `stdout.` / `stderr.` forms never reached a seed key even where one existed.
+
+The fix has four parts, and each is FORCED by the one before it -- seeding alone would have been a silent regression:
+
+1. Seed the missing builtins, under BOTH key forms: the bare free-function name (`println`, keyed exactly as `panic` / `todo` already are) and the qualified resource method (`Stdout.println`). Same bridge-the-`with`-clause-into-inference rationale as the `File.*` block -- the baked-stdlib clauses on these `#[compiler_builtin]` stubs are documentation, not the propagation mechanism.
+
+2. Generalize the ambient-module map to the canonical seven (`env/clock/rand/stdin/stdout/stderr/fs`), matching the typechecker's, the interpreter's and codegen's copies of the same table.
+
+3. Carve the console out of BOTH concurrency decisions, via one shared `is_console_resource` predicate. The auto-par design DELIBERATELY relies on console output carrying no resource effect: `find_parallel_groups` fans print statements out because `karac_par_run` captures each branch's output and replays it in source order, which is the documented reversal of B-2026-06-13-18's blanket suppression. Seeding `writes(Stdout)` made two prints conflict (killing that parallelism) AND made a print count as "meaningful work" in the cost model (so a group of nothing but prints stopped being trivial and would pay ~70us of spawn to run two `println`s in parallel). Both halves are needed; each was measured to be independently necessary by reverting it alone.
+
+4. Let a `Console`-providing target satisfy `Stdout` / `Stderr` in the target gate. design.md's table gives `wasm_browser` `Console` and deliberately not `Stdout` -- a browser has no file descriptors -- but `println` is a builtin on every target and the browser glue implements it as exactly that: `fd_write` routes fd 1 to `console.log` and fd 2 to `console.error`. Every printing browser program built fine before only because the gate never saw a console effect; the inconsistency predates the seeding and this reconciles it. WRITE sinks only -- `console.log` has no input side, so `Stdin` stays unprovided. |
 
 </details>
 
