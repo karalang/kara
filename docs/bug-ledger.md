@@ -92,17 +92,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 279 | 0 |
+| miscompile | 280 | 1 |
 | leak | 189 | 0 |
-| missing-feature | 155 | 0 |
-| run-vs-build | 151 | 0 |
+| missing-feature | 157 | 2 |
+| run-vs-build | 152 | 1 |
 | double-free | 135 | 0 |
 | codegen-gap | 129 | 0 |
 | diagnostics | 99 | 0 |
 | false-positive | 95 | 0 |
 | perf | 84 | 0 |
 | other | 58 | 1 |
-| soundness | 55 | 0 |
+| soundness | 56 | 1 |
 | crash | 55 | 0 |
 | use-after-free | 20 | 0 |
 
@@ -110,27 +110,32 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 999 | 1 |
+| codegen | 1000 | 2 |
 | typecheck | 247 | 0 |
-| interp | 174 | 0 |
+| interp | 175 | 1 |
 | ownership | 64 | 0 |
 | other | 63 | 0 |
 | cli | 62 | 0 |
 | autopar | 55 | 0 |
-| parser | 38 | 0 |
+| parser | 39 | 1 |
 | runtime | 31 | 0 |
 | resolver | 26 | 0 |
-| effect | 11 | 0 |
+| effect | 13 | 2 |
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1504 surfaced · 1 open · 1480 fixed · 9 wontfix** (2026-05-20 → 2026-08-23). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1509 surfaced · 6 open · 1480 fixed · 9 wontfix** (2026-05-20 → 2026-08-23). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (1)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-23-4 | 2026-08-23 | codegen | low | Codegen owns a LOCAL fixed array element-wise but a PARAM fixed array whole, so the drop-differential cannot gate the array class by place name and needs alignment rule 4 to exclude it | roadmap.md |
+| B-2026-08-23-6 | 2026-08-23 | codegen | high | ANY non-`main` function declared with an EXPLICIT `-> ()` return type miscompiles into UNBOUNDED RECURSION on both compiled backends. `fn f() -> () { println("x"); }` + `fn main() { f(); }` prints `x` ONCE under `--interp` and prints it forever under `karac run` until the stack guard aborts (exit 134); the AOT binary SIGSEGVs (exit 139). `karac check` reports "All checks passed." The control one character away is clean: DROP the `-> ()` and the identical program is correct on all three backends. ROOT CAUSE IS VISIBLE IN THE ONE SHAPE THAT FAILS LOUDLY -- give the body an explicit `return;` and the LLVM verifier catches it: `codegen failed: Module verification failed: "Function return type does not match operand type of return inst!\n  ret void\n i64"`. So codegen gives the function an i64 LLVM return type while emitting `ret void`; without an explicit `return` the mismatch is not caught and control runs off the end of the function. `fn main() -> ()` is UNAFFECTED (main is lowered separately), which is why this survives every hello-world smoke test. | roadmap.md |
+| B-2026-08-23-7 | 2026-08-23 | effect | high | A declared effect is LOST when a function is reached through a LET BINDING or a CONTAINER ELEMENT, so a public function's effect declaration -- "guaranteed semantics" per § Specification Layers -- is bypassable in two lines. design.md § First-Class Functions: "**Effects carry through.** A function with effects produces a typed function value that includes those effects: `let f = save;  // f: Fn(User) -> () with writes(UserDB)` -- calling f carries the writes(UserDB) effect, SAME AS CALLING SAVE DIRECTLY." Measured against a `fn save(n: i64) -> i64 with writes(UserDB)`: `pub fn direct() -> i64 { save(7) }` correctly errors `public function 'direct' performs effects [writes(UserDB)] but has no effect declaration`; `pub fn via_value() -> i64 { let f = save; f(7) }` reports "All checks passed." A second hop (`let f = save; let g = f; g(7)`) also passes. The CONTAINER leg is worse than silent -- `let mut v: Vec[Fn(i64) -> i64] = Vec.new(); v.push(save); v[0](7)` reports a PARTIAL set, `performs effects [panics]`, naming the indexing panic while dropping the callee's declared `writes(UserDB)`, so the diagnostic reads as an authoritative effect list that is wrong. | roadmap.md |
+| B-2026-08-23-8 | 2026-08-23 | effect | medium | BUILT-IN PRIMITIVE RESOURCE effects are never inferred -- stdout, stdin, stderr, env and the filesystem contribute NOTHING to any effect set, so design.md's own two I/O skeletons report the wrong answer and a `pub fn` that does I/O needs no declaration. § Standard I/O Surface states the results outright for its guessing-game skeleton ("The inferred effect set: `reads(Stdin), writes(Stdout), panics`") and its CLI skeleton ("Inferred effects: `reads(Env), reads(FileSystem), writes(Stdout), writes(Stderr), panics`"). Transcribed VERBATIM, both check clean and `karac check --output=json` reports `program_effects: []` for the first and `['panics()']` for the second. The enforcement half is missing in step: `pub fn emit() -> i64 { println("hi"); 1 }`, `pub fn read_it() { stdin.read_line(); }`, `pub fn envy() { env.args(); }` and `pub fn err_it() { eprintln("e"); }` ALL pass with no effect declaration, while the identical shape over a USER-DEFINED resource is correctly refused (`public function 'p' performs effects [writes(UserDB)] but has no effect declaration`). | roadmap.md |
+| B-2026-08-23-9 | 2026-08-23 | interp | medium | The INTERPRETER SKIPS an `errdefer` block when the function's `Err` comes from its TAIL EXPRESSION, while both compiled backends run it. `fn work() -> Result[i64, String] { errdefer { println("failed"); } defer { println("always"); } Err("bad".to_string()) }` prints `always | err bad` under `karac run --interp` and `failed | always | err bad` under `karac run` (JIT) and the AOT binary alike -- so the cleanup that the shipped binary performs is silently absent under the interpreter. `karac check` is clean. The divergence is specific to the tail-expression form: an `Err` reached via `?` short-circuit and an explicit `return Err(...)` both run the `errdefer` correctly on ALL THREE backends, and the `Ok`-from-tail control correctly skips it on all three. | roadmap.md |
+| B-2026-08-23-10 | 2026-08-23 | parser | low | UNIT STRUCTS (`struct Name;`) do not parse, so design.md § Typestate via Phantom Type Parameters' state markers cannot be written as the spec writes them. `struct Disconnected;` -> `error[parse]: Expected LeftBrace, found Semicolon`. The section introduces them as "// State markers — zero-size phantom types" and they are the first two lines of its worked example. The form appears in design.md exactly twice, both here (lines 8734-8735), and the braced spelling works everywhere else. | roadmap.md |
 
 ### Wontfix (9)
 
