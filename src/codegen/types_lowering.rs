@@ -2845,6 +2845,23 @@ impl<'ctx> super::Codegen<'ctx> {
                 Some(self.llvm_type_for_type_expr(te))
             }
             TypeKind::Tuple(elems) if elems.is_empty() => None,
+            // `-> ()` written EXPLICITLY. It parses as its own `TypeKind::Unit`
+            // variant, NOT as the empty `Tuple` above — so before this arm it
+            // fell to the wildcard, lowered through `llvm_type_for_type_expr`,
+            // and landed on the i64 default. The function then carried an i64
+            // LLVM return type while its body emitted `ret void`: caught by the
+            // verifier when the body had an explicit `return;`, and SILENT
+            // otherwise — control ran off the end of the function and resumed
+            // at a wrong address, which presented as unbounded recursion
+            // (B-2026-08-23-6). `fn main` was unaffected because it is lowered
+            // separately, which is why every hello-world smoke test passed.
+            //
+            // Returning `None` routes an explicit `-> ()` down the identical
+            // path as an omitted return type — the one-character-different
+            // program that was always correct. `compile_closure_fn_type` has
+            // carried the same `Unit`-is-void arm since closures were added;
+            // this is that rule reaching the free-function/method signature.
+            TypeKind::Unit => None,
             // A `-> ref BorrowedStruct` return (a struct with `ref` fields,
             // design.md Feature 4 Part 3) is returned BY VALUE — the `ref`
             // marks the struct's borrow scope, not pointer indirection. The

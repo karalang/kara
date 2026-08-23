@@ -104873,6 +104873,159 @@ fn main() {
             "a FIELD-PATH base is a place too, so it is re-evaluable and expands"
         );
     }
+
+    /// B-2026-08-23-6 — an EXPLICIT `-> ()` return type on a non-`main`
+    /// function miscompiled into unbounded recursion on both compiled backends.
+    ///
+    /// `-> ()` parses as its own `TypeKind::Unit`, NOT as the empty `Tuple`
+    /// that `llvm_return_type` already mapped to void, so it fell to the
+    /// wildcard and got the i64 default. The function then carried an i64 LLVM
+    /// return type while its body emitted `ret void`. With an explicit
+    /// `return;` the verifier caught it; WITHOUT one nothing did — control ran
+    /// off the end and resumed at a wrong address, printing `before x before x
+    /// …` (back to the top of `main`, not a loop inside `f`) until the stack
+    /// guard aborted. `fn main() -> ()` was unaffected because `main` is
+    /// lowered separately, which is why every hello-world smoke test passed.
+    ///
+    /// The body matrix matters because ONE shape masked the bug: an `if` whose
+    /// terminator supplied the missing one. Every other body — including the
+    /// EMPTY body — miscompiled, so a single-shape test would have been a coin
+    /// flip. Each case here asserts the output equals what dropping the `-> ()`
+    /// produces, since that one-character-different program was always correct.
+    #[test]
+    fn test_e2e_explicit_unit_return_type_does_not_miscompile() {
+        let bodies = [
+            ("println_one", "println(\"x\");", "before\nx\nafter\n"),
+            ("let_only", "let a = 1i64;", "before\nafter\n"),
+            ("empty", "", "before\nafter\n"),
+            (
+                "let_then_fstring",
+                "let a = 1i64; println(f\"{a}\");",
+                "before\n1\nafter\n",
+            ),
+            (
+                "two_prints",
+                "println(\"x\"); println(\"y\");",
+                "before\nx\ny\nafter\n",
+            ),
+            ("bare_return", "return;", "before\nafter\n"),
+            (
+                "let_then_return",
+                "let a = 1i64; return;",
+                "before\nafter\n",
+            ),
+            // The masking shape: the `if`'s terminator hid the missing return,
+            // so this one was GREEN before the fix. Kept so a regression that
+            // only re-breaks the unmasked shapes is still distinguishable.
+            (
+                "if_true",
+                "if true { println(\"x\"); }",
+                "before\nx\nafter\n",
+            ),
+        ];
+        for (name, body, want) in bodies {
+            let src = format!(
+                "fn f() -> () {{ {body} }}\n\
+                 fn main() {{ println(\"before\"); f(); println(\"after\"); }}\n"
+            );
+            let out = run_program(&src)
+                .unwrap_or_else(|| panic!("`-> ()` body `{name}` should build and run"));
+            assert_eq!(out, want, "explicit `-> ()` with body `{name}`");
+
+            // The control is the same program with the annotation dropped. It
+            // was always correct, and the fix's whole claim is that the two
+            // spellings now lower identically — so compare them, not just the
+            // literal.
+            let ctrl = format!(
+                "fn f() {{ {body} }}\n\
+                 fn main() {{ println(\"before\"); f(); println(\"after\"); }}\n"
+            );
+            let ctrl_out = run_program(&ctrl)
+                .unwrap_or_else(|| panic!("control body `{name}` should build and run"));
+            assert_eq!(
+                out, ctrl_out,
+                "`-> ()` must lower identically to the omitted annotation (body `{name}`)"
+            );
+        }
+    }
+
+    /// B-2026-08-23-6, the receiver and function-value surfaces — the same
+    /// miscompile reached through a method and through a call by value, both
+    /// of which the report exercised.
+    #[test]
+    fn test_e2e_explicit_unit_return_on_method_and_fn_value() {
+        let method = "struct S { v: i64 }\n\
+             impl S { fn show(ref self) -> () { println(\"m\"); } }\n\
+             fn main() { println(\"before\"); let s: S = S { v: 1i64 }; s.show(); println(\"after\"); }\n";
+        assert_eq!(
+            run_program(method).expect("unit-returning method should build and run"),
+            "before\nm\nafter\n"
+        );
+
+        // A `Fn(i64) -> ()` PARAMETER type was already fine (closures carried
+        // the `Unit`-is-void arm); the defect was the declared function's own
+        // signature, so both the by-value call and the direct call must work.
+        let fnval = "fn f(n: i64) -> () { println(f\"g{n}\"); }\n\
+             fn run(g: Fn(i64) -> ()) { g(1i64); }\n\
+             fn main() { println(\"before\"); let h = f; h(7i64); run(f); println(\"after\"); }\n";
+        assert_eq!(
+            run_program(fnval).expect("unit-returning fn used as a value should build and run"),
+            "before\ng7\ng1\nafter\n"
+        );
+    }
+
+    /// `return <unit-valued expr>;` in a VOID function — a SEPARATE defect the
+    /// `-> ()` fix uncovered, and one that predated it: `fn g() { return f(); }`
+    /// with the annotation OMITTED failed module verification the same way
+    /// ("Found return instr that returns non-void in Function of void return
+    /// type"), so this was never about `-> ()` at all.
+    ///
+    /// The tail-return site in `functions.rs` had carried a `fn_returns_void`
+    /// guard for exactly this since it was written; the explicit-`return` site
+    /// in `exprs.rs` had not. Both spellings are asserted because the point of
+    /// the pair is that they agree.
+    #[test]
+    fn test_e2e_return_of_unit_call_in_void_fn() {
+        for (name, ann) in [("annotated", " -> ()"), ("omitted", "")] {
+            let src = format!(
+                "fn f() -> () {{ println(\"x\"); }}\n\
+                 fn g(){ann} {{ return f(); }}\n\
+                 fn main() {{ g(); println(\"after\"); }}\n"
+            );
+            assert_eq!(
+                run_program(&src)
+                    .unwrap_or_else(|| panic!("`return f();` in a void fn ({name}) should build")),
+                "x\nafter\n",
+                "return of a unit call, {name} return type"
+            );
+        }
+    }
+
+    /// The owned-locals path through that same `return <unit call>;` arm. The
+    /// new arm sits after `emit_scope_cleanup` has already run, so it must NOT
+    /// clean up again — a second walk would double free every owned local.
+    /// Drop order and the `Drop` body firing exactly once are what pin that;
+    /// the LSan half is `tests/memory_sanitizer.rs`'s business, but a
+    /// double free shows up here as a crash or a repeated `D5`.
+    #[test]
+    fn test_e2e_return_of_unit_call_with_owned_locals() {
+        let src = "struct T { tag: i64, name: String }\n\
+             impl Drop for T { fn drop(mut ref self) { println(f\"D{self.tag}\"); } }\n\
+             fn sink() -> () { println(\"sink\"); }\n\
+             fn g() -> () {\n\
+                 let s: String = \"owned_payload_long_enough_to_heap_allocate\".to_string();\n\
+                 let t: T = T { tag: 5i64, name: \"tracked_payload_long_enough_here\".to_string() };\n\
+                 println(s.len() + t.name.len());\n\
+                 return sink();\n\
+             }\n\
+             fn main() { println(\"before\"); g(); println(\"after\"); }\n";
+        assert_eq!(
+            run_program(src).expect("owned locals + `return <unit call>;` should build and run"),
+            // 42 + 32 — the two literals' lengths, cross-checked against the
+            // interpreter rather than transcribed from codegen's own output.
+            "before\n74\nD5\nsink\nafter\n"
+        );
+    }
 }
 
 #[cfg(feature = "llvm")]

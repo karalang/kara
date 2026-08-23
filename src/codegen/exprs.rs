@@ -1248,6 +1248,34 @@ impl<'ctx> super::Codegen<'ctx> {
                         // `ret void`. Matches the tail site.
                         self.builder.build_store(sret_ptr, v).unwrap();
                         self.builder.build_return(None).unwrap();
+                    } else if self
+                        .current_fn
+                        .and_then(|f| f.get_type().get_return_type())
+                        .is_none()
+                    {
+                        // `return <unit-valued expr>;` in a VOID function —
+                        // `return f();` where `f` returns unit, or any callee
+                        // whose codegen hands back the i64-0 unit placeholder
+                        // (`compile_print`, `compile_assert_eq`, the
+                        // unknown-callee fallback). `v` is that placeholder,
+                        // never a user-visible value, so discarding it leaves
+                        // observable behavior unchanged.
+                        //
+                        // This is the guard the TAIL return site in
+                        // `functions.rs` has carried all along (see its
+                        // `fn_returns_void` arm and the same reasoning);
+                        // without it here the explicit-`return` spelling
+                        // emitted `ret i64` against a void signature and module
+                        // verification refused the build. Ordered AFTER `sret`
+                        // for the reason the tail site gives: an sret function's
+                        // LLVM signature is also void, but the struct must be
+                        // stored through the result pointer first, so a bare
+                        // `ret void` there would silently drop the result.
+                        //
+                        // No cleanup call here: `emit_scope_cleanup` already
+                        // ran above this chain, and a second one would double
+                        // free every owned local on this path.
+                        self.builder.build_return(None).unwrap();
                     } else if self.fn_ctx.current_fn_name == "main"
                         && self.main_result_err_te.is_some()
                     {
