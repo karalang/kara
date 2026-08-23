@@ -99,9 +99,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | double-free | 135 | 0 |
 | codegen-gap | 129 | 0 |
 | diagnostics | 99 | 0 |
-| false-positive | 94 | 0 |
+| false-positive | 95 | 0 |
 | perf | 84 | 0 |
-| other | 59 | 2 |
+| other | 58 | 1 |
 | soundness | 55 | 0 |
 | crash | 55 | 0 |
 | use-after-free | 20 | 0 |
@@ -110,10 +110,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 999 | 2 |
+| codegen | 999 | 1 |
 | typecheck | 247 | 0 |
 | interp | 174 | 0 |
-| ownership | 64 | 1 |
+| ownership | 64 | 0 |
 | other | 63 | 0 |
 | cli | 62 | 0 |
 | autopar | 55 | 0 |
@@ -124,14 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1504 surfaced · 2 open · 1479 fixed · 9 wontfix** (2026-05-20 → 2026-08-23). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1504 surfaced · 1 open · 1480 fixed · 9 wontfix** (2026-05-20 → 2026-08-23). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (1)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-23-4 | 2026-08-23 | codegen | low | Codegen owns a LOCAL fixed array element-wise but a PARAM fixed array whole, so the drop-differential cannot gate the array class by place name and needs alignment rule 4 to exclude it | roadmap.md |
-| B-2026-08-23-5 | 2026-08-23 | ownership+codegen | medium | The drop_fuzz oracle-codegen differential corpus reports 94 divergences at the default size (186 at --count 400), against a module doc that states the corpus reached 0 -- so the corpus-level leak gate is red while the curated 14-shape gate is green | roadmap.md |
 
 ### Wontfix (9)
 
@@ -151,9 +150,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1504 surfaced
 
 </details>
 
-### Fixed (1479)
+### Fixed (1480)
 
-<details><summary>1479 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1480 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -16969,6 +16968,67 @@ both, so the lint fires wherever the test runs.
 Full `--features llvm --no-fail-fast` suite green on aarch64 macOS: 109 test
 binaries, 0 failures.
  |
+| B-2026-08-23-5 | ownership+codegen | medium | The drop_fuzz oracle-codegen differential corpus reports 94 divergences at the default size (186 at --count 400), against a module doc that states th… | FIXED by f0a55a6.
+
+Two defects, disjoint and both necessary. Measured by reverting each
+independently against the corpus: codegen-only 6, oracle-only 88, both 0,
+neither 94 -- a clean partition, so no edit is redundant.
+
+1. CODEGEN -- an EMITTING path that never RECORDED. `fire_due_user_drops`
+   fires a binding's cleanup at its NLL live-range end and RETIRES the action
+   from the frame, so the scope-exit funnel (`emit_cleanup_action_at`, which
+   records) never sees it. Its `RcDec` arm already recorded, with a comment
+   naming this exact hazard -- "retiring the action here without recording
+   would present a *retimed* drop to the differential as a MISSING one" -- but
+   the `UserDrop` arm directly beside it did not. That arm fires for every
+   binding whose type carries an `impl Drop`, which is why an entire class was
+   invisible: 88 phantom divergences. Recorded directly via `drop_obs::record`
+   rather than by rebuilding a `CleanupAction` for `record_drop_obs`, so the
+   production path (sink never armed) allocates nothing -- the cost `armed()`
+   exists to avoid. Emission stays open-coded: `emit_cleanup_action`'s
+   `UserDrop` arm also flushes `pending_box_field_zeroes` (B-2026-08-18-4),
+   scope-exit-ordered work this early fire must not do.
+
+2. OWNERSHIP ORACLE -- a move it did not model. `Some(t)` parses as
+   `ExprKind::Call`, so it took the free-call caller-retains default and READ
+   its argument, where `Tuple` / `StructLiteral` / `MapLiteral` all Move
+   theirs. An enum-variant constructor is an aggregate literal: the argument
+   escapes into the enum, which then owns it. Reading it left the source
+   binding Owned alongside the enum, so ONE value carried TWO scheduled drops
+   (`let o = Some(t)` scheduled `o` AND `t`), and codegen -- which keys the
+   drop on the enum binding -- read as missing one. 6 divergences. `TypeDb`
+   now collects every payload-carrying variant name (user enums in both bare
+   and qualified spelling, plus the prelude's `Some`/`Ok`/`Err`); unit variants
+   are excluded, since they take no argument to consume. Only heap bindings are
+   disarmed by a Move, so `Some(n)` on an i64 is unaffected.
+
+NEITHER WAS A LEAK. Every divergent shape is LSan-clean and runs its `Drop`
+body exactly once on interp, JIT and AOT alike. Confirmed BEFORE either fix by
+building each shape with `-fsanitize=address` and running under
+`detect_leaks=1`. The reports were fidelity failures in the differential, not
+memory bugs -- which is what the row asked to be determined first.
+
+WHY IT WENT UNNOTICED, the part worth keeping: the curated standing gate
+`tests/drop_differential.rs` had NO case declaring an `impl Drop` -- zero
+across all 14 shapes -- and an `impl Drop` is precisely what routes a binding
+onto the unrecorded firing path. The corpus was red and the gate was green
+because the gate could not reach the class at all. Four Drop-bearing cases
+added, each pinned by reverting the fix it covers: two go red on the codegen
+revert, three on the oracle revert, none survive both.
+
+MEASURED: corpus 94 -> 0 at the default size, 186 -> 0 at `--count 400`.
+`drops checked` falls 779 -> 771 (1553 -> 1531 at 400): that is the
+double-schedule correction showing up in the count, not lost coverage.
+Non-vacuity re-proved with `KARAC_DROPOBS_SILENCE=1` -- 771/771 divergences
+reported with the recorder silenced. Oracle self-check clean over 400 programs
+/ 4461 scheduled drops, 0 invariant violations.
+
+DOCS CORRECTED, since the stale number is what let this sit: the
+`drop_differential.rs` module header and
+`docs/spikes/ownership-model-mechanization.md` both claimed 0 while the corpus
+read 94. Both now state that a zero is a measurement rather than a property,
+that it has gone red once, and that when a curated gate and the corpus
+disagree the corpus is the one to believe. |
 
 </details>
 
