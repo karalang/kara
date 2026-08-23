@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 279 | 1 |
 | leak | 189 | 0 |
-| missing-feature | 154 | 0 |
+| missing-feature | 155 | 1 |
 | run-vs-build | 151 | 0 |
 | double-free | 135 | 0 |
 | codegen-gap | 129 | 0 |
@@ -114,7 +114,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | typecheck | 246 | 2 |
 | interp | 174 | 0 |
 | other | 63 | 0 |
-| ownership | 62 | 0 |
+| ownership | 63 | 1 |
 | cli | 62 | 0 |
 | autopar | 55 | 0 |
 | parser | 38 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1500 surfaced · 4 open · 1473 fixed · 9 wontfix** (2026-05-20 → 2026-08-23). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1501 surfaced · 5 open · 1473 fixed · 9 wontfix** (2026-05-20 → 2026-08-23). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,6 +134,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1500 surfaced
 | B-2026-08-22-28 | 2026-08-22 | typecheck | medium | An associated-type bound declared on a STDLIB-BAKED trait is never discharged at an impl site: `trait_assoc_decls` finds the trait declaration only by scanning `program.items`, and a baked trait lives in `env.traits` instead -- so `impl BuildHasher for B { type Hasher = <a type with no Hasher impl> }` type checks, while the same shape on a user-declared trait is correctly rejected with E_GAT_BOUND_NOT_SATISFIED | roadmap.md |
 | B-2026-08-22-29 | 2026-08-22 | codegen+runtime | medium | `FxBuildHasher` is 13.7x SLOWER than the default `SipHash13BuildHasher` on `String` keys (1.23 s vs 0.09 s, 200k inserts + 1M lookups, compiled, arm64) -- the exact opposite of the speed-for-safety trade the stdlib comment and design.md offer it as; a user-written FNV-1a hasher is at parity with the default, so a non-default hasher is not inherently slow | roadmap.md |
 | B-2026-08-22-30 | 2026-08-22 | typecheck | medium | Three `f16_software_emulated` lint tests fail on EVERY aarch64 macOS machine on a clean `main`: the tests assert the emulation warning fires, while `baseline_cpu_and_features` resolves Apple Silicon to `apple-m1`, which `target_has_native_f16` answers `true` for -- so the lint correctly stays quiet. CI is x86_64 and green, leaving a permanently-red local suite | roadmap.md |
+| B-2026-08-23-2 | 2026-08-23 | ownership | medium | Ownership oracle does not model fixed-array (Array[T,N]) ownership, so the drop-differential is blind to the array-element-drop class and the planned codegen-consumes-oracle refactor would regress B-2026-08-23-1 | roadmap.md |
 
 ### Wontfix (9)
 

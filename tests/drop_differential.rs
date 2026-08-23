@@ -112,6 +112,34 @@ fn nested_vec_of_vecs() {
 }
 
 #[test]
+fn owned_fixed_array_of_string_is_an_oracle_boundary() {
+    // DOCUMENTED ORACLE BOUNDARY (B-2026-08-23-2). An owned `Array[String, N]`
+    // binding owns its N element buffers, and codegen frees them
+    // (`synthesize_array_drop_fn_te`, B-2026-08-23-1). But the ownership oracle
+    // does NOT yet model fixed-array ownership end-to-end: `is_heap` aside, its
+    // let/value analysis schedules ZERO local drops for a fixed array, so this
+    // passes with an EMPTY schedule — exactly like `option_string_match_is_clean`
+    // below. The assertion is that this is *clean* (codegen's array drops are not
+    // flagged by the missing-drop direction), NOT that anything is scheduled.
+    //
+    // This is a real gate on a real gap: when the mechanization effort teaches
+    // the oracle to schedule fixed-array drops (B-2026-08-23-2), this `== 0` must
+    // be tightened to `>= 1`, and the differential will then actively verify
+    // codegen covers the array schedule. Until then, the LSan
+    // `memory_sanitizer` array fixtures are the gate on the actual leak.
+    let src = format!(
+        "fn main() {{ let a: Array[String, 2] = [{S}, {S}]; \
+         println(a[0].len() + a[1].len()); }}"
+    );
+    assert_eq!(
+        assert_clean(&src),
+        0,
+        "oracle does not yet schedule fixed-array drops (B-2026-08-23-2); \
+         if this now schedules, tighten the assertion to >= 1"
+    );
+}
+
+#[test]
 fn option_string_match_is_clean() {
     // Documented oracle boundary: a `match o { Some(x) => … }` on an owned
     // `Option[String]` schedules **zero** local drops — the scrutinee `o` is
