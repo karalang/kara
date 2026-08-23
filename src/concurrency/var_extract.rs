@@ -56,6 +56,72 @@ impl<'a> super::ConcurrencyChecker<'a> {
         }
     }
 
+    /// `true` iff any binding introduced by `pattern` has surface type
+    /// `Sender` / `Receiver` — a channel end. Keyed off the typechecker's
+    /// `pattern_binding_types` (the same span-stable table codegen consults to
+    /// emit the scope-exit `DropChannelEnd`), so it fires for both the
+    /// single-binding `let rx = after(…)` and the `let (tx, rx) = Channel.new()`
+    /// destructure.
+    ///
+    /// Used by `find_parallel_groups` to keep a statement that *produces* a
+    /// channel-end binding out of auto-par groups. `stmt_has_channel_op`
+    /// already excludes a statement that performs a channel op syntactically
+    /// (`Channel.new()` / `send` / `recv`), but a plain call whose RETURN is a
+    /// channel end — `std.web.time.after` returns `Receiver[()]` — is invisible
+    /// to that AST walk. Lifting such a `let` into a `__par_branch` worker
+    /// duplicates the channel end's `DropChannelEnd`: the branch writes the
+    /// {handle} back into the parent frame by bit-copy, so both the branch's
+    /// captured alloca and the parent's binding emit a `drop_receiver`, driving
+    /// the channel's `total` one below its true live-end count. On the
+    /// host-async timer path (`let rx = after(ms); rx.recv()`) that made a live
+    /// receiver read as dropped, so the host's timer `channel_send` panicked
+    /// with "send on a channel with no live receiver". Sequential is always
+    /// correct; auto-par is only an optimization.
+    pub(super) fn pattern_binds_channel_end(&self, pattern: &Pattern) -> bool {
+        let Some(types) = self.types else {
+            return false;
+        };
+        self.pattern_binding_is_channel_end(pattern, &types.pattern_binding_types)
+    }
+
+    fn pattern_binding_is_channel_end(
+        &self,
+        pattern: &Pattern,
+        binding_types: &rustc_hash::FxHashMap<SpanKey, String>,
+    ) -> bool {
+        let is_end = |p: &Pattern| {
+            matches!(
+                binding_types
+                    .get(&SpanKey::from_span(&p.span))
+                    .map(String::as_str),
+                Some("Sender") | Some("Receiver")
+            )
+        };
+        match &pattern.kind {
+            PatternKind::Binding(_) => is_end(pattern),
+            PatternKind::AtBinding { pattern: inner, .. } => {
+                is_end(pattern) || self.pattern_binding_is_channel_end(inner, binding_types)
+            }
+            PatternKind::Struct { fields, .. } => fields.iter().any(|f| {
+                f.pattern
+                    .as_ref()
+                    .is_some_and(|p| self.pattern_binding_is_channel_end(p, binding_types))
+            }),
+            PatternKind::TupleVariant { patterns, .. }
+            | PatternKind::Tuple(patterns)
+            | PatternKind::Or(patterns) => patterns
+                .iter()
+                .any(|p| self.pattern_binding_is_channel_end(p, binding_types)),
+            PatternKind::Slice { prefix, suffix, .. } => prefix
+                .iter()
+                .chain(suffix.iter())
+                .any(|p| self.pattern_binding_is_channel_end(p, binding_types)),
+            PatternKind::Wildcard | PatternKind::Literal(_) | PatternKind::RangePattern { .. } => {
+                false
+            }
+        }
+    }
+
     pub(super) fn collect_assign_target_defines(&self, expr: &Expr, defines: &mut HashSet<String>) {
         match &expr.kind {
             ExprKind::Identifier(name) => {

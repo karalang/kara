@@ -1625,6 +1625,16 @@ impl<'a> ConcurrencyChecker<'a> {
                 "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
             ),
             StmtKind::Let { pattern, value, .. } => {
+                // A `let` whose binding is a channel end (`Sender`/`Receiver`)
+                // — even when produced by a plain call whose RETURN is a
+                // channel end, e.g. `let rx = after(ms)` — must stay
+                // sequential: a `__par_branch` writeback would duplicate the
+                // end's `DropChannelEnd`. `stmt_has_channel_op` only sees a
+                // syntactic channel op, so catch the returns-a-channel-end
+                // shape here. See `pattern_binds_channel_end`.
+                if self.pattern_binds_channel_end(pattern) {
+                    info.has_channel_op = true;
+                }
                 // The pattern defines variables
                 self.collect_pattern_bindings(pattern, &mut info.defines);
                 self.collect_pattern_bindings(pattern, &mut info.let_introduced);
@@ -1652,6 +1662,10 @@ impl<'a> ConcurrencyChecker<'a> {
                 else_block,
                 ..
             } => {
+                // Channel-end binding guard — see the `StmtKind::Let` arm.
+                if self.pattern_binds_channel_end(pattern) {
+                    info.has_channel_op = true;
+                }
                 self.collect_pattern_bindings(pattern, &mut info.defines);
                 self.collect_pattern_bindings(pattern, &mut info.let_introduced);
                 self.collect_expr_reads(value, &mut info.reads);
