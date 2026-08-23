@@ -115,6 +115,45 @@ pub fn fx_hash_bytes(bytes: &[u8]) -> u64 {
     for &b in remainder {
         h = fx_add(h, u64::from(b));
     }
+    fx_finalize(h)
+}
+
+/// Final avalanche applied to every [`fx_hash_bytes`] digest.
+///
+/// WHY THIS EXISTS, and why karac's Fx digest deliberately no longer matches
+/// rustc-hash's byte for byte (B-2026-08-22-29).
+///
+/// `fx_add` ends in a multiply, and multiplication propagates bits only
+/// UPWARD: bit `i` of a product depends on bits `<= i` of the operands. So the
+/// LOW bits of an Fx digest are barely mixed -- for keys sharing a prefix and
+/// differing near the end (`key-0` .. `key-199999`), they hardly move at all.
+///
+/// That is harmless in rustc, whose table indexes from the HIGH bits. karac's
+/// open-addressed table takes the bucket index from the LOW ones
+/// (`hash & (capacity - 1)`, see `runtime/src/map.rs`), so those same weak bits
+/// choose the bucket. The measured result was `Map[String, i64, FxBuildHasher]`
+/// running 13.7x SLOWER than the SipHash-1-3 default (arm64; ~11x on x86-64) --
+/// the exact opposite of the speed-for-safety trade this hasher is offered as,
+/// with a user-written FNV-1a at parity with the default as the control.
+///
+/// Rotating the digest, or moving the bucket index to the high bits, would each
+/// fix the index while leaving the OTHER consumer weak: the control byte's tag
+/// is drawn from the high bits precisely because the index uses the low ones,
+/// and moving the index is a codegen-ABI change replicated across
+/// `src/codegen/mono.rs`, `control_flow_for.rs` and `runtime.rs` whose
+/// disagreement mode is a silently missed key. A full avalanche fixes every bit
+/// for every consumer, in one place that both backends already funnel through.
+///
+/// This is `moremur`: five dependent ALU ops, negligible against the ~10x it
+/// recovers, and Fx keeps its cheap per-byte loop, which is where its speed
+/// advantage over SipHash actually lives.
+#[inline]
+fn fx_finalize(mut h: u64) -> u64 {
+    h ^= h >> 27;
+    h = h.wrapping_mul(0x3C79_AC49_2BA7_B653);
+    h ^= h >> 33;
+    h = h.wrapping_mul(0x1C69_B3F7_4AC4_AE35);
+    h ^= h >> 27;
     h
 }
 
@@ -278,10 +317,61 @@ mod tests {
     /// slip past.
     #[test]
     fn fx_is_pinned_and_therefore_unseeded() {
+        // These are karac's OWN digests, not rustc-hash's: `fx_finalize`
+        // deliberately diverges from it (B-2026-08-22-29 -- see that fn's docs
+        // for why karac's table needs the avalanche and rustc's does not).
+        // `b""` still hashes to 0 because the avalanche fixes 0, which is the
+        // one value it cannot improve -- a pre-existing wart of the empty key,
+        // unchanged by this.
         assert_eq!(fx_hash_bytes(b""), 0x0000_0000_0000_0000);
-        assert_eq!(fx_hash_bytes(b"abc"), 0x62FD_7437_241E_1ADF);
-        assert_eq!(fx_hash_bytes(b"12345678"), 0xE871_2E7A_8344_2085);
-        assert_eq!(fx_hash_bytes(b"123456789"), 0x8980_204C_4B0A_C4D4);
+        assert_eq!(fx_hash_bytes(b"abc"), 0x8A79_FEFD_F5E0_1CA1);
+        assert_eq!(fx_hash_bytes(b"12345678"), 0xC599_2C54_F582_2138);
+        assert_eq!(fx_hash_bytes(b"123456789"), 0x8452_816B_70A2_28B3);
+    }
+
+    /// B-2026-08-22-29 — the LOW bits of an Fx digest must keep spreading as
+    /// the table grows, because karac's open-addressed table takes the bucket
+    /// index from exactly those bits (`hash & (capacity - 1)`,
+    /// `runtime/src/map.rs`).
+    ///
+    /// Pinned as a DISTRIBUTION property, not a timing one: the symptom was a
+    /// 13.7x slowdown, but a benchmark assertion would be flaky and would not
+    /// say what broke. This measures the cause.
+    ///
+    /// WHAT THE CAUSE ACTUALLY IS -- measured, because the first version of
+    /// this test asserted the wrong thing and passed with the mixer removed.
+    /// Un-finalized Fx does not merely spread the low bits thinly; it hits a
+    /// CEILING of about 1000 distinct low-bit patterns for `key-N` keys and
+    /// stays there no matter how many bits the mask exposes:
+    ///
+    ///        keys / mask      raw Fx   finalized
+    ///       4096 / 12-bit        985        2597
+    ///      16384 / 14-bit       1033       10341
+    ///     200000 / 18-bit       2057      126663
+    ///
+    /// So past ~1024 buckets a growing table cannot spread these keys at all,
+    /// and every further insert lengthens a probe chain. That is why the
+    /// slowdown scales with map size, and why a small-N test sees nothing --
+    /// at 1024 keys over a 10-bit mask the two are indistinguishable (644 vs
+    /// 632), which is exactly the trap this comment exists to stop.
+    #[test]
+    fn fx_low_bits_keep_spreading_as_the_table_grows() {
+        const N: usize = 16_384;
+        const BITS: u32 = 14;
+        let buckets: std::collections::BTreeSet<u64> = (0..N)
+            .map(|i| fx_hash_bytes(format!("key-{i}").as_bytes()) & ((1 << BITS) - 1))
+            .collect();
+        // Un-finalized Fx yields ~1033 here; a well-mixed digest yields ~10300
+        // (the coupon-collector expectation for N keys into N slots is
+        // N*(1 - 1/e) ~= 10360). The threshold sits far above the ceiling and
+        // well below the expectation, so it pins the property rather than one
+        // mixer's exact luck.
+        assert!(
+            buckets.len() > 5_000,
+            "low bits stopped spreading: {} distinct buckets for {N} \
+             prefix-sharing keys over a {BITS}-bit mask",
+            buckets.len()
+        );
     }
 
     /// The two selectors must actually select different things — otherwise
