@@ -12945,6 +12945,88 @@ fn main() {
         assert_eq!(out, Some("1\n3\n-1\n2\n".to_string()));
     }
 
+    /// B-2026-08-22-27 — an `i64`-keyed map under a non-default hasher, across
+    /// a resize. THE `Map[i64, V]` FAMILY IS MONOMORPHIZED and the other
+    /// hasher tests here are not: they use `String` keys (a different, already
+    /// correct lowering) and three entries, so none of them ever reached the
+    /// synthesized `karac_map_i64_i64_insert_old` / `_get`, and none crossed a
+    /// resize. That combination is exactly why this shipped.
+    ///
+    /// Those two bodies called a `karac_hash_<K>` symbol baked in at emission
+    /// time rather than the hash the map was CONSTRUCTED with, so a
+    /// non-default map filed keys under one hash and probed under another.
+    /// Every `len` stayed right while `contains_key` / `get` went blind.
+    ///
+    /// It looked like a large-N resize bug and is not one — it reproduces at
+    /// SIXTEEN keys. What made it look scale-dependent is that each resize
+    /// takes the slow path, which rehashes the whole table through the stored
+    /// fn and REPAIRS every misfiled key; only the keys added since the last
+    /// resize stay lost. So the damage is always a contiguous tail, and at
+    /// large N that tail begins at exactly 3/4 of capacity (196609 at
+    /// N=200000, 13567 lost at N=800000).
+    #[test]
+    fn an_fx_hashed_i64_map_finds_every_key_across_resizes() {
+        let src = "fn probe(n: i64) -> i64 {\n\
+            \x20   let mut m: Map[i64, i64, FxBuildHasher] = Map.new();\n\
+            \x20   let mut i = 0;\n\
+            \x20   while i < n { m.insert(i, i * 3); i = i + 1; }\n\
+            \x20   let mut bad = 0;\n\
+            \x20   let mut j = 0;\n\
+            \x20   while j < n {\n\
+            \x20       if not m.contains_key(j) { bad = bad + 1; }\n\
+            \x20       if m.get(j).unwrap_or(-1) != j * 3 { bad = bad + 1; }\n\
+            \x20       j = j + 1;\n\
+            \x20   }\n\
+            \x20   if m.len() != n { bad = bad + 1; }\n\
+            \x20   return bad;\n\
+            }\n\
+            fn main() {\n\
+            \x20   println(probe(16) + probe(64) + probe(100) + probe(1000));\n\
+            }\n";
+        // Pre-fix this printed 498 (3 + 15 + 3 + 231 missing, each also
+        // costing a wrong `get`); 16 alone was already broken.
+        assert_eq!(run_program(src).as_deref(), Some("0\n"));
+
+        // `Map[char, V]` shares this same emitted body — `char` lowers to
+        // LLVM i32 — so it desynced too, and needs even fewer keys to show it:
+        // 62 chars lost 13 pre-fix.
+        let chars = "fn main() {\n\
+            \x20   let mut m: Map[char, i64, FxBuildHasher] = Map.new();\n\
+            \x20   let src = \"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\";\n\
+            \x20   let mut i = 0;\n\
+            \x20   for c in src.chars() { m.insert(c, i); i = i + 1; }\n\
+            \x20   let mut bad = 0;\n\
+            \x20   for c in src.chars() { if not m.contains_key(c) { bad = bad + 1; } }\n\
+            \x20   println(bad);\n\
+            }\n";
+        assert_eq!(run_program(chars).as_deref(), Some("0\n"));
+    }
+
+    /// B-2026-08-22-27, the half that a per-hasher symbol name would NOT have
+    /// fixed: two `Map[i64, i64]` bindings with DIFFERENT hashers in one
+    /// module. They share a single `linkonce_odr` mono family by design, so
+    /// the emitted body cannot bake in either hasher — it has to read the one
+    /// the receiver was built with. Loading the stored pointer makes the
+    /// shared symbol correct for both instead of merely distinguishing them.
+    #[test]
+    fn two_maps_with_different_hashers_share_one_mono_symbol_safely() {
+        let src = "fn main() {\n\
+            \x20   let mut d: Map[i64, i64] = Map.new();\n\
+            \x20   let mut f: Map[i64, i64, FxBuildHasher] = Map.new();\n\
+            \x20   let mut i = 0;\n\
+            \x20   while i < 500 { d.insert(i, i); f.insert(i, i * 2); i = i + 1; }\n\
+            \x20   let mut bad = 0;\n\
+            \x20   let mut j = 0;\n\
+            \x20   while j < 500 {\n\
+            \x20       if d.get(j).unwrap_or(-1) != j { bad = bad + 1; }\n\
+            \x20       if f.get(j).unwrap_or(-1) != j * 2 { bad = bad + 1; }\n\
+            \x20       j = j + 1;\n\
+            \x20   }\n\
+            \x20   println(bad);\n\
+            }\n";
+        assert_eq!(run_program(src).as_deref(), Some("0\n"));
+    }
+
     /// A `Set[T, H]` takes the selector in its own trailing position, and an
     /// Fx-hashed set is still a set.
     #[test]
@@ -62805,11 +62887,24 @@ fn main() {
 
     #[test]
     fn test_ir_map_i64_i64_insert_body_has_inline_probe() {
-        // Slice 1b.2b — the mono insert_old body inlines the
-        // load-factor check, the FNV-1a hash call (via direct call
-        // to `karac_hash_i64` rather than through the runtime's
-        // function-pointer dispatch), and the linear-probe + i64
-        // eq loop. Pin the new body shape.
+        // Slice 1b.2b — the mono insert_old body inlines the load-factor
+        // check, the hash call, and the linear-probe + i64 eq loop. Pin that
+        // body shape.
+        //
+        // B-2026-08-22-27 CHANGED WHAT THE HASH ASSERTION SAYS. This test used
+        // to require a DIRECT call to `karac_hash_i64`, "rather than through
+        // the runtime's function-pointer dispatch" — and that requirement was
+        // the bug, pinned. Baking one hash symbol into a body shared by every
+        // `Map[i64, i64]` made a non-default-hasher map file keys under one
+        // hash and probe under another, silently losing a contiguous tail of
+        // them from as few as 16 keys.
+        //
+        // The hash is now loaded from the map's control block and called
+        // indirectly, exactly as the Set monos and the String-key get already
+        // did. What this test is actually FOR is unchanged and still asserted
+        // below: the body inlines the probe rather than delegating to the
+        // erased runtime. That is where the family's win comes from; the hash
+        // was never the inlined part that mattered.
         let ir = ir_for(
             r#"
 fn main() {
@@ -62845,10 +62940,16 @@ fn main() {
             "mono insert should have fast/slow path basic blocks; body:\n{}",
             body
         );
-        // Direct call to karac_hash_i64 (not function-pointer dispatch).
+        // The hash comes from the map's OWN stored `hash_fn` (offset 56),
+        // called indirectly — not from a symbol baked in at emission time.
         assert!(
-            body.contains("call i64 @karac_hash_i64"),
-            "mono insert fast path should call karac_hash_i64 directly; body:\n{}",
+            body.contains("i64 56") && body.contains("hash.fn"),
+            "mono insert should load the stored hash_fn from the control block; body:\n{}",
+            body
+        );
+        assert!(
+            !body.contains("call i64 @karac_hash_"),
+            "mono insert must NOT call a baked hash symbol — that is B-2026-08-22-27; body:\n{}",
             body
         );
         // Probe loop: status byte load + 3-way switch on EMPTY /
@@ -62964,9 +63065,20 @@ fn main() {
             }
         }
         let body = body_lines.join("\n");
+        // B-2026-08-22-27 — the hash is the map's stored `hash_fn`, not a
+        // baked `karac_hash_i32`. The old assertion is worth remembering for
+        // the reason it was written: `char` and `i32` keys share this one body
+        // because both hashed "FNV-1a over 4 bytes ... identical output for
+        // identical input". True of the default hasher and of nothing else, so
+        // a `Map[char, V, H]` desynced exactly as the i64 family did.
         assert!(
-            body.contains("@karac_hash_i32"),
-            "i32 mono insert fast path should call karac_hash_i32 directly; body:\n{}",
+            body.contains("i64 56") && body.contains("hash.fn"),
+            "i32 mono insert should load the stored hash_fn from the control block; body:\n{}",
+            body
+        );
+        assert!(
+            !body.contains("call i64 @karac_hash_"),
+            "i32 mono insert must NOT call a baked hash symbol (B-2026-08-22-27); body:\n{}",
             body
         );
         assert!(
@@ -62979,12 +63091,15 @@ fn main() {
     #[test]
     fn test_ir_map_i64_i64_get_uses_mono_symbol_with_inline_probe() {
         // Slice 1b.3 — Map[i64, i64].get routes through the mono
-        // `karac_map_i64_i64_get` symbol with the same inline-probe
-        // shape as insert_old: direct `karac_hash_i64` call, inline
-        // status `load i8`, inline `icmp eq i64`. Get has no
-        // load-factor branch (never resizes) and no tombstone-
-        // tracking PHI — simpler than insert_old but same hot-path
-        // pattern.
+        // `karac_map_i64_i64_get` symbol with the same inline-probe shape as
+        // insert_old: inline status `load i8`, inline `icmp eq i64`. Get has
+        // no load-factor branch (never resizes) and no tombstone-tracking PHI
+        // — simpler than insert_old but the same hot-path pattern.
+        //
+        // B-2026-08-22-27 — the hash is loaded from the map's control block
+        // and called indirectly, matching insert_old. The two MUST agree: a
+        // get that probed with a different hash than insert filed under would
+        // miss every key, which is half of what that row measured.
         let ir = ir_for(
             r#"
 fn main() {
@@ -63033,8 +63148,13 @@ fn main() {
         }
         let body = body_lines.join("\n");
         assert!(
-            body.contains("call i64 @karac_hash_i64"),
-            "mono get should call karac_hash_i64 directly; body:\n{}",
+            body.contains("i64 56") && body.contains("hash.fn"),
+            "mono get should load the stored hash_fn from the control block; body:\n{}",
+            body
+        );
+        assert!(
+            !body.contains("call i64 @karac_hash_"),
+            "mono get must NOT call a baked hash symbol (B-2026-08-22-27); body:\n{}",
             body
         );
         assert!(

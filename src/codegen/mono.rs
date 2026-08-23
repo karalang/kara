@@ -4457,16 +4457,6 @@ impl<'ctx> super::Codegen<'ctx> {
         let val_arg = f.get_nth_param(2).unwrap().into_int_value();
         let out_old_arg = f.get_nth_param(3).unwrap().into_pointer_value();
 
-        // Match the mangle-token used by `mono_map_cache_key` so the
-        // helper name aligns with the symbol family. Both `char` (4-
-        // byte) and `i32` keys hash via `karac_hash_i32` here even
-        // though the erased fallback's stored function-pointer might
-        // be `karac_hash_char` — both are FNV-1a over 4 bytes and
-        // produce identical output for identical input, so cross-
-        // path consistency holds.
-        let hash_name = self.llvm_type_to_mangle_str(key_ty);
-        let hash_fn = self.emit_hash_fn_for_type(&hash_name, key_ty);
-
         let entry_bb = self.context.append_basic_block(f, "entry");
         let slow_bb = self.context.append_basic_block(f, "slow_path");
         let fast_bb = self.context.append_basic_block(f, "fast_path");
@@ -4609,14 +4599,54 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap()
             .into_pointer_value();
 
-        // Compute hash via direct call to karac_hash_<K>. Stack-
-        // alloca + store + call matches the existing erased path's
-        // hash exactly (same FNV-1a basis + prime, same byte order).
+        // B-2026-08-22-27 — load the Map's STORED `hash_fn` and call it
+        // indirectly, exactly as the Set monos and the String-key Map get
+        // already do. This body used to call a `karac_hash_<K>` symbol baked in
+        // at emission time, on the reasoning (still in the git history) that it
+        // "matches the existing erased path's hash exactly". That was true while
+        // exactly one hasher existed; `Map[K, V, H]` falsified it silently.
+        //
+        // WHAT WENT WRONG. The hasher is a CONSTRUCTION-time decision: `Map.new`
+        // synthesizes the hash fn for the declared `H` and stores the pointer in
+        // the control block, and every erased-path operation — `contains_key`,
+        // `get`, and crucially `resize`/`rehash_from` — calls through it. This
+        // fast path called the DEFAULT hash instead, so a non-default map's
+        // fast-path inserts filed keys under one hash while every lookup probed
+        // under another.
+        //
+        // The failure had a distinctive shape worth recording, because it looks
+        // like a resize bug and is not one: each resize takes the SLOW path,
+        // which rehashes the whole table through the stored fn and so REPAIRS
+        // every previously-misfiled key. Only the keys inserted since the last
+        // resize stay lost — a contiguous tail beginning at exactly 3/4 of the
+        // stalled capacity (196609 at N=200000, 393217 at 400000, 786433 at
+        // 800000). `len` counts them, `contains_key` cannot find them.
+        //
+        // The hash is now the only indirect call in the probe; the eq and the
+        // bucket walk stay inlined, which is where this family's win actually
+        // comes from (the erased path pays an FFI boundary per operation).
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let hash_fn_ty = i64_t.fn_type(&[ptr_ty.into()], false);
+        let hash_fn_pp = unsafe {
+            self.builder
+                .build_in_bounds_gep(
+                    i8_t,
+                    map_arg,
+                    &[i64_t.const_int(Self::KARAC_MAP_HASH_FN_OFFSET, false)],
+                    "hash.fn.pp",
+                )
+                .unwrap()
+        };
+        let hash_fn_ptr = self
+            .builder
+            .build_load(ptr_ty, hash_fn_pp, "hash.fn")
+            .unwrap()
+            .into_pointer_value();
         let hash_key_slot = self.builder.build_alloca(key_ty, "hash.key.slot").unwrap();
         self.builder.build_store(hash_key_slot, key_arg).unwrap();
         let hash = self
             .builder
-            .build_call(hash_fn, &[hash_key_slot.into()], "hash")
+            .build_indirect_call(hash_fn_ty, hash_fn_ptr, &[hash_key_slot.into()], "hash")
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
@@ -4884,9 +4914,6 @@ impl<'ctx> super::Codegen<'ctx> {
         let key_arg = f.get_nth_param(1).unwrap().into_int_value();
         let out_val_arg = f.get_nth_param(2).unwrap().into_pointer_value();
 
-        let hash_name = self.llvm_type_to_mangle_str(key_ty);
-        let hash_fn = self.emit_hash_fn_for_type(&hash_name, key_ty);
-
         let entry_bb = self.context.append_basic_block(f, "entry");
         let probe_cond_bb = self.context.append_basic_block(f, "probe.cond");
         let probe_body_bb = self.context.append_basic_block(f, "probe.body");
@@ -4946,11 +4973,32 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_load(self.context.ptr_type(AddressSpace::default()), kv_pp, "kv")
             .unwrap()
             .into_pointer_value();
+        // B-2026-08-22-27 — the read-side twin of the insert body's stored-hash
+        // load. A `get` that probed with a different hash than `insert` filed
+        // under would miss every key; both now read the one pointer the map was
+        // constructed with.
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let hash_fn_ty = i64_t.fn_type(&[ptr_ty.into()], false);
+        let hash_fn_pp = unsafe {
+            self.builder
+                .build_in_bounds_gep(
+                    i8_t,
+                    map_arg,
+                    &[i64_t.const_int(Self::KARAC_MAP_HASH_FN_OFFSET, false)],
+                    "hash.fn.pp",
+                )
+                .unwrap()
+        };
+        let hash_fn_ptr = self
+            .builder
+            .build_load(ptr_ty, hash_fn_pp, "hash.fn")
+            .unwrap()
+            .into_pointer_value();
         let hash_key_slot = self.builder.build_alloca(key_ty, "hash.key.slot").unwrap();
         self.builder.build_store(hash_key_slot, key_arg).unwrap();
         let hash = self
             .builder
-            .build_call(hash_fn, &[hash_key_slot.into()], "hash")
+            .build_indirect_call(hash_fn_ty, hash_fn_ptr, &[hash_key_slot.into()], "hash")
             .unwrap()
             .try_as_basic_value()
             .unwrap_basic()
