@@ -13,6 +13,16 @@
 //! conflicts with itself across tasks — each task holds a disjoint
 //! instance, semantically.
 //!
+//! Despite the module name, the walker here serves TWO rules: the
+//! module-binding attribution described above, and the function-as-value
+//! effect edges of B-2026-08-23-7 (a mention of a free function in value
+//! position contributes its effects to the enclosing function). They share
+//! one traversal because both need the same two things — a shadow stack over
+//! every binding form, and an exhaustive `walk_expr` — and the traversal,
+//! not the recording, is the cost. Each rule's recording is independently
+//! switchable: `ModBindingSynthWalker::new` takes both tables, and either
+//! may be empty.
+//!
 //! Wiring: a per-binding pair of synthetic "callee" keys
 //! (`__modbind_read.<NAME>` / `__modbind_write.<NAME>`) is seeded
 //! into `inferred_effects` at start-of-check with the appropriate
@@ -24,7 +34,7 @@
 //! the `writes(BINDING_resource)`), keeping conflict analysis
 //! unchanged.
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::intern::{Interner, Symbol};
 
@@ -476,7 +486,50 @@ impl<'a> super::EffectChecker<'a> {
         if self.modbind_let_mut.is_empty() {
             return Vec::new();
         }
-        let mut walker = ModBindingSynthWalker::new(&self.modbind_let_mut, &self.interner);
+        static NO_FNS: std::sync::OnceLock<FxHashSet<Symbol>> = std::sync::OnceLock::new();
+        let mut walker = ModBindingSynthWalker::new(
+            &self.modbind_let_mut,
+            &self.interner,
+            NO_FNS.get_or_init(FxHashSet::default),
+        );
+        for p in param_names {
+            walker.push_shadow(p.clone());
+        }
+        walker.walk_block(block);
+        walker.calls
+    }
+
+    /// Function-as-value call edges for one body (B-2026-08-23-7): every
+    /// identifier in value position that names a free function, minus the
+    /// ones a local binding shadows.
+    ///
+    /// Computed ONCE per function and cached in
+    /// `EffectChecker::fn_value_ref_calls` rather than recomputed at each
+    /// use. The edges depend only on the body, but the two consumers ask
+    /// repeatedly: `build_call_graph` runs four times per program (bounds,
+    /// GPU gate, target gate, inference) and `infer_function_effects` runs
+    /// once per convergence pass per SCC member. Walking per request cost
+    /// 15–47% of effectcheck time (mesh n=1000: 8.51 → 11.94 ms); caching
+    /// gives it back.
+    ///
+    /// Reuses the modbind walker with an empty binding table — see
+    /// `ModBindingSynthWalker::fn_value_refs` for why that walk rather than
+    /// a fresh one.
+    pub(crate) fn collect_fn_value_ref_calls_in_block(
+        &self,
+        block: &Block,
+        param_names: &[String],
+    ) -> Vec<(Symbol, Span)> {
+        if self.fn_value_ref_syms.is_empty() {
+            return Vec::new();
+        }
+        static NO_BINDINGS: std::sync::OnceLock<FxHashMap<Symbol, ModBindingInfo>> =
+            std::sync::OnceLock::new();
+        let mut walker = ModBindingSynthWalker::new(
+            NO_BINDINGS.get_or_init(FxHashMap::default),
+            &self.interner,
+            &self.fn_value_ref_syms,
+        );
         for p in param_names {
             walker.push_shadow(p.clone());
         }
@@ -526,8 +579,18 @@ impl<'a> super::EffectChecker<'a> {
         let bounds: FxHashMap<String, Vec<TraitBound>> = FxHashMap::default();
         let direct_calls = self.collect_calls_in_block(block, &bounds);
         let synth_calls = self.collect_modbind_synth_calls_in_block(block, &[]);
+        // Function-as-value edges belong here too (B-2026-08-23-7): a par
+        // block that reaches a module-binding writer through a VALUE rather
+        // than a direct call is the same conflict, and the §1328 rule would
+        // otherwise miss it for exactly the reason the public-boundary check
+        // did.
+        let fn_value_calls = self.collect_fn_value_ref_calls_in_block(block, &[]);
         let mut effects: Vec<Effect> = Vec::new();
-        for (callee, _span) in direct_calls.into_iter().chain(synth_calls) {
+        for (callee, _span) in direct_calls
+            .into_iter()
+            .chain(synth_calls)
+            .chain(fn_value_calls)
+        {
             for e in self.callee_effect_sets(callee).iter() {
                 if !effects.contains(e) {
                     effects.push(e.clone());
@@ -1263,15 +1326,32 @@ fn collect_par_in_expr(expr: &Expr, out: &mut Vec<(Block, Span)>) {
 struct ModBindingSynthWalker<'a> {
     bindings: &'a FxHashMap<Symbol, ModBindingInfo>,
     interner: &'a Interner,
+    /// Free-function symbols to treat as effect-carrying when mentioned in
+    /// VALUE position (B-2026-08-23-7). Empty on the par-conflict path,
+    /// which walks a block for module-binding writes only.
+    ///
+    /// This walk is reused rather than duplicated because it already has the
+    /// two properties the function-value rule needs and a fresh walker would
+    /// have to re-earn: a shadow stack covering every binding form (`let`,
+    /// match arm, `if`/`while let`, `for`, closure params), and an
+    /// EXHAUSTIVE `walk_expr` match with no catch-all — so a new
+    /// `ExprKind` is a compile error here rather than a silently unwalked
+    /// path that leaks an effect.
+    fn_value_refs: &'a FxHashSet<Symbol>,
     shadow: Vec<String>,
     calls: Vec<(Symbol, Span)>,
 }
 
 impl<'a> ModBindingSynthWalker<'a> {
-    fn new(bindings: &'a FxHashMap<Symbol, ModBindingInfo>, interner: &'a Interner) -> Self {
+    fn new(
+        bindings: &'a FxHashMap<Symbol, ModBindingInfo>,
+        interner: &'a Interner,
+        fn_value_refs: &'a FxHashSet<Symbol>,
+    ) -> Self {
         ModBindingSynthWalker {
             bindings,
             interner,
+            fn_value_refs,
             shadow: Vec::new(),
             calls: Vec::new(),
         }
@@ -1293,11 +1373,60 @@ impl<'a> ModBindingSynthWalker<'a> {
     }
 
     fn record_read(&mut self, name: &str, span: &Span) {
+        self.record_modbind_read(name, span);
+        self.record_fn_value_ref(name, span);
+    }
+
+    /// The module-binding half of [`Self::record_read`], without the
+    /// function-as-value half. Used for the callee of a direct call: calling
+    /// a fn-typed module binding still READS that binding, but naming a
+    /// function in order to call it is not a use of it as a value — the
+    /// ordinary call graph already carries that edge.
+    fn record_modbind_read(&mut self, name: &str, span: &Span) {
         if self.is_shadowed(name) {
             return;
         }
         if let Some(info) = self.let_mut_binding(name) {
             self.calls.push((info.read_key, *span));
+        }
+    }
+
+    /// A mention of a free function in value position contributes that
+    /// function's effects to the enclosing function (B-2026-08-23-7).
+    ///
+    /// Deliberately an OVER-approximation: `let f = save;` attributes
+    /// `save`'s effects even if `f` is never called. That direction is the
+    /// safe one — declaring an effect a function does not perform is
+    /// accepted (verified: a `pub fn` declaring an unperformed
+    /// `writes(UserDB)` passes), so the cost of a spurious attribution is an
+    /// annotation, while the cost of a missing one is a public function
+    /// silently performing an undeclared effect. Precise tracking would need
+    /// the effect row on `Type::Function` that design.md § First-Class
+    /// Functions describes and the type system does not yet carry.
+    ///
+    /// Shadowing is what makes this safe to do by name: `is_shadowed` has
+    /// already rejected identifiers bound locally, so a `let save = 5` in
+    /// scope does not masquerade as the function.
+    ///
+    /// A direct call's callee does NOT reach here — `walk_callee` routes it
+    /// past this — because naming a function in order to call it is not a
+    /// use of it as a value, and the ordinary call graph already holds that
+    /// edge. See `walk_callee` for what recording it cost.
+    fn record_fn_value_ref(&mut self, name: &str, span: &Span) {
+        if self.fn_value_refs.is_empty() {
+            return;
+        }
+        // Guarded HERE, not only in the caller: `record_modbind_read` holds
+        // its own copy of this check, so a shared guard in `record_read`
+        // would leave this half unprotected the moment the two are called
+        // separately — which `walk_callee` now does.
+        if self.is_shadowed(name) {
+            return;
+        }
+        if let Some(sym) = self.interner.get(name) {
+            if self.fn_value_refs.contains(&sym) {
+                self.calls.push((sym, *span));
+            }
         }
     }
 
@@ -1386,6 +1515,29 @@ impl<'a> ModBindingSynthWalker<'a> {
         }
     }
 
+    /// The callee of a direct call `f(x)`. A bare name here is being CALLED,
+    /// not used as a value, so it takes the module-binding read but not a
+    /// function-as-value edge (B-2026-08-23-7).
+    ///
+    /// Skipping it is a correctness no-op — `collect_calls_in_expr` already
+    /// records the same edge, and `infer_function_effects` deduped the
+    /// duplicate — but not a performance one: recording it made every direct
+    /// call in the program emit a second, redundant graph edge, roughly
+    /// doubling the call graph. That cost 15–47% of effectcheck time on
+    /// call-graph-heavy programs, which is what these benchmarks are.
+    ///
+    /// Anything that is not a bare name (`(h.f)(x)`, `v[0](x)`) walks
+    /// normally: its inner identifiers ARE value uses.
+    fn walk_callee(&mut self, callee: &Expr) {
+        match &callee.kind {
+            ExprKind::Identifier(name) => self.record_modbind_read(name, &callee.span),
+            ExprKind::Path { segments, .. } if segments.len() == 1 => {
+                self.record_modbind_read(&segments[0], &callee.span)
+            }
+            _ => self.walk_expr(callee),
+        }
+    }
+
     fn walk_expr(&mut self, expr: &Expr) {
         match &expr.kind {
             ExprKind::Identifier(name) => {
@@ -1419,7 +1571,7 @@ impl<'a> ModBindingSynthWalker<'a> {
                 }
             }
             ExprKind::Call { callee, args } => {
-                self.walk_expr(callee);
+                self.walk_callee(callee);
                 for a in args {
                     self.walk_expr(&a.value);
                 }

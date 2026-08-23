@@ -745,6 +745,24 @@ pub struct EffectChecker<'a> {
     /// per call site — that scan (with a `format!` per probe) was the single
     /// largest front-end cost on call-graph-heavy programs.
     pub(crate) method_name_index: FxHashMap<Symbol, Vec<Symbol>>,
+    /// Free-function names reachable as a *value* (B-2026-08-23-7).
+    ///
+    /// The effect model is name-based: effects flow along call-graph edges
+    /// keyed by function symbol. A function mentioned as a VALUE — `let f =
+    /// save`, `v.push(save)`, `Holder { f: save }`, `fn get() { save }` —
+    /// leaves that model entirely, so the callee's declared effects used to
+    /// reach nobody and a `pub fn` could perform them with no declaration.
+    ///
+    /// The walker in `modbind_synth.rs` consults this at every identifier in
+    /// value position and pushes a synthetic call edge, so the existing
+    /// propagation carries the effect exactly as a direct call would. Holds
+    /// `function_bodies` keys only: `method_bodies` is keyed `Type.method`,
+    /// which a bare identifier can never name.
+    pub(crate) fn_value_ref_syms: FxHashSet<Symbol>,
+    /// Per-function function-as-value call edges (B-2026-08-23-7), computed
+    /// once from `fn_value_ref_syms` and reused by both consumers. See
+    /// `collect_fn_value_ref_calls_in_block` for why this is cached.
+    pub(crate) fn_value_ref_calls: FxHashMap<Symbol, Vec<(Symbol, Span)>>,
     /// Functions that call polymorphic (`with _`) callees.
     pub(crate) calls_polymorphic: FxHashSet<Symbol>,
     /// Functions that explicitly declare `with _` (anonymous polymorphism)
@@ -924,6 +942,8 @@ impl<'a> EffectChecker<'a> {
             function_bodies: FxHashMap::default(),
             method_bodies: FxHashMap::default(),
             method_name_index: FxHashMap::default(),
+            fn_value_ref_syms: FxHashSet::default(),
+            fn_value_ref_calls: FxHashMap::default(),
             calls_polymorphic: FxHashSet::default(),
             fn_uses_with_underscore: FxHashSet::default(),
             fn_bounds_index: FxHashMap::default(),
@@ -2151,6 +2171,26 @@ impl<'a> EffectChecker<'a> {
         // insert above, first-insert-wins to mirror the old build over
         // the final key set) are complete from here on — nothing inserts
         // after this pass.
+
+        // Function-as-value mention table (B-2026-08-23-7). Built here
+        // because `function_bodies` is final at this point, and the walker
+        // that consults it needs a membership test, not the bodies.
+        self.fn_value_ref_syms = self.function_bodies.keys().copied().collect();
+        if !self.fn_value_ref_syms.is_empty() {
+            let handles: Vec<(Symbol, FnHandle<'a>)> = self
+                .function_bodies
+                .iter()
+                .chain(self.method_bodies.iter())
+                .map(|(&n, f)| (n, f.clone()))
+                .collect();
+            for (name, f) in handles {
+                let params = self.function_param_names(&f);
+                let edges = self.collect_fn_value_ref_calls_in_block(&f.body, &params);
+                if !edges.is_empty() {
+                    self.fn_value_ref_calls.insert(name, edges);
+                }
+            }
+        }
     }
 
     fn is_transparent_verb(&self, verb: &EffectVerbKind) -> bool {

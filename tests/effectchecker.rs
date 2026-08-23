@@ -10159,3 +10159,199 @@ fn test_public_fn_must_declare_channel_send() {
          }",
     );
 }
+
+// ── Function values carry their effects (B-2026-08-23-7) ────────
+//
+// design.md § First-Class Functions: "**Effects carry through.** A function
+// with effects produces a typed function value that includes those effects
+// … calling `f` carries the `writes(UserDB)` effect, SAME AS CALLING SAVE
+// DIRECTLY."
+//
+// The effect model is name-based — effects flow along call-graph edges keyed
+// by function symbol — so a function reached as a VALUE left the model and
+// its declared effects reached nobody. That made a public function's effect
+// declaration, which § Contracts calls the commitment that justifies having
+// no `forbids(verb)` predicate, bypassable in two lines with no diagnostic.
+//
+// The rule: a mention of a free function in value position contributes its
+// effects to the enclosing function. Each test below fails without it.
+
+/// A `resource` plus one effectful function, shared by the tests below.
+/// `-> i64` deliberately, NOT `-> ()`: an explicit unit return type had its
+/// own miscompile (B-2026-08-23-6), and the original probe of this bug was
+/// re-run without it so the two could not contaminate each other.
+const FN_VALUE_PRELUDE: &str = "resource UserDB;\n\
+     fn save(n: i64) -> i64 with writes(UserDB) { n + 1 }\n";
+
+fn assert_leaks_writes(body: &str, what: &str) {
+    let src = format!("{FN_VALUE_PRELUDE}{body}");
+    let errs = effectcheck_errors(&src);
+    assert!(
+        errs.iter()
+            .any(|e| e.to_string().contains("writes(UserDB)")),
+        "{what}: expected the declared effect to reach the public function, got: {errs:?}"
+    );
+}
+
+#[test]
+fn test_effect_carries_through_let_binding() {
+    assert_leaks_writes(
+        "pub fn via_value() -> i64 { let f = save; f(7) }",
+        "single let binding",
+    );
+}
+
+#[test]
+fn test_effect_carries_through_chained_let_bindings() {
+    assert_leaks_writes(
+        "pub fn two_hop() -> i64 { let f = save; let g = f; g(7) }",
+        "rebound twice",
+    );
+}
+
+/// Both annotation spellings. The HONEST one (`with writes(UserDB)` on the
+/// binding's type) leaked just as the bare one did, so "write the effect in
+/// the type" was never a workaround; the LYING one (a bare `Fn(i64) -> i64`,
+/// which per the slot rule declares purity) must not launder the effect away.
+#[test]
+fn test_effect_carries_through_annotated_binding() {
+    assert_leaks_writes(
+        "pub fn p1() -> i64 { let f: Fn(i64) -> i64 with writes(UserDB) = save; f(7) }",
+        "binding annotated with the honest effect",
+    );
+    assert_leaks_writes(
+        "pub fn p2() -> i64 { let f: Fn(i64) -> i64 = save; f(7) }",
+        "binding annotated as pure",
+    );
+}
+
+/// The container leg was worse than silent: it reported `[panics]` — the
+/// indexing panic — while dropping the callee's `writes(UserDB)`, so the
+/// diagnostic read as an authoritative effect list that was wrong. Assert
+/// BOTH verbs, since the bug was a partial set rather than an empty one.
+#[test]
+fn test_effect_carries_through_container_element() {
+    let errs = effectcheck_errors(&format!(
+        "{FN_VALUE_PRELUDE}\
+         pub fn via_vec() -> i64 {{\n\
+         \x20   let mut v: Vec[Fn(i64) -> i64] = Vec.new();\n\
+         \x20   v.push(save);\n\
+         \x20   v[0](7)\n\
+         }}"
+    ));
+    let msg = errs
+        .iter()
+        .map(|e| e.to_string())
+        .collect::<Vec<_>>()
+        .join(" | ");
+    assert!(
+        msg.contains("writes(UserDB)"),
+        "container element dropped the callee's effect: {msg}"
+    );
+    assert!(
+        msg.contains("panics"),
+        "the pre-existing panics effect must survive alongside it: {msg}"
+    );
+}
+
+#[test]
+fn test_effect_carries_through_struct_field() {
+    assert_leaks_writes(
+        "struct Holder { f: Fn(i64) -> i64 }\n\
+         pub fn p4() -> i64 { let h = Holder { f: save }; (h.f)(7) }",
+        "function stored in a struct field",
+    );
+}
+
+/// Reached through a RETURN value: `get` mentions `save`, so `get` acquires
+/// the effect and its caller inherits it transitively. This is the shape that
+/// needs the edge in `build_call_graph` and not merely in
+/// `infer_function_effects` — a single-member SCC is inferred in one pass on
+/// the premise that every callee is already resolved.
+#[test]
+fn test_effect_carries_through_returned_function() {
+    assert_leaks_writes(
+        "fn get() -> Fn(i64) -> i64 { save }\n\
+         pub fn p5() -> i64 { let f = get(); f(7) }",
+        "function returned out of a function",
+    );
+}
+
+/// The false positive the rule could create: attribution is by NAME, so a
+/// local binding that happens to share a function's name must not be mistaken
+/// for the function. Every binding form the walker's shadow stack covers.
+///
+/// Non-vacuity is pinned by `test_unshadowed_mention_is_attributed` below —
+/// without it these five would also pass with attribution switched off
+/// entirely.
+#[test]
+fn test_function_value_shadowing_does_not_attribute() {
+    for (body, what) in [
+        ("pub fn s1() -> i64 { let save = 5; save + 1 }", "let"),
+        ("pub fn s2(save: i64) -> i64 { save + 1 }", "parameter"),
+        (
+            "pub fn s3() -> i64 { let g = |save: i64| save + 1; g(4) }",
+            "closure parameter",
+        ),
+        (
+            "pub fn s4(o: Option[i64]) -> i64 { match o { Some(save) => save + 1, None => 0 } }",
+            "match-arm binding",
+        ),
+        (
+            "pub fn s5() -> i64 { let mut t = 0; for save in 0..3 { t = t + save; } t }",
+            "for-loop pattern",
+        ),
+    ] {
+        // `effectcheck_ok` rather than a filtered `effectcheck_errors`: these
+        // programs are entirely clean, and that helper PANICS when there are
+        // no errors at all. The stronger assertion is also the right one — a
+        // shadowed name must produce NO diagnostic, not merely not this one.
+        let _ = what;
+        effectcheck_ok(&format!("{FN_VALUE_PRELUDE}{body}"));
+    }
+}
+
+/// The anchor that makes the shadowing test above mean something: the SAME
+/// shape with a non-colliding binding name IS attributed. If the attribution
+/// ever stops firing, this fails while the shadowing test stays green.
+#[test]
+fn test_unshadowed_mention_is_attributed() {
+    assert_leaks_writes(
+        "pub fn s1neg() -> i64 { let other = save; 5 + 1 }",
+        "unshadowed mention",
+    );
+}
+
+/// The rule attributes the MENTIONED function's effects, not "any function
+/// value is effectful" — binding a pure function stays pure. Guards against
+/// a fix that fires on the shape rather than on the callee.
+#[test]
+fn test_pure_function_value_stays_pure() {
+    effectcheck_ok(
+        "fn double(n: i64) -> i64 { n * 2 }\n\
+         pub fn n1() -> i64 { let f = double; f(7) }",
+    );
+}
+
+/// The par-block conflict rule (design.md §1328) reaches a module-binding
+/// writer through a function VALUE, not only through a direct call
+/// (B-2026-08-23-7). Without the function-as-value edges on this path the
+/// block's transitive effect set is empty and the conflict goes unreported —
+/// the same hole as the public-boundary one, in the rule next door.
+#[test]
+fn test_par_block_write_through_function_value_rejected() {
+    let errors = effectcheck_errors(
+        "let mut COUNTER: i64 = 0;\n\
+         fn bump() { COUNTER = 1; }\n\
+         fn run() { par { let f = bump; f(); } }",
+    );
+    assert!(
+        has_par_conflict_for(&errors, "COUNTER"),
+        "expected E_MODULE_BINDING_WRITE_IN_PAR when the writer is reached \
+         through a function value; got: {:?}",
+        errors
+            .iter()
+            .map(|e| (&e.kind, &e.message))
+            .collect::<Vec<_>>()
+    );
+}

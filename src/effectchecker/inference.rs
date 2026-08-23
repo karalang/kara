@@ -448,11 +448,25 @@ impl<'a> super::EffectChecker<'a> {
             .collect();
         let mut graph: FxHashMap<Symbol, Vec<(Symbol, Span)>> = FxHashMap::default();
         let empty_bounds: FxHashMap<String, Vec<TraitBound>> = FxHashMap::default();
+        // Function-as-value edges (B-2026-08-23-7) belong in the GRAPH, not
+        // only in `infer_function_effects`. A single-member SCC is inferred
+        // in ONE pass on the premise that every callee sits in an earlier
+        // SCC and is already resolved; an edge missing here breaks that
+        // premise, and a mentioned function whose own effects are INFERRED
+        // (rather than declared, hence seeded up front) would be read while
+        // still empty. Declared-effect callees would have masked this.
         for (&name, func) in &self.function_bodies {
             let bounds = self.fn_bounds_index.get(&name).unwrap_or(&empty_bounds);
             let relevant = self
                 .collect_calls_in_block(&func.body, bounds)
                 .into_iter()
+                .chain(
+                    self.fn_value_ref_calls
+                        .get(&name)
+                        .into_iter()
+                        .flatten()
+                        .copied(),
+                )
                 .filter(|(callee, _)| all_fn_names.contains(callee))
                 .collect();
             graph.insert(name, relevant);
@@ -462,6 +476,13 @@ impl<'a> super::EffectChecker<'a> {
             let relevant = self
                 .collect_calls_in_block(&func.body, bounds)
                 .into_iter()
+                .chain(
+                    self.fn_value_ref_calls
+                        .get(&name)
+                        .into_iter()
+                        .flatten()
+                        .copied(),
+                )
                 .filter(|(callee, _)| all_fn_names.contains(callee))
                 .collect();
             graph.insert(name, relevant);
@@ -522,6 +543,17 @@ impl<'a> super::EffectChecker<'a> {
             })
             .unwrap_or_default();
         calls.extend(self.collect_modbind_synth_calls_in_block(body, &param_names));
+        // Function-as-value edges (B-2026-08-23-7) ride the same channel: a
+        // mention of a free function in value position contributes its
+        // effects exactly as a direct call would. Precomputed per function,
+        // so an SCC's convergence passes re-read rather than re-walk.
+        calls.extend(
+            self.fn_value_ref_calls
+                .get(&fn_name)
+                .into_iter()
+                .flatten()
+                .copied(),
+        );
 
         // Dedupe callees in place (first call site wins — matching
         // `EffectSet::add`'s first-origin-wins semantics).
