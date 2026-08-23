@@ -27,6 +27,26 @@
 //!     bare `String`/`Vec`/`Map` param **caller-side** (caller-retains — the
 //!     callee emits no cleanup). Both free exactly once, across the call
 //!     boundary, so a per-callee comparison would false-positive on params.
+//!  4. **Fixed-array locals are excluded, and this one is a KNOWN GAP rather
+//!     than a clean alignment** (B-2026-08-23-2). The oracle schedules one
+//!     array-keyed drop for an owned `Array[T, N]` local. Codegen frees the
+//!     same element buffers, but never through an array-keyed action: it has
+//!     an array drop fn (`synthesize_array_drop_fn_te`) and uses it only for
+//!     PARAMS, so for a local the elements are discharged through whatever
+//!     owns them individually — the source bindings, or the f-string / temp
+//!     cleanups. Measured under LSan across four shapes (f-string elements,
+//!     named bindings moved in, call-result elements, and an array returned
+//!     out of its function): all clean, so this is a place-KEY mismatch, not a
+//!     leak. Comparing by place name would false-positive on every one.
+//!
+//!     Unlike rules 1-3, this exclusion does NOT reflect a genuine ownership
+//!     difference — it reflects codegen owning local arrays element-wise where
+//!     it owns param arrays whole. Closing it means making codegen emit the
+//!     array-keyed drop for locals and suppressing the element sources, at
+//!     which point this filter comes out and the class becomes gated by name
+//!     like every other. Tracked separately; the LSan array fixtures remain
+//!     the gate on the actual leak until then.
+//!
 //!  3. **Captures are modelled, not skipped.** A `spawn`-closure capture escapes
 //!     as an auto-promoted shared/RC reference, so the oracle demotes the
 //!     captured heap binding to `Borrowed` (no scope drop — codegen frees it via
@@ -158,10 +178,12 @@ pub fn differential_check_on(src: &str, tree: OracleTree) -> DiffOutcome {
     for f in &oracle.functions {
         let cg_places = cg.get(f.function.as_str());
         let fn_params = params.get(&f.function).unwrap_or(&empty);
-        // Distinct scheduled LOCAL places (dedup; params discharged caller-side).
+        // Distinct scheduled LOCAL places (dedup; params discharged caller-side,
+        // fixed arrays discharged element-wise — rules 2 and 4).
         let scheduled: BTreeSet<&str> = f
             .drops
             .iter()
+            .filter(|d| !is_fixed_array_render(&d.ty))
             .map(|d| d.place.as_str())
             .filter(|p| !fn_params.contains(*p))
             .collect();
@@ -180,6 +202,15 @@ pub fn differential_check_on(src: &str, tree: OracleTree) -> DiffOutcome {
         drops_checked,
         divergences,
     }
+}
+
+/// True for the oracle's rendered form of a fixed array — both spellings, since
+/// `Array[T, N]` renders as `Array[T]` (the const arg is dropped) and the
+/// `[T; N]` sugar renders as `[T]`. Rule 4: codegen discharges a local fixed
+/// array's elements individually rather than through an array-keyed action, so
+/// comparing this place by name is a false positive until that changes.
+fn is_fixed_array_render(ty: &str) -> bool {
+    ty.starts_with("Array[") || (ty.starts_with('[') && ty.ends_with(']'))
 }
 
 /// Parameter names of every free function and impl method in the surface tree,

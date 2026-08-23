@@ -229,6 +229,19 @@ impl TypeDb {
                 if is_pod_builtin(name) {
                     return false;
                 }
+                // B-2026-08-23-2 — the GENERIC `Array[T, N]` spelling. The
+                // `[T; N]` sugar reaches the `TypeKind::Array` arm above, but
+                // the path form parses as `Path("Array", [Type(T), Const(N)])`
+                // and used to fall all the way through to the unknown-named-
+                // type `false`, i.e. POD. A fixed array owns heap exactly when
+                // its ELEMENT does, same as the sugar; `generic_type_args`
+                // already drops the `Const(N)`, so the two spellings now agree
+                // by construction rather than by coincidence.
+                if name == "Array" {
+                    return generic_type_args(p)
+                        .iter()
+                        .any(|t| self.is_heap_guarded(t, seen));
+                }
                 // Option[T] / Result[T] own heap iff a type argument does.
                 if matches!(name, "Option" | "Result") {
                     return generic_type_args(p)
