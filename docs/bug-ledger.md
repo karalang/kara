@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 280 | 1 |
+| miscompile | 280 | 0 |
 | leak | 189 | 0 |
 | missing-feature | 157 | 2 |
 | run-vs-build | 152 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1000 | 1 |
+| codegen | 1000 | 0 |
 | typecheck | 247 | 0 |
 | interp | 175 | 1 |
 | ownership | 64 | 0 |
@@ -124,13 +124,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1509 surfaced · 5 open · 1481 fixed · 9 wontfix** (2026-05-20 → 2026-08-23). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1509 surfaced · 4 open · 1482 fixed · 9 wontfix** (2026-05-20 → 2026-08-23). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-23-6 | 2026-08-23 | codegen | high | ANY non-`main` function declared with an EXPLICIT `-> ()` return type miscompiles into UNBOUNDED RECURSION on both compiled backends. `fn f() -> () { println("x"); }` + `fn main() { f(); }` prints `x` ONCE under `--interp` and prints it forever under `karac run` until the stack guard aborts (exit 134); the AOT binary SIGSEGVs (exit 139). `karac check` reports "All checks passed." The control one character away is clean: DROP the `-> ()` and the identical program is correct on all three backends. ROOT CAUSE IS VISIBLE IN THE ONE SHAPE THAT FAILS LOUDLY -- give the body an explicit `return;` and the LLVM verifier catches it: `codegen failed: Module verification failed: "Function return type does not match operand type of return inst!\n  ret void\n i64"`. So codegen gives the function an i64 LLVM return type while emitting `ret void`; without an explicit `return` the mismatch is not caught and control runs off the end of the function. `fn main() -> ()` is UNAFFECTED (main is lowered separately), which is why this survives every hello-world smoke test. | roadmap.md |
 | B-2026-08-23-7 | 2026-08-23 | effect | high | A declared effect is LOST when a function is reached through a LET BINDING or a CONTAINER ELEMENT, so a public function's effect declaration -- "guaranteed semantics" per § Specification Layers -- is bypassable in two lines. design.md § First-Class Functions: "**Effects carry through.** A function with effects produces a typed function value that includes those effects: `let f = save;  // f: Fn(User) -> () with writes(UserDB)` -- calling f carries the writes(UserDB) effect, SAME AS CALLING SAVE DIRECTLY." Measured against a `fn save(n: i64) -> i64 with writes(UserDB)`: `pub fn direct() -> i64 { save(7) }` correctly errors `public function 'direct' performs effects [writes(UserDB)] but has no effect declaration`; `pub fn via_value() -> i64 { let f = save; f(7) }` reports "All checks passed." A second hop (`let f = save; let g = f; g(7)`) also passes. The CONTAINER leg is worse than silent -- `let mut v: Vec[Fn(i64) -> i64] = Vec.new(); v.push(save); v[0](7)` reports a PARTIAL set, `performs effects [panics]`, naming the indexing panic while dropping the callee's declared `writes(UserDB)`, so the diagnostic reads as an authoritative effect list that is wrong. | roadmap.md |
 | B-2026-08-23-8 | 2026-08-23 | effect | medium | BUILT-IN PRIMITIVE RESOURCE effects are never inferred -- stdout, stdin, stderr, env and the filesystem contribute NOTHING to any effect set, so design.md's own two I/O skeletons report the wrong answer and a `pub fn` that does I/O needs no declaration. § Standard I/O Surface states the results outright for its guessing-game skeleton ("The inferred effect set: `reads(Stdin), writes(Stdout), panics`") and its CLI skeleton ("Inferred effects: `reads(Env), reads(FileSystem), writes(Stdout), writes(Stderr), panics`"). Transcribed VERBATIM, both check clean and `karac check --output=json` reports `program_effects: []` for the first and `['panics()']` for the second. The enforcement half is missing in step: `pub fn emit() -> i64 { println("hi"); 1 }`, `pub fn read_it() { stdin.read_line(); }`, `pub fn envy() { env.args(); }` and `pub fn err_it() { eprintln("e"); }` ALL pass with no effect declaration, while the identical shape over a USER-DEFINED resource is correctly refused (`public function 'p' performs effects [writes(UserDB)] but has no effect declaration`). | roadmap.md |
 | B-2026-08-23-9 | 2026-08-23 | interp | medium | The INTERPRETER SKIPS an `errdefer` block when the function's `Err` comes from its TAIL EXPRESSION, while both compiled backends run it. `fn work() -> Result[i64, String] { errdefer { println("failed"); } defer { println("always"); } Err("bad".to_string()) }` prints `always | err bad` under `karac run --interp` and `failed | always | err bad` under `karac run` (JIT) and the AOT binary alike -- so the cleanup that the shipped binary performs is silently absent under the interpreter. `karac check` is clean. The divergence is specific to the tail-expression form: an `Err` reached via `?` short-circuit and an explicit `return Err(...)` both run the `errdefer` correctly on ALL THREE backends, and the `Ok`-from-tail control correctly skips it on all three. | roadmap.md |
@@ -154,9 +153,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1509 surfaced
 
 </details>
 
-### Fixed (1481)
+### Fixed (1482)
 
-<details><summary>1481 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1482 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -17084,6 +17083,66 @@ DOCS CORRECTED, since the stale number is what let this sit: the
 read 94. Both now state that a zero is a measurement rather than a property,
 that it has gone red once, and that when a curated gate and the corpus
 disagree the corpus is the one to believe. |
+| B-2026-08-23-6 | codegen | high | ANY non-`main` function declared with an EXPLICIT `-> ()` return type miscompiles into UNBOUNDED RECURSION on both compiled backends | FIXED by 550eeef.
+
+Two defects in the same mechanism, both necessary and disjoint. Measured by
+reverting each against a 16-program matrix (8 body shapes x explicit-vs-omitted
+annotation, plus method / fn-value / call-site / owned-locals shapes):
+types_lowering-only leaves 2 failing, exprs-only leaves 15, both leave 0.
+
+1. THE ROW'S BUG. `-> ()` parses as its OWN `TypeKind::Unit` variant, NOT as
+   the empty `Tuple` that `llvm_return_type` already mapped to void. It fell to
+   the wildcard, lowered through `llvm_type_for_type_expr`, and landed on the
+   i64 default -- so the function carried an i64 LLVM return type while its
+   body emitted `ret void`. Added the missing `TypeKind::Unit => None` arm,
+   which routes an explicit `-> ()` down the IDENTICAL path as an omitted
+   return type -- the one-character-different program that was always correct.
+   `compile_closure_fn_type` has carried the same `Unit`-is-void arm since
+   closures were added; this is that rule finally reaching the free-function
+   and method signature.
+
+   The row's diagnosis was right in full, including the detail that made it
+   findable: with an explicit `return;` the verifier caught the mismatch, and
+   without one nothing did.
+
+2. A SECOND, PRE-EXISTING DEFECT the fix surfaced. `return <unit-valued expr>;`
+   inside a VOID function emitted a value return. The TAIL-return site in
+   `functions.rs` has carried a `fn_returns_void` guard for exactly this since
+   it was written (its comment describes the identical verifier message); the
+   explicit-`return` site in `exprs.rs` never got one.
+
+   NOT INTRODUCED BY (1), and worth stating precisely because the sequence
+   looks like a regression: `fn g() { return f(); }` with the annotation
+   OMITTED failed module verification identically BEFORE any change here, so it
+   was never about `-> ()`. What (1) changed is that the ANNOTATED spelling
+   `fn g() -> () { return f(); }` stopped silently miscompiling and started
+   hitting that same pre-existing refusal -- a silent miscompile converted into
+   a loud build error, then fixed. Ordered after the `sret` arm for the reason
+   the tail site gives: an sret function's signature is also void, but the
+   struct must be stored through the result pointer first. No cleanup call in
+   the new arm -- `emit_scope_cleanup` has already run above the chain, and a
+   second walk would double free every owned local (checked under ASAN with a
+   `Drop`-bearing local and an owned String: one `D5`, no leak, no double free).
+
+WHY A HIGH-SEVERITY MISCOMPILE SURVIVED THIS LONG -- the part worth keeping.
+`-> ()` is documented in design.md (§ First-Class Functions' `fn save(u: User)
+-> () with writes(UserDB)`, which is what the probe was transcribing when it
+found this) and used by ZERO `.kara` files anywhere: 0 of 427 in this repo, 0
+of 917 in kara-katas. A spec'd surface with no corpus coverage at all. The
+regression tests added here are its first coverage.
+
+The body matrix also mattered for a second reason: ONE shape masked the bug.
+`if true { println("x"); }` supplied the missing terminator and was GREEN
+before the fix, so a single-shape test had roughly a 1-in-8 chance of proving
+nothing. That shape is kept in the test deliberately.
+
+MEASURED: all 16 programs byte-identical across interpreter, JIT, AOT and
+`KARAC_AUTO_PAR=0`; ASAN+LSan clean on the owned-locals path. Four regression
+tests in `tests/codegen.rs`, each pinned by reverting the fix it covers (all
+four fail on the types_lowering revert; the two return-of-unit-call tests fail
+on the exprs revert; none survives both). Each `-> ()` case additionally
+asserts its output equals the annotation-dropped control, so the tests check
+the two spellings AGREE rather than just matching a literal. |
 
 </details>
 
