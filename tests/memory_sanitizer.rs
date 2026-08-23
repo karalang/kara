@@ -52247,4 +52247,38 @@ fn main() {
             "asan_nonscalar_array_temp_returning_an_element_frees_only_the_rest",
         );
     }
+
+    /// B-2026-08-22-18 follow-up — the NESTED-passing guard for the owned
+    /// fixed-array element drop. An owned `Array[String, N]` param moved BY VALUE
+    /// into a second callee (`outer(a)` → `inner(a)`) transfers ownership: the
+    /// caller's element drop is retracted at the call site
+    /// (`suppress_array_binding_move_arg`) so the two frames don't both free the
+    /// shared buffers. Without that retraction this double-freed (leak → double
+    /// free is strictly worse); without the callee drop it would leak the
+    /// non-returned element. `inner` returns element 1, so element 0 is freed by
+    /// `inner`'s drop and element 1 flows out to `last` — each buffer freed once.
+    #[test]
+    fn asan_array_owned_param_moved_into_nested_call_is_balanced() {
+        assert_clean_asan_run(
+            r#"fn inner(a: Array[String, 2]) -> String { return a[1]; }
+fn outer(a: Array[String, 2]) -> String { return inner(a); }
+fn mk(i: i64) -> Array[String, 2] { return [f"a{i}", f"b{i}"]; }
+
+fn main() {
+    let mut i = 0i64;
+    let mut n = 0i64;
+    let mut last: String = "";
+    while i < 50i64 {
+        last = outer(mk(i));
+        n = n + last.len();
+        i = i + 1i64;
+    }
+    println(last);
+    println(n);
+}
+"#,
+            &["b49", "140"],
+            "asan_array_owned_param_moved_into_nested_call_is_balanced",
+        );
+    }
 }

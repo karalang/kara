@@ -1000,6 +1000,72 @@ impl<'ctx> super::Codegen<'ctx> {
         Some(drop_fn)
     }
 
+    /// The fixed-array sibling of [`Self::synthesize_tuple_drop_fn_te`]
+    /// (B-2026-08-22-18 follow-up): a drop fn for an owned `Array[T, N]` whose
+    /// element `T` owns heap. It frees each of the `N` elements by iterating the
+    /// `[N x T]` aggregate with an array-index GEP and calling the element type's
+    /// own drop fn ([`Self::emit_drop_fn_for_type_expr`], the same per-element
+    /// drop `emit_tuple_drop_fn` calls per field) — cap-guarded, so a disarmed
+    /// (cap-zeroed) element is skipped, exactly as the struct/tuple move-out
+    /// disarm relies on.
+    ///
+    /// A fixed array is NOT a tuple at the LLVM level (`[N x T]` vs `{T, …}`), so
+    /// this cannot reuse `emit_tuple_elem_drops`, which GEPs struct fields; the
+    /// array needs the `[i]` stride. Memoized by the element signature + `N`.
+    /// `None` when `N == 0` or the element owns no drop-bearing heap.
+    pub(super) fn synthesize_array_drop_fn_te(
+        &mut self,
+        elem_ty: BasicTypeEnum<'ctx>,
+        elem_te: &crate::ast::TypeExpr,
+        n: u32,
+    ) -> Option<FunctionValue<'ctx>> {
+        if n == 0
+            || !(self.type_expr_has_drop_heap(elem_te) || self.tuple_elem_needs_deep_drop(elem_te))
+        {
+            return None;
+        }
+        let fn_name = format!(
+            "__karac_drop_array_te_{}_{n}",
+            Self::display_mangle_te(elem_te)
+        );
+        if let Some(f) = self.module.get_function(&fn_name) {
+            return Some(f);
+        }
+        // Recurse-first: the child emitter may switch the builder's insert block.
+        let child = self.emit_drop_fn_for_type_expr(elem_te);
+        let arr_ty = elem_ty.array_type(n);
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i32_t = self.context.i32_type();
+        let saved_bb = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+        let drop_fn_ty = self.context.void_type().fn_type(&[ptr_ty.into()], false);
+        let drop_fn = self.module.add_function(
+            &fn_name,
+            drop_fn_ty,
+            Some(inkwell::module::Linkage::Internal),
+        );
+        self.current_fn = Some(drop_fn);
+        let entry = self.context.append_basic_block(drop_fn, "entry");
+        self.builder.position_at_end(entry);
+        let base = drop_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let zero = i32_t.const_zero();
+        for i in 0..n {
+            let idx = i32_t.const_int(i as u64, false);
+            let ep = unsafe {
+                self.builder
+                    .build_in_bounds_gep(arr_ty, base, &[zero, idx], "arr.drop.ep")
+                    .unwrap()
+            };
+            self.builder.build_call(child, &[ep.into()], "").unwrap();
+        }
+        self.builder.build_return(None).unwrap();
+        self.current_fn = saved_fn;
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        Some(drop_fn)
+    }
+
     /// A stable, LLVM-name-safe signature of a tuple's element types, keying the
     /// memoization of [`Self::synthesize_tuple_drop_fn_te`] (and its bodies-only
     /// sibling `emit_tuple_elem_user_drop_bodies_fn`).

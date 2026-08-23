@@ -1321,6 +1321,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.borrow_vars.borrowed_agg_payload_struct_vars.clear();
         self.accel.gpu_buffer_vars.clear();
         self.borrow_vars.owned_struct_params.clear();
+        self.borrow_vars.owned_array_params.clear();
         self.payload_vars.param_view_locals.clear();
         self.payload_vars.shared_enum_payload_view_vars.clear();
         self.drop_rc.rc_fallback_heap_types.clear();
@@ -2078,6 +2079,40 @@ impl<'ctx> super::Codegen<'ctx> {
                         .insert(param_name.clone(), elem_names);
                     if let BasicTypeEnum::StructType(agg_ty) = param_val.get_type() {
                         self.make_tuple_param_callee_owned(elems, agg_ty, alloca);
+                    }
+                }
+                // Owned by-value `Array[T, N]` param / `self` whose element owns
+                // heap (B-2026-08-22-18 follow-up): give it a callee-owned deep
+                // copy + scope-exit element drop, the array analog of the Tuple
+                // arm above. Without this an `Array[String, N]` param's elements
+                // were never freed — a pure leak (LSan-only, invisible at -O2
+                // where the buffers are provably dead and deleted). `Array[T, N]`
+                // parses as a `Path` (segment "Array", generic args `[Type(T),
+                // Const(N)]`), NOT `TypeKind::Array` (which is the `[T; N]`
+                // sugar). Only a bare owned param — a `ref`/`mut ref` array does
+                // not take ownership — and a const-int `N > 0`.
+                if let TypeKind::Path(p) = &param.ty.kind {
+                    if p.segments.first().map(String::as_str) == Some("Array") {
+                        if let Some(args) = &p.generic_args {
+                            if let (
+                                Some(crate::ast::GenericArg::Type(elem_te)),
+                                Some(crate::ast::GenericArg::Const(size_expr)),
+                            ) = (args.first(), args.get(1))
+                            {
+                                if let ExprKind::Integer(n, _) = &size_expr.kind {
+                                    if *n > 0 {
+                                        let elem_ty = self.llvm_type_for_type_expr(elem_te);
+                                        self.make_array_param_callee_owned(
+                                            &param_name,
+                                            elem_te,
+                                            *n as u32,
+                                            elem_ty,
+                                            alloca,
+                                        );
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
                 // `Option[shared T]` parameter registration. The

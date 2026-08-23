@@ -5086,6 +5086,11 @@ impl<'ctx> super::Codegen<'ctx> {
             // stays the owner and its free must survive.
             self.gpu_zero_moved_buffer_handle(expr);
             self.suppress_source_vec_cleanup_for_arg(expr);
+            // B-2026-08-22-18 follow-up — tail `a[0]` moving a constant-index
+            // element out of an owned `Array[T, N]` (the explicit-`return`
+            // sibling is in `exprs.rs`). Cap-zero the element in the array's slot
+            // so its scope-exit drop skips the moved-out buffer.
+            self.suppress_array_elem_move_source(expr);
             // B-2026-07-22-2: `fn get() -> String { mk().s }` tail — the
             // caller owns the extracted field; zero it in the staged
             // fresh-temp slot so the frame drain frees only the remainder.
@@ -5912,6 +5917,14 @@ impl<'ctx> super::Codegen<'ctx> {
     /// copy-support analysis rejects — every copy-supported struct keeps the
     /// existing entry-copy behaviour untouched.
     pub(super) fn move_declined_copy_struct_arg(&mut self, arg: &Expr) {
+        // B-2026-08-22-18 follow-up — an owned `Array[T, N]` binding/param passed
+        // BY VALUE into a callee transfers ownership (the callee frees it,
+        // `make_array_param_callee_owned`), so retract the caller's own array
+        // element drop here. Without this, `fn g(a: Array[String,2]) { h(a) }`
+        // frees the shared buffers in both frames — a double free. Hooked at this
+        // shared by-value-owned-arg choke point so every call-arg site is
+        // covered. No-op for a temporary or non-owning root.
+        self.suppress_array_binding_move_arg(arg);
         let ExprKind::Identifier(var) = &arg.kind else {
             return;
         };

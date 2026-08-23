@@ -123,6 +123,18 @@ pub(crate) struct BorrowVars<'ctx> {
     /// independent (B-2026-06-10-2). Cleared per-function alongside
     /// `ref_params`.
     pub(crate) owned_struct_params: HashSet<String>,
+    /// Owned by-value `Array[T, N]` params / `self` whose element owns heap and
+    /// therefore carry a scope-exit element drop (B-2026-08-22-18 follow-up,
+    /// registered by `make_array_param_callee_owned`). Unlike the struct/tuple
+    /// paths a fixed array transfers ownership rather than being deep-copied, so
+    /// this set drives two disarms that keep the single-owner invariant: a
+    /// constant-index element moved out of such a root (`return a[0]`) is
+    /// cap-zeroed (`suppress_array_elem_move_source`), and the whole array passed
+    /// by value into another callee has its own drop suppressed at the call site
+    /// (`suppress_array_binding_move_arg`). Cleared per-function alongside
+    /// `owned_struct_params`. Keyed by binding name → (element TypeExpr, N) so
+    /// the disarms can GEP the right element and decide cap-zero vs recurse.
+    pub(crate) owned_array_params: HashMap<String, (crate::ast::TypeExpr, u32)>,
     /// Per-binding inner-shared-heap layout for `Option[shared T]`
     /// variables. Populated by `track_rc_option_var` at let-binding
     /// time; read by the `Assign` arm so reassignment of a tracked

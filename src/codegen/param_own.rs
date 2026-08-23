@@ -289,6 +289,52 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// The fixed-array sibling of [`Self::make_tuple_param_callee_owned`]
+    /// (B-2026-08-22-18 follow-up): give an owned by-value `Array[T, N]` param /
+    /// `self` whose element `T` owns heap a scope-exit element drop, so its `N`
+    /// buffers are freed exactly once.
+    ///
+    /// Unlike the tuple/struct owned-aggregate paths this does NOT deep-copy at
+    /// entry: a fixed array is passed by value transferring ownership (the caller
+    /// does not free the value it hands over — a bound-array source's own drop is
+    /// suppressed at the call site by [`Self::suppress_array_binding_move_arg`],
+    /// and a temporary has no separate owner), so the callee is the sole owner
+    /// and a copy would create a second one. The DROP goes through
+    /// [`Self::synthesize_array_drop_fn_te`], which GEPs the real `[N x T]` with
+    /// the `[i]` stride and is cap-guarded, so a moved-out element cap-zeroed by
+    /// [`Self::suppress_array_elem_move_source`] is skipped.
+    ///
+    /// The slot is recorded in `owned_array_params` so the move-out disarm and
+    /// the call-site source suppression know this root carries a drop. Returns
+    /// `false` (no drop) when `N == 0` or the element owns no drop-bearing heap.
+    pub(super) fn make_array_param_callee_owned(
+        &mut self,
+        param_name: &str,
+        elem_te: &TypeExpr,
+        n: u32,
+        elem_ty: inkwell::types::BasicTypeEnum<'ctx>,
+        slot: PointerValue<'ctx>,
+    ) -> bool {
+        if n == 0 || !self.type_expr_has_drop_heap(elem_te) {
+            return false;
+        }
+        match self.synthesize_array_drop_fn_te(elem_ty, elem_te, n) {
+            Some(drop_fn) => {
+                if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
+                    frame.push(super::state::CleanupAction::StructDrop {
+                        struct_alloca: slot,
+                        drop_fn,
+                    });
+                }
+                self.borrow_vars
+                    .owned_array_params
+                    .insert(param_name.to_string(), (elem_te.clone(), n));
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Recursively decide whether a struct's heap content can be soundly
     /// outer-buffer-copied to mirror its drop. `stack` guards against
     /// self-referential owned structs (which would recurse forever — bail).
@@ -3539,6 +3585,107 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_load(i64_t, p, name)
             .unwrap()
             .into_int_value()
+    }
+
+    /// Move-out disarm for a constant-index element read out of an owned
+    /// `Array[T, N]` root (B-2026-08-22-18 follow-up): when `a[k]` /`self[k]`
+    /// (const `k`) is moved out as a `return` / `let` value and `a` carries the
+    /// transfer-owned array element drop (`owned_array_params`), cap-zero element
+    /// `k` in the array's source slot so the array's scope-exit
+    /// `synthesize_array_drop_fn_te` drop skips it — the returned element now has
+    /// the single owner (the destination binding). Without this the returned
+    /// buffer is freed twice (the array drop AND the destination). The array
+    /// analog of [`Self::suppress_place_field_struct_move_source`]; constant
+    /// index only (a dynamic-index move-out is a separate, pre-existing gap).
+    pub(super) fn suppress_array_elem_move_source(&mut self, value: &Expr) {
+        let ExprKind::Index { object, index } = &value.kind else {
+            return;
+        };
+        let ExprKind::Integer(k, _) = &index.kind else {
+            return;
+        };
+        if *k < 0 {
+            return;
+        }
+        let root = match &object.kind {
+            ExprKind::Identifier(n) => n.clone(),
+            ExprKind::SelfValue => "self".to_string(),
+            _ => return,
+        };
+        let Some((elem_te, n)) = self.borrow_vars.owned_array_params.get(&root).cloned() else {
+            return;
+        };
+        let k = *k as u32;
+        if k >= n {
+            return;
+        }
+        let Some(slot) = self.variables.get(&root).map(|s| s.ptr) else {
+            return;
+        };
+        let elem_ty = self.llvm_type_for_type_expr(&elem_te);
+        let arr_ty = elem_ty.array_type(n);
+        let i32_t = self.context.i32_type();
+        let zero = i32_t.const_zero();
+        let idx = i32_t.const_int(k as u64, false);
+        let Ok(ep) = (unsafe {
+            self.builder
+                .build_in_bounds_gep(arr_ty, slot, &[zero, idx], "arr.mv.ep")
+        }) else {
+            return;
+        };
+        if self.is_string_type_expr(&elem_te) || self.extract_vec_elem_type(&elem_te).is_some() {
+            if let Ok(cap_ptr) =
+                self.builder
+                    .build_struct_gep(self.vec_struct_type(), ep, 2, "arr.mv.cap")
+            {
+                let _ = self
+                    .builder
+                    .build_store(cap_ptr, self.context.i64_type().const_int(0, false));
+            }
+        } else if let TypeKind::Path(p) = &elem_te.kind {
+            if let Some(name) = p.segments.last() {
+                if self.type_decls.struct_types.contains_key(name.as_str())
+                    && !self.type_decls.shared_types.contains_key(name.as_str())
+                {
+                    let name = name.clone();
+                    self.zero_struct_move_caps_mono(ep, &name, None);
+                }
+            }
+        }
+    }
+
+    /// Call-site source suppression for a whole owned `Array[T, N]` passed BY
+    /// VALUE into another callee (B-2026-08-22-18 follow-up). The callee takes
+    /// ownership (transfer model — [`Self::make_array_param_callee_owned`]), so
+    /// the caller's own scope-exit array drop must be retracted, exactly as
+    /// moving a Vec/String binding into a call suppresses its buffer free. Keyed
+    /// off `owned_array_params`, so a temporary or a non-owning root no-ops.
+    /// Without this, `fn g(a: Array[String,2]) { h(a) }` would free the shared
+    /// buffers in both `g` and `h` — a double free.
+    pub(super) fn suppress_array_binding_move_arg(&mut self, arg: &Expr) {
+        let root = match &arg.kind {
+            ExprKind::Identifier(n) => n.clone(),
+            ExprKind::SelfValue => "self".to_string(),
+            _ => return,
+        };
+        if self.borrow_vars.owned_array_params.remove(&root).is_none() {
+            return;
+        }
+        let Some(slot) = self.variables.get(&root).map(|s| s.ptr) else {
+            return;
+        };
+        // Retract the queued StructDrop for this array's slot (the same
+        // compile-time retraction the channel/user-Drop move-out suppressions
+        // use at a terminal move site).
+        for frame in self.drop_rc.scope_cleanup_actions.iter_mut().rev() {
+            frame.retain(|action| {
+                !matches!(
+                    action,
+                    super::state::CleanupAction::StructDrop { struct_alloca, .. }
+                        if *struct_alloca == slot
+                )
+            });
+        }
     }
 
     fn store_enum_word(

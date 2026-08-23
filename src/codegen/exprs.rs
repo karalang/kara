@@ -1033,6 +1033,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     // must go inert or the caller receives a dead handle.
                     self.gpu_zero_moved_buffer_handle(e);
                     self.suppress_source_vec_cleanup_for_arg(e);
+                    // B-2026-08-22-18 follow-up — `return a[0];` moving a
+                    // constant-index element out of an owned `Array[T, N]`: the
+                    // returned element's buffer now has the caller as its single
+                    // owner, so cap-zero it in the array's slot to keep the
+                    // array's scope-exit element drop from freeing it again.
+                    self.suppress_array_elem_move_source(e);
                     // B-2026-07-22-2: `return mk().s;` — the caller now owns
                     // the extracted field's buffer; zero it in the staged
                     // fresh-temp slot so the drain below frees only the
