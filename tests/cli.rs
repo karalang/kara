@@ -4176,6 +4176,284 @@ fn test_providers_block_run_build_parity() {
     );
 }
 
+/// B-2026-08-23-14 — `eprintln` must reach fd 2 on EVERY backend.
+///
+/// The free `eprintln` builtin reached NO codegen intercept at all:
+/// `call_dispatch` claimed `println` / `print` and nothing else, so `eprintln`
+/// fell through to the same unknown-callee constant-0 fallback that swallowed
+/// the providers block above, and a compiled program lost every stderr write.
+///
+/// What kept it hidden is the shape of the loss. The output was not misrouted
+/// to stdout — stdout stayed byte-identical across all three backends — it
+/// simply vanished, so the kata corpus, which compares stdout only, could
+/// never see it, and no phase reported anything. The QUALIFIED `Stderr.println`
+/// spelling was fine throughout (it lowers on the ambient-method path), which
+/// is why "stderr works" looked true from the codegen side.
+///
+/// The gate compares the three surfaces against EACH OTHER on BOTH streams
+/// rather than asserting a literal, for the reason the providers gate gives:
+/// the failure mode was one backend emitting nothing, which no single-backend
+/// assertion can see. Correctness is pinned separately so a regression that
+/// breaks every backend identically stays distinguishable from one that makes
+/// them disagree.
+///
+/// The argument shapes are load-bearing, not decoration. `compile_print`
+/// dispatches on the ARGUMENT'S TYPE across 22 separate write sites, and each
+/// one names its own stream, so threading the flag into whichever arm a single
+/// test happens to exercise would leave the rest hard-wired to stdout. One
+/// `eprintln` per reachable family appears below: literal and String variable,
+/// signed / unsigned / i128 integers, float, bool, char, Vec variable and Vec
+/// temporary, Map, Set, `Some` / `None`, `Ok`, tuple, a user `impl Display` on
+/// a struct and on a C-like enum, the f-string accumulator, and the zero-arg
+/// form. Not exhaustive over all 22 — a few are reachable only through shapes
+/// the typechecker rejects for `eprintln` (a bare enum or struct with no
+/// `Display` is refused outright) — but every family that lowers is here, and
+/// reverting the 12 String/collection arms alone drops exactly the nine lines
+/// those arms render, which is how that claim was checked rather than assumed.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_eprintln_reaches_stderr_on_every_backend() {
+    let tmp = scratch_project("eprintln-stderr-parity");
+    // One `eprintln` per write arm `compile_print` can dispatch to. The Map
+    // and Set carry a SINGLE entry each on purpose: iteration order is
+    // randomized per process (CLAUDE.md § `Map` / `Set` iteration order), so a
+    // multi-entry literal would make this gate flaky for a reason that has
+    // nothing to do with the stream it writes to.
+    let src = "struct Money { cents: i64 }\n\
+               impl Display for Money {\n\
+               \x20   fn to_string(ref self) -> String { f\"${self.cents}\" }\n\
+               }\n\
+               enum Color { Red, Green }\n\
+               impl Display for Color {\n\
+               \x20   fn to_string(ref self) -> String {\n\
+               \x20       match self { Color.Red => \"red\", Color.Green => \"green\" }\n\
+               \x20   }\n\
+               }\n\
+               fn main() {\n\
+               \x20   let n = 7;\n\
+               \x20   let s = \"str\";\n\
+               \x20   let v = [1, 2, 3];\n\
+               \x20   let mut m = Map[String, i64].new();\n\
+               \x20   m.insert(\"k\", 1);\n\
+               \x20   let mut q = Set[i64].new();\n\
+               \x20   q.insert(9);\n\
+               \x20   let o = Some(4);\n\
+               \x20   let non: Option[i64] = None;\n\
+               \x20   let r: Result[i64, String] = Ok(5);\n\
+               \x20   let t = (1, \"two\");\n\
+               \x20   let d = Money { cents: 250 };\n\
+               \x20   let c = Color.Red;\n\
+               \x20   let big: i128 = 99;\n\
+               \x20   let neg: i32 = -12;\n\
+               \x20   let u: u8 = 200;\n\
+               \x20   eprintln(\"E-lit\");\n\
+               \x20   eprintln(n);\n\
+               \x20   eprintln(1.5);\n\
+               \x20   eprintln(true);\n\
+               \x20   eprintln('z');\n\
+               \x20   eprintln(s);\n\
+               \x20   eprintln(v);\n\
+               \x20   eprintln(m);\n\
+               \x20   eprintln(q);\n\
+               \x20   eprintln(o);\n\
+               \x20   eprintln(non);\n\
+               \x20   eprintln(r);\n\
+               \x20   eprintln(t);\n\
+               \x20   eprintln(d);\n\
+               \x20   eprintln(c);\n\
+               \x20   eprintln(big);\n\
+               \x20   eprintln(neg);\n\
+               \x20   eprintln(u);\n\
+               \x20   eprintln([9, 8]);\n\
+               \x20   eprintln(f\"E-fstr-{n}-{s}\");\n\
+               \x20   eprintln();\n\
+               \x20   print(\"O-part \");\n\
+               \x20   println(\"O-line\");\n\
+               \x20   eprintln(\"E-last\");\n\
+               }\n";
+    write(&tmp.join("estream.kara"), src);
+
+    let capture = |args: &[&str]| -> Option<(String, String)> {
+        karac_bin()
+            .current_dir(&tmp)
+            .args(args)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| {
+                (
+                    String::from_utf8_lossy(&o.stdout).into_owned(),
+                    String::from_utf8_lossy(&o.stderr).into_owned(),
+                )
+            })
+    };
+
+    let interp = capture(&["run", "--interp", "estream.kara"]);
+    let jit = capture(&["run", "estream.kara"]);
+
+    let built = karac_bin()
+        .current_dir(&tmp)
+        .args(["build", "estream.kara"])
+        .output();
+    let exe = tmp.join("estream");
+    let aot = if built.map(|o| o.status.success()).unwrap_or(false) && exe.exists() {
+        std::process::Command::new(&exe)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| {
+                (
+                    String::from_utf8_lossy(&o.stdout).into_owned(),
+                    String::from_utf8_lossy(&o.stderr).into_owned(),
+                )
+            })
+    } else {
+        None
+    };
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    let (Some((i_out, i_err)), Some((j_out, j_err))) = (interp, jit) else {
+        panic!("interp and JIT must both run — neither needs a runtime archive");
+    };
+    let Some((a_out, a_err)) = aot else {
+        eprintln!("skip: no compiled binary (no runtime archive?); interp/JIT legs still asserted");
+        // The JIT leg alone still catches the original bug — it shared the
+        // dropped-output path with AOT — so do not return before checking it.
+        assert_eq!(i_err, j_err, "interp/JIT stderr parity");
+        assert_eq!(i_out, j_out, "interp/JIT stdout parity");
+        return;
+    };
+
+    // (1) PARITY — the A/B rule, on BOTH streams. This is the assertion the
+    // missing intercept violated: compiled stderr was empty against the
+    // interpreter's ten lines, while stdout matched exactly.
+    assert_eq!(i_err, j_err, "interp/JIT stderr parity");
+    assert_eq!(i_err, a_err, "interp/AOT stderr parity");
+    assert_eq!(i_out, j_out, "interp/JIT stdout parity");
+    assert_eq!(i_out, a_out, "interp/AOT stdout parity");
+
+    // (2) CORRECTNESS — every argument shape actually rendered, and rendered
+    // on stderr. Asserted as one exact string so a silently-empty stream or a
+    // dropped arm cannot pass: `contains` on an empty haystack would still
+    // fail, but an exact match also pins the newline of the zero-arg form and
+    // the rendering of each type.
+    assert_eq!(
+        a_err,
+        "E-lit\n7\n1.5\ntrue\nz\nstr\n[1, 2, 3]\n{k: 1}\nSet{9}\nSome(4)\nNone\n\
+         Ok(5)\n(1, two)\n$250\nred\n99\n-12\n200\n[9, 8]\nE-fstr-7-str\n\nE-last\n",
+        "every eprintln argument shape must render on stderr"
+    );
+
+    // (3) NO CROSS-TALK, both directions. The bug was output vanishing, but
+    // the natural over-correction is routing the whole console to fd 2, so
+    // pin that `print`/`println` stayed on stdout and no stderr payload
+    // leaked into it.
+    assert_eq!(
+        a_out, "O-part O-line\n",
+        "print/println must stay on stdout, unchanged by the stderr routing"
+    );
+    assert!(
+        !a_out.contains("E-"),
+        "no eprintln payload may reach stdout, got stdout={a_out:?}"
+    );
+    assert!(
+        !a_err.contains("O-"),
+        "no print/println payload may reach stderr, got stderr={a_err:?}"
+    );
+}
+
+/// B-2026-08-23-14, second part — the ZERO-ARGUMENT console forms.
+///
+/// `compile_print`'s empty-argument branch wrote "\n" unconditionally, keyed
+/// off nothing at all, so a bare `print()` emitted a newline it should not
+/// have: `print("a"); print(); print("b")` compiled to `a\nb` against the
+/// interpreter's `ab`. `println()` and `eprintln()` were correct by accident —
+/// a newline is what they owe — which is why the branch looked right.
+///
+/// Found while threading the stream selector through that same branch. It is a
+/// different defect from the dropped `eprintln` above (a wrong terminator, not
+/// a missing intercept) and is asserted separately so neither fix can be
+/// credited with the other's coverage.
+///
+/// The interpreter is the oracle here rather than a hand-written expectation:
+/// "what does `print()` mean" is settled by the backend that was already
+/// right, so the gate is parity plus one literal that pins WHICH behaviour the
+/// two agreed on — parity alone would pass if both emitted the stray newline.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_zero_argument_console_forms_match_across_backends() {
+    let tmp = scratch_project("zero-arg-console-parity");
+    let src = "fn main() {\n\
+               \x20   print(\"a\");\n\
+               \x20   print();\n\
+               \x20   print(\"b\");\n\
+               \x20   println();\n\
+               \x20   eprintln();\n\
+               \x20   println(\"end\");\n\
+               }\n";
+    write(&tmp.join("zeroarg.kara"), src);
+
+    let grab = |o: std::process::Output| {
+        (
+            String::from_utf8_lossy(&o.stdout).into_owned(),
+            String::from_utf8_lossy(&o.stderr).into_owned(),
+        )
+    };
+    let interp = karac_bin()
+        .current_dir(&tmp)
+        .args(["run", "--interp", "zeroarg.kara"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(grab);
+
+    let built = karac_bin()
+        .current_dir(&tmp)
+        .args(["build", "zeroarg.kara"])
+        .output();
+    let exe = tmp.join("zeroarg");
+    let aot = if built.map(|o| o.status.success()).unwrap_or(false) && exe.exists() {
+        std::process::Command::new(&exe)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(grab)
+    } else {
+        None
+    };
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    let Some((i_out, i_err)) = interp else {
+        panic!("the interpreter leg must run — it needs no runtime archive");
+    };
+    let Some((a_out, a_err)) = aot else {
+        eprintln!("skip: no compiled binary (no runtime archive?)");
+        return;
+    };
+
+    // (1) PARITY — the divergence itself.
+    assert_eq!(
+        i_out, a_out,
+        "interp/AOT stdout parity for the zero-arg forms"
+    );
+    assert_eq!(
+        i_err, a_err,
+        "interp/AOT stderr parity for the zero-arg forms"
+    );
+
+    // (2) WHICH behaviour they agreed on. `print()` contributes nothing, so
+    // `a` and `b` stay on one line; `println()` closes it; `eprintln()` puts
+    // its lone newline on the OTHER stream.
+    assert_eq!(
+        a_out, "ab\nend\n",
+        "a bare `print()` must emit nothing at all, not a newline"
+    );
+    assert_eq!(
+        a_err, "\n",
+        "a bare `eprintln()` must emit exactly one newline, on stderr"
+    );
+}
+
 /// B-2026-07-31-11 — the parity gate above, extended to an EARLY-RETURN body
 /// for BOTH provider forms (the ledger entry's validation bar).
 ///

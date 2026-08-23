@@ -1272,19 +1272,19 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
     }
 
-    /// Print a String value (`{data,len,cap}`) NUL-safely + the newline `nl`,
-    /// then free its heap buffer. Used by the collection-Display print arms,
-    /// which render into a throwaway accumulator and must release it inline
-    /// (no scope-tracking — avoids per-call buffer accumulation in loops).
-    fn emit_print_and_free_string(&mut self, sval: BasicValueEnum<'ctx>, nl: &str) {
-        self.emit_write_and_free_string(sval, nl, false);
-    }
-
-    /// `emit_print_and_free_string` with an explicit stream selector: write the
-    /// owning String value to stdout (`to_stderr == false`) or stderr
-    /// (`true`), append `nl`, then free its heap buffer. The stderr arm backs
-    /// the `main() -> Result` `Err(e)` exit, whose `Error: {e}\n` rendering
-    /// must land on stderr per design.md § Entry Point (B-2026-06-12-9).
+    /// Write the owning String value to stdout (`to_stderr == false`) or
+    /// stderr (`true`), append `nl`, then free its heap buffer. Used by the
+    /// collection-Display print arms, which render into a throwaway
+    /// accumulator and must release it inline (no scope-tracking — avoids
+    /// per-call buffer accumulation in loops). The stderr arm backs both the
+    /// `main() -> Result` `Err(e)` exit, whose `Error: {e}\n` rendering must
+    /// land on stderr per design.md § Entry Point (B-2026-06-12-9), and every
+    /// `eprintln` of a collection / Display value (B-2026-08-23-14).
+    ///
+    /// There is deliberately NO two-argument wrapper defaulting `to_stderr` to
+    /// false. One existed, every `compile_print` arm used it, and that is
+    /// exactly how `eprintln` came to write to stdout the moment it was given
+    /// an intercept — the caller has to name its stream.
     pub(super) fn emit_write_and_free_string(
         &mut self,
         sval: BasicValueEnum<'ctx>,
@@ -1387,20 +1387,47 @@ impl<'ctx> super::Codegen<'ctx> {
         args: &[CallArg],
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let zero = self.context.i64_type().const_int(0, false);
+        // B-2026-08-23-14 — the stream is chosen ONCE here and threaded to
+        // every write arm below, because the bug this replaced was a missing
+        // arm, not a wrong one: `eprintln` reached no intercept at all and
+        // fell through to the unknown-callee `i64 0` fallback, so a compiled
+        // program's every stderr write vanished while `--interp` printed it.
+        // Each arm takes the flag explicitly (there is deliberately no
+        // stdout-defaulting convenience wrapper) so a print arm added later
+        // has to decide which stream it writes to rather than inheriting
+        // stdout by omission.
+        let to_stderr = name == "eprintln";
+        let nl = if matches!(name, "println" | "eprintln") {
+            "\n"
+        } else {
+            ""
+        };
         if args.is_empty() {
-            // Route through the console chokepoint (not `printf`) so a bare
+            // The zero-argument forms. This branch wrote a hard-coded "\n"
+            // whatever the callee was, so a bare `print()` emitted a newline it
+            // does not owe: `print("a"); print(); print("b")` compiled to `a\nb`
+            // against the interpreter's `ab`. `println()` / `eprintln()` were
+            // right only because a newline happens to be what THEY owe.
+            //
+            // Writing `nl` — already computed above as this form's terminator —
+            // is the whole fix: it is "" for `print`, so nothing is emitted.
+            // An early `return` on the empty case would be equally correct but
+            // is redundant with this, and only one of the two can be the fix.
+            // The zero-length call is kept rather than short-circuited so this
+            // branch has exactly one exit shape and `nl` stays the single
+            // source of truth for "does this form terminate a line".
+            //
+            // Routed through the console chokepoint (not `printf`) so a bare
             // `println()` inside a parallel branch is captured + ordered too.
-            let nl_g = self.builder.build_global_string_ptr("\n", "nl").unwrap();
+            let nl_g = self.builder.build_global_string_ptr(nl, "nl").unwrap();
             self.emit_nul_safe_write(
                 nl_g.as_pointer_value(),
-                self.context.i64_type().const_int(1, false),
+                self.context.i64_type().const_int(nl.len() as u64, false),
                 "",
-                false,
+                to_stderr,
             );
             return Ok(zero.into());
         }
-
-        let nl = if name == "println" { "\n" } else { "" };
 
         // Collection dispatch: when the print arg is a bare identifier that
         // we've registered as a Vec or Map variable, emit a call to the
@@ -1428,7 +1455,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .ok_or_else(|| format!("compile_print: '{var_name}' not bound"))?;
                 let display_fn = self.emit_vec_display_fn_te(&elem_te);
                 let (_acc, sval) = self.render_via_display_fn(display_fn, slot.ptr);
-                self.emit_print_and_free_string(sval, nl);
+                self.emit_write_and_free_string(sval, nl, to_stderr);
                 return Ok(zero.into());
             }
             // Map[K, V]: side-tables hold both K and V `TypeExpr`s.
@@ -1450,7 +1477,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.emit_map_display_fn(&k_te, &v_te)
                 };
                 let (_acc, sval) = self.render_via_display_fn(display_fn, slot.ptr);
-                self.emit_print_and_free_string(sval, nl);
+                self.emit_write_and_free_string(sval, nl, to_stderr);
                 return Ok(zero.into());
             }
             // Set[T]: side-table holds the element `TypeExpr`.
@@ -1467,7 +1494,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.emit_set_display_fn(&elem_te)
                 };
                 let (_acc, sval) = self.render_via_display_fn(display_fn, slot.ptr);
-                self.emit_print_and_free_string(sval, nl);
+                self.emit_write_and_free_string(sval, nl, to_stderr);
                 return Ok(zero.into());
             }
             // B-2026-07-08-9: Option[T] — synthesize a `Some(<T>)`/`None`
@@ -1481,7 +1508,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .ok_or_else(|| format!("compile_print: '{var_name}' not bound"))?;
                 let display_fn = self.emit_option_display_te(&payload_te);
                 let (_acc, sval) = self.render_via_display_fn(display_fn, slot.ptr);
-                self.emit_print_and_free_string(sval, nl);
+                self.emit_write_and_free_string(sval, nl, to_stderr);
                 return Ok(zero.into());
             }
             // Result[T, E] sibling.
@@ -1495,7 +1522,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .ok_or_else(|| format!("compile_print: '{var_name}' not bound"))?;
                 let display_fn = self.emit_result_display_te(&ok_te, &err_te);
                 let (_acc, sval) = self.render_via_display_fn(display_fn, slot.ptr);
-                self.emit_print_and_free_string(sval, nl);
+                self.emit_write_and_free_string(sval, nl, to_stderr);
                 return Ok(zero.into());
             }
         }
@@ -1507,7 +1534,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // Precedes the payload-enum / struct-value error arms, which explicitly
         // exclude the built-in Option/Result enums.
         if let Some((_acc, sval)) = self.try_compile_option_result_display(&args[0].value)? {
-            self.emit_print_and_free_string(sval, nl);
+            self.emit_write_and_free_string(sval, nl, to_stderr);
             return Ok(zero.into());
         }
 
@@ -1517,7 +1544,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // arms below, which would otherwise reject the anonymous tuple aggregate
         // (B-2026-07-18-14).
         if let Some((_acc, sval)) = self.try_compile_tuple_display(&args[0].value)? {
-            self.emit_print_and_free_string(sval, nl);
+            self.emit_write_and_free_string(sval, nl, to_stderr);
             return Ok(zero.into());
         }
 
@@ -1528,7 +1555,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // as a String and printed garbage (B-2026-07-28-12). A materialized
         // temporary registers itself for scope cleanup inside the helper.
         if let Some((_acc, sval)) = self.try_compile_vec_display(&args[0].value)? {
-            self.emit_print_and_free_string(sval, nl);
+            self.emit_write_and_free_string(sval, nl, to_stderr);
             return Ok(zero.into());
         }
         // B-2026-08-14-31 — the Map/Set sibling, for the same reason one step
@@ -1536,7 +1563,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // CONTROL POINTER, because the value-kind arms see one pointer and have
         // nothing to distinguish it from any other.
         if let Some((_acc, sval)) = self.try_compile_map_or_set_display(&args[0].value)? {
-            self.emit_print_and_free_string(sval, nl);
+            self.emit_write_and_free_string(sval, nl, to_stderr);
             return Ok(zero.into());
         }
 
@@ -1552,7 +1579,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 &args[0].value.span,
                 &args[0].value.span,
             )?;
-            self.emit_print_and_free_string(sval, nl);
+            self.emit_write_and_free_string(sval, nl, to_stderr);
             return Ok(zero.into());
         }
 
@@ -1594,7 +1621,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.builder.build_store(tmp, v).unwrap();
                     let display_fn = self.emit_vec_display_fn_te(&elem_te);
                     let (_acc, sval) = self.render_via_display_fn(display_fn, tmp);
-                    self.emit_print_and_free_string(sval, nl);
+                    self.emit_write_and_free_string(sval, nl, to_stderr);
                     // Drop the temp only when this expression really PRODUCED
                     // the value — a fresh literal or a call result owns
                     // everything it made, and the identifier path leaves that
@@ -1627,7 +1654,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // arm below (an enum lowers to a tagged struct value).
         if let Some(ename) = self.expr_user_enum_name(&args[0].value) {
             let (data, len) = self.compile_unit_enum_display(&args[0].value, &ename)?;
-            self.emit_nul_safe_write(data, len, nl, false);
+            self.emit_nul_safe_write(data, len, nl, to_stderr);
             return Ok(zero.into());
         }
 
@@ -1636,7 +1663,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // print + free the owning buffer.
         if let Some(ename) = self.expr_user_enum_name_any(&args[0].value) {
             let (_acc, sval) = self.render_user_enum_display(&args[0].value, &ename)?;
-            self.emit_print_and_free_string(sval, nl);
+            self.emit_write_and_free_string(sval, nl, to_stderr);
             return Ok(zero.into());
         }
 
@@ -1661,7 +1688,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_extract_value(s, 1, "pd.len")
                 .unwrap()
                 .into_int_value();
-            self.emit_nul_safe_write(data, len, nl, false);
+            self.emit_nul_safe_write(data, len, nl, to_stderr);
             return Ok(zero.into());
         }
 
@@ -1677,7 +1704,7 @@ impl<'ctx> super::Codegen<'ctx> {
             let (buf_ptr, byte_len) = self.emit_codepoint_to_utf8(val.into_int_value());
             // NUL-safe write: `'\0'` is a single 0x00 byte (byte_len 1) — a
             // `%.*s` print would emit nothing; `fwrite` emits the NUL (L5).
-            self.emit_nul_safe_write(buf_ptr, byte_len, nl, false);
+            self.emit_nul_safe_write(buf_ptr, byte_len, nl, to_stderr);
             return Ok(zero.into());
         }
 
@@ -1712,7 +1739,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     )
                     .unwrap()
                     .into_int_value();
-                self.emit_nul_safe_write(sel_ptr, sel_len, nl, false);
+                self.emit_nul_safe_write(sel_ptr, sel_len, nl, to_stderr);
             } else {
                 // Widen narrower ints to i64 before printf's varargs slot —
                 // sign-extend for signed types so a negative `i32` prints as
@@ -1749,7 +1776,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // `println(f"{x}")` agree.
                 if widened.get_type().get_bit_width() > 64 {
                     let (bp, blen) = self.format_i128_to_stack_buf(widened, is_unsigned);
-                    self.emit_nul_safe_write(bp, blen, nl, false);
+                    self.emit_nul_safe_write(bp, blen, nl, to_stderr);
                     return Ok(self.context.i64_type().const_zero().into());
                 }
                 // Render into a stack buffer via `snprintf`, then route the
@@ -1791,7 +1818,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .try_as_basic_value()
                     .unwrap_basic()
                     .into_int_value();
-                self.emit_nul_safe_write(buf_ptr, written, nl, false);
+                self.emit_nul_safe_write(buf_ptr, written, nl, to_stderr);
             }
         } else if val.is_struct_value() {
             // A user struct that reached here is a `println(StructLiteral{…})`
@@ -1829,7 +1856,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_extract_value(sv, 1, "str.len")
                 .unwrap()
                 .into_int_value();
-            self.emit_nul_safe_write(str_ptr, str_len, nl, false);
+            self.emit_nul_safe_write(str_ptr, str_len, nl, to_stderr);
             // #20: a fresh-owned String temp passed directly to `println` /
             // `print` (`println(i.to_string())`, `print(a + b)`) has no
             // consuming binding, so its heap buffer would leak once per call —
@@ -1864,7 +1891,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 .try_as_basic_value()
                 .unwrap_basic()
                 .into_int_value();
-            self.emit_nul_safe_write(val.into_pointer_value(), slen, nl, false);
+            self.emit_nul_safe_write(val.into_pointer_value(), slen, nl, to_stderr);
         } else if val.is_float_value() {
             // Render with Rust's shortest-round-trip `{}` formatting (via the
             // runtime `karac_runtime_f64_to_str`) so AOT output matches
@@ -1875,7 +1902,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // carries a NUL, but routing it through the same `fwrite` path
             // keeps the print surface uniform (and buffer-shared with printf).
             let (buf_ptr, len) = self.format_f64_to_stack_buf(val.into_float_value());
-            self.emit_nul_safe_write(buf_ptr, len, nl, false);
+            self.emit_nul_safe_write(buf_ptr, len, nl, to_stderr);
         }
         Ok(zero.into())
     }

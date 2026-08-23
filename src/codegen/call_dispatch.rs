@@ -594,7 +594,15 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
-        if name == "println" || name == "print" {
+        // `eprintln` belongs here with its stdout siblings: it is a prelude
+        // free function (`PRELUDE_FUNCTIONS`), not a resource method, so no
+        // later arm claims it. Without this it fell through to the
+        // unknown-callee fallback and compiled to nothing at all — every
+        // stderr write silently dropped under both JIT and AOT while the
+        // interpreter printed it (B-2026-08-23-14). The qualified
+        // `Stderr.println` form was never affected; it lowers on the ambient
+        // method path (`compile_ambient_ffi`).
+        if name == "println" || name == "print" || name == "eprintln" {
             return self.compile_print(&name, args);
         }
 
