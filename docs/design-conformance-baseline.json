@@ -43,34 +43,6 @@
       "reason": "SPEC GAP — `let r = ref some_function();` uses `ref` as an EXPRESSION prefix; syntax.md's TYPE production has `\"ref\" TYPE` and CAPTURE_MODE has `ref`, but no expression form exists and the parser rejects it. Same shape as B-2026-08-21-9's other three: design.md writes syntax syntax.md never defined. B-2026-08-21-9",
       "first_diagnostic": "'ref' is a reserved keyword and cannot be used as an identifier"
     },
-    "9a0de9527541": {
-      "line": 2745,
-      "heading": "Module-Level Bindings > Iterator Traits",
-      "outcome": "SIGNATURE-MISSING",
-      "reason": "SPEC GAP — inline associated-type binding `Trait[Assoc = T]`; syntax.md's TRAIT_BOUND grammar has no such form and the parser rejects it. See B-2026-08-21-9",
-      "first_diagnostic": "Expected RightBracket, found Equal"
-    },
-    "d505bb7efa47": {
-      "line": 2764,
-      "heading": "Module-Level Bindings > Iterator Traits",
-      "outcome": "REJECTED",
-      "reason": "SPEC GAP — inline associated-type binding `Trait[Assoc = T]`; syntax.md's TRAIT_BOUND grammar has no such form and the parser rejects it. See B-2026-08-21-9",
-      "first_diagnostic": "Expected RightBracket, found Equal"
-    },
-    "eb2089c0a8e5": {
-      "line": 2827,
-      "heading": "Module-Level Bindings > Iterator Adaptors",
-      "outcome": "SIGNATURE-MISSING",
-      "reason": "SPEC GAP — inline associated-type binding `Trait[Assoc = T]`; syntax.md's TRAIT_BOUND grammar has no such form and the parser rejects it. See B-2026-08-21-9",
-      "first_diagnostic": "Expected RightBracket, found Equal"
-    },
-    "83c7bc6b937f": {
-      "line": 2877,
-      "heading": "Module-Level Bindings > Iterator Adaptors",
-      "outcome": "REJECTED",
-      "reason": "SPEC GAP — inline associated-type binding `Trait[Assoc = T]`; syntax.md's TRAIT_BOUND grammar has no such form and the parser rejects it. See B-2026-08-21-9",
-      "first_diagnostic": "Expected RightBracket, found Equal"
-    },
     "cba9c0d81a3e": {
       "line": 2889,
       "heading": "Module-Level Bindings > Iterator Adaptors",
@@ -85,281 +57,232 @@
       "reason": "deferred feature (deferred.md) — the parser is not expected to accept this yet",
       "first_diagnostic": "error[E_UNKNOWN_ATTRIBUTE]: unknown attribute `serde` — the compiler does not recognise this bare-name attribute. If you intended a diagnostic hint, write `#[diagnostic::serde]`; if you intended a tool attribute, use a namespaced form like `#[your_tool::serde]`."
     },
-    "395c86d9ecd5": {
-      "line": 3590,
-      "heading": "Module-Level Bindings > Trait Aliases",
-      "outcome": "REJECTED",
-      "reason": "SPEC GAP — inline associated-type binding `Trait[Assoc = T]`; syntax.md's TRAIT_BOUND grammar has no such form and the parser rejects it. See B-2026-08-21-9",
-      "first_diagnostic": "Expected RightBracket, found Equal"
-    },
     "27578870b939": {
-      "line": 3756,
+      "line": 3757,
       "heading": "Associated Types in Traits > Generic associated types (GATs)",
       "outcome": "REJECTED",
       "reason": "out-of-block declarations — the `Functor` trait is declared in the preceding block",
       "first_diagnostic": "unknown trait 'Functor' in inline bound on type parameter 'F'"
     },
     "60a1c72f647d": {
-      "line": 3808,
+      "line": 3809,
       "heading": "Module-Level Bindings > Conversion Traits (`From`, `Into`, `TryFrom`, `TryInto`)",
       "outcome": "REJECTED",
       "reason": "illustrative — the compiler-provided blanket `impl Into for T`; user code may not write it, and the rejection is correct",
       "first_diagnostic": "user-defined `impl Into for T` is not allowed; `Into` is derived from `From` via a blanket impl"
     },
-    "daa3e247bbdc": {
-      "line": 3818,
-      "heading": "Module-Level Bindings > Conversion Traits (`From`, `Into`, `TryFrom`, `TryInto`)",
-      "outcome": "REJECTED",
-      "reason": "SPEC GAP — `impl Trait for Type with <effects>`; the parser has no rule for an effect clause on an impl header. See B-2026-08-21-9",
-      "first_diagnostic": "Expected LeftBrace, found With"
-    },
     "87c3970d7537": {
-      "line": 4217,
+      "line": 4220,
       "heading": "Module-Level Bindings > Contracts (requires / ensures / invariant)",
       "outcome": "REJECTED",
       "reason": "SPEC GAP — `impl invariant A => B` uses `=>` as logical implication; syntax.md's contract predicate grammar has no such operator (`=>` appears only in match arms and provider bindings). Probed: the same invariant without `=>` parses. B-2026-08-21-9",
       "first_diagnostic": "Expected identifier, found FatArrow"
     },
-    "4d182164aab6": {
-      "line": 4749,
-      "heading": "Module-Level Bindings > Standard I/O Surface",
-      "outcome": "UNDECLARED-NAME",
-      "reason": "SPEC GAP (B-2026-08-21-29) — every one of the eight `io.` / `env.` / `fs.` entry points resolves to nothing; the surface is spelled `Stdin.read_line`. Checked by the signature rung's call probes.",
-      "first_diagnostic": "undefined name 'io'  [probe: io.read_line()]"
-    },
     "a76910b7979b": {
-      "line": 4771,
+      "line": 4781,
       "heading": "Module-Level Bindings > Standard I/O Surface",
       "outcome": "REJECTED",
       "reason": "declares `pub enum env.VarError` with a module-qualified name — a doc convention for showing where the enum lives, not a declaration form",
       "first_diagnostic": "`env` is Value-class but enum names must be Type-class (PascalCase); consider renaming to `Env`"
     },
     "217ca7b53d20": {
-      "line": 5312,
+      "line": 5324,
       "heading": "Module-Level Bindings > Operator Traits",
       "outcome": "REJECTED",
       "reason": "illustrative — re-declares the stdlib `Ordering` to show its shape, so the block's `impl Option[Ordering]` collides with the real one",
       "first_diagnostic": "conflicting impl: `impl Option[Ordering]` redefines methods `is_eq`, `is_ge`, `is_gt`, `is_le`, `is_lt` already provided by an existing `impl Option`; a specialized inherent impl may only ADD new methods, not redefine or specialize an existing one (v1 has no method specialization)"
     },
     "99452b6946e1": {
-      "line": 5763,
+      "line": 5787,
       "heading": "`#[repr]` — ABI and Physical Layout Control > Field Offsets: `offset_of[T](field)`",
       "outcome": "REJECTED",
       "reason": "doc placeholder, not Kāra — `field: <field-path>` stands in for syntax the spec has not settled. The same thing `...` marks, so the signature rung skips it rather than failing it.",
       "first_diagnostic": "Expected type, found LessThan"
     },
     "dcf47252f335": {
-      "line": 5891,
+      "line": 5915,
       "heading": "Feature 2: Effect Types (fixed verbs + user-defined resources) > Catching Panics: `catch_panic[T]`",
       "outcome": "SIGNATURE-MISSING",
       "reason": "deferred feature (deferred.md) — the parser is not expected to accept this yet",
       "first_diagnostic": "Expected effect verb, effect variable, or group name after 'with'"
     },
-    "01a05785e76c": {
-      "line": 6052,
-      "heading": "Feature 2: Effect Types (fixed verbs + user-defined resources) > Channel[T] API",
-      "outcome": "SIGNATURE-MISSING",
-      "reason": "SPEC GAP (B-2026-08-21-29) — `Channel.bounded` does not exist in any spelling, and `Channel.new` exists only WITHOUT the documented `[T]` type argument. Checked by the signature rung, not set aside.",
-      "first_diagnostic": "no associated function 'new' on type 'Channel'  [probe: Channel.new[i64]()]"
-    },
-    "810bc9155271": {
-      "line": 6064,
-      "heading": "Feature 2: Effect Types (fixed verbs + user-defined resources) > Channel[T] API",
-      "outcome": "SIGNATURE-MISSING",
-      "reason": "SPEC GAP (B-2026-08-21-32) — the Sender API's `with sends(tx)` names a PARAMETER as an effect resource, which design.md:6049 specifies normatively and the resolver rejects. Checked by the signature rung.",
-      "first_diagnostic": "'tx' is not an effect resource (it is a variable); declare `effect resource tx;` or import one (e.g. `import std.web.tx;`)"
-    },
-    "786a6450b033": {
-      "line": 6080,
-      "heading": "Feature 2: Effect Types (fixed verbs + user-defined resources) > Channel[T] API",
-      "outcome": "SIGNATURE-MISSING",
-      "reason": "SPEC GAP (B-2026-08-21-32) — same as the Sender table above: `with receives(rx)` roots an effect at a parameter. Checked by the signature rung.",
-      "first_diagnostic": "'rx' is not an effect resource (it is a variable); declare `effect resource rx;` or import one (e.g. `import std.web.rx;`)"
-    },
     "61249709f488": {
-      "line": 6846,
+      "line": 6888,
       "heading": "`impl Trait` (Existential Types) > Return-position `impl Trait` — the existential",
       "outcome": "REJECTED",
       "reason": "SPEC GAP — inline associated-type binding `Trait[Assoc = T]`; syntax.md's TRAIT_BOUND grammar has no such form and the parser rejects it. See B-2026-08-21-9",
-      "first_diagnostic": "Expected RightBracket, found Equal"
+      "first_diagnostic": "no method 'into_iter' on type 'RangeFrom'"
     },
     "d9655b8bddb5": {
-      "line": 6864,
+      "line": 6919,
       "heading": "`impl Trait` (Existential Types) > Return-position `impl Trait` — the existential",
       "outcome": "REJECTED",
       "reason": "SPEC GAP (B-2026-08-21-9 item 8) — the signature writes `with E` BEFORE `-> R`; the grammar requires the return type first (`Expected LeftBrace, found Arrow`). Not a catalogue at all — both functions here have bodies.",
       "first_diagnostic": "Expected LeftBrace, found Arrow"
     },
     "0d22a0757891": {
-      "line": 6912,
+      "line": 6967,
       "heading": "`impl Trait` (Existential Types) > Capture set — what the existential carries from the surrounding signature",
       "outcome": "REJECTED",
       "reason": "SPEC GAP (B-2026-08-21-9 item 8) — same `with`-before-`->` ordering as the block above. Not a catalogue; the function has a body.",
       "first_diagnostic": "Expected LeftBrace, found Arrow"
     },
     "20076c1ecd98": {
-      "line": 6935,
+      "line": 6990,
       "heading": "`impl Trait` (Existential Types) > Trait methods returning `impl Trait` (RPITIT)",
-      "outcome": "SIGNATURE-MISSING",
+      "outcome": "UNDECLARED-NAME",
       "reason": "SPEC GAP — inline associated-type binding `Trait[Assoc = T]`; syntax.md's TRAIT_BOUND grammar has no such form and the parser rejects it. See B-2026-08-21-9",
-      "first_diagnostic": "Expected RightBracket, found Equal"
+      "first_diagnostic": "undefined type 'T'"
     },
     "09377dbbe061": {
-      "line": 6961,
+      "line": 7016,
       "heading": "`impl Trait` (Existential Types) > Type alias `impl Trait` (TAIT)",
       "outcome": "REJECTED",
       "reason": "SPEC GAP — inline associated-type binding `Trait[Assoc = T]`; syntax.md's TRAIT_BOUND grammar has no such form and the parser rejects it. See B-2026-08-21-9",
-      "first_diagnostic": "Expected RightBracket, found Equal"
+      "first_diagnostic": "Expected LeftBrace, found Arrow"
     },
     "4b2c0f93966d": {
-      "line": 7021,
+      "line": 7076,
       "heading": "Effect Polymorphism > Trait Coherence and Effects",
       "outcome": "UNDECLARED-NAME",
       "reason": "out-of-block declarations — `Key`, `Value`, `Wire` and `DB` are illustrative types this trait's methods name and nothing declares. Reported as UNDECLARED-NAME because the signature rung cannot tell a spec promise from a gesture at a user type; this one is a gesture.",
       "first_diagnostic": "undefined type 'Key', did you mean 'key'?"
     },
     "f791bf570f0c": {
-      "line": 7257,
+      "line": 7312,
       "heading": "Feature 2: Effect Types (fixed verbs + user-defined resources) > Provider-Rooted Resources (trait-based injection)",
       "outcome": "SIGNATURE-MISSING",
       "reason": "SPEC GAP (B-2026-08-21-9) — `with_provider[R: effect resource, …]` uses an effect-resource generic BOUND, a form the grammar has no production for (`Expected LeftParen, found Effect`). The earlier reason here — \"written without `fn`\" — was wrong: the signature rung supplies the `fn` and the bound is what fails.",
       "first_diagnostic": "Expected identifier"
     },
     "d846d9df31f2": {
-      "line": 8005,
+      "line": 8060,
       "heading": "Feature 4: Tiered Ownership > Match Arm Binding Modes",
       "outcome": "REJECTED",
       "reason": "SPEC GAP — `Foo { ref name, score }` binds a match-arm field by reference; syntax.md:1344's PATTERN and :1355's FIELD_PATTERN have no `ref` form, and the parser rejects it. design.md documents the feature twice (§ Partial moves inside match arms, and `ref x @ PATTERN`). B-2026-08-21-9",
       "first_diagnostic": "'ref' is a reserved keyword and cannot be used as an identifier"
     },
     "da02dd39f646": {
-      "line": 8577,
+      "line": 8632,
       "heading": "Feature 4: Tiered Ownership > Part 5b: Concurrent Shared Types (`par struct`)",
       "outcome": "REJECTED",
       "reason": "catalogue of alternative forms — a before/after pair that declares `Counter` twice in one fence; not one program",
       "first_diagnostic": "'Counter' is already defined in this scope (first defined at 2:8)"
     },
     "0b00561248a8": {
-      "line": 8840,
+      "line": 8895,
       "heading": "Feature 4: Tiered Ownership > Part 6: `Copy` Semantics",
       "outcome": "REJECTED",
       "reason": "catalogue of alternative forms — each line rebinds the same name; not one program",
       "first_diagnostic": "'Offset' is already defined in this scope (first defined at 1:1)"
     },
     "d12127dc4493": {
-      "line": 9523,
+      "line": 9578,
       "heading": "Feature 5: Auto-Concurrency via Effect Analysis > Explicit Concurrency: `par {}` and `spawn()`",
       "outcome": "REJECTED",
       "reason": "out-of-block declarations — `Dashboard`, `AppError`, and the `fetch_*` functions",
       "first_diagnostic": "undefined type 'Dashboard'"
     },
-    "14a5f68b5380": {
-      "line": 9627,
-      "heading": "Feature 5: Auto-Concurrency via Effect Analysis > Channels",
-      "outcome": "UNDECLARED-NAME",
-      "reason": "SPEC GAP (B-2026-08-21-29) — `allocates(Heap)` is written 58 times in design.md and `effect resource Heap;` is declared nowhere in it, nor is `Heap` a prelude resource. Checked by the signature rung.",
-      "first_diagnostic": "undefined effect resource 'Heap'; declare `effect resource Heap;` or import one (e.g. `import std.web.Heap;`)"
-    },
     "90cd4859e251": {
-      "line": 10435,
+      "line": 10490,
       "heading": "Cross-target Compilation > Effect-Driven Target Gating (primary mechanism)",
       "outcome": "REJECTED",
       "reason": "out-of-block declarations — the types this block names are introduced in prose, not in the block",
       "first_diagnostic": "undefined type 'Data'"
     },
     "32c0f0d2de3f": {
-      "line": 10459,
+      "line": 10514,
       "heading": "Cross-target Compilation > Provider Injection for SSR-shared Code (primary pattern)",
       "outcome": "REJECTED",
       "reason": "out-of-block declarations — `AppError`, `UserId`, `Html` and the provider types are introduced in prose, not in the block",
       "first_diagnostic": "undefined type 'AppError', did you mean 'TcpError'?"
     },
     "8c04638b1990": {
-      "line": 10845,
+      "line": 10900,
       "heading": "member core/kara.toml > Panic Strategy: `panic = \"unwind\" | \"abort\"`",
       "outcome": "REJECTED",
       "reason": "deferred feature (deferred.md) — the parser is not expected to accept this yet",
       "first_diagnostic": "error[E_UNKNOWN_ATTRIBUTE]: unknown attribute `panic_handler` — the compiler does not recognise this bare-name attribute. If you intended a diagnostic hint, write `#[diagnostic::panic_handler]`; if you intended a tool attribute, use a namespaced form like `#[your_tool::panic_handler]`."
     },
     "cec80c40e843": {
-      "line": 11350,
+      "line": 11405,
       "heading": "Execution Model and Compilation Targets > Bounds-check elision and the `get_unchecked` escape hatch",
       "outcome": "REJECTED",
       "reason": "SPEC GAP — design.md § Bounds-check elision documents `get_unchecked` as \"an `unsafe fn` returning `ref T`\" and the example builds one with `&*ptr.offset(…)`. The implementation returns `T` (`unary '*' … found 'i64'`), and there is no `&` operator: `*p.offset(n)` is accepted, `&*p.offset(n)` is `Expected expression, found Amp`. Neither half of the documented shape is writable, and which half is wrong is a language decision. B-2026-08-21-9",
       "first_diagnostic": "unary '*' requires 'ref T', 'mut ref T', or a raw pointer ('*const T' / '*mut T'), found 'i64'"
     },
     "8f06a6945386": {
-      "line": 11969,
+      "line": 12024,
       "heading": "Unsafe Escape Hatch > `unsafe_op_in_unsafe_fn` rule",
       "outcome": "REJECTED",
       "reason": "SPEC GAP — design.md § Bounds-check elision documents `get_unchecked` as \"an `unsafe fn` returning `ref T`\" and the example builds one with `&*ptr.offset(…)`. The implementation returns `T` (`unary '*' … found 'i64'`), and there is no `&` operator: `*p.offset(n)` is accepted, `&*p.offset(n)` is `Expected expression, found Amp`. Neither half of the documented shape is writable, and which half is wrong is a language decision. B-2026-08-21-9",
       "first_diagnostic": "Expected expression, found Amp"
     },
     "54027a815a45": {
-      "line": 12148,
+      "line": 12203,
       "heading": "member core/kara.toml > Volatile Memory Access (MMIO)",
       "outcome": "REJECTED",
       "reason": "mixed items and statements — a `struct` declaration followed by a function-body fragment; no single framing fits both halves",
       "first_diagnostic": "expected `extern` or `fn` after `unsafe` at module scope — `unsafe` may only prefix an `unsafe extern \"ABI\" { ... }` block or an `unsafe fn` declaration."
     },
     "015aa0d54d7a": {
-      "line": 12185,
+      "line": 12240,
       "heading": "Inline Assembly > Syntax",
       "outcome": "REJECTED",
       "reason": "reserved-for-future syntax, not a doc bug — `asm(…)` / `global_asm(…)` is the INTENDED inline-assembly surface; syntax.md §1.1 lists both under \"Reserved for future use (not yet meaningful to the parser beyond being reserved)\". The block documents syntax the parser has not implemented, which is what a spec is for",
       "first_diagnostic": "expected `extern` or `fn` after `unsafe` at module scope — `unsafe` may only prefix an `unsafe extern \"ABI\" { ... }` block or an `unsafe fn` declaration."
     },
     "24705350e558": {
-      "line": 12256,
+      "line": 12311,
       "heading": "Inline Assembly > Clobbers and ABI Clobbers",
       "outcome": "REJECTED",
       "reason": "reserved-for-future syntax, not a doc bug — `asm(…)` / `global_asm(…)` is the INTENDED inline-assembly surface; syntax.md §1.1 lists both under \"Reserved for future use (not yet meaningful to the parser beyond being reserved)\". The block documents syntax the parser has not implemented, which is what a spec is for",
       "first_diagnostic": "expected `extern` or `fn` after `unsafe` at module scope — `unsafe` may only prefix an `unsafe extern \"ABI\" { ... }` block or an `unsafe fn` declaration."
     },
     "5b705eea237c": {
-      "line": 12296,
+      "line": 12351,
       "heading": "Inline Assembly > Effect Integration",
       "outcome": "REJECTED",
       "reason": "reserved-for-future syntax, not a doc bug — `asm(…)` / `global_asm(…)` is the INTENDED inline-assembly surface; syntax.md §1.1 lists both under \"Reserved for future use (not yet meaningful to the parser beyond being reserved)\". The block documents syntax the parser has not implemented, which is what a spec is for",
       "first_diagnostic": "'asm' is a reserved keyword and cannot be used as an identifier"
     },
     "3a5f6133d1f4": {
-      "line": 12325,
+      "line": 12380,
       "heading": "Inline Assembly > `global_asm`",
       "outcome": "REJECTED",
       "reason": "reserved-for-future syntax, not a doc bug — `asm(…)` / `global_asm(…)` is the INTENDED inline-assembly surface; syntax.md §1.1 lists both under \"Reserved for future use (not yet meaningful to the parser beyond being reserved)\". The block documents syntax the parser has not implemented, which is what a spec is for",
       "first_diagnostic": "'global_asm' is a reserved keyword and cannot be used as an identifier"
     },
     "90bf84af4d8f": {
-      "line": 12732,
+      "line": 12787,
       "heading": "C Calling Convention Variants > Panic Semantics at the FFI Boundary",
       "outcome": "REJECTED",
       "reason": "out-of-block declarations — `parse`; the block additionally needs a `panic = \"unwind\"` build profile the harness does not set",
       "first_diagnostic": "undefined name 'parse', did you mean 'Parser'?"
     },
     "5fd5483df9a9": {
-      "line": 12742,
+      "line": 12797,
       "heading": "C Calling Convention Variants > Panic Semantics at the FFI Boundary",
       "outcome": "REJECTED",
       "reason": "deferred feature (deferred.md) — the parser is not expected to accept this yet",
       "first_diagnostic": "undefined name 'catch_panic'"
     },
     "abd6491d4ddf": {
-      "line": 12897,
+      "line": 12952,
       "heading": "FFI > FFI Unions: `union Foo { ... }`",
       "outcome": "REJECTED",
       "reason": "deferred feature (deferred.md) — the parser is not expected to accept this yet",
       "first_diagnostic": "cannot assign through `x` — `x` is declared without `mut` at line 7:1"
     },
     "335e127c698d": {
-      "line": 12998,
+      "line": 13053,
       "heading": "FFI > Opaque Foreign Types: `extern \"C\" { type Foo; }`",
       "outcome": "SIGNATURE-MISSING",
       "reason": "SPEC GAP (B-2026-08-21-9 item 9) — `extern \"C\" { type FILE; }` is refused because `FILE` is not PascalCase, but an opaque FOREIGN type carries the C library's name, which Kāra does not get to choose.",
       "first_diagnostic": "`FILE` is Const-class but struct names must be Type-class (PascalCase); consider renaming to `File`"
     },
     "7635bafbf78f": {
-      "line": 13189,
+      "line": 13244,
       "heading": "Host Functions > Syntax",
       "outcome": "REJECTED",
       "reason": "out-of-block declarations — the types this block names are introduced in prose, not in the block",

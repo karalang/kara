@@ -3816,10 +3816,12 @@ The rule: **implement `From`, get `Into` for free**. Implementing `Into` directl
 **Effect propagation through the blanket.** The blanket `Into` impl has no effect set of its own — its `into` body is a single call to `U.from(self)`, so at each `(T, U)` monomorphization the inferred effects are exactly those of the concrete `impl From[T] for U`. This is not a special blanket-impl rule — it is the standard "`with _` public functions calling less-effectful helpers" behavior at [Effect Set Subtyping](#effect-set-subtyping) applied to a one-line body. At call sites, `x.into()` contributes to the caller's inferred effect set exactly what `U.from(x)` would contribute, for the `U` determined by type inference at that site. No pooling across all possible `U`s — only the resolved `U` matters.
 
 ```kara
+effect resource Log;
+
 // Effectful From impl
 impl From[ParseError] for AppError {
     fn from(e: ParseError) -> AppError with writes(Log) {
-        log_error(&e);
+        log_error(e);
         AppError.Parse(e)
     }
 }
@@ -6072,10 +6074,10 @@ Channels are the primary inter-task communication primitive. A channel is a type
 
 ```kara
 // Construction — produces a matched sender/receiver pair
-Channel[T].new() -> (Sender[T], Receiver[T])
+Channel.new() -> (Sender[T], Receiver[T])
     with allocates(Heap)
 
-Channel.bounded[T](cap: i64) -> (Sender[T], Receiver[T])
+Channel.bounded(cap: i64) -> (Sender[T], Receiver[T])
     with allocates(Heap)
     requires cap > 0
 ```
