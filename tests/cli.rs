@@ -30060,3 +30060,208 @@ fn test_unlowerable_defer_body_refuses_instead_of_vanishing() {
         "the refusal must name the construct that could not be lowered; got: {combined}"
     );
 }
+
+/// B-2026-08-23-20 — a payload held INLINE in four or more words must
+/// reconstruct ALL of its fields, not the first three.
+///
+/// `rebuild_value_from_payload_words` took exactly `(w0, w1, w2)` and its
+/// generic-struct branch rebuilt from a hardcoded three-element array, stopping
+/// at whichever field ran past the end. A `Result[i64, Wide]` whose `Wide` is
+/// four `i64`s has a FOUR-word payload area, so the value was carried intact in
+/// the aggregate and then dropped on the way out: `W(1,2,3,<garbage>)` under
+/// JIT, `W(1,2,3,0)` under AOT, against `W(1,2,3,4)` in the interpreter. A
+/// five-field struct lost two fields.
+///
+/// `match`'s arm reconstruction has always taken a slice and was correct on
+/// exactly these payloads — which is why a `match` on the same value agreed
+/// with the interpreter while these paths did not, and why the fix is the
+/// second helper joining that contract rather than new machinery.
+///
+/// The rows cover a plain 4-word struct, a 5-word struct, a multi-word field
+/// (`String`) followed by fields that used to fall off the end in BOTH orders,
+/// a nested aggregate, and all-float fields (each word bitcast, not truncated).
+/// The 3-word row is the boundary control: it was correct before and must stay
+/// correct. The boxed row is a regression guard for B-2026-08-23-19's de-boxing
+/// — a payload wider than the inline area takes a different path and must not
+/// be disturbed by widening this one.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_wide_inline_payload_reconstructs_every_field() {
+    let tmp = scratch_project("wide-inline-payload");
+    let src = r#"struct Four { a: i64, b: i64, c: i64, d: i64 }
+impl Display for Four {
+    fn to_string(ref self) -> String { f"4({self.a},{self.b},{self.c},{self.d})" }
+}
+struct Five { a: i64, b: i64, c: i64, d: i64, e: i64 }
+impl Display for Five {
+    fn to_string(ref self) -> String { f"5({self.a},{self.b},{self.c},{self.d},{self.e})" }
+}
+struct StrFirst { s: String, a: i64, b: i64 }
+impl Display for StrFirst {
+    fn to_string(ref self) -> String { f"SF({self.s},{self.a},{self.b})" }
+}
+struct StrMid { a: i64, s: String, b: i64 }
+impl Display for StrMid {
+    fn to_string(ref self) -> String { f"SM({self.a},{self.s},{self.b})" }
+}
+struct Inner { p: i64, q: i64 }
+struct Nested { a: i64, inner: Inner, b: i64 }
+impl Display for Nested {
+    fn to_string(ref self) -> String { f"N({self.a},{self.inner.p},{self.inner.q},{self.b})" }
+}
+struct Quad { a: f64, b: f64, c: f64, d: f64 }
+impl Display for Quad {
+    fn to_string(ref self) -> String { f"Q({self.a},{self.b},{self.c},{self.d})" }
+}
+struct Three { a: i64, b: i64, c: i64 }
+impl Display for Three {
+    fn to_string(ref self) -> String { f"3({self.a},{self.b},{self.c})" }
+}
+struct Boxed { a: String, b: String }
+impl Display for Boxed {
+    fn to_string(ref self) -> String { f"B({self.a}/{self.b})" }
+}
+
+fn mk4() -> Four { Four { a: 1, b: 2, c: 3, d: 4 } }
+fn mk5() -> Five { Five { a: 1, b: 2, c: 3, d: 4, e: 5 } }
+fn mksf() -> StrFirst { StrFirst { s: "hi".to_string(), a: 7, b: 9 } }
+fn mksm() -> StrMid { StrMid { a: 7, s: "hi".to_string(), b: 9 } }
+fn mkn() -> Nested { Nested { a: 1, inner: Inner { p: 2, q: 3 }, b: 4 } }
+fn mkq() -> Quad { Quad { a: 1.5, b: 2.5, c: 3.5, d: 4.5 } }
+fn mk3() -> Three { Three { a: 1, b: 2, c: 3 } }
+fn mkb() -> Boxed { Boxed { a: "x".to_string(), b: "y".to_string() } }
+
+fn f4() -> Result[i64, Four] { errdefer(x) { println(f"A {x}"); } return Err(mk4()) }
+fn f5() -> Result[i64, Five] { errdefer(x) { println(f"B {x}"); } return Err(mk5()) }
+fn fsf() -> Result[i64, StrFirst] { errdefer(x) { println(f"C {x}"); } return Err(mksf()) }
+fn fsm() -> Result[i64, StrMid] { errdefer(x) { println(f"D {x}"); } return Err(mksm()) }
+fn fn_() -> Result[i64, Nested] { errdefer(x) { println(f"E {x}"); } return Err(mkn()) }
+fn fq() -> Result[i64, Quad] { errdefer(x) { println(f"F {x}"); } return Err(mkq()) }
+fn f3() -> Result[i64, Three] { errdefer(x) { println(f"G {x}"); } return Err(mk3()) }
+fn fb() -> Result[i64, Boxed] { errdefer(x) { println(f"H {x}"); } return Err(mkb()) }
+
+fn inner4() -> Result[i64, Four] { Err(mk4()) }
+fn fq4() -> Result[i64, Four] {
+    errdefer(x) { println(f"I {x}"); }
+    let v = inner4()?;
+    return Ok(v)
+}
+
+fn main() {
+    let _ = f4();
+    let _ = f5();
+    let _ = fsf();
+    let _ = fsm();
+    let _ = fn_();
+    let _ = fq();
+    let _ = f3();
+    let _ = fb();
+    let _ = fq4();
+    println("done");
+}
+"#;
+    write(&tmp.join("w.kara"), src);
+
+    let stdout_of = |args: &[&str]| -> Option<String> {
+        karac_bin()
+            .current_dir(&tmp)
+            .args(args)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+    };
+    let interp = stdout_of(&["run", "--interp", "w.kara"]);
+    let jit = stdout_of(&["run", "w.kara"]);
+    let built = karac_bin()
+        .current_dir(&tmp)
+        .args(["build", "w.kara"])
+        .output();
+    let exe = tmp.join("w");
+    let aot = if built.map(|o| o.status.success()).unwrap_or(false) && exe.exists() {
+        std::process::Command::new(&exe)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+    } else {
+        None
+    };
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    let (Some(i), Some(j)) = (interp, jit) else {
+        panic!("interp and JIT must both run — neither needs a runtime archive");
+    };
+    assert_eq!(i, j, "interp/JIT parity for a wide inline payload");
+    if let Some(a) = aot.as_ref() {
+        assert_eq!(&i, a, "interp/AOT parity for a wide inline payload");
+    }
+    assert_eq!(
+        i,
+        "A 4(1,2,3,4)\nB 5(1,2,3,4,5)\nC SF(hi,7,9)\nD SM(7,hi,9)\nE N(1,2,3,4)\n\
+         F Q(1.5,2.5,3.5,4.5)\nG 3(1,2,3)\nH B(x/y)\nI 4(1,2,3,4)\ndone\n",
+        "every field of a wide inline payload must survive reconstruction"
+    );
+}
+
+/// B-2026-08-23-20, second site: `main() -> Result[(), E]`'s error exit
+/// reconstructs `E` to render `Error: {e}`, and took only three words as well.
+/// A suite-wide trace of callers supplying fewer words than their target type
+/// needs found exactly two sites; this is the other one.
+///
+/// This asserts the two COMPILED backends against each other and against the
+/// expected text rather than against `--interp`: the interpreter renders this
+/// particular line through a different path that ignores the `Display` impl and
+/// emits struct fields in a per-run random order, which is tracked separately.
+/// Pinning the compiled halves is what this fix is responsible for.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_main_result_err_exit_renders_every_payload_word() {
+    let tmp = scratch_project("main-result-wide-err");
+    let src = r#"struct Wide { a: i64, b: i64, c: i64, d: i64 }
+impl Display for Wide {
+    fn to_string(ref self) -> String { f"W({self.a},{self.b},{self.c},{self.d})" }
+}
+fn main() -> Result[(), Wide] {
+    return Err(Wide { a: 1, b: 2, c: 3, d: 4 })
+}
+"#;
+    write(&tmp.join("m.kara"), src);
+
+    let jit = karac_bin()
+        .current_dir(&tmp)
+        .args(["run", "m.kara"])
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stderr).into_owned());
+    let built = karac_bin()
+        .current_dir(&tmp)
+        .args(["build", "m.kara"])
+        .output();
+    let exe = tmp.join("m");
+    let aot = if built.map(|o| o.status.success()).unwrap_or(false) && exe.exists() {
+        std::process::Command::new(&exe)
+            .output()
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stderr).into_owned())
+    } else {
+        None
+    };
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    let Some(j) = jit else {
+        panic!("JIT must run — it needs no runtime archive");
+    };
+    assert!(
+        j.contains("Error: W(1,2,3,4)"),
+        "the JIT entry-point error exit must render every field of a 4-word \
+         payload; got: {j}"
+    );
+    if let Some(a) = aot.as_ref() {
+        assert!(
+            a.contains("Error: W(1,2,3,4)"),
+            "the AOT entry-point error exit must render every field of a 4-word \
+             payload; got: {a}"
+        );
+    }
+}

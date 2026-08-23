@@ -4169,7 +4169,41 @@ impl<'ctx> super::Codegen<'ctx> {
         w1: inkwell::values::IntValue<'ctx>,
         w2: inkwell::values::IntValue<'ctx>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
+        self.rebuild_value_from_payload_word_slice(target_ty, &[w0, w1, w2])
+    }
+
+    /// B-2026-08-23-20. The width-general core of the above.
+    ///
+    /// The three-word form was the only entry point, and its generic-struct
+    /// branch rebuilt from a hardcoded `[w0, w1, w2]`, stopping at whichever
+    /// field ran past the end. A payload held INLINE in four or more words --
+    /// `Result[i64, Wide]` with `Wide { a: i64, b: i64, c: i64, d: i64 }`, whose
+    /// aggregate has a four-word payload area -- therefore reconstructed three
+    /// correct fields and left the rest undef: `W(1,2,3,<garbage>)` under JIT,
+    /// `W(1,2,3,0)` under AOT, against `W(1,2,3,4)` in the interpreter. A
+    /// five-field struct lost two.
+    ///
+    /// `match`'s arm reconstruction (`reconstruct_payload_value`) has always
+    /// taken a slice and is correct on exactly these payloads, which is why a
+    /// `match` on the same value agreed with the interpreter while the
+    /// reconstruction here did not. This is the second helper joining that
+    /// contract.
+    ///
+    /// Words past the end of `words` read as zero, so a caller that can only
+    /// supply three keeps its previous behaviour exactly -- which is why the
+    /// wrapper above is a pure delegation and every existing call site is
+    /// unchanged.
+    pub(super) fn rebuild_value_from_payload_word_slice(
+        &self,
+        target_ty: BasicTypeEnum<'ctx>,
+        words: &[inkwell::values::IntValue<'ctx>],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
         let i64_t = self.context.i64_type();
+        let zero_w = i64_t.const_zero();
+        let word_at = |i: usize| words.get(i).copied().unwrap_or(zero_w);
+        let w0 = word_at(0);
+        let w1 = word_at(1);
+        let w2 = word_at(2);
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let vec_ty = self.vec_struct_type();
         let slice_ty = self.slice_struct_type();
@@ -4277,8 +4311,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 // budget; larger payloads stay on the deferred path until the
                 // layout widens further.
                 let n_fields = st.count_fields() as usize;
-                let words = [w0, w1, w2];
-                let zero = i64_t.const_zero();
+                // B-2026-08-23-20: walk the caller's ACTUAL words, not a
+                // hardcoded three. `words` is whatever the aggregate carries,
+                // so a four- or five-word inline payload now reaches its last
+                // field instead of stopping at the third.
                 let mut agg = st.get_undef();
                 let mut cursor = 0usize;
                 for i in 0..n_fields {
@@ -4289,21 +4325,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     if cursor >= words.len() {
                         break;
                     }
-                    // Feed this field its own window of words (padding with
-                    // zero when the field straddles the end of the budget).
-                    let fw0 = words[cursor];
-                    let fw1 = if cursor + 1 < words.len() {
-                        words[cursor + 1]
-                    } else {
-                        zero
-                    };
-                    let fw2 = if cursor + 2 < words.len() {
-                        words[cursor + 2]
-                    } else {
-                        zero
-                    };
+                    // Feed this field the REST of the words. It consumes only
+                    // what its own width demands, and a nested aggregate field
+                    // recurses with its own cursor — so a multi-word field no
+                    // longer has to fit in a three-word window.
                     let field_val =
-                        self.rebuild_value_from_payload_words(field_ty, fw0, fw1, fw2)?;
+                        self.rebuild_value_from_payload_word_slice(field_ty, &words[cursor..])?;
                     agg = self
                         .builder
                         .build_insert_value(agg, field_val, i as u32, "or.pl.s.iv")

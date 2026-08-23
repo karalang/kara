@@ -2639,9 +2639,15 @@ impl<'ctx> super::Codegen<'ctx> {
                 _ => zero,
             }
         };
-        let w0 = word(1, "errdefer_payload_w0");
-        let w1 = word(2, "errdefer_payload_w1");
-        let w2 = word(3, "errdefer_payload_w2");
+        // B-2026-08-23-20: take EVERY payload word the aggregate carries, not
+        // the first three. Fields 1.. are the payload area (field 0 is the
+        // tag), so a `Result[_, Wide]` whose `Wide` is four i64s hands over
+        // four words and reconstructs its fourth field instead of leaving it
+        // undef.
+        let payload_words: Vec<_> = (1..field_count)
+            .map(|slot| word(slot, "errdefer_payload_w"))
+            .collect();
+        let w0 = payload_words.first().copied().unwrap_or(zero);
         let Some(e_ty) = self.fn_ctx.current_fn_err_payload_ty else {
             // No recognised `Result[T, E]` annotation — nothing to rebuild
             // against, so stage the bare word.
@@ -2670,7 +2676,8 @@ impl<'ctx> super::Codegen<'ctx> {
                 .ok()?;
             return self.builder.build_load(e_ty, boxed, "errdefer.box.ld").ok();
         }
-        self.rebuild_value_from_payload_words(e_ty, w0, w1, w2).ok()
+        self.rebuild_value_from_payload_word_slice(e_ty, &payload_words)
+            .ok()
     }
 
     pub(super) fn err_payload_from_value(expr: &Expr) -> Option<&Expr> {

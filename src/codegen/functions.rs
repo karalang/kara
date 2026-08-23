@@ -3155,9 +3155,16 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_return(Some(&i32_t.const_int(0, false)))
             .unwrap();
 
-        // Err → reconstruct the source-typed error value from the aggregate's
-        // payload words (w0/w1/w2 at fields 1/2/3, synthesizing 0 past the
-        // struct's field count) and exit 1 after printing it.
+        // Err → reconstruct the source-typed error value from EVERY payload
+        // word the aggregate carries (fields 1.., field 0 being the tag) and
+        // exit 1 after printing it.
+        //
+        // B-2026-08-23-20: this took only w0/w1/w2, so `main() -> Result[(), E]`
+        // with an `E` held inline in four or more words printed three correct
+        // fields and garbage for the rest — `Error: W(1,2,3,-9223372036854775808)`
+        // under JIT, `Error: W(1,2,3,0)` under AOT. It was the one site besides
+        // the errdefer staging helper that a suite-wide trace caught supplying
+        // fewer words than the target type needs.
         self.builder.position_at_end(err_bb);
         let n = st.count_fields();
         let zero = i64_t.const_int(0, false);
@@ -3167,25 +3174,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap()
                 .into_int_value()
         };
-        let w0 = if n >= 2 {
-            extract_word(self, 1, "main_res_w0")
-        } else {
-            zero
-        };
-        let w1 = if n >= 3 {
-            extract_word(self, 2, "main_res_w1")
-        } else {
-            zero
-        };
-        let w2 = if n >= 4 {
-            extract_word(self, 3, "main_res_w2")
-        } else {
-            zero
-        };
+        let payload_words: Vec<_> = (1..n)
+            .map(|i| extract_word(self, i, "main_res_w"))
+            .collect();
+        let w0 = payload_words.first().copied().unwrap_or(zero);
         let err_val = match self.main_result_err_te.clone() {
             Some(te) => {
                 let e_ty = self.llvm_type_for_type_expr(&te);
-                self.rebuild_value_from_payload_words(e_ty, w0, w1, w2)
+                self.rebuild_value_from_payload_word_slice(e_ty, &payload_words)
                     .unwrap_or_else(|_| w0.into())
             }
             None => w0.into(),
