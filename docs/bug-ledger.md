@@ -102,7 +102,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 94 | 0 |
 | perf | 84 | 1 |
 | other | 57 | 1 |
-| soundness | 55 | 1 |
+| soundness | 55 | 0 |
 | crash | 55 | 0 |
 | use-after-free | 20 | 0 |
 
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 997 | 2 |
-| typecheck | 246 | 2 |
+| typecheck | 246 | 1 |
 | interp | 174 | 0 |
 | other | 63 | 0 |
 | ownership | 63 | 1 |
@@ -124,14 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1501 surfaced · 5 open · 1473 fixed · 9 wontfix** (2026-05-20 → 2026-08-23). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1501 surfaced · 4 open · 1474 fixed · 9 wontfix** (2026-05-20 → 2026-08-23). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-22-27 | 2026-08-22 | codegen+runtime | high | A COMPILED `Map[i64, V, H]` under any NON-DEFAULT hasher stops growing after one resize and silently drops every key past it: `len` still counts them, `contains_key` cannot find them, and the missing keys are the contiguous tail starting at exactly 3/4 of the stalled capacity (196609 at N=200000, 393217 at 400000, 786433 at 800000). `--interp` is correct, so it is a run-vs-build divergence; the default hasher never loses a key at any N | roadmap.md |
-| B-2026-08-22-28 | 2026-08-22 | typecheck | medium | An associated-type bound declared on a STDLIB-BAKED trait is never discharged at an impl site: `trait_assoc_decls` finds the trait declaration only by scanning `program.items`, and a baked trait lives in `env.traits` instead -- so `impl BuildHasher for B { type Hasher = <a type with no Hasher impl> }` type checks, while the same shape on a user-declared trait is correctly rejected with E_GAT_BOUND_NOT_SATISFIED | roadmap.md |
 | B-2026-08-22-29 | 2026-08-22 | codegen+runtime | medium | `FxBuildHasher` is 13.7x SLOWER than the default `SipHash13BuildHasher` on `String` keys (1.23 s vs 0.09 s, 200k inserts + 1M lookups, compiled, arm64) -- the exact opposite of the speed-for-safety trade the stdlib comment and design.md offer it as; a user-written FNV-1a hasher is at parity with the default, so a non-default hasher is not inherently slow | roadmap.md |
 | B-2026-08-22-30 | 2026-08-22 | typecheck | medium | Three `f16_software_emulated` lint tests fail on EVERY aarch64 macOS machine on a clean `main`: the tests assert the emulation warning fires, while `baseline_cpu_and_features` resolves Apple Silicon to `apple-m1`, which `target_has_native_f16` answers `true` for -- so the lint correctly stays quiet. CI is x86_64 and green, leaving a permanently-red local suite | roadmap.md |
 | B-2026-08-23-2 | 2026-08-23 | ownership | medium | Ownership oracle does not model fixed-array (Array[T,N]) ownership, so the drop-differential is blind to the array-element-drop class and the planned codegen-consumes-oracle refactor would regress B-2026-08-23-1 | roadmap.md |
@@ -154,9 +153,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1501 surfaced
 
 </details>
 
-### Fixed (1473)
+### Fixed (1474)
 
-<details><summary>1473 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1474 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -16574,6 +16573,58 @@ monomorphized into the impl, and an ordinary inherent method) with the
 by-value `Slice[T]` control beside each, since that spelling always worked and
 a regression confined to the `ref` slot would otherwise hide behind it.
  |
+| B-2026-08-22-28 | typecheck | medium | An associated-type bound declared on a STDLIB-BAKED trait is never discharged at an impl site: `trait_assoc_decls` finds the trait declaration only b… | Fixed in d0ced1a, following the row's own plan, which was accurate in every
+particular -- including why it was not a one-liner.
+
+`TraitInfo` carried `assoc_types: Vec<String>`: names only, enough to answer
+"does this trait have an assoc type called X" and useless for discharging
+what it must satisfy. It now also carries the DECLS
+(`assoc_type_decls: Vec<AssocTypeDecl>`, populated in `env_add_trait`), and
+`trait_assoc_decls` falls back to `env.traits` when `program.items` misses --
+so the user-program surface and the stdlib-BAKED surface go through one path
+instead of one working and one silently not.
+
+ONE DESIGN DETAIL THE ROW DID NOT ANTICIPATE: the map had to become OWNED.
+The user-program half can hand out `&'a AssocTypeDecl` tied to
+`self.program`, but the baked half borrows `self.env`, and the per-binding
+discharge loop below needs `self` mutably. Cloning a handful of small decls
+per impl is the cheap way to hold both sources in one map; the alternative is
+threading two differently-lifetimed maps through the loop for no gain.
+
+THE WORKAROUND IT REPLACES IS GONE, and the reason to remove it was measured
+rather than assumed. B-2026-08-22-6 carried its own `type Hasher: Hasher`
+check in `check_recorded_container_hasher` precisely because this machinery
+did not work. With the general path live, that copy made one mistake report
+TWICE -- an impl-site `E_GAT_BOUND_NOT_SATISFIED` plus a use-site refusal at
+the container annotation. Removed. Its two SIBLING checks stay, and that
+distinction is the point: neither "does not implement BuildHasher" nor "a
+builder named in a container's type must be field-less" is an
+associated-type bound, so the general mechanism does not subsume them.
+Verified both still fire.
+
+The diagnostic also moved to a better place as a side effect: the refusal now
+lands at the IMPL, where the mistake is, rather than at whichever container
+annotation happened to name the builder.
+
+TESTS. `a_builder_whose_state_type_is_not_a_hasher_is_refused` is kept and
+re-pointed at `E_GAT_BOUND_NOT_SATISFIED`, as the row asked -- it now covers
+the general rule through the first baked trait with a user-facing impl
+surface, and additionally asserts ONE diagnostic for one mistake, which is
+what would catch the double-report coming back. Two new tests:
+`a_declared_assoc_type_bound_is_discharged_on_baked_and_user_traits_alike`
+asserts the two surfaces as a PAIR, because the defect was exactly that they
+disagreed and a fix regressing the user half would satisfy the baked half
+alone; and `a_satisfied_assoc_type_bound_on_a_baked_trait_is_accepted` pins
+the case an over-eager fix breaks -- rejecting every impl would pass the
+first test and make the feature unusable.
+
+SCOPE, stated so nobody re-derives it: this closes the gap for every stdlib
+trait with a bounded associated type, not just `BuildHasher`. `BuildHasher`
+was simply the first to have a user-facing impl surface, which is why it
+surfaced here.
+
+Full suite: 109 binaries, 14910 passed, 0 failed. fmt clean; clippy clean on
+both feature legs. |
 | B-2026-08-23-1 | codegen | medium | Owned Array[T, N] with heap elements leaks its element buffers at -O0 -- no scope-exit element drop was ever registered (the -O0 remainder B-2026-08-… | Fixed in 6c3957cf. An owned by-value Array[T, N] whose element owns heap (Array[String, N]) had NO scope-exit element drop registered at any binding site -- no CleanupAction, no synthesize_array_drop_fn, no track_*_array. So every element buffer leaked. Invisible at the default -O2 (the buffers are provably dead and LLVM deletes them) and on macOS ASAN (no LeakSanitizer); caught only by the Linux memory-sanitizer -O0 leg. Modeled the fix on the tuple owned-aggregate machinery but with array-index ([i]) GEP: (1) synthesize_array_drop_fn_te (runtime.rs) emits a drop fn freeing each of the N elements via the element type's own cap-guarded drop; (2) make_array_param_callee_owned (param_own.rs) registers it for an owned Array[heap, N] param/self -- note Array[T,N] parses as Path("Array") with generic args [Type(T), Const(N)], NOT TypeKind::Array (the [T;N] sugar), which is why the first attempt's TypeKind::Array arm never fired; (3) TRANSFER ownership, not deep copy -- the callee is sole owner, so the caller does not also free, which is what the measured single-element (a[1]) leak in take_first(mk(i)) confirmed (a[0] returned had its single owner in last); (4) suppress_array_elem_move_source (param_own.rs) cap-zeros a constant-index element moved out via return a[k] so the array drop skips the returned buffer (else double-free); (5) suppress_array_binding_move_arg retracts the caller's array drop when the whole array is passed by value into another callee (move_declined_copy_struct_arg choke point) so nested passing fn g(a){h(a)} does not free the shared buffers twice. Scalar-element and ref/mut ref array params are untouched. Verified: the three B-2026-08-22-18 fixtures plus a new nested-passing fixture (asan_array_owned_param_moved_into_nested_call_is_balanced) all clean under Linux LSan at -O0; codegen array E2E suite green. |
 
 </details>
