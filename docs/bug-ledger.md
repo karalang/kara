@@ -92,9 +92,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 281 | 1 |
+| miscompile | 281 | 0 |
 | leak | 189 | 0 |
-| missing-feature | 159 | 3 |
+| missing-feature | 160 | 4 |
 | run-vs-build | 155 | 3 |
 | double-free | 135 | 0 |
 | codegen-gap | 129 | 0 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1003 | 2 |
-| typecheck | 248 | 1 |
+| codegen | 1004 | 2 |
+| typecheck | 249 | 1 |
 | interp | 177 | 3 |
 | ownership | 64 | 0 |
 | other | 63 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1516 surfaced · 8 open · 1485 fixed · 9 wontfix** (2026-05-20 → 2026-08-23). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1517 surfaced · 8 open · 1486 fixed · 9 wontfix** (2026-05-20 → 2026-08-23). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (8)
 
@@ -136,8 +136,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1516 surfaced
 | B-2026-08-23-12 | 2026-08-23 | effect | medium | A `let` binding's `Fn(...)` TYPE ANNOTATION is never checked against the assigned function's effects, so `let f: Fn(i64) -> i64 = save;` -- a slot that declares PURITY -- silently accepts an effectful `save`, while the IDENTICAL parameter slot is rejected. Measured against `fn save(n: i64) -> i64 with writes(UserDB)`: `fn apply(f: Fn(i64) -> i64, n: i64)` called as `apply(save, 7)` errors `argument 1 has effect writes(UserDB) not declared in slot [pure]`, but `let f: Fn(i64) -> i64 = save;` in a caller that declares `with writes(UserDB)` reports NOTHING. The same E0404 rule, applied at one site and not the other. | roadmap.md |
 | B-2026-08-23-13 | 2026-08-23 | effect | low | The mutual-recursion NOTE now fires for two functions that merely REFERENCE each other as VALUES, calling them a "mutual recursion group" though neither calls the other. `fn p(n: i64) -> i64 { let f = q; n + 1 }` + `fn q(n: i64) -> i64 { let g = p; n + 2 }` reports `note[effect]: mutual recursion group resolved by fixed-point inference: \`p\` (no effects), \`q\` (no effects)`. The program passes and the note is suppressible with `#[allow(mutual_recursion_note)]`, so this is diagnostic wording, not a check failure -- but "mutual recursion" is a false statement about the program. | roadmap.md |
 | B-2026-08-23-15 | 2026-08-23 | interp | medium | The INTERPRETER does not order `eprintln` output across `par {}` branches, so stderr from a parallel region interleaves NONDETERMINISTICALLY -- 4 distinct orderings in 20 runs of one program -- while the SAME program's stderr under JIT and AOT is replayed in stable source order. design.md line 6242 promises exactly the opposite: it names `eprintln` as the construct to reach for when you need deterministic order under `par` ("For anything that needs deterministic order (snapshot tests, log aggregators, printf-style debugging of a race), use `eprintln`"), in explicit contrast to `dbg()`, whose unordered output it documents as unsupported for snapshot testing. The compiled backends honour that promise; the interpreter does not. | roadmap.md |
-| B-2026-08-23-16 | 2026-08-23 | codegen | high | `dbg(x)` HAS NO CODEGEN LOWERING AT ALL, so under JIT and AOT it returns CONSTANT 0 instead of its argument -- design.md calls it "an identity function with a side effect", and the compiled backends break the identity half silently. `let y = dbg(41) + 1` yields 42 under `--interp` and 1 under `karac run` / `karac build`; `let s = dbg("hello")` binds the String to 0 and prints `s=0`, a wrong-TYPED value flowing on from a wrong-valued call. The stderr line dbg is supposed to emit is lost too, but that is the lesser half: this corrupts data, not just diagnostics. Present in `--release` builds as well, where design.md strips dbg's OUTPUT but still requires the value to pass through. | roadmap.md |
 | B-2026-08-23-17 | 2026-08-23 | codegen+interp | medium | A PANIC MESSAGE goes to STDOUT under JIT and AOT but to STDERR under `--interp`, and design.md § Entry Point (line 6423) says stderr for all of them. The compiled backends inject the panic line into the program's DATA stream, so anything parsing a compiled Kara program's stdout gets `panic at f.kara:3:16 in main: unwrap() called on None/Err` mixed into its output, while a consumer watching stderr for faults sees nothing at all. Separately and on ALL THREE surfaces, a panic exits 1, not the 101 the same spec paragraph promises -- so the `$?` distinction it exists to provide ("distinct from the Err-exit-1 path so shell pipelines can distinguish expected failures from bugs") does not exist. | roadmap.md |
+| B-2026-08-23-18 | 2026-08-23 | codegen | medium | `dbg(x)` still has NO CODEGEN LOWERING, so a program containing it cannot be compiled at all -- `karac build` and `karac run` now REFUSE it with an actionable error (B-2026-08-23-16 replaced the silent constant-0 miscompile with that refusal), and only `karac run --interp` executes it. design.md § dbg() specifies a real feature -- a stderr line carrying file, line, expression TEXT and the `Debug` rendering of the value, in a terminal form and a `--output=json`/`jsonl` form, tagged with `task_id` inside a `par` region, stripped from `--release` builds, and returning the value so it composes inline. The interpreter implements all of it; the compiled backends implement none of it. | roadmap.md |
 
 ### Wontfix (9)
 
@@ -157,9 +157,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1516 surfaced
 
 </details>
 
-### Fixed (1485)
+### Fixed (1486)
 
-<details><summary>1485 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1486 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -17184,6 +17184,27 @@ CORPUS FALLOUT: none, and that is the finding. Exactly five `.kara` files mentio
 CONFIRMED IN PASSING: design.md line 6425's claim that `main`'s inferred set includes "`writes(Stderr)` introduced by `eprintln`, `reads(Env)` from `env.args()`" now holds exactly — `karac check --output=json` on that program reports `program_effects: ["reads(Env)","writes(Stderr)","writes(Stdout)"]`. That is B-2026-08-23-8 delivering, and it shows this row's codegen change left effect inference untouched.
 
 TWO STALE design.md MECHANISM CLAIMS were corrected alongside, both falsified by B-2026-08-23-8's console carve-out and both found by checking this row's `par` behaviour against the spec rather than against intuition. Line 6242 said `eprintln`'s "`writes(Stderr)` effect forces sequential execution of callers within a parallel region"; console writes are explicitly NON-conflicting (`conflicts.rs`'s `(Writes, Writes) if is_console_resource => false`), so nothing serializes — the deterministic order the sentence promises is real, but it comes from ordered REPLAY at the join. Line 9948 said a `for` body like `println(i)` is deterministic "because ... rule (2) serializes iterations"; measured deterministic over 12 runs, but by the cost model declining to fork a console-only body, not by conflict. Both now name the actual mechanism and warn against reading the console case as conflict serialization — which matters because the old wording implies the carve-out could be removed without consequence. |
+| B-2026-08-23-16 | typecheck+codegen | high | `dbg(x)` HAS NO CODEGEN LOWERING AT ALL, so under JIT and AOT it returns CONSTANT 0 instead of its argument -- design.md calls it "an identity functi… | FIXED by 107bea6, in two parts, and the row as filed UNDERSTATED the defect in two ways worth recording.
+
+WHAT THE ROW GOT WRONG. (1) It called the surface `codegen`. The root cause is in the TYPECHECKER: `dbg` had no type rule anywhere (`grep '"dbg"' src/` returned only `PRELUDE_FUNCTIONS` and a doc entry), so the call's type was unconstrained. That is not "untyped", it is a UNIVERSAL CAST — `let n: i64 = dbg("hello")` and `let s: String = dbg(42)` both type-checked. It is also WHY codegen could not lower `dbg`: with no recorded type for the result there was nothing to lower it to, which is what `dbg("abc").len()` was really reporting when it failed with "no handler for method 'len' on variable 'v'". (2) It missed that the constant-0 arm returns BEFORE arguments are compiled, so the argument expression is discarded entirely: `dbg(side_effect())` never calls `side_effect`. The row recorded a wrong RETURN VALUE; the argument's effects vanish too.
+
+Measured, on a genuine `--features llvm` build (an earlier reading that showed the JIT behaving correctly was taken against a karac accidentally rebuilt WITHOUT the llvm feature, where `run` falls back to the interpreter and `build` falls back to type-check — that reading was discarded):
+  interp: a=42  SIDE-EFFECT-RAN  b=5  c=7   + five dbg lines on stderr
+  jit:    a=1                    b=0  c=0   + nothing on stderr
+  aot:    a=1                    b=0  c=0   + nothing on stderr
+  `let s: String = dbg(42)` under AOT: SEGFAULT (rc=139) — 0 is a fine i64 and a null String data pointer.
+
+PART 1 — the type rule (`src/typechecker/expr_call.rs`, beside its console siblings). `dbg(x)` now has x's type; `dbg()` is Unit; two or more arguments is an arity error; a local named `dbg` shadows the builtin (the B-2026-08-01-26 guard the console family already carries). Deliberately NO `Display` bound, unlike `println`/`print`/`eprintln`: dbg renders through `Debug` (design.md § Debug names "`dbg(x)` output" as its first consumer), so `dbg(some_plain_struct)` must be accepted where `println` of the same value is correctly rejected. This closes the soundness hole outright — both laundering shapes are now type errors, including the one that segfaulted.
+
+PART 2 — fail closed (`src/codegen/call_dispatch.rs`), two arms. The general unknown-callee arm — whose comment read "silently return 0 (e.g. stdlib builtins not yet codegen'd)" — now returns an Err naming the callee and the site. That single arm produced this bug, B-2026-08-23-14 (`eprintln` compiled to nothing, every stderr write lost) and B-2026-07-31-9 (the `providers { } in { }` block compiled to nothing); in each case nothing was red and the divergence was found by accident much later. A second, `dbg`-specific arm gives the actionable message, since `dbg` is the one callee a user will hit.
+
+BLAST RADIUS, measured before switching rather than argued. The arm was instrumented and the corpus compiled through it: ZERO callees reach it across 12 example packages, 46 standalone example files and 398 built katas. Every prelude builtin was then probed directly (`min`/`max`/`clamp`/`size_of`/`ref_eq`/`collect_all`/the five `tracing_*`/`with_provider`): none is refused. It was dead for real programs and live only for compiler gaps, silently. Both full suites confirm.
+
+WHAT THIS DOES NOT DO: `dbg` still does not RUN in a compiled build — it now refuses loudly instead of miscompiling. That is a strict improvement (silent wrong values and a segfault become a compile error, and `--interp` runs the program correctly), but it is not the feature, so the lowering is filed as its own row rather than left implied by this one.
+
+HONESTY NOTE ON THE TESTS. The general fallback arm alone already refuses this program — verified by deleting the dbg-specific arm and re-running, which still fails the build, just with a generic message. So the cli gate pins the MESSAGE, not the class fix; nothing pins the general arm on its own, because no other callee reaches it. Of the five typechecker tests, three fail with the rule reverted (identity, arity, laundering) and two are deliberately guards against the WRONG fix rather than against the old behaviour: the Display test fails only if someone copies the console family's bound onto dbg, and the shadow test fails only if the intercept skips the local-binding guard. An earlier version of the identity test asserted only working programs and passed with the rule removed — vacuous, because an unconstrained type satisfies every legal use; it was rewritten around rejections, which only the identity can produce.
+
+ALTERNATIVE CONSIDERED AND REJECTED, recorded so it need not be re-derived: lower `dbg` as the IDENTITY ONLY — evaluate the argument, return it, print nothing — plus a compile-time warning that dbg output is interpreter-only. It is tempting because it fixes the miscompile completely while letting the program still build, and because it is EXACTLY the semantics design.md already specifies for `--release` (line 6218 strips dbg's output there; line 6240 keeps the value). It was rejected because in a non-release build it would knowingly ship an A/B divergence — the interpreter printing lines the compiled binary does not — and "A/B run == build" is the one rule the kata corpus treats as non-negotiable. A warning makes such a gap visible but does not make it absent, and every bug in this cluster began as a surface that was present-looking and partial. Refusing keeps the invariant intact and costs only the ability to compile a program that still has temporary developer instrumentation in it, which design.md calls dbg exactly. If the follow-up row's full lowering turns out to be expensive, identity-plus-warning is the sensible fallback for `--release` ONLY, where it is not a divergence but the specified behaviour. |
 
 </details>
 
