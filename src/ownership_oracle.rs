@@ -171,12 +171,26 @@ struct TypeDb {
     structs: HashMap<String, Vec<(String, TypeExpr)>>,
     /// enum name → all payload types across variants
     enums: HashMap<String, Vec<TypeExpr>>,
+    /// Names that call as a PAYLOAD-CARRYING enum-variant constructor —
+    /// `Some`, `Ok`, `Err`, and every user tuple/struct variant, in both the
+    /// bare (`Some`) and qualified (`Option.Some`) spellings.
+    ///
+    /// `Some(t)` parses as `ExprKind::Call`, so without this it fell through
+    /// the free-call arm's caller-retains default and the argument was read
+    /// rather than moved — see the `Call` arm for what that cost.
+    variant_ctors: HashSet<String>,
 }
 
 impl TypeDb {
     fn build(program: &Program) -> Self {
         let mut structs = HashMap::new();
         let mut enums = HashMap::new();
+        // The prelude's payload-carrying variants. They are not `EnumDef`s in
+        // the analyzed tree, so they have to be seeded rather than collected.
+        let mut variant_ctors: HashSet<String> = ["Some", "Ok", "Err"]
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
         for item in &program.items {
             match item {
                 Item::StructDef(s) => {
@@ -196,13 +210,39 @@ impl TypeDb {
                             VariantKind::Struct(fs) => tys.extend(fs.iter().map(|f| f.ty.clone())),
                             VariantKind::Unit => {}
                         }
+                        // Unit variants take no argument, so they can never
+                        // consume one and are left out deliberately.
+                        if !matches!(v.kind, VariantKind::Unit) {
+                            variant_ctors.insert(v.name.clone());
+                            variant_ctors.insert(format!("{}.{}", e.name, v.name));
+                        }
                     }
                     enums.insert(e.name.clone(), tys);
                 }
                 _ => {}
             }
         }
-        TypeDb { structs, enums }
+        TypeDb {
+            structs,
+            enums,
+            variant_ctors,
+        }
+    }
+
+    /// Does this callee name a payload-carrying enum-variant constructor?
+    /// Matches the last path segment, so `Some`, `Option.Some` and a
+    /// module-qualified `m.E.V` all resolve alike.
+    fn is_variant_ctor(&self, callee: &Expr) -> bool {
+        let name = match &callee.kind {
+            ExprKind::Identifier(n) => n.as_str(),
+            ExprKind::Path { segments, .. } => match segments.last() {
+                Some(s) => s.as_str(),
+                None => return false,
+            },
+            ExprKind::FieldAccess { field, .. } => field.as_str(),
+            _ => return false,
+        };
+        self.variant_ctors.contains(name)
     }
 
     /// Does a value of this declared type own heap storage (and therefore carry
@@ -904,15 +944,40 @@ impl Analyzer<'_> {
 
             // Free call: user fn → caller-retains, every arg NonConsuming
             // (Read); a builtin constructor (`Vec.new()`) has no owned args.
+            //
+            // EXCEPT an enum-variant constructor. `Some(t)` shares this node
+            // with a free call but is an AGGREGATE LITERAL: the argument
+            // escapes into the enum value, which then owns it — the same §4
+            // rule `Tuple` / `StructLiteral` / `MapLiteral` below apply, and
+            // the reason they say Move. Reading it instead left the source
+            // binding `Owned`, so the schedule carried BOTH the source and the
+            // enum (`let o = Some(t)` scheduled `o` *and* `t` — one value,
+            // two drops), and codegen — which keys the drop on the enum
+            // binding — read as missing one. That was every divergence left in
+            // the `drop_fuzz --differential` corpus.
             ExprKind::Call { callee, args } => {
                 let modes = self.callee_modes(callee);
+                // A known user function WINS over a same-named variant. The two
+                // can only collide when a program declares both, and the tie has
+                // to break somewhere; it breaks toward Read because the two
+                // errors are not symmetric. Reading what was really moved
+                // OVER-schedules, and an over-scheduled place shows up as a
+                // divergence — loud. Moving what was really read UNDER-schedules,
+                // and a place that is never scheduled is a leak this differential
+                // can no longer see — silent.
+                let ctor = modes.is_none() && self.type_db.is_variant_ctor(callee);
                 for (i, a) in args.iter().enumerate() {
-                    let r = match modes.as_ref().and_then(|m| m.get(i)) {
-                        // Both Owned and Borrow user params are NonConsuming for
-                        // the *caller's* binding (§4): owned params entry-copy.
-                        Some(_) => Role::Read,
-                        // Unknown callee → default caller-retains (Read).
-                        None => Role::Read,
+                    let r = if ctor {
+                        Role::Move
+                    } else {
+                        match modes.as_ref().and_then(|m| m.get(i)) {
+                            // Both Owned and Borrow user params are NonConsuming
+                            // for the *caller's* binding (§4): owned params
+                            // entry-copy.
+                            Some(_) => Role::Read,
+                            // Unknown callee → default caller-retains (Read).
+                            None => Role::Read,
+                        }
                     };
                     self.analyze_expr(&a.value, r);
                 }

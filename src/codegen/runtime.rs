@@ -7457,6 +7457,33 @@ impl<'ctx> super::Codegen<'ctx> {
         for d in &due {
             match d {
                 DueDrop::User { name, ptr, drop_fn } => {
+                    // Record before emitting, for the reason the `Rc` arm below
+                    // spells out — and this arm is the one that motivated it.
+                    // The action is RETIRED from the frame once fired, so the
+                    // scope-exit funnel never sees it, and without a record
+                    // here the differential reads an NLL-*retimed* user drop as
+                    // a MISSING one. Measured: 88 of the 94 divergences on the
+                    // `drop_fuzz --differential` corpus, every one a
+                    // Drop-bearing local whose last use fired here, and all
+                    // LSan-clean.
+                    //
+                    // Recorded DIRECTLY rather than through `record_drop_obs`,
+                    // which takes a `&CleanupAction` this site no longer holds.
+                    // Rebuilding one to re-read the `binding_name` we already
+                    // have would allocate on the production path, where the
+                    // sink is never armed — the cost `armed()` exists to avoid.
+                    // For `UserDrop` the funnel's place IS `binding_name`, so
+                    // the two forms record identically.
+                    if crate::codegen::drop_obs::armed() {
+                        if let Some(fn_val) = self.current_fn {
+                            let f = fn_val.get_name().to_str().unwrap_or("");
+                            crate::codegen::drop_obs::record(f, "heap", name);
+                        }
+                    }
+                    // Emission stays open-coded rather than routed through
+                    // `emit_cleanup_action`: that arm also flushes
+                    // `pending_box_field_zeroes` (B-2026-08-18-4), which is
+                    // scope-exit-ordered work this early fire must not do.
                     self.builder
                         .build_call(*drop_fn, &[(*ptr).into()], &format!("nll.drop.{name}"))
                         .unwrap();

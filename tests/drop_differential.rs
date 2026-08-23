@@ -306,3 +306,115 @@ fn ownership_error_is_invalid_not_a_divergence() {
     );
     assert_eq!(differential_check(&src), DiffOutcome::Invalid);
 }
+
+// ── Drop-bearing shapes (B-2026-08-23-5) ────────────────────────────────────
+//
+// Until this block, NO curated case declared an `impl Drop` — which is why the
+// standing gate stayed green while the `drop_fuzz --differential` corpus sat at
+// 94 divergences. Every one of the 94 needed a user `Drop` body, because that
+// is what routes a binding's cleanup through `fire_due_user_drops` (the NLL
+// live-range-end firing) instead of the scope-exit drain. All four shapes below
+// are LSan-clean; they are gates on the DIFFERENTIAL's fidelity, not on the
+// leak — a red one means the oracle and codegen disagree about the drop, not
+// that memory was lost.
+
+/// A struct with a user `Drop` body plus a heap field — the shape the fuzzer
+/// generates as `Tracked` and the one every divergence in the corpus involved.
+const DROP_T: &str = "struct T { tag: i64, name: String }\n\
+                      impl Drop for T { fn drop(mut ref self) { println(f\"D{self.tag}\"); } }\n";
+
+#[test]
+fn drop_bearing_local_moved_into_owned_param() {
+    // The 88-divergence class. `t`'s last use MOVES it into an owned param, so
+    // the binding's `UserDrop` fires at its NLL live-range end and is retired
+    // from the frame — never reaching the scope-exit funnel. Before the fix
+    // that firing path recorded nothing and the differential read the retimed
+    // drop as a missing one.
+    let src = format!(
+        "{DROP_T}fn take(t: T) -> i64 {{ return t.name.len(); }}\n\
+         fn main() {{ let t: T = T {{ tag: 1i64, name: {S} }}; println(take(t)); }}"
+    );
+    assert!(
+        assert_clean(&src) >= 1,
+        "expected the Drop-bearing local to be scheduled and covered"
+    );
+}
+
+#[test]
+fn drop_bearing_local_passed_by_ref_still_drops() {
+    // Same firing path reached without any move at all: `t` is only borrowed,
+    // so `main` still owns it and drops it at `t`'s last use. Pins that the fix
+    // is about the RECORD, not about moves — this shape has none.
+    let src = format!(
+        "{DROP_T}fn peek(t: ref T) -> i64 {{ return t.name.len(); }}\n\
+         fn main() {{ let t: T = T {{ tag: 1i64, name: {S} }}; println(peek(t)); }}"
+    );
+    assert!(
+        assert_clean(&src) >= 1,
+        "expected the borrowed-from local to be scheduled and covered"
+    );
+}
+
+#[test]
+fn drop_bearing_local_moved_into_some() {
+    // The 6-divergence class, and a different defect: `Some(t)` parses as a
+    // `Call`, so the oracle took the free-call caller-retains default and READ
+    // `t` instead of moving it. Codegen keys the drop on the `Option` binding
+    // (and the arm binding it is matched into), so the source-keyed schedule
+    // read as missing.
+    // Kept match-free so the schedule stays NON-EMPTY: matching `o` moves it
+    // into the scrutinee, after which `main` owns nothing and the comparison
+    // would pass vacuously. Here `o` is still live at scope exit, so the
+    // assertion below has something to check.
+    let src = format!(
+        "{DROP_T}fn main() {{ let t: T = T {{ tag: 1i64, name: {S} }};\n\
+         let o: Option[T] = Some(t); println(o.is_some()); }}"
+    );
+    assert!(
+        assert_clean(&src) >= 1,
+        "expected the Option binding to be scheduled and covered"
+    );
+}
+
+#[test]
+fn drop_bearing_local_moved_into_some_then_matched_out() {
+    // The same move followed by a `match` that consumes the `Option`. Nothing
+    // survives to scope exit, so the schedule is legitimately empty and the
+    // check is that the differential agrees rather than that it counts: before
+    // the fix this reported `main::t` missing, because the source binding was
+    // still scheduled while codegen keyed the drop on the arm binding.
+    let src = format!(
+        "{DROP_T}fn main() {{ let t: T = T {{ tag: 1i64, name: {S} }};\n\
+         let o: Option[T] = Some(t);\n\
+         match o {{ Some(x) => println(x.name.len()), None => {{}} }} }}"
+    );
+    assert_clean(&src);
+}
+
+#[test]
+fn moving_into_some_schedules_the_option_not_the_source() {
+    // The same oracle gap seen directly, without codegen: reading rather than
+    // moving the constructor argument left BOTH the source and the enum owned,
+    // so one value carried two scheduled drops. Asserted against the oracle
+    // itself so a regression is attributed to the model, not to lowering.
+    let src = format!(
+        "{DROP_T}fn main() {{ let t: T = T {{ tag: 1i64, name: {S} }};\n\
+         let o: Option[T] = Some(t); println(o.is_some()); }}"
+    );
+    let oracle = karac::ownership_oracle::analyze(&karac::parse(&src).program);
+    let main_fn = oracle
+        .functions
+        .iter()
+        .find(|f| f.function == "main")
+        .expect("main in the oracle result");
+    let places: Vec<&str> = main_fn.drops.iter().map(|d| d.place.as_str()).collect();
+    assert!(
+        places.contains(&"o"),
+        "the Option binding owns the value and must be scheduled; got {places:?}"
+    );
+    assert!(
+        !places.contains(&"t"),
+        "`t` was moved into `Some(..)` and must NOT also be scheduled \
+         (one value, two drops); got {places:?}"
+    );
+}

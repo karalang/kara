@@ -18,9 +18,26 @@
 //! normal `karac` / test / REPL codegen path pays nothing (one relaxed
 //! `is_some` check per emitted cleanup action). The recorder is inkwell-free —
 //! it takes already-extracted `(function, category, place)` strings, so the
-//! LLVM-typed extraction (reading an alloca's name) stays at the single call
-//! site in `runtime.rs`'s `emit_cleanup_action_at`, the sole funnel every
-//! actually-emitted drop passes through.
+//! LLVM-typed extraction (reading an alloca's name) stays in `runtime.rs`.
+//!
+//! **Any path that emits a drop for a SOURCE BINDING must record it — including
+//! the paths that RETIRE an action instead of draining it.**
+//! `emit_cleanup_action_at` is the scope-exit funnel and the main one, but it is
+//! not the only one: `fire_due_user_drops` fires a binding's `UserDrop` /
+//! `RcDec` at its NLL live-range end and removes the action from the frame, so
+//! the scope-exit funnel never sees it. Both of its arms record. A firing path
+//! that skips the record does not present a *retimed* drop to the differential
+//! — it presents a MISSING one, i.e. a phantom leak. That is exactly what the
+//! `UserDrop` arm did: 88 of the 94 divergences the corpus carried
+//! (B-2026-08-23-5), all of them LSan-clean.
+//!
+//! `drain_statement_temp_user_drops` is the one firing path that deliberately
+//! records nothing, and it is exempt BY CONSTRUCTION rather than by choice: it
+//! matches three fixed synthetic names (`__owned_agg_tmp`, `__refarg_tmp`,
+//! `__urecv_drop_tmp`), none of which is a source binding, so no place it fires
+//! can be in the oracle's vocabulary and none can become a divergence. A new
+//! firing path earns that exemption only by the same argument — if it can fire
+//! on a name the user wrote, it has to record.
 //!
 //! The comparison is keyed on *place names*: `create_entry_alloca` names each
 //! binding's slot after the binding, so an emitted `FreeVecBuffer` /

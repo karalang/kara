@@ -13,8 +13,21 @@
 //! the `drop_fuzz --differential` corpus runner and `tests/drop_differential.rs`
 //! (the standing gate over canonical heap-core shapes) share one implementation.
 //!
-//! **Soundness — three alignment rules, each pinned by a false positive it
-//! removed** (the corpus went 792 → 392 → 111 → 0 divergences as they went in):
+//! **Soundness — four alignment rules, each pinned by a false positive it
+//! removed** (the corpus went 792 → 392 → 111 → 0 divergences as rules 1-3
+//! went in; rule 4 arrived later and is neutral on it):
+//!
+//! **The corpus number is a live gate, not a historical note.** It sat at 94
+//! (186 at `--count 400`) for a while against a doc that still read 0
+//! (B-2026-08-23-5) — a red gate nobody was reading, because the curated
+//! `tests/drop_differential.rs` shapes stayed green. The cause was coverage,
+//! and worth stating so it is not re-learned: **no curated shape declared an
+//! `impl Drop`**, and every one of the 94 needed one. The corpus is back to 0
+//! at both sizes, the two defects it was reporting are fixed (an unrecorded
+//! NLL firing path, and the oracle reading an enum-variant constructor's
+//! argument rather than moving it), and the curated file now carries
+//! Drop-bearing cases so the standing gate covers the class too. If this
+//! number and the corpus disagree again, believe the corpus.
 //!
 //!  1. **Oracle on the *surface* tree** (before `lower`). The oracle's model
 //!     and its unit tests are defined over source syntax; `lower` desugars
