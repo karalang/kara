@@ -102,7 +102,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 95 | 0 |
 | perf | 84 | 0 |
 | other | 59 | 0 |
-| soundness | 57 | 0 |
+| soundness | 58 | 1 |
 | crash | 55 | 0 |
 | use-after-free | 20 | 0 |
 
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1012 | 2 |
+| codegen | 1013 | 3 |
 | typecheck | 250 | 1 |
 | interp | 180 | 0 |
 | other | 64 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1534 surfaced · 4 open · 1507 fixed · 9 wontfix** (2026-05-20 → 2026-08-24). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1535 surfaced · 5 open · 1507 fixed · 9 wontfix** (2026-05-20 → 2026-08-24). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,6 +134,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1534 surfaced
 | B-2026-08-23-13 | 2026-08-23 | effect | low | The mutual-recursion NOTE now fires for two functions that merely REFERENCE each other as VALUES, calling them a "mutual recursion group" though neither calls the other. `fn p(n: i64) -> i64 { let f = q; n + 1 }` + `fn q(n: i64) -> i64 { let g = p; n + 2 }` reports `note[effect]: mutual recursion group resolved by fixed-point inference: \`p\` (no effects), \`q\` (no effects)`. The program passes and the note is suppressible with `#[allow(mutual_recursion_note)]`, so this is diagnostic wording, not a check failure -- but "mutual recursion" is a false statement about the program. | roadmap.md |
 | B-2026-08-24-9 | 2026-08-24 | codegen | low | `dbg(x)` where `x` is a SELF-REFERENTIAL `shared enum` (`shared enum T2 { Node(i64, T2), Leaf(i64) }`) REFUSES to compile. Not a missing arm: the shared-enum wrapper and the inner `emit_enum_display_fn` share ONE cache key (the bare enum name), so a payload of the enum's own type resolves to the aggregate-taking inner and is handed a handle. Refusing is the new behaviour; before the guard it MISCOMPILED, printing a wrong variant. A HEADERLESS or weak-headered shared type refuses for its own separate reason, below. | phase-7-codegen.md |
 | B-2026-08-24-13 | 2026-08-24 | codegen | medium | A NON-SCALAR `break` VALUE (String / Vec / struct) cannot travel through the compiled backends' break-value slot: `fn pick() -> String { loop { break f"x" } }` and the labeled-block twin `found: { break found f"x" }` both FAIL AT MODULE VERIFICATION (`ret i64` against `{ptr, i64, i64}`), while the interpreter returns the value. Storing the header instead is a DOUBLE FREE, measured -- so the slot deliberately refuses it. | roadmap.md |
+| B-2026-08-24-15 | 2026-08-24 | codegen | high | `Vec.insert` / `Vec.remove` / `Vec.swap_remove` HAVE NO CODEGEN BOUNDS CHECK: an out-of-range index CORRUPTS THE HEAP (insert/remove) or SILENTLY RETURNS GARBAGE AND DROPS AN ELEMENT (swap_remove) on both compiled backends, where the interpreter panics and design.md says "panics if out of bounds" | roadmap.md |
 
 ### Wontfix (9)
 
