@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 283 | 0 |
 | leak | 189 | 0 |
 | missing-feature | 160 | 4 |
-| run-vs-build | 156 | 3 |
+| run-vs-build | 156 | 2 |
 | double-free | 135 | 0 |
 | codegen-gap | 129 | 0 |
 | diagnostics | 100 | 1 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | codegen | 1006 | 2 |
 | typecheck | 249 | 1 |
-| interp | 178 | 3 |
+| interp | 178 | 2 |
 | ownership | 64 | 0 |
 | other | 63 | 0 |
 | cli | 62 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1520 surfaced · 8 open · 1489 fixed · 9 wontfix** (2026-05-20 → 2026-08-23). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1520 surfaced · 7 open · 1490 fixed · 9 wontfix** (2026-05-20 → 2026-08-23). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (8)
+### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -137,7 +137,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1520 surfaced
 | B-2026-08-23-15 | 2026-08-23 | interp | medium | The INTERPRETER does not order `eprintln` output across `par {}` branches, so stderr from a parallel region interleaves NONDETERMINISTICALLY -- 4 distinct orderings in 20 runs of one program -- while the SAME program's stderr under JIT and AOT is replayed in stable source order. design.md line 6242 promises exactly the opposite: it names `eprintln` as the construct to reach for when you need deterministic order under `par` ("For anything that needs deterministic order (snapshot tests, log aggregators, printf-style debugging of a race), use `eprintln`"), in explicit contrast to `dbg()`, whose unordered output it documents as unsupported for snapshot testing. The compiled backends honour that promise; the interpreter does not. | roadmap.md |
 | B-2026-08-23-17 | 2026-08-23 | codegen+interp | medium | A PANIC MESSAGE goes to STDOUT under JIT and AOT but to STDERR under `--interp`, and design.md § Entry Point (line 6423) says stderr for all of them. The compiled backends inject the panic line into the program's DATA stream, so anything parsing a compiled Kara program's stdout gets `panic at f.kara:3:16 in main: unwrap() called on None/Err` mixed into its output, while a consumer watching stderr for faults sees nothing at all. Separately and on ALL THREE surfaces, a panic exits 1, not the 101 the same spec paragraph promises -- so the `$?` distinction it exists to provide ("distinct from the Err-exit-1 path so shell pipelines can distinguish expected failures from bugs") does not exist. | roadmap.md |
 | B-2026-08-23-18 | 2026-08-23 | codegen | medium | `dbg(x)` still has NO CODEGEN LOWERING, so a program containing it cannot be compiled at all -- `karac build` and `karac run` now REFUSE it with an actionable error (B-2026-08-23-16 replaced the silent constant-0 miscompile with that refusal), and only `karac run --interp` executes it. design.md § dbg() specifies a real feature -- a stderr line carrying file, line, expression TEXT and the `Debug` rendering of the value, in a terminal form and a `--output=json`/`jsonl` form, tagged with `task_id` inside a `par` region, stripped from `--release` builds, and returning the value so it composes inline. The interpreter implements all of it; the compiled backends implement none of it. | roadmap.md |
-| B-2026-08-23-21 | 2026-08-23 | interp | medium | The INTERPRETER's entry-point error line renders `E` through Rust's `Display for Value` instead of the Kāra `Display` impl, so `main() -> Result[(), E]` prints a DIFFERENT string under `karac run --interp` than under JIT/AOT -- and because `Value::Struct` holds its fields in a `HashMap`, the field order is RANDOM PER RUN. Five consecutive interpreter runs of one program printed `Wide { d: 4, a: 1, c: 3, b: 2 }`, `Wide { a: 1, b: 2, c: 3, d: 4 }`, `Wide { d: 4, a: 1, b: 2, c: 3 }`, ... where both compiled backends print the impl's `W(1,2,3,4)`. `KARAC_HASH_SEED` does NOT pin it: this is Rust's own per-process `RandomState`, not the Kāra hasher. | roadmap.md |
 
 ### Wontfix (9)
 
@@ -157,9 +156,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1520 surfaced
 
 </details>
 
-### Fixed (1489)
+### Fixed (1490)
 
-<details><summary>1489 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1490 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -17392,6 +17391,85 @@ It affects `--output=json` and `jsonl` identically. That is why the entry-point
 test above asserts the two COMPILED backends against the expected text instead
 of asserting parity with `--interp`: the interpreter half of that comparison is
 a separate open defect, not something this fix is responsible for. |
+| B-2026-08-23-21 | interp | medium | The INTERPRETER's entry-point error line renders `E` through Rust's `Display for Value` instead of the Kāra `Display` impl, so `main() -> Result[(),… | FIXED by 67c2a3a. Both halves came from one line:
+`eprintln!("Error: {e}")` in `src/cli/run_check_cmds.rs`, where `e` is an
+interpreter `Value`. That interpolation is Rust's `Display for Value`, which is
+a DIFFERENT RENDERER from the one the language uses, and the difference is not
+cosmetic:
+
+  (1) WRONG RENDERER. It ignores the user's Kāra `impl Display`. The compiled
+      backends render the same value by compiling `f"Error: {e}\n"`, which
+      dispatches to the user's `to_string`. So `run` and `build` disagreed on a
+      format design.md § Entry Point specifies exactly.
+  (2) NONDETERMINISTIC ORDER. `Value::Struct` holds `fields: HashMap<String,
+      Value>` and that arm walked it directly. Rust randomises `HashMap`
+      iteration per process via `RandomState`, so the SAME binary printed a
+      different field order on each run.
+
+MEASURED, `--interp` vs JIT vs AOT (all three now agree, and interp is stable
+across runs):
+  E = struct with impl Display   Shown { b: 2, a: 1 }   -> S(1,2)
+  E = enum with impl Display     NotFound(cfg)          -> not found: cfg
+  E = struct with #[derive(Display)]  hash order        -> declaration order
+  E = String                     already agreed         -> unchanged
+  determinism, 5 interp runs     5 different orders     -> 5 identical lines
+
+THE CONTRACT ALREADY EXISTED; only the interpreter ignored it. The typechecker
+rejects a `main() -> Result[(), E]` whose `E` has no `Display` with
+`E_MAIN_ERR_NOT_DISPLAY`, whose message says the runtime prints `Err(e)` "as
+`Error: {e}` using its `Display` impl". design.md § Entry Point says the same in
+two places. Nothing in the spec or the diagnostics needed changing -- the
+implementation was simply not doing what both already promised.
+
+THE FIX is a value-driven twin of the dispatch the language already had.
+`println(x)` and `f"{x}"` route through `eval_method_call(expr, "to_string", ..)`,
+which needs an AST EXPRESSION to recover the receiver's type; a site holding only
+a `Value` had no equivalent and reached for `format!`. `render_value_via_display`
+is that equivalent: user `impl Display` if the type has one, else
+`display_render_typed` (the built-in / `#[derive(Display)]` renderer, which reads
+the struct's declaration and therefore emits DECLARATION order). All three output
+modes -- text, `--output=json`, `--output=jsonl` -- now go through it. The JSON
+modes mattered independently: they emitted the same randomised string into the
+machine-readable surface something downstream is expected to diff.
+
+BLAST RADIUS, MEASURED rather than argued. Instrumenting the hash-ordered arm to
+report every hit found ZERO across the 1,680-test interpreter suite and the
+603-test CLI suite -- the entry-point error line is the only path that reached
+it, and no existing test covered that path, which is why this survived. In
+particular `#[derive(Display)]` rendering (`println(r)`, `f"{r}"`) was already
+deterministic and in declaration order on all three backends: it goes through
+`display_render_typed`, not this arm.
+
+DEFENSE IN DEPTH, with zero measured reach and stated as such: the raw
+`Display for Value` arms for `Struct` and `SharedStruct` now emit fields in a
+deterministic order rather than `HashMap` order, so a future `format!("{v}")`
+cannot silently reintroduce per-run nondeterminism. `SharedStruct` was the worse
+of the two -- its fields live in FOUR separate `HashMap`s by mutability and
+weakness, so its order was randomised AND grouped by a property the user never
+wrote. That order is ALPHABETICAL, not declaration order, and the comment says so:
+this arm cannot see the struct's declaration, `display_render_typed` can, and
+user-visible rendering must go through `render_value_via_display`.
+
+NOT TO BE CONFUSED WITH `Map` / `Set`, which are also order-randomised and are
+CORRECT. Their `iter_observable` sorts by the KĀRA hash, so their order is seeded
+(pinnable with `KARAC_HASH_SEED`), identical in both backends, and deliberate --
+the DoS-resistance design.md § Hash describes. The struct arm's randomness was
+Rust's `RandomState`, which `KARAC_HASH_SEED` cannot pin; that difference is what
+distinguishes a design decision from this bug.
+
+TESTS: 2 in `tests/cli.rs` (a four-shape interp/JIT/AOT parity matrix --
+user-impl struct, user-impl enum, `String`, and `#[derive(Display)]` with field
+names ordered so neither alphabetical nor reverse-alphabetical sorting would
+produce the expected string; plus a six-run determinism check, since a single run
+of a `HashMap` walk always looks fine and only repetition exposes it) and 1
+lib unit test pinning the raw `Display for Value` arm directly, because no `.kara`
+program can reach it. Each of the three changes was reverted independently and
+its test re-run: all three fail when reverted.
+
+CORPUS IMPACT: none. Ten `.kara` programs declare `main() -> Result`, and the two
+that run to an error exit (`examples/phase0/dashboard.kara`,
+`examples/word_count.kara`) fail earlier -- neither prints an `Error:` line -- so
+no corpus output changes. |
 
 </details>
 
