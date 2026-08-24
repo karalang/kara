@@ -76,7 +76,7 @@ mod memory_sanitizer_tests {
     /// [`run_under_asan_no_leak_check`] instead: a program that `emit_panic`s
     /// aborts mid-operation, so the in-flight allocations LSan would flag are
     /// abort-time, not steady-state leaks, and would spuriously flip the
-    /// process exit code from `emit_panic`'s 1 to LSan's 23.
+    /// process exit code from `emit_panic`'s 101 to LSan's 23.
     fn run_under_asan(src: &str, label: &str) -> Option<(String, std::process::ExitStatus)> {
         run_under_asan_opts(src, label, true, false, true).map(|(out, _err, st)| (out, st))
     }
@@ -111,15 +111,18 @@ mod memory_sanitizer_tests {
     /// program partway through an operation (e.g. the `extend_from_slice`
     /// source-alias guard fires after the destination Vec has grown but before
     /// the old buffer is reclaimed), leaving abort-time allocations that LSan
-    /// reports as leaks — flipping the exit code from the expected 1 to 23 and
-    /// masking the panic the test is actually asserting. Panic-path cleanup is
-    /// the OS's job at process death; steady-state leaks are covered by every
-    /// `assert_clean_asan_run` case.
+    /// reports as leaks — flipping the exit code from the expected 101 to 23
+    /// and masking the panic the test is actually asserting. Panic-path
+    /// cleanup is the OS's job at process death; steady-state leaks are
+    /// covered by every `assert_clean_asan_run` case.
+    ///
+    /// Returns stderr alongside stdout: the panic line is on stderr
+    /// (B-2026-08-23-17), and the caller asserts against it.
     fn run_under_asan_no_leak_check(
         src: &str,
         label: &str,
-    ) -> Option<(String, std::process::ExitStatus)> {
-        run_under_asan_opts(src, label, false, false, true).map(|(out, _err, st)| (out, st))
+    ) -> Option<(String, String, std::process::ExitStatus)> {
+        run_under_asan_opts(src, label, false, false, true)
     }
 
     /// B-2026-08-08-16 — the flip's own guard. Every other fixture in this file
@@ -358,9 +361,9 @@ mod memory_sanitizer_tests {
         }
     }
 
-    /// Assert a program panics under ASAN (exit code 1) with `emit_panic`'s
-    /// `printf + exit(1)` shape, and that the panic message appears on
-    /// stdout. Skips on hosts lacking ASAN. Counterpart to
+    /// Assert a program panics under ASAN (exit code 101) with `emit_panic`'s
+    /// `fprintf(stderr) + exit(101)` shape, and that the panic message appears
+    /// on STDERR. Skips on hosts lacking ASAN. Counterpart to
     /// `assert_clean_asan_run` for runtime-guard tests (e.g. the
     /// `extend_from_slice` source-alias guard) where the codegen
     /// deliberately rejects a misuse rather than silently corrupting.
@@ -371,27 +374,28 @@ mod memory_sanitizer_tests {
         }
         // Leak detection OFF: the panic aborts mid-operation, so any in-flight
         // allocation LSan would report is an abort-time artifact, not a
-        // steady-state leak — and would flip the exit code 1 -> 23, masking
+        // steady-state leak — and would flip the exit code 101 -> 23, masking
         // the panic this assertion exists to verify. See
         // `run_under_asan_no_leak_check`.
-        let Some((stdout, status)) = run_under_asan_no_leak_check(src, label) else {
+        let Some((stdout, stderr, status)) = run_under_asan_no_leak_check(src, label) else {
             eprintln!("[{label}] setup failed — skipping");
             return;
         };
-        // `emit_panic` exits with code 1. `success()` is false; ASAN's own
-        // exit code (23) would indicate a memory error rather than the
-        // expected panic, so check for exactly 1 to disambiguate.
+        // `emit_panic` exits with the spec's panic code 101 (B-2026-08-23-17).
+        // `success()` is false; ASAN's own exit code (23) would indicate a
+        // memory error rather than the expected panic, so check for exactly
+        // 101 to disambiguate.
         assert_eq!(
             status.code(),
-            Some(1),
-            "[{label}] expected exit code 1 from emit_panic; got {:?}. \
-             stdout was: {stdout:?}",
+            Some(101),
+            "[{label}] expected exit code 101 from emit_panic; got {:?}. \
+             stdout was: {stdout:?}, stderr was: {stderr:?}",
             status.code(),
         );
         assert!(
-            stdout.contains(expected_substring),
+            stderr.contains(expected_substring),
             "[{label}] panic message missing {expected_substring:?}; \
-             stdout was: {stdout:?}",
+             stderr was: {stderr:?}, stdout was: {stdout:?}",
         );
     }
 

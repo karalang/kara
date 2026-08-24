@@ -124,7 +124,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Pinned by `tests/codegen.rs::test_server_serve_handler_shim_caches`.
     ///
     /// **Panic semantics (F1).** The shim does nothing special — Kāra's
-    /// `emit_panic` is `printf + exit(1)`, so handler panics terminate the
+    /// `emit_panic` is `fprintf(stderr) + exit(101)`, so handler panics terminate the
     /// server process. Recovery requires `std.panic` (separate Phase 8 work).
     pub(super) fn emit_http_handler_shim(
         &mut self,

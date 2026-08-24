@@ -206,8 +206,8 @@ fn main() {
 #[test]
 fn repl_runner_salvages_output_when_cell_calls_exit() {
     // A cell whose JIT'd `main` reaches `emit_panic` (assert failure, OOB
-    // index, runtime panic, contract violation) calls libc's `exit(1)` from
-    // inside the JIT'd code. That still terminates the runner subprocess —
+    // index, runtime panic, contract violation) calls libc's `exit(101)` from
+    // inside the JIT'd code (B-2026-08-23-17 — the spec's panic exit code). That still terminates the runner subprocess —
     // but the runner now installs an `atexit` handler (B-2026-07-09-4) that,
     // before the process dies, flushes and frames the cell's CAPTURED output
     // as a `faulted <id> <exit> <stdout_len> <stderr_len>\n<bytes>` frame on
@@ -241,7 +241,11 @@ fn main() {
     assert_eq!(parts.len(), 5, "faulted header parts: {trimmed:?}");
     assert_eq!(parts[0], "faulted", "expected a `faulted` salvage frame");
     assert_eq!(parts[1], "7", "echoed cell id");
-    assert_eq!(parts[2], "1", "salvage frames the emit_panic exit code (1)");
+    assert_eq!(
+        parts[2], "101",
+        "salvage frames the emit_panic exit code, which is the spec's panic \
+         code 101 (B-2026-08-23-17) — not the Err-path's 1"
+    );
     let stdout_len: usize = parts[3].parse().expect("stdout_len");
     let stderr_len: usize = parts[4].parse().expect("stderr_len");
     let mut cell_stdout = vec![0u8; stdout_len];
@@ -254,10 +258,10 @@ fn main() {
         .stdout
         .read_exact(&mut cell_stderr)
         .expect("read salvaged stderr");
-    // The fault text must survive the salvage — an assert failure lands on
-    // stderr (the `KARAC_TEST_FAILURE` marker path); an OOB/contract panic's
-    // `panic …` line lands on stdout. Assert the union is non-empty and
-    // carries a recognizable fault token.
+    // The fault text must survive the salvage — both the assert failure's
+    // `KARAC_TEST_FAILURE` marker and an OOB/contract panic's `panic …` line
+    // land on stderr. Assert the union is non-empty and carries a
+    // recognizable fault token.
     let combined = format!(
         "{}{}",
         String::from_utf8_lossy(&cell_stdout),
@@ -286,7 +290,7 @@ fn main() {
             Some(s) => break s,
             None if std::time::Instant::now() >= deadline => {
                 runner.child.kill().ok();
-                panic!("runner did not exit within 5s after cell's exit(1)");
+                panic!("runner did not exit within 5s after cell's exit(101)");
             }
             None => std::thread::sleep(Duration::from_millis(20)),
         }

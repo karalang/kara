@@ -5703,6 +5703,171 @@ fn test_build_release_project_mode_accepted() {
     );
 }
 
+// ── Panic stream + exit code (design.md § Entry Point) ─────────────
+//
+// A panic is normative in exactly two respects, on every backend: it goes
+// to STDERR and it exits 101 (B-2026-08-23-17). Before that row, the
+// compiled backends printed it with libc `printf` — i.e. into the
+// program's DATA stream, so anything parsing a Kāra program's stdout got
+// the panic mixed into its input — and all three backends exited 1,
+// collapsing the "distinguish expected failures from bugs" distinction the
+// spec paragraph exists to provide. The wording of the line is NOT pinned
+// (the two backends still differ); these tests assert only the two
+// properties a tool may rely on.
+
+/// Write a one-file panicking program into a fresh scratch dir.
+fn panic_program_dir(tag: &str, src: &str) -> std::path::PathBuf {
+    use std::io::Write;
+    let dir = std::env::temp_dir().join(format!("karac_panic_{}_{}", tag, std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::create_dir_all(&dir);
+    let mut f = std::fs::File::create(dir.join("pk.kara")).expect("write temp .kara");
+    f.write_all(src.as_bytes()).expect("write src");
+    dir
+}
+
+const PANIC_SRC: &str = "fn main() {\n    println(\"before\");\n    \
+                         let o: Option[i64] = None;\n    println(f\"{o.unwrap()}\");\n}\n";
+
+#[test]
+fn test_interp_panic_goes_to_stderr_and_exits_101() {
+    let dir = panic_program_dir("interp", PANIC_SRC);
+    let out = karac_bin()
+        .current_dir(&dir)
+        .args(["run", "--interp", "pk.kara"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(
+        out.status.code(),
+        Some(101),
+        "a panic exits 101, not 1 — stderr={stderr:?}"
+    );
+    assert!(
+        stderr.contains("unwrap"),
+        "the fault text belongs on stderr, got stderr={stderr:?}"
+    );
+    // The program's own output is the whole of stdout: the panic must not
+    // be interleaved into it.
+    assert_eq!(
+        stdout.trim(),
+        "before",
+        "stdout carries only program output, got {stdout:?}"
+    );
+}
+
+#[cfg(feature = "llvm")]
+#[test]
+fn test_jit_panic_goes_to_stderr_and_exits_101() {
+    let dir = panic_program_dir("jit", PANIC_SRC);
+    let out = karac_bin()
+        .current_dir(&dir)
+        .args(["run", "pk.kara"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    let _ = std::fs::remove_dir_all(&dir);
+    if stderr.contains("requires the llvm feature") {
+        return;
+    }
+    assert_eq!(
+        out.status.code(),
+        Some(101),
+        "a panic exits 101 under the JIT — stderr={stderr:?}"
+    );
+    assert!(
+        stderr.contains("panic at "),
+        "the JIT panic line belongs on stderr, got stderr={stderr:?} stdout={stdout:?}"
+    );
+    assert!(
+        !stdout.contains("panic at "),
+        "the panic must not land in the program's data stream, got stdout={stdout:?}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "before",
+        "pre-fault program output survives on stdout, got {stdout:?}"
+    );
+}
+
+#[cfg(feature = "llvm")]
+#[test]
+fn test_aot_panic_goes_to_stderr_and_exits_101() {
+    let dir = panic_program_dir("aot", PANIC_SRC);
+    let build = karac_bin()
+        .current_dir(&dir)
+        .args(["build", "pk.kara"])
+        .output()
+        .unwrap();
+    let berr = String::from_utf8_lossy(&build.stderr).to_string();
+    let exe = dir.join("pk");
+    if berr.contains("requires the llvm feature") || !exe.exists() {
+        let _ = std::fs::remove_dir_all(&dir);
+        return; // soft-skip: no codegen / no linker, same as the other E2Es
+    }
+    let run = common::output_with_hang_watchdog(
+        std::process::Command::new(&exe),
+        std::time::Duration::from_secs(15),
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    let run = match run {
+        Some(r) => r,
+        None => return,
+    };
+    let stdout = String::from_utf8_lossy(&run.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&run.stderr).to_string();
+    assert_eq!(
+        run.status.code(),
+        Some(101),
+        "a panic exits 101 in a built binary — stderr={stderr:?}"
+    );
+    assert!(
+        stderr.contains("panic at "),
+        "the panic line belongs on stderr, got stderr={stderr:?} stdout={stdout:?}"
+    );
+    assert!(
+        !stdout.contains("panic at "),
+        "the panic must not land in the program's data stream, got stdout={stdout:?}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "before",
+        "pre-fault program output survives on stdout, got {stdout:?}"
+    );
+}
+
+#[test]
+fn test_main_returning_err_still_exits_1_not_101() {
+    // The other half of the contract: 101 is worth nothing unless the
+    // Err-path stays 1. `main() -> Result` returning `Err` prints
+    // `Error: {e}` and exits 1 (design.md § Entry Point, "Error display
+    // format") — a DELIBERATE failure, not a bug, which is exactly the
+    // distinction the two codes encode.
+    let dir = panic_program_dir(
+        "errmain",
+        "fn main() -> Result[(), String] {\n    return Err(\"boom\");\n}\n",
+    );
+    let out = karac_bin()
+        .current_dir(&dir)
+        .args(["run", "--interp", "pk.kara"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "an Err-returning main exits 1 — stderr={stderr:?}"
+    );
+    assert!(
+        stderr.contains("Error: boom"),
+        "the Err line goes to stderr, got {stderr:?}"
+    );
+}
+
 #[cfg(feature = "llvm")]
 #[test]
 fn test_build_release_strips_contracts_e2e() {
@@ -5729,7 +5894,7 @@ fn main() { println(checked(5)); }
     // Returns None to soft-skip when the no-llvm fallback fires or linking
     // can't find the runtime archive (so the test passes vacuously in those
     // environments rather than failing on an unrelated cause).
-    let build_and_run = |release: bool| -> Option<(String, Option<i32>)> {
+    let build_and_run = |release: bool| -> Option<(String, String, Option<i32>)> {
         let mut args: Vec<&str> = vec!["build", "relprog.kara"];
         if release {
             args.push("--release");
@@ -5744,22 +5909,31 @@ fn main() { println(checked(5)); }
             std::time::Duration::from_secs(15),
         )?;
         let out = String::from_utf8_lossy(&run.stdout).to_string();
+        let err = String::from_utf8_lossy(&run.stderr).to_string();
         let code = run.status.code();
         let _ = std::fs::remove_file(&exe);
-        Some((out, code))
+        Some((out, err, code))
     };
 
-    if let Some((out, code)) = build_and_run(false) {
+    if let Some((out, err, code)) = build_and_run(false) {
+        // The abort text is on STDERR, not stdout, and the exit code is the
+        // spec's panic code — design.md § Entry Point, B-2026-08-23-17. Both
+        // are asserted here rather than just "nonzero somewhere" because the
+        // pre-fix behaviour (message on stdout, exit 1) passed a laxer test.
         assert!(
-            out.contains("contract violated"),
-            "debug build must abort on the requires violation, got stdout={out:?}",
+            err.contains("contract violated"),
+            "debug build must abort on the requires violation, got stderr={err:?} stdout={out:?}",
         );
-        assert_ne!(code, Some(0), "debug build must exit nonzero on the abort");
-    }
-    if let Some((out, code)) = build_and_run(true) {
         assert!(
             !out.contains("contract violated"),
-            "--release must strip the contract, got stdout={out:?}",
+            "the abort must not pollute the program's data stream, got stdout={out:?}",
+        );
+        assert_eq!(code, Some(101), "a panic exits 101, not the Err-path's 1");
+    }
+    if let Some((out, err, code)) = build_and_run(true) {
+        assert!(
+            !out.contains("contract violated") && !err.contains("contract violated"),
+            "--release must strip the contract, got stdout={out:?} stderr={err:?}",
         );
         assert_eq!(
             out.trim(),
@@ -5788,7 +5962,7 @@ fn test_build_release_project_mode_strips_contracts_e2e() {
     // Soft-skip (None) on the no-llvm fallback or a missing exe so the test
     // passes vacuously in those environments rather than failing on an
     // unrelated cause — same discipline as the single-file E2E above.
-    let build_and_run = |release: bool| -> Option<(String, Option<i32>)> {
+    let build_and_run = |release: bool| -> Option<(String, String, Option<i32>)> {
         let tmp = scratch_project(if release {
             "release-strip"
         } else {
@@ -5816,25 +5990,32 @@ fn test_build_release_project_mode_strips_contracts_e2e() {
         let run = run?;
         Some((
             String::from_utf8_lossy(&run.stdout).to_string(),
+            String::from_utf8_lossy(&run.stderr).to_string(),
             run.status.code(),
         ))
     };
 
-    if let Some((out, code)) = build_and_run(false) {
+    if let Some((out, err, code)) = build_and_run(false) {
         assert!(
-            out.contains("contract violated"),
-            "debug project build must abort on the requires violation, got stdout={out:?}",
+            err.contains("contract violated"),
+            "debug project build must abort on the requires violation, \
+             got stderr={err:?} stdout={out:?}",
         );
-        assert_ne!(
-            code,
-            Some(0),
-            "debug project build must exit nonzero on the abort"
-        );
-    }
-    if let Some((out, code)) = build_and_run(true) {
         assert!(
             !out.contains("contract violated"),
-            "--release must strip the contract in project mode, got stdout={out:?}",
+            "the abort must not pollute the program's data stream, got stdout={out:?}",
+        );
+        assert_eq!(
+            code,
+            Some(101),
+            "a panic exits 101, not the Err-path's 1 (B-2026-08-23-17)"
+        );
+    }
+    if let Some((out, err, code)) = build_and_run(true) {
+        assert!(
+            !out.contains("contract violated") && !err.contains("contract violated"),
+            "--release must strip the contract in project mode, \
+             got stdout={out:?} stderr={err:?}",
         );
         assert_eq!(
             out.trim(),

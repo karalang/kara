@@ -1948,7 +1948,7 @@ impl Session {
     /// Slice c-repl.B.B: run the just-typechecked program through the
     /// persistent `karac_jit_runner --repl-mode` subprocess. Lazily
     /// spawns the runner on the first cell; re-spawns after a cell-
-    /// induced exit (`emit_panic`'s `exit(1)`, runtime panics)
+    /// induced exit (`emit_panic`'s `exit(101)`, runtime panics)
     /// terminates it. Each cell increments `jit_next_cell_id` so the
     /// runner's echoed `result <id>` line cross-checks framing
     /// integrity.
@@ -2165,7 +2165,7 @@ impl Session {
                 let exit_code = wait_status.and_then(|s| s.code());
                 let mut errors = vec![format!(
                     "JIT runner subprocess died mid-cell (exit code {:?}); \
-                     the cell's code likely tripped emit_panic's exit(1). \
+                     the cell's code likely tripped emit_panic's exit(101). \
                      A fresh runner will spawn on the next cell.",
                     exit_code
                 )];
@@ -2182,8 +2182,8 @@ impl Session {
                     // the terminal (the `Completed` arm's forward wouldn't run
                     // for a dead runner). The runner's atexit salvage
                     // (B-2026-07-09-4) frames the faulting cell's captured
-                    // stdout — including the `panic at …` message emit_panic
-                    // prints to stdout — plus its stderr, so a fault is no
+                    // stdout plus its stderr — the `panic at …` message
+                    // emit_panic prints is on the latter — so a fault is no
                     // longer silent. When we DID salvage output, the panic text
                     // is self-explanatory, so suppress the verbose internal
                     // "runner died / will respawn" note; show it only on a

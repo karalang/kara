@@ -643,7 +643,7 @@ impl<'ctx> super::Codegen<'ctx> {
         }
 
         // Diverging prelude builtins `todo()` / `unreachable()` / `panic()`
-        // (type `!`). They print a panic message + `exit(1)`, then terminate
+        // (type `!`). They print a panic message + `exit(101)`, then terminate
         // the block with `unreachable` so no `ret` is emitted after them.
         // Lowered here — before the generic-call / unknown-callee fallback that
         // would otherwise hand back an `i64 0` placeholder and let the function
@@ -4335,7 +4335,7 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     /// Lower a diverging prelude builtin (`todo()` / `unreachable()` /
-    /// `panic()`, type `!`). Prints a panic message and `exit(1)` via
+    /// `panic()`, type `!`). Prints a panic message and `exit(101)` via
     /// `emit_panic`, then terminates the current block with an `unreachable`
     /// instruction so the caller's terminator-guarded paths (`compile_block`
     /// between statements, `if`/`match` branch merges, and the function-tail

@@ -42,13 +42,14 @@ use karac::codegen::LLJITEngine;
 
 // ── Panic-salvage for REPL mode (B-2026-07-09-4) ─────────────────────
 //
-// A faulting cell lowers to codegen's `emit_panic` → libc `exit(1)`,
+// A faulting cell lowers to codegen's `emit_panic` → libc `exit(101)`,
 // which terminates the runner mid-`call_main` — before
 // `capture_via_redirect` restores the fds, reads the per-cell redirect
 // tempfiles, and frames the captured bytes back to the parent. Those
-// bytes (the cell's pre-fault prints AND the `panic at …` message, both
-// already landed in the redirect tempfiles by dup2) would be lost, so an
-// interactive faulting cell showed nothing at all.
+// bytes (the cell's pre-fault prints AND the `panic at …` message —
+// stdout and stderr respectively, both already landed in the redirect
+// tempfiles by dup2) would be lost, so an interactive faulting cell showed
+// nothing at all.
 //
 // libc `exit` runs `atexit` handlers before terminating, so we register
 // `salvage_faulted_cell_output`: when a cell is in flight (`SALVAGE_ARMED`),
@@ -73,7 +74,8 @@ extern "C" fn salvage_faulted_cell_output() {
         return;
     }
     // Flush the JIT'd libc stdio so the redirect tempfiles hold every byte
-    // (the `panic at …` printf may still be buffered at exit time).
+    // (the `panic at …` fprintf may still be buffered at exit time — stderr
+    // is unbuffered on a tty but NOT when dup2'd onto a regular file).
     unsafe {
         libc::fflush(std::ptr::null_mut());
     }
@@ -91,8 +93,11 @@ extern "C" fn salvage_faulted_cell_output() {
     let _ = std::fs::remove_file(&out_path);
     let _ = std::fs::remove_file(&err_path);
     let id = SALVAGE_CELL_ID.load(Ordering::SeqCst);
-    // Exit code is emit_panic's `exit(1)`; frame it as 1.
-    let header = format!("faulted {} 1 {} {}\n", id, stdout.len(), stderr.len());
+    // Exit code is emit_panic's `exit(101)` (design.md § Entry Point,
+    // B-2026-08-23-17); frame it as 101. The parent discards this field on
+    // the faulted path — it re-spawns regardless — so it is a record of what
+    // happened, not a control signal.
+    let header = format!("faulted {} 101 {} {}\n", id, stdout.len(), stderr.len());
     write_all_fd(fd, header.as_bytes());
     write_all_fd(fd, &stdout);
     write_all_fd(fd, &stderr);

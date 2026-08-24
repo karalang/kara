@@ -1174,15 +1174,15 @@ impl<'ctx> super::Codegen<'ctx> {
     /// optionally with a trailing newline. Backs the `Stdout.{print,println}`
     /// / `Stderr.{print,println}` ambient methods (L646 slice 4b).
     ///
-    /// **Stdout** reuses `self.runtime_fns.printf_fn` — the SAME libc `printf` / stdout
-    /// buffer the free `print`/`println` builtins use (`compile_print`), so a
-    /// program mixing `println(x)` and `Stdout.println(y)` never interleaves
-    /// out of order. **Stderr** writes to fd 2 via POSIX `dprintf`, avoiding
-    /// the non-portable `stderr` / `__stderrp` FILE*-global; fd 2 is
-    /// unbuffered. Both use `%.*s` with the explicit length (field 1) so a
-    /// non-NUL-terminated heap `String` is read exactly `len` bytes —
-    /// identical to `compile_print`'s String-value arm (which documents the
-    /// ASan heap-overflow that a bare `%s` would cause).
+    /// Both streams go through `emit_nul_safe_write` (an `fwrite` to the
+    /// stdout / stderr `FILE*`), which is the SAME libc buffer the free
+    /// `print`/`println` builtins use (`compile_print`), so a program mixing
+    /// `println(x)` and `Stdout.println(y)` never interleaves out of order.
+    /// `fwrite` takes an explicit length, so a non-NUL-terminated heap
+    /// `String` is read exactly `len` bytes and an INTERIOR NUL does not
+    /// truncate it — the two failure modes the earlier `printf`/`dprintf`
+    /// `%.*s` form had (an ASan heap-overflow on a bare `%s`, and silent
+    /// truncation at an interior NUL).
     pub(super) fn emit_console_str_write(
         &mut self,
         str_val: BasicValueEnum<'ctx>,

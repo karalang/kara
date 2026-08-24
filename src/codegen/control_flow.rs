@@ -1158,7 +1158,24 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `Codegen::new` — karac is built natively per target. Both arms are
     /// syntactically live so `stdout_global` is never "field never read" on
     /// Windows.
-    fn stdio_stream(&self, to_stderr: bool) -> inkwell::values::BasicValueEnum<'ctx> {
+    pub(super) fn stdio_stream(&self, to_stderr: bool) -> inkwell::values::BasicValueEnum<'ctx> {
+        self.stdio_stream_with(&self.builder, to_stderr)
+    }
+
+    /// [`Self::stdio_stream`] against an EXPLICIT builder.
+    ///
+    /// The stream is materialized by an instruction (a load of `stderr`, or a
+    /// call to `__acrt_iob_func` on Windows), so it has to be emitted into the
+    /// same function as its use. `emit_panic` outlines its body into a
+    /// per-site `__karac_panic_site_<n>` function with its OWN builder, and
+    /// emitting the load through `self.builder` there put it in the caller —
+    /// "Instruction does not dominate all uses" at module verification
+    /// (B-2026-08-23-17).
+    pub(super) fn stdio_stream_with(
+        &self,
+        builder: &inkwell::builder::Builder<'ctx>,
+        to_stderr: bool,
+    ) -> inkwell::values::BasicValueEnum<'ctx> {
         let ptr_t = self.context.ptr_type(inkwell::AddressSpace::default());
         if cfg!(windows) {
             let i32_t = self.context.i32_type();
@@ -1173,7 +1190,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     )
                 });
             let idx = i32_t.const_int(if to_stderr { 2 } else { 1 }, false);
-            self.builder
+            builder
                 .build_call(iob, &[idx.into()], "iob")
                 .unwrap()
                 .try_as_basic_value()
@@ -1184,7 +1201,7 @@ impl<'ctx> super::Codegen<'ctx> {
             } else {
                 self.stdout_global
             };
-            self.builder
+            builder
                 .build_load(ptr_t, glob.as_pointer_value(), "fw.stream")
                 .unwrap()
         }

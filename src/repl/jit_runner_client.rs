@@ -7,7 +7,7 @@
 //! `result <id> <exit> <stdout_len> <stderr_len>\n<stdout><stderr>`
 //! responses). The Session holds at most one of these; it's lazily
 //! spawned on the first cell and re-spawned after a cell-induced
-//! exit (`emit_panic`'s `exit(1)`, runtime panics) terminates the
+//! exit (`emit_panic`'s `exit(101)`, runtime panics) terminates the
 //! runner.
 //!
 //! Lookup path for the runner binary:
@@ -122,7 +122,7 @@ impl ReplRunnerClient {
         let trimmed = header_line.trim_end_matches(['\r', '\n']);
         let parts: Vec<&str> = trimmed.split_whitespace().collect();
         // `result` = the runner survived; `faulted` = a cell tripped
-        // `emit_panic`'s exit(1) and the runner's atexit salvage framed the
+        // `emit_panic`'s exit(101) and the runner's atexit salvage framed the
         // captured output on its way out (B-2026-07-09-4). Both share the
         // 5-field `<verb> <id> <exit> <stdout_len> <stderr_len>` shape.
         let faulted = parts.first() == Some(&"faulted");
@@ -161,9 +161,9 @@ impl ReplRunnerClient {
             return self.collect_died();
         }
         if faulted {
-            // The runner salvaged the faulting cell's captured stdout (incl.
-            // the `panic at …` message, which `emit_panic` prints to stdout)
-            // and stderr, then exit(1)'d. Surface it through the runner-died
+            // The runner salvaged the faulting cell's captured stdout and
+            // stderr (the `panic at …` message is on the latter — B-2026-08-23-17),
+            // then exit(101)'d. Surface it through the runner-died
             // path so `run_cell_via_jit` prints it and the client re-spawns
             // for the next cell — same handling as a runner that died without
             // salvage, but now with the output the user needs.

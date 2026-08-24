@@ -997,7 +997,7 @@ mod codegen_tests {
             if let Some(cap) = run_program_capturing(&src) {
                 assert_eq!(
                     cap.status.code(),
-                    Some(1),
+                    Some(101),
                     "{label}: expected a trap; stdout={:?} stderr={:?}",
                     cap.stdout,
                     cap.stderr
@@ -1006,12 +1006,13 @@ mod codegen_tests {
                     !cap.stdout.contains("21"),
                     "{label}: a mismatched shape must not produce a tensor"
                 );
-                // `emit_panic` printfs, so the fault lands on STDOUT.
+                // `emit_panic` fprintfs to stderr, so that is where the fault
+                // lands (B-2026-08-23-17).
                 assert!(
-                    cap.stdout
+                    cap.stderr
                         .contains("shape does not match the declared shape"),
-                    "{label}: expected the shape-reconciliation panic, got stdout={:?}",
-                    cap.stdout
+                    "{label}: expected the shape-reconciliation panic, got stderr={:?}",
+                    cap.stderr
                 );
             }
         }
@@ -5723,7 +5724,7 @@ fn main() {
 }
 "#;
         if let Some(cap) = run_program_capturing(src) {
-            assert_eq!(cap.status.code(), Some(1), "stderr={:?}", cap.stderr);
+            assert_eq!(cap.status.code(), Some(101), "stderr={:?}", cap.stderr);
             assert!(
                 cap.stdout.contains("-2147483648"),
                 "the operand must reach i32::MIN before the negate, \
@@ -5731,7 +5732,7 @@ fn main() {
                 cap.stdout
             );
             assert!(
-                cap.stdout.contains("integer overflow"),
+                cap.stderr.contains("integer overflow"),
                 "negating i32::MIN must trap `integer overflow`, \
                  got stdout={:?} stderr={:?}",
                 cap.stdout,
@@ -21024,9 +21025,9 @@ fn main() {
 }
 "#;
         if let Some(cap) = run_program_capturing(src) {
-            assert_eq!(cap.status.code(), Some(1), "stderr={:?}", cap.stderr);
+            assert_eq!(cap.status.code(), Some(101), "stderr={:?}", cap.stderr);
             assert!(
-                cap.stdout.contains("integer overflow"),
+                cap.stderr.contains("integer overflow"),
                 "expected the unproven index add to KEEP its overflow trap, \
                  got stdout={:?} stderr={:?}",
                 cap.stdout,
@@ -21075,10 +21076,10 @@ fn main() {
         if let Some(cap) =
             run_program_capturing("fn main() { let x: u8 = 16; println(x.pow(2u32)); }")
         {
-            assert_eq!(cap.status.code(), Some(1), "stderr={:?}", cap.stderr);
+            assert_eq!(cap.status.code(), Some(101), "stderr={:?}", cap.stderr);
             // The AOT panic handler writes to stdout (`panic at … integer overflow`).
             assert!(
-                cap.stdout.contains("integer overflow"),
+                cap.stderr.contains("integer overflow"),
                 "expected integer-overflow trap, got stdout={:?} stderr={:?}",
                 cap.stdout,
                 cap.stderr
@@ -21115,9 +21116,9 @@ fn main() {
         if let Some(cap) = run_program_capturing(
             "fn main() { let mut z = 3i64; z = z - 3i64; println((5i64).div_euclid(z)); }",
         ) {
-            assert_eq!(cap.status.code(), Some(1), "stderr={:?}", cap.stderr);
+            assert_eq!(cap.status.code(), Some(101), "stderr={:?}", cap.stderr);
             assert!(
-                cap.stdout.contains("division by zero"),
+                cap.stderr.contains("division by zero"),
                 "expected division-by-zero trap, got stdout={:?} stderr={:?}",
                 cap.stdout,
                 cap.stderr
@@ -21144,9 +21145,9 @@ fn main() {
                          boom();\n\
                          }\n";
         if let Some(cap) = run_program_capturing(with_attr) {
-            assert_eq!(cap.status.code(), Some(1), "stderr={:?}", cap.stderr);
+            assert_eq!(cap.status.code(), Some(101), "stderr={:?}", cap.stderr);
             assert!(
-                cap.stdout.contains(":6:") && cap.stdout.contains("in boom"),
+                cap.stderr.contains(":6:") && cap.stderr.contains("in boom"),
                 "track_caller must report the caller's line (6) with the emitting frame name; \
                  stdout={:?}",
                 cap.stdout
@@ -21178,16 +21179,16 @@ fn main() {
                        boom();\n\
                        }\n";
         if let Some(cap) = run_program_capturing(no_attr) {
-            assert_eq!(cap.status.code(), Some(1), "stderr={:?}", cap.stderr);
+            assert_eq!(cap.status.code(), Some(101), "stderr={:?}", cap.stderr);
             assert!(
-                !cap.stdout.contains("panic at") && !cap.stdout.contains(":5:"),
-                "baseline must not redirect to the caller's line (5); stdout={:?}",
-                cap.stdout
+                !cap.stderr.contains("panic at") && !cap.stderr.contains(":5:"),
+                "baseline must not redirect to the caller's line (5); stderr={:?}",
+                cap.stderr
             );
             assert!(
-                cap.stdout.contains("entered unreachable code"),
-                "baseline still fires the same underlying panic; stdout={:?}",
-                cap.stdout
+                cap.stderr.contains("entered unreachable code"),
+                "baseline still fires the same underlying panic; stderr={:?}",
+                cap.stderr
             );
         }
 
@@ -21208,12 +21209,12 @@ fn main() {
                           outer();\n\
                           }\n";
         if let Some(cap) = run_program_capturing(transitive) {
-            assert_eq!(cap.status.code(), Some(1), "stderr={:?}", cap.stderr);
+            assert_eq!(cap.status.code(), Some(101), "stderr={:?}", cap.stderr);
             assert!(
-                cap.stdout.contains(":12:") && cap.stdout.contains("in inner"),
+                cap.stderr.contains(":12:") && cap.stderr.contains("in inner"),
                 "transitivity must forward the caller's line (12) to the innermost frame; \
-                 stdout={:?}",
-                cap.stdout
+                 stderr={:?}",
+                cap.stderr
             );
         }
     }
@@ -21244,11 +21245,11 @@ fn main() {
                       force(n);\n\
                       }\n";
         if let Some(cap) = run_program_capturing(unwrap) {
-            assert_eq!(cap.status.code(), Some(1), "stderr={:?}", cap.stderr);
+            assert_eq!(cap.status.code(), Some(101), "stderr={:?}", cap.stderr);
             assert!(
-                cap.stdout.contains(":10:")
-                    && cap.stdout.contains("in force")
-                    && !cap.stdout.contains(":6:"),
+                cap.stderr.contains(":10:")
+                    && cap.stderr.contains("in force")
+                    && !cap.stderr.contains(":6:"),
                 "unwrap must report the caller's line (10), not its own (6); stdout={:?}",
                 cap.stdout
             );
@@ -21266,13 +21267,13 @@ fn main() {
                      at(v, 99i64);\n\
                      }\n";
         if let Some(cap) = run_program_capturing(index) {
-            assert_eq!(cap.status.code(), Some(1), "stderr={:?}", cap.stderr);
+            assert_eq!(cap.status.code(), Some(101), "stderr={:?}", cap.stderr);
             assert!(
-                cap.stdout.contains(":8:")
-                    && cap.stdout.contains("in at")
-                    && !cap.stdout.contains(":3:"),
-                "index-OOB must report the caller's line (8), not its own (3); stdout={:?}",
-                cap.stdout
+                cap.stderr.contains(":8:")
+                    && cap.stderr.contains("in at")
+                    && !cap.stderr.contains(":3:"),
+                "index-OOB must report the caller's line (8), not its own (3); stderr={:?}",
+                cap.stderr
             );
         }
 
@@ -21291,13 +21292,13 @@ fn main() {
                    0i64\n\
                    }\n";
         if let Some(cap) = run_program_capturing(div) {
-            assert_eq!(cap.status.code(), Some(1), "stderr={:?}", cap.stderr);
+            assert_eq!(cap.status.code(), Some(101), "stderr={:?}", cap.stderr);
             assert!(
-                cap.stdout.contains(":7:")
-                    && cap.stdout.contains("in divide")
-                    && !cap.stdout.contains(":3:"),
-                "div-by-zero must report the caller's line (7), not its own (3); stdout={:?}",
-                cap.stdout
+                cap.stderr.contains(":7:")
+                    && cap.stderr.contains("in divide")
+                    && !cap.stderr.contains(":3:"),
+                "div-by-zero must report the caller's line (7), not its own (3); stderr={:?}",
+                cap.stderr
             );
         }
 
@@ -21551,9 +21552,9 @@ fn main() {
         if let Some(cap) =
             run_program_capturing("fn main() { let g: u8 = 129; println(g.next_power_of_two()); }")
         {
-            assert_eq!(cap.status.code(), Some(1), "stderr={:?}", cap.stderr);
+            assert_eq!(cap.status.code(), Some(101), "stderr={:?}", cap.stderr);
             assert!(
-                cap.stdout.contains("integer overflow"),
+                cap.stderr.contains("integer overflow"),
                 "expected integer-overflow trap, got stdout={:?} stderr={:?}",
                 cap.stdout,
                 cap.stderr
@@ -34812,13 +34813,13 @@ fn main() {
         ) {
             assert_eq!(
                 cap.status.code(),
-                Some(1),
+                Some(101),
                 "stdout={:?} stderr={:?}",
                 cap.stdout,
                 cap.stderr
             );
             assert!(
-                cap.stdout.contains("capacity overflow"),
+                cap.stderr.contains("capacity overflow"),
                 "expected capacity-overflow panic, got stdout={:?} stderr={:?}",
                 cap.stdout,
                 cap.stderr
@@ -37195,11 +37196,11 @@ fn main() reads(ResA) reads(ResB) {
     #[test]
     fn test_e2e_panic_prints_message_verbatim() {
         if let Some(cap) = run_program_capturing("fn main() { panic(\"kaboom\"); }") {
-            assert_eq!(cap.status.code(), Some(1), "stderr={:?}", cap.stderr);
+            assert_eq!(cap.status.code(), Some(101), "stderr={:?}", cap.stderr);
             assert!(
-                cap.stdout.contains("kaboom")
-                    && !cap.stdout.contains("not yet implemented")
-                    && !cap.stdout.contains("entered unreachable code"),
+                cap.stderr.contains("kaboom")
+                    && !cap.stderr.contains("not yet implemented")
+                    && !cap.stderr.contains("entered unreachable code"),
                 "panic() must surface its message verbatim; stdout={:?}",
                 cap.stdout
             );
@@ -44823,13 +44824,13 @@ fn main() {
         ) {
             assert_eq!(
                 c.status.code(),
-                Some(1),
+                Some(101),
                 "a branch panic must fail fast with exit 1; stdout={:?} stderr={:?}",
                 c.stdout,
                 c.stderr
             );
             assert!(
-                c.stdout.contains("division by zero"),
+                c.stderr.contains("division by zero"),
                 "expected the div-by-zero panic message; stdout={:?} stderr={:?}",
                 c.stdout,
                 c.stderr
@@ -45605,14 +45606,20 @@ fn driver() -> i64 {
             Some("-1428\n".to_string()),
             "control: the in-range program must run clean"
         );
-        let trapped = run_program(&format!(
+        // The pre-trap row still prints on stdout; the trap itself is on
+        // stderr (B-2026-08-23-17), so this needs the capturing harness.
+        let trapped = run_program_capturing(&format!(
             "{BODY}    println(row_scan(v, n * len - 2i64, len));\n}}"
         ))
         .expect("program should build and run");
         assert!(
-            trapped.starts_with("-1428\n") && trapped.contains("vec index out of bounds"),
+            trapped.stdout.starts_with("-1428\n")
+                && trapped.stderr.contains("vec index out of bounds"),
             "the out-of-range row must still trap — the second call site cannot \
-             discharge the precondition, so the bounds check must survive; got:\n{trapped}"
+             discharge the precondition, so the bounds check must survive; got \
+             stdout={:?} stderr={:?}",
+            trapped.stdout,
+            trapped.stderr
         );
     }
 
@@ -45734,7 +45741,7 @@ fn main() {{
         for (label, pre_fill, enc_head, post_init) in cases {
             if let Some(c) = run_program_capturing(&case_src(pre_fill, enc_head, post_init)) {
                 assert!(
-                    c.stdout.contains("vec index out of bounds"),
+                    c.stderr.contains("vec index out of bounds"),
                     "[{label}] an out-of-range store must panic, not be elided; \
                      got stdout={:?} stderr={:?}",
                     c.stdout,
@@ -47534,7 +47541,7 @@ fn main() {
              }",
         ) {
             assert!(
-                c.stdout.contains("vec index out of bounds"),
+                c.stderr.contains("vec index out of bounds"),
                 "expected OOB panic, got stdout={:?} stderr={:?}",
                 c.stdout,
                 c.stderr
@@ -49436,7 +49443,7 @@ fn main() {
         );
         if let Some(c) = captured {
             assert!(
-                c.stdout.contains("panic: vec index out of bounds"),
+                c.stderr.contains("panic: vec index out of bounds"),
                 "expected vec OOB panic, got stdout={:?} stderr={:?}",
                 c.stdout,
                 c.stderr
@@ -49648,7 +49655,7 @@ fn main() {
         );
         if let Some(c) = captured {
             assert!(
-                c.stdout.contains("integer overflow"),
+                c.stderr.contains("integer overflow"),
                 "expected u8-overflow trap, got stdout={:?}",
                 c.stdout
             );
@@ -49682,7 +49689,7 @@ fn main() {
         );
         if let Some(c) = captured {
             assert!(
-                c.stdout.contains("integer overflow"),
+                c.stderr.contains("integer overflow"),
                 "runtime -1 divisor must still trap, got stdout={:?}",
                 c.stdout
             );
@@ -49702,7 +49709,7 @@ fn main() {
         );
         if let Some(c) = captured {
             assert!(
-                c.stdout.contains("integer overflow"),
+                c.stderr.contains("integer overflow"),
                 "constant -1 divisor must still trap, got stdout={:?}",
                 c.stdout
             );
@@ -49747,7 +49754,7 @@ fn main() {
         );
         if let Some(c) = captured {
             assert!(
-                c.stdout.contains("integer overflow"),
+                c.stderr.contains("integer overflow"),
                 "expected integer-overflow trap on iN::MIN.abs(), got stdout={:?}",
                 c.stdout
             );
@@ -49957,7 +49964,7 @@ fn main() {
         );
         if let Some(c) = captured {
             assert!(
-                c.stdout.contains("float-to-int out of range"),
+                c.stderr.contains("float-to-int out of range"),
                 "expected out-of-range trap, got stdout={:?} stderr={:?}",
                 c.stdout,
                 c.stderr
@@ -51138,15 +51145,15 @@ fn main() {
                 errs[0].message
             );
             if let Some(cap) = run_program_capturing_with_filename(src, "trap.kara") {
-                let got = panic_location(&cap.stdout).unwrap_or_else(|| {
-                    panic!("{label}: no `panic at` location in stdout={:?}", cap.stdout)
+                let got = panic_location(&cap.stderr).unwrap_or_else(|| {
+                    panic!("{label}: no `panic at` location in stderr={:?}", cap.stderr)
                 });
                 assert_eq!(
                     got,
                     (line, col),
                     "{label}: compiled binary blamed a different location than \
-                     the interpreter; stdout={:?}",
-                    cap.stdout
+                     the interpreter; stderr={:?}",
+                    cap.stderr
                 );
             }
         }
@@ -51166,7 +51173,7 @@ fn main() {
         );
         if let Some(c) = captured {
             assert!(
-                c.stdout.contains("integer overflow"),
+                c.stderr.contains("integer overflow"),
                 "expected integer-overflow panic, got stdout={:?} stderr={:?}",
                 c.stdout,
                 c.stderr
@@ -51192,7 +51199,7 @@ fn main() {
         );
         if let Some(c) = captured {
             assert!(
-                c.stdout.contains("integer overflow"),
+                c.stderr.contains("integer overflow"),
                 "expected integer-overflow panic on MIN - 1, got stdout={:?}",
                 c.stdout
             );
@@ -51212,7 +51219,7 @@ fn main() {
         );
         if let Some(c) = captured {
             assert!(
-                c.stdout.contains("integer overflow"),
+                c.stderr.contains("integer overflow"),
                 "expected integer-overflow panic on 2^62 * 2, got stdout={:?}",
                 c.stdout
             );
@@ -51233,7 +51240,7 @@ fn main() {
         );
         if let Some(c) = captured {
             assert!(
-                c.stdout.contains("division by zero"),
+                c.stderr.contains("division by zero"),
                 "expected division-by-zero panic, got stdout={:?} stderr={:?}",
                 c.stdout,
                 c.stderr
@@ -51255,7 +51262,7 @@ fn main() {
         );
         if let Some(c) = captured {
             assert!(
-                c.stdout.contains("division by zero"),
+                c.stderr.contains("division by zero"),
                 "expected division-by-zero panic on %, got stdout={:?}",
                 c.stdout
             );
@@ -51278,7 +51285,7 @@ fn main() {
         );
         if let Some(c) = captured {
             assert!(
-                c.stdout.contains("integer overflow"),
+                c.stderr.contains("integer overflow"),
                 "expected integer-overflow panic on MIN / -1 (design.md: same \
                  error family as MAX + 1, distinct from division by zero), \
                  got stdout={:?}",
@@ -51307,7 +51314,7 @@ fn main() {
         );
         if let Some(c) = captured {
             assert!(
-                c.stdout.contains("integer overflow"),
+                c.stderr.contains("integer overflow"),
                 "expected integer-overflow panic on MIN % -1, got stdout={:?}",
                 c.stdout
             );
@@ -51328,7 +51335,7 @@ fn main() {
         );
         if let Some(c) = captured {
             assert!(
-                c.stdout.contains("integer overflow"),
+                c.stderr.contains("integer overflow"),
                 "expected integer-overflow panic on -iN::MIN (interpreter \
                  parity: checked_neg), got stdout={:?}",
                 c.stdout
@@ -51592,7 +51599,7 @@ fn main() {
         );
         if let Some(c) = captured {
             assert!(
-                c.stdout.contains("integer overflow"),
+                c.stderr.contains("integer overflow"),
                 "wrapping monotone update must trap, got stdout={:?}",
                 c.stdout
             );
@@ -51816,13 +51823,13 @@ fn main() {
         );
         if let Some(c) = captured {
             assert!(
-                c.stdout.contains("panic at ") && c.stdout.contains("cut.kara:"),
+                c.stderr.contains("panic at ") && c.stderr.contains("cut.kara:"),
                 "expected a located panic, got stdout={:?} stderr={:?}",
                 c.stdout,
                 c.stderr
             );
             assert!(
-                c.stdout.contains("not a UTF-8 codepoint boundary"),
+                c.stderr.contains("not a UTF-8 codepoint boundary"),
                 "expected the boundary diagnosis, got stdout={:?}",
                 c.stdout
             );
@@ -51874,25 +51881,25 @@ fn main() {
         );
         if let Some(c) = captured {
             assert!(
-                c.stdout.contains("panic at "),
+                c.stderr.contains("panic at "),
                 "expected rich `panic at` prefix, got stdout={:?} stderr={:?}",
                 c.stdout,
                 c.stderr
             );
             assert!(
-                c.stdout.contains("oob_demo.kara:"),
-                "expected source filename in panic location, got stdout={:?}",
-                c.stdout
+                c.stderr.contains("oob_demo.kara:"),
+                "expected source filename in panic location, got stderr={:?}",
+                c.stderr
             );
             assert!(
-                c.stdout.contains(" in main:"),
-                "expected enclosing function name in panic location, got stdout={:?}",
-                c.stdout
+                c.stderr.contains(" in main:"),
+                "expected enclosing function name in panic location, got stderr={:?}",
+                c.stderr
             );
             assert!(
-                c.stdout.contains("vec index out of bounds"),
-                "expected the panic message, got stdout={:?}",
-                c.stdout
+                c.stderr.contains("vec index out of bounds"),
+                "expected the panic message, got stderr={:?}",
+                c.stderr
             );
             assert!(
                 !c.stdout.contains("42"),
@@ -51920,13 +51927,13 @@ fn main() {
         if let Some(c) = captured {
             // Format: `panic at linecol.kara:<line>:<col> in main: <msg>`.
             let marker = "linecol.kara:";
-            let idx = c.stdout.find(marker).unwrap_or_else(|| {
+            let idx = c.stderr.find(marker).unwrap_or_else(|| {
                 panic!(
-                    "no panic location in stdout={:?} stderr={:?}",
-                    c.stdout, c.stderr
+                    "no panic location in stderr={:?} stdout={:?}",
+                    c.stderr, c.stdout
                 )
             });
-            let rest = &c.stdout[idx + marker.len()..];
+            let rest = &c.stderr[idx + marker.len()..];
             // The two fields immediately after the filename must be numeric
             // `<line>:<col>` — proves real span data, not a `0:0` placeholder.
             let line: String = rest.chars().take_while(|ch| ch.is_ascii_digit()).collect();
@@ -51975,7 +51982,7 @@ fn main() {
         );
         if let Some(c) = captured {
             assert!(
-                c.stdout.contains("panic: vec index out of bounds"),
+                c.stderr.contains("panic: vec index out of bounds"),
                 "expected bare panic form without a filename, got stdout={:?} stderr={:?}",
                 c.stdout,
                 c.stderr
@@ -64392,7 +64399,7 @@ fn main() {
             // Panic message printed to stdout (printf), then exit(1) — so
             // the trailing prints never run.
             assert!(
-                c.stdout.contains("panic: Map index: key not present"),
+                c.stderr.contains("panic: Map index: key not present"),
                 "expected panic message, got stdout={:?} stderr={:?}",
                 c.stdout,
                 c.stderr
@@ -87270,7 +87277,7 @@ fn main() {
         );
         if let Some(c) = captured {
             assert!(
-                c.stdout.contains("contract violated") && c.stdout.contains("Even"),
+                c.stderr.contains("contract violated") && c.stderr.contains("Even"),
                 "expected a contract-violation abort naming Even, got stdout={:?} stderr={:?}",
                 c.stdout,
                 c.stderr
@@ -87297,7 +87304,7 @@ fn main() {
         );
         if let Some(c) = captured {
             assert!(
-                c.stdout.contains("contract violated") && c.stdout.contains("NonEmpty"),
+                c.stderr.contains("contract violated") && c.stderr.contains("NonEmpty"),
                 "expected NonEmpty contract abort, got stdout={:?} stderr={:?}",
                 c.stdout,
                 c.stderr
@@ -87438,7 +87445,7 @@ fn main() {
         );
         if let Some(c) = captured {
             assert!(
-                c.stdout.contains("contract violated"),
+                c.stderr.contains("contract violated"),
                 "expected a contract-violation abort, got stdout={:?} stderr={:?}",
                 c.stdout,
                 c.stderr
@@ -87629,7 +87636,7 @@ fn main() {
         );
         if let Some(c) = captured {
             assert!(
-                c.stdout.contains("contract violated"),
+                c.stderr.contains("contract violated"),
                 "expected a contract-violation abort, got stdout={:?} stderr={:?}",
                 c.stdout,
                 c.stderr
@@ -87657,7 +87664,7 @@ fn main() {
         );
         if let Some(c) = captured {
             assert!(
-                c.stdout.contains("contract violated"),
+                c.stderr.contains("contract violated"),
                 "expected a method-requires abort, got stdout={:?} stderr={:?}",
                 c.stdout,
                 c.stderr
@@ -87694,7 +87701,7 @@ fn main() { println(bad(5)); println(42); }
         );
         if let Some(c) = captured {
             assert!(
-                c.stdout.contains("contract violated"),
+                c.stderr.contains("contract violated"),
                 "expected an ensures abort, got stdout={:?} stderr={:?}",
                 c.stdout,
                 c.stderr
@@ -87741,7 +87748,7 @@ fn main() { let mut a = Account { balance: 100 }; println(a.withdraw(30)); print
         );
         if let Some(c) = captured {
             assert!(
-                c.stdout.contains("contract violated"),
+                c.stderr.contains("contract violated"),
                 "expected an old() ensures abort, got stdout={:?} stderr={:?}",
                 c.stdout,
                 c.stderr
@@ -87764,7 +87771,7 @@ fn main() { println(f(5)); println(42); }
         );
         if let Some(c) = captured {
             assert!(
-                c.stdout.contains("contract violated"),
+                c.stderr.contains("contract violated"),
                 "expected an ensures abort on the explicit-return path, got stdout={:?}",
                 c.stdout
             );
@@ -87811,7 +87818,7 @@ fn main() { let mut c = Counter { n: 0 }; c.dec(); println(42); }
         );
         if let Some(c) = captured {
             assert!(
-                c.stdout.contains("contract violated"),
+                c.stderr.contains("contract violated"),
                 "expected an invariant abort, got stdout={:?} stderr={:?}",
                 c.stdout,
                 c.stderr
@@ -87840,7 +87847,7 @@ fn main() { let mut c = Counter { n: 0 }; c.dec(); println(42); }
         );
         if let Some(c) = captured {
             assert!(
-                c.stdout.contains("contract violated"),
+                c.stderr.contains("contract violated"),
                 "expected impl-invariant abort at the non-pub exit, got stdout={:?} stderr={:?}",
                 c.stdout,
                 c.stderr
@@ -87913,7 +87920,7 @@ fn main() { let c = Counter.bad(); println(c.n); println(42); }
         );
         if let Some(c) = captured {
             assert!(
-                c.stdout.contains("contract violated"),
+                c.stderr.contains("contract violated"),
                 "constructor invariant must abort, got stdout={:?} stderr={:?}",
                 c.stdout,
                 c.stderr
@@ -87941,7 +87948,7 @@ fn main() { let c = Counter.bad(); println(c.n); }
         );
         if let Some(c) = captured {
             assert!(
-                c.stdout.contains("contract violated"),
+                c.stderr.contains("contract violated"),
                 "an `impl invariant` must fire at the constructor return, got stdout={:?}",
                 c.stdout
             );
@@ -88002,7 +88009,7 @@ fn main() { let c = Scell.bad(); println(c.n); println(42); }
         );
         if let Some(c) = captured {
             assert!(
-                c.stdout.contains("contract violated"),
+                c.stderr.contains("contract violated"),
                 "a shared-struct constructor invariant must abort, got stdout={:?} stderr={:?}",
                 c.stdout,
                 c.stderr
@@ -88084,7 +88091,7 @@ fn main() { let mut c = Counter { n: 0 }; c.drive(); println(42); }
         );
         if let Some(c) = captured {
             assert!(
-                c.stdout.contains("contract violated"),
+                c.stderr.contains("contract violated"),
                 "expected the helper's impl-invariant abort via self-dispatch, \
                  got stdout={:?} stderr={:?}",
                 c.stdout,
@@ -88212,7 +88219,7 @@ fn main() {
         );
         if let Some(c) = captured {
             assert!(
-                c.stdout.contains("contract predicate panicked"),
+                c.stderr.contains("contract predicate panicked"),
                 "expected a `contract predicate panicked` fault, got stdout={:?} stderr={:?}",
                 c.stdout,
                 c.stderr
@@ -88242,7 +88249,7 @@ fn main() { println(pos(-5)); println(42); }
         );
         if let Some(c) = captured {
             assert!(
-                c.stdout.contains("contract violated"),
+                c.stderr.contains("contract violated"),
                 "expected `contract violated` for a false predicate, got stdout={:?} stderr={:?}",
                 c.stdout,
                 c.stderr
@@ -88272,7 +88279,7 @@ fn main() {
         );
         if let Some(c) = captured {
             assert!(
-                c.stdout.contains("contract predicate panicked"),
+                c.stderr.contains("contract predicate panicked"),
                 "expected `contract predicate panicked` in an ensures, got stdout={:?} stderr={:?}",
                 c.stdout,
                 c.stderr
@@ -88309,7 +88316,7 @@ fn main() {
         );
         if let Some(c) = captured {
             assert!(
-                c.stdout.contains("contract predicate panicked"),
+                c.stderr.contains("contract predicate panicked"),
                 "a panic inside a fn the predicate CALLS must report `contract predicate panicked`, got stdout={:?} stderr={:?}",
                 c.stdout,
                 c.stderr
@@ -91013,7 +91020,7 @@ fn main() {
         );
         if let Some(c) = captured {
             assert!(
-                c.stdout.contains("vector lane index out of bounds"),
+                c.stderr.contains("vector lane index out of bounds"),
                 "expected vector lane OOB panic, got stdout={:?} stderr={:?}",
                 c.stdout,
                 c.stderr
@@ -91222,7 +91229,7 @@ fn main() {
         );
         if let Some(c) = captured {
             assert!(
-                c.stdout
+                c.stderr
                     .contains("load_masked: active lane index out of bounds"),
                 "expected active-lane OOB panic, got stdout={:?} stderr={:?}",
                 c.stdout,
@@ -92086,7 +92093,7 @@ fn main() {
         );
         if let Some(c) = captured {
             assert!(
-                c.stdout
+                c.stderr
                     .contains("runtime dim 0 does not match the annotated static dim"),
                 "expected the construction-boundary dim assert, got stdout={:?} stderr={:?}",
                 c.stdout,
@@ -92110,7 +92117,7 @@ fn main() {
         );
         if let Some(c) = captured {
             assert!(
-                c.stdout.contains("tensor index out of bounds for dim 1"),
+                c.stderr.contains("tensor index out of bounds for dim 1"),
                 "expected the runtime index bounds trap, got stdout={:?} stderr={:?}",
                 c.stdout,
                 c.stderr
@@ -92238,7 +92245,7 @@ fn main() {
         );
         if let Some(c) = captured {
             assert!(
-                c.stdout.contains("Column index out of bounds"),
+                c.stderr.contains("Column index out of bounds"),
                 "expected the runtime index bounds trap, got stdout={:?} stderr={:?}",
                 c.stdout,
                 c.stderr
@@ -92501,7 +92508,7 @@ fn main() {
         );
         if let Some(c) = captured {
             assert!(
-                c.stdout.contains("no valid values"),
+                c.stderr.contains("no valid values"),
                 "expected empty-reduce trap, got stdout={:?} stderr={:?}",
                 c.stdout,
                 c.stderr
@@ -92520,7 +92527,7 @@ fn main() {
         );
         if let Some(c) = captured {
             assert!(
-                c.stdout.contains("at least 2 valid values"),
+                c.stderr.contains("at least 2 valid values"),
                 "expected var<2 trap, got stdout={:?} stderr={:?}",
                 c.stdout,
                 c.stderr
@@ -92563,7 +92570,7 @@ fn main() {
         );
         if let Some(c) = captured {
             assert!(
-                c.stdout.contains("must be in [0, 1]"),
+                c.stderr.contains("must be in [0, 1]"),
                 "expected quantile-range trap, got stdout={:?} stderr={:?}",
                 c.stdout,
                 c.stderr
@@ -92670,7 +92677,7 @@ fn main() {
         );
         if let Some(c) = captured {
             assert!(
-                c.stdout.contains("empty slice"),
+                c.stderr.contains("empty slice"),
                 "expected empty-slice trap, got stdout={:?} stderr={:?}",
                 c.stdout,
                 c.stderr
@@ -92693,7 +92700,7 @@ fn main() {
         );
         if let Some(c) = captured {
             assert!(
-                c.stdout.contains("Stats.stddev() called on empty slice"),
+                c.stderr.contains("Stats.stddev() called on empty slice"),
                 "stddev must name itself, not variance; got stdout={:?} stderr={:?}",
                 c.stdout,
                 c.stderr
@@ -92855,7 +92862,7 @@ fn main() {
         );
         if let Some(c) = captured {
             assert!(
-                c.stdout.contains("[0, 100]"),
+                c.stderr.contains("[0, 100]"),
                 "expected percentile-range trap, got stdout={:?} stderr={:?}",
                 c.stdout,
                 c.stderr
@@ -92981,7 +92988,7 @@ fn main() {
         );
         if let Some(c) = captured {
             assert!(
-                c.stdout.contains("column length does not match"),
+                c.stderr.contains("column length does not match"),
                 "expected the equal-length trap, got stdout={:?} stderr={:?}",
                 c.stdout,
                 c.stderr
@@ -93466,7 +93473,7 @@ fn main() {
         );
         if let Some(c) = captured {
             assert!(
-                c.stdout
+                c.stderr
                     .contains("shape mismatch — dim 'K' differs between arguments"),
                 "expected the cross-argument equality trap; stdout={:?} stderr={:?}",
                 c.stdout,
@@ -93498,7 +93505,7 @@ fn main() {
         );
         if let Some(c) = captured {
             assert!(
-                c.stdout
+                c.stderr
                     .contains("shape mismatch — dim 'K' of argument 'a' (dim 1) must be 4"),
                 "expected the concrete-vs-? bounds trap; stdout={:?} stderr={:?}",
                 c.stdout,
@@ -93613,9 +93620,9 @@ fn main() {
              \x20   println(a.matmul(b)[0, 0]);\n\
              }";
         if let Some(cap) = run_program_capturing(src) {
-            assert_eq!(cap.status.code(), Some(1), "stderr={:?}", cap.stderr);
+            assert_eq!(cap.status.code(), Some(101), "stderr={:?}", cap.stderr);
             assert!(
-                cap.stdout.contains("integer overflow"),
+                cap.stderr.contains("integer overflow"),
                 "an overflowing integer matmul must trap under `karac build`, \
                  got stdout={:?} stderr={:?}",
                 cap.stdout,
@@ -93998,7 +94005,7 @@ fn main() {
         );
         if let Some(c) = captured {
             assert!(
-                c.stdout.contains("reshape element counts must match"),
+                c.stderr.contains("reshape element counts must match"),
                 "expected the reshape count-mismatch trap, got stdout={:?} stderr={:?}",
                 c.stdout,
                 c.stderr
@@ -94018,7 +94025,7 @@ fn main() {
         );
         if let Some(c) = captured {
             assert!(
-                c.stdout.contains("slice end out of bounds for the axis"),
+                c.stderr.contains("slice end out of bounds for the axis"),
                 "expected the slice bounds trap, got stdout={:?} stderr={:?}",
                 c.stdout,
                 c.stderr
@@ -94040,7 +94047,7 @@ fn main() {
         );
         if let Some(c) = captured {
             assert!(
-                c.stdout
+                c.stderr
                     .contains("cannot squeeze an axis whose size is not 1"),
                 "expected the squeeze size-1 trap, got stdout={:?} stderr={:?}",
                 c.stdout,
@@ -94140,7 +94147,7 @@ fn main() {
         );
         if let Some(c) = captured {
             assert!(
-                c.stdout.contains("iter_axis axis out of bounds"),
+                c.stderr.contains("iter_axis axis out of bounds"),
                 "expected the iter_axis bounds trap, got stdout={:?} stderr={:?}",
                 c.stdout,
                 c.stderr
@@ -94299,7 +94306,7 @@ fn main() {
         );
         if let Some(c) = captured {
             assert!(
-                c.stdout
+                c.stderr
                     .contains("tensor shape mismatch in element-wise operator"),
                 "expected the element-wise shape-mismatch trap, got stdout={:?} stderr={:?}",
                 c.stdout,
@@ -94765,7 +94772,7 @@ fn main() {
         );
         if let Some(c) = captured {
             assert!(
-                c.stdout.contains("cannot reduce an empty tensor"),
+                c.stderr.contains("cannot reduce an empty tensor"),
                 "expected the empty-reduce trap, got stdout={:?} stderr={:?}",
                 c.stdout,
                 c.stderr
@@ -94858,7 +94865,7 @@ fn main() {
         );
         if let Some(c) = captured {
             assert!(
-                c.stdout.contains("not broadcast-compatible"),
+                c.stderr.contains("not broadcast-compatible"),
                 "expected the broadcast-incompatible trap, got stdout={:?} stderr={:?}",
                 c.stdout,
                 c.stderr
@@ -99845,9 +99852,9 @@ fn main() {
                  println(f\"{acc}\");\n\
              }\n",
         ) {
-            assert_eq!(cap.status.code(), Some(1), "stderr={:?}", cap.stderr);
+            assert_eq!(cap.status.code(), Some(101), "stderr={:?}", cap.stderr);
             assert!(
-                cap.stdout.contains("integer overflow"),
+                cap.stderr.contains("integer overflow"),
                 "a non-zero-init accumulator must still trap; stdout={:?}",
                 cap.stdout
             );
@@ -102834,7 +102841,7 @@ fn main() {
 "#;
         let cap = run_program_capturing(violated).expect("build the violating program");
         assert!(
-            cap.stdout.contains("contract violated: requires clause"),
+            cap.stderr.contains("contract violated: requires clause"),
             "a generic `requires` must abort; got stdout={:?}",
             cap.stdout
         );
@@ -102880,7 +102887,7 @@ fn main() {
 "#;
         let cap = run_program_capturing(tail).expect("build the tail-return program");
         assert!(
-            cap.stdout.contains("contract violated: ensures clause"),
+            cap.stderr.contains("contract violated: ensures clause"),
             "a generic tail-return `ensures` must abort; got stdout={:?}",
             cap.stdout
         );
@@ -102902,7 +102909,7 @@ fn main() {
 "#;
         let cap = run_program_capturing(early).expect("build the early-return program");
         assert!(
-            cap.stdout.contains("contract violated: ensures clause"),
+            cap.stderr.contains("contract violated: ensures clause"),
             "a generic early-return `ensures` must abort; got stdout={:?}",
             cap.stdout
         );
@@ -102941,9 +102948,9 @@ fn main() {
 "#;
         let cap = run_program_capturing(old_bad).expect("build the old() program");
         assert!(
-            cap.stdout.contains("contract violated: ensures clause"),
-            "`old(...)` in a generic `ensures` must be captured and compared; got stdout={:?}",
-            cap.stdout
+            cap.stderr.contains("contract violated: ensures clause"),
+            "`old(...)` in a generic `ensures` must be captured and compared; got stderr={:?}",
+            cap.stderr
         );
     }
 
@@ -102974,7 +102981,7 @@ fn main() {
 "#;
         let cap = run_program_capturing(mono_outer).expect("build the mono-outer program");
         assert!(
-            cap.stdout.contains("contract violated: ensures clause"),
+            cap.stderr.contains("contract violated: ensures clause"),
             "a monomorphic caller's `ensures` must survive an inner generic call; got stdout={:?}",
             cap.stdout
         );
@@ -103003,7 +103010,7 @@ fn main() {
 "#;
         let cap = run_program_capturing(gen_outer).expect("build the generic-outer program");
         assert!(
-            cap.stdout.contains("contract violated: ensures clause"),
+            cap.stderr.contains("contract violated: ensures clause"),
             "a generic caller's `ensures` must survive its inner monos; got stdout={:?}",
             cap.stdout
         );
@@ -103038,7 +103045,7 @@ fn main() {
             cap.stdout
         );
         assert!(
-            cap.stdout.contains("contract violated: invariant"),
+            cap.stderr.contains("contract violated: invariant"),
             "the second call breaks it and must abort; got stdout={:?}",
             cap.stdout
         );
@@ -103069,7 +103076,7 @@ fn main() {
             cap.stdout
         );
         assert!(
-            cap.stdout.contains("contract violated: requires clause"),
+            cap.stderr.contains("contract violated: requires clause"),
             "the unsorted haystack must abort; got stdout={:?}",
             cap.stdout
         );

@@ -37,7 +37,13 @@ pub(crate) struct RuntimeFns<'ctx> {
     pub(crate) karac_runtime_enter_predicate_fn: FunctionValue<'ctx>,
     pub(crate) karac_runtime_exit_predicate_fn: FunctionValue<'ctx>,
     pub(crate) karac_runtime_panic_prefix_fn: FunctionValue<'ctx>,
-    pub(crate) printf_fn: FunctionValue<'ctx>,
+    /// `int fprintf(FILE*, const char*, ...)` — the STREAM-BEARING sibling of
+    /// `printf`, and the only varargs printer codegen declares. The panic path
+    /// is its one caller (B-2026-08-23-17): `printf` is stdout by
+    /// construction, which put a fault into the program's DATA stream. Naming
+    /// the stream at every call site is the same rule `compile_print` enforces
+    /// by having removed its stdout-defaulting convenience wrapper.
+    pub(crate) fprintf_fn: FunctionValue<'ctx>,
     /// `int snprintf(char* buf, size_t n, const char* fmt, ...)` — used by f-string
     /// codegen to convert integers and floats to their decimal string forms.
     pub(crate) snprintf_fn: FunctionValue<'ctx>,

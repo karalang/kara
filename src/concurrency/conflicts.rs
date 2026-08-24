@@ -413,8 +413,9 @@ impl<'a> super::ConcurrencyChecker<'a> {
             // non-conflicting. This unblocks auto-par for ordinary arithmetic:
             // `/` and `%` infer `panics` (the div/rem-by-zero guard), which is
             // why `examples/parallax_lite` had to avoid them to keep its groups.
-            // Safe because a Kāra panic lowers to `emit_panic` = `printf` +
-            // `exit(1)` (`src/codegen/runtime.rs`), a direct process exit — NOT
+            // Safe because a Kāra panic lowers to `emit_panic` = an
+            // `fprintf(stderr, …)` + `exit(101)` (`src/codegen/runtime.rs`), a
+            // direct process exit — NOT
             // a Rust unwind. So a panic inside a `par_run` worker terminates the
             // whole process fail-fast (identical to a sequential panic: the
             // release runtime is built `panic = "abort"`, and worker-panic →

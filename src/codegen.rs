@@ -1844,8 +1844,17 @@ impl<'ctx> Codegen<'ctx> {
         let i32_type = context.i32_type();
         let i64_type = context.i64_type();
         let ptr_type = context.ptr_type(AddressSpace::default());
-        let printf_type = i32_type.fn_type(&[BasicMetadataTypeEnum::from(ptr_type)], true);
-        let printf_fn = module.add_function("printf", printf_type, None);
+        // `int fprintf(FILE*, const char*, ...)`. There is deliberately no
+        // `printf` declaration alongside it: the panic path was its last
+        // caller, and it wrote to stdout by construction (B-2026-08-23-17).
+        let fprintf_type = i32_type.fn_type(
+            &[
+                BasicMetadataTypeEnum::from(ptr_type),
+                BasicMetadataTypeEnum::from(ptr_type),
+            ],
+            true,
+        );
+        let fprintf_fn = module.add_function("fprintf", fprintf_type, None);
 
         // `size_t` is i32 on wasm32 (wasi-libc) and i64 natively. Used by the
         // size-bearing libc decls below (`snprintf`, `fwrite`, `malloc`). Even
@@ -5388,7 +5397,7 @@ impl<'ctx> Codegen<'ctx> {
                 karac_runtime_enter_predicate_fn,
                 karac_runtime_exit_predicate_fn,
                 karac_runtime_panic_prefix_fn,
-                printf_fn,
+                fprintf_fn,
                 snprintf_fn,
                 write_console_fn,
                 write_console_line_fn,

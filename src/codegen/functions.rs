@@ -282,7 +282,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // That requires the panic-unwind substrate (LLVM invoke /
         // landingpad / personality + `panic = "unwind"`), which this
         // backend does not yet have — panics currently lower to a print
-        // + `exit(1)` (abort-style). Rather than silently miscompile a
+        // + `exit(101)` (abort-style). Rather than silently miscompile a
         // C-unwind export into an abort (which would defeat the ABI's
         // whole purpose), reject it with a pointer to the working
         // alternative. `extern "C"` (Case 1) needs no substrate: a body

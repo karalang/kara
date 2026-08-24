@@ -178,8 +178,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     )
                     .unwrap();
                 b.build_call(
-                    self.runtime_fns.printf_fn,
+                    self.runtime_fns.fprintf_fn,
                     &[
+                        self.stdio_stream_with(&b, true).into(),
                         fmt.as_pointer_value().into(),
                         file_ptr.into(),
                         line.into(),
@@ -197,8 +198,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_global_string_ptr("panic: %s%s\n\0", "panic_fmt")
                     .unwrap();
                 b.build_call(
-                    self.runtime_fns.printf_fn,
+                    self.runtime_fns.fprintf_fn,
                     &[
+                        self.stdio_stream_with(&b, true).into(),
                         fmt.as_pointer_value().into(),
                         prefix.into(),
                         msg.as_pointer_value().into(),
@@ -208,7 +210,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap();
             }
         }
-        let exit_code = self.context.i32_type().const_int(1, false);
+        // B-2026-08-23-17 — design.md § Entry Point, "Panics": exit 101, "distinct
+        // from the `Err`-exit-1 path so shell pipelines can distinguish expected
+        // failures from bugs". This was 1, which collapsed the distinction the
+        // paragraph exists to provide.
+        let exit_code = self.context.i32_type().const_int(101, false);
         b.build_call(self.runtime_fns.exit_fn, &[exit_code.into()], "")
             .unwrap();
         b.build_unreachable().unwrap();

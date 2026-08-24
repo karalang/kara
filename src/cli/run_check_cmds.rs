@@ -1434,12 +1434,22 @@ pub(super) fn cmd_run(
 
     // A faulting program exits nonzero (previously always 0 — scripts couldn't
     // detect interpreter-level failures). Gated on `runtime_errors` so a clean
-    // run still exits 0. `main_err_exit` adds the design.md § Entry Point case:
-    // a `main() -> Result` that returned `Err(e)` exits 1 (the `Error:` line
-    // was already printed above). Faults take precedence over an `ExitCode`
-    // return — a runtime error unwinds before `main` produces a clean value, so
+    // run still exits 0. Faults take precedence over an `ExitCode` return — a
+    // runtime error unwinds before `main` produces a clean value, so
     // `main_result` is `Unit`, not the intended code, in that case anyway.
-    if !runtime_errors.is_empty() || main_err_exit {
+    //
+    // The two nonzero codes are NOT interchangeable (design.md § Entry Point,
+    // B-2026-08-23-17). A PANIC — which is what every interpreter runtime error
+    // is: `unwrap()` on `None`, an out-of-bounds index, an overflowing add —
+    // exits `101`; a `main() -> Result` that returned `Err(e)` exits `1` (the
+    // `Error:` line was already printed above). The spec's whole reason for two
+    // codes is that a shell pipeline can tell an expected failure from a bug,
+    // so collapsing both onto 1 (as this did) erases the distinction. The AOT
+    // and JIT backends exit 101 from `emit_panic` for the same reason.
+    if !runtime_errors.is_empty() {
+        process::exit(101);
+    }
+    if main_err_exit {
         process::exit(1);
     }
 

@@ -6422,7 +6422,18 @@ fn main() -> ExitCode {
 
 **Error display format.** When `main()` returns `Err(e)`, the runtime prints exactly `Error: {e}\n` to stderr (one line, `Display`-formatted, terminal newline), then exits with code `1`. The literal `1` is used uniformly — not the platform-dependent `EXIT_FAILURE` macro — for byte-reproducible behavior across Unix and Windows. Backtraces are suppressed by default and enabled with `KARA_BACKTRACE=1` in the environment.
 
-**Panics.** If `main()` panics (via `unwrap()`, `todo()`, `unreachable()`, array out-of-bounds, integer overflow in debug builds, etc.), the runtime prints `panicked: {message}` plus source location to stderr and exits with code `101`. This code is distinct from the `Err`-exit-1 path so shell pipelines can distinguish expected failures from bugs. Whether `defer`/`errdefer` blocks run during panic unwind is specified under auto-concurrency and unwind semantics (see the `defer`/`errdefer` sections) and is orthogonal to entry-point exit behavior.
+**Panics.** If `main()` panics (via `unwrap()`, `todo()`, `unreachable()`, array out-of-bounds, integer overflow in debug builds, etc.), the runtime prints the panic message plus source location to **stderr** and exits with code `101`. This code is distinct from the `Err`-exit-1 path so shell pipelines can distinguish expected failures from bugs. Whether `defer`/`errdefer` blocks run during panic unwind is specified under auto-concurrency and unwind semantics (see the `defer`/`errdefer` sections) and is orthogonal to entry-point exit behavior.
+
+**The stream and the code are the contract; the wording is not (yet).** Two properties of a panic are normative and identical on every backend — the tree-walk interpreter, the JIT, and a built binary: it goes to **stderr**, never stdout, and it exits **101**, never 1. Both were wrong before B-2026-08-23-17: the compiled backends emitted the panic through libc `printf`, which put a fault into the program's *data* stream (anything parsing a Kāra program's stdout got `panic at f.kara:3:16 in main: …` mixed into its input, while a consumer watching stderr for faults saw nothing), and all three backends exited `1`, collapsing the very distinction this paragraph promises. Routing the panic to stderr does **not** cost output ordering: the compiled backends print it with `fprintf(stderr, …)`, so a faulting program's prior `println` output still appears before the panic when both are read together.
+
+The panic *text* is deliberately left unpinned for v1, and the two backends do not agree on it:
+
+| backend | panic line |
+|---|---|
+| JIT / AOT | `panic at <file>:<line>:<col> in <fn>: <message>` |
+| `--interp` | `runtime error: <message>` then `  at <file>:<line>:<col>`, plus an `Error return trace:` block |
+
+The messages themselves also differ per site (`unwrap() called on None/Err` vs `called unwrap() on None`), because each backend carries its own fault-message table. Unifying them is a real project — the tables are large and per-site — and is tracked separately rather than being pretended away here. What a tool may rely on today is the stream and the exit code; what it may not rely on is a byte-exact panic line.
 
 **Effect inference still applies.** Because `main()` is not `pub`, the compiler infers its full effect set from the body — including `writes(Stderr)` introduced by `eprintln`, `reads(Env)` from `env.args()`, and any effects contributed by `ExitCode.from`. This inferred set is the `program_effects` summary surfaced after a successful build.
 
