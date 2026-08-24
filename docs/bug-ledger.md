@@ -94,11 +94,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 283 | 0 |
 | leak | 189 | 0 |
-| missing-feature | 162 | 2 |
+| missing-feature | 162 | 1 |
 | run-vs-build | 158 | 1 |
 | double-free | 136 | 0 |
 | codegen-gap | 131 | 1 |
-| diagnostics | 100 | 1 |
+| diagnostics | 101 | 2 |
 | false-positive | 95 | 0 |
 | perf | 84 | 0 |
 | other | 58 | 0 |
@@ -120,11 +120,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | parser | 40 | 0 |
 | runtime | 31 | 0 |
 | resolver | 26 | 0 |
-| effect | 16 | 2 |
+| effect | 17 | 2 |
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1527 surfaced · 5 open · 1499 fixed · 9 wontfix** (2026-05-20 → 2026-08-24). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1528 surfaced · 5 open · 1500 fixed · 9 wontfix** (2026-05-20 → 2026-08-24). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (5)
 
@@ -132,9 +132,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1527 surfaced
 |---|---|---|---|---|---|
 | B-2026-08-23-11 | 2026-08-23 | typecheck | medium | `Type::Function` carries NO EFFECT ROW, so design.md § First-Class Functions' `let f = save;  // f: Fn(User) -> () with writes(UserDB)` is not representable and a function value's effects cannot propagate through its TYPE. NARROWED 7e7972b: the IMPRECISION this caused -- a function value that is bound and never called still demanding the enclosing function declare its effects -- is FIXED, in the effect checker and without the type row (bind-an-alias, attribute-at-every-other-mention). What remains is representability only, and the prescription in the original title does not work as written: the typechecker cannot populate an effect row, because `effectcheck` runs after `typecheck` AND consumes its output, so inferred effects at typecheck time would need a cycle. Read the detail before picking this up. | roadmap.md |
 | B-2026-08-23-13 | 2026-08-23 | effect | low | The mutual-recursion NOTE now fires for two functions that merely REFERENCE each other as VALUES, calling them a "mutual recursion group" though neither calls the other. `fn p(n: i64) -> i64 { let f = q; n + 1 }` + `fn q(n: i64) -> i64 { let g = p; n + 2 }` reports `note[effect]: mutual recursion group resolved by fixed-point inference: \`p\` (no effects), \`q\` (no effects)`. The program passes and the note is suppressible with `#[allow(mutual_recursion_note)]`, so this is diagnostic wording, not a check failure -- but "mutual recursion" is a false statement about the program. | roadmap.md |
-| B-2026-08-24-1 | 2026-08-24 | effect | medium | The `Fn(..)` EFFECT SLOT IS STILL UNCHECKED AT FOUR NON-`let` POSITIONS after B-2026-08-23-12 wired the binding annotation. Each accepts an effectful `save` into a slot that declares purity, with no diagnostic: (1) ASSIGNMENT to a declared-Fn binding -- `let mut f: Fn(i64) -> i64 = |x| x; f = save;`; (2) the `LetUninit` form of the same -- `let f: Fn(i64) -> i64; f = save;`; (3) RETURN POSITION -- `fn get() -> Fn(i64) -> i64 { save }`; (4) a STRUCT-LITERAL FIELD -- `struct Holder { f: Fn(i64) -> i64 }` built as `Holder { f: save }`. All four measured silent under `karac check` with the -12 binary, and all four print `14` under `--interp`, so the effectful function really does route through the pure-declared slot rather than the shape being rejected earlier. | roadmap.md |
 | B-2026-08-24-6 | 2026-08-24 | codegen | low | `dbg(x)` where `x` is a `shared ENUM` still REFUSES to compile -- "codegen: `dbg` at L:C cannot render a value of type `Shape` yet" -- while `karac run --interp` renders it (`Circle(5)`). B-2026-08-24-2 gave the shared STRUCT a Debug renderer and left this half deliberately failing closed, per that cluster's rule that a partly-landed renderer must NAME what it cannot draw rather than print a placeholder. A HEADERLESS shared struct refuses for a separate and more interesting reason, below. | phase-7-codegen.md |
 | B-2026-08-24-7 | 2026-08-24 | interp | medium | A RUNTIME ERROR inside `return <expr>` is OVERWRITTEN by the return's own control flow, so the interpreter KEEPS EXECUTING after the fault and hands the caller a FABRICATED value. `fn boom() -> i64 { let v = Vec[1, 2]; return v[99] }` called from `main` prints `got ()` -- a Unit where an `i64` belongs -- and only then reports the error; the compiled backends abort at the fault and print nothing else. Not `par`-specific: reproduces at top level with no `par` in the program. | phase-4-interpreter.md |
+| B-2026-08-24-8 | 2026-08-24 | effect | low | A BARE `Fn(..)` SLOT IS IMPRACTICAL BECAUSE `panics` IS INFERRED FROM ORDINARY INDEXING and is not a transparent verb, so a closure as plain as `|w, i| w[i]` does not fit `Fn(ref Vec[u8], i64) -> u8` and must be spelled `Fn(ref Vec[u8], i64) -> u8 with panics`. Measured identical at all FIVE slot positions -- argument, `let` annotation, assignment, return, struct field -- so this is one rule applied consistently, not a defect in any one of them. The question is whether a bare `Fn(..)` should mean "pure INCLUDING panics" at all, given that indexing, division and (on some shapes) arithmetic all infer it: as it stands, `with panics` becomes boilerplate on nearly every non-trivial function value, which is the shape of an annotation users cargo-cult rather than read. | roadmap.md |
 
 ### Wontfix (9)
 
@@ -154,9 +154,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1527 surfaced
 
 </details>
 
-### Fixed (1499)
+### Fixed (1500)
 
-<details><summary>1499 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1500 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -17576,6 +17576,81 @@ CORPUS IMPACT: none. Ten `.kara` programs declare `main() -> Result`, and the tw
 that run to an error exit (`examples/phase0/dashboard.kara`,
 `examples/word_count.kara`) fail earlier -- neither prints an `Error:` line -- so
 no corpus output changes. |
+| B-2026-08-24-1 | effect | medium | The `Fn(..)` EFFECT SLOT IS STILL UNCHECKED AT FOUR NON-`let` POSITIONS after B-2026-08-23-12 wired the binding annotation | FIXED by 536c495.
+
+All four positions now check the declared `Fn(..)` slot, plus a FIFTH the
+row did not name and which is the commoner spelling of case 3.
+
+The row's central prediction held exactly: `check_binding_annotation_
+subtyping` and `fn_annotation_slot_effects` were already position-agnostic,
+so every position is a matter of FINDING the right `TypeExpr`, not of
+writing another comparison. The helper's `pattern: &Pattern` parameter --
+used only to build the "binding `f`" subject string -- is now a plain
+`subject: &str`, which is the only per-position difference in the
+diagnostic. One implementation of the rule, one wording.
+
+(1) + (2) ASSIGNMENT and its LetUninit twin. A `SubtypingWalk` carries a
+STACK of (name, declared TypeExpr) pushed at each annotated `let` /
+`let else` / `LetUninit` and truncated at block exit, exactly as the row
+prescribed. `LetUninit`'s `ty` is not an `Option` -- an uninitialised
+binding has nothing to infer from -- so recording it is unconditional and
+that case is one line.
+
+(3) RETURN. `FnHandle` derefs to the decl, so `f.return_type` is in hand at
+the top of the walk, as the row said. The row understated the rest: an
+explicit `ExprKind::Return` is the RARER spelling, and `fn get() ->
+Fn(i64) -> i64 { save }` has no return node at all. The body's tail needs
+its own recursion, following `if` / `if let` / `match` / block tails
+because only one arm may be the lie -- and deliberately NOT following
+`ExprKind::Return`, since the walker's own arm checks that and following it
+here too would report `fn get() -> ... { return save; }` twice.
+
+(4) STRUCT-LITERAL FIELD. The row said this one needs new STATE because
+`EffectChecker` has no struct index. It does not: `self.program` is already
+a field, so `struct_field_type` is a `find_map` over `program.items`. A
+table would need building and invalidating to serve a shape -- a struct
+literal whose field is a naked function value -- rare enough that the scan
+is the cheaper engineering. No new state was added.
+
+MEASURED, each reported exactly once (the count is asserted, not just the
+presence -- a lookup wired in two places double-reports and reads as two
+separate mistakes):
+  assignment          binding `f`      writes(UserDB) not declared in slot [pure]
+  LetUninit           binding `f`      "
+  return, tail        returned value   "
+  return, explicit    returned value   "
+  struct field        field `f`        "
+and the honest spellings of all of them stay clean, as does a pure value in
+a pure slot at every position.
+
+THE FALSE POSITIVE THE ROW WARNED ABOUT is pinned in both directions. An
+inner `let f: Fn(..)` must not outlive its block: after the block closes,
+`f = save` targets the OUTER binding, whose slot honestly declares the
+write and permits it -- a flat name map answers with the inner slot and
+rejects legal code. The sibling test pins that while the inner block IS
+open the inner slot is the one consulted, so the first test cannot pass
+with the assignment check switched off.
+
+A CORRECTION to something said while claiming this row: B-2026-08-23-11's
+alias stack does NOT serve these cases. That stack lives in the effect
+checker's BODY WALKER (`modbind_synth.rs`) and holds function-value
+aliases; this one lives in the SUBTYPING walker and holds declared
+`TypeExpr`s. Same shape, same reason -- shadowing -- two different walkers.
+The two bugs are adjacent, not stacked, which is also why this one did not
+need -11 first.
+
+STILL NOT COVERED, unchanged from the row's own deferral: container
+elements (`let v: Vec[Fn(i64) -> i64] = [save];`) and map values. Measured
+after this fix: still silent, because `fn_annotation_slot_effects` requires
+`TypeKind::FnType` at the TOP of the annotation and a `Vec[..]` is not one.
+Reading the slot out of a generic argument is a different lookup again and
+deserves its own probe rather than an assumption folded in here.
+
+NOTE ON THE TEST HELPER: `effectcheck_errors` asserts at least one error,
+so the all-clean cases -- half of these, and the half that guards against
+false positives -- cannot be built on it. `slot_violations` parses and
+calls `effectcheck` directly so it can return an empty vec. Same trap the
+B-2026-08-23-7 shadowing test documents in its own comment. |
 | B-2026-08-24-2 | codegen | low | `dbg(x)` where `x` is a `shared struct` / `shared enum` REFUSES to compile: "codegen: `dbg` at L:C cannot render a value of type `Sh` yet — the compi… | FIXED by 6dc7d9d. `dbg` of a `shared struct` / `par struct` now lowers on both compiled backends, rendering byte-identically to the interpreter, including a self-referential `Option[shared]` link. Shared ENUMS still refuse and name themselves.
 
 THE ROW'S ORDERING INSTRUCTION WAS RIGHT AND ITS MECHANISM WAS NOT, and the correction matters for anyone reading it later. The row says the oracle to fix first is `debug_fmt`'s `SharedStruct` arm. `dbg` does not call that for structs -- it renders through `debug_render_typed` -> `render_typed_mode`, which had NO `SharedStruct` arm at all, so a shared value fell through that walker's `other if debug => other.debug_fmt()` catch-all and only THEN reached the four-HashMap walk. So the fix belongs in `render_typed_mode`, as a declaration-ordered sibling of the `Value::Struct` arm B-2026-08-23-18 added -- not in `debug_fmt`, which stays the decl-blind fallback (and whose `Display` twin deliberately sorts ALPHABETICALLY, because that arm cannot see the declaration; `render_typed_mode` can).
