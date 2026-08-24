@@ -52680,4 +52680,34 @@ fn main() {
             4,
         );
     }
+
+    /// B-2026-08-24-19 — a `Map` built fresh on every iteration and broken out
+    /// on a later one. The breaking path must hand its handle to the receiver;
+    /// every NON-breaking iteration must still free its own.
+    ///
+    /// This is the fixture that rules out the tempting fix. Retracting the
+    /// queued `FreeMapHandle` at compile time — what the tail-return
+    /// suppressor does, and what looks like the obvious reuse — is
+    /// flow-insensitive: it would disarm the free on iterations 1 and 2 as
+    /// well, leaking both maps while the ASAN output stayed silent about the
+    /// double free it fixed. Only LeakSanitizer catches that, and only on
+    /// Linux.
+    #[test]
+    fn asan_loop_break_map_handle_frees_unbroken_iterations() {
+        assert_clean_asan_run_min_allocs(
+            "fn pick() -> Map[String, i64] {\n\
+             \x20   let mut i = 0;\n\
+             \x20   loop {\n\
+             \x20       i = i + 1;\n\
+             \x20       let mut m: Map[String, i64] = Map.new();\n\
+             \x20       m.insert(f\"k{i}\", i * 7);\n\
+             \x20       if i == 3 { break m }\n\
+             \x20   }\n\
+             }\n\
+             fn main() { let m = pick(); println(m.get(f\"k3\").unwrap()); }\n",
+            &["21"],
+            "loop-break-map-handle",
+            8,
+        );
+    }
 }

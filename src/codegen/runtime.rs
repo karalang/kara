@@ -9905,6 +9905,37 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_load(ptr_ty, *map_alloca, "cleanup.map.handle")
                     .unwrap()
                     .into_pointer_value();
+                // NULL-GUARD (B-2026-08-24-19). The three `karac_map_free*`
+                // entry points already no-op on a null handle, but the
+                // codegen-side rc_dec / drop-fn walks above them read bucket
+                // bytes straight off the handle at fixed offsets, so a null
+                // would fault for `Map[K, shared V]` and friends. Guarding
+                // here makes the WHOLE action null-tolerant, which is what
+                // lets a move be disarmed by ZEROING the slot at runtime
+                // instead of retracting the queued action at compile time.
+                //
+                // That distinction is the reason this guard exists: a
+                // retraction is flow-insensitive, and at a `break` — which is
+                // conditional, inside a loop that may iterate many times
+                // without taking it — retracting would disarm cleanup on the
+                // iterations that DON'T break, trading a double free for a
+                // leak. The same reasoning the `BoxedEnumDrop` arm records.
+                let fn_val = self.current_fn.unwrap();
+                let map_is_null = self
+                    .builder
+                    .build_int_compare(
+                        IntPredicate::EQ,
+                        handle,
+                        ptr_ty.const_null(),
+                        "cleanup.map.is_null",
+                    )
+                    .unwrap();
+                let map_free_bb = self.context.append_basic_block(fn_val, "mapdrop_free");
+                let map_join_bb = self.context.append_basic_block(fn_val, "mapdrop_join");
+                self.builder
+                    .build_conditional_branch(map_is_null, map_join_bb, map_free_bb)
+                    .unwrap();
+                self.builder.position_at_end(map_free_bb);
                 // Single-handle free shared with the `Vec[Map]`/`Vec[Set]`
                 // element-drop loop. The shared-half rc_dec walks run first
                 // (they read live bucket bytes, before the storage release);
@@ -9922,6 +9953,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     key_drop_fn: *key_drop_fn,
                 };
                 self.emit_free_one_map_handle(handle, &drop);
+                self.builder
+                    .build_unconditional_branch(map_join_bb)
+                    .unwrap();
+                self.builder.position_at_end(map_join_bb);
             }
             // Phase 8 `File` handle slice F4b — close the file fd at
             // scope exit. Load the handle from its alloca, hand it to

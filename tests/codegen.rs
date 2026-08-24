@@ -96153,6 +96153,35 @@ fn main() { println(pick()); }
         }
     }
 
+    /// B-2026-08-24-19 — a `Map` handle carried out of a loop by `break`.
+    ///
+    /// Map/Set cleanup is queue-driven (`FreeMapHandle`) with no in-slot
+    /// sentinel, so the existing move suppressor retracts the queued action at
+    /// COMPILE time. That is wrong at a conditional break, so this disarms by
+    /// ZEROING the slot at runtime instead and `FreeMapHandle` gained the
+    /// null-guard that makes the queued action inert exactly on that path.
+    #[test]
+    fn test_e2e_loop_break_map_handle_round_trips() {
+        let out = run_program(
+            r#"
+fn pick() -> Map[String, i64] {
+    let mut i = 0;
+    loop {
+        i = i + 1;
+        let mut m: Map[String, i64] = Map.new();
+        m.insert(f"k{i}", i * 7);
+        if i == 3 { break m }
+    }
+}
+
+fn main() { let m = pick(); println(m.get(f"k3").unwrap()); }
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "21");
+        }
+    }
+
     /// The Identifier carrier, which needs the OTHER suppressor: here the
     /// buffer belongs to a tracked binding rather than an f-string
     /// accumulator, and a fresh one is allocated on EVERY iteration — so the

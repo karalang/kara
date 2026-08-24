@@ -2668,6 +2668,70 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Disarm a handle-shaped binding's queued cleanup by ZEROING its slot at
+    /// runtime, so the value can be carried out of a loop by `break`. Returns
+    /// whether it fired — the caller uses that as permission to store the
+    /// handle, since taking ownership and storing it must be one decision.
+    ///
+    /// Zeroing rather than retracting the queued action is the whole point.
+    /// Map/Set cleanup is queue-driven (`FreeMapHandle`) with no in-slot
+    /// sentinel like Vec/String's `cap = 0`, so the existing move suppressor
+    /// (`suppress_map_cleanup_for_tail_identifier`) disarms by editing the
+    /// queue at COMPILE TIME. That is right for a function tail, which runs
+    /// once, and wrong here: a `break` is conditional and sits inside a loop
+    /// that may iterate many times without taking it, so retracting would
+    /// disarm the free on every non-breaking iteration too — a leak in place
+    /// of a double free. The runtime store executes only on the path that
+    /// actually breaks, and `FreeMapHandle`'s null-guard makes the queued
+    /// action a no-op exactly there.
+    ///
+    /// Only `FreeMapHandle` (`Map` / `Set`) qualifies today. The three
+    /// `karac_map_free*` entry points already no-op on null, and this change
+    /// added the matching guard around the codegen-side walks above them, so
+    /// a zeroed slot makes the queued action inert on the breaking path only.
+    ///
+    /// `shared` handles do NOT qualify, and the reason is worth recording
+    /// because the code makes it look as though they should. `RcDec` is
+    /// already null-guarded — for an unrelated reason (a body-local shared
+    /// slot whose `let` never ran carries a null sentinel) — so zeroing the
+    /// slot appears to be the same one-line move as the Map case. It is not:
+    /// MEASURED, a `shared struct` carried out this way HANGS and a
+    /// `shared enum` dies with a bus error, both at the default opt level.
+    /// Disarming the source is evidently not sufficient for an RC'd value,
+    /// and the difference was not diagnosed. A `shared` break value therefore
+    /// still takes the skip path and its loud verification error, which is
+    /// strictly better than corrupting the heap. Tracked separately.
+    ///
+    /// Identifier sources only: an rvalue `break Map.new()` or
+    /// `break Node { .. }` has no binding to disarm, so it keeps the skip path
+    /// and its loud verification error rather than being half-supported.
+    fn disarm_moved_handle_by_zeroing(&mut self, expr: &Expr) -> bool {
+        let ExprKind::Identifier(name) = &expr.kind else {
+            return false;
+        };
+        let Some(slot) = self.variables.get(name).map(|s| s.ptr) else {
+            return false;
+        };
+        // The cleanup queue is the only witness to what kind of handle this
+        // is: the LLVM type is an opaque `ptr` shared by every handle kind, so
+        // a Map and a `shared` struct are indistinguishable from the value
+        // alone.
+        use crate::codegen::state::CleanupAction;
+        let owns_handle = self.drop_rc.scope_cleanup_actions.iter().any(|frame| {
+            frame.iter().any(|action| match action {
+                CleanupAction::FreeMapHandle { map_alloca, .. } => *map_alloca == slot,
+                // Deliberately NOT `RcDec` — see the doc comment above.
+                _ => false,
+            })
+        });
+        if !owns_handle {
+            return false;
+        }
+        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        self.builder.build_store(slot, ptr_ty.const_null()).unwrap();
+        true
+    }
+
     /// Store `val` into `frame`'s result slot, creating that slot on first
     /// use at `val`'s OWN type.
     ///
@@ -2680,6 +2744,7 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         frame: &LoopFrame<'ctx>,
         val: BasicValueEnum<'ctx>,
+        owned_ptr: bool,
     ) -> Result<(), String> {
         let key = frame.break_bb;
         if let Some(idx) = self
@@ -2688,7 +2753,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .iter()
             .position(|f| f.break_bb == key)
         {
-            self.store_in_frame_at(idx, val)?;
+            self.store_in_frame_at(idx, val, owned_ptr)?;
         }
         Ok(())
     }
@@ -2697,12 +2762,17 @@ impl<'ctx> super::Codegen<'ctx> {
     /// pushed just before the body was compiled.
     fn store_frame_result(&mut self, val: BasicValueEnum<'ctx>) -> Result<(), String> {
         if let Some(idx) = self.fn_ctx.loop_stack.len().checked_sub(1) {
-            self.store_in_frame_at(idx, val)?;
+            self.store_in_frame_at(idx, val, false)?;
         }
         Ok(())
     }
 
-    fn store_in_frame_at(&mut self, idx: usize, val: BasicValueEnum<'ctx>) -> Result<(), String> {
+    fn store_in_frame_at(
+        &mut self,
+        idx: usize,
+        val: BasicValueEnum<'ctx>,
+        owned_ptr: bool,
+    ) -> Result<(), String> {
         let ty = val.get_type();
         // What may travel through the result slot (B-2026-08-24-13).
         //
@@ -2725,9 +2795,17 @@ impl<'ctx> super::Codegen<'ctx> {
         //     the whole-binding retraction is a different suppressor.
         // Both keep the previous skip-silently behaviour, which preserves the
         // single owner rather than inventing a second one.
+        // A POINTER is storable only when the caller has already taken
+        // ownership of what it points at — today that means a `Map` / `Set`
+        // handle whose source binding was disarmed by zeroing (see
+        // `disarm_map_cleanup_by_zeroing`). `owned_ptr` is that proof, not a
+        // hint: without it a `shared` handle would travel out as a SECOND
+        // reference with no matching retain, a use-after-free rather than the
+        // loud verification error it gets today (B-2026-08-24-19).
         let storable = ty.is_int_type()
             || ty.is_float_type()
-            || (ty.is_struct_type() && ty.into_struct_type().count_fields() > 0);
+            || (ty.is_struct_type() && ty.into_struct_type().count_fields() > 0)
+            || (ty.is_pointer_type() && owned_ptr);
         if !storable {
             return Ok(());
         }
@@ -2799,7 +2877,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // slot on first use at the VALUE's type. Previously the slot was a
         // pre-allocated i64 and this store was guarded on `is_int_value()`,
         // so a float or aggregate break silently stored nothing at all.
-        self.store_in_frame(&frame, val)?;
+        // Ownership transfer runs between the LOAD above and the drain below.
+        // The handle disarm has to precede the store because it also decides
+        // whether the handle may be stored at all.
+        let owned_ptr = value.is_some_and(|v| self.disarm_moved_handle_by_zeroing(v));
+        self.store_in_frame(&frame, val, owned_ptr)?;
         // MOVE-AWARE SUPPRESSION (B-2026-08-24-13), the break-site twin of
         // what `suppress_cleanup_for_tail_return` does for a function tail.
         //
