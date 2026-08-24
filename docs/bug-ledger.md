@@ -17957,7 +17957,7 @@ there the wrapper is part of the thing being declared.
 
 Five new tests in tests/effectchecker.rs, one of them the all-clean
 false-positive guard covering both deliberate boundaries. |
-| B-2026-08-24-19 | codegen | low | A `Map` / `Set` BREAK VALUE could not leave a loop on the compiled backends: `loop { ...; let mut m = Map.new(); ...; break m }` FAILED AT MODULE VER… | PARTIALLY FIXED by 698ebd4 — the Map/Set half only. The `shared` half is NOT fixed and is split to its own row; see below, and do not read this row as clearing it.
+| B-2026-08-24-19 | codegen | low | A `Map` / `Set` BREAK VALUE could not leave a loop on the compiled backends: `loop { ...; let mut m = Map.new(); ...; break m }` FAILED AT MODULE VER… | PARTIALLY FIXED by d9b5ea0 — the Map/Set half only. The `shared` half is NOT fixed and is split to its own row; see below, and do not read this row as clearing it.
 
 MAP / SET, fixed. Their cleanup is queue-driven (`FreeMapHandle`) with no in-slot sentinel like Vec/String's `cap = 0`, which is why the existing move suppressor (`suppress_map_cleanup_for_tail_identifier`) disarms by editing the cleanup queue at COMPILE time. That is right for a function tail, which runs once, and wrong at a `break`: a break is conditional and sits inside a loop that may iterate many times without taking it, so retracting the action would disarm the free on every non-breaking iteration too — a leak in place of a double free.
 
@@ -17965,7 +17965,7 @@ MAP / SET, fixed. Their cleanup is queue-driven (`FreeMapHandle`) with no in-slo
 
 A pointer enters the loop's result slot only against PROOF that ownership was taken (the `owned_ptr` flag), never as a type test. The LLVM type is an opaque `ptr` shared by every handle kind, so a Map and a `shared` struct are indistinguishable from the value alone; the cleanup queue is the only witness to which is which.
 
-MEASURED on 698ebd4: `loop { ...; let mut m = Map.new(); m.insert(f"k{i}", i*7); if i == 3 { break m } }` returns 21 from the interpreter and from an AOT binary, and is clean under ASAN with LeakSanitizer at `KARAC_OPT_LEVEL=0` (27 allocations for the multi-iteration shape, no leak — so the two non-breaking iterations still free their own maps). |
+MEASURED on d9b5ea0: `loop { ...; let mut m = Map.new(); m.insert(f"k{i}", i*7); if i == 3 { break m } }` returns 21 from the interpreter and from an AOT binary, and is clean under ASAN with LeakSanitizer at `KARAC_OPT_LEVEL=0` (27 allocations for the multi-iteration shape, no leak — so the two non-breaking iterations still free their own maps). |
 | B-2026-08-24-20 | effect | low | A METHOD-CHAIN receiver's declared `Fn(..)` element slot is still unchecked: `hand_out().push(save)` carries the same slot as a bound `v.push(save)`,… | Fixed in ba5b136 (src/effectchecker/subtyping.rs, tests/effectchecker.rs).
 
 THE ROW'S BLOCKER WAS WRONG, and the correction is the useful part. This row
