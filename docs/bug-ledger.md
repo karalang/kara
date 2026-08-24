@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 283 | 0 |
 | leak | 189 | 0 |
-| missing-feature | 166 | 2 |
+| missing-feature | 166 | 1 |
 | run-vs-build | 158 | 0 |
 | double-free | 136 | 0 |
 | codegen-gap | 135 | 2 |
@@ -120,13 +120,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | parser | 41 | 0 |
 | runtime | 31 | 0 |
 | resolver | 26 | 0 |
-| effect | 22 | 2 |
+| effect | 22 | 1 |
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1540 surfaced · 6 open · 1511 fixed · 9 wontfix** (2026-05-20 → 2026-08-24). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1540 surfaced · 5 open · 1512 fixed · 9 wontfix** (2026-05-20 → 2026-08-24). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -135,7 +135,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1540 surfaced
 | B-2026-08-24-15 | 2026-08-24 | codegen | high | `Vec.insert` / `Vec.remove` / `Vec.swap_remove` HAVE NO CODEGEN BOUNDS CHECK: an out-of-range index CORRUPTS THE HEAP (insert/remove) or SILENTLY RETURNS GARBAGE AND DROPS AN ELEMENT (swap_remove) on both compiled backends, where the interpreter panics and design.md says "panics if out of bounds" | roadmap.md |
 | B-2026-08-24-18 | 2026-08-24 | codegen | low | `dbg(x)` REFUSES for a HEADERLESS or WEAK-HEADERED `shared` type, the last two shapes in the shared family the compiled `Debug` renderers do not cover. Neither is an unwritten arm: the headerless niche makes the field base a PER-FUNCTION property while a synthesized renderer is cached program-wide, and the weak-headered base-2 layout is set by nothing in the compiler today. NOTE this arm has never been observed to fire on a real program -- it is a guard against a hazard, not a fix for a measured failure. | phase-7-codegen.md |
 | B-2026-08-24-19 | 2026-08-24 | codegen | low | A `Map` / `Set` or `shared` BREAK VALUE still cannot leave a loop on the compiled backends: `loop { ... break m }` for a `Map[String, i64]`, and `loop { ... break Node { v: 22 } }` for a `shared struct`, both FAIL AT MODULE VERIFICATION while the interpreter returns the value. Their cleanup cannot be disarmed the way String/Vec's was -- Map retracts a QUEUED action (flow-insensitive, so it would leak on the iterations that do not break) and a `shared` handle needs a matching RETAIN rather than a cap-zero. | roadmap.md |
-| B-2026-08-24-20 | 2026-08-24 | effect | low | A METHOD-CHAIN receiver's declared `Fn(..)` element slot is still unchecked: `hand_out().push(save)` carries the same slot as a bound `v.push(save)`, but the receiver's type is the callee's RETURN type rather than a written annotation, and the slot walk holds no return types. The last of the four receiver shapes B-2026-08-24-17 named; the other three (`self`/field, index, parameter) are closed. | roadmap.md |
 
 ### Wontfix (9)
 
@@ -155,9 +154,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1540 surfaced
 
 </details>
 
-### Fixed (1511)
+### Fixed (1512)
 
-<details><summary>1511 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1512 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -17958,6 +17957,32 @@ there the wrapper is part of the thing being declared.
 
 Five new tests in tests/effectchecker.rs, one of them the all-clean
 false-positive guard covering both deliberate boundaries. |
+| B-2026-08-24-20 | effect | low | A METHOD-CHAIN receiver's declared `Fn(..)` element slot is still unchecked: `hand_out().push(save)` carries the same slot as a bound `v.push(save)`,… | Fixed in ba5b136 (src/effectchecker/subtyping.rs, tests/effectchecker.rs).
+
+THE ROW'S BLOCKER WAS WRONG, and the correction is the useful part. This row
+argued a chained receiver's type could only be recovered from the TYPECHECKER,
+whose `Type::Function` carries no effect row (B-2026-08-23-11) -- so a recovered
+return type would arrive with the `with` clause already erased, every chained
+receiver would read as a PURE slot, and the check would become a
+false-positive generator strictly worse than silence.
+
+The typechecker was never needed. A callee's return type is an AST `TypeExpr`
+-- the annotation its author WROTE, `with` clause intact -- sitting on the
+declaration the effect checker already holds. `check_call_args_subtyping` has
+been reading exactly that, four lines of `function_bodies.get(..).return_type`,
+since long before this row was filed. Erasure happens at
+`lower_type_expr_inner`, which this side of the compiler never goes through.
+
+That is the same shape as B-2026-08-23-11's own dissolved blocker: a real
+constraint on ONE route, mistaken for a constraint on the goal, because the
+route already in the file was not checked.
+
+New `callee_return_type` does the two-table lookup; `receiver_declared_type`
+gains a `Call` arm (via `extract_callee_name`) and a `MethodCall` arm (via
+`resolve_method_callee_key`). An UNDECLARED return type yields `None` and the
+walk stops -- correct, since there is then no annotation to call a lie -- and a
+generic return resolves to the unbound parameter and is a silent no-op, exactly
+as a generic struct field is. Both pinned by tests. |
 
 </details>
 
