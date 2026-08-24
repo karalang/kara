@@ -365,12 +365,15 @@ impl<'a> super::Interpreter<'a> {
             .collect();
 
         // Collect results from each branch
-        // Each branch result: (index, defined_vars, console_segs, dbg_lines, control_flow_or_value)
+        // Each branch result: (index, defined_vars, console_segs, dbg_lines,
+        // runtime_errors, control_flow_or_value)
         type BranchResult = (
             usize,
             HashMap<String, Value>,
             Vec<ConsoleSeg>,
             Vec<String>,
+            Vec<crate::interpreter::RuntimeError>,
+            (Vec<crate::interpreter::ErrorTraceFrame>, bool),
             Result<Value, ControlFlow>,
         );
         let results: Mutex<Vec<BranchResult>> = Mutex::new(Vec::new());
@@ -470,12 +473,38 @@ impl<'a> super::Interpreter<'a> {
 
                     let console = branch_interp.captured_console.unwrap_or_default();
                     let dbg_lines = branch_interp.captured_dbg.unwrap_or_default();
+                    // B-2026-08-24-4 — carry the DIAGNOSTIC PAYLOAD across the
+                    // join. `record_runtime_error` pushes the message, span and
+                    // trace onto the BRANCH interpreter's vec; only the bare
+                    // `ControlFlow::RuntimeError` marker used to reach the
+                    // parent, so the CLI found an empty `runtime_errors`, had
+                    // nothing to render, and exited 0 — a program that died
+                    // halfway reported SUCCESS.
+                    let branch_errors = std::mem::take(&mut branch_interp.runtime_errors);
+                    // The RETURN TRACE is a second vec on the branch
+                    // interpreter and dies with it the same way. Harvest it
+                    // only when the branch actually recorded an error: a
+                    // successful branch can still have pushed frames (a `?`
+                    // propagating an `Err` is ordinary control flow, not a
+                    // fault), and those frames would otherwise be rendered
+                    // under a SIBLING's error as if they were part of its
+                    // trace.
+                    let branch_trace = if branch_errors.is_empty() {
+                        (Vec::new(), false)
+                    } else {
+                        (
+                            std::mem::take(&mut branch_interp.error_trace),
+                            branch_interp.error_trace_truncated,
+                        )
+                    };
 
                     results_ref.lock().unwrap().push((
                         i,
                         defined_vars,
                         console,
                         dbg_lines,
+                        branch_errors,
+                        branch_trace,
                         cf_result,
                     ));
                 });
@@ -484,7 +513,7 @@ impl<'a> super::Interpreter<'a> {
 
         // Sort results by source order (deterministic)
         let mut branch_results = results.into_inner().unwrap();
-        branch_results.sort_by_key(|(i, _, _, _, _)| *i);
+        branch_results.sort_by_key(|(i, _, _, _, _, _, _)| *i);
 
         // Merge results back into the parent interpreter
         // 1. Replay console output in source order — this is the join half of
@@ -505,7 +534,7 @@ impl<'a> super::Interpreter<'a> {
         //    `print!` this loop used to call, which panics on `BrokenPipe`.
         let replay: Vec<ConsoleSeg> = branch_results
             .iter()
-            .flat_map(|(_, _, console, _, _)| console.iter().cloned())
+            .flat_map(|(_, _, console, _, _, _, _)| console.iter().cloned())
             .collect();
         for seg in replay {
             match seg.stream {
@@ -517,11 +546,26 @@ impl<'a> super::Interpreter<'a> {
         // 1b. Merge dbg lines in source order (test-only; only present
         // when the parent has an active capture buffer).
         if let Some(ref mut cap) = self.captured_dbg {
-            for (_, _, _, dbg_lines, _) in &branch_results {
+            for (_, _, _, dbg_lines, _, _, _) in &branch_results {
                 for line in dbg_lines {
                     cap.push(line.clone());
                 }
             }
+        }
+
+        // 1c. Merge each branch's runtime errors in source order
+        //     (B-2026-08-24-4). Same ordering discipline as the console replay
+        //     above, and for the same reason: the join is where a branch's
+        //     observable output becomes the parent's, and a diagnostic is
+        //     output. Every branch contributes — the CLI renders the whole vec,
+        //     so a par block that killed two branches reports both rather than
+        //     silently picking one. Done BEFORE the control-flow check below,
+        //     which returns early on the first error and would otherwise skip
+        //     the merge entirely.
+        for (_, _, _, _, errors, (trace, truncated), _) in &branch_results {
+            self.runtime_errors.extend(errors.iter().cloned());
+            self.error_trace.extend(trace.iter().cloned());
+            self.error_trace_truncated |= *truncated;
         }
 
         // 2. Merge defined variables into the CURRENT (enclosing) scope so
@@ -529,7 +573,7 @@ impl<'a> super::Interpreter<'a> {
         //    branch's `let` into the enclosing scope, matching the resolver /
         //    typechecker and the shape `par { let a = f(); let b = g(); }
         //    (a, b)` needs (B-2026-07-11-3). No private scope is pushed.
-        for (_, vars, _, _, _) in &branch_results {
+        for (_, vars, _, _, _, _, _) in &branch_results {
             for (name, val) in vars {
                 // Skip prelude/function definitions
                 if matches!(val, Value::Function { .. } | Value::EnumVariant { .. }) {
@@ -543,7 +587,7 @@ impl<'a> super::Interpreter<'a> {
         // `ControlFlow::Cancelled` is silenced — a cancelled sibling's
         // cleanup already ran with `e = Cancelled`, but the originating
         // branch's real `Err` is what propagates as the scope's value.
-        for (_, _, _, _, result) in branch_results {
+        for (_, _, _, _, _, _, result) in branch_results {
             if let Err(cf) = result {
                 if matches!(cf, ControlFlow::Cancelled) {
                     continue;

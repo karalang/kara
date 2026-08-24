@@ -37686,3 +37686,99 @@ fn test_tail_error_exit_is_syntactic_and_function_scoped() {
         "bd"
     );
 }
+
+// ---------------------------------------------------------------------------
+// A runtime error inside a `par {}` branch reaches the parent — B-2026-08-24-4
+// ---------------------------------------------------------------------------
+//
+// A branch runs on its OWN `Interpreter`, and `record_runtime_error` pushes the
+// message / span / trace onto THAT interpreter's vecs. The join used to harvest
+// only `defined_vars`, the console segments, the dbg lines and `cf_result`, so
+// the diagnostic died with the branch: the CLI found an empty `runtime_errors`,
+// printed nothing, and exited 0. A program that died halfway reported SUCCESS,
+// which is the worst shape a divergence can take — nothing signals that the
+// answer should be doubted.
+//
+// ONE failing branch per test, deliberately: `par {}` is fail-fast, so with two
+// failing branches which one records an error depends on which thread wins the
+// cancellation race (measured 3/8 vs 5/8 over eight runs). Asserting on both
+// would be flaky by construction.
+
+#[test]
+fn test_par_branch_runtime_error_reaches_the_parent() {
+    let (_out, errors, trace, _trunc) = run_program_full(
+        "fn boom(n: i64) -> i64 { if n == 1 { panic(\"branch died\") } n * 2 }\n\
+         fn main() {\n\
+             let (a, b) = par { let a = boom(0); let b = boom(1); (a, b) };\n\
+             println(f\"joined {a} {b}\");\n\
+         }\n",
+    );
+    assert!(
+        errors.iter().any(|e| e.message.contains("branch died")),
+        "the branch's error must reach the parent, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+    // The RETURN TRACE is a second vec on the branch interpreter and was lost
+    // the same way. Harvesting only the message would leave the par diagnostic
+    // missing the `Error return trace:` section that the identical error
+    // outside `par` prints.
+    assert!(
+        !trace.is_empty(),
+        "the branch's error return trace must reach the parent too"
+    );
+}
+
+#[test]
+fn test_par_branch_error_matches_the_same_error_outside_par() {
+    // The bar is parity with the SAME fault outside a `par {}`, not some new
+    // par-specific rendering — that is what makes the join a transport
+    // question rather than a formatting one.
+    let par_errors = runtime_errors(
+        "fn boom(n: i64) -> i64 { if n == 1 { panic(\"same text\") } n * 2 }\n\
+         fn main() { let (a, b) = par { let a = boom(0); let b = boom(1); (a, b) }; }\n",
+    );
+    let plain_errors = runtime_errors(
+        "fn boom() -> i64 { panic(\"same text\") }\n\
+         fn main() { let x = boom(); }\n",
+    );
+    assert_eq!(
+        par_errors.first().map(|e| e.message.clone()),
+        plain_errors.first().map(|e| e.message.clone()),
+        "a fault inside par must report the same message as outside it"
+    );
+    assert!(!par_errors.is_empty(), "par error must exist");
+}
+
+#[test]
+fn test_par_branch_index_out_of_bounds_reaches_the_parent() {
+    // A second, unrelated fault shape: the row measured three (explicit
+    // `panic`, a Vec index, a failed `assert`) and all three were swallowed
+    // identically, so the harvest must not be keyed to one of them.
+    let errors = runtime_errors(
+        "fn boom(n: i64) -> i64 { let v = Vec[1, 2]; if n == 1 { let x = v[99]; return x } n * 2 }\n\
+         fn main() { let (a, b) = par { let a = boom(0); let b = boom(1); (a, b) }; }\n",
+    );
+    assert!(
+        errors.iter().any(|e| e.message.contains("out of bounds")),
+        "got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_clean_par_records_no_runtime_error() {
+    // The retraction must not manufacture errors for a healthy par block —
+    // the inverse failure, and the one that would turn every parallel program
+    // into a false alarm.
+    let errors = runtime_errors(
+        "fn ok(n: i64) -> i64 { n * 2 }\n\
+         fn main() {\n\
+             let (a, b) = par { let a = ok(1); let b = ok(2); (a, b) };\n\
+             println(f\"joined {a} {b}\");\n\
+         }\n",
+    );
+    assert!(
+        errors.is_empty(),
+        "clean par must record nothing: {errors:?}"
+    );
+}

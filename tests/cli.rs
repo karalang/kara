@@ -31585,3 +31585,74 @@ fn main() {
     }
     assert_eq!(i, "sent 6\nmarker ok\n");
 }
+
+/// B-2026-08-24-4 — a runtime error inside a `par {}` branch must make
+/// `karac run --interp` FAIL, not report success.
+///
+/// The branch's diagnostic lived on the branch's own `Interpreter` and was
+/// dropped at the join, so the CLI found an empty `runtime_errors`, printed
+/// nothing, and exited 0. Exit status is the half that matters most here: it
+/// is what CI and any shell script gate on, and `karac test` runs the
+/// interpreter, so a silent success is a green build over a dead program.
+///
+/// The comparison is against the SAME fault outside `par {}` rather than a
+/// hardcoded string — the bar is that the join transports the diagnostic, not
+/// that it invents a par-specific rendering.
+#[test]
+fn test_par_branch_runtime_error_fails_the_run() {
+    let tmp = scratch_project("par-branch-error-exit-status");
+    std::fs::write(
+        tmp.join("par.kara"),
+        "fn boom(n: i64) -> i64 { if n == 1 { panic(\"branch died\") } n * 2 }\n\
+         fn main() {\n\
+             let (a, b) = par { let a = boom(0); let b = boom(1); (a, b) };\n\
+             println(f\"joined {a} {b}\");\n\
+         }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        tmp.join("plain.kara"),
+        "fn boom() -> i64 { panic(\"branch died\") }\n\
+         fn main() { let x = boom(); println(f\"got {x}\"); }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        tmp.join("clean.kara"),
+        "fn ok(n: i64) -> i64 { n * 2 }\n\
+         fn main() {\n\
+             let (a, b) = par { let a = ok(1); let b = ok(2); (a, b) };\n\
+             println(f\"joined {a} {b}\");\n\
+         }\n",
+    )
+    .unwrap();
+
+    let run = |name: &str| {
+        let o = karac_bin()
+            .current_dir(&tmp)
+            .args(["run", "--interp", name])
+            .output()
+            .expect("run karac");
+        (
+            o.status.code(),
+            String::from_utf8_lossy(&o.stderr).into_owned(),
+        )
+    };
+    let (par_code, par_err) = run("par.kara");
+    let (plain_code, _plain_err) = run("plain.kara");
+    let (clean_code, _clean_err) = run("clean.kara");
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    assert!(
+        par_code != Some(0),
+        "a par branch that died must not report success; exit was {par_code:?}"
+    );
+    assert_eq!(
+        par_code, plain_code,
+        "a fault inside par must exit the same way as the same fault outside it"
+    );
+    assert!(
+        par_err.contains("branch died"),
+        "the branch's message must reach stderr, got: {par_err}"
+    );
+    assert_eq!(clean_code, Some(0), "a healthy par block must still exit 0");
+}
