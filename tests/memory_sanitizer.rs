@@ -52587,4 +52587,97 @@ fn main() {
             "dbg_stripped_ownership",
         );
     }
+
+    // ── B-2026-08-24-13 — a break value that owns heap leaves the loop with
+    //    EXACTLY ONE owner.
+    //
+    // `compile_break` stores the value into the loop's result slot and then
+    // drains the frames inside the loop. Before the fix that drain freed the
+    // very buffer the slot points at, so the receiver got a dangling pointer
+    // and freed it again: "free(): double free detected in tcache 2" on all
+    // three carriers below. The fix suppresses the source's scope-exit free
+    // between the store and the drain — the break-site twin of
+    // `suppress_cleanup_for_tail_return`.
+    //
+    // These are ASAN tests rather than output comparisons on purpose: the
+    // failure mode is a FREE, not a wrong value, and both directions have to
+    // be caught. A too-eager suppression trades the double free for a leak,
+    // which only LeakSanitizer sees — and only on Linux (CLAUDE.md: a green
+    // macOS asan run is silent about leaks). The `min_allocs` floors keep a
+    // fixture from silently optimising its allocation away and asserting
+    // nothing.
+    //
+    // These do NOT guard the COMPILE path: `assert_clean_asan_run` skips when
+    // setup fails, so if aggregates ever regressed to being refused outright,
+    // every fixture here would print "setup failed — skipping" and pass
+    // vacuously. That half is guarded in tests/codegen.rs, whose `run_program`
+    // PANICS on a codegen failure —
+    // `test_e2e_loop_break_string_value_round_trips` and its Identifier
+    // sibling are the loud pair. Keep both: one asserts the value arrives, the
+    // other that it arrives owned exactly once.
+
+    /// The f-string carrier: the buffer belongs to the interpolation
+    /// accumulator, not to any binding, so it needs the `rhs_stages_fstr_acc`
+    /// suppressor rather than the Identifier one.
+    #[test]
+    fn asan_loop_break_fstring_value_single_owner() {
+        assert_clean_asan_run_min_allocs(
+            "fn pick() -> String {\n\
+             \x20   let mut i = 0;\n\
+             \x20   loop { i = i + 1; if i == 2 { break f\"got{i}\" } }\n\
+             }\n\
+             fn main() { println(pick()); }\n",
+            &["got2"],
+            "loop-break-fstring",
+            4,
+        );
+    }
+
+    /// The Identifier carrier, and the LEAK side of the same coin: a fresh
+    /// String is allocated on every iteration and only the last one breaks, so
+    /// the iterations that fall through must still free theirs. Suppressing
+    /// unconditionally (or retracting the queued cleanup at compile time,
+    /// which is flow-insensitive) would leak those.
+    #[test]
+    fn asan_loop_break_binding_value_frees_unbroken_iterations() {
+        assert_clean_asan_run_min_allocs(
+            "fn pick() -> String {\n\
+             \x20   let mut i = 0;\n\
+             \x20   loop {\n\
+             \x20       i = i + 1;\n\
+             \x20       let s = f\"row{i}\";\n\
+             \x20       if i == 3 { break s }\n\
+             \x20   }\n\
+             }\n\
+             fn main() { println(pick()); }\n",
+            &["row3"],
+            "loop-break-binding",
+            5,
+        );
+    }
+
+    /// A `Vec` carrier out of a LABELED loop, broken from inside a nested
+    /// `while` — the frames between the break and the loop boundary are what
+    /// `emit_scope_cleanup_from` drains, so this exercises the deepest
+    /// suppression path.
+    #[test]
+    fn asan_labeled_loop_break_vec_value_single_owner() {
+        assert_clean_asan_run_min_allocs(
+            "fn pick() -> Vec[i64] {\n\
+             \x20   let mut i = 0;\n\
+             \x20   outer: loop {\n\
+             \x20       i = i + 1;\n\
+             \x20       let mut j = 0;\n\
+             \x20       while j < 2 {\n\
+             \x20           j = j + 1;\n\
+             \x20           if i == 2 { break outer [i, j, i + j] }\n\
+             \x20       }\n\
+             \x20   }\n\
+             }\n\
+             fn main() { let v = pick(); println(v[0]); println(v[1]); println(v[2]); }\n",
+            &["2", "1", "3"],
+            "labeled-loop-break-vec",
+            4,
+        );
+    }
 }

@@ -96126,31 +96126,57 @@ fn main() { println(pick()); }
         }
     }
 
-    /// The other half of the same slot change: a NON-scalar break value is
-    /// refused with an actionable message rather than compiled.
+    /// B-2026-08-24-13 — a NON-scalar break value now travels correctly.
     ///
-    /// Copying a `{ptr, i64, i64}` String header through the slot gives the
-    /// buffer a second owner, and the loop body's scope cleanup plus the
-    /// receiving binding both free it — a double free. That is strictly
-    /// worse than the module-verification error the i64 slot used to raise,
-    /// so the aggregate case fails closed until break sites get the
-    /// move-aware cleanup suppression `suppress_cleanup_for_tail_return`
-    /// already performs for function tails.
+    /// This test previously asserted the opposite: aggregates were refused,
+    /// because storing a `{ptr, i64, i64}` String header into the slot gave
+    /// its buffer a second owner and the loop body's drain freed it out from
+    /// under the receiver ("free(): double free detected in tcache 2").
+    /// `compile_break` now suppresses the source's scope-exit free between the
+    /// store and the drain — the break-site twin of what
+    /// `suppress_cleanup_for_tail_return` does for a function tail — so the
+    /// value leaves with exactly one owner.
     #[test]
-    fn test_ir_loop_break_non_scalar_is_refused_not_miscompiled() {
-        let err = ir_result(
-            "fn pick() -> String { loop { break f\"x\" } }\nfn main() { println(pick()); }\n",
-        )
-        .expect_err("a String break must fail loudly, not compile to a double free");
-        // The loud failure is module verification rejecting `ret i64` against
-        // the `{ptr, i64, i64}` return type — the aggregate is never stored,
-        // so the buffer keeps its single owner. What this pins is that the
-        // program does NOT compile: storing the header unconditionally made it
-        // build and then double-free.
-        assert!(
-            err.contains("verification") || err.contains("non-scalar"),
-            "expected a loud refusal, got: {err}"
+    fn test_e2e_loop_break_string_value_round_trips() {
+        let out = run_program(
+            r#"
+fn pick() -> String {
+    let mut i = 0;
+    loop { i = i + 1; if i == 2 { break f"got{i}" } }
+}
+
+fn main() { println(pick()); }
+"#,
         );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "got2");
+        }
+    }
+
+    /// The Identifier carrier, which needs the OTHER suppressor: here the
+    /// buffer belongs to a tracked binding rather than an f-string
+    /// accumulator, and a fresh one is allocated on EVERY iteration — so the
+    /// iterations that do not break must still free theirs. A leak here would
+    /// be the mirror-image bug of the double free this fix removed.
+    #[test]
+    fn test_e2e_loop_break_string_binding_round_trips() {
+        let out = run_program(
+            r#"
+fn pick() -> String {
+    let mut i = 0;
+    loop {
+        i = i + 1;
+        let s = f"row{i}";
+        if i == 2 { break s }
+    }
+}
+
+fn main() { println(pick()); }
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "row2");
+        }
     }
 
     #[test]

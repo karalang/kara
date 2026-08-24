@@ -2704,27 +2704,31 @@ impl<'ctx> super::Codegen<'ctx> {
 
     fn store_in_frame_at(&mut self, idx: usize, val: BasicValueEnum<'ctx>) -> Result<(), String> {
         let ty = val.get_type();
-        // Only OWNERSHIP-FREE scalars travel through the result slot.
+        // What may travel through the result slot (B-2026-08-24-13).
         //
-        // Ints were already allowed (the store used to be guarded on
-        // `is_int_value()`); floats are the fix — `loop { break 2.5 }` stored
-        // NOTHING and loaded whatever the slot held, printing 0 from AOT and a
-        // garbage integer from the JIT against 2.5 from the interpreter.
+        // Ints were always allowed; floats were added with the lazily-typed
+        // slot. STRUCTS — the `{ptr, i64, i64}` header a `String` / `Vec`
+        // lowers to, and plain POD structs — are allowed now that
+        // `compile_break` suppresses the source binding's scope-exit free
+        // before draining the loop's frames. Without that suppression the
+        // drain freed the very buffer this slot points at, which measured as
+        // "free(): double free detected in tcache 2".
         //
-        // Everything else keeps the previous skip-silently behaviour, and that
-        // is deliberate rather than lazy. A `String` / `Vec` break value is a
-        // `{ptr, i64, i64}` header whose buffer already has an owner; copying
-        // it into the slot and loading it at the exit creates a SECOND owner,
-        // and the loop body's scope cleanup plus the receiving binding then
-        // free the same pointer — measured as "free(): double free detected in
-        // tcache 2" when this branch stored unconditionally. Not storing keeps
-        // the single owner: a program that never USES the value (`break outer
-        // ()`, a discarded labeled-block tail) is unaffected, and one that does
-        // use it fails loudly at module verification instead, exactly as it did
-        // before this change. Real support needs the move-aware cleanup
-        // suppression `suppress_cleanup_for_tail_return` already performs for
-        // function tails, applied at every break site; that is its own slice.
-        if !(ty.is_int_type() || ty.is_float_type()) {
+        // Deliberately still excluded, each for its own reason:
+        //   * the EMPTY struct — `break outer ()` is a VALUELESS break
+        //     (design.md § `break expr`: "Plain `break` (or `break ()`) is
+        //     valid in any loop form"), so there is nothing to carry and a
+        //     slot would only invent one;
+        //   * POINTERS — a `shared` handle needs a matching retain for the
+        //     second reference this creates, not a cap-zero;
+        //   * ARRAYS — `Array[T, N]` drops elementwise via `StructDrop`, so
+        //     the whole-binding retraction is a different suppressor.
+        // Both keep the previous skip-silently behaviour, which preserves the
+        // single owner rather than inventing a second one.
+        let storable = ty.is_int_type()
+            || ty.is_float_type()
+            || (ty.is_struct_type() && ty.into_struct_type().count_fields() > 0);
+        if !storable {
             return Ok(());
         }
         let slot = match self.fn_ctx.loop_stack[idx].result_slot {
@@ -2796,6 +2800,48 @@ impl<'ctx> super::Codegen<'ctx> {
         // pre-allocated i64 and this store was guarded on `is_int_value()`,
         // so a float or aggregate break silently stored nothing at all.
         self.store_in_frame(&frame, val)?;
+        // MOVE-AWARE SUPPRESSION (B-2026-08-24-13), the break-site twin of
+        // what `suppress_cleanup_for_tail_return` does for a function tail.
+        //
+        // The drain below frees every binding in the frames inside this loop
+        // — including the one whose buffer the slot now points at. Zeroing the
+        // source's `cap` makes its queued `FreeVecBuffer` no-op, so the value
+        // leaving through the slot keeps exactly ONE owner: the binding that
+        // receives the loop's value.
+        //
+        // ORDER IS LOAD-BEARING in both directions. After `store_in_frame`,
+        // because zeroing before the value is read corrupts what the receiver
+        // gets (B-2026-06-12-6). Before `emit_scope_cleanup_from`, because
+        // that is the drain being disarmed.
+        //
+        // Only the RUNTIME-STORE suppressor is used here, never the
+        // compile-time queue-retracting ones (Map/Set, boxed-enum payload). A
+        // `break` is conditional and sits inside a loop that may iterate many
+        // times without taking it, so a flow-insensitive retraction would
+        // disarm the cleanup on the iterations that DON'T break — trading this
+        // double free for a leak, the exact bargain the tail-return code warns
+        // against. A `Map` / `Set` / boxed-enum break value therefore still
+        // takes the skip-silently path above.
+        if let Some(v) = value {
+            self.suppress_source_vec_cleanup_for_arg(v);
+            // The f-string sibling. A `break f"…"` (or `break x.to_string()`)
+            // has no source BINDING to disarm — the buffer belongs to the
+            // accumulator staged while lowering the interpolation, and that
+            // accumulator queued its own `FreeVecBuffer` in a frame the drain
+            // below is about to run. `rhs_stages_fstr_acc` is the same
+            // predicate the let-binding and tail-return paths use, and it
+            // deliberately covers `.to_string()` as well as a literal `f"…"`:
+            // a struct `.to_string()` stages its acc through the synthetic
+            // f-string in `compile_struct_display_string`, and the narrower
+            // `InterpolatedStringLit` match missed exactly that shape once
+            // before (B-2026-07-12-17). `take()` yielding `None` — a user
+            // `impl Display` that stages no acc — is a harmless no-op.
+            if self.rhs_stages_fstr_acc(v) {
+                if let Some(acc) = self.last_fstr_acc.take() {
+                    self.zero_vec_alloca_cap(acc);
+                }
+            }
+        }
         // Drain the frames INSIDE the loop being exited (per-iteration
         // frame + any nested block / `if let` / match-arm frames between
         // here and the loop boundary) — the back-edge / scope-end drains
