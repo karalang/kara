@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 162 | 2 |
 | run-vs-build | 157 | 1 |
 | double-free | 136 | 0 |
-| codegen-gap | 130 | 1 |
+| codegen-gap | 131 | 1 |
 | diagnostics | 100 | 1 |
 | false-positive | 95 | 0 |
 | perf | 84 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1008 | 1 |
+| codegen | 1009 | 1 |
 | typecheck | 249 | 1 |
 | interp | 179 | 1 |
 | ownership | 64 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1525 surfaced · 5 open · 1497 fixed · 9 wontfix** (2026-05-20 → 2026-08-24). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1526 surfaced · 5 open · 1498 fixed · 9 wontfix** (2026-05-20 → 2026-08-24). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (5)
 
@@ -133,8 +133,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1525 surfaced
 | B-2026-08-23-11 | 2026-08-23 | typecheck | medium | `Type::Function` carries NO EFFECT ROW, so design.md § First-Class Functions' `let f = save;  // f: Fn(User) -> () with writes(UserDB)` is not representable and a function value's effects cannot propagate through its TYPE. NARROWED 7e7972b: the IMPRECISION this caused -- a function value that is bound and never called still demanding the enclosing function declare its effects -- is FIXED, in the effect checker and without the type row (bind-an-alias, attribute-at-every-other-mention). What remains is representability only, and the prescription in the original title does not work as written: the typechecker cannot populate an effect row, because `effectcheck` runs after `typecheck` AND consumes its output, so inferred effects at typecheck time would need a cycle. Read the detail before picking this up. | roadmap.md |
 | B-2026-08-23-13 | 2026-08-23 | effect | low | The mutual-recursion NOTE now fires for two functions that merely REFERENCE each other as VALUES, calling them a "mutual recursion group" though neither calls the other. `fn p(n: i64) -> i64 { let f = q; n + 1 }` + `fn q(n: i64) -> i64 { let g = p; n + 2 }` reports `note[effect]: mutual recursion group resolved by fixed-point inference: \`p\` (no effects), \`q\` (no effects)`. The program passes and the note is suppressible with `#[allow(mutual_recursion_note)]`, so this is diagnostic wording, not a check failure -- but "mutual recursion" is a false statement about the program. | roadmap.md |
 | B-2026-08-24-1 | 2026-08-24 | effect | medium | The `Fn(..)` EFFECT SLOT IS STILL UNCHECKED AT FOUR NON-`let` POSITIONS after B-2026-08-23-12 wired the binding annotation. Each accepts an effectful `save` into a slot that declares purity, with no diagnostic: (1) ASSIGNMENT to a declared-Fn binding -- `let mut f: Fn(i64) -> i64 = |x| x; f = save;`; (2) the `LetUninit` form of the same -- `let f: Fn(i64) -> i64; f = save;`; (3) RETURN POSITION -- `fn get() -> Fn(i64) -> i64 { save }`; (4) a STRUCT-LITERAL FIELD -- `struct Holder { f: Fn(i64) -> i64 }` built as `Holder { f: save }`. All four measured silent under `karac check` with the -12 binary, and all four print `14` under `--interp`, so the effectful function really does route through the pure-declared slot rather than the shape being rejected earlier. | roadmap.md |
-| B-2026-08-24-2 | 2026-08-24 | codegen | low | `dbg(x)` where `x` is a `shared struct` / `shared enum` REFUSES to compile: "codegen: `dbg` at L:C cannot render a value of type `Sh` yet — the compiled backends have no `Debug` renderer for it." Every other shape now lowers (B-2026-08-23-18), and `karac run --interp` renders shared values correctly, so this is a single missing arm in the `Debug` renderer family rather than a design question. | phase-7-codegen.md |
 | B-2026-08-24-4 | 2026-08-24 | interp | high | A RUNTIME ERROR inside a `par {}` branch is swallowed WHOLE by the interpreter -- no message on stderr, exit code 0, and the statements after the join are skipped -- so a program that died halfway reports SUCCESS. JIT and AOT both print the error and exit 1. Measured on three unrelated error shapes (`panic("...")`, a Vec index out of bounds, a failed `assert`), all three identical: `karac run --interp` prints NOTHING and exits 0 where `karac run` and the compiled binary print `panic at c2.kara:1:51 in boom: vec index out of bounds` and exit 1. | roadmap.md |
+| B-2026-08-24-6 | 2026-08-24 | codegen | low | `dbg(x)` where `x` is a `shared ENUM` still REFUSES to compile -- "codegen: `dbg` at L:C cannot render a value of type `Shape` yet" -- while `karac run --interp` renders it (`Circle(5)`). B-2026-08-24-2 gave the shared STRUCT a Debug renderer and left this half deliberately failing closed, per that cluster's rule that a partly-landed renderer must NAME what it cannot draw rather than print a placeholder. A HEADERLESS shared struct refuses for a separate and more interesting reason, below. | phase-7-codegen.md |
 
 ### Wontfix (9)
 
@@ -154,9 +154,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1525 surfaced
 
 </details>
 
-### Fixed (1497)
+### Fixed (1498)
 
-<details><summary>1497 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1498 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -17576,6 +17576,23 @@ CORPUS IMPACT: none. Ten `.kara` programs declare `main() -> Result`, and the tw
 that run to an error exit (`examples/phase0/dashboard.kara`,
 `examples/word_count.kara`) fail earlier -- neither prints an `Error:` line -- so
 no corpus output changes. |
+| B-2026-08-24-2 | codegen | low | `dbg(x)` where `x` is a `shared struct` / `shared enum` REFUSES to compile: "codegen: `dbg` at L:C cannot render a value of type `Sh` yet — the compi… | FIXED by 6dc7d9d. `dbg` of a `shared struct` / `par struct` now lowers on both compiled backends, rendering byte-identically to the interpreter, including a self-referential `Option[shared]` link. Shared ENUMS still refuse and name themselves.
+
+THE ROW'S ORDERING INSTRUCTION WAS RIGHT AND ITS MECHANISM WAS NOT, and the correction matters for anyone reading it later. The row says the oracle to fix first is `debug_fmt`'s `SharedStruct` arm. `dbg` does not call that for structs -- it renders through `debug_render_typed` -> `render_typed_mode`, which had NO `SharedStruct` arm at all, so a shared value fell through that walker's `other if debug => other.debug_fmt()` catch-all and only THEN reached the four-HashMap walk. So the fix belongs in `render_typed_mode`, as a declaration-ordered sibling of the `Value::Struct` arm B-2026-08-23-18 added -- not in `debug_fmt`, which stays the decl-blind fallback (and whose `Display` twin deliberately sorts ALPHABETICALLY, because that arm cannot see the declaration; `render_typed_mode` can).
+
+THE ORACLE WAS MEASURED NONDETERMINISTIC FIRST, which is what made the ordering non-negotiable: five distinct field orders in twelve runs of one binary. Writing the codegen renderer first would have pinned it to whichever order that run happened to produce. After the interpreter arm: 15/15 runs in declaration order.
+
+Declaration order also un-groups the fields. The four maps split by mutability and weakness -- a representation detail the user never wrote -- so walking them in sequence reported `mut` fields last wherever they were declared. The test's `counter` is declared third of four and must print third; under the old grouping it printed last, and alphabetically it would come first.
+
+CODEGEN (`emit_shared_struct_debug_display_fn`, `src/codegen/synth_display.rs`): load the handle, GEP the heap box, render each field in `struct_field_names` order. Two decisions worth keeping:
+  - `field_base` comes from `has_weak_header` directly (1, or 2 for a weak-headered box), NOT from `shared_gep_layout`. That funnel also answers for the HEADERLESS niche, and `headerless_here` reads `fn_ctx.current_fn_name` -- a per-FUNCTION property, while this renderer is emitted once and cached program-wide. Baking a per-function layout into a shared function is how a field read lands at the wrong offset, so a headerless type keeps failing closed instead. `synth_drop` records the same reasoning for its own `heap_type`-based walk.
+  - The dispatcher arm goes BEFORE the enum and struct arms in `emit_display_fn_for_type_expr`: a shared type is registered in `struct_field_names` (which the struct arm claims by name) and, for a shared enum, in `enum_layouts` -- while its LLVM type is in neither, which is precisely the mismatch that made the old struct arm's `.expect("struct type registered")` panic the compiler.
+
+AN OWNERSHIP BUG CAME WITH IT, found by the JIT leg of the new parity test rather than by reading. `dbg`'s owned copy for a place expression went through `emit_clone_fn_for_type_expr`, which SHALLOW-copies -- right for its twenty-odd move/transfer callers, wrong for a refcount: the returned temporary aliased the binding's box with no retain, and the two scope-exit decs freed it once too often. MEASURED as `malloc(): unaligned tcache chunk detected` on a two-link `Option[shared]` list. The fix is one call: `emit_owning_clone_fn_for_type_expr`, the RETAINING entry point that already exists for exactly this distinction (its own doc cites the same symptom). I had begun writing a duplicate before the compiler's "duplicate definitions" error surfaced the existing one -- worth recording, because the separation between the two clone entry points is deliberate and easy to miss.
+
+THE GUARD FOR THAT HALF IS THE JIT COMPARISON, NOT THE ASAN TEST. AOT was silent on the premature free -- clean at `-O2` and at `KARAC_OPT_LEVEL=0`, with and without the fix -- and only the JIT surfaced it. So `test_dbg_of_a_shared_struct_renders_the_same_on_all_three_backends` (`tests/cli.rs`), which compares JIT stderr byte for byte and sees the allocator's complaint as a diff, is the regression test; VERIFIED to fail without the fix. The ASAN test added alongside is COVERAGE for a shape nothing had exercised (it was uncompilable), and its doc comment says plainly that it passes either way so nobody mistakes it for the guard.
+
+TESTS: three added in `tests/cli.rs` (three-backend parity with the interpreter run twelve times, since the pre-fix order was random per process; nested `Vec[shared]` + `par struct` + Debug string quoting; and `println(shared)` still being a `Display`-bound error, so giving the type a Debug renderer did not quietly give it a Display one). One added in `tests/memory_sanitizer.rs`. TWO EXISTING TESTS were retargeted from `shared struct` to `shared enum` -- both used `dbg` of a shared value as their deliberately-unlowerable trigger, and one carried a note asking for exactly this when the renderer landed. |
 | B-2026-08-24-3 | parser | low | A STRUCT LITERAL WITH EXPLICIT GENERIC ARGUMENTS (`Connection[Disconnected] { socket: .. | FIXED by 8dd822e. `Name[Args] { field: value }` now parses in every expression position, and the arguments are carried to the typechecker and used. design.md § Typestate via Phantom Type Parameters transcribes VERBATIM now -- markers, generic literals, wrong-state rejection -- and the section's program runs identically on interp / JIT / AOT (`sent 6`), with the negative case rejected as `expected 'ref Connection[Connected]', found 'Connection[Disconnected]'`, the exact text the section claims.
 
 THREE PARTS:
