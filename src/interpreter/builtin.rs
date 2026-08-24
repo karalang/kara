@@ -17,7 +17,7 @@ use crate::token::Span;
 use crate::typechecker::type_display;
 
 use super::value::{EnumData, Value};
-use super::{dbg_json_escape, DbgOutputMode};
+use super::{dbg_json_escape, ConsoleSeg, ConsoleStream, DbgOutputMode};
 
 impl<'a> super::Interpreter<'a> {
     // ── Built-in functions ───────────────────────────────────────
@@ -502,7 +502,19 @@ impl<'a> super::Interpreter<'a> {
     /// and the `Stdout.print` / `Stdout.println` resource methods so the
     /// two surfaces share one capture path.
     pub(crate) fn write_stdout(&mut self, s: &str, newline: bool) {
-        if let Some(ref mut output) = self.captured_output {
+        // A `par {}` branch's capture comes first: it defers BOTH streams so
+        // the join can replay them in source order (B-2026-08-23-15). The two
+        // buffers are never both installed on one interpreter.
+        if let Some(ref mut segs) = self.captured_console {
+            segs.push(ConsoleSeg {
+                stream: ConsoleStream::Stdout,
+                text: if newline {
+                    format!("{s}\n")
+                } else {
+                    s.to_string()
+                },
+            });
+        } else if let Some(ref mut output) = self.captured_output {
             if newline {
                 output.push(format!("{}\n", s));
             } else {
@@ -554,11 +566,27 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
-    /// Write to stderr. No capture buffer today — `captured_output` is
-    /// stdout-only and the test harness does not currently snapshot stderr.
-    /// Mirrors `write_stdout` so the `Stderr` arms have the same shape as
-    /// `Stdout`'s without forcing every Stderr test to learn a new pattern.
+    /// Write to stderr, honoring a `par {}` branch's `captured_console` so
+    /// the join can replay it in source order (B-2026-08-23-15) — design.md
+    /// § dbg() promises exactly that of `eprintln`, and the compiled backends
+    /// already deliver it. Mirrors `write_stdout` so the `Stderr` arms have
+    /// the same shape as `Stdout`'s.
+    ///
+    /// `captured_output` is deliberately NOT consulted: it is the test
+    /// harness's stdout-only snapshot buffer, and folding stderr into it
+    /// would silently rewrite what every existing stdout assertion sees.
     pub(crate) fn write_stderr(&mut self, s: &str, newline: bool) {
+        if let Some(ref mut segs) = self.captured_console {
+            segs.push(ConsoleSeg {
+                stream: ConsoleStream::Stderr,
+                text: if newline {
+                    format!("{s}\n")
+                } else {
+                    s.to_string()
+                },
+            });
+            return;
+        }
         if newline {
             eprintln!("{}", s);
         } else {

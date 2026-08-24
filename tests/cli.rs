@@ -4101,6 +4101,167 @@ fn test_stdin_lines_run_and_build_parity() {
     }
     let _ = std::fs::remove_dir_all(&tmp);
 }
+/// B-2026-08-23-15 — `eprintln` inside a `par {}` region must replay at the
+/// join in SOURCE order, under the interpreter as well as the compiled
+/// backends.
+///
+/// design.md § dbg() ("Per-line atomicity, not ordering") names `eprintln` as
+/// the construct to reach for when output order under `par` must be
+/// deterministic: it "goes through the console chokepoint, so a parallel
+/// branch's writes are captured and replayed at the join in source order",
+/// explicitly in contrast to `dbg()`, whose unordered output that paragraph
+/// documents as unsupported for snapshot testing. The compiled backends
+/// honoured that (`OutputCapture` in `runtime/src/lib.rs`); the interpreter
+/// did not — `write_stderr` had no capture buffer, so a branch's stderr
+/// bypassed the join entirely and landed in THREAD-COMPLETION order.
+///
+/// The `while` spin in `slow_left` is what makes this test decisive rather
+/// than probabilistic. Without it the two branches race and the buggy build
+/// still produced source order on a minority of runs (7 of 20 measured), so a
+/// handful of repetitions could pass by luck. With it, branch 1 always
+/// finishes before branch 0 emits anything, so the pre-fix build printed
+/// right-before-left on 12 of 12 runs and the fixed build prints
+/// left-before-right on 12 of 12 — the assertion fails deterministically if
+/// the capture regresses. 20_000 iterations is ~0.4 s in the tree-walk
+/// interpreter, generous margin over the microseconds branch 1 needs.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_eprintln_under_par_replays_in_source_order_run_and_build() {
+    use std::process::Command;
+
+    let tmp = scratch_project("par-stderr-order");
+    let src = "fn slow_left() -> i64 {\n\
+               \x20   let mut i = 0;\n\
+               \x20   while i < 20000 { i = i + 1; }\n\
+               \x20   eprintln(\"E-left-1\");\n\
+               \x20   println(\"O-left-1\");\n\
+               \x20   eprintln(\"E-left-2\");\n\
+               \x20   1\n\
+               }\n\
+               fn fast_right() -> i64 {\n\
+               \x20   eprintln(\"E-right-1\");\n\
+               \x20   println(\"O-right-1\");\n\
+               \x20   eprintln(\"E-right-2\");\n\
+               \x20   2\n\
+               }\n\
+               fn main() {\n\
+               \x20   let (a, b) = par { let a = slow_left(); let b = fast_right(); (a, b) };\n\
+               \x20   println(f\"O-sum-{a + b}\");\n\
+               \x20   eprintln(f\"E-sum-{a + b}\");\n\
+               }\n";
+    write(&tmp.join("po.kara"), src);
+
+    let want_err = "E-left-1\nE-left-2\nE-right-1\nE-right-2\nE-sum-3\n";
+    let want_out = "O-left-1\nO-right-1\nO-sum-3\n";
+
+    // Interpreter: repeat, because the bug was a RACE — one green run proves
+    // nothing about a scheduling-order defect.
+    for attempt in 0..3 {
+        let out = Command::new(env!("CARGO_BIN_EXE_karac"))
+            .current_dir(&tmp)
+            .args(["run", "--interp", "po.kara"])
+            .output()
+            .expect("spawn karac run --interp");
+        assert_eq!(
+            String::from_utf8_lossy(&out.stderr),
+            want_err,
+            "interpreter attempt {attempt}: par-branch stderr must replay in source order"
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            want_out,
+            "interpreter attempt {attempt}: par-branch stdout order"
+        );
+    }
+
+    // Compiled backend: the oracle the interpreter is being held to. Skips
+    // gracefully when the runtime archive is absent and the link fails.
+    let built = Command::new(env!("CARGO_BIN_EXE_karac"))
+        .current_dir(&tmp)
+        .args(["build", "po.kara"])
+        .output();
+    let exe = tmp.join("po");
+    if built.map(|o| o.status.success()).unwrap_or(false) && exe.exists() {
+        for attempt in 0..2 {
+            let out = Command::new(&exe).output().expect("run built binary");
+            assert_eq!(
+                String::from_utf8_lossy(&out.stderr),
+                want_err,
+                "AOT attempt {attempt}: par-branch stderr source order"
+            );
+            assert_eq!(
+                String::from_utf8_lossy(&out.stdout),
+                want_out,
+                "AOT attempt {attempt}: par-branch stdout order"
+            );
+        }
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// B-2026-08-23-15, second half: the capture is ONE buffer carrying both
+/// streams, so a branch's stdout and stderr keep their INTERLEAVING relative
+/// to each other — not two per-stream buffers replayed back to back.
+///
+/// This is the property that separates the two candidate designs. Two buffers
+/// get each stream's own order right and would pass the test above, but replay
+/// every branch's stdout before any of its stderr, so a reader that merges the
+/// two (`prog 2>&1`, a log collector, a CI pane) sees an order that never
+/// happened. The runtime records `(bytes, stream)` segments over one flat
+/// buffer for exactly this reason; the interpreter's `captured_console`
+/// mirrors it.
+///
+/// Interpreter-only ON PURPOSE. Both fds here point at one file, and the
+/// compiled binary's stdout is then a block-buffered libc stream that flushes
+/// at exit while its stderr is unbuffered — so an AOT comparison would measure
+/// stdio buffering policy, not replay order. (Run under `stdbuf -o0` the
+/// compiled binary does emit this exact interleaving; that is where the
+/// expected string below comes from, but `stdbuf` is not portable enough to
+/// assert on.) The per-stream AOT parity is covered by the test above.
+#[test]
+fn test_par_console_capture_preserves_stdout_stderr_interleaving() {
+    use std::fs::File;
+    use std::process::{Command, Stdio};
+
+    let tmp = scratch_project("par-console-interleave");
+    let src = "fn left() -> i64 {\n\
+               \x20   eprintln(\"E-left-1\"); println(\"O-left-1\"); eprintln(\"E-left-2\"); 1\n\
+               }\n\
+               fn right() -> i64 {\n\
+               \x20   eprintln(\"E-right-1\"); println(\"O-right-1\"); eprintln(\"E-right-2\"); 2\n\
+               }\n\
+               fn main() {\n\
+               \x20   let (a, b) = par { let a = left(); let b = right(); (a, b) };\n\
+               \x20   println(f\"O-sum-{a + b}\");\n\
+               \x20   eprintln(f\"E-sum-{a + b}\");\n\
+               }\n";
+    write(&tmp.join("il.kara"), src);
+
+    let merged = tmp.join("merged.txt");
+    let want = "E-left-1\nO-left-1\nE-left-2\n\
+                E-right-1\nO-right-1\nE-right-2\n\
+                O-sum-3\nE-sum-3\n";
+
+    for attempt in 0..3 {
+        let f = File::create(&merged).expect("create merged output file");
+        let f2 = f.try_clone().expect("dup merged output file");
+        let status = Command::new(env!("CARGO_BIN_EXE_karac"))
+            .current_dir(&tmp)
+            .args(["run", "--interp", "il.kara"])
+            .stdout(Stdio::from(f))
+            .stderr(Stdio::from(f2))
+            .status()
+            .expect("spawn karac run --interp");
+        assert!(status.success(), "interpreter run {attempt} failed");
+        let got = std::fs::read_to_string(&merged).expect("read merged output");
+        assert_eq!(
+            got, want,
+            "attempt {attempt}: a par branch's stdout and stderr must stay \
+             interleaved with each other, not be replayed stream by stream"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+}
 
 /// Standing run-vs-build gate for the `providers { R => v } in { body }` BLOCK
 /// form (B-2026-07-31-9).

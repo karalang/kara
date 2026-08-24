@@ -22,7 +22,7 @@ use super::exec::{
     EvalResult, ExitPath,
 };
 use super::value::{EnumData, Value};
-use super::Interpreter;
+use super::{ConsoleSeg, ConsoleStream, Interpreter};
 
 impl<'a> super::Interpreter<'a> {
     /// B-2026-08-14-6 — apply the implicit int-to-float widening to an
@@ -365,11 +365,11 @@ impl<'a> super::Interpreter<'a> {
             .collect();
 
         // Collect results from each branch
-        // Each branch result: (index, defined_vars, output_lines, dbg_lines, control_flow_or_value)
+        // Each branch result: (index, defined_vars, console_segs, dbg_lines, control_flow_or_value)
         type BranchResult = (
             usize,
             HashMap<String, Value>,
-            Vec<String>,
+            Vec<ConsoleSeg>,
             Vec<String>,
             Result<Value, ControlFlow>,
         );
@@ -396,7 +396,12 @@ impl<'a> super::Interpreter<'a> {
 
                     // Create a branch interpreter with the shared env snapshot
                     let mut branch_interp = Interpreter::new(prog, tc);
-                    branch_interp.captured_output = Some(Vec::new());
+                    // ONE capture for both console streams, so the join can
+                    // replay this branch's stdout AND stderr in source order
+                    // with their within-branch interleaving intact
+                    // (B-2026-08-23-15). Not `captured_output`, which is
+                    // stdout-only.
+                    branch_interp.captured_console = Some(Vec::new());
                     branch_interp.sequential_mode = sequential_mode;
                     branch_interp.source_filename = source_filename.clone();
                     branch_interp.cancel_flag = Some(Arc::clone(&cancel));
@@ -463,13 +468,13 @@ impl<'a> super::Interpreter<'a> {
                         HashMap::new()
                     };
 
-                    let output = branch_interp.captured_output.unwrap_or_default();
+                    let console = branch_interp.captured_console.unwrap_or_default();
                     let dbg_lines = branch_interp.captured_dbg.unwrap_or_default();
 
                     results_ref.lock().unwrap().push((
                         i,
                         defined_vars,
-                        output,
+                        console,
                         dbg_lines,
                         cf_result,
                     ));
@@ -482,14 +487,30 @@ impl<'a> super::Interpreter<'a> {
         branch_results.sort_by_key(|(i, _, _, _, _)| *i);
 
         // Merge results back into the parent interpreter
-        // 1. Merge output in source order
-        for (_, _, output, _, _) in &branch_results {
-            for line in output {
-                if let Some(ref mut cap) = self.captured_output {
-                    cap.push(line.clone());
-                } else {
-                    print!("{}", line);
-                }
+        // 1. Replay console output in source order — this is the join half of
+        //    design.md § dbg()'s console-chokepoint promise ("a parallel
+        //    branch's writes are captured and replayed at the join in source
+        //    order"), and it covers stderr as well as stdout: before
+        //    B-2026-08-23-15 stderr bypassed the capture entirely and landed
+        //    in thread-completion order, so `eprintln` under `par {}` was
+        //    nondeterministic in the interpreter while the compiled backends
+        //    replayed it in source order.
+        //
+        //    Replaying THROUGH `write_stdout` / `write_stderr` rather than to
+        //    the fd is deliberate, and mirrors the runtime's `OUTPUT_REDIRECT`
+        //    note: in a NESTED `par {}` the parent is itself a branch, so its
+        //    own `captured_console` picks these segments up and defers them to
+        //    the outer join. It also keeps stdout on the one writer that
+        //    handles a closed reader (B-2026-08-19-2) instead of the bare
+        //    `print!` this loop used to call, which panics on `BrokenPipe`.
+        let replay: Vec<ConsoleSeg> = branch_results
+            .iter()
+            .flat_map(|(_, _, console, _, _)| console.iter().cloned())
+            .collect();
+        for seg in replay {
+            match seg.stream {
+                ConsoleStream::Stdout => self.write_stdout(&seg.text, false),
+                ConsoleStream::Stderr => self.write_stderr(&seg.text, false),
             }
         }
 

@@ -94,6 +94,35 @@ pub struct Interpreter<'a> {
     pub(crate) env: Env,
     /// Captured output for testing (when Some, print/println write here instead of stdout)
     pub captured_output: Option<Vec<String>>,
+    /// A `par {}` branch's deferred console output: one segment per
+    /// `write_stdout` / `write_stderr` call, tagged with its stream.
+    ///
+    /// This is the interpreter's half of the console chokepoint design.md
+    /// § dbg() names -- "a parallel branch's writes are captured and replayed
+    /// at the join in source order". `eval_par_block` installs it on each
+    /// branch interpreter and replays the branches' segments in source order
+    /// after the join, so a `par {}` region's stderr is deterministic and its
+    /// within-branch stdout/stderr interleaving is preserved -- matching the
+    /// runtime's `OutputCapture` (`runtime/src/lib.rs`), which records the
+    /// same `(bytes, stream)` segments for the compiled backends.
+    ///
+    /// ONE buffer rather than a stdout one and a stderr one: two buffers
+    /// would replay every branch's stdout before any of its stderr, which
+    /// gets each stream's own order right but loses the interleaving between
+    /// them (visible whenever the two are merged, e.g. `prog 2>&1`).
+    ///
+    /// Takes precedence over `captured_output` in `write_stdout`; the two are
+    /// never both `Some` on one interpreter, since a branch installs only
+    /// this one. Replay goes back THROUGH `write_stdout` / `write_stderr`
+    /// rather than to the fd directly, which is what makes nested `par {}`
+    /// correct: an inner region's replay folds into the outer branch's
+    /// capture and defers to the outer join (same reasoning as the runtime's
+    /// `OUTPUT_REDIRECT` note).
+    ///
+    /// `dbg()` is deliberately NOT routed here -- design.md declares
+    /// transparent-verb output exempt from the chokepoint and its order under
+    /// `par {}` unreproducible. `captured_dbg` stays its own test-only buffer.
+    pub(crate) captured_console: Option<Vec<ConsoleSeg>>,
     /// Pending control flow signal (return/break/continue)
     pub(crate) pending_cf: Option<ControlFlow>,
     /// Set by `eval_body_growing` immediately before it evaluates a FUNCTION
@@ -640,6 +669,24 @@ pub enum DbgOutputMode {
     Json,
 }
 
+/// Which console stream one captured `par {}` branch segment belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ConsoleStream {
+    Stdout,
+    Stderr,
+}
+
+/// One console write deferred by a `par {}` branch: the exact text that
+/// `write_stdout` / `write_stderr` would have emitted (trailing newline
+/// already applied), plus the stream it was headed for. The runtime's
+/// compiled twin is `Seg` in `runtime/src/lib.rs`, which records the same
+/// `(bytes, stream)` pair over a flat byte buffer.
+#[derive(Debug, Clone)]
+pub(crate) struct ConsoleSeg {
+    pub(crate) stream: ConsoleStream,
+    pub(crate) text: String,
+}
+
 /// JSON-string escape with surrounding quotes. Used by the `dbg()`
 /// structured output mode. Kept private to interpreter.rs; the cli /
 /// doc modules each carry their own copies for the same reason
@@ -772,6 +819,7 @@ impl<'a> Interpreter<'a> {
             typecheck_result,
             env: Env::new(),
             captured_output: None,
+            captured_console: None,
             next_block_is_fn_body: false,
             pending_cf: None,
             tracked_effects: Vec::new(),
