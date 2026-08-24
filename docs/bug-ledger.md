@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 158 | 0 |
 | double-free | 136 | 0 |
 | codegen-gap | 132 | 1 |
-| diagnostics | 101 | 2 |
+| diagnostics | 101 | 1 |
 | false-positive | 95 | 0 |
 | perf | 84 | 0 |
 | other | 58 | 0 |
@@ -120,19 +120,18 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | parser | 41 | 1 |
 | runtime | 31 | 0 |
 | resolver | 26 | 0 |
-| effect | 17 | 2 |
+| effect | 17 | 1 |
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1530 surfaced · 5 open · 1502 fixed · 9 wontfix** (2026-05-20 → 2026-08-24). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1530 surfaced · 4 open · 1503 fixed · 9 wontfix** (2026-05-20 → 2026-08-24). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-23-11 | 2026-08-23 | typecheck | medium | `Type::Function` carries NO EFFECT ROW, so design.md § First-Class Functions' `let f = save;  // f: Fn(User) -> () with writes(UserDB)` is not representable and a function value's effects cannot propagate through its TYPE. NARROWED 7e7972b: the IMPRECISION this caused -- a function value that is bound and never called still demanding the enclosing function declare its effects -- is FIXED, in the effect checker and without the type row (bind-an-alias, attribute-at-every-other-mention). What remains is representability only, and the prescription in the original title does not work as written: the typechecker cannot populate an effect row, because `effectcheck` runs after `typecheck` AND consumes its output, so inferred effects at typecheck time would need a cycle. Read the detail before picking this up. | roadmap.md |
 | B-2026-08-23-13 | 2026-08-23 | effect | low | The mutual-recursion NOTE now fires for two functions that merely REFERENCE each other as VALUES, calling them a "mutual recursion group" though neither calls the other. `fn p(n: i64) -> i64 { let f = q; n + 1 }` + `fn q(n: i64) -> i64 { let g = p; n + 2 }` reports `note[effect]: mutual recursion group resolved by fixed-point inference: \`p\` (no effects), \`q\` (no effects)`. The program passes and the note is suppressible with `#[allow(mutual_recursion_note)]`, so this is diagnostic wording, not a check failure -- but "mutual recursion" is a false statement about the program. | roadmap.md |
-| B-2026-08-24-8 | 2026-08-24 | effect | low | A BARE `Fn(..)` SLOT IS IMPRACTICAL BECAUSE `panics` IS INFERRED FROM ORDINARY INDEXING and is not a transparent verb, so a closure as plain as `|w, i| w[i]` does not fit `Fn(ref Vec[u8], i64) -> u8` and must be spelled `Fn(ref Vec[u8], i64) -> u8 with panics`. Measured identical at all FIVE slot positions -- argument, `let` annotation, assignment, return, struct field -- so this is one rule applied consistently, not a defect in any one of them. The question is whether a bare `Fn(..)` should mean "pure INCLUDING panics" at all, given that indexing, division and (on some shapes) arithmetic all infer it: as it stands, `with panics` becomes boilerplate on nearly every non-trivial function value, which is the shape of an annotation users cargo-cult rather than read. | roadmap.md |
 | B-2026-08-24-9 | 2026-08-24 | codegen | low | `dbg(x)` where `x` is a SELF-REFERENTIAL `shared enum` (`shared enum T2 { Node(i64, T2), Leaf(i64) }`) REFUSES to compile. Not a missing arm: the shared-enum wrapper and the inner `emit_enum_display_fn` share ONE cache key (the bare enum name), so a payload of the enum's own type resolves to the aggregate-taking inner and is handed a handle. Refusing is the new behaviour; before the guard it MISCOMPILED, printing a wrong variant. A HEADERLESS or weak-headered shared type refuses for its own separate reason, below. | phase-7-codegen.md |
 | B-2026-08-24-10 | 2026-08-24 | parser+typecheck+codegen | high | A TAIL-POSITION `loop` DROPS ITS BREAK VALUE and the declared return type is NEVER CHECKED, so one program behaves THREE DIFFERENT WAYS: `fn pick() -> i64 { let mut i = 0; loop { i = i + 1; if i == 3 { break i * 10 } } }` prints `()` and exits 0 under the interpreter, STACK-OVERFLOWS the JIT, and HANGS FOREVER as an AOT binary. `karac check` reports "All checks passed." -- even for `fn pick() -> i64 { loop { break "a string" } }`, a String break in an i64 function. | roadmap.md |
 
@@ -154,9 +153,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1530 surfaced
 
 </details>
 
-### Fixed (1502)
+### Fixed (1503)
 
-<details><summary>1502 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1503 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -17728,6 +17727,66 @@ The two tests that use an unlowerable `dbg` shape as their fail-closed trigger m
 | B-2026-08-24-7 | interp | medium | A RUNTIME ERROR inside `return <expr>` is OVERWRITTEN by the return's own control flow, so the interpreter KEEPS EXECUTING after the fault and hands… | FIXED by b964f37. `Interpreter::set_cf` (src/interpreter.rs) — the single funnel every `return` / `break` / `continue` goes through — now DECLINES to write `pending_cf` when an unwind is already in flight. A new `ControlFlow::is_unwind()` (src/interpreter/exec.rs) names the four unwind variants (`RuntimeError`, `ExitUnwind`, `Cancelled`, `TimedOut`) — exactly the set `call_function`'s propagate arm already groups — so a fault, a `process::exit`, a `par` cancellation or a test deadline all outrank a statement that is merely carrying a value out of the expression it faulted inside of.
 
 `record_runtime_error` and its `assert`-style sibling write `pending_cf` DIRECTLY and are deliberately left unguarded: a fault must still be recordable while another unwind is pending. The guard governs the statement-level funnel alone, which is where the downgrade happened. |
+| B-2026-08-24-8 | effect | low | A BARE `Fn(..)` SLOT IS IMPRACTICAL BECAUSE `panics` IS INFERRED FROM ORDINARY INDEXING and is not a transparent verb, so a closure as plain as `\|w,… | FIXED by 40c6c13, option (a): `panics` joins the transparent set
+FOR SLOT SUBTYPING ONLY.
+
+`is_slot_transparent_verb` (src/effectchecker/subtyping.rs) is the ordinary
+transparent set plus `panics`, and the six slot comparisons now call it.
+Scoped deliberately: `panics` is still inferred, still declared on
+functions, still verified on public signatures, still reported by
+`karac explain`. Only the value-against-slot comparison ignores it. A slot
+may still DECLARE `with panics`; it is simply not a requirement the value
+has to meet.
+
+`blocks` and `suspends` stay CHECKED, and that asymmetry is the whole
+design: they drive scheduler placement rather than falling out of
+arithmetic, so "this callback must not block" is a constraint worth
+expressing and cheap to honor. The consequence, stated plainly in design.md,
+is that v1 has no way to say "this callback must not panic" -- consistent
+with the absence of a `forbids(verb)` predicate elsewhere.
+
+WHAT SETTLED THE DECISION was the standard library, not the ergonomics
+argument in the row. 27 of the stdlib's 33 `Fn(..)` slots are bare --
+`Vec.map(f: Fn(T) -> T)`, `Pool.new(create_fn: Fn() -> T)`,
+`Once.get_or_init(init: Fn() -> T)`, `autograd.grad(f: Fn(Var) -> Var)` --
+and NONE was written with `panics`. Under the old rule a callback as
+ordinary as `|w, i| w[i]` could fill none of them. That is the language's
+own API surface disagreeing with its own rule, which is stronger evidence
+than "users will cargo-cult the annotation".
+
+A CORRECTION TO THE RECORD. While proposing this it was argued that a bare
+slot "was never a deliberate way" to forbid panics. That was WRONG, and the
+test suite said so: THREE tests from B-2026-08-05-18 -- the fixed row about
+resource-less verbs being dropped in list-to-set conversion -- assert
+exactly that a `panics` value must not satisfy a pure slot
+(`test_undeclared_resource_less_verb_in_slot_still_rejected`,
+`test_wrong_resource_less_verb_in_slot_still_rejected`,
+`test_let_annotation_resource_less_verb_follows_the_slot`). So the old
+behaviour was deliberate and tested, and this row is a reversal of a prior
+decision rather than the fixing of an oversight. Whoever revisits it should
+know that.
+
+Those three guards were RE-POINTED, not deleted. Each exists to prove a
+resource-less verb survives the list-to-set conversion and that verb
+identity is respected -- purposes entirely independent of WHICH
+resource-less verb carries them. They now run on `blocks` (and `blocks`
+into a `suspends` slot for the identity one), which is still checked, so
+B-2026-08-05-18 remains guarded at full strength. Deleting them would have
+dropped a real regression guard; leaving them on `panics` would have
+asserted the behaviour this row removes.
+
+ALSO REVERTED: `tests/codegen.rs`'s `test_e2e_closure_over_builtin_
+predicates_and_handle_refs` had `with panics` added to its `vecat` slot
+under B-2026-08-24-1 to get the suite green. That was the workaround the
+row was filed about, and it is now back to the idiomatic bare spelling --
+which is the observable proof of this fix, since that test program is
+exactly the shape that provoked the row.
+
+MEASURED after the change:
+  bare slot, panicking closure   let / return / argument   all clean
+  bare slot, `blocks` value      returned value has effect blocks() not declared in slot [pure]
+  bare slot, `suspends` value    returned value has effect suspends() not declared in slot [pure]
+  bare slot, `writes(UserDB)`    returned value has effect writes(UserDB) not declared in slot [pure] |
 
 </details>
 
