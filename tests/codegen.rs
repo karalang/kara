@@ -45623,6 +45623,113 @@ fn driver() -> i64 {
         );
     }
 
+    /// B-2026-08-24-15 — `Vec.insert` / `Vec.remove` / `Vec.swap_remove` emit
+    /// no bounds check in codegen, so an out-of-range index was memory-unsafe
+    /// instead of fatal.
+    ///
+    /// `insert`'s shift count is `len - idx`, so `idx > len` went negative and
+    /// reached `memmove` as a huge unsigned byte count (glibc `free(): invalid
+    /// pointer`, exit 134). `remove` did the same. `swap_remove` did not crash
+    /// at all — it read past the end, returned the garbage (a live heap
+    /// pointer, under the JIT) and decremented `len`, dropping a live element
+    /// with a clean exit 0.
+    ///
+    /// Plain indexing `v[i]` was always checked, which is what made this an
+    /// inconsistency inside one type rather than a no-checks policy. All three
+    /// must now panic exactly as `--interp` and design.md say they do.
+    #[test]
+    fn vec_mutation_methods_bounds_check_out_of_range_index() {
+        const PRELUDE: &str = "fn main() {\n\
+             let mut v: Vec[i64] = Vec.new();\n\
+             v.push(11i64);\n\
+             v.push(22i64);\n";
+
+        // (call, panic-message fragment) — each must trap, not corrupt.
+        let cases = [
+            ("v.insert(7i64, 9i64);", "Vec.insert index out of bounds"),
+            ("v.insert(-1i64, 9i64);", "Vec.insert index out of bounds"),
+            (
+                "let x = v.remove(7i64); println(x);",
+                "Vec.remove index out of bounds",
+            ),
+            (
+                "let x = v.remove(-1i64); println(x);",
+                "Vec.remove index out of bounds",
+            ),
+            (
+                "let x = v.swap_remove(7i64); println(x);",
+                "Vec.swap_remove index out of bounds",
+            ),
+            (
+                "let x = v.swap_remove(-1i64); println(x);",
+                "Vec.swap_remove index out of bounds",
+            ),
+        ];
+
+        for (call, want) in cases {
+            let src = format!("{PRELUDE}    {call}\n    println(\"survived\");\n}}");
+            let run = match run_program_capturing(&src) {
+                Some(r) => r,
+                None => return, // no runtime archive / linker — harness skip
+            };
+            assert!(
+                run.stderr.contains(want),
+                "{call} must panic with {want:?}; got stdout={:?} stderr={:?}",
+                run.stdout,
+                run.stderr
+            );
+            assert!(
+                !run.stdout.contains("survived"),
+                "{call} must not fall through to the next statement; got stdout={:?}",
+                run.stdout
+            );
+            // Exit 101 is the panic path. The bug produced 134 (abort from
+            // glibc's heap check) for insert/remove and 0 for swap_remove, so
+            // pinning the code is what separates "panics" from "dies somehow".
+            assert_eq!(
+                run.status.code(),
+                Some(101),
+                "{call} must exit via panic (101), not abort or success; stderr={:?}",
+                run.stderr
+            );
+        }
+    }
+
+    /// The other half of B-2026-08-24-15: the new bounds checks must not
+    /// reject anything legal. `insert(len, v)` is an APPEND and is valid —
+    /// `insert` alone accepts `idx == len`, which is why it needs `UGT` where
+    /// `remove` / `swap_remove` need `UGE`. Getting that predicate wrong turns
+    /// a memory-safety fix into a broken `push`.
+    #[test]
+    fn vec_mutation_methods_accept_every_in_range_index() {
+        let src = "fn main() {\n\
+             let mut v: Vec[i64] = Vec.new();\n\
+             v.push(11i64);\n\
+             v.push(22i64);\n\
+             v.insert(2i64, 33i64);\n\
+             v.insert(0i64, 0i64);\n\
+             println(v.len());\n\
+             let a = v.remove(0i64);\n\
+             let b = v.remove(v.len() - 1i64);\n\
+             let c = v.swap_remove(0i64);\n\
+             println(a);\n\
+             println(b);\n\
+             println(c);\n\
+             println(v.len());\n\
+             let mut e: Vec[i64] = Vec.new();\n\
+             e.insert(0i64, 7i64);\n\
+             println(e[0]);\n\
+         }";
+        // insert(2)=append -> 11 22 33; insert(0) -> 0 11 22 33
+        // remove(0)=0; remove(last)=33; swap_remove(0)=11, leaving [22]
+        assert_eq!(
+            run_program(src),
+            Some("4\n0\n33\n11\n1\n7\n".to_string()),
+            "in-range insert/remove/swap_remove must be unaffected, including \
+             insert-at-len (append) and insert(0) into an EMPTY vec"
+        );
+    }
+
     #[test]
     fn test_ir_descending_loop_bce_skip_wiring() {
         // B-2026-07-17-1: the descending-loop skip proves `k < row.len()` for

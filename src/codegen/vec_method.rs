@@ -130,6 +130,56 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `malloc(n)`, so it is a clean drop-in for any buffer that is null-or-heap
     /// (Vec data always is); a String's static-literal `cap == 0` rodata view is
     /// the one buffer it must NOT touch — those grow paths guard with `cap > 0`.
+    /// Emit the runtime bounds check for a `Vec` mutation at `idx`, given an
+    /// already-loaded `len`.
+    ///
+    /// `insert` / `remove` / `swap_remove` are specified to panic on an
+    /// out-of-range index (design.md § `Vec[T]`), and the interpreter does.
+    /// Codegen used to emit no check at all, which made an out-of-range index
+    /// memory-unsafe rather than fatal: `insert`'s shift count is `len - idx`,
+    /// so `idx > len` went negative and reached `memmove` as a huge unsigned
+    /// byte count, while `swap_remove` silently read past the end and shrank
+    /// `len`. That was B-2026-08-24-15.
+    ///
+    /// `allow_eq_len` picks the valid range: `insert` accepts `idx == len`
+    /// (appending at the end), `remove` / `swap_remove` do not. ONE UNSIGNED
+    /// COMPARE COVERS THE NEGATIVE CASE TOO, because a negative `i64`
+    /// reinterpreted as unsigned exceeds any representable length — the same
+    /// trick [`Self::emit_split_bounds_check`] uses for plain indexing, and
+    /// the reason this costs one `icmp` + one branch rather than two.
+    fn emit_vec_mutation_bounds_check(
+        &mut self,
+        label_prefix: &str,
+        idx_val: inkwell::values::IntValue<'ctx>,
+        len: inkwell::values::IntValue<'ctx>,
+        allow_eq_len: bool,
+        message: &str,
+    ) {
+        let fn_val = self.current_fn.unwrap();
+        let oob_bb = self
+            .context
+            .append_basic_block(fn_val, &format!("{label_prefix}.oob"));
+        let ok_bb = self
+            .context
+            .append_basic_block(fn_val, &format!("{label_prefix}.ok"));
+        let pred = if allow_eq_len {
+            inkwell::IntPredicate::UGT
+        } else {
+            inkwell::IntPredicate::UGE
+        };
+        let cmp = self
+            .builder
+            .build_int_compare(pred, idx_val, len, "bounds")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(cmp, oob_bb, ok_bb)
+            .unwrap();
+        self.builder.position_at_end(oob_bb);
+        self.emit_panic(message);
+        self.builder.build_unreachable().unwrap();
+        self.builder.position_at_end(ok_bb);
+    }
+
     pub(super) fn realloc_or_panic_fn_decl(&self) -> inkwell::values::FunctionValue<'ctx> {
         let sym = crate::codegen::driver::c_realloc_or_panic_symbol();
         self.module.get_function(sym).unwrap_or_else(|| {
@@ -3044,6 +3094,17 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap()
                     .into_int_value();
 
+                // Bounds check BEFORE the growth check and the shift: `idx ==
+                // len` is a legal append, `idx > len` (and any negative idx)
+                // is the B-2026-08-24-15 heap corruption.
+                self.emit_vec_mutation_bounds_check(
+                    "insert",
+                    idx_val,
+                    len,
+                    true,
+                    "Vec.insert index out of bounds",
+                );
+
                 // Growth check (`len == cap`) → realloc to max(4, cap*2), same
                 // amortized-doubling strategy as `push`.
                 let fn_val = self.current_fn.unwrap();
@@ -3736,6 +3797,15 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_load(i64_t, len_ptr, "remove.len")
                     .unwrap()
                     .into_int_value();
+
+                // Bounds check before the element load and the tail memmove.
+                self.emit_vec_mutation_bounds_check(
+                    "remove",
+                    idx_val,
+                    len,
+                    false,
+                    "Vec.remove index out of bounds",
+                );
                 let data = self
                     .builder
                     .build_load(ptr_ty, data_ptr_ptr, "remove.data")
@@ -3812,6 +3882,16 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_load(i64_t, len_ptr, "swrm.len")
                     .unwrap()
                     .into_int_value();
+
+                // Bounds check before the out-of-range element load that used
+                // to hand a heap pointer back to the caller as an `i64`.
+                self.emit_vec_mutation_bounds_check(
+                    "swrm",
+                    idx_val,
+                    len,
+                    false,
+                    "Vec.swap_remove index out of bounds",
+                );
                 let data = self
                     .builder
                     .build_load(ptr_ty, data_ptr_ptr, "swrm.data")
