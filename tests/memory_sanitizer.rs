@@ -52373,6 +52373,89 @@ fn main() {
             "local_fixed_array_returned_out",
         );
     }
+
+    /// B-2026-08-24-5 — the same escape as the fixture above, but reached
+    /// through the OTHER return position: a bare TAIL expression with no
+    /// `return` keyword. The whole-array drop retraction lives at two sites
+    /// (`suppress_cleanup_for_tail_return` and the `ExprKind::Return` arm in
+    /// `exprs.rs`), and hooking only one leaves the other double-freeing, so
+    /// each gets a fixture rather than trusting one to stand for both.
+    #[test]
+    fn asan_local_fixed_array_tail_expression_is_not_dropped_twice() {
+        assert_clean_asan_run(
+            r#"fn mk(i: i64) -> Array[String, 2] {
+    let x = f"a{i}";
+    let y = f"b{i}";
+    let a: Array[String, 2] = [x, y];
+    a
+}
+fn main() {
+    let mut i = 0i64; let mut n = 0i64;
+    while i < 50i64 { let r = mk(i); n = n + r[0].len(); i = i + 1i64; }
+    println(n);
+}
+"#,
+            &["140"],
+            "local_fixed_array_tail_expression",
+        );
+    }
+
+    /// B-2026-08-24-5 — a MID-BODY `return a;` (inside an `if`, with other
+    /// statements after it), which routes through the `ExprKind::Return` arm
+    /// rather than the tail walk. Without the retraction there this frame frees
+    /// the element buffers that the caller also owns.
+    #[test]
+    fn asan_local_fixed_array_conditional_return_is_not_dropped_twice() {
+        assert_clean_asan_run(
+            r#"fn mk(i: i64) -> Array[String, 2] {
+    let x = f"a{i}";
+    let y = f"b{i}";
+    let a: Array[String, 2] = [x, y];
+    if i >= 0i64 {
+        return a;
+    }
+    let p = f"p{i}";
+    let q = f"q{i}";
+    let b: Array[String, 2] = [p, q];
+    b
+}
+fn main() {
+    let mut i = 0i64; let mut n = 0i64;
+    while i < 50i64 { let r = mk(i); n = n + r[0].len(); i = i + 1i64; }
+    println(n);
+}
+"#,
+            &["140"],
+            "local_fixed_array_conditional_return",
+        );
+    }
+
+    /// B-2026-08-24-5 — the PARAM sibling: an owned `Array[T, N]` PARAMETER
+    /// returned straight back out. `make_array_param_callee_owned` has armed a
+    /// slot drop for array params since well before the local-array
+    /// registration existed, so this shape reaches the same missing retraction
+    /// by an older route. Kept as a standing fixture so the param path cannot
+    /// regress independently of the local one.
+    #[test]
+    fn asan_owned_array_param_returned_out_is_not_dropped_twice() {
+        assert_clean_asan_run(
+            r#"fn pass(a: Array[String, 2]) -> Array[String, 2] { return a; }
+fn mk(i: i64) -> Array[String, 2] {
+    let x = f"a{i}";
+    let y = f"b{i}";
+    let a: Array[String, 2] = [x, y];
+    return a;
+}
+fn main() {
+    let mut i = 0i64; let mut n = 0i64;
+    while i < 50i64 { let r = pass(mk(i)); n = n + r[0].len(); i = i + 1i64; }
+    println(n);
+}
+"#,
+            &["140"],
+            "owned_array_param_returned_out",
+        );
+    }
     /// B-2026-08-23-18 — `dbg(x)` on a PLACE expression of every heap-owning
     /// shape, under ASAN/LSan.
     ///

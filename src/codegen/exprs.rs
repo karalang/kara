@@ -1039,6 +1039,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     // owner, so cap-zero it in the array's slot to keep the
                     // array's scope-exit element drop from freeing it again.
                     self.suppress_array_elem_move_source(e);
+                    // B-2026-08-24-5 — the explicit-`return` twin for the WHOLE
+                    // array: `return a;` where `a` is an owned `Array[T, N]`
+                    // transfers the elements to the caller, so this frame's
+                    // scope-exit `StructDrop` on the array slot must be
+                    // retracted. Without it both frames free the same element
+                    // buffers. See the tail-position sibling in
+                    // `suppress_cleanup_for_tail_return`.
+                    self.suppress_array_binding_move_arg(e);
                     // B-2026-07-22-2: `return mk().s;` — the caller now owns
                     // the extracted field's buffer; zero it in the staged
                     // fresh-temp slot so the drain below frees only the

@@ -5143,6 +5143,20 @@ impl<'ctx> super::Codegen<'ctx> {
             // sibling is in `exprs.rs`). Cap-zero the element in the array's slot
             // so its scope-exit drop skips the moved-out buffer.
             self.suppress_array_elem_move_source(expr);
+            // B-2026-08-24-5 — the WHOLE owned `Array[T, N]` returned out
+            // (`fn mk() -> Array[String, 2] { ...; return a; }`). The element
+            // sibling above covers `return a[0]`; this covers `return a`. The
+            // retraction already existed for the by-value CALL-ARGUMENT
+            // position (`move_declined_copy_struct_arg`) but was never hooked
+            // at either return position, so the array's scope-exit
+            // `StructDrop` fired here AND the caller freed the same buffers —
+            // a double free.
+            //
+            // Invisible at the default -O2, which is why it survived: the
+            // fixture's allocation is provably dead there and LLVM deletes it
+            // along with the evidence. Only the `KARAC_OPT_LEVEL=0` ASAN leg
+            // runs the allocation the program actually writes.
+            self.suppress_array_binding_move_arg(expr);
             // B-2026-07-22-2: `fn get() -> String { mk().s }` tail — the
             // caller owns the extracted field; zero it in the staged
             // fresh-temp slot so the frame drain frees only the remainder.
