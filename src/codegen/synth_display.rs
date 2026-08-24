@@ -1499,12 +1499,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     // tag and needs its own renderer, so it keeps failing closed
                     // rather than rendering something the interpreter disagrees
                     // with.
-                    if self
-                        .type_decls
-                        .shared_types
-                        .get(seg)
-                        .is_some_and(|i| !i.is_enum)
-                    {
+                    if let Some(info) = self.type_decls.shared_types.get(seg) {
+                        if info.is_enum {
+                            return self.emit_shared_enum_debug_display_fn(seg);
+                        }
                         return self.emit_shared_struct_debug_display_fn(seg);
                     }
                     if self.type_decls.enum_layouts.contains_key(seg) {
@@ -2519,6 +2517,125 @@ impl<'ctx> super::Codegen<'ctx> {
         self.disp_append_lit(acc, " }");
         // Appends may split the current block (buffer grow) — return from
         // wherever we end up (mirrors the enum/option renderers).
+        self.builder.build_return(None).unwrap();
+
+        self.current_fn = saved_fn;
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        display_fn
+    }
+
+    /// B-2026-08-24-6: synthesize a `Debug` renderer for a `shared enum` — the
+    /// RC-backed sibling of `emit_enum_display_fn`, and a thin wrapper over it.
+    ///
+    /// A shared enum's box is `{ i64 strong, <enum words…> }`, so the enum
+    /// aggregate the ordinary renderer already knows how to switch on is simply
+    /// the box's TAIL. This loads the handle, GEPs past the control header, and
+    /// hands the resulting pointer to `emit_enum_display_fn` — no second copy of
+    /// the tag dispatch, the variant blocks, or the payload-word extraction.
+    ///
+    /// REUSING IT THIS WAY IS ONLY SOUND BECAUSE THE TWO LAYOUTS COINCIDE, and
+    /// that was measured rather than assumed (the row that filed this flagged it
+    /// as the one thing to check): for a four-variant enum with a `String`
+    /// payload, `heap_type` is 6 × i64 and the enum's own `llvm_type` is
+    /// 5 × i64. Every word is an i64 on both sides, so no padding can differ
+    /// and the tail is bit-identical to the aggregate. If a future layout gives
+    /// either side a non-i64 field, this GEP-and-load stops being exact and the
+    /// symptom would be a WRONG VARIANT NAME rather than a crash — so the
+    /// assertion below fails the build instead of rendering a lie.
+    ///
+    /// CACHE ORDER IS LOAD-BEARING, IN THIS DIRECTION. `emit_enum_display_fn`
+    /// keys its cache on the bare enum name — the same key
+    /// `emit_display_fn_for_type_expr` looks up before it reaches the shared
+    /// arm. So the inner renderer is synthesized FIRST and the wrapper takes
+    /// the key over afterwards: every later lookup then finds the handle-taking
+    /// wrapper, never the aggregate-taking inner, whose first parameter means
+    /// something different. Registering the wrapper first instead makes the
+    /// inner synthesis find the wrapper and emit a self-call — measured as a
+    /// `karac build` that succeeds and a binary that never terminates.
+    pub(super) fn emit_shared_enum_debug_display_fn(
+        &mut self,
+        enum_name: &str,
+    ) -> FunctionValue<'ctx> {
+        let type_name = enum_name.to_string();
+        if let Some(f) = self.disp_cache_get(&type_name) {
+            return f;
+        }
+        let fn_name = format!("{}shared_{type_name}", self.disp_sym_prefix());
+        if let Some(f) = self.module.get_function(&fn_name) {
+            self.disp_cache_put(type_name, f);
+            return f;
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let info = self
+            .type_decls
+            .shared_types
+            .get(enum_name)
+            .expect("emit_shared_enum_debug_display_fn: shared type registered");
+        let heap_type = info.heap_type;
+        let field_base: u32 = if info.has_weak_header { 2 } else { 1 };
+
+        // The layout coincidence this renderer rests on. Checked here rather
+        // than trusted: the box must be exactly the control header plus the
+        // enum's own words, in order.
+        let enum_llvm = self
+            .type_decls
+            .enum_layouts
+            .get(enum_name)
+            .expect("emit_shared_enum_debug_display_fn: enum layout registered")
+            .llvm_type;
+        let box_fields = heap_type.get_field_types();
+        let enum_fields = enum_llvm.get_field_types();
+        assert_eq!(
+            box_fields.len(),
+            enum_fields.len() + field_base as usize,
+            "shared enum `{enum_name}`: box is not the control header plus the enum's words"
+        );
+        assert!(
+            box_fields
+                .iter()
+                .skip(field_base as usize)
+                .zip(enum_fields.iter())
+                .all(|(a, b)| a == b),
+            "shared enum `{enum_name}`: box tail does not match the enum aggregate word for word"
+        );
+
+        let saved_bb = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+        let display_fn_ty = self
+            .context
+            .void_type()
+            .fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let display_fn = self
+            .module
+            .add_function(&fn_name, display_fn_ty, Some(Linkage::Internal));
+        // Synthesize the inner renderer FIRST, then take over its cache key.
+        // `emit_enum_display_fn` consults the same key on entry, so registering
+        // the wrapper before this call makes it find the WRAPPER and emit a
+        // self-call — an infinite loop that hangs the compiled binary rather
+        // than failing loudly (measured: `karac build` succeeded and the
+        // program never terminated).
+        let inner = self.emit_enum_display_fn(enum_name, &[]);
+        self.disp_cache_put(type_name, display_fn);
+
+        let entry_bb = self.context.append_basic_block(display_fn, "entry");
+        self.builder.position_at_end(entry_bb);
+        self.current_fn = Some(display_fn);
+        let slot_ptr = display_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let acc = display_fn.get_nth_param(1).unwrap().into_pointer_value();
+        let handle = self
+            .builder
+            .build_load(ptr_ty, slot_ptr, "shenum.handle")
+            .unwrap()
+            .into_pointer_value();
+        let agg_ptr = self
+            .builder
+            .build_struct_gep(heap_type, handle, field_base, "shenum.agg")
+            .unwrap();
+        self.builder
+            .build_call(inner, &[agg_ptr.into(), acc.into()], "shenum.d")
+            .unwrap();
         self.builder.build_return(None).unwrap();
 
         self.current_fn = saved_fn;

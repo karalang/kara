@@ -268,15 +268,15 @@ impl<'ctx> super::Codegen<'ctx> {
     /// The first type in `te` (itself or nested) for which no `Debug` renderer
     /// can be synthesized, or `None` when the whole shape is renderable.
     ///
-    /// Today that means a `shared enum` (its payload lives in the RC box behind
-    /// a variant tag and has no renderer yet) and a HEADERLESS shared struct
-    /// (whose field base is a per-function property, so it cannot be baked into
-    /// one program-wide cached renderer — see
-    /// `emit_shared_struct_debug_display_fn`). Ordinary `shared struct` /
-    /// `par struct` handles DO render as of B-2026-08-24-2, including
-    /// self-referential `Option[shared]` fields. Nested positions are walked
-    /// too, so `Vec[Sh]` and `Option[Sh]` refuse at the point of the offending
-    /// element rather than panicking one level down.
+    /// Today that means a HEADERLESS shared type — whose field base is a
+    /// per-function property, so it cannot be baked into one program-wide
+    /// cached renderer (see `emit_shared_struct_debug_display_fn`) — and a
+    /// weak-headered one, whose base-2 layout nothing exercises yet. Ordinary
+    /// `shared struct` / `par struct` handles render as of B-2026-08-24-2,
+    /// including self-referential `Option[shared]` fields, and `shared enum`
+    /// handles as of B-2026-08-24-6. Nested positions are walked too, so
+    /// `Vec[Sh]` and `Option[Sh]` refuse at the point of the offending element
+    /// rather than panicking one level down.
     fn dbg_unsupported_shape(&self, te: &TypeExpr) -> Option<String> {
         let TypeKind::Path(p) = &te.kind else {
             // Tuples: check every element.
@@ -289,16 +289,25 @@ impl<'ctx> super::Codegen<'ctx> {
             let shared_info = self.type_decls.shared_types.get(seg);
             let is_shared_name =
                 self.type_decls.shared_type_decl_names.contains(seg) || shared_info.is_some();
-            // A shared STRUCT renders (B-2026-08-24-2) unless it is headerless
-            // here — the headerless niche drops the refcount word, moving user
-            // field 0 to heap index 0, and `headerless_here` is answered per
-            // FUNCTION while the renderer is cached program-wide. Refusing is
-            // the honest outcome: the alternative is a cached renderer that
-            // reads every field at the wrong offset in some other function.
-            let renderable_shared_struct = shared_info
-                .is_some_and(|i| !i.is_enum && !i.has_weak_header)
-                && !self.headerless_here(seg);
-            if is_shared_name && !renderable_shared_struct {
+            // A shared STRUCT (B-2026-08-24-2) and a shared ENUM (B-2026-08-24-6)
+            // both render, unless the type is headerless here — the headerless
+            // niche drops the refcount word, moving user field 0 to heap index
+            // 0, and `headerless_here` is answered per FUNCTION while the
+            // renderer is cached program-wide. Refusing is the honest outcome:
+            // the alternative is a cached renderer that reads every field at
+            // the wrong offset in some other function.
+            //
+            // A weak-headered type is excluded for a narrower reason: nothing
+            // sets `has_weak_header` today (weak fields are declaration-only in
+            // codegen), so the base-2 path has never been exercised end to end
+            // and this keeps it failing closed rather than shipping untested.
+            let renderable_shared = shared_info.is_some_and(|i| {
+                !i.has_weak_header
+                    && (!i.is_enum
+                        || (self.type_decls.enum_layouts.contains_key(seg)
+                            && !self.shared_enum_is_cyclic(seg)))
+            }) && !self.headerless_here(seg);
+            if is_shared_name && !renderable_shared {
                 return Some(seg.clone());
             }
         }
@@ -308,6 +317,107 @@ impl<'ctx> super::Codegen<'ctx> {
                 _ => None,
             })
         })
+    }
+
+    /// Whether `name` is a `shared enum` that can reach ITSELF through a variant
+    /// payload — directly (`shared enum T { Node(T), Leaf }`) or around a cycle
+    /// of shared enums.
+    ///
+    /// Such a type is refused, and the reason is a cache-key collision rather
+    /// than a missing arm. `emit_shared_enum_debug_display_fn` is a wrapper that
+    /// loads the handle and delegates to `emit_enum_display_fn`, and both are
+    /// keyed on the bare enum name. While the inner renderer is being
+    /// synthesized, a payload of the enum's OWN type resolves through the
+    /// dispatcher to that inner — the AGGREGATE-taking function — which is then
+    /// handed a word holding a HANDLE. Neither cache order avoids it: putting
+    /// the wrapper in first makes the inner synthesis find the wrapper and emit
+    /// a self-call instead.
+    ///
+    /// MEASURED, on `shared enum T2 { Node(i64, T2), Leaf(i64) }` nested twice:
+    /// the interpreter prints `Node(3, Node(7, Leaf(99)))`, while AOT printed
+    /// `Node(3, Leaf(139898617069619))` and the JIT `Node(3, Leaf(5))` — the
+    /// garbage word read as a tag, so the failure is a WRONG VARIANT rather
+    /// than a crash. A single-level `Node(Leaf)` happened to render correctly,
+    /// which is exactly why this needed a payload-bearing case to surface.
+    ///
+    /// The proper fix is to give `emit_enum_display_fn` an explicit cache key so
+    /// the inner and the wrapper can coexist; until then this fails closed. Note
+    /// the hazard is SELF-reference only: a payload of a DIFFERENT shared enum,
+    /// or of a shared struct, resolves to that type's own wrapper and renders
+    /// correctly — both measured.
+    fn shared_enum_is_cyclic(&self, name: &str) -> bool {
+        fn collect_segments(te: &TypeExpr, out: &mut Vec<String>) {
+            match &te.kind {
+                TypeKind::Path(p) => {
+                    if let Some(seg) = p.segments.last() {
+                        out.push(seg.clone());
+                    }
+                    if let Some(args) = p.generic_args.as_ref() {
+                        for a in args {
+                            if let GenericArg::Type(t) = a {
+                                collect_segments(t, out);
+                            }
+                        }
+                    }
+                }
+                TypeKind::Tuple(elems) => {
+                    for e in elems {
+                        collect_segments(e, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let payload_names = |enum_name: &str| -> Vec<String> {
+            let mut out = Vec::new();
+            let Some(prog) = self.program_snapshot.as_ref() else {
+                return out;
+            };
+            for it in &prog.items {
+                if let Item::EnumDef(e) = it {
+                    if e.name != enum_name {
+                        continue;
+                    }
+                    for v in &e.variants {
+                        match &v.kind {
+                            VariantKind::Unit => {}
+                            VariantKind::Tuple(tes) => {
+                                for te in tes {
+                                    collect_segments(te, &mut out);
+                                }
+                            }
+                            VariantKind::Struct(fields) => {
+                                for f in fields {
+                                    collect_segments(&f.ty, &mut out);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            out
+        };
+        // DFS over shared ENUMS only; reaching `name` again is the cycle.
+        let mut seen: Vec<String> = Vec::new();
+        let mut stack: Vec<String> = payload_names(name);
+        while let Some(n) = stack.pop() {
+            if n == name {
+                return true;
+            }
+            if seen.contains(&n) {
+                continue;
+            }
+            let is_shared_enum = self
+                .type_decls
+                .shared_types
+                .get(&n)
+                .is_some_and(|i| i.is_enum);
+            seen.push(n.clone());
+            if is_shared_enum {
+                stack.extend(payload_names(&n));
+            }
+        }
+        false
     }
 
     /// Whether the `dbg` argument is a PLACE expression — something another

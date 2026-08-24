@@ -4742,13 +4742,15 @@ fn test_dbg_keeps_identity_and_side_effects_on_compiled_backends() {
 /// asserted and PANICKED the compiler ("struct type registered") before the
 /// pre-check was added.
 ///
-/// The shape here is a shared ENUM specifically. B-2026-08-24-2 gave the shared
-/// STRUCT a renderer, so it is no longer refused (and is covered by its own
-/// tests); the enum keeps failing closed because its payload sits in the RC box
-/// behind a variant tag. That split is deliberate rather than an oversight — a
-/// partly-landed renderer must keep NAMING what it cannot draw instead of
-/// quietly printing a placeholder, which is the rule this whole cluster exists
-/// to enforce.
+/// The shape here is a SELF-REFERENTIAL shared enum specifically. B-2026-08-24-2
+/// gave the shared STRUCT a renderer and B-2026-08-24-6 gave the ordinary shared
+/// ENUM one, so neither is refused any more (both have their own tests); a
+/// cyclic enum keeps failing closed because the wrapper and the inner renderer
+/// share one cache key, so a payload of the enum's own type would be rendered by
+/// the aggregate-taking inner while it actually holds a handle. That produced a
+/// WRONG VARIANT rather than a crash when measured, which is precisely why it
+/// must refuse: a partly-landed renderer has to keep NAMING what it cannot draw
+/// instead of quietly printing something false.
 ///
 /// This is the rule the whole cluster exists to enforce. Every bug in it
 /// (B-2026-08-23-14, -16, B-2026-07-31-9) was a surface that LOOKED present and
@@ -4759,9 +4761,9 @@ fn test_dbg_keeps_identity_and_side_effects_on_compiled_backends() {
 #[test]
 fn test_dbg_of_an_unrenderable_shape_refuses_and_names_it() {
     let tmp = scratch_project("dbg-unrenderable-refuses");
-    let src = "shared enum Sh { One(i64), Two }\n\
+    let src = "shared enum Sh { One(i64, Sh), Two }\n\
                fn main() {\n\
-               \x20   let sh = Sh.One(1);\n\
+               \x20   let sh = Sh.One(1, Sh.Two);\n\
                \x20   dbg(sh);\n\
                \x20   println(\"after\");\n\
                }\n";
@@ -4797,7 +4799,7 @@ fn test_dbg_of_an_unrenderable_shape_refuses_and_names_it() {
         "and it must be a diagnostic, not a compiler panic, got:\n{berr}"
     );
     assert!(
-        run.status.success() && rout.trim() == "after" && rerr.contains("sh = One(1)"),
+        run.status.success() && rout.trim() == "after" && rerr.contains("sh = One(1, Two)"),
         "the interpreter must still render it — that is what makes the compiled \
          refusal defensible; stdout={rout:?} stderr={rerr:?}"
     );
@@ -30448,28 +30450,30 @@ fn main() {
 /// statement and ran on. That is how the `errdefer(e)` binding failures
 /// presented before the typing fix — as a missing `println`, not as an error.
 ///
-/// The trigger is `dbg` of a `shared ENUM` — the construct the compiled
-/// backends still refuse outright, because the `Debug` renderer family has no
-/// arm for one: its payload lives in the RC box behind a variant tag. Using a
+/// The trigger is `dbg` of a SELF-REFERENTIAL `shared enum` — the construct the
+/// compiled backends still refuse outright (B-2026-08-24-6: the wrapper and the
+/// inner enum renderer share one cache key, so a payload of the enum's own type
+/// resolves to the aggregate-taking inner and is handed a handle). Using a
 /// genuinely-refused construct makes this a real end-to-end check of the
 /// fail-closed path rather than a mock.
 ///
-/// The trigger has now moved TWICE, which is the point worth recording. It was
-/// `dbg(1)` until B-2026-08-23-18 lowered `dbg` itself; then a `shared struct`
-/// until B-2026-08-24-2 lowered that; now a shared enum. The property under
-/// test is the cleanup dispatcher's error PROPAGATION — that an unlowerable
-/// `defer` body fails the build instead of being silently dropped — and nothing
-/// about which shape happens to be unlowerable this month. When the shared-enum
-/// renderer lands, move the trigger again rather than deleting the test.
+/// The trigger has now moved THREE times, which is the point worth recording.
+/// It was `dbg(1)` until B-2026-08-23-18 lowered `dbg` itself; then a
+/// `shared struct` until B-2026-08-24-2 lowered that; then any `shared enum`
+/// until B-2026-08-24-6 lowered the non-cyclic ones; now a cyclic one. The
+/// property under test is the cleanup dispatcher's error PROPAGATION — that an
+/// unlowerable `defer` body fails the build instead of being silently dropped —
+/// and nothing about which shape happens to be unlowerable this month. Move the
+/// trigger a fourth time rather than deleting the test.
 #[cfg(feature = "llvm")]
 #[test]
 fn test_unlowerable_defer_body_refuses_instead_of_vanishing() {
     let tmp = scratch_project("defer-body-fail-closed");
     write(
         &tmp.join("d.kara"),
-        "shared enum Sh { One(i64), Two }\n\
+        "shared enum Sh { One(i64, Sh), Two }\n\
          fn main() {\n\
-         \x20   let sh = Sh.One(1);\n\
+         \x20   let sh = Sh.One(1, Sh.Two);\n\
          \x20   defer { dbg(sh); }\n\
          \x20   println(\"body\");\n\
          }\n",
@@ -31455,6 +31459,219 @@ fn test_dbg_of_a_shared_struct_nested_and_par_variants() {
             String::from_utf8_lossy(&out.stderr),
             want,
             "AOT must match the interpreter byte for byte"
+        );
+    } else {
+        eprintln!("skip: AOT leg unavailable (no runtime archive?)");
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// B-2026-08-24-6 — `dbg` of a `shared enum` renders identically on all three
+/// backends, across every variant shape.
+///
+/// The renderer is a thin WRAPPER over `emit_enum_display_fn`: a shared enum's
+/// box is `{ i64 strong, <enum words…> }`, so the aggregate the ordinary enum
+/// renderer already switches on is simply the box's tail. That reuse is sound
+/// only because the two layouts coincide, which was MEASURED rather than
+/// assumed — for the four-variant enum below, `heap_type` is 6 × i64 and the
+/// enum's own `llvm_type` is 5 × i64, every word an i64 on both sides, so no
+/// padding can differ. `emit_shared_enum_debug_display_fn` asserts that
+/// relation at synthesis time, so a future layout change fails the build
+/// instead of reading the tag from the wrong place.
+///
+/// All four variant shapes are here because they exercise different payload
+/// paths: a one-word tuple, a two-word tuple, a unit (no payload read at all),
+/// and a struct-variant whose `String` field spans three words.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_dbg_of_a_shared_enum_renders_the_same_on_all_three_backends() {
+    let tmp = scratch_project("dbg-shared-enum-parity");
+    let src = "shared enum Shape { Circle(i64), Rect(i64, i64), Empty, Named { w: i64, label: String } }\n\
+               fn main() {\n\
+               \x20   dbg(Shape.Circle(5));\n\
+               \x20   dbg(Shape.Rect(3, 4));\n\
+               \x20   dbg(Shape.Empty);\n\
+               \x20   dbg(Shape.Named { w: 7, label: \"hi\" });\n\
+               \x20   println(\"done\");\n\
+               }\n";
+    write(&tmp.join("e.kara"), src);
+
+    let want = "[e.kara:3] Shape.Circle(5) = Circle(5)\n\
+                [e.kara:4] Shape.Rect(3, 4) = Rect(3, 4)\n\
+                [e.kara:5] Shape.Empty = Empty\n\
+                [e.kara:6] Shape.Named { w: 7, label: \"hi\" } = Named { w: 7, label: \"hi\" }\n";
+
+    let interp = karac_bin()
+        .current_dir(&tmp)
+        .args(["run", "--interp", "e.kara"])
+        .output()
+        .expect("karac run --interp");
+    assert_eq!(
+        String::from_utf8_lossy(&interp.stderr),
+        want,
+        "interpreter: every shared-enum variant shape"
+    );
+
+    let jit = karac_bin()
+        .current_dir(&tmp)
+        .args(["run", "e.kara"])
+        .output()
+        .expect("karac run");
+    assert_eq!(
+        String::from_utf8_lossy(&jit.stderr),
+        want,
+        "JIT must match the interpreter byte for byte"
+    );
+
+    let built = karac_bin()
+        .current_dir(&tmp)
+        .args(["build", "e.kara"])
+        .output();
+    let exe = tmp.join("e");
+    if built.map(|o| o.status.success()).unwrap_or(false) && exe.exists() {
+        let out = std::process::Command::new(&exe)
+            .output()
+            .expect("run built binary");
+        assert_eq!(
+            String::from_utf8_lossy(&out.stderr),
+            want,
+            "AOT must match the interpreter byte for byte"
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout).trim(),
+            "done",
+            "and the program's own output is unchanged"
+        );
+    } else {
+        eprintln!("skip: AOT leg unavailable (no runtime archive?)");
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// B-2026-08-24-6 — a SELF-REFERENTIAL `shared enum` must REFUSE, and the
+/// reason it must is that it silently rendered a lie.
+///
+/// The wrapper and the inner enum renderer share one cache key (the bare enum
+/// name), so while the inner is being synthesized a payload of the enum's OWN
+/// type resolves through the dispatcher to that inner — the AGGREGATE-taking
+/// function — and is handed a word holding a HANDLE. Neither cache order avoids
+/// it: registering the wrapper first makes the inner synthesis find the wrapper
+/// and emit a self-call, which compiled fine and hung the binary.
+///
+/// MEASURED on this exact program before the guard: the interpreter printed
+/// `Node(3, Node(7, Leaf(99)))`, AOT printed `Node(3, Leaf(139898617069619))`
+/// and the JIT `Node(3, Leaf(5))` — the garbage word read as a tag, so the
+/// failure is a WRONG VARIANT, not a crash.
+///
+/// TWO NESTING LEVELS AND A PAYLOAD ARE BOTH LOAD-BEARING. A single-level
+/// `Node(Leaf)` over a UNIT variant rendered correctly by luck, because the
+/// garbage happened to match the unit variant's tag and a unit variant prints
+/// no payload to be wrong about. A test built on that shape would have passed
+/// against the broken renderer.
+///
+/// The cross checks are here to pin that the refusal is SCOPED: a payload of a
+/// DIFFERENT shared enum, and a payload of a shared struct, both still render —
+/// only self-reference is refused.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_dbg_of_a_self_referential_shared_enum_refuses_but_siblings_render() {
+    let tmp = scratch_project("dbg-shared-enum-cyclic");
+
+    write(
+        &tmp.join("cyc.kara"),
+        "shared enum T2 { Node(i64, T2), Leaf(i64) }\n\
+         fn main() {\n\
+         \x20   let l = T2.Leaf(99);\n\
+         \x20   let m = T2.Node(7, l);\n\
+         \x20   let n = T2.Node(3, m);\n\
+         \x20   dbg(n);\n\
+         \x20   println(\"done\");\n\
+         }\n",
+    );
+    let built = karac_bin()
+        .current_dir(&tmp)
+        .args(["build", "cyc.kara"])
+        .output()
+        .expect("karac build runs");
+    let berr = format!(
+        "{}{}",
+        String::from_utf8_lossy(&built.stdout),
+        String::from_utf8_lossy(&built.stderr)
+    );
+    assert!(
+        !built.status.success() && berr.contains("cannot render a value of type `T2`"),
+        "a self-referential shared enum must refuse and name itself rather than \
+         render a wrong variant; got:\n{berr}"
+    );
+    assert!(
+        !berr.contains("panicked"),
+        "and it must be a diagnostic, not a compiler panic; got:\n{berr}"
+    );
+    // The interpreter still renders it — what makes refusing defensible.
+    let run = karac_bin()
+        .current_dir(&tmp)
+        .args(["run", "--interp", "cyc.kara"])
+        .output()
+        .expect("karac run --interp");
+    assert!(
+        String::from_utf8_lossy(&run.stderr).contains("n = Node(3, Node(7, Leaf(99)))"),
+        "interpreter must still render the cyclic enum; got:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // SCOPE: a payload of a different shared enum, and of a shared struct, both
+    // render — the refusal is self-reference only, not "any shared payload".
+    write(
+        &tmp.join("sib.kara"),
+        "shared struct P { n: i64 }\n\
+         shared enum Inner { X(i64), Y }\n\
+         shared enum Outer { Wrap(Inner), Holds(P) }\n\
+         fn main() {\n\
+         \x20   dbg(Outer.Wrap(Inner.X(42)));\n\
+         \x20   dbg(Outer.Holds(P { n: 5 }));\n\
+         \x20   println(\"done\");\n\
+         }\n",
+    );
+    let want = "[sib.kara:5] Outer.Wrap(Inner.X(42)) = Wrap(X(42))\n\
+                [sib.kara:6] Outer.Holds(P { n: 5 }) = Holds(P { n: 5 })\n";
+    let sib_interp = karac_bin()
+        .current_dir(&tmp)
+        .args(["run", "--interp", "sib.kara"])
+        .output()
+        .expect("karac run --interp");
+    assert_eq!(
+        String::from_utf8_lossy(&sib_interp.stderr),
+        want,
+        "interpreter: non-cyclic shared payloads"
+    );
+    let sib_built = karac_bin()
+        .current_dir(&tmp)
+        .args(["build", "sib.kara"])
+        .output()
+        .expect("karac build runs");
+    let sib_err = format!(
+        "{}{}",
+        String::from_utf8_lossy(&sib_built.stdout),
+        String::from_utf8_lossy(&sib_built.stderr)
+    );
+    // Assert the REFUSAL is absent before allowing the archive soft-skip below.
+    // Without this the two are indistinguishable: a build that refused these
+    // shapes would fall into the same `else` as a missing runtime archive and
+    // the test would pass having checked nothing — which is exactly what it did
+    // when measured against the pre-fix build.
+    assert!(
+        !sib_err.contains("cannot render a value of type"),
+        "a non-cyclic shared enum and a shared-struct payload must NOT be refused; got:\n{sib_err}"
+    );
+    let sib_exe = tmp.join("sib");
+    if sib_built.status.success() && sib_exe.exists() {
+        let out = std::process::Command::new(&sib_exe)
+            .output()
+            .expect("run built binary");
+        assert_eq!(
+            String::from_utf8_lossy(&out.stderr),
+            want,
+            "AOT: a shared-enum and a shared-struct payload must both still render"
         );
     } else {
         eprintln!("skip: AOT leg unavailable (no runtime archive?)");
