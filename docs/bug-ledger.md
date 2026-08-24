@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 162 | 1 |
 | run-vs-build | 158 | 1 |
 | double-free | 136 | 0 |
-| codegen-gap | 131 | 1 |
+| codegen-gap | 132 | 1 |
 | diagnostics | 101 | 2 |
 | false-positive | 95 | 0 |
 | perf | 84 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1009 | 1 |
+| codegen | 1010 | 1 |
 | typecheck | 249 | 1 |
 | interp | 180 | 1 |
 | ownership | 64 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1528 surfaced · 5 open · 1500 fixed · 9 wontfix** (2026-05-20 → 2026-08-24). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1529 surfaced · 5 open · 1501 fixed · 9 wontfix** (2026-05-20 → 2026-08-24). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (5)
 
@@ -132,9 +132,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1528 surfaced
 |---|---|---|---|---|---|
 | B-2026-08-23-11 | 2026-08-23 | typecheck | medium | `Type::Function` carries NO EFFECT ROW, so design.md § First-Class Functions' `let f = save;  // f: Fn(User) -> () with writes(UserDB)` is not representable and a function value's effects cannot propagate through its TYPE. NARROWED 7e7972b: the IMPRECISION this caused -- a function value that is bound and never called still demanding the enclosing function declare its effects -- is FIXED, in the effect checker and without the type row (bind-an-alias, attribute-at-every-other-mention). What remains is representability only, and the prescription in the original title does not work as written: the typechecker cannot populate an effect row, because `effectcheck` runs after `typecheck` AND consumes its output, so inferred effects at typecheck time would need a cycle. Read the detail before picking this up. | roadmap.md |
 | B-2026-08-23-13 | 2026-08-23 | effect | low | The mutual-recursion NOTE now fires for two functions that merely REFERENCE each other as VALUES, calling them a "mutual recursion group" though neither calls the other. `fn p(n: i64) -> i64 { let f = q; n + 1 }` + `fn q(n: i64) -> i64 { let g = p; n + 2 }` reports `note[effect]: mutual recursion group resolved by fixed-point inference: \`p\` (no effects), \`q\` (no effects)`. The program passes and the note is suppressible with `#[allow(mutual_recursion_note)]`, so this is diagnostic wording, not a check failure -- but "mutual recursion" is a false statement about the program. | roadmap.md |
-| B-2026-08-24-6 | 2026-08-24 | codegen | low | `dbg(x)` where `x` is a `shared ENUM` still REFUSES to compile -- "codegen: `dbg` at L:C cannot render a value of type `Shape` yet" -- while `karac run --interp` renders it (`Circle(5)`). B-2026-08-24-2 gave the shared STRUCT a Debug renderer and left this half deliberately failing closed, per that cluster's rule that a partly-landed renderer must NAME what it cannot draw rather than print a placeholder. A HEADERLESS shared struct refuses for a separate and more interesting reason, below. | phase-7-codegen.md |
 | B-2026-08-24-7 | 2026-08-24 | interp | medium | A RUNTIME ERROR inside `return <expr>` is OVERWRITTEN by the return's own control flow, so the interpreter KEEPS EXECUTING after the fault and hands the caller a FABRICATED value. `fn boom() -> i64 { let v = Vec[1, 2]; return v[99] }` called from `main` prints `got ()` -- a Unit where an `i64` belongs -- and only then reports the error; the compiled backends abort at the fault and print nothing else. Not `par`-specific: reproduces at top level with no `par` in the program. | phase-4-interpreter.md |
 | B-2026-08-24-8 | 2026-08-24 | effect | low | A BARE `Fn(..)` SLOT IS IMPRACTICAL BECAUSE `panics` IS INFERRED FROM ORDINARY INDEXING and is not a transparent verb, so a closure as plain as `|w, i| w[i]` does not fit `Fn(ref Vec[u8], i64) -> u8` and must be spelled `Fn(ref Vec[u8], i64) -> u8 with panics`. Measured identical at all FIVE slot positions -- argument, `let` annotation, assignment, return, struct field -- so this is one rule applied consistently, not a defect in any one of them. The question is whether a bare `Fn(..)` should mean "pure INCLUDING panics" at all, given that indexing, division and (on some shapes) arithmetic all infer it: as it stands, `with panics` becomes boilerplate on nearly every non-trivial function value, which is the shape of an annotation users cargo-cult rather than read. | roadmap.md |
+| B-2026-08-24-9 | 2026-08-24 | codegen | low | `dbg(x)` where `x` is a SELF-REFERENTIAL `shared enum` (`shared enum T2 { Node(i64, T2), Leaf(i64) }`) REFUSES to compile. Not a missing arm: the shared-enum wrapper and the inner `emit_enum_display_fn` share ONE cache key (the bare enum name), so a payload of the enum's own type resolves to the aggregate-taking inner and is handed a handle. Refusing is the new behaviour; before the guard it MISCOMPILED, printing a wrong variant. A HEADERLESS or weak-headered shared type refuses for its own separate reason, below. | phase-7-codegen.md |
 
 ### Wontfix (9)
 
@@ -154,9 +154,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1528 surfaced
 
 </details>
 
-### Fixed (1500)
+### Fixed (1501)
 
-<details><summary>1500 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1501 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -17703,6 +17703,28 @@ THREE STANDING FIXTURES, one per return shape (`tests/memory_sanitizer.rs`): the
 WHY IT SURVIVED, and the general lesson: the origin commit `71022437` DID add an escape fixture, and its message states the intent exactly -- "an array returned out must NOT have its slot drop fire, which would be a use-after-free rather than a leak". That fixture could not fail at the gate that ran it. At the default -O2 the array in `mk` is provably dead, so LLVM deletes the allocation and the double free with it; only the -O0 leg, where no pass pipeline runs, executes the allocation the program actually writes. A fixture asserting a memory property is only as good as the opt level it runs at.
 
 OLDER AND BROADER THAN THE LOCAL-ARRAY FRAMING -- answering the question this row left open, and correcting a first answer. The obvious reading is that `71022437` introduced it, since the second free is the array-keyed `StructDrop` on the LOCAL's slot and that registration is what the commit added. That is true of the local shape but is NOT the whole defect: `make_array_param_callee_owned` has armed the same slot drop for array PARAMS since well before that commit, and an owned param returned straight back out (`fn pass(a: Array[String, 2]) -> Array[String, 2] { return a; }`) reaches the identical missing retraction by the older route. Measured, not reasoned: with both hooks removed that shape double-frees under ASAN at -O0; with them it is clean. So `71022437` WIDENED the set of arrays the gap applies to (locals joined params) rather than creating it, and the param leg has been corrupting memory for longer. It is now a fourth standing fixture, `asan_owned_array_param_returned_out_is_not_dropped_twice`, so the two legs cannot regress independently. |
+| B-2026-08-24-6 | codegen | low | `dbg(x)` where `x` is a `shared ENUM` still REFUSES to compile -- "codegen: `dbg` at L:C cannot render a value of type `Shape` yet" -- while `karac r… | FIXED by 7d0a582. `dbg` of a `shared enum` now lowers on both compiled backends, rendering byte-identically to the interpreter across every variant shape -- one-word tuple, two-word tuple, unit, and a struct-variant whose `String` payload spans three words. SELF-REFERENTIAL shared enums are refused instead, and that half is filed separately.
+
+THE LAYOUT COINCIDENCE THE ROW ASKED ME TO VERIFY HOLDS, and verifying it was the right call because it is what makes the whole approach a wrapper rather than a rewrite. A shared enum's box is `{ i64 strong, <enum words...> }`, so the aggregate `emit_enum_display_fn` already switches on IS the box's tail. MEASURED on a four-variant enum with a String payload: `heap_type` is 6 x i64 and the enum's own `llvm_type` is 5 x i64 -- every word an i64 on both sides, so no padding can differ. `emit_shared_enum_debug_display_fn` now ASSERTS that relation (length and word-for-word type equality) at synthesis time, so a future layout that breaks it fails the build instead of silently reading the tag from the wrong offset. The renderer is then ~20 lines: load the handle, GEP past the control header, call the existing enum renderer.
+
+CACHE ORDER IS LOAD-BEARING AND ONLY ONE DIRECTION WORKS -- I measured both. Both functions key on the bare enum name. Registering the wrapper FIRST makes `emit_enum_display_fn`'s own entry check find the wrapper and emit a self-call: `karac build` succeeds and the binary never terminates (measured, `timeout` kill). So the inner is synthesized first and the wrapper takes the key over afterwards.
+
+THAT SAME COLLISION IS ALSO A MISCOMPILE FOR A SELF-REFERENTIAL SHARED ENUM, WHICH IS NOW REFUSED. While the inner renderer is being synthesized, a payload of the enum's OWN type resolves -- through the dispatcher's `module.get_function` fallback -- to that inner, the AGGREGATE-taking function, and is handed a word holding a HANDLE. MEASURED on `shared enum T2 { Node(i64, T2), Leaf(i64) }` nested twice:
+  interpreter: Node(3, Node(7, Leaf(99)))
+  AOT:         Node(3, Leaf(139898617069619))
+  JIT:         Node(3, Leaf(5))
+The garbage word read as a tag, so the failure is a WRONG VARIANT, not a crash -- exactly the failure mode the row predicted for a layout mismatch, arriving from a different cause.
+
+I ALMOST SHIPPED THIS. A single-level `shared enum Tree { Node(Tree), Leaf }` rendered `Node(Leaf)` CORRECTLY on all three backends, because the garbage happened to match the unit variant's tag and a unit variant has no payload to be wrong about. Only pushing to two levels with a payload-bearing variant exposed it. The lesson worth carrying: a recursive-shape test needs depth AND a payload, or it certifies nothing.
+
+THE REFUSAL IS SCOPED BY MEASUREMENT, not by caution. A payload of a DIFFERENT shared enum (`Outer.Wrap(Inner.X(42))`) and a payload of a shared STRUCT (`Outer.Holds(P { n: 5 })`) both resolve to that type's own wrapper and render correctly on both backends -- so only self-reference (and cycles) are refused, via a DFS over shared-enum payload types.
+
+TESTS (`tests/cli.rs`), both verified to FAIL against the pre-fix build:
+  - `test_dbg_of_a_shared_enum_renders_the_same_on_all_three_backends` -- all four variant shapes, three backends.
+  - `test_dbg_of_a_self_referential_shared_enum_refuses_but_siblings_render` -- the cyclic refusal, the interpreter still rendering it, and the two sibling shapes still compiling.
+The second test initially passed against the pre-fix build and was VACUOUS: its sibling half fell into the same `if built.success() { ... } else { skip }` soft-skip that a missing runtime archive uses, so a build that REFUSED those shapes looked identical to one that could not link. It now asserts the refusal text is absent before allowing that skip, and fails pre-fix as it should.
+
+The two tests that use an unlowerable `dbg` shape as their fail-closed trigger moved for the THIRD time (`dbg(1)` -> shared struct -> shared enum -> cyclic shared enum), as their own notes asked. |
 
 </details>
 
