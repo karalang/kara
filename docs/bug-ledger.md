@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 283 | 0 |
 | leak | 189 | 0 |
-| missing-feature | 165 | 2 |
+| missing-feature | 166 | 2 |
 | run-vs-build | 158 | 0 |
 | double-free | 136 | 0 |
 | codegen-gap | 135 | 2 |
@@ -120,11 +120,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | parser | 41 | 0 |
 | runtime | 31 | 0 |
 | resolver | 26 | 0 |
-| effect | 21 | 2 |
+| effect | 22 | 2 |
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1539 surfaced · 6 open · 1510 fixed · 9 wontfix** (2026-05-20 → 2026-08-24). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1540 surfaced · 6 open · 1511 fixed · 9 wontfix** (2026-05-20 → 2026-08-24). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (6)
 
@@ -133,9 +133,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1539 surfaced
 | B-2026-08-23-11 | 2026-08-23 | typecheck | medium | `Type::Function` carries NO EFFECT ROW, so design.md § First-Class Functions' `let f = save;  // f: Fn(User) -> () with writes(UserDB)` is not representable and a function value's effects cannot propagate through its TYPE. NARROWED 7e7972b: the IMPRECISION this caused -- a function value that is bound and never called still demanding the enclosing function declare its effects -- is FIXED, in the effect checker and without the type row (bind-an-alias, attribute-at-every-other-mention). What remains is representability only, and the prescription in the original title does not work as written: the typechecker cannot populate an effect row, because `effectcheck` runs after `typecheck` AND consumes its output, so inferred effects at typecheck time would need a cycle. Read the detail before picking this up. | roadmap.md |
 | B-2026-08-23-13 | 2026-08-23 | effect | low | The mutual-recursion NOTE now fires for two functions that merely REFERENCE each other as VALUES, calling them a "mutual recursion group" though neither calls the other. `fn p(n: i64) -> i64 { let f = q; n + 1 }` + `fn q(n: i64) -> i64 { let g = p; n + 2 }` reports `note[effect]: mutual recursion group resolved by fixed-point inference: \`p\` (no effects), \`q\` (no effects)`. The program passes and the note is suppressible with `#[allow(mutual_recursion_note)]`, so this is diagnostic wording, not a check failure -- but "mutual recursion" is a false statement about the program. | roadmap.md |
 | B-2026-08-24-15 | 2026-08-24 | codegen | high | `Vec.insert` / `Vec.remove` / `Vec.swap_remove` HAVE NO CODEGEN BOUNDS CHECK: an out-of-range index CORRUPTS THE HEAP (insert/remove) or SILENTLY RETURNS GARBAGE AND DROPS AN ELEMENT (swap_remove) on both compiled backends, where the interpreter panics and design.md says "panics if out of bounds" | roadmap.md |
-| B-2026-08-24-17 | 2026-08-24 | effect | low | A declared `Fn(..)` element slot on a receiver that is NOT a plain named binding is still unchecked: `self.items.push(save)` carries the same slot as `items.push(save)` -- on a struct FIELD rather than a local -- and is silent. B-2026-08-24-16 reads the receiver's declared type off the walk's scope stack, which is keyed by NAME, so any receiver that is an EXPRESSION (field access, index, method chain) has no entry. | roadmap.md |
 | B-2026-08-24-18 | 2026-08-24 | codegen | low | `dbg(x)` REFUSES for a HEADERLESS or WEAK-HEADERED `shared` type, the last two shapes in the shared family the compiled `Debug` renderers do not cover. Neither is an unwritten arm: the headerless niche makes the field base a PER-FUNCTION property while a synthesized renderer is cached program-wide, and the weak-headered base-2 layout is set by nothing in the compiler today. NOTE this arm has never been observed to fire on a real program -- it is a guard against a hazard, not a fix for a measured failure. | phase-7-codegen.md |
 | B-2026-08-24-19 | 2026-08-24 | codegen | low | A `Map` / `Set` or `shared` BREAK VALUE still cannot leave a loop on the compiled backends: `loop { ... break m }` for a `Map[String, i64]`, and `loop { ... break Node { v: 22 } }` for a `shared struct`, both FAIL AT MODULE VERIFICATION while the interpreter returns the value. Their cleanup cannot be disarmed the way String/Vec's was -- Map retracts a QUEUED action (flow-insensitive, so it would leak on the iterations that do not break) and a `shared` handle needs a matching RETAIN rather than a cap-zero. | roadmap.md |
+| B-2026-08-24-20 | 2026-08-24 | effect | low | A METHOD-CHAIN receiver's declared `Fn(..)` element slot is still unchecked: `hand_out().push(save)` carries the same slot as a bound `v.push(save)`, but the receiver's type is the callee's RETURN type rather than a written annotation, and the slot walk holds no return types. The last of the four receiver shapes B-2026-08-24-17 named; the other three (`self`/field, index, parameter) are closed. | roadmap.md |
 
 ### Wontfix (9)
 
@@ -155,9 +155,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1539 surfaced
 
 </details>
 
-### Fixed (1510)
+### Fixed (1511)
 
-<details><summary>1510 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1511 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -17934,6 +17934,30 @@ SOURCE NOTE: found while fixing B-2026-08-24-12, whose fix renders a return
 type into a suggested-fix string and so could not be correct until this was.
  |
 | B-2026-08-24-16 | effect | medium | A declared `Fn(..)` EFFECT SLOT is checked only when the value arrives in the DECLARING statement, so the same annotation gives two different answers… | Fixed in 776680a (src/effectchecker/subtyping.rs). Three changes. (1) The `StmtKind::Assign` / `CompoundAssign` arm now calls the DESCENDING `check_annotation_slots` instead of the top-level-only `check_binding_annotation_subtyping` it wraps -- the same upgrade B-2026-08-24-11 made to the `let` arm, which the assignment arm never received. (2) New `check_stored_arg_slots` + the `stdlib_stored_arg_slots` table, called from the `MethodCall` arm: it reads the element slot off the RECEIVER's declared `TypeExpr` (already in hand on the B-2026-08-24-1 scope stack) rather than off the callee's parameter list, and hands it to the same descending walk, so `vv.push([save])` on a `Vec[Vec[Fn(..)]]` works for free. (3) New `check_generic_param_slots`, also from the `MethodCall` arm: it maps a user method's bare type-parameter mention to its index in the inherent impl header's generic list and reads the receiver's type argument there. Six new tests in tests/effectchecker.rs, half of them all-clean false-positive guards. |
+| B-2026-08-24-17 | effect | low | A declared `Fn(..)` element slot on a receiver that is NOT a plain named binding is still unchecked: `self.items.push(save)` carries the same slot as… | Fixed in a9d540b (src/effectchecker/subtyping.rs). The receiver lookup stops
+being a name lookup and becomes a resolution: `receiver_declared_type` walks a
+receiver expression to the type someone actually WROTE for it, and every slot
+check downstream is unchanged.
+
+FOUR receiver shapes now resolve, where only a plain named local did before.
+
+1. `self` -- from the enclosing method's `method_bodies` key (`"Registry.add"`
+   -> `Registry`), threaded onto the walk as `SubtypingWalk::self_type`. The
+   name-keyed slot stack cannot hold this, which is why the row existed.
+2. A FIELD ACCESS -- resolve the object, then read the field's declared type off
+   the struct via the existing `struct_field_type`. It recurses, so
+   `self.inner.items` works without a case of its own.
+3. An INDEX -- `indexed_element_type` off the container's own annotation.
+4. A PARAMETER -- see the separate note below; this was not in the row and turned
+   out to be the widest of the four.
+
+Plus `peel_borrow`: a receiver held as `mut ref Vec[Fn(..)]` names the same
+element slot as `Vec[Fn(..)]`. Only RECEIVER resolution peels -- a
+`let f: ref Fn(..)` annotation is still compared exactly as written, because
+there the wrapper is part of the thing being declared.
+
+Five new tests in tests/effectchecker.rs, one of them the all-clean
+false-positive guard covering both deliberate boundaries. |
 
 </details>
 
