@@ -375,6 +375,30 @@ impl<'a> super::Interpreter<'a> {
         self.env.get(&key).is_some().then_some(key)
     }
 
+    /// Render `v` the way the language says a value renders: through its user
+    /// `impl Display` when it has one, and through the built-in / derived
+    /// renderer otherwise.
+    ///
+    /// B-2026-08-23-21. The expression-driven twin of this is
+    /// `eval_method_call(expr, "to_string", ..)`, which `println(x)` and
+    /// f-string interpolation use — but it needs an AST expression to recover
+    /// the receiver's type from. Sites that hold only a `Value` had no
+    /// equivalent, so they reached for `format!("{v}")`, i.e. `Value`'s RUST
+    /// `Display`. That is a different renderer: it ignores the user impl
+    /// entirely, and for a struct it walks a `HashMap`, so field order is
+    /// randomised per process by Rust's `RandomState` (NOT the Kāra hasher, so
+    /// `KARAC_HASH_SEED` cannot pin it). The `main() -> Result[(), E]` error
+    /// exit did exactly that and printed a different string from the compiled
+    /// backends — and a different one on each run.
+    pub(crate) fn render_value_via_display(&mut self, v: &Value) -> String {
+        if let Some(key) = self.user_display_impl_to_string_key(v) {
+            if let Value::String(s) = self.call_function(&key, std::slice::from_ref(v)) {
+                return s;
+            }
+        }
+        self.display_render_typed(v, None)
+    }
+
     pub(crate) fn eval_builtin_print(
         &mut self,
         name: &str,

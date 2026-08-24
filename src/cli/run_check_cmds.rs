@@ -1304,16 +1304,27 @@ pub(super) fn cmd_run(
     // `Unit`, so `as_result_err_payload` is `None` and this is a no-op.
     let main_err_exit = main_result.as_result_err_payload().is_some();
     if let Some(e) = main_result.as_result_err_payload() {
+        // B-2026-08-23-21: render through the value's Kāra `Display` impl, the
+        // same renderer the compiled backends use (they compile
+        // `f"Error: {e}\n"`, which dispatches to the user's `to_string`).
+        //
+        // This used to interpolate the `Value` directly — `format!("{e}")` —
+        // which is Rust's `Display for Value`, a DIFFERENT renderer: it ignores
+        // the user impl and walks a `HashMap` for a struct's fields, so `run`
+        // and `build` printed different strings AND `run` printed a different
+        // field order on every execution. The typechecker already guarantees
+        // there is an impl to call: `E_MAIN_ERR_NOT_DISPLAY` rejects a
+        // `main() -> Result[(), E]` whose `E` has none, telling the user the
+        // runtime "prints a returned `Err(e)` as `Error: {e}` using its
+        // `Display` impl" — which is precisely what this now does.
+        let rendered = interp.render_value_via_display(e);
         match output {
-            OutputMode::Text => eprintln!("Error: {e}"),
+            OutputMode::Text => eprintln!("Error: {rendered}"),
             OutputMode::Json => {
-                println!("{{\"error\":{}}}", json_string(&e.to_string()));
+                println!("{{\"error\":{}}}", json_string(&rendered));
             }
             OutputMode::Jsonl => {
-                emit_jsonl_event(
-                    "error",
-                    &format!("\"message\":{}", json_string(&e.to_string())),
-                );
+                emit_jsonl_event("error", &format!("\"message\":{}", json_string(&rendered)));
             }
         }
     }

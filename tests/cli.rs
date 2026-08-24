@@ -30265,3 +30265,174 @@ fn main() -> Result[(), Wide] {
         );
     }
 }
+
+/// B-2026-08-23-21 — the `main() -> Result[(), E]` error exit must print the
+/// SAME string under `karac run --interp` as under JIT and AOT, and the same
+/// string on every run.
+///
+/// The interpreter interpolated the error `Value` directly (`eprintln!("Error:
+/// {e}")`), which is Rust's `Display for Value` — a different renderer from the
+/// one the compiled backends use. They compile `f"Error: {e}\n"`, which
+/// dispatches to the user's Kāra `to_string`. So:
+///   * a struct or enum `E` with an `impl Display` printed its DEBUG form under
+///     `--interp` and its impl under JIT/AOT (`Shown { a: 1, b: 2 }` vs
+///     `S(1,2)`; `NotFound(cfg)` vs `not found: cfg`), and
+///   * for a struct, `Value::Struct` holds its fields in a `HashMap`, so the
+///     interpreter's field order was randomised per process by Rust's
+///     `RandomState` — five consecutive runs of one program gave five different
+///     orders. `KARAC_HASH_SEED` could not pin it: that seeds the KĀRA hasher,
+///     which is why `Map`/`Set` order IS pinnable and identical in both
+///     backends, and this was not.
+///
+/// The typechecker already guarantees the impl exists — `E_MAIN_ERR_NOT_DISPLAY`
+/// rejects a `main() -> Result[(), E]` whose `E` has none, and its message says
+/// the runtime prints `Err(e)` "using its `Display` impl". This test pins that
+/// promise for all three backends.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_main_result_err_uses_display_impl_on_every_backend() {
+    for (label, src, want) in [
+        (
+            "struct",
+            "struct Shown { a: i64, b: i64 }\n\
+             impl Display for Shown { fn to_string(ref self) -> String { f\"S({self.a},{self.b})\" } }\n\
+             fn main() -> Result[(), Shown] {\n\
+             \x20   return Err(Shown { a: 1, b: 2 })\n\
+             }\n",
+            "Error: S(1,2)",
+        ),
+        (
+            "enum",
+            "enum AppErr { NotFound(String), Denied }\n\
+             impl Display for AppErr {\n\
+             \x20   fn to_string(ref self) -> String {\n\
+             \x20       match self { AppErr.NotFound(w) => { f\"not found: {w}\" } AppErr.Denied => { \"denied\".to_string() } }\n\
+             \x20   }\n\
+             }\n\
+             fn main() -> Result[(), AppErr] {\n\
+             \x20   return Err(AppErr.NotFound(\"cfg\".to_string()))\n\
+             }\n",
+            "Error: not found: cfg",
+        ),
+        (
+            "string",
+            "fn main() -> Result[(), String] {\n\
+             \x20   return Err(\"plain failure\".to_string())\n\
+             }\n",
+            "Error: plain failure",
+        ),
+        // `#[derive(Display)]` takes the OTHER branch of the new dispatch —
+        // there is no user `to_string` in the env, so it falls through to
+        // `display_render_typed`, which reads the struct's declaration and
+        // emits DECLARATION order. Worth pinning separately because it is the
+        // path `E_MAIN_ERR_NOT_DISPLAY` actually recommends ("add
+        // `#[derive(Display)]`"), and because the field names here are chosen
+        // so declaration order is neither alphabetical nor reverse-alphabetical
+        // — a renderer that sorted, or that walked a `HashMap`, would not
+        // produce this string.
+        (
+            "derive",
+            "#[derive(Display)]\n\
+             struct DErr { zulu: i64, alpha: i64, mike: i64, bravo: i64 }\n\
+             fn main() -> Result[(), DErr] {\n\
+             \x20   return Err(DErr { zulu: 1, alpha: 2, mike: 3, bravo: 4 })\n\
+             }\n",
+            "Error: DErr { zulu: 1, alpha: 2, mike: 3, bravo: 4 }",
+        ),
+    ] {
+        let tmp = scratch_project(&format!("main-err-display-{label}"));
+        write(&tmp.join("m.kara"), src);
+        let stderr_of = |args: &[&str]| -> Option<String> {
+            karac_bin()
+                .current_dir(&tmp)
+                .args(args)
+                .output()
+                .ok()
+                .map(|o| String::from_utf8_lossy(&o.stderr).into_owned())
+        };
+        let interp = stderr_of(&["run", "--interp", "m.kara"]);
+        let jit = stderr_of(&["run", "m.kara"]);
+        let built = karac_bin()
+            .current_dir(&tmp)
+            .args(["build", "m.kara"])
+            .output();
+        let exe = tmp.join("m");
+        let aot = if built.map(|o| o.status.success()).unwrap_or(false) && exe.exists() {
+            std::process::Command::new(&exe)
+                .output()
+                .ok()
+                .map(|o| String::from_utf8_lossy(&o.stderr).into_owned())
+        } else {
+            None
+        };
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        let (Some(i), Some(j)) = (interp, jit) else {
+            panic!("[{label}] interp and JIT must both run — neither needs a runtime archive");
+        };
+        for (backend, got) in [("interp", &i), ("jit", &j)] {
+            assert!(
+                got.contains(want),
+                "[{label}/{backend}] entry-point error must render through the \
+                 `Display` impl; wanted {want:?}, got: {got:?}"
+            );
+        }
+        if let Some(a) = aot.as_ref() {
+            assert!(
+                a.contains(want),
+                "[{label}/aot] entry-point error must render through the `Display` \
+                 impl; wanted {want:?}, got: {a:?}"
+            );
+        }
+    }
+}
+
+/// The determinism half of B-2026-08-23-21, split out because it fails for a
+/// different reason than the parity test above and needs REPEATED runs to see.
+///
+/// A single run cannot detect this: the old renderer walked a `HashMap`, so any
+/// one execution produced *some* plausible order and looked fine. Only running
+/// the same binary several times exposes it — the same trap design.md § Hash
+/// documents for `Map`/`Set` tests, here inside the compiler's own renderer.
+/// Four fields make an accidental pass vanishingly unlikely (1/24 per run).
+#[test]
+fn test_main_result_err_render_is_deterministic_across_runs() {
+    let tmp = scratch_project("main-err-deterministic");
+    write(
+        &tmp.join("m.kara"),
+        "struct Wide { alpha: i64, beta: i64, gamma: i64, delta: i64 }\n\
+         impl Display for Wide {\n\
+         \x20   fn to_string(ref self) -> String {\n\
+         \x20       f\"W({self.alpha},{self.beta},{self.gamma},{self.delta})\"\n\
+         \x20   }\n\
+         }\n\
+         fn main() -> Result[(), Wide] {\n\
+         \x20   return Err(Wide { alpha: 1, beta: 2, gamma: 3, delta: 4 })\n\
+         }\n",
+    );
+    let run_once = || -> Option<String> {
+        karac_bin()
+            .current_dir(&tmp)
+            .args(["run", "--interp", "m.kara"])
+            .output()
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stderr).into_owned())
+    };
+    let runs: Vec<String> = (0..6).filter_map(|_| run_once()).collect();
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    assert_eq!(runs.len(), 6, "every run must produce output");
+    let first = &runs[0];
+    for (i, r) in runs.iter().enumerate() {
+        assert_eq!(
+            r, first,
+            "run {i} differs from run 0 — the entry-point error render must not \
+             depend on hash iteration order"
+        );
+    }
+    assert!(
+        first.contains("Error: W(1,2,3,4)"),
+        "and it must be the Display impl's text, in the impl's own field order; \
+         got: {first:?}"
+    );
+}

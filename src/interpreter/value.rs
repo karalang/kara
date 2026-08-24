@@ -1902,8 +1902,26 @@ impl std::fmt::Display for Value {
                 write!(f, "}}")
             }
             Value::Struct { name, fields } => {
+                // B-2026-08-23-21: iterate in a DETERMINISTIC order. `fields` is
+                // a `HashMap`, and Rust randomises its iteration per process via
+                // `RandomState` — so walking it directly made this renderer emit
+                // a different field order on every run of the same binary, with
+                // no way to pin it (`KARAC_HASH_SEED` seeds the KĀRA hasher, not
+                // Rust's). That is unlike `Map`/`Set`, whose `iter_observable`
+                // order is seeded-random ON PURPOSE, pinnable, and identical in
+                // both backends.
+                //
+                // Sorting by name is alphabetical, NOT declaration order.
+                // Declaration order lives in `display_render_typed`, which can
+                // see the struct's decl; this arm cannot. Anything user-visible
+                // must therefore go through `render_value_via_display` (user
+                // `impl Display`, else `display_render_typed`) rather than
+                // `format!("{v}")` — this arm is a debug fallback, and its only
+                // job here is to never be nondeterministic.
+                let mut sorted: Vec<_> = fields.iter().collect();
+                sorted.sort_by(|a, b| a.0.cmp(b.0));
                 write!(f, "{} {{ ", name)?;
-                for (i, (k, v)) in fields.iter().enumerate() {
+                for (i, (k, v)) in sorted.into_iter().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
@@ -1921,41 +1939,41 @@ impl std::fmt::Display for Value {
                 None => write!(f, "None"),
             },
             Value::SharedStruct(inner) => {
-                write!(f, "{} {{ ", inner.name)?;
-                let mut first = true;
+                // B-2026-08-23-21, same rule as the `Struct` arm above and for a
+                // compounded reason: a shared struct's fields live in FOUR
+                // separate `HashMap`s by mutability/weakness, so walking them in
+                // sequence made the order both randomised per process AND
+                // grouped by a property the user never wrote. Collect every
+                // field, then emit by name, so one shared struct renders the
+                // same way twice. Alphabetical, not declaration order — see the
+                // `Struct` arm for why, and for what user-visible code should
+                // call instead.
+                let mut rendered: Vec<(&String, String)> = Vec::new();
                 for (k, v) in &inner.immutable_fields {
-                    if !first {
-                        write!(f, ", ")?;
-                    }
-                    first = false;
-                    write!(f, "{}: {}", k, v)?;
+                    rendered.push((k, format!("{}", v)));
                 }
                 for (k, cell) in &inner.mut_fields {
-                    if !first {
-                        write!(f, ", ")?;
-                    }
-                    first = false;
                     let v = cell.value.try_read().expect(
                         "shared struct field write-locked during Display — unreachable in single-task interpreter",
                     );
-                    write!(f, "{}: {}", k, *v)?;
+                    rendered.push((k, format!("{}", *v)));
                 }
                 for (k, weak) in &inner.weak_immutable_fields {
-                    if !first {
-                        write!(f, ", ")?;
-                    }
-                    first = false;
-                    write!(f, "{}: {}", k, upgrade_weak_to_option(weak))?;
+                    rendered.push((k, format!("{}", upgrade_weak_to_option(weak))));
                 }
                 for (k, slot) in &inner.weak_mut_fields {
-                    if !first {
-                        write!(f, ", ")?;
-                    }
-                    first = false;
                     let weak = slot.try_read().expect(
                         "shared struct weak field write-locked during Display — unreachable in single-task interpreter",
                     );
-                    write!(f, "{}: {}", k, upgrade_weak_to_option(&weak))?;
+                    rendered.push((k, format!("{}", upgrade_weak_to_option(&weak))));
+                }
+                rendered.sort_by(|a, b| a.0.cmp(b.0));
+                write!(f, "{} {{ ", inner.name)?;
+                for (i, (k, v)) in rendered.into_iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}: {}", k, v)?;
                 }
                 write!(f, " }}")
             }
@@ -2424,6 +2442,7 @@ pub(crate) fn upgrade_weak_to_option(weak: &std::sync::Weak<SharedStructInner>) 
 
 #[cfg(test)]
 mod map_data_tests {
+
     use super::*;
 
     /// The load-bearing invariant of the whole `Map` index (B-2026-08-21-8):
@@ -2677,5 +2696,47 @@ mod map_data_tests {
         assert_eq!(m.get(&Value::Float(1.0)), Some(&Value::Int(1)));
         assert_eq!(m.get(&Value::Float(2.0)), Some(&Value::Int(2)));
         assert_eq!(m.get(&Value::Float(3.0)), None);
+    }
+}
+
+#[cfg(test)]
+mod value_display_tests {
+    use super::*;
+
+    /// B-2026-08-23-21 — `Display for Value` must not expose `HashMap`
+    /// iteration order.
+    ///
+    /// This arm walked `fields` directly, so a struct rendered in Rust's
+    /// per-process randomised order and the same binary printed a different
+    /// field order on each run. It reached user-visible output through the
+    /// `main() -> Result[(), E]` error exit, which is now routed through the
+    /// Kāra `Display` dispatch instead — but the raw renderer stays reachable
+    /// from any future `format!("{v}")`, so it is pinned here directly.
+    ///
+    /// Asserting the exact alphabetical text is what discriminates: five fields
+    /// deliberately inserted in non-alphabetical order have a 1-in-120 chance
+    /// of coming out sorted by accident, and pre-fix the result also varied
+    /// between runs. Alphabetical, not declaration order — this arm cannot see
+    /// the struct's decl; `display_render_typed` can, and does.
+    #[test]
+    fn struct_display_is_deterministic_and_not_hash_ordered() {
+        let mut fields = HashMap::new();
+        for (k, v) in [
+            ("delta", 4),
+            ("beta", 2),
+            ("epsilon", 5),
+            ("alpha", 1),
+            ("gamma", 3),
+        ] {
+            fields.insert(k.to_string(), Value::Int(v));
+        }
+        let v = Value::Struct {
+            name: "S".to_string(),
+            fields,
+        };
+        assert_eq!(
+            format!("{v}"),
+            "S { alpha: 1, beta: 2, delta: 4, epsilon: 5, gamma: 3 }"
+        );
     }
 }

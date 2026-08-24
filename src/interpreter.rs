@@ -1988,7 +1988,7 @@ impl<'a> Interpreter<'a> {
         }
     }
 
-    fn call_function(&mut self, name: &str, args: &[Value]) -> Value {
+    pub(crate) fn call_function(&mut self, name: &str, args: &[Value]) -> Value {
         let func = self.env.get(name);
         let func_variant = func
             .as_ref()
