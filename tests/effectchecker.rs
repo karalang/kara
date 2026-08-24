@@ -2380,6 +2380,205 @@ fn test_let_annotation_slot_and_parameter_slot_agree() {
     );
 }
 
+// ── B-2026-08-24-1: the other four Fn-slot positions ────────────────
+//
+// B-2026-08-23-12 wired the `let` ANNOTATION. Four other syntactic
+// positions carry the same declared `Fn(..)` slot and none of them
+// checked it: assignment to a declared binding, the `LetUninit` form of
+// the same, return position, and a struct-literal field. Each accepted an
+// effectful `save` into a slot declaring purity, in silence.
+//
+// Like -12 these are PRECISION pins, not soundness ones — B-2026-08-23-7
+// still makes the mention contribute — and the shared comparison is the
+// same `check_binding_annotation_subtyping`. Only finding the `TypeExpr`
+// differs per position, so what these tests really pin is the LOOKUP.
+
+/// One effectful function and one pure one, plus a struct with a
+/// pure-declared function field.
+const SLOT_PRELUDE: &str = "effect resource UserDB;\n\
+     fn save(n: i64) -> i64 with writes(UserDB) { n * 2 }\n\
+     fn dbl(n: i64) -> i64 { n * 2 }\n\
+     struct H { f: Fn(i64) -> i64 }\n";
+
+/// The slot violations in one program, EMPTY when there are none.
+///
+/// Deliberately not built on `effectcheck_errors`: that helper asserts at
+/// least one error, so every all-clean case below — which is half of them,
+/// and the half that guards against false positives — would panic in the
+/// helper rather than report. Same trap the -7 shadowing test documents.
+fn slot_violations(body: &str) -> Vec<String> {
+    let src = format!("{SLOT_PRELUDE}{body}");
+    let parsed = parse(&src);
+    assert!(
+        parsed.errors.is_empty(),
+        "Parse errors: {}",
+        parsed
+            .errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    effectcheck(&parsed.program)
+        .errors
+        .into_iter()
+        .filter(|e| e.kind == EffectErrorKind::EffectSubtypeViolation)
+        .map(|e| e.message)
+        .collect()
+}
+
+/// All four positions, each reported exactly once. The count matters as
+/// much as the presence: a lookup wired in two places (say, a tail
+/// expression also visited as a `return`) double-reports, which reads to
+/// the user like two separate mistakes.
+#[test]
+fn test_all_four_fn_slot_positions_are_checked() {
+    for (body, what, subject) in [
+        (
+            "pub fn go() -> i64 with writes(UserDB) \
+             { let mut f: Fn(i64) -> i64 = dbl; f = save; f(7) }",
+            "assignment to a declared binding",
+            "binding `f`",
+        ),
+        (
+            "pub fn go() -> i64 with writes(UserDB) \
+             { let f: Fn(i64) -> i64; f = save; f(7) }",
+            "the LetUninit form",
+            "binding `f`",
+        ),
+        (
+            "fn get() -> Fn(i64) -> i64 { save }\n\
+             pub fn go() -> i64 with writes(UserDB) { let g = get(); g(7) }",
+            "return position, tail expression",
+            "returned value",
+        ),
+        (
+            "fn get() -> Fn(i64) -> i64 { return save; }\n\
+             pub fn go() -> i64 with writes(UserDB) { let g = get(); g(7) }",
+            "return position, explicit return",
+            "returned value",
+        ),
+        (
+            "pub fn go() -> i64 with writes(UserDB) \
+             { let h = H { f: save }; (h.f)(7) }",
+            "struct-literal field",
+            "field `f`",
+        ),
+    ] {
+        let msgs = slot_violations(body);
+        assert_eq!(
+            msgs.len(),
+            1,
+            "{what}: expected exactly one slot violation, got {msgs:?}"
+        );
+        assert!(
+            msgs[0].contains(subject) && msgs[0].contains("writes(UserDB)"),
+            "{what}: message should name {subject} and the effect; got {}",
+            msgs[0]
+        );
+    }
+}
+
+/// An HONEST slot accepts the same value at every one of those positions.
+/// Without this the tests above would pass with a check that fires on the
+/// shape rather than on the comparison.
+#[test]
+fn test_honest_fn_slots_accept_the_effectful_value() {
+    for (body, what) in [
+        (
+            "pub fn go() -> i64 with writes(UserDB) \
+             { let mut f: Fn(i64) -> i64 with writes(UserDB) = save; f = save; f(7) }",
+            "assignment",
+        ),
+        (
+            "pub fn go() -> i64 with writes(UserDB) \
+             { let f: Fn(i64) -> i64 with writes(UserDB); f = save; f(7) }",
+            "LetUninit",
+        ),
+        (
+            "fn get() -> Fn(i64) -> i64 with writes(UserDB) { save }\n\
+             pub fn go() -> i64 with writes(UserDB) { let g = get(); g(7) }",
+            "return position",
+        ),
+    ] {
+        let msgs = slot_violations(body);
+        assert!(
+            msgs.is_empty(),
+            "{what}: an honest slot must accept the value; got {msgs:?}"
+        );
+    }
+}
+
+/// A pure value in a pure slot at every position — the all-clean control.
+#[test]
+fn test_pure_values_in_pure_fn_slots_are_clean() {
+    assert!(slot_violations(
+        "pub fn go() -> i64 {\n\
+         \x20   let mut f: Fn(i64) -> i64 = dbl;\n\
+         \x20   f = dbl;\n\
+         \x20   let h = H { f: dbl };\n\
+         \x20   (h.f)(1) + f(2)\n\
+         }"
+    )
+    .is_empty());
+}
+
+/// THE false positive this family must not acquire (the row says so
+/// outright). The slot lookup is a STACK, so an inner declaration must not
+/// outlive its block: after the inner block closes, `f = save` targets the
+/// OUTER binding, whose slot honestly declares the write and permits it.
+/// A flat name map answers with the inner slot here and rejects legal code.
+#[test]
+fn test_inner_slot_does_not_outlive_its_block() {
+    let msgs = slot_violations(
+        "pub fn go() -> i64 with writes(UserDB) {\n\
+         \x20   let mut f: Fn(i64) -> i64 with writes(UserDB) = save;\n\
+         \x20   { let g: Fn(i64) -> i64 = dbl; let _ = g(1); }\n\
+         \x20   f = save;\n\
+         \x20   f(7)\n\
+         }",
+    );
+    assert!(
+        msgs.is_empty(),
+        "the outer binding's honest slot must be the one consulted; got {msgs:?}"
+    );
+}
+
+/// The other half of the scoping pin: while the inner block IS open, the
+/// inner declaration is the target, and its pure slot rejects `save`.
+/// Without this, `test_inner_slot_does_not_outlive_its_block` would also
+/// pass with the whole assignment check switched off.
+#[test]
+fn test_inner_slot_applies_inside_its_block() {
+    let msgs = slot_violations(
+        "pub fn go() -> i64 with writes(UserDB) {\n\
+         \x20   let mut f: Fn(i64) -> i64 with writes(UserDB) = save;\n\
+         \x20   { let mut f: Fn(i64) -> i64 = dbl; f = save; let _ = f(1); }\n\
+         \x20   f(7)\n\
+         }",
+    );
+    assert_eq!(
+        msgs.len(),
+        1,
+        "the inner pure slot must reject `save` while its block is open; got {msgs:?}"
+    );
+}
+
+/// Return position follows the tail through branches, because only one arm
+/// may be the lie.
+#[test]
+fn test_return_slot_follows_branch_tails() {
+    let msgs = slot_violations(
+        "fn get(c: bool) -> Fn(i64) -> i64 { if c { save } else { dbl } }\n\
+         pub fn go() -> i64 with writes(UserDB) { let g = get(true); g(7) }",
+    );
+    assert_eq!(
+        msgs.len(),
+        1,
+        "the effectful arm must be reported, and only it; got {msgs:?}"
+    );
+}
+
 #[test]
 fn test_let_annotation_wider_value_rejected() {
     let errors = effectcheck_errors(

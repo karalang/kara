@@ -24,6 +24,54 @@ use super::{
     EffectSubtypeTrace,
 };
 
+/// The `subject` string for a binding's diagnostic. Shared so the `let`,
+/// `let else` and assignment positions all name the binding the same way.
+fn binding_subject(pattern: &Pattern) -> String {
+    match &pattern.kind {
+        PatternKind::Binding(name) => format!("binding `{name}`"),
+        _ => "binding".to_string(),
+    }
+}
+
+/// Record a simple binding's declared type so a later assignment to it can
+/// find the slot. Only `PatternKind::Binding` — a destructuring pattern
+/// binds no name whose annotation is the whole `TypeExpr`, and guessing
+/// which sub-type belongs to which name is how a false positive gets in.
+fn remember_slot(w: &mut SubtypingWalk, pattern: &Pattern, ty: &TypeExpr) {
+    if let PatternKind::Binding(name) = &pattern.kind {
+        w.slots.push((name.clone(), ty.clone()));
+    }
+}
+
+/// Walk-scoped state for the Fn-slot subtyping pass (B-2026-08-24-1).
+///
+/// Held in a parameter rather than on [`super::EffectChecker`] because it
+/// is per-BODY, not per-program: a field would have to be reset at every
+/// body boundary, and forgetting that is a cross-function false positive —
+/// the one failure mode this family must not acquire.
+#[derive(Default)]
+struct SubtypingWalk {
+    /// Locals whose DECLARATION carried an `Fn(..)` annotation, innermost
+    /// last, so a later `f = save;` can find the slot the annotation named.
+    /// A stack, not a flat map: an inner `f: Fn() with writes` must not
+    /// outlive its block and reject an outer, legitimate `f = save`.
+    slots: Vec<(String, TypeExpr)>,
+    /// The enclosing function's declared return type, for the tail
+    /// expression and every `return`.
+    return_ty: Option<TypeExpr>,
+}
+
+impl SubtypingWalk {
+    /// Innermost-wins, matching Kāra's shadowing.
+    fn slot(&self, name: &str) -> Option<&TypeExpr> {
+        self.slots
+            .iter()
+            .rev()
+            .find(|(n, _)| n == name)
+            .map(|(_, t)| t)
+    }
+}
+
 impl<'a> super::EffectChecker<'a> {
     pub(crate) fn check_call_site_subtyping(&mut self) {
         let bodies: Vec<super::FnHandle> = self
@@ -33,20 +81,90 @@ impl<'a> super::EffectChecker<'a> {
             .chain(self.method_bodies.values().cloned())
             .collect();
         for f in bodies {
-            self.check_subtyping_in_block(&f.body);
+            // `FnHandle` derefs to the decl, so the declared return type is
+            // in hand at the top of every walk — that is what makes the
+            // RETURN-position slot (B-2026-08-24-1 case 3) cheap.
+            let mut w = SubtypingWalk {
+                slots: Vec::new(),
+                return_ty: f.return_type.clone(),
+            };
+            // The body's TAIL is a return position too, and the commoner
+            // spelling: `fn get() -> Fn(i64) -> i64 { save }` has no
+            // `return` node at all. Done here rather than in
+            // `check_subtyping_in_block` because only the FUNCTION body's
+            // tail returns — a nested block's tail is just a value.
+            if let (Some(ret), Some(tail)) = (w.return_ty.clone(), f.body.final_expr.as_ref()) {
+                self.check_return_tail_subtyping(&ret, tail);
+            }
+            self.check_subtyping_in_block(&f.body, &mut w);
         }
     }
 
-    fn check_subtyping_in_block(&mut self, block: &Block) {
+    /// Check a function body's tail expression against the declared return
+    /// type, following the tail through the forms that have one
+    /// (B-2026-08-24-1 case 3).
+    ///
+    /// `if` / `match` / `if let` recurse into their branch tails, because
+    /// `fn get() -> Fn(i64) -> i64 { if c { save } else { pure_fn } }`
+    /// returns from either arm and only one of them may be a lie.
+    ///
+    /// `ExprKind::Return` is deliberately NOT followed: the walker's own
+    /// `Return` arm checks it, and following it here too would report the
+    /// same violation twice for `fn get() -> ... { return save; }`, whose
+    /// body tail IS the return node.
+    fn check_return_tail_subtyping(&mut self, ret: &TypeExpr, tail: &Expr) {
+        match &tail.kind {
+            ExprKind::Return(_) => {}
+            ExprKind::Block(b) | ExprKind::LabeledBlock { body: b, .. } => {
+                if let Some(inner) = b.final_expr.as_ref() {
+                    self.check_return_tail_subtyping(ret, inner);
+                }
+            }
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                if let Some(inner) = then_block.final_expr.as_ref() {
+                    self.check_return_tail_subtyping(ret, inner);
+                }
+                if let Some(e) = else_branch {
+                    self.check_return_tail_subtyping(ret, e);
+                }
+            }
+            ExprKind::IfLet {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                if let Some(inner) = then_block.final_expr.as_ref() {
+                    self.check_return_tail_subtyping(ret, inner);
+                }
+                if let Some(e) = else_branch {
+                    self.check_return_tail_subtyping(ret, e);
+                }
+            }
+            ExprKind::Match { arms, .. } => {
+                for arm in arms {
+                    self.check_return_tail_subtyping(ret, &arm.body);
+                }
+            }
+            _ => self.check_binding_annotation_subtyping(ret, "returned value", tail),
+        }
+    }
+
+    fn check_subtyping_in_block(&mut self, block: &Block, w: &mut SubtypingWalk) {
+        let saved = w.slots.len();
         for stmt in &block.stmts {
-            self.check_subtyping_in_stmt(stmt);
+            self.check_subtyping_in_stmt(stmt, w);
         }
         if let Some(expr) = &block.final_expr {
-            self.check_subtyping_in_expr(expr);
+            self.check_subtyping_in_expr(expr, w);
         }
+        w.slots.truncate(saved);
     }
 
-    fn check_subtyping_in_stmt(&mut self, stmt: &Stmt) {
+    fn check_subtyping_in_stmt(&mut self, stmt: &Stmt, w: &mut SubtypingWalk) {
         match &stmt.kind {
             StmtKind::MultiAssign { .. } => unreachable!(
                 "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
@@ -55,15 +173,20 @@ impl<'a> super::EffectChecker<'a> {
                 ty, pattern, value, ..
             } => {
                 if let Some(ty) = ty {
-                    self.check_binding_annotation_subtyping(ty, pattern, value);
+                    self.check_binding_annotation_subtyping(ty, &binding_subject(pattern), value);
+                    remember_slot(w, pattern, ty);
                 }
-                self.check_subtyping_in_expr(value);
+                self.check_subtyping_in_expr(value, w);
             }
-            // `let f: Fn(..);` has no value, so there is no function to check
-            // against the slot here. The later `f = save;` is the ASSIGNMENT
-            // position, which is a separate unchecked slot -- see the sibling
-            // row filed alongside B-2026-08-23-12.
-            StmtKind::LetUninit { .. } => {}
+            // `let f: Fn(..);` has no value to check against the slot HERE —
+            // but it declares one, and the later `f = save;` fills it
+            // (B-2026-08-24-1 case 2). Recording the annotation is the whole
+            // of that case: the `Assign` arm below does the comparing.
+            StmtKind::LetUninit { name, ty, .. } => {
+                // `ty` is mandatory on this form — an uninitialised binding
+                // has nothing to infer from — so there is no `Option` here.
+                w.slots.push((name.clone(), ty.clone()));
+            }
             StmtKind::LetElse {
                 ty,
                 pattern,
@@ -71,19 +194,32 @@ impl<'a> super::EffectChecker<'a> {
                 else_block,
             } => {
                 if let Some(ty) = ty {
-                    self.check_binding_annotation_subtyping(ty, pattern, value);
+                    self.check_binding_annotation_subtyping(ty, &binding_subject(pattern), value);
+                    remember_slot(w, pattern, ty);
                 }
-                self.check_subtyping_in_expr(value);
-                self.check_subtyping_in_block(else_block);
+                self.check_subtyping_in_expr(value, w);
+                self.check_subtyping_in_block(else_block, w);
             }
             StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
-                self.check_subtyping_in_block(body);
+                self.check_subtyping_in_block(body, w);
             }
             StmtKind::Assign { target, value } | StmtKind::CompoundAssign { target, value, .. } => {
-                self.check_subtyping_in_expr(target);
-                self.check_subtyping_in_expr(value);
+                // ASSIGNMENT to a declared-`Fn` binding (B-2026-08-24-1 cases
+                // 1 and 2). The annotation is on the DECLARATION, not here, so
+                // the slot has to be looked up — hence the scope stack.
+                if let ExprKind::Identifier(name) = &target.kind {
+                    if let Some(slot) = w.slot(name).cloned() {
+                        self.check_binding_annotation_subtyping(
+                            &slot,
+                            &format!("binding `{name}`"),
+                            value,
+                        );
+                    }
+                }
+                self.check_subtyping_in_expr(target, w);
+                self.check_subtyping_in_expr(value, w);
             }
-            StmtKind::Expr(expr) => self.check_subtyping_in_expr(expr),
+            StmtKind::Expr(expr) => self.check_subtyping_in_expr(expr, w),
         }
     }
 
@@ -292,6 +428,25 @@ impl<'a> super::EffectChecker<'a> {
         }
     }
 
+    /// A struct field's declared `TypeExpr`, by struct name and field name.
+    ///
+    /// Scans `self.program` rather than consulting an index: the effect
+    /// checker holds no struct table (it is a call-graph pass), and the only
+    /// caller is a struct literal whose field is a naked function value —
+    /// rare enough that building and invalidating a table would cost more
+    /// than it saves. Returns `None` for an unknown struct or field, which
+    /// is the right answer for a literal the typechecker will reject anyway.
+    fn struct_field_type(&self, struct_name: &str, field: &str) -> Option<TypeExpr> {
+        self.program.items.iter().find_map(|item| match item {
+            Item::StructDef(sd) if sd.name == struct_name => sd
+                .fields
+                .iter()
+                .find(|f| f.name == field)
+                .map(|f| f.ty.clone()),
+            _ => None,
+        })
+    }
+
     /// Check a binding's `Fn(..)` annotation against the effects of the
     /// function value assigned to it (B-2026-08-23-12).
     ///
@@ -307,12 +462,14 @@ impl<'a> super::EffectChecker<'a> {
     /// to the enclosing function, so a `pub fn` still cannot hide the write
     /// (measured on every shape this walker reaches, annotated and not). What
     /// was missing was any diagnostic for the annotation itself being a lie.
-    fn check_binding_annotation_subtyping(
-        &mut self,
-        ty: &TypeExpr,
-        pattern: &Pattern,
-        value: &Expr,
-    ) {
+    ///
+    /// POSITION-AGNOSTIC: `subject` is the only thing that varies between the
+    /// five slots this now serves — a `let` annotation, an assignment to a
+    /// declared binding, its `LetUninit` twin, a declared return type, and a
+    /// struct field (B-2026-08-24-1). Finding the right `TypeExpr` is each
+    /// caller's job; comparing it is entirely here, so there is one
+    /// implementation of the rule and one wording of the diagnostic.
+    fn check_binding_annotation_subtyping(&mut self, ty: &TypeExpr, subject: &str, value: &Expr) {
         let Some(slot_effects) = self.fn_annotation_slot_effects(ty) else {
             return;
         };
@@ -340,11 +497,6 @@ impl<'a> super::EffectChecker<'a> {
             })
             .map(|te| format!("{}({})", verb_name(&te.effect.verb), te.effect.resource))
             .collect();
-
-        let subject = match &pattern.kind {
-            PatternKind::Binding(name) => format!("binding `{name}`"),
-            _ => "binding".to_string(),
-        };
 
         for te in &value_effects.effects {
             if slot_effects.contains(&te.effect) || self.is_transparent_verb(&te.effect.verb) {
@@ -376,30 +528,30 @@ impl<'a> super::EffectChecker<'a> {
         }
     }
 
-    fn check_subtyping_in_expr(&mut self, expr: &Expr) {
+    fn check_subtyping_in_expr(&mut self, expr: &Expr, w: &mut SubtypingWalk) {
         match &expr.kind {
             ExprKind::Call { callee, args } => {
                 if let Some(cname) = self.extract_callee_name(callee) {
                     self.check_call_args_subtyping(cname, args, &expr.span);
                 }
                 // Recurse into callee and args
-                self.check_subtyping_in_expr(callee);
+                self.check_subtyping_in_expr(callee, w);
                 for arg in args {
-                    self.check_subtyping_in_expr(&arg.value);
+                    self.check_subtyping_in_expr(&arg.value, w);
                 }
             }
             ExprKind::Block(block) | ExprKind::Comptime(block) => {
-                self.check_subtyping_in_block(block)
+                self.check_subtyping_in_block(block, w)
             }
             ExprKind::If {
                 condition,
                 then_block,
                 else_branch,
             } => {
-                self.check_subtyping_in_expr(condition);
-                self.check_subtyping_in_block(then_block);
+                self.check_subtyping_in_expr(condition, w);
+                self.check_subtyping_in_block(then_block, w);
                 if let Some(e) = else_branch {
-                    self.check_subtyping_in_expr(e);
+                    self.check_subtyping_in_expr(e, w);
                 }
             }
             ExprKind::IfLet {
@@ -408,45 +560,45 @@ impl<'a> super::EffectChecker<'a> {
                 else_branch,
                 ..
             } => {
-                self.check_subtyping_in_expr(value);
-                self.check_subtyping_in_block(then_block);
+                self.check_subtyping_in_expr(value, w);
+                self.check_subtyping_in_block(then_block, w);
                 if let Some(e) = else_branch {
-                    self.check_subtyping_in_expr(e);
+                    self.check_subtyping_in_expr(e, w);
                 }
             }
             ExprKind::Match { scrutinee, arms } => {
-                self.check_subtyping_in_expr(scrutinee);
+                self.check_subtyping_in_expr(scrutinee, w);
                 for arm in arms {
                     if let Some(g) = &arm.guard {
-                        self.check_subtyping_in_expr(g);
+                        self.check_subtyping_in_expr(g, w);
                     }
-                    self.check_subtyping_in_expr(&arm.body);
+                    self.check_subtyping_in_expr(&arm.body, w);
                 }
             }
             ExprKind::While {
                 condition, body, ..
             } => {
-                self.check_subtyping_in_expr(condition);
-                self.check_subtyping_in_block(body);
+                self.check_subtyping_in_expr(condition, w);
+                self.check_subtyping_in_block(body, w);
             }
             ExprKind::WhileLet { value, body, .. } => {
-                self.check_subtyping_in_expr(value);
-                self.check_subtyping_in_block(body);
+                self.check_subtyping_in_expr(value, w);
+                self.check_subtyping_in_block(body, w);
             }
             ExprKind::For { iterable, body, .. } => {
-                self.check_subtyping_in_expr(iterable);
-                self.check_subtyping_in_block(body);
+                self.check_subtyping_in_expr(iterable, w);
+                self.check_subtyping_in_block(body, w);
             }
             ExprKind::Loop { body, .. }
             | ExprKind::Unsafe(body)
             | ExprKind::Try(body)
             | ExprKind::Seq(body)
             | ExprKind::Par(body) => {
-                self.check_subtyping_in_block(body);
+                self.check_subtyping_in_block(body, w);
             }
-            ExprKind::LabeledBlock { body, .. } => self.check_subtyping_in_block(body),
-            ExprKind::Lock { body, .. } => self.check_subtyping_in_block(body),
-            ExprKind::Closure { body, .. } => self.check_subtyping_in_expr(body),
+            ExprKind::LabeledBlock { body, .. } => self.check_subtyping_in_block(body, w),
+            ExprKind::Lock { body, .. } => self.check_subtyping_in_block(body, w),
+            ExprKind::Closure { body, .. } => self.check_subtyping_in_expr(body, w),
             ExprKind::MethodCall { object, args, .. } => {
                 // Mirror the `Call` branch: resolve to `Type.method` via the
                 // typechecker side-table and run the same per-arg Fn-slot
@@ -456,93 +608,119 @@ impl<'a> super::EffectChecker<'a> {
                 if let Some(callee_key) = self.resolve_method_callee_key(&expr.span) {
                     self.check_call_args_subtyping(callee_key, args, &expr.span);
                 }
-                self.check_subtyping_in_expr(object);
+                self.check_subtyping_in_expr(object, w);
                 for arg in args {
-                    self.check_subtyping_in_expr(&arg.value);
+                    self.check_subtyping_in_expr(&arg.value, w);
                 }
             }
             ExprKind::Binary { left, right, .. } => {
-                self.check_subtyping_in_expr(left);
-                self.check_subtyping_in_expr(right);
+                self.check_subtyping_in_expr(left, w);
+                self.check_subtyping_in_expr(right, w);
             }
             ExprKind::Pipe { left, right } => {
-                self.check_subtyping_in_expr(left);
-                self.check_subtyping_in_expr(right);
+                self.check_subtyping_in_expr(left, w);
+                self.check_subtyping_in_expr(right, w);
             }
-            ExprKind::Unary { operand, .. } => self.check_subtyping_in_expr(operand),
-            ExprKind::Return(Some(e)) | ExprKind::Question(e) => self.check_subtyping_in_expr(e),
-            ExprKind::Break { value: Some(e), .. } => self.check_subtyping_in_expr(e),
+            ExprKind::Unary { operand, .. } => self.check_subtyping_in_expr(operand, w),
+            // RETURN position (B-2026-08-24-1 case 3): the slot is the
+            // enclosing function's declared return type. This is the shape
+            // that hands another module a function value whose declared type
+            // lies about it -- `pub fn get() -> Fn(i64) -> i64 { save }`.
+            ExprKind::Return(Some(e)) => {
+                if let Some(ret) = w.return_ty.clone() {
+                    self.check_binding_annotation_subtyping(&ret, "returned value", e);
+                }
+                self.check_subtyping_in_expr(e, w)
+            }
+            ExprKind::Question(e) => self.check_subtyping_in_expr(e, w),
+            ExprKind::Break { value: Some(e), .. } => self.check_subtyping_in_expr(e, w),
             ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
-                self.check_subtyping_in_expr(object)
+                self.check_subtyping_in_expr(object, w)
             }
             ExprKind::Index { object, index } => {
-                self.check_subtyping_in_expr(object);
-                self.check_subtyping_in_expr(index);
+                self.check_subtyping_in_expr(object, w);
+                self.check_subtyping_in_expr(index, w);
             }
             ExprKind::Tuple(exprs) => {
                 for e in exprs {
-                    self.check_subtyping_in_expr(e);
+                    self.check_subtyping_in_expr(e, w);
                 }
             }
             ExprKind::ArrayLiteral(elems) => {
                 for e in elems {
-                    self.check_subtyping_in_expr(e);
+                    self.check_subtyping_in_expr(e, w);
                 }
             }
             ExprKind::RepeatLiteral { value, count, .. } => {
-                self.check_subtyping_in_expr(value);
-                self.check_subtyping_in_expr(count);
+                self.check_subtyping_in_expr(value, w);
+                self.check_subtyping_in_expr(count, w);
             }
             ExprKind::PrefixCollectionLiteral { items, .. } => {
                 for e in items {
-                    self.check_subtyping_in_expr(e);
+                    self.check_subtyping_in_expr(e, w);
                 }
             }
-            ExprKind::StructLiteral { fields, spread, .. } => {
+            ExprKind::StructLiteral {
+                path,
+                fields,
+                spread,
+                ..
+            } => {
+                // STRUCT-LITERAL FIELD (B-2026-08-24-1 case 4): the slot is
+                // the field's declared type. Looked up by the literal's own
+                // path, which is the last path segment -- `mod::Holder { .. }`
+                // and `Holder { .. }` name the same struct.
                 for f in fields {
-                    self.check_subtyping_in_expr(&f.value);
+                    if let Some(field_ty) = path
+                        .last()
+                        .and_then(|sname| self.struct_field_type(sname, &f.name))
+                    {
+                        let subject = format!("field `{}`", f.name);
+                        self.check_binding_annotation_subtyping(&field_ty, &subject, &f.value);
+                    }
+                    self.check_subtyping_in_expr(&f.value, w);
                 }
                 if let Some(s) = spread {
-                    self.check_subtyping_in_expr(s);
+                    self.check_subtyping_in_expr(s, w);
                 }
             }
             ExprKind::MapLiteral(entries) => {
                 for (k, v) in entries {
-                    self.check_subtyping_in_expr(k);
-                    self.check_subtyping_in_expr(v);
+                    self.check_subtyping_in_expr(k, w);
+                    self.check_subtyping_in_expr(v, w);
                 }
             }
-            ExprKind::Cast { expr: inner, .. } => self.check_subtyping_in_expr(inner),
+            ExprKind::Cast { expr: inner, .. } => self.check_subtyping_in_expr(inner, w),
             ExprKind::Range { start, end, .. } => {
                 if let Some(s) = start {
-                    self.check_subtyping_in_expr(s);
+                    self.check_subtyping_in_expr(s, w);
                 }
                 if let Some(e) = end {
-                    self.check_subtyping_in_expr(e);
+                    self.check_subtyping_in_expr(e, w);
                 }
             }
             ExprKind::NilCoalesce { left, right } => {
-                self.check_subtyping_in_expr(left);
-                self.check_subtyping_in_expr(right);
+                self.check_subtyping_in_expr(left, w);
+                self.check_subtyping_in_expr(right, w);
             }
             ExprKind::OptionalChain { object, args, .. } => {
-                self.check_subtyping_in_expr(object);
+                self.check_subtyping_in_expr(object, w);
                 if let Some(args) = args {
                     for a in args {
-                        self.check_subtyping_in_expr(&a.value);
+                        self.check_subtyping_in_expr(&a.value, w);
                     }
                 }
             }
             ExprKind::Providers { bindings, body } => {
                 for b in bindings {
-                    self.check_subtyping_in_expr(&b.value);
+                    self.check_subtyping_in_expr(&b.value, w);
                 }
-                self.check_subtyping_in_block(body);
+                self.check_subtyping_in_block(body, w);
             }
             ExprKind::InterpolatedStringLit(parts) => {
                 for p in parts {
                     if let ParsedInterpolationPart::Expr(e, _) = p {
-                        self.check_subtyping_in_expr(e);
+                        self.check_subtyping_in_expr(e, w);
                     }
                 }
             }
