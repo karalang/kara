@@ -11602,3 +11602,118 @@ fn a_user_generic_methods_parameter_is_a_substituted_slot() {
     ));
     assert!(clean.is_empty(), "expected no violations, got: {clean:?}");
 }
+
+// ── Receivers that are not plain bindings (B-2026-08-24-17) ──────
+//
+// B-2026-08-24-16 could look a receiver up only by NAME, because the walk's
+// slot stack is keyed by name. `self.items.push(save)` carries the same
+// element slot on a struct FIELD, `buckets[0].push(save)` on a container
+// ELEMENT, and a PARAMETER's slot was never in the stack at all.
+
+/// A field's declared element slot, reached through `self`, through a local,
+/// and through a nested field.
+#[test]
+fn a_field_receivers_declared_element_slot_is_checked() {
+    let found = slot_violations(
+        "struct Inner { items: Vec[Fn(i64) -> i64] }\n\
+         struct Outer { inner: Inner }\n\
+         impl Outer {\n\
+         fn nest(mut ref self) with writes(UserDB) { self.inner.items.push(save); }\n\
+         }\n\
+         pub fn main() with writes(UserDB) {\n\
+         let mut o: Outer = Outer { inner: Inner { items: [dbl] } };\n\
+         o.inner.items.push(save);\n\
+         }\n",
+    );
+    assert_eq!(found.len(), 2, "self and local, once each; got: {found:?}");
+    assert!(
+        found.iter().any(|m| m.contains("field `self.inner.items`")),
+        "the `self` receiver is named as a field path; got: {found:?}"
+    );
+    assert!(
+        found.iter().any(|m| m.contains("field `o.inner.items`")),
+        "so is the local one; got: {found:?}"
+    );
+}
+
+/// `self` parses as its own AST node, so the obvious
+/// `Identifier(name) if name == "self"` arm is dead code that covers nothing.
+/// This is the non-vacuity anchor for that: it fails if the resolver ever goes
+/// back to matching `self` as an identifier.
+#[test]
+fn a_self_receiver_is_not_an_identifier() {
+    let found = slot_violations(
+        "struct R { items: Vec[Fn(i64) -> i64] }\n\
+         impl R {\n\
+         fn add(mut ref self) with writes(UserDB) { self.items.push(save); }\n\
+         }\n",
+    );
+    assert_eq!(found.len(), 1, "expected one violation, got: {found:?}");
+}
+
+/// A PARAMETER is a declared slot exactly as a `let` annotation is, and the
+/// borrow it is held through is not part of what it contains.
+#[test]
+fn a_parameter_is_a_declared_slot() {
+    let found = slot_violations(
+        "struct R { items: Vec[Fn(i64) -> i64] }\n\
+         fn direct(v: mut ref Vec[Fn(i64) -> i64]) with writes(UserDB) { v.push(save); }\n\
+         fn through_field(r: mut ref R) with writes(UserDB) { r.items.push(save); }\n",
+    );
+    assert_eq!(found.len(), 2, "one per parameter; got: {found:?}");
+}
+
+/// An INDEX receiver reads the element type off the container's annotation.
+/// `Map` is the case that makes the direction matter: `m[k]` yields the VALUE,
+/// so reading generic argument 0 would compare against the KEY slot.
+#[test]
+fn an_index_receiver_reads_the_containers_element_type() {
+    let found = slot_violations(
+        "pub fn main() with writes(UserDB) {\n\
+         let mut buckets: Vec[Vec[Fn(i64) -> i64]] = [[dbl]];\n\
+         buckets[0].push(save);\n\
+         let mut byname: Map[i64, Vec[Fn(i64) -> i64]] = Map.new();\n\
+         byname[1].push(save);\n\
+         }\n",
+    );
+    assert_eq!(found.len(), 2, "sequence and map; got: {found:?}");
+    assert!(
+        found.iter().all(|m| m.contains("[..]")),
+        "the index expression is elided, not rendered; got: {found:?}"
+    );
+}
+
+/// The false-positive guard for all three new receiver shapes, plus the two
+/// boundaries that are deliberate.
+///
+/// A GENERIC struct's field resolves to its type PARAMETER (`Gen[T]`'s `item`
+/// is `Vec[T]`), which names no `Fn`, so checking inside the method is a
+/// silent no-op — correct, because `T` is unbound there and the caller-side
+/// substitution is `check_generic_param_slots`'s job.
+///
+/// A METHOD-CHAIN receiver stays unchecked: its type is a RETURN type, not a
+/// written annotation, and this pass has no return types. Pinned so that
+/// wiring it later is a deliberate change to this assertion rather than a
+/// silent widening.
+#[test]
+fn the_new_receiver_shapes_do_not_over_fire() {
+    let found = slot_violations(
+        "struct Okay { items: Vec[Fn(i64) -> i64 with writes(UserDB)] }\n\
+         struct Gen[T] { item: Vec[T] }\n\
+         impl[T] Gen[T] {\n\
+         fn add(mut ref self, v: T) { self.item.push(v); }\n\
+         }\n\
+         impl Okay {\n\
+         fn fine(mut ref self) with writes(UserDB) { self.items.push(save); }\n\
+         }\n\
+         fn hand_out() -> Vec[Fn(i64) -> i64] { [dbl] }\n\
+         pub fn main() with writes(UserDB) {\n\
+         let mut ok: Vec[Vec[Fn(i64) -> i64 with writes(UserDB)]] = [[dbl]];\n\
+         ok[0].push(save);\n\
+         let mut p: Vec[Vec[Fn(i64) -> i64]] = [[dbl]];\n\
+         p[0].push(dbl);\n\
+         hand_out().push(save);\n\
+         }\n",
+    );
+    assert!(found.is_empty(), "expected no violations, got: {found:?}");
+}

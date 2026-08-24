@@ -33,6 +33,84 @@ fn binding_subject(pattern: &Pattern) -> String {
     }
 }
 
+/// What indexing a container yields, when the container's head is one whose
+/// index semantics are known.
+///
+/// The list is short and closed on purpose. For a sequence the element is
+/// generic argument 0; for a `Map` it is argument 1, because `m[k]` yields the
+/// VALUE while argument 0 is the key. An unknown head returns `None` rather
+/// than guessing argument 0 — a user type with its own `Index` impl can yield
+/// anything at all, and inventing an element type is how a false positive gets
+/// in. Same discipline as [`stdlib_stored_arg_slots`], and the same reason.
+fn indexed_element_type(ty: &TypeExpr) -> Option<TypeExpr> {
+    match &ty.kind {
+        // `Array[T, N]` keeps its element in a field, not a generic argument.
+        TypeKind::Array { element, .. } => Some((**element).clone()),
+        TypeKind::MutSlice(element) => Some((**element).clone()),
+        TypeKind::Path(p) => {
+            let args = p.generic_args.as_ref()?;
+            let idx = match p.segments.last()?.as_str() {
+                "Vec" | "VecDeque" | "Slice" => 0,
+                "Map" | "SortedMap" => 1,
+                _ => return None,
+            };
+            match args.get(idx)? {
+                GenericArg::Type(t) => Some(t.clone()),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Strip the borrow/immutability wrappers off a RECEIVER's declared type.
+///
+/// `mut ref Vec[Fn(i64) -> i64]` names the same element slot as
+/// `Vec[Fn(i64) -> i64]` — the borrow says how the receiver is held, not what
+/// it contains — and a parameter is the common way to meet the wrapped form.
+/// Only receiver resolution peels: a `let f: ref Fn(..)` annotation is still
+/// compared exactly as written, because there the wrapper is part of the thing
+/// being declared rather than part of how a container is reached.
+fn peel_borrow(ty: TypeExpr) -> TypeExpr {
+    match ty.kind {
+        TypeKind::Ref(inner) | TypeKind::MutRef(inner) | TypeKind::Frozen(inner) => {
+            peel_borrow(*inner)
+        }
+        _ => ty,
+    }
+}
+
+/// The receiver written as a place: `b`, `self`, `self.items`. `None` for
+/// every shape [`super::EffectChecker::receiver_declared_type`] declines, so
+/// the two stay in step by construction.
+fn receiver_place(expr: &Expr) -> Option<String> {
+    match &expr.kind {
+        ExprKind::Identifier(name) => Some(name.clone()),
+        ExprKind::SelfValue => Some("self".to_string()),
+        ExprKind::FieldAccess { object, field } => {
+            Some(format!("{}.{field}", receiver_place(object)?))
+        }
+        // The index EXPRESSION is elided rather than rendered: it can be any
+        // expression at all, the slot does not depend on which element was
+        // picked, and the span on the diagnostic already points at the value.
+        ExprKind::Index { object, .. } => Some(format!("{}[..]", receiver_place(object)?)),
+        _ => None,
+    }
+}
+
+/// How a receiver is named in a slot diagnostic. A local is a `binding` (the
+/// wording every other position in this family uses); anything reached through
+/// a `.` is a `field`, because calling `self.items` a binding would point the
+/// reader at a local that does not exist.
+fn receiver_subject(expr: &Expr) -> Option<String> {
+    let place = receiver_place(expr)?;
+    Some(match &expr.kind {
+        ExprKind::Identifier(_) => format!("binding `{place}`"),
+        ExprKind::FieldAccess { .. } => format!("field `{place}`"),
+        _ => format!("receiver `{place}`"),
+    })
+}
+
 /// Record a simple binding's declared type so a later assignment to it can
 /// find the slot. Only `PatternKind::Binding` — a destructuring pattern
 /// binds no name whose annotation is the whole `TypeExpr`, and guessing
@@ -97,6 +175,10 @@ struct SubtypingWalk {
     /// The enclosing function's declared return type, for the tail
     /// expression and every `return`.
     return_ty: Option<TypeExpr>,
+    /// The type `self` names inside a method body, taken from the
+    /// `method_bodies` key (`"Registry.add"` → `Registry`). `None` in a free
+    /// function, where `self` is not in scope at all (B-2026-08-24-17).
+    self_type: Option<String>,
 }
 
 impl SubtypingWalk {
@@ -112,20 +194,39 @@ impl SubtypingWalk {
 
 impl<'a> super::EffectChecker<'a> {
     pub(crate) fn check_call_site_subtyping(&mut self) {
-        let bodies: Vec<super::FnHandle> = self
+        // Free functions carry no `self`; a method's key is `Type.method`, and
+        // its head is exactly what `self` names in that body — the one piece
+        // of context a receiver like `self.items` needs and a name-keyed slot
+        // stack cannot hold (B-2026-08-24-17).
+        let bodies: Vec<(Option<String>, super::FnHandle)> = self
             .function_bodies
             .values()
-            .cloned()
-            .chain(self.method_bodies.values().cloned())
+            .map(|f| (None, f.clone()))
+            .chain(self.method_bodies.iter().map(|(k, f)| {
+                let key = self.interner.resolve(*k);
+                let head = key.split('.').next().map(str::to_string);
+                (head, f.clone())
+            }))
             .collect();
-        for f in bodies {
+        for (self_type, f) in bodies {
             // `FnHandle` derefs to the decl, so the declared return type is
             // in hand at the top of every walk — that is what makes the
             // RETURN-position slot (B-2026-08-24-1 case 3) cheap.
             let mut w = SubtypingWalk {
                 slots: Vec::new(),
                 return_ty: f.return_type.clone(),
+                self_type,
             };
+            // PARAMETERS are declared slots too, and were missed by every
+            // position in this family until now: the stack was filled only by
+            // `let`, so `fn f(v: mut ref Vec[Fn(i64) -> i64]) { v.push(save) }`
+            // — a slot written just as plainly as an annotation, one line
+            // further up — had no entry to find. Seeded here rather than in
+            // `check_subtyping_in_block` because a nested block's scope is a
+            // push/truncate window and the parameter scope is the whole body.
+            for param in &f.params {
+                remember_slot(&mut w, &param.pattern, &param.ty);
+            }
             // The body's TAIL is a return position too, and the commoner
             // spelling: `fn get() -> Fn(i64) -> i64 { save }` has no
             // `return` node at all. Done here rather than in
@@ -692,7 +793,7 @@ impl<'a> super::EffectChecker<'a> {
     fn check_stored_arg_slots(
         &mut self,
         recv_ty: &TypeExpr,
-        recv: &str,
+        subject: &str,
         method: &str,
         args: &[CallArg],
     ) {
@@ -715,7 +816,7 @@ impl<'a> super::EffectChecker<'a> {
             // The full descending walk, not the top-level check: the stored
             // value can itself be a container or an `Option`, as in
             // `vv.push([save])` on a `Vec[Vec[Fn(i64) -> i64]]`.
-            self.check_annotation_slots(slot, &format!("binding `{recv}` {role}"), &arg.value);
+            self.check_annotation_slots(slot, &format!("{subject} {role}"), &arg.value);
         }
     }
 
@@ -749,7 +850,7 @@ impl<'a> super::EffectChecker<'a> {
     fn check_generic_param_slots(
         &mut self,
         recv_ty: &TypeExpr,
-        recv: &str,
+        subject: &str,
         method: &str,
         args: &[CallArg],
     ) {
@@ -809,11 +910,78 @@ impl<'a> super::EffectChecker<'a> {
                     };
                     self.check_annotation_slots(
                         slot,
-                        &format!("binding `{recv}` argument {i}"),
+                        &format!("{subject} argument {i}"),
                         &arg.value,
                     );
                 }
             }
+        }
+    }
+
+    /// The DECLARED type of a receiver expression, and the name to call it in
+    /// a diagnostic (B-2026-08-24-17).
+    ///
+    /// B-2026-08-24-16 could only look a receiver up by NAME, because the
+    /// walk's slot stack is keyed by name. That covered `items.push(save)` and
+    /// missed `self.items.push(save)` — the same element slot, on a struct
+    /// FIELD rather than a local. This resolves the two receiver shapes whose
+    /// declared type is written down somewhere:
+    ///
+    /// - a plain binding, from the slot stack, exactly as before;
+    /// - `self`, from the enclosing method's key;
+    /// - a field access, by resolving the object and then reading the field's
+    ///   declared type off the struct — which nests, so `self.inner.items`
+    ///   works without a case of its own.
+    ///
+    /// Everything else returns `None` and is checked exactly as it was before:
+    /// an index (`buckets[i].push(save)`) or a method chain would need an
+    /// element type or a return type rather than a written annotation, and
+    /// inventing one is how a false positive gets in.
+    ///
+    /// A GENERIC struct's field resolves to its type PARAMETER — `Holder[T]`'s
+    /// `item` is `T` — which is not an `FnType` and carries no generic
+    /// arguments, so every check downstream is a silent no-op. That is the
+    /// correct answer, not a miss: inside the method the parameter is unbound,
+    /// and substituting the caller's argument is the receiver-side job
+    /// `check_generic_param_slots` already does from the call site.
+    fn receiver_declared_type(&self, expr: &Expr, w: &SubtypingWalk) -> Option<TypeExpr> {
+        match &expr.kind {
+            // `SelfValue`, NOT `Identifier("self")`. `self` has its own AST node
+            // and never parses as an identifier, so the obvious
+            // `Identifier(name) if name == "self"` arm is DEAD CODE that
+            // compiles, passes review, and silently covers nothing — the same
+            // trap B-2026-08-24-11 hit with `ArrayLiteral` vs
+            // `PrefixCollectionLiteral`, and caught the same way: a local
+            // field receiver fired while the `self` one next to it stayed
+            // silent, from two source lines of identical shape.
+            ExprKind::SelfValue => {
+                let head = w.self_type.as_ref()?;
+                Some(TypeExpr {
+                    kind: TypeKind::Path(PathExpr {
+                        segments: vec![head.clone()],
+                        generic_args: None,
+                        span: expr.span,
+                    }),
+                    span: expr.span,
+                })
+            }
+            ExprKind::Identifier(name) => w.slot(name).cloned().map(peel_borrow),
+            ExprKind::FieldAccess { object, field } => {
+                let obj_ty = self.receiver_declared_type(object, w)?;
+                let TypeKind::Path(p) = &obj_ty.kind else {
+                    return None;
+                };
+                self.struct_field_type(p.segments.last()?, field)
+                    .map(peel_borrow)
+            }
+            // `buckets[i].push(save)` — the receiver is a container ELEMENT,
+            // and the element type is written down in the container's own
+            // annotation.
+            ExprKind::Index { object, .. } => {
+                let obj_ty = self.receiver_declared_type(object, w)?;
+                indexed_element_type(&obj_ty).map(peel_borrow)
+            }
+            _ => None,
         }
     }
 
@@ -966,11 +1134,12 @@ impl<'a> super::EffectChecker<'a> {
                 // list, which a baked stdlib method does not have. This one
                 // reads it off the RECEIVER's own annotation instead, which is
                 // where `v.push(save)`'s slot actually lives.
-                if let ExprKind::Identifier(recv) = &object.kind {
-                    if let Some(recv_ty) = w.slot(recv).cloned() {
-                        self.check_stored_arg_slots(&recv_ty, recv, method, args);
-                        self.check_generic_param_slots(&recv_ty, recv, method, args);
-                    }
+                if let (Some(recv_ty), Some(subject)) = (
+                    self.receiver_declared_type(object, w),
+                    receiver_subject(object),
+                ) {
+                    self.check_stored_arg_slots(&recv_ty, &subject, method, args);
+                    self.check_generic_param_slots(&recv_ty, &subject, method, args);
                 }
                 self.check_subtyping_in_expr(object, w);
                 for arg in args {
