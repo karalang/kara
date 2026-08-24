@@ -52710,4 +52710,54 @@ fn main() {
             8,
         );
     }
+
+    /// B-2026-08-24-21 — a `shared` value allocated on EVERY iteration and
+    /// broken out on a later one. The breaking path hands its ref to the
+    /// receiver at net +1; the iterations that fall through must release
+    /// theirs.
+    ///
+    /// This is an RC fixture, so BOTH directions matter and only ASAN sees
+    /// them: too few decs leaks the unbroken iterations' nodes, too many frees
+    /// the one that escaped. The shape is also the one that bus-errored under
+    /// the wrong mechanism (disarm instead of retain), so a regression to that
+    /// mechanism fails here rather than silently.
+    #[test]
+    fn asan_loop_break_shared_struct_releases_unbroken_iterations() {
+        assert_clean_asan_run_min_allocs(
+            "shared struct Node { v: i64 }\n\
+             fn pick() -> Node {\n\
+             \x20   let mut i = 0;\n\
+             \x20   loop {\n\
+             \x20       i = i + 1;\n\
+             \x20       let n = Node { v: i * 11 };\n\
+             \x20       if i == 3 { break n }\n\
+             \x20   }\n\
+             }\n\
+             fn main() { println(pick().v); }\n",
+            &["33"],
+            "loop-break-shared-struct",
+            5,
+        );
+    }
+
+    /// The `shared enum` sibling — a different heap layout through the same
+    /// retain-based transfer.
+    #[test]
+    fn asan_loop_break_shared_enum_single_owner() {
+        assert_clean_asan_run_min_allocs(
+            "shared enum Tree { Leaf(i64), Node(i64, i64) }\n\
+             fn pick() -> Tree {\n\
+             \x20   let mut i = 0;\n\
+             \x20   loop {\n\
+             \x20       i = i + 1;\n\
+             \x20       let t = Tree.Node(i, i * 2);\n\
+             \x20       if i == 2 { break t }\n\
+             \x20   }\n\
+             }\n\
+             fn main() { match pick() { Leaf(a) => println(a), Node(a, b) => println(a + b) } }\n",
+            &["6"],
+            "loop-break-shared-enum",
+            4,
+        );
+    }
 }

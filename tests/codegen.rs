@@ -96260,6 +96260,62 @@ fn main() { println(pick()); }
         }
     }
 
+    /// B-2026-08-24-21 — a `shared` value carried out of a loop by `break`.
+    ///
+    /// An RC'd value moves out by RETAIN, not by suppression: the source's
+    /// queued dec still fires and `suppress_source_vec_cleanup_for_arg` emits
+    /// the balancing `+1`, so it leaves at net +1 for the receiver — the same
+    /// shape the function tail emits for `fn f() -> Node { let n = ...; n }`.
+    /// Disarming the source instead (the Map/Set treatment) hangs, because the
+    /// zero-store lands before the retain reads the slot.
+    #[test]
+    fn test_e2e_loop_break_shared_struct_round_trips() {
+        let out = run_program(
+            r#"
+shared struct Node { v: i64 }
+
+fn pick() -> Node {
+    let mut i = 0;
+    loop {
+        i = i + 1;
+        let n = Node { v: i * 11 };
+        if i == 3 { break n }
+    }
+}
+
+fn main() { println(pick().v); }
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "33");
+        }
+    }
+
+    /// The `shared enum` sibling — a different heap layout through the same
+    /// transfer, and the shape that bus-errored under the wrong mechanism.
+    #[test]
+    fn test_e2e_loop_break_shared_enum_round_trips() {
+        let out = run_program(
+            r#"
+shared enum Tree { Leaf(i64), Node(i64, i64) }
+
+fn pick() -> Tree {
+    let mut i = 0;
+    loop {
+        i = i + 1;
+        let t = Tree.Node(i, i * 2);
+        if i == 2 { break t }
+    }
+}
+
+fn main() { match pick() { Leaf(a) => println(a), Node(a, b) => println(a + b) } }
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "6");
+        }
+    }
+
     /// B-2026-08-24-19 — a `Map` handle carried out of a loop by `break`.
     ///
     /// Map/Set cleanup is queue-driven (`FreeMapHandle`) with no in-slot

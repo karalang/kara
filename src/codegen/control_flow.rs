@@ -2685,22 +2685,29 @@ impl<'ctx> super::Codegen<'ctx> {
     /// actually breaks, and `FreeMapHandle`'s null-guard makes the queued
     /// action a no-op exactly there.
     ///
-    /// Only `FreeMapHandle` (`Map` / `Set`) qualifies today. The three
-    /// `karac_map_free*` entry points already no-op on null, and this change
-    /// added the matching guard around the codegen-side walks above them, so
-    /// a zeroed slot makes the queued action inert on the breaking path only.
+    /// TWO handle kinds qualify, by OPPOSITE mechanisms — which is the whole
+    /// subtlety, and getting it backwards corrupts the heap:
     ///
-    /// `shared` handles do NOT qualify, and the reason is worth recording
-    /// because the code makes it look as though they should. `RcDec` is
-    /// already null-guarded — for an unrelated reason (a body-local shared
-    /// slot whose `let` never ran carries a null sentinel) — so zeroing the
-    /// slot appears to be the same one-line move as the Map case. It is not:
-    /// MEASURED, a `shared struct` carried out this way HANGS and a
-    /// `shared enum` dies with a bus error, both at the default opt level.
-    /// Disarming the source is evidently not sufficient for an RC'd value,
-    /// and the difference was not diagnosed. A `shared` break value therefore
-    /// still takes the skip path and its loud verification error, which is
-    /// strictly better than corrupting the heap. Tracked separately.
+    ///   * `Map` / `Set` (`FreeMapHandle`) — DISARM. Their cleanup is
+    ///     queue-driven with no in-slot sentinel, so this zeroes the slot and
+    ///     the (now null-guarded) queued free becomes inert on the breaking
+    ///     path only.
+    ///
+    ///   * `shared` struct / enum (`RcDec`) — DO NOT DISARM. An RC'd value
+    ///     moves out by RETAIN, not by suppression: the source's queued dec
+    ///     still fires, and `suppress_source_vec_cleanup_for_arg` (called just
+    ///     after the store, under `apply_shared_transfer`) emits the balancing
+    ///     `+1`, so the value leaves at net +1 for the receiver. That is
+    ///     exactly what the function-tail path emits for
+    ///     `fn f() -> Node { let n = ...; n }`, verified in its IR.
+    ///
+    /// Zeroing a `shared` slot was tried and MEASURED to hang a `shared
+    /// struct` and bus-error a `shared enum` (B-2026-08-24-21). The cause is
+    /// ordering, not RC semantics: the zero-store ran BEFORE the retain, so
+    /// `move.rc.load` read null out of the slot and incremented through it.
+    /// The trap is easy to fall into because `RcDec` is already null-guarded
+    /// — for the unrelated case of a body-local slot whose `let` never ran —
+    /// which makes zeroing look like the same one-line move as the Map case.
     ///
     /// Identifier sources only: an rvalue `break Map.new()` or
     /// `break Node { .. }` has no binding to disarm, so it keeps the skip path
@@ -2717,19 +2724,25 @@ impl<'ctx> super::Codegen<'ctx> {
         // a Map and a `shared` struct are indistinguishable from the value
         // alone.
         use crate::codegen::state::CleanupAction;
-        let owns_handle = self.drop_rc.scope_cleanup_actions.iter().any(|frame| {
+        let is_map = self.drop_rc.scope_cleanup_actions.iter().any(|frame| {
             frame.iter().any(|action| match action {
                 CleanupAction::FreeMapHandle { map_alloca, .. } => *map_alloca == slot,
-                // Deliberately NOT `RcDec` — see the doc comment above.
                 _ => false,
             })
         });
-        if !owns_handle {
-            return false;
+        if is_map {
+            let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+            self.builder.build_store(slot, ptr_ty.const_null()).unwrap();
+            return true;
         }
-        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
-        self.builder.build_store(slot, ptr_ty.const_null()).unwrap();
-        true
+        // A `shared` binding: permit the store, but emit NOTHING here. The
+        // retain that balances its still-live queued dec is emitted by
+        // `suppress_source_vec_cleanup_for_arg` after the store, and it reads
+        // the handle back out of this slot — so zeroing would be read as null.
+        self.var_types
+            .var_type_names
+            .get(name)
+            .is_some_and(|tn| self.type_decls.shared_types.contains_key(tn.as_str()))
     }
 
     /// Store `val` into `frame`'s result slot, creating that slot on first
