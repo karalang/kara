@@ -31667,6 +31667,109 @@ fn test_dbg_of_a_self_referential_shared_enum_renders_on_all_three_backends() {
 }
 
 /// B-2026-08-24-2 — a `shared struct` has no `Display` impl, and giving it a
+/// B-2026-08-24-18: a chain program whose member type WOULD be headerless
+/// renders `dbg` identically on all three backends.
+///
+/// `dbg_unsupported_shape` refuses a shared type that is headerless at the call
+/// site, because the niche drops the refcount word and moves user field 0 from
+/// heap index 1 to 0. That arm has never fired, and this test is why: `dbg(x)`
+/// hands `x` to a call, which is exactly the escape the headerless purity gate
+/// demotes on. Strip the `dbg` from the program below and `ListNode` is
+/// headerless both program-wide and per-fn; add it back and neither set
+/// contains it. So the value `dbg` receives is always headered, and the
+/// refusal is unreachable rather than merely unexercised.
+///
+/// `tests/elision.rs` pins the analysis half (with the controls that keep it
+/// from passing vacuously). This is the end-to-end consequence: the shape
+/// COMPILES AND RENDERS rather than being refused. If the exclusion ever
+/// breaks, this test starts failing with the refusal diagnostic, which is the
+/// signal that the headerless renderer now has to be built for real.
+#[test]
+fn test_dbg_of_a_would_be_headerless_chain_renders_on_all_three_backends() {
+    let tmp = scratch_project("dbg-headerless-chain");
+    let src = "shared struct ListNode { val: i64, mut next: Option[ListNode] }\n\
+               fn build(n: i64) -> Option[ListNode] {\n\
+               \x20   let head = ListNode { val: 1, next: None };\n\
+               \x20   let mut tail = head;\n\
+               \x20   let mut i = 2;\n\
+               \x20   while i <= n {\n\
+               \x20       let node = ListNode { val: i, next: None };\n\
+               \x20       tail.next = Some(node);\n\
+               \x20       tail = node;\n\
+               \x20       i = i + 1;\n\
+               \x20   }\n\
+               \x20   Some(head)\n\
+               }\n\
+               fn main() {\n\
+               \x20   let out = build(3);\n\
+               \x20   match out {\n\
+               \x20       Some(node) => { dbg(node); }\n\
+               \x20       None => {}\n\
+               \x20   }\n\
+               \x20   println(\"done\");\n\
+               }\n";
+    write(&tmp.join("s.kara"), src);
+
+    let want = "[s.kara:17] node = ListNode { val: 1, next: Some(ListNode { val: 2, \
+                next: Some(ListNode { val: 3, next: None }) }) }\n";
+
+    let interp = karac_bin()
+        .current_dir(&tmp)
+        .args(["run", "--interp", "s.kara"])
+        .output()
+        .expect("karac run --interp");
+    assert_eq!(
+        String::from_utf8_lossy(&interp.stderr),
+        want,
+        "interpreter renders the chain"
+    );
+
+    let jit = karac_bin()
+        .current_dir(&tmp)
+        .args(["run", "s.kara"])
+        .output()
+        .expect("karac run");
+    assert_eq!(
+        String::from_utf8_lossy(&jit.stderr),
+        want,
+        "JIT must match the interpreter byte for byte — a refusal here means \
+         the headerless exclusion broke"
+    );
+
+    let built = karac_bin()
+        .current_dir(&tmp)
+        .args(["build", "s.kara"])
+        .output()
+        .expect("karac build");
+    let build_err = String::from_utf8_lossy(&built.stderr).into_owned();
+    // Checked BEFORE the skip below: a REFUSAL also fails the build, and the
+    // soft-skip would swallow it as "no runtime archive" — green while
+    // witnessing the exact regression this test exists to catch.
+    assert!(
+        !build_err.contains("cannot render a value of type"),
+        "`dbg` must not refuse this chain: {build_err}"
+    );
+    let exe = tmp.join("s");
+    if built.status.success() && exe.exists() {
+        let out = std::process::Command::new(&exe)
+            .output()
+            .expect("run built binary");
+        assert_eq!(
+            String::from_utf8_lossy(&out.stderr),
+            want,
+            "AOT must match the interpreter byte for byte"
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout).trim(),
+            "done",
+            "and the program's own output is unchanged"
+        );
+    } else {
+        eprintln!("skip: AOT leg unavailable (no runtime archive?)");
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// DEBUG renderer must not quietly give it a Display one.
 ///
 /// The renderer synthesized here is reached from `emit_display_fn_for_type_expr`,

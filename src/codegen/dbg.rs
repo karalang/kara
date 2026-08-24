@@ -306,11 +306,31 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.type_decls.shared_type_decl_names.contains(seg) || shared_info.is_some();
             // A shared STRUCT (B-2026-08-24-2) and a shared ENUM (B-2026-08-24-6)
             // both render, unless the type is headerless here — the headerless
-            // niche drops the refcount word, moving user field 0 to heap index
-            // 0, and `headerless_here` is answered per FUNCTION while the
-            // renderer is cached program-wide. Refusing is the honest outcome:
-            // the alternative is a cached renderer that reads every field at
-            // the wrong offset in some other function.
+            // niche drops the refcount word, moving user field 0 from heap
+            // index 1 to 0, so a renderer built for one base reads every field
+            // at the wrong offset under the other.
+            //
+            // This arm is UNREACHABLE, and deliberately kept anyway
+            // (B-2026-08-24-18). `dbg(x)` hands `x` itself to a call, which is
+            // exactly the escape the headerless purity gate demotes on: across
+            // 16 probe programs — both headerless arms, free fns and impl
+            // methods, the bare member / `Option[member]` / link-field / tuple
+            // positions — naming a shared value in a `dbg` argument emptied
+            // BOTH headerless sets, while the same program without the `dbg`
+            // kept them. A scalar read through the value (`x.val`) does not
+            // demote, and does not consult this arm. So the value `dbg`
+            // receives is always headered. `tests/elision.rs` pins the
+            // exclusion (with controls, so it cannot pass vacuously) and
+            // `tests/cli.rs` pins the rendering consequence; if either starts
+            // failing, this refusal has become reachable and needs a real
+            // renderer rather than a guard.
+            //
+            // Note `headerless_here` answers from two sets and only ONE of them
+            // is per-function: `headerless_types` is program-wide and uniform
+            // (a renderer cached program-wide would be correct for it, needing
+            // only the base computed from the same funnel), while
+            // `headerless_fns` is keyed per `(fn, type)` and is the half a
+            // single cached renderer genuinely cannot serve.
             //
             // A weak-headered type is excluded for a narrower reason: nothing
             // sets `has_weak_header` today (weak fields are declaration-only in

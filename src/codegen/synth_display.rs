@@ -2695,13 +2695,20 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `{ i64 strong, i64 weak, fields… }` when the type is the target of a
     /// `weak` field anywhere in the program. `field_base` is computed from
     /// `has_weak_header` directly rather than through `shared_gep_layout` —
-    /// that funnel also answers for the HEADERLESS niche, whose base-0 answer
-    /// is a per-FUNCTION property (`headerless_here` reads
-    /// `fn_ctx.current_fn_name`) while this renderer is emitted once and cached
-    /// program-wide. Baking a per-function layout into a shared function is how
-    /// a field read lands at the wrong offset, so the caller refuses a
-    /// headerless type instead. Same reasoning `synth_drop` records for its own
-    /// `heap_type`-based walk.
+    /// that funnel also answers for the HEADERLESS niche (base 0), and one of
+    /// the two sets behind it, `headerless_fns`, is keyed per `(fn, type)`
+    /// (`headerless_here` reads `fn_ctx.current_fn_name`) while this renderer
+    /// is emitted once and cached program-wide. Baking a per-function layout
+    /// into a shared function is how a field read lands at the wrong offset,
+    /// so the caller refuses a headerless type instead. Same reasoning
+    /// `synth_drop` records for its own `heap_type`-based walk.
+    ///
+    /// The other set, `headerless_types`, IS program-wide and uniform, so a
+    /// program-wide renderer could serve it by taking its base from the funnel
+    /// — that half needs no cache-key work. Neither is built, because neither
+    /// is reachable: `dbg` of a shared value demotes the type out of both sets,
+    /// measured in B-2026-08-24-18 and pinned by `tests/elision.rs`. Building
+    /// an untestable GEP path is the hazard, not the fix.
     ///
     /// Field ORDER is `struct_field_names`, i.e. declaration order — the same
     /// order the interpreter's `render_typed_mode` now walks, which is what

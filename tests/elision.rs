@@ -1200,6 +1200,117 @@ fn headerless_gate_rejects_bare_member_param() {
     assert!(!r.headerless_types.contains_key("ListNode"));
 }
 
+// B-2026-08-24-18: `dbg` of a shared value and the headerless niche are
+// MUTUALLY EXCLUSIVE — the reason codegen's headerless refusal arm
+// (`dbg_unsupported_shape`) has never fired on a real program.
+//
+// `dbg(x)` hands `x` itself to a call, which is exactly the escape the
+// purity gate demotes on; a scalar READ through the same value
+// (`x.val`) does not. So a type can be headerless, or it can be
+// `dbg`-able, never both — and the refusal is unreachable rather than
+// merely unexercised.
+//
+// Each test pairs the claim with a CONTROL asserting the same program
+// shape IS headerless without the `dbg`. Without that half the
+// assertion passes for any reason a program fails the gate, which is
+// most of them — a vacuous green.
+
+#[test]
+fn dbg_of_a_shared_value_demotes_it_out_of_headerless() {
+    let control = format!(
+        "{NODE}{ADOPT_BUILDER}\
+         fn main() {{\n\
+             let out = build(5);\n\
+             match out {{\n\
+                 Some(node) => {{ println(node.val); }}\n\
+                 None => {{}}\n\
+             }}\n\
+         }}"
+    );
+    assert!(
+        analyze(&control).headerless_types.contains_key("ListNode"),
+        "control must be headerless, else the assertion below is vacuous"
+    );
+    let dbgd = control.replace("println(node.val);", "dbg(node);");
+    assert!(
+        !analyze(&dbgd).headerless_types.contains_key("ListNode"),
+        "`dbg` of a member value must demote the type out of headerless — \
+         if this fires, codegen's headerless `dbg` refusal just became \
+         reachable and needs a real renderer (B-2026-08-24-18)"
+    );
+}
+
+#[test]
+fn dbg_demotes_headerless_from_any_member_typed_position() {
+    // The bare member, the `Option[member]` cursor, and a link FIELD of
+    // a member all demote. A scalar field read does not — the exact
+    // complement, which is what makes the exclusion structural rather
+    // than a property of one syntactic shape.
+    let control = format!(
+        "{NODE}\
+         fn build_and_sum(n: i64) -> i64 {{\n\
+             let dummy = ListNode {{ val: 0, next: None }};\n\
+             let mut tail = dummy;\n\
+             let mut i = 1;\n\
+             while i <= n {{\n\
+                 let node = ListNode {{ val: i, next: None }};\n\
+                 tail.next = Some(node);\n\
+                 tail = node;\n\
+                 i = i + 1;\n\
+             }}\n\
+             let mut sum = 0;\n\
+             let mut cur = dummy.next;\n\
+             while cur.is_some() {{\n\
+                 let x = cur.unwrap();\n\
+                 sum = sum + x.val;\n\
+                 cur = x.next;\n\
+             }}\n\
+             sum\n\
+         }}\n\
+         fn main() {{ println(build_and_sum(5)); }}"
+    );
+    let base = analyze(&control);
+    assert!(
+        base.headerless_types.contains_key("ListNode"),
+        "control must be headerless, else every assertion below is vacuous"
+    );
+    assert!(
+        base.elided_clusters["build_and_sum"]
+            .iter()
+            .any(|c| c.headerless),
+        "control must also carry a PER-FUNCTION headerless cluster — that \
+         is the arm whose layout really is per-fn: {:?}",
+        base.elided_clusters["build_and_sum"]
+    );
+
+    for inserted in ["dbg(x);", "dbg(cur);", "dbg(x.next);", "dbg(dummy);"] {
+        let src = control.replace(
+            "sum = sum + x.val;",
+            &format!("sum = sum + x.val; {inserted}"),
+        );
+        let r = analyze(&src);
+        assert!(
+            !r.headerless_types.contains_key("ListNode"),
+            "`{inserted}` must demote the program-wide set"
+        );
+        assert!(
+            r.elided_clusters
+                .get("build_and_sum")
+                .is_none_or(|cs| !cs.iter().any(|c| c.headerless)),
+            "`{inserted}` must also demote the per-fn cluster"
+        );
+    }
+
+    // The complement: a SCALAR read leaves the gate intact, so the
+    // demotion above is `dbg`-of-a-member, not `dbg` of anything.
+    let scalar = control.replace("sum = sum + x.val;", "sum = sum + x.val; dbg(x.val);");
+    assert!(
+        analyze(&scalar).headerless_types.contains_key("ListNode"),
+        "`dbg` of a scalar field must NOT demote — otherwise the tests \
+         above pass because `dbg` demotes everything, proving nothing"
+    );
+}
+
 #[test]
 fn cluster_blocks_prepend_idiom() {
     // Prepend couples the literal link-init to the root reassignment —
