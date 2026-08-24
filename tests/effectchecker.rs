@@ -2590,6 +2590,103 @@ fn test_return_slot_follows_branch_tails() {
     );
 }
 
+// ── B-2026-08-24-11: the slot inside a container ────────────────────
+//
+// B-2026-08-24-1 wired five positions, every one of which reads a slot
+// whose annotation is an `Fn(..)` at the TOP. A container's element slot
+// is one level in — `let v: Vec[Fn(i64) -> i64] = [save, dbl];` declares
+// each element pure — and nothing looked there, so an effectful function
+// inside a container was accepted in silence. That was `-1`'s stated
+// deferral ("worth its own probe rather than an assumption folded in").
+//
+// The descent is STRUCTURAL: it pairs an annotation shape with the literal
+// shape that matches it and recurses, so nesting works for free and a
+// mismatch just stops the walk rather than rejecting anything.
+
+/// Every container spelling that carries an element slot, plus a nested
+/// one to show the descent recurses rather than looking exactly one level
+/// deep. `Vec` and `Array` are both here on purpose: `lower` rewrites a
+/// `Vec`-annotated literal into `PrefixCollectionLiteral` and leaves an
+/// `Array`-annotated one an `ArrayLiteral`, so a walk that knows only one
+/// spelling passes half of these while covering nothing for the commonest
+/// container in the language.
+#[test]
+fn test_container_element_slots_are_checked() {
+    for (body, what, subject) in [
+        (
+            "pub fn go() with writes(UserDB) \
+             { let v: Vec[Fn(i64) -> i64] = [save, dbl]; let _ = v; }",
+            "Vec literal (PrefixCollectionLiteral after lower)",
+            "element 0",
+        ),
+        (
+            "pub fn go() with writes(UserDB) \
+             { let a: Array[Fn(i64) -> i64, 2] = [save, dbl]; let _ = a; }",
+            "Array literal (stays an ArrayLiteral)",
+            "element 0",
+        ),
+        (
+            "pub fn go() with writes(UserDB) \
+             { let v: Vec[Fn(i64) -> i64] = [save; 3]; let _ = v; }",
+            "repeat literal",
+            "element",
+        ),
+        (
+            "pub fn go() with writes(UserDB) \
+             { let o: Option[Fn(i64) -> i64] = Some(save); let _ = o; }",
+            "Option payload",
+            "binding `o`",
+        ),
+        (
+            "pub fn go() with writes(UserDB) \
+             { let t: (Fn(i64) -> i64, i64) = (save, 1); let _ = t; }",
+            "tuple element",
+            "element 0",
+        ),
+        (
+            "pub fn go() with writes(UserDB) \
+             { let m: Map[String, Fn(i64) -> i64] = Map[\"k\": save]; let _ = m; }",
+            "map value",
+            "value 0",
+        ),
+        (
+            "pub fn go() with writes(UserDB) \
+             { let v: Vec[Option[Fn(i64) -> i64]] = [Some(save)]; let _ = v; }",
+            "nested Vec[Option[Fn]]",
+            "element 0",
+        ),
+    ] {
+        let msgs = slot_violations(body);
+        assert_eq!(
+            msgs.len(),
+            1,
+            "{what}: expected exactly one slot violation, got {msgs:?}"
+        );
+        assert!(
+            msgs[0].contains(subject) && msgs[0].contains("writes(UserDB)"),
+            "{what}: message should name {subject} and the effect; got {}",
+            msgs[0]
+        );
+    }
+}
+
+/// The two controls. A pure function in a pure element slot is clean, and
+/// an HONEST element slot accepts the effectful one — without these, a
+/// check that fired on the container shape rather than on the comparison
+/// would pass the test above.
+#[test]
+fn test_container_element_slots_accept_what_they_should() {
+    assert!(
+        slot_violations("pub fn go() { let v: Vec[Fn(i64) -> i64] = [dbl, dbl]; let _ = v; }")
+            .is_empty()
+    );
+    assert!(slot_violations(
+        "pub fn go() with writes(UserDB) \
+         { let v: Vec[Fn(i64) -> i64 with writes(UserDB)] = [save]; let _ = v; }"
+    )
+    .is_empty());
+}
+
 // ── B-2026-08-24-8: `panics` does not constrain a bare Fn slot ──────
 //
 // `panics` is inferred from any indexing, division or overflow-checked

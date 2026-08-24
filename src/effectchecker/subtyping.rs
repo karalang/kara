@@ -173,7 +173,7 @@ impl<'a> super::EffectChecker<'a> {
                 ty, pattern, value, ..
             } => {
                 if let Some(ty) = ty {
-                    self.check_binding_annotation_subtyping(ty, &binding_subject(pattern), value);
+                    self.check_annotation_slots(ty, &binding_subject(pattern), value);
                     remember_slot(w, pattern, ty);
                 }
                 self.check_subtyping_in_expr(value, w);
@@ -194,7 +194,7 @@ impl<'a> super::EffectChecker<'a> {
                 else_block,
             } => {
                 if let Some(ty) = ty {
-                    self.check_binding_annotation_subtyping(ty, &binding_subject(pattern), value);
+                    self.check_annotation_slots(ty, &binding_subject(pattern), value);
                     remember_slot(w, pattern, ty);
                 }
                 self.check_subtyping_in_expr(value, w);
@@ -504,6 +504,126 @@ impl<'a> super::EffectChecker<'a> {
     /// struct field (B-2026-08-24-1). Finding the right `TypeExpr` is each
     /// caller's job; comparing it is entirely here, so there is one
     /// implementation of the rule and one wording of the diagnostic.
+    /// Descend a declared annotation and its literal initializer TOGETHER,
+    /// checking every `Fn(..)` slot found on the way down (B-2026-08-24-11).
+    ///
+    /// The five positions wired by B-2026-08-24-1 all read a slot whose
+    /// annotation is an `Fn(..)` at the TOP. A container's element slot is
+    /// one level in — `let v: Vec[Fn(i64) -> i64] = [save, dbl];` declares
+    /// each element pure — and nothing looked there, so an effectful
+    /// function inside a container was accepted in silence.
+    ///
+    /// Structural, not type-directed: it pairs an annotation shape with the
+    /// literal shape that matches it and recurses, so `Vec[Option[Fn(..)]]`
+    /// works for free. A mismatch (annotation says `Vec`, value is a call)
+    /// simply stops the descent — the typechecker owns "does this value fit
+    /// this type", and this walk only finds slots to compare. It must never
+    /// be the thing that rejects a shape.
+    ///
+    /// Only LITERAL initializers are reachable this way. `v.push(save)`
+    /// carries the same slot but reads it off the RECEIVER, which needs a
+    /// per-method map from argument position to generic argument
+    /// (`Vec.push` → arg 0 ↦ param 0, `Map.insert` → arg 1 ↦ param 1) —
+    /// stdlib knowledge this pass does not otherwise hold. Measured and
+    /// deferred rather than guessed; see the row.
+    fn check_annotation_slots(&mut self, ty: &TypeExpr, subject: &str, value: &Expr) {
+        // A slot at THIS level, if the annotation names one.
+        self.check_binding_annotation_subtyping(ty, subject, value);
+
+        match (&ty.kind, &value.kind) {
+            (TypeKind::Path(path), _) => {
+                let Some(args) = path.generic_args.as_ref() else {
+                    return;
+                };
+                let arg_ty = |i: usize| match args.get(i) {
+                    Some(GenericArg::Type(t)) => Some(t),
+                    _ => None,
+                };
+                match &value.kind {
+                    // `Vec[E] = [a, b]` — every element sits in the E slot.
+                    //
+                    // BOTH literal spellings are listed because `lower`
+                    // rewrites a bare `[..]` into `PrefixCollectionLiteral`
+                    // when the annotation is `Vec`/`Set`/`Map`, and leaves it
+                    // an `ArrayLiteral` when the annotation is `Array[T, N]`.
+                    // The effect checker runs AFTER `lower`, so the prefix
+                    // form is the one it actually sees for a Vec — matching
+                    // only `ArrayLiteral` looked correct against the parsed
+                    // AST and silently covered nothing for the commonest
+                    // container in the language.
+                    ExprKind::ArrayLiteral(elems)
+                    | ExprKind::PrefixCollectionLiteral { items: elems, .. } => {
+                        if let Some(e) = arg_ty(0) {
+                            for (i, el) in elems.iter().enumerate() {
+                                self.check_annotation_slots(
+                                    e,
+                                    &format!("{subject} element {i}"),
+                                    el,
+                                );
+                            }
+                        }
+                    }
+                    // `Option[E] = Some(x)` / `Result[E, _] = Ok(x)` — the
+                    // payload sits in a type argument's slot. Keyed on the
+                    // constructor NAME, since these are ordinary calls here.
+                    ExprKind::Call {
+                        callee,
+                        args: cargs,
+                    } => {
+                        let ctor = match &callee.kind {
+                            ExprKind::Identifier(n) => Some(n.as_str()),
+                            ExprKind::Path { segments, .. } => segments.last().map(|s| s.as_str()),
+                            _ => None,
+                        };
+                        let payload_slot = match ctor {
+                            Some("Some") | Some("Ok") => arg_ty(0),
+                            Some("Err") => arg_ty(1),
+                            _ => None,
+                        };
+                        if let (Some(slot), Some(first)) = (payload_slot, cargs.first()) {
+                            self.check_annotation_slots(slot, subject, &first.value);
+                        }
+                    }
+                    // `Map[K, V] = {k: v, ...}` — keys sit in the K slot,
+                    // values in V. Both are checked: a function value is a
+                    // legal map KEY as well as a map value.
+                    ExprKind::MapLiteral(entries) => {
+                        for (i, (k, v)) in entries.iter().enumerate() {
+                            if let Some(kt) = arg_ty(0) {
+                                self.check_annotation_slots(kt, &format!("{subject} key {i}"), k);
+                            }
+                            if let Some(vt) = arg_ty(1) {
+                                self.check_annotation_slots(vt, &format!("{subject} value {i}"), v);
+                            }
+                        }
+                    }
+                    // `[v; n]` / `Vec[v; n]` — one value, every element slot.
+                    ExprKind::RepeatLiteral { value: rep, .. } => {
+                        if let Some(e) = arg_ty(0) {
+                            self.check_annotation_slots(e, &format!("{subject} element"), rep);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            // `Array[E, N] = [a, b]` — the fixed-size spelling, whose
+            // element type is a field rather than a generic argument.
+            (TypeKind::Array { element, .. }, ExprKind::ArrayLiteral(elems)) => {
+                for (i, el) in elems.iter().enumerate() {
+                    self.check_annotation_slots(element, &format!("{subject} element {i}"), el);
+                }
+            }
+            // `(Fn(..), i64) = (save, 1)` — positional, and only when the
+            // arities agree; a mismatch is the typechecker's to report.
+            (TypeKind::Tuple(tys), ExprKind::Tuple(vals)) if tys.len() == vals.len() => {
+                for (i, (t, v)) in tys.iter().zip(vals.iter()).enumerate() {
+                    self.check_annotation_slots(t, &format!("{subject} element {i}"), v);
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn check_binding_annotation_subtyping(&mut self, ty: &TypeExpr, subject: &str, value: &Expr) {
         let Some(slot_effects) = self.fn_annotation_slot_effects(ty) else {
             return;
