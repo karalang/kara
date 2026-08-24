@@ -23,6 +23,21 @@ use super::{
     tarjan_scc, DeclaredEffects, Effect, EffectError, EffectErrorKind, EffectOrigin, EffectSet,
 };
 
+/// Which edge kinds `build_call_graph_with` puts in the graph.
+///
+/// The distinction only matters for a consumer that makes a claim about
+/// CALLS specifically; everything that reasons about effect propagation
+/// wants both, because a function mentioned as a value contributes its
+/// effects exactly as a called one does (B-2026-08-23-7).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EdgeKinds {
+    /// Call edges plus function-as-value mention edges — the graph effect
+    /// inference runs on.
+    CallsAndValueRefs,
+    /// Call edges only.
+    CallsOnly,
+}
+
 /// E0412 predicate: does this declared `with` clause mention `resource`
 /// under some verb while omitting `writes(resource)`? Returns the
 /// `/`-joined verb names that do mention it (for the diagnostic text),
@@ -440,6 +455,24 @@ impl<'a> super::EffectChecker<'a> {
     /// bodies to infer from (their effects are seeded directly into
     /// `inferred_effects` during initialization).
     pub(crate) fn build_call_graph(&self) -> FxHashMap<Symbol, Vec<(Symbol, Span)>> {
+        self.build_call_graph_with(EdgeKinds::CallsAndValueRefs)
+    }
+
+    /// The same graph with the function-as-value edges (B-2026-08-23-7) left
+    /// out, so every remaining edge is a genuine call.
+    ///
+    /// Effect inference wants both edge kinds — a mentioned function's
+    /// effects propagate exactly as a called one's do, which is the whole
+    /// point of -7 — so `build_call_graph` is the right graph for every
+    /// consumer that asks "whose effects feed whose". This variant exists
+    /// for the one question where the distinction is load-bearing: the
+    /// `mutual_recursion_note` claims two functions CALL each other, and a
+    /// cycle built out of value references is not that (B-2026-08-23-13).
+    pub(crate) fn build_call_graph_calls_only(&self) -> FxHashMap<Symbol, Vec<(Symbol, Span)>> {
+        self.build_call_graph_with(EdgeKinds::CallsOnly)
+    }
+
+    fn build_call_graph_with(&self, kinds: EdgeKinds) -> FxHashMap<Symbol, Vec<(Symbol, Span)>> {
         let all_fn_names: FxHashSet<Symbol> = self
             .function_bodies
             .keys()
@@ -463,6 +496,7 @@ impl<'a> super::EffectChecker<'a> {
                 .chain(
                     self.fn_value_ref_calls
                         .get(&name)
+                        .filter(|_| kinds == EdgeKinds::CallsAndValueRefs)
                         .into_iter()
                         .flatten()
                         .copied(),
@@ -479,6 +513,7 @@ impl<'a> super::EffectChecker<'a> {
                 .chain(
                     self.fn_value_ref_calls
                         .get(&name)
+                        .filter(|_| kinds == EdgeKinds::CallsAndValueRefs)
                         .into_iter()
                         .flatten()
                         .copied(),

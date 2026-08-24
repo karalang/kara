@@ -409,6 +409,37 @@ impl<'a> super::EffectChecker<'a> {
 
     // ── SCC Detection (Tarjan's Algorithm) ───────────────────────
 
+    /// Functions that sit in a cycle of CALL edges — i.e. that really are
+    /// mutually recursive (B-2026-08-23-13).
+    ///
+    /// `detect_mutual_recursion_groups` runs Tarjan over the inference
+    /// graph, which since B-2026-08-23-7 also carries function-as-value
+    /// edges: `p` mentioning `q` as a value makes p's inferred effects
+    /// depend on q's, so the edge is real and the fixed point over it is
+    /// correct. It is just not a CALL. Two functions that each stash the
+    /// other in a struct form a genuine effect-inference cycle in which
+    /// neither ever calls the other, and describing that as "mutual
+    /// recursion" is a false statement about the program.
+    ///
+    /// So the note asks a narrower question than inference does, and needs
+    /// the narrower graph to answer it: re-run Tarjan with the value edges
+    /// left out. A member of a call-only SCC of size >1 is mutually
+    /// recursive with something; a member of no such SCC is not.
+    fn call_only_recursive_members(&self) -> FxHashSet<Symbol> {
+        let all_fn_names: FxHashSet<Symbol> = self
+            .function_bodies
+            .keys()
+            .chain(self.method_bodies.keys())
+            .copied()
+            .collect();
+        let call_graph = self.build_call_graph_calls_only();
+        tarjan_scc(&all_fn_names, &call_graph, &self.interner)
+            .into_iter()
+            .filter(|scc| scc.len() > 1)
+            .flatten()
+            .collect()
+    }
+
     /// Emit the `mutual_recursion_note` advisory for every detected group
     /// (B-2026-08-21-2). design.md § Effect Inference and Boundaries: "When
     /// the compiler detects a mutual recursion group during inference, it
@@ -427,6 +458,16 @@ impl<'a> super::EffectChecker<'a> {
     /// across runs — Tarjan yields SCC members in traversal order, which is
     /// not stable enough to pin in a test.
     pub(crate) fn emit_mutual_recursion_notes(&mut self, groups: &[MutualRecursionGroup]) {
+        // Only a program that mentions some function as a value can have a
+        // group whose cycle is not a call cycle, and that is rare — so pay
+        // for the second graph only when one exists. `None` means every
+        // edge in the graph was already a call edge, hence every group is
+        // genuine mutual recursion.
+        let call_recursive: Option<FxHashSet<Symbol>> = if self.fn_value_ref_calls.is_empty() {
+            None
+        } else {
+            Some(self.call_only_recursive_members())
+        };
         for group in groups {
             let syms: Vec<Symbol> = group
                 .functions
@@ -442,10 +483,15 @@ impl<'a> super::EffectChecker<'a> {
             else {
                 continue;
             };
-            let mut listed: Vec<String> = group
-                .functions
-                .iter()
-                .map(|n| {
+            // Partitioned rather than merely listed: a member can be pulled
+            // into the inference cycle by a function-as-value reference
+            // without being mutually recursive with anything
+            // (B-2026-08-23-13), and naming it inside a "mutual recursion
+            // group" is the same false statement in miniature.
+            let mut recursive: Vec<String> = Vec::new();
+            let mut value_joined: Vec<String> = Vec::new();
+            for n in &group.functions {
+                let rendered = {
                     let sym = self.interner.intern(n);
                     // Same `verb(resource)` rendering the `--output=json`
                     // `program_effects` field uses, so the note and the JSON
@@ -478,15 +524,46 @@ impl<'a> super::EffectChecker<'a> {
                     } else {
                         format!("`{n}` ({effects})")
                     }
-                })
-                .collect();
-            listed.sort();
-            self.errors.push(EffectError {
-                message: format!(
+                };
+                let sym = self.interner.intern(n);
+                if call_recursive.as_ref().is_none_or(|set| set.contains(&sym)) {
+                    recursive.push(rendered);
+                } else {
+                    value_joined.push(rendered);
+                }
+            }
+            recursive.sort();
+            value_joined.sort();
+            // Three shapes, because all three are things the note can
+            // truthfully say (B-2026-08-23-13):
+            //   - every member call-recursive -> mutual recursion, verbatim
+            //     as before;
+            //   - none -> an effect-inference cycle that is not recursion;
+            //   - mixed -> a real mutual recursion group plus the members
+            //     that only got pulled in by a value reference.
+            let message = match (recursive.is_empty(), value_joined.is_empty()) {
+                (false, true) => format!(
                     "mutual recursion group resolved by fixed-point inference: {}. \
                      Suppress with `#[allow(mutual_recursion_note)]`",
-                    listed.join(", ")
+                    recursive.join(", ")
                 ),
+                (true, _) => format!(
+                    "effect-inference cycle resolved by fixed-point inference: {}. \
+                     Every cycle here passes through a function-as-value reference, \
+                     so no member is mutually recursive with another. \
+                     Suppress with `#[allow(mutual_recursion_note)]`",
+                    value_joined.join(", ")
+                ),
+                (false, false) => format!(
+                    "mutual recursion group resolved by fixed-point inference: {}; \
+                     joined by function-as-value reference: {}. \
+                     Suppress with `#[allow(mutual_recursion_note)]`",
+                    recursive.join(", "),
+                    value_joined.join(", ")
+                ),
+            };
+            self.errors.push(EffectError {
+                message,
                 span,
                 kind: EffectErrorKind::MutualRecursionNote,
                 subtype_trace: None,

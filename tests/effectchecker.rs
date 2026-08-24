@@ -11801,3 +11801,181 @@ fn an_undeclared_return_type_is_not_a_pure_slot() {
     );
     assert!(found.is_empty(), "expected no violations, got: {found:?}");
 }
+
+// ── Value-reference cycles are not mutual recursion (B-2026-08-23-13) ──
+
+/// A cycle built ONLY out of function-as-value references is not mutual
+/// recursion, and the note must not say it is (B-2026-08-23-13).
+///
+/// B-2026-08-23-7 added function-as-value edges to the call graph so a
+/// mentioned function's effects reach its mentioner. Those edges are real
+/// EFFECT-DEPENDENCY edges — `p`'s inferred effects genuinely depend on
+/// `q`'s — so Tarjan sees a true cycle and the fixed point over it is
+/// correct. What is not correct is the word "recursion": here `p` and `q`
+/// each stash the other in a struct and neither ever calls the other, so
+/// "mutual recursion group" was a false statement about the program.
+#[test]
+fn value_only_cycle_is_not_reported_as_mutual_recursion() {
+    let source = r#"
+struct Holder { f: Fn(i64) -> i64 }
+
+fn p(n: i64) -> i64 {
+    let h = Holder { f: q };
+    n + 1
+}
+
+fn q(n: i64) -> i64 {
+    let h = Holder { f: p };
+    n + 2
+}
+"#;
+    let result = effectcheck_full_pipeline(source);
+    let notes: Vec<_> = result
+        .errors
+        .iter()
+        .filter(|e| e.kind == EffectErrorKind::MutualRecursionNote)
+        .collect();
+    // Non-vacuity: the note must still FIRE. If the value edges ever stop
+    // reaching the graph this test would otherwise pass by saying nothing,
+    // hiding the very cycle it exists to describe.
+    assert_eq!(
+        notes.len(),
+        1,
+        "the value-reference cycle must still be detected and reported; got: {:?}",
+        result
+            .errors
+            .iter()
+            .map(|e| (&e.kind, &e.message))
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        !notes[0].message.contains("mutual recursion"),
+        "neither function calls the other, so the note must not claim mutual \
+         recursion; got: {}",
+        notes[0].message
+    );
+    assert!(
+        notes[0].message.contains("effect-inference cycle")
+            && notes[0].message.contains("`p`")
+            && notes[0].message.contains("`q`"),
+        "the note must still name the cycle and its members; got: {}",
+        notes[0].message
+    );
+}
+
+/// The genuine case is untouched: two functions that really do call each
+/// other still get the spec's "mutual recursion group" wording verbatim.
+/// This is the other half of B-2026-08-23-13 — a fix that quietly reworded
+/// every note would trade a false statement for a useless one.
+#[test]
+fn genuine_mutual_recursion_keeps_its_wording() {
+    let source = r#"
+fn f() {
+    g()
+}
+fn g() {
+    f()
+}
+"#;
+    let result = effectcheck_full_pipeline(source);
+    let notes: Vec<_> = result
+        .errors
+        .iter()
+        .filter(|e| e.kind == EffectErrorKind::MutualRecursionNote)
+        .collect();
+    assert_eq!(notes.len(), 1, "expected one note for the one real group");
+    assert!(
+        notes[0].message.contains("mutual recursion group")
+            && !notes[0].message.contains("effect-inference cycle"),
+        "a real call cycle must keep the spec's wording; got: {}",
+        notes[0].message
+    );
+}
+
+/// A group can be BOTH: two functions that genuinely recurse, plus a third
+/// pulled into the same SCC only by a function-as-value reference. Naming
+/// that third one inside the "mutual recursion group" is the same false
+/// statement in miniature, so the note partitions the members
+/// (B-2026-08-23-13).
+#[test]
+fn mixed_cycle_separates_recursive_members_from_value_joined_ones() {
+    let source = r#"
+struct Holder { f: Fn(i64) -> i64 }
+
+fn is_even(n: i64) -> i64 {
+    let h = Holder { f: r };
+    if n == 0 { 1 } else { is_odd(n - 1) }
+}
+
+fn is_odd(n: i64) -> i64 {
+    if n == 0 { 0 } else { is_even(n - 1) }
+}
+
+fn r(n: i64) -> i64 {
+    let h = Holder { f: is_even };
+    n
+}
+"#;
+    let result = effectcheck_full_pipeline(source);
+    let notes: Vec<_> = result
+        .errors
+        .iter()
+        .filter(|e| e.kind == EffectErrorKind::MutualRecursionNote)
+        .collect();
+    assert_eq!(
+        notes.len(),
+        1,
+        "expected one note for the one group; got: {:?}",
+        result
+            .errors
+            .iter()
+            .map(|e| (&e.kind, &e.message))
+            .collect::<Vec<_>>()
+    );
+    let msg = &notes[0].message;
+    let (recursive, joined) = msg
+        .split_once("; joined by function-as-value reference:")
+        .unwrap_or_else(|| {
+            panic!("mixed group must partition its members; got: {msg}");
+        });
+    assert!(
+        recursive.contains("`is_even`") && recursive.contains("`is_odd`"),
+        "the two functions that really call each other belong on the \
+         mutual-recursion side; got: {msg}"
+    );
+    assert!(
+        !recursive.contains("`r`") && joined.contains("`r`"),
+        "`r` calls nobody and nobody calls it — it must not be named as \
+         mutually recursive; got: {msg}"
+    );
+}
+
+/// `#[allow(mutual_recursion_note)]` still suppresses the reworded note.
+/// The lint name is unchanged, so the escape hatch must keep working for
+/// the value-only shape too — otherwise the fix would hand users a note
+/// they cannot silence.
+#[test]
+fn value_only_cycle_note_is_suppressible() {
+    let source = r#"
+struct Holder { f: Fn(i64) -> i64 }
+
+#[allow(mutual_recursion_note)]
+fn p(n: i64) -> i64 {
+    let h = Holder { f: q };
+    n + 1
+}
+
+fn q(n: i64) -> i64 {
+    let h = Holder { f: p };
+    n + 2
+}
+"#;
+    let result = effectcheck_full_pipeline(source);
+    assert!(
+        !result
+            .errors
+            .iter()
+            .any(|e| e.kind == EffectErrorKind::MutualRecursionNote),
+        "`#[allow(mutual_recursion_note)]` must suppress the reworded note too"
+    );
+}
