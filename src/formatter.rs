@@ -392,6 +392,47 @@ mod tests {
     }
 
     #[test]
+    fn fn_type_keeps_its_case_once_ness_and_effect_row() {
+        // B-2026-08-24-14, and the same class as
+        // `no_effect_attribute_keeps_its_verbs` above: formatting must never
+        // be able to weaken a guarantee. Three things were dropped by one
+        // arm — the head printed lowercase `fn(`, which is not the surface
+        // syntax and does not parse in type position; `is_once` was matched
+        // away, so an `OnceFn` printed as a plain `Fn` and lost
+        // once-callability; and `effect_spec` was matched away, so
+        // `Fn(i64) -> i64 with writes(D)` printed as a PURE slot.
+        //
+        // The unparseable head is the only reason the two silent losses were
+        // not silent corruption: `karac fmt` output failed at the next parse
+        // instead of quietly changing two types.
+        let out = fmt_ok(
+            "effect resource D;\n\
+             fn f(a: Fn(i64) -> i64 with writes(D), b: OnceFn(i64) -> i64, \
+             c: Fn(i64) -> i64 with _) -> i64 { 0 }",
+        );
+        assert!(
+            out.contains("Fn(i64) -> i64 with writes(D)"),
+            "the effect row must survive formatting:\n{out}"
+        );
+        assert!(
+            out.contains("OnceFn(i64) -> i64"),
+            "once-callability must survive formatting:\n{out}"
+        );
+        assert!(
+            out.contains("with _"),
+            "the polymorphic row must survive formatting:\n{out}"
+        );
+        assert!(
+            !out.contains("fn(i64)"),
+            "the head is `Fn`/`OnceFn`; lowercase `fn(` does not parse in \
+             type position:\n{out}"
+        );
+        // Parseable and a fixpoint — the two properties the bug broke.
+        let again = fmt_ok(&out);
+        assert_eq!(out, again, "second format pass must be a fixpoint");
+    }
+
+    #[test]
     fn multi_bound_provider_declaration_keeps_every_bound() {
         // `effect resource UserDB: Store[Row] + Healthy;` (design.md:7216,
         // B-2026-08-19-3). A formatter that renders only the first bound

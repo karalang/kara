@@ -191,12 +191,23 @@ impl super::Formatter {
                 }
                 self.format_type_expr(inner);
             }
+            // `Fn(..)` / `OnceFn(..)`, with the effect row when one is
+            // written. Every part of this used to be wrong (B-2026-08-24-14):
+            // the head was lowercase `fn(`, which is not the surface syntax
+            // and does not parse in type position; `is_once` was matched away
+            // by `..`, so an `OnceFn` printed as a plain `Fn` and lost
+            // once-callability; and `effect_spec` was matched away too, so
+            // `Fn(i64) -> i64 with writes(D)` printed as a PURE slot — a
+            // silently different type. `karac fmt`'s output for any such
+            // annotation therefore failed to parse, which is the only reason
+            // the two silent losses were not silent corruption.
             TypeKind::FnType {
                 params,
                 return_type,
-                ..
+                effect_spec,
+                is_once,
             } => {
-                self.write_str("fn(");
+                self.write_str(if *is_once { "OnceFn(" } else { "Fn(" });
                 for (i, p) in params.iter().enumerate() {
                     if i > 0 {
                         self.write_str(", ");
@@ -207,6 +218,15 @@ impl super::Formatter {
                 if let Some(ref rt) = return_type {
                     self.write_str(" -> ");
                     self.format_type_expr(rt);
+                }
+                match effect_spec {
+                    Some(EffectSpec::Polymorphic) => self.write_str(" with _"),
+                    Some(EffectSpec::Specific(list)) => {
+                        self.write_str(" with ");
+                        let rendered = crate::formatter::render_effect_list(list);
+                        self.write_str(&rendered);
+                    }
+                    None => {}
                 }
             }
             TypeKind::Frozen(inner) => {

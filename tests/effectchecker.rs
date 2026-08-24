@@ -2590,6 +2590,81 @@ fn test_return_slot_follows_branch_tails() {
     );
 }
 
+// ── B-2026-08-24-12: advice a user can actually follow ──────────────
+//
+// "public function 'get' performs effects [writes(UserDB)] but has no
+// effect declaration. Add: with writes(UserDB) to the function signature"
+// is correct for every return type EXCEPT an `Fn(..)`, where a `with`
+// written directly after it binds to the TYPE. Following the advice
+// literally reproduced the identical error — a compiler repeating itself.
+
+/// The Fn-returning case names the parenthesised spelling, and following
+/// it makes PROGRESS: the next error is a different one (the returned
+/// value's own row), not the same message again.
+#[test]
+fn test_fn_returning_pub_fn_gets_followable_advice() {
+    let msgs: Vec<String> = effectcheck_errors(
+        "effect resource UserDB;\n\
+         fn save(n: i64) -> i64 with writes(UserDB) { n * 2 }\n\
+         pub fn get() -> Fn(i64) -> i64 { save }",
+    )
+    .into_iter()
+    .filter(|e| e.kind == EffectErrorKind::MissingEffectDeclaration)
+    .map(|e| e.message)
+    .collect();
+    assert_eq!(
+        msgs.len(),
+        1,
+        "expected one missing-declaration error: {msgs:?}"
+    );
+    assert!(
+        msgs[0].contains("PARENTHESISED") && msgs[0].contains("(Fn(i64) -> i64)"),
+        "advice must name the parenthesised spelling, rendered concretely; got {}",
+        msgs[0]
+    );
+
+    // Following it moves the user on. The advice is deliberately NOT the
+    // fully-doubled spelling: this diagnostic knows the FUNCTION's effects,
+    // not whether they come from the returned value, so it suggests exactly
+    // what this error requires and lets the return-slot check (B-2026-08-24-1)
+    // ask for the row when the value really carries one. Two accurate
+    // messages beat one guessed one.
+    let after: Vec<String> = effectcheck_errors(
+        "effect resource UserDB;\n\
+         fn save(n: i64) -> i64 with writes(UserDB) { n * 2 }\n\
+         pub fn get() -> (Fn(i64) -> i64) with writes(UserDB) { save }",
+    )
+    .into_iter()
+    .map(|e| e.message)
+    .collect();
+    assert!(
+        !after
+            .iter()
+            .any(|m| m.contains("has no effect declaration")),
+        "following the advice must not reproduce the same error; got {after:?}"
+    );
+}
+
+/// An ORDINARY return type keeps the original wording. The special case
+/// must be exactly one shape wide.
+#[test]
+fn test_plain_return_type_advice_is_unchanged() {
+    let msgs: Vec<String> = effectcheck_errors(
+        "effect resource UserDB;\n\
+         fn save(n: i64) -> i64 with writes(UserDB) { n * 2 }\n\
+         pub fn go() -> i64 { save(1) }",
+    )
+    .into_iter()
+    .filter(|e| e.kind == EffectErrorKind::MissingEffectDeclaration)
+    .map(|e| e.message)
+    .collect();
+    assert!(
+        msgs.iter()
+            .any(|m| m.contains("Add: with writes(UserDB) to the function signature")),
+        "a non-Fn return type keeps the plain advice; got {msgs:?}"
+    );
+}
+
 // ── B-2026-08-24-11: the slot inside a container ────────────────────
 //
 // B-2026-08-24-1 wired five positions, every one of which reads a slot

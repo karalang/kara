@@ -25,6 +25,18 @@ use super::{
 impl<'a> super::EffectChecker<'a> {
     // ── Verification ────────────────────────────────────────────
 
+    /// The declared return type of `sym`, but ONLY when it is an `Fn(..)`
+    /// / `OnceFn(..)` type (B-2026-08-24-12).
+    ///
+    /// `None` for every other return type, including absent — which is
+    /// what keeps the ordinary suggested-fix text unchanged. This exists
+    /// solely to detect the one shape where a `with` clause would bind to
+    /// the return type instead of the function.
+    fn fn_return_type(&self, sym: Symbol) -> Option<TypeExpr> {
+        let ret = self.function_bodies.get(&sym)?.return_type.clone()?;
+        matches!(ret.kind, TypeKind::FnType { .. }).then_some(ret)
+    }
+
     pub(crate) fn verify_declarations(&mut self) {
         let fn_names: Vec<Symbol> = self.function_bodies.keys().copied().collect();
         for &sym in &fn_names {
@@ -295,13 +307,36 @@ impl<'a> super::EffectChecker<'a> {
                                         }
                                     })
                                     .collect();
+                                let clause = effects_list.join(" ");
+                                // B-2026-08-24-12: when the return type is an
+                                // `Fn(..)`, the bare advice is UNFOLLOWABLE —
+                                // a `with` written directly after an `Fn`
+                                // return type binds to that TYPE, not to the
+                                // function, so the user re-runs and gets this
+                                // same error verbatim. The return type has to
+                                // be parenthesised for the clause to attach to
+                                // the function. Render the real return type so
+                                // the suggestion is copy-pasteable rather than
+                                // a shape the reader has to reconstruct.
+                                let advice = match self.fn_return_type(sym) {
+                                    Some(ret) => format!(
+                                        "Add: with {clause} after a PARENTHESISED return type — \
+                                         `-> ({}) with {clause}` — because a `with` written \
+                                         directly after an `Fn` return type binds to that type, \
+                                         not to the function",
+                                        crate::formatter::render_type_expr(&ret),
+                                    ),
+                                    None => {
+                                        format!("Add: with {clause} to the function signature")
+                                    }
+                                };
                                 self.errors.push(EffectError {
                                     message: format!(
                                         "public function '{}' performs effects [{}] but has no \
-                                         effect declaration. Add: with {} to the function signature",
+                                         effect declaration. {}",
                                         name,
                                         effects_list.join(", "),
-                                        effects_list.join(" "),
+                                        advice,
                                     ),
                                     span,
                                     kind: EffectErrorKind::MissingEffectDeclaration,
