@@ -96,8 +96,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 189 | 0 |
 | missing-feature | 166 | 1 |
 | run-vs-build | 158 | 0 |
+| codegen-gap | 136 | 1 |
 | double-free | 136 | 0 |
-| codegen-gap | 135 | 1 |
 | diagnostics | 102 | 1 |
 | false-positive | 95 | 0 |
 | perf | 84 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1015 | 2 |
+| codegen | 1016 | 2 |
 | typecheck | 250 | 1 |
 | interp | 180 | 0 |
 | other | 64 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1540 surfaced · 4 open · 1512 fixed · 10 wontfix** (2026-05-20 → 2026-08-24). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1541 surfaced · 4 open · 1513 fixed · 10 wontfix** (2026-05-20 → 2026-08-24). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (4)
 
@@ -133,7 +133,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1540 surfaced
 | B-2026-08-23-11 | 2026-08-23 | typecheck | medium | `Type::Function` carries NO EFFECT ROW, so design.md § First-Class Functions' `let f = save;  // f: Fn(User) -> () with writes(UserDB)` is not representable and a function value's effects cannot propagate through its TYPE. NARROWED 7e7972b: the IMPRECISION this caused -- a function value that is bound and never called still demanding the enclosing function declare its effects -- is FIXED, in the effect checker and without the type row (bind-an-alias, attribute-at-every-other-mention). What remains is representability only, and the prescription in the original title does not work as written: the typechecker cannot populate an effect row, because `effectcheck` runs after `typecheck` AND consumes its output, so inferred effects at typecheck time would need a cycle. Read the detail before picking this up. | roadmap.md |
 | B-2026-08-23-13 | 2026-08-23 | effect | low | The mutual-recursion NOTE now fires for two functions that merely REFERENCE each other as VALUES, calling them a "mutual recursion group" though neither calls the other. `fn p(n: i64) -> i64 { let f = q; n + 1 }` + `fn q(n: i64) -> i64 { let g = p; n + 2 }` reports `note[effect]: mutual recursion group resolved by fixed-point inference: \`p\` (no effects), \`q\` (no effects)`. The program passes and the note is suppressible with `#[allow(mutual_recursion_note)]`, so this is diagnostic wording, not a check failure -- but "mutual recursion" is a false statement about the program. | roadmap.md |
 | B-2026-08-24-15 | 2026-08-24 | codegen | high | `Vec.insert` / `Vec.remove` / `Vec.swap_remove` HAVE NO CODEGEN BOUNDS CHECK: an out-of-range index CORRUPTS THE HEAP (insert/remove) or SILENTLY RETURNS GARBAGE AND DROPS AN ELEMENT (swap_remove) on both compiled backends, where the interpreter panics and design.md says "panics if out of bounds" | roadmap.md |
-| B-2026-08-24-19 | 2026-08-24 | codegen | low | A `Map` / `Set` or `shared` BREAK VALUE still cannot leave a loop on the compiled backends: `loop { ... break m }` for a `Map[String, i64]`, and `loop { ... break Node { v: 22 } }` for a `shared struct`, both FAIL AT MODULE VERIFICATION while the interpreter returns the value. Their cleanup cannot be disarmed the way String/Vec's was -- Map retracts a QUEUED action (flow-insensitive, so it would leak on the iterations that do not break) and a `shared` handle needs a matching RETAIN rather than a cap-zero. | roadmap.md |
+| B-2026-08-24-21 | 2026-08-24 | codegen | low | A `shared` STRUCT OR ENUM BREAK VALUE cannot leave a loop on the compiled backends, and the OBVIOUS FIX MAKES IT WORSE: `loop { ...; let n = Node { v: i }; break n }` fails at module verification today (interpreter returns it), but disarming the source binding the way Map/Set now does -- which LOOKS correct, because `RcDec` is already null-guarded -- was MEASURED to HANG for a `shared struct` and to die with a BUS ERROR for a `shared enum`. | roadmap.md |
 
 ### Wontfix (10)
 
@@ -154,9 +154,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1540 surfaced
 
 </details>
 
-### Fixed (1512)
+### Fixed (1513)
 
-<details><summary>1512 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1513 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -17957,6 +17957,15 @@ there the wrapper is part of the thing being declared.
 
 Five new tests in tests/effectchecker.rs, one of them the all-clean
 false-positive guard covering both deliberate boundaries. |
+| B-2026-08-24-19 | codegen | low | A `Map` / `Set` BREAK VALUE could not leave a loop on the compiled backends: `loop { ...; let mut m = Map.new(); ...; break m }` FAILED AT MODULE VER… | PARTIALLY FIXED by 698ebd4 — the Map/Set half only. The `shared` half is NOT fixed and is split to its own row; see below, and do not read this row as clearing it.
+
+MAP / SET, fixed. Their cleanup is queue-driven (`FreeMapHandle`) with no in-slot sentinel like Vec/String's `cap = 0`, which is why the existing move suppressor (`suppress_map_cleanup_for_tail_identifier`) disarms by editing the cleanup queue at COMPILE time. That is right for a function tail, which runs once, and wrong at a `break`: a break is conditional and sits inside a loop that may iterate many times without taking it, so retracting the action would disarm the free on every non-breaking iteration too — a leak in place of a double free.
+
+`disarm_moved_handle_by_zeroing` (src/codegen/control_flow.rs) instead stores null into the binding's slot, so the disarm executes only on the path that actually breaks. That required making `FreeMapHandle` uniformly null-tolerant: the three `karac_map_free*` entry points already no-op on a null handle, but the codegen-side rc_dec / drop-fn walks ABOVE them read bucket bytes off the handle at fixed offsets and would fault for `Map[K, shared V]`. The action now null-guards, mirroring the `BoxedEnumDrop` arm — which records the same flow-insensitivity reasoning, for the same reason, in its own comment.
+
+A pointer enters the loop's result slot only against PROOF that ownership was taken (the `owned_ptr` flag), never as a type test. The LLVM type is an opaque `ptr` shared by every handle kind, so a Map and a `shared` struct are indistinguishable from the value alone; the cleanup queue is the only witness to which is which.
+
+MEASURED on 698ebd4: `loop { ...; let mut m = Map.new(); m.insert(f"k{i}", i*7); if i == 3 { break m } }` returns 21 from the interpreter and from an AOT binary, and is clean under ASAN with LeakSanitizer at `KARAC_OPT_LEVEL=0` (27 allocations for the multi-iteration shape, no leak — so the two non-breaking iterations still free their own maps). |
 | B-2026-08-24-20 | effect | low | A METHOD-CHAIN receiver's declared `Fn(..)` element slot is still unchecked: `hand_out().push(save)` carries the same slot as a bound `v.push(save)`,… | Fixed in ba5b136 (src/effectchecker/subtyping.rs, tests/effectchecker.rs).
 
 THE ROW'S BLOCKER WAS WRONG, and the correction is the useful part. This row
