@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 283 | 0 |
 | leak | 189 | 0 |
-| missing-feature | 162 | 1 |
+| missing-feature | 163 | 1 |
 | run-vs-build | 158 | 0 |
 | double-free | 136 | 0 |
 | codegen-gap | 132 | 1 |
@@ -120,11 +120,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | parser | 41 | 1 |
 | runtime | 31 | 0 |
 | resolver | 26 | 0 |
-| effect | 17 | 1 |
+| effect | 18 | 1 |
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1530 surfaced · 4 open · 1503 fixed · 9 wontfix** (2026-05-20 → 2026-08-24). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1531 surfaced · 4 open · 1504 fixed · 9 wontfix** (2026-05-20 → 2026-08-24). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (4)
 
@@ -153,9 +153,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1530 surfaced
 
 </details>
 
-### Fixed (1503)
+### Fixed (1504)
 
-<details><summary>1503 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1504 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -17787,6 +17787,30 @@ MEASURED after the change:
   bare slot, `blocks` value      returned value has effect blocks() not declared in slot [pure]
   bare slot, `suspends` value    returned value has effect suspends() not declared in slot [pure]
   bare slot, `writes(UserDB)`    returned value has effect writes(UserDB) not declared in slot [pure] |
+| B-2026-08-24-11 | effect | low | The `Fn(..)` EFFECT SLOT INSIDE A CONTAINER is never checked, so an effectful function placed in a pure-declared element slot is accepted in silence:… | FIXED by 2193636.
+
+`check_annotation_slots` (src/effectchecker/subtyping.rs) descends a
+declared annotation and its literal initializer together, calling the
+existing `check_binding_annotation_subtyping` at every level. The `let` and
+`let else` positions use it; assignment, return and struct-field positions
+keep the flat check, since each of those is a single slot.
+
+Covered, each asserted to report EXACTLY ONCE:
+  Vec literal        binding `v` element 0
+  Array literal      binding `a` element 0
+  repeat literal     binding `v` element
+  Option payload     binding `o`
+  tuple element      binding `t` element 0
+  map value          binding `m` value 0
+  nested Vec[Option] binding `v` element 0
+plus two controls: a pure function in a pure element slot is clean, and an
+honest element slot (`Vec[Fn(i64) -> i64 with writes(UserDB)]`) accepts the
+effectful one.
+
+Map KEYS are checked alongside values -- a function value is a legal map
+key, and checking only the value would have been an assumption rather than
+a decision.
+ |
 
 </details>
 
