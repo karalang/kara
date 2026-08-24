@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 283 | 0 |
 | leak | 189 | 0 |
-| missing-feature | 162 | 3 |
+| missing-feature | 162 | 2 |
 | run-vs-build | 157 | 1 |
 | double-free | 136 | 1 |
 | codegen-gap | 130 | 1 |
@@ -117,16 +117,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | other | 63 | 0 |
 | cli | 62 | 0 |
 | autopar | 55 | 0 |
-| parser | 40 | 1 |
+| parser | 40 | 0 |
 | runtime | 31 | 0 |
 | resolver | 26 | 0 |
 | effect | 16 | 2 |
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1525 surfaced · 7 open · 1495 fixed · 9 wontfix** (2026-05-20 → 2026-08-24). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1525 surfaced · 6 open · 1496 fixed · 9 wontfix** (2026-05-20 → 2026-08-24). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (7)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,7 +134,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1525 surfaced
 | B-2026-08-23-13 | 2026-08-23 | effect | low | The mutual-recursion NOTE now fires for two functions that merely REFERENCE each other as VALUES, calling them a "mutual recursion group" though neither calls the other. `fn p(n: i64) -> i64 { let f = q; n + 1 }` + `fn q(n: i64) -> i64 { let g = p; n + 2 }` reports `note[effect]: mutual recursion group resolved by fixed-point inference: \`p\` (no effects), \`q\` (no effects)`. The program passes and the note is suppressible with `#[allow(mutual_recursion_note)]`, so this is diagnostic wording, not a check failure -- but "mutual recursion" is a false statement about the program. | roadmap.md |
 | B-2026-08-24-1 | 2026-08-24 | effect | medium | The `Fn(..)` EFFECT SLOT IS STILL UNCHECKED AT FOUR NON-`let` POSITIONS after B-2026-08-23-12 wired the binding annotation. Each accepts an effectful `save` into a slot that declares purity, with no diagnostic: (1) ASSIGNMENT to a declared-Fn binding -- `let mut f: Fn(i64) -> i64 = |x| x; f = save;`; (2) the `LetUninit` form of the same -- `let f: Fn(i64) -> i64; f = save;`; (3) RETURN POSITION -- `fn get() -> Fn(i64) -> i64 { save }`; (4) a STRUCT-LITERAL FIELD -- `struct Holder { f: Fn(i64) -> i64 }` built as `Holder { f: save }`. All four measured silent under `karac check` with the -12 binary, and all four print `14` under `--interp`, so the effectful function really does route through the pure-declared slot rather than the shape being rejected earlier. | roadmap.md |
 | B-2026-08-24-2 | 2026-08-24 | codegen | low | `dbg(x)` where `x` is a `shared struct` / `shared enum` REFUSES to compile: "codegen: `dbg` at L:C cannot render a value of type `Sh` yet — the compiled backends have no `Debug` renderer for it." Every other shape now lowers (B-2026-08-23-18), and `karac run --interp` renders shared values correctly, so this is a single missing arm in the `Debug` renderer family rather than a design question. | phase-7-codegen.md |
-| B-2026-08-24-3 | 2026-08-24 | parser | low | A STRUCT LITERAL WITH EXPLICIT GENERIC ARGUMENTS (`Connection[Disconnected] { socket: ... }`) does not parse in ANY expression position, so design.md § Typestate via Phantom Type Parameters line 8756 -- the line that demonstrates the wrong-state compile error -- cannot be written as the spec writes it. `let c = C[S] { fd: 1 };` -> `Expected Semicolon, found LeftBrace`; the same literal as a tail expression -> `Expected expression, found Colon`. Annotating the binding and using the bare name (`let c: C[S] = C { fd: 1 };`) works. | phase-2-parser-ast.md |
 | B-2026-08-24-4 | 2026-08-24 | interp | high | A RUNTIME ERROR inside a `par {}` branch is swallowed WHOLE by the interpreter -- no message on stderr, exit code 0, and the statements after the join are skipped -- so a program that died halfway reports SUCCESS. JIT and AOT both print the error and exit 1. Measured on three unrelated error shapes (`panic("...")`, a Vec index out of bounds, a failed `assert`), all three identical: `karac run --interp` prints NOTHING and exits 0 where `karac run` and the compiled binary print `panic at c2.kara:1:51 in boom: vec index out of bounds` and exit 1. | roadmap.md |
 | B-2026-08-24-5 | 2026-08-24 | codegen | high | `asan_local_fixed_array_returned_out_is_not_dropped_twice` DOUBLE-FREES at KARAC_OPT_LEVEL=0, so `scripts/asan-o0-leg.sh` is RED on main and reports the fixture as a new unquarantined failure. The fixture PASSES at the default -O2, which is the classic -O0-only shape: at -O0 no pass pipeline runs so the allocation the fixture intends actually happens, while at -O2 LLVM deletes the provably-dead buffer along with the evidence. | roadmap.md |
 
@@ -156,9 +155,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1525 surfaced
 
 </details>
 
-### Fixed (1495)
+### Fixed (1496)
 
-<details><summary>1495 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1496 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -17578,6 +17577,18 @@ CORPUS IMPACT: none. Ten `.kara` programs declare `main() -> Result`, and the tw
 that run to an error exit (`examples/phase0/dashboard.kara`,
 `examples/word_count.kara`) fail earlier -- neither prints an `Error:` line -- so
 no corpus output changes. |
+| B-2026-08-24-3 | parser | low | A STRUCT LITERAL WITH EXPLICIT GENERIC ARGUMENTS (`Connection[Disconnected] { socket: .. | FIXED by 8dd822e. `Name[Args] { field: value }` now parses in every expression position, and the arguments are carried to the typechecker and used. design.md § Typestate via Phantom Type Parameters transcribes VERBATIM now -- markers, generic literals, wrong-state rejection -- and the section's program runs identically on interp / JIT / AOT (`sent 6`), with the negative case rejected as `expected 'ref Connection[Connected]', found 'Connection[Disconnected]'`, the exact text the section claims.
+
+THREE PARTS:
+(1) PARSER (`src/parser/exprs.rs`). `lookahead_generic_struct_literal` mirrors the existing `lookahead_concrete_type_ufcs` -- require a type-start inside the brackets, balanced-scan to the matching `]`, then require a `{` whose contents look like a struct-literal body. Intercepted before the postfix `[` loop, exactly as the UFCS form is. `looks_like_struct_literal` was factored into a positional `_at(brace_pos)` variant so the brace can be judged without consuming the bracket group first.
+(2) AST (`src/ast/exprs.rs`). `ExprKind::StructLiteral` gained `generic_args: Option<Vec<GenericArg>>`, mirroring `Path::generic_args` (including the const-generics `GenericArg` widening). 15 pattern sites took `..`; two constructors pass the field.
+(3) TYPECHECK (`src/typechecker/exprs.rs`, `fields.rs`). The arguments are lowered and passed as `expected_type_args` -- the SAME channel the annotated form (`let c: C[S] = C { .. }`) already used, so this adds a source for the expectation rather than a second inference path. `lower_literal_generic_args` validates arity and argument kind and reports (`takes 1 type argument, but 2 were supplied here`; `is not generic, so it takes no type arguments here`) rather than silently falling back to inference, which would surface as a less specific error somewhere else.
+
+WHY THE AST FIELD IS LOAD-BEARING, not bookkeeping: a PHANTOM parameter appears in no field, so field values cannot solve it. Dropping the arguments at the parse leaves `let c = C[S] { fd: 1 }` reporting "cannot infer type parameter 'T'" -- which is exactly what happened at the intermediate state where parsing worked and the typechecker still ignored the arguments. Both halves are required and each is revert-discriminated: disabling the parser branch fails the parse-position and args-recorded tests; disabling the typechecker consumption fails the phantom / arity / field-checking tests while the parse tests stay green.
+
+CORRECTION TO THIS ROW'S OWN ESTIMATE. It priced the fix as needing "a restricted-expression rule (no struct literal in the condition position of `if`/`while`/`match` scrutinee, as Rust does)" -- and implied that machinery was absent. It was already there: `Parser::no_struct_literal`, with `parse_condition_expr` / `with_struct_literals`, has gated the ambiguous single-identifier body form since B-2026-07-08-23. So only the lookahead was missing, and the "blast radius across every `[`-suffixed expression followed by a brace" the row worried about is bounded by that existing flag plus the type-start guard. Pinned by a regression test over subscript-then-brace shapes (`if f[i] { .. }`, `while f[i] { .. }`, `match v[i] { .. }`, `for x in g[r] { .. }`, and the single-identifier body that the restriction must still claim).
+
+KNOWN BOUNDARY: the SELF-HOST Kara parser (`selfhost/src/`) does not parse this form. No divergence results -- the Rust-side sexp renderer in `tests/selfhost_parser.rs` does not emit `generic_args`, and no corpus program uses the syntax -- so the self-host oracle is unaffected; self-host parity for the new form is ordinary phase-12 lag, not a regression introduced here. |
 
 </details>
 
