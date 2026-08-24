@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 158 | 0 |
 | double-free | 136 | 0 |
 | codegen-gap | 132 | 1 |
-| diagnostics | 101 | 1 |
+| diagnostics | 102 | 2 |
 | false-positive | 95 | 0 |
 | perf | 84 | 0 |
 | other | 58 | 0 |
@@ -120,13 +120,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | parser | 41 | 1 |
 | runtime | 31 | 0 |
 | resolver | 26 | 0 |
-| effect | 18 | 1 |
+| effect | 19 | 2 |
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1531 surfaced · 4 open · 1504 fixed · 9 wontfix** (2026-05-20 → 2026-08-24). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1532 surfaced · 5 open · 1504 fixed · 9 wontfix** (2026-05-20 → 2026-08-24). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,6 +134,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1531 surfaced
 | B-2026-08-23-13 | 2026-08-23 | effect | low | The mutual-recursion NOTE now fires for two functions that merely REFERENCE each other as VALUES, calling them a "mutual recursion group" though neither calls the other. `fn p(n: i64) -> i64 { let f = q; n + 1 }` + `fn q(n: i64) -> i64 { let g = p; n + 2 }` reports `note[effect]: mutual recursion group resolved by fixed-point inference: \`p\` (no effects), \`q\` (no effects)`. The program passes and the note is suppressible with `#[allow(mutual_recursion_note)]`, so this is diagnostic wording, not a check failure -- but "mutual recursion" is a false statement about the program. | roadmap.md |
 | B-2026-08-24-9 | 2026-08-24 | codegen | low | `dbg(x)` where `x` is a SELF-REFERENTIAL `shared enum` (`shared enum T2 { Node(i64, T2), Leaf(i64) }`) REFUSES to compile. Not a missing arm: the shared-enum wrapper and the inner `emit_enum_display_fn` share ONE cache key (the bare enum name), so a payload of the enum's own type resolves to the aggregate-taking inner and is handed a handle. Refusing is the new behaviour; before the guard it MISCOMPILED, printing a wrong variant. A HEADERLESS or weak-headered shared type refuses for its own separate reason, below. | phase-7-codegen.md |
 | B-2026-08-24-10 | 2026-08-24 | parser+typecheck+codegen | high | A TAIL-POSITION `loop` DROPS ITS BREAK VALUE and the declared return type is NEVER CHECKED, so one program behaves THREE DIFFERENT WAYS: `fn pick() -> i64 { let mut i = 0; loop { i = i + 1; if i == 3 { break i * 10 } } }` prints `()` and exits 0 under the interpreter, STACK-OVERFLOWS the JIT, and HANGS FOREVER as an AOT binary. `karac check` reports "All checks passed." -- even for `fn pick() -> i64 { loop { break "a string" } }`, a String break in an i64 function. | roadmap.md |
+| B-2026-08-24-12 | 2026-08-24 | effect | medium | THE COMPILER'S OWN SUGGESTED FIX IS UNFOLLOWABLE for a public function that RETURNS an `Fn(..)` value. `pub fn get() -> Fn(i64) -> i64 { save }` errors with "public function 'get' performs effects [writes(UserDB)] but has no effect declaration. Add: with writes(UserDB) to the function signature" -- and doing EXACTLY that reproduces the SAME error, because a `with` clause after an `Fn` return type binds to the RETURN TYPE, not to the function. The one spelling that compiles is `pub fn get() -> (Fn(i64) -> i64 with writes(UserDB)) with writes(UserDB) { save }` -- parenthesised AND doubled -- which the diagnostic never mentions and which no user would guess. Measured on all four spellings. | roadmap.md |
 
 ### Wontfix (9)
 
