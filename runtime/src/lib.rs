@@ -72,6 +72,9 @@ pub mod channel;
 // same single-owner shape as `bounded_channel`.
 pub mod clone;
 mod cpu;
+/// `dbg()` runtime support — quoting, task ids, and the direct stderr write
+/// the compiled backends' `dbg` lowering uses (B-2026-08-23-18).
+pub mod dbg;
 pub mod emutls;
 #[cfg(feature = "net")]
 pub mod event_loop;
@@ -286,6 +289,17 @@ pub fn __preserve_no_mangle_symbols() -> usize {
     // symbol survives `-dead_strip` in any build that does carry the feature.
     #[cfg(feature = "unicode")]
     keep!(unicode::karac_unicode_normalize);
+    // `dbg()` FFI (`runtime/src/dbg.rs`) — quoting, the current task id, and
+    // the direct stderr write. NOT feature-gated: `dbg` is a core language
+    // construct, so every archive carries these and `karac run` (JIT) resolves
+    // them from the running `karac_jit_runner` like any other default symbol.
+    // Force-kept for the same reason the string surface is: macOS `-dead_strip`
+    // drops an unreferenced archive symbol, and the JIT then cannot find it.
+    keep!(
+        dbg::karac_dbg_quote_str,
+        dbg::karac_dbg_quote_char,
+        dbg::karac_dbg_emit,
+    );
     // Arrow IPC FFI (`runtime/src/arrow_ipc.rs`, opt-in `arrow` feature) — same
     // keep-list class as the regex surface above. AOT links
     // `libkarac_runtime_arrow.a`; the JIT would need these resolvable from the
@@ -1960,6 +1974,14 @@ unsafe fn karac_par_run_pooled(
         // reads them only after the join barrier, which establishes happens-before.
         let mut captures: Vec<OutputCapture> = (0..count).map(|_| OutputCapture::new()).collect();
 
+        // `dbg()` task tags (design.md § `dbg()` — "[task:3 src/main.kara:42]").
+        // Reserved ONCE for the whole region, before any branch is queued, so
+        // branch `i` reports `base + i` in SOURCE order no matter which worker
+        // picks it up first — the interpreter pre-assigns its ids the same way
+        // (`eval_par_block`), which is what makes a branch's tag stable run to
+        // run even though the LINES may interleave in any order.
+        let task_id_base = crate::dbg::reserve_task_ids(count as u64);
+
         let p = pool();
         {
             let mut q = p.queue.lock().unwrap_or_else(|e| e.into_inner());
@@ -1974,6 +1996,7 @@ unsafe fn karac_par_run_pooled(
                 let func = b.func;
                 let ctx_addr = b.ctx as usize;
                 let cap_addr = (cap as *mut OutputCapture) as usize;
+                let task_id = task_id_base + i as u64;
                 q.push_back(Task {
                     call: Arc::clone(&call),
                     branch_idx: i as u32,
@@ -1983,6 +2006,10 @@ unsafe fn karac_par_run_pooled(
                         // called fns included). RAII-restored on return OR unwind,
                         // and to the PREVIOUS value so a nested `par` branch nests.
                         let _redir = OutputRedirectGuard::new(cap_addr as *mut OutputCapture);
+                        // This branch's `dbg()` task tag, RAII-restored to the
+                        // enclosing branch's id (0 at the top level) so a nested
+                        // `par` unwinds to its outer tag rather than to "no par".
+                        let _task = crate::dbg::TaskIdGuard::new(task_id);
                         // B-2026-08-17-14 — a par-run branch body counts toward
                         // the per-thread fork depth, same as a reduce worker
                         // body: any auto-par region (or capped reduce) reached
@@ -2065,6 +2092,8 @@ pub(crate) unsafe fn seq_par_run(
         // pooled path. Stable addresses (no push after build), one writer per
         // element, read only after the (here implicit, source-order) join.
         let mut captures: Vec<OutputCapture> = (0..count).map(|_| OutputCapture::new()).collect();
+        // Same source-order `dbg()` task-id reservation as the pooled path.
+        let task_id_base = crate::dbg::reserve_task_ids(count as u64);
         for (i, cap) in captures.iter_mut().enumerate() {
             // Cascade an enclosing cancellation inward before each branch.
             if !parent_cancel.is_null() && (*parent_cancel).load(Ordering::Relaxed) {
@@ -2074,6 +2103,7 @@ pub(crate) unsafe fn seq_par_run(
             // Redirect this branch's console output into its capture (RAII-restored
             // to the enclosing context at iteration end, so a nested `par` nests).
             let _redir = OutputRedirectGuard::new(cap as *mut OutputCapture);
+            let _task = crate::dbg::TaskIdGuard::new(task_id_base + i as u64);
             // B-2026-08-17-14 — same depth accounting as the pooled branch body.
             let _depth = ParReduceDepthGuard::enter();
             if track_frames {

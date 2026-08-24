@@ -361,6 +361,9 @@ pub(super) fn run_ir_via_jit_subprocess(ir: &str, program_argv: &[String]) -> i3
     // Unit separator (U+001F) rather than NUL: an environment variable's value
     // is a NUL-terminated C string, so NUL cannot appear inside it. U+001F is
     // valid in a value and does not occur in real arguments.
+    // `KARAC_DBG_OUTPUT` (the JIT'd program's `dbg` output format) is INHERITED
+    // from this process rather than set here — `cmd_run` sets it from
+    // `--output` before reaching this helper, which has no view of the flag.
     let status = std::process::Command::new(&runner)
         .arg(&ir_path)
         .env("KARAC_PROGRAM_ARGS", program_argv.join("\u{1F}"))
@@ -488,6 +491,15 @@ pub(super) fn cmd_run(
     interp: bool,
     program_args: &[String],
 ) {
+    // `dbg()` output format for a COMPILED run (design.md § `dbg()` —
+    // "Structured mode (`--output=json` or `--output=jsonl`)"). The interpreter
+    // takes the mode as a value (`DbgOutputMode`, below); a compiled program has
+    // no CLI flag of its own, so its runtime reads `KARAC_DBG_OUTPUT`. Set here,
+    // once, so the JIT subprocess inherits it — `run_ir_via_jit_subprocess`
+    // never sees `output` (B-2026-08-23-18).
+    if matches!(output, OutputMode::Json | OutputMode::Jsonl) {
+        std::env::set_var("KARAC_DBG_OUTPUT", "json");
+    }
     // Mutual exclusion at the entry point — both flags together would
     // be ambiguous (which wins?). Reject early so the operator gets a
     // clear diagnostic rather than a silent precedence rule.

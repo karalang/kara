@@ -252,6 +252,24 @@ pub(crate) struct RuntimeFns<'ctx> {
     /// `String.normalize(form)`. Opt-in `libkarac_runtime_unicode.a` only;
     /// see `driver.rs § SpecialArchive::Unicode`.
     pub(crate) karac_unicode_normalize_fn: FunctionValue<'ctx>,
+    /// `dbg()` runtime support (B-2026-08-23-18; `runtime/src/dbg.rs`).
+    ///
+    /// `karac_dbg_quote_str(data, len, out_len) -> ptr` and
+    /// `karac_dbg_quote_char(codepoint, out_len) -> ptr` return the Rust
+    /// `{:?}` spelling of a string / char leaf — the ONLY two places `Debug`
+    /// and `Display` differ, which is why the one Display walker renders both
+    /// modes. Doing the escaping in the runtime (rather than in codegen) is
+    /// what makes the compiled backends and the interpreter byte-identical by
+    /// construction: both end up inside the same Rust `{:?}`.
+    pub(crate) karac_dbg_quote_str_fn: FunctionValue<'ctx>,
+    pub(crate) karac_dbg_quote_char_fn: FunctionValue<'ctx>,
+    /// `karac_dbg_emit(file, file_len, line, expr, expr_len, type, type_len,
+    /// value, value_len)` — formats and writes one complete `dbg` line.
+    /// Codegen renders the VALUE and hands over the text; the envelope
+    /// (terminal vs `--output=json`, the `[task:N …]` tag, the newline, the
+    /// single atomic write) is assembled in the runtime so both forms live in
+    /// one place instead of being open-coded in IR.
+    pub(crate) karac_dbg_emit_fn: FunctionValue<'ctx>,
     pub(crate) karac_string_to_lowercase_fn: FunctionValue<'ctx>,
     pub(crate) karac_string_to_uppercase_fn: FunctionValue<'ctx>,
     pub(crate) karac_string_trim_fn: FunctionValue<'ctx>,

@@ -85,4 +85,21 @@ pub(crate) struct Display<'ctx> {
     /// `compile_print` integration). Remove the allow when subtask 7 lands.
     #[allow(dead_code)]
     pub(crate) display_fn_cache: HashMap<String, FunctionValue<'ctx>>,
+    /// The `Debug`-mode twin of `display_fn_cache` (B-2026-08-23-18).
+    ///
+    /// `dbg()` renders its value through `Debug`, not `Display`. The two agree
+    /// on every COMPOUND shape — a struct is `Name { f: v }` either way, a Vec
+    /// is `[a, b]`, a tuple is `(a, b)` — and differ at exactly two LEAVES:
+    /// `String` and `char` are quoted and escaped under `Debug`. So rather than
+    /// a parallel renderer tree, the one Display walker serves both modes, with
+    /// `debug_render` selecting the leaf behaviour and this second cache keeping
+    /// the two families' synthesized functions apart. Sharing one cache would
+    /// hand a `Display` function to a `Debug` request (or the reverse) whenever
+    /// a type was rendered in both modes in the same module.
+    pub(crate) debug_fn_cache: HashMap<String, FunctionValue<'ctx>>,
+    /// Whether the renderer family is currently synthesizing `Debug` functions.
+    /// Set for the extent of one `dbg()` lowering; the recursion through
+    /// `emit_display_fn_for_type_expr` inherits it, so nested elements quote
+    /// their leaves too.
+    pub(crate) debug_render: bool,
 }

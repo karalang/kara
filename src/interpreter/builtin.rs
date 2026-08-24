@@ -91,6 +91,43 @@ impl<'a> super::Interpreter<'a> {
         v: &Value,
         ty: Option<&crate::typechecker::Type>,
     ) -> String {
+        self.render_typed_mode(v, ty, false)
+    }
+
+    /// The `Debug` twin of `display_render_typed`, and the renderer `dbg()`
+    /// reports through (design.md § `dbg()` — "expression text, and value").
+    ///
+    /// B-2026-08-23-18. `Value::debug_fmt` walks a struct's `HashMap` of
+    /// fields directly, so it emitted a DIFFERENT field order on every run of
+    /// the same binary — 6 distinct orderings observed in 12 runs of a
+    /// three-field struct. That made `dbg()`'s own output nondeterministic and
+    /// left the compiled backends with no oracle to match, since codegen
+    /// renders struct fields in DECLARATION order (`emit_struct_debug_display_fn`
+    /// walks `struct_field_names`). Routing `dbg()` through this renderer buys
+    /// declaration order, `Secret` redaction, and the unsigned-integer width
+    /// handling — all of which the compiled backends already do — so the two
+    /// backends agree by construction rather than by convention.
+    ///
+    /// `Debug` differs from `Display` at exactly two leaves: `String` and
+    /// `Char` are quoted (`"hi"`, `'c'`) via Rust's own `{:?}`, which is what
+    /// `Value::debug_fmt` calls. Every compound shape renders identically in
+    /// the two modes, which is why one walker serves both.
+    pub(crate) fn debug_render_typed(
+        &self,
+        v: &Value,
+        ty: Option<&crate::typechecker::Type>,
+    ) -> String {
+        self.render_typed_mode(v, ty, true)
+    }
+
+    /// Shared body of `display_render_typed` / `debug_render_typed`. `debug`
+    /// selects the quoted-leaf rendering; the structural arms are common.
+    fn render_typed_mode(
+        &self,
+        v: &Value,
+        ty: Option<&crate::typechecker::Type>,
+        debug: bool,
+    ) -> String {
         use crate::typechecker::Type;
         match v {
             Value::Struct { name, fields } => {
@@ -124,7 +161,7 @@ impl<'a> super::Interpreter<'a> {
                     .filter_map(|fname| {
                         fields.get(fname).map(|fv| {
                             let fty = field_tys.get(fname);
-                            format!("{}: {}", fname, self.display_render_typed(fv, fty))
+                            format!("{}: {}", fname, self.render_typed_mode(fv, fty, debug))
                         })
                     })
                     .collect::<Vec<_>>()
@@ -139,7 +176,9 @@ impl<'a> super::Interpreter<'a> {
                 let body = vals
                     .iter()
                     .enumerate()
-                    .map(|(i, x)| self.display_render_typed(x, elem_tys.and_then(|ts| ts.get(i))))
+                    .map(|(i, x)| {
+                        self.render_typed_mode(x, elem_tys.and_then(|ts| ts.get(i)), debug)
+                    })
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("({})", body)
@@ -149,7 +188,7 @@ impl<'a> super::Interpreter<'a> {
                 let vals = rc.read().unwrap();
                 let body = vals
                     .iter()
-                    .map(|x| self.display_render_typed(x, elem))
+                    .map(|x| self.render_typed_mode(x, elem, debug))
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("[{}]", body)
@@ -164,7 +203,7 @@ impl<'a> super::Interpreter<'a> {
                 let vals = storage.read().unwrap();
                 let body = vals[*start..*start + *len]
                     .iter()
-                    .map(|x| self.display_render_typed(x, elem))
+                    .map(|x| self.render_typed_mode(x, elem, debug))
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("[{}]", body)
@@ -189,8 +228,8 @@ impl<'a> super::Interpreter<'a> {
                     .map(|(k, val)| {
                         format!(
                             "{}: {}",
-                            self.display_render_typed(k, kt),
-                            self.display_render_typed(val, vt)
+                            self.render_typed_mode(k, kt, debug),
+                            self.render_typed_mode(val, vt, debug)
                         )
                     })
                     .collect::<Vec<_>>()
@@ -215,7 +254,11 @@ impl<'a> super::Interpreter<'a> {
                         .iter()
                         .enumerate()
                         .map(|(i, x)| {
-                            self.display_render_typed(x, ptys.as_ref().and_then(|(_, t)| t.get(i)))
+                            self.render_typed_mode(
+                                x,
+                                ptys.as_ref().and_then(|(_, t)| t.get(i)),
+                                debug,
+                            )
                         })
                         .collect::<Vec<_>>()
                         .join(", ");
@@ -242,7 +285,7 @@ impl<'a> super::Interpreter<'a> {
                                 let fty = ptys.as_ref().and_then(|(names, t)| {
                                     names.iter().position(|n| n == fname).and_then(|i| t.get(i))
                                 });
-                                format!("{}: {}", fname, self.display_render_typed(fv, fty))
+                                format!("{}: {}", fname, self.render_typed_mode(fv, fty, debug))
                             })
                         })
                         .collect::<Vec<_>>()
@@ -261,6 +304,17 @@ impl<'a> super::Interpreter<'a> {
                 Some(128) => format!("{}", *n as u128),
                 _ => format!("{}", v),
             },
+            // The two leaves where `Debug` and `Display` part ways. Rust's own
+            // `{:?}` does the quoting and escaping, which is exactly what
+            // `Value::debug_fmt` calls and what the runtime's
+            // `karac_dbg_quote_str` / `_quote_char` call on the compiled side —
+            // so all three agree by construction, not by convention.
+            Value::String(s) if debug => format!("{:?}", s),
+            Value::Char(c) if debug => format!("{:?}", c),
+            // `debug_fmt` for the shapes this walker does not destructure
+            // (shared structs, sets, sorted collections): still quoted at the
+            // leaves, just without the declaration-order/type threading.
+            other if debug => other.debug_fmt(),
             other => format!("{}", other),
         }
     }
@@ -543,12 +597,14 @@ impl<'a> super::Interpreter<'a> {
         // not all expression kinds reach the typechecker's recording path,
         // and ad-hoc test harnesses sometimes synthesize a TypeCheckResult
         // without populating expr_types.
-        let type_text = arg_expr
-            .and_then(|e| {
-                self.typecheck_result
-                    .expr_types
-                    .get(&SpanKey::from_span(&e.span))
-            })
+        let arg_ty = arg_expr.and_then(|e| {
+            self.typecheck_result
+                .expr_types
+                .get(&SpanKey::from_span(&e.span))
+                .cloned()
+        });
+        let type_text = arg_ty
+            .as_ref()
             .map(type_display)
             .unwrap_or_else(|| "?".to_string());
 
@@ -557,7 +613,12 @@ impl<'a> super::Interpreter<'a> {
         } else {
             self.source_filename.clone()
         };
-        let value_str = val.debug_fmt();
+        // B-2026-08-23-18: render through the DECLARATION-ORDERED, type-aware
+        // debug walker, not the bare `Value::debug_fmt`. The latter walks a
+        // struct's field `HashMap` directly, so it reported a different field
+        // order on every run — nondeterministic output, and no stable oracle
+        // for the compiled backends to match.
+        let value_str = self.debug_render_typed(&val, arg_ty.as_ref());
 
         let line = match self.dbg_output_mode {
             DbgOutputMode::Terminal => match self.current_task_id {

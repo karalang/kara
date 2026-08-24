@@ -989,6 +989,19 @@ pub struct Program {
     /// `closure_fn_types` so a later `g(x)` lowers to an indirect call
     /// (B-2026-06-21-3). See [`FnValueTypedExprsTable`].
     pub fn_value_typed_exprs: FnValueTypedExprsTable,
+    /// Set by the lowering pass from `TypeCheckResult.dbg_arg_types`: for every
+    /// `dbg(x)` call, the `TypeExpr` of its ARGUMENT, keyed by the argument's
+    /// `(span.offset, span.length)` (B-2026-08-23-18). Codegen synthesizes the
+    /// `Debug` renderer for that type; without it the argument's type is not
+    /// recoverable from the expression alone.
+    pub dbg_arg_type_exprs: FnValueTypedExprsTable,
+    /// The `type_display` TEXT of each `dbg(x)` argument's type, keyed the same
+    /// way (B-2026-08-23-18). Carried separately from the `TypeExpr` because
+    /// the structured (`--output=json`) form's `"type"` field must read exactly
+    /// as the interpreter spells it, and re-rendering a `TypeExpr` in codegen
+    /// would be a second spelling of the same thing — the class of divergence
+    /// this row exists to remove.
+    pub dbg_arg_type_names: std::collections::HashMap<(usize, usize), String>,
     /// Set by the lowering pass from `TypeCheckResult.call_type_subs`: the
     /// resolved generic-call type-arg substitution per call span. Codegen's
     /// `compile_generic_call` consumes it to bind container element type

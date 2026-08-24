@@ -4472,30 +4472,22 @@ fn test_zero_argument_console_forms_match_across_backends() {
 ///   * once the typechecker learned dbg's real type, `let s: String = dbg(42)`
 ///     SEGFAULTED the binary — 0 is a fine `i64` and a null data pointer.
 ///
-/// The refusal is the fix for the CLASS, not just for `dbg`: the same arm
+/// The refusal was the fix for the CLASS, not just for `dbg`: the same arm
 /// swallowed `eprintln` (B-2026-08-23-14) and the `providers { } in { }` block
 /// (B-2026-07-31-9), each found by accident long afterwards. Blast radius was
 /// measured before switching it — zero callees reach that arm across 12 example
 /// packages, 46 standalone examples and 398 katas — so it was dead for real
-/// programs and live only for compiler gaps, silently.
+/// programs and live only for compiler gaps, silently. That general fallback
+/// refusal REMAINS; only the dbg-specific arm in front of it is gone.
 ///
-/// TWO arms were added and they do different jobs, which this test can only
-/// partly separate. The GENERAL fallback refusal is what fixes the class, and
-/// it alone already refuses this program — measured by removing the
-/// dbg-specific arm and re-running: the build still fails, just with a generic
-/// message. The dbg-specific arm exists for the MESSAGE, since `dbg` is the one
-/// callee a user will actually hit, and the assertions below pin that message.
-/// Nothing here pins the general arm on its own: no other callee reaches it
-/// (every prelude builtin was probed directly and none is refused), which is
-/// precisely why it went unnoticed for three bugs.
-///
-/// The interpreter leg is asserted too, and it is the half that makes the
-/// refusal defensible rather than merely strict: `dbg` still WORKS under
-/// `--interp`, which is where a debugging helper is used, so refusing the
-/// compiled build takes nothing away that worked.
+/// B-2026-08-23-18 then LOWERED `dbg`, so this test now asserts the far
+/// stronger property the refusal was standing in for: all three symptoms are
+/// fixed on the COMPILED backends, not merely refused there. The interpreter leg
+/// is kept and compared against the compiled one, because the original defect
+/// was one backend doing something different from the other.
 #[cfg(feature = "llvm")]
 #[test]
-fn test_unlowered_dbg_refuses_instead_of_compiling_to_zero() {
+fn test_dbg_keeps_identity_and_side_effects_on_compiled_backends() {
     let tmp = scratch_project("dbg-refuses");
     let src = "fn side() -> i64 { println(\"SIDE\"); 5 }\n\
                fn main() {\n\
@@ -4505,7 +4497,9 @@ fn test_unlowered_dbg_refuses_instead_of_compiling_to_zero() {
                }\n";
     write(&tmp.join("dbgprog.kara"), src);
 
-    // (1) The compiled backends REFUSE, and say why.
+    // (1) The compiled backend COMPILES it and reproduces the interpreter's
+    // stdout and stderr exactly — the three symptoms, on the surface that used
+    // to return a constant 0.
     let built = karac_bin()
         .current_dir(&tmp)
         .args(["build", "dbgprog.kara"])
@@ -4513,23 +4507,21 @@ fn test_unlowered_dbg_refuses_instead_of_compiling_to_zero() {
         .expect("karac build spawn");
     let berr = String::from_utf8_lossy(&built.stderr).into_owned()
         + &String::from_utf8_lossy(&built.stdout);
-    assert!(
-        !built.status.success(),
-        "`karac build` must refuse a program it cannot lower, not emit a binary \
-         that returns 0 from dbg; output was:\n{berr}"
-    );
-    assert!(
-        berr.contains("`dbg` is not lowered"),
-        "the refusal must name `dbg` and say it is unlowered, got:\n{berr}"
-    );
-    assert!(
-        berr.contains("--interp"),
-        "the refusal must point at the backend that DOES run it, got:\n{berr}"
-    );
-    assert!(
-        !tmp.join("dbgprog").exists(),
-        "a refused build must not leave a binary behind"
-    );
+    let exe = tmp.join("dbgprog");
+    let compiled = if built.status.success() && exe.exists() {
+        std::process::Command::new(&exe).output().ok().map(|o| {
+            (
+                String::from_utf8_lossy(&o.stdout).into_owned(),
+                String::from_utf8_lossy(&o.stderr).into_owned(),
+            )
+        })
+    } else {
+        assert!(
+            berr.contains("runtime archive") || berr.contains("linker"),
+            "`karac build` must now LOWER dbg rather than refuse it; output was:\n{berr}"
+        );
+        None
+    };
 
     // (2) The interpreter still runs it correctly — the identity holds, the
     // argument's side effect happens, and the dbg lines reach stderr.
@@ -4560,6 +4552,85 @@ fn test_unlowered_dbg_refuses_instead_of_compiling_to_zero() {
         err.contains("41 = 41") && err.contains("side() = 5"),
         "the dbg lines must reach stderr with expression text and value; \
          stderr={err:?}"
+    );
+
+    // (3) And the compiled binary agrees with it on both streams.
+    if let Some((cout, cerr)) = compiled {
+        assert_eq!(
+            out, cout,
+            "compiled stdout must match the interpreter's — this is where \
+             `dbg(41) + 1 == 1` and the deleted side effect showed up"
+        );
+        assert_eq!(
+            err, cerr,
+            "compiled dbg lines must match the interpreter's byte for byte"
+        );
+    } else {
+        eprintln!("skip: AOT leg unavailable (no runtime archive?)");
+    }
+}
+
+/// B-2026-08-23-18 — a shape the `Debug` renderer does NOT cover must REFUSE and
+/// name itself, never print a placeholder.
+///
+/// `dbg` accepts a strictly wider domain than `println`: the typechecker
+/// deliberately puts no `Display` bound on it, since `dbg(some_struct)` is most
+/// of what dbg is for. A `shared struct` is the measured case that falls outside
+/// the renderer family — it has no `Display` impl at all, and its LLVM type
+/// lives in `shared_types` rather than `struct_types`, so the struct renderer
+/// asserted and PANICKED the compiler ("struct type registered") before the
+/// pre-check was added.
+///
+/// This is the rule the whole cluster exists to enforce. Every bug in it
+/// (B-2026-08-23-14, -16, B-2026-07-31-9) was a surface that LOOKED present and
+/// silently was not, so an unlowered shape has to say so — and `--interp` still
+/// renders it, which is what makes refusing the compiled build defensible
+/// rather than merely strict.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_dbg_of_an_unrenderable_shape_refuses_and_names_it() {
+    let tmp = scratch_project("dbg-unrenderable-refuses");
+    let src = "shared struct Sh { mut n: i64 }\n\
+               fn main() {\n\
+               \x20   let sh = Sh { n: 1 };\n\
+               \x20   dbg(sh);\n\
+               \x20   println(f\"{sh.n}\");\n\
+               }\n";
+    write(&tmp.join("u.kara"), src);
+
+    let built = karac_bin()
+        .current_dir(&tmp)
+        .args(["build", "u.kara"])
+        .output()
+        .expect("karac build spawn");
+    let berr = String::from_utf8_lossy(&built.stderr).into_owned()
+        + &String::from_utf8_lossy(&built.stdout);
+    let run = karac_bin()
+        .current_dir(&tmp)
+        .args(["run", "--interp", "u.kara"])
+        .output()
+        .expect("karac run spawn");
+    let rout = String::from_utf8_lossy(&run.stdout).into_owned();
+    let rerr = String::from_utf8_lossy(&run.stderr).into_owned();
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    assert!(
+        !built.status.success(),
+        "a shape with no Debug renderer must refuse, not emit a placeholder or \
+         panic the compiler; output was:\n{berr}"
+    );
+    assert!(
+        berr.contains("cannot render a value of type `Sh`"),
+        "the refusal must NAME the offending type, got:\n{berr}"
+    );
+    assert!(
+        !berr.contains("panicked"),
+        "and it must be a diagnostic, not a compiler panic, got:\n{berr}"
+    );
+    assert!(
+        run.status.success() && rout.trim() == "1" && rerr.contains("sh = Sh { n: 1 }"),
+        "the interpreter must still render it — that is what makes the compiled \
+         refusal defensible; stdout={rout:?} stderr={rerr:?}"
     );
 }
 
@@ -30027,16 +30098,27 @@ fn main() {
 /// statement and ran on. That is how the `errdefer(e)` binding failures
 /// presented before the typing fix — as a missing `println`, not as an error.
 ///
-/// `dbg` is the trigger here because it is the one construct the compiled
-/// backends refuse outright (B-2026-08-23-16), which makes this test a real
-/// end-to-end check of the fail-closed path rather than a mock.
+/// The trigger is `dbg` of a `shared struct` — the construct the compiled
+/// backends still refuse outright, because the `Debug` renderer family has no
+/// arm for a shared type (B-2026-08-23-18 lowered `dbg` for every other shape
+/// and split that remainder into its own row). Using a genuinely-refused
+/// construct makes this a real end-to-end check of the fail-closed path rather
+/// than a mock. It was `dbg(1)` until `dbg` itself became lowerable; if the
+/// shared-struct renderer lands too, this needs a new trigger rather than
+/// deletion — the property under test is the cleanup dispatcher's error
+/// propagation, not anything about `dbg`.
 #[cfg(feature = "llvm")]
 #[test]
 fn test_unlowerable_defer_body_refuses_instead_of_vanishing() {
     let tmp = scratch_project("defer-body-fail-closed");
     write(
         &tmp.join("d.kara"),
-        "fn main() {\n\x20   defer { dbg(1); }\n\x20   println(\"body\");\n}\n",
+        "shared struct Sh { mut n: i64 }\n\
+         fn main() {\n\
+         \x20   let sh = Sh { n: 1 };\n\
+         \x20   defer { dbg(sh); }\n\
+         \x20   println(\"body\");\n\
+         }\n",
     );
     let out = karac_bin()
         .current_dir(&tmp)
@@ -30435,4 +30517,425 @@ fn test_main_result_err_render_is_deterministic_across_runs() {
         "and it must be the Display impl's text, in the impl's own field order; \
          got: {first:?}"
     );
+}
+
+/// B-2026-08-23-18 — `dbg(x)` renders IDENTICALLY on all three backends.
+///
+/// Until this landed, `karac build` / `karac run` REFUSED any program containing
+/// `dbg` (B-2026-08-23-16 put that refusal in place of a silent constant-0
+/// miscompile) and only `karac run --interp` executed it. design.md § `dbg()`
+/// specifies a real feature — a stderr line carrying file, line, expression TEXT
+/// and the `Debug` rendering of the value — so the interpreter's
+/// `eval_builtin_dbg` is the oracle and the compiled backends must match it
+/// byte for byte.
+///
+/// The matrix is the shape list `Debug` actually discriminates on: the quoted
+/// leaves (`String`, `char`, with escapes), the compound shapes that must render
+/// in DECLARATION order (struct, struct-variant), and the container/payload
+/// nestings where a quoted leaf sits inside a compound (`Option[String]`,
+/// tuple-with-String) — that last group is where a Display-only renderer would
+/// silently drop the quotes.
+#[test]
+fn test_dbg_renders_identically_on_all_three_backends() {
+    let tmp = scratch_project("dbg-three-backend-parity");
+    let src = "struct S { zeta: i64, alpha: String, mid: char }\n\
+               enum Shape { Dot, Line(i64, i64), Box { w: i64, h: i64 } }\n\
+               fn main() {\n\
+               \x20   let a = dbg(42);\n\
+               \x20   let b = dbg(-7);\n\
+               \x20   let c = dbg(true);\n\
+               \x20   let d = dbg(\"a\\\"b\\nc\");\n\
+               \x20   let e = dbg('\\n');\n\
+               \x20   let f = dbg(S { zeta: 1, alpha: \"in\", mid: 'q' });\n\
+               \x20   let g = dbg(Shape.Line(2, 3));\n\
+               \x20   let h = dbg(Shape.Box { w: 4, h: 5 });\n\
+               \x20   let i = dbg(Shape.Dot);\n\
+               \x20   let j: Option[String] = Some(\"p\");\n\
+               \x20   let k = dbg(j);\n\
+               \x20   let l: Result[i64, String] = Err(\"bad\");\n\
+               \x20   let m = dbg(l);\n\
+               \x20   let n = dbg((1, \"two\", 'u'));\n\
+               \x20   let o = dbg(41) + 1;\n\
+               \x20   println(f\"{a}{b}{c}{d}{e}{f.zeta}{n.2}{o}\");\n\
+               }\n";
+    write(&tmp.join("d.kara"), src);
+
+    let stderr_of = |args: &[&str]| -> Option<String> {
+        karac_bin()
+            .current_dir(&tmp)
+            .args(args)
+            .output()
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stderr).into_owned())
+    };
+    let interp = stderr_of(&["run", "--interp", "d.kara"]);
+    let jit = stderr_of(&["run", "d.kara"]);
+    let built = karac_bin()
+        .current_dir(&tmp)
+        .args(["build", "d.kara"])
+        .output();
+    let exe = tmp.join("d");
+    let aot = if built.map(|o| o.status.success()).unwrap_or(false) && exe.exists() {
+        std::process::Command::new(&exe)
+            .output()
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stderr).into_owned())
+    } else {
+        None
+    };
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    let Some(i) = interp else {
+        eprintln!("skip: interpreter produced no output");
+        return;
+    };
+    // The interpreter is the oracle and is checked unconditionally; the compiled
+    // legs are compared when they could be produced at all.
+    let expected = "[d.kara:4] 42 = 42\n\
+                    [d.kara:5] -7 = -7\n\
+                    [d.kara:6] true = true\n\
+                    [d.kara:7] \"a\\\"b\\nc\" = \"a\\\"b\\nc\"\n\
+                    [d.kara:8] '\\n' = '\\n'\n\
+                    [d.kara:9] S { zeta: 1, alpha: \"in\", mid: 'q' } = \
+                    S { zeta: 1, alpha: \"in\", mid: 'q' }\n\
+                    [d.kara:10] Shape.Line(2, 3) = Line(2, 3)\n\
+                    [d.kara:11] Shape.Box { w: 4, h: 5 } = Box { w: 4, h: 5 }\n\
+                    [d.kara:12] Shape.Dot = Dot\n\
+                    [d.kara:14] j = Some(\"p\")\n\
+                    [d.kara:16] l = Err(\"bad\")\n\
+                    [d.kara:17] (1, \"two\", 'u') = (1, \"two\", 'u')\n\
+                    [d.kara:18] 41 = 41\n";
+    assert_eq!(
+        i, expected,
+        "interpreter dbg output must match design.md § `dbg()`'s terminal form: \
+         `[{{file}}:{{line}}] {{expr}} = {{Debug value}}`, with String/char leaves \
+         QUOTED (including inside a struct field, an Option payload and a tuple) \
+         and struct fields in DECLARATION order"
+    );
+    if let Some(j) = jit {
+        assert_eq!(
+            i, j,
+            "run --interp vs run (JIT) dbg output must be identical"
+        );
+    } else {
+        eprintln!("note: JIT leg produced no output");
+    }
+    if let Some(a) = aot {
+        assert_eq!(
+            i, a,
+            "run --interp vs build (AOT) dbg output must be identical"
+        );
+    } else {
+        eprintln!("skip: AOT leg unavailable (no runtime archive?)");
+    }
+}
+
+/// `dbg` is an IDENTITY function with a side effect (design.md § `dbg()`), so the
+/// argument is evaluated exactly once and its value is the result. The
+/// pre-lowering codegen fallback got both wrong: it returned a constant `i64 0`
+/// *without compiling the argument at all*, so `dbg(41) + 1` was 1 and
+/// `dbg(side_effect())` never ran the effect (B-2026-08-23-16).
+#[test]
+fn test_dbg_is_identity_and_evaluates_its_argument_once() {
+    let tmp = scratch_project("dbg-identity-once");
+    let src = "shared struct Counter { mut n: i64 }\n\
+               fn bump(c: Counter) -> i64 { c.n = c.n + 1; c.n }\n\
+               fn main() {\n\
+               \x20   let c = Counter { n: 0 };\n\
+               \x20   let v = dbg(bump(c));\n\
+               \x20   println(f\"calls={c.n} got={v} sum={dbg(41) + 1}\");\n\
+               }\n";
+    write(&tmp.join("i.kara"), src);
+    let stdout_of = |args: &[&str]| -> Option<String> {
+        karac_bin()
+            .current_dir(&tmp)
+            .args(args)
+            .output()
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+    };
+    let interp = stdout_of(&["run", "--interp", "i.kara"]);
+    let built = karac_bin()
+        .current_dir(&tmp)
+        .args(["build", "i.kara"])
+        .output();
+    let exe = tmp.join("i");
+    let aot = if built.map(|o| o.status.success()).unwrap_or(false) && exe.exists() {
+        std::process::Command::new(&exe)
+            .output()
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+    } else {
+        None
+    };
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    let Some(i) = interp else {
+        eprintln!("skip: interpreter produced no output");
+        return;
+    };
+    assert_eq!(
+        i.trim(),
+        "calls=1 got=1 sum=42",
+        "dbg must evaluate its argument ONCE and hand the value back unchanged"
+    );
+    if let Some(a) = aot {
+        assert_eq!(
+            i, a,
+            "identity + call-once must hold on the compiled backend too"
+        );
+    } else {
+        eprintln!("skip: AOT leg unavailable (no runtime archive?)");
+    }
+}
+
+/// The structured form (design.md § `dbg()`: "*Structured mode* (`--output=json`
+/// or `--output=jsonl`)"), including the `type` field — which is why the
+/// typechecker forwards the argument's `type_display` TEXT to codegen rather
+/// than letting the backend re-render a `TypeExpr` into a second spelling.
+#[test]
+fn test_dbg_json_form_is_identical_across_backends() {
+    let tmp = scratch_project("dbg-json-parity");
+    let src = "fn main() {\n\
+               \x20   let mut vs: Vec[i64] = [];\n\
+               \x20   vs.push(10);\n\
+               \x20   let a = dbg(vs);\n\
+               \x20   let b = dbg(\"q\");\n\
+               \x20   println(f\"{a.len()}{b}\");\n\
+               }\n";
+    write(&tmp.join("j.kara"), src);
+    let dbg_lines = |s: &str| -> Vec<String> {
+        s.lines()
+            .filter(|l| l.contains("\"kind\":\"dbg\""))
+            .map(str::to_string)
+            .collect()
+    };
+    let interp = karac_bin()
+        .current_dir(&tmp)
+        .args(["run", "--interp", "--output=json", "j.kara"])
+        .output()
+        .ok()
+        .map(|o| dbg_lines(&String::from_utf8_lossy(&o.stderr)));
+    let built = karac_bin()
+        .current_dir(&tmp)
+        .args(["build", "j.kara"])
+        .output();
+    let exe = tmp.join("j");
+    let aot = if built.map(|o| o.status.success()).unwrap_or(false) && exe.exists() {
+        std::process::Command::new(&exe)
+            .env("KARAC_DBG_OUTPUT", "json")
+            .output()
+            .ok()
+            .map(|o| dbg_lines(&String::from_utf8_lossy(&o.stderr)))
+    } else {
+        None
+    };
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    let Some(i) = interp else {
+        eprintln!("skip: interpreter produced no output");
+        return;
+    };
+    assert_eq!(
+        i,
+        vec![
+            "{\"kind\":\"dbg\",\"task_id\":null,\"file\":\"j.kara\",\"line\":4,\
+             \"expr\":\"vs\",\"type\":\"Vec[i64]\",\"value\":\"[10]\"}"
+                .to_string(),
+            "{\"kind\":\"dbg\",\"task_id\":null,\"file\":\"j.kara\",\"line\":5,\
+             \"expr\":\"\\\"q\\\"\",\"type\":\"String\",\"value\":\"\\\"q\\\"\"}"
+                .to_string(),
+        ],
+        "structured dbg form must carry kind/task_id/file/line/expr/type/value"
+    );
+    if let Some(a) = aot {
+        assert_eq!(
+            i, a,
+            "the JSON dbg form must be byte-identical between the interpreter \
+             and a compiled binary"
+        );
+    } else {
+        eprintln!("skip: AOT leg unavailable (no runtime archive?)");
+    }
+}
+
+/// The `par` task tag (design.md § `dbg()`: "Inside a `par {}` region, each line
+/// includes a task identifier"). Ordering across branches is explicitly NOT
+/// reproducible (design.md: "Snapshot-testing `dbg()` output is unsupported"),
+/// so this asserts the SET of lines, sorted — the tag is the property under
+/// test, not the interleaving.
+#[test]
+fn test_dbg_tags_par_branches_with_task_ids_on_every_backend() {
+    let tmp = scratch_project("dbg-par-task-ids");
+    let src = "fn left() -> i64 { dbg(11); 1 }\n\
+               fn right() -> i64 { dbg(22); 2 }\n\
+               fn main() {\n\
+               \x20   let (a, b) = par { let a = left(); let b = right(); (a, b) };\n\
+               \x20   dbg(a + b);\n\
+               \x20   println(f\"{a + b}\");\n\
+               }\n";
+    write(&tmp.join("p.kara"), src);
+    let sorted_dbg = |s: &str| -> Vec<String> {
+        let mut v: Vec<String> = s
+            .lines()
+            .filter(|l| l.contains("p.kara:"))
+            .map(str::to_string)
+            .collect();
+        v.sort();
+        v
+    };
+    let interp = karac_bin()
+        .current_dir(&tmp)
+        .args(["run", "--interp", "p.kara"])
+        .output()
+        .ok()
+        .map(|o| sorted_dbg(&String::from_utf8_lossy(&o.stderr)));
+    let built = karac_bin()
+        .current_dir(&tmp)
+        .args(["build", "p.kara"])
+        .output();
+    let exe = tmp.join("p");
+    let aot = if built.map(|o| o.status.success()).unwrap_or(false) && exe.exists() {
+        std::process::Command::new(&exe)
+            .output()
+            .ok()
+            .map(|o| sorted_dbg(&String::from_utf8_lossy(&o.stderr)))
+    } else {
+        None
+    };
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    let Some(i) = interp else {
+        eprintln!("skip: interpreter produced no output");
+        return;
+    };
+    assert_eq!(
+        i,
+        vec![
+            "[p.kara:5] a + b = 3".to_string(),
+            "[task:1 p.kara:1] 11 = 11".to_string(),
+            "[task:2 p.kara:2] 22 = 22".to_string(),
+        ],
+        "a dbg inside a `par` branch must carry its branch's task id (assigned in \
+         SOURCE order, counting from 1), and a dbg outside any `par` must carry none"
+    );
+    if let Some(a) = aot {
+        assert_eq!(
+            i, a,
+            "task tagging must be identical on the compiled backend — the runtime \
+             reserves ids per region in source order exactly as the interpreter \
+             pre-assigns them"
+        );
+    } else {
+        eprintln!("skip: AOT leg unavailable (no runtime archive?)");
+    }
+}
+
+/// `--release` strips dbg (design.md § `dbg()`: "Stripped from release builds
+/// (`karac build --release`)"), and the STDOUT of the program is unchanged by
+/// the stripping — dbg's argument is still evaluated, because it is also the
+/// expression's value.
+#[test]
+fn test_dbg_is_stripped_from_release_builds_without_changing_the_program() {
+    let tmp = scratch_project("dbg-release-strip");
+    let src = "fn main() {\n\
+               \x20   let mut vs: Vec[i64] = [];\n\
+               \x20   vs.push(10);\n\
+               \x20   let a = dbg(vs);\n\
+               \x20   println(f\"{a.len()}\");\n\
+               }\n";
+    write(&tmp.join("r.kara"), src);
+    let build_and_run = |extra: &[&str], exe_name: &str| -> Option<(String, String)> {
+        let mut args = vec!["build"];
+        args.extend_from_slice(extra);
+        args.push("r.kara");
+        let ok = karac_bin()
+            .current_dir(&tmp)
+            .args(&args)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        let exe = tmp.join(exe_name);
+        if !ok || !exe.exists() {
+            return None;
+        }
+        std::process::Command::new(&exe).output().ok().map(|o| {
+            (
+                String::from_utf8_lossy(&o.stdout).into_owned(),
+                String::from_utf8_lossy(&o.stderr).into_owned(),
+            )
+        })
+    };
+    let debug = build_and_run(&[], "r");
+    let release = build_and_run(&["--release"], "r");
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    let (Some((dbg_out, dbg_err)), Some((rel_out, rel_err))) = (debug, release) else {
+        eprintln!("skip: could not build both a debug and a release binary");
+        return;
+    };
+    assert!(
+        dbg_err.contains("r.kara:4] vs = [10]"),
+        "the debug build must emit the dbg line; got stderr {dbg_err:?}"
+    );
+    assert!(
+        !rel_err.contains("r.kara:4"),
+        "the release build must emit NO dbg line; got stderr {rel_err:?}"
+    );
+    assert_eq!(
+        dbg_out, rel_out,
+        "stripping dbg must not change the program's own output — its argument is \
+         still evaluated, since it is also the expression's value"
+    );
+    assert_eq!(rel_out.trim(), "1", "and that output must be correct");
+}
+
+/// B-2026-08-23-18 — `dbg()`'s own output must be DETERMINISTIC across runs.
+///
+/// The oracle was not. `Value::debug_fmt` walked a struct's field `HashMap`
+/// directly, and Rust randomises `HashMap` iteration per process via
+/// `RandomState`, so a three-field struct printed a different field order on
+/// every run — SIX distinct orderings measured in twelve runs of one program.
+/// That is unlike `Map`/`Set`, whose iteration order is seeded-random ON PURPOSE
+/// (design.md § `Hash`), pinnable with `KARAC_HASH_SEED`, and identical in both
+/// backends; this was accidental, unpinnable, and left the compiled backends
+/// with no stable oracle to match.
+///
+/// The fix routes `dbg` through the declaration-order renderer, which is also
+/// what codegen's `emit_struct_debug_display_fn` walks — so the two backends
+/// agree by construction. The field names here are deliberately NOT in
+/// alphabetical order, so sorting-by-name would fail this test as surely as hash
+/// order would: declaration order is the property, not merely determinism.
+#[test]
+fn test_dbg_struct_field_order_is_declaration_order_every_run() {
+    let tmp = scratch_project("dbg-decl-order-stable");
+    write(
+        &tmp.join("o.kara"),
+        "struct S { zeta: i64, alpha: i64, mid: i64 }\n\
+         fn main() {\n\
+         \x20   dbg(S { zeta: 1, alpha: 2, mid: 3 });\n\
+         \x20   println(\"done\");\n\
+         }\n",
+    );
+    let once = || -> Option<String> {
+        karac_bin()
+            .current_dir(&tmp)
+            .args(["run", "--interp", "o.kara"])
+            .output()
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stderr).into_owned())
+    };
+    let runs: Vec<String> = (0..12).filter_map(|_| once()).collect();
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    assert_eq!(runs.len(), 12, "every run must produce output");
+    for (i, r) in runs.iter().enumerate() {
+        assert_eq!(
+            r.trim(),
+            "[o.kara:3] S { zeta: 1, alpha: 2, mid: 3 } = S { zeta: 1, alpha: 2, mid: 3 }",
+            "run {i}: dbg must render struct fields in DECLARATION order, the same \
+             way on every run — hash order gave six different answers in twelve runs, \
+             and alphabetical order would give `alpha, mid, zeta`"
+        );
+    }
 }

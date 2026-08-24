@@ -1771,7 +1771,16 @@ impl<'a> super::TypeChecker<'a> {
                     // `dbg()` with no argument mirrors the interpreter, which
                     // evaluates to Unit rather than erroring.
                     0 => Type::Unit,
-                    1 => self.infer_expr(&args[0].value),
+                    1 => {
+                        let t = self.infer_expr(&args[0].value);
+                        // Hand codegen the argument's static type: it renders
+                        // the value through a synthesized `Debug` function and
+                        // has no way to recover the type from the expression
+                        // alone (B-2026-08-23-18).
+                        self.dbg_arg_types
+                            .insert(SpanKey::from_span(&args[0].value.span), t.clone());
+                        t
+                    }
                     _ => {
                         self.type_error(
                             format!("dbg() takes 0 or 1 argument(s), found {}", args.len()),

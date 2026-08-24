@@ -1417,6 +1417,17 @@ pub struct TypeCheckResult {
     /// type for the fat-pointer call (B-2026-06-22-4). Lowering folds this into
     /// `Program.fn_value_typed_exprs`.
     pub fn_value_callee_types: FxHashMap<SpanKey, TypeExpr>,
+    /// The STATIC TYPE of each `dbg(x)` argument, keyed by the ARGUMENT's span
+    /// (B-2026-08-23-18).
+    ///
+    /// `dbg` renders its value through `Debug`, and codegen synthesizes a
+    /// renderer from a `TypeExpr` — which it cannot recover from an arbitrary
+    /// expression on its own (that is why `compile_print` is a long list of
+    /// span-table special cases). The typechecker already computes this type to
+    /// give `dbg` its identity rule, so it records it here rather than making
+    /// codegen re-derive it. `lowering` converts each entry to a `TypeExpr` and
+    /// forwards it as `Program::dbg_arg_type_exprs`.
+    pub dbg_arg_types: FxHashMap<SpanKey, Type>,
     /// `impl Trait` slice 4 — per-existential capture set, keyed by the
     /// `SpanKey` of the `TypeKind::ImplTrait` AST node (same key shape
     /// used by [`Type::Existential::origin`]). For each return-position
@@ -2095,6 +2106,7 @@ pub struct TypeChecker<'a> {
     /// a non-identifier callee. See the public copy on `TypeCheckResult` for
     /// the full rationale.
     pub(super) fn_value_callee_types: FxHashMap<SpanKey, TypeExpr>,
+    pub(super) dbg_arg_types: FxHashMap<SpanKey, Type>,
     /// Per-existential capture sets, keyed by the SpanKey of the
     /// `TypeKind::ImplTrait` AST node. See the public copy on
     /// `TypeCheckResult` for the full rationale.
@@ -2434,6 +2446,7 @@ impl<'a> TypeChecker<'a> {
             method_typeparam_receiver: FxHashMap::default(),
             method_typeparam_trait_key: FxHashMap::default(),
             fn_value_callee_types: FxHashMap::default(),
+            dbg_arg_types: FxHashMap::default(),
             impl_trait_captures: FxHashMap::default(),
             method_unwrap_inner_types: FxHashMap::default(),
             optional_chain_lowering: FxHashMap::default(),
@@ -2694,6 +2707,7 @@ impl<'a> TypeChecker<'a> {
             method_typeparam_receiver: self.method_typeparam_receiver,
             method_typeparam_trait_key: self.method_typeparam_trait_key,
             fn_value_callee_types: self.fn_value_callee_types,
+            dbg_arg_types: self.dbg_arg_types,
             impl_trait_captures: self.impl_trait_captures,
             method_unwrap_inner_types: self.method_unwrap_inner_types,
             optional_chain_lowering: self.optional_chain_lowering,

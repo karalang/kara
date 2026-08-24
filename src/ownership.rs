@@ -2871,7 +2871,14 @@ pub(crate) fn collect_callee_param_modes(
     // The body Fn slot stays `Own` (it is a once-invoked closure — calling
     // it consumes owned captures). Inserted first so stdlib/user
     // definitions of the same key win below.
-    for name in ["print", "println", "eprint", "eprintln"] {
+    // `dbg` joins them (B-2026-08-23-18) for a reason the print family shares
+    // and then some: `dbg` is STRIPPED from release builds (design.md §
+    // `dbg()`), so if it consumed its argument, adding or removing a `dbg`
+    // — or switching between a debug and a release build — could change
+    // whether the program COMPILES. A construct documented as transparent
+    // instrumentation cannot move what it inspects. Classified `Ref`: dbg
+    // reads the value and hands it straight back.
+    for name in ["print", "println", "eprint", "eprintln", "dbg"] {
         map.insert(name.to_string(), vec![OwnershipMode::Ref]);
     }
     map.insert(

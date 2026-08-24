@@ -29,6 +29,14 @@ pub(super) fn cmd_build(
     // so `--offline` is silently accepted for ergonomic CLI consistency with
     // project mode (operators script both via the same flag set).
     let _ = offline;
+    // `dbg()` is stripped from release builds (design.md § `dbg()`). Codegen
+    // reads this the way it reads every other build-mode knob (`KARAC_AUTO_PAR`,
+    // `KARAC_BCE_*`, …); see `Codegen::dbg_stripped` (B-2026-08-23-18). Set
+    // rather than threaded because the flag has to reach one leaf of one
+    // lowering through five wrapper signatures.
+    if release {
+        std::env::set_var("KARAC_STRIP_DBG", "1");
+    }
     // Phase-10 WASM build path: a `--target` value from the closed v1 name
     // set (`native`, `wasm_browser`, `wasm_wasi`, `gpu`) selects the
     // compilation target — it swaps the process-wide active target that

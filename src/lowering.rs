@@ -653,6 +653,20 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
     // the callee key (so the loop above misses it); these entries carry the
     // un-overwritten callee signature so codegen can lower the env-first
     // indirect call (B-2026-06-22-4).
+    // Forward each `dbg(x)` argument's static type as a `TypeExpr` so codegen
+    // can synthesize its `Debug` renderer (B-2026-08-23-18). Same shape as the
+    // fn-value table above, and for the same reason: codegen sees expressions,
+    // not types, and cannot re-derive this on its own.
+    program.dbg_arg_type_exprs = tc
+        .dbg_arg_types
+        .iter()
+        .map(|(k, ty)| ((k.0, k.1), TypeChecker::type_to_type_expr(ty)))
+        .collect();
+    program.dbg_arg_type_names = tc
+        .dbg_arg_types
+        .iter()
+        .map(|(k, ty)| ((k.0, k.1), crate::typechecker::type_display(ty)))
+        .collect();
     for (k, fn_ty_expr) in &tc.fn_value_callee_types {
         program
             .fn_value_typed_exprs

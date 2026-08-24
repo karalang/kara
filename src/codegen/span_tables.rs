@@ -145,6 +145,14 @@ pub(crate) struct SpanTables {
     /// an un-annotated fn-value binding (`let g = h.f;`) in `closure_fn_types`
     /// so `g(x)` lowers to an indirect call (B-2026-06-21-3).
     pub(crate) fn_value_typed_exprs: HashMap<(usize, usize), TypeExpr>,
+    /// Each `dbg(x)` argument's `TypeExpr`, keyed by the argument's
+    /// `(span.offset, span.length)` — forwarded from the typechecker via
+    /// `lowering` (B-2026-08-23-18). `compile_dbg` looks the argument up here
+    /// to synthesize its `Debug` renderer.
+    pub(crate) dbg_arg_type_exprs: HashMap<(usize, usize), TypeExpr>,
+    /// The `type_display` text of the same arguments — the JSON form's
+    /// `"type"` field.
+    pub(crate) dbg_arg_type_names: HashMap<(usize, usize), String>,
     /// Per-generic-call-site resolved type-arg substitution
     /// (`{ formal-param-name -> concrete-type-name }`), keyed by the call
     /// expression's `(span.offset, span.length)`. From

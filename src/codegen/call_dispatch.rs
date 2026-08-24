@@ -606,26 +606,22 @@ impl<'ctx> super::Codegen<'ctx> {
             return self.compile_print(&name, args);
         }
 
-        // `dbg` has no lowering yet, and until it does this MUST refuse rather
-        // than fall through. The fallback below hands back a constant `i64 0`
-        // without compiling the argument at all, which for a value-returning
-        // builtin is not a dropped diagnostic but a miscompile: `dbg(41) + 1`
-        // evaluated to 1, `dbg(side_effect())` never called `side_effect`, and
-        // once the typechecker learned dbg's real (identity) type, binding its
-        // result to a `String` segfaulted the binary on first read — a 0 where
-        // a data pointer belongs. Refusing is strictly better than any of
-        // those, and `--interp` runs the program correctly meanwhile.
-        // B-2026-08-23-16.
+        // `dbg(x)` — emit the diagnostic line, hand back `x` (design.md §
+        // `dbg()`: an identity function with a side effect). See
+        // `src/codegen/dbg.rs`.
+        //
+        // This arm previously REFUSED, because the fallback below hands back a
+        // constant `i64 0` without compiling the argument at all — for a
+        // value-returning builtin that is not a dropped diagnostic but a
+        // miscompile: `dbg(41) + 1` evaluated to 1, `dbg(side_effect())` never
+        // called `side_effect`, and once the typechecker learned dbg's real
+        // (identity) type, binding its result to a `String` segfaulted the
+        // binary on first read — a 0 where a data pointer belongs
+        // (B-2026-08-23-16). `compile_dbg` keeps that fail-closed posture for
+        // any shape it cannot render: it returns an Err naming the case rather
+        // than printing a placeholder (B-2026-08-23-18).
         if name == "dbg" {
-            return Err(format!(
-                "codegen: `dbg` is not lowered by the compiled backends yet, so \
-                 `karac build` / `karac run` cannot compile this call at {}:{}. \
-                 Run it with `karac run --interp`, where `dbg` works, or remove \
-                 the `dbg` for a compiled build. The refusal is deliberate: this \
-                 call used to compile to a constant 0, corrupting the value `dbg` \
-                 is documented to hand back.",
-                call_span.line, call_span.column
-            ));
+            return self.compile_dbg(args, call_span);
         }
 
         // Slice c.1 — prelude `assert` / `assert_eq` / `assert_ne` lowering.

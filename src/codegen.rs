@@ -78,6 +78,7 @@ mod control_flow_match;
 mod control_flow_slice;
 mod coro;
 mod dataframe;
+mod dbg;
 mod debug_info;
 mod declarations;
 mod disjoint_par;
@@ -5129,6 +5130,32 @@ impl<'ctx> Codegen<'ctx> {
             string_normalize_ty,
             Some(Linkage::External),
         );
+        // `dbg()` runtime support (B-2026-08-23-18; `runtime/src/dbg.rs`).
+        // Not feature-gated — `dbg` is a core construct, so these live in every
+        // archive and the JIT resolves them from `karac_jit_runner`.
+        //   `ptr  karac_dbg_quote_str(*const u8 data, i64 len, *mut i64 out_len)`
+        //   `ptr  karac_dbg_quote_char(i32 codepoint, *mut i64 out_len)`
+        let karac_dbg_quote_str_fn = module.add_function(
+            "karac_dbg_quote_str",
+            string_xform_ty,
+            Some(Linkage::External),
+        );
+        let dbg_quote_char_ty = ptr_type.fn_type(&[i32_type.into(), ptr_md], false);
+        let karac_dbg_quote_char_fn = module.add_function(
+            "karac_dbg_quote_char",
+            dbg_quote_char_ty,
+            Some(Linkage::External),
+        );
+        //   `void karac_dbg_emit(file, file_len, line, expr, expr_len,
+        //                        type, type_len, value, value_len)`
+        let dbg_emit_ty = context.void_type().fn_type(
+            &[
+                ptr_md, i64_ty, i64_ty, ptr_md, i64_ty, ptr_md, i64_ty, ptr_md, i64_ty,
+            ],
+            false,
+        );
+        let karac_dbg_emit_fn =
+            module.add_function("karac_dbg_emit", dbg_emit_ty, Some(Linkage::External));
         let karac_string_to_lowercase_fn = module.add_function(
             "karac_string_to_lowercase",
             string_xform_ty,
@@ -5415,6 +5442,9 @@ impl<'ctx> Codegen<'ctx> {
                 karac_string_slice_fn,
                 karac_string_slice_borrow_fn,
                 karac_unicode_normalize_fn,
+                karac_dbg_quote_str_fn,
+                karac_dbg_quote_char_fn,
+                karac_dbg_emit_fn,
                 karac_string_to_lowercase_fn,
                 karac_string_to_uppercase_fn,
                 karac_string_trim_fn,
@@ -5491,6 +5521,8 @@ impl<'ctx> Codegen<'ctx> {
                 display_set_types: HashMap::new(),
                 display_sorted_collection_spans: std::collections::HashSet::new(),
                 display_fn_cache: HashMap::new(),
+                debug_fn_cache: HashMap::new(),
+                debug_render: false,
             },
             fn_ctx: FnCtx {
                 loop_stack: Vec::new(),
@@ -5698,6 +5730,8 @@ impl<'ctx> Codegen<'ctx> {
                 borrow_vec_typed_exprs: HashSet::new(),
                 iterator_typed_exprs: HashSet::new(),
                 fn_value_typed_exprs: HashMap::new(),
+                dbg_arg_type_exprs: HashMap::new(),
+                dbg_arg_type_names: HashMap::new(),
                 call_type_subs: HashMap::new(),
                 call_type_subs_mangle: HashMap::new(),
                 index_recv_vec_types: HashMap::new(),
@@ -6962,6 +6996,8 @@ impl<'ctx> Codegen<'ctx> {
         self.span_tables.borrow_vec_typed_exprs = program.borrow_vec_typed_exprs.clone();
         self.span_tables.iterator_typed_exprs = program.iterator_typed_exprs.clone();
         self.span_tables.fn_value_typed_exprs = program.fn_value_typed_exprs.clone();
+        self.span_tables.dbg_arg_type_exprs = program.dbg_arg_type_exprs.clone();
+        self.span_tables.dbg_arg_type_names = program.dbg_arg_type_names.clone();
         // Per-generic-call-site resolved type-arg substitution — lets
         // `compile_generic_call` bind container element type params the
         // LLVM-type inference can't (B-2026-07-02-41).

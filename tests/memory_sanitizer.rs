@@ -52369,4 +52369,91 @@ fn main() {
             "local_fixed_array_returned_out",
         );
     }
+    /// B-2026-08-23-18 — `dbg(x)` on a PLACE expression of every heap-owning
+    /// shape, under ASAN/LSan.
+    ///
+    /// `dbg` does not consume its argument (it is classified `Ref` alongside the
+    /// print family, because a construct stripped from release builds must not
+    /// change what a program means by being present), so the value it hands back
+    /// cannot be the argument's own descriptor — the binding still frees the
+    /// buffer at scope exit while the returned temporary gets a cleanup of its
+    /// own. Before the owned-copy fix, `dbg(vs)` on a `Vec` and `dbg(hs)` on a
+    /// heap `String` aborted with "double free detected in tcache 2", `dbg(mp)`
+    /// on a `Map` SEGFAULTED, and `Option[String]` aborted the same way. Each
+    /// shape is exercised both discarded and bound, since the two reach
+    /// different cleanup paths.
+    #[test]
+    fn test_dbg_of_place_expression_double_frees_no_heap_shape() {
+        assert_clean_asan_run(
+            r#"
+struct Pair { a: i64, b: String }
+fn main() {
+    let mut vs: Vec[i64] = Vec.new();
+    vs.push(1_i64);
+    dbg(vs);
+    let vs2 = dbg(vs);
+    println(f"{vs2.len()}");
+
+    let hs = "x".to_uppercase();
+    dbg(hs);
+    let hs2 = dbg(hs);
+    println(hs2);
+
+    let mut mp: Map[String, i64] = Map.new();
+    mp.insert("k", 7_i64);
+    dbg(mp);
+    let mp2 = dbg(mp);
+    println(f"{mp2.len()}");
+
+    let op: Option[String] = Some("s".to_uppercase());
+    dbg(op);
+    let op2 = dbg(op);
+    match op2 {
+        Some(v) => println(v),
+        None => println("none"),
+    }
+
+    let pr = Pair { a: 1_i64, b: "t".to_uppercase() };
+    dbg(pr);
+    println(f"{pr.a}");
+}
+"#,
+            &["1", "X", "1", "S", "1"],
+            "dbg_place_expression_heap_shapes",
+        );
+    }
+
+    /// The `--release` half of the same property. Stripping removes the
+    /// diagnostic, NOT the expression, so the ownership handling has to run in
+    /// the stripped build too — an early return that skipped it made
+    /// `karac build --release` abort on a program whose debug build was clean.
+    /// Exercised here through the same ASAN harness with `KARAC_STRIP_DBG=1`,
+    /// which is what `karac build --release` sets.
+    #[test]
+    fn test_dbg_stripped_build_keeps_ownership_handling() {
+        struct StripGuard;
+        impl Drop for StripGuard {
+            fn drop(&mut self) {
+                std::env::remove_var("KARAC_STRIP_DBG");
+            }
+        }
+        std::env::set_var("KARAC_STRIP_DBG", "1");
+        let _g = StripGuard;
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut vs: Vec[i64] = Vec.new();
+    vs.push(1_i64);
+    dbg(vs);
+    let vs2 = dbg(vs);
+    println(f"{vs2.len()}");
+    let hs = "y".to_uppercase();
+    let hs2 = dbg(hs);
+    println(hs2);
+}
+"#,
+            &["1", "Y"],
+            "dbg_stripped_ownership",
+        );
+    }
 }

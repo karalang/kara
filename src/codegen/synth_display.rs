@@ -52,6 +52,117 @@ impl<'ctx> super::Codegen<'ctx> {
     /// the buffer-form Display fns. `self.current_fn` must be the Display fn
     /// being emitted so any buffer-grow blocks land in it (see
     /// `emit_string_append_raw`).
+    /// Append the `Debug` spelling of a `String` / `str` leaf — quoted and
+    /// escaped, e.g. `"a\nb"` — to the accumulator, then free the runtime's
+    /// temporary buffer (B-2026-08-23-18).
+    ///
+    /// The escaping is Rust's own `{:?}`, performed inside
+    /// `karac_dbg_quote_str`, which is what makes this byte-identical to the
+    /// interpreter's `format!("{:?}", s)` rather than merely similar to it.
+    pub(super) fn disp_append_debug_str(
+        &mut self,
+        acc: PointerValue<'ctx>,
+        data: PointerValue<'ctx>,
+        len: inkwell::values::IntValue<'ctx>,
+    ) {
+        let i64_t = self.context.i64_type();
+        let out_len = self.builder.build_alloca(i64_t, "dbgq.s.outlen").unwrap();
+        let f = self.runtime_fns.karac_dbg_quote_str_fn;
+        let call = self
+            .builder
+            .build_call(f, &[data.into(), len.into(), out_len.into()], "dbgq.s")
+            .unwrap();
+        let quoted = call
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        let qlen = self
+            .builder
+            .build_load(i64_t, out_len, "dbgq.s.len")
+            .unwrap()
+            .into_int_value();
+        self.emit_string_append_raw(acc, quoted, qlen);
+        // The quote buffer is a one-shot temporary; the accumulator copied the
+        // bytes. Freeing here keeps a `dbg` of a String off LeakSanitizer's
+        // report (the Linux `memory-sanitizer` job is the authoritative gate).
+        self.builder
+            .build_call(self.runtime_fns.free_fn, &[quoted.into()], "")
+            .unwrap();
+    }
+
+    /// `Debug` spelling of a `char` leaf — `'x'`, `'\n'`, `'\u{1f600}'`.
+    /// Same runtime-owned-escaping rationale as `disp_append_debug_str`.
+    pub(super) fn disp_append_debug_char(
+        &mut self,
+        acc: PointerValue<'ctx>,
+        cp: inkwell::values::IntValue<'ctx>,
+    ) {
+        let i32_t = self.context.i32_type();
+        let i64_t = self.context.i64_type();
+        let cp32 = match cp.get_type().get_bit_width() {
+            32 => cp,
+            w if w < 32 => self
+                .builder
+                .build_int_z_extend(cp, i32_t, "dbgq.c.z")
+                .unwrap(),
+            _ => self
+                .builder
+                .build_int_truncate(cp, i32_t, "dbgq.c.t")
+                .unwrap(),
+        };
+        let out_len = self.builder.build_alloca(i64_t, "dbgq.c.outlen").unwrap();
+        let f = self.runtime_fns.karac_dbg_quote_char_fn;
+        let call = self
+            .builder
+            .build_call(f, &[cp32.into(), out_len.into()], "dbgq.c")
+            .unwrap();
+        let quoted = call
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        let qlen = self
+            .builder
+            .build_load(i64_t, out_len, "dbgq.c.len")
+            .unwrap()
+            .into_int_value();
+        self.emit_string_append_raw(acc, quoted, qlen);
+        self.builder
+            .build_call(self.runtime_fns.free_fn, &[quoted.into()], "")
+            .unwrap();
+    }
+
+    /// Look up a synthesized renderer in the cache for the CURRENT render mode
+    /// (`Display` or `Debug`). B-2026-08-23-18 — see `DisplayState::debug_fn_cache`
+    /// for why the two modes may not share one cache.
+    pub(super) fn disp_cache_get(&self, key: &str) -> Option<FunctionValue<'ctx>> {
+        if self.display.debug_render {
+            self.display.debug_fn_cache.get(key).copied()
+        } else {
+            self.display.display_fn_cache.get(key).copied()
+        }
+    }
+
+    /// Record a synthesized renderer in the current render mode's cache.
+    pub(super) fn disp_cache_put(&mut self, key: String, f: FunctionValue<'ctx>) {
+        if self.display.debug_render {
+            self.display.debug_fn_cache.insert(key, f);
+        } else {
+            self.display.display_fn_cache.insert(key, f);
+        }
+    }
+
+    /// Symbol-name prefix for the current render mode. The two families must
+    /// not collide in the module's symbol table either — `get_function` is
+    /// consulted as a second-level cache, so a shared prefix would let a
+    /// `Display` function satisfy a `Debug` lookup across a cache miss.
+    pub(super) fn disp_sym_prefix(&self) -> &'static str {
+        if self.display.debug_render {
+            "karac_debug_"
+        } else {
+            "karac_display_"
+        }
+    }
+
     pub(super) fn disp_append_lit(&mut self, acc: PointerValue<'ctx>, s: &str) {
         if s.is_empty() {
             return;
@@ -115,10 +226,10 @@ impl<'ctx> super::Codegen<'ctx> {
         type_name: &str,
         ty: BasicTypeEnum<'ctx>,
     ) -> FunctionValue<'ctx> {
-        if let Some(&f) = self.display.display_fn_cache.get(type_name) {
+        if let Some(f) = self.disp_cache_get(type_name) {
             return f;
         }
-        let fn_name = format!("karac_display_{type_name}");
+        let fn_name = format!("{}{type_name}", self.disp_sym_prefix());
         if let Some(f) = self.module.get_function(&fn_name) {
             self.display
                 .display_fn_cache
@@ -265,8 +376,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_load(ty, val_ptr, "v")
                     .unwrap()
                     .into_int_value();
-                let (p, l) = self.emit_codepoint_to_utf8(v);
-                self.emit_string_append_raw(acc, p, l);
+                // `Debug` quotes and escapes the char; `Display` emits the bare
+                // glyph. One of the two leaves where the modes diverge.
+                if self.display.debug_render {
+                    self.disp_append_debug_char(acc, v);
+                } else {
+                    let (p, l) = self.emit_codepoint_to_utf8(v);
+                    self.emit_string_append_raw(acc, p, l);
+                }
             }
             "String" | "str" => {
                 // 24-byte struct {data, len, cap} — append the `len` bytes.
@@ -289,7 +406,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_load(i64_t, len_p, "s.len")
                     .unwrap()
                     .into_int_value();
-                self.emit_string_append_raw(acc, data, len);
+                // The other diverging leaf: `Debug` quotes and escapes.
+                if self.display.debug_render {
+                    self.disp_append_debug_str(acc, data, len);
+                } else {
+                    self.emit_string_append_raw(acc, data, len);
+                }
             }
             other if other.starts_with("Vec_") => {
                 // Vec[T]'s element TypeExpr can't be unambiguously recovered
@@ -510,12 +632,12 @@ impl<'ctx> super::Codegen<'ctx> {
         let key_name = Self::display_mangle_te(key_te);
         let val_name = Self::display_mangle_te(val_te);
         let type_name = format!("Map_{key_name}_{val_name}");
-        if let Some(&f) = self.display.display_fn_cache.get(&type_name) {
+        if let Some(f) = self.disp_cache_get(&type_name) {
             return f;
         }
-        let fn_name = format!("karac_display_{type_name}");
+        let fn_name = format!("{}{type_name}", self.disp_sym_prefix());
         if let Some(f) = self.module.get_function(&fn_name) {
-            self.display.display_fn_cache.insert(type_name, f);
+            self.disp_cache_put(type_name, f);
             return f;
         }
 
@@ -531,7 +653,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let display_fn = self
             .module
             .add_function(&fn_name, display_fn_ty, Some(Linkage::Internal));
-        self.display.display_fn_cache.insert(type_name, display_fn);
+        self.disp_cache_put(type_name, display_fn);
 
         let entry_bb = self.context.append_basic_block(display_fn, "entry");
         self.builder.position_at_end(entry_bb);
@@ -706,12 +828,12 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn emit_set_display_fn(&mut self, elem_te: &TypeExpr) -> FunctionValue<'ctx> {
         let elem_name = Self::display_mangle_te(elem_te);
         let type_name = format!("Set_{elem_name}");
-        if let Some(&f) = self.display.display_fn_cache.get(&type_name) {
+        if let Some(f) = self.disp_cache_get(&type_name) {
             return f;
         }
-        let fn_name = format!("karac_display_{type_name}");
+        let fn_name = format!("{}{type_name}", self.disp_sym_prefix());
         if let Some(f) = self.module.get_function(&fn_name) {
-            self.display.display_fn_cache.insert(type_name, f);
+            self.disp_cache_put(type_name, f);
             return f;
         }
 
@@ -727,7 +849,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let display_fn = self
             .module
             .add_function(&fn_name, display_fn_ty, Some(Linkage::Internal));
-        self.display.display_fn_cache.insert(type_name, display_fn);
+        self.disp_cache_put(type_name, display_fn);
 
         let entry_bb = self.context.append_basic_block(display_fn, "entry");
         self.builder.position_at_end(entry_bb);
@@ -918,12 +1040,12 @@ impl<'ctx> super::Codegen<'ctx> {
         val_te: Option<&TypeExpr>,
         prefix: &str,
     ) -> Result<FunctionValue<'ctx>, String> {
-        if let Some(&f) = self.display.display_fn_cache.get(&type_name) {
+        if let Some(f) = self.disp_cache_get(&type_name) {
             return Ok(f);
         }
-        let fn_name = format!("karac_display_{type_name}");
+        let fn_name = format!("{}{type_name}", self.disp_sym_prefix());
         if let Some(f) = self.module.get_function(&fn_name) {
-            self.display.display_fn_cache.insert(type_name, f);
+            self.disp_cache_put(type_name, f);
             return Ok(f);
         }
 
@@ -939,7 +1061,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let display_fn = self
             .module
             .add_function(&fn_name, display_fn_ty, Some(Linkage::Internal));
-        self.display.display_fn_cache.insert(type_name, display_fn);
+        self.disp_cache_put(type_name, display_fn);
 
         let entry_bb = self.context.append_basic_block(display_fn, "entry");
         self.builder.position_at_end(entry_bb);
@@ -1275,12 +1397,12 @@ impl<'ctx> super::Codegen<'ctx> {
     /// exists.
     pub(super) fn emit_display_fn_for_type_expr(&mut self, te: &TypeExpr) -> FunctionValue<'ctx> {
         let type_name = Self::display_mangle_te(te);
-        if let Some(&f) = self.display.display_fn_cache.get(&type_name) {
+        if let Some(f) = self.disp_cache_get(&type_name) {
             return f;
         }
-        let fn_name = format!("karac_display_{type_name}");
+        let fn_name = format!("{}{type_name}", self.disp_sym_prefix());
         if let Some(f) = self.module.get_function(&fn_name) {
-            self.display.display_fn_cache.insert(type_name, f);
+            self.disp_cache_put(type_name, f);
             return f;
         }
 
@@ -1412,12 +1534,12 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn emit_vec_display_fn_te(&mut self, elem_te: &TypeExpr) -> FunctionValue<'ctx> {
         let elem_name = Self::display_mangle_te(elem_te);
         let type_name = format!("Vec_{elem_name}");
-        if let Some(&f) = self.display.display_fn_cache.get(&type_name) {
+        if let Some(f) = self.disp_cache_get(&type_name) {
             return f;
         }
-        let fn_name = format!("karac_display_{type_name}");
+        let fn_name = format!("{}{type_name}", self.disp_sym_prefix());
         if let Some(f) = self.module.get_function(&fn_name) {
-            self.display.display_fn_cache.insert(type_name, f);
+            self.disp_cache_put(type_name, f);
             return f;
         }
 
@@ -1433,7 +1555,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let display_fn = self
             .module
             .add_function(&fn_name, display_fn_ty, Some(Linkage::Internal));
-        self.display.display_fn_cache.insert(type_name, display_fn);
+        self.disp_cache_put(type_name, display_fn);
 
         let entry_bb = self.context.append_basic_block(display_fn, "entry");
         self.builder.position_at_end(entry_bb);
@@ -1478,12 +1600,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // checks share one key.
         let parts: Vec<String> = elems.iter().map(Self::display_mangle_te).collect();
         let type_name = format!("tuple_{}", parts.join("_"));
-        let fn_name = format!("karac_display_{type_name}");
-        if let Some(&f) = self.display.display_fn_cache.get(&type_name) {
+        let fn_name = format!("{}{type_name}", self.disp_sym_prefix());
+        if let Some(f) = self.disp_cache_get(&type_name) {
             return f;
         }
         if let Some(f) = self.module.get_function(&fn_name) {
-            self.display.display_fn_cache.insert(type_name, f);
+            self.disp_cache_put(type_name, f);
             return f;
         }
 
@@ -1517,7 +1639,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let display_fn = self
             .module
             .add_function(&fn_name, display_fn_ty, Some(Linkage::Internal));
-        self.display.display_fn_cache.insert(type_name, display_fn);
+        self.disp_cache_put(type_name, display_fn);
 
         let entry_bb = self.context.append_basic_block(display_fn, "entry");
         self.builder.position_at_end(entry_bb);
@@ -2073,12 +2195,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 .collect()
         };
         let cache_key = format!("{enum_name}{suffix}");
-        if let Some(&f) = self.display.display_fn_cache.get(&cache_key) {
+        if let Some(f) = self.disp_cache_get(&cache_key) {
             return f;
         }
-        let fn_name = format!("karac_display_{cache_key}");
+        let fn_name = format!("{}{cache_key}", self.disp_sym_prefix());
         if let Some(f) = self.module.get_function(&fn_name) {
-            self.display.display_fn_cache.insert(cache_key, f);
+            self.disp_cache_put(cache_key, f);
             return f;
         }
 
@@ -2314,12 +2436,12 @@ impl<'ctx> super::Codegen<'ctx> {
         struct_name: &str,
     ) -> FunctionValue<'ctx> {
         let type_name = struct_name.to_string();
-        if let Some(&f) = self.display.display_fn_cache.get(&type_name) {
+        if let Some(f) = self.disp_cache_get(&type_name) {
             return f;
         }
-        let fn_name = format!("karac_display_{type_name}");
+        let fn_name = format!("{}{type_name}", self.disp_sym_prefix());
         if let Some(f) = self.module.get_function(&fn_name) {
-            self.display.display_fn_cache.insert(type_name, f);
+            self.disp_cache_put(type_name, f);
             return f;
         }
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
@@ -2350,7 +2472,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let display_fn = self
             .module
             .add_function(&fn_name, display_fn_ty, Some(Linkage::Internal));
-        self.display.display_fn_cache.insert(type_name, display_fn);
+        self.disp_cache_put(type_name, display_fn);
 
         let entry_bb = self.context.append_basic_block(display_fn, "entry");
         self.builder.position_at_end(entry_bb);
@@ -2397,12 +2519,12 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn emit_option_display_te(&mut self, payload_te: &TypeExpr) -> FunctionValue<'ctx> {
         let mangled = Self::display_mangle_te(payload_te);
         let type_name = format!("Option_{mangled}");
-        if let Some(&f) = self.display.display_fn_cache.get(&type_name) {
+        if let Some(f) = self.disp_cache_get(&type_name) {
             return f;
         }
-        let fn_name = format!("karac_display_{type_name}");
+        let fn_name = format!("{}{type_name}", self.disp_sym_prefix());
         if let Some(f) = self.module.get_function(&fn_name) {
-            self.display.display_fn_cache.insert(type_name, f);
+            self.disp_cache_put(type_name, f);
             return f;
         }
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
@@ -2429,7 +2551,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let display_fn = self
             .module
             .add_function(&fn_name, display_fn_ty, Some(Linkage::Internal));
-        self.display.display_fn_cache.insert(type_name, display_fn);
+        self.disp_cache_put(type_name, display_fn);
 
         let entry_bb = self.context.append_basic_block(display_fn, "entry");
         self.builder.position_at_end(entry_bb);
@@ -2502,12 +2624,12 @@ impl<'ctx> super::Codegen<'ctx> {
             Self::display_mangle_te(ok_te),
             Self::display_mangle_te(err_te)
         );
-        if let Some(&f) = self.display.display_fn_cache.get(&type_name) {
+        if let Some(f) = self.disp_cache_get(&type_name) {
             return f;
         }
-        let fn_name = format!("karac_display_{type_name}");
+        let fn_name = format!("{}{type_name}", self.disp_sym_prefix());
         if let Some(f) = self.module.get_function(&fn_name) {
-            self.display.display_fn_cache.insert(type_name, f);
+            self.disp_cache_put(type_name, f);
             return f;
         }
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
@@ -2539,7 +2661,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let display_fn = self
             .module
             .add_function(&fn_name, display_fn_ty, Some(Linkage::Internal));
-        self.display.display_fn_cache.insert(type_name, display_fn);
+        self.disp_cache_put(type_name, display_fn);
 
         let entry_bb = self.context.append_basic_block(display_fn, "entry");
         self.builder.position_at_end(entry_bb);
