@@ -95,14 +95,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 283 | 0 |
 | leak | 189 | 0 |
 | missing-feature | 162 | 1 |
-| run-vs-build | 158 | 1 |
+| run-vs-build | 158 | 0 |
 | double-free | 136 | 0 |
 | codegen-gap | 132 | 1 |
 | diagnostics | 101 | 2 |
 | false-positive | 95 | 0 |
 | perf | 84 | 0 |
 | other | 58 | 0 |
-| soundness | 56 | 0 |
+| soundness | 57 | 1 |
 | crash | 55 | 0 |
 | use-after-free | 20 | 0 |
 
@@ -110,21 +110,21 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1010 | 1 |
-| typecheck | 249 | 1 |
-| interp | 180 | 1 |
+| codegen | 1011 | 2 |
+| typecheck | 250 | 2 |
+| interp | 180 | 0 |
 | ownership | 64 | 0 |
 | other | 63 | 0 |
 | cli | 62 | 0 |
 | autopar | 55 | 0 |
-| parser | 40 | 0 |
+| parser | 41 | 1 |
 | runtime | 31 | 0 |
 | resolver | 26 | 0 |
 | effect | 17 | 2 |
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1529 surfaced · 5 open · 1501 fixed · 9 wontfix** (2026-05-20 → 2026-08-24). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1530 surfaced · 5 open · 1502 fixed · 9 wontfix** (2026-05-20 → 2026-08-24). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (5)
 
@@ -132,9 +132,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1529 surfaced
 |---|---|---|---|---|---|
 | B-2026-08-23-11 | 2026-08-23 | typecheck | medium | `Type::Function` carries NO EFFECT ROW, so design.md § First-Class Functions' `let f = save;  // f: Fn(User) -> () with writes(UserDB)` is not representable and a function value's effects cannot propagate through its TYPE. NARROWED 7e7972b: the IMPRECISION this caused -- a function value that is bound and never called still demanding the enclosing function declare its effects -- is FIXED, in the effect checker and without the type row (bind-an-alias, attribute-at-every-other-mention). What remains is representability only, and the prescription in the original title does not work as written: the typechecker cannot populate an effect row, because `effectcheck` runs after `typecheck` AND consumes its output, so inferred effects at typecheck time would need a cycle. Read the detail before picking this up. | roadmap.md |
 | B-2026-08-23-13 | 2026-08-23 | effect | low | The mutual-recursion NOTE now fires for two functions that merely REFERENCE each other as VALUES, calling them a "mutual recursion group" though neither calls the other. `fn p(n: i64) -> i64 { let f = q; n + 1 }` + `fn q(n: i64) -> i64 { let g = p; n + 2 }` reports `note[effect]: mutual recursion group resolved by fixed-point inference: \`p\` (no effects), \`q\` (no effects)`. The program passes and the note is suppressible with `#[allow(mutual_recursion_note)]`, so this is diagnostic wording, not a check failure -- but "mutual recursion" is a false statement about the program. | roadmap.md |
-| B-2026-08-24-7 | 2026-08-24 | interp | medium | A RUNTIME ERROR inside `return <expr>` is OVERWRITTEN by the return's own control flow, so the interpreter KEEPS EXECUTING after the fault and hands the caller a FABRICATED value. `fn boom() -> i64 { let v = Vec[1, 2]; return v[99] }` called from `main` prints `got ()` -- a Unit where an `i64` belongs -- and only then reports the error; the compiled backends abort at the fault and print nothing else. Not `par`-specific: reproduces at top level with no `par` in the program. | phase-4-interpreter.md |
 | B-2026-08-24-8 | 2026-08-24 | effect | low | A BARE `Fn(..)` SLOT IS IMPRACTICAL BECAUSE `panics` IS INFERRED FROM ORDINARY INDEXING and is not a transparent verb, so a closure as plain as `|w, i| w[i]` does not fit `Fn(ref Vec[u8], i64) -> u8` and must be spelled `Fn(ref Vec[u8], i64) -> u8 with panics`. Measured identical at all FIVE slot positions -- argument, `let` annotation, assignment, return, struct field -- so this is one rule applied consistently, not a defect in any one of them. The question is whether a bare `Fn(..)` should mean "pure INCLUDING panics" at all, given that indexing, division and (on some shapes) arithmetic all infer it: as it stands, `with panics` becomes boilerplate on nearly every non-trivial function value, which is the shape of an annotation users cargo-cult rather than read. | roadmap.md |
 | B-2026-08-24-9 | 2026-08-24 | codegen | low | `dbg(x)` where `x` is a SELF-REFERENTIAL `shared enum` (`shared enum T2 { Node(i64, T2), Leaf(i64) }`) REFUSES to compile. Not a missing arm: the shared-enum wrapper and the inner `emit_enum_display_fn` share ONE cache key (the bare enum name), so a payload of the enum's own type resolves to the aggregate-taking inner and is handed a handle. Refusing is the new behaviour; before the guard it MISCOMPILED, printing a wrong variant. A HEADERLESS or weak-headered shared type refuses for its own separate reason, below. | phase-7-codegen.md |
+| B-2026-08-24-10 | 2026-08-24 | parser+typecheck+codegen | high | A TAIL-POSITION `loop` DROPS ITS BREAK VALUE and the declared return type is NEVER CHECKED, so one program behaves THREE DIFFERENT WAYS: `fn pick() -> i64 { let mut i = 0; loop { i = i + 1; if i == 3 { break i * 10 } } }` prints `()` and exits 0 under the interpreter, STACK-OVERFLOWS the JIT, and HANGS FOREVER as an AOT binary. `karac check` reports "All checks passed." -- even for `fn pick() -> i64 { loop { break "a string" } }`, a String break in an i64 function. | roadmap.md |
 
 ### Wontfix (9)
 
@@ -154,9 +154,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1529 surfaced
 
 </details>
 
-### Fixed (1501)
+### Fixed (1502)
 
-<details><summary>1501 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1502 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -17725,6 +17725,9 @@ TESTS (`tests/cli.rs`), both verified to FAIL against the pre-fix build:
 The second test initially passed against the pre-fix build and was VACUOUS: its sibling half fell into the same `if built.success() { ... } else { skip }` soft-skip that a missing runtime archive uses, so a build that REFUSED those shapes looked identical to one that could not link. It now asserts the refusal text is absent before allowing that skip, and fails pre-fix as it should.
 
 The two tests that use an unlowerable `dbg` shape as their fail-closed trigger moved for the THIRD time (`dbg(1)` -> shared struct -> shared enum -> cyclic shared enum), as their own notes asked. |
+| B-2026-08-24-7 | interp | medium | A RUNTIME ERROR inside `return <expr>` is OVERWRITTEN by the return's own control flow, so the interpreter KEEPS EXECUTING after the fault and hands… | FIXED by b964f37. `Interpreter::set_cf` (src/interpreter.rs) — the single funnel every `return` / `break` / `continue` goes through — now DECLINES to write `pending_cf` when an unwind is already in flight. A new `ControlFlow::is_unwind()` (src/interpreter/exec.rs) names the four unwind variants (`RuntimeError`, `ExitUnwind`, `Cancelled`, `TimedOut`) — exactly the set `call_function`'s propagate arm already groups — so a fault, a `process::exit`, a `par` cancellation or a test deadline all outrank a statement that is merely carrying a value out of the expression it faulted inside of.
+
+`record_runtime_error` and its `assert`-style sibling write `pending_cf` DIRECTLY and are deliberately left unguarded: a fault must still be recordable while another unwind is pending. The guard governs the statement-level funnel alone, which is where the downgrade happened. |
 
 </details>
 
