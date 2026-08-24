@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 189 | 0 |
 | missing-feature | 162 | 2 |
 | run-vs-build | 157 | 1 |
-| double-free | 136 | 1 |
+| double-free | 136 | 0 |
 | codegen-gap | 130 | 1 |
 | diagnostics | 100 | 1 |
 | false-positive | 95 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1008 | 2 |
+| codegen | 1008 | 1 |
 | typecheck | 249 | 1 |
 | interp | 179 | 1 |
 | ownership | 64 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1525 surfaced · 6 open · 1496 fixed · 9 wontfix** (2026-05-20 → 2026-08-24). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1525 surfaced · 5 open · 1497 fixed · 9 wontfix** (2026-05-20 → 2026-08-24). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -135,7 +135,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1525 surfaced
 | B-2026-08-24-1 | 2026-08-24 | effect | medium | The `Fn(..)` EFFECT SLOT IS STILL UNCHECKED AT FOUR NON-`let` POSITIONS after B-2026-08-23-12 wired the binding annotation. Each accepts an effectful `save` into a slot that declares purity, with no diagnostic: (1) ASSIGNMENT to a declared-Fn binding -- `let mut f: Fn(i64) -> i64 = |x| x; f = save;`; (2) the `LetUninit` form of the same -- `let f: Fn(i64) -> i64; f = save;`; (3) RETURN POSITION -- `fn get() -> Fn(i64) -> i64 { save }`; (4) a STRUCT-LITERAL FIELD -- `struct Holder { f: Fn(i64) -> i64 }` built as `Holder { f: save }`. All four measured silent under `karac check` with the -12 binary, and all four print `14` under `--interp`, so the effectful function really does route through the pure-declared slot rather than the shape being rejected earlier. | roadmap.md |
 | B-2026-08-24-2 | 2026-08-24 | codegen | low | `dbg(x)` where `x` is a `shared struct` / `shared enum` REFUSES to compile: "codegen: `dbg` at L:C cannot render a value of type `Sh` yet — the compiled backends have no `Debug` renderer for it." Every other shape now lowers (B-2026-08-23-18), and `karac run --interp` renders shared values correctly, so this is a single missing arm in the `Debug` renderer family rather than a design question. | phase-7-codegen.md |
 | B-2026-08-24-4 | 2026-08-24 | interp | high | A RUNTIME ERROR inside a `par {}` branch is swallowed WHOLE by the interpreter -- no message on stderr, exit code 0, and the statements after the join are skipped -- so a program that died halfway reports SUCCESS. JIT and AOT both print the error and exit 1. Measured on three unrelated error shapes (`panic("...")`, a Vec index out of bounds, a failed `assert`), all three identical: `karac run --interp` prints NOTHING and exits 0 where `karac run` and the compiled binary print `panic at c2.kara:1:51 in boom: vec index out of bounds` and exit 1. | roadmap.md |
-| B-2026-08-24-5 | 2026-08-24 | codegen | high | `asan_local_fixed_array_returned_out_is_not_dropped_twice` DOUBLE-FREES at KARAC_OPT_LEVEL=0, so `scripts/asan-o0-leg.sh` is RED on main and reports the fixture as a new unquarantined failure. The fixture PASSES at the default -O2, which is the classic -O0-only shape: at -O0 no pass pipeline runs so the allocation the fixture intends actually happens, while at -O2 LLVM deletes the provably-dead buffer along with the evidence. | roadmap.md |
 
 ### Wontfix (9)
 
@@ -155,9 +154,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1525 surfaced
 
 </details>
 
-### Fixed (1496)
+### Fixed (1497)
 
-<details><summary>1496 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1497 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -17589,6 +17588,18 @@ WHY THE AST FIELD IS LOAD-BEARING, not bookkeeping: a PHANTOM parameter appears 
 CORRECTION TO THIS ROW'S OWN ESTIMATE. It priced the fix as needing "a restricted-expression rule (no struct literal in the condition position of `if`/`while`/`match` scrutinee, as Rust does)" -- and implied that machinery was absent. It was already there: `Parser::no_struct_literal`, with `parse_condition_expr` / `with_struct_literals`, has gated the ambiguous single-identifier body form since B-2026-07-08-23. So only the lookahead was missing, and the "blast radius across every `[`-suffixed expression followed by a brace" the row worried about is bounded by that existing flag plus the type-start guard. Pinned by a regression test over subscript-then-brace shapes (`if f[i] { .. }`, `while f[i] { .. }`, `match v[i] { .. }`, `for x in g[r] { .. }`, and the single-identifier body that the restriction must still claim).
 
 KNOWN BOUNDARY: the SELF-HOST Kara parser (`selfhost/src/`) does not parse this form. No divergence results -- the Rust-side sexp renderer in `tests/selfhost_parser.rs` does not emit `generic_args`, and no corpus program uses the syntax -- so the self-host oracle is unaffected; self-host parity for the new form is ordinary phase-12 lag, not a regression introduced here. |
+| B-2026-08-24-5 | codegen | high | `asan_local_fixed_array_returned_out_is_not_dropped_twice` DOUBLE-FREES at KARAC_OPT_LEVEL=0, so `scripts/asan-o0-leg.sh` is RED on main and reports… | FIXED by 5a585d8. The retraction already existed -- `suppress_array_binding_move_arg` (`src/codegen/param_own.rs`) removes an owned `Array[T, N]` binding's array-keyed `StructDrop` from the cleanup frame -- but it was hooked ONLY at the by-value CALL-ARGUMENT choke point (`move_declined_copy_struct_arg`). Neither RETURN position called it, so a returned array's slot drop fired in the callee while the caller freed the same element buffers. Hooked at both return sites now.
+
+TWO SITES, AND EACH COVERS A SHAPE THE OTHER DOES NOT -- established by revert-discrimination, not by reading:
+  `src/codegen/exprs.rs`, the `ExprKind::Return` arm  -> `return a;` as the last statement AND a mid-body/conditional `return a;`
+  `suppress_cleanup_for_tail_return` (`call_dispatch.rs`) -> a bare TAIL expression `a` with no `return` keyword
+Removing the exprs.rs hook alone fails the `returned_out` and `conditional_return` fixtures while the tail one stays green; removing the tail hook alone fails only the tail fixture. Note this CORRECTS the natural reading of `suppress_cleanup_for_tail_return`, whose `from_last_stmt` branch destructures `ExprKind::Return` and so looks like it owns `return a;` as the final statement -- it does not; that shape reaches the `exprs.rs` arm first. Hooking one site and trusting it to stand for both would have left the other shape corrupting memory with no failing test.
+
+THREE STANDING FIXTURES, one per return shape (`tests/memory_sanitizer.rs`): the pre-existing `..._returned_out_...`, plus `..._tail_expression_...` and `..._conditional_return_...`. The full `KARAC_OPT_LEVEL=0` leg is GREEN at 1151 passed / 0 failed (was 1148 / 1), and `drop_differential` is 19/19 -- the retraction removes a drop, so a leak is the natural way to over-correct, and the Linux LSan half of the same run is what rules it out.
+
+WHY IT SURVIVED, and the general lesson: the origin commit `71022437` DID add an escape fixture, and its message states the intent exactly -- "an array returned out must NOT have its slot drop fire, which would be a use-after-free rather than a leak". That fixture could not fail at the gate that ran it. At the default -O2 the array in `mk` is provably dead, so LLVM deletes the allocation and the double free with it; only the -O0 leg, where no pass pipeline runs, executes the allocation the program actually writes. A fixture asserting a memory property is only as good as the opt level it runs at.
+
+OLDER AND BROADER THAN THE LOCAL-ARRAY FRAMING -- answering the question this row left open, and correcting a first answer. The obvious reading is that `71022437` introduced it, since the second free is the array-keyed `StructDrop` on the LOCAL's slot and that registration is what the commit added. That is true of the local shape but is NOT the whole defect: `make_array_param_callee_owned` has armed the same slot drop for array PARAMS since well before that commit, and an owned param returned straight back out (`fn pass(a: Array[String, 2]) -> Array[String, 2] { return a; }`) reaches the identical missing retraction by the older route. Measured, not reasoned: with both hooks removed that shape double-frees under ASAN at -O0; with them it is clean. So `71022437` WIDENED the set of arrays the gap applies to (locals joined params) rather than creating it, and the param leg has been corrupting memory for longer. It is now a fourth standing fixture, `asan_owned_array_param_returned_out_is_not_dropped_twice`, so the two legs cannot regress independently. |
 
 </details>
 
