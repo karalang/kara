@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 165 | 2 |
 | run-vs-build | 158 | 0 |
 | double-free | 136 | 0 |
-| codegen-gap | 133 | 2 |
+| codegen-gap | 134 | 2 |
 | diagnostics | 102 | 1 |
 | false-positive | 95 | 0 |
 | perf | 84 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1013 | 3 |
+| codegen | 1014 | 3 |
 | typecheck | 250 | 1 |
 | interp | 180 | 0 |
 | other | 64 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1537 surfaced · 6 open · 1508 fixed · 9 wontfix** (2026-05-20 → 2026-08-24). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1538 surfaced · 6 open · 1509 fixed · 9 wontfix** (2026-05-20 → 2026-08-24). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (6)
 
@@ -132,10 +132,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1537 surfaced
 |---|---|---|---|---|---|
 | B-2026-08-23-11 | 2026-08-23 | typecheck | medium | `Type::Function` carries NO EFFECT ROW, so design.md § First-Class Functions' `let f = save;  // f: Fn(User) -> () with writes(UserDB)` is not representable and a function value's effects cannot propagate through its TYPE. NARROWED 7e7972b: the IMPRECISION this caused -- a function value that is bound and never called still demanding the enclosing function declare its effects -- is FIXED, in the effect checker and without the type row (bind-an-alias, attribute-at-every-other-mention). What remains is representability only, and the prescription in the original title does not work as written: the typechecker cannot populate an effect row, because `effectcheck` runs after `typecheck` AND consumes its output, so inferred effects at typecheck time would need a cycle. Read the detail before picking this up. | roadmap.md |
 | B-2026-08-23-13 | 2026-08-23 | effect | low | The mutual-recursion NOTE now fires for two functions that merely REFERENCE each other as VALUES, calling them a "mutual recursion group" though neither calls the other. `fn p(n: i64) -> i64 { let f = q; n + 1 }` + `fn q(n: i64) -> i64 { let g = p; n + 2 }` reports `note[effect]: mutual recursion group resolved by fixed-point inference: \`p\` (no effects), \`q\` (no effects)`. The program passes and the note is suppressible with `#[allow(mutual_recursion_note)]`, so this is diagnostic wording, not a check failure -- but "mutual recursion" is a false statement about the program. | roadmap.md |
-| B-2026-08-24-9 | 2026-08-24 | codegen | low | `dbg(x)` where `x` is a SELF-REFERENTIAL `shared enum` (`shared enum T2 { Node(i64, T2), Leaf(i64) }`) REFUSES to compile. Not a missing arm: the shared-enum wrapper and the inner `emit_enum_display_fn` share ONE cache key (the bare enum name), so a payload of the enum's own type resolves to the aggregate-taking inner and is handed a handle. Refusing is the new behaviour; before the guard it MISCOMPILED, printing a wrong variant. A HEADERLESS or weak-headered shared type refuses for its own separate reason, below. | phase-7-codegen.md |
 | B-2026-08-24-13 | 2026-08-24 | codegen | medium | A NON-SCALAR `break` VALUE (String / Vec / struct) cannot travel through the compiled backends' break-value slot: `fn pick() -> String { loop { break f"x" } }` and the labeled-block twin `found: { break found f"x" }` both FAIL AT MODULE VERIFICATION (`ret i64` against `{ptr, i64, i64}`), while the interpreter returns the value. Storing the header instead is a DOUBLE FREE, measured -- so the slot deliberately refuses it. | roadmap.md |
 | B-2026-08-24-15 | 2026-08-24 | codegen | high | `Vec.insert` / `Vec.remove` / `Vec.swap_remove` HAVE NO CODEGEN BOUNDS CHECK: an out-of-range index CORRUPTS THE HEAP (insert/remove) or SILENTLY RETURNS GARBAGE AND DROPS AN ELEMENT (swap_remove) on both compiled backends, where the interpreter panics and design.md says "panics if out of bounds" | roadmap.md |
 | B-2026-08-24-17 | 2026-08-24 | effect | low | A declared `Fn(..)` element slot on a receiver that is NOT a plain named binding is still unchecked: `self.items.push(save)` carries the same slot as `items.push(save)` -- on a struct FIELD rather than a local -- and is silent. B-2026-08-24-16 reads the receiver's declared type off the walk's scope stack, which is keyed by NAME, so any receiver that is an EXPRESSION (field access, index, method chain) has no entry. | roadmap.md |
+| B-2026-08-24-18 | 2026-08-24 | codegen | low | `dbg(x)` REFUSES for a HEADERLESS or WEAK-HEADERED `shared` type, the last two shapes in the shared family the compiled `Debug` renderers do not cover. Neither is an unwritten arm: the headerless niche makes the field base a PER-FUNCTION property while a synthesized renderer is cached program-wide, and the weak-headered base-2 layout is set by nothing in the compiler today. NOTE this arm has never been observed to fire on a real program -- it is a guard against a hazard, not a fix for a measured failure. | phase-7-codegen.md |
 
 ### Wontfix (9)
 
@@ -155,9 +155,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1537 surfaced
 
 </details>
 
-### Fixed (1508)
+### Fixed (1509)
 
-<details><summary>1508 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1509 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -17789,6 +17789,23 @@ MEASURED after the change:
   bare slot, `blocks` value      returned value has effect blocks() not declared in slot [pure]
   bare slot, `suspends` value    returned value has effect suspends() not declared in slot [pure]
   bare slot, `writes(UserDB)`    returned value has effect writes(UserDB) not declared in slot [pure] |
+| B-2026-08-24-9 | codegen | low | `dbg(x)` where `x` is a SELF-REFERENTIAL `shared enum` (`shared enum T2 { Node(i64, T2), Leaf(i64) }`) REFUSES to compile | FIXED by 0ee3e15, along the exact line the row predicted: `emit_enum_display_fn` gained an explicit cache-key suffix, the two renderers stopped colliding, and the cycle guard was DELETED rather than kept. Net -62 lines.
+
+THE CONTRADICTION AND WHY SPLITTING THE KEY DISSOLVES IT. The wrapper takes a HANDLE and `emit_enum_display_fn` takes the AGGREGATE -- two functions rendering one enum with different first parameters, sharing one cache key (the bare enum name, which is also what `emit_display_fn_for_type_expr` looks up). Inner-first: a payload of the enum's own type resolved to the inner and was handed a handle word. Wrapper-first: the inner's own entry check found the wrapper and emitted a self-call. Now `emit_enum_display_fn_keyed(enum_name, args, key_suffix)` appends the suffix to BOTH the cache key and the symbol name while `enum_name` keeps driving every layout and AST lookup, so the two concerns -- which enum's variants, and who owns the cache slot -- come apart. The wrapper registers under the bare name FIRST and emits the inner under `<Enum>__agg`; a nested lookup then resolves to the wrapper, which is right, because that payload IS a handle. Only three call sites existed, and the other two pass `""` and are bit-identical.
+
+VERIFIED ON THE PROGRAM THAT MISCOMPILED. All three backends now print `Node(3, Node(7, Leaf(99)))` for `shared enum T2 { Node(i64, T2), Leaf(i64) }` nested twice -- against `Node(3, Leaf(139898617069619))` (AOT) and `Node(3, Leaf(5))` (JIT) before. The refusal is gone, not relocated.
+
+TWO ADJACENT DEFECTS FELL OUT OF READING THE SAME CODE, both fixed here.
+
+(1) `emit_enum_display_fn` inserted into `display_fn_cache` UNCONDITIONALLY while its lookup used the mode-aware `disp_cache_get`. So a renderer synthesized in DEBUG mode was filed under the DISPLAY map, where a later `println` of the same enum would find it and render Debug's quoted leaves -- a `"s"` where Display owes `s`. Latent only because nothing had reached both modes for one enum; a genuine run-vs-build hazard the moment something did. Now routed through `disp_cache_put`.
+
+(2) `dbg` of a FUNCTION VALUE had no entry in `dbg_unsupported_shape`, so it fell through to `emit_display_fn_for_type` and PANICKED the compiler: `type_name 'unknown' not yet supported`. A compiler crash is precisely what this cluster exists to convert into a diagnostic, so this was the rule being broken in the module that enforces it. It now refuses by name (`Fn(..)`). That shape is unrenderable in PRINCIPLE, not merely unimplemented: the interpreter prints the callee's name (`<fn add>`) and a compiled function value is a bare code pointer carrying none.
+
+THAT ALSO GIVES THE FAIL-CLOSED TESTS A TRIGGER THAT SHOULD LAST. Theirs has moved four times -- `dbg(1)` -> shared struct -> shared enum -> cyclic shared enum -> function value -- once per renderer landing, because every previous choice was a shape that was merely NOT YET WRITTEN. A function value is different in kind, so the churn should stop.
+
+A TEST THAT COULD NOT FAIL, FOUND IN THE VACUITY CHECK: `test_unlowerable_defer_body_refuses_instead_of_vanishing` asserted only that the build fails and mentions `dbg`. A compiler PANIC satisfies both -- so against the pre-fix build, where this shape panicked, the test passed while witnessing exactly the outcome it exists to prevent. It now also asserts the output contains no "panicked", and fails pre-fix as it should. All three touched tests were verified failing pre-fix and passing post-fix.
+
+REMAINDER: the headerless / weak-headered shared type. Untouched, still refused, still unreached by any measured program. Split into its own row rather than left inside this one. |
 | B-2026-08-24-10 | parser+typecheck+codegen | high | A TAIL-POSITION `loop` DROPS ITS BREAK VALUE and the declared return type is NEVER CHECKED, so one program behaves THREE DIFFERENT WAYS: `fn pick() -… | FIXED by 787c355. THREE DEFECTS, one per phase, and a single explanation for all three backend behaviours.
 
 1. PARSER, `is_block_expr` (src/parser/stmts.rs). `Loop` was listed with `While`/`WhileLet`/`For` as an expression "always treated as a statement (not final_expr)", so a trailing `loop` never became a block's value and the function fell off its own end. `Loop` is removed; the other three stay, because design.md gives them type `()` unconditionally and there is nothing to carry out. That was the interpreter's `()`.
