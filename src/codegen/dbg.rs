@@ -165,9 +165,22 @@ impl<'ctx> super::Codegen<'ctx> {
         // there is a double free. Copying keeps both values independently
         // valid, which is the only reading under which `dbg` is transparent.
         let returned =
-            if Self::dbg_arg_is_place(&arg.value) && Self::dbg_result_needs_owned_copy(&arg_te) {
+            if Self::dbg_arg_is_place(&arg.value) && self.dbg_result_needs_owned_copy(&arg_te) {
                 let dst = self.create_entry_alloca(fn_val, "dbg.own", value.get_type());
-                let clone_fn = self.emit_clone_fn_for_type_expr(&arg_te);
+                // The OWNING clone, not the plain dispatcher. `dbg`'s copy is a
+                // DUPLICATION -- the binding and the returned temporary must
+                // both be independently valid -- which is exactly the
+                // distinction `emit_owning_clone_fn_for_type_expr` exists to
+                // draw: for a `shared struct` handle it retains (rc_inc), where
+                // the plain dispatcher deliberately does not, because its
+                // twenty-odd other callers are move/transfer sites that manage
+                // RC themselves. For every other shape the two are the same
+                // function. Without this a `dbg` of a shared handle aliased the
+                // binding's box with no increment and the two scope-exit decs
+                // freed it once too often -- MEASURED as `malloc(): unaligned
+                // tcache chunk detected` on a two-link `Option[shared]` list,
+                // the same symptom B-2026-07-28-10 records for this class.
+                let clone_fn = self.emit_owning_clone_fn_for_type_expr(&arg_te);
                 self.builder
                     .build_call(clone_fn, &[slot.into(), dst.into()], "dbg.clone")
                     .unwrap();
@@ -255,11 +268,15 @@ impl<'ctx> super::Codegen<'ctx> {
     /// The first type in `te` (itself or nested) for which no `Debug` renderer
     /// can be synthesized, or `None` when the whole shape is renderable.
     ///
-    /// Today that means a `shared struct` / `shared enum`: its LLVM type lives
-    /// in `shared_types`, not `struct_types`, and the struct renderer asserts
-    /// the latter. Nested positions are walked too, so `Vec[Sh]` and
-    /// `Option[Sh]` refuse at the point of the offending element rather than
-    /// panicking one level down.
+    /// Today that means a `shared enum` (its payload lives in the RC box behind
+    /// a variant tag and has no renderer yet) and a HEADERLESS shared struct
+    /// (whose field base is a per-function property, so it cannot be baked into
+    /// one program-wide cached renderer — see
+    /// `emit_shared_struct_debug_display_fn`). Ordinary `shared struct` /
+    /// `par struct` handles DO render as of B-2026-08-24-2, including
+    /// self-referential `Option[shared]` fields. Nested positions are walked
+    /// too, so `Vec[Sh]` and `Option[Sh]` refuse at the point of the offending
+    /// element rather than panicking one level down.
     fn dbg_unsupported_shape(&self, te: &TypeExpr) -> Option<String> {
         let TypeKind::Path(p) = &te.kind else {
             // Tuples: check every element.
@@ -269,9 +286,19 @@ impl<'ctx> super::Codegen<'ctx> {
             return None;
         };
         if let Some(seg) = p.segments.last() {
-            if self.type_decls.shared_type_decl_names.contains(seg)
-                || self.type_decls.shared_types.contains_key(seg)
-            {
+            let shared_info = self.type_decls.shared_types.get(seg);
+            let is_shared_name =
+                self.type_decls.shared_type_decl_names.contains(seg) || shared_info.is_some();
+            // A shared STRUCT renders (B-2026-08-24-2) unless it is headerless
+            // here — the headerless niche drops the refcount word, moving user
+            // field 0 to heap index 0, and `headerless_here` is answered per
+            // FUNCTION while the renderer is cached program-wide. Refusing is
+            // the honest outcome: the alternative is a cached renderer that
+            // reads every field at the wrong offset in some other function.
+            let renderable_shared_struct = shared_info
+                .is_some_and(|i| !i.is_enum && !i.has_weak_header)
+                && !self.headerless_here(seg);
+            if is_shared_name && !renderable_shared_struct {
                 return Some(seg.clone());
             }
         }
@@ -303,13 +330,23 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `emit_clone_fn_for_type_expr` covers primitives, `String`, `Vec`, `Map`,
     /// `Set` and tuples but NOT user structs, and the struct shapes do not need
     /// it, so a broader test would reach a clone path that does not exist.
-    fn dbg_result_needs_owned_copy(te: &TypeExpr) -> bool {
+    fn dbg_result_needs_owned_copy(&self, te: &TypeExpr) -> bool {
         let TypeKind::Path(p) = &te.kind else {
             return false;
         };
         let Some(head) = p.segments.last().map(String::as_str) else {
             return false;
         };
+        // B-2026-08-24-2 — a `shared struct` / `par struct` handle owns a
+        // refcount, so it needs the copy exactly as a Vec or String does. It is
+        // not in the builtin list below because that list is spelled by NAME
+        // and a shared type's name is the user's; asking `shared_types` is what
+        // makes it work for any of them. Without this the returned temporary
+        // aliased the binding's handle with no increment and the two cleanups
+        // decremented one box twice.
+        if self.type_decls.shared_types.contains_key(head) {
+            return true;
+        }
         matches!(
             head,
             "Vec"

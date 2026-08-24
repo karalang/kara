@@ -4736,11 +4736,19 @@ fn test_dbg_keeps_identity_and_side_effects_on_compiled_backends() {
 ///
 /// `dbg` accepts a strictly wider domain than `println`: the typechecker
 /// deliberately puts no `Display` bound on it, since `dbg(some_struct)` is most
-/// of what dbg is for. A `shared struct` is the measured case that falls outside
+/// of what dbg is for. A shared type is the measured case that falls outside
 /// the renderer family — it has no `Display` impl at all, and its LLVM type
 /// lives in `shared_types` rather than `struct_types`, so the struct renderer
 /// asserted and PANICKED the compiler ("struct type registered") before the
 /// pre-check was added.
+///
+/// The shape here is a shared ENUM specifically. B-2026-08-24-2 gave the shared
+/// STRUCT a renderer, so it is no longer refused (and is covered by its own
+/// tests); the enum keeps failing closed because its payload sits in the RC box
+/// behind a variant tag. That split is deliberate rather than an oversight — a
+/// partly-landed renderer must keep NAMING what it cannot draw instead of
+/// quietly printing a placeholder, which is the rule this whole cluster exists
+/// to enforce.
 ///
 /// This is the rule the whole cluster exists to enforce. Every bug in it
 /// (B-2026-08-23-14, -16, B-2026-07-31-9) was a surface that LOOKED present and
@@ -4751,11 +4759,11 @@ fn test_dbg_keeps_identity_and_side_effects_on_compiled_backends() {
 #[test]
 fn test_dbg_of_an_unrenderable_shape_refuses_and_names_it() {
     let tmp = scratch_project("dbg-unrenderable-refuses");
-    let src = "shared struct Sh { mut n: i64 }\n\
+    let src = "shared enum Sh { One(i64), Two }\n\
                fn main() {\n\
-               \x20   let sh = Sh { n: 1 };\n\
+               \x20   let sh = Sh.One(1);\n\
                \x20   dbg(sh);\n\
-               \x20   println(f\"{sh.n}\");\n\
+               \x20   println(\"after\");\n\
                }\n";
     write(&tmp.join("u.kara"), src);
 
@@ -4789,7 +4797,7 @@ fn test_dbg_of_an_unrenderable_shape_refuses_and_names_it() {
         "and it must be a diagnostic, not a compiler panic, got:\n{berr}"
     );
     assert!(
-        run.status.success() && rout.trim() == "1" && rerr.contains("sh = Sh { n: 1 }"),
+        run.status.success() && rout.trim() == "after" && rerr.contains("sh = One(1)"),
         "the interpreter must still render it — that is what makes the compiled \
          refusal defensible; stdout={rout:?} stderr={rerr:?}"
     );
@@ -30440,24 +30448,28 @@ fn main() {
 /// statement and ran on. That is how the `errdefer(e)` binding failures
 /// presented before the typing fix — as a missing `println`, not as an error.
 ///
-/// The trigger is `dbg` of a `shared struct` — the construct the compiled
+/// The trigger is `dbg` of a `shared ENUM` — the construct the compiled
 /// backends still refuse outright, because the `Debug` renderer family has no
-/// arm for a shared type (B-2026-08-23-18 lowered `dbg` for every other shape
-/// and split that remainder into its own row). Using a genuinely-refused
-/// construct makes this a real end-to-end check of the fail-closed path rather
-/// than a mock. It was `dbg(1)` until `dbg` itself became lowerable; if the
-/// shared-struct renderer lands too, this needs a new trigger rather than
-/// deletion — the property under test is the cleanup dispatcher's error
-/// propagation, not anything about `dbg`.
+/// arm for one: its payload lives in the RC box behind a variant tag. Using a
+/// genuinely-refused construct makes this a real end-to-end check of the
+/// fail-closed path rather than a mock.
+///
+/// The trigger has now moved TWICE, which is the point worth recording. It was
+/// `dbg(1)` until B-2026-08-23-18 lowered `dbg` itself; then a `shared struct`
+/// until B-2026-08-24-2 lowered that; now a shared enum. The property under
+/// test is the cleanup dispatcher's error PROPAGATION — that an unlowerable
+/// `defer` body fails the build instead of being silently dropped — and nothing
+/// about which shape happens to be unlowerable this month. When the shared-enum
+/// renderer lands, move the trigger again rather than deleting the test.
 #[cfg(feature = "llvm")]
 #[test]
 fn test_unlowerable_defer_body_refuses_instead_of_vanishing() {
     let tmp = scratch_project("defer-body-fail-closed");
     write(
         &tmp.join("d.kara"),
-        "shared struct Sh { mut n: i64 }\n\
+        "shared enum Sh { One(i64), Two }\n\
          fn main() {\n\
-         \x20   let sh = Sh { n: 1 };\n\
+         \x20   let sh = Sh.One(1);\n\
          \x20   defer { dbg(sh); }\n\
          \x20   println(\"body\");\n\
          }\n",
@@ -31280,6 +31292,211 @@ fn test_dbg_struct_field_order_is_declaration_order_every_run() {
              and alphabetical order would give `alpha, mid, zeta`"
         );
     }
+}
+
+/// B-2026-08-24-2 — `dbg` of a `shared struct` renders identically on all three
+/// backends, in DECLARATION order, including a self-referential
+/// `Option[shared]` link.
+///
+/// Two halves had to land together, and the ORDER between them is the whole
+/// point. The compiled backends refused a shared value outright, so the first
+/// question was what they should be held to — and the interpreter was not yet
+/// an answer. `render_typed_mode` had no `SharedStruct` arm, so a shared value
+/// fell to the `Value::debug_fmt` catch-all, whose arm walks the FOUR field
+/// `HashMap`s a shared struct keeps (immutable / mut / weak / weak-mut) in
+/// sequence: MEASURED five distinct field orders in twelve runs of one binary.
+/// Writing the codegen renderer first would have pinned it to whichever order
+/// that run happened to produce. So the interpreter got a declaration-ordered
+/// arm first, and the renderer matches THAT.
+///
+/// Declaration order also un-groups the fields: the four maps are a
+/// representation detail (mutability, weakness), not something the user wrote,
+/// so walking them in sequence reported `mut` fields last no matter where they
+/// were declared. `counter` is declared third-of-four here and must print
+/// third — under the old grouping it printed last, and under alphabetical order
+/// it would come first.
+///
+/// The `Link` half covers the NICHE layout: a field of type `Option[shared L]`
+/// is stored as a bare pointer (null = `None`) rather than the conventional
+/// four-word Option aggregate, so the ordinary Option renderer would read three
+/// words past the end of a one-word field. It is also the recursion check — the
+/// renderer is cached before its body is emitted, or a self-referential shape
+/// would synthesize forever.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_dbg_of_a_shared_struct_renders_the_same_on_all_three_backends() {
+    let tmp = scratch_project("dbg-shared-struct-parity");
+    let src = "shared struct Node { zeta: i64, alpha: String, mut counter: i64, mid: bool }\n\
+               shared struct Link { v: i64, mut next: Option[Link] }\n\
+               fn main() {\n\
+               \x20   let n = Node { zeta: 7, alpha: \"hi\", counter: 3, mid: true };\n\
+               \x20   dbg(n);\n\
+               \x20   let tail = Link { v: 2, next: None };\n\
+               \x20   let head = Link { v: 1, next: Some(tail) };\n\
+               \x20   dbg(head);\n\
+               \x20   println(\"done\");\n\
+               }\n";
+    write(&tmp.join("s.kara"), src);
+
+    let want = "[s.kara:5] n = Node { zeta: 7, alpha: \"hi\", counter: 3, mid: true }\n\
+                [s.kara:8] head = Link { v: 1, next: Some(Link { v: 2, next: None }) }\n";
+
+    // Interpreter, repeated: the pre-fix order was RANDOM per process, so one
+    // green run proves nothing. Twelve runs saw five different orders before.
+    for attempt in 0..12 {
+        let out = karac_bin()
+            .current_dir(&tmp)
+            .args(["run", "--interp", "s.kara"])
+            .output()
+            .expect("karac run --interp");
+        assert_eq!(
+            String::from_utf8_lossy(&out.stderr),
+            want,
+            "interpreter attempt {attempt}: shared-struct dbg must be declaration-ordered \
+             and identical on every run"
+        );
+    }
+
+    // JIT and AOT — the halves that refused to compile at all before.
+    let jit = karac_bin()
+        .current_dir(&tmp)
+        .args(["run", "s.kara"])
+        .output()
+        .expect("karac run");
+    assert_eq!(
+        String::from_utf8_lossy(&jit.stderr),
+        want,
+        "JIT must match the interpreter byte for byte"
+    );
+
+    let built = karac_bin()
+        .current_dir(&tmp)
+        .args(["build", "s.kara"])
+        .output();
+    let exe = tmp.join("s");
+    if built.map(|o| o.status.success()).unwrap_or(false) && exe.exists() {
+        let out = std::process::Command::new(&exe)
+            .output()
+            .expect("run built binary");
+        assert_eq!(
+            String::from_utf8_lossy(&out.stderr),
+            want,
+            "AOT must match the interpreter byte for byte"
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout).trim(),
+            "done",
+            "and the program's own output is unchanged"
+        );
+    } else {
+        eprintln!("skip: AOT leg unavailable (no runtime archive?)");
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// B-2026-08-24-2, second half: a shared struct nested inside another shape,
+/// and a `par struct` handle.
+///
+/// The renderer is reached through `emit_display_fn_for_type_expr`, the same
+/// recursive dispatcher every element and field type goes through, so a shared
+/// struct has to render as a `Vec` element too — not only as `dbg`'s direct
+/// argument. That dispatcher checks the enum table before the struct table, and
+/// a shared type is registered in BOTH by name while its LLVM type lives in
+/// neither, which is what made the old struct arm assert; the shared check has
+/// to come first.
+///
+/// `par struct` shares the shared-struct layout (design.md § Part 5b "Always
+/// Arc" — same map, `is_par` only selects atomic refcount ops), so it renders
+/// through the same arm. It is here because "same layout, different refcount"
+/// is exactly the kind of claim that is true until it isn't.
+///
+/// The `String` field is deliberately one that Debug must QUOTE and escape:
+/// Debug and Display part ways at exactly two leaves (`String`, `Char`), and
+/// this pins that the shared path reaches the quoting one.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_dbg_of_a_shared_struct_nested_and_par_variants() {
+    let tmp = scratch_project("dbg-shared-struct-nested");
+    let src = "shared struct P { x: i64, tag: String }\n\
+               par struct C { a: i64, b: String }\n\
+               fn main() {\n\
+               \x20   let v = [P { x: 1, tag: \"a\\\"q\" }, P { x: 2, tag: \"b\" }];\n\
+               \x20   dbg(v);\n\
+               \x20   let c = C { a: 1, b: \"z\" };\n\
+               \x20   dbg(c);\n\
+               \x20   println(\"done\");\n\
+               }\n";
+    write(&tmp.join("n.kara"), src);
+
+    let want = "[n.kara:5] v = [P { x: 1, tag: \"a\\\"q\" }, P { x: 2, tag: \"b\" }]\n\
+                [n.kara:7] c = C { a: 1, b: \"z\" }\n";
+
+    let interp = karac_bin()
+        .current_dir(&tmp)
+        .args(["run", "--interp", "n.kara"])
+        .output()
+        .expect("karac run --interp");
+    assert_eq!(
+        String::from_utf8_lossy(&interp.stderr),
+        want,
+        "interpreter: shared struct as a Vec element, and a par struct"
+    );
+
+    let built = karac_bin()
+        .current_dir(&tmp)
+        .args(["build", "n.kara"])
+        .output();
+    let exe = tmp.join("n");
+    if built.map(|o| o.status.success()).unwrap_or(false) && exe.exists() {
+        let out = std::process::Command::new(&exe)
+            .output()
+            .expect("run built binary");
+        assert_eq!(
+            String::from_utf8_lossy(&out.stderr),
+            want,
+            "AOT must match the interpreter byte for byte"
+        );
+    } else {
+        eprintln!("skip: AOT leg unavailable (no runtime archive?)");
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// B-2026-08-24-2 — a `shared struct` has no `Display` impl, and giving it a
+/// DEBUG renderer must not quietly give it a Display one.
+///
+/// The renderer synthesized here is reached from `emit_display_fn_for_type_expr`,
+/// which serves `println` as well as `dbg` — the two share one walker because
+/// they differ at only two leaves. So the guard that keeps `println(sh)` an
+/// error is the TYPECHECKER's `Display` bound, not the absence of a renderer,
+/// and that distinction is invisible until someone removes the bound. This pins
+/// it from the outside: the diagnostic must still name `Display`.
+#[test]
+fn test_shared_struct_still_has_no_display_impl() {
+    let tmp = scratch_project("shared-struct-no-display");
+    write(
+        &tmp.join("d.kara"),
+        "shared struct Q { x: i64 }\n\
+         fn main() {\n\
+         \x20   let q = Q { x: 1 };\n\
+         \x20   println(q);\n\
+         }\n",
+    );
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .args(["run", "--interp", "d.kara"])
+        .output()
+        .expect("karac run --interp");
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(
+        combined.contains("must implement Display") && combined.contains("'Q'"),
+        "`println` of a shared struct must still be refused by the Display bound; got:\n{combined}"
+    );
 }
 
 /// design.md § Typestate via Phantom Type Parameters, transcribed with its

@@ -16,7 +16,7 @@ use crate::resolver::SpanKey;
 use crate::token::Span;
 use crate::typechecker::type_display;
 
-use super::value::{EnumData, Value};
+use super::value::{upgrade_weak_to_option, EnumData, Value};
 use super::{dbg_json_escape, ConsoleSeg, ConsoleStream, DbgOutputMode};
 
 impl<'a> super::Interpreter<'a> {
@@ -311,6 +311,76 @@ impl<'a> super::Interpreter<'a> {
             // so all three agree by construction, not by convention.
             Value::String(s) if debug => format!("{:?}", s),
             Value::Char(c) if debug => format!("{:?}", c),
+            // B-2026-08-24-2 — a `shared struct` walked in DECLARATION order,
+            // the shared sibling of the `Value::Struct` arm above.
+            //
+            // Without this arm a shared struct fell to the `debug_fmt`
+            // catch-all below, whose `SharedStruct` arm iterates its four
+            // field `HashMap`s in sequence. That made `dbg(shared)` output
+            // nondeterministic -- MEASURED 5 distinct field orders in 12 runs
+            // of one binary -- and left the compiled backends with no stable
+            // oracle to match, which is why `dbg` of a shared value refused to
+            // compile at all rather than render something that disagreed.
+            //
+            // The four maps are a REPRESENTATION detail (mutability and
+            // weakness), not something the user wrote, so rebuilding the
+            // declared order from `struct_info` also stops the rendering from
+            // grouping fields by a property the source never mentions. Weak
+            // fields render through the upgrade, so a live target prints as
+            // the struct it points at and a dead one prints `None`
+            // (B-2026-08-08-14), same as every other read site.
+            Value::SharedStruct(inner) => {
+                let si = self.typecheck_result.struct_info.get(&inner.name);
+                let order: Vec<String> = match si {
+                    Some(si) => si.fields.iter().map(|(n, _, _)| n.clone()).collect(),
+                    // Unknown type (ad-hoc harness, or a decl the typechecker
+                    // never saw): fall back to the field names sorted, which is
+                    // what `Display`'s own shared arm does. Deterministic is the
+                    // contract; declaration order is the improvement on it.
+                    None => {
+                        let mut names: Vec<String> = inner
+                            .immutable_fields
+                            .keys()
+                            .chain(inner.mut_fields.keys())
+                            .chain(inner.weak_immutable_fields.keys())
+                            .chain(inner.weak_mut_fields.keys())
+                            .cloned()
+                            .collect();
+                        names.sort();
+                        names
+                    }
+                };
+                let field_tys = self.struct_field_display_types(&inner.name, ty);
+                let body = order
+                    .iter()
+                    .filter_map(|fname| {
+                        let fty = field_tys.get(fname);
+                        let rendered = if let Some(v) = inner.immutable_fields.get(fname) {
+                            self.render_typed_mode(v, fty, debug)
+                        } else if let Some(cell) = inner.mut_fields.get(fname) {
+                            let v = cell.value.try_read().expect(
+                                "shared struct field write-locked during debug render — unreachable in single-task interpreter",
+                            );
+                            self.render_typed_mode(&v, fty, debug)
+                        } else if let Some(weak) = inner.weak_immutable_fields.get(fname) {
+                            self.render_typed_mode(&upgrade_weak_to_option(weak), None, debug)
+                        } else if let Some(slot) = inner.weak_mut_fields.get(fname) {
+                            let weak = slot.try_read().expect(
+                                "shared struct weak field write-locked during debug render — unreachable in single-task interpreter",
+                            );
+                            self.render_typed_mode(&upgrade_weak_to_option(&weak), None, debug)
+                        } else {
+                            // Declared but absent: skip rather than invent a
+                            // placeholder, matching the `Struct` arm's
+                            // `fields.get(fname)` filter.
+                            return None;
+                        };
+                        Some(format!("{}: {}", fname, rendered))
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{} {{ {} }}", inner.name, body)
+            }
             // `debug_fmt` for the shapes this walker does not destructure
             // (shared structs, sets, sorted collections): still quoted at the
             // leaves, just without the declaration-order/type threading.

@@ -1486,6 +1486,27 @@ impl<'ctx> super::Codegen<'ctx> {
                 // and expr-driven; this path is the buffer-append, by-pointer
                 // form needed for nested/recursive field rendering).
                 if let Some(seg) = p.segments.last() {
+                    // B-2026-08-24-2 — a `shared struct` handle. Checked BEFORE
+                    // the enum and struct arms below, because a shared type is
+                    // registered in BOTH `struct_field_names` (which the struct
+                    // arm claims by name) and, for a shared enum, `enum_layouts`
+                    // — while its LLVM type lives in `shared_types` and NOT in
+                    // `struct_types`. That mismatch is what made the struct
+                    // renderer's `.expect("struct type registered")` panic the
+                    // compiler on a shared value, which `dbg`'s pre-check now
+                    // refuses ahead of. A shared ENUM still falls through to the
+                    // refusal: its payload lives in the RC box behind a variant
+                    // tag and needs its own renderer, so it keeps failing closed
+                    // rather than rendering something the interpreter disagrees
+                    // with.
+                    if self
+                        .type_decls
+                        .shared_types
+                        .get(seg)
+                        .is_some_and(|i| !i.is_enum)
+                    {
+                        return self.emit_shared_struct_debug_display_fn(seg);
+                    }
                     if self.type_decls.enum_layouts.contains_key(seg) {
                         // Pass the use site's generic arguments so a generic
                         // enum renders at its instantiation (B-2026-08-19-28).
@@ -2498,6 +2519,161 @@ impl<'ctx> super::Codegen<'ctx> {
         self.disp_append_lit(acc, " }");
         // Appends may split the current block (buffer grow) — return from
         // wherever we end up (mirrors the enum/option renderers).
+        self.builder.build_return(None).unwrap();
+
+        self.current_fn = saved_fn;
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        display_fn
+    }
+
+    /// B-2026-08-24-2: synthesize `void karac_display_<Sh>(ptr val, ptr acc)` for
+    /// a `shared struct`, the RC-backed sibling of `emit_struct_debug_display_fn`.
+    ///
+    /// Two things differ from the plain-struct renderer. First, `val` points at
+    /// a slot holding the HANDLE, not at the fields, so the body loads the
+    /// pointer and GEPs into the heap box. Second, user field 0 does not sit at
+    /// heap index 0: the box is `{ i64 strong, fields… }`, or
+    /// `{ i64 strong, i64 weak, fields… }` when the type is the target of a
+    /// `weak` field anywhere in the program. `field_base` is computed from
+    /// `has_weak_header` directly rather than through `shared_gep_layout` —
+    /// that funnel also answers for the HEADERLESS niche, whose base-0 answer
+    /// is a per-FUNCTION property (`headerless_here` reads
+    /// `fn_ctx.current_fn_name`) while this renderer is emitted once and cached
+    /// program-wide. Baking a per-function layout into a shared function is how
+    /// a field read lands at the wrong offset, so the caller refuses a
+    /// headerless type instead. Same reasoning `synth_drop` records for its own
+    /// `heap_type`-based walk.
+    ///
+    /// Field ORDER is `struct_field_names`, i.e. declaration order — the same
+    /// order the interpreter's `render_typed_mode` now walks, which is what
+    /// makes the two backends agree by construction rather than by convention.
+    pub(super) fn emit_shared_struct_debug_display_fn(
+        &mut self,
+        struct_name: &str,
+    ) -> FunctionValue<'ctx> {
+        let type_name = struct_name.to_string();
+        if let Some(f) = self.disp_cache_get(&type_name) {
+            return f;
+        }
+        let fn_name = format!("{}{type_name}", self.disp_sym_prefix());
+        if let Some(f) = self.module.get_function(&fn_name) {
+            self.disp_cache_put(type_name, f);
+            return f;
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let info = self
+            .type_decls
+            .shared_types
+            .get(struct_name)
+            .expect("emit_shared_struct_debug_display_fn: shared type registered");
+        let heap_type = info.heap_type;
+        let field_base: u32 = if info.has_weak_header { 2 } else { 1 };
+        let niche_fields = info.niche_option_fields.clone();
+        let field_names = self
+            .type_decls
+            .struct_field_names
+            .get(struct_name)
+            .cloned()
+            .unwrap_or_default();
+        let field_tes = self
+            .type_decls
+            .struct_field_type_exprs
+            .get(struct_name)
+            .cloned()
+            .unwrap_or_default();
+
+        let saved_bb = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+        let display_fn_ty = self
+            .context
+            .void_type()
+            .fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let display_fn = self
+            .module
+            .add_function(&fn_name, display_fn_ty, Some(Linkage::Internal));
+        // Cached BEFORE the body is emitted, so a self-referential shape
+        // (`Link { next: Option[Link] }`) recurses into this same function
+        // instead of synthesizing forever.
+        self.disp_cache_put(type_name, display_fn);
+
+        let entry_bb = self.context.append_basic_block(display_fn, "entry");
+        self.builder.position_at_end(entry_bb);
+        self.current_fn = Some(display_fn);
+        let slot_ptr = display_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let acc = display_fn.get_nth_param(1).unwrap().into_pointer_value();
+        let handle = self
+            .builder
+            .build_load(ptr_ty, slot_ptr, "sh.handle")
+            .unwrap()
+            .into_pointer_value();
+
+        self.disp_append_lit(acc, &format!("{struct_name} {{ "));
+        for (i, fname) in field_names.iter().enumerate() {
+            if i > 0 {
+                self.disp_append_lit(acc, ", ");
+            }
+            self.disp_append_lit(acc, &format!("{fname}: "));
+            let field_ptr = self
+                .builder
+                .build_struct_gep(heap_type, handle, field_base + i as u32, "sh.f")
+                .unwrap();
+            match niche_fields.get(i).and_then(|n| n.clone()) {
+                // Niche `Option[shared Inner]`: the slot holds a bare pointer,
+                // null for `None`, rather than the conventional 4-word Option
+                // aggregate — so the ordinary Option renderer would read three
+                // words past the end of a one-word field. Rendered here to match
+                // the interpreter's `Some(<inner>)` / `None` spelling.
+                Some(inner) => {
+                    let inner_fn = self.emit_shared_struct_debug_display_fn(&inner);
+                    let loaded = self
+                        .builder
+                        .build_load(ptr_ty, field_ptr, "sh.niche")
+                        .unwrap()
+                        .into_pointer_value();
+                    let is_null = self.builder.build_is_null(loaded, "sh.niche.null").unwrap();
+                    let none_bb = self.context.append_basic_block(display_fn, "sh.none");
+                    let some_bb = self.context.append_basic_block(display_fn, "sh.some");
+                    let join_bb = self.context.append_basic_block(display_fn, "sh.join");
+                    self.builder
+                        .build_conditional_branch(is_null, none_bb, some_bb)
+                        .unwrap();
+
+                    self.builder.position_at_end(none_bb);
+                    self.disp_append_lit(acc, "None");
+                    self.builder.build_unconditional_branch(join_bb).unwrap();
+
+                    // An append may split the current block (buffer grow), so
+                    // branch to the join from wherever we end up — the same
+                    // rule the enum / Option renderers follow.
+                    self.builder.position_at_end(some_bb);
+                    self.disp_append_lit(acc, "Some(");
+                    self.builder
+                        .build_call(inner_fn, &[field_ptr.into(), acc.into()], "sh.fd")
+                        .unwrap();
+                    self.disp_append_lit(acc, ")");
+                    self.builder.build_unconditional_branch(join_bb).unwrap();
+
+                    self.builder.position_at_end(join_bb);
+                }
+                None => {
+                    let fte = field_tes.get(i).cloned().unwrap_or_else(|| TypeExpr {
+                        kind: TypeKind::Path(PathExpr {
+                            segments: vec!["i64".to_string()],
+                            generic_args: None,
+                            span: crate::token::Span::default(),
+                        }),
+                        span: crate::token::Span::default(),
+                    });
+                    let field_disp = self.emit_display_fn_for_type_expr(&fte);
+                    self.builder
+                        .build_call(field_disp, &[field_ptr.into(), acc.into()], "sh.fd")
+                        .unwrap();
+                }
+            }
+        }
+        self.disp_append_lit(acc, " }");
         self.builder.build_return(None).unwrap();
 
         self.current_fn = saved_fn;

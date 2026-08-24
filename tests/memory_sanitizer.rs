@@ -52510,6 +52510,50 @@ fn main() {
         );
     }
 
+    /// B-2026-08-24-2 — ASAN/LSan COVERAGE for `dbg` of a `shared struct`
+    /// handle, a shape that could not be compiled at all until the renderer
+    /// landed, so nothing in this suite had ever exercised it.
+    ///
+    /// READ THE NEXT PARAGRAPH BEFORE TRUSTING THIS TEST. It is coverage, NOT
+    /// the regression guard for the refcount bug that landed alongside it:
+    /// MEASURED to pass both with and without that fix, at `-O2` and at
+    /// `KARAC_OPT_LEVEL=0`. The AOT leg this harness builds is balanced either
+    /// way; the premature free was observable only under the JIT, as
+    /// `malloc(): unaligned tcache chunk detected`. The guard that actually
+    /// fails is `test_dbg_of_a_shared_struct_renders_the_same_on_all_three_backends`
+    /// in `tests/cli.rs`, which compares JIT stderr byte for byte and so sees
+    /// the allocator's complaint as a diff. Do not "strengthen" this one by
+    /// asserting on the bug; strengthen the JIT comparison instead.
+    ///
+    /// What it does earn: a shared handle owns a REFCOUNT rather than a buffer,
+    /// so `dbg`'s owned copy has to RETAIN rather than memcpy, and this pins
+    /// that the retaining path is free of the ordinary leak/double-free faults
+    /// on the AOT surface — including the niche `Option[shared]` layout, where
+    /// `None` is a null handle and the retain must be null-guarded.
+    #[test]
+    fn test_dbg_of_a_shared_struct_place_expression_is_refcount_balanced() {
+        assert_clean_asan_run(
+            r#"
+shared struct Flat { a: i64, b: String }
+shared struct Link { v: i64, mut next: Option[Link] }
+fn main() {
+    let f = Flat { a: 1_i64, b: "t".to_uppercase() };
+    dbg(f);
+    let f2 = dbg(f);
+    println(f"{f2.a}");
+
+    let tail = Link { v: 2_i64, next: None };
+    let head = Link { v: 1_i64, next: Some(tail) };
+    dbg(head);
+    let head2 = dbg(head);
+    println(f"{head2.v}");
+}
+"#,
+            &["1", "1"],
+            "dbg_shared_struct_place_expression",
+        );
+    }
+
     /// The `--release` half of the same property. Stripping removes the
     /// diagnostic, NOT the expression, so the ownership handling has to run in
     /// the stripped build too — an early return that skipped it made
