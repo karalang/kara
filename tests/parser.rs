@@ -15482,3 +15482,75 @@ fn test_unit_struct_serves_as_phantom_type_parameter() {
     );
     assert_eq!(prog.items.len(), 4);
 }
+
+// ---------------------------------------------------------------------------
+// Struct literals with explicit generic arguments — B-2026-08-24-3
+// ---------------------------------------------------------------------------
+//
+// `Connection[Disconnected] { socket: ... }` (design.md § Typestate via
+// Phantom Type Parameters, line 8756) used to fail in every expression
+// position: the postfix `[` loop read `C[S]` as a subscript and the `{` as a
+// block, so the `let` form reported "Expected Semicolon, found LeftBrace" and
+// the tail-expression form "Expected expression, found Colon" — two messages
+// for one cause. Kāra has no turbofish, so there is no `::<>` to disambiguate
+// with; a bounded lookahead past the bracket group does it instead.
+
+#[test]
+fn test_generic_struct_literal_parses_in_expression_positions() {
+    // let, WITHOUT an annotation — the design.md spelling.
+    parse_ok("struct S;\nstruct C[T] { fd: i64 }\nfn main() { let c = C[S] { fd: 1 }; }");
+    // tail-expression position.
+    parse_ok("struct S;\nstruct C[T] { fd: i64 }\nfn mk() -> C[S] { C[S] { fd: 1 } }");
+    // nested inside another generic literal, and in call-argument position.
+    parse_ok(
+        "struct S;\nstruct C[T] { fd: i64 }\nstruct D[T] { inner: C[S] }\n\
+         fn take(c: C[S]) -> i64 { c.fd }\n\
+         fn main() { let d = D[S] { inner: C[S] { fd: 7 } }; let n = take(C[S] { fd: 9 }); }",
+    );
+    // multi-argument and empty-body forms.
+    parse_ok(
+        "struct A;\nstruct B;\nstruct P[X, Y] { v: i64 }\nfn main() { let p = P[A, B] { v: 1 }; }",
+    );
+    parse_ok("struct S;\nstruct E[T] {}\nfn main() { let e = E[S] {}; }");
+}
+
+#[test]
+fn test_generic_struct_literal_records_its_type_arguments() {
+    let prog =
+        parse_ok("struct S;\nstruct C[T] { fd: i64 }\nfn main() { let c = C[S] { fd: 1 }; }");
+    // Dig out the literal and confirm the arguments survived the parse — a
+    // phantom parameter appears in no field, so dropping them here is exactly
+    // how the annotation-free form loses the only record of `T`.
+    let src = format!("{prog:?}");
+    assert!(
+        src.contains("StructLiteral"),
+        "expected a StructLiteral in the AST"
+    );
+    assert!(
+        src.contains("generic_args: Some"),
+        "explicit generic arguments must be recorded on the literal, got: {src}"
+    );
+}
+
+#[test]
+fn test_subscript_followed_by_brace_is_not_a_generic_struct_literal() {
+    // The lookahead must not steal an ordinary index expression whose
+    // statement happens to be followed by a block. Each of these parses as
+    // subscript + block and would break if the literal branch were too eager.
+    for src in [
+        "fn main() { let f = Vec[true]; let i = 0; if f[i] { let x = 1; } }",
+        "fn main() { let mut f = Vec[true]; let i = 0; while f[i] { f[i] = false; } }",
+        "fn main() { let v = Vec[1]; let i = 0; match v[i] { 1 => { } _ => { } } }",
+        "fn main() { let g = Vec[Vec[1]]; let r = 0; for x in g[r] { let y = x; } }",
+        // Single-identifier body in a condition: the `no_struct_literal`
+        // restriction must still win, exactly as for the bare `Name { x }` form.
+        "fn main() { let f = Vec[true]; let i = 0; let ok = 1; if f[i] { ok; } }",
+    ] {
+        let result = karac::parse(src);
+        assert!(
+            result.errors.is_empty(),
+            "must parse as subscript + block, got {:?} for: {src}",
+            result.errors
+        );
+    }
+}

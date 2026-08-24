@@ -770,6 +770,7 @@ fn render_rust_expr(e: &Expr) -> String {
             path,
             fields,
             spread,
+            ..
         } => {
             let name = path.join("::");
             let mut out = format!("(structlit {name}{sp}");

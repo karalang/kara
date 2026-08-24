@@ -1029,6 +1029,7 @@ pub(crate) fn subst_expr(expr: &mut Expr, subst: &std::collections::HashMap<Stri
             path,
             fields,
             spread,
+            ..
         } => {
             // A struct-literal path is a type-constructor position, so a bare
             // single-segment `T { .. }` is a type param too (qualified_only =
@@ -1346,6 +1347,7 @@ fn struct_default_body(
             path: vec![s.name.clone()],
             fields,
             spread: None,
+            generic_args: None,
         },
         span: s.span,
     })

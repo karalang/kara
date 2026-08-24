@@ -1149,6 +1149,7 @@ impl<'a> super::TypeChecker<'a> {
             path,
             fields,
             spread: None,
+            ..
         } = &expr.kind
         {
             if let Type::Named { name, args } = expected {
@@ -5264,6 +5265,7 @@ impl<'a> super::TypeChecker<'a> {
                 path,
                 fields,
                 spread,
+                generic_args,
             } => {
                 // Slice 2c — FFI union literal arm. Unions share the
                 // `Name { field: value, ... }` shape with struct
@@ -5333,6 +5335,29 @@ impl<'a> super::TypeChecker<'a> {
                     // goes nowhere (see `infer_struct_literal_with_spread`).
                     self.infer_expr(spread_expr);
                     return self.infer_struct_literal_with_spread(path, fields, &expr.span);
+                }
+                // Explicit generic arguments written AT the literal
+                // (`Connection[Disconnected] { socket: ... }`). Seed them as
+                // the expected type args, which is the same channel the
+                // annotated form (`let c: C[S] = C { .. }`) already uses.
+                //
+                // This is what makes a PHANTOM parameter work without an
+                // annotation: `S` appears in no field, so the field values
+                // cannot solve it and inference reports "cannot infer type
+                // parameter". What the programmer wrote is the only source of
+                // truth for it. B-2026-08-24-3.
+                if let Some(args) = generic_args {
+                    if let Some(lowered) =
+                        self.lower_literal_generic_args(&target_name, args, &expr.span)
+                    {
+                        return self.infer_struct_literal_expected(
+                            path,
+                            fields,
+                            &expr.span,
+                            Some(&lowered),
+                            false,
+                        );
+                    }
                 }
                 self.infer_struct_literal(path, fields, &expr.span)
             }

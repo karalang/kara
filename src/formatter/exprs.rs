@@ -455,6 +455,7 @@ impl super::Formatter {
                 path,
                 fields,
                 spread,
+                ..
             } => {
                 self.write_path(path);
                 self.write_str(" {\n");

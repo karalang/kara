@@ -708,6 +708,65 @@ impl<'a> super::TypeChecker<'a> {
         })
     }
 
+    /// Lower the EXPLICIT generic arguments written at a struct literal
+    /// (`Connection[Disconnected] { .. }`) to `Type`s for use as the expected
+    /// type args. Returns `None` — falling back to ordinary field-driven
+    /// inference — when the struct is unknown or non-generic, so a stray
+    /// `[...]` never changes how an existing program is inferred.
+    ///
+    /// Arity and argument-kind mismatches are reported here rather than
+    /// silently dropped: writing the arguments out is an explicit claim about
+    /// the type, and a wrong claim should be a diagnostic, not a fallback to
+    /// inference that reports something less specific somewhere else.
+    /// B-2026-08-24-3.
+    pub(super) fn lower_literal_generic_args(
+        &mut self,
+        struct_name: &str,
+        args: &[crate::ast::GenericArg],
+        span: &Span,
+    ) -> Option<Vec<Type>> {
+        let arity = self.env.structs.get(struct_name)?.generic_params.len();
+        if arity == 0 {
+            self.type_error(
+                format!("`{struct_name}` is not generic, so it takes no type arguments here"),
+                *span,
+                TypeErrorKind::TypeMismatch,
+            );
+            return None;
+        }
+        if args.len() != arity {
+            self.type_error(
+                format!(
+                    "`{struct_name}` takes {arity} type argument{}, but {} {} supplied here",
+                    if arity == 1 { "" } else { "s" },
+                    args.len(),
+                    if args.len() == 1 { "was" } else { "were" },
+                ),
+                *span,
+                TypeErrorKind::TypeMismatch,
+            );
+            return None;
+        }
+        let mut out = Vec::with_capacity(args.len());
+        for a in args {
+            match a {
+                crate::ast::GenericArg::Type(te) => out.push(self.lower_type_expr(te, &[])),
+                _ => {
+                    self.type_error(
+                        format!(
+                            "`{struct_name}` expects type arguments here; \
+                             a const or shape argument is not valid at a struct literal"
+                        ),
+                        *span,
+                        TypeErrorKind::TypeMismatch,
+                    );
+                    return None;
+                }
+            }
+        }
+        Some(out)
+    }
+
     pub(super) fn infer_struct_literal(
         &mut self,
         path: &[String],

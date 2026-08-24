@@ -45048,3 +45048,103 @@ fn errdefer_binding_is_scoped_to_its_own_block() {
          fn main() { let _ = work(); }\n",
     );
 }
+
+// ---------------------------------------------------------------------------
+// Explicit generic arguments on a struct literal — B-2026-08-24-3
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_phantom_parameter_is_bound_by_explicit_literal_type_args() {
+    // The point of the feature. `State` appears in NO field, so the field
+    // values cannot solve it — before the arguments were carried through,
+    // this reported "cannot infer type parameter 'State'". design.md
+    // § Typestate via Phantom Type Parameters depends on exactly this.
+    typecheck_ok(
+        "struct Disconnected;\n\
+         struct Connected;\n\
+         struct Connection[State] { fd: i64 }\n\
+         fn connect(c: Connection[Disconnected]) -> Connection[Connected] {\n\
+             Connection[Connected] { fd: c.fd }\n\
+         }\n\
+         fn send(c: ref Connection[Connected], n: i64) -> i64 { c.fd + n }\n\
+         fn main() {\n\
+             let conn = Connection[Disconnected] { fd: 4 };\n\
+             let open = connect(conn);\n\
+             let n = send(open, 2);\n\
+         }\n",
+    );
+}
+
+#[test]
+fn test_wrong_typestate_is_still_rejected() {
+    // The section's payoff line: the compiler must catch wrong-state access.
+    // A feature that made every state compatible would "pass" the positive
+    // test above while destroying the reason the pattern exists.
+    let errors = typecheck_errors(
+        "struct Disconnected;\n\
+         struct Connected;\n\
+         struct Connection[State] { fd: i64 }\n\
+         fn send(c: ref Connection[Connected], n: i64) -> i64 { c.fd + n }\n\
+         fn main() {\n\
+             let conn = Connection[Disconnected] { fd: 4 };\n\
+             let n = send(conn, 1);\n\
+         }\n",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("Connection[Connected]")
+                && e.message.contains("Connection[Disconnected]")),
+        "expected a state mismatch, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_explicit_literal_type_args_drive_field_checking() {
+    // The arguments are a real claim about the type, not decoration: a field
+    // value inconsistent with them must be rejected.
+    let errors =
+        typecheck_errors("struct Box[T] { v: T }\nfn main() { let b = Box[i64] { v: \"s\" }; }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("i64") && e.message.contains("String")),
+        "expected i64/String mismatch, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+    typecheck_ok("struct Box[T] { v: T }\nfn main() { let b = Box[i64] { v: 3 }; }");
+}
+
+#[test]
+fn test_literal_type_arg_arity_is_diagnosed() {
+    // Writing the arguments out is an explicit claim; a wrong one is a
+    // diagnostic here, not a silent fallback to inference that reports
+    // something less specific somewhere else.
+    let errors = typecheck_errors(
+        "struct S;\nstruct C[T] { fd: i64 }\nfn main() { let c = C[S, S] { fd: 1 }; }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("takes 1 type argument")),
+        "expected an arity diagnostic, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+
+    let errors =
+        typecheck_errors("struct S;\nstruct P { x: i64 }\nfn main() { let p = P[S] { x: 1 }; }");
+    assert!(
+        errors.iter().any(|e| e.message.contains("is not generic")),
+        "expected a non-generic diagnostic, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_bare_and_annotated_struct_literal_forms_are_unaffected() {
+    // The two spellings that already worked must keep working — the lookahead
+    // only fires on `Name[...]` immediately followed by a literal body.
+    typecheck_ok("struct S;\nstruct C[T] { fd: i64 }\nfn main() { let c: C[S] = C { fd: 1 }; }");
+    typecheck_ok("struct P { x: i64 }\nfn main() { let p = P { x: 1 }; }");
+}

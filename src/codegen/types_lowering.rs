@@ -269,6 +269,7 @@ impl<'ctx> super::Codegen<'ctx> {
             path,
             fields,
             spread,
+            ..
         } = &expr.kind
         else {
             return None;

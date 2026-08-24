@@ -298,6 +298,16 @@ pub enum ExprKind {
         path: Vec<String>,
         fields: Vec<FieldInit>,
         spread: Option<Box<Expr>>,
+        /// Explicit generic arguments written at the literal:
+        /// `Connection[Disconnected] { socket: ... }` (design.md § Typestate
+        /// via Phantom Type Parameters). `None` for the bare `C { .. }` form,
+        /// where the arguments are inferred from the fields or the expected
+        /// type. They cannot always be inferred — a PHANTOM parameter appears
+        /// in no field, so `let c = C[S] { fd: 1 }` has nothing to infer `S`
+        /// from and the annotation-free spelling needs these carried through.
+        /// Mirrors `Path::generic_args`, including the `GenericArg` widening
+        /// for const generics. B-2026-08-24-3.
+        generic_args: Option<Vec<GenericArg>>,
     },
 
     // Pipe

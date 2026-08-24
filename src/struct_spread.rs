@@ -102,6 +102,7 @@ fn rewrite_struct_literal(e: &mut Expr, structs: &StructFields) {
         path,
         fields,
         spread,
+        ..
     } = &mut e.kind
     else {
         return;

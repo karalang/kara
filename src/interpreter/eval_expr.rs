@@ -467,6 +467,7 @@ impl<'a> super::Interpreter<'a> {
                 path,
                 fields,
                 spread,
+                ..
             } => self.eval_struct_literal(path, fields, spread.as_deref()),
 
             // Field access

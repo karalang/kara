@@ -754,6 +754,7 @@ impl Stripper<'_> {
                 path,
                 fields,
                 spread,
+                ..
             } => {
                 self.segments(path, span);
                 for f in fields.iter_mut() {

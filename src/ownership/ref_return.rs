@@ -236,6 +236,7 @@ impl<'a> super::OwnershipChecker<'a> {
             path,
             fields,
             spread,
+            ..
         } = &e.kind
         else {
             return Some(BorrowReturnShape::UnsupportedForm);

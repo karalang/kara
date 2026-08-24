@@ -2776,6 +2776,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 path,
                 fields,
                 spread,
+                ..
             } => {
                 // A spread copies fields wholesale out of another value, box
                 // pointers included, and nothing here can tell which.

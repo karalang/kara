@@ -696,6 +696,7 @@ impl<'a> super::Resolver<'a> {
                 path,
                 fields,
                 spread,
+                ..
             } => {
                 // Resolve the struct type name
                 if let Some(first) = path.first() {

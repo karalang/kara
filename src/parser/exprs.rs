@@ -2174,6 +2174,18 @@ impl super::Parser {
             });
         }
 
+        // Generic struct literal: `Name[Args] { field: value }`. Must be
+        // intercepted BEFORE the postfix `[` index loop, exactly like the UFCS
+        // form above — otherwise the bracket is consumed as a subscript and the
+        // brace opens a block. B-2026-08-24-3.
+        if starts_upper(&name)
+            && self.check(&Token::LeftBracket)
+            && self.lookahead_generic_struct_literal()
+        {
+            let args = self.parse_generic_type_args()?;
+            return self.parse_struct_literal_body_generic(vec![name], Some(args), &start);
+        }
+
         // Prefix collection literal: `Vec[e1, e2, ...]` / `Array[e1, e2, ...]`
         // / `Vec[v; n]` / `Array[v; n]`. Intercept before the postfix `[` index
         // loop so the bracket is consumed as part of the literal, not as a
@@ -2354,6 +2366,47 @@ impl super::Parser {
         false
     }
 
+    /// `Name[Args] { field: value }` — a struct literal carrying EXPLICIT
+    /// generic arguments (design.md § Typestate via Phantom Type Parameters,
+    /// `Connection[Disconnected] { socket: ... }`). Mirrors
+    /// [`Self::lookahead_concrete_type_ufcs`]'s balanced-bracket scan, but
+    /// requires the token after the matching `]` to be a `{` whose contents
+    /// look like a struct-literal body rather than a block.
+    ///
+    /// Without this the postfix `[` loop reads `C[S]` as a SUBSCRIPT and the
+    /// following `{` as a block, so `let c = C[S] { fd: 1 };` failed with
+    /// "Expected Semicolon, found LeftBrace" and the same literal in tail
+    /// position with "Expected expression, found Colon" — two different
+    /// messages for one cause. Kāra has no turbofish, so there is no `::<>`
+    /// spelling to disambiguate with. B-2026-08-24-3.
+    fn lookahead_generic_struct_literal(&self) -> bool {
+        // Require at least one token inside `[…]` and check it is a type-start,
+        // so a value-shaped subscript (`grid[0] { … }`) never reaches the scan.
+        let inner_start = self.pos + 1;
+        if inner_start >= self.tokens.len() {
+            return false;
+        }
+        if !Self::starts_type(&self.tokens[inner_start].token) {
+            return false;
+        }
+        let mut depth: usize = 0;
+        let mut i = self.pos;
+        while i < self.tokens.len() {
+            match &self.tokens[i].token {
+                Token::LeftBracket => depth += 1,
+                Token::RightBracket => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return self.looks_like_struct_literal_at(i + 1);
+                    }
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        false
+    }
+
     /// First-token heuristic for "looks like the start of a type expression"
     /// — used by [`Self::lookahead_concrete_type_ufcs`] to reject value-
     /// shaped collection contents (integer literals, string literals, etc.)
@@ -2372,6 +2425,24 @@ impl super::Parser {
     }
 
     fn looks_like_struct_literal(&self) -> bool {
+        self.looks_like_struct_literal_at(self.pos)
+    }
+
+    /// [`Self::looks_like_struct_literal`] against an ARBITRARY `{` position
+    /// rather than `self.pos`. Needed by
+    /// [`Self::lookahead_generic_struct_literal`], which has to judge the brace
+    /// that follows a `[…]` generic-argument group without consuming it first.
+    fn looks_like_struct_literal_at(&self, brace_pos: usize) -> bool {
+        if !matches!(
+            self.tokens.get(brace_pos).map(|t| &t.token),
+            Some(Token::LeftBrace)
+        ) {
+            return false;
+        }
+        self.looks_like_struct_literal_body_at(brace_pos)
+    }
+
+    fn looks_like_struct_literal_body_at(&self, brace_pos: usize) -> bool {
         // Heuristic to disambiguate `Name { ... }` (struct literal) from
         // `expr { ... }` (expression followed by block).
         //
@@ -2390,11 +2461,11 @@ impl super::Parser {
         // (`fn mk(a: i64) -> P { P { a } }`, `let p = P { a };`) misparsed as
         // `P` followed by a block and failed with "expected 'P', found 'i64'"
         // (or a stray-brace parse error) — B-2026-07-08-23.
-        if self.pos + 2 >= self.tokens.len() {
+        if brace_pos + 2 >= self.tokens.len() {
             return false;
         }
-        let next = &self.tokens[self.pos + 1].token;
-        let after = &self.tokens[self.pos + 2].token;
+        let next = &self.tokens[brace_pos + 1].token;
+        let after = &self.tokens[brace_pos + 2].token;
         if matches!(
             (next, after),
             (Token::Identifier { .. }, Token::Colon)
@@ -2434,6 +2505,19 @@ impl super::Parser {
     }
 
     fn parse_struct_literal_body(&mut self, path: Vec<String>, start: &Span) -> Option<Expr> {
+        self.parse_struct_literal_body_generic(path, None, start)
+    }
+
+    /// `parse_struct_literal_body` with explicit generic arguments written at
+    /// the literal (`Connection[Disconnected] { socket: ... }`). `self.pos`
+    /// must point at the `{`; the `[...]` has already been consumed by the
+    /// caller. B-2026-08-24-3.
+    fn parse_struct_literal_body_generic(
+        &mut self,
+        path: Vec<String>,
+        generic_args: Option<Vec<GenericArg>>,
+        start: &Span,
+    ) -> Option<Expr> {
         self.expect(&Token::LeftBrace)?;
         let mut fields = Vec::new();
         let mut spread = None;
@@ -2480,6 +2564,7 @@ impl super::Parser {
                 path,
                 fields,
                 spread,
+                generic_args,
             },
         })
     }

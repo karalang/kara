@@ -31290,6 +31290,12 @@ fn test_dbg_struct_field_order_is_declaration_order_every_run() {
 /// SPEC'S spelling now reaches all three backends with identical output,
 /// so the sugar is a parser-level desugar and nothing downstream sees a
 /// different shape.
+///
+/// B-2026-08-24-3 completed the transcription: the literal now carries its
+/// explicit generic arguments (`Connection[Connected] { fd: ... }`), which is
+/// what binds the PHANTOM `State` parameter — it appears in no field, so the
+/// annotation-free spelling has nothing else to infer it from. The whole
+/// section is now written exactly as design.md writes it.
 #[test]
 fn test_unit_struct_typestate_parity_across_backends() {
     let tmp = scratch_project("unit-struct-typestate-parity");
@@ -31299,8 +31305,7 @@ struct Connected;
 struct Connection[State] { fd: i64 }
 
 fn connect(c: Connection[Disconnected]) -> Connection[Connected] {
-    let out: Connection[Connected] = Connection { fd: c.fd };
-    out
+    Connection[Connected] { fd: c.fd }
 }
 
 fn send(c: ref Connection[Connected], n: i64) -> i64 { c.fd + n }
@@ -31310,7 +31315,7 @@ fn send(c: ref Connection[Connected], n: i64) -> i64 { c.fd + n }
 struct Marker;
 
 fn main() {
-    let c: Connection[Disconnected] = Connection { fd: 4 };
+    let c = Connection[Disconnected] { fd: 4 };
     let open = connect(c);
     println(f"sent {send(open, 2)}");
     let m = Marker {};
