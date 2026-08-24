@@ -30939,3 +30939,85 @@ fn test_dbg_struct_field_order_is_declaration_order_every_run() {
         );
     }
 }
+
+/// design.md § Typestate via Phantom Type Parameters, transcribed with its
+/// own declaration syntax — `struct Disconnected;` / `struct Connected;`.
+/// B-2026-08-23-10: that spelling did not parse, so the section's worked
+/// example could not be written as the spec writes it. The pattern itself
+/// always worked once the markers were respelled `{}`; this pins that the
+/// SPEC'S spelling now reaches all three backends with identical output,
+/// so the sugar is a parser-level desugar and nothing downstream sees a
+/// different shape.
+#[test]
+fn test_unit_struct_typestate_parity_across_backends() {
+    let tmp = scratch_project("unit-struct-typestate-parity");
+    let src = r#"struct Disconnected;
+struct Connected;
+
+struct Connection[State] { fd: i64 }
+
+fn connect(c: Connection[Disconnected]) -> Connection[Connected] {
+    let out: Connection[Connected] = Connection { fd: c.fd };
+    out
+}
+
+fn send(c: ref Connection[Connected], n: i64) -> i64 { c.fd + n }
+
+// A unit struct is still a struct: constructible with the braced literal
+// and usable as an ordinary value, not only as a phantom argument.
+struct Marker;
+
+fn main() {
+    let c: Connection[Disconnected] = Connection { fd: 4 };
+    let open = connect(c);
+    println(f"sent {send(open, 2)}");
+    let m = Marker {};
+    let _ = m;
+    println("marker ok");
+}
+"#;
+    std::fs::write(tmp.join("ts.kara"), src).unwrap();
+
+    let stdout_of = |args: &[&str]| -> Option<String> {
+        karac_bin()
+            .current_dir(&tmp)
+            .args(args)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+    };
+    let interp = stdout_of(&["run", "--interp", "ts.kara"]);
+    let jit = stdout_of(&["run", "ts.kara"]);
+
+    let built = karac_bin()
+        .current_dir(&tmp)
+        .args(["build", "ts.kara"])
+        .output();
+    let exe = tmp.join("ts");
+    let aot = if built.map(|o| o.status.success()).unwrap_or(false) && exe.exists() {
+        std::process::Command::new(&exe)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+    } else {
+        None
+    };
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    let (Some(i), Some(j)) = (interp, jit) else {
+        panic!("interp and JIT must both run — neither needs a runtime archive");
+    };
+    assert_eq!(
+        i, j,
+        "interp/JIT parity for the unit-struct typestate example"
+    );
+    if let Some(a) = aot.as_ref() {
+        assert_eq!(
+            &i, a,
+            "interp/AOT parity for the unit-struct typestate example"
+        );
+    }
+    assert_eq!(i, "sent 6\nmarker ok\n");
+}

@@ -1801,9 +1801,31 @@ impl super::Parser {
         let generic_params = self.parse_optional_generic_params();
         let where_clause = self.parse_optional_where_clause();
 
-        self.expect(&Token::LeftBrace)?;
-        let (fields, invariants, impl_invariants) = self.parse_struct_body()?;
-        self.expect(&Token::RightBrace)?;
+        // Unit struct: `struct Name;` is sugar for `struct Name {}`.
+        // design.md § Typestate via Phantom Type Parameters writes its
+        // zero-size state markers this way (`struct Disconnected;`), and
+        // the language already HAS that shape — a zero-field struct — so
+        // this accepts the terminator instead of introducing a new kind of
+        // declaration. Everything downstream (resolver, typechecker,
+        // codegen, interpreter) sees exactly what `struct Name {}` produces:
+        // an empty field list, no invariants. The braced spelling stays
+        // canonical and is what the rest of the document uses.
+        let (fields, invariants, impl_invariants) = if self.eat(&Token::Semicolon) {
+            (Vec::new(), Vec::new(), Vec::new())
+        } else {
+            if !self.check(&Token::LeftBrace) {
+                // Both spellings are legal, so name both. Reporting only
+                // "Expected LeftBrace" here would read as if `;` were still
+                // a parse error, which is exactly the message this row was
+                // filed about.
+                self.error("Expected `{` or `;` after struct name");
+                return None;
+            }
+            self.expect(&Token::LeftBrace)?;
+            let body = self.parse_struct_body()?;
+            self.expect(&Token::RightBrace)?;
+            body
+        };
 
         let no_rc = attributes.iter().any(|a| a.is_bare("no_rc"));
         // `#[non_exhaustive]` is a bare type-level attribute. Set the

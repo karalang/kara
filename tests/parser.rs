@@ -15393,3 +15393,92 @@ fn impl_header_effect_clause_carries_a_machine_applicable_deletion() {
         parse(&fixed).errors
     );
 }
+
+// ---------------------------------------------------------------------------
+// Unit structs (`struct Name;`) — B-2026-08-23-10
+// ---------------------------------------------------------------------------
+//
+// design.md § Typestate via Phantom Type Parameters declares its zero-size
+// state markers as `struct Disconnected;` / `struct Connected;` — the first
+// two lines of its worked example. That spelling used to fail with
+// `Expected LeftBrace, found Semicolon`, so the section could not be
+// transcribed as written. It is sugar for the zero-field `struct Name {}`
+// the language already had; these pin that the sugar covers every
+// declaration shape and desugars to exactly the braced form.
+
+#[test]
+fn test_unit_struct_definition() {
+    let prog = parse_ok("struct Disconnected;");
+    if let Item::StructDef(s) = &prog.items[0] {
+        assert_eq!(s.name, "Disconnected");
+        assert!(s.fields.is_empty(), "unit struct must have no fields");
+    } else {
+        panic!("Expected struct");
+    }
+}
+
+#[test]
+fn test_unit_struct_matches_empty_braced_struct() {
+    // The sugar must produce the SAME StructDef shape as the braced form —
+    // if these ever diverge, downstream phases see a third kind of struct.
+    let unit = parse_ok("struct Marker;");
+    let braced = parse_ok("struct Marker {}");
+    let (Item::StructDef(u), Item::StructDef(b)) = (&unit.items[0], &braced.items[0]) else {
+        panic!("Expected structs");
+    };
+    assert_eq!(u.name, b.name);
+    assert_eq!(u.fields.len(), b.fields.len());
+    assert_eq!(u.invariants.len(), b.invariants.len());
+    assert_eq!(u.is_shared, b.is_shared);
+}
+
+#[test]
+fn test_unit_struct_modifier_and_generic_shapes() {
+    // Every declaration modifier the braced form accepts must reach the
+    // `;` terminator too — the sugar is on the body, not on the header.
+    for src in [
+        "pub struct S;",
+        "shared struct S;",
+        "struct S[T];",
+        "pub struct S[T, U];",
+        "#[non_exhaustive] pub struct S;",
+        "/// A marker.\nstruct S;",
+    ] {
+        let prog = parse_ok(src);
+        let Item::StructDef(s) = &prog.items[0] else {
+            panic!("Expected struct for: {src}");
+        };
+        assert_eq!(s.name, "S", "for: {src}");
+        assert!(s.fields.is_empty(), "for: {src}");
+    }
+}
+
+#[test]
+fn test_struct_without_body_or_semicolon_names_both_spellings() {
+    // Now that `;` is legal, reporting only "Expected LeftBrace" would read
+    // as if the unit spelling were still a parse error — which is the exact
+    // confusion this row was filed about.
+    let (_, errors) = parse_with_errors("struct S\nfn main() {}");
+    assert!(!errors.is_empty(), "expected a parse error");
+    let msg = errors[0].to_string();
+    assert!(
+        msg.contains('{') && msg.contains(';'),
+        "diagnostic must name both spellings, got: {msg}"
+    );
+}
+
+#[test]
+fn test_unit_struct_serves_as_phantom_type_parameter() {
+    // The whole point of the sugar: design.md's typestate markers, used as
+    // phantom arguments, parse in the positions the section puts them.
+    let prog = parse_ok(
+        "struct Disconnected;\n\
+         struct Connected;\n\
+         struct Connection[State] { fd: i64 }\n\
+         fn connect(c: Connection[Disconnected]) -> Connection[Connected] {\n\
+             let out: Connection[Connected] = Connection { fd: c.fd };\n\
+             out\n\
+         }\n",
+    );
+    assert_eq!(prog.items.len(), 4);
+}
