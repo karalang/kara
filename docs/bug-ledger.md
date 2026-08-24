@@ -97,12 +97,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 163 | 1 |
 | run-vs-build | 158 | 0 |
 | double-free | 136 | 0 |
-| codegen-gap | 132 | 1 |
+| codegen-gap | 133 | 2 |
 | diagnostics | 102 | 2 |
 | false-positive | 95 | 0 |
 | perf | 84 | 0 |
 | other | 58 | 0 |
-| soundness | 57 | 1 |
+| soundness | 57 | 0 |
 | crash | 55 | 0 |
 | use-after-free | 20 | 0 |
 
@@ -110,21 +110,21 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1011 | 2 |
-| typecheck | 250 | 2 |
+| codegen | 1012 | 2 |
+| typecheck | 250 | 1 |
 | interp | 180 | 0 |
 | ownership | 64 | 0 |
 | other | 63 | 0 |
 | cli | 62 | 0 |
 | autopar | 55 | 0 |
-| parser | 41 | 1 |
+| parser | 41 | 0 |
 | runtime | 31 | 0 |
 | resolver | 26 | 0 |
 | effect | 19 | 2 |
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1532 surfaced · 5 open · 1504 fixed · 9 wontfix** (2026-05-20 → 2026-08-24). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1533 surfaced · 5 open · 1505 fixed · 9 wontfix** (2026-05-20 → 2026-08-24). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (5)
 
@@ -133,8 +133,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1532 surfaced
 | B-2026-08-23-11 | 2026-08-23 | typecheck | medium | `Type::Function` carries NO EFFECT ROW, so design.md § First-Class Functions' `let f = save;  // f: Fn(User) -> () with writes(UserDB)` is not representable and a function value's effects cannot propagate through its TYPE. NARROWED 7e7972b: the IMPRECISION this caused -- a function value that is bound and never called still demanding the enclosing function declare its effects -- is FIXED, in the effect checker and without the type row (bind-an-alias, attribute-at-every-other-mention). What remains is representability only, and the prescription in the original title does not work as written: the typechecker cannot populate an effect row, because `effectcheck` runs after `typecheck` AND consumes its output, so inferred effects at typecheck time would need a cycle. Read the detail before picking this up. | roadmap.md |
 | B-2026-08-23-13 | 2026-08-23 | effect | low | The mutual-recursion NOTE now fires for two functions that merely REFERENCE each other as VALUES, calling them a "mutual recursion group" though neither calls the other. `fn p(n: i64) -> i64 { let f = q; n + 1 }` + `fn q(n: i64) -> i64 { let g = p; n + 2 }` reports `note[effect]: mutual recursion group resolved by fixed-point inference: \`p\` (no effects), \`q\` (no effects)`. The program passes and the note is suppressible with `#[allow(mutual_recursion_note)]`, so this is diagnostic wording, not a check failure -- but "mutual recursion" is a false statement about the program. | roadmap.md |
 | B-2026-08-24-9 | 2026-08-24 | codegen | low | `dbg(x)` where `x` is a SELF-REFERENTIAL `shared enum` (`shared enum T2 { Node(i64, T2), Leaf(i64) }`) REFUSES to compile. Not a missing arm: the shared-enum wrapper and the inner `emit_enum_display_fn` share ONE cache key (the bare enum name), so a payload of the enum's own type resolves to the aggregate-taking inner and is handed a handle. Refusing is the new behaviour; before the guard it MISCOMPILED, printing a wrong variant. A HEADERLESS or weak-headered shared type refuses for its own separate reason, below. | phase-7-codegen.md |
-| B-2026-08-24-10 | 2026-08-24 | parser+typecheck+codegen | high | A TAIL-POSITION `loop` DROPS ITS BREAK VALUE and the declared return type is NEVER CHECKED, so one program behaves THREE DIFFERENT WAYS: `fn pick() -> i64 { let mut i = 0; loop { i = i + 1; if i == 3 { break i * 10 } } }` prints `()` and exits 0 under the interpreter, STACK-OVERFLOWS the JIT, and HANGS FOREVER as an AOT binary. `karac check` reports "All checks passed." -- even for `fn pick() -> i64 { loop { break "a string" } }`, a String break in an i64 function. | roadmap.md |
 | B-2026-08-24-12 | 2026-08-24 | effect | medium | THE COMPILER'S OWN SUGGESTED FIX IS UNFOLLOWABLE for a public function that RETURNS an `Fn(..)` value. `pub fn get() -> Fn(i64) -> i64 { save }` errors with "public function 'get' performs effects [writes(UserDB)] but has no effect declaration. Add: with writes(UserDB) to the function signature" -- and doing EXACTLY that reproduces the SAME error, because a `with` clause after an `Fn` return type binds to the RETURN TYPE, not to the function. The one spelling that compiles is `pub fn get() -> (Fn(i64) -> i64 with writes(UserDB)) with writes(UserDB) { save }` -- parenthesised AND doubled -- which the diagnostic never mentions and which no user would guess. Measured on all four spellings. | roadmap.md |
+| B-2026-08-24-13 | 2026-08-24 | codegen | medium | A NON-SCALAR `break` VALUE (String / Vec / struct) cannot travel through the compiled backends' break-value slot: `fn pick() -> String { loop { break f"x" } }` and the labeled-block twin `found: { break found f"x" }` both FAIL AT MODULE VERIFICATION (`ret i64` against `{ptr, i64, i64}`), while the interpreter returns the value. Storing the header instead is a DOUBLE FREE, measured -- so the slot deliberately refuses it. | roadmap.md |
 
 ### Wontfix (9)
 
@@ -154,9 +154,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1532 surfaced
 
 </details>
 
-### Fixed (1504)
+### Fixed (1505)
 
-<details><summary>1504 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1505 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -17788,6 +17788,29 @@ MEASURED after the change:
   bare slot, `blocks` value      returned value has effect blocks() not declared in slot [pure]
   bare slot, `suspends` value    returned value has effect suspends() not declared in slot [pure]
   bare slot, `writes(UserDB)`    returned value has effect writes(UserDB) not declared in slot [pure] |
+| B-2026-08-24-10 | parser+typecheck+codegen | high | A TAIL-POSITION `loop` DROPS ITS BREAK VALUE and the declared return type is NEVER CHECKED, so one program behaves THREE DIFFERENT WAYS: `fn pick() -… | FIXED by 787c355. THREE DEFECTS, one per phase, and a single explanation for all three backend behaviours.
+
+1. PARSER, `is_block_expr` (src/parser/stmts.rs). `Loop` was listed with `While`/`WhileLet`/`For` as an expression "always treated as a statement (not final_expr)", so a trailing `loop` never became a block's value and the function fell off its own end. `Loop` is removed; the other three stay, because design.md gives them type `()` unconditionally and there is nothing to carry out. That was the interpreter's `()`.
+
+2. TYPECHECKER, `ExprKind::Loop` (src/typechecker/exprs.rs). It inferred `Type::Never` unconditionally, ignoring every `break <value>`; `Never` is the bottom type, so the declared return type was never enforced. It now pushes a collector frame and returns `lub_block_type(Never, &break_values)` — `Never` only when no value-break exists, keeping `loop {}` genuinely divergent.
+
+THE HANG AND THE STACK OVERFLOW WERE THE SAME BUG AS (2), and the IR shows it. With the loop typed `Never`, the exit block was emitted as:
+
+    loop.exit:                          ; preds = %mul.ovf.ok
+      %loop.val = load i64, ptr %loop.result
+      unreachable                       ; where `ret i64 %loop.val` belonged
+
+The `break` was always correct — it stores the value and branches here. But `unreachable` is UB, so LLVM deleted the edge reaching it and the loop became genuinely infinite: the AOT binary hung, the JIT died of a stack overflow under a different pass pipeline. That also explains the row's HONESTY NOTE about the JIT printing `()` once and overflowing three times later — two builds of identical source making different choices about the same UB. Fixing the type made the exit reachable and the `ret` appear.
+
+3. CODEGEN, the `break`-value slot (src/codegen/control_flow.rs) — found only because (1) and (2) made it reachable, and a genuine SILENT MISCOMPILE in its own right. `compile_loop` pre-allocated `loop.result` as a bare `i64` ("i64 by default; refined if used" — the refinement was never written) and `compile_break` stored only `if val.is_int_value()`. So `fn f() -> f64 { loop { break 2.5 } }` stored NOTHING and loaded whatever the slot held: 0 from AOT, 94219697698608 from the JIT, against 2.5 from the interpreter — no diagnostic on any path. The slot is now allocated LAZILY by the first stored value, at that value's own type, and read back at the same type. `compile_labeled_block` shares the mechanism and had the identical bug (`break found 3.5` printed 0).
+
+A `loop` that nothing breaks out of is divergent (design.md rule 0), so its exit block has no predecessors; it is now terminated with `unreachable`, which is what lets the enclosing `get_terminator().is_none()` guards skip a follow-on `ret`. Without that, a `-> Vec[String]` function ending in a `loop` that exits only via `return` emitted `ret i64` against a `{ptr, i64, i64}` return type — caught by the existing `test_e2e_value_fn_loop_tail_terminates_with_unreachable`, which pinned exactly this shape.
+
+NON-SCALAR BREAK VALUES ARE REFUSED, NOT COMPILED. A `String`/`Vec` break value is a `{ptr, i64, i64}` header whose buffer has an owner; copying it through the slot gives it a second owner and both the loop body's scope cleanup and the receiving binding free it — a measured double free ("free(): double free detected in tcache 2"), strictly worse than the module-verification error the i64 slot used to raise. Correctness needs the move-aware suppression `suppress_cleanup_for_tail_return` already performs for function tails, applied at every break site; that is its own slice, filed separately. Until then codegen fails closed with an actionable message naming the reason and the workaround.
+
+THE FRAME MODEL. `break_value_types` was a label-keyed list only labeled BLOCKS pushed to, so unlabeled breaks — and breaks targeting a labeled LOOP — matched nothing and were dropped. It is now a stack of `BreakFrame`s that every break target pushes: `loop` collects values, `while`/`while let`/`for` push VALUELESS frames, labeled blocks collect by name. The valueless frames are load-bearing: without them a bare `break` inside a `while` nested in a `loop` would resolve to the outer loop and contribute `()` to its LUB.
+
+THREE design.md RULES NOW HOLD that did not: the LUB itself; "a type mismatch across `break` sites is a compile error" (`check_break_values_agree` — `lub_block_type` silently picks a candidate, and that silence is what let this surface rot); and "`while` and `for` loops always have type `()`", so a value-carrying break out of one is rejected rather than discarded. |
 | B-2026-08-24-11 | effect | low | The `Fn(..)` EFFECT SLOT INSIDE A CONTAINER is never checked, so an effectful function placed in a pure-declared element slot is accepted in silence:… | FIXED by 2193636.
 
 `check_annotation_slots` (src/effectchecker/subtyping.rs) descends a
