@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 283 | 0 |
 | leak | 189 | 0 |
 | missing-feature | 162 | 2 |
-| run-vs-build | 157 | 1 |
+| run-vs-build | 158 | 1 |
 | double-free | 136 | 0 |
 | codegen-gap | 131 | 1 |
 | diagnostics | 100 | 1 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | codegen | 1009 | 1 |
 | typecheck | 249 | 1 |
-| interp | 179 | 1 |
+| interp | 180 | 1 |
 | ownership | 64 | 0 |
 | other | 63 | 0 |
 | cli | 62 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1526 surfaced · 5 open · 1498 fixed · 9 wontfix** (2026-05-20 → 2026-08-24). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1527 surfaced · 5 open · 1499 fixed · 9 wontfix** (2026-05-20 → 2026-08-24). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (5)
 
@@ -133,8 +133,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1526 surfaced
 | B-2026-08-23-11 | 2026-08-23 | typecheck | medium | `Type::Function` carries NO EFFECT ROW, so design.md § First-Class Functions' `let f = save;  // f: Fn(User) -> () with writes(UserDB)` is not representable and a function value's effects cannot propagate through its TYPE. NARROWED 7e7972b: the IMPRECISION this caused -- a function value that is bound and never called still demanding the enclosing function declare its effects -- is FIXED, in the effect checker and without the type row (bind-an-alias, attribute-at-every-other-mention). What remains is representability only, and the prescription in the original title does not work as written: the typechecker cannot populate an effect row, because `effectcheck` runs after `typecheck` AND consumes its output, so inferred effects at typecheck time would need a cycle. Read the detail before picking this up. | roadmap.md |
 | B-2026-08-23-13 | 2026-08-23 | effect | low | The mutual-recursion NOTE now fires for two functions that merely REFERENCE each other as VALUES, calling them a "mutual recursion group" though neither calls the other. `fn p(n: i64) -> i64 { let f = q; n + 1 }` + `fn q(n: i64) -> i64 { let g = p; n + 2 }` reports `note[effect]: mutual recursion group resolved by fixed-point inference: \`p\` (no effects), \`q\` (no effects)`. The program passes and the note is suppressible with `#[allow(mutual_recursion_note)]`, so this is diagnostic wording, not a check failure -- but "mutual recursion" is a false statement about the program. | roadmap.md |
 | B-2026-08-24-1 | 2026-08-24 | effect | medium | The `Fn(..)` EFFECT SLOT IS STILL UNCHECKED AT FOUR NON-`let` POSITIONS after B-2026-08-23-12 wired the binding annotation. Each accepts an effectful `save` into a slot that declares purity, with no diagnostic: (1) ASSIGNMENT to a declared-Fn binding -- `let mut f: Fn(i64) -> i64 = |x| x; f = save;`; (2) the `LetUninit` form of the same -- `let f: Fn(i64) -> i64; f = save;`; (3) RETURN POSITION -- `fn get() -> Fn(i64) -> i64 { save }`; (4) a STRUCT-LITERAL FIELD -- `struct Holder { f: Fn(i64) -> i64 }` built as `Holder { f: save }`. All four measured silent under `karac check` with the -12 binary, and all four print `14` under `--interp`, so the effectful function really does route through the pure-declared slot rather than the shape being rejected earlier. | roadmap.md |
-| B-2026-08-24-4 | 2026-08-24 | interp | high | A RUNTIME ERROR inside a `par {}` branch is swallowed WHOLE by the interpreter -- no message on stderr, exit code 0, and the statements after the join are skipped -- so a program that died halfway reports SUCCESS. JIT and AOT both print the error and exit 1. Measured on three unrelated error shapes (`panic("...")`, a Vec index out of bounds, a failed `assert`), all three identical: `karac run --interp` prints NOTHING and exits 0 where `karac run` and the compiled binary print `panic at c2.kara:1:51 in boom: vec index out of bounds` and exit 1. | roadmap.md |
 | B-2026-08-24-6 | 2026-08-24 | codegen | low | `dbg(x)` where `x` is a `shared ENUM` still REFUSES to compile -- "codegen: `dbg` at L:C cannot render a value of type `Shape` yet" -- while `karac run --interp` renders it (`Circle(5)`). B-2026-08-24-2 gave the shared STRUCT a Debug renderer and left this half deliberately failing closed, per that cluster's rule that a partly-landed renderer must NAME what it cannot draw rather than print a placeholder. A HEADERLESS shared struct refuses for a separate and more interesting reason, below. | phase-7-codegen.md |
+| B-2026-08-24-7 | 2026-08-24 | interp | medium | A RUNTIME ERROR inside `return <expr>` is OVERWRITTEN by the return's own control flow, so the interpreter KEEPS EXECUTING after the fault and hands the caller a FABRICATED value. `fn boom() -> i64 { let v = Vec[1, 2]; return v[99] }` called from `main` prints `got ()` -- a Unit where an `i64` belongs -- and only then reports the error; the compiled backends abort at the fault and print nothing else. Not `par`-specific: reproduces at top level with no `par` in the program. | phase-4-interpreter.md |
 
 ### Wontfix (9)
 
@@ -154,9 +154,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1526 surfaced
 
 </details>
 
-### Fixed (1498)
+### Fixed (1499)
 
-<details><summary>1498 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1499 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -17605,6 +17605,17 @@ WHY THE AST FIELD IS LOAD-BEARING, not bookkeeping: a PHANTOM parameter appears 
 CORRECTION TO THIS ROW'S OWN ESTIMATE. It priced the fix as needing "a restricted-expression rule (no struct literal in the condition position of `if`/`while`/`match` scrutinee, as Rust does)" -- and implied that machinery was absent. It was already there: `Parser::no_struct_literal`, with `parse_condition_expr` / `with_struct_literals`, has gated the ambiguous single-identifier body form since B-2026-07-08-23. So only the lookahead was missing, and the "blast radius across every `[`-suffixed expression followed by a brace" the row worried about is bounded by that existing flag plus the type-start guard. Pinned by a regression test over subscript-then-brace shapes (`if f[i] { .. }`, `while f[i] { .. }`, `match v[i] { .. }`, `for x in g[r] { .. }`, and the single-identifier body that the restriction must still claim).
 
 KNOWN BOUNDARY: the SELF-HOST Kara parser (`selfhost/src/`) does not parse this form. No divergence results -- the Rust-side sexp renderer in `tests/selfhost_parser.rs` does not emit `generic_args`, and no corpus program uses the syntax -- so the self-host oracle is unaffected; self-host parity for the new form is ordinary phase-12 lag, not a regression introduced here. |
+| B-2026-08-24-4 | interp | high | A RUNTIME ERROR inside a `par {}` branch is swallowed WHOLE by the interpreter -- no message on stderr, exit code 0, and the statements after the joi… | FIXED by de0fee9. `eval_par_block`'s join now harvests the branch interpreter's DIAGNOSTIC PAYLOAD alongside the four things it already took. `BranchResult` gained two elements -- `runtime_errors` and the `(error_trace, error_trace_truncated)` pair -- and the join merges them into the parent in source order, next to the console replay and BEFORE the control-flow check that returns early on the first error.
+
+TWO VECS, NOT ONE. The row named `runtime_errors`; the RETURN TRACE is a second vec on the branch interpreter and died the same way. Harvesting only the first would have left the par diagnostic missing the `Error return trace:` section that the identical fault outside `par` prints -- a partial landing of exactly the kind this cluster keeps producing. The trace is taken only when the branch actually recorded an error: a SUCCESSFUL branch can still have pushed frames (a `?` propagating an `Err` is ordinary control flow, not a fault), and those would otherwise render under a sibling's error as if they belonged to it.
+
+THE BAR IS PARITY WITH THE SAME FAULT OUTSIDE `par`, not a new par-specific rendering, and that is now exact -- same message, same trace section, same exit status. Measured after the fix, `panic()` in a branch: `runtime error: died` / `at p1.kara:1:38` / `Error return trace:` / exit 101, character-for-character the non-par baseline modulo the span. A clean par block still exits 0.
+
+TWO CORRECTIONS TO THIS ROW, both measured:
+  (1) EXIT CODE. The row records JIT/AOT exiting 1. They exit 101 now -- B-2026-08-23-17's fix (`c12de8f`, panics to stderr + exit 101) landed after this row was filed. The assert shape still exits 1 under JIT because it takes the `KARAC_TEST_FAILURE` path, and that difference is PRE-EXISTING and identical outside `par` -- not something this fix changes or should.
+  (2) "THE STATEMENTS AFTER THE JOIN ARE SKIPPED" is true for the `panic()` and bare-index shapes but NOT for `return v[99]`, which prints `joined 0 ()` -- the post-join `println` runs with a FABRICATED `()` where an `i64` belongs. That is a second, independent defect, filed as B-2026-08-24-7: it reproduces with no `par` in sight, so it is not the join's doing. After this fix the par case matches the non-par case exactly, including that residue.
+
+SCOPE NOTE ON FAIL-FAST: with two failing branches, WHICH error is reported is nondeterministic (measured 3/8 vs 5/8 over eight runs) because the pre-start cancellation check means a branch may never run at all. That is the existing `cancel` design, unchanged here, and it is why every regression test uses exactly ONE failing branch -- asserting on both would be flaky by construction, the same discipline the Map/Set iteration-order rule enforces. |
 | B-2026-08-24-5 | codegen | high | `asan_local_fixed_array_returned_out_is_not_dropped_twice` DOUBLE-FREES at KARAC_OPT_LEVEL=0, so `scripts/asan-o0-leg.sh` is RED on main and reports… | FIXED by 5a585d8. The retraction already existed -- `suppress_array_binding_move_arg` (`src/codegen/param_own.rs`) removes an owned `Array[T, N]` binding's array-keyed `StructDrop` from the cleanup frame -- but it was hooked ONLY at the by-value CALL-ARGUMENT choke point (`move_declined_copy_struct_arg`). Neither RETURN position called it, so a returned array's slot drop fired in the callee while the caller freed the same element buffers. Hooked at both return sites now.
 
 TWO SITES, AND EACH COVERS A SHAPE THE OTHER DOES NOT -- established by revert-discrimination, not by reading:
