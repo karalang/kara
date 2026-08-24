@@ -2335,6 +2335,260 @@ fn test_subtype_closure_arg_wider_rejected() {
     );
 }
 
+// ── B-2026-08-23-12: a `let` annotation is a slot too ───────────────────────
+//
+// `fn apply(f: Fn(i64) -> i64)` called as `apply(save)` was rejected while
+// `let f: Fn(i64) -> i64 = save;` was accepted in silence -- the same E0404
+// rule applied at one site and not the other. `check_subtyping_in_stmt`'s
+// `Let` arm walked the VALUE for nested calls but never compared the binding's
+// declared type against that value's effects.
+//
+// These are PRECISION pins, not soundness ones. B-2026-08-23-7 already makes
+// the mere MENTION of `save` contribute its effects to the enclosing function,
+// so every program below still fails at a `pub` boundary that hides the write;
+// what none of them used to produce was a complaint about the ANNOTATION.
+
+/// The asymmetry itself: one program, the same function placed in the same
+/// declared slot at two positions, must get the same verdict. This is the
+/// regression guard -- an argument-only fix would pass every other test here.
+#[test]
+fn test_let_annotation_slot_and_parameter_slot_agree() {
+    let via_param = effectcheck_errors(
+        "effect resource UserDB;\n\
+         fn save(n: i64) -> i64 with writes(UserDB) { n * 2 }\n\
+         fn apply(f: Fn(i64) -> i64, n: i64) -> i64 { f(n) }\n\
+         fn main() with writes(UserDB) { apply(save, 7); }",
+    );
+    let via_let = effectcheck_errors(
+        "effect resource UserDB;\n\
+         fn save(n: i64) -> i64 with writes(UserDB) { n * 2 }\n\
+         fn main() with writes(UserDB) { let f: Fn(i64) -> i64 = save; f(7); }",
+    );
+    let violates = |errs: &[EffectError]| {
+        errs.iter()
+            .any(|e| e.kind == EffectErrorKind::EffectSubtypeViolation)
+    };
+    assert!(
+        violates(&via_param),
+        "parameter slot must reject the effectful fn; got: {:?}",
+        via_param.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+    assert!(
+        violates(&via_let),
+        "the IDENTICAL let-annotation slot must reject it too; got: {:?}",
+        via_let.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_let_annotation_wider_value_rejected() {
+    let errors = effectcheck_errors(
+        "effect resource UserDB;\n\
+         fn save(n: i64) -> i64 with writes(UserDB) { n * 2 }\n\
+         fn main() with writes(UserDB) { let f: Fn(i64) -> i64 = save; f(7); }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == EffectErrorKind::EffectSubtypeViolation),
+        "expected EffectSubtypeViolation, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+    let msg = errors
+        .iter()
+        .find(|e| e.kind == EffectErrorKind::EffectSubtypeViolation)
+        .map(|e| e.message.clone())
+        .unwrap_or_default();
+    assert!(
+        msg.contains("`f`"),
+        "message should name the offending binding; got: {msg}"
+    );
+    assert!(
+        msg.contains("writes(UserDB)") && msg.contains("[pure]"),
+        "message should name the effect and the declared slot; got: {msg}"
+    );
+}
+
+#[test]
+fn test_let_annotation_exact_match_ok() {
+    effectcheck_ok(
+        "effect resource UserDB;\n\
+         fn save(n: i64) -> i64 with writes(UserDB) { n * 2 }\n\
+         fn main() with writes(UserDB) {\n\
+             let f: Fn(i64) -> i64 with writes(UserDB) = save; f(7);\n\
+         }",
+    );
+}
+
+#[test]
+fn test_let_annotation_wider_slot_accepts_narrower_value() {
+    effectcheck_ok(
+        "effect resource UserDB;\n\
+         effect resource Db;\n\
+         fn save(n: i64) -> i64 with writes(UserDB) { n * 2 }\n\
+         fn main() with writes(UserDB) {\n\
+             let f: Fn(i64) -> i64 with writes(UserDB) reads(Db) = save; f(7);\n\
+         }",
+    );
+}
+
+#[test]
+fn test_let_annotation_pure_value_into_pure_slot_ok() {
+    effectcheck_ok(
+        "fn pure_fn(n: i64) -> i64 { n + 1 }\n\
+         fn main() { let f: Fn(i64) -> i64 = pure_fn; f(7); }",
+    );
+}
+
+#[test]
+fn test_let_annotation_polymorphic_slot_accepts_anything() {
+    effectcheck_ok(
+        "effect resource UserDB;\n\
+         fn save(n: i64) -> i64 with writes(UserDB) { n * 2 }\n\
+         pub fn main() with _ { let f: Fn(i64) -> i64 with _ = save; f(7); }",
+    );
+}
+
+/// `with E` names an effect VARIABLE, and variables are bound per CALL SITE by
+/// `compute_call_var_bindings` -- which needs a callee symbol and an argument
+/// list, neither of which a binding annotation has. Resolving `E` against no
+/// bindings yields the EMPTY set, which would reject every effectful value
+/// assigned to a legitimately polymorphic slot, so the check fails OPEN here.
+/// This pins that choice rather than leaving it to be "fixed" into a false
+/// positive.
+#[test]
+fn test_let_annotation_effect_variable_slot_is_not_checked() {
+    effectcheck_ok(
+        "effect resource UserDB;\n\
+         fn save(n: i64) -> i64 with writes(UserDB) { n * 2 }\n\
+         pub fn run[with E](g: Fn(i64) -> i64 with E) -> i64 with E {\n\
+             let f: Fn(i64) -> i64 with E = g; f(7)\n\
+         }\n\
+         fn main() with writes(UserDB) { run(save); }",
+    );
+}
+
+#[test]
+fn test_let_else_annotation_wider_value_rejected() {
+    let errors = effectcheck_errors(
+        "effect resource UserDB;\n\
+         fn save(n: i64) -> i64 with writes(UserDB) { n * 2 }\n\
+         fn main() with writes(UserDB) {\n\
+             let f: Fn(i64) -> i64 = save else { return; };\n\
+             f(7);\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == EffectErrorKind::EffectSubtypeViolation),
+        "`let ... else` carries the same annotation slot; got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_let_annotation_wider_closure_rejected() {
+    let errors = effectcheck_errors(
+        "effect resource UserDB;\n\
+         fn save(n: i64) -> i64 with writes(UserDB) { n * 2 }\n\
+         fn main() with writes(UserDB) { let f: Fn(i64) -> i64 = |x| save(x); f(7); }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == EffectErrorKind::EffectSubtypeViolation),
+        "a closure calling an effectful fn must not satisfy a pure slot; got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+/// `OnceFn` shares the `FnType` AST shape and effect-spec structure with `Fn`
+/// (only the lowering target differs), and the argument-position rule already
+/// ignores `is_once`. The annotation rule must not accidentally special-case it.
+#[test]
+fn test_oncefn_let_annotation_wider_value_rejected() {
+    let errors = effectcheck_errors(
+        "effect resource UserDB;\n\
+         fn save(n: i64) -> i64 with writes(UserDB) { n * 2 }\n\
+         fn main() with writes(UserDB) { let f: OnceFn(i64) -> i64 = save; f(7); }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == EffectErrorKind::EffectSubtypeViolation),
+        "an `OnceFn` annotation is the same slot; got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+/// A resource-less verb (`panics`) must reject against a pure slot and pass
+/// against one that declares it -- the B-2026-08-05-18 class, at the new site.
+#[test]
+fn test_let_annotation_resource_less_verb_follows_the_slot() {
+    let errors = effectcheck_errors(
+        "fn panicky(n: i64) -> i64 with panics { n }\n\
+         fn main() with panics { let f: Fn(i64) -> i64 = panicky; f(7); }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == EffectErrorKind::EffectSubtypeViolation),
+        "`panics` must not satisfy a pure annotation slot; got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+    effectcheck_ok(
+        "fn panicky(n: i64) -> i64 with panics { n }\n\
+         fn main() with panics { let f: Fn(i64) -> i64 with panics = panicky; f(7); }",
+    );
+}
+
+/// Control: an UNANNOTATED `let` is not a slot and must stay silent. Without
+/// this, "check every `let`" would look like a passing fix while flooding
+/// ordinary code with diagnostics for effects the binding never declared.
+#[test]
+fn test_let_without_annotation_is_not_a_slot() {
+    effectcheck_ok(
+        "effect resource UserDB;\n\
+         fn save(n: i64) -> i64 with writes(UserDB) { n * 2 }\n\
+         fn main() with writes(UserDB) { let f = save; f(7); }",
+    );
+}
+
+/// Control: a non-function annotation is not a slot either.
+#[test]
+fn test_non_fn_let_annotation_is_not_a_slot() {
+    effectcheck_ok("fn main() { let x: i64 = 5; let _ = x; }");
+}
+
+/// The rendered slot list is built from a `HashSet`, whose iteration order is
+/// per-process random -- so a slot declaring two or more effects used to render
+/// them in a different order between runs of the SAME binary, and any snapshot
+/// of the message was a coin flip. Both slot paths sort before joining; this
+/// pins the rendered text exactly.
+#[test]
+fn test_multi_effect_slot_renders_in_a_stable_order() {
+    let errors = effectcheck_errors(
+        "effect resource Alpha;\n\
+         effect resource Zeta;\n\
+         effect resource Other;\n\
+         fn noisy(n: i64) -> i64 with writes(Other) { n }\n\
+         fn main() with writes(Other) {\n\
+             let f: Fn(i64) -> i64 with reads(Zeta) reads(Alpha) = noisy;\n\
+             f(7);\n\
+         }",
+    );
+    let msg = errors
+        .iter()
+        .find(|e| e.kind == EffectErrorKind::EffectSubtypeViolation)
+        .map(|e| e.message.clone())
+        .expect("expected a slot violation naming both declared effects");
+    assert!(
+        msg.contains("[reads(Alpha), reads(Zeta)]"),
+        "slot list must render sorted and stable; got: {msg}"
+    );
+}
+
 // ── E0404 structured subtype trace (Phase 3 checklist `karac explain`) ───────
 
 #[test]

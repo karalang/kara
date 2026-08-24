@@ -20,7 +20,8 @@ use crate::resolver::SpanKey;
 use crate::token::Span;
 
 use super::{
-    format_monomorphized_signature, verb_name, EffectError, EffectErrorKind, EffectSubtypeTrace,
+    format_monomorphized_signature, verb_name, Effect, EffectError, EffectErrorKind,
+    EffectSubtypeTrace,
 };
 
 impl<'a> super::EffectChecker<'a> {
@@ -50,11 +51,28 @@ impl<'a> super::EffectChecker<'a> {
             StmtKind::MultiAssign { .. } => unreachable!(
                 "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
             ),
-            StmtKind::Let { value, .. } => self.check_subtyping_in_expr(value),
+            StmtKind::Let {
+                ty, pattern, value, ..
+            } => {
+                if let Some(ty) = ty {
+                    self.check_binding_annotation_subtyping(ty, pattern, value);
+                }
+                self.check_subtyping_in_expr(value);
+            }
+            // `let f: Fn(..);` has no value, so there is no function to check
+            // against the slot here. The later `f = save;` is the ASSIGNMENT
+            // position, which is a separate unchecked slot -- see the sibling
+            // row filed alongside B-2026-08-23-12.
             StmtKind::LetUninit { .. } => {}
             StmtKind::LetElse {
-                value, else_block, ..
+                ty,
+                pattern,
+                value,
+                else_block,
             } => {
+                if let Some(ty) = ty {
+                    self.check_binding_annotation_subtyping(ty, pattern, value);
+                }
                 self.check_subtyping_in_expr(value);
                 self.check_subtyping_in_block(else_block);
             }
@@ -161,10 +179,15 @@ impl<'a> super::EffectChecker<'a> {
 
             // Pre-compute trace fields shared across all E0404 errors for
             // this argument position (slot / argument / offending sets).
-            let slot_str: Vec<String> = slot_effects
+            // Sorted for the same reason the binding-annotation path sorts:
+            // `slot_effects` is a `HashSet`, so a slot declaring two or more
+            // effects rendered them in a per-process-random order and the
+            // shipped message differed between runs of one binary.
+            let mut slot_str: Vec<String> = slot_effects
                 .iter()
                 .map(|e| format!("{}({})", verb_name(&e.verb), e.resource))
                 .collect();
+            slot_str.sort();
             let arg_str: Vec<String> = arg_effects
                 .effects
                 .iter()
@@ -228,6 +251,128 @@ impl<'a> super::EffectChecker<'a> {
                     });
                 }
             }
+        }
+    }
+
+    /// Effects admitted by an explicit `Fn(..)` / `OnceFn(..)` type annotation.
+    ///
+    /// `Some(set)` when the annotation is a function type whose effect clause
+    /// resolves to a concrete set at this site -- an ABSENT clause reading as
+    /// the empty (pure) set, the same way the argument-position rule reads an
+    /// unannotated slot (`test_subtype_unannotated_slot_treated_as_pure`).
+    ///
+    /// `None` -- meaning "no check here" -- in three cases:
+    ///
+    ///   * `ty` is not a function type at all, so there is no slot.
+    ///   * `with _` ([`EffectSpec::Polymorphic`]) admits any effects by
+    ///     definition, exactly as the argument path `continue`s on it.
+    ///   * the clause names an effect VARIABLE (`with E`). Those are bound per
+    ///     CALL SITE by `compute_call_var_bindings`, which needs a callee
+    ///     symbol and an argument list; a binding annotation has neither. The
+    ///     alternative -- resolving `E` against no bindings -- yields the EMPTY
+    ///     set and would reject every effectful value assigned to a
+    ///     legitimately polymorphic slot, so this fails open.
+    fn fn_annotation_slot_effects(&self, ty: &TypeExpr) -> Option<HashSet<Effect>> {
+        let TypeKind::FnType { effect_spec, .. } = &ty.kind else {
+            return None;
+        };
+        match effect_spec {
+            Some(EffectSpec::Polymorphic) => None,
+            Some(EffectSpec::Specific(list)) => {
+                let has_unresolvable_var = list
+                    .items
+                    .iter()
+                    .any(|i| matches!(i, EffectItem::Variable(_) | EffectItem::Polymorphic));
+                if has_unresolvable_var {
+                    return None;
+                }
+                Some(self.resolve_effect_list_to_set(list, None))
+            }
+            None => Some(HashSet::new()),
+        }
+    }
+
+    /// Check a binding's `Fn(..)` annotation against the effects of the
+    /// function value assigned to it (B-2026-08-23-12).
+    ///
+    /// An annotation is a slot in exactly the sense `check_call_args_subtyping`
+    /// means one: `let f: Fn(i64) -> i64 = save;` declares `f` pure and is
+    /// handed a `save` that writes. Until this check existed the IDENTICAL
+    /// parameter slot -- `fn apply(f: Fn(i64) -> i64)` called as `apply(save)`
+    /// -- was rejected while the binding was accepted in silence, which is the
+    /// same E0404 rule applied at one site and not the other.
+    ///
+    /// This is a PRECISION check, not a soundness one, and deliberately so:
+    /// B-2026-08-23-7 makes the mere MENTION of `save` contribute its effects
+    /// to the enclosing function, so a `pub fn` still cannot hide the write
+    /// (measured on every shape this walker reaches, annotated and not). What
+    /// was missing was any diagnostic for the annotation itself being a lie.
+    fn check_binding_annotation_subtyping(
+        &mut self,
+        ty: &TypeExpr,
+        pattern: &Pattern,
+        value: &Expr,
+    ) {
+        let Some(slot_effects) = self.fn_annotation_slot_effects(ty) else {
+            return;
+        };
+        let value_effects = self.get_arg_effects(value);
+
+        // Sorted, not raw `HashSet` order: the rendered slot list is user-facing
+        // text, and an unsorted set makes the message vary between runs of the
+        // same binary once a slot declares two or more effects.
+        let mut slot_str: Vec<String> = slot_effects
+            .iter()
+            .map(|e| format!("{}({})", verb_name(&e.verb), e.resource))
+            .collect();
+        slot_str.sort();
+        let value_str: Vec<String> = value_effects
+            .effects
+            .iter()
+            .filter(|te| !self.is_transparent_verb(&te.effect.verb))
+            .map(|te| format!("{}({})", verb_name(&te.effect.verb), te.effect.resource))
+            .collect();
+        let offending_str: Vec<String> = value_effects
+            .effects
+            .iter()
+            .filter(|te| {
+                !self.is_transparent_verb(&te.effect.verb) && !slot_effects.contains(&te.effect)
+            })
+            .map(|te| format!("{}({})", verb_name(&te.effect.verb), te.effect.resource))
+            .collect();
+
+        let subject = match &pattern.kind {
+            PatternKind::Binding(name) => format!("binding `{name}`"),
+            _ => "binding".to_string(),
+        };
+
+        for te in &value_effects.effects {
+            if slot_effects.contains(&te.effect) || self.is_transparent_verb(&te.effect.verb) {
+                continue;
+            }
+            let effect_str = format!("{}({})", verb_name(&te.effect.verb), te.effect.resource);
+            let message = format!(
+                "{} has effect {} not declared in slot [{}]",
+                subject,
+                effect_str,
+                if slot_str.is_empty() {
+                    "pure".to_string()
+                } else {
+                    slot_str.join(", ")
+                },
+            );
+            self.errors.push(EffectError {
+                message,
+                span: value.span,
+                kind: EffectErrorKind::EffectSubtypeViolation,
+                subtype_trace: Some(EffectSubtypeTrace {
+                    slot_effects: slot_str.clone(),
+                    argument_effects: value_str.clone(),
+                    offending_effects: offending_str.clone(),
+                    monomorphized_signature: None,
+                }),
+                replacement: None,
+            });
         }
     }
 
