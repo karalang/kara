@@ -37782,3 +37782,143 @@ fn test_clean_par_records_no_runtime_error() {
         "clean par must record nothing: {errors:?}"
     );
 }
+
+// ── B-2026-08-24-7: a fault outranks the statement it faulted inside ──
+
+/// The load-bearing assertion for this family: after the fault, the
+/// interpreter must have executed NOTHING further. `errors` alone is not
+/// enough — the pre-fix interpreter recorded the error too, and *still*
+/// ran the caller to completion on a value that does not exist.
+fn assert_stops_at_fault(source: &str, needle: &str, forbidden: &str) {
+    let (out, errors, _trace, _trunc) = run_program_full(source);
+    assert!(
+        errors.iter().any(|e| e.message.contains(needle)),
+        "expected a runtime error containing {needle:?}, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+    let joined = out.join("");
+    assert!(
+        !joined.contains(forbidden),
+        "execution continued past the fault: output {joined:?} contains {forbidden:?}"
+    );
+}
+
+#[test]
+fn test_fault_in_return_operand_stops_the_program() {
+    // `return v[99]` used to be DOWNGRADED to `return ()`: the faulting
+    // operand yielded the Unit poison, and `set_cf(Return(poison))`
+    // overwrote the RuntimeError marker already in `pending_cf`. The caller
+    // then resumed and printed `got ()` — a Unit where an `i64` belongs —
+    // from a statement the compiled backends never reach.
+    assert_stops_at_fault(
+        "fn boom() -> i64 { let v = Vec[1, 2]; return v[99] }\n\
+         fn main() { let x = boom(); println(f\"got {x}\"); }\n",
+        "out of bounds",
+        "got",
+    );
+}
+
+#[test]
+fn test_fault_in_break_operand_stops_the_program() {
+    // `break` carries a value through the same funnel, so it downgraded the
+    // fault identically. The row named only `return`; this is the shape that
+    // showed the defect belongs to `set_cf`, not to one statement.
+    assert_stops_at_fault(
+        "fn boom() -> i64 {\n\
+             let v = Vec[1, 2];\n\
+             let r = loop { break v[99] };\n\
+             r\n\
+         }\n\
+         fn main() { let x = boom(); println(f\"got {x}\"); }\n",
+        "out of bounds",
+        "got",
+    );
+}
+
+#[test]
+fn test_fault_in_returned_call_stops_the_program() {
+    // The fault need not be lexically inside the `return` operand: a callee
+    // that faults sets the same marker through `call_function`'s propagate
+    // arm, and the caller's `return` overwrote it just as readily.
+    assert_stops_at_fault(
+        "fn inner() -> i64 { let v = Vec[1, 2]; v[99] }\n\
+         fn boom() -> i64 { return inner() }\n\
+         fn main() { let x = boom(); println(f\"got {x}\"); }\n",
+        "out of bounds",
+        "got",
+    );
+}
+
+#[test]
+fn test_divide_by_zero_in_return_operand_stops_the_program() {
+    // Fault-kind-agnostic: every `record_runtime_error` caller sets the same
+    // marker, so pinning only the index-OOB shape would leave the rest of the
+    // family free to regress.
+    assert_stops_at_fault(
+        "fn boom(d: i64) -> i64 { return 10 / d }\n\
+         fn main() { let x = boom(0); println(f\"got {x}\"); }\n",
+        "division by zero",
+        "got",
+    );
+}
+
+#[test]
+fn test_unwrap_of_none_in_return_operand_stops_the_program() {
+    assert_stops_at_fault(
+        "fn boom() -> i64 { let o: Option[i64] = None; return o.unwrap() }\n\
+         fn main() { let x = boom(); println(f\"got {x}\"); }\n",
+        "unwrap",
+        "got",
+    );
+}
+
+#[test]
+fn test_healthy_return_and_break_still_carry_their_values() {
+    // The inverse failure the guard could cause: `set_cf` now declines to
+    // write when an unwind is pending, so a stale or over-broad marker would
+    // silently swallow ordinary control flow. Both carriers must still work.
+    assert_eq!(
+        run_no_errors(
+            "fn pick() -> i64 { let v = Vec[7, 8]; return v[1] }\n\
+             fn main() { println(pick()); }\n"
+        ),
+        "8\n"
+    );
+    // The `break` carrier is exercised through a `let` binding rather than a
+    // tail-position `loop`: a tail `loop` drops its break value in BOTH
+    // backends (filed separately — it predates this fix and is not a
+    // run-vs-build divergence), which would make this test fail for an
+    // unrelated reason.
+    assert_eq!(
+        run_no_errors(
+            "fn pick() -> i64 {\n\
+                 let mut i = 0;\n\
+                 let r = loop { i = i + 1; if i == 3 { break i * 10 } };\n\
+                 r\n\
+             }\n\
+             fn main() { println(pick()); }\n"
+        ),
+        "30\n"
+    );
+}
+
+#[test]
+fn test_question_mark_propagation_survives_the_guard() {
+    // `?` propagates an `Err` through `set_cf(Return(..))` — the same funnel,
+    // but on a real value rather than a fault poison. Guarding the funnel must
+    // not touch it.
+    assert_eq!(
+        run_no_errors(
+            "fn half(n: i64) -> Result[i64, String] {\n\
+                 if n % 2 != 0 { return Err(\"odd\") }\n\
+                 Ok(n / 2)\n\
+             }\n\
+             fn chain(n: i64) -> Result[i64, String] { let h = half(n)?; Ok(h + 1) }\n\
+             fn main() {\n\
+                 match chain(9) { Ok(v) => println(f\"ok {v}\"), Err(e) => println(f\"err {e}\") }\n\
+                 match chain(8) { Ok(v) => println(f\"ok {v}\"), Err(e) => println(f\"err {e}\") }\n\
+             }\n"
+        ),
+        "err odd\nok 5\n"
+    );
+}

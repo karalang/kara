@@ -31873,3 +31873,83 @@ fn test_par_branch_runtime_error_fails_the_run() {
     );
     assert_eq!(clean_code, Some(0), "a healthy par block must still exit 0");
 }
+
+/// B-2026-08-24-7 — a fault inside a `return` operand must stop the program on
+/// EVERY backend. The interpreter used to overwrite the fault marker with the
+/// `return`'s own control flow (`set_cf`), so it carried the `Unit` poison out
+/// to the caller and ran `main` to completion, printing `got ()` — an `i64`
+/// that does not exist — while the compiled backends aborted at the fault and
+/// printed nothing.
+///
+/// stdout is the portable invariant here, not stderr: the interpreter renders
+/// `runtime error: …` and the compiled backends render `panic at …`, so the
+/// diagnostics are not byte-comparable. What all three MUST agree on is that
+/// no statement after the fault ever ran.
+#[test]
+fn test_fault_in_return_operand_stops_every_backend() {
+    let tmp = scratch_project("fault-in-return-backend-parity");
+    let src = "fn boom() -> i64 { let v = Vec[1, 2]; return v[99] }\n\
+               fn main() { let x = boom(); println(f\"got {x}\"); }\n";
+    write(&tmp.join("b.kara"), src);
+
+    let run = |args: &[&str]| -> Option<(Option<i32>, String)> {
+        karac_bin()
+            .current_dir(&tmp)
+            .args(args)
+            .output()
+            .ok()
+            .map(|o| {
+                (
+                    o.status.code(),
+                    String::from_utf8_lossy(&o.stdout).into_owned(),
+                )
+            })
+    };
+    let interp = run(&["run", "--interp", "b.kara"]);
+    let jit = run(&["run", "b.kara"]);
+    let built = karac_bin()
+        .current_dir(&tmp)
+        .args(["build", "b.kara"])
+        .output();
+    let exe = tmp.join("b");
+    let aot = if built.map(|o| o.status.success()).unwrap_or(false) && exe.exists() {
+        std::process::Command::new(&exe).output().ok().map(|o| {
+            (
+                o.status.code(),
+                String::from_utf8_lossy(&o.stdout).into_owned(),
+            )
+        })
+    } else {
+        None
+    };
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    let Some((interp_code, interp_out)) = interp else {
+        eprintln!("skip: interpreter produced no output");
+        return;
+    };
+    // The interpreter is the leg that regressed, so it is asserted
+    // unconditionally; the compiled legs are compared when available.
+    assert!(
+        !interp_out.contains("got"),
+        "interpreter ran past the fault: stdout was {interp_out:?}"
+    );
+    assert_ne!(
+        interp_code,
+        Some(0),
+        "a faulting program must not report success"
+    );
+    for (label, leg) in [("JIT", jit), ("AOT", aot)] {
+        match leg {
+            Some((code, out)) => {
+                assert_eq!(
+                    out, interp_out,
+                    "{label} stdout must match the interpreter's — neither may run \
+                     a statement after the fault"
+                );
+                assert_ne!(code, Some(0), "{label} must not report success");
+            }
+            None => eprintln!("skip: {label} leg unavailable (no runtime archive?)"),
+        }
+    }
+}

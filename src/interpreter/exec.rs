@@ -58,6 +58,25 @@ pub(crate) enum ControlFlow {
     TimedOut,
 }
 
+impl ControlFlow {
+    /// Whether this signal is an *unwind* — a fault or a scope-wide abort
+    /// that is propagating outward — as opposed to ordinary, value-carrying
+    /// control flow (`return` / `break` / `continue`).
+    ///
+    /// The distinction is what makes a fault outrank the statement it
+    /// faulted inside of. These four are exactly the variants
+    /// `call_function` groups into its "propagate up the stack" arm.
+    pub(crate) fn is_unwind(&self) -> bool {
+        matches!(
+            self,
+            ControlFlow::ExitUnwind { .. }
+                | ControlFlow::RuntimeError
+                | ControlFlow::Cancelled
+                | ControlFlow::TimedOut
+        )
+    }
+}
+
 pub(crate) type EvalResult = Result<Value, ControlFlow>;
 
 // ── Unified drop+defer cleanup stack ────────────────────────────

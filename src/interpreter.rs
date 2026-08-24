@@ -2184,7 +2184,34 @@ impl<'a> Interpreter<'a> {
         }
     }
 
+    /// Raise a control-flow signal, unless a fault is already unwinding.
+    ///
+    /// B-2026-08-24-7 — a fault inside the operand of a value-carrying
+    /// statement used to be silently DOWNGRADED to that statement. A
+    /// faulting expression (`record_runtime_error`) sets
+    /// `pending_cf = RuntimeError` and yields the `Value::Unit` poison as
+    /// its value; `return v[99]` then evaluated its operand, got the
+    /// poison, and overwrote the marker with `Return(Unit)`. The fault
+    /// became an ordinary return of `()`, the caller resumed on a value
+    /// that does not exist, and `fn boom() -> i64 { return v[99] }`
+    /// printed `got ()` from a caller the compiled backends never reach.
+    /// `break v[99]` carried it identically, for every fault kind (index
+    /// OOB, divide-by-zero, `unwrap` of `None`, a faulting callee).
+    ///
+    /// So an unwind already in flight WINS: a fault, a `process::exit`, a
+    /// `par` cancellation or a test deadline all outrank a `return` /
+    /// `break` / `continue` that is merely carrying a value out of the
+    /// statement they faulted inside of. The dropped signal is not lost
+    /// information — its operand never produced a real value to carry.
+    ///
+    /// Only `set_cf` is guarded. `record_runtime_error` and its
+    /// `assert`-style sibling write `pending_cf` directly, so a fault can
+    /// still be recorded while another unwind is pending; this guard
+    /// governs the statement-level funnel alone.
     fn set_cf(&mut self, cf: ControlFlow) -> Value {
+        if !cf.is_unwind() && self.pending_cf.as_ref().is_some_and(ControlFlow::is_unwind) {
+            return Value::Unit;
+        }
         self.pending_cf = Some(cf);
         Value::Unit
     }
