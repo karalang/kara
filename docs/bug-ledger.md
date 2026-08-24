@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 283 | 0 |
 | leak | 189 | 0 |
-| missing-feature | 160 | 4 |
+| missing-feature | 161 | 4 |
 | run-vs-build | 156 | 2 |
 | double-free | 135 | 0 |
 | codegen-gap | 129 | 0 |
@@ -120,11 +120,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | parser | 39 | 1 |
 | runtime | 31 | 0 |
 | resolver | 26 | 0 |
-| effect | 15 | 2 |
+| effect | 16 | 2 |
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1520 surfaced · 7 open · 1490 fixed · 9 wontfix** (2026-05-20 → 2026-08-23). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1521 surfaced · 7 open · 1491 fixed · 9 wontfix** (2026-05-20 → 2026-08-24). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (7)
 
@@ -132,11 +132,11 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1520 surfaced
 |---|---|---|---|---|---|
 | B-2026-08-23-10 | 2026-08-23 | parser | low | UNIT STRUCTS (`struct Name;`) do not parse, so design.md § Typestate via Phantom Type Parameters' state markers cannot be written as the spec writes them. `struct Disconnected;` -> `error[parse]: Expected LeftBrace, found Semicolon`. The section introduces them as "// State markers — zero-size phantom types" and they are the first two lines of its worked example. The form appears in design.md exactly twice, both here (lines 8734-8735), and the braced spelling works everywhere else. | roadmap.md |
 | B-2026-08-23-11 | 2026-08-23 | typecheck | medium | `Type::Function` carries NO EFFECT ROW, so design.md § First-Class Functions' `let f = save;  // f: Fn(User) -> () with writes(UserDB)` is not representable and a function value's effects cannot propagate through its TYPE. The typechecker's function type is `Function { params, return_type }` -- no effect field -- while the AST-level `TypeKind::FnType` DOES carry an `effect_spec`, which is why a PARAMETER slot can be checked (E0404 `argument 1 has effect writes(UserDB) not declared in slot [pure]`) but an inferred binding cannot. B-2026-08-23-7 closed the resulting soundness hole with an OVER-APPROXIMATION -- a function mentioned in value position contributes its effects to the enclosing function whether or not it is ever called -- which is sound but imprecise: `let f = save;` with no call still demands the declaration. | roadmap.md |
-| B-2026-08-23-12 | 2026-08-23 | effect | medium | A `let` binding's `Fn(...)` TYPE ANNOTATION is never checked against the assigned function's effects, so `let f: Fn(i64) -> i64 = save;` -- a slot that declares PURITY -- silently accepts an effectful `save`, while the IDENTICAL parameter slot is rejected. Measured against `fn save(n: i64) -> i64 with writes(UserDB)`: `fn apply(f: Fn(i64) -> i64, n: i64)` called as `apply(save, 7)` errors `argument 1 has effect writes(UserDB) not declared in slot [pure]`, but `let f: Fn(i64) -> i64 = save;` in a caller that declares `with writes(UserDB)` reports NOTHING. The same E0404 rule, applied at one site and not the other. | roadmap.md |
 | B-2026-08-23-13 | 2026-08-23 | effect | low | The mutual-recursion NOTE now fires for two functions that merely REFERENCE each other as VALUES, calling them a "mutual recursion group" though neither calls the other. `fn p(n: i64) -> i64 { let f = q; n + 1 }` + `fn q(n: i64) -> i64 { let g = p; n + 2 }` reports `note[effect]: mutual recursion group resolved by fixed-point inference: \`p\` (no effects), \`q\` (no effects)`. The program passes and the note is suppressible with `#[allow(mutual_recursion_note)]`, so this is diagnostic wording, not a check failure -- but "mutual recursion" is a false statement about the program. | roadmap.md |
 | B-2026-08-23-15 | 2026-08-23 | interp | medium | The INTERPRETER does not order `eprintln` output across `par {}` branches, so stderr from a parallel region interleaves NONDETERMINISTICALLY -- 4 distinct orderings in 20 runs of one program -- while the SAME program's stderr under JIT and AOT is replayed in stable source order. design.md line 6242 promises exactly the opposite: it names `eprintln` as the construct to reach for when you need deterministic order under `par` ("For anything that needs deterministic order (snapshot tests, log aggregators, printf-style debugging of a race), use `eprintln`"), in explicit contrast to `dbg()`, whose unordered output it documents as unsupported for snapshot testing. The compiled backends honour that promise; the interpreter does not. | roadmap.md |
 | B-2026-08-23-17 | 2026-08-23 | codegen+interp | medium | A PANIC MESSAGE goes to STDOUT under JIT and AOT but to STDERR under `--interp`, and design.md § Entry Point (line 6423) says stderr for all of them. The compiled backends inject the panic line into the program's DATA stream, so anything parsing a compiled Kara program's stdout gets `panic at f.kara:3:16 in main: unwrap() called on None/Err` mixed into its output, while a consumer watching stderr for faults sees nothing at all. Separately and on ALL THREE surfaces, a panic exits 1, not the 101 the same spec paragraph promises -- so the `$?` distinction it exists to provide ("distinct from the Err-exit-1 path so shell pipelines can distinguish expected failures from bugs") does not exist. | roadmap.md |
 | B-2026-08-23-18 | 2026-08-23 | codegen | medium | `dbg(x)` still has NO CODEGEN LOWERING, so a program containing it cannot be compiled at all -- `karac build` and `karac run` now REFUSE it with an actionable error (B-2026-08-23-16 replaced the silent constant-0 miscompile with that refusal), and only `karac run --interp` executes it. design.md § dbg() specifies a real feature -- a stderr line carrying file, line, expression TEXT and the `Debug` rendering of the value, in a terminal form and a `--output=json`/`jsonl` form, tagged with `task_id` inside a `par` region, stripped from `--release` builds, and returning the value so it composes inline. The interpreter implements all of it; the compiled backends implement none of it. | roadmap.md |
+| B-2026-08-24-1 | 2026-08-24 | effect | medium | The `Fn(..)` EFFECT SLOT IS STILL UNCHECKED AT FOUR NON-`let` POSITIONS after B-2026-08-23-12 wired the binding annotation. Each accepts an effectful `save` into a slot that declares purity, with no diagnostic: (1) ASSIGNMENT to a declared-Fn binding -- `let mut f: Fn(i64) -> i64 = |x| x; f = save;`; (2) the `LetUninit` form of the same -- `let f: Fn(i64) -> i64; f = save;`; (3) RETURN POSITION -- `fn get() -> Fn(i64) -> i64 { save }`; (4) a STRUCT-LITERAL FIELD -- `struct Holder { f: Fn(i64) -> i64 }` built as `Holder { f: save }`. All four measured silent under `karac check` with the -12 binary, and all four print `14` under `--interp`, so the effectful function really does route through the pure-declared slot rather than the shape being rejected earlier. | roadmap.md |
 
 ### Wontfix (9)
 
@@ -156,9 +156,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1520 surfaced
 
 </details>
 
-### Fixed (1490)
+### Fixed (1491)
 
-<details><summary>1490 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1491 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -17183,6 +17183,25 @@ MATRIX, all three backends, before -> after. Sixteen programs covering every exi
 CORPUS IMPACT: none, and it is the same story as the two rows before it. Exactly three `.kara` files in the repo contain the string `errdefer`, and all three are the SELF-HOSTED COMPILER recognizing the keyword (`"errdefer" => Token.ErrDefer`), not using it. No program in the repo or in kara-katas uses `errdefer` at all, so nothing changes behaviour and the construct has no dogfooding -- which is why a missing cleanup path survived.
 
 CHECKED AND NOT REPRODUCED: `selfhost/src/ast.kara` renames its error-recovery variant from `Err` to `Error` with a comment saying `is_error_exit_value` "would mis-stage errdefer cleanup and panic on the shared-enum return value" -- i.e. a false positive on a USER enum with a variant named `Err`. Probed four shapes (plain and `shared` enum, tail and explicit-return) on both backends: all correct, no panic. Either it was fixed since or the shape is narrower than the comment describes. Not filed, since a hazard that will not reproduce is not a bug report; recorded here so the next reader does not take the comment as current. |
+| B-2026-08-23-12 | effect | medium | A `let` binding's `Fn(...)` TYPE ANNOTATION is never checked against the assigned function's effects, so `let f: Fn(i64) -> i64 = save;` -- a slot th… | FIXED by 4f67f9d1. Root cause: `check_subtyping_in_stmt`'s `Let` arm (src/effectchecker/subtyping.rs) walked the VALUE for nested calls and dropped the binding's `ty` on the floor -- so the one thing that makes a `let` a slot, the declared `Fn(..)` annotation, was never compared against anything. `check_call_args_subtyping` already held the entire rule; it was simply unreachable from a binding.
+
+THE FIX is two new methods in the same impl block plus two rewritten stmt arms:
+
+  * `fn_annotation_slot_effects` resolves an explicit `Fn(..)` / `OnceFn(..)` annotation to the effect set it admits. It returns None -- "no check here" -- for a non-function type, for `with _`, and for a named effect VARIABLE. That last case is the one judgement call and is deliberate: `with E` is bound per CALL SITE by `compute_call_var_bindings`, which needs a callee symbol and an argument list, and a binding annotation has neither. Resolving `E` against no bindings yields the EMPTY set, which would reject every effectful value assigned to a legitimately polymorphic slot, so the check fails OPEN. `test_let_annotation_effect_variable_slot_is_not_checked` pins that rather than leaving it to be "fixed" into a false positive later.
+
+  * `check_binding_annotation_subtyping` runs the same comparison the argument path runs, emitting the same `EffectSubtypeViolation` kind with the same `EffectSubtypeTrace`, so `karac explain` renders it identically. The wording is parallel too -- `binding `f` has effect writes(UserDB) not declared in slot [pure]` beside the existing `argument 1 has effect ...` -- so a reader who has seen one recognises the other.
+
+`Let` and `LetElse` both route through it. `LetUninit` has no value to check at the declaration.
+
+MEASURED SCOPE CORRECTION, recorded because it nearly went the other way. The row's "NOT A SOUNDNESS HOLE AS OF -7" claim is CONFIRMED -- but the first pass appeared to REFUTE it: a stale `target/debug/karac` (built 08-22, before -7 landed on 08-23) reported "All checks passed" for `pub fn hand_out() -> i64 { let f = save; f(7) }`, which would have made this a soundness hole and a much larger bug. After a rebuild every one of those shapes errors at the public boundary; -7's mention rule fires everywhere, annotated or not, and the residual really was only the unchecked annotation. A binary older than the fix under discussion is indistinguishable from a compiler bug -- check `ls -la target/debug/karac` against the fix date before trusting a green.
+
+ALSO FIXED, same function family, found while writing the tests: the rendered slot list was built by iterating a `HashSet<Effect>`, so a slot declaring two or more effects printed them in per-process-random order -- measured 14 vs 16 out of 30 runs for a two-element set, i.e. a coin flip in shipped diagnostic text and in any snapshot of it. Both slot paths now sort before joining, and `test_multi_effect_slot_renders_in_a_stable_order` pins the exact rendering.
+
+TESTS: 14 in tests/effectchecker.rs. The load-bearing one is `test_let_annotation_slot_and_parameter_slot_agree`, which puts the same function into the same declared slot at both positions and requires the same verdict -- an argument-only regression passes every other test in the group. Around it: exact-match, wider-slot, pure-value, polymorphic and effect-variable negatives; `let else`; an effectful closure; `OnceFn`; the resource-less-verb (`panics`) pair guarding the B-2026-08-05-18 class at the new site; and two controls proving an UNANNOTATED `let` and a non-function annotation are not slots -- the shape a naive "check every let" fix would break.
+
+GATES: 9806 tests pass (0 failed), fmt clean, clippy clean on both feature legs.
+
+REMAINDER: the same slot is still unchecked at four other positions -- see B-2026-08-24-1, filed with this fix. |
 | B-2026-08-23-14 | codegen | high | `eprintln` output is SILENTLY DROPPED under `karac run` (JIT) and `karac build` (AOT) -- a compiled program loses every stderr write | FIXED by 5786ab6. Two edits, each independently necessary (each was reverted alone and the gate failed).
 
 (1) `src/codegen/call_dispatch.rs` — `eprintln` now joins `println` / `print` on the `compile_print` intercept. It is a prelude FREE function, so no later arm ever claimed it; without the intercept it reached the unknown-callee constant-0 fallback and lowered to nothing at all.
