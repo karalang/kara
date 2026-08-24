@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 165 | 2 |
 | run-vs-build | 158 | 0 |
 | double-free | 136 | 0 |
-| codegen-gap | 134 | 2 |
+| codegen-gap | 135 | 2 |
 | diagnostics | 102 | 1 |
 | false-positive | 95 | 0 |
 | perf | 84 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1014 | 3 |
+| codegen | 1015 | 3 |
 | typecheck | 250 | 1 |
 | interp | 180 | 0 |
 | other | 64 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1538 surfaced · 6 open · 1509 fixed · 9 wontfix** (2026-05-20 → 2026-08-24). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1539 surfaced · 6 open · 1510 fixed · 9 wontfix** (2026-05-20 → 2026-08-24). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (6)
 
@@ -132,10 +132,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1538 surfaced
 |---|---|---|---|---|---|
 | B-2026-08-23-11 | 2026-08-23 | typecheck | medium | `Type::Function` carries NO EFFECT ROW, so design.md § First-Class Functions' `let f = save;  // f: Fn(User) -> () with writes(UserDB)` is not representable and a function value's effects cannot propagate through its TYPE. NARROWED 7e7972b: the IMPRECISION this caused -- a function value that is bound and never called still demanding the enclosing function declare its effects -- is FIXED, in the effect checker and without the type row (bind-an-alias, attribute-at-every-other-mention). What remains is representability only, and the prescription in the original title does not work as written: the typechecker cannot populate an effect row, because `effectcheck` runs after `typecheck` AND consumes its output, so inferred effects at typecheck time would need a cycle. Read the detail before picking this up. | roadmap.md |
 | B-2026-08-23-13 | 2026-08-23 | effect | low | The mutual-recursion NOTE now fires for two functions that merely REFERENCE each other as VALUES, calling them a "mutual recursion group" though neither calls the other. `fn p(n: i64) -> i64 { let f = q; n + 1 }` + `fn q(n: i64) -> i64 { let g = p; n + 2 }` reports `note[effect]: mutual recursion group resolved by fixed-point inference: \`p\` (no effects), \`q\` (no effects)`. The program passes and the note is suppressible with `#[allow(mutual_recursion_note)]`, so this is diagnostic wording, not a check failure -- but "mutual recursion" is a false statement about the program. | roadmap.md |
-| B-2026-08-24-13 | 2026-08-24 | codegen | medium | A NON-SCALAR `break` VALUE (String / Vec / struct) cannot travel through the compiled backends' break-value slot: `fn pick() -> String { loop { break f"x" } }` and the labeled-block twin `found: { break found f"x" }` both FAIL AT MODULE VERIFICATION (`ret i64` against `{ptr, i64, i64}`), while the interpreter returns the value. Storing the header instead is a DOUBLE FREE, measured -- so the slot deliberately refuses it. | roadmap.md |
 | B-2026-08-24-15 | 2026-08-24 | codegen | high | `Vec.insert` / `Vec.remove` / `Vec.swap_remove` HAVE NO CODEGEN BOUNDS CHECK: an out-of-range index CORRUPTS THE HEAP (insert/remove) or SILENTLY RETURNS GARBAGE AND DROPS AN ELEMENT (swap_remove) on both compiled backends, where the interpreter panics and design.md says "panics if out of bounds" | roadmap.md |
 | B-2026-08-24-17 | 2026-08-24 | effect | low | A declared `Fn(..)` element slot on a receiver that is NOT a plain named binding is still unchecked: `self.items.push(save)` carries the same slot as `items.push(save)` -- on a struct FIELD rather than a local -- and is silent. B-2026-08-24-16 reads the receiver's declared type off the walk's scope stack, which is keyed by NAME, so any receiver that is an EXPRESSION (field access, index, method chain) has no entry. | roadmap.md |
 | B-2026-08-24-18 | 2026-08-24 | codegen | low | `dbg(x)` REFUSES for a HEADERLESS or WEAK-HEADERED `shared` type, the last two shapes in the shared family the compiled `Debug` renderers do not cover. Neither is an unwritten arm: the headerless niche makes the field base a PER-FUNCTION property while a synthesized renderer is cached program-wide, and the weak-headered base-2 layout is set by nothing in the compiler today. NOTE this arm has never been observed to fire on a real program -- it is a guard against a hazard, not a fix for a measured failure. | phase-7-codegen.md |
+| B-2026-08-24-19 | 2026-08-24 | codegen | low | A `Map` / `Set` or `shared` BREAK VALUE still cannot leave a loop on the compiled backends: `loop { ... break m }` for a `Map[String, i64]`, and `loop { ... break Node { v: 22 } }` for a `shared struct`, both FAIL AT MODULE VERIFICATION while the interpreter returns the value. Their cleanup cannot be disarmed the way String/Vec's was -- Map retracts a QUEUED action (flow-insensitive, so it would leak on the iterations that do not break) and a `shared` handle needs a matching RETAIN rather than a cap-zero. | roadmap.md |
 
 ### Wontfix (9)
 
@@ -155,9 +155,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1538 surfaced
 
 </details>
 
-### Fixed (1509)
+### Fixed (1510)
 
-<details><summary>1509 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1510 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -17882,6 +17882,18 @@ B-2026-08-24-14: rendering the return type concretely requires
 for an `Fn` type -- lowercase, which does not parse in type position. The
 first version of this fix therefore produced advice that was copy-pasteable
 and still wrong. Fixing the printer was a precondition, not a detour. |
+| B-2026-08-24-13 | codegen | medium | A NON-SCALAR `break` VALUE (String / Vec / struct) cannot travel through the compiled backends' break-value slot: `fn pick() -> String { loop { break… | FIXED by 758bf19. `compile_break` now disarms the source's scope-exit free BETWEEN the store and the drain — the break-site twin of what `suppress_cleanup_for_tail_return` (src/codegen/call_dispatch.rs) does for a function tail — so the value leaves the loop owned exactly once and struct-typed break values travel the slot.
+
+TWO SUPPRESSORS ARE NEEDED, because the buffer has two possible owners:
+  * `suppress_source_vec_cleanup_for_arg` for a tracked BINDING (`break s`) — a runtime `store cap, 0` that makes the queued `FreeVecBuffer` no-op;
+  * `rhs_stages_fstr_acc` + `zero_vec_alloca_cap` for an F-STRING or `.to_string()` value (`break f"got{i}"`), where the buffer belongs to the interpolation accumulator and there is no binding to disarm.
+The first cut had only the former. It fixed `break s` and `break [i, i*2, i*3]` while every f-string carrier still double-freed — which is how the second suppressor was found rather than reasoned about. `rhs_stages_fstr_acc` is deliberately the same predicate the let-binding and tail-return paths use: it covers `.to_string()` as well as a literal `f"…"`, and the narrower `InterpolatedStringLit` match missed exactly that shape once before (B-2026-07-12-17).
+
+ORDER IS LOAD-BEARING IN BOTH DIRECTIONS: after the store, because zeroing before the value is read corrupts what the receiver gets (B-2026-06-12-6); before `emit_scope_cleanup_from`, because that drain is what is being disarmed.
+
+STILL SKIPPED, each for its own reason rather than as a leftover: POINTERS (a `shared` handle needs a matching retain, not a cap-zero), ARRAYS (`Array[T, N]` drops elementwise via `StructDrop`, a different suppressor), and the EMPTY STRUCT — `break outer ()` is a VALUELESS break per design.md § `break expr` ("Plain `break` (or `break ()`) is valid in any loop form"), so there is nothing to carry and a slot would only invent one.
+
+THE COMPILE-TIME QUEUE-RETRACTING SUPPRESSORS ARE DELIBERATELY NOT REUSED (Map/Set's `suppress_map_cleanup_for_tail_identifier`, the boxed-enum payload retraction). A `break` is CONDITIONAL and sits inside a loop that may iterate many times without taking it, so a flow-insensitive retraction would disarm the cleanup on the iterations that do NOT break — trading this double free for a leak. That is the exact bargain the tail-return code warns against in its own comments, and it is why a `Map` / `Set` / boxed-enum break value still takes the skip path. Filed as the remaining surface rather than attempted. |
 | B-2026-08-24-14 | other | medium | `karac fmt` EMITS UNPARSEABLE SOURCE for any `Fn(..)` / `OnceFn(..)` type annotation, and silently drops two declarations doing it | FIXED by 05a5108.
 
 `src/formatter/types.rs`'s `TypeKind::FnType` arm now destructures
