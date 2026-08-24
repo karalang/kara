@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 283 | 0 |
 | leak | 189 | 0 |
-| missing-feature | 163 | 1 |
+| missing-feature | 165 | 2 |
 | run-vs-build | 158 | 0 |
 | double-free | 136 | 0 |
 | codegen-gap | 133 | 2 |
@@ -120,13 +120,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | parser | 41 | 0 |
 | runtime | 31 | 0 |
 | resolver | 26 | 0 |
-| effect | 19 | 1 |
+| effect | 21 | 2 |
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1535 surfaced · 5 open · 1507 fixed · 9 wontfix** (2026-05-20 → 2026-08-24). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1537 surfaced · 6 open · 1508 fixed · 9 wontfix** (2026-05-20 → 2026-08-24). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -135,6 +135,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1535 surfaced
 | B-2026-08-24-9 | 2026-08-24 | codegen | low | `dbg(x)` where `x` is a SELF-REFERENTIAL `shared enum` (`shared enum T2 { Node(i64, T2), Leaf(i64) }`) REFUSES to compile. Not a missing arm: the shared-enum wrapper and the inner `emit_enum_display_fn` share ONE cache key (the bare enum name), so a payload of the enum's own type resolves to the aggregate-taking inner and is handed a handle. Refusing is the new behaviour; before the guard it MISCOMPILED, printing a wrong variant. A HEADERLESS or weak-headered shared type refuses for its own separate reason, below. | phase-7-codegen.md |
 | B-2026-08-24-13 | 2026-08-24 | codegen | medium | A NON-SCALAR `break` VALUE (String / Vec / struct) cannot travel through the compiled backends' break-value slot: `fn pick() -> String { loop { break f"x" } }` and the labeled-block twin `found: { break found f"x" }` both FAIL AT MODULE VERIFICATION (`ret i64` against `{ptr, i64, i64}`), while the interpreter returns the value. Storing the header instead is a DOUBLE FREE, measured -- so the slot deliberately refuses it. | roadmap.md |
 | B-2026-08-24-15 | 2026-08-24 | codegen | high | `Vec.insert` / `Vec.remove` / `Vec.swap_remove` HAVE NO CODEGEN BOUNDS CHECK: an out-of-range index CORRUPTS THE HEAP (insert/remove) or SILENTLY RETURNS GARBAGE AND DROPS AN ELEMENT (swap_remove) on both compiled backends, where the interpreter panics and design.md says "panics if out of bounds" | roadmap.md |
+| B-2026-08-24-17 | 2026-08-24 | effect | low | A declared `Fn(..)` element slot on a receiver that is NOT a plain named binding is still unchecked: `self.items.push(save)` carries the same slot as `items.push(save)` -- on a struct FIELD rather than a local -- and is silent. B-2026-08-24-16 reads the receiver's declared type off the walk's scope stack, which is keyed by NAME, so any receiver that is an EXPRESSION (field access, index, method chain) has no entry. | roadmap.md |
 
 ### Wontfix (9)
 
@@ -154,9 +155,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1535 surfaced
 
 </details>
 
-### Fixed (1507)
+### Fixed (1508)
 
-<details><summary>1507 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1508 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -17903,6 +17904,7 @@ fixpoint.
 SOURCE NOTE: found while fixing B-2026-08-24-12, whose fix renders a return
 type into a suggested-fix string and so could not be correct until this was.
  |
+| B-2026-08-24-16 | effect | medium | A declared `Fn(..)` EFFECT SLOT is checked only when the value arrives in the DECLARING statement, so the same annotation gives two different answers… | Fixed in 776680a (src/effectchecker/subtyping.rs). Three changes. (1) The `StmtKind::Assign` / `CompoundAssign` arm now calls the DESCENDING `check_annotation_slots` instead of the top-level-only `check_binding_annotation_subtyping` it wraps -- the same upgrade B-2026-08-24-11 made to the `let` arm, which the assignment arm never received. (2) New `check_stored_arg_slots` + the `stdlib_stored_arg_slots` table, called from the `MethodCall` arm: it reads the element slot off the RECEIVER's declared `TypeExpr` (already in hand on the B-2026-08-24-1 scope stack) rather than off the callee's parameter list, and hands it to the same descending walk, so `vv.push([save])` on a `Vec[Vec[Fn(..)]]` works for free. (3) New `check_generic_param_slots`, also from the `MethodCall` arm: it maps a user method's bare type-parameter mention to its index in the inherent impl header's generic list and reads the receiver's type argument there. Six new tests in tests/effectchecker.rs, half of them all-clean false-positive guards. |
 
 </details>
 
