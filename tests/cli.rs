@@ -31953,3 +31953,89 @@ fn test_fault_in_return_operand_stops_every_backend() {
         }
     }
 }
+
+/// B-2026-08-24-10 — a tail-position `loop` is the function's VALUE, and all
+/// three backends must agree on it.
+///
+/// Two defects compounded here. The parser listed `Loop` in `is_block_expr`,
+/// so a trailing `loop` became a statement and the function fell off its own
+/// end; and `ExprKind::Loop` inferred `Type::Never` unconditionally, so the
+/// declared `-> i64` was never checked. The interpreter therefore printed
+/// `()` and exited 0, while codegen — trusting `Never` — emitted
+/// `unreachable` at the loop exit, LLVM deleted the edge that reached it, and
+/// the AOT binary HUNG (the JIT died of a stack overflow). `karac check`
+/// reported "All checks passed." throughout.
+///
+/// The loop is deliberately SELF-LIMITING: if the exit edge ever regresses,
+/// the guard panics after 1000 iterations instead of spinning forever, so a
+/// regression fails this test rather than hanging the whole suite.
+#[test]
+fn test_tail_position_loop_value_matches_across_backends() {
+    let tmp = scratch_project("tail-loop-value-backend-parity");
+    let src = "fn pick() -> i64 {\n\
+               \x20   let mut i = 0;\n\
+               \x20   loop {\n\
+               \x20       i = i + 1;\n\
+               \x20       if i > 1000 { panic(\"loop exit edge regressed\") }\n\
+               \x20       if i == 3 { break i * 10 }\n\
+               \x20   }\n\
+               }\n\
+               fn main() { println(pick()); }\n";
+    write(&tmp.join("b.kara"), src);
+
+    let run = |args: &[&str]| -> Option<(Option<i32>, String)> {
+        karac_bin()
+            .current_dir(&tmp)
+            .args(args)
+            .output()
+            .ok()
+            .map(|o| {
+                (
+                    o.status.code(),
+                    String::from_utf8_lossy(&o.stdout).into_owned(),
+                )
+            })
+    };
+    let interp = run(&["run", "--interp", "b.kara"]);
+    let jit = run(&["run", "b.kara"]);
+    let built = karac_bin()
+        .current_dir(&tmp)
+        .args(["build", "b.kara"])
+        .output();
+    let exe = tmp.join("b");
+    let aot = if built.map(|o| o.status.success()).unwrap_or(false) && exe.exists() {
+        std::process::Command::new(&exe).output().ok().map(|o| {
+            (
+                o.status.code(),
+                String::from_utf8_lossy(&o.stdout).into_owned(),
+            )
+        })
+    } else {
+        None
+    };
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    let Some((interp_code, interp_out)) = interp else {
+        eprintln!("skip: interpreter produced no output");
+        return;
+    };
+    assert_eq!(
+        interp_out.trim(),
+        "30",
+        "the tail `loop` is the function's value, not `()`"
+    );
+    assert_eq!(interp_code, Some(0));
+    for (label, leg) in [("JIT", jit), ("AOT", aot)] {
+        match leg {
+            Some((code, out)) => {
+                assert_eq!(
+                    out.trim(),
+                    "30",
+                    "{label} must produce the loop's break value"
+                );
+                assert_eq!(code, Some(0), "{label} must exit cleanly");
+            }
+            None => eprintln!("skip: {label} leg unavailable (no runtime archive?)"),
+        }
+    }
+}

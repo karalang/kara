@@ -29,6 +29,7 @@ use super::types::{
     type_is_fully_concrete, type_to_concrete_or_param_name, type_to_mono_mangle_token,
     types_compatible, ConstArg, DimArg, IntSize, ScrutineeMode, SubstValue, Type, UIntSize,
 };
+use super::BreakFrame;
 use super::TypeErrorKind;
 
 /// Validate an f-string format specifier `{expr:spec}` against the hole's
@@ -138,6 +139,41 @@ fn contains_type_var(t: &Type) -> bool {
 }
 
 impl<'a> super::TypeChecker<'a> {
+    /// design.md § `loop` type inference: "All `break` values must agree
+    /// (or unify); a type mismatch across `break` sites is a compile
+    /// error." Reported here rather than left to `lub_block_type`, which
+    /// silently picks a candidate — silence is what let the whole
+    /// break-value surface rot unnoticed (B-2026-08-24-10).
+    ///
+    /// `Never` contributes nothing to the join (rule 0) and `Error` means a
+    /// diagnostic already fired, so both are skipped.
+    fn check_break_values_agree(&mut self, values: &[Type], span: Span) {
+        let mut first: Option<&Type> = None;
+        for v in values {
+            if *v == Type::Never || *v == Type::Error {
+                continue;
+            }
+            match first {
+                None => first = Some(v),
+                Some(f) => {
+                    if !types_compatible(f, v) {
+                        self.type_error(
+                            format!(
+                                "`break` value types disagree: '{}' and '{}'. \
+                                 Every `break` out of the same loop or labeled \
+                                 block must carry the same type",
+                                type_display(f),
+                                type_display(v)
+                            ),
+                            span,
+                            TypeErrorKind::TypeMismatch,
+                        );
+                        return;
+                    }
+                }
+            }
+        }
+    }
     /// `true` when `expr` is a `Coll.try_with_capacity(n)` path call — the
     /// fallible constructor whose `?`-form needs check-mode element pinning
     /// (phase-8-stdlib-floor item 8).
@@ -4973,7 +5009,10 @@ impl<'a> super::TypeChecker<'a> {
             ExprKind::Match { scrutinee, arms } => self.infer_match(scrutinee, arms, &expr.span),
 
             ExprKind::While {
-                condition, body, ..
+                condition,
+                body,
+                label,
+                ..
             } => {
                 let cond_ty = self.infer_expr(condition);
                 if cond_ty != Type::Bool && cond_ty != Type::Error {
@@ -4986,7 +5025,13 @@ impl<'a> super::TypeChecker<'a> {
                         TypeErrorKind::ConditionNotBool,
                     );
                 }
+                // A valueless frame: it catches unlabeled `break`s so they
+                // cannot leak out to an enclosing `loop`'s LUB, but rejects
+                // a value (design.md: `while` / `for` always have type `()`).
+                self.break_value_types
+                    .push(BreakFrame::for_valueless_loop(label.clone()));
                 self.infer_block(body);
+                self.break_value_types.pop();
                 Type::Unit
             }
 
@@ -4994,6 +5039,7 @@ impl<'a> super::TypeChecker<'a> {
                 pattern,
                 iterable,
                 body,
+                label,
                 ..
             } => {
                 let iter_ty = self.infer_expr(iterable);
@@ -5003,19 +5049,42 @@ impl<'a> super::TypeChecker<'a> {
                 // any user type that has registered an "Item" assoc binding.
                 let elem_ty = self.element_type_of(&iter_ty);
                 self.bind_pattern_types(pattern, &elem_ty);
+                // See the `While` arm: valueless frame, so an unlabeled
+                // `break` stops here instead of reaching an outer `loop`.
+                self.break_value_types
+                    .push(BreakFrame::for_valueless_loop(label.clone()));
                 for stmt in &body.stmts {
                     self.check_stmt(stmt);
                 }
                 if let Some(ref final_expr) = body.final_expr {
                     self.infer_expr(final_expr);
                 }
+                self.break_value_types.pop();
                 self.local_scope.pop();
                 Type::Unit
             }
 
-            ExprKind::Loop { body, .. } => {
+            ExprKind::Loop { body, label, .. } => {
+                // design.md § `loop` type inference. A `loop` is an
+                // EXPRESSION: its type is the LUB of its reachable
+                // `break expr` values, and `Never` only when it has none
+                // (it runs forever or diverges). This arm used to return
+                // `Never` unconditionally, which is B-2026-08-24-10: the
+                // break value was dropped, `-> i64` went unchecked, and
+                // codegen — trusting `Never` — emitted `unreachable` at
+                // the loop exit, so LLVM deleted the exit edge and the
+                // compiled binary HUNG where the interpreter returned `()`.
+                //
+                // The tail type is `Never`, not the body's: falling off the
+                // end of a loop body starts the next iteration, it does not
+                // produce a value.
+                self.break_value_types
+                    .push(BreakFrame::for_loop(label.clone()));
                 self.infer_block(body);
-                Type::Never
+                let frame = self.break_value_types.pop();
+                let values = frame.map(|f| f.values).unwrap_or_default();
+                self.check_break_values_agree(&values, expr.span);
+                lub_block_type(Type::Never, &values)
             }
 
             ExprKind::LabeledBlock { label, body, .. } => {
@@ -5023,13 +5092,15 @@ impl<'a> super::TypeChecker<'a> {
                 // body's tail type, pop the frame, and compute the block's
                 // type as the LUB of `tail_type` and the collected
                 // `break label expr` value types.
-                self.break_value_types.push((label.clone(), Vec::new()));
+                self.break_value_types
+                    .push(BreakFrame::for_labeled_block(label.clone()));
                 let tail_ty = self.infer_block(body);
                 let frame = self
                     .break_value_types
                     .pop()
-                    .map(|(_, v)| v)
+                    .map(|f| f.values)
                     .unwrap_or_default();
+                self.check_break_values_agree(&frame, expr.span);
                 lub_block_type(tail_ty, &frame)
             }
 
@@ -5225,20 +5296,47 @@ impl<'a> super::TypeChecker<'a> {
                 } else {
                     Type::Unit
                 };
-                // LB3 — feed the per-label LUB collector for labeled
-                // blocks. Find the matching frame by label name (innermost
-                // wins) and append the value type. Unlabeled `break`s
-                // and breaks targeting a labeled loop have no matching
-                // collector frame and are ignored here — loops keep
-                // their `Type::Never`-by-default behavior.
-                if let Some(name) = label {
-                    if let Some(frame) = self
+                // Resolve the target frame: a labeled `break` names its
+                // frame (innermost wins); an unlabeled one takes the
+                // innermost frame that accepts unlabeled breaks — every
+                // loop form, but never a labeled block, which is reachable
+                // only by name (design.md § Labeled blocks).
+                let target = match label {
+                    Some(name) => self
                         .break_value_types
                         .iter_mut()
                         .rev()
-                        .find(|(n, _)| n == name)
-                    {
-                        frame.1.push(val_ty);
+                        .find(|f| f.label.as_deref() == Some(name.as_str())),
+                    None => self
+                        .break_value_types
+                        .iter_mut()
+                        .rev()
+                        .find(|f| f.unlabeled_target),
+                };
+                if let Some(frame) = target {
+                    if frame.accepts_value {
+                        frame.values.push(val_ty);
+                    } else if val_ty != Type::Unit && val_ty != Type::Error {
+                        // design.md § `break expr`: `while` / `while let` /
+                        // `for` always have type `()`, so a value here has
+                        // nowhere to go. Reported rather than silently
+                        // dropped — dropping it is the class of bug this
+                        // whole change exists to remove.
+                        let what = frame
+                            .label
+                            .clone()
+                            .map(|l| format!("`{l}`"))
+                            .unwrap_or_else(|| "the enclosing loop".to_string());
+                        self.type_error(
+                            format!(
+                                "`break` with a value of type '{}' is not allowed here: \
+                                 {what} is a `while`/`for` loop, which always has type '()'. \
+                                 Only `loop` and labeled blocks can break with a value",
+                                type_display(&val_ty)
+                            ),
+                            expr.span,
+                            TypeErrorKind::TypeMismatch,
+                        );
                     }
                 }
                 Type::Never
@@ -5466,6 +5564,7 @@ impl<'a> super::TypeChecker<'a> {
                 pattern,
                 value,
                 body,
+                label,
                 ..
             } => {
                 let scrut_ty = self.infer_expr(value);
@@ -5478,7 +5577,11 @@ impl<'a> super::TypeChecker<'a> {
                 let dispatch_ty = dispatch_ty.clone();
                 self.local_scope.push();
                 self.check_pattern_against(pattern, &dispatch_ty, mode);
+                // See the `While` arm.
+                self.break_value_types
+                    .push(BreakFrame::for_valueless_loop(label.clone()));
                 self.infer_block(body);
+                self.break_value_types.pop();
                 self.local_scope.pop();
                 Type::Unit
             }

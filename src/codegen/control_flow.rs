@@ -453,6 +453,7 @@ impl<'ctx> super::Codegen<'ctx> {
             continue_bb: cond_bb,
             break_bb: exit_bb,
             result_slot: None,
+            result_ty: None,
             cleanup_depth: self.drop_rc.scope_cleanup_actions.len(),
         });
 
@@ -2338,6 +2339,7 @@ impl<'ctx> super::Codegen<'ctx> {
             continue_bb: cond_bb,
             break_bb: exit_bb,
             result_slot: None,
+            result_ty: None,
             cleanup_depth: self.drop_rc.scope_cleanup_actions.len(),
         });
 
@@ -2490,15 +2492,16 @@ impl<'ctx> super::Codegen<'ctx> {
         let loop_bb = self.context.append_basic_block(fn_val, "loop.body");
         let exit_bb = self.context.append_basic_block(fn_val, "loop.exit");
 
-        // Allocate a slot for `break value` (i64 by default; refined if used)
-        let result_slot =
-            self.create_entry_alloca(fn_val, "loop.result", self.context.i64_type().into());
-
+        // No slot is pre-allocated: `compile_break` creates one lazily, typed
+        // by the first break value it sees (B-2026-08-24-10). A pre-allocated
+        // `i64` could only ever hold an integer, which is why `break 2.5`
+        // silently produced 0 and `break f"s"` failed module verification.
         self.fn_ctx.loop_stack.push(LoopFrame {
             label: label.map(str::to_string),
             continue_bb: loop_bb,
             break_bb: exit_bb,
-            result_slot: Some(result_slot),
+            result_slot: None,
+            result_ty: None,
             cleanup_depth: self.drop_rc.scope_cleanup_actions.len(),
         });
 
@@ -2524,18 +2527,44 @@ impl<'ctx> super::Codegen<'ctx> {
             self.drop_rc.scope_cleanup_actions.pop();
         }
 
+        let exited_with = self
+            .fn_ctx
+            .loop_stack
+            .last()
+            .and_then(|f| f.result_slot.zip(f.result_ty));
         self.fn_ctx.loop_stack.pop();
         self.builder.position_at_end(exit_bb);
-        // Load result (may be zero if no break-with-value was hit)
-        let result = self
-            .builder
-            .build_load::<BasicTypeEnum<'ctx>>(
-                self.context.i64_type().into(),
-                result_slot,
-                "loop.val",
-            )
-            .unwrap();
-        Ok(result)
+
+        // A loop nothing ever `break`s out of is DIVERGENT — design.md
+        // § `loop` type inference rule 0, "the loop runs forever or diverges
+        // via panic/return", type `Never`. Its exit block then has no
+        // predecessors and there is no value to produce.
+        //
+        // This is the same failure class the both-arms-diverge `if` above
+        // handles, and it became reachable here the moment a trailing `loop`
+        // could be a block's `final_expr` (B-2026-08-24-10): a
+        // `-> Vec[String]` function ending in a `loop` that only exits via
+        // `return` would otherwise load the i64 `loop.result` slot and emit
+        // `ret i64 %loop.val` against a `{ptr, i64, i64}` return type, which
+        // fails module verification. Terminating with `unreachable` makes the
+        // enclosing `get_terminator().is_none()` guards skip the follow-on
+        // `ret`, exactly as they did when the loop was still a statement.
+        if exit_bb.get_first_use().is_none() {
+            self.builder.build_unreachable().unwrap();
+            return Ok(self.context.i64_type().const_int(0, false).into());
+        }
+
+        // Load the break value at the type it was stored with. No slot at
+        // all means every `break` out of this loop was value-less, so the
+        // loop's value is unit — represented here by the same i64 zero the
+        // pre-allocated slot used to hold.
+        match exited_with {
+            Some((slot, ty)) => Ok(self
+                .builder
+                .build_load::<BasicTypeEnum<'ctx>>(ty, slot, "loop.val")
+                .unwrap()),
+            None => Ok(self.context.i64_type().const_int(0, false).into()),
+        }
     }
 
     /// Compile `label: { body }` (`ExprKind::LabeledBlock`).
@@ -2568,14 +2597,10 @@ impl<'ctx> super::Codegen<'ctx> {
         let fn_val = self.current_fn.unwrap();
         let i64_t = self.context.i64_type();
 
-        let result_slot = self.create_entry_alloca(fn_val, "lblock.result", i64_t.into());
-        // Defense-in-depth zero-init so a never-stored slot loads as 0
-        // (matching the unit-equivalent semantics for control paths the
-        // typechecker rules out but which a future divergence wouldn't
-        // catch).
-        self.builder
-            .build_store(result_slot, i64_t.const_int(0, false))
-            .unwrap();
+        // Slot allocated lazily on the first stored value (tail or
+        // `break label expr`), typed by that value — see `compile_loop`.
+        // A never-stored slot yields the i64 zero placeholder at the exit,
+        // preserving the old zero-init's unit-equivalent semantics.
 
         let body_bb = self
             .context
@@ -2603,7 +2628,8 @@ impl<'ctx> super::Codegen<'ctx> {
             label: Some(label.to_string()),
             continue_bb: continue_unreachable_bb,
             break_bb: exit_bb,
-            result_slot: Some(result_slot),
+            result_slot: None,
+            result_ty: None,
             cleanup_depth: self.drop_rc.scope_cleanup_actions.len(),
         });
 
@@ -2621,20 +2647,105 @@ impl<'ctx> super::Codegen<'ctx> {
             .is_none()
         {
             if let Some(v) = tail {
-                if v.is_int_value() {
-                    self.builder.build_store(result_slot, v).unwrap();
-                }
+                self.store_frame_result(v)?;
             }
             self.builder.build_unconditional_branch(exit_bb).unwrap();
         }
 
+        let stored = self
+            .fn_ctx
+            .loop_stack
+            .last()
+            .and_then(|f| f.result_slot.zip(f.result_ty));
         self.fn_ctx.loop_stack.pop();
         self.builder.position_at_end(exit_bb);
-        let result = self
-            .builder
-            .build_load::<BasicTypeEnum<'ctx>>(i64_t.into(), result_slot, "lblock.val")
-            .unwrap();
-        Ok(result)
+        match stored {
+            Some((slot, ty)) => Ok(self
+                .builder
+                .build_load::<BasicTypeEnum<'ctx>>(ty, slot, "lblock.val")
+                .unwrap()),
+            None => Ok(i64_t.const_int(0, false).into()),
+        }
+    }
+
+    /// Store `val` into `frame`'s result slot, creating that slot on first
+    /// use at `val`'s OWN type.
+    ///
+    /// Callers hold a CLONE of the frame (the label-aware lookup in
+    /// `compile_break` clones so the borrow ends before `compile_expr` runs),
+    /// so the slot has to be recorded on the live stack entry rather than the
+    /// copy. Frames are matched by `break_bb`, which uniquely identifies one:
+    /// every loop and labeled block appends its own exit block.
+    fn store_in_frame(
+        &mut self,
+        frame: &LoopFrame<'ctx>,
+        val: BasicValueEnum<'ctx>,
+    ) -> Result<(), String> {
+        let key = frame.break_bb;
+        if let Some(idx) = self
+            .fn_ctx
+            .loop_stack
+            .iter()
+            .position(|f| f.break_bb == key)
+        {
+            self.store_in_frame_at(idx, val)?;
+        }
+        Ok(())
+    }
+
+    /// A labeled block's TAIL value targets the innermost frame — its own,
+    /// pushed just before the body was compiled.
+    fn store_frame_result(&mut self, val: BasicValueEnum<'ctx>) -> Result<(), String> {
+        if let Some(idx) = self.fn_ctx.loop_stack.len().checked_sub(1) {
+            self.store_in_frame_at(idx, val)?;
+        }
+        Ok(())
+    }
+
+    fn store_in_frame_at(&mut self, idx: usize, val: BasicValueEnum<'ctx>) -> Result<(), String> {
+        let ty = val.get_type();
+        // Only OWNERSHIP-FREE scalars travel through the result slot.
+        //
+        // Ints were already allowed (the store used to be guarded on
+        // `is_int_value()`); floats are the fix — `loop { break 2.5 }` stored
+        // NOTHING and loaded whatever the slot held, printing 0 from AOT and a
+        // garbage integer from the JIT against 2.5 from the interpreter.
+        //
+        // Everything else keeps the previous skip-silently behaviour, and that
+        // is deliberate rather than lazy. A `String` / `Vec` break value is a
+        // `{ptr, i64, i64}` header whose buffer already has an owner; copying
+        // it into the slot and loading it at the exit creates a SECOND owner,
+        // and the loop body's scope cleanup plus the receiving binding then
+        // free the same pointer — measured as "free(): double free detected in
+        // tcache 2" when this branch stored unconditionally. Not storing keeps
+        // the single owner: a program that never USES the value (`break outer
+        // ()`, a discarded labeled-block tail) is unaffected, and one that does
+        // use it fails loudly at module verification instead, exactly as it did
+        // before this change. Real support needs the move-aware cleanup
+        // suppression `suppress_cleanup_for_tail_return` already performs for
+        // function tails, applied at every break site; that is its own slice.
+        if !(ty.is_int_type() || ty.is_float_type()) {
+            return Ok(());
+        }
+        let slot = match self.fn_ctx.loop_stack[idx].result_slot {
+            Some(s) => s,
+            None => {
+                let fn_val = self.current_fn.unwrap();
+                let s = self.create_entry_alloca(fn_val, "brk.result", ty);
+                self.fn_ctx.loop_stack[idx].result_slot = Some(s);
+                self.fn_ctx.loop_stack[idx].result_ty = Some(ty);
+                s
+            }
+        };
+        // Two breaks out of the same construct must agree, which the
+        // typechecker now enforces (`check_break_values_agree`). This guard
+        // covers only a codegen-side disagreement the source level cannot
+        // express — storing at the wrong type would corrupt the slot, so skip
+        // rather than emit an ill-typed store.
+        if self.fn_ctx.loop_stack[idx].result_ty == Some(ty) {
+            self.builder.build_store(slot, val).unwrap();
+        }
+        Ok(())
     }
 
     pub(super) fn compile_break(
@@ -2660,28 +2771,40 @@ impl<'ctx> super::Codegen<'ctx> {
                 .cloned(),
             None => self.fn_ctx.loop_stack.last().cloned(),
         };
-        if let Some(frame) = frame {
-            if let Some(slot) = frame.result_slot {
-                let val = if let Some(v) = value {
-                    self.compile_expr(v)?
-                } else {
-                    zero.into()
-                };
-                // Store break value (only works when types match i64)
-                if val.is_int_value() {
-                    self.builder.build_store(slot, val).unwrap();
-                }
-            }
-            // Drain the frames INSIDE the loop being exited (per-iteration
-            // frame + any nested block / `if let` / match-arm frames between
-            // here and the loop boundary) — the back-edge / scope-end drains
-            // are on paths this branch skips. Emit-only: the compile-time
-            // stack is untouched, the fall-through path keeps its own drains.
-            self.emit_scope_cleanup_from(frame.cleanup_depth);
-            self.builder
-                .build_unconditional_branch(frame.break_bb)
-                .unwrap();
-        }
+        // FAIL CLOSED (B-2026-08-24-10). This used to be `if let Some(frame)`
+        // with no `else`: a `break` that matched no frame fell straight to
+        // the `Ok` below having emitted NO BRANCH, so it became a silent
+        // no-op and its loop ran forever. That is how a tail-position `loop`
+        // in a non-unit function produced an AOT binary that hangs — no
+        // diagnostic at any phase, and the IR still verifies because an
+        // infinite loop is perfectly well-formed. A missing frame is a
+        // COMPILER bug, not a program error (the resolver already rejects a
+        // stray `break`), so the only honest response is to refuse to emit.
+        let Some(frame) = frame else {
+            return Err(format!(
+                "internal: `break{}` found no enclosing loop or labeled-block frame",
+                label.map(|l| format!(" {l}")).unwrap_or_default()
+            ));
+        };
+        let val = if let Some(v) = value {
+            self.compile_expr(v)?
+        } else {
+            zero.into()
+        };
+        // Store the break value into the target frame's slot, creating that
+        // slot on first use at the VALUE's type. Previously the slot was a
+        // pre-allocated i64 and this store was guarded on `is_int_value()`,
+        // so a float or aggregate break silently stored nothing at all.
+        self.store_in_frame(&frame, val)?;
+        // Drain the frames INSIDE the loop being exited (per-iteration
+        // frame + any nested block / `if let` / match-arm frames between
+        // here and the loop boundary) — the back-edge / scope-end drains
+        // are on paths this branch skips. Emit-only: the compile-time
+        // stack is untouched, the fall-through path keeps its own drains.
+        self.emit_scope_cleanup_from(frame.cleanup_depth);
+        self.builder
+            .build_unconditional_branch(frame.break_bb)
+            .unwrap();
         Ok(zero.into())
     }
 
@@ -2703,14 +2826,21 @@ impl<'ctx> super::Codegen<'ctx> {
                 .cloned(),
             None => self.fn_ctx.loop_stack.last().cloned(),
         };
-        if let Some(frame) = frame {
-            // Same early-exit drain as `compile_break`: `continue` jumps to
-            // the loop header, skipping the body-end back-edge drain.
-            self.emit_scope_cleanup_from(frame.cleanup_depth);
-            self.builder
-                .build_unconditional_branch(frame.continue_bb)
-                .unwrap();
-        }
+        // Fail closed for the same reason as `compile_break` above: a
+        // `continue` that emits no branch falls through into whatever
+        // follows, silently changing the program's control flow.
+        let Some(frame) = frame else {
+            return Err(format!(
+                "internal: `continue{}` found no enclosing loop frame",
+                label.map(|l| format!(" {l}")).unwrap_or_default()
+            ));
+        };
+        // Same early-exit drain as `compile_break`: `continue` jumps to
+        // the loop header, skipping the body-end back-edge drain.
+        self.emit_scope_cleanup_from(frame.cleanup_depth);
+        self.builder
+            .build_unconditional_branch(frame.continue_bb)
+            .unwrap();
         Ok(zero.into())
     }
 }

@@ -2582,6 +2582,7 @@ impl<'ctx> super::Codegen<'ctx> {
             continue_bb: incr_bb,
             break_bb: exit_bb,
             result_slot: None,
+            result_ty: None,
             cleanup_depth: self.drop_rc.scope_cleanup_actions.len(),
         });
 

@@ -330,14 +330,20 @@ pub fn expr_span(e: ref Expr) -> Span {
 }
 
 // The loop forms the seed's `src/parser/stmts.rs::is_block_expr` treats as
-// statements that never become a block's tail (`while` / `for` / `loop`). `if`,
-// `break`, and `continue` are deliberately EXCLUDED — they remain valid block
-// tails (`{ if a { b } else { c } }`, `loop { break }`), matching the seed.
+// statements that never become a block's tail (`while` / `for`). `if`, `break`,
+// and `continue` are deliberately EXCLUDED — they remain valid block tails
+// (`{ if a { b } else { c } }`), matching the seed.
+//
+// `Loop` is NOT in this set (B-2026-08-24-10): design.md § `loop` type
+// inference makes `loop` an expression whose type is the LUB of its `break`
+// values, so a trailing `loop` IS the block's tail. The seed was changed to
+// match, and this mirror has to move with it or the self-host oracle
+// diverges — which is exactly how it was caught, on the input
+// `loop { outer: loop { break outer } }`.
 pub fn is_loop_block_expr(e: ref Expr) -> bool {
     match e {
         While(_) => true,
         For(_) => true,
-        Loop(_) => true,
         _ => false,
     }
 }

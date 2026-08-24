@@ -96103,6 +96103,56 @@ fn main() {
         }
     }
 
+    /// B-2026-08-24-10 — a `break` value's slot is typed by the VALUE, not
+    /// hardcoded to i64. A float break used to store nothing at all (the
+    /// store was guarded on `is_int_value()`) and load whatever the slot
+    /// happened to hold: `fn f() -> f64 { loop { break 2.5 } }` printed 0
+    /// from an AOT binary and a garbage integer from the JIT, against 2.5
+    /// from the interpreter. A silent wrong answer, no diagnostic anywhere.
+    #[test]
+    fn test_e2e_loop_break_float_value_round_trips() {
+        let out = run_program(
+            r#"
+fn pick() -> f64 {
+    let mut i = 0;
+    loop { i = i + 1; if i == 2 { break 2.5 } }
+}
+
+fn main() { println(pick()); }
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "2.5");
+        }
+    }
+
+    /// The other half of the same slot change: a NON-scalar break value is
+    /// refused with an actionable message rather than compiled.
+    ///
+    /// Copying a `{ptr, i64, i64}` String header through the slot gives the
+    /// buffer a second owner, and the loop body's scope cleanup plus the
+    /// receiving binding both free it — a double free. That is strictly
+    /// worse than the module-verification error the i64 slot used to raise,
+    /// so the aggregate case fails closed until break sites get the
+    /// move-aware cleanup suppression `suppress_cleanup_for_tail_return`
+    /// already performs for function tails.
+    #[test]
+    fn test_ir_loop_break_non_scalar_is_refused_not_miscompiled() {
+        let err = ir_result(
+            "fn pick() -> String { loop { break f\"x\" } }\nfn main() { println(pick()); }\n",
+        )
+        .expect_err("a String break must fail loudly, not compile to a double free");
+        // The loud failure is module verification rejecting `ret i64` against
+        // the `{ptr, i64, i64}` return type — the aggregate is never stored,
+        // so the buffer keeps its single owner. What this pins is that the
+        // program does NOT compile: storing the header unconditionally made it
+        // build and then double-free.
+        assert!(
+            err.contains("verification") || err.contains("non-scalar"),
+            "expected a loud refusal, got: {err}"
+        );
+    }
+
     #[test]
     fn test_e2e_value_fn_loop_tail_terminates_with_unreachable() {
         // A value-returning function whose body's final expression is a

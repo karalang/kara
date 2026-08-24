@@ -413,15 +413,24 @@ impl super::Parser {
     }
 
     fn is_block_expr(&self, expr: &Expr) -> bool {
-        // Block-like expressions that don't need semicolons when used as statements.
-        // These are always treated as statements (not final_expr / implicit return).
-        // For `loop` with break-value, use `let x = loop { ... };` pattern.
+        // Block-like expressions that don't need semicolons when used as
+        // statements, and are never a block's `final_expr`.
+        //
+        // `While` / `WhileLet` / `For` belong here because design.md gives
+        // them type `()` unconditionally — there is no value to carry out, so
+        // treating a trailing one as a statement loses nothing.
+        //
+        // `Loop` does NOT (B-2026-08-24-10). design.md § `loop` type
+        // inference makes `loop` an EXPRESSION whose type is the LUB of its
+        // `break` values, so a trailing `loop` is the block's value like any
+        // other tail expression. Listing it here is what made
+        // `fn pick() -> i64 { loop { break 30 } }` fall off the end of its own
+        // body and yield `()` — and, because the typechecker then called the
+        // loop `Never`, made codegen emit `unreachable` at the loop exit so
+        // LLVM deleted the exit edge and the compiled binary hung.
         matches!(
             &expr.kind,
-            ExprKind::While { .. }
-                | ExprKind::WhileLet { .. }
-                | ExprKind::For { .. }
-                | ExprKind::Loop { .. }
+            ExprKind::While { .. } | ExprKind::WhileLet { .. } | ExprKind::For { .. }
         )
     }
 

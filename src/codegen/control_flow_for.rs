@@ -1774,6 +1774,7 @@ impl<'ctx> super::Codegen<'ctx> {
             continue_bb: incr_bb,
             break_bb: exit_bb,
             result_slot: None,
+            result_ty: None,
             cleanup_depth: self.drop_rc.scope_cleanup_actions.len(),
         });
 
@@ -1961,6 +1962,7 @@ impl<'ctx> super::Codegen<'ctx> {
             continue_bb: incr_bb,
             break_bb: exit_bb,
             result_slot: None,
+            result_ty: None,
             cleanup_depth: self.drop_rc.scope_cleanup_actions.len(),
         });
 
@@ -2069,6 +2071,7 @@ impl<'ctx> super::Codegen<'ctx> {
             continue_bb: latch_bb,
             break_bb: exit_bb,
             result_slot: None,
+            result_ty: None,
             cleanup_depth: self.drop_rc.scope_cleanup_actions.len(),
         });
 
@@ -2186,6 +2189,7 @@ impl<'ctx> super::Codegen<'ctx> {
             continue_bb: incr_bb,
             break_bb: exit_bb,
             result_slot: None,
+            result_ty: None,
             cleanup_depth: self.drop_rc.scope_cleanup_actions.len(),
         });
 
@@ -2345,6 +2349,7 @@ impl<'ctx> super::Codegen<'ctx> {
             continue_bb: incr_bb,
             break_bb: exit_bb,
             result_slot: None,
+            result_ty: None,
             cleanup_depth: self.drop_rc.scope_cleanup_actions.len(),
         });
 
@@ -2506,6 +2511,7 @@ impl<'ctx> super::Codegen<'ctx> {
             continue_bb: incr_bb,
             break_bb: exit_bb,
             result_slot: None,
+            result_ty: None,
             cleanup_depth: self.drop_rc.scope_cleanup_actions.len(),
         });
 
@@ -2689,6 +2695,7 @@ impl<'ctx> super::Codegen<'ctx> {
             continue_bb: incr_bb,
             break_bb: exit_bb,
             result_slot: None,
+            result_ty: None,
             cleanup_depth: self.drop_rc.scope_cleanup_actions.len(),
         });
 
@@ -2816,6 +2823,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 continue_bb: incr_bb,
                 break_bb: shared_exit,
                 result_slot: None,
+                result_ty: None,
                 cleanup_depth: self.drop_rc.scope_cleanup_actions.len(),
             });
 
@@ -2969,6 +2977,7 @@ impl<'ctx> super::Codegen<'ctx> {
             continue_bb: incr_bb,
             break_bb: exit_bb,
             result_slot: None,
+            result_ty: None,
             cleanup_depth: self.drop_rc.scope_cleanup_actions.len(),
         });
 
@@ -3111,6 +3120,7 @@ impl<'ctx> super::Codegen<'ctx> {
             continue_bb: incr_bb,
             break_bb: exit_bb,
             result_slot: None,
+            result_ty: None,
             cleanup_depth: self.drop_rc.scope_cleanup_actions.len(),
         });
 
@@ -3272,6 +3282,7 @@ impl<'ctx> super::Codegen<'ctx> {
             continue_bb: incr_bb,
             break_bb: exit_bb,
             result_slot: None,
+            result_ty: None,
             cleanup_depth: self.drop_rc.scope_cleanup_actions.len(),
         });
 
@@ -3503,6 +3514,7 @@ impl<'ctx> super::Codegen<'ctx> {
             continue_bb: latch_bb,
             break_bb: exit_bb,
             result_slot: None,
+            result_ty: None,
             cleanup_depth: self.drop_rc.scope_cleanup_actions.len(),
         });
         self.compile_loop_body_with_cleanup(body, latch_bb)?;
@@ -3554,6 +3566,7 @@ impl<'ctx> super::Codegen<'ctx> {
             continue_bb: slow_latch_bb,
             break_bb: exit_bb,
             result_slot: None,
+            result_ty: None,
             cleanup_depth: self.drop_rc.scope_cleanup_actions.len(),
         });
         self.compile_loop_body_with_cleanup(body, slow_latch_bb)?;
@@ -3621,6 +3634,7 @@ impl<'ctx> super::Codegen<'ctx> {
             continue_bb: incr_bb,
             break_bb: exit_bb,
             result_slot: None,
+            result_ty: None,
             cleanup_depth: self.drop_rc.scope_cleanup_actions.len(),
         });
 
@@ -3823,6 +3837,7 @@ impl<'ctx> super::Codegen<'ctx> {
             continue_bb: incr_bb,
             break_bb: exit_bb,
             result_slot: None,
+            result_ty: None,
             cleanup_depth: self.drop_rc.scope_cleanup_actions.len(),
         });
 
@@ -3964,6 +3979,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 continue_bb: cont_bb,
                 break_bb: exit_bb,
                 result_slot: None,
+                result_ty: None,
                 cleanup_depth: self.drop_rc.scope_cleanup_actions.len(),
             });
 
@@ -4114,6 +4130,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 continue_bb: loop_bb,
                 break_bb: exit_bb,
                 result_slot: None,
+                result_ty: None,
                 cleanup_depth: self.drop_rc.scope_cleanup_actions.len(),
             });
 
@@ -4241,6 +4258,7 @@ impl<'ctx> super::Codegen<'ctx> {
             continue_bb: loop_bb,
             break_bb: exit_bb,
             result_slot: None,
+            result_ty: None,
             cleanup_depth: self.drop_rc.scope_cleanup_actions.len(),
         });
 
@@ -4378,6 +4396,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 continue_bb: cont_bb,
                 break_bb: exit_bb,
                 result_slot: None,
+                result_ty: None,
                 cleanup_depth: self.drop_rc.scope_cleanup_actions.len(),
             });
 
@@ -4476,6 +4495,7 @@ impl<'ctx> super::Codegen<'ctx> {
             continue_bb: loop_bb,
             break_bb: exit_bb,
             result_slot: None,
+            result_ty: None,
             cleanup_depth: self.drop_rc.scope_cleanup_actions.len(),
         });
 
@@ -4683,6 +4703,7 @@ impl<'ctx> super::Codegen<'ctx> {
             continue_bb: incr_bb,
             break_bb: exit_bb,
             result_slot: None,
+            result_ty: None,
             cleanup_depth: self.drop_rc.scope_cleanup_actions.len(),
         });
 

@@ -45148,3 +45148,101 @@ fn test_bare_and_annotated_struct_literal_forms_are_unaffected() {
     typecheck_ok("struct S;\nstruct C[T] { fd: i64 }\nfn main() { let c: C[S] = C { fd: 1 }; }");
     typecheck_ok("struct P { x: i64 }\nfn main() { let p = P { x: 1 }; }");
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// B-2026-08-24-10 — `loop` is an expression whose type is the LUB of its
+// `break` values (design.md § `loop` type inference).
+//
+// Before this, `ExprKind::Loop` returned `Type::Never` unconditionally and
+// the parser forced a trailing `loop` to be a statement. The pair meant
+// `fn pick() -> i64 { loop { break 30 } }` returned `()` under the
+// interpreter, and — because codegen trusts `Never` and emits `unreachable`
+// at the loop exit — HUNG as a compiled binary. Each test below fails again
+// if either half is reverted.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn loop_break_value_satisfies_the_declared_return_type() {
+    // The bug's headline shape: a tail `loop` IS the function's value.
+    typecheck_ok("fn pick() -> i64 { loop { break 30 } }\nfn main() { println(pick()); }");
+}
+
+#[test]
+fn loop_break_value_type_is_checked_against_the_return_type() {
+    // Previously "All checks passed." — `Never` coerces to anything, so the
+    // declared `-> i64` was never enforced.
+    let errors = typecheck_errors("fn pick() -> i64 { loop { break \"a string\" } }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("i64") && e.message.contains("String")),
+        "a String break in an i64 function must be rejected, got: {errors:?}"
+    );
+}
+
+#[test]
+fn loop_break_values_must_agree_across_sites() {
+    // design.md: "a type mismatch across `break` sites is a compile error".
+    let errors = typecheck_errors(
+        "fn go(a: bool, b: bool) -> i64 { loop { if a { break 5 } if b { break \"hello\" } } }",
+    );
+    assert!(
+        errors.iter().any(|e| e.message.contains("disagree")),
+        "disagreeing break values must be rejected, got: {errors:?}"
+    );
+}
+
+#[test]
+fn loop_with_no_value_break_is_still_never() {
+    // Rule 0 must survive: a loop that never breaks with a value keeps
+    // diverging, so it may stand in for any type.
+    typecheck_ok("fn f() -> i64 { loop { } }");
+    typecheck_ok("fn f() -> String { loop { } }");
+}
+
+#[test]
+fn conditional_break_still_contributes_its_type() {
+    // design.md: the compiler does not infer `Option` or `Never` just
+    // because the break is guarded.
+    typecheck_ok("fn f(ready: bool) -> i64 { loop { if ready { break 5 } } }");
+}
+
+#[test]
+fn while_and_for_reject_a_value_carrying_break() {
+    // design.md § `break expr`: `while` / `for` always have type `()`.
+    for src in [
+        "fn f() -> i64 { let mut i = 0; while i < 9 { i = i + 1; if i == 3 { break i } } return 0; }",
+        "fn f() -> i64 { for x in 0..9 { if x == 3 { break x } } return 0; }",
+    ] {
+        let errors = typecheck_errors(src);
+        assert!(
+            errors.iter().any(|e| e.message.contains("always has type")),
+            "a value-carrying break out of a while/for must be rejected: {src}\ngot: {errors:?}"
+        );
+    }
+}
+
+#[test]
+fn a_bare_break_in_a_nested_while_does_not_reach_the_outer_loop() {
+    // The reason `while`/`for` push a frame at all. Without one, this inner
+    // bare `break` would contribute `()` to the OUTER loop's LUB and turn a
+    // correct program into an i64-vs-unit mismatch.
+    typecheck_ok(
+        "fn go() -> i64 {\n\
+         let mut i = 0;\n\
+         loop {\n\
+             let mut j = 0;\n\
+             while j < 2 { j = j + 1; if j == 2 { break } }\n\
+             i = i + 1;\n\
+             if i == 4 { break i * 100 }\n\
+         }\n\
+         }",
+    );
+}
+
+#[test]
+fn labeled_loop_break_value_is_collected_too() {
+    // Labeled LOOPS dropped their break values for the same reason
+    // unlabeled ones did — neither pushed a collector frame.
+    typecheck_ok("fn go() -> i64 { outer: loop { break outer 7 } }");
+}

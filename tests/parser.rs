@@ -750,15 +750,16 @@ fn test_par_order_free_attr_parses_on_for() {
 #[test]
 fn test_par_order_free_attr_parses_on_loop() {
     let prog = parse_ok("fn main() { #[par_order_free] loop { break; } }");
-    if let Item::Function(f) = &prog.items[0] {
-        if let StmtKind::Expr(expr) = &f.body.stmts[0].kind {
-            if let ExprKind::Loop { attributes, .. } = &expr.kind {
-                assert_eq!(attributes.len(), 1);
-                assert!(attributes[0].is_par_order_free());
-            } else {
-                panic!("expected Loop, got {:?}", expr.kind);
-            }
-        }
+    // `first_fn_expr` rather than `stmts[0]`: a trailing `loop` is the
+    // block's `final_expr` now that `loop` is an expression
+    // (B-2026-08-24-10), and this test is about the ATTRIBUTE, not the
+    // construct's structural placement.
+    let expr = first_fn_expr(&prog);
+    if let ExprKind::Loop { attributes, .. } = &expr.kind {
+        assert_eq!(attributes.len(), 1);
+        assert!(attributes[0].is_par_order_free());
+    } else {
+        panic!("expected Loop, got {:?}", expr.kind);
     }
 }
 
@@ -7604,15 +7605,11 @@ fn test_lock_block_with_alias() {
 #[test]
 fn test_labeled_loop() {
     let prog = parse_ok("fn main() { outer: loop { break outer; } }");
-    if let Item::Function(f) = &prog.items[0] {
-        let stmt = &f.body.stmts[0];
-        if let StmtKind::Expr(expr) = &stmt.kind {
-            if let ExprKind::Loop { label, .. } = &expr.kind {
-                assert_eq!(label.as_deref(), Some("outer"));
-            } else {
-                panic!("Expected labeled Loop");
-            }
-        }
+    let expr = first_fn_expr(&prog);
+    if let ExprKind::Loop { label, .. } = &expr.kind {
+        assert_eq!(label.as_deref(), Some("outer"));
+    } else {
+        panic!("Expected labeled Loop");
     }
 }
 
@@ -7650,39 +7647,35 @@ fn test_labeled_for() {
 fn test_break_with_label() {
     // `break outer;` inside a loop labeled `outer:` is parsed as a labeled break.
     let prog = parse_ok("fn main() { outer: loop { break outer; } }");
-    if let Item::Function(f) = &prog.items[0] {
-        let stmt = &f.body.stmts[0];
-        if let StmtKind::Expr(expr) = &stmt.kind {
-            if let ExprKind::Loop { body, .. } = &expr.kind {
-                if let StmtKind::Expr(inner) = &body.stmts[0].kind {
-                    if let ExprKind::Break { label, value } = &inner.kind {
-                        assert_eq!(label.as_deref(), Some("outer"));
-                        assert!(value.is_none());
-                    } else {
-                        panic!("Expected Break");
-                    }
-                }
+    let expr = first_fn_expr(&prog);
+    if let ExprKind::Loop { body, .. } = &expr.kind {
+        if let StmtKind::Expr(inner) = &body.stmts[0].kind {
+            if let ExprKind::Break { label, value } = &inner.kind {
+                assert_eq!(label.as_deref(), Some("outer"));
+                assert!(value.is_none());
+            } else {
+                panic!("Expected Break");
             }
         }
+    } else {
+        panic!("Expected labeled Loop");
     }
 }
 
 #[test]
 fn test_continue_with_label() {
     let prog = parse_ok("fn main() { outer: loop { continue outer; } }");
-    if let Item::Function(f) = &prog.items[0] {
-        let stmt = &f.body.stmts[0];
-        if let StmtKind::Expr(expr) = &stmt.kind {
-            if let ExprKind::Loop { body, .. } = &expr.kind {
-                if let StmtKind::Expr(inner) = &body.stmts[0].kind {
-                    if let ExprKind::Continue { label, .. } = &inner.kind {
-                        assert_eq!(label.as_deref(), Some("outer"));
-                    } else {
-                        panic!("Expected Continue with label");
-                    }
-                }
+    let expr = first_fn_expr(&prog);
+    if let ExprKind::Loop { body, .. } = &expr.kind {
+        if let StmtKind::Expr(inner) = &body.stmts[0].kind {
+            if let ExprKind::Continue { label, .. } = &inner.kind {
+                assert_eq!(label.as_deref(), Some("outer"));
+            } else {
+                panic!("Expected Continue with label");
             }
         }
+    } else {
+        panic!("Expected labeled Loop");
     }
 }
 

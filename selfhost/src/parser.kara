@@ -542,8 +542,8 @@ impl Parser {
     // `{ stmt* tail? }`. Mirrors `src/parser/stmts.rs::parse_block`, restricted
     // to the slice-2a statement forms (`let` / expr-stmt / assignment) and a
     // value-producing tail. A trailing expression without `;` at `}` is the
-    // block's tail (only `while`/`for`/`loop` — not in 2a — become trailing
-    // expr-statements, per the seed's `is_block_expr`).
+    // block's tail (only `while`/`for` become trailing expr-statements, per the
+    // seed's `is_block_expr`; a trailing `loop` is a tail expression).
     fn parse_block(mut ref self) -> Block {
         let start = self.current_span();
         self.expect_lbrace();
@@ -711,10 +711,13 @@ impl Parser {
                 stmts.push(Stmt.Exp(ExprStmt { expr: e, span: sp }));
                 continue;
             }
-            // No semicolon. A `while`/`for`/`loop` is a block-STATEMENT even
-            // when trailing (the seed's `is_block_expr`: such loops never become
-            // a block's tail / implicit value — `let x = loop { … };` is the
-            // value-producing form). Its statement span is the loop's own span.
+            // No semicolon. A `while`/`for` is a block-STATEMENT even when
+            // trailing (the seed's `is_block_expr`: they have type `()`
+            // unconditionally, so they never become a block's tail / implicit
+            // value). Its statement span is the loop's own span. A trailing
+            // `loop` IS a tail expression — design.md § `loop` type inference
+            // makes it an expression valued by its breaks (B-2026-08-24-10) —
+            // so `is_loop_block_expr` no longer answers true for it.
             let is_loopish = is_loop_block_expr(e);
             if is_loopish {
                 let sp = expr_span(e);

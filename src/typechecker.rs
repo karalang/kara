@@ -448,6 +448,66 @@ pub(super) enum CaptureWalkMode {
     Consuming,
 }
 
+/// One `break`-target frame for the value-collecting walk
+/// (design.md § `loop` type inference, § `break expr`).
+///
+/// Every construct a `break` can name pushes one: `loop`, `while`,
+/// `while let`, `for`, and a labeled block. Before B-2026-08-24-10 only
+/// labeled blocks did, so an unlabeled `break` matched nothing and the
+/// value it carried was dropped on the floor — which is how a `loop`
+/// came to type as `Never` no matter what it broke with.
+#[derive(Debug)]
+pub(super) struct BreakFrame {
+    /// `Some(name)` for a labeled loop or labeled block; `None` otherwise.
+    pub(super) label: Option<String>,
+    /// Whether an UNLABELED `break` targets this frame. True for every loop
+    /// form — design.md: "`break` exits the innermost loop" — and false for
+    /// a labeled block, which is reachable only by name. This is precisely
+    /// what stops a bare `break` inside a `while` nested in a `loop` from
+    /// contributing its type to the OUTER loop's LUB.
+    pub(super) unlabeled_target: bool,
+    /// Whether a value-carrying `break` is legal here. `while` / `while let`
+    /// / `for` are always `()` (design.md § `break expr`), so a non-unit
+    /// value breaking out of one is a compile error, not a contribution.
+    pub(super) accepts_value: bool,
+    /// Value types of the `break`s that resolved to this frame.
+    pub(super) values: Vec<Type>,
+}
+
+impl BreakFrame {
+    /// A `loop` frame: names unlabeled breaks and carries their values.
+    pub(super) fn for_loop(label: Option<String>) -> Self {
+        Self {
+            label,
+            unlabeled_target: true,
+            accepts_value: true,
+            values: Vec::new(),
+        }
+    }
+
+    /// A `while` / `while let` / `for` frame. It still catches unlabeled
+    /// breaks — that is the whole point, so they do not leak outward — but
+    /// rejects a value rather than collecting it.
+    pub(super) fn for_valueless_loop(label: Option<String>) -> Self {
+        Self {
+            label,
+            unlabeled_target: true,
+            accepts_value: false,
+            values: Vec::new(),
+        }
+    }
+
+    /// A labeled block: reachable only by name.
+    pub(super) fn for_labeled_block(label: String) -> Self {
+        Self {
+            label: Some(label),
+            unlabeled_target: false,
+            accepts_value: true,
+            values: Vec::new(),
+        }
+    }
+}
+
 pub(super) struct LocalTypeScope {
     pub(super) scopes: Vec<FxHashMap<String, Type>>,
 }
@@ -1984,11 +2044,14 @@ pub struct TypeChecker<'a> {
     /// Popped at labeled-block exit; the labeled block's type is the LUB
     /// of `tail_type` and the collected break types. Saved/restored at
     /// closure boundaries (LB4) so labels are lexical to the function-
-    /// body control flow. Loops keep their existing `Type::Never`-by-
-    /// default behavior — loop-LUB inference is a separate slice that
-    /// will reuse the same machinery once the design entry promotes
-    /// (out-of-scope here).
-    pub(super) break_value_types: Vec<(String, Vec<Type>)>,
+    /// body control flow.
+    ///
+    /// B-2026-08-24-10 promoted this from a label-keyed list to a frame
+    /// stack covering EVERY `break` target, which is what design.md
+    /// § `loop` type inference has always specified. A `loop` now pushes
+    /// a frame of its own, so its type is the LUB of its break values
+    /// rather than an unconditional `Never`.
+    pub(super) break_value_types: Vec<BreakFrame>,
     /// B-2026-07-31-18 — closure-scoped `return` collector. One frame per
     /// closure literal currently being inferred (innermost last); each
     /// `return E` inside a closure body pushes E's type here instead of

@@ -1559,6 +1559,18 @@ pub(crate) struct LoopFrame<'ctx> {
     /// always `Some` and stores both the body's tail value (on normal
     /// fall-through) and any `break label expr` value (on early exit).
     pub(crate) result_slot: Option<PointerValue<'ctx>>,
+    /// LLVM type `result_slot` was allocated with, recorded when the slot is
+    /// first created so the exit block loads it back at the right type.
+    ///
+    /// The slot is allocated LAZILY, by the first `break <value>` (or, for a
+    /// labeled block, the tail value) — the earliest point the value's type
+    /// is known, this backend being value-driven rather than type-driven. It
+    /// used to be pre-allocated as a bare `i64`, so `break 2.5` / `break
+    /// f"s"` either stored nothing (the store was guarded on
+    /// `is_int_value()`) and loaded garbage, or emitted `ret i64` against a
+    /// `{ptr, i64, i64}` return type and failed module verification.
+    /// B-2026-08-24-10.
+    pub(crate) result_ty: Option<BasicTypeEnum<'ctx>>,
     /// `scope_cleanup_actions.len()` at the moment this frame was pushed
     /// — i.e. the index of the first cleanup frame INSIDE the loop /
     /// labeled block. `compile_break` / `compile_continue` drain frames
