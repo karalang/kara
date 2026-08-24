@@ -102,7 +102,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 95 | 0 |
 | perf | 84 | 0 |
 | other | 59 | 0 |
-| soundness | 58 | 1 |
+| soundness | 58 | 0 |
 | crash | 55 | 0 |
 | use-after-free | 20 | 0 |
 
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1016 | 2 |
+| codegen | 1016 | 1 |
 | typecheck | 250 | 1 |
 | interp | 180 | 0 |
 | other | 64 | 0 |
@@ -124,15 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1541 surfaced · 4 open · 1513 fixed · 10 wontfix** (2026-05-20 → 2026-08-24). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1541 surfaced · 3 open · 1514 fixed · 10 wontfix** (2026-05-20 → 2026-08-24). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-23-11 | 2026-08-23 | typecheck | medium | `Type::Function` carries NO EFFECT ROW, so design.md § First-Class Functions' `let f = save;  // f: Fn(User) -> () with writes(UserDB)` is not representable and a function value's effects cannot propagate through its TYPE. NARROWED 7e7972b: the IMPRECISION this caused -- a function value that is bound and never called still demanding the enclosing function declare its effects -- is FIXED, in the effect checker and without the type row (bind-an-alias, attribute-at-every-other-mention). What remains is representability only, and the prescription in the original title does not work as written: the typechecker cannot populate an effect row, because `effectcheck` runs after `typecheck` AND consumes its output, so inferred effects at typecheck time would need a cycle. Read the detail before picking this up. | roadmap.md |
 | B-2026-08-23-13 | 2026-08-23 | effect | low | The mutual-recursion NOTE now fires for two functions that merely REFERENCE each other as VALUES, calling them a "mutual recursion group" though neither calls the other. `fn p(n: i64) -> i64 { let f = q; n + 1 }` + `fn q(n: i64) -> i64 { let g = p; n + 2 }` reports `note[effect]: mutual recursion group resolved by fixed-point inference: \`p\` (no effects), \`q\` (no effects)`. The program passes and the note is suppressible with `#[allow(mutual_recursion_note)]`, so this is diagnostic wording, not a check failure -- but "mutual recursion" is a false statement about the program. | roadmap.md |
-| B-2026-08-24-15 | 2026-08-24 | codegen | high | `Vec.insert` / `Vec.remove` / `Vec.swap_remove` HAVE NO CODEGEN BOUNDS CHECK: an out-of-range index CORRUPTS THE HEAP (insert/remove) or SILENTLY RETURNS GARBAGE AND DROPS AN ELEMENT (swap_remove) on both compiled backends, where the interpreter panics and design.md says "panics if out of bounds" | roadmap.md |
 | B-2026-08-24-21 | 2026-08-24 | codegen | low | A `shared` STRUCT OR ENUM BREAK VALUE cannot leave a loop on the compiled backends, and the OBVIOUS FIX MAKES IT WORSE: `loop { ...; let n = Node { v: i }; break n }` fails at module verification today (interpreter returns it), but disarming the source binding the way Map/Set now does -- which LOOKS correct, because `RcDec` is already null-guarded -- was MEASURED to HANG for a `shared struct` and to die with a BUS ERROR for a `shared enum`. | roadmap.md |
 
 ### Wontfix (10)
@@ -154,9 +153,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1541 surfaced
 
 </details>
 
-### Fixed (1513)
+### Fixed (1514)
 
-<details><summary>1513 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1514 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -17932,6 +17931,47 @@ fixpoint.
 SOURCE NOTE: found while fixing B-2026-08-24-12, whose fix renders a return
 type into a suggested-fix string and so could not be correct until this was.
  |
+| B-2026-08-24-15 | codegen | high | `Vec.insert` / `Vec.remove` / `Vec.swap_remove` HAVE NO CODEGEN BOUNDS CHECK: an out-of-range index CORRUPTS THE HEAP (insert/remove) or SILENTLY RET… | Fixed in 114a9d2. One `icmp` + branch per call site in
+`src/codegen/vec_method.rs`, via a new `emit_vec_mutation_bounds_check`
+helper that mirrors what `emit_split_bounds_check` already does for plain
+indexing.
+
+THE PREDICATE DIFFERS BETWEEN THE THREE, which is the only subtle part:
+`insert` compares UGT because `idx == len` is a legal APPEND, while `remove`
+and `swap_remove` compare UGE. Using UGE for `insert` would turn a
+memory-safety fix into a broken `push`, so the in-range test pins
+insert-at-len and insert(0)-into-empty explicitly.
+
+The unsigned compare covers negative indices for free: a negative `i64`
+reinterpreted as unsigned exceeds any representable length, so one compare
+catches both halves. That is the same trick indexing already used, and it is
+why this costs one compare rather than two.
+
+All three now panic with exit 101 and a located message on `karac run` and
+`karac build` alike, matching `--interp`:
+
+    panic at m4.kara:168:23 in ss_add: Vec.insert index out of bounds
+
+TWO REGRESSION TESTS, and the first was verified to fail without the fix by
+stashing the codegen change and re-running (it went red; the in-range test
+stayed green, which is correct — its job is to catch a wrong predicate, not
+the missing check). The out-of-range test pins the message AND exit 101 for
+all three methods at a positive and a negative index; pinning the code is
+what separates "panics" from "dies somehow", since the bug produced 134 for
+insert/remove and 0 for swap_remove.
+
+VERIFICATION: codegen 3197 passed / 0 failed and memory_sanitizer 1158
+passed / 0 failed, both under KARAC_REQUIRE_RUNTIME_ARCHIVE=1 so no case
+green-skipped; all default-feature suites green; `cargo clippy --all
+--all-targets -D warnings` clean on BOTH the default and `--features llvm`
+legs; `cargo fmt --all --check` clean.
+
+NOTE ON THE FIRST TEST RUN, which showed 7 then 9 unrelated failures: those
+were a STALE runtime archive (the container's archives predated 52 pulled
+commits) plus the absent optional `unicode` / `regex` / `arrow` archives, not
+this change. Rebuilding all five archives took the suite to fully green. The
+`KARAC_REQUIRE_RUNTIME_ARCHIVE=1` gate is what turned the optional-archive
+cases from silent skips into visible failures, which is exactly its purpose. |
 | B-2026-08-24-16 | effect | medium | A declared `Fn(..)` EFFECT SLOT is checked only when the value arrives in the DECLARING statement, so the same annotation gives two different answers… | Fixed in 776680a (src/effectchecker/subtyping.rs). Three changes. (1) The `StmtKind::Assign` / `CompoundAssign` arm now calls the DESCENDING `check_annotation_slots` instead of the top-level-only `check_binding_annotation_subtyping` it wraps -- the same upgrade B-2026-08-24-11 made to the `let` arm, which the assignment arm never received. (2) New `check_stored_arg_slots` + the `stdlib_stored_arg_slots` table, called from the `MethodCall` arm: it reads the element slot off the RECEIVER's declared `TypeExpr` (already in hand on the B-2026-08-24-1 scope stack) rather than off the callee's parameter list, and hands it to the same descending walk, so `vv.push([save])` on a `Vec[Vec[Fn(..)]]` works for free. (3) New `check_generic_param_slots`, also from the `MethodCall` arm: it maps a user method's bare type-parameter mention to its index in the inherent impl header's generic list and reads the receiver's type argument there. Six new tests in tests/effectchecker.rs, half of them all-clean false-positive guards. |
 | B-2026-08-24-17 | effect | low | A declared `Fn(..)` element slot on a receiver that is NOT a plain named binding is still unchecked: `self.items.push(save)` carries the same slot as… | Fixed in a9d540b (src/effectchecker/subtyping.rs). The receiver lookup stops
 being a name lookup and becomes a resolution: `receiver_declared_type` walks a
