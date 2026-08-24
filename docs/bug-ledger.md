@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 283 | 0 |
 | leak | 189 | 0 |
-| missing-feature | 161 | 3 |
+| missing-feature | 162 | 3 |
 | run-vs-build | 156 | 2 |
 | double-free | 135 | 0 |
 | codegen-gap | 130 | 1 |
@@ -117,26 +117,26 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | other | 63 | 0 |
 | cli | 62 | 0 |
 | autopar | 55 | 0 |
-| parser | 39 | 1 |
+| parser | 40 | 1 |
 | runtime | 31 | 0 |
 | resolver | 26 | 0 |
 | effect | 16 | 2 |
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1522 surfaced · 7 open · 1492 fixed · 9 wontfix** (2026-05-20 → 2026-08-24). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1523 surfaced · 7 open · 1493 fixed · 9 wontfix** (2026-05-20 → 2026-08-24). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-23-10 | 2026-08-23 | parser | low | UNIT STRUCTS (`struct Name;`) do not parse, so design.md § Typestate via Phantom Type Parameters' state markers cannot be written as the spec writes them. `struct Disconnected;` -> `error[parse]: Expected LeftBrace, found Semicolon`. The section introduces them as "// State markers — zero-size phantom types" and they are the first two lines of its worked example. The form appears in design.md exactly twice, both here (lines 8734-8735), and the braced spelling works everywhere else. | roadmap.md |
 | B-2026-08-23-11 | 2026-08-23 | typecheck | medium | `Type::Function` carries NO EFFECT ROW, so design.md § First-Class Functions' `let f = save;  // f: Fn(User) -> () with writes(UserDB)` is not representable and a function value's effects cannot propagate through its TYPE. The typechecker's function type is `Function { params, return_type }` -- no effect field -- while the AST-level `TypeKind::FnType` DOES carry an `effect_spec`, which is why a PARAMETER slot can be checked (E0404 `argument 1 has effect writes(UserDB) not declared in slot [pure]`) but an inferred binding cannot. B-2026-08-23-7 closed the resulting soundness hole with an OVER-APPROXIMATION -- a function mentioned in value position contributes its effects to the enclosing function whether or not it is ever called -- which is sound but imprecise: `let f = save;` with no call still demands the declaration. | roadmap.md |
 | B-2026-08-23-13 | 2026-08-23 | effect | low | The mutual-recursion NOTE now fires for two functions that merely REFERENCE each other as VALUES, calling them a "mutual recursion group" though neither calls the other. `fn p(n: i64) -> i64 { let f = q; n + 1 }` + `fn q(n: i64) -> i64 { let g = p; n + 2 }` reports `note[effect]: mutual recursion group resolved by fixed-point inference: \`p\` (no effects), \`q\` (no effects)`. The program passes and the note is suppressible with `#[allow(mutual_recursion_note)]`, so this is diagnostic wording, not a check failure -- but "mutual recursion" is a false statement about the program. | roadmap.md |
 | B-2026-08-23-15 | 2026-08-23 | interp | medium | The INTERPRETER does not order `eprintln` output across `par {}` branches, so stderr from a parallel region interleaves NONDETERMINISTICALLY -- 4 distinct orderings in 20 runs of one program -- while the SAME program's stderr under JIT and AOT is replayed in stable source order. design.md line 6242 promises exactly the opposite: it names `eprintln` as the construct to reach for when you need deterministic order under `par` ("For anything that needs deterministic order (snapshot tests, log aggregators, printf-style debugging of a race), use `eprintln`"), in explicit contrast to `dbg()`, whose unordered output it documents as unsupported for snapshot testing. The compiled backends honour that promise; the interpreter does not. | roadmap.md |
 | B-2026-08-23-17 | 2026-08-23 | codegen+interp | medium | A PANIC MESSAGE goes to STDOUT under JIT and AOT but to STDERR under `--interp`, and design.md § Entry Point (line 6423) says stderr for all of them. The compiled backends inject the panic line into the program's DATA stream, so anything parsing a compiled Kara program's stdout gets `panic at f.kara:3:16 in main: unwrap() called on None/Err` mixed into its output, while a consumer watching stderr for faults sees nothing at all. Separately and on ALL THREE surfaces, a panic exits 1, not the 101 the same spec paragraph promises -- so the `$?` distinction it exists to provide ("distinct from the Err-exit-1 path so shell pipelines can distinguish expected failures from bugs") does not exist. | roadmap.md |
 | B-2026-08-24-1 | 2026-08-24 | effect | medium | The `Fn(..)` EFFECT SLOT IS STILL UNCHECKED AT FOUR NON-`let` POSITIONS after B-2026-08-23-12 wired the binding annotation. Each accepts an effectful `save` into a slot that declares purity, with no diagnostic: (1) ASSIGNMENT to a declared-Fn binding -- `let mut f: Fn(i64) -> i64 = |x| x; f = save;`; (2) the `LetUninit` form of the same -- `let f: Fn(i64) -> i64; f = save;`; (3) RETURN POSITION -- `fn get() -> Fn(i64) -> i64 { save }`; (4) a STRUCT-LITERAL FIELD -- `struct Holder { f: Fn(i64) -> i64 }` built as `Holder { f: save }`. All four measured silent under `karac check` with the -12 binary, and all four print `14` under `--interp`, so the effectful function really does route through the pure-declared slot rather than the shape being rejected earlier. | roadmap.md |
 | B-2026-08-24-2 | 2026-08-24 | codegen | low | `dbg(x)` where `x` is a `shared struct` / `shared enum` REFUSES to compile: "codegen: `dbg` at L:C cannot render a value of type `Sh` yet — the compiled backends have no `Debug` renderer for it." Every other shape now lowers (B-2026-08-23-18), and `karac run --interp` renders shared values correctly, so this is a single missing arm in the `Debug` renderer family rather than a design question. | phase-7-codegen.md |
+| B-2026-08-24-3 | 2026-08-24 | parser | low | A STRUCT LITERAL WITH EXPLICIT GENERIC ARGUMENTS (`Connection[Disconnected] { socket: ... }`) does not parse in ANY expression position, so design.md § Typestate via Phantom Type Parameters line 8756 -- the line that demonstrates the wrong-state compile error -- cannot be written as the spec writes it. `let c = C[S] { fd: 1 };` -> `Expected Semicolon, found LeftBrace`; the same literal as a tail expression -> `Expected expression, found Colon`. Annotating the binding and using the bare name (`let c: C[S] = C { fd: 1 };`) works. | phase-2-parser-ast.md |
 
 ### Wontfix (9)
 
@@ -156,9 +156,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1522 surfaced
 
 </details>
 
-### Fixed (1492)
+### Fixed (1493)
 
-<details><summary>1492 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1493 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -17183,6 +17183,15 @@ MATRIX, all three backends, before -> after. Sixteen programs covering every exi
 CORPUS IMPACT: none, and it is the same story as the two rows before it. Exactly three `.kara` files in the repo contain the string `errdefer`, and all three are the SELF-HOSTED COMPILER recognizing the keyword (`"errdefer" => Token.ErrDefer`), not using it. No program in the repo or in kara-katas uses `errdefer` at all, so nothing changes behaviour and the construct has no dogfooding -- which is why a missing cleanup path survived.
 
 CHECKED AND NOT REPRODUCED: `selfhost/src/ast.kara` renames its error-recovery variant from `Err` to `Error` with a comment saying `is_error_exit_value` "would mis-stage errdefer cleanup and panic on the shared-enum return value" -- i.e. a false positive on a USER enum with a variant named `Err`. Probed four shapes (plain and `shared` enum, tail and explicit-return) on both backends: all correct, no panic. Either it was fixed since or the shape is narrower than the comment describes. Not filed, since a hazard that will not reproduce is not a bug report; recorded here so the next reader does not take the comment as current. |
+| B-2026-08-23-10 | parser | low | UNIT STRUCTS (`struct Name;`) do not parse, so design.md § Typestate via Phantom Type Parameters' state markers cannot be written as the spec writes… | FIXED by 54548e0. The parser now accepts `struct Name;` as sugar for `struct Name {}` (`src/parser/items.rs`, `parse_struct_def`): after the optional generic params and where clause, a `;` terminator yields the same empty field / invariant / impl-invariant lists the braced form yields, so no downstream phase sees a new shape -- a test asserts the two `StructDef`s are field-for-field identical. Every declaration modifier the braced form takes reaches the terminator too: `pub`, `shared`, generic params, `#[non_exhaustive]`, doc comments (all pinned). design.md's state markers now transcribe as written, and a 3-backend `tests/cli.rs` test runs the section's pattern with interp / JIT / AOT byte-identical (`sent 6\nmarker ok\n`).
+
+WHICH SIDE MOVED, AND WHY. The row left this to the owner and priced the doc repair at two lines. Moved the PARSER, because: (a) the row's own measurement is that this is pure surface sugar over a shape the language already has -- a zero-field struct -- so it adds no semantics and no new AST node; (b) a sweep found the form in design.md EXACTLY TWICE (8736-8737) and nowhere else in the repo, so repairing the doc would trade a real ergonomic gap for two lines and leave the next transcriber to rediscover it; (c) the risky half -- Rust's bare-`S` unit-struct CONSTRUCTION -- is deliberately NOT added, and still fails closed on the pre-existing, actionable `'S' is a type, not a function -- construct it with a struct literal: `S { ... }``. The boundary is declaration-only sugar; `S {}` constructs a unit struct exactly as it constructs any zero-field struct.
+
+DIAGNOSTIC. `struct S` followed by neither `{` nor `;` now reports "Expected `{` or `;` after struct name". Reporting only the brace, as before, would read as if the unit spelling were still a parse error -- which is the message this row was filed about.
+
+REVERT-DISCRIMINATED, each mechanism independently: disabling the `;` acceptance fails the four unit-struct tests and leaves the diagnostic test passing; removing the both-spellings diagnostic fails only that test and leaves the four passing.
+
+NOT FIXED HERE, split out as B-2026-08-24-3: the SAME section's line 8756 -- `let conn = Connection[Disconnected] { socket: Socket.new() }` -- still does not parse. Explicit generic arguments on a struct LITERAL fail in every expression position, which is why the section is still not transcribable end to end. That gap is independent of this row (it reproduces identically with braced `{}` markers) and is a real disambiguation decision rather than a terminator addition, so it is its own row. |
 | B-2026-08-23-12 | effect | medium | A `let` binding's `Fn(...)` TYPE ANNOTATION is never checked against the assigned function's effects, so `let f: Fn(i64) -> i64 = save;` -- a slot th… | FIXED by 4f67f9d1. Root cause: `check_subtyping_in_stmt`'s `Let` arm (src/effectchecker/subtyping.rs) walked the VALUE for nested calls and dropped the binding's `ty` on the floor -- so the one thing that makes a `let` a slot, the declared `Fn(..)` annotation, was never compared against anything. `check_call_args_subtyping` already held the entire rule; it was simply unreachable from a binding.
 
 THE FIX is two new methods in the same impl block plus two rewritten stmt arms:
