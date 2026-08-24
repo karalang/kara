@@ -98,10 +98,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 158 | 0 |
 | double-free | 136 | 0 |
 | codegen-gap | 133 | 2 |
-| diagnostics | 102 | 2 |
+| diagnostics | 102 | 1 |
 | false-positive | 95 | 0 |
 | perf | 84 | 0 |
-| other | 58 | 0 |
+| other | 59 | 0 |
 | soundness | 57 | 0 |
 | crash | 55 | 0 |
 | use-after-free | 20 | 0 |
@@ -113,27 +113,26 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen | 1012 | 2 |
 | typecheck | 250 | 1 |
 | interp | 180 | 0 |
+| other | 64 | 0 |
 | ownership | 64 | 0 |
-| other | 63 | 0 |
 | cli | 62 | 0 |
 | autopar | 55 | 0 |
 | parser | 41 | 0 |
 | runtime | 31 | 0 |
 | resolver | 26 | 0 |
-| effect | 19 | 2 |
+| effect | 19 | 1 |
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1533 surfaced · 5 open · 1505 fixed · 9 wontfix** (2026-05-20 → 2026-08-24). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1534 surfaced · 4 open · 1507 fixed · 9 wontfix** (2026-05-20 → 2026-08-24). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-23-11 | 2026-08-23 | typecheck | medium | `Type::Function` carries NO EFFECT ROW, so design.md § First-Class Functions' `let f = save;  // f: Fn(User) -> () with writes(UserDB)` is not representable and a function value's effects cannot propagate through its TYPE. NARROWED 7e7972b: the IMPRECISION this caused -- a function value that is bound and never called still demanding the enclosing function declare its effects -- is FIXED, in the effect checker and without the type row (bind-an-alias, attribute-at-every-other-mention). What remains is representability only, and the prescription in the original title does not work as written: the typechecker cannot populate an effect row, because `effectcheck` runs after `typecheck` AND consumes its output, so inferred effects at typecheck time would need a cycle. Read the detail before picking this up. | roadmap.md |
 | B-2026-08-23-13 | 2026-08-23 | effect | low | The mutual-recursion NOTE now fires for two functions that merely REFERENCE each other as VALUES, calling them a "mutual recursion group" though neither calls the other. `fn p(n: i64) -> i64 { let f = q; n + 1 }` + `fn q(n: i64) -> i64 { let g = p; n + 2 }` reports `note[effect]: mutual recursion group resolved by fixed-point inference: \`p\` (no effects), \`q\` (no effects)`. The program passes and the note is suppressible with `#[allow(mutual_recursion_note)]`, so this is diagnostic wording, not a check failure -- but "mutual recursion" is a false statement about the program. | roadmap.md |
 | B-2026-08-24-9 | 2026-08-24 | codegen | low | `dbg(x)` where `x` is a SELF-REFERENTIAL `shared enum` (`shared enum T2 { Node(i64, T2), Leaf(i64) }`) REFUSES to compile. Not a missing arm: the shared-enum wrapper and the inner `emit_enum_display_fn` share ONE cache key (the bare enum name), so a payload of the enum's own type resolves to the aggregate-taking inner and is handed a handle. Refusing is the new behaviour; before the guard it MISCOMPILED, printing a wrong variant. A HEADERLESS or weak-headered shared type refuses for its own separate reason, below. | phase-7-codegen.md |
-| B-2026-08-24-12 | 2026-08-24 | effect | medium | THE COMPILER'S OWN SUGGESTED FIX IS UNFOLLOWABLE for a public function that RETURNS an `Fn(..)` value. `pub fn get() -> Fn(i64) -> i64 { save }` errors with "public function 'get' performs effects [writes(UserDB)] but has no effect declaration. Add: with writes(UserDB) to the function signature" -- and doing EXACTLY that reproduces the SAME error, because a `with` clause after an `Fn` return type binds to the RETURN TYPE, not to the function. The one spelling that compiles is `pub fn get() -> (Fn(i64) -> i64 with writes(UserDB)) with writes(UserDB) { save }` -- parenthesised AND doubled -- which the diagnostic never mentions and which no user would guess. Measured on all four spellings. | roadmap.md |
 | B-2026-08-24-13 | 2026-08-24 | codegen | medium | A NON-SCALAR `break` VALUE (String / Vec / struct) cannot travel through the compiled backends' break-value slot: `fn pick() -> String { loop { break f"x" } }` and the labeled-block twin `found: { break found f"x" }` both FAIL AT MODULE VERIFICATION (`ret i64` against `{ptr, i64, i64}`), while the interpreter returns the value. Storing the header instead is a DOUBLE FREE, measured -- so the slot deliberately refuses it. | roadmap.md |
 
 ### Wontfix (9)
@@ -154,9 +153,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1533 surfaced
 
 </details>
 
-### Fixed (1505)
+### Fixed (1507)
 
-<details><summary>1505 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1507 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -17834,6 +17833,74 @@ effectful one.
 Map KEYS are checked alongside values -- a function value is a legal map
 key, and checking only the value would have been an assumption rather than
 a decision.
+ |
+| B-2026-08-24-12 | effect | medium | THE COMPILER'S OWN SUGGESTED FIX IS UNFOLLOWABLE for a public function that RETURNS an `Fn(..)` value | FIXED by 05a5108.
+
+The suggested-fix text is now return-type-aware. When the declared return
+type is an `Fn(..)` / `OnceFn(..)`, the advice names the PARENTHESISED
+spelling and renders the real return type, so it can be copy-pasted:
+
+  Add: with writes(UserDB) after a PARENTHESISED return type —
+  `-> (Fn(i64) -> i64) with writes(UserDB)` — because a `with` written
+  directly after an `Fn` return type binds to that type, not to the function
+
+Every other return type keeps the original wording verbatim; the special
+case is exactly one shape wide, and a test pins that.
+
+DELIBERATELY NOT THE FULLY-DOUBLED SPELLING. This diagnostic knows the
+FUNCTION's effects; it does not know whether they come from the returned
+value. Suggesting `-> (Fn(..) with E) with E` would be a guess that is wrong
+whenever the function performs the effect in its own body and returns a pure
+function. Following the advice given now moves the user from the loop to a
+DIFFERENT, actionable error -- the return-slot check from B-2026-08-24-1
+asking for the row when the value really carries one. Two accurate messages
+beat one guessed message, and the test asserts the second message is not the
+first repeated.
+
+BLOCKED ON A SECOND BUG, fixed in the same commit and filed separately as
+B-2026-08-24-14: rendering the return type concretely requires
+`formatter::render_type_expr`, and that printer was emitting `fn(i64) -> i64`
+for an `Fn` type -- lowercase, which does not parse in type position. The
+first version of this fix therefore produced advice that was copy-pasteable
+and still wrong. Fixing the printer was a precondition, not a detour. |
+| B-2026-08-24-14 | other | medium | `karac fmt` EMITS UNPARSEABLE SOURCE for any `Fn(..)` / `OnceFn(..)` type annotation, and silently drops two declarations doing it | FIXED by 05a5108.
+
+`src/formatter/types.rs`'s `TypeKind::FnType` arm now destructures
+`effect_spec` and `is_once` instead of matching them away, and writes the
+correct head:
+
+  Fn(...)         / OnceFn(...)      -- head, was lowercase `fn(`
+  ... with _                          -- polymorphic row, was dropped
+  ... with writes(D)                  -- concrete row, was dropped
+
+MEASURED, `karac fmt` on one source line holding all three:
+  before   let f: fn(i64) -> i64 = save;      <- from `Fn(i64) -> i64 with writes(UserDB)`
+           let g: fn(i64) -> i64 = save;      <- from `OnceFn(i64) -> i64`
+  after    let f: Fn(i64) -> i64 with writes(UserDB) = save;
+           let g: OnceFn(i64) -> i64 = save;
+
+and the formatted output now round-trips (`karac check` on it reports only
+the effect error the ORIGINAL source has) and is a fixpoint under a second
+format pass. Before, feeding `karac fmt`'s own output back in failed with
+`error[parse]: Expected type, found Fn`.
+
+WHY THE SEVERITY IS NOT HIGHER THAN IT LOOKS. Two of the three losses --
+the effect row and once-callability -- are silent weakenings of a declared
+guarantee, which is the class `no_effect_attribute_keeps_its_verbs` exists
+to guard ("formatting must never be able to weaken a guarantee"). They were
+saved from being silent CORRUPTION only by the third defect: the lowercase
+head made the output unparseable, so the damage surfaced at the next parse
+instead of quietly changing two types. `karac fmt` also prints to stdout
+rather than rewriting in place, so the blast radius is whoever pipes it back
+over their source -- the obvious workflow, and what a `--write` flag or an
+editor format-on-save integration would do.
+
+The regression test lives next to the `#[no_effect]` one it mirrors and
+pins the same two properties: the output parses, and a second pass is a
+fixpoint.
+
+SOURCE NOTE: found while fixing B-2026-08-24-12, whose fix renders a return
+type into a suggested-fix string and so could not be correct until this was.
  |
 
 </details>
