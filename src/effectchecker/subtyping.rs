@@ -327,14 +327,15 @@ impl<'a> super::EffectChecker<'a> {
             let arg_str: Vec<String> = arg_effects
                 .effects
                 .iter()
-                .filter(|te| !self.is_transparent_verb(&te.effect.verb))
+                .filter(|te| !self.is_slot_transparent_verb(&te.effect.verb))
                 .map(|te| format!("{}({})", verb_name(&te.effect.verb), te.effect.resource))
                 .collect();
             let offending_str: Vec<String> = arg_effects
                 .effects
                 .iter()
                 .filter(|te| {
-                    !self.is_transparent_verb(&te.effect.verb) && !slot_effects.contains(&te.effect)
+                    !self.is_slot_transparent_verb(&te.effect.verb)
+                        && !slot_effects.contains(&te.effect)
                 })
                 .map(|te| format!("{}({})", verb_name(&te.effect.verb), te.effect.resource))
                 .collect();
@@ -356,7 +357,7 @@ impl<'a> super::EffectChecker<'a> {
             };
 
             for te in &arg_effects.effects {
-                let is_transparent = self.is_transparent_verb(&te.effect.verb);
+                let is_transparent = self.is_slot_transparent_verb(&te.effect.verb);
                 if !slot_effects.contains(&te.effect) && !is_transparent {
                     let effect_str =
                         format!("{}({})", verb_name(&te.effect.verb), te.effect.resource);
@@ -428,6 +429,40 @@ impl<'a> super::EffectChecker<'a> {
         }
     }
 
+    /// Is `verb` ignored when comparing a value's effects against a declared
+    /// `Fn(..)` SLOT? (B-2026-08-24-8, option (a).)
+    ///
+    /// The ordinary transparent set, plus `panics`. `panics` is inferred
+    /// from any indexing, division or overflow-checked arithmetic, so under
+    /// the old rule a closure as plain as `|w, i| w[i]` did not fit
+    /// `Fn(ref Vec[u8], i64) -> u8` and had to be spelled `... with panics`.
+    /// That made the annotation boilerplate on nearly every non-trivial
+    /// function value — the shape users cargo-cult rather than read — and
+    /// the standard library disagreed with its own rule in practice:
+    /// 27 of its 33 `Fn(..)` slots are bare (`Vec.map`, `Pool.new`,
+    /// `Once.get_or_init`, `autograd.grad`), and none was written with
+    /// `panics`, yet an indexing callback could not fill any of them.
+    ///
+    /// SCOPED TO SLOTS ON PURPOSE. This does NOT make `panics` transparent
+    /// anywhere else: it is still inferred, still declared on functions,
+    /// still surfaced by the public-effect rule, and still reported by
+    /// `karac explain`. Only the value-vs-slot comparison ignores it.
+    ///
+    /// `blocks` and `suspends` stay CHECKED. They are execution verbs that
+    /// drive scheduler placement, so "this callback must not block" is a
+    /// constraint a slot may really mean; "this callback must not panic" is
+    /// not expressible in v1 anyway (design.md deliberately has no
+    /// `forbids(verb)` predicate), so a bare slot was never a deliberate way
+    /// to say it.
+    ///
+    /// PRECEDENT: the auto-par conflict rule already singles `panics` out as
+    /// non-conflicting (`src/concurrency/conflicts.rs`), because a Kāra panic
+    /// is a process exit rather than an unwind. Different question, same verb,
+    /// same reason it behaves unlike the other five resource verbs.
+    fn is_slot_transparent_verb(&self, verb: &EffectVerbKind) -> bool {
+        matches!(verb, EffectVerbKind::Panics) || self.is_transparent_verb(verb)
+    }
+
     /// A struct field's declared `TypeExpr`, by struct name and field name.
     ///
     /// Scans `self.program` rather than consulting an index: the effect
@@ -486,20 +521,21 @@ impl<'a> super::EffectChecker<'a> {
         let value_str: Vec<String> = value_effects
             .effects
             .iter()
-            .filter(|te| !self.is_transparent_verb(&te.effect.verb))
+            .filter(|te| !self.is_slot_transparent_verb(&te.effect.verb))
             .map(|te| format!("{}({})", verb_name(&te.effect.verb), te.effect.resource))
             .collect();
         let offending_str: Vec<String> = value_effects
             .effects
             .iter()
             .filter(|te| {
-                !self.is_transparent_verb(&te.effect.verb) && !slot_effects.contains(&te.effect)
+                !self.is_slot_transparent_verb(&te.effect.verb)
+                    && !slot_effects.contains(&te.effect)
             })
             .map(|te| format!("{}({})", verb_name(&te.effect.verb), te.effect.resource))
             .collect();
 
         for te in &value_effects.effects {
-            if slot_effects.contains(&te.effect) || self.is_transparent_verb(&te.effect.verb) {
+            if slot_effects.contains(&te.effect) || self.is_slot_transparent_verb(&te.effect.verb) {
                 continue;
             }
             let effect_str = format!("{}({})", verb_name(&te.effect.verb), te.effect.resource);

@@ -100690,7 +100690,7 @@ fn main() {
                  fn msize() -> Fn(ref Map[String, i64]) -> i64 { |m| m.len() }\n\
                  fn ssize() -> Fn(ref Set[String]) -> i64 { |st| st.len() }\n\
                  fn nocap() -> Fn(ref String) -> bool { |s| s.starts_with(\"ab\") }\n\
-                 fn vecat() -> Fn(ref Vec[u8], i64) -> u8 with panics { |w, i| w[i] }\n\
+                 fn vecat() -> Fn(ref Vec[u8], i64) -> u8 { |w, i| w[i] }\n\
                  fn slen() -> Fn(ref String) -> i64 { |s| s.len() }\n\
                  fn psum() -> Fn(ref P) -> i64 { |p| p.x + p.y }\n\
                  fn vlen() -> Fn(ref Vec[String]) -> i64 { |v| v.len() }\n\

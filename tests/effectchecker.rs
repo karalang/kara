@@ -668,14 +668,21 @@ fn test_fn_slot_mixes_resource_and_resource_less_verbs() {
     );
 }
 
-/// The gate must not have become permissive: a panicking argument handed to a
-/// slot that does NOT declare `panics` is still an error. Without this the
-/// fix above could be satisfied by accepting everything.
+/// The gate must not have become permissive: a resource-less-verb argument
+/// handed to a slot that does NOT declare it is still an error. Without this
+/// the fix above could be satisfied by accepting everything.
+///
+/// Written on `blocks`, not `panics`. It used to be `panics`, and that was
+/// the right choice until B-2026-08-24-8 made `panics` transparent FOR SLOT
+/// SUBTYPING (it is inferred from any indexing, so requiring it in a slot
+/// was boilerplate on nearly every function value). `blocks` carries the
+/// same guard: it is resource-less, so it exercises the same list-to-set
+/// conversion this test exists to protect, and it is still checked.
 #[test]
 fn test_undeclared_resource_less_verb_in_slot_still_rejected() {
     let parsed = parse(
-        "fn act() with panics { }\n\
-         fn apply(g: Fn()) with panics { g(); }\n\
+        "fn act() with blocks { }\n\
+         fn apply(g: Fn()) with blocks { g(); }\n\
          fn main() { apply(act); }",
     );
     assert!(
@@ -689,7 +696,7 @@ fn test_undeclared_resource_less_verb_in_slot_still_rejected() {
             .errors
             .iter()
             .any(|e| e.kind == EffectErrorKind::EffectSubtypeViolation),
-        "a `panics` argument must still be rejected by a pure slot; errors: {:?}",
+        "a `blocks` argument must still be rejected by a pure slot; errors: {:?}",
         result
             .errors
             .iter()
@@ -700,11 +707,15 @@ fn test_undeclared_resource_less_verb_in_slot_still_rejected() {
 
 /// A slot declaring the WRONG resource-less verb must still reject — guards
 /// against the guard being written as "any resource-less verb matches".
+///
+/// `blocks` into a `suspends` slot, for the reason given on the test above:
+/// the pair must be two verbs that slot subtyping still compares, and
+/// `panics` is no longer one of them (B-2026-08-24-8).
 #[test]
 fn test_wrong_resource_less_verb_in_slot_still_rejected() {
     let parsed = parse(
-        "fn act() with panics { }\n\
-         fn apply(g: Fn() with blocks) with panics { g(); }\n\
+        "fn act() with blocks { }\n\
+         fn apply(g: Fn() with suspends) with blocks { g(); }\n\
          fn main() { apply(act); }",
     );
     assert!(
@@ -718,7 +729,7 @@ fn test_wrong_resource_less_verb_in_slot_still_rejected() {
             .errors
             .iter()
             .any(|e| e.kind == EffectErrorKind::EffectSubtypeViolation),
-        "`panics` must not satisfy a `blocks` slot; errors: {:?}",
+        "`blocks` must not satisfy a `suspends` slot; errors: {:?}",
         result
             .errors
             .iter()
@@ -2579,6 +2590,109 @@ fn test_return_slot_follows_branch_tails() {
     );
 }
 
+// ── B-2026-08-24-8: `panics` does not constrain a bare Fn slot ──────
+//
+// `panics` is inferred from any indexing, division or overflow-checked
+// arithmetic, so under the old rule a closure as plain as `|w, i| w[i]`
+// did not fit `Fn(ref Vec[u8], i64) -> u8` and had to be spelled
+// `... with panics`. That is boilerplate on nearly every non-trivial
+// function value, and the standard library disagreed with the rule in
+// practice: 27 of its 33 `Fn(..)` slots are bare (`Vec.map`, `Pool.new`,
+// `Once.get_or_init`, `autograd.grad`) and none was written with `panics`,
+// yet an indexing callback could fill none of them.
+//
+// Option (a) of the row: `panics` joins the transparent set FOR SLOT
+// SUBTYPING ONLY. It is still inferred, still declared on functions, still
+// surfaced by the public-effect rule. What follows pins both halves of
+// that cut, because a fix that made the whole comparison lax would pass
+// the first test and fail the second.
+
+/// A panicking closure fits a bare slot at every one of the five
+/// positions. `go` still declares `panics` itself — the public-effect rule
+/// is untouched, and that is the point: the effect is still tracked, it
+/// just no longer has to be repeated inside the slot.
+#[test]
+fn test_panics_does_not_constrain_a_bare_fn_slot() {
+    for (body, what) in [
+        (
+            "pub fn go() -> u8 with panics \
+             { let f: Fn(ref Vec[u8], i64) -> u8 = |w, i| w[i]; \
+             let mut v: Vec[u8] = Vec.new(); v.push(1u8); f(v, 0) }",
+            "let annotation",
+        ),
+        (
+            "fn vecat() -> Fn(ref Vec[u8], i64) -> u8 { |w, i| w[i] }\n\
+             pub fn go() -> u8 with panics { let f = vecat(); \
+             let mut v: Vec[u8] = Vec.new(); v.push(1u8); f(v, 0) }",
+            "return position",
+        ),
+        (
+            "fn apply(f: Fn(ref Vec[u8], i64) -> u8, v: Vec[u8]) -> u8 with panics { f(v, 0) }\n\
+             pub fn go() -> u8 with panics { let mut v: Vec[u8] = Vec.new(); \
+             v.push(1u8); apply(|w, i| w[i], v) }",
+            "argument position",
+        ),
+    ] {
+        let errs = effectcheck(&{
+            let parsed = parse(body);
+            assert!(
+                parsed.errors.is_empty(),
+                "{what}: parse: {:?}",
+                parsed.errors
+            );
+            parsed.program
+        })
+        .errors
+        .into_iter()
+        .filter(|e| e.kind == EffectErrorKind::EffectSubtypeViolation)
+        .map(|e| e.message)
+        .collect::<Vec<_>>();
+        assert!(
+            errs.is_empty(),
+            "{what}: `panics` must not constrain a bare slot; got {errs:?}"
+        );
+    }
+}
+
+/// The other half of the cut, and the reason this is not just "make the
+/// comparison lax". `blocks` and `suspends` are EXECUTION verbs driving
+/// scheduler placement, so "this callback must not block" is a constraint
+/// a slot may really mean — they stay checked. So do the resource verbs.
+#[test]
+fn test_other_verbs_still_constrain_a_bare_fn_slot() {
+    for (body, verb) in [
+        (
+            "fn waits(n: i64) -> i64 with blocks { n }\n\
+             fn get() -> Fn(i64) -> i64 { waits }\n\
+             pub fn go() -> i64 with blocks { let f = get(); f(1) }",
+            "blocks",
+        ),
+        (
+            "fn yields(n: i64) -> i64 with suspends { n }\n\
+             fn get() -> Fn(i64) -> i64 { yields }\n\
+             pub fn go() -> i64 with suspends { let f = get(); f(1) }",
+            "suspends",
+        ),
+        (
+            "effect resource UserDB;\n\
+             fn save(n: i64) -> i64 with writes(UserDB) { n * 2 }\n\
+             fn get() -> Fn(i64) -> i64 { save }\n\
+             pub fn go() -> i64 with writes(UserDB) { let f = get(); f(1) }",
+            "writes",
+        ),
+    ] {
+        let msgs: Vec<String> = effectcheck_errors(body)
+            .into_iter()
+            .filter(|e| e.kind == EffectErrorKind::EffectSubtypeViolation)
+            .map(|e| e.message)
+            .collect();
+        assert!(
+            msgs.iter().any(|m| m.contains(verb)),
+            "`{verb}` must still constrain a bare slot; got {msgs:?}"
+        );
+    }
+}
+
 #[test]
 fn test_let_annotation_wider_value_rejected() {
     let errors = effectcheck_errors(
@@ -2721,24 +2835,28 @@ fn test_oncefn_let_annotation_wider_value_rejected() {
     );
 }
 
-/// A resource-less verb (`panics`) must reject against a pure slot and pass
-/// against one that declares it -- the B-2026-08-05-18 class, at the new site.
+/// A resource-less verb must reject against a pure slot and pass against one
+/// that declares it -- the B-2026-08-05-18 class, at the new site.
+///
+/// On `blocks` rather than `panics` since B-2026-08-24-8; see
+/// `test_undeclared_resource_less_verb_in_slot_still_rejected` for why the
+/// verb changed and why the guard is unaffected.
 #[test]
 fn test_let_annotation_resource_less_verb_follows_the_slot() {
     let errors = effectcheck_errors(
-        "fn panicky(n: i64) -> i64 with panics { n }\n\
-         fn main() with panics { let f: Fn(i64) -> i64 = panicky; f(7); }",
+        "fn waits(n: i64) -> i64 with blocks { n }\n\
+         fn main() with blocks { let f: Fn(i64) -> i64 = waits; f(7); }",
     );
     assert!(
         errors
             .iter()
             .any(|e| e.kind == EffectErrorKind::EffectSubtypeViolation),
-        "`panics` must not satisfy a pure annotation slot; got: {:?}",
+        "`blocks` must not satisfy a pure annotation slot; got: {:?}",
         errors.iter().map(|e| &e.message).collect::<Vec<_>>()
     );
     effectcheck_ok(
-        "fn panicky(n: i64) -> i64 with panics { n }\n\
-         fn main() with panics { let f: Fn(i64) -> i64 with panics = panicky; f(7); }",
+        "fn waits(n: i64) -> i64 with blocks { n }\n\
+         fn main() with blocks { let f: Fn(i64) -> i64 with blocks = waits; f(7); }",
     );
 }
 
