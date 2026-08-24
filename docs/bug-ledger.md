@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 283 | 0 |
 | leak | 189 | 0 |
 | missing-feature | 162 | 3 |
-| run-vs-build | 157 | 2 |
+| run-vs-build | 157 | 1 |
 | double-free | 136 | 1 |
 | codegen-gap | 130 | 1 |
 | diagnostics | 100 | 1 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1008 | 3 |
+| codegen | 1008 | 2 |
 | typecheck | 249 | 1 |
-| interp | 179 | 2 |
+| interp | 179 | 1 |
 | ownership | 64 | 0 |
 | other | 63 | 0 |
 | cli | 62 | 0 |
@@ -124,15 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1525 surfaced · 8 open · 1494 fixed · 9 wontfix** (2026-05-20 → 2026-08-24). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1525 surfaced · 7 open · 1495 fixed · 9 wontfix** (2026-05-20 → 2026-08-24). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (8)
+### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-23-11 | 2026-08-23 | typecheck | medium | `Type::Function` carries NO EFFECT ROW, so design.md § First-Class Functions' `let f = save;  // f: Fn(User) -> () with writes(UserDB)` is not representable and a function value's effects cannot propagate through its TYPE. The typechecker's function type is `Function { params, return_type }` -- no effect field -- while the AST-level `TypeKind::FnType` DOES carry an `effect_spec`, which is why a PARAMETER slot can be checked (E0404 `argument 1 has effect writes(UserDB) not declared in slot [pure]`) but an inferred binding cannot. B-2026-08-23-7 closed the resulting soundness hole with an OVER-APPROXIMATION -- a function mentioned in value position contributes its effects to the enclosing function whether or not it is ever called -- which is sound but imprecise: `let f = save;` with no call still demands the declaration. | roadmap.md |
 | B-2026-08-23-13 | 2026-08-23 | effect | low | The mutual-recursion NOTE now fires for two functions that merely REFERENCE each other as VALUES, calling them a "mutual recursion group" though neither calls the other. `fn p(n: i64) -> i64 { let f = q; n + 1 }` + `fn q(n: i64) -> i64 { let g = p; n + 2 }` reports `note[effect]: mutual recursion group resolved by fixed-point inference: \`p\` (no effects), \`q\` (no effects)`. The program passes and the note is suppressible with `#[allow(mutual_recursion_note)]`, so this is diagnostic wording, not a check failure -- but "mutual recursion" is a false statement about the program. | roadmap.md |
-| B-2026-08-23-17 | 2026-08-23 | codegen+interp | medium | A PANIC MESSAGE goes to STDOUT under JIT and AOT but to STDERR under `--interp`, and design.md § Entry Point (line 6423) says stderr for all of them. The compiled backends inject the panic line into the program's DATA stream, so anything parsing a compiled Kara program's stdout gets `panic at f.kara:3:16 in main: unwrap() called on None/Err` mixed into its output, while a consumer watching stderr for faults sees nothing at all. Separately and on ALL THREE surfaces, a panic exits 1, not the 101 the same spec paragraph promises -- so the `$?` distinction it exists to provide ("distinct from the Err-exit-1 path so shell pipelines can distinguish expected failures from bugs") does not exist. | roadmap.md |
 | B-2026-08-24-1 | 2026-08-24 | effect | medium | The `Fn(..)` EFFECT SLOT IS STILL UNCHECKED AT FOUR NON-`let` POSITIONS after B-2026-08-23-12 wired the binding annotation. Each accepts an effectful `save` into a slot that declares purity, with no diagnostic: (1) ASSIGNMENT to a declared-Fn binding -- `let mut f: Fn(i64) -> i64 = |x| x; f = save;`; (2) the `LetUninit` form of the same -- `let f: Fn(i64) -> i64; f = save;`; (3) RETURN POSITION -- `fn get() -> Fn(i64) -> i64 { save }`; (4) a STRUCT-LITERAL FIELD -- `struct Holder { f: Fn(i64) -> i64 }` built as `Holder { f: save }`. All four measured silent under `karac check` with the -12 binary, and all four print `14` under `--interp`, so the effectful function really does route through the pure-declared slot rather than the shape being rejected earlier. | roadmap.md |
 | B-2026-08-24-2 | 2026-08-24 | codegen | low | `dbg(x)` where `x` is a `shared struct` / `shared enum` REFUSES to compile: "codegen: `dbg` at L:C cannot render a value of type `Sh` yet — the compiled backends have no `Debug` renderer for it." Every other shape now lowers (B-2026-08-23-18), and `karac run --interp` renders shared values correctly, so this is a single missing arm in the `Debug` renderer family rather than a design question. | phase-7-codegen.md |
 | B-2026-08-24-3 | 2026-08-24 | parser | low | A STRUCT LITERAL WITH EXPLICIT GENERIC ARGUMENTS (`Connection[Disconnected] { socket: ... }`) does not parse in ANY expression position, so design.md § Typestate via Phantom Type Parameters line 8756 -- the line that demonstrates the wrong-state compile error -- cannot be written as the spec writes it. `let c = C[S] { fd: 1 };` -> `Expected Semicolon, found LeftBrace`; the same literal as a tail expression -> `Expected expression, found Colon`. Annotating the binding and using the bare name (`let c: C[S] = C { fd: 1 };`) works. | phase-2-parser-ast.md |
@@ -157,9 +156,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1525 surfaced
 
 </details>
 
-### Fixed (1494)
+### Fixed (1495)
 
-<details><summary>1494 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1495 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -17270,6 +17269,55 @@ WHAT THIS DOES NOT DO: `dbg` still does not RUN in a compiled build — it now r
 HONESTY NOTE ON THE TESTS. The general fallback arm alone already refuses this program — verified by deleting the dbg-specific arm and re-running, which still fails the build, just with a generic message. So the cli gate pins the MESSAGE, not the class fix; nothing pins the general arm on its own, because no other callee reaches it. Of the five typechecker tests, three fail with the rule reverted (identity, arity, laundering) and two are deliberately guards against the WRONG fix rather than against the old behaviour: the Display test fails only if someone copies the console family's bound onto dbg, and the shadow test fails only if the intercept skips the local-binding guard. An earlier version of the identity test asserted only working programs and passed with the rule removed — vacuous, because an unconstrained type satisfies every legal use; it was rewritten around rejections, which only the identity can produce.
 
 ALTERNATIVE CONSIDERED AND REJECTED, recorded so it need not be re-derived: lower `dbg` as the IDENTITY ONLY — evaluate the argument, return it, print nothing — plus a compile-time warning that dbg output is interpreter-only. It is tempting because it fixes the miscompile completely while letting the program still build, and because it is EXACTLY the semantics design.md already specifies for `--release` (line 6218 strips dbg's output there; line 6240 keeps the value). It was rejected because in a non-release build it would knowingly ship an A/B divergence — the interpreter printing lines the compiled binary does not — and "A/B run == build" is the one rule the kata corpus treats as non-negotiable. A warning makes such a gap visible but does not make it absent, and every bug in this cluster began as a surface that was present-looking and partial. Refusing keeps the invariant intact and costs only the ability to compile a program that still has temporary developer instrumentation in it, which design.md calls dbg exactly. If the follow-up row's full lowering turns out to be expensive, identity-plus-warning is the sensible fallback for `--release` ONLY, where it is not a divergence but the specified behaviour. |
+| B-2026-08-23-17 | codegen+interp | medium | A PANIC MESSAGE goes to STDOUT under JIT and AOT but to STDERR under `--interp`, and design.md § Entry Point (line 6423) says stderr for all of them | FIXED by c12de8f.
+
+Fixed on both axes, on all three backends.
+
+STREAM. `emit_panic` (src/codegen/runtime.rs) printed through libc
+`printf`, which is stdout by construction. It now prints through
+`fprintf(stderr, ...)`. The `FILE*` comes from `stdio_stream_with`, a new
+explicit-builder twin of `stdio_stream`: `emit_panic` outlines its body
+into a per-site `__karac_panic_site_<n>` function with its OWN builder, and
+materializing the `stderr` load through `self.builder` emitted it in the
+CALLER -- "Instruction does not dominate all uses" at module verification.
+The `printf` declaration is gone from codegen entirely (the panic path was
+its last caller), so no future site can reach stdout by omission; `fprintf`
+is now the only varargs printer declared, and every call names its stream.
+
+EXIT CODE. All three backends exited 1. `emit_panic` now emits `exit(101)`
+(JIT and AOT), and the interpreter's `cmd_run` splits the two nonzero paths
+it had collapsed: a runtime error -- which is what every interpreter panic
+is -- exits 101, while `main() -> Result` returning `Err(e)` keeps exiting
+1. That split is the whole point of the spec paragraph: `$?` distinguishes
+an expected failure from a bug.
+
+FOLLOW-ON: the REPL's JIT runner salvages a faulting cell's output through
+an atexit handler and frames the exit code back to the parent; that frame
+now reports 101 (src/bin/karac_jit_runner.rs). `karac test`'s subprocess
+path parsed the panic line off STDOUT to classify contract faults
+(`src/test_jit_dispatch.rs::map_exit_to_outcome`) -- it now reads stderr,
+and its unused `stdout` parameter is gone.
+
+VERIFIED: the measured table in the row's detail, re-run, now reads
+rc=101 / stdout=[] / stderr=[panic ...] for AOT and JIT, and rc=101 with
+the fault on stderr for `--interp`.
+
+TESTS. Four new `tests/cli.rs` E2Es assert the two normative properties per
+backend -- interp / JIT / AOT each get stream + code, and a fourth pins
+that `main() -> Err` still exits 1, since 101 is worth nothing unless the
+Err path stays 1. ~100 existing assertions across codegen.rs, cli.rs,
+memory_sanitizer.rs and karac_jit_runner_repl.rs read the fault off stdout
+or expected exit 1; they now read stderr and expect 101. The two
+`--release`-strips-contracts E2Es were asserting `!= 0`, which the pre-fix
+exit 1 satisfied -- they now pin 101 exactly.
+
+DOC. design.md § Entry Point gains a paragraph making the split explicit:
+the STREAM and the CODE are normative and identical on every backend; the
+panic TEXT is not pinned for v1, and the JIT/AOT form (`panic at
+<file>:<line>:<col> in <fn>: <msg>`) still differs from the interpreter's
+(`runtime error: <msg>` + `  at <loc>` + an error-return trace), as do
+per-site fault messages. Unifying the two message tables is real separate
+work and is named as such rather than pretended away. |
 | B-2026-08-23-18 | codegen | medium | `dbg(x)` still has NO CODEGEN LOWERING, so a program containing it cannot be compiled at all -- `karac build` and `karac run` now REFUSE it with an a… | FIXED by a112513. LOWERED `dbg` in the compiled backends, so all three surfaces now execute it and agree byte-for-byte. All four pieces the row listed are done; one shape is deliberately left refusing and is split into its own row.
 
 PREREQUISITE FOUND FIRST, and it was in the ORACLE: `dbg`'s own output was NONDETERMINISTIC. `Value::debug_fmt` (`src/interpreter/value.rs`) walks a struct's field `HashMap` directly, and Rust randomises `HashMap` iteration per process via `RandomState` — MEASURED: SIX distinct field orderings in TWELVE runs of one three-field struct, all six permutations. Unlike `Map`/`Set`, whose order is seeded-random ON PURPOSE (design.md § Hash), pinnable via `KARAC_HASH_SEED`, and identical in both backends, this was accidental and unpinnable. So there was no stable oracle to match, and no faithful twin was possible until it was fixed. This is a sibling of B-2026-08-23-21, which fixed the `Display` arm of the same `HashMap` walk and missed the `debug_fmt` twin. FIX: `eval_builtin_dbg` now renders through a new `debug_render_typed` — the `Debug` mode of the DECLARATION-ORDERED, type-aware `display_render_typed` walker — which also buys `Secret` redaction and the unsigned-integer-width handling, all of which the compiled backends already did.
