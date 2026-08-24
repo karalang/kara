@@ -95,8 +95,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 283 | 0 |
 | leak | 189 | 0 |
 | missing-feature | 162 | 3 |
-| run-vs-build | 156 | 2 |
-| double-free | 135 | 0 |
+| run-vs-build | 157 | 2 |
+| double-free | 136 | 1 |
 | codegen-gap | 130 | 1 |
 | diagnostics | 100 | 1 |
 | false-positive | 95 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1007 | 2 |
+| codegen | 1008 | 3 |
 | typecheck | 249 | 1 |
-| interp | 178 | 2 |
+| interp | 179 | 2 |
 | ownership | 64 | 0 |
 | other | 63 | 0 |
 | cli | 62 | 0 |
@@ -124,19 +124,20 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1523 surfaced · 7 open · 1493 fixed · 9 wontfix** (2026-05-20 → 2026-08-24). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1525 surfaced · 8 open · 1494 fixed · 9 wontfix** (2026-05-20 → 2026-08-24). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (7)
+### Open (8)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-23-11 | 2026-08-23 | typecheck | medium | `Type::Function` carries NO EFFECT ROW, so design.md § First-Class Functions' `let f = save;  // f: Fn(User) -> () with writes(UserDB)` is not representable and a function value's effects cannot propagate through its TYPE. The typechecker's function type is `Function { params, return_type }` -- no effect field -- while the AST-level `TypeKind::FnType` DOES carry an `effect_spec`, which is why a PARAMETER slot can be checked (E0404 `argument 1 has effect writes(UserDB) not declared in slot [pure]`) but an inferred binding cannot. B-2026-08-23-7 closed the resulting soundness hole with an OVER-APPROXIMATION -- a function mentioned in value position contributes its effects to the enclosing function whether or not it is ever called -- which is sound but imprecise: `let f = save;` with no call still demands the declaration. | roadmap.md |
 | B-2026-08-23-13 | 2026-08-23 | effect | low | The mutual-recursion NOTE now fires for two functions that merely REFERENCE each other as VALUES, calling them a "mutual recursion group" though neither calls the other. `fn p(n: i64) -> i64 { let f = q; n + 1 }` + `fn q(n: i64) -> i64 { let g = p; n + 2 }` reports `note[effect]: mutual recursion group resolved by fixed-point inference: \`p\` (no effects), \`q\` (no effects)`. The program passes and the note is suppressible with `#[allow(mutual_recursion_note)]`, so this is diagnostic wording, not a check failure -- but "mutual recursion" is a false statement about the program. | roadmap.md |
-| B-2026-08-23-15 | 2026-08-23 | interp | medium | The INTERPRETER does not order `eprintln` output across `par {}` branches, so stderr from a parallel region interleaves NONDETERMINISTICALLY -- 4 distinct orderings in 20 runs of one program -- while the SAME program's stderr under JIT and AOT is replayed in stable source order. design.md line 6242 promises exactly the opposite: it names `eprintln` as the construct to reach for when you need deterministic order under `par` ("For anything that needs deterministic order (snapshot tests, log aggregators, printf-style debugging of a race), use `eprintln`"), in explicit contrast to `dbg()`, whose unordered output it documents as unsupported for snapshot testing. The compiled backends honour that promise; the interpreter does not. | roadmap.md |
 | B-2026-08-23-17 | 2026-08-23 | codegen+interp | medium | A PANIC MESSAGE goes to STDOUT under JIT and AOT but to STDERR under `--interp`, and design.md § Entry Point (line 6423) says stderr for all of them. The compiled backends inject the panic line into the program's DATA stream, so anything parsing a compiled Kara program's stdout gets `panic at f.kara:3:16 in main: unwrap() called on None/Err` mixed into its output, while a consumer watching stderr for faults sees nothing at all. Separately and on ALL THREE surfaces, a panic exits 1, not the 101 the same spec paragraph promises -- so the `$?` distinction it exists to provide ("distinct from the Err-exit-1 path so shell pipelines can distinguish expected failures from bugs") does not exist. | roadmap.md |
 | B-2026-08-24-1 | 2026-08-24 | effect | medium | The `Fn(..)` EFFECT SLOT IS STILL UNCHECKED AT FOUR NON-`let` POSITIONS after B-2026-08-23-12 wired the binding annotation. Each accepts an effectful `save` into a slot that declares purity, with no diagnostic: (1) ASSIGNMENT to a declared-Fn binding -- `let mut f: Fn(i64) -> i64 = |x| x; f = save;`; (2) the `LetUninit` form of the same -- `let f: Fn(i64) -> i64; f = save;`; (3) RETURN POSITION -- `fn get() -> Fn(i64) -> i64 { save }`; (4) a STRUCT-LITERAL FIELD -- `struct Holder { f: Fn(i64) -> i64 }` built as `Holder { f: save }`. All four measured silent under `karac check` with the -12 binary, and all four print `14` under `--interp`, so the effectful function really does route through the pure-declared slot rather than the shape being rejected earlier. | roadmap.md |
 | B-2026-08-24-2 | 2026-08-24 | codegen | low | `dbg(x)` where `x` is a `shared struct` / `shared enum` REFUSES to compile: "codegen: `dbg` at L:C cannot render a value of type `Sh` yet — the compiled backends have no `Debug` renderer for it." Every other shape now lowers (B-2026-08-23-18), and `karac run --interp` renders shared values correctly, so this is a single missing arm in the `Debug` renderer family rather than a design question. | phase-7-codegen.md |
 | B-2026-08-24-3 | 2026-08-24 | parser | low | A STRUCT LITERAL WITH EXPLICIT GENERIC ARGUMENTS (`Connection[Disconnected] { socket: ... }`) does not parse in ANY expression position, so design.md § Typestate via Phantom Type Parameters line 8756 -- the line that demonstrates the wrong-state compile error -- cannot be written as the spec writes it. `let c = C[S] { fd: 1 };` -> `Expected Semicolon, found LeftBrace`; the same literal as a tail expression -> `Expected expression, found Colon`. Annotating the binding and using the bare name (`let c: C[S] = C { fd: 1 };`) works. | phase-2-parser-ast.md |
+| B-2026-08-24-4 | 2026-08-24 | interp | high | A RUNTIME ERROR inside a `par {}` branch is swallowed WHOLE by the interpreter -- no message on stderr, exit code 0, and the statements after the join are skipped -- so a program that died halfway reports SUCCESS. JIT and AOT both print the error and exit 1. Measured on three unrelated error shapes (`panic("...")`, a Vec index out of bounds, a failed `assert`), all three identical: `karac run --interp` prints NOTHING and exits 0 where `karac run` and the compiled binary print `panic at c2.kara:1:51 in boom: vec index out of bounds` and exit 1. | roadmap.md |
+| B-2026-08-24-5 | 2026-08-24 | codegen | high | `asan_local_fixed_array_returned_out_is_not_dropped_twice` DOUBLE-FREES at KARAC_OPT_LEVEL=0, so `scripts/asan-o0-leg.sh` is RED on main and reports the fixture as a new unquarantined failure. The fixture PASSES at the default -O2, which is the classic -O0-only shape: at -O0 no pass pipeline runs so the allocation the fixture intends actually happens, while at -O2 LLVM deletes the provably-dead buffer along with the evidence. | roadmap.md |
 
 ### Wontfix (9)
 
@@ -156,9 +157,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1523 surfaced
 
 </details>
 
-### Fixed (1493)
+### Fixed (1494)
 
-<details><summary>1493 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1494 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -17232,6 +17233,22 @@ CORPUS FALLOUT: none, and that is the finding. Exactly five `.kara` files mentio
 CONFIRMED IN PASSING: design.md line 6425's claim that `main`'s inferred set includes "`writes(Stderr)` introduced by `eprintln`, `reads(Env)` from `env.args()`" now holds exactly — `karac check --output=json` on that program reports `program_effects: ["reads(Env)","writes(Stderr)","writes(Stdout)"]`. That is B-2026-08-23-8 delivering, and it shows this row's codegen change left effect inference untouched.
 
 TWO STALE design.md MECHANISM CLAIMS were corrected alongside, both falsified by B-2026-08-23-8's console carve-out and both found by checking this row's `par` behaviour against the spec rather than against intuition. Line 6242 said `eprintln`'s "`writes(Stderr)` effect forces sequential execution of callers within a parallel region"; console writes are explicitly NON-conflicting (`conflicts.rs`'s `(Writes, Writes) if is_console_resource => false`), so nothing serializes — the deterministic order the sentence promises is real, but it comes from ordered REPLAY at the join. Line 9948 said a `for` body like `println(i)` is deterministic "because ... rule (2) serializes iterations"; measured deterministic over 12 runs, but by the cost model declining to fork a console-only body, not by conflict. Both now name the actual mechanism and warn against reading the console case as conflict serialization — which matters because the old wording implies the carve-out could be removed without consequence. |
+| B-2026-08-23-15 | interp | medium | The INTERPRETER does not order `eprintln` output across `par {}` branches, so stderr from a parallel region interleaves NONDETERMINISTICALLY -- 4 dis… | FIXED by a5dc4691. The interpreter's `par {}` join gained a console capture that covers BOTH streams, so `eprintln` inside a parallel branch is replayed in source order like the compiled backends already did.
+
+`write_stderr` (`src/interpreter/builtin.rs`) had no capture buffer -- its own doc comment said so -- so a branch's stderr went straight out through `eprintln!` and landed in thread-completion order while its stdout was buffered and replayed at the join. Fixed by adding `captured_console: Option<Vec<ConsoleSeg>>` to `Interpreter`, where `ConsoleSeg` is `{ stream: Stdout|Stderr, text: String }`; `eval_par_block` installs it on each branch interpreter INSTEAD of the stdout-only `captured_output`, and the join replays every branch's segments in source order.
+
+ONE buffer, not the `captured_stderr` twin the row proposed, and the difference is observable. Two per-stream buffers get each stream's own order right but replay every branch's stdout before any of its stderr, so anything that merges the two -- `prog 2>&1`, a log collector -- sees an order that never happened. MEASURED on the compiled binary with `stdbuf -o0` (unbuffered stdout, so the true replay order shows through a pipe): `E-left-1 O-left-1 E-left-2 | E-right-1 O-right-1 E-right-2 | O-sum-3 E-sum-3` -- stdout and stderr interleaved WITHIN each branch, stable over 10 runs. That is the runtime's `OutputCapture` (`runtime/src/lib.rs`), which records `(len, stream)` segments over one flat buffer; `ConsoleSeg` is its interpreter twin, so the two backends agree by construction rather than by convention. The interpreter now reproduces that byte string exactly.
+
+Replay goes back THROUGH `write_stdout` / `write_stderr` rather than to the fd, mirroring the runtime's `OUTPUT_REDIRECT` note: in a NESTED `par {}` the parent is itself a branch, so the inner region's replay folds into the outer branch's capture and defers to the outer join. Verified: a two-level nest is byte-identical to the compiled binary over 8 runs. That routing also retires a latent hole -- the old join called bare `print!`, which panics on `BrokenPipe`, bypassing the one writer that handles a closed reader (B-2026-08-19-2).
+
+THE DESIGN QUESTION THE ROW RAISED IS ANSWERED BY THE SPEC, not by matching the backends. design.md's "Per-line atomicity, not ordering" paragraph says `eprintln` "goes through the console chokepoint, so a parallel branch's writes are captured and replayed at the join in source order", and in the same breath declares `dbg()` "exempt because transparent-verb output is not routed through that chokepoint at all". So the two are distinguished by the spec: `eprintln` ordered, `dbg()` not. `captured_dbg` is left exactly as it was.
+
+The row's crash-visibility worry does not materialize in the interpreter, and MEASUREMENT INVERTS IT. The join replays console output (step 1) BEFORE it propagates a branch's error (step 3), so a branch that dies still gets its stderr out. Measured on a `panic()`-in-branch program: the interpreter now prints the dying branch's `E-boom-before` on 8 of 8 runs, while the AOT binary prints ONLY the panic message and loses the branch's stderr entirely -- the compiled side is the one that drops it, and buffering in the interpreter made the interpreter strictly more informative, not less.
+
+REGRESSION TESTS (`tests/cli.rs`), both verified to FAIL on the pre-fix build:
+  - `test_eprintln_under_par_replays_in_source_order_run_and_build` -- stderr and stdout source order under `karac run --interp` and the compiled binary, plus their parity.
+  - `test_par_console_capture_preserves_stdout_stderr_interleaving` -- both fds to one file; pins the interleaving that a two-buffer design would lose.
+The first test's `while` spin is load-bearing: without it the branches race and the BUGGY build still produced source order on 7 of 20 runs, so a few repetitions could pass by luck. With it the pre-fix build failed 12 of 12 and the fixed build passes 12 of 12 -- deterministic in both directions rather than probabilistic. |
 | B-2026-08-23-16 | typecheck+codegen | high | `dbg(x)` HAS NO CODEGEN LOWERING AT ALL, so under JIT and AOT it returns CONSTANT 0 instead of its argument -- design.md calls it "an identity functi… | FIXED by 107bea6, in two parts, and the row as filed UNDERSTATED the defect in two ways worth recording.
 
 WHAT THE ROW GOT WRONG. (1) It called the surface `codegen`. The root cause is in the TYPECHECKER: `dbg` had no type rule anywhere (`grep '"dbg"' src/` returned only `PRELUDE_FUNCTIONS` and a doc entry), so the call's type was unconstrained. That is not "untyped", it is a UNIVERSAL CAST — `let n: i64 = dbg("hello")` and `let s: String = dbg(42)` both type-checked. It is also WHY codegen could not lower `dbg`: with no recorded type for the result there was nothing to lower it to, which is what `dbg("abc").len()` was really reporting when it failed with "no handler for method 'len' on variable 'v'". (2) It missed that the constant-0 arm returns BEFORE arguments are compiled, so the argument expression is discarded entirely: `dbg(side_effect())` never calls `side_effect`. The row recorded a wrong RETURN VALUE; the argument's effects vanish too.
