@@ -10568,11 +10568,139 @@ fn test_function_value_shadowing_does_not_attribute() {
 /// The anchor that makes the shadowing test above mean something: the SAME
 /// shape with a non-colliding binding name IS attributed. If the attribution
 /// ever stops firing, this fails while the shadowing test stays green.
+///
+/// The binding is USED here (`other(7)`). It did not have to be until
+/// B-2026-08-23-11: the bind alone used to attribute, and this anchor was
+/// written as `let other = save; 5 + 1` to make the point that even an
+/// unused mention counted. That is the imprecision -11 retired, so the
+/// anchor now spends one more token to say the same thing — attribution
+/// fires for an unshadowed name — in a shape the rule still covers.
+/// `test_bound_but_never_used_is_not_attributed` pins the other half.
 #[test]
 fn test_unshadowed_mention_is_attributed() {
     assert_leaks_writes(
-        "pub fn s1neg() -> i64 { let other = save; 5 + 1 }",
+        "pub fn s1neg() -> i64 { let other = save; other(7) }",
         "unshadowed mention",
+    );
+}
+
+// ── B-2026-08-23-11: bind is not use ────────────────────────────────
+//
+// B-2026-08-23-7 attributed at the MENTION, so `let f = save;` demanded
+// `with writes(UserDB)` from the enclosing public function even when `f`
+// was never called. Sound, but it made the declaration a lie in the other
+// direction: the function does not perform the write.
+//
+// The rule now: the alias's BINDING SITE attributes nothing; every other
+// mention of it does, including the callee of a direct call. "Used at all,
+// other than being bound" is a sound over-approximation of "escapes or is
+// called", and the walker visits every mention — which is why this needs
+// no escape analysis and no effect row on `Type::Function`.
+//
+// The tests below come in pairs on purpose. Each precision pin sits next to
+// the soundness pin for the same shape, because the failure mode being
+// guarded is a fix that buys precision by dropping a real effect.
+
+/// The precision win itself, and the row's own repro.
+#[test]
+fn test_bound_but_never_used_is_not_attributed() {
+    effectcheck_ok(&format!(
+        "{FN_VALUE_PRELUDE}pub fn holder() {{ let f = save; }}"
+    ));
+}
+
+/// The soundness half of the pair above: the same binding, called once.
+#[test]
+fn test_bound_and_called_is_attributed() {
+    assert_leaks_writes(
+        "pub fn holder() -> i64 { let f = save; f(7) }",
+        "alias called",
+    );
+}
+
+/// Every way the alias can leave the binding must attribute — a function
+/// value that escapes may be called anywhere, so the enclosing function
+/// cannot claim not to perform its effects. Each of these is a shape the
+/// precision win must NOT reach.
+#[test]
+fn test_escaping_alias_is_attributed() {
+    for (body, what) in [
+        (
+            "pub fn e1() -> Fn(i64) -> i64 { let f = save; f }",
+            "returned",
+        ),
+        (
+            "fn take(g: Fn(i64) -> i64) -> i64 { g(2) }\n\
+             pub fn e2() -> i64 { let f = save; take(f) }",
+            "passed as an argument",
+        ),
+        (
+            "struct H { f: Fn(i64) -> i64 }\n\
+             pub fn e3() -> H { let f = save; H { f: f } }",
+            "stored in a struct field",
+        ),
+        (
+            "pub fn e4() -> i64 { let f = save; let c = || f(3); c() }",
+            "captured by a closure",
+        ),
+        (
+            "pub fn e5() -> i64 { let f = save; let mut v: Vec[Fn(i64) -> i64] = Vec.new(); \
+             v.push(f); v[0](1) }",
+            "pushed into a container",
+        ),
+    ] {
+        assert_leaks_writes(body, what);
+    }
+}
+
+/// Scoping. The alias rides the walker's shadow stack, so lookup must be
+/// innermost-wins rather than any-match: an inner `let f = 5` hides the
+/// outer alias while the block is open, and the alias is live again after
+/// it closes. A flat name map gets the second half of this wrong.
+#[test]
+fn test_alias_scoping_is_innermost_wins() {
+    // Inner shadow, outer alias never used: nothing to attribute.
+    effectcheck_ok(&format!(
+        "{FN_VALUE_PRELUDE}\
+         pub fn sc1() -> i64 {{ let f = save; {{ let f = 5; let _ = f; }} 0 }}"
+    ));
+    // Same program, plus a use of the OUTER alias after the inner block
+    // closes. The alias must have survived the inner binding.
+    assert_leaks_writes(
+        "pub fn sc2() -> i64 { let f = save; { let f = 5; let _ = f; } f(1) }",
+        "outer alias used after an inner shadow closes",
+    );
+}
+
+/// Reassignment. `f = other` attributes `other` AT THE ASSIGNMENT — that is
+/// the ordinary mention rule, not the alias rule — so overwriting an alias
+/// with a pure function and never calling it leaves nothing to declare,
+/// while overwriting with an effectful one is caught at the assignment even
+/// if the binding is never called.
+#[test]
+fn test_reassignment_attributes_the_new_value() {
+    effectcheck_ok(&format!(
+        "{FN_VALUE_PRELUDE}\
+         fn double(n: i64) -> i64 {{ n * 2 }}\n\
+         pub fn r1() {{ let mut f = double; f = double; }}"
+    ));
+    assert_leaks_writes(
+        "fn double(n: i64) -> i64 { n * 2 }\n\
+         pub fn r2() { let mut f = double; f = save; }",
+        "alias overwritten with an effectful function",
+    );
+}
+
+/// Only a NAKED mention binds an alias. `let f = if c { save } else { … };`
+/// stands for more than one function, and the walker tracks a single
+/// symbol, so that shape keeps the attribute-at-mention behaviour rather
+/// than silently tracking the wrong one.
+#[test]
+fn test_non_naked_let_value_keeps_mention_attribution() {
+    assert_leaks_writes(
+        "fn double(n: i64) -> i64 { n * 2 }\n\
+         pub fn c1(b: bool) -> i64 { let f = if b { save } else { double }; 0 }",
+        "conditional function value",
     );
 }
 

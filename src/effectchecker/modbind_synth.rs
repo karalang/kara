@@ -1338,8 +1338,22 @@ struct ModBindingSynthWalker<'a> {
     /// `ExprKind` is a compile error here rather than a silently unwalked
     /// path that leaks an effect.
     fn_value_refs: &'a FxHashSet<Symbol>,
-    shadow: Vec<String>,
+    shadow: Vec<ShadowEntry>,
     calls: Vec<(Symbol, Span)>,
+}
+
+/// One local name in scope, plus — when the name was bound by a `let`
+/// whose value was nothing but a mention of an effect-carrying free
+/// function — the symbol of that function (B-2026-08-23-11).
+///
+/// The alias rides the SHADOW STACK rather than a side map because the
+/// two need identical scoping, and a flat map would misfire on exactly
+/// the case the stack already gets right: an inner `let f = 5` must hide
+/// an outer `let f = save`, so alias lookup is innermost-wins
+/// (`fn_alias` scans in reverse) while `is_shadowed` stays any-match.
+struct ShadowEntry {
+    name: String,
+    fn_alias: Option<Symbol>,
 }
 
 impl<'a> ModBindingSynthWalker<'a> {
@@ -1358,11 +1372,34 @@ impl<'a> ModBindingSynthWalker<'a> {
     }
 
     fn push_shadow(&mut self, name: String) {
-        self.shadow.push(name);
+        self.shadow.push(ShadowEntry {
+            name,
+            fn_alias: None,
+        });
+    }
+
+    /// `push_shadow` for a binding that aliases a free function
+    /// (`let f = save;`). See [`ShadowEntry::fn_alias`].
+    fn push_shadow_fn_alias(&mut self, name: String, target: Symbol) {
+        self.shadow.push(ShadowEntry {
+            name,
+            fn_alias: Some(target),
+        });
     }
 
     fn is_shadowed(&self, name: &str) -> bool {
-        self.shadow.iter().any(|n| n == name)
+        self.shadow.iter().any(|e| e.name == name)
+    }
+
+    /// The free function `name` aliases, if the innermost binding of that
+    /// name is a function alias. Innermost-wins: an inner `let f = 5`
+    /// shadowing an outer `let f = save` must answer `None`, not `save`.
+    fn fn_alias(&self, name: &str) -> Option<Symbol> {
+        self.shadow
+            .iter()
+            .rev()
+            .find(|e| e.name == name)
+            .and_then(|e| e.fn_alias)
     }
 
     /// Non-inserting probe: binding names were interned at
@@ -1391,6 +1428,61 @@ impl<'a> ModBindingSynthWalker<'a> {
         }
     }
 
+    /// Attribute a use of a function ALIAS, returning whether `name` was
+    /// one (B-2026-08-23-11).
+    ///
+    /// EVERY mention of an alias attributes, including the callee of a
+    /// direct call — `f(1)` performs `save`'s effects, and so does any
+    /// other use, because a function value that leaves this binding
+    /// (returned, passed on, stored, captured) may be called anywhere.
+    /// The single site that does NOT attribute is the alias's own binding
+    /// `let f = save;`, which is what buys the precision: a function value
+    /// that is bound and never mentioned again is never called, so it
+    /// contributes nothing.
+    ///
+    /// That asymmetry is the whole fix, and it is why no escape analysis
+    /// is needed: "used at all, other than being bound" is already a
+    /// sound over-approximation of "escapes or is called", and the walker
+    /// visits every mention.
+    fn record_fn_alias_use(&mut self, name: &str, span: &Span) -> bool {
+        match self.fn_alias(name) {
+            Some(target) => {
+                self.calls.push((target, *span));
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// The free-function symbol a `let` VALUE names outright, if it names
+    /// one: a bare identifier or single-segment path that resolves to an
+    /// effect-carrying free function and is not locally shadowed.
+    ///
+    /// Deliberately narrow — only a naked mention qualifies. `let f = if c
+    /// { save } else { other };` is not an alias and keeps the
+    /// attribute-at-mention behaviour, because the binding then stands for
+    /// more than one function and this walker does not track sets.
+    fn let_value_fn_target<'e>(&self, value: &'e Expr) -> Option<(&'e str, Symbol)> {
+        if self.fn_value_refs.is_empty() {
+            return None;
+        }
+        let name = match &value.kind {
+            ExprKind::Identifier(n) => n.as_str(),
+            ExprKind::Path { segments, .. } if segments.len() == 1 => segments[0].as_str(),
+            _ => return None,
+        };
+        // A locally-shadowed name is not the free function, and an alias
+        // of an alias is not tracked — both fall through to the mention
+        // rule, which attributes. Sound in the safe direction.
+        if self.is_shadowed(name) {
+            return None;
+        }
+        self.interner
+            .get(name)
+            .filter(|s| self.fn_value_refs.contains(s))
+            .map(|s| (name, s))
+    }
+
     /// A mention of a free function in value position contributes that
     /// function's effects to the enclosing function (B-2026-08-23-7).
     ///
@@ -1414,6 +1506,12 @@ impl<'a> ModBindingSynthWalker<'a> {
     /// edge. See `walk_callee` for what recording it cost.
     fn record_fn_value_ref(&mut self, name: &str, span: &Span) {
         if self.fn_value_refs.is_empty() {
+            return;
+        }
+        // An ALIAS use attributes the function it aliases
+        // (B-2026-08-23-11). Checked before `is_shadowed`, because an
+        // alias IS a local binding and would otherwise be rejected by it.
+        if self.record_fn_alias_use(name, span) {
             return;
         }
         // Guarded HERE, not only in the caller: `record_modbind_read` holds
@@ -1456,6 +1554,22 @@ impl<'a> ModBindingSynthWalker<'a> {
                 "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
             ),
             StmtKind::Let { pattern, value, .. } => {
+                // `let f = save;` binds an ALIAS and attributes NOTHING
+                // (B-2026-08-23-11) — walking the value would record the
+                // mention, which is the over-approximation being retired.
+                // Every later use of `f` attributes; only the bind does not.
+                if let PatternKind::Binding(bound) = &pattern.kind {
+                    if let Some((name, target)) = self.let_value_fn_target(value) {
+                        // Only the function-as-value half is skipped. The
+                        // module-binding half still fires, so the skip is
+                        // lossless by construction rather than by relying on
+                        // a free fn and a module `let mut` never colliding.
+                        let name = name.to_string();
+                        self.record_modbind_read(&name, &value.span);
+                        self.push_shadow_fn_alias(bound.clone(), target);
+                        return;
+                    }
+                }
                 self.walk_expr(value);
                 for name in pattern.binding_names() {
                     self.push_shadow(name);
@@ -1530,8 +1644,16 @@ impl<'a> ModBindingSynthWalker<'a> {
     /// normally: its inner identifiers ARE value uses.
     fn walk_callee(&mut self, callee: &Expr) {
         match &callee.kind {
-            ExprKind::Identifier(name) => self.record_modbind_read(name, &callee.span),
+            ExprKind::Identifier(name) => {
+                // An alias in callee position is the ONE use that is a
+                // genuine call rather than an escape, and it is exactly as
+                // effectful (B-2026-08-23-11). Recorded here because
+                // `walk_callee` deliberately bypasses `record_fn_value_ref`.
+                self.record_fn_alias_use(name, &callee.span);
+                self.record_modbind_read(name, &callee.span)
+            }
             ExprKind::Path { segments, .. } if segments.len() == 1 => {
+                self.record_fn_alias_use(&segments[0], &callee.span);
                 self.record_modbind_read(&segments[0], &callee.span)
             }
             _ => self.walk_expr(callee),
