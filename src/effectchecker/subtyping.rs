@@ -43,6 +43,44 @@ fn remember_slot(w: &mut SubtypingWalk, pattern: &Pattern, ty: &TypeExpr) {
     }
 }
 
+/// Which argument of a BAKED stdlib container method is STORED into which of
+/// the receiver's generic-argument slots, and what to call that slot in a
+/// diagnostic: `(head type, method) -> [(arg index, generic-arg index, role)]`.
+///
+/// This is the one place the effect checker holds stdlib knowledge, and it is
+/// here because there is nothing else to read. `Vec` and `Map` are declared in
+/// `runtime/stdlib/*.kara` as SHAPES only — `struct Vec[=T] { }` — while the
+/// method surface is hand-written `match` arms in the typechecker
+/// (`infer_vec_method`, `infer_map_method`, `method_vec_mutation.rs`). There is
+/// no `TypeExpr` for `push`'s parameter anywhere in the program, so the
+/// "argument 0 lands in slot T" fact cannot be derived; it can only be stated.
+///
+/// The alternative considered and rejected was a heuristic: check EVERY
+/// argument against the receiver's sole `Fn`-typed generic slot. That is a
+/// false-positive generator — `v.map(g)` on a `v: Vec[Fn(i64) -> i64]` passes a
+/// function value that is NOT stored in the element slot, and this family must
+/// not acquire a false positive. Naming the storing methods explicitly is both
+/// safer and more honest about what is known.
+///
+/// SET and SORTEDSET are absent deliberately, not by oversight: their element
+/// must be `Hash + Eq` / `Ord`, and a function type is neither, so
+/// `Set[Fn(i64) -> i64]` is rejected by the typechecker before this pass runs
+/// (measured — the error is "element type does not implement `Hash + Eq`").
+/// `Map`'s KEY slot is listed anyway, for the same reason in reverse: the table
+/// describes what the METHOD stores, which stays true, rather than what happens
+/// to be reachable today, which would silently rot if function types ever gain
+/// a hash.
+fn stdlib_stored_arg_slots(head: &str, method: &str) -> &'static [(usize, usize, &'static str)] {
+    match (head, method) {
+        ("Vec", "push") => &[(0, 0, "element")],
+        // `insert(index, value)` — the ELEMENT is argument 1.
+        ("Vec", "insert") => &[(1, 0, "element")],
+        ("VecDeque", "push_back") | ("VecDeque", "push_front") => &[(0, 0, "element")],
+        ("Map", "insert") | ("SortedMap", "insert") => &[(0, 0, "key"), (1, 1, "value")],
+        _ => &[],
+    }
+}
+
 /// Walk-scoped state for the Fn-slot subtyping pass (B-2026-08-24-1).
 ///
 /// Held in a parameter rather than on [`super::EffectChecker`] because it
@@ -207,13 +245,20 @@ impl<'a> super::EffectChecker<'a> {
                 // ASSIGNMENT to a declared-`Fn` binding (B-2026-08-24-1 cases
                 // 1 and 2). The annotation is on the DECLARATION, not here, so
                 // the slot has to be looked up — hence the scope stack.
+                //
+                // `check_annotation_slots`, not the top-level-only
+                // `check_binding_annotation_subtyping` it wraps: the `let`
+                // position was upgraded to the DESCENDING walk by
+                // B-2026-08-24-11 and this position was not, so
+                // `let o: Option[Fn(i64) -> i64] = Some(save);` was caught
+                // while the very same slot filled one line later by
+                // `o = Some(save);` was silent. Same slot, same lie, two
+                // different answers depending on which statement wrote it.
+                // The descending walk is a strict superset — it checks this
+                // level first and then recurses — so this is pure wiring.
                 if let ExprKind::Identifier(name) = &target.kind {
                     if let Some(slot) = w.slot(name).cloned() {
-                        self.check_binding_annotation_subtyping(
-                            &slot,
-                            &format!("binding `{name}`"),
-                            value,
-                        );
+                        self.check_annotation_slots(&slot, &format!("binding `{name}`"), value);
                     }
                 }
                 self.check_subtyping_in_expr(target, w);
@@ -624,6 +669,154 @@ impl<'a> super::EffectChecker<'a> {
         }
     }
 
+    /// Check an argument that a stdlib container method STORES against the
+    /// element slot the receiver's own annotation declared (B-2026-08-24-11's
+    /// stated deferral, measured again and now closed for the baked half).
+    ///
+    /// `let mut v: Vec[Fn(i64) -> i64] = [dbl]; v.push(save);` declares every
+    /// element pure and then stores an effectful function. The literal
+    /// initializer half of that has been checked since B-2026-08-24-11; the
+    /// `push` half was silent, so the SAME slot got two different answers
+    /// depending on whether the value arrived at the declaration or after it.
+    ///
+    /// The receiver's declared `TypeExpr` comes from the walk's scope stack, so
+    /// this only fires for a receiver that is a plain named binding with an
+    /// annotation. `self.items.push(save)` carries the same slot on a struct
+    /// FIELD and is not reachable this way — the field's type would have to be
+    /// looked up from the receiver expression rather than a name. Left for a
+    /// row of its own rather than half-wired here.
+    ///
+    /// Soundness is not what this adds: B-2026-08-23-7 makes the MENTION of
+    /// `save` contribute its effects to the enclosing function either way. What
+    /// this adds is a complaint about the ANNOTATION being a lie.
+    fn check_stored_arg_slots(
+        &mut self,
+        recv_ty: &TypeExpr,
+        recv: &str,
+        method: &str,
+        args: &[CallArg],
+    ) {
+        let TypeKind::Path(path) = &recv_ty.kind else {
+            return;
+        };
+        let Some(head) = path.segments.last() else {
+            return;
+        };
+        let Some(generic_args) = path.generic_args.as_ref() else {
+            return;
+        };
+        for (arg_i, slot_i, role) in stdlib_stored_arg_slots(head, method) {
+            let Some(arg) = args.get(*arg_i) else {
+                continue;
+            };
+            let Some(GenericArg::Type(slot)) = generic_args.get(*slot_i) else {
+                continue;
+            };
+            // The full descending walk, not the top-level check: the stored
+            // value can itself be a container or an `Option`, as in
+            // `vv.push([save])` on a `Vec[Vec[Fn(i64) -> i64]]`.
+            self.check_annotation_slots(slot, &format!("binding `{recv}` {role}"), &arg.value);
+        }
+    }
+
+    /// Check an argument against a USER generic method's parameter slot, with
+    /// the impl's type parameter substituted from the receiver's declared type.
+    ///
+    /// ```kara
+    /// struct Holder[T] { item: T }
+    /// impl[T] Holder[T] { fn set(mut ref self, value: T) { self.item = value; } }
+    ///
+    /// let mut h: Holder[Fn(i64) -> i64] = Holder { item: dbl };
+    /// h.set(save);        // `value: T` is `Fn(i64) -> i64` here — a PURE slot
+    /// ```
+    ///
+    /// `check_call_args_subtyping` reads the parameter's written type and finds
+    /// `T`, which is not an `FnType`, so it stops. The slot is real all the
+    /// same: after substitution the parameter IS a pure `Fn(i64) -> i64`, and
+    /// `save` writes.
+    ///
+    /// Unlike [`Self::check_stored_arg_slots`], this needs no notion of which
+    /// arguments are STORED. A parameter's substituted type is a slot whether
+    /// the callee keeps the value or merely calls it — the same rule
+    /// `check_call_args_subtyping` already applies to a directly-written
+    /// `Fn(..)` parameter. Storage only mattered for the baked containers,
+    /// whose parameters have no written type to substitute into.
+    ///
+    /// The impl scan is on demand rather than cached because it only runs for a
+    /// receiver whose declared head is NOT a baked container and DOES carry
+    /// generic arguments — a rare shape, and one where a per-program side table
+    /// would cost every compile to serve almost none of them.
+    fn check_generic_param_slots(
+        &mut self,
+        recv_ty: &TypeExpr,
+        recv: &str,
+        method: &str,
+        args: &[CallArg],
+    ) {
+        let TypeKind::Path(path) = &recv_ty.kind else {
+            return;
+        };
+        let (Some(head), Some(generic_args)) = (path.segments.last(), path.generic_args.as_ref())
+        else {
+            return;
+        };
+        for item in &self.program.items {
+            let Item::ImplBlock(imp) = item else {
+                continue;
+            };
+            // Inherent impls only. A TRAIT impl's method parameters are typed
+            // by the TRAIT's generics, not the impl header's, so mapping a
+            // parameter name to a position in `imp.generic_params` would be
+            // reading the wrong list.
+            if imp.trait_name.is_some() {
+                continue;
+            }
+            let TypeKind::Path(target) = &imp.target_type.kind else {
+                continue;
+            };
+            if target.segments.last().map(|s| s.as_str()) != Some(head.as_str()) {
+                continue;
+            }
+            let Some(gp) = imp.generic_params.as_ref() else {
+                continue;
+            };
+            for impl_item in &imp.items {
+                let ImplItem::Method(f) = impl_item else {
+                    continue;
+                };
+                if f.name != method {
+                    continue;
+                }
+                for (i, param) in f.params.iter().enumerate() {
+                    let Some(arg) = args.get(i) else {
+                        continue;
+                    };
+                    // Only a BARE mention of a type parameter — `value: T`.
+                    // `value: Vec[T]` would need the substitution pushed inside
+                    // the annotation, which is a different (and larger) job
+                    // than looking one up.
+                    let TypeKind::Path(pty) = &param.ty.kind else {
+                        continue;
+                    };
+                    if pty.generic_args.is_some() || pty.segments.len() != 1 {
+                        continue;
+                    }
+                    let Some(pos) = gp.params.iter().position(|g| g.name == pty.segments[0]) else {
+                        continue;
+                    };
+                    let Some(GenericArg::Type(slot)) = generic_args.get(pos) else {
+                        continue;
+                    };
+                    self.check_annotation_slots(
+                        slot,
+                        &format!("binding `{recv}` argument {i}"),
+                        &arg.value,
+                    );
+                }
+            }
+        }
+    }
+
     fn check_binding_annotation_subtyping(&mut self, ty: &TypeExpr, subject: &str, value: &Expr) {
         let Some(slot_effects) = self.fn_annotation_slot_effects(ty) else {
             return;
@@ -755,7 +948,12 @@ impl<'a> super::EffectChecker<'a> {
             ExprKind::LabeledBlock { body, .. } => self.check_subtyping_in_block(body, w),
             ExprKind::Lock { body, .. } => self.check_subtyping_in_block(body, w),
             ExprKind::Closure { body, .. } => self.check_subtyping_in_expr(body, w),
-            ExprKind::MethodCall { object, args, .. } => {
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } => {
                 // Mirror the `Call` branch: resolve to `Type.method` via the
                 // typechecker side-table and run the same per-arg Fn-slot
                 // subtyping check. Without this, an effectful closure could
@@ -763,6 +961,16 @@ impl<'a> super::EffectChecker<'a> {
                 // caller declared the effects.
                 if let Some(callee_key) = self.resolve_method_callee_key(&expr.span) {
                     self.check_call_args_subtyping(callee_key, args, &expr.span);
+                }
+                // The check above reads the slot off the CALLEE's parameter
+                // list, which a baked stdlib method does not have. This one
+                // reads it off the RECEIVER's own annotation instead, which is
+                // where `v.push(save)`'s slot actually lives.
+                if let ExprKind::Identifier(recv) = &object.kind {
+                    if let Some(recv_ty) = w.slot(recv).cloned() {
+                        self.check_stored_arg_slots(&recv_ty, recv, method, args);
+                        self.check_generic_param_slots(&recv_ty, recv, method, args);
+                    }
                 }
                 self.check_subtyping_in_expr(object, w);
                 for arg in args {

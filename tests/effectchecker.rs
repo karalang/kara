@@ -11462,3 +11462,143 @@ fn test_design_md_io_skeletons_infer_documented_effects() {
         "nothing in the guessing-game skeleton can panic; got: {have:?}"
     );
 }
+
+// ── Receiver-position element slots (B-2026-08-24-16) ────────────
+//
+// B-2026-08-24-11 checks a container's element slot against a LITERAL
+// initializer. The same slot filled by a method call — `v.push(save)` —
+// or by an assignment after the declaration was silent, so one annotation
+// got two different answers depending on which statement wrote it.
+
+/// The baked containers. Each store reaches the element slot the
+/// receiver's own annotation declared.
+#[test]
+fn stdlib_stores_are_checked_against_the_receivers_element_slot() {
+    let found = slot_violations(
+        "pub fn main() with writes(UserDB) {\n\
+         let mut v: Vec[Fn(i64) -> i64] = [dbl];\n\
+         v.push(save);\n\
+         v.insert(0, save);\n\
+         let mut d: VecDeque[Fn(i64) -> i64] = VecDeque.new();\n\
+         d.push_back(save);\n\
+         d.push_front(save);\n\
+         let mut m: Map[i64, Fn(i64) -> i64] = Map.new();\n\
+         m.insert(1, save);\n\
+         let mut s: SortedMap[i64, Fn(i64) -> i64] = SortedMap.new();\n\
+         s.insert(1, save);\n\
+         }\n",
+    );
+    assert_eq!(
+        found.len(),
+        6,
+        "one report per store, no more and no less; got: {found:?}"
+    );
+    // The slot's ROLE is named, so a `Map` store says which half it landed
+    // in rather than the bare "element" a single-slot container gets.
+    assert_eq!(
+        found.iter().filter(|m| m.contains("element")).count(),
+        4,
+        "Vec/VecDeque stores name the element slot; got: {found:?}"
+    );
+    assert_eq!(
+        found.iter().filter(|m| m.contains("value")).count(),
+        2,
+        "Map/SortedMap stores name the VALUE slot; got: {found:?}"
+    );
+}
+
+/// The false-positive guard, and the reason the store table is an explicit
+/// list rather than "check every argument against the sole `Fn` slot".
+///
+/// A store whose slot DECLARES the effect is legal; so is a pure value, a
+/// non-`Fn` element, and a `panics` value (transparent for slot subtyping —
+/// B-2026-08-24-8). A method that is not a store is not checked at all: the
+/// receiver here is a `Vec[Fn(i64) -> i64]`, so a heuristic keyed on "the
+/// receiver's only `Fn`-typed generic argument" would flag `len`'s absent
+/// argument list and, worse, any function value passed to a non-storing
+/// method that merely CALLS it.
+#[test]
+fn a_store_that_fits_its_slot_is_clean() {
+    let found = slot_violations(
+        "fn boom(n: i64) -> i64 with panics { n }\n\
+         pub fn main() with writes(UserDB) panics {\n\
+         let mut ok: Vec[Fn(i64) -> i64 with writes(UserDB)] = [dbl];\n\
+         ok.push(save);\n\
+         let mut clean: Vec[Fn(i64) -> i64] = [dbl];\n\
+         clean.push(dbl);\n\
+         let mut p: Vec[Fn(i64) -> i64] = [dbl];\n\
+         p.push(boom);\n\
+         let mut n: Vec[i64] = [1];\n\
+         n.push(2);\n\
+         let mut u: Vec[Fn(i64) -> i64] = [dbl];\n\
+         u.len();\n\
+         }\n",
+    );
+    assert!(found.is_empty(), "expected no violations, got: {found:?}");
+}
+
+/// A receiver with no declared type has no slot to lie about. The walk
+/// reads the annotation off the DECLARATION, so an inferred binding
+/// contributes nothing — silence here is correct, not a miss.
+#[test]
+fn an_unannotated_receiver_has_no_slot() {
+    let found = slot_violations(
+        "pub fn main() with writes(UserDB) {\n\
+         let mut v = [dbl];\n\
+         v.push(save);\n\
+         }\n",
+    );
+    assert!(found.is_empty(), "expected no violations, got: {found:?}");
+}
+
+/// ASSIGNMENT descends like a `let` annotation does. Before this, the
+/// declaration half of each pair was caught and the assignment half was
+/// silent — the same slot, the same lie, two different answers.
+#[test]
+fn assignment_descends_into_the_declared_annotation() {
+    let found = slot_violations(
+        "pub fn main() with writes(UserDB) {\n\
+         let mut o: Option[Fn(i64) -> i64] = None;\n\
+         o = Some(save);\n\
+         let mut v: Vec[Fn(i64) -> i64] = [dbl];\n\
+         v = [save];\n\
+         let mut t: (Fn(i64) -> i64, i64) = (dbl, 1);\n\
+         t = (save, 2);\n\
+         }\n",
+    );
+    assert_eq!(found.len(), 3, "one report per assignment; got: {found:?}");
+}
+
+/// A USER generic method's parameter is a slot once the receiver's type
+/// argument is substituted in: `fn set(mut ref self, value: T)` on a
+/// `Holder[Fn(i64) -> i64]` declares a PURE parameter.
+///
+/// This needs no store table — a parameter's substituted type constrains
+/// the argument whether the callee keeps the value or merely calls it.
+#[test]
+fn a_user_generic_methods_parameter_is_a_substituted_slot() {
+    const HOLDER: &str = "struct Holder[T] { item: T }\n\
+         impl[T] Holder[T] {\n\
+         fn set(mut ref self, value: T) { self.item = value; }\n\
+         }\n";
+
+    let found = slot_violations(&format!(
+        "{HOLDER}pub fn main() with writes(UserDB) {{\n\
+         let mut h: Holder[Fn(i64) -> i64] = Holder {{ item: dbl }};\n\
+         h.set(save);\n\
+         }}\n"
+    ));
+    assert_eq!(found.len(), 1, "expected one violation, got: {found:?}");
+
+    // …and the same call is clean when the slot declares the effect, or
+    // when the type argument is not a function at all.
+    let clean = slot_violations(&format!(
+        "{HOLDER}pub fn main() with writes(UserDB) {{\n\
+         let mut h: Holder[Fn(i64) -> i64 with writes(UserDB)] = Holder {{ item: dbl }};\n\
+         h.set(save);\n\
+         let mut n: Holder[i64] = Holder {{ item: 1 }};\n\
+         n.set(9);\n\
+         }}\n"
+    ));
+    assert!(clean.is_empty(), "expected no violations, got: {clean:?}");
+}
