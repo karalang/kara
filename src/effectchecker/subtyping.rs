@@ -94,6 +94,11 @@ fn receiver_place(expr: &Expr) -> Option<String> {
         // expression at all, the slot does not depend on which element was
         // picked, and the span on the diagnostic already points at the value.
         ExprKind::Index { object, .. } => Some(format!("{}[..]", receiver_place(object)?)),
+        // Arguments are elided for the same reason the index is.
+        ExprKind::Call { callee, .. } => Some(format!("{}(..)", receiver_place(callee)?)),
+        ExprKind::MethodCall { object, method, .. } => {
+            Some(format!("{}.{method}(..)", receiver_place(object)?))
+        }
         _ => None,
     }
 }
@@ -918,6 +923,31 @@ impl<'a> super::EffectChecker<'a> {
         }
     }
 
+    /// A callee's DECLARED return type, free function or method.
+    ///
+    /// The same two-table lookup `check_call_args_subtyping` already does, and
+    /// the reason B-2026-08-24-20's recorded blocker was WRONG. That row argued
+    /// a chained receiver's type could only come from the typechecker, whose
+    /// `Type::Function` carries no effect row (B-2026-08-23-11) — so every
+    /// chained receiver would read as a pure slot and the check would become a
+    /// false-positive generator.
+    ///
+    /// It never needed the typechecker. This is the AST annotation the author
+    /// WROTE, `with` clause and all, sitting on the declaration the effect
+    /// checker already holds. Erasure happens at `lower_type_expr_inner`, which
+    /// this side of the compiler never goes through.
+    ///
+    /// An undeclared return type yields `None` and the walk stops — correct,
+    /// since there is then no annotation to call a lie. A generic return
+    /// (`fn make[T]() -> Vec[T]`) resolves to the unbound parameter and every
+    /// check downstream is a silent no-op, exactly as a generic struct field is.
+    fn callee_return_type(&self, callee: Symbol) -> Option<TypeExpr> {
+        self.function_bodies
+            .get(&callee)
+            .or_else(|| self.method_bodies.get(&callee))
+            .and_then(|f| f.return_type.clone())
+    }
+
     /// The DECLARED type of a receiver expression, and the name to call it in
     /// a diagnostic (B-2026-08-24-17).
     ///
@@ -980,6 +1010,17 @@ impl<'a> super::EffectChecker<'a> {
             ExprKind::Index { object, .. } => {
                 let obj_ty = self.receiver_declared_type(object, w)?;
                 indexed_element_type(&obj_ty).map(peel_borrow)
+            }
+            // `hand_out().push(save)` — a CALL's result. The declared return
+            // type is the annotation its author wrote, so it carries the
+            // effect row like any other (B-2026-08-24-20).
+            ExprKind::Call { callee, .. } => {
+                let name = self.extract_callee_name(callee)?;
+                self.callee_return_type(name).map(peel_borrow)
+            }
+            ExprKind::MethodCall { .. } => {
+                let key = self.resolve_method_callee_key(&expr.span)?;
+                self.callee_return_type(key).map(peel_borrow)
             }
             _ => None,
         }

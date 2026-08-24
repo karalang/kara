@@ -2411,15 +2411,33 @@ const SLOT_PRELUDE: &str = "effect resource UserDB;\n\
      fn dbl(n: i64) -> i64 { n * 2 }\n\
      struct H { f: Fn(i64) -> i64 }\n";
 
-/// The slot violations in one program, EMPTY when there are none.
+/// The slot violations in one program, through the REAL pipeline.
 ///
-/// Deliberately not built on `effectcheck_errors`: that helper asserts at
-/// least one error, so every all-clean case below — which is half of them,
-/// and the half that guards against false positives — would panic in the
-/// helper rather than report. Same trap the -7 shadowing test documents.
+/// Deliberately not `parse` + `effectcheck`, which is what this helper used to
+/// be and what made two whole classes of assertion vacuous (B-2026-08-24-20):
+///
+/// - `lower` never runs, so a `Vec`-annotated `[..]` initializer stays an
+///   `ArrayLiteral` instead of becoming the `PrefixCollectionLiteral`
+///   production actually sees — the exact rewrite B-2026-08-24-11 was caught
+///   by.
+/// - `typecheck` never runs, so `method_callee_types` is empty and every check
+///   reached through `resolve_method_callee_key` silently finds nothing.
+///
+/// Both were invisible for as long as the code happened to handle the other
+/// spelling too — the tests passed either way and proved less than they read
+/// as. Threading the tables in and lowering first is what makes a test that
+/// mentions a method callee, or a `Vec` literal, assert on something.
+///
+/// Every slot test in this file goes through here; all 501 passed unchanged on
+/// the switch, so the fidelity came free.
+///
+/// Deliberately still not asserting `typed.errors.is_empty()`: several cases
+/// below are about the EFFECT checker's opinion of a program the typechecker
+/// also has opinions about, and coupling them would make an unrelated
+/// type-error change fail this file.
 fn slot_violations(body: &str) -> Vec<String> {
     let src = format!("{SLOT_PRELUDE}{body}");
-    let parsed = parse(&src);
+    let mut parsed = parse(&src);
     assert!(
         parsed.errors.is_empty(),
         "Parse errors: {}",
@@ -2430,12 +2448,23 @@ fn slot_violations(body: &str) -> Vec<String> {
             .collect::<Vec<_>>()
             .join(", ")
     );
-    effectcheck(&parsed.program)
-        .errors
-        .into_iter()
-        .filter(|e| e.kind == EffectErrorKind::EffectSubtypeViolation)
-        .map(|e| e.message)
-        .collect()
+    let resolved = karac::resolve(&parsed.program);
+    let typed = karac::typecheck(&parsed.program, &resolved);
+    let method_types = typed.method_callee_types.clone();
+    let call_type_subs = typed.call_type_subs.clone();
+    karac::lower(&mut parsed.program, &typed);
+    karac::effectcheck_with_typecheck_data(
+        &parsed.program,
+        karac::effectchecker::PublicEffectsPolicy::default(),
+        karac::manifest::CompileProfile::Default,
+        method_types,
+        call_type_subs,
+    )
+    .errors
+    .into_iter()
+    .filter(|e| e.kind == EffectErrorKind::EffectSubtypeViolation)
+    .map(|e| e.message)
+    .collect()
 }
 
 /// All four positions, each reported exactly once. The count matters as
@@ -11691,10 +11720,10 @@ fn an_index_receiver_reads_the_containers_element_type() {
 /// silent no-op — correct, because `T` is unbound there and the caller-side
 /// substitution is `check_generic_param_slots`'s job.
 ///
-/// A METHOD-CHAIN receiver stays unchecked: its type is a RETURN type, not a
-/// written annotation, and this pass has no return types. Pinned so that
-/// wiring it later is a deliberate change to this assertion rather than a
-/// silent widening.
+/// A CHAINED receiver used to be pinned here as deliberately unchecked. It no
+/// longer is (B-2026-08-24-20) — the assertion moved to
+/// `a_chained_receiver_reads_the_callees_declared_return_type`, which is
+/// exactly the visible flip this pin existed to force.
 #[test]
 fn the_new_receiver_shapes_do_not_over_fire() {
     let found = slot_violations(
@@ -11706,13 +11735,68 @@ fn the_new_receiver_shapes_do_not_over_fire() {
          impl Okay {\n\
          fn fine(mut ref self) with writes(UserDB) { self.items.push(save); }\n\
          }\n\
-         fn hand_out() -> Vec[Fn(i64) -> i64] { [dbl] }\n\
          pub fn main() with writes(UserDB) {\n\
          let mut ok: Vec[Vec[Fn(i64) -> i64 with writes(UserDB)]] = [[dbl]];\n\
          ok[0].push(save);\n\
          let mut p: Vec[Vec[Fn(i64) -> i64]] = [[dbl]];\n\
          p[0].push(dbl);\n\
+         }\n",
+    );
+    assert!(found.is_empty(), "expected no violations, got: {found:?}");
+}
+
+/// A CHAINED receiver's slot comes from the callee's DECLARED return type
+/// (B-2026-08-24-20).
+///
+/// The row this closes recorded the opposite conclusion — that the type could
+/// only be recovered from the typechecker, where the effect row is already
+/// erased, so checking it would flag every chained receiver as pure. That was
+/// wrong: the declaration's own annotation is an AST `TypeExpr` the effect
+/// checker already holds, `with` clause intact. The clean half below is what
+/// proves the row survives the trip, since a stripped one would flag `hand_ok`
+/// exactly as a pure slot.
+#[test]
+fn a_chained_receiver_reads_the_callees_declared_return_type() {
+    const DECLS: &str = "fn hand_out() -> Vec[Fn(i64) -> i64] { [dbl] }\n\
+         fn hand_ok() -> Vec[Fn(i64) -> i64 with writes(UserDB)] { [dbl] }\n\
+         struct Reg { items: Vec[Fn(i64) -> i64] }\n\
+         impl Reg {\n\
+         fn part(mut ref self) -> Vec[Fn(i64) -> i64] { [dbl] }\n\
+         }\n";
+
+    let found = slot_violations(&format!(
+        "{DECLS}pub fn main() with writes(UserDB) {{\n\
          hand_out().push(save);\n\
+         let mut r: Reg = Reg {{ items: [dbl] }};\n\
+         r.part().push(save);\n\
+         }}\n"
+    ));
+    assert_eq!(found.len(), 2, "free fn and method; got: {found:?}");
+    assert!(
+        found.iter().all(|m| m.contains("(..)")),
+        "the argument list is elided, not rendered; got: {found:?}"
+    );
+
+    // The row survives: a declared slot accepts the effectful value, and a
+    // pure value fits the pure one.
+    let clean = slot_violations(&format!(
+        "{DECLS}pub fn main() with writes(UserDB) {{\n\
+         hand_ok().push(save);\n\
+         hand_out().push(dbl);\n\
+         }}\n"
+    ));
+    assert!(clean.is_empty(), "expected no violations, got: {clean:?}");
+}
+
+/// A callee with NO declared return type yields no slot, and must not be
+/// mistaken for one that declared a pure `Fn`.
+#[test]
+fn an_undeclared_return_type_is_not_a_pure_slot() {
+    let found = slot_violations(
+        "fn nothing() { }\n\
+         fn generic[T]() -> Vec[T] { Vec.new() }\n\
+         pub fn main() with writes(UserDB) {\n\
+         generic().push(save);\n\
          }\n",
     );
     assert!(found.is_empty(), "expected no violations, got: {found:?}");
