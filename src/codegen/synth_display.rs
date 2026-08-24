@@ -2191,6 +2191,35 @@ impl<'ctx> super::Codegen<'ctx> {
         enum_name: &str,
         args: &[GenericArg],
     ) -> FunctionValue<'ctx> {
+        self.emit_enum_display_fn_keyed(enum_name, args, "")
+    }
+
+    /// `emit_enum_display_fn` with an explicit IDENTITY SUFFIX appended to the
+    /// cache key and the symbol name.
+    ///
+    /// The suffix separates "which enum's variants do I render" (`enum_name`,
+    /// which still drives every layout and AST lookup) from "who owns this
+    /// cache slot". Every ordinary caller passes `""` and gets exactly the
+    /// behaviour it always had.
+    ///
+    /// It exists for `emit_shared_enum_debug_display_fn` (B-2026-08-24-9). That
+    /// wrapper takes a HANDLE and delegates to this function, which takes the
+    /// AGGREGATE — two functions rendering one enum, with different first
+    /// parameters. Sharing the bare enum name between them made a
+    /// self-referential `shared enum` unrenderable either way round: with the
+    /// inner registered first, a payload of the enum's own type resolved to the
+    /// aggregate-taking inner and was handed a handle (a WRONG VARIANT, not a
+    /// crash); with the wrapper registered first, this function's own entry
+    /// check found the wrapper and emitted a self-call, hanging the binary.
+    /// Giving the inner its own key lets the wrapper own the bare name, which
+    /// is what every nested lookup should resolve to, since a payload of that
+    /// type is a handle.
+    pub(super) fn emit_enum_display_fn_keyed(
+        &mut self,
+        enum_name: &str,
+        args: &[GenericArg],
+        key_suffix: &str,
+    ) -> FunctionValue<'ctx> {
         // Per-INSTANTIATION identity: `MyOpt[i64]` and `MyOpt[String]` render
         // differently, so they cannot share one fn. A non-generic enum keeps
         // the bare name it has always had, so nothing about those changes.
@@ -2213,7 +2242,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 })
                 .collect()
         };
-        let cache_key = format!("{enum_name}{suffix}");
+        let cache_key = format!("{enum_name}{suffix}{key_suffix}");
         if let Some(f) = self.disp_cache_get(&cache_key) {
             return f;
         }
@@ -2275,9 +2304,13 @@ impl<'ctx> super::Codegen<'ctx> {
         let display_fn = self
             .module
             .add_function(&fn_name, display_fn_ty, Some(Linkage::Internal));
-        self.display
-            .display_fn_cache
-            .insert(cache_key.clone(), display_fn);
+        // `disp_cache_put`, not a bare `display_fn_cache.insert`: the lookup at
+        // the top of this function is mode-aware, so inserting into the display
+        // map unconditionally meant a fn synthesized in DEBUG mode was filed
+        // under the DISPLAY map, where a later `println` of the same enum would
+        // find it and render Debug's quoted leaves. Harmless while nothing
+        // reached both modes for one enum; wrong the moment something did.
+        self.disp_cache_put(cache_key.clone(), display_fn);
 
         let entry_bb = self.context.append_basic_block(display_fn, "entry");
         self.builder.position_at_end(entry_bb);
@@ -2545,15 +2578,15 @@ impl<'ctx> super::Codegen<'ctx> {
     /// symptom would be a WRONG VARIANT NAME rather than a crash — so the
     /// assertion below fails the build instead of rendering a lie.
     ///
-    /// CACHE ORDER IS LOAD-BEARING, IN THIS DIRECTION. `emit_enum_display_fn`
-    /// keys its cache on the bare enum name — the same key
-    /// `emit_display_fn_for_type_expr` looks up before it reaches the shared
-    /// arm. So the inner renderer is synthesized FIRST and the wrapper takes
-    /// the key over afterwards: every later lookup then finds the handle-taking
-    /// wrapper, never the aggregate-taking inner, whose first parameter means
-    /// something different. Registering the wrapper first instead makes the
-    /// inner synthesis find the wrapper and emit a self-call — measured as a
-    /// `karac build` that succeeds and a binary that never terminates.
+    /// THE TWO RENDERERS HAVE SEPARATE CACHE KEYS, and that is what makes a
+    /// SELF-REFERENTIAL shared enum work (B-2026-08-24-9). The wrapper owns the
+    /// bare enum name — the key `emit_display_fn_for_type_expr` looks up — and
+    /// the inner is emitted under `<Enum>__agg`. So a payload of this enum's
+    /// own type resolves to the wrapper, which is right: that payload holds a
+    /// handle. While the two shared one key, neither order worked — inner-first
+    /// rendered a wrong variant (the handle word read as an aggregate) and
+    /// wrapper-first emitted a self-call that hung the binary — and cyclic
+    /// enums had to be refused outright.
     pub(super) fn emit_shared_enum_debug_display_fn(
         &mut self,
         enum_name: &str,
@@ -2610,14 +2643,21 @@ impl<'ctx> super::Codegen<'ctx> {
         let display_fn = self
             .module
             .add_function(&fn_name, display_fn_ty, Some(Linkage::Internal));
-        // Synthesize the inner renderer FIRST, then take over its cache key.
-        // `emit_enum_display_fn` consults the same key on entry, so registering
-        // the wrapper before this call makes it find the WRAPPER and emit a
-        // self-call — an infinite loop that hangs the compiled binary rather
-        // than failing loudly (measured: `karac build` succeeded and the
-        // program never terminated).
-        let inner = self.emit_enum_display_fn(enum_name, &[]);
+        // Register the wrapper under the BARE enum name BEFORE synthesizing the
+        // inner renderer, and give the inner its own key (B-2026-08-24-9). Both
+        // halves matter:
+        //   - wrapper first, so that a payload of this enum's OWN type, looked
+        //     up while the inner is being emitted, resolves to the handle-taking
+        //     wrapper. That payload IS a handle, so the wrapper is the correct
+        //     answer; resolving to the inner instead read the handle word as an
+        //     enum aggregate and printed a wrong variant.
+        //   - a distinct inner key, so that registering the wrapper first does
+        //     not make `emit_enum_display_fn`'s own entry check find the wrapper
+        //     and emit a self-call — which compiled cleanly and hung the binary.
+        // Sharing one key made those two requirements contradictory, which is
+        // why self-referential shared enums were refused until now.
         self.disp_cache_put(type_name, display_fn);
+        let inner = self.emit_enum_display_fn_keyed(enum_name, &[], "__agg");
 
         let entry_bb = self.context.append_basic_block(display_fn, "entry");
         self.builder.position_at_end(entry_bb);
