@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 166 | 1 |
 | run-vs-build | 158 | 0 |
 | double-free | 136 | 0 |
-| codegen-gap | 135 | 2 |
+| codegen-gap | 135 | 1 |
 | diagnostics | 102 | 1 |
 | false-positive | 95 | 0 |
 | perf | 84 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1015 | 3 |
+| codegen | 1015 | 2 |
 | typecheck | 250 | 1 |
 | interp | 180 | 0 |
 | other | 64 | 0 |
@@ -124,21 +124,20 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1540 surfaced · 5 open · 1512 fixed · 9 wontfix** (2026-05-20 → 2026-08-24). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1540 surfaced · 4 open · 1512 fixed · 10 wontfix** (2026-05-20 → 2026-08-24). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-23-11 | 2026-08-23 | typecheck | medium | `Type::Function` carries NO EFFECT ROW, so design.md § First-Class Functions' `let f = save;  // f: Fn(User) -> () with writes(UserDB)` is not representable and a function value's effects cannot propagate through its TYPE. NARROWED 7e7972b: the IMPRECISION this caused -- a function value that is bound and never called still demanding the enclosing function declare its effects -- is FIXED, in the effect checker and without the type row (bind-an-alias, attribute-at-every-other-mention). What remains is representability only, and the prescription in the original title does not work as written: the typechecker cannot populate an effect row, because `effectcheck` runs after `typecheck` AND consumes its output, so inferred effects at typecheck time would need a cycle. Read the detail before picking this up. | roadmap.md |
 | B-2026-08-23-13 | 2026-08-23 | effect | low | The mutual-recursion NOTE now fires for two functions that merely REFERENCE each other as VALUES, calling them a "mutual recursion group" though neither calls the other. `fn p(n: i64) -> i64 { let f = q; n + 1 }` + `fn q(n: i64) -> i64 { let g = p; n + 2 }` reports `note[effect]: mutual recursion group resolved by fixed-point inference: \`p\` (no effects), \`q\` (no effects)`. The program passes and the note is suppressible with `#[allow(mutual_recursion_note)]`, so this is diagnostic wording, not a check failure -- but "mutual recursion" is a false statement about the program. | roadmap.md |
 | B-2026-08-24-15 | 2026-08-24 | codegen | high | `Vec.insert` / `Vec.remove` / `Vec.swap_remove` HAVE NO CODEGEN BOUNDS CHECK: an out-of-range index CORRUPTS THE HEAP (insert/remove) or SILENTLY RETURNS GARBAGE AND DROPS AN ELEMENT (swap_remove) on both compiled backends, where the interpreter panics and design.md says "panics if out of bounds" | roadmap.md |
-| B-2026-08-24-18 | 2026-08-24 | codegen | low | `dbg(x)` REFUSES for a HEADERLESS or WEAK-HEADERED `shared` type, the last two shapes in the shared family the compiled `Debug` renderers do not cover. Neither is an unwritten arm: the headerless niche makes the field base a PER-FUNCTION property while a synthesized renderer is cached program-wide, and the weak-headered base-2 layout is set by nothing in the compiler today. NOTE this arm has never been observed to fire on a real program -- it is a guard against a hazard, not a fix for a measured failure. | phase-7-codegen.md |
 | B-2026-08-24-19 | 2026-08-24 | codegen | low | A `Map` / `Set` or `shared` BREAK VALUE still cannot leave a loop on the compiled backends: `loop { ... break m }` for a `Map[String, i64]`, and `loop { ... break Node { v: 22 } }` for a `shared struct`, both FAIL AT MODULE VERIFICATION while the interpreter returns the value. Their cleanup cannot be disarmed the way String/Vec's was -- Map retracts a QUEUED action (flow-insensitive, so it would leak on the iterations that do not break) and a `shared` handle needs a matching RETAIN rather than a cap-zero. | roadmap.md |
 
-### Wontfix (9)
+### Wontfix (10)
 
-<details><summary>9 wontfix — real and reproduced, measured to a standstill, no action left. Titles are kept in full: they carry the measurements that closed the question, so read one before reopening its subject.</summary>
+<details><summary>10 wontfix — real and reproduced, measured to a standstill, no action left. Titles are kept in full: they carry the measurements that closed the question, so read one before reopening its subject.</summary>
 
 | id | date | surface | sev | title |
 |---|---|---|---|---|
@@ -151,6 +150,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1540 surfaced
 | B-2026-08-17-40 | 2026-08-17 | codegen | medium | Kata 236's 14.5% kāra-only slowdown is CODE PLACEMENT, not a codegen regression — hot code byte-identical, moved 152 bytes; instructions flat to 0.002% |
 | B-2026-08-21-3 | 2026-08-21 | codegen | low | MEASURED NEGATIVE RESULT -- hoisting the ASCII test to the top of the `String.push` codegen arm removes 34% of the program's retired instructions and makes it 10% SLOWER; the string-build inner loop is latency-bound, not instruction-bound, so instruction-count reasoning does not predict its wall time |
 | B-2026-08-21-52 | 2026-08-22 | effect | low | CHANNEL EFFECT RESOURCES HAVE NO PER-VALUE IDENTITY -- every channel collapses to the single `Channel` resource. The conflict-analysis motivation this row was filed on has since been REFUTED by measurement (the producer/consumer case already worked; two-producer serialization was a verb-lattice defect, fixed separately) -- what remains is a narrow spec-fidelity gap against design.md:6049, where only the NON-communication verbs on distinct channels over-serialize |
+| B-2026-08-24-18 | 2026-08-24 | codegen | low | `dbg(x)` REFUSES for a HEADERLESS or WEAK-HEADERED `shared` type -- the last two shapes in the shared family the compiled `Debug` renderers do not cover. MEASURED UNREACHABLE and closed without an implementation: `dbg(x)` hands `x` to a call, which is exactly the escape the headerless purity gate demotes on, so a type can be headerless or `dbg`-able but never both (16 probe programs, both arms, controls green). `has_weak_header` is false for every type today. The guard is KEPT as insurance -- making `dbg` a borrowing intrinsic would stop it demoting and turn the arm into a silent one-word field-offset miscompile -- and the exclusion is now pinned by tests instead of assumed. |
 
 </details>
 
