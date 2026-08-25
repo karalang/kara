@@ -11,7 +11,7 @@
 // `String` element, and the codegen machinery that compiles a GENERIC
 // baked stdlib module now exists (see
 // `Codegen::declare_stdlib_program_inner`). Registration waits on
-// B-2026-08-25-2: a generic method that calls a MUTATING sibling generic
+// B-2026-08-25-5: a generic method that calls a MUTATING sibling generic
 // method inside a loop hangs under codegen — a defect that predates this
 // module and reproduces without it, but which `into_sorted_vec` below
 // hits head-on. Re-registering is a four-line change once that clears;

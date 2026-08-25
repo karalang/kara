@@ -92,14 +92,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 283 | 0 |
+| miscompile | 284 | 1 |
 | leak | 189 | 0 |
 | missing-feature | 166 | 0 |
 | run-vs-build | 159 | 1 |
 | codegen-gap | 137 | 1 |
 | double-free | 136 | 0 |
 | diagnostics | 104 | 2 |
-| false-positive | 95 | 0 |
+| false-positive | 96 | 0 |
 | perf | 84 | 0 |
 | other | 60 | 1 |
 | soundness | 58 | 0 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1019 | 3 |
-| typecheck | 250 | 0 |
+| codegen | 1020 | 4 |
+| typecheck | 251 | 0 |
 | interp | 180 | 0 |
 | ownership | 65 | 1 |
 | other | 64 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1546 surfaced · 5 open · 1516 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-25). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1548 surfaced · 6 open · 1517 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-25). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -135,6 +135,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1546 surfaced
 | B-2026-08-25-1 | 2026-08-25 | codegen | low | An RVALUE `break` value that owns heap is still refused: `break Node { v: 11 }` (shared), `break Map.new()`, and `break f"x"` in a labeled-block TAIL position have no source BINDING to retain against or disarm, so they fail at module verification while the interpreter returns them. Loud, not silent -- but a spec-legal program that does not compile. | roadmap.md |
 | B-2026-08-25-2 | 2026-08-25 | codegen | high | `std.cli` IS NOT AOT-COMPILABLE: every pure-Kāra INSTANCE method on its types (`Arg.required`, `Parser.about`, ... ) dies in codegen with `no handler for method '<m>' on variable '<v>'`, so `karac check` passes and `karac build` fails -- while roadmap.md marks the feature `[x]` done and deferred.md ships it at v1 | roadmap.md:531 (`std.cli` marked [x]) + deferred.md § std.cli; codegen method dispatch falls through to the catch-all in src/codegen/method_call.rs for these receivers |
 | B-2026-08-25-3 | 2026-08-25 | codegen | medium | `codegen_tests::vec_mutation_methods_bounds_check_out_of_range_index` IS FLAKY, and it fails by showing exactly the PRE-FIX symptom of the high-severity bug it guards: `v.insert(7i64, 9i64)` produced no `Vec.insert index out of bounds` panic, stdout empty, stderr `free(): invalid pointer`. Observed once in a full `cargo test --features llvm` run; the same test then passed 3/3 in isolation, 3198/3198 in a codegen-only run, and the next FULL run was green at 125 suites / 15090 tests. | roadmap.md |
+| B-2026-08-25-5 | 2026-08-25 | codegen | high | A generic method calling a MUTATING sibling generic method in a loop HANGS under codegen (interp ok) | implementation_checklist/phase-11-stdlib-longtail.md#general-purpose-collections |
 
 ### Relocated (1)
 
@@ -165,9 +166,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1546 surfaced
 
 </details>
 
-### Fixed (1516)
+### Fixed (1517)
 
-<details><summary>1516 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1517 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -18064,6 +18065,7 @@ The row's suggested remedy ("needs a matching RETAIN rather than a cap-zero") wa
 MAP AND `shared` NOW TAKE OPPOSITE TREATMENTS THROUGH THE SAME FUNCTION — Map/Set disarm by zeroing, `shared` deliberately does not — so both mechanisms and the reason they differ are written at `disarm_moved_handle_by_zeroing`. The trap that makes the wrong one look right is that `RcDec` is ALREADY null-guarded, for the unrelated case of a body-local slot whose `let` never ran.
 
 STILL REFUSED, unchanged: an RVALUE source (`break Node { v: 11 }`) has no binding to retain against, exactly as `break Map.new()` has none to disarm. Both fail loudly at module verification rather than being half-supported. |
+| B-2026-08-25-4 | typecheck | medium | An ASSOCIATED fn inside a BOUNDED generic impl saw the impl's OWN bound as unsatisfied on a local receiver | b4042fa |
 
 </details>
 
