@@ -11095,6 +11095,75 @@ fn main() {
         assert_eq!(out, "a1\nb2\na1\nb2\na1\n");
     }
 
+    /// B-2026-08-25-2 — a `std.cli` type NAMED in a struct field, a function
+    /// return type, and a binding, with its `String` fields read back.
+    ///
+    /// `std.cli`'s layouts are declared for every program (see
+    /// `layout_only_stdlib_programs`), so `Parser` lowers at its real six-field
+    /// shape instead of silently collapsing to `i64`. Before that, this program
+    /// passed `karac check` and failed `karac build` with `cannot resolve field
+    /// 'program_name' on this receiver (its type was not recorded for
+    /// codegen)`, while `--interp` printed the right answer.
+    ///
+    /// Reading the fields BACK is what gives this teeth. A variant that merely
+    /// names `Parser` and never touches it built fine even against the broken
+    /// compiler — every reference was `i64`-wide and consistently so, so the
+    /// collapse was unobservable. Any regression test for this class has to
+    /// round-trip a field's value.
+    #[test]
+    fn e2e_stdlib_cli_type_named_but_uncalled_lowers_at_real_layout() {
+        let Some(out) = run_program(
+            "struct Holder { p: Parser, n: i64 }\n\
+             fn mk(nm: String) -> Parser {\n\
+             \x20   return Parser { program_name: nm, about_text: \"abt\",\n\
+             \x20       version_text: \"1.0\", args: Vec.new(), flags: Vec.new(),\n\
+             \x20       subcommands: Vec.new() };\n\
+             }\n\
+             fn name_of(h: Holder) -> String { return h.p.program_name; }\n\
+             fn main() {\n\
+             \x20   let h = Holder { p: mk(\"demo\"), n: 7 };\n\
+             \x20   println(name_of(h));\n\
+             \x20   let p2 = mk(\"second\");\n\
+             \x20   println(p2.about_text);\n\
+             \x20   println(p2.version_text);\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "demo\nabt\n1.0\n");
+    }
+
+    /// B-2026-08-25-2 — the other half of the layout-only split: CALLING a
+    /// `std.cli` method must fail loudly, naming the gap.
+    ///
+    /// Registering the layouts without the bodies leaves `Arg.string` with no
+    /// definition, and the associated-call dispatcher's last resort is an
+    /// `i64 0`. For a type whose layout codegen now knows, that zero is the
+    /// worst possible answer: either the module fails verification hundreds of
+    /// lines from the cause, or — when nothing reads the value back — it
+    /// silently builds a binary holding a fake, empty value. The dispatcher
+    /// therefore reports the real gap for a layout-only stdlib type, while an
+    /// unrecognized name still takes the `i64 0` default unchanged.
+    #[test]
+    fn stdlib_cli_method_call_reports_the_uncompiled_body_gap() {
+        let mut parsed = karac::parse("fn main() { let a = Arg.string(); println(\"ok\"); }\n");
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        karac::prepare_for_resolve(&mut parsed.program);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let err = compile_to_ir(&parsed.program, None, None)
+            .expect_err("a std.cli method call must not compile to the i64 default");
+        assert!(
+            err.contains("Arg.string") && err.contains("B-2026-08-25-2"),
+            "error should name the call and the tracking row, got: {err}"
+        );
+    }
+
     /// B-2026-08-01-27 — compiled-backend pin for the let-move alias fix:
     /// the interpreter moved to MATCH these (already-correct) behaviors, so
     /// this twin guards the target semantics from drifting. Same program as

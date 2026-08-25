@@ -579,6 +579,78 @@ fn regex_stdlib_program() -> &'static Program {
     &REGEX_LOWERED_PROGRAM
 }
 
+static CLI_LOWERED_PROGRAM: std::sync::LazyLock<Program> = std::sync::LazyLock::new(|| {
+    lower_stdlib_source("cli", include_str!("../runtime/stdlib/cli.kara"))
+});
+
+/// The lowered `std.cli` program — LAYOUT-ONLY at codegen (see
+/// [`layout_only_stdlib_programs`]).
+fn cli_stdlib_program() -> &'static Program {
+    &CLI_LOWERED_PROGRAM
+}
+
+/// Baked stdlib modules whose STRUCT/ENUM LAYOUTS are declared for every
+/// program, but whose impl-method signatures and bodies are NOT compiled.
+///
+/// The split exists because the two halves have opposite failure modes, and
+/// only one of them is safe to gate on usage.
+///
+/// A missing LAYOUT is silent: `llvm_type_for_name` falls through to `i64`,
+/// so `fn build() -> Parser` gets an `i64` signature, the body then stores a
+/// real `Parser`, and the damage surfaces hundreds of lines later as a module
+/// verification failure or as memory corruption (the miscompile 8a04107
+/// closed). Any usage detector is a syntactic approximation, so gating layouts
+/// on one means a detector miss becomes that silent miscompile. Layouts are
+/// therefore UNCONDITIONAL — they declare types and emit no IR, so the cost of
+/// carrying an unused module's layouts is zero, which is the same argument
+/// `regex` and `mem` already ship on.
+///
+/// A missing BODY is loud: the call fails at method dispatch (`no handler for
+/// method 'required' on variable 'a'`) or at link with an undefined symbol.
+/// That half can be gated, and MUST be — cli's ~600 lines are real Kāra whose
+/// bodies emit `karac_clone_String` calls and checked-overflow intrinsics into
+/// every module that compiles them, which is both dead weight and a violation
+/// of two IR-shape guarantees the codegen tests assert
+/// (`test_ir_return_struct_field_vec_element_emits_clone`,
+/// `wrapping_arith_lowers_without_overflow_trap`).
+///
+/// So `std.cli` sits here rather than in [`compiled_stdlib_programs`] until
+/// its body half is wired behind a usage gate. Consequence, unchanged from
+/// B-2026-08-25-2: a program that CALLS a `std.cli` instance method still
+/// fails to build — loudly. What this buys is that a program merely NAMING a
+/// `std.cli` type in a signature, field, or binding now lowers at the right
+/// layout instead of `i64`.
+fn layout_only_stdlib_programs() -> Vec<&'static Program> {
+    vec![cli_stdlib_program()]
+}
+
+/// The struct/enum names exported by the [`layout_only_stdlib_programs`]
+/// modules — the types whose LAYOUT is registered but whose method bodies are
+/// not compiled.
+///
+/// Exists so the unresolved-call fall-throughs can tell "this is a type I
+/// deliberately half-registered" apart from "this is a name I have never heard
+/// of", and fail LOUDLY on the former instead of handing back the `i64 0`
+/// default. Without that, `Parser.new(..)` lowers to a zero of the wrong width
+/// and the program either fails module verification hundreds of lines later or
+/// — when nothing reads the value back — silently builds a binary holding a
+/// fake, empty `Parser`.
+pub(crate) fn layout_only_stdlib_type_names() -> &'static std::collections::HashSet<String> {
+    static NAMES: std::sync::LazyLock<std::collections::HashSet<String>> =
+        std::sync::LazyLock::new(|| {
+            layout_only_stdlib_programs()
+                .into_iter()
+                .flat_map(|p| p.items.iter())
+                .filter_map(|item| match item {
+                    Item::StructDef(s) => Some(s.name.clone()),
+                    Item::EnumDef(e) => Some(e.name.clone()),
+                    _ => None,
+                })
+                .collect()
+        });
+    &NAMES
+}
+
 /// True when `user` references the `std.protobuf` runtime surface — i.e. it
 /// carries a `#[derive(Message)]` on some struct/enum. That derive is the sole
 /// entry point to protobuf: its expansion (already run by codegen time, per
@@ -6832,7 +6904,10 @@ impl<'ctx> Codegen<'ctx> {
         if !user_redefines_stdlib_type(program, tracing_stdlib_program()) {
             self.declare_stdlib_layouts(tracing_stdlib_program());
         }
-        for tp in compiled_stdlib_programs(program) {
+        for tp in compiled_stdlib_programs(program)
+            .into_iter()
+            .chain(layout_only_stdlib_programs())
+        {
             if !user_redefines_stdlib_type(program, tp) {
                 self.declare_stdlib_layouts(tp);
             }

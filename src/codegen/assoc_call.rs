@@ -3746,6 +3746,25 @@ impl<'ctx> super::Codegen<'ctx> {
                 .into_struct_value();
             return Ok(agg.into());
         }
+        // B-2026-08-25-2 — a `std.cli` type reaches here because its LAYOUT is
+        // registered (so `Parser` lowers at its real shape) while its method
+        // BODIES are not compiled (see `layout_only_stdlib_programs`). Falling
+        // through to the `i64 0` default below would hand back a zero of the
+        // wrong width for a type whose shape codegen DOES know: either the
+        // module fails verification far from the cause, or — when nothing reads
+        // the value back — it silently builds a binary holding a fake, empty
+        // `Parser`. Report the real gap instead. This deliberately does NOT
+        // widen the default itself: an unrecognized name still takes it, which
+        // is the behaviour every other caller depends on.
+        if crate::codegen::layout_only_stdlib_type_names().contains(type_name) {
+            return Err(format!(
+                "codegen: `{type_name}.{method}` is not compiled — `std.cli`'s \
+                 type layouts are registered but its method bodies are not, so \
+                 only programs that NAME its types (fields, signatures, \
+                 bindings) build today. Run with `--interp` (or \
+                 `KARAC_RUN_JIT=0`); tracked as B-2026-08-25-2."
+            ));
+        }
         Ok(self.context.i64_type().const_int(0, false).into())
     }
 
