@@ -48,24 +48,56 @@
 //!
 //! The row expected a free fix-it: hoist the receiver prefix into a `let` and
 //! rewrite the call, which is what codegen's own message prescribes. That
-//! rewrite is NOT semantics-preserving, and the two ways it fails were measured
-//! rather than reasoned about:
+//! rewrite is NOT semantics-preserving, and the two ways it failed were
+//! measured rather than reasoned about:
 //!
 //! * For a MUTATING call it silently drops the write. `b.a.lines.push("y")`
 //!   refuses to build today; hoisted to `let mut t = b.a; t.lines.push("y")` it
 //!   builds and the container `b.a.lines` never sees the element. Trading a
-//!   build error for a silent wrong answer is strictly worse.
-//! * The hoist itself diverges run-vs-build even before the mutation:
-//!   `let mut t = b.a;` leaves `b.a.lines` EMPTY under both compiled backends
-//!   while the interpreter keeps it intact and treats the binding as an alias.
-//!   Filed separately.
+//!   build error for a silent wrong answer is strictly worse. STILL TRUE.
+//! * ~~The hoist itself diverges run-vs-build even before the mutation.~~
+//!   NO LONGER TRUE — that was B-2026-08-13-14, FIXED by 7994156. The hoist
+//!   used to leave `b.a.lines` EMPTY under both compiled backends while the
+//!   interpreter treated the binding as an alias.
+//!
+//! WHAT THE HOIST DOES NOW, re-measured 2026-08-25 on a source seeded with one
+//! element (an empty source cannot tell a COPY from an EMPTIED one, which is
+//! the trap this measurement exists to avoid):
+//!
+//! ```text
+//! let mut t = b.a;   t.lines.push(200);   let u = b.a;
+//!
+//!   --interp   t=2 source=1        copy     -> all three agree
+//!   karac run  t=2 source=1        copy
+//!   karac build t=2 source=1       copy
+//!
+//!   (emptied would be source=0; alias would be source=2)
+//! ```
+//!
+//! So the hoist is a CONSISTENT COPY on every surface. The first bullet is
+//! therefore no longer a backend divergence — it is a plain semantics change,
+//! which is a weaker objection but still a disqualifying one for an autofix.
 //!
 //! An autofix that is right for readers and silently wrong for mutators is not
 //! a fix-it, and the lint has no reliable syntactic test for which one it is
 //! looking at — `remove` reads like a reader at a call site and mutates. So the
 //! diagnostic names the remedy in prose, exactly as codegen does, and leaves
-//! the edit to the author. When the divergence above is fixed, a fix-it gated
-//! to provably read-only uses becomes a defensible follow-up.
+//! the edit to the author.
+//!
+//! ## The precondition for a read-only fix-it has CLEARED
+//!
+//! This section used to end "when the divergence above is fixed, a fix-it gated
+//! to provably read-only uses becomes a defensible follow-up". B-2026-08-13-14
+//! is fixed and the measurement above confirms it, so that condition is met:
+//! for a provably READ-ONLY receiver the hoist now produces the same answer on
+//! all three surfaces, and a fix-it gated to those uses is defensible today.
+//!
+//! The one remaining blocker is the reader/mutator classification, NOT the
+//! correctness of the rewrite — deciding it needs method-level mutability
+//! (`mut ref self` vs `ref self`) resolved at the call site rather than a name
+//! heuristic, since `remove` reads like a reader and mutates. Anyone picking
+//! this up should start there and not re-derive the divergence question, which
+//! is settled.
 //!
 //! ## Level
 //!
@@ -134,8 +166,11 @@ fn diagnostic(receiver: &Expr, ctx: &str) -> TypeError {
         kind: TypeErrorKind::TypeMismatch,
         lint_name: Some(LINT_NAME.to_string()),
         // No `fix_it`: the hoist codegen prescribes is not semantics-preserving
-        // for a mutating receiver, and diverges run-vs-build on its own. See the
-        // module doc — this is a measurement, not an omission.
+        // for a MUTATING receiver — it is a copy, so the write never reaches the
+        // source. (It no longer diverges run-vs-build; that was B-2026-08-13-14,
+        // fixed, and the hoist is now a consistent copy on all three surfaces.)
+        // So the blocker is reader/mutator classification, not the rewrite. See
+        // the module doc — this is a measurement, not an omission.
         fix_it: None,
         class: Some(crate::diagnostic_class::DiagnosticClass::LintWarning),
         expected: None,
