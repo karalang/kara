@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 159 | 0 |
 | codegen-gap | 138 | 0 |
 | double-free | 138 | 0 |
-| diagnostics | 108 | 2 |
+| diagnostics | 108 | 1 |
 | false-positive | 97 | 0 |
 | perf | 84 | 0 |
 | other | 60 | 1 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 1036 | 1 |
-| typecheck | 260 | 6 |
+| typecheck | 260 | 5 |
 | interp | 180 | 0 |
 | other | 65 | 1 |
 | ownership | 65 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1576 surfaced · 8 open · 1543 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-25). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1576 surfaced · 7 open · 1544 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-25). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (8)
+### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -136,7 +136,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1576 surfaced
 | B-2026-08-25-22 | 2026-08-25 | typecheck | medium | The STABLE-HASH module does not exist, so the escape design.md prescribes for every use case where `Hash` is explicitly the wrong tool is unavailable. § `Hash` and `Hasher`, stability policy: hash values are "not stable across runs, not stable across Kara versions, not stable across targets", and therefore "Code that needs stable digests (content addressing, on-disk indexes, snapshot tests, distributed sharding) does **not** use `Hash`. Kara's stdlib SHIPS explicit, versioned functions for that purpose -- `hash::stable::siphash24(bytes, key)`, `hash::stable::xxh3(bytes)`, and the `crypto` module for cryptographic hashes." Neither `siphash24` nor `xxh3` appears anywhere in `src/` or `runtime/stdlib/`, and there is no `hash.stable` namespace to call. The paragraph's closing promise is unreachable too: "Users who reach for `Hash` for stability are pointed at the stable-hash module by a `karac explain` page" -- see B-2026-08-25-23 for the state of `karac explain --concept=`. | roadmap.md |
 | B-2026-08-25-29 | 2026-08-25 | typecheck | medium | TWO OPERATOR BEHAVIOURS design.md § Operator Traits presents as SHIPPED v1 SURFACE DO NOT EXIST. (1) IMPLICIT LOSSLESS WIDENING AT OPERATOR BOUNDARIES: the section states "`(x: i32) + (y: i64)` is valid -- the compiler widens `x` to `i64` before dispatch, and the result type is `i64`", but the compiler rejects it with `cannot mix integer types 'i32' and 'i64' in arithmetic -- they must match; cast the 'i32' operand up`. Same for `u8 + u32` and for `f32 + f64` (`cannot mix float types`). A LITERAL operand still widens (`let x: i32 = 1; x + 2` is fine), so what is missing is specifically the two-typed-operand case. (2) BITWISE `Not` ON INTEGER PRIMITIVES: the v1 trait set lists `Not` under Bitwise and the stdlib-impl list says the bitwise traits ship "only on integer primitives and bool", but `not a` on an `i64` or `u8` is rejected -- `unary '!' requires 'bool', found 'i64'`. Only `bool` works. | roadmap.md |
 | B-2026-08-25-30 | 2026-08-25 | typecheck | medium | OPERATOR-FAILURE DIAGNOSTICS DO NOT SPEAK THE TRAIT LANGUAGE design.md § Operator Traits mandates, and two of them NAME A TRAIT THE USER DOES NOT NEED. The spec is explicit: "Diagnostics for a missing impl (e.g., `vec1 + vec2`) speak the trait language -- \"type Vec[T] does not implement trait Add\" -- not operator language -- \"+ is not defined for Vec[T]\"", and § Notably absent adds that `vec1 + vec2` gets "a diagnostic pointing at `vec.concat(other)` or `vec.extend(other)`". Measured, `[1,2] + [3,4]` reports `arithmetic operator requires numeric type, found 'Vec[i64]'` -- operator language, no trait named, no method redirect. Separately, `==` on a struct reports `does not implement Eq; add #[derive(Eq)]` and `<` reports `does not implement Ord; add #[derive(Ord)]`, but the desugaring runs through `PartialEq` / `PartialOrd` and `#[derive(PartialEq)]` / `#[derive(PartialOrd)]` ALONE is sufficient to compile -- so the message names the total trait when the partial one is what is required. The spec states the `Eq` marker "is never named by the desugaring". | roadmap.md |
-| B-2026-08-25-31 | 2026-08-25 | typecheck | low | The un-inferrable-type-argument diagnostic points at the first USE, not at the empty literal that caused it, because `Type::Error` carries no provenance. B-2026-08-25-26 fixed the message (it now names the inference failure instead of blaming a bound, and no longer prints `<error>` or an irrelevant implementors list) but left the SPAN, which is the third of that row's three defects. | roadmap.md |
 | B-2026-08-25-32 | 2026-08-25 | other | medium | `PriorityQueue` HAS NO `peek`: there is NO non-destructive way to read the root, so the archetypal two-heap median use case cannot read a queue's head at the O(1) its own doc comment advertises -- and `runtime/stdlib/priority_queue.kara`'s header promises `peek / len O(1)` for a method that does not exist in the file or in design.md | runtime/stdlib/priority_queue.kara (header complexity table promises `peek`); design.md § `PriorityQueue[T]` method table needs the row too |
 
 ### Relocated (1)
@@ -168,9 +167,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1576 surfaced
 
 </details>
 
-### Fixed (1543)
+### Fixed (1544)
 
-<details><summary>1543 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1544 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1717,6 +1716,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1576 surfaced
 | B-2026-08-25-26 | typecheck | low | An un-inferrable `T` from an EMPTY array literal is reported as a BOUND failure naming `<error>` as the type, pointed at a later method call rather t… | 40a54f6 |
 | B-2026-08-25-27 | codegen | high | SIX `let`-RHS forms bound a generic-struct value with NO recorded instantiation, so the sibling call dispatched to the unmangled base prototype and S… | 14c6d32 |
 | B-2026-08-25-28 | codegen | high | A method call whose receiver is an unnamed TEMPORARY inside a generic impl dispatches to the unmangled base prototype and SEGFAULTS at a heap-carryin… | 5fa76a7 |
+| B-2026-08-25-31 | typecheck | low | The un-inferrable-type-argument diagnostic points at the first USE, not at the empty literal that caused it, because `Type::Error` carries no provena… | a54d41d |
 
 </details>
 
