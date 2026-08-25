@@ -53388,4 +53388,57 @@ fn main() { let h = Heap { xs: [[1], [2], [3]] }; println(f"n={take(h)}"); }
             "discarded-pop-generic-free-fn",
         );
     }
+
+    /// B-2026-08-25-2 — `std.cli`'s method bodies under ASAN.
+    ///
+    /// This module's bodies had never been AOT-compiled before the usage gate
+    /// landed, so every heap path in them is newly exercised machine code. The
+    /// module is also the one that produced B-2026-08-25-15 (a borrowed match
+    /// payload stored into an owned field, double-freeing on the compiled side
+    /// only) and B-2026-08-25-13 (four borrowed-String-into-owned-field stores
+    /// that shipped because the baked-module typecheck errors were discarded).
+    /// Both were memory corruption in exactly this code, found only by running
+    /// it — so shipping its bodies without an ASAN run would be repeating the
+    /// mistake that made those two rows expensive.
+    ///
+    /// The builder chain allocates a `String` per hop and pushes owned entries
+    /// into three `Vec`s; `parse()` then walks argv, builds the help text by
+    /// repeated concatenation, and drops the whole tree. `help_text()` is
+    /// called explicitly because it is the heaviest String producer in the
+    /// module and the one whose two `Parser` self-copies the typechecker
+    /// reports as ambiguous.
+    #[test]
+    fn asan_stdlib_cli_builder_and_parse_are_clean() {
+        let src = r#"
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        let p = Parser.new("greet")
+            .about("greets someone")
+            .version("2.1")
+            .arg("--name", Arg.string().required().help("who to greet"))
+            .flag("--loud", 'l', "shout it");
+        match p.parse() {
+            Ok(args) => { println("parsed"); }
+            Err(e) => { println(f"err {e.message}"); }
+        }
+        let h = p.help_text();
+        println(f"len {h.len() > 0}");
+        i = i + 1;
+    }
+}
+"#;
+        assert_clean_asan_run(
+            src,
+            &[
+                "err missing required argument",
+                "len true",
+                "err missing required argument",
+                "len true",
+                "err missing required argument",
+                "len true",
+            ],
+            "stdlib-cli-builder-and-parse",
+        );
+    }
 }

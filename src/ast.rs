@@ -803,6 +803,28 @@ pub struct Program {
     /// type annotation so heap-typed wp-result bindings register their
     /// method-dispatch metadata (B-2026-07-31-20).
     pub wp_result_types: QuestionOkPayloadTypesTable,
+    /// Every named type (`Type::Named` head, `Type::Shared`) that appears in
+    /// the type of ANY expression in this program, collected by the lowering
+    /// pass from `TypeCheckResult.expr_types`. Empty before lowering runs.
+    ///
+    /// Exists so codegen can answer "does this program use baked stdlib module
+    /// M?" without taking a `TypeCheckResult` — the same reason
+    /// `question_conversions` and `wp_result_types` are forwarded here.
+    ///
+    /// A SEMANTIC signal, deliberately, not a syntactic one. The question a
+    /// usage gate has to answer is "could a value of one of M's types exist
+    /// here?", and for the method-call form (`p.parse()`) that is unanswerable
+    /// from the AST alone: the receiver is an identifier whose type lives in
+    /// the typechecker's tables, not in the tree. Reading `expr_types` gets
+    /// every receiver, argument, and intermediate for free and cannot miss a
+    /// syntactic position, which is what a hand-written AST walk would risk as
+    /// the grammar grows.
+    ///
+    /// It is an OVER-approximation and meant to be: a program that only names
+    /// a type is indistinguishable from one that calls its methods, so the
+    /// module gets compiled either way. Over-approximating costs dead IR that
+    /// the link-time strip removes; under-approximating costs a failed build.
+    pub referenced_type_names: rustc_hash::FxHashSet<String>,
     /// Set by the cli pipeline after effectcheck; empty otherwise.
     pub callee_effectful: CalleeEffectfulTable,
     /// Set by the cli pipeline after effectcheck; empty otherwise. Identifies

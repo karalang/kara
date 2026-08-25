@@ -3758,10 +3758,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // is the behaviour every other caller depends on.
         if crate::codegen::layout_only_stdlib_type_names().contains(type_name) {
             return Err(format!(
-                "codegen: `{type_name}.{method}` is not compiled — `std.cli`'s \
-                 type layouts are registered but its method bodies are not, so \
-                 only programs that NAME its types (fields, signatures, \
-                 bindings) build today. Run with `--interp` (or \
+                "codegen: `{type_name}.{method}` did not resolve to a compiled \
+                 method body. `{type_name}` belongs to `std.cli`, whose bodies \
+                 are compiled only for programs that use its types, and are \
+                 skipped entirely for a program that defines its own type of a \
+                 name the module exports. Run with `--interp` (or \
                  `KARAC_RUN_JIT=0`); tracked as B-2026-08-25-2."
             ));
         }

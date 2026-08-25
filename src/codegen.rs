@@ -614,19 +614,62 @@ fn cli_stdlib_program() -> &'static Program {
 /// (`test_ir_return_struct_field_vec_element_emits_clone`,
 /// `wrapping_arith_lowers_without_overflow_trap`).
 ///
-/// So `std.cli` sits here rather than in [`compiled_stdlib_programs`] until
-/// its body half is wired behind a usage gate. Consequence, unchanged from
-/// B-2026-08-25-2: a program that CALLS a `std.cli` instance method still
-/// fails to build — loudly. What this buys is that a program merely NAMING a
-/// `std.cli` type in a signature, field, or binding now lowers at the right
-/// layout instead of `i64`.
-fn layout_only_stdlib_programs() -> Vec<&'static Program> {
-    vec![cli_stdlib_program()]
+/// So the two halves are gated differently, and `std.cli` is in BOTH lists —
+/// never at the same time. When [`program_uses_cli`] says the program could
+/// hold one of its values, cli is a fully compiled module and
+/// [`compiled_stdlib_programs`] carries it; this function then returns empty
+/// so its layouts are not declared twice. Otherwise it is layout-only and
+/// appears here. Calling a `std.cli` method builds and runs
+/// (B-2026-08-25-2) — the earlier state, where it did not, is what the
+/// opposite-failure-modes argument above was written for and is why the
+/// layout half stayed unconditional when the body half became gated.
+fn layout_only_stdlib_programs(user: &Program) -> Vec<&'static Program> {
+    if program_uses_cli(user) {
+        // Its bodies are being compiled for this program, so it is a fully
+        // compiled module here and `compiled_stdlib_programs` already carries
+        // it. Returning it from both lists would declare its layouts twice.
+        vec![]
+    } else {
+        vec![cli_stdlib_program()]
+    }
 }
 
-/// The struct/enum names exported by the [`layout_only_stdlib_programs`]
-/// modules — the types whose LAYOUT is registered but whose method bodies are
-/// not compiled.
+/// True when `user` could hold a value of one of `std.cli`'s types — the gate
+/// on compiling cli's ~600 lines of method bodies into the module.
+///
+/// WHY A TYPE-MENTION TEST RATHER THAN A CALL TEST. The thing that needs cli's
+/// bodies is a CALL, but calls are the one form that cannot be recognized
+/// syntactically: `p.parse()` names no type, and `p`'s type lives in the
+/// typechecker's tables. Every route to a cli value does, however, pass
+/// through a cli type — the module's only entry points are the associated fns
+/// `Parser.new` / `Arg.string`, whose results and every subsequent builder hop
+/// are cli-typed — so "some expression in this program has a cli type" is
+/// implied by "this program calls a cli method", which is what a gate needs.
+/// `referenced_type_names` is exactly that set, forwarded off `expr_types` by
+/// the lowering pass.
+///
+/// The converse does not hold, and that asymmetry is the safe one: a program
+/// that only NAMES `Parser` in a field or signature also passes, and compiles
+/// bodies it never calls. Those are dead-stripped at link (measured: a
+/// cli-using and a cli-free binary came out the same size), so the cost is
+/// compile-time IR, while the opposite error — missing a real user — costs a
+/// failed build.
+fn program_uses_cli(user: &Program) -> bool {
+    cli_stdlib_program().items.iter().any(|item| {
+        let name = match item {
+            Item::StructDef(s) => &s.name,
+            Item::EnumDef(e) => &e.name,
+            _ => return false,
+        };
+        user.referenced_type_names.contains(name)
+    })
+}
+
+/// The struct/enum names exported by the modules that CAN be layout-only —
+/// `std.cli`'s, today. Deliberately the static list rather than
+/// [`layout_only_stdlib_programs`]'s per-program answer: this feeds a
+/// `LazyLock`, and it is consulted by an error path that wants to recognize
+/// the name whether or not this particular program compiled the bodies.
 ///
 /// Exists so the unresolved-call fall-throughs can tell "this is a type I
 /// deliberately half-registered" apart from "this is a name I have never heard
@@ -638,7 +681,7 @@ fn layout_only_stdlib_programs() -> Vec<&'static Program> {
 pub(crate) fn layout_only_stdlib_type_names() -> &'static std::collections::HashSet<String> {
     static NAMES: std::sync::LazyLock<std::collections::HashSet<String>> =
         std::sync::LazyLock::new(|| {
-            layout_only_stdlib_programs()
+            [cli_stdlib_program()]
                 .into_iter()
                 .flat_map(|p| p.items.iter())
                 .filter_map(|item| match item {
@@ -700,6 +743,18 @@ fn compiled_stdlib_programs(user: &Program) -> Vec<&'static Program> {
     ];
     if program_uses_protobuf(user) {
         programs.push(protobuf_stdlib_program());
+    }
+    // B-2026-08-25-2 — cli's bodies cannot ride along unconditionally: they
+    // emit `karac_clone_String` calls and checked-overflow intrinsics into
+    // every module that compiles them, which two IR-shape tests assert the
+    // absence of (`test_ir_return_struct_field_vec_element_emits_clone`,
+    // `wrapping_arith_lowers_without_overflow_trap` — both measured failing
+    // with cli unconditional). Unlike protobuf's, they are not saved by the
+    // zero-use prune, because cli's parse loop and its helpers call each
+    // other. Its LAYOUTS are separate and unconditional; see
+    // `layout_only_stdlib_programs`.
+    if program_uses_cli(user) {
+        programs.push(cli_stdlib_program());
     }
     programs
 }
@@ -6906,7 +6961,7 @@ impl<'ctx> Codegen<'ctx> {
         }
         for tp in compiled_stdlib_programs(program)
             .into_iter()
-            .chain(layout_only_stdlib_programs())
+            .chain(layout_only_stdlib_programs(program))
         {
             if !user_redefines_stdlib_type(program, tp) {
                 self.declare_stdlib_layouts(tp);

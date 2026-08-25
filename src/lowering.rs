@@ -234,6 +234,18 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
         .iter()
         .map(|(k, v)| ((k.0, k.1), v.clone()))
         .collect();
+    // Every named type mentioned by ANY expression's inferred type. Codegen's
+    // baked-stdlib usage gates read this to decide whether to compile a
+    // module's method bodies (`program_uses_cli`), so it must be populated for
+    // every program the backend can see — which is why it rides the same
+    // forward as the tables above rather than being recomputed downstream.
+    program.referenced_type_names = {
+        let mut names = rustc_hash::FxHashSet::default();
+        for ty in tc.expr_types.values() {
+            collect_named_types(ty, &mut names);
+        }
+        names
+    };
     // Forward the method-call → `Type.method` callee key table so codegen
     // can narrow the par-branch cancel check at instance method sites.
     // The typechecker populates this directly because the parser sets
@@ -2453,4 +2465,57 @@ fn tensor_type_info_of(ty: &Type) -> Option<crate::ast::TensorTypeInfo> {
         elem: TypeChecker::type_to_type_expr(&args[0]),
         dims,
     })
+}
+
+/// Collect the head name of every `Named` / `Shared` type reachable from `ty`,
+/// recursing through every structural variant that can carry one.
+///
+/// Recursion is exhaustive by construction: the match binds each composite
+/// variant explicitly and ends in a `_` arm covering only the leaves that
+/// carry no nested `Type` (primitives, `TypeParam`, inference variables). A
+/// new composite variant added to `Type` would fall into that arm and silently
+/// stop the walk, so the arm lists what it means to cover.
+fn collect_named_types(ty: &Type, out: &mut rustc_hash::FxHashSet<String>) {
+    match ty {
+        Type::Named { name, args } => {
+            out.insert(name.clone());
+            for a in args {
+                collect_named_types(a, out);
+            }
+        }
+        Type::Shared(name) => {
+            out.insert(name.clone());
+        }
+        Type::Tuple(items) => {
+            for t in items {
+                collect_named_types(t, out);
+            }
+        }
+        Type::Array { element, .. }
+        | Type::Vector { element, .. }
+        | Type::Slice { element, .. } => collect_named_types(element, out),
+        Type::Rc(inner)
+        | Type::Arc(inner)
+        | Type::Ref(inner)
+        | Type::MutRef(inner)
+        | Type::Weak(inner)
+        | Type::Pointer { inner, .. } => collect_named_types(inner, out),
+        Type::Function {
+            params,
+            return_type,
+        }
+        | Type::OnceFunction {
+            params,
+            return_type,
+        } => {
+            for p in params {
+                collect_named_types(p, out);
+            }
+            collect_named_types(return_type, out);
+        }
+        // Leaves with no nested `Type`: Int, UInt, Float, Bool, Char, Str,
+        // Unit, Never, TypeParam, TypeVar, and the remaining inference-only
+        // variants.
+        _ => {}
+    }
 }

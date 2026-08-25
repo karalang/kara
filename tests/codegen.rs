@@ -11133,20 +11133,71 @@ fn main() {
         assert_eq!(out, "demo\nabt\n1.0\n");
     }
 
-    /// B-2026-08-25-2 — the other half of the layout-only split: CALLING a
-    /// `std.cli` method must fail loudly, naming the gap.
+    /// B-2026-08-25-2 — E2E: a real `std.cli` program, compiled and run.
     ///
-    /// Registering the layouts without the bodies leaves `Arg.string` with no
-    /// definition, and the associated-call dispatcher's last resort is an
-    /// `i64 0`. For a type whose layout codegen now knows, that zero is the
-    /// worst possible answer: either the module fails verification hundreds of
-    /// lines from the cause, or — when nothing reads the value back — it
-    /// silently builds a binary holding a fake, empty value. The dispatcher
-    /// therefore reports the real gap for a layout-only stdlib type, while an
-    /// unrecognized name still takes the `i64 0` default unchanged.
+    /// The row's repro was three lines that died at method dispatch. This is
+    /// the shape the row actually cares about — the builder chain, `parse()`'s
+    /// argv loop, and the generated help text — because that is what a shipped
+    /// CLI tool runs.
+    ///
+    /// It ROUND-TRIPS STRING VALUES BACK OUT (`help_text` embeds the program
+    /// name, the about text, and each arg's name and help). That is deliberate
+    /// and is the lesson of this row's two false-negative probes: a cli program
+    /// that never reads a field back printed the right answer even against the
+    /// broken compiler, because every reference was consistently `i64`-wide and
+    /// the collapse was unobservable. Same trap as B-2026-08-25-15's string
+    /// literals.
+    ///
+    /// No argv is passed (the harness runs the binary bare), so the required
+    /// arg is missing and `parse()` takes its `Err` path — deterministic, and
+    /// still a full traversal of the `Vec[ArgEntry]` / `Vec[FlagEntry]`
+    /// machinery.
     #[test]
-    fn stdlib_cli_method_call_reports_the_uncompiled_body_gap() {
-        let mut parsed = karac::parse("fn main() { let a = Arg.string(); println(\"ok\"); }\n");
+    fn e2e_stdlib_cli_parses_and_reports_end_to_end() {
+        let src = r#"
+fn main() {
+    let p = Parser.new("greet")
+        .about("greets someone")
+        .version("2.1")
+        .arg("--name", Arg.string().required().help("who to greet"))
+        .flag("--loud", 'l', "shout it");
+    match p.parse() {
+        Ok(args) => { println("parsed"); }
+        Err(e) => { println(f"err {e.message}"); }
+    }
+    println(p.version_line());
+    let h = p.help_text();
+    if h.contains("greets someone") { println("about-ok"); } else { println("about-BAD"); }
+    if h.contains("who to greet") { println("help-ok"); } else { println("help-BAD"); }
+}
+"#;
+        let out = run_program(src);
+        if let Some(out) = out {
+            assert_eq!(
+                out, "err missing required argument\ngreet 2.1\nabout-ok\nhelp-ok\n",
+                "compiled std.cli program diverged"
+            );
+        }
+    }
+
+    /// B-2026-08-25-2 — the body half: CALLING a `std.cli` method compiles.
+    ///
+    /// This is the row's headline, and it replaces an earlier pin that
+    /// asserted the opposite (that the call failed loudly, naming the gap).
+    /// That assertion was correct for the layout-only state and is now false
+    /// by construction: `program_uses_cli` sees `Arg` in the program's
+    /// `referenced_type_names` and compiles cli's bodies, so both the
+    /// associated fn and the instance method resolve to real definitions.
+    ///
+    /// Compiling to IR is the whole assertion. `Arg.string()` used to take the
+    /// associated-call dispatcher's `i64 0` last resort, and `a.required()`
+    /// used to die at method dispatch with `no handler for method 'required'
+    /// on variable 'a'` — the error the row was filed on.
+    #[test]
+    fn stdlib_cli_method_call_compiles() {
+        let mut parsed = karac::parse(
+            "fn main() { let a = Arg.string(); let b = a.required(); println(\"ok\"); }\n",
+        );
         assert!(
             parsed.errors.is_empty(),
             "parse errors: {:?}",
@@ -11156,12 +11207,39 @@ fn main() {
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
-        let err = compile_to_ir(&parsed.program, None, None)
-            .expect_err("a std.cli method call must not compile to the i64 default");
+        compile_to_ir(&parsed.program, None, None)
+            .expect("a std.cli associated fn + instance method must compile");
+    }
+
+    /// B-2026-08-25-2 — the gate is a GATE: a program that never mentions a
+    /// `std.cli` type must not drag cli's bodies into its module.
+    ///
+    /// The IR-shape tests (`test_ir_return_struct_field_vec_element_emits_clone`,
+    /// `wrapping_arith_lowers_without_overflow_trap`) already fail if cli is
+    /// compiled unconditionally — both were measured failing that way — but
+    /// they assert it indirectly, through the absence of a clone call and an
+    /// overflow trap. This asserts the gate's own decision directly, so a
+    /// change that widens `program_uses_cli` is caught here by name rather
+    /// than surfacing as two unrelated-looking IR assertions.
+    #[test]
+    fn stdlib_cli_bodies_stay_out_of_a_cli_free_program() {
+        let mut parsed = karac::parse("fn main() { let x = 1 + 2; println(f\"{x}\"); }\n");
         assert!(
-            err.contains("Arg.string") && err.contains("B-2026-08-25-2"),
-            "error should name the call and the tracking row, got: {err}"
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
         );
+        karac::prepare_for_resolve(&mut parsed.program);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let ir = compile_to_ir(&parsed.program, None, None).expect("cli-free program must compile");
+        for m in ["Parser_parse", "Parser_help_text", "Arg_required"] {
+            assert!(
+                !ir.contains(m),
+                "cli body `{m}` leaked into a program that never mentions a cli type"
+            );
+        }
     }
 
     /// B-2026-08-01-27 — compiled-backend pin for the let-move alias fix:
