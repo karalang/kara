@@ -92,13 +92,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 285 | 0 |
+| miscompile | 286 | 0 |
 | leak | 195 | 0 |
 | missing-feature | 171 | 4 |
 | run-vs-build | 159 | 0 |
 | codegen-gap | 138 | 0 |
 | double-free | 138 | 0 |
-| diagnostics | 105 | 1 |
+| diagnostics | 106 | 2 |
 | false-positive | 97 | 1 |
 | perf | 84 | 0 |
 | other | 60 | 1 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1033 | 1 |
-| typecheck | 256 | 4 |
+| codegen | 1034 | 1 |
+| typecheck | 257 | 5 |
 | interp | 180 | 0 |
 | ownership | 65 | 0 |
 | other | 64 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1568 surfaced · 7 open · 1536 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-25). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1570 surfaced · 8 open · 1537 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-25). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (7)
+### Open (8)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -137,6 +137,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1568 surfaced
 | B-2026-08-25-22 | 2026-08-25 | typecheck | medium | The STABLE-HASH module does not exist, so the escape design.md prescribes for every use case where `Hash` is explicitly the wrong tool is unavailable. § `Hash` and `Hasher`, stability policy: hash values are "not stable across runs, not stable across Kara versions, not stable across targets", and therefore "Code that needs stable digests (content addressing, on-disk indexes, snapshot tests, distributed sharding) does **not** use `Hash`. Kara's stdlib SHIPS explicit, versioned functions for that purpose -- `hash::stable::siphash24(bytes, key)`, `hash::stable::xxh3(bytes)`, and the `crypto` module for cryptographic hashes." Neither `siphash24` nor `xxh3` appears anywhere in `src/` or `runtime/stdlib/`, and there is no `hash.stable` namespace to call. The paragraph's closing promise is unreachable too: "Users who reach for `Hash` for stability are pointed at the stable-hash module by a `karac explain` page" -- see B-2026-08-25-23 for the state of `karac explain --concept=`. | roadmap.md |
 | B-2026-08-25-23 | 2026-08-25 | cli | low | `karac explain --concept=` supports exactly ONE concept, `closures`, and it is not one of the pages design.md names. The error message self-documents the gap: `error: unknown concept 'operators'. Supported: closures.` design.md names two pages by exact flag -- `karac explain --concept=operators`, which § Operator Traits says "documents the full desugaring table so that users can see why a given operator call fails and which trait they would need", and `karac explain --concept=module-state` -- plus a stable-hash page referenced in prose (§ Hash stability policy: "Users who reach for `Hash` for stability are pointed at the stable-hash module by a `karac explain` page"). None of the three exists. The document makes 36 references to `karac explain` overall, so the surface is load-bearing for the AI-first diagnostics story. | roadmap.md |
 | B-2026-08-25-24 | 2026-08-25 | resolver | low | The unassigned-layout-fields warning renders as `warning[resolve]` instead of `warning[layout_unassigned_fields]`, so the suppression design.md prescribes cannot be discovered from the message. § Layout Rules: "The compiler emits a warning once per layout block listing the unassigned fields — suppress with `#[allow(layout_unassigned_fields)]` when the omission is intentional." The warning fires correctly and the allow DOES suppress it -- `#[allow(layout_unassigned_fields)]` on the layout block turns `warning[resolve]: layout 'ps': fields not assigned to any group or cold section: b. These will be placed in an implicit trailing hot group.` into "All checks passed." But the rendered tag names the PHASE, not the lint, and the message text never states the lint name either, so a user who sees the warning has nothing to pass to `#[allow(...)]`. Sibling lint-backed diagnostics render with their own name -- `warning[deprecated]: use of deprecated item 'old_api'` and `warning[must_use]: discarded 'C' value` in the same compiler, on the same surface. | roadmap.md |
+| B-2026-08-25-26 | 2026-08-25 | typecheck | low | An un-inferrable `T` from an EMPTY array literal is reported as a BOUND failure naming `<error>` as the type, pointed at a later method call rather than at the literal: `W.from([])` on `impl[T: Ord]` says "trait bound `T: Ord` is not satisfied; `<error>` does not implement `Ord`" | implementation_checklist/phase-11-stdlib-longtail.md#general-purpose-collections |
 
 ### Relocated (1)
 
@@ -167,9 +168,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1568 surfaced
 
 </details>
 
-### Fixed (1536)
+### Fixed (1537)
 
-<details><summary>1536 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1537 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1709,6 +1710,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1568 surfaced
 | B-2026-08-25-16 | codegen | medium | An aggregate TEMPORARY used as the receiver of an owned-`self` method is dropped with the UNMANGLED outer-only drop (`__karac_drop_struct_Heap`), so… | a9856f1 |
 | B-2026-08-25-17 | codegen | medium | A DISCARDED method-call result that owns heap is never freed: `h.xs.pop();` as a bare expression statement leaks the popped element's buffer (8 bytes… | c8753cd |
 | B-2026-08-25-18 | codegen | medium | Discarded heap-owning pop in a generic FREE FUNCTION leaks the container's elements at -O0 -- B-2026-08-25-17's free-fn precedence guard was not actu… | Fixed in two paired sites |
+| B-2026-08-25-25 | codegen | high | An ASSOCIATED fn in a GENERIC impl that binds a struct LITERAL to a local and calls a MUTATING sibling through it dispatches to the UNMANGLED base pr… | 8d32a0d |
 
 </details>
 
