@@ -96641,6 +96641,61 @@ fn main() { let o = Outer { inner: Inner { v: 5 } }; println(pick(o).v); }
         );
     }
 
+    /// A MUTUAL type cycle through a `Vec` must not crash the compiler.
+    ///
+    /// `Outer.kids: Vec[Inner]` and `Inner.owner: Outer` is legal Kāra that
+    /// `karac check` accepts. Passing `Outer` by value engages the entry-copy,
+    /// whose emitter UNROLLS a per-element struct copy — so a cyclic type has
+    /// no finite emission and the copy-support analysis has to decline it.
+    ///
+    /// B-2026-07-28-3 installed that guard but asked only whether the element
+    /// type was ALREADY on the walk stack, which catches the DIRECT cycle
+    /// (`Node.kids: Vec[Node]`, pinned below) and answers "terminates" for
+    /// every cycle of length two or more — then stops the walk, so
+    /// `Subcommand`'s edge back to `Outer` was never examined. Measured on
+    /// fda65f4, this program overflowed the compiler's stack (13 000 frames).
+    #[test]
+    fn test_e2e_mutual_type_cycle_through_vec_compiles() {
+        let out = run_program(
+            r#"
+struct Inner { owner: Outer, tag: String }
+struct Outer { kids: Vec[Inner], name: String }
+
+fn count(o: Outer) -> i64 { o.kids.len() }
+
+fn main() {
+    let o = Outer { kids: [], name: "root" };
+    println(count(o));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "0");
+        }
+    }
+
+    /// The DIRECT cycle B-2026-07-28-3 already handled, kept alongside its
+    /// mutual sibling so a future edit to the guard cannot fix one by
+    /// regressing the other.
+    #[test]
+    fn test_e2e_direct_type_cycle_through_vec_compiles() {
+        let out = run_program(
+            r#"
+struct Node { kids: Vec[Node], name: String }
+
+fn count(n: Node) -> i64 { n.kids.len() }
+
+fn main() {
+    let n = Node { kids: [], name: "r" };
+    println(count(n));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "0");
+        }
+    }
+
     /// B-2026-08-25-6 — a BRANCHING carrier: `break if c { Node { .. } } else
     /// { Node { .. } }`. Exactly one tail runs, but the slot is written once
     /// for all of them, so the allowlist recurses with an ALL-tails rule.

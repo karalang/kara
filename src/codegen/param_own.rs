@@ -418,6 +418,48 @@ impl<'ctx> super::Codegen<'ctx> {
         self.struct_reaches(struct_name, struct_name, &mut stack)
     }
 
+    /// B-2026-08-25-2 — does unrolling the emitter's per-element struct copy
+    /// for `Vec[elem]` have a FINITE emission?
+    ///
+    /// B-2026-07-28-3 asked a narrower question here: "is `elem` already on the
+    /// walk stack". That catches a DIRECT self-reference — `struct GraphNode {
+    /// edges: Vec[GraphNode] }`, where `elem` IS the struct being walked — but
+    /// it answers "terminates" for every cycle of length two or more and then
+    /// STOPS THE WALK, because the arm returns a verdict instead of recursing.
+    /// `std.cli` is exactly that shape: `Parser.subcommands: Vec[Subcommand]`
+    /// and `Subcommand.parser: Parser`. Walking `Parser` sees element
+    /// `Subcommand`, which is not on the stack, so the analysis called `Parser`
+    /// copy-supported and never looked at `Subcommand`'s fields. The emitter
+    /// has no such stopping rule — `deep_copy_one_aggregate_field` descends a
+    /// `Vec[struct]`'s elements and then that struct's own fields — so it took
+    /// the `Subcommand.parser` edge straight back to `Parser` and recursed
+    /// until the compiler's stack was gone (13 000 frames, on `hello world`,
+    /// as soon as cli.kara's bodies were registered for compilation).
+    ///
+    /// Asking about REACHABILITY instead of membership makes the analysis walk
+    /// exactly as deep as the emitter, which is what B-2026-07-28-3 intended.
+    /// The three ways the unrolled copy fails to terminate:
+    ///   - `elem` is an ancestor (the original direct-cycle case),
+    ///   - `elem` can REACH an ancestor (the mutual cycle this row is about),
+    ///   - `elem` reaches itself (a cycle wholly below the current walk).
+    ///
+    /// Deliberately narrow: an ACYCLIC element type still answers "terminates"
+    /// and keeps the arm's unconditional `true`, so programs that compile today
+    /// emit byte-identical IR. Only a genuine cycle newly declines, and
+    /// declining just means the param falls back to caller-retains — the same
+    /// conservative treatment every other non-copyable field shape gets.
+    fn vec_elem_copy_emission_terminates(&self, ehead: &str, stack: &[String]) -> bool {
+        if stack.iter().any(|s| s == ehead) {
+            return false;
+        }
+        if self.struct_is_self_referential(ehead) {
+            return false;
+        }
+        !stack
+            .iter()
+            .any(|a| self.struct_reaches(a, ehead, &mut Vec::new()))
+    }
+
     fn struct_reaches(&self, root: &str, cur: &str, stack: &mut Vec<String>) -> bool {
         if stack.iter().any(|s| s == cur) {
             return false;
@@ -747,7 +789,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         // byte-identical IR.
                         !(self.type_decls.struct_types.contains_key(ehead)
                             && !self.type_decls.shared_types.contains_key(ehead)
-                            && stack.iter().any(|s| s == ehead))
+                            && !self.vec_elem_copy_emission_terminates(ehead, stack))
                     }
                     "Slice" => true,
                     // Heap the outer-buffer copy can't duplicate → bail.
