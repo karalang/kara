@@ -15,6 +15,7 @@ Usage:
                                                   # by hand; the ledger is canon)
 """
 import json
+import re
 import sys
 from collections import Counter, defaultdict
 from datetime import date, timedelta
@@ -170,6 +171,34 @@ def short_title(r) -> str:
     return s.replace("|", "\\|")
 
 
+def short_fix(r) -> str:
+    """The fix SHA alone for the collapsed Fixed index.
+
+    The column header has always said "fix SHA", but the cell rendered
+    `r["fix"]` VERBATIM — the whole multi-paragraph write-up (mean ~1.0 KB, max
+    8.5 KB, and 413 of 1532 entries multi-line, which breaks the markdown table
+    outright). That is exactly the bloat `short_title` above was written to
+    prevent, left in place one column over: it inflated the Fixed section to
+    18,134 lines for 1,532 entries — ~12 lines each — and the rendered view to
+    1.9 MB, which is not survey-able and is precisely what an LLM told to "read
+    the .md for a survey" would swallow whole.
+
+    Fix prose opens with `FIXED <sha>` / `FIXED by <sha>`, so take the first
+    hex word. Fall back to a hard-capped first clause when a row predates that
+    convention, so the column degrades to something readable rather than empty.
+    The full write-up stays in `bug-ledger.jsonl`, grep by id."""
+    raw = " ".join((r.get("fix", "") or "").split())
+    if not raw:
+        return "—"
+    m = re.search(r"\b[0-9a-f]{7,40}\b", raw)
+    if m:
+        return m.group(0)
+    s = raw.split(". ", 1)[0]
+    if len(s) > 60:
+        s = s[:59].rstrip() + "…"
+    return s.replace("|", "\\|")
+
+
 def ledger_view(rows) -> str:
     """The human-readable rolled-up state — Open bugs in full, Fixed as a
     compact one-line-per-entry index.
@@ -289,10 +318,9 @@ def ledger_view(rows) -> str:
     out.append("| id | surface | sev | title | fix |")
     out.append("|---|---|---|---|---|")
     for r in sorted(fixed, key=lambda r: r["date"]):
-        fix = r.get("fix", "") or "—"
         out.append(
             f"| {r['id']} | {r['surface']} | {r['severity']} | {short_title(r)} "
-            f"| {fix} |"
+            f"| {short_fix(r)} |"
         )
     out.append("\n</details>")
     out.append("")
