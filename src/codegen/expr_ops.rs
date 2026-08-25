@@ -6836,7 +6836,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 _ => None,
             };
             if let Some(te) = key.and_then(|k| self.fn_sig.fn_return_type_exprs.get(&k)) {
-                return Some(te.clone());
+                // The DECLARED return type is the generic form (`Bag[T]`) when
+                // the callee is generic, so a call used directly as a receiver
+                // (`mkbag(v).inner()`) hit the same base-prototype dispatch as
+                // the struct-literal temporary. B-2026-08-25-28.
+                return Some(
+                    self.concrete_generic_struct_inst(te)
+                        .unwrap_or_else(|| te.clone()),
+                );
             }
         }
         self.enum_inst_type_of_expr(object)
@@ -6860,7 +6867,63 @@ impl<'ctx> super::Codegen<'ctx> {
                 return Some(t);
             }
         }
+        // B-2026-08-25-28 — a struct LITERAL used directly as a receiver
+        // (`Bag { xs: v }.inner()`) is an unnamed TEMPORARY: there is no name
+        // for the arm above to key on, and the span table records no entry for
+        // a literal, so this returned `None` and the call dispatched to the
+        // unmangled base prototype — a SEGFAULT at a heap-carrying `T`, while
+        // binding the same value to a name first (`let q = Bag { xs: v };
+        // q.inner()`) was correct. Reconstruct the args from the struct's
+        // DECLARED parameter names, exactly as the `let`-site arm does.
+        if let ExprKind::StructLiteral { path, .. } = &expr.kind {
+            if let Some(inst) = self.struct_literal_generic_inst(path, expr.span) {
+                return Some(inst);
+            }
+        }
+        // The span record is pre-monomorphization, so inside a generic impl it
+        // holds the GENERIC form; resolve its bare params through the active
+        // monomorph's substitution (B-2026-08-25-27's rule, applied on the
+        // receiver side).
         self.enum_inst_type_from_span(expr)
+            .map(|i| self.concrete_generic_struct_inst(&i).unwrap_or(i))
+    }
+
+    /// Concrete instantiation of a generic struct LITERAL, reconstructed from
+    /// the struct's declared generic parameter names and resolved through the
+    /// active monomorph's substitution. `None` for a non-generic struct or when
+    /// no substitution binds (no monomorph in flight). B-2026-08-25-28.
+    pub(super) fn struct_literal_generic_inst(
+        &self,
+        path: &[String],
+        span: crate::token::Span,
+    ) -> Option<TypeExpr> {
+        let name = path.last()?;
+        let params = self.type_decls.struct_generic_params.get(name)?.clone();
+        if params.is_empty() {
+            return None;
+        }
+        let args: Vec<GenericArg> = params
+            .iter()
+            .map(|p| {
+                GenericArg::Type(TypeExpr {
+                    kind: TypeKind::Path(PathExpr {
+                        segments: vec![p.clone()],
+                        generic_args: None,
+                        span,
+                    }),
+                    span,
+                })
+            })
+            .collect();
+        let generic_form = TypeExpr {
+            kind: TypeKind::Path(PathExpr {
+                segments: vec![name.clone()],
+                generic_args: Some(args),
+                span,
+            }),
+            span,
+        };
+        self.concrete_generic_struct_inst(&generic_form)
     }
 
     /// Concrete return-type *instantiation* of a generic impl method call,

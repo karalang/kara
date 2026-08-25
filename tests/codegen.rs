@@ -11211,6 +11211,53 @@ fn main() {
             .expect("a std.cli associated fn + instance method must compile");
     }
 
+    /// A method call whose receiver is an unnamed TEMPORARY inside a generic
+    /// impl (B-2026-08-25-28). `enum_inst_var_types` is NAME-keyed, so a
+    /// temporary has no key and no binding-site arm can reach it — this is the
+    /// case the `let`-site family's six arms structurally could not close.
+    /// Resolved on the receiver side instead: a struct literal reconstructs its
+    /// args from the struct's declared params, and a call resolves its declared
+    /// (generic) return type through the active monomorph's substitution.
+    ///
+    /// The named-binding control was correct before this fix, so it pins the
+    /// diagnosis: the defect was the ABSENCE of a name, not the value.
+    #[test]
+    fn e2e_generic_method_call_on_temporary_receiver() {
+        let receivers: &[(&str, &str)] = &[
+            ("struct literal", "Bag { xs: v }.inner()"),
+            ("free-fn call", "mkbag(v).inner()"),
+            ("assoc-fn call", "Bag.make(v).inner()"),
+            ("chained temporaries", "Bag { xs: v }.dup().inner()"),
+            (
+                "named binding (control)",
+                "{ let q = Bag { xs: v }; q.inner() }",
+            ),
+        ];
+        for (name, recv) in receivers {
+            let src = format!(
+                "struct Bag[=T] {{ xs: Vec[T] }}\n\
+                 impl[T: Ord] Bag[T] {{\n    \
+                     fn swap2(mut ref self, i: i64, j: i64) {{ let t = self.xs[i]; self.xs[i] = self.xs[j]; self.xs[j] = t; }}\n    \
+                     fn arrange(mut ref self) {{ let n = self.xs.len(); if n > 1 {{ self.swap2(0, n - 1); }} }}\n    \
+                     fn dup(ref self) -> Bag[T] {{ Bag {{ xs: self.xs }} }}\n    \
+                     fn make(v: Vec[T]) -> Bag[T] {{ Bag {{ xs: v }} }}\n    \
+                     fn inner(self) -> Vec[T] {{ let mut b = self; b.arrange(); b.xs }}\n    \
+                     fn mk(v: Vec[T]) -> Vec[T] {{ {recv} }}\n\
+                 }}\n\
+                 fn mkbag[T: Ord](v: Vec[T]) -> Bag[T] {{ Bag {{ xs: v }} }}\n\
+                 fn main() {{\n    \
+                     let a = Bag.mk([\"x\", \"y\", \"z\"]); println(a[0]);\n    \
+                     let b = Bag.mk([1, 2, 3]); println(b[0]);\n\
+                 }}\n"
+            );
+            assert_eq!(
+                run_program(&src).as_deref(),
+                Some("z\n3\n"),
+                "temporary-receiver form `{name}` did not round-trip at both T = String and T = i64",
+            );
+        }
+    }
+
     /// The `let`-site instantiation family, swept across every RHS form that
     /// can bind a generic-struct value inside a monomorph. Each of these
     /// SEGFAULTED at a heap-carrying `T` before the span-resolution arm landed
