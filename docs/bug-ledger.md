@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 288 | 0 |
 | leak | 195 | 0 |
-| missing-feature | 172 | 4 |
+| missing-feature | 173 | 5 |
 | run-vs-build | 159 | 0 |
 | codegen-gap | 138 | 0 |
 | double-free | 138 | 0 |
@@ -113,8 +113,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen | 1036 | 1 |
 | typecheck | 260 | 6 |
 | interp | 180 | 0 |
+| other | 65 | 1 |
 | ownership | 65 | 0 |
-| other | 64 | 0 |
 | cli | 63 | 0 |
 | autopar | 55 | 0 |
 | parser | 41 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1575 surfaced · 7 open · 1543 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-25). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1576 surfaced · 8 open · 1543 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-25). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (7)
+### Open (8)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -137,6 +137,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1575 surfaced
 | B-2026-08-25-29 | 2026-08-25 | typecheck | medium | TWO OPERATOR BEHAVIOURS design.md § Operator Traits presents as SHIPPED v1 SURFACE DO NOT EXIST. (1) IMPLICIT LOSSLESS WIDENING AT OPERATOR BOUNDARIES: the section states "`(x: i32) + (y: i64)` is valid -- the compiler widens `x` to `i64` before dispatch, and the result type is `i64`", but the compiler rejects it with `cannot mix integer types 'i32' and 'i64' in arithmetic -- they must match; cast the 'i32' operand up`. Same for `u8 + u32` and for `f32 + f64` (`cannot mix float types`). A LITERAL operand still widens (`let x: i32 = 1; x + 2` is fine), so what is missing is specifically the two-typed-operand case. (2) BITWISE `Not` ON INTEGER PRIMITIVES: the v1 trait set lists `Not` under Bitwise and the stdlib-impl list says the bitwise traits ship "only on integer primitives and bool", but `not a` on an `i64` or `u8` is rejected -- `unary '!' requires 'bool', found 'i64'`. Only `bool` works. | roadmap.md |
 | B-2026-08-25-30 | 2026-08-25 | typecheck | medium | OPERATOR-FAILURE DIAGNOSTICS DO NOT SPEAK THE TRAIT LANGUAGE design.md § Operator Traits mandates, and two of them NAME A TRAIT THE USER DOES NOT NEED. The spec is explicit: "Diagnostics for a missing impl (e.g., `vec1 + vec2`) speak the trait language -- \"type Vec[T] does not implement trait Add\" -- not operator language -- \"+ is not defined for Vec[T]\"", and § Notably absent adds that `vec1 + vec2` gets "a diagnostic pointing at `vec.concat(other)` or `vec.extend(other)`". Measured, `[1,2] + [3,4]` reports `arithmetic operator requires numeric type, found 'Vec[i64]'` -- operator language, no trait named, no method redirect. Separately, `==` on a struct reports `does not implement Eq; add #[derive(Eq)]` and `<` reports `does not implement Ord; add #[derive(Ord)]`, but the desugaring runs through `PartialEq` / `PartialOrd` and `#[derive(PartialEq)]` / `#[derive(PartialOrd)]` ALONE is sufficient to compile -- so the message names the total trait when the partial one is what is required. The spec states the `Eq` marker "is never named by the desugaring". | roadmap.md |
 | B-2026-08-25-31 | 2026-08-25 | typecheck | low | The un-inferrable-type-argument diagnostic points at the first USE, not at the empty literal that caused it, because `Type::Error` carries no provenance. B-2026-08-25-26 fixed the message (it now names the inference failure instead of blaming a bound, and no longer prints `<error>` or an irrelevant implementors list) but left the SPAN, which is the third of that row's three defects. | roadmap.md |
+| B-2026-08-25-32 | 2026-08-25 | other | medium | `PriorityQueue` HAS NO `peek`: there is NO non-destructive way to read the root, so the archetypal two-heap median use case cannot read a queue's head at the O(1) its own doc comment advertises -- and `runtime/stdlib/priority_queue.kara`'s header promises `peek / len O(1)` for a method that does not exist in the file or in design.md | runtime/stdlib/priority_queue.kara (header complexity table promises `peek`); design.md § `PriorityQueue[T]` method table needs the row too |
 
 ### Relocated (1)
 
