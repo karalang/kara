@@ -1966,9 +1966,18 @@ fn render_text_diagnostics(pipeline: &Pipeline) -> Vec<String> {
             } else {
                 "error"
             };
+            // B-2026-08-25-24 — a LINT-BACKED resolve diagnostic names its
+            // lint, not the phase, exactly as the typecheck renderers below
+            // already do. `warning[resolve]` left the reader with nothing to
+            // pass to `#[allow(...)]`: the bracket said "resolve", which is not
+            // a lint, and the message text does not repeat the name. For
+            // `layout_unassigned_fields` that attribute is prescribed by
+            // design.md § Layout Rules and works — it was just undiscoverable
+            // from its own warning.
+            let label = crate::resolver::resolve_kind_lint_name(&err.kind).unwrap_or("resolve");
             out.push(with_snippet(
                 format!(
-                    "{sev}[resolve]: {}:{}:{}: {}",
+                    "{sev}[{label}]: {}:{}:{}: {}",
                     filename, err.span.line, err.span.column, err.message
                 ),
                 source,

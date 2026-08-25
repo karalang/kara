@@ -936,6 +936,30 @@ pub fn resolve_kind_is_note(kind: &ResolveErrorKind) -> bool {
     )
 }
 
+/// The LINT that governs a resolve diagnostic, when one does — the name a
+/// reader must pass to `#[allow(...)]` / `-A`.
+///
+/// B-2026-08-25-24. Every kind here is lint-backed and suppressible, but both
+/// renderers labelled them by PHASE (`warning[resolve]`), and the message text
+/// does not repeat the lint name, so the warning carried no way back to the
+/// attribute that silences it — for `layout_unassigned_fields`, an attribute
+/// design.md § Layout Rules prescribes by name. The typecheck renderers had
+/// already settled the rule: "the bracket is the actionable label", because
+/// that is what `-A <name>` takes.
+///
+/// Kept beside [`resolve_kind_is_note`] and consulted by every renderer for
+/// the same reason that predicate is: one list, so the text and JSON emitters
+/// cannot drift apart. `None` for an ordinary hard error, which keeps its
+/// phase label.
+pub fn resolve_kind_lint_name(kind: &ResolveErrorKind) -> Option<&'static str> {
+    match kind {
+        ResolveErrorKind::LayoutUnassignedFields => Some("layout_unassigned_fields"),
+        ResolveErrorKind::LayoutReprCIgnored => Some("repr_c_layout_ignored"),
+        ResolveErrorKind::FloatInSerializedType => Some("float_in_serialized_type"),
+        _ => None,
+    }
+}
+
 impl std::fmt::Display for ResolveError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(

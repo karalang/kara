@@ -1627,9 +1627,20 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 .stub_hint
                 .as_ref()
                 .map(|s| render_stub_hint_json(filename, s));
+            // B-2026-08-25-24 — a NOTE-severity resolve diagnostic is a
+            // warning, and a lint-backed one names its lint. This emitter
+            // hardcoded `error` and `lint_name: None`, so `--output=json`
+            // reported `"severity": "error"` for a diagnostic the text
+            // renderer prints as a warning and that does not fail the build —
+            // the same record already carrying a `W`-prefixed code. That
+            // divergence lands on the Mend path, where the JSON IS the
+            // interface. Both fields now read the same two predicates the text
+            // renderer uses, so the two emitters cannot disagree.
+            let is_note = crate::resolver::resolve_kind_is_note(&err.kind);
+            let lint_name = crate::resolver::resolve_kind_lint_name(&err.kind);
             diags.add(DiagEntry {
                 id: &format!("d{id_counter}"),
-                severity: "error",
+                severity: if is_note { "warning" } else { "error" },
                 phase: "resolve",
                 code,
                 category: "resolve",
@@ -1638,7 +1649,7 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 span: &err.span,
                 suggestion: err.suggestion.as_deref(),
                 extra_json,
-                lint_name: None,
+                lint_name,
                 fix_it: None,
                 class: None,
                 expected: None,

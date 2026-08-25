@@ -1419,6 +1419,132 @@ fn test_must_use_reaches_check_and_json() {
     assert_eq!(hits, 1, "run must report must_use exactly once, got {hits}");
 }
 
+/// B-2026-08-25-24 — a LINT-BACKED resolve diagnostic names its lint, on both
+/// output lanes.
+///
+/// `warning[resolve]` names the PHASE, and the message text does not repeat the
+/// lint name, so a reader had nothing to pass to `#[allow(...)]` — for
+/// `layout_unassigned_fields` an attribute design.md § Layout Rules prescribes
+/// by name, which DID work and was simply undiscoverable from its own warning.
+///
+/// The JSON lane carried a worse form of the same gap: it hardcoded
+/// `"severity": "error"` for a diagnostic the text lane prints as a warning and
+/// that exits 0, in a record already carrying a `W`-prefixed code. That is the
+/// Mend path, where the JSON is the interface.
+///
+/// The hard-error control is what keeps this honest: an ordinary resolve error
+/// must KEEP `error[resolve]`, `"severity": "error"` and a nonzero exit, so the
+/// fix cannot have relabelled everything indiscriminately.
+#[test]
+fn lint_backed_resolve_warnings_name_their_lint_on_both_lanes() {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-resolve-lint-label-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+
+    // (a) layout_unassigned_fields — `z` is in no group.
+    let unassigned = tmp.join("unassigned.kara");
+    std::fs::write(
+        &unassigned,
+        "struct Entity { x: i64, y: i64, z: i64 }\n         layout entities: Vec[Entity] {\n             group pos { x, y }\n         }\n         fn main() {\n             let mut entities: Vec[Entity] = Vec.new();\n             entities.push(Entity { x: 1, y: 2, z: 3 });\n             println(entities[0].x);\n         }\n",
+    )
+    .unwrap();
+
+    let out = karac_bin()
+        .args(["check", unassigned.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(
+        err.contains("warning[layout_unassigned_fields]"),
+        "the bracket must name the lint the reader passes to #[allow(...)], got: {err}"
+    );
+    assert!(
+        !err.contains("warning[resolve]"),
+        "the phase-tagged label must be gone: {err}"
+    );
+
+    // The lint name in the bracket must be the one that actually suppresses it.
+    let suppressed = tmp.join("suppressed.kara");
+    std::fs::write(
+        &suppressed,
+        "struct Entity { x: i64, y: i64, z: i64 }\n         #[allow(layout_unassigned_fields)]\n         layout entities: Vec[Entity] {\n             group pos { x, y }\n         }\n         fn main() {\n             let mut entities: Vec[Entity] = Vec.new();\n             entities.push(Entity { x: 1, y: 2, z: 3 });\n             println(entities[0].x);\n         }\n",
+    )
+    .unwrap();
+    let out = karac_bin()
+        .args(["check", suppressed.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let serr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(
+        !serr.contains("layout_unassigned_fields"),
+        "the name printed in the bracket must be the one that silences it: {serr}"
+    );
+
+    // (b) a SIBLING kind, so this is a class fix rather than one string.
+    let reprc = tmp.join("reprc.kara");
+    std::fs::write(
+        &reprc,
+        "#[repr(C)]\n         struct E { x: i64, y: i64 }\n         layout es: Vec[E] {\n             group pos { x, y }\n         }\n         fn main() {\n             let mut v: Vec[E] = Vec.new();\n             v.push(E { x: 1, y: 2 });\n             println(v[0].x);\n         }\n",
+    )
+    .unwrap();
+    let out = karac_bin()
+        .args(["check", reprc.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let rerr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(
+        rerr.contains("warning[repr_c_layout_ignored]"),
+        "the sibling note kind must name its lint too, got: {rerr}"
+    );
+
+    // (c) JSON lane: a note is a WARNING and carries its lint name.
+    let out = karac_bin()
+        .args(["check", "--output=json", unassigned.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let v: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("check --output=json must emit JSON ({e}): {stdout}"));
+    let d = v["diagnostics"]
+        .as_array()
+        .and_then(|a| a.iter().find(|d| d["phase"] == "resolve"))
+        .unwrap_or_else(|| panic!("no resolve diagnostic in JSON: {stdout}"));
+    assert_eq!(
+        d["severity"], "warning",
+        "a note-severity resolve diagnostic must not report as an error on the \
+         Mend lane — it exits 0 and its own code is W-prefixed: {stdout}"
+    );
+    assert_eq!(
+        d["lint_name"], "layout_unassigned_fields",
+        "the JSON must carry the lint name too: {stdout}"
+    );
+
+    // (d) CONTROL — an ordinary resolve ERROR is untouched on both lanes.
+    let hard = tmp.join("hard.kara");
+    std::fs::write(&hard, "fn main() { println(undefined_thing); }\n").unwrap();
+    let out = karac_bin()
+        .args(["check", hard.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let herr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(
+        herr.contains("error[resolve]"),
+        "a hard resolve error keeps its phase label: {herr}"
+    );
+    assert!(
+        !out.status.success(),
+        "a hard resolve error must still fail the check"
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// B-2026-08-17-21 — the chained-receiver lint must see LOWERED shapes.
 ///
 /// `ORIGIN.inner.v.to_string()` parses as a 4-segment `Call(Path)` because the
