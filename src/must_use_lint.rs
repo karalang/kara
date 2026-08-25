@@ -73,9 +73,36 @@ fn implicit_must_use_kind(name: &str) -> Option<(&'static str, &'static str)> {
 /// the spec's `TreeMap` spelling, which the spec pairs with `SortedSet` in the
 /// same sentences — an incoherent pair the implementation never had.
 /// B-2026-08-17-38 settles it on `Sorted*` and corrects the spec.
+///
+/// A FALLIBLE-ALLOCATION TWIN INHERITS ITS PANICKING SIBLING'S EXEMPTION
+/// (B-2026-08-25-21). `Map.try_insert(k, v)` returns
+/// `Result[Option[V], AllocError]`, so `m.try_insert(k, v)?;` propagates the
+/// allocation failure and leaves exactly the displaced `Option[V]` that the
+/// panicking `m.insert(k, v);` leaves — the same value, discarded for the same
+/// reason. Warning on only the fallible spelling penalises the more careful one.
+///
+/// The `try_` strip here is belt-and-braces, NOT the mechanism: for a BUILTIN
+/// twin the typechecker already canonicalizes the callee key to the panicking
+/// handler, so `m.try_insert(..)` arrives as `"Map.insert"` and matches the list
+/// directly (measured). A USER method keeps its own spelling —
+/// `Holder.try_insert` records `"Holder.try_insert"` — and stays un-exempt
+/// because the receiver is not a stdlib container either way. Stripping makes
+/// this predicate correct whichever spelling it is handed, so a future twin that
+/// does NOT get canonicalized is still covered.
+///
+/// The rule stays honest because the base name must be in the list:
+/// `Process.try_wait()?` yields `Option[ExitStatus]` where the `Option` IS the
+/// result (did the child exit?), not an ancillary report, and `("Process",
+/// "wait")` is absent — so it still warns.
+///
+/// Consulted ONLY when the discarded value's type is `Option` (see
+/// `check_discard`), so a `try_*` call discarded WITHOUT `?` — where the
+/// discarded type is the `Result` and the abandoned branch is the ALLOCATION
+/// FAILURE — is untouched and still warns.
 fn displaced_value_exempt(receiver: &str, method: &str) -> bool {
+    let panicking = method.strip_prefix("try_").unwrap_or(method);
     matches!(
-        (receiver, method),
+        (receiver, panicking),
         ("Map" | "SortedMap", "insert" | "remove")
             | ("Vec", "pop" | "remove_first")
             | ("VecDeque", "pop_front" | "pop_back")
@@ -316,17 +343,39 @@ impl Walker<'_> {
     /// method segment to match this call's method name means a stale
     /// inner entry can never exempt a different outer call.
     fn is_displaced_value_discard(&self, expr: &Expr) -> bool {
-        let ExprKind::MethodCall { method, .. } = &expr.kind else {
+        // Look through `?` (B-2026-08-25-21). For `m.try_insert(k, v)?;` the
+        // DISCARDED expression is the `Question` node — its type is the `Ok`
+        // payload `Option[V]`, which is what brought us here — while the call
+        // that identifies the operation is the `MethodCall` inside it. Matching
+        // only `MethodCall` therefore missed every fallible twin. The span key
+        // must come from that inner call too, since `method_callee_types` is
+        // keyed by the call's own span and holds nothing under the `?`.
+        let mut call = expr;
+        while let ExprKind::Question(inner) = &call.kind {
+            call = inner;
+        }
+        let ExprKind::MethodCall { method, .. } = &call.kind else {
             return false;
         };
-        let key = SpanKey::from_span(&expr.span);
+        let key = SpanKey::from_span(&call.span);
         let Some(callee) = self.typed.method_callee_types.get(&key) else {
             return false;
         };
         let Some((receiver, callee_method)) = callee.split_once('.') else {
             return false;
         };
-        callee_method == method && displaced_value_exempt(receiver, callee_method)
+        // Normalize BOTH sides to the panicking spelling before comparing
+        // (B-2026-08-25-21). For a builtin fallible twin the table holds the
+        // canonicalized name while the source says `try_`, so the raw equality
+        // this guard used to do (`"insert" == "try_insert"`) was false and the
+        // exemption never fired — that, not the exemption list, is what made
+        // `m.try_insert(k, v)?;` warn. Comparing normalized names keeps the
+        // guard's actual job intact: a STALE inner entry from a chained span
+        // (`"VecDeque.pop_front"` under an outer `.try_insert`) still fails to
+        // match, so it can never exempt an unrelated call.
+        let source_base = method.strip_prefix("try_").unwrap_or(method);
+        let callee_base = callee_method.strip_prefix("try_").unwrap_or(callee_method);
+        callee_base == source_base && displaced_value_exempt(receiver, callee_base)
     }
 
     /// Resolve a statement-position expression's type to a

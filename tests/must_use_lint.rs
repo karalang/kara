@@ -1110,3 +1110,92 @@ fn a_user_defined_insert_returning_option_still_warns() {
     );
     assert_must_use_warning(&diags, "Option");
 }
+
+// ── Fallible-allocation twins inherit the exemption (B-2026-08-25-21) ──
+//
+// `Map.try_insert(k, v)` returns `Result[Option[V], AllocError]`, so
+// `m.try_insert(k, v)?;` propagates the allocation failure and discards
+// exactly the displaced `Option[V]` that the exempt `m.insert(k, v);`
+// discards. It warned anyway, so the fallible spelling carried a
+// diagnostic its panicking twin did not.
+//
+// The cause was NOT a missing entry in the exemption list. For a builtin
+// twin the typechecker canonicalizes the callee key to the panicking
+// handler — `m.try_insert(..)` records `"Map.insert"` — while the source
+// says `try_insert`, so `is_displaced_value_discard`'s
+// `callee_method == method` guard compared `"insert"` against
+// `"try_insert"`, failed, and never consulted the list. The `?` also had
+// to be looked through: the discarded expression is the `Question` node,
+// not the `MethodCall`.
+
+#[test]
+fn test_discarded_map_try_insert_through_question_does_not_warn() {
+    let diags = lint(
+        "fn caller() -> Result[i64, AllocError] {\n\
+             let mut m: Map[i64, i64] = Map.new();\n\
+             m.try_insert(1, 2)?;\n\
+             return Result.Ok(0);\n\
+         }",
+    );
+    assert!(diags.is_empty(), "expected no warnings, got: {diags:?}");
+}
+
+#[test]
+fn test_discarded_try_insert_result_without_question_still_warns() {
+    // The exemption covers the DISPLACED VALUE, never the allocation
+    // outcome. Without `?` the discarded type is the `Result`, and the
+    // abandoned branch is an OOM the caller meant to handle — that must
+    // keep warning, or the fix would have silenced a real hazard.
+    let diags = lint(
+        "fn caller() {\n\
+             let mut m: Map[i64, i64] = Map.new();\n\
+             m.try_insert(1, 2);\n\
+         }",
+    );
+    assert_eq!(diags.len(), 1, "expected one warning, got: {diags:?}");
+    assert!(
+        diags[0].message.contains("`Result`"),
+        "the surviving warning must be about the discarded Result, got: {}",
+        diags[0].message
+    );
+}
+
+#[test]
+fn test_user_defined_try_insert_through_question_still_warns() {
+    // The exemption is scoped by RECEIVER to the stdlib containers. A user
+    // method of the same name and shape keeps its own callee key
+    // (`"Holder.try_insert"`, not canonicalized) and is not exempt.
+    let diags = lint(
+        "struct Holder { v: i64 }\n\
+         impl Holder {\n\
+             fn try_insert(ref self) -> Result[Option[i64], AllocError] {\n\
+                 return Result.Ok(Option.Some(self.v));\n\
+             }\n\
+         }\n\
+         fn caller(h: Holder) -> Result[i64, AllocError] {\n\
+             h.try_insert()?;\n\
+             return Result.Ok(0);\n\
+         }",
+    );
+    assert_eq!(diags.len(), 1, "expected one warning, got: {diags:?}");
+    assert!(
+        diags[0].message.contains("`Option`"),
+        "expected the implicit-Option warning, got: {}",
+        diags[0].message
+    );
+}
+
+#[test]
+fn test_question_on_a_non_exempt_stdlib_option_still_warns() {
+    // Looking through `?` must not blanket-exempt everything reached that
+    // way: the base name still has to be in the displaced-value list. Here
+    // the `Option` IS the result rather than an ancillary report.
+    let diags = lint(
+        "fn caller(m: Map[i64, i64]) -> Result[i64, AllocError] {\n\
+             let r: Result[Option[i64], AllocError] = Result.Ok(m.get(1));\n\
+             r?;\n\
+             return Result.Ok(0);\n\
+         }",
+    );
+    assert_eq!(diags.len(), 1, "expected one warning, got: {diags:?}");
+}
