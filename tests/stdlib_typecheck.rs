@@ -63,7 +63,7 @@ fn check_standalone(module: &str, src: &str) -> (Vec<String>, Vec<String>) {
     let tc_errs = tc
         .errors
         .iter()
-        .map(|e| format!("[{:?}] {}", &e.kind, e.message))
+        .map(|e| format!("[{:?}] {}", e.kind, e.message))
         .collect();
     (parse_errs, tc_errs)
 }
