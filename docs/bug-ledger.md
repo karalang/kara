@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 285 | 0 |
-| leak | 194 | 1 |
+| leak | 194 | 0 |
 | missing-feature | 167 | 0 |
 | run-vs-build | 159 | 1 |
 | codegen-gap | 138 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1032 | 5 |
+| codegen | 1032 | 4 |
 | typecheck | 252 | 0 |
 | interp | 180 | 0 |
 | ownership | 65 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1561 surfaced · 5 open · 1531 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-25). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1561 surfaced · 4 open · 1532 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-25). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,7 +134,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1561 surfaced
 | B-2026-08-25-3 | 2026-08-25 | codegen | medium | `codegen_tests::vec_mutation_methods_bounds_check_out_of_range_index` IS FLAKY, and it fails by showing exactly the PRE-FIX symptom of the high-severity bug it guards: `v.insert(7i64, 9i64)` produced no `Vec.insert index out of bounds` panic, stdout empty, stderr `free(): invalid pointer`. Observed once in a full `cargo test --features llvm` run; the same test then passed 3/3 in isolation, 3198/3198 in a codegen-only run, and the next FULL run was green at 125 suites / 15090 tests. | roadmap.md |
 | B-2026-08-25-13 | 2026-08-25 | codegen | high | `lower_stdlib_source` DISCARDS the typecheck errors it computes for every baked stdlib module, so a baked module can ship code `karac check` rejects in user programs -- which is how cli.kara shipped four borrowed-String-into-owned-field stores that DOUBLE-FREED when compiled. The naive fail-closed gate is a FALSE POSITIVE on pool.kara; see detail for what a real fix needs. | roadmap.md |
 | B-2026-08-25-15 | 2026-08-25 | codegen+runtime | high | Returning a heap-bearing FIELD out of a BORROWED match payload (`return pv.value` where `pv` is bound from `.get()` on a `ref self` receiver) MOVES the buffer instead of copying, so the returned String and the still-live owner both free it. 17 lines, no Result/Env/stdlib; interpreter is correct. Found via std.cli's `get_string`, which is the last AOT blocker. | roadmap.md |
-| B-2026-08-25-17 | 2026-08-25 | codegen | medium | A DISCARDED method-call result that owns heap is never freed: `h.xs.pop();` as a bare expression statement leaks the popped element's buffer (8 bytes in 1 allocation for a `Vec[Vec[i64]]` element) under LeakSanitizer. Binding the result (`let _v = h.xs.pop();`) or matching on it is clean, so it is the discarding that leaks, not the pop. | — |
 
 ### Relocated (1)
 
@@ -165,9 +164,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1561 surfaced
 
 </details>
 
-### Fixed (1531)
+### Fixed (1532)
 
-<details><summary>1531 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1532 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -18262,6 +18261,39 @@ MEASURED, against main at bf1f793:
 The one remaining failure is B-2026-08-25-17 (a discarded call result), untouched by this and a different family.
 
 REGRESSION TEST: `asan_receiver_temporary_drop_frees_its_elements` in tests/memory_sanitizer.rs (ASAN + LeakSanitizer). Verified RED pre-fix at 58 bytes in 5 allocations. Case (a) uses three DIFFERENT element sizes deliberately -- see the correction below for why that is load-bearing rather than cosmetic. (c) is the bound-receiver control that localises the fault to the temporary path. |
+| B-2026-08-25-17 | codegen | medium | A DISCARDED method-call result that owns heap is never freed: `h.xs.pop();` as a bare expression statement leaks the popped element's buffer (8 bytes… | FIXED by c8753cd.
+
+THE ROW'S FIRST INSTRUCTION WAS TO ESTABLISH SCOPE BEFORE FIXING, on the
+theory that `pop()` was a convenient producer and the class was wider.
+MEASURING MADE IT NARROWER. A 10-case producer matrix at top level --
+`v.pop()`, `v.remove(i)`, `v.swap_remove(i)`, `Map.remove`, and
+functions/methods returning `String` / `Vec` / an owning struct, each
+discarded -- is entirely CLEAN under LSan, as are a NON-generic impl
+method, a generic FREE FUNCTION, a plain local rebind, and a scalar `T`.
+
+TRIGGER: a generic IMPL METHOD whose receiver was rebound from `self`
+(`let mut h = self`) -- the B-2026-08-25-7 shape, whose fix (cbc545f) is in
+and closed the sibling-DISPATCH half only. So this is not "discarded values
+leak"; it is one more consumer of a pre-monomorphization table read from
+inside a monomorph.
+
+ROOT CAUSE: `enum_inst_type_exprs` is span-keyed and PRE-mono, so in the
+monomorph it holds the generic `Option[T]`. `option_inline_payload_elem`
+cannot read a payload element off that, every tracker in
+`track_discarded_temp_cleanup` declined, and the temp fell through to
+`materialize_owned_temp`, which does not free it in this shape. Rewriting
+the bare param names through the active monomorph substitution
+(`subst_monomorph_type_params`) makes `T` concrete.
+
+THE GATE IS LOAD-BEARING, NOT DEFENSIVE, and this is the part worth
+reading before touching this code. The fix is a SEPARATE last-resort
+tracker gated to an impl-method monomorph (`enum_inst_var_types` carries a
+"self" entry only there). TWO earlier attempts failed: substituting inside
+the existing inline-Option tracker, and then running that substitution as a
+last resort. BOTH turned a CLEAN generic free-function case into a 16-byte
+leak, because `track_discarded_temp_cleanup`'s chain is MUTUALLY EXCLUSIVE
+-- claiming a temp there displaces the handler that was already freeing it.
+A handler that claims MORE is not strictly better. |
 
 </details>
 
