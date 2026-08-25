@@ -103,14 +103,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | perf | 84 | 0 |
 | other | 60 | 1 |
 | soundness | 58 | 0 |
-| crash | 55 | 0 |
+| crash | 56 | 0 |
 | use-after-free | 20 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1022 | 3 |
+| codegen | 1023 | 3 |
 | typecheck | 252 | 1 |
 | interp | 180 | 0 |
 | ownership | 65 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1551 surfaced · 4 open · 1522 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-25). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1552 surfaced · 4 open · 1523 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-25). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (4)
 
@@ -164,9 +164,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1551 surfaced
 
 </details>
 
-### Fixed (1522)
+### Fixed (1523)
 
-<details><summary>1522 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1523 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -18123,6 +18123,7 @@ REGRESSION TEST `e2e_mut_ref_self_sibling_call_in_generic_impl_mutates_the_recei
 
 NOT COVERED, filed separately as B-2026-08-25-7: the row's "POSSIBLY-RELATED" note was right to warn against assuming one fix covers both. A generic method that rebinds an OWNED receiver to a local (`let mut h = self`) and drains through the sibling returns EMPTY STRINGS at `T = String` under the compiled backends. Verified byte-identical before and after this fix, so it is untouched by it and is a distinct defect. |
 | B-2026-08-25-6 | codegen | low | A BRANCHING `break` carrier that owns heap is still refused: `break if c { Node { v: 4 } } else { Node { v: 5 } }` fails module verification while th… | FIXED by e01dce4. `break_value_is_fresh_owned_handle` now recurses through `If` / `IfLet` / `Match` / `Block` / `Seq` / `Unsafe` tails. Exactly one tail runs, but the result slot is written once for all of them, so EVERY tail has to manufacture ownership -- an ALL-tails conjunction. An `if` with no `else` declines (it yields unit and can carry nothing) and an empty arm list is guarded explicitly, since `all` over an empty iterator is vacuously true and would claim ownership of a value no arm produces. No emission changed: this is still permission, not mechanism. |
+| B-2026-08-25-8 | codegen | high | A MUTUAL type cycle through a `Vec` CRASHES THE COMPILER: `struct Inner { owner: Outer }` + `struct Outer { kids: Vec[Inner] }` passes `karac check`… | FIXED by 39b159e. `field_copy_supported`'s `Vec`/`VecDeque` arm now asks whether unrolling the emitter's per-element struct copy TERMINATES (`vec_elem_copy_emission_terminates`) rather than whether the element type is already on the walk stack. It declines when the element is an ancestor (B-2026-07-28-3's direct case), can REACH an ancestor (the mutual cycle this row is about), or reaches itself. That makes the analysis walk exactly as deep as the emitter, which is what B-2026-07-28-3's own comment states it intended. An ACYCLIC element type still answers "terminates" and keeps the arm's unconditional `true`, so programs that compile today emit byte-identical IR; only a genuine cycle newly declines, falling back to caller-retains like every other non-copyable field shape. Both cycle shapes are pinned by `tests/codegen.rs::test_e2e_mutual_type_cycle_through_vec_compiles` and `..._direct_type_cycle_...`, so a later edit cannot fix one by regressing the other. SUITES: llvm 15114 passed / 0 failed, default 9895 / 0, clippy clean on both feature legs, fmt clean. |
 
 </details>
 
