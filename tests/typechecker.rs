@@ -45315,3 +45315,122 @@ fn test_assoc_fn_unsatisfied_bound_still_rejected_at_call_site() {
         "an unsatisfied bound on a concrete instantiation must still be rejected"
     );
 }
+
+// ── Un-inferrable element type from an empty collection literal
+//    (B-2026-08-25-26) ──────────────────────────────────────────
+//
+// An empty literal leaves the element type un-inferred, which becomes
+// `Type::Error` and then flows into every downstream bound check. The
+// bound-discharge path in `method_user_impl.rs` rendered that as an
+// unsatisfied bound: it blamed the bound rather than the inference
+// failure, printed `<error>` as though it were a type name, and listed
+// every type implementing the trait — none of which is the fix.
+//
+// The sibling discharge path in `exprs.rs` already skips `Type::Error`
+// ("already-error — upstream diagnostics handle. Avoid noise."); this
+// gate was never given the same guard. It cannot skip outright, because
+// the BARE `[]` form has no upstream report, so skipping would accept a
+// broken program in silence.
+
+const EMPTY_LITERAL_W: &str = "\
+struct W[T] { xs: Vec[T] }
+impl[T: Ord] W[T] {
+    fn from(v: Vec[T]) -> W[T] { W { xs: v } }
+    fn size(ref self) -> i64 { self.xs.len() }
+}
+";
+
+#[test]
+fn empty_bare_literal_reports_inference_failure_not_a_bound_failure() {
+    let errors = typecheck_errors(&format!(
+        "{EMPTY_LITERAL_W}fn main() {{ let g = W.from([]); println(g.size()); }}"
+    ));
+    assert_eq!(errors.len(), 1, "expected exactly one error: {errors:?}");
+    let msg = &errors[0].message;
+    assert!(
+        msg.contains("could not be inferred"),
+        "must name the inference failure, got: {msg}"
+    );
+    // The three specific defects, each pinned so a regression is legible.
+    assert!(
+        !msg.contains("<error>"),
+        "must not print the error type as a type name, got: {msg}"
+    );
+    assert!(
+        !msg.contains("is not satisfied"),
+        "must not blame the trait bound, got: {msg}"
+    );
+    assert!(
+        !msg.contains("is implemented by"),
+        "must not list implementors — none of them is the fix, got: {msg}"
+    );
+}
+
+#[test]
+fn empty_prefix_literal_reports_once_at_the_literal() {
+    // `Vec[]` already reports the right thing at the literal's own span.
+    // The bound gate used to restate it in different, wrong words, so the
+    // user got an accurate diagnostic followed by a contradictory one.
+    let errors = typecheck_errors(&format!(
+        "{EMPTY_LITERAL_W}fn main() {{ let g = W.from(Vec[]); println(g.size()); }}"
+    ));
+    assert_eq!(
+        errors.len(),
+        1,
+        "the root cause must be reported exactly once: {errors:?}"
+    );
+    assert!(
+        errors[0]
+            .message
+            .contains("E_EMPTY_PREFIX_LITERAL_NEEDS_ANNOTATION"),
+        "the surviving report must be the literal-anchored one, got: {}",
+        errors[0].message
+    );
+}
+
+#[test]
+fn annotated_empty_literal_still_typechecks() {
+    // The prescribed fix must actually work, or the diagnostic is a lie.
+    typecheck_ok(&format!(
+        "{EMPTY_LITERAL_W}fn main() {{ let e: Vec[i64] = []; let g = W.from(e); println(g.size()); }}"
+    ));
+}
+
+#[test]
+fn unbounded_impl_with_empty_literal_is_unchanged() {
+    // The un-inferred element type is only visible when a bound has to be
+    // discharged. With no bound there is nothing to report, and this
+    // compiles today — the fix must not start rejecting it.
+    typecheck_ok(
+        "struct W[T] { xs: Vec[T] }
+         impl[T] W[T] {
+             fn from(v: Vec[T]) -> W[T] { W { xs: v } }
+             fn size(ref self) -> i64 { self.xs.len() }
+         }
+         fn main() { let g = W.from([]); println(g.size()); }",
+    );
+}
+
+#[test]
+fn a_genuinely_unsatisfied_bound_still_names_the_bound() {
+    // The guard keys on the ERROR type specifically. A real bound failure
+    // on a CONCRETE type must keep its original message, including the
+    // implementors list that is genuinely useful there.
+    let errors = typecheck_errors(
+        "struct W[T] { xs: Vec[T] }
+         impl[T: Ord] W[T] {
+             fn from(v: Vec[T]) -> W[T] { W { xs: v } }
+             fn size(ref self) -> i64 { self.xs.len() }
+         }
+         fn main() { let e: Vec[f64] = [1.0]; let g = W.from(e); println(g.size()); }",
+    );
+    let joined = errors
+        .iter()
+        .map(|e| e.message.clone())
+        .collect::<Vec<_>>()
+        .join(" | ");
+    assert!(
+        joined.contains("is not satisfied"),
+        "a concrete unsatisfied bound must still be reported as one, got: {joined}"
+    );
+}

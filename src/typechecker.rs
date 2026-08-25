@@ -2386,6 +2386,14 @@ pub struct TypeChecker<'a> {
     /// the injected copy, and the skip corrupted its lowering — broke the
     /// `e2e_tracing_*` / `ordering` codegen).
     pub(super) compiling_stdlib: bool,
+    /// Set once [`Self::report_empty_prefix_literal`] has reported an
+    /// un-inferrable empty collection literal, so the bound-discharge path
+    /// does not report the SAME root cause a second time in different words
+    /// (B-2026-08-25-26). An un-inferred element type becomes `Type::Error`,
+    /// which then flows into every downstream bound check; without this the
+    /// user sees the accurate literal-anchored diagnostic followed by a
+    /// `` `<error>` does not implement `Ord` `` that names the wrong problem.
+    pub(super) reported_uninferrable_empty_literal: bool,
     /// When `Some(name)`, `register_baked_stdlib` skips the [`crate::prelude::STDLIB_PROGRAMS`]
     /// entry whose key is `name` (e.g. `"cli.kara"`), so a baked module
     /// type-checked as its own program does not see an INJECTED SECOND COPY of
@@ -2565,6 +2573,7 @@ impl<'a> TypeChecker<'a> {
             closure_param_seeds: FxHashMap::default(),
             current_fn_stdlib_origin: false,
             compiling_stdlib: false,
+            reported_uninferrable_empty_literal: false,
             stdlib_self_module: None,
             lint_override_stack: Vec::new(),
             cli_lint_overrides: crate::lints::CliLintOverrides::default(),
@@ -4103,6 +4112,9 @@ impl<'a> TypeChecker<'a> {
             msg.push_str(&format!(", or use `{ctor}`"));
         }
         self.type_error(msg, *span, TypeErrorKind::TypeMismatch);
+        // The root cause is now on the record, anchored at the literal itself.
+        // Suppress the downstream restatement (B-2026-08-25-26).
+        self.reported_uninferrable_empty_literal = true;
     }
 
     /// Default `_` arm body for per-type `infer_*_method` dispatch on arms

@@ -715,6 +715,38 @@ impl<'a> super::TypeChecker<'a> {
                         .map(|(pn, b, cty)| (imp.trait_name.clone(), pn, b, cty))
                 });
                 if let Some((trait_of_impl, param_name, bound, concrete)) = bound_gate {
+                    // An ERROR-typed argument means the type parameter was never
+                    // INFERRED, not that some concrete type fails the bound
+                    // (B-2026-08-25-26). `W.from([])` on `impl[T: Ord] W[T]`
+                    // leaves `T = Type::Error`, and rendering the bound message
+                    // for it produced three wrong things at once: it blamed the
+                    // bound rather than the inference failure, printed `<error>`
+                    // as though it were a type name, and then listed every type
+                    // implementing `Ord` — none of which is the fix. The fix is
+                    // an annotation on the literal.
+                    //
+                    // The sibling discharge path in `exprs.rs` already skips
+                    // `Type::Error` for exactly this reason ("already-error —
+                    // upstream diagnostics handle. Avoid noise."); this gate was
+                    // simply never given the same guard. It cannot skip outright,
+                    // though: when the un-inferrable literal is the BARE `[]`
+                    // form nothing upstream reports it, so skipping would accept
+                    // the program in silence. So: stay silent when the root cause
+                    // is already on the record (the `Vec[]` prefix form, which
+                    // reports at the literal's own span), and otherwise say what
+                    // is actually wrong.
+                    if matches!(concrete, Type::Error) {
+                        if !self.reported_uninferrable_empty_literal {
+                            let msg = format!(
+                                "method '{}' is not callable on this `{}`: the type \
+                                 argument for `{}` could not be inferred — annotate the \
+                                 value it came from, e.g. `let v: Vec[i64] = [];`",
+                                method, type_name, param_name
+                            );
+                            self.type_error(msg, *span, TypeErrorKind::TypeMismatch);
+                        }
+                        return Type::Error;
+                    }
                     let bound_trait = bound.path.last().cloned().unwrap_or_default();
                     let detail = self.render_unsatisfied_bound_message(
                         &param_name,
