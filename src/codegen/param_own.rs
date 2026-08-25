@@ -1802,7 +1802,25 @@ impl<'ctx> super::Codegen<'ctx> {
             // String / Map / Set / inner-Vec buffer; other element shapes stay
             // outer-only (`None`), matching the drop's outer-only handling for
             // them.
-            let inner_te = crate::codegen::helpers::vec_inner_type_expr(fte);
+            // B-2026-08-25-10 — resolve the element through the active
+            // monomorph substitution BEFORE classifying it. Inside
+            // `impl[T] Heap[T]`, a field declared `xs: Vec[T]` yields the bare
+            // param `T`, which is neither String nor Vec nor Map/Set by name,
+            // so `elem_te_needs_direct_recursive_drain` said "no" and the
+            // entry-copy stayed outer-only. The mono's struct drop, however,
+            // resolves `T` and IS element-deep, so the copy aliased the
+            // caller's element buffers and both drains freed them — the exact
+            // copy-depth/drop-depth mismatch the comment above warns about,
+            // reached through the one path that erases the element's identity.
+            //
+            // `subst_monomorph_type_params` consults `type_subst_type_exprs`
+            // first, so `T` recovers its FULL concrete type (`Vec[i64]`, not
+            // the head-only `Vec` that `type_subst_names` would give) — which
+            // the recursive copy needs to size the inner element. Outside a
+            // monomorph it is a no-op clone, so every concrete field keeps its
+            // existing behaviour.
+            let inner_te = crate::codegen::helpers::vec_inner_type_expr(fte)
+                .map(|te| self.subst_monomorph_type_params(&te));
             let deep_elem_te = inner_te
                 .clone()
                 .filter(Self::elem_te_needs_direct_recursive_drain);

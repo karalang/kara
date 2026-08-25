@@ -52941,4 +52941,60 @@ fn main() {
             "builtin-fs-temp-path-arg",
         );
     }
+
+    /// B-2026-08-25-10 — a generic impl method that moves a heap-owning field
+    /// out of an owned `self` double-freed every element buffer.
+    ///
+    /// The owned by-value aggregate param is deep-copied at entry so the callee
+    /// owns it, and the comment on that code states the invariant: copy-depth
+    /// must equal drop-depth. It did not. The copy classified the element by
+    /// reading the field's declared type, which inside `impl[T] Heap[T]` is the
+    /// bare param `T` — neither String nor Vec nor Map/Set by name — so it
+    /// stayed outer-only and memcpy'd the element control blocks. The
+    /// monomorph's struct drop DOES resolve `T` and walks elements, so the
+    /// caller and the callee's copy both freed the same element buffers.
+    ///
+    /// Case (b) is heap-allocated on purpose. An earlier narrowing of this bug
+    /// recorded "`T = String` is correct", which was a false negative: string
+    /// LITERALS live in static rodata with cap 0, so the second free is a no-op
+    /// and a literal-only fixture passes while the bug is fully present. Built
+    /// via f-string so the elements own real buffers.
+    ///
+    /// Controls (c) and (d) were both correct pre-fix and pin the diagnosis: a
+    /// scalar element has no inner buffer to alias, and the non-generic twin
+    /// never erases the element type. Verified RED pre-fix — (a) aborted with
+    /// `attempting double-free` under ASAN, naming `karac_drop_Vec_i64` inside
+    /// `__karac_drop_struct_Heap$Vec_i64`.
+    #[test]
+    fn asan_generic_owned_self_field_move_out_does_not_double_free_elements() {
+        assert_clean_asan_run(
+            r#"
+struct Heap[T] { xs: Vec[T] }
+impl[T] Heap[T] { fn into_vec(self) -> Vec[T] { self.xs } }
+struct PlainHeap { xs: Vec[Vec[i64]] }
+impl PlainHeap { fn into_vec(self) -> Vec[Vec[i64]] { self.xs } }
+fn main() {
+    // (a) nested-Vec element: the filed shape.
+    let a = Heap { xs: [[1, 2], [3], [4, 5, 6]] };
+    let av = a.into_vec();
+    println(f"a={av.len()} {av[0].len()} {av[2].len()}");
+    // (b) HEAP-allocated String elements (literals would pass while broken).
+    let mut ss: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < 3 { ss.push(f"item{i}"); i = i + 1; }
+    let b = Heap { xs: ss };
+    let bv = b.into_vec();
+    println(f"b={bv.len()} {bv[0]}");
+    // (c) scalar control: correct before the fix.
+    let c = Heap { xs: [7, 8] };
+    println(f"c={c.into_vec().len()}");
+    // (d) NON-generic control at the same nested-Vec element type.
+    let d = PlainHeap { xs: [[1], [2]] };
+    println(f"d={d.into_vec().len()}");
+}
+"#,
+            &["a=3 2 3", "b=3 item0", "c=2", "d=2"],
+            "generic-owned-self-field-move-out",
+        );
+    }
 }
