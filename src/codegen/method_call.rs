@@ -9698,6 +9698,23 @@ impl<'ctx> super::Codegen<'ctx> {
         // localises the fault to this guard rather than to the drop machinery.
         // Invisible at -O2, where the allocation is deleted outright: the
         // vacuous-fixture hazard this row is about, caught by its own -O0 leg.
+        // B-2026-08-25-16 — drop the materialized receiver temp at its recorded
+        // INSTANTIATION, not by bare name. `track_struct_var` is
+        // `track_struct_var_inst(.., None)`, so `Heap { .. }.take()` got the
+        // name-shared `__karac_drop_struct_Heap`, which resolves the
+        // `xs: Vec[T]` field from the erased `T`, classifies it outer-only, and
+        // frees the outer buffer while never walking the elements — the whole
+        // container's element buffers leaked, one per element.
+        //
+        // The instantiation is already in hand: the block above seeds
+        // `enum_inst_var_types[synth]` precisely so the CALLEE is selected at
+        // the right monomorph (B-2026-08-06-12). Only the temp's own drop was
+        // still keyed by name, so a program emitted the correct
+        // `__karac_drop_struct_Heap$Vec_i64` for its named bindings and the
+        // erased one for its temporaries. Same defect as B-2026-08-25-14, one
+        // site over: there it was the callee's owned param, here the caller's
+        // receiver temp.
+        let recv_inst = self.type_decls.enum_inst_var_types.get(&synth).cloned();
         let receiver_is_fresh_owned = self.expr_yields_fresh_owned_temp(object)
             || matches!(&object.kind, ExprKind::StructLiteral { .. });
         if receiver_is_fresh_owned {
@@ -9748,9 +9765,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     if let Some(f) = self.field_bodies_fn_for_owned_temp(&type_name) {
                         self.track_user_drop_var_with_fn(&type_name, "__urecv_drop_tmp", slot, f);
                     }
-                    self.track_struct_var(&type_name, slot);
+                    self.track_struct_var_inst(&type_name, slot, recv_inst.clone());
                 } else {
-                    self.track_struct_var(&type_name, slot);
+                    self.track_struct_var_inst(&type_name, slot, recv_inst.clone());
                 }
             }
         }

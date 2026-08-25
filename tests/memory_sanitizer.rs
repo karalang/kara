@@ -53184,4 +53184,65 @@ fn main() {
             "owned-aggregate-param-drop-elements",
         );
     }
+
+    /// B-2026-08-25-16 — a materialized RECEIVER TEMPORARY was dropped by bare
+    /// name, so its element buffers leaked.
+    ///
+    /// `Heap { .. }.take()` materializes the receiver into a `__urecv_tmp` slot
+    /// and drop-tracks it via `track_struct_var`, i.e.
+    /// `track_struct_var_inst(.., None)`. The name-shared
+    /// `__karac_drop_struct_Heap` resolves the `xs: Vec[T]` field from the
+    /// erased `T` and is outer-only: it freed the outer buffer and never walked
+    /// the elements. The instantiation was already in hand — the same block
+    /// seeds `enum_inst_var_types[synth]` so the CALLEE is selected at the right
+    /// monomorph — so a program emitted the correct `$Vec_i64` drop for its
+    /// named bindings and the erased one for its temporaries.
+    ///
+    /// (c) is the control that localises it: the identical call on a BOUND
+    /// receiver was always clean, because the `let` site records the
+    /// instantiation and the binding's drop is selected from it. Only the
+    /// temporary took the name-keyed path.
+    ///
+    /// (a) uses three DIFFERENT element sizes on purpose. With uniform sizes the
+    /// leak report cannot say which buffers survived, and an earlier reading of
+    /// this bug mis-recorded "only two of three leak" from a uniform fixture —
+    /// distinct sizes show all three, and the outer buffer's absence from the
+    /// report is what proves the temp was dropped outer-only rather than not at
+    /// all. Verified RED pre-fix: 58 bytes in 5 allocations — (a)'s 8 + 16 + 24
+    /// plus (b)'s two surviving 5-byte Strings.
+    #[test]
+    fn asan_receiver_temporary_drop_frees_its_elements() {
+        assert_clean_asan_run(
+            r#"
+struct Heap[T] { xs: Vec[T] }
+impl[T] Heap[T] {
+    fn take(self) -> Option[T] { let mut h = self; h.xs.pop() }
+}
+struct PlainHeap { xs: Vec[Vec[i64]] }
+impl PlainHeap {
+    fn take(self) -> Option[Vec[i64]] { let mut h = self; h.xs.pop() }
+}
+fn main() {
+    // (a) TEMPORARY receiver, nested-Vec elements at three distinct sizes.
+    match Heap { xs: [[1], [2, 2], [3, 3, 3]] }.take() {
+        Some(v) => { println(f"a={v.len()}"); } None => {}
+    }
+    // (b) TEMPORARY receiver, HEAP-allocated String elements.
+    let mut ss: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < 3 { ss.push(f"item{i}"); i = i + 1; }
+    match Heap { xs: ss }.take() { Some(v) => { println(f"b={v}"); } None => {} }
+    // (c) control: BOUND receiver, same everything. Clean before the fix.
+    let c = Heap { xs: [[9], [8, 8]] };
+    match c.take() { Some(v) => { println(f"c={v.len()}"); } None => {} }
+    // (d) control: NON-generic twin with a temporary receiver.
+    match PlainHeap { xs: [[1], [2]] }.take() { Some(v) => { println(f"d={v.len()}"); } None => {} }
+    // (e) control: scalar element, nothing inner to own.
+    match Heap { xs: [5, 6, 7] }.take() { Some(v) => { println(f"e={v}"); } None => {} }
+}
+"#,
+            &["a=3", "b=item2", "c=2", "d=1", "e=7"],
+            "receiver-temporary-drop-elements",
+        );
+    }
 }
