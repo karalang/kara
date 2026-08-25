@@ -97,7 +97,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 167 | 0 |
 | run-vs-build | 159 | 1 |
 | codegen-gap | 138 | 0 |
-| double-free | 138 | 1 |
+| double-free | 138 | 0 |
 | diagnostics | 104 | 0 |
 | false-positive | 96 | 0 |
 | perf | 84 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1032 | 4 |
+| codegen | 1032 | 3 |
 | typecheck | 252 | 0 |
 | interp | 180 | 0 |
 | ownership | 65 | 0 |
@@ -118,22 +118,21 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | cli | 62 | 0 |
 | autopar | 55 | 0 |
 | parser | 41 | 0 |
-| runtime | 32 | 1 |
+| runtime | 32 | 0 |
 | resolver | 26 | 0 |
 | effect | 23 | 0 |
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1561 surfaced · 4 open · 1532 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-25). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1561 surfaced · 3 open · 1533 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-25). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-25-2 | 2026-08-25 | codegen | high | `std.cli` IS NOT AOT-COMPILABLE: every pure-Kāra INSTANCE method on its types (`Arg.required`, `Parser.about`, ... ) dies in codegen with `no handler for method '<m>' on variable '<v>'`, so `karac check` passes and `karac build` fails -- while roadmap.md marks the feature `[x]` done and deferred.md ships it at v1 | roadmap.md:531 (`std.cli` marked [x]) + deferred.md § std.cli; codegen method dispatch falls through to the catch-all in src/codegen/method_call.rs for these receivers |
 | B-2026-08-25-3 | 2026-08-25 | codegen | medium | `codegen_tests::vec_mutation_methods_bounds_check_out_of_range_index` IS FLAKY, and it fails by showing exactly the PRE-FIX symptom of the high-severity bug it guards: `v.insert(7i64, 9i64)` produced no `Vec.insert index out of bounds` panic, stdout empty, stderr `free(): invalid pointer`. Observed once in a full `cargo test --features llvm` run; the same test then passed 3/3 in isolation, 3198/3198 in a codegen-only run, and the next FULL run was green at 125 suites / 15090 tests. | roadmap.md |
 | B-2026-08-25-13 | 2026-08-25 | codegen | high | `lower_stdlib_source` DISCARDS the typecheck errors it computes for every baked stdlib module, so a baked module can ship code `karac check` rejects in user programs -- which is how cli.kara shipped four borrowed-String-into-owned-field stores that DOUBLE-FREED when compiled. The naive fail-closed gate is a FALSE POSITIVE on pool.kara; see detail for what a real fix needs. | roadmap.md |
-| B-2026-08-25-15 | 2026-08-25 | codegen+runtime | high | Returning a heap-bearing FIELD out of a BORROWED match payload (`return pv.value` where `pv` is bound from `.get()` on a `ref self` receiver) MOVES the buffer instead of copying, so the returned String and the still-live owner both free it. 17 lines, no Result/Env/stdlib; interpreter is correct. Found via std.cli's `get_string`, which is the last AOT blocker. | roadmap.md |
 
 ### Relocated (1)
 
@@ -164,9 +163,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1561 surfaced
 
 </details>
 
-### Fixed (1532)
+### Fixed (1533)
 
-<details><summary>1532 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1533 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -18247,6 +18246,7 @@ ELEMENT-TYPE CORRECTION vs B-2026-08-25-11: `T = String` IS affected here, and t
 REGRESSION TEST: `asan_owned_aggregate_param_drop_frees_its_entry_copied_elements` in tests/memory_sanitizer.rs (ASAN + LeakSanitizer). Verified RED pre-fix at 63 bytes in 6 allocations -- (a)'s three Vec buffers (16 + 8 + 24) plus (b)'s three String bodies (5 each), which is the whole leak accounted for exactly rather than approximately.
 
 VACUITY NOTE: the method must transfer NOTHING out. Any method that returns or drains part of the container routes ownership to a binding whose drop is already correct, and the fixture passes pre-fix. |
+| B-2026-08-25-15 | codegen+runtime | high | Returning a heap-bearing FIELD out of a BORROWED match payload (`return pv.value` where `pv` is bound from `.get()` on a `ref self` receiver) MOVES t… | FIXED by 55f16cb. `maybe_defensive_copy_param_arg`'s borrowed-receiver FieldAccess arm (src/codegen/runtime.rs) now admits `borrowed_agg_payload_struct_vars` — the third root class of one shape, alongside `ref_params` (the original) and `for_loop_owned_agg_vars` (added by B-2026-08-01-28 with the same rationale). A one-root widening, not the conditional-exclusion surgery the previous entry proposed; see the CORRECTION below. Regression pins: `e2e_borrow_payload_field_direct_consume_no_double_free` (tests/codegen.rs, all three consume spellings plus a trailing re-read that proves the container survived) and `asan_borrow_payload_field_direct_consume_no_double_free` (tests/memory_sanitizer.rs, 300 iterations under LSan — the leak gate for the widening's mirror-image failure). |
 | B-2026-08-25-16 | codegen | medium | An aggregate TEMPORARY used as the receiver of an owned-`self` method is dropped with the UNMANGLED outer-only drop (`__karac_drop_struct_Heap`), so… | FIXED by a9856f1. ROOT CAUSE: the materialized receiver temporary is drop-tracked by BARE NAME. `Heap { .. }.take()` stores the receiver into a `__urecv_tmp` slot (src/codegen/method_call.rs) and calls `track_struct_var(&type_name, slot)`, which is `track_struct_var_inst(.., None)`. The resulting name-shared `__karac_drop_struct_Heap` resolves the `xs: Vec[T]` field from the erased bare `T`, classifies it outer-only, and frees the outer buffer while never walking the elements -- so every element buffer leaked, one per element.
 
 The instantiation was ALREADY IN HAND: the same block seeds `enum_inst_var_types[synth]` a few lines above, precisely so the CALLEE is selected at the right monomorph (B-2026-08-06-12). Only the temp's own drop was still name-keyed, which is why one program emitted the correct `__karac_drop_struct_Heap$Vec_i64` for its named bindings and the erased drop for its temporaries.
