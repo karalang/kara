@@ -35572,6 +35572,9 @@ fn main() {
         use karac::codegen::{compile_to_object_with_options, link_executable};
         use std::sync::atomic::{AtomicU64, Ordering};
         static COUNTER: AtomicU64 = AtomicU64::new(0);
+        /// Per-process nonce for E2E artifact paths — see the path construction
+        /// below (B-2026-08-25-3).
+        static E2E_NONCE: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
 
         // Parse errors are programming bugs in the test source, not a
         // legitimate "skip" condition — panic with a clear message so
@@ -35655,8 +35658,27 @@ fn main() {
         }
 
         let id = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let obj_path = format!("/tmp/karac_e2e_{}_{}.o", std::process::id(), id);
-        let exe_path = format!("/tmp/karac_e2e_{}_{}", std::process::id(), id);
+        // B-2026-08-25-3 — the path carries a per-PROCESS nonce as well as the
+        // pid and the counter. pid+counter is unique among LIVE processes, but
+        // it is NOT unique over time: a killed run leaks its artifacts (cleanup
+        // only runs on the success path — 51 stale `/tmp/karac_e2e_*` files were
+        // present when this was written), and a later process that reuses the
+        // pid restarts the counter at 0, landing on exactly those paths. The
+        // nonce makes that aliasing impossible rather than unlikely.
+        let nonce = *E2E_NONCE.get_or_init(|| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| u64::from(d.subsec_nanos()) ^ d.as_secs())
+                .unwrap_or(0)
+        });
+        let obj_path = format!("/tmp/karac_e2e_{}_{}_{}.o", std::process::id(), nonce, id);
+        let exe_path = format!("/tmp/karac_e2e_{}_{}_{}", std::process::id(), nonce, id);
+        // Belt and braces: never inherit a file at either path. If one somehow
+        // exists, executing it would run SOMEBODY ELSE'S PROGRAM and the
+        // assertion would be about the wrong binary entirely — the failure mode
+        // B-2026-08-25-3 has to rule out before it can blame codegen.
+        let _ = std::fs::remove_file(&obj_path);
+        let _ = std::fs::remove_file(&exe_path);
 
         // Codegen failures are also programming bugs (in the compiler or in
         // the test program) — surface them loudly. Link and exec failures
@@ -35676,6 +35698,16 @@ fn main() {
             panic!("codegen failed for test program: {}", e);
         }
         super::common::link_or_skip(link_executable(&obj_path, &exe_path))?;
+        // B-2026-08-25-3 — prove the thing we are about to execute was produced
+        // by the link that just ran. A soft-skip returns above, so reaching here
+        // means the linker reported success; if the file is missing anyway, the
+        // run that follows would be meaningless (or would exec a leftover), and
+        // a loud failure beats an assertion about an unknown binary.
+        assert!(
+            std::path::Path::new(&exe_path).exists(),
+            "link reported success but produced no executable at {exe_path} — \
+             refusing to run whatever else may be at that path"
+        );
 
         let output = output_with_hang_watchdog(std::process::Command::new(&exe_path))?;
 
