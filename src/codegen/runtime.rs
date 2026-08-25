@@ -6639,6 +6639,33 @@ impl<'ctx> super::Codegen<'ctx> {
         // full drop the overlay `_elems` can't provide.
         let (ok_payload_struct_drop, err_payload_struct_drop) =
             self.result_inline_payload_struct_drops(&te);
+        // B-2026-08-25-12 — same boxed gate as `track_inline_result_payload_var`
+        // (B-2026-08-06-26) and the fresh-temp scrutinee site. A payload wider
+        // than `Result`'s 5-word area lives behind a POINTER in w0, so this
+        // action's drop would read that pointer word as the payload struct's
+        // first word and free whatever followed it; the box is owned by the
+        // `BoxedEnumDrop` registered for the value. Gated per half so a boxed
+        // `Ok` beside an inline-heap `Err` keeps the `Err` drop.
+        let (ok_boxed, err_boxed) = Self::result_payload_tes(&te)
+            .map(|(ok_te, err_te)| {
+                (
+                    self.result_payload_is_boxed(&ok_te),
+                    self.result_payload_is_boxed(&err_te),
+                )
+            })
+            .unwrap_or((false, false));
+        let ok_payload_elem_ty = if ok_boxed { None } else { ok_payload_elem_ty };
+        let err_payload_elem_ty = if err_boxed { None } else { err_payload_elem_ty };
+        let ok_payload_struct_drop = if ok_boxed {
+            None
+        } else {
+            ok_payload_struct_drop
+        };
+        let err_payload_struct_drop = if err_boxed {
+            None
+        } else {
+            err_payload_struct_drop
+        };
         if ok_payload_elem_ty.is_none()
             && err_payload_elem_ty.is_none()
             && ok_payload_struct_drop.is_none()

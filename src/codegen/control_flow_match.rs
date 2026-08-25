@@ -10393,6 +10393,46 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap_or((None, None));
         let (ok_payload_struct_drop, err_payload_struct_drop) =
             self.result_inline_payload_struct_drops(&te);
+        // B-2026-08-25-12 — the INLINE action is only correct for a payload
+        // that actually lives inline. A payload wider than `Result`'s 5-word
+        // area is heap-BOXED (`coerce_to_payload_words` spills it behind a
+        // pointer), and this action's drop runs at `&slot.w0` — the word
+        // holding the box POINTER — reading it as the first word of the
+        // payload struct. B-2026-08-06-26 established exactly that and gated
+        // `track_inline_result_payload_var`, but the gate never reached the
+        // other two registration sites, of which this is the FRESH-TEMP
+        // scrutinee one: `match f() { Ok(a) => .. }` over a call returning a
+        // wide payload. Measured on `Out { v1, v2, v3: Vec[String], tag: i64 }`
+        // (10 words): the drop read `{box_ptr, 0, 0}` as Vec #1, zeros as
+        // Vec #2, then ran off the END of the 6-word Result alloca for Vec #3
+        // and called `free` on whatever followed — a SEGFAULT. Two Vecs stayed
+        // inside the alloca and so only mis-freed benign zeros, which is why
+        // the fault looked like it began at three fields.
+        //
+        // Boxed-ness is a property of the payload TYPE, gated per half exactly
+        // as the named-binding path does, so a boxed `Ok` beside an
+        // inline-heap `Err` keeps the `Err` drop it still needs. The box
+        // itself is owned by the `BoxedEnumDrop` registered for this value.
+        let (ok_boxed, err_boxed) = Self::result_payload_tes(&te)
+            .map(|(ok_te, err_te)| {
+                (
+                    self.result_payload_is_boxed(&ok_te),
+                    self.result_payload_is_boxed(&err_te),
+                )
+            })
+            .unwrap_or((false, false));
+        let ok_payload_elem_ty = if ok_boxed { None } else { ok_payload_elem_ty };
+        let err_payload_elem_ty = if err_boxed { None } else { err_payload_elem_ty };
+        let ok_payload_struct_drop = if ok_boxed {
+            None
+        } else {
+            ok_payload_struct_drop
+        };
+        let err_payload_struct_drop = if err_boxed {
+            None
+        } else {
+            err_payload_struct_drop
+        };
         if ok_payload_elem_ty.is_none()
             && err_payload_elem_ty.is_none()
             && ok_payload_struct_drop.is_none()
@@ -10409,8 +10449,16 @@ impl<'ctx> super::Codegen<'ctx> {
         let (ok_payload_elem_agg_drop, err_payload_elem_agg_drop) =
             match Self::result_payload_tes(&te) {
                 Some((ok_te, err_te)) => (
-                    self.vec_payload_elem_agg_drop(&ok_te),
-                    self.vec_payload_elem_agg_drop(&err_te),
+                    if ok_boxed {
+                        None
+                    } else {
+                        self.vec_payload_elem_agg_drop(&ok_te)
+                    },
+                    if err_boxed {
+                        None
+                    } else {
+                        self.vec_payload_elem_agg_drop(&err_te)
+                    },
                 ),
                 None => (None, None),
             };

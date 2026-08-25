@@ -17529,6 +17529,56 @@ fn main() {
     // lengths into the printed result, and the parent's scope-exit
     // cleanup releases the four heap buffers exactly once.
 
+    /// B-2026-08-25-12 — the boxed-payload gate must not trade a segfault for
+    /// a LEAK. Suppressing the bogus inline drop is only correct because the
+    /// `BoxedEnumDrop` registered for the same value owns the box and its
+    /// contents; if that were not so, every `String` in here would leak.
+    ///
+    /// LSan (Linux CI) is the half that actually proves it — a local macOS asan
+    /// run catches the use-after-free side only. Payload is deliberately WIDER
+    /// than `Result`'s 5-word inline area (three `Vec` fields) so it is boxed,
+    /// and carries real heap in two of the three so a missed free is visible.
+    #[test]
+    fn test_boxed_wide_result_payload_match_no_leak_no_double_free() {
+        assert_clean_asan_run(
+            r#"
+struct Err1 { message: String }
+struct Out { v1: Vec[String], v2: Vec[String], v3: Vec[String], tag: i64 }
+
+fn go(n: i64) -> Result[Out, Err1] {
+    if n < 0i64 {
+        return Err(Err1 { message: "negative" });
+    }
+    let mut a: Vec[String] = Vec.new();
+    a.push("alpha");
+    a.push("gamma");
+    let mut b: Vec[String] = Vec.new();
+    b.push("beta");
+    return Ok(Out { v1: a, v2: b, v3: [], tag: n });
+}
+
+fn main() {
+    let mut i = 0i64;
+    while i < 3i64 {
+        match go(i) {
+            Ok(a) => { println(a.v1.len()); }
+            Err(e) => { println(e.message); }
+        }
+        i = i + 1i64;
+    }
+    // The Err half too — its payload is narrow and stays INLINE, so the gate
+    // must remain per-half rather than disarming the whole action.
+    match go(-1i64) {
+        Ok(a) => { println(a.tag); }
+        Err(e) => { println(e.message); }
+    }
+}
+"#,
+            &["2", "2", "2", "negative"],
+            "boxed_wide_result_payload_match",
+        );
+    }
+
     #[test]
     fn test_converging_two_pointer_bce_skip_stays_in_bounds() {
         // B-2026-08-04-8: the converging skip drops BOTH halves of the bounds

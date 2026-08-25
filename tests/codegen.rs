@@ -96750,6 +96750,86 @@ fn main() {
         }
     }
 
+    /// B-2026-08-25-12 — `match f() { Ok(a) => .. }` over a call whose Ok
+    /// payload is WIDER than `Result`'s 5-word inline area segfaulted. The
+    /// payload is heap-BOXED (a pointer in w0), but the fresh-temp scrutinee
+    /// registered the INLINE cleanup, whose drop runs at `&slot.w0` and reads
+    /// that pointer word as the payload struct's first word. With three
+    /// `Vec` fields the read ran off the end of the 6-word `Result` alloca and
+    /// `free`d whatever followed. B-2026-08-06-26 established the class and
+    /// gated the named-binding path; this is the same gate reaching the other
+    /// two registration sites.
+    ///
+    /// Three Vecs is the smallest shape that faults — two stay inside the
+    /// alloca and mis-free only benign zeros — so the count is load-bearing,
+    /// not incidental. `std.cli`'s `Args` has exactly three.
+    #[test]
+    fn test_e2e_match_ok_of_boxed_wide_result_payload_compiles() {
+        let out = run_program(
+            r#"
+struct Err1 { message: String }
+struct Out { v1: Vec[String], v2: Vec[String], v3: Vec[String], tag: i64 }
+struct Src { name: String }
+
+impl Src {
+    fn go(ref self) -> Result[Out, Err1] {
+        return Ok(Out { v1: [], v2: [], v3: [], tag: 7 });
+    }
+}
+
+fn main() {
+    let s = Src { name: "d" };
+    match s.go() {
+        Ok(a) => { println(a.tag); }
+        Err(e) => { println(e.message); }
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "7");
+        }
+    }
+
+    /// The same shape carrying REAL heap in the boxed payload, so the arm has
+    /// something to own and the suppressed inline drop cannot be mistaken for
+    /// "nothing needed freeing". Pairs with the memory_sanitizer twin, which
+    /// is what proves the box is still freed exactly once.
+    #[test]
+    fn test_e2e_match_ok_of_boxed_wide_result_payload_with_heap_reads_back() {
+        let out = run_program(
+            r#"
+struct Err1 { message: String }
+struct Out { v1: Vec[String], v2: Vec[String], v3: Vec[String], tag: i64 }
+
+fn go() -> Result[Out, Err1] {
+    let mut a: Vec[String] = Vec.new();
+    a.push("alpha");
+    let mut b: Vec[String] = Vec.new();
+    b.push("beta");
+    return Ok(Out { v1: a, v2: b, v3: [], tag: 1 });
+}
+
+fn main() {
+    match go() {
+        Ok(a) => {
+            println(a.v1.len());
+            match a.v2.get(0) { Some(s) => { println(s); } None => { } }
+        }
+        Err(e) => { println(e.message); }
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "1
+beta"
+            );
+        }
+    }
+
     /// A user fn whose declared RETURN TYPE names a baked stdlib struct got an
     /// `i64` LLVM signature while its body returned the real aggregate, so the
     /// module failed verification with "Function return type does not match
