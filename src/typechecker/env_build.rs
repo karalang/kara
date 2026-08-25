@@ -861,8 +861,15 @@ impl<'a> super::TypeChecker<'a> {
                 _ => None,
             }
         }
+        // Self-copy exclusion (B-2026-08-25-13): a baked module type-checked as
+        // its own program must not also receive the INJECTED copy of itself, or
+        // every one of its types is declared twice and its own method calls go
+        // ambiguous against identical candidates. Only the verification pass
+        // sets this; the lowering pass leaves it `None` and is unaffected.
+        let self_module = self.stdlib_self_module.as_deref();
         let baked: Vec<Item> = crate::prelude::STDLIB_PROGRAMS
             .iter()
+            .filter(|(name, _)| Some(*name) != self_module)
             .flat_map(|(_, p)| p.items.iter())
             .filter(|it| {
                 if user_types.is_empty() {

@@ -304,6 +304,40 @@ pub fn typecheck_stdlib_module(
     checker.check()
 }
 
+/// Type-check a baked stdlib module as its own program **with the injected
+/// copy of that same module removed** from the prelude.
+///
+/// This is the VERIFICATION peer of [`typecheck_stdlib_module`], and the two
+/// differ only in that env. [`typecheck_stdlib_module`] is what
+/// `codegen::lower_stdlib_source` runs to populate the span-keyed side tables
+/// codegen needs, and it registers the whole prelude — including a second copy
+/// of the module being compiled. That duplicate is harmless to the tables (both
+/// copies agree), but it makes the module's own `.errors` unusable as a
+/// correctness signal: on current `main` it manufactures 10 errors across three
+/// modules (`protobuf` 6 and `cli` 2 `AmbiguousMethod`, each listing two
+/// IDENTICAL candidates; `pool` 2 `E_DROP_DUPLICATE_IMPL`) in modules whose
+/// sources declare each item exactly once.
+///
+/// Excluding the self-copy yields the environment a USER program compiling the
+/// same source would get — the module's own declarations own their names, every
+/// other baked module is still in scope — so the resulting `.errors` mean what
+/// they say. That is what makes a fail-closed gate possible; see
+/// `tests/stdlib_typecheck.rs`, which asserts every lowered module is clean
+/// under this entry point. B-2026-08-25-13.
+///
+/// `module` is the [`crate::prelude::STDLIB_SOURCES`] key, i.e. the file name
+/// (`"cli.kara"`), not the module name (`"cli"`).
+pub fn typecheck_stdlib_module_excluding_self(
+    program: &Program,
+    resolve_result: &ResolveResult,
+    module: &str,
+) -> TypeCheckResult {
+    let checker = TypeChecker::new(program, resolve_result)
+        .compiling_stdlib()
+        .excluding_stdlib_self_copy(module);
+    checker.check()
+}
+
 /// Type-check with CLI-driven build-wide lint level overrides
 /// (slice 4b polish — `-A NAME` / `-W NAME` / `-D NAME` / `-F NAME`
 /// / `-D warnings`). The CLI dispatch in `src/cli.rs` calls this

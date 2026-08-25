@@ -2386,6 +2386,19 @@ pub struct TypeChecker<'a> {
     /// the injected copy, and the skip corrupted its lowering — broke the
     /// `e2e_tracing_*` / `ordering` codegen).
     pub(super) compiling_stdlib: bool,
+    /// When `Some(name)`, `register_baked_stdlib` skips the [`crate::prelude::STDLIB_PROGRAMS`]
+    /// entry whose key is `name` (e.g. `"cli.kara"`), so a baked module
+    /// type-checked as its own program does not see an INJECTED SECOND COPY of
+    /// itself. Only the verification pass sets this
+    /// ([`crate::typecheck_stdlib_module_excluding_self`]); the lowering pass
+    /// leaves it `None` and registers the full prelude exactly as before.
+    ///
+    /// Without the exclusion the module's own `struct Parser` + `impl Parser`
+    /// coexist with the identical injected pair, and every method call on the
+    /// type reports `AmbiguousMethod` against two IDENTICAL candidates (or, for
+    /// a `Drop` impl, `E_DROP_DUPLICATE_IMPL`) — artifacts of the double
+    /// registration, not defects in the module. B-2026-08-25-13.
+    pub(super) stdlib_self_module: Option<String>,
     /// Stack of `lint_overrides` frames for the items currently being
     /// type-checked (slice 4b of the lint-level entry). Frame
     /// pushed at every item-walk entry (`check_function`,
@@ -2552,6 +2565,7 @@ impl<'a> TypeChecker<'a> {
             closure_param_seeds: FxHashMap::default(),
             current_fn_stdlib_origin: false,
             compiling_stdlib: false,
+            stdlib_self_module: None,
             lint_override_stack: Vec::new(),
             cli_lint_overrides: crate::lints::CliLintOverrides::default(),
             fulfilled_expectations: FxHashSet::default(),
@@ -2591,6 +2605,16 @@ impl<'a> TypeChecker<'a> {
     /// this `false` and collision-skips any module it redefines.
     pub fn compiling_stdlib(mut self) -> Self {
         self.compiling_stdlib = true;
+        self
+    }
+
+    /// Exclude the baked-stdlib entry named `module` (e.g. `"cli.kara"`) from
+    /// the prelude injection, so a stdlib module type-checked as its own
+    /// program is not confronted with a duplicate of itself. Pairs with
+    /// [`Self::compiling_stdlib`]; see [`Self::stdlib_self_module`] for why the
+    /// duplicate is not merely redundant but actively error-producing.
+    pub fn excluding_stdlib_self_copy(mut self, module: &str) -> Self {
+        self.stdlib_self_module = Some(module.to_string());
         self
     }
 
