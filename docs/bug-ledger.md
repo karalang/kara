@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 285 | 0 |
-| leak | 194 | 2 |
+| leak | 194 | 1 |
 | missing-feature | 167 | 0 |
 | run-vs-build | 159 | 1 |
 | codegen-gap | 138 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1032 | 6 |
+| codegen | 1032 | 5 |
 | typecheck | 252 | 0 |
 | interp | 180 | 0 |
 | ownership | 65 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1561 surfaced · 6 open · 1530 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-25). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1561 surfaced · 5 open · 1531 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-25). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,7 +134,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1561 surfaced
 | B-2026-08-25-3 | 2026-08-25 | codegen | medium | `codegen_tests::vec_mutation_methods_bounds_check_out_of_range_index` IS FLAKY, and it fails by showing exactly the PRE-FIX symptom of the high-severity bug it guards: `v.insert(7i64, 9i64)` produced no `Vec.insert index out of bounds` panic, stdout empty, stderr `free(): invalid pointer`. Observed once in a full `cargo test --features llvm` run; the same test then passed 3/3 in isolation, 3198/3198 in a codegen-only run, and the next FULL run was green at 125 suites / 15090 tests. | roadmap.md |
 | B-2026-08-25-13 | 2026-08-25 | codegen | high | `lower_stdlib_source` DISCARDS the typecheck errors it computes for every baked stdlib module, so a baked module can ship code `karac check` rejects in user programs -- which is how cli.kara shipped four borrowed-String-into-owned-field stores that DOUBLE-FREED when compiled. The naive fail-closed gate is a FALSE POSITIVE on pool.kara; see detail for what a real fix needs. | roadmap.md |
 | B-2026-08-25-15 | 2026-08-25 | codegen+runtime | high | Returning a heap-bearing FIELD out of a BORROWED match payload (`return pv.value` where `pv` is bound from `.get()` on a `ref self` receiver) MOVES the buffer instead of copying, so the returned String and the still-live owner both free it. 17 lines, no Result/Env/stdlib; interpreter is correct. Found via std.cli's `get_string`, which is the last AOT blocker. | roadmap.md |
-| B-2026-08-25-16 | 2026-08-25 | codegen | medium | An aggregate TEMPORARY used as the receiver of an owned-`self` method is never dropped by the caller, so its heap-owning element buffers leak: `Heap { xs: [[1], [2], [3]] }.take()` leaks 16 bytes in 2 allocations under LeakSanitizer while printing the right answer. Binding the same value to a name first (`let h = Heap { ... }; h.take()`) is clean, so it is the temporary-ness of the receiver that matters, not the method. | — |
 | B-2026-08-25-17 | 2026-08-25 | codegen | medium | A DISCARDED method-call result that owns heap is never freed: `h.xs.pop();` as a bare expression statement leaks the popped element's buffer (8 bytes in 1 allocation for a `Vec[Vec[i64]]` element) under LeakSanitizer. Binding the result (`let _v = h.xs.pop();`) or matching on it is clean, so it is the discarding that leaks, not the pop. | — |
 
 ### Relocated (1)
@@ -166,9 +165,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1561 surfaced
 
 </details>
 
-### Fixed (1530)
+### Fixed (1531)
 
-<details><summary>1530 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1531 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -18249,6 +18248,20 @@ ELEMENT-TYPE CORRECTION vs B-2026-08-25-11: `T = String` IS affected here, and t
 REGRESSION TEST: `asan_owned_aggregate_param_drop_frees_its_entry_copied_elements` in tests/memory_sanitizer.rs (ASAN + LeakSanitizer). Verified RED pre-fix at 63 bytes in 6 allocations -- (a)'s three Vec buffers (16 + 8 + 24) plus (b)'s three String bodies (5 each), which is the whole leak accounted for exactly rather than approximately.
 
 VACUITY NOTE: the method must transfer NOTHING out. Any method that returns or drains part of the container routes ownership to a binding whose drop is already correct, and the fixture passes pre-fix. |
+| B-2026-08-25-16 | codegen | medium | An aggregate TEMPORARY used as the receiver of an owned-`self` method is dropped with the UNMANGLED outer-only drop (`__karac_drop_struct_Heap`), so… | FIXED by a9856f1. ROOT CAUSE: the materialized receiver temporary is drop-tracked by BARE NAME. `Heap { .. }.take()` stores the receiver into a `__urecv_tmp` slot (src/codegen/method_call.rs) and calls `track_struct_var(&type_name, slot)`, which is `track_struct_var_inst(.., None)`. The resulting name-shared `__karac_drop_struct_Heap` resolves the `xs: Vec[T]` field from the erased bare `T`, classifies it outer-only, and frees the outer buffer while never walking the elements -- so every element buffer leaked, one per element.
+
+The instantiation was ALREADY IN HAND: the same block seeds `enum_inst_var_types[synth]` a few lines above, precisely so the CALLEE is selected at the right monomorph (B-2026-08-06-12). Only the temp's own drop was still name-keyed, which is why one program emitted the correct `__karac_drop_struct_Heap$Vec_i64` for its named bindings and the erased drop for its temporaries.
+
+FIX: pass that recorded instantiation to `track_struct_var_inst`. Same one-line shape as B-2026-08-25-14, one site over -- there the callee's owned param, here the caller's receiver temp.
+
+MEASURED, against main at bf1f793:
+  temporary receiver, nested-Vec elements (8/16/24)  48 bytes / 3  ->  CLEAN
+  temporary receiver, heap String elements           10 / 2        ->  CLEAN
+  bound-receiver control                             clean         ->  clean
+  every other probe                                  unchanged (19 of 20 clean)
+The one remaining failure is B-2026-08-25-17 (a discarded call result), untouched by this and a different family.
+
+REGRESSION TEST: `asan_receiver_temporary_drop_frees_its_elements` in tests/memory_sanitizer.rs (ASAN + LeakSanitizer). Verified RED pre-fix at 58 bytes in 5 allocations. Case (a) uses three DIFFERENT element sizes deliberately -- see the correction below for why that is load-bearing rather than cosmetic. (c) is the bound-receiver control that localises the fault to the temporary path. |
 
 </details>
 
