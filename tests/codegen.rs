@@ -7843,6 +7843,81 @@ fn main() {
         assert_eq!(run_program(src).as_deref(), Some("9\n1\n2\n2\n9\n1\n3\n"));
     }
 
+    /// B-2026-08-25-7 — a generic impl method that REBINDS its owned receiver
+    /// (`let mut h = self`) and then calls a sibling through it.
+    ///
+    /// `self` parses as `ExprKind::SelfValue`, not `Identifier("self")`, so the
+    /// `let` site recorded no generic instantiation for `h`. The sibling call
+    /// then could not recover the impl's type args and was lowered against the
+    /// UNMANGLED default prototype (`Heap.pop_one`, built at the all-`i64` base
+    /// layout) instead of the `T = String` monomorph — reading a 24-byte String
+    /// control block as an i64. The Vec length still decremented, so the drain
+    /// loop terminated with the right COUNT and every element came back empty.
+    ///
+    /// The two controls are what make the assertion non-vacuous, because both
+    /// were already correct pre-fix and pin the two halves of the diagnosis:
+    /// (c) a SCALAR `T`, correct only because the default layout coincides with
+    /// `i64`, and (d) the identical shape on a NON-generic impl at the same
+    /// heap element type, which never went through the monomorphizer at all.
+    /// Case (a) is the minimal single-call form — the filed repro's drain loop
+    /// in (b) is an amplifier, not a trigger.
+    ///
+    /// Verified RED against the pre-fix compiler: (a) and (b) printed empty
+    /// lines while (c) and (d) printed correctly.
+    ///
+    /// The element type is deliberately `String` and not `Vec[i64]`: a
+    /// nested-heap element reaches a SEPARATE, pre-existing double-free in the
+    /// same rebinding shape (present identically before this fix, filed on its
+    /// own row), which would make this test fail for an unrelated reason.
+    #[test]
+    fn e2e_generic_impl_rebinding_owned_self_drains_through_sibling_at_heap_t() {
+        let src = r#"
+struct Heap[T] { xs: Vec[T] }
+impl[T] Heap[T] {
+    fn pop_one(mut ref self) -> Option[T] { self.xs.pop() }
+    fn take_one(self) -> Option[T] {
+        let mut h = self;
+        h.pop_one()
+    }
+    fn into_sorted(self) -> Vec[T] {
+        let mut h = self;
+        let mut out: Vec[T] = Vec.new();
+        while h.xs.len() > 0 {
+            match h.pop_one() { Some(v) => { out.push(v); } None => {} }
+        }
+        out
+    }
+}
+struct PlainHeap { xs: Vec[String] }
+impl PlainHeap {
+    fn pop_one(mut ref self) -> Option[String] { self.xs.pop() }
+    fn take_one(self) -> Option[String] { let mut h = self; h.pop_one() }
+}
+fn main() {
+    // (a) minimal: ONE sibling call through the rebound owned receiver.
+    let a = Heap { xs: ["a", "bb", "ccc"] };
+    match a.take_one() { Some(v) => { println(v); } None => {} }
+    // (b) the filed shape — assert CONTENTS, not just the count: the count was
+    // right even while every element was empty.
+    let b = Heap { xs: ["a", "bb", "ccc"] };
+    let o = b.into_sorted();
+    println(o.len());
+    let mut i = 0;
+    while i < o.len() { println(o[i]); i = i + 1; }
+    // (c) scalar control: correct pre-fix, because the base layout is i64.
+    let c = Heap { xs: [1, 2, 3] };
+    match c.take_one() { Some(v) => { println(v); } None => {} }
+    // (d) NON-generic control at the same heap element type.
+    let d = PlainHeap { xs: ["p", "qq"] };
+    match d.take_one() { Some(v) => { println(v); } None => {} }
+}
+"#;
+        assert_eq!(
+            run_program(src).as_deref(),
+            Some("ccc\n3\nccc\nbb\na\n3\nqq\n")
+        );
+    }
+
     /// B-2026-08-06-20 — TWO instantiations of ONE generic struct reached
     /// through a MIX of literal and named receivers.
     ///

@@ -3604,6 +3604,36 @@ impl<'ctx> super::Codegen<'ctx> {
                                 || self.is_generic_named_struct_type_expr(te)
                         })
                         .cloned()
+                        // B-2026-08-25-7 — a generic impl method that REBINDS
+                        // its owned receiver (`let mut h = self`) and then
+                        // drains through a sibling `mut ref self` method.
+                        // `self` parses as `ExprKind::SelfValue`, NOT
+                        // `Identifier("self")`, and the span table below is a
+                        // pre-monomorphization record: it can only ever hold
+                        // the GENERIC form (`Heap[T]`), and for a bare `self`
+                        // token it holds nothing at all. So `h` got no recorded
+                        // instantiation, the sibling call site could not
+                        // recover the impl's type args, and `compile_generic_call`
+                        // emitted a call to the UNMANGLED default prototype
+                        // (`Heap.pop_one`, built at the all-`i64` base layout)
+                        // instead of the `T = String` monomorph. At a
+                        // heap-carrying `T` that reads a 24-byte String control
+                        // block as an i64: the Vec length still decremented, so
+                        // the COUNT came out right while every element was
+                        // empty. `T = i64` was correct only because the default
+                        // layout happens to match.
+                        //
+                        // The name-keyed record is authoritative here and must
+                        // win over the span fallback: the mono param prologue
+                        // seeds `enum_inst_var_types["self"]` with the receiver's
+                        // CONCRETE instantiation (`Heap[String]`), which is
+                        // exactly what the span table cannot carry.
+                        .or_else(|| match &value.kind {
+                            ExprKind::SelfValue => {
+                                self.type_decls.enum_inst_var_types.get("self").cloned()
+                            }
+                            _ => None,
+                        })
                         .or_else(|| self.enum_inst_type_from_span(value))
                         // B-2026-07-15-24 — a generic struct FIELD moved out
                         // (`let bound = o.inner`, `inner: GInner[T]`) is a
