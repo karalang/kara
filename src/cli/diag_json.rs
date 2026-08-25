@@ -2448,10 +2448,19 @@ pub(super) fn mutual_recursion_groups_json(pipeline: &Pipeline) -> String {
                             )
                         })
                         .collect();
+                    // B-2026-08-24-23 — `kind` and `call_recursive_members`
+                    // are ADDITIVE: `functions` and `resolution_trace` keep
+                    // exactly their previous meaning, so a consumer reading
+                    // only those is unaffected. What changes is that a
+                    // value-only cycle no longer arrives indistinguishable
+                    // from real mutual recursion under a field name that
+                    // asserts the latter.
                     format!(
-                        "{{\"functions\":{},\"resolution_trace\":[{}]}}",
+                        "{{\"functions\":{},\"resolution_trace\":[{}],\"kind\":{},\"call_recursive_members\":{}}}",
                         funcs,
                         traces.join(","),
+                        json_string(g.kind.as_str()),
+                        json_string_list(&g.call_recursive_members),
                     )
                 })
                 .collect();

@@ -6373,6 +6373,13 @@ f(data, |item| write_to_db(item))
 
 **Compiler diagnostic for mutual recursion.** When the compiler detects a mutual recursion group during inference, it emits a note (not an error) listing the functions and their inferred or resolved effects. Visible in terminal output and in `--output=json` under `"mutual_recursion_groups"`. Suppress with `#[allow(mutual_recursion_note)]`.
 
+**Not every cycle is recursion.** The effect-inference graph has two kinds of edge: a **call**, and a mention of a function **as a value** (see First-Class Functions). Both are real effect dependencies, so a cycle through either needs the fixed point and is reported — but only a cycle of *calls* is mutual recursion. Two functions that merely stash each other in a struct field never call one another, and saying they mutually recurse is false. Each entry therefore carries:
+
+- `"kind"` — `"mutual_recursion"` (every member reaches every other by calls), `"value_reference_cycle"` (every cycle passes through a function-as-value reference, so no member is mutually recursive with another), or `"mixed"`.
+- `"call_recursive_members"` — the members that mutually recurse by calls: all of `functions` for `"mutual_recursion"`, empty for `"value_reference_cycle"`, and the recursing subset for `"mixed"`, where `kind` alone would not say *which* functions the claim covers.
+
+`functions` and `resolution_trace` keep their existing meaning — the group is still reported, because the fixed point was still required. Membership is deliberately **not** narrowed: dropping value-only cycles would discard the true half of what the field reports. The terminal note draws the same distinction in prose.
+
 #### Effect Annotation Workflow
 
 The compiler's structured output (see AI-First Compiler Interface) enables a mechanical annotation workflow:

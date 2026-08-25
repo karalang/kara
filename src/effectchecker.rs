@@ -569,6 +569,49 @@ pub struct ResolvedEffect {
     pub effect: String,
 }
 
+/// Why an SCC in the effect-inference graph is a cycle at all.
+///
+/// B-2026-08-24-23. The graph carries two kinds of edge — a CALL, and a
+/// mention of a function as a VALUE (B-2026-08-23-7). Both are real effect
+/// dependencies, so a cycle through either genuinely needs the fixed point,
+/// which is why the group is reported. But only a cycle of calls is *mutual
+/// recursion*, and the field reporting these is named `mutual_recursion_
+/// groups` — so a value-only cycle was carried under a name asserting
+/// something false about the user's program. B-2026-08-23-13 fixed exactly
+/// that claim in the terminal note; this is the same claim on the JSON
+/// channel.
+///
+/// Narrowing the field's MEMBERSHIP was rejected: it would drop the fact
+/// that a fixed point was needed over the cycle at all, which is the true
+/// half of what the field reports (and what `resolution_trace` describes).
+/// Discriminating is additive — every existing field keeps its meaning and
+/// existing consumers are untouched.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MutualRecursionKind {
+    /// Every member reaches every other through CALLS alone: real mutual
+    /// recursion, the case the field name always described.
+    MutualRecursion,
+    /// Every cycle here passes through a function-as-value reference, so no
+    /// member is mutually recursive with another. The fixed point was still
+    /// required — the effects propagate — but nobody calls anybody.
+    ValueReferenceCycle,
+    /// Some members mutually recurse by calls and others are joined to them
+    /// only by a value reference. `call_recursive_members` is the subset that
+    /// genuinely recurses; the rest do not, and saying so is the whole point.
+    Mixed,
+}
+
+impl MutualRecursionKind {
+    /// The stable string used in `--output=json`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::MutualRecursion => "mutual_recursion",
+            Self::ValueReferenceCycle => "value_reference_cycle",
+            Self::Mixed => "mixed",
+        }
+    }
+}
+
 /// A mutual recursion group (SCC with >1 function) and its effect resolution trace.
 #[derive(Debug, Clone)]
 pub struct MutualRecursionGroup {
@@ -576,6 +619,14 @@ pub struct MutualRecursionGroup {
     pub functions: Vec<String>,
     /// The resolution trace showing how effects propagated through the cycle.
     pub resolution_trace: Vec<ResolvedEffect>,
+    /// Whether this cycle is real mutual recursion, a value-reference cycle,
+    /// or a mix — see [`MutualRecursionKind`].
+    pub kind: MutualRecursionKind,
+    /// The members that mutually recurse through CALLS. Equal to `functions`
+    /// for `MutualRecursion`, empty for `ValueReferenceCycle`, and a proper
+    /// subset for `Mixed` — which is the case where `kind` alone would leave
+    /// a consumer unable to tell which functions the claim applies to.
+    pub call_recursive_members: Vec<String>,
 }
 
 // ── Result ──────────────────────────────────────────────────────

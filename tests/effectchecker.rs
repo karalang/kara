@@ -11979,3 +11979,105 @@ fn q(n: i64) -> i64 {
         "`#[allow(mutual_recursion_note)]` must suppress the reworded note too"
     );
 }
+
+// ── B-2026-08-24-23: the JSON channel must not assert mutual recursion ──
+//
+// B-2026-08-23-13 stopped the terminal NOTE calling a value-only cycle mutual
+// recursion. The `mutual_recursion_groups` field carried the same claim in its
+// very name, and was left alone on purpose: narrowing its membership would drop
+// the true half of what it reports (a fixed point WAS required over the cycle).
+// The resolution is additive — `functions` and `resolution_trace` are untouched,
+// and `kind` / `call_recursive_members` say which claim actually holds.
+
+#[test]
+fn value_only_cycle_json_kind_is_value_reference_cycle() {
+    // `alpha` and `beta` each stash the OTHER in a struct field. Neither calls
+    // the other, so neither is mutually recursive with anything — but the cycle
+    // is real in the effect graph (a function-as-value mention propagates
+    // effects, B-2026-08-23-7), so the group is still reported.
+    let source = r#"
+struct Holder { f: Fn(i64) -> i64 }
+fn alpha(n: i64) -> i64 { let h = Holder { f: beta }; n + 1 }
+fn beta(n: i64) -> i64 { let h = Holder { f: alpha }; n + 2 }
+"#;
+    let result = effectcheck_full_pipeline(source);
+    let group = result
+        .mutual_recursion_groups
+        .first()
+        .expect("the cycle is real and must still be REPORTED — only the claim changes");
+    assert_eq!(
+        group.kind,
+        MutualRecursionKind::ValueReferenceCycle,
+        "neither function calls the other; got {:?} for {:?}",
+        group.kind,
+        group.functions
+    );
+    assert!(
+        group.call_recursive_members.is_empty(),
+        "no member mutually recurses: {:?}",
+        group.call_recursive_members
+    );
+    assert_eq!(
+        group.functions.len(),
+        2,
+        "membership is deliberately NOT narrowed — dropping the group would lose \
+         the fact that a fixed point was needed: {:?}",
+        group.functions
+    );
+}
+
+#[test]
+fn true_mutual_recursion_json_kind_is_mutual_recursion() {
+    // The non-vacuity anchor for the test above: without this, classifying
+    // everything as a value cycle would pass it.
+    let source = r#"
+fn ping(n: i64) -> i64 { if n <= 0 { 0 } else { pong(n - 1) } }
+fn pong(n: i64) -> i64 { if n <= 0 { 0 } else { ping(n - 1) } }
+"#;
+    let result = effectcheck_full_pipeline(source);
+    let group = result
+        .mutual_recursion_groups
+        .first()
+        .expect("a real call cycle must be detected");
+    assert_eq!(group.kind, MutualRecursionKind::MutualRecursion);
+    let mut members = group.call_recursive_members.clone();
+    members.sort();
+    assert_eq!(
+        members,
+        vec!["ping".to_string(), "pong".to_string()],
+        "both members recurse through calls"
+    );
+}
+
+#[test]
+fn mixed_cycle_json_names_only_the_call_recursive_members() {
+    // `ping` and `pong` mutually recurse by calls; `gamma` is dragged into the
+    // same SCC only because it mentions `ping` as a VALUE (and `ping` calls
+    // `gamma`). `kind` alone cannot say which functions the recursion claim
+    // covers, which is why `call_recursive_members` exists.
+    let source = r#"
+struct Holder { f: Fn(i64) -> i64 }
+fn ping(n: i64) -> i64 { if n <= 0 { gamma(0) } else { pong(n - 1) } }
+fn pong(n: i64) -> i64 { if n <= 0 { 0 } else { ping(n - 1) } }
+fn gamma(n: i64) -> i64 { let h = Holder { f: ping }; n }
+"#;
+    let result = effectcheck_full_pipeline(source);
+    let group = result
+        .mutual_recursion_groups
+        .first()
+        .expect("the SCC spans all three");
+    assert_eq!(
+        group.kind,
+        MutualRecursionKind::Mixed,
+        "{:?}",
+        group.functions
+    );
+    assert_eq!(group.functions.len(), 3, "{:?}", group.functions);
+    let mut members = group.call_recursive_members.clone();
+    members.sort();
+    assert_eq!(
+        members,
+        vec!["ping".to_string(), "pong".to_string()],
+        "`gamma` is joined by a value reference and must NOT be named as recursing"
+    );
+}

@@ -31,7 +31,7 @@ use crate::intern::Symbol;
 
 use super::{
     effect_var_names_in_type, tarjan_scc, verb_name, EffectError, EffectErrorKind,
-    MutualRecursionGroup, ResolvedEffect,
+    MutualRecursionGroup, MutualRecursionKind, ResolvedEffect,
 };
 
 impl<'a> super::EffectChecker<'a> {
@@ -584,6 +584,14 @@ impl<'a> super::EffectChecker<'a> {
             .collect();
         let sccs = tarjan_scc(&all_fn_names, &call_graph, &self.interner);
 
+        // B-2026-08-24-23 — classify each group as real mutual recursion, a
+        // value-only cycle, or a mix, so the JSON channel stops asserting
+        // what B-2026-08-23-13 stopped the terminal note asserting. The
+        // analysis is free: `call_only_recursive_members` is the same
+        // call-edges-only Tarjan the note already runs, computed ONCE here
+        // rather than per group.
+        let call_recursive = self.call_only_recursive_members();
+
         // Filter to SCCs with >1 function (actual mutual recursion)
         let mut groups = Vec::new();
         for scc in sccs {
@@ -633,12 +641,30 @@ impl<'a> super::EffectChecker<'a> {
                 ))
             });
 
+            let functions: Vec<String> = scc
+                .iter()
+                .map(|s| self.interner.resolve(*s).to_string())
+                .collect();
+            // Members that mutually recurse through CALLS. `call_recursive`
+            // is the union over all call-only SCCs, so intersecting with this
+            // group's membership is what narrows it to this cycle.
+            let call_recursive_members: Vec<String> = scc
+                .iter()
+                .filter(|s| call_recursive.contains(*s))
+                .map(|s| self.interner.resolve(*s).to_string())
+                .collect();
+            let kind = if call_recursive_members.is_empty() {
+                MutualRecursionKind::ValueReferenceCycle
+            } else if call_recursive_members.len() == functions.len() {
+                MutualRecursionKind::MutualRecursion
+            } else {
+                MutualRecursionKind::Mixed
+            };
             groups.push(MutualRecursionGroup {
-                functions: scc
-                    .iter()
-                    .map(|s| self.interner.resolve(*s).to_string())
-                    .collect(),
+                functions,
                 resolution_trace: trace,
+                kind,
+                call_recursive_members,
             });
         }
 
