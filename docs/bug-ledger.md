@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 285 | 0 |
-| leak | 192 | 1 |
+| leak | 194 | 2 |
 | missing-feature | 167 | 0 |
 | run-vs-build | 159 | 1 |
 | codegen-gap | 138 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1030 | 5 |
+| codegen | 1032 | 6 |
 | typecheck | 252 | 0 |
 | interp | 180 | 0 |
 | ownership | 65 | 0 |
@@ -124,17 +124,18 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1559 surfaced · 5 open · 1529 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-25). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1561 surfaced · 6 open · 1530 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-25). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (5)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-25-2 | 2026-08-25 | codegen | high | `std.cli` IS NOT AOT-COMPILABLE: every pure-Kāra INSTANCE method on its types (`Arg.required`, `Parser.about`, ... ) dies in codegen with `no handler for method '<m>' on variable '<v>'`, so `karac check` passes and `karac build` fails -- while roadmap.md marks the feature `[x]` done and deferred.md ships it at v1 | roadmap.md:531 (`std.cli` marked [x]) + deferred.md § std.cli; codegen method dispatch falls through to the catch-all in src/codegen/method_call.rs for these receivers |
 | B-2026-08-25-3 | 2026-08-25 | codegen | medium | `codegen_tests::vec_mutation_methods_bounds_check_out_of_range_index` IS FLAKY, and it fails by showing exactly the PRE-FIX symptom of the high-severity bug it guards: `v.insert(7i64, 9i64)` produced no `Vec.insert index out of bounds` panic, stdout empty, stderr `free(): invalid pointer`. Observed once in a full `cargo test --features llvm` run; the same test then passed 3/3 in isolation, 3198/3198 in a codegen-only run, and the next FULL run was green at 125 suites / 15090 tests. | roadmap.md |
 | B-2026-08-25-13 | 2026-08-25 | codegen | high | `lower_stdlib_source` DISCARDS the typecheck errors it computes for every baked stdlib module, so a baked module can ship code `karac check` rejects in user programs -- which is how cli.kara shipped four borrowed-String-into-owned-field stores that DOUBLE-FREED when compiled. The naive fail-closed gate is a FALSE POSITIVE on pool.kara; see detail for what a real fix needs. | roadmap.md |
-| B-2026-08-25-14 | 2026-08-25 | codegen | medium | An owned `self` aggregate param's OWN scope-exit drop is the UNMANGLED base drop (`__karac_drop_struct_Heap`, outer-only), not the monomorph's, so a generic impl method that takes `self` and transfers NOTHING out leaks every element its entry deep-copy allocated: `fn take(self) -> i64 { self.xs.len() }` on a 3-element `Heap[Vec[i64]]` leaks 24 bytes in 3 allocations while printing the right answer. | — |
 | B-2026-08-25-15 | 2026-08-25 | codegen+runtime | high | `std.cli`'s `args.get_string(name)` DOUBLE-FREES when the argument was supplied: `return Ok(pv.value)` returns a `String` field read out of a BORROWED `ref self` payload. ASAN-confirmed (2-byte `karac_string_clone` buffer, both frees in main); `parse()` alone is clean. The last blocker on registering std.cli for AOT. | roadmap.md |
+| B-2026-08-25-16 | 2026-08-25 | codegen | medium | An aggregate TEMPORARY used as the receiver of an owned-`self` method is never dropped by the caller, so its heap-owning element buffers leak: `Heap { xs: [[1], [2], [3]] }.take()` leaks 16 bytes in 2 allocations under LeakSanitizer while printing the right answer. Binding the same value to a name first (`let h = Heap { ... }; h.take()`) is clean, so it is the temporary-ness of the receiver that matters, not the method. | — |
+| B-2026-08-25-17 | 2026-08-25 | codegen | medium | A DISCARDED method-call result that owns heap is never freed: `h.xs.pop();` as a bare expression statement leaks the popped element's buffer (8 bytes in 1 allocation for a `Vec[Vec[i64]]` element) under LeakSanitizer. Binding the result (`let _v = h.xs.pop();`) or matching on it is clean, so it is the discarding that leaks, not the pop. | — |
 
 ### Relocated (1)
 
@@ -165,9 +166,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1559 surfaced
 
 </details>
 
-### Fixed (1529)
+### Fixed (1530)
 
-<details><summary>1529 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1530 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -18230,6 +18231,24 @@ B-2026-08-06-26 had already established this exact class and gated `track_inline
 Suppressing the inline drop is correct rather than a leak because the `BoxedEnumDrop` registered for the same value owns the box and its contents -- which is asserted, not assumed: `tests/memory_sanitizer.rs::test_boxed_wide_result_payload_match_no_leak_no_double_free` runs the boxed shape with real heap in two of three Vecs plus the narrow-Err half, under ASAN+LSan (LSan being the half that would catch a traded-away free; it is live on this Linux container, and the test passes with `KARAC_REQUIRE_RUNTIME_ARCHIVE=1`, which turns a soft skip into a panic). Two E2E tests pin the crash itself and a heap-carrying read-back.
 
 VERIFIED: the original 1..4-Vec x opt/noopt matrix is now 8/8 clean and byte-identical to the interpreter, where it was 4 SEGFAULTs before. SUITES: llvm 15126 passed / 0 failed, default 9898 / 0, clippy clean on both feature legs, fmt clean. |
+| B-2026-08-25-14 | codegen | medium | An owned `self` aggregate param's OWN scope-exit drop is the UNMANGLED base drop (`__karac_drop_struct_Heap`, outer-only), not the monomorph's, so a… | FIXED by 6df0bfb. ROOT CAUSE: `make_aggregate_param_callee_owned_inst` (src/codegen/param_own.rs) has two branches that register an owned by-value aggregate param's scope-exit drop. The copy-UNSUPPORTED branch registers it at the param's declared INSTANTIATION (`track_struct_var_inst(type_name, slot, inst)`). The copy-SUPPORTED branch -- which a `Heap[T] { xs: Vec[T] }` takes, since its fields ARE copy-supported -- discarded `inst` and called the name-keyed `track_struct_var(type_name, slot)`, which is literally `track_struct_var_inst(.., None)`.
+
+The resulting `__karac_drop_struct_Heap` resolves the `xs: Vec[T]` field from the erased bare `T`, classifies it as outer-only, and frees only the copied outer buffer. Since B-2026-08-25-10 that entry copy is element-DEEP inside a monomorph, so every element buffer it allocated was left with no owner at all. The doc comment on `track_struct_var_inst` already names this exact failure mode -- "not the name-shared `__karac_drop_struct_S` that resolves the element from bare `T` and leaks every element" -- so the two branches disagreed about a rule one of them had written down.
+
+FIX: pass `inst` on the copy-supported branch too, matching its sibling. One line.
+
+WHY IT SURVIVED TWO PRIOR ROWS ON THE SAME SHAPE: the erased drop is only ever REACHED when nothing moves out of `self`. `let mut h = self` hands ownership to `h`, whose drop is selected from the binding's recorded instantiation (correct since B-2026-08-25-11), and `self`'s own drop is then cap/len-zeroed by the existing move-suppression -- so a method that drains or returns anything never exercises this path. It took the read-only shape (`fn count(self) -> i64 { self.xs.len() }`) to reach it.
+
+MEASURED, against main at 443a902 (which carries -10 and -11):
+  read-only owned self, Vec[i64] elems  24 bytes / 3 allocations  ->  CLEAN
+  read-only owned self, heap String     15 / 3                    ->  CLEAN
+  every other probe                     unchanged (16 of 18 clean)
+
+ELEMENT-TYPE CORRECTION vs B-2026-08-25-11: `T = String` IS affected here, and that row's warning to re-measure rather than assume was correct. -11's erasure lived in the INSTANTIATION RECORD, where `String` is a single name a name-to-name map carries losslessly; this drop was unmangled outright, so any heap-owning element leaks. Measured, not inferred: 15 bytes in 3 allocations for three heap-built Strings.
+
+REGRESSION TEST: `asan_owned_aggregate_param_drop_frees_its_entry_copied_elements` in tests/memory_sanitizer.rs (ASAN + LeakSanitizer). Verified RED pre-fix at 63 bytes in 6 allocations -- (a)'s three Vec buffers (16 + 8 + 24) plus (b)'s three String bodies (5 each), which is the whole leak accounted for exactly rather than approximately.
+
+VACUITY NOTE: the method must transfer NOTHING out. Any method that returns or drains part of the container routes ownership to a binding whose drop is already correct, and the fixture passes pre-fix. |
 
 </details>
 
