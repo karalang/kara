@@ -11024,6 +11024,77 @@ fn main() {
         assert_eq!(out, "v2\n2\na7\n");
     }
 
+    /// B-2026-08-25-15 — a heap FIELD read out of a BORROW-accessor match
+    /// payload and consumed DIRECTLY, with no intervening `let`.
+    ///
+    /// `match self.values.get(i) { Some(pv) => … }` on a `ref self` receiver
+    /// binds `pv` as a shallow bit-copy of the container's element, so the
+    /// container's per-element drain owns and frees its `String` fields.
+    /// `register_borrowed_agg_payload_struct_bindings` already recorded such
+    /// bindings for the LET-site copier, and `let s = pv.value; return s;`
+    /// was correct throughout (`via_let` below is that control). But the
+    /// let-site copier only fires at a `let`, so the two DIRECT consume
+    /// spellings got no copy from anywhere and handed the sink an alias:
+    /// `return pv.value` and `out.push(pv.value)` both aborted with
+    /// `free(): double free detected in tcache 2` under JIT/AOT while
+    /// `--interp` printed the right answer. The arg/return-site copier now
+    /// admits the same root class its two siblings already carry.
+    ///
+    /// The trailing second `h.direct()` is load-bearing: it proves the
+    /// container survived all three escapes rather than merely not crashing
+    /// on the way out. Every payload is built with an f-string — a string
+    /// LITERAL is static with `cap == 0`, so every free over it is a no-op
+    /// and the double free is unobservable (two earlier reductions of this
+    /// bug were false negatives for exactly that reason). ASAN/LSan twin in
+    /// `tests/memory_sanitizer.rs`.
+    #[test]
+    fn e2e_borrow_payload_field_direct_consume_no_double_free() {
+        let Some(out) = run_program(
+            "struct Pv { name: String, value: String }\n\
+             struct Holder { values: Vec[Pv] }\n\
+             impl Holder {\n\
+             \x20   fn direct(ref self) -> String {\n\
+             \x20       match self.values.get(0) {\n\
+             \x20           Some(pv) => { return pv.value; }\n\
+             \x20           None => { return \"none\"; }\n\
+             \x20       }\n\
+             \x20   }\n\
+             \x20   fn via_let(ref self) -> String {\n\
+             \x20       match self.values.get(1) {\n\
+             \x20           Some(pv) => { let s = pv.value; return s; }\n\
+             \x20           None => { return \"none\"; }\n\
+             \x20       }\n\
+             \x20   }\n\
+             \x20   fn collect(ref self) -> Vec[String] {\n\
+             \x20       let mut out: Vec[String] = Vec.new();\n\
+             \x20       let mut i = 0;\n\
+             \x20       while i < self.values.len() {\n\
+             \x20           match self.values.get(i) {\n\
+             \x20               Some(pv) => { out.push(pv.value); }\n\
+             \x20               None => {}\n\
+             \x20           }\n\
+             \x20           i = i + 1;\n\
+             \x20       }\n\
+             \x20       return out;\n\
+             \x20   }\n\
+             }\n\
+             fn main() {\n\
+             \x20   let mut v: Vec[Pv] = Vec.new();\n\
+             \x20   v.push(Pv { name: f\"k{1}\", value: f\"a{1}\" });\n\
+             \x20   v.push(Pv { name: f\"k{2}\", value: f\"b{2}\" });\n\
+             \x20   let h = Holder { values: v };\n\
+             \x20   println(h.direct());\n\
+             \x20   println(h.via_let());\n\
+             \x20   let got = h.collect();\n\
+             \x20   for g in got { println(g); }\n\
+             \x20   println(h.direct());\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "a1\nb2\na1\nb2\na1\n");
+    }
+
     /// B-2026-08-01-27 — compiled-backend pin for the let-move alias fix:
     /// the interpreter moved to MATCH these (already-correct) behaviors, so
     /// this twin guards the target semantics from drifting. Same program as

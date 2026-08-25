@@ -5293,10 +5293,37 @@ impl<'ctx> super::Codegen<'ctx> {
                 // without it the sink and the source container's drain freed
                 // the same buffer (the field-move-out arm of the
                 // B-2026-08-01-24 class).
+                // B-2026-08-25-15 — a match-payload binding bound out of a
+                // BORROW accessor (`match self.values.get(i) { Some(pv) => … }`
+                // on a `ref self` receiver) is the third shape of the same
+                // thing: `pv` is a shallow bit-copy of the container's element,
+                // so the container's per-element drain owns and frees its heap
+                // fields. `register_borrowed_agg_payload_struct_bindings`
+                // already records exactly these bindings for the LET-site
+                // copier (`deep_copy_owned_struct_param_field_move`), but that
+                // helper only fires at a `let`, so a DIRECT consume —
+                // `return pv.value` / `out.push(pv.value)` — got no copy from
+                // anywhere and handed the sink an alias the container frees
+                // again (`free(): double free detected in tcache 2`; the
+                // `let s = pv.value; return s;` spelling of the same program
+                // was already clean, which is what localized the hole).
+                //
+                // The two copiers do not stack: the `let` path never routes
+                // through this helper (stmts.rs calls the let-site copier
+                // directly), and the struct-literal field path that DOES route
+                // here has no let-site twin for this root class — the
+                // `for_loop_owned_agg_vars` StructLiteral copy was deliberately
+                // removed when B-2026-08-01-28 admitted that root here, and
+                // `deep_copy_owned_struct_param_field_move` only matches a
+                // FieldAccess RHS, never a literal.
                 if self.borrow_vars.ref_params.contains_key(&recv_name)
                     || self
                         .borrow_vars
                         .for_loop_owned_agg_vars
+                        .contains(recv_name.as_str())
+                    || self
+                        .borrow_vars
+                        .borrowed_agg_payload_struct_vars
                         .contains(recv_name.as_str())
                 {
                     if let Some(struct_name) = self.inferred_receiver_type(object) {

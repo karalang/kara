@@ -3418,6 +3418,76 @@ fn main() {
     }
 
     #[test]
+    fn asan_borrow_payload_field_direct_consume_no_double_free() {
+        // B-2026-08-25-15: a heap FIELD read out of a BORROW-accessor match
+        // payload (`match self.values.get(i) { Some(pv) => … }` on a `ref self`
+        // receiver) and consumed DIRECTLY, with no intervening `let`. `pv` is a
+        // shallow bit-copy of the container's element, so the container's
+        // per-element drain owns and frees its `String` fields — but the copier
+        // that gives such a field an independent buffer only fired at a `let`,
+        // so `return pv.value` and `out.push(pv.value)` handed the sink a live
+        // alias: `free(): double free detected in tcache 2`, SIGABRT 134 under
+        // JIT/AOT while `--interp` printed the right answer. The arg/return-site
+        // copier now admits the same root class its two siblings already carry.
+        //
+        // This is also the LEAK gate for that widening: the mirror-image failure
+        // of an over-eager copy is a leak, invisible to a macOS asan run and
+        // caught only by LSan on Linux. 300 iterations so a per-call leak
+        // accumulates well past noise, and every payload is an f-string — a
+        // string LITERAL is static with `cap == 0`, so every free over it is a
+        // no-op and NEITHER failure mode would be observable (two earlier
+        // reductions of this bug were false negatives for exactly that reason).
+        // The trailing second `h.direct()` proves the container survived the
+        // escapes rather than merely not crashing on the way out.
+        assert_clean_asan_run(
+            r#"
+struct Pv { name: String, value: String }
+struct Holder { values: Vec[Pv] }
+impl Holder {
+    fn direct(ref self) -> String {
+        match self.values.get(0) {
+            Some(pv) => { return pv.value; }
+            None => { return "none"; }
+        }
+    }
+    fn collect(ref self) -> Vec[String] {
+        let mut out: Vec[String] = Vec.new();
+        let mut i = 0;
+        while i < self.values.len() {
+            match self.values.get(i) {
+                Some(pv) => { out.push(pv.value); }
+                None => {}
+            }
+            i = i + 1;
+        }
+        return out;
+    }
+}
+fn main() {
+    let mut total: i64 = 0;
+    let mut i: i64 = 0;
+    while i < 300 {
+        let mut v: Vec[Pv] = Vec.new();
+        v.push(Pv { name: f"k-{i}", value: f"a-{i}" });
+        v.push(Pv { name: f"m-{i}", value: f"bb-{i}" });
+        let h = Holder { values: v };
+        total = total + h.direct().len();
+        let got = h.collect();
+        for g in got { total = total + g.len(); }
+        total = total + h.direct().len();
+        i = i + 1;
+    }
+    println(total.to_string());
+}
+"#,
+            // per iter, d = digits of i: two `direct()` at 2+d each, `collect()`
+            // at (2+d)+(3+d) → 9+4d. 10 iters at d=1, 90 at d=2, 200 at d=3.
+            &["5860"],
+            "borrow_payload_field_direct_consume_no_double_free",
+        );
+    }
+
+    #[test]
     fn asan_match_bound_struct_variant_vec_field_reborrow_no_double_free() {
         // B-2026-07-18-4: a STRUCT-VARIANT payload's Vec field bound DIRECTLY
         // (`match it { Fu { params } => … }`) then whole-moved into a local
