@@ -364,16 +364,19 @@ impl<'a> super::Interpreter<'a> {
                             self.render_typed_mode(&v, fty, debug)
                         } else if let Some(weak) = inner.weak_immutable_fields.get(fname) {
                             self.render_typed_mode(&upgrade_weak_to_option(weak), None, debug)
-                        } else if let Some(slot) = inner.weak_mut_fields.get(fname) {
+                        } else {
+                            // Declared but absent: skip rather than invent a
+                            // placeholder, matching the `Struct` arm's
+                            // `fields.get(fname)` filter. `?` short-circuits the
+                            // `filter_map` closure with `None` when the field is
+                            // in none of the maps (floating-stable clippy's
+                            // `question_mark` lint requires this over an explicit
+                            // `else { return None }`).
+                            let slot = inner.weak_mut_fields.get(fname)?;
                             let weak = slot.try_read().expect(
                                 "shared struct weak field write-locked during debug render — unreachable in single-task interpreter",
                             );
                             self.render_typed_mode(&upgrade_weak_to_option(&weak), None, debug)
-                        } else {
-                            // Declared but absent: skip rather than invent a
-                            // placeholder, matching the `Struct` arm's
-                            // `fields.get(fname)` filter.
-                            return None;
                         };
                         Some(format!("{}: {}", fname, rendered))
                     })

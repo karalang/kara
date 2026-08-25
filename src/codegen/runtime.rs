@@ -6338,15 +6338,28 @@ impl<'ctx> super::Codegen<'ctx> {
         if self.discarded_temp_aliases_armed_source(tail) {
             return false;
         }
-        // Gated to a generic IMPL-METHOD monomorph. `enum_inst_var_types`
-        // carries a "self" entry only there — the mono param prologue seeds it
-        // with the receiver's concrete instantiation (B-2026-08-25-7) — and
-        // that is exactly the shape whose discarded temp currently falls all
-        // the way through to `materialize_owned_temp` and leaks. A generic FREE
-        // FUNCTION with the same rebind (`fn take[T](s: Heap[T])`) is already
-        // handled correctly by that fallback, and claiming it here instead
-        // frees less: measured as a clean case turning into a 16-byte leak.
-        if !self.type_decls.enum_inst_var_types.contains_key("self") {
+        // Gated to a generic MONOMORPH — the only context where the span
+        // table's pre-mono `Option[T]` can be made concrete through the active
+        // substitution. Two shapes qualify: an IMPL-METHOD monomorph (the mono
+        // param prologue seeds an `enum_inst_var_types` "self" entry with the
+        // receiver's concrete instantiation, B-2026-08-25-7), and a FREE
+        // FUNCTION monomorph (`fn take[T](s: Heap[T])`), which has no "self" but
+        // does have an active `type_subst_names`.
+        //
+        // B-2026-08-25-17 originally gated this to "self" only, on the belief a
+        // free function's discarded pop was already freed by the
+        // `materialize_owned_temp` fallback. It is not: that fallback frees the
+        // inline-`Option` temp's header but not its erased-`T` element buffer, so
+        // `h.xs.pop();` in a generic free function leaked one element per call
+        // (8 B / call for `Heap[Vec[i64]]`). This tracker runs LAST — only after
+        // every other handler declines — and resolves `T` through the subst, so
+        // admitting the free function frees exactly the buffer the fallback
+        // leaves. The earlier 16-byte regression came from substituting inside
+        // the tracker ABOVE (claiming wide payloads from the boxed tracker), a
+        // different site than this last-resort one, whose ordering is unchanged.
+        if !self.type_decls.enum_inst_var_types.contains_key("self")
+            && self.mono_state.type_subst_names.is_empty()
+        {
             return false;
         }
         let key = (tail.span.offset, tail.span.length);

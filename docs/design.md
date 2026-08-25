@@ -4967,8 +4967,12 @@ Four sub-cases cover the escape behavior:
 
 - **(i) Clean escape, no outer use of captures.** Captured owned values move into the closure; the closure becomes a single-owner value carrying those captures. Returning or storing the closure moves it. No Rc, no Arc. Example:
   ```kara
+  struct Message { body: String }
+  struct Connection { id: i64 }
+  impl Connection { fn deliver(self, msg: Message) { let _ = msg; } }
+
   fn make_sender(conn: Connection) -> Fn(Message) -> () {
-      |msg| conn.send(msg)    // conn captured by move; no outer use; clean escape
+      |msg| conn.deliver(msg)    // conn captured by move; no outer use; clean escape
   }
   ```
 - **(ii) Escape with outer use of a capture.** RC trigger 2 fires: the closure creation site is one use of the captured value, and the outer-scope use is another, neither dominating the other. Part 4 Phase 1 tentatively marks the captured value as `Rc`. No special rule — this is exactly the existing trigger.

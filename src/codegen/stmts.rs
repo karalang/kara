@@ -3632,6 +3632,26 @@ impl<'ctx> super::Codegen<'ctx> {
                             ExprKind::SelfValue => {
                                 self.type_decls.enum_inst_var_types.get("self").cloned()
                             }
+                            // The free-FUNCTION analog of the `self` rebind
+                            // above (B-2026-08-25-17 free-fn leg). `let mut h = s`
+                            // where `s` is a generic-struct PARAM must bind `h` to
+                            // the same concrete instantiation the mono prologue
+                            // recorded for `s` in `enum_inst_var_types`. `self`
+                            // parses as `SelfValue` and a param as `Identifier`,
+                            // but both need their recorded concrete inst to reach
+                            // the rebind — without it `h`'s scope-exit drop is the
+                            // erased-`T` NAME drop, whose per-element step is an
+                            // empty stub, so every element buffer the entry-copy
+                            // allocated leaks. The impl-method spelling was already
+                            // clean via the `SelfValue` arm; the free-fn spelling
+                            // leaked the whole container's elements (24 B / 3 for
+                            // `Heap[Vec[i64]]`). The name-keyed record wins over
+                            // the span fallback for the same reason it does for
+                            // `self`: the span table is pre-monomorphization and
+                            // holds only the generic form.
+                            ExprKind::Identifier(name) => {
+                                self.type_decls.enum_inst_var_types.get(name).cloned()
+                            }
                             _ => None,
                         })
                         .or_else(|| self.enum_inst_type_from_span(value))
