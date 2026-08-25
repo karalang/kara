@@ -2286,9 +2286,29 @@ impl<'ctx> super::Codegen<'ctx> {
                     } else {
                         None
                     };
-                    let ptr: BasicValueEnum<'ctx> = if let ExprKind::Identifier(var_name) =
-                        &args[i].value.kind
-                    {
+                    // B-2026-08-25-5: `self` parses as `SelfValue`, NOT
+                    // `Identifier("self")`, so a sibling call on the receiver
+                    // (`self.one()` inside another method of the same generic
+                    // impl) matched NONE of the pointer-producing arms below —
+                    // not this one, not the index-borrow arm, and not
+                    // `mut_ref_place_arg_ptr` (which handles only FieldAccess /
+                    // TupleIndex, on the stated assumption that "a bare
+                    // identifier already took the `get_data_ptr` fast path").
+                    // It fell through to `materialize_rvalue_for_ref_arg`, so
+                    // the callee received a pointer to a COPY of the receiver
+                    // and every mutation it made through `mut ref self` was
+                    // discarded. Normalising the receiver to the name `self`
+                    // routes it through `get_data_ptr`, which loads the stored
+                    // pointer for a `ref`/`mut ref` param exactly as it does
+                    // for any other borrow. Same normalisation several other
+                    // sites already spell out (`control_flow_for.rs`,
+                    // `calls.rs`, `call_dispatch.rs`).
+                    let ident_name: Option<&str> = match &args[i].value.kind {
+                        ExprKind::Identifier(n) => Some(n.as_str()),
+                        ExprKind::SelfValue => Some("self"),
+                        _ => None,
+                    };
+                    let ptr: BasicValueEnum<'ctx> = if let Some(var_name) = ident_name {
                         if let Some(ptr) = self.get_data_ptr(var_name) {
                             ptr.into()
                         } else {

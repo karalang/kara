@@ -7768,6 +7768,81 @@ fn main() {
         assert_eq!(run_program(src).as_deref(), Some("6\n7\n8\n9\n2\n"));
     }
 
+    /// B-2026-08-25-5 — a `mut ref self` SIBLING call inside a generic impl
+    /// silently discarded the callee's mutations.
+    ///
+    /// `self` parses as `ExprKind::SelfValue`, not `Identifier("self")`. The
+    /// generic call path's ref-argument lowering produced a pointer from three
+    /// arms — an `Identifier` via `get_data_ptr`, an index borrow, and
+    /// `mut_ref_place_arg_ptr` (FieldAccess / TupleIndex only, on the stated
+    /// assumption that "a bare identifier already took the `get_data_ptr` fast
+    /// path") — and `SelfValue` matched NONE of them. It fell through to
+    /// `materialize_rvalue_for_ref_arg`, so the callee got a pointer to a COPY
+    /// of the receiver and wrote into that.
+    ///
+    /// Filed as a HANG, and the loop is how it was noticed — `while
+    /// self.xs.len() > 0` never goes false when the pop lands on a copy. But
+    /// the loop is NOT required and the row's narrowing on that point was
+    /// wrong: a SINGLE call already loses the mutation. Case (a) is that
+    /// minimal shape, and it is the one to keep if this test is ever trimmed —
+    /// the earlier narrowing reported one call as "correct" because it checked
+    /// only the returned value, which is right either way. The receiver's state
+    /// afterward is what has to be asserted.
+    ///
+    /// Controls: (c) is the same shape on a NON-generic impl, which always
+    /// worked (the concrete path resolves `SelfValue` elsewhere); (d) reads
+    /// through `ref self` rather than mutating. If (c)/(d) ever fail the fix
+    /// has over-reached into the concrete path. Verified RED against the
+    /// pre-fix compiler: (a) printed 2 and (b) hung until killed.
+    #[test]
+    fn e2e_mut_ref_self_sibling_call_in_generic_impl_mutates_the_receiver() {
+        let src = r#"
+struct Box[T] { xs: Vec[T] }
+impl[T] Box[T] {
+    fn one(mut ref self) -> Option[T] { self.xs.pop() }
+    fn probe(mut ref self) -> i64 {
+        match self.one() { Some(v) => { println(v); } None => {} }
+        self.xs.len()
+    }
+    fn drain(mut ref self) -> Vec[T] {
+        let mut out: Vec[T] = Vec.new();
+        while self.xs.len() > 0 {
+            match self.one() { Some(v) => { out.push(v); } None => {} }
+        }
+        out
+    }
+    fn peek(ref self) -> i64 { self.xs.len() }
+}
+struct Plain { xs: Vec[i64] }
+impl Plain {
+    fn one(mut ref self) -> Option[i64] { self.xs.pop() }
+    fn probe(mut ref self) -> i64 {
+        match self.one() { Some(v) => { println(v); } None => {} }
+        self.xs.len()
+    }
+}
+fn main() {
+    // (a) ONE sibling call: the receiver must be one shorter afterward.
+    let mut a = Box { xs: [7, 9] };
+    println(a.probe());
+    // (b) the filed shape — the drain loop must terminate and yield both.
+    let mut b = Box { xs: [7, 9] };
+    let o = b.drain();
+    println(o.len());
+    // (b2) same at a heap-carrying element type.
+    let mut s = Box { xs: ["x", "yy"] };
+    println(s.drain().len());
+    // (c) NON-generic control: always worked, must stay working.
+    let mut p = Plain { xs: [7, 9] };
+    println(p.probe());
+    // (d) `ref self` control: a read-only sibling receiver is unaffected.
+    let r = Box { xs: [7, 9, 11] };
+    println(r.peek());
+}
+"#;
+        assert_eq!(run_program(src).as_deref(), Some("9\n1\n2\n2\n9\n1\n3\n"));
+    }
+
     /// B-2026-08-06-20 — TWO instantiations of ONE generic struct reached
     /// through a MIX of literal and named receivers.
     ///
