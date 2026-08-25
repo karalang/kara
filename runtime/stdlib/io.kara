@@ -78,7 +78,7 @@ struct FileSystem { }
 
 impl FileSystem {
     #[compiler_builtin]
-    fn read_to_string(path: String) -> Result[String, IoError] { Err(IoError.Other("placeholder")) }
+    fn read_to_string(path: ref String) -> Result[String, IoError] { Err(IoError.Other("placeholder")) }
 
     // `fs.read_lines(path)` — read a whole file and split it into lines
     // (design.md § I/O; phase-8 line 773). Slurp-first, matching the fs
@@ -89,12 +89,12 @@ impl FileSystem {
     // `karac build` rejects it loudly (codegen for the `Result[Vec[String], _]`
     // return is a tracked follow-on).
     #[compiler_builtin]
-    fn read_lines(path: String) -> Result[Vec[String], IoError] with reads(FileSystem) {
+    fn read_lines(path: ref String) -> Result[Vec[String], IoError] with reads(FileSystem) {
         Err(IoError.Other("placeholder"))
     }
 
     #[compiler_builtin]
-    fn write(path: String, contents: String) -> Result[Unit, IoError] { Err(IoError.Other("placeholder")) }
+    fn write(path: ref String, contents: ref String) -> Result[Unit, IoError] { Err(IoError.Other("placeholder")) }
 }
 
 // Phase 8 `File` handle slice F1 (2026-05-26): stateful file I/O. The
@@ -112,13 +112,13 @@ struct File { }
 
 impl File {
     #[compiler_builtin]
-    fn open(path: String) -> Result[File, IoError] with reads(FileSystem) { Err(IoError.Other("placeholder")) }
+    fn open(path: ref String) -> Result[File, IoError] with reads(FileSystem) { Err(IoError.Other("placeholder")) }
 
     #[compiler_builtin]
-    fn create(path: String) -> Result[File, IoError] with writes(FileSystem) { Err(IoError.Other("placeholder")) }
+    fn create(path: ref String) -> Result[File, IoError] with writes(FileSystem) { Err(IoError.Other("placeholder")) }
 
     #[compiler_builtin]
-    fn append(path: String) -> Result[File, IoError] with writes(FileSystem) { Err(IoError.Other("placeholder")) }
+    fn append(path: ref String) -> Result[File, IoError] with writes(FileSystem) { Err(IoError.Other("placeholder")) }
 
     #[compiler_builtin]
     fn read(ref self, buf: mut Slice[u8]) -> Result[usize, IoError] with reads(FileSystem) { Err(IoError.Other("placeholder")) }
@@ -189,7 +189,7 @@ impl Env {
     fn args() -> Vec[String] { Vec.new() }
 
     #[compiler_builtin]
-    fn var(name: String) -> Result[String, VarError] { Err(VarError.NotPresent) }
+    fn var(name: ref String) -> Result[String, VarError] { Err(VarError.NotPresent) }
 
     #[compiler_builtin]
     fn set(name: String, value: String) { }

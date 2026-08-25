@@ -4773,6 +4773,8 @@ fn fs.read_to_string(path: ref String) -> Result[String, IoError] with reads(Fil
 fn fs.write(path: ref String, content: ref String) -> Result[(), IoError] with writes(FileSystem)
 ```
 
+**Paths are borrowed, not consumed.** Every entry point above that takes a path or a name takes it as `ref String`, and so do the `File` constructors — `File.open(path: ref String)`, `File.create`, `File.append`. Opening a file is a read of the path, not a claim on it, so a read-only predicate over a path (`fn is_png(path: ref String) -> bool`) can borrow one and the caller keeps its `String` for later use. Passing an owned binding, a literal, or a temporary all remain legal at the call site — `ref` is never written there (see [Ownership](#ownership)).
+
 `print` / `println` / `eprintln` are already in the prelude (see [Module System — Prelude](#module-system)) with `writes(Stdout)` / `writes(Stderr)`.
 
 **Error types.**
