@@ -93,8 +93,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 285 | 1 |
-| leak | 189 | 0 |
-| missing-feature | 167 | 1 |
+| leak | 190 | 1 |
+| missing-feature | 167 | 0 |
 | run-vs-build | 159 | 1 |
 | codegen-gap | 138 | 0 |
 | double-free | 136 | 0 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1023 | 3 |
-| typecheck | 252 | 1 |
+| codegen | 1024 | 4 |
+| typecheck | 252 | 0 |
 | interp | 180 | 0 |
 | ownership | 65 | 0 |
 | other | 64 | 0 |
@@ -124,16 +124,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1552 surfaced · 4 open · 1523 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-25). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1553 surfaced · 4 open · 1524 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-25). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-24-24 | 2026-08-24 | typecheck | low | `File.open` takes an owned `String`, so a read-only path predicate cannot borrow one and must clone | kara-katas/apps/cumulus/README.md |
 | B-2026-08-25-2 | 2026-08-25 | codegen | high | `std.cli` IS NOT AOT-COMPILABLE: every pure-Kāra INSTANCE method on its types (`Arg.required`, `Parser.about`, ... ) dies in codegen with `no handler for method '<m>' on variable '<v>'`, so `karac check` passes and `karac build` fails -- while roadmap.md marks the feature `[x]` done and deferred.md ships it at v1 | roadmap.md:531 (`std.cli` marked [x]) + deferred.md § std.cli; codegen method dispatch falls through to the catch-all in src/codegen/method_call.rs for these receivers |
 | B-2026-08-25-3 | 2026-08-25 | codegen | medium | `codegen_tests::vec_mutation_methods_bounds_check_out_of_range_index` IS FLAKY, and it fails by showing exactly the PRE-FIX symptom of the high-severity bug it guards: `v.insert(7i64, 9i64)` produced no `Vec.insert index out of bounds` panic, stdout empty, stderr `free(): invalid pointer`. Observed once in a full `cargo test --features llvm` run; the same test then passed 3/3 in isolation, 3198/3198 in a codegen-only run, and the next FULL run was green at 125 suites / 15090 tests. | roadmap.md |
 | B-2026-08-25-7 | 2026-08-25 | codegen | high | A generic method that REBINDS its owned receiver to a local (`let mut h = self`) and drains through a sibling `mut ref self` method returns EMPTY elements at a heap-carrying `T`: `Heap[String].into_sorted()` yields the right COUNT but every String is empty under JIT and AOT, while the interpreter is correct. Needs all three of generic impl + the rebinding + a heap element type -- `T = i64` is correct, and the identical shape on a NON-generic impl is correct at String too. | phase-7-codegen.md |
+| B-2026-08-25-9 | 2026-08-25 | codegen | medium | A TEMPORARY passed as the path argument to a `#[compiler_builtin]` fs entry point is never freed: ~47 bytes leak per call, under BOTH the owned and `ref String` signatures | roadmap.md |
 
 ### Relocated (1)
 
@@ -164,9 +164,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1552 surfaced
 
 </details>
 
-### Fixed (1523)
+### Fixed (1524)
 
-<details><summary>1523 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1524 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -18101,6 +18101,32 @@ alone cannot say WHICH functions a "mixed" claim covers. The terminal note
 already draws that partition in prose; leaving the JSON channel unable to
 is the same gap in a smaller form. The JSON now reproduces the note's
 partition exactly. |
+| B-2026-08-24-24 | typecheck | low | `File.open` takes an owned `String`, so a read-only path predicate cannot borrow one and must clone | FIXED by 0382211, and it was mostly SPEC DRIFT rather than the open design
+question the row assumed.
+
+design.md ALREADY specifies the borrowing forms -- 4772
+`fs.read_to_string(path: ref String)`, 4773 `fs.write(path: ref String,
+content: ref String)`, 4769 `env.var(name: ref String)` -- and the
+implementation had drifted to owned `String`. Seven signatures in
+runtime/stdlib/io.kara now match the spec: `File.open` / `.create` /
+`.append`, `fs.read_to_string` / `.read_lines` / `.write` (path AND
+contents), and `env.var`. `env.set` is deliberately untouched: spec-silent
+and not a path.
+
+BOTH HALVES WERE ALREADY BORROW-SHAPED, which is what made this safe rather
+than a breaking change:
+  - CALL SITES keep compiling. A `ref String` parameter accepts an owned
+    binding, a literal, a function-return temporary and a `.clone()`
+    temporary alike -- `ref` is never written at a call site -- so no
+    existing caller breaks. They simply stop LOSING the String.
+  - THE RUNTIME NEVER OWNED THE PATH. `karac_runtime_file_open`,
+    `_fs_write` and `_env_var` all take `(ptr, len)` and copy into a
+    PathBuf/String on the Rust side. The owned parameter was a front-end
+    artifact with nothing behind it.
+
+So the row's `is_cstack(inp.clone())` workaround is no longer needed, and
+the broader `AsRef`-shaped-bound question it raised does NOT have to be
+settled to get the affordance -- that remains open as its own design topic. |
 | B-2026-08-25-1 | codegen | low | An RVALUE `break` value that owns heap is still refused: `break Node { v: 11 }` (shared), `break Map.new()`, and `break f"x"` in a labeled-block TAIL… | FIXED by 0892679. An rvalue carrier needs NO ownership action -- only permission to store. `compile_break`'s `owned_ptr` now accepts a second proof beside the binding disarm: `break_value_is_fresh_owned_handle`, an ALLOWLIST of the two forms that manufacture ownership -- a `shared` struct literal (mallocs its own box, stores rc = 1) and a call / method call that is not declared to return a borrow (reusing `expr_yields_fresh_owned_temp`, which already carves that exception out). `shared enum` variant construction parses as a call, so it arrives through the second arm. `store_in_frame_at`'s pointer gate is unchanged; only the supply of proofs grew. |
 | B-2026-08-25-4 | typecheck | medium | An ASSOCIATED fn inside a BOUNDED generic impl saw the impl's OWN bound as unsatisfied on a local receiver | b4042fa |
 | B-2026-08-25-5 | codegen | high | A generic method calling a MUTATING sibling generic method in a loop HANGS under codegen (interp ok) | FIXED by 8e93189. `self` parses as `ExprKind::SelfValue`, NOT `Identifier("self")`, and the generic call path's ref-argument lowering (`compile_generic_call`, src/codegen/mono.rs) produced a pointer from exactly three arms: an `Identifier` through `get_data_ptr`, an index borrow through `ref_arg_index_borrow_ptr`, and `mut_ref_place_arg_ptr` -- which handles only `FieldAccess` / `TupleIndex`, on the explicit stated assumption that "a bare identifier already took the `get_data_ptr` fast path above". `SelfValue` matched NONE of the three, so it fell through to `materialize_rvalue_for_ref_arg` and the callee received a pointer to a COPY of the receiver. Every mutation the sibling made through `mut ref self` landed on that copy and was discarded.
