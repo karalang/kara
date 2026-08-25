@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 158 | 0 |
 | codegen-gap | 136 | 1 |
 | double-free | 136 | 0 |
-| diagnostics | 102 | 1 |
+| diagnostics | 104 | 2 |
 | false-positive | 95 | 0 |
 | perf | 84 | 0 |
 | other | 59 | 0 |
@@ -113,26 +113,27 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen | 1016 | 1 |
 | typecheck | 250 | 1 |
 | interp | 180 | 0 |
+| ownership | 65 | 1 |
 | other | 64 | 0 |
-| ownership | 64 | 0 |
 | cli | 62 | 0 |
 | autopar | 55 | 0 |
 | parser | 41 | 0 |
 | runtime | 31 | 0 |
 | resolver | 26 | 0 |
-| effect | 22 | 1 |
+| effect | 23 | 1 |
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1541 surfaced · 3 open · 1514 fixed · 10 wontfix** (2026-05-20 → 2026-08-24). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1543 surfaced · 4 open · 1515 fixed · 10 wontfix** (2026-05-20 → 2026-08-24). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-23-11 | 2026-08-23 | typecheck | medium | `Type::Function` carries NO EFFECT ROW, so design.md § First-Class Functions' `let f = save;  // f: Fn(User) -> () with writes(UserDB)` is not representable and a function value's effects cannot propagate through its TYPE. NARROWED 7e7972b: the IMPRECISION this caused -- a function value that is bound and never called still demanding the enclosing function declare its effects -- is FIXED, in the effect checker and without the type row (bind-an-alias, attribute-at-every-other-mention). What remains is representability only, and the prescription in the original title does not work as written: the typechecker cannot populate an effect row, because `effectcheck` runs after `typecheck` AND consumes its output, so inferred effects at typecheck time would need a cycle. Read the detail before picking this up. | roadmap.md |
-| B-2026-08-23-13 | 2026-08-23 | effect | low | The mutual-recursion NOTE now fires for two functions that merely REFERENCE each other as VALUES, calling them a "mutual recursion group" though neither calls the other. `fn p(n: i64) -> i64 { let f = q; n + 1 }` + `fn q(n: i64) -> i64 { let g = p; n + 2 }` reports `note[effect]: mutual recursion group resolved by fixed-point inference: \`p\` (no effects), \`q\` (no effects)`. The program passes and the note is suppressible with `#[allow(mutual_recursion_note)]`, so this is diagnostic wording, not a check failure -- but "mutual recursion" is a false statement about the program. | roadmap.md |
 | B-2026-08-24-21 | 2026-08-24 | codegen | low | A `shared` STRUCT OR ENUM BREAK VALUE cannot leave a loop on the compiled backends, and the OBVIOUS FIX MAKES IT WORSE: `loop { ...; let n = Node { v: i }; break n }` fails at module verification today (interpreter returns it), but disarming the source binding the way Map/Set now does -- which LOOKS correct, because `RcDec` is already null-guarded -- was MEASURED to HANG for a `shared struct` and to die with a BUS ERROR for a `shared enum`. | roadmap.md |
+| B-2026-08-24-22 | 2026-08-24 | ownership | medium | `karac check` IS NOT DETERMINISTIC: the same binary on the same unchanged input emits a DIFFERENT rc-fallback diagnostic run to run. On runtime/stdlib/protobuf.kara the `ename` note cites `consume at 1630:59, other use at 1650:59` in some runs and `consume at 1750:57, other use at 1763:59` in others -- measured 9/11 and 11/9 over two 20-run batches of ONE binary. Diagnostic ORDER is unstable too: 200 differing lines across a 1111-file sweep of one binary against itself, same files and same exit codes throughout. | roadmap.md |
+| B-2026-08-24-23 | 2026-08-24 | effect | low | The `--output=json` `mutual_recursion_groups` field still reports a VALUE-ONLY cycle as a mutual recursion group, the same false claim B-2026-08-23-13 fixed in the terminal note. Two functions that each stash the other in a struct field, neither calling the other, appear in that array under a name asserting they mutually recurse. | roadmap.md |
 
 ### Wontfix (10)
 
@@ -153,9 +154,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1541 surfaced
 
 </details>
 
-### Fixed (1514)
+### Fixed (1515)
 
-<details><summary>1514 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1515 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -17208,6 +17209,7 @@ TESTS: 14 in tests/effectchecker.rs. The load-bearing one is `test_let_annotatio
 GATES: 9806 tests pass (0 failed), fmt clean, clippy clean on both feature legs.
 
 REMAINDER: the same slot is still unchecked at four other positions -- see B-2026-08-24-1, filed with this fix. |
+| B-2026-08-23-13 | effect | low | The mutual-recursion NOTE now fires for two functions that merely REFERENCE each other as VALUES, calling them a "mutual recursion group" though neit… | FIXED by 249f165. `emit_mutual_recursion_notes` now asks a narrower question than inference does, and uses a narrower graph to answer it. `build_call_graph` gained an `EdgeKinds` parameter plus a `build_call_graph_calls_only()` sibling that omits the `fn_value_ref_calls` edges; the note re-runs Tarjan on that graph and counts a member as mutually recursive only if it sits in a call-only SCC of size >1. Three renderings result: every member call-recursive -> "mutual recursion group ...", byte-identical to before; none -> "effect-inference cycle ... Every cycle here passes through a function-as-value reference, so no member is mutually recursive with another."; mixed -> "mutual recursion group ...; joined by function-as-value reference: ...", because naming a value-joined member inside a mutual recursion group is the same false statement in miniature. The second graph is built only when `fn_value_ref_calls` is non-empty, so a program that never mentions a function as a value pays nothing. `#[allow(mutual_recursion_note)]` and the `mutual_recursion_groups` JSON field are both unchanged. Tests: 4 in tests/effectchecker.rs (value-only rewording, with a non-vacuity assert that the note still FIRES; genuine-recursion wording unchanged; mixed partition; suppression) -- the two bug-pinning ones were confirmed to FAIL against a pre-fix binary. Corpus: 1111 .kara files swept with pre- and post-fix binaries, output multiset identical (see the CORRECTION for the one apparent diff, which reproduced on the pre-fix binary too and is filed separately). |
 | B-2026-08-23-14 | codegen | high | `eprintln` output is SILENTLY DROPPED under `karac run` (JIT) and `karac build` (AOT) -- a compiled program loses every stderr write | FIXED by 5786ab6. Two edits, each independently necessary (each was reverted alone and the gate failed).
 
 (1) `src/codegen/call_dispatch.rs` — `eprintln` now joins `println` / `print` on the `compile_print` intercept. It is a prelude FREE function, so no later arm ever claimed it; without the intercept it reached the unknown-callee constant-0 fallback and lowered to nothing at all.
