@@ -577,7 +577,7 @@ impl Args {
             match self.values.get(i) {
                 Some(pv) => {
                     if pv.name == name {
-                        return Ok(pv.value);
+                        return Ok(pv.value.clone());
                     }
                 }
                 None => { }
@@ -607,7 +607,7 @@ impl Args {
     // invoked on the command line.
     fn subcommand_name(ref self) -> Option[String] {
         match self.sub {
-            Some(s) => Some(s.name),
+            Some(s) => Some(s.name.clone()),
             None => None,
         }
     }
@@ -620,7 +620,7 @@ impl SubcommandResult {
             match self.values.get(i) {
                 Some(pv) => {
                     if pv.name == name {
-                        return Ok(pv.value);
+                        return Ok(pv.value.clone());
                     }
                 }
                 None => { }
