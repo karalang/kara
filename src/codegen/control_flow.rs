@@ -2745,6 +2745,55 @@ impl<'ctx> super::Codegen<'ctx> {
             .is_some_and(|tn| self.type_decls.shared_types.contains_key(tn.as_str()))
     }
 
+    /// Does this break value produce a handle whose ONLY owner is the
+    /// expression itself — a fresh temporary, not a second reference to
+    /// something a binding still owns (B-2026-08-25-1)?
+    ///
+    /// This is the rvalue counterpart to [`Self::disarm_moved_handle_by_zeroing`],
+    /// and it exists because every mechanism that one relies on is keyed on a
+    /// source BINDING: the disarm needs a slot to null, and the `shared` retain
+    /// reads the handle back out of that slot. `break Node { v: 1 }` and
+    /// `break make_map(n)` have no binding, so they used to fail the pointer
+    /// gate and leave the loop's result slot unwritten — which surfaced as
+    /// `Module verification failed: ret i64 0` rather than as a wrong answer.
+    ///
+    /// The oracle is the RETURN twin. `return Node { v: 1 }` in the same loop
+    /// already compiles, and its IR is the whole argument: a `malloc`, a
+    /// `store i64 1` into the refcount, and a bare `ret` — no retain, no dec,
+    /// nothing queued in any cleanup frame. A `return make_map(n)` is the same
+    /// shape one level up (`%call = call ptr @make_map` then `ret ptr %call`).
+    /// The temporary is born owned and the drain has nothing to say about it,
+    /// so `break` needs no ownership action either — only permission to store.
+    ///
+    /// Deliberately an ALLOWLIST of forms that manufacture ownership, never a
+    /// "not obviously borrowed" test. The forms that must keep failing are the
+    /// PLACE reads — `break n.child`, `break v[i]`, `break self.head` — which
+    /// hand out a handle the container still owns and would need a retain this
+    /// emits none of. Refusing an unfamiliar form costs a compile error;
+    /// admitting one costs a use-after-free, so silence is the safe default and
+    /// anything added here needs the same standard of proof as the two arms
+    /// below.
+    fn break_value_is_fresh_owned_handle(&self, expr: &Expr) -> bool {
+        match &expr.kind {
+            // A `shared` struct literal mallocs its own box and initializes
+            // the refcount to 1 — see the `return` IR quoted above. The
+            // `shared` test is not redundant even though a plain struct
+            // literal never lowers to a pointer: `owned_ptr` is read as a
+            // claim about ownership, so it should only be true where that
+            // claim has actually been checked.
+            ExprKind::StructLiteral { path, .. } => path
+                .last()
+                .is_some_and(|n| self.type_decls.shared_types.contains_key(n.as_str())),
+            // Calls and method calls — `make_map(n)`, `Map.new()`, and every
+            // `shared enum` variant construction, which parses as a call.
+            // Kāra's convention is that a call returns an owned value, and
+            // this predicate already carves out the one exception (a callee
+            // declared to return a borrow), which is why it is reused here
+            // rather than rewritten.
+            _ => self.expr_yields_fresh_owned_temp(expr),
+        }
+    }
+
     /// Store `val` into `frame`'s result slot, creating that slot on first
     /// use at `val`'s OWN type.
     ///
@@ -2802,19 +2851,22 @@ impl<'ctx> super::Codegen<'ctx> {
         //     (design.md § `break expr`: "Plain `break` (or `break ()`) is
         //     valid in any loop form"), so there is nothing to carry and a
         //     slot would only invent one;
-        //   * POINTERS — a `shared` handle needs a matching retain for the
-        //     second reference this creates, not a cap-zero;
         //   * ARRAYS — `Array[T, N]` drops elementwise via `StructDrop`, so
         //     the whole-binding retraction is a different suppressor.
         // Both keep the previous skip-silently behaviour, which preserves the
         // single owner rather than inventing a second one.
-        // A POINTER is storable only when the caller has already taken
-        // ownership of what it points at — today that means a `Map` / `Set`
-        // handle whose source binding was disarmed by zeroing (see
-        // `disarm_map_cleanup_by_zeroing`). `owned_ptr` is that proof, not a
-        // hint: without it a `shared` handle would travel out as a SECOND
-        // reference with no matching retain, a use-after-free rather than the
-        // loud verification error it gets today (B-2026-08-24-19).
+        //
+        // A POINTER — every handle kind lowers to one, so this covers `Map`,
+        // `Set`, `shared struct` and `shared enum` alike — is storable only
+        // against `owned_ptr`, which is a PROOF that this break site owns what
+        // it points at, not a hint. Three things can supply that proof, and
+        // `compile_break` is where they are established: a `Map`/`Set` binding
+        // disarmed by zeroing, a `shared` binding whose still-live dec is
+        // balanced by a retain, or a fresh temporary that never had a second
+        // owner to begin with. Without such a proof a handle would travel out
+        // as a SECOND reference with nothing balancing it — a use-after-free
+        // instead of the loud verification error the skip produces
+        // (B-2026-08-24-19).
         let storable = ty.is_int_type()
             || ty.is_float_type()
             || (ty.is_struct_type() && ty.into_struct_type().count_fields() > 0)
@@ -2893,7 +2945,14 @@ impl<'ctx> super::Codegen<'ctx> {
         // Ownership transfer runs between the LOAD above and the drain below.
         // The handle disarm has to precede the store because it also decides
         // whether the handle may be stored at all.
-        let owned_ptr = value.is_some_and(|v| self.disarm_moved_handle_by_zeroing(v));
+        // Two independent proofs of ownership, in the order their side
+        // effects allow: the disarm runs first because for a `Map` binding it
+        // WRITES (nulls the source slot), and only its `false` return means
+        // "no binding here to take from". The freshness test then covers the
+        // rvalue carriers, which have no binding at all (B-2026-08-25-1).
+        let owned_ptr = value.is_some_and(|v| {
+            self.disarm_moved_handle_by_zeroing(v) || self.break_value_is_fresh_owned_handle(v)
+        });
         self.store_in_frame(&frame, val, owned_ptr)?;
         // MOVE-AWARE SUPPRESSION (B-2026-08-24-13), the break-site twin of
         // what `suppress_cleanup_for_tail_return` does for a function tail.

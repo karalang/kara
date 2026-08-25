@@ -52760,4 +52760,85 @@ fn main() {
             4,
         );
     }
+
+    /// B-2026-08-25-1 — the RVALUE carrier: a `shared` struct literal built
+    /// directly in the `break`, with no binding to key any mechanism on.
+    ///
+    /// The transfer emits NO ownership action, which is the whole claim of the
+    /// fix, so this fixture exists to prove that is not merely a leak in
+    /// disguise. Every iteration allocates a `scratch` node the drain must
+    /// still free, and one more node escapes through the break: too few decs
+    /// leaks the three scratches, too many frees the one that got out. The
+    /// escaping node is also READ after `pick` returns, so a premature free is
+    /// a use-after-free ASAN reports rather than a silent wrong number.
+    #[test]
+    fn asan_loop_break_shared_struct_rvalue_single_owner() {
+        assert_clean_asan_run_min_allocs(
+            "shared struct Node { v: i64 }\n\
+             fn pick() -> Node {\n\
+             \x20   let mut i = 0;\n\
+             \x20   loop {\n\
+             \x20       i = i + 1;\n\
+             \x20       let scratch = Node { v: i };\n\
+             \x20       if i == 3 { break Node { v: scratch.v * 11 } }\n\
+             \x20   }\n\
+             }\n\
+             fn main() { println(pick().v); }\n",
+            &["33"],
+            "loop-break-shared-struct-rvalue",
+            4,
+        );
+    }
+
+    /// The `shared enum` rvalue sibling. A variant construction parses as a
+    /// CALL, so it reaches the fix through a different arm than the struct
+    /// literal above while landing on the same no-op transfer.
+    #[test]
+    fn asan_loop_break_shared_enum_rvalue_single_owner() {
+        assert_clean_asan_run_min_allocs(
+            "shared enum Tree { Leaf(i64), Node(i64, i64) }\n\
+             fn pick() -> Tree {\n\
+             \x20   let mut i = 0;\n\
+             \x20   loop {\n\
+             \x20       i = i + 1;\n\
+             \x20       let scratch = Tree.Leaf(i);\n\
+             \x20       let stop = match scratch { Leaf(a) => a == 2, Node(a, b) => a == b };\n\
+             \x20       if stop { break Tree.Node(i, i * 2) }\n\
+             \x20   }\n\
+             }\n\
+             fn main() { match pick() { Leaf(a) => println(a), Node(a, b) => println(a + b) } }\n",
+            &["6"],
+            "loop-break-shared-enum-rvalue",
+            4,
+        );
+    }
+
+    /// The `Map` rvalue — a call RETURN, so the handle is manufactured a frame
+    /// down and arrives already owned. The per-iteration `scratch` map is the
+    /// leak half of the same two-sided check: the break path drains it while
+    /// carrying an unrelated handle out, so a suppressor that reached too far
+    /// would leak three maps here.
+    #[test]
+    fn asan_loop_break_map_rvalue_frees_unbroken_iterations() {
+        assert_clean_asan_run_min_allocs(
+            "fn make_map(n: i64) -> Map[String, i64] {\n\
+             \x20   let mut m: Map[String, i64] = Map.new();\n\
+             \x20   m.insert(f\"k{n}\", n * 7);\n\
+             \x20   m\n\
+             }\n\
+             fn pick() -> Map[String, i64] {\n\
+             \x20   let mut i = 0;\n\
+             \x20   loop {\n\
+             \x20       i = i + 1;\n\
+             \x20       let mut scratch: Map[String, i64] = Map.new();\n\
+             \x20       scratch.insert(f\"s{i}\", i);\n\
+             \x20       if i == 3 { break make_map(i) }\n\
+             \x20   }\n\
+             }\n\
+             fn main() { let m = pick(); println(m.get(f\"k3\").unwrap()); }\n",
+            &["21"],
+            "loop-break-map-rvalue",
+            8,
+        );
+    }
 }

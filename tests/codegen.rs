@@ -96371,6 +96371,169 @@ fn main() { println(pick()); }
         }
     }
 
+    /// B-2026-08-25-1 — an RVALUE `break` value that owns heap: a `shared`
+    /// struct literal built directly in the break, with no binding anywhere.
+    ///
+    /// Every mechanism the three preceding rows added is keyed on a source
+    /// BINDING — the disarm needs a slot to null, the retain reads the handle
+    /// back out of one — so this shape fell through the pointer gate and left
+    /// the loop's result slot unwritten. That surfaced as
+    /// `Module verification failed: ret i64 0`, not as a wrong answer.
+    ///
+    /// The transfer needs NO ownership action at all, which is what the
+    /// `return` twin proves: `return Node { v: 1 }` in the same loop emits a
+    /// `malloc`, a `store i64 1` into the refcount, and a bare `ret` — nothing
+    /// retained, nothing queued. The temporary is born owned, so `break` only
+    /// ever needed permission to store it.
+    #[test]
+    fn test_e2e_loop_break_shared_struct_rvalue_round_trips() {
+        let out = run_program(
+            r#"
+shared struct Node { v: i64 }
+
+fn pick() -> Node {
+    let mut i = 0;
+    loop {
+        i = i + 1;
+        if i == 2 { break Node { v: i * 11 } }
+    }
+}
+
+fn main() { println(pick().v); }
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "22");
+        }
+    }
+
+    /// The `shared enum` rvalue sibling. A variant construction parses as a
+    /// CALL, so it reaches the fix through the call arm rather than the
+    /// struct-literal one — a different route to the same permission.
+    #[test]
+    fn test_e2e_loop_break_shared_enum_rvalue_round_trips() {
+        let out = run_program(
+            r#"
+shared enum Tree { Leaf(i64), Node(i64, i64) }
+
+fn pick() -> Tree {
+    let mut i = 0;
+    loop {
+        i = i + 1;
+        if i == 2 { break Tree.Node(i, i * 2) }
+    }
+}
+
+fn main() { match pick() { Leaf(a) => println(a), Node(a, b) => println(a + b) } }
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "6");
+        }
+    }
+
+    /// The `Map` rvalue — a call RETURN rather than a literal, so the handle
+    /// is manufactured one frame down and arrives already owned. The `Set`
+    /// surface shares this path (`Set` lowers to `Map[T, ()]`).
+    #[test]
+    fn test_e2e_loop_break_map_rvalue_round_trips() {
+        let out = run_program(
+            r#"
+fn make_map(n: i64) -> Map[String, i64] {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("a", n);
+    m
+}
+
+fn pick() -> Map[String, i64] {
+    let mut i = 0;
+    loop {
+        i = i + 1;
+        if i == 2 { break make_map(i * 7) }
+    }
+}
+
+fn main() { println(pick().get("a").unwrap()); }
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "14");
+        }
+    }
+
+    /// A `String` / `Vec` rvalue carrier ALREADY worked, and this pins why so
+    /// the pointer-gate story is not mistaken for the whole story: those
+    /// lower to a `{ptr, i64, i64}` STRUCT, which the slot has accepted since
+    /// B-2026-08-24-13. Only handle types — `shared`, `Map`, `Set` — lower to
+    /// a bare pointer and hit the ownership gate this row opened.
+    #[test]
+    fn test_e2e_loop_break_string_and_vec_rvalues_round_trip() {
+        let out = run_program(
+            r#"
+fn pick_str() -> String {
+    let mut i = 0;
+    loop {
+        i = i + 1;
+        if i == 2 { break f"x{i}" }
+    }
+}
+
+fn pick_vec() -> Vec[i64] {
+    let mut i = 0;
+    loop {
+        i = i + 1;
+        if i == 2 { break [1, 2, i] }
+    }
+}
+
+fn main() { println(pick_str()); println(pick_vec()[2]); }
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "x2\n2");
+        }
+    }
+
+    /// The other half of the allowlist: a break value read out of a PLACE the
+    /// container still owns must keep being refused.
+    ///
+    /// `break o.inner` hands out a handle with no retain behind it, so
+    /// admitting it would be a use-after-free rather than the compile error it
+    /// gets. The predicate is an allowlist of forms that MANUFACTURE ownership
+    /// for exactly this reason, and this test is what stops a later
+    /// "simplification" to a not-obviously-borrowed test — which would accept
+    /// this program.
+    #[test]
+    fn test_loop_break_borrowed_field_stays_refused() {
+        let src = r#"
+shared struct Inner { v: i64 }
+struct Outer { inner: Inner }
+
+fn pick(o: Outer) -> Inner {
+    let mut i = 0;
+    loop {
+        i = i + 1;
+        if i == 2 { break o.inner }
+    }
+}
+
+fn main() { let o = Outer { inner: Inner { v: 5 } }; println(pick(o).v); }
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        karac::prepare_for_resolve(&mut parsed.program);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        let err = compile_to_ir(&parsed.program, Some(&ownership), None)
+            .expect_err("a borrowed place must not travel out through the result slot");
+        assert!(
+            err.contains("Module verification failed"),
+            "expected the loud refusal, got: {err}"
+        );
+    }
+
     #[test]
     fn test_e2e_value_fn_loop_tail_terminates_with_unreachable() {
         // A value-returning function whose body's final expression is a
