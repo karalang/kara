@@ -94,11 +94,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 288 | 1 |
 | leak | 195 | 0 |
-| missing-feature | 171 | 4 |
+| missing-feature | 172 | 4 |
 | run-vs-build | 159 | 0 |
 | codegen-gap | 138 | 0 |
 | double-free | 138 | 0 |
-| diagnostics | 106 | 1 |
+| diagnostics | 107 | 2 |
 | false-positive | 97 | 0 |
 | perf | 84 | 0 |
 | other | 60 | 1 |
@@ -111,11 +111,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 1036 | 2 |
-| typecheck | 257 | 4 |
+| typecheck | 259 | 6 |
 | interp | 180 | 0 |
 | ownership | 65 | 0 |
 | other | 64 | 0 |
-| cli | 63 | 1 |
+| cli | 63 | 0 |
 | autopar | 55 | 0 |
 | parser | 41 | 0 |
 | runtime | 32 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1572 surfaced · 7 open · 1540 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-25). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1574 surfaced · 8 open · 1541 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-25). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (7)
+### Open (8)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -134,9 +134,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1572 surfaced
 | B-2026-08-25-19 | 2026-08-25 | typecheck | medium | The ENTIRE `Box` / `Rc` / `Arc` smart-pointer family is UNDEFINED -- all six of `Box.new`, `Box.try_new`, `Rc.new`, `Rc.try_new`, `Arc.new`, `Arc.try_new` fail at RESOLVE with `undefined name`, and `Box[T]` in type position is `undefined type 'Box', did you mean 'Hex'?`. design.md carries them in three separate places as shipped surface: § Type Inference's variance table has `Box[=T] | invariant | Owned heap pointer; consuming `Box[T]` yields `T`...`; § Fallible Allocation's table has the row `Box[T] / Rc[T] / Arc[T] | new(t) | try_new(t)`; and § Fallible Allocation's indirect-allocator rules name `every `Box.new(...)` literal` as one of the sites that must be rejected under a no-panic profile. `Arc` is additionally LOAD-BEARING FOR A DOCUMENTED CONCURRENCY RULE -- § Module-Level Bindings says a `let mut` binding may be written from inside `par { }` only when its type is `Atomic[T]`, `Mutex[T]`, `RwLock[T]`, or `Arc[shared struct S]`, so one of the four sanctioned escapes cannot be spelled. | roadmap.md |
 | B-2026-08-25-20 | 2026-08-25 | typecheck | medium | Three of the fallible-allocation `try_*` methods design.md names by name do not exist, and `AllocError`'s `Display` is Debug formatting rather than the specified text. § Fallible Allocation API: "Operations that report only success/failure return `Result[(), AllocError]` (`try_push`, `try_insert`, `try_reserve`, `try_extend`, `try_append`)". Measured one method per compile: `Vec.try_reserve` -> `no method 'try_reserve' on type 'Vec'`; `Vec.try_extend` -> `no method 'try_extend'`; `Vec.try_append` -> `no method 'try_append'`. Working: `Vec.try_push`, `Vec.try_insert`, `Vec.try_with_capacity`, `String.try_push`, `String.try_push_str`, `Set.try_insert`. SEPARATELY, the same section specifies "The `Display` formatting names the failed operation's byte size on the `OutOfMemory` arm and \"capacity overflow\" on the `CapacityOverflow` arm" -- measured, `f"{e}"` renders `CapacityOverflow` and `OutOfMemory { requested_bytes: 4096 }`, which is the DEBUG form for both arms. | roadmap.md |
 | B-2026-08-25-22 | 2026-08-25 | typecheck | medium | The STABLE-HASH module does not exist, so the escape design.md prescribes for every use case where `Hash` is explicitly the wrong tool is unavailable. § `Hash` and `Hasher`, stability policy: hash values are "not stable across runs, not stable across Kara versions, not stable across targets", and therefore "Code that needs stable digests (content addressing, on-disk indexes, snapshot tests, distributed sharding) does **not** use `Hash`. Kara's stdlib SHIPS explicit, versioned functions for that purpose -- `hash::stable::siphash24(bytes, key)`, `hash::stable::xxh3(bytes)`, and the `crypto` module for cryptographic hashes." Neither `siphash24` nor `xxh3` appears anywhere in `src/` or `runtime/stdlib/`, and there is no `hash.stable` namespace to call. The paragraph's closing promise is unreachable too: "Users who reach for `Hash` for stability are pointed at the stable-hash module by a `karac explain` page" -- see B-2026-08-25-23 for the state of `karac explain --concept=`. | roadmap.md |
-| B-2026-08-25-23 | 2026-08-25 | cli | low | `karac explain --concept=` supports exactly ONE concept, `closures`, and it is not one of the pages design.md names. The error message self-documents the gap: `error: unknown concept 'operators'. Supported: closures.` design.md names two pages by exact flag -- `karac explain --concept=operators`, which § Operator Traits says "documents the full desugaring table so that users can see why a given operator call fails and which trait they would need", and `karac explain --concept=module-state` -- plus a stable-hash page referenced in prose (§ Hash stability policy: "Users who reach for `Hash` for stability are pointed at the stable-hash module by a `karac explain` page"). None of the three exists. The document makes 36 references to `karac explain` overall, so the surface is load-bearing for the AI-first diagnostics story. | roadmap.md |
 | B-2026-08-25-26 | 2026-08-25 | typecheck | low | An un-inferrable `T` from an EMPTY array literal is reported as a BOUND failure naming `<error>` as the type, pointed at a later method call rather than at the literal: `W.from([])` on `impl[T: Ord]` says "trait bound `T: Ord` is not satisfied; `<error>` does not implement `Ord`" | implementation_checklist/phase-11-stdlib-longtail.md#general-purpose-collections |
 | B-2026-08-25-28 | 2026-08-25 | codegen | high | A method call whose receiver is an unnamed TEMPORARY inside a generic impl dispatches to the unmangled base prototype and SEGFAULTS at a heap-carrying `T`: `Bag { xs: v }.inner()` and `mkbag(v).inner()` crash where `let q = Bag { xs: v }; q.inner()` is correct | implementation_checklist/phase-11-stdlib-longtail.md#general-purpose-collections |
+| B-2026-08-25-29 | 2026-08-25 | typecheck | medium | TWO OPERATOR BEHAVIOURS design.md § Operator Traits presents as SHIPPED v1 SURFACE DO NOT EXIST. (1) IMPLICIT LOSSLESS WIDENING AT OPERATOR BOUNDARIES: the section states "`(x: i32) + (y: i64)` is valid -- the compiler widens `x` to `i64` before dispatch, and the result type is `i64`", but the compiler rejects it with `cannot mix integer types 'i32' and 'i64' in arithmetic -- they must match; cast the 'i32' operand up`. Same for `u8 + u32` and for `f32 + f64` (`cannot mix float types`). A LITERAL operand still widens (`let x: i32 = 1; x + 2` is fine), so what is missing is specifically the two-typed-operand case. (2) BITWISE `Not` ON INTEGER PRIMITIVES: the v1 trait set lists `Not` under Bitwise and the stdlib-impl list says the bitwise traits ship "only on integer primitives and bool", but `not a` on an `i64` or `u8` is rejected -- `unary '!' requires 'bool', found 'i64'`. Only `bool` works. | roadmap.md |
+| B-2026-08-25-30 | 2026-08-25 | typecheck | medium | OPERATOR-FAILURE DIAGNOSTICS DO NOT SPEAK THE TRAIT LANGUAGE design.md § Operator Traits mandates, and two of them NAME A TRAIT THE USER DOES NOT NEED. The spec is explicit: "Diagnostics for a missing impl (e.g., `vec1 + vec2`) speak the trait language -- \"type Vec[T] does not implement trait Add\" -- not operator language -- \"+ is not defined for Vec[T]\"", and § Notably absent adds that `vec1 + vec2` gets "a diagnostic pointing at `vec.concat(other)` or `vec.extend(other)`". Measured, `[1,2] + [3,4]` reports `arithmetic operator requires numeric type, found 'Vec[i64]'` -- operator language, no trait named, no method redirect. Separately, `==` on a struct reports `does not implement Eq; add #[derive(Eq)]` and `<` reports `does not implement Ord; add #[derive(Ord)]`, but the desugaring runs through `PartialEq` / `PartialOrd` and `#[derive(PartialEq)]` / `#[derive(PartialOrd)]` ALONE is sufficient to compile -- so the message names the total trait when the partial one is what is required. The spec states the `Eq` marker "is never named by the desugaring". | roadmap.md |
 
 ### Relocated (1)
 
@@ -167,9 +168,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1572 surfaced
 
 </details>
 
-### Fixed (1540)
+### Fixed (1541)
 
-<details><summary>1540 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1541 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1710,6 +1711,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1572 surfaced
 | B-2026-08-25-17 | codegen | medium | A DISCARDED method-call result that owns heap is never freed: `h.xs.pop();` as a bare expression statement leaks the popped element's buffer (8 bytes… | c8753cd |
 | B-2026-08-25-18 | codegen | medium | Discarded heap-owning pop in a generic FREE FUNCTION leaks the container's elements at -O0 -- B-2026-08-25-17's free-fn precedence guard was not actu… | Fixed in two paired sites |
 | B-2026-08-25-21 | typecheck | low | `m.try_insert(k, v)?;` as a statement warns `discarded 'Option' value`, though the displaced-value must-use exemption exists precisely for that shape… | 0fcc886 |
+| B-2026-08-25-23 | cli | low | `karac explain --concept=` supports exactly ONE concept, `closures`, and it is not one of the pages design.md names | 7472e06 |
 | B-2026-08-25-24 | resolver | low | The unassigned-layout-fields warning renders as `warning[resolve]` instead of `warning[layout_unassigned_fields]`, so the suppression design.md presc… | 733c0f2 |
 | B-2026-08-25-25 | codegen | high | An ASSOCIATED fn in a GENERIC impl that binds a struct LITERAL to a local and calls a MUTATING sibling through it dispatches to the UNMANGLED base pr… | 8d32a0d |
 | B-2026-08-25-27 | codegen | high | SIX `let`-RHS forms bound a generic-struct value with NO recorded instantiation, so the sibling call dispatched to the unmangled base prototype and S… | 14c6d32 |
