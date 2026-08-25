@@ -102,7 +102,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | false-positive | 96 | 0 |
 | perf | 84 | 0 |
 | other | 60 | 1 |
-| soundness | 59 | 1 |
+| soundness | 59 | 0 |
 | crash | 57 | 0 |
 | use-after-free | 20 | 0 |
 
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1032 | 3 |
+| codegen | 1032 | 2 |
 | typecheck | 252 | 0 |
 | interp | 180 | 0 |
 | ownership | 65 | 0 |
@@ -124,15 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1561 surfaced · 3 open · 1533 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-25). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1561 surfaced · 2 open · 1534 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-25). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (2)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-25-2 | 2026-08-25 | codegen | high | `std.cli` IS NOT AOT-COMPILABLE: every pure-Kāra INSTANCE method on its types (`Arg.required`, `Parser.about`, ... ) dies in codegen with `no handler for method '<m>' on variable '<v>'`, so `karac check` passes and `karac build` fails -- while roadmap.md marks the feature `[x]` done and deferred.md ships it at v1 | roadmap.md:531 (`std.cli` marked [x]) + deferred.md § std.cli; codegen method dispatch falls through to the catch-all in src/codegen/method_call.rs for these receivers |
 | B-2026-08-25-3 | 2026-08-25 | codegen | medium | `codegen_tests::vec_mutation_methods_bounds_check_out_of_range_index` IS FLAKY, and it fails by showing exactly the PRE-FIX symptom of the high-severity bug it guards: `v.insert(7i64, 9i64)` produced no `Vec.insert index out of bounds` panic, stdout empty, stderr `free(): invalid pointer`. Observed once in a full `cargo test --features llvm` run; the same test then passed 3/3 in isolation, 3198/3198 in a codegen-only run, and the next FULL run was green at 125 suites / 15090 tests. | roadmap.md |
-| B-2026-08-25-13 | 2026-08-25 | codegen | high | `lower_stdlib_source` DISCARDS the typecheck errors it computes for every baked stdlib module, so a baked module can ship code `karac check` rejects in user programs -- which is how cli.kara shipped four borrowed-String-into-owned-field stores that DOUBLE-FREED when compiled. The naive fail-closed gate FALSE-POSITIVES on THREE of the eight lowered modules (protobuf 6, pool 2, cli 2) across TWO error kinds; see detail for what a real fix needs. | roadmap.md |
 
 ### Relocated (1)
 
@@ -163,9 +162,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1561 surfaced
 
 </details>
 
-### Fixed (1533)
+### Fixed (1534)
 
-<details><summary>1533 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1534 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1698,6 +1697,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1561 surfaced
 | B-2026-08-25-10 | codegen | high | A generic impl method that transfers heap-owning content OUT of an owned `self` (`fn into_vec(self) -> Vec[T] { self.xs }`, or a drain through `pop`)… | c91d018 |
 | B-2026-08-25-11 | codegen | medium | A monomorph's per-element drop for a `Vec[T]` field is emitted as an EMPTY STUB (`karac_drop_Vec`, `ret void`) when the impl's `T` is recorded head-o… | 6789e4a |
 | B-2026-08-25-12 | codegen | high | `match` on a `Result` whose Ok payload is a struct with THREE OR MORE `Vec` fields SEGFAULTS the compiled binary while the interpreter is correct | 443a902 |
+| B-2026-08-25-13 | codegen | high | `lower_stdlib_source` DISCARDS the typecheck errors it computes for every baked stdlib module, so a baked module can ship code `karac check` rejects… | 0440daa |
 | B-2026-08-25-14 | codegen | medium | An owned `self` aggregate param's OWN scope-exit drop is the UNMANGLED base drop (`__karac_drop_struct_Heap`, outer-only), not the monomorph's, so a… | 6df0bfb |
 | B-2026-08-25-15 | codegen+runtime | high | Returning a heap-bearing FIELD out of a BORROWED match payload (`return pv.value` where `pv` is bound from `.get()` on a `ref self` receiver) MOVES t… | 55f16cb |
 | B-2026-08-25-16 | codegen | medium | An aggregate TEMPORARY used as the receiver of an owned-`self` method is dropped with the UNMANGLED outer-only drop (`__karac_drop_struct_Heap`), so… | a9856f1 |
