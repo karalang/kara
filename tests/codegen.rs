@@ -13844,6 +13844,92 @@ impl BuildHasher for SumBuild {\n\
         run_program_capturing(src).map(|c| c.stdout)
     }
 
+    // ── Temporary receiver inside a generic impl (B-2026-08-25-28) ──────
+    //
+    // `Bag { xs: v }.inner()` inside `impl[T: Ord] Bag[T]` resolved its
+    // receiver instantiation to `Bag[T]` — the impl's own type PARAMETER, not
+    // the concrete type the enclosing monomorph was generated for. `Bag[T]`
+    // pins nothing, so no monomorph was selected and `inner` was emitted ONCE,
+    // unmangled, at the erased base layout. Both `mk$i64` and
+    // `mk$struct$T_ct_String` called that single prototype, and the String
+    // instantiation read a heap pointer through the wrong layout — SIGSEGV.
+    //
+    // The collapse cascaded: with `inner` unmangled, the `self`-receiver calls
+    // inside it lost their instantiation too, so one unsubstituted receiver
+    // took `inner` -> `arrange` -> `swap2` down together.
+    //
+    // Masked entirely at a scalar `T`, which is why the i64 leg is a control
+    // rather than the test.
+
+    const B28_BAG: &str = "\
+struct Bag[=T] { xs: Vec[T] }
+impl[T: Ord] Bag[T] {
+    fn swap2(mut ref self, i: i64, j: i64) { let t = self.xs[i]; self.xs[i] = self.xs[j]; self.xs[j] = t; }
+    fn arrange(mut ref self) { let n = self.xs.len(); if n > 1 { self.swap2(0, n - 1); } }
+    fn inner(self) -> Vec[T] { let mut b = self; b.arrange(); b.xs }
+";
+
+    #[test]
+    fn test_e2e_struct_literal_receiver_in_generic_impl_selects_its_monomorph() {
+        // The filed repro. Heap-carrying `T` first, scalar `T` second, in one
+        // program: the two instantiations must reach DIFFERENT monomorphs.
+        let src = format!(
+            "{B28_BAG}    fn mk(v: Vec[T]) -> Vec[T] {{ Bag {{ xs: v }}.inner() }}\n\
+             }}\n\
+             fn main() {{ let a = Bag.mk([\"x\",\"y\",\"z\"]); println(a[0]); \
+             let b = Bag.mk([1,2,3]); println(b[0]); }}"
+        );
+        assert_eq!(run_program(&src).as_deref(), Some("z\n3\n"));
+    }
+
+    #[test]
+    fn test_e2e_assoc_call_receiver_in_generic_impl_selects_its_monomorph() {
+        // Same defect through a CALL receiver rather than a struct literal,
+        // provided the constructor is itself inside the generic impl so its
+        // return type is still written in terms of `T`.
+        let src = format!(
+            "{B28_BAG}    fn make(v: Vec[T]) -> Bag[T] {{ Bag {{ xs: v }} }}\n\
+             \x20   fn mk2(v: Vec[T]) -> Vec[T] {{ Bag.make(v).inner() }}\n\
+             }}\n\
+             fn main() {{ let a = Bag.mk2([\"x\",\"y\",\"z\"]); println(a[0]); \
+             let b = Bag.mk2([1,2,3]); println(b[0]); }}"
+        );
+        assert_eq!(run_program(&src).as_deref(), Some("z\n3\n"));
+    }
+
+    #[test]
+    fn test_e2e_named_binding_receiver_in_generic_impl_still_correct() {
+        // Control: the SAME value bound to a name first was always correct
+        // (the `let` site seeds the instantiation). It must stay correct — the
+        // fix tightens the temporary path only.
+        let src = format!(
+            "{B28_BAG}    fn mk(v: Vec[T]) -> Vec[T] {{ let q = Bag {{ xs: v }}; q.inner() }}\n\
+             }}\n\
+             fn main() {{ let a = Bag.mk([\"x\",\"y\",\"z\"]); println(a[0]); \
+             let b = Bag.mk([1,2,3]); println(b[0]); }}"
+        );
+        assert_eq!(run_program(&src).as_deref(), Some("z\n3\n"));
+    }
+
+    #[test]
+    fn test_e2e_free_fn_constructor_receiver_was_never_affected() {
+        // Control pinning the SCOPE of the defect. A free generic constructor
+        // called from `main` binds `T` from concrete arguments, so its receiver
+        // instantiation was never parametric and this spelling passed before
+        // the fix. Keeping it here documents where the boundary is, so a future
+        // reader does not widen the fix chasing a case that never broke.
+        let src = "\
+struct Bag[=T] { xs: Vec[T] }
+impl[T: Ord] Bag[T] {
+    fn swap2(mut ref self, i: i64, j: i64) { let t = self.xs[i]; self.xs[i] = self.xs[j]; self.xs[j] = t; }
+    fn arrange(mut ref self) { let n = self.xs.len(); if n > 1 { self.swap2(0, n - 1); } }
+    fn inner(self) -> Vec[T] { let mut b = self; b.arrange(); b.xs }
+}
+fn mkbag[T: Ord](v: Vec[T]) -> Bag[T] { Bag { xs: v } }
+fn main() { let a = mkbag([\"x\",\"y\",\"z\"]).inner(); println(a[0]); let b = mkbag([1,2,3]).inner(); println(b[0]); }";
+        assert_eq!(run_program(src).as_deref(), Some("z\n3\n"));
+    }
+
     /// B-2026-08-22-17 — the same qualified spelling over a BUILT-IN head.
     ///
     /// B-2026-08-21-53 made `Type[Args].fn(..)` the documented way to pin a type
