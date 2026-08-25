@@ -439,6 +439,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 "file.ctor.call",
             )
             .unwrap();
+        // B-2026-08-25-9 — the runtime borrows `(ptr, len)` and copies, so a
+        // fresh owned temporary argument had no owner left to free it.
+        // No-ops on a non-heap value or a borrow view (`cap == 0`).
+        if self.expr_yields_fresh_owned_temp(path_arg) {
+            self.free_str_vec_buffer_if_heap(path_val);
+        }
         self.lower_kara_io_result(slot, FileOkKind::FileHandle)
     }
 
@@ -453,7 +459,14 @@ impl<'ctx> super::Codegen<'ctx> {
         path_arg: &Expr,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let path_val = self.compile_expr(path_arg)?;
-        self.compile_file_read_to_string_val(path_val)
+        let out = self.compile_file_read_to_string_val(path_val)?;
+        // B-2026-08-25-9 — the runtime borrows `(ptr, len)` and copies, so a
+        // fresh owned temporary argument had no owner left to free it.
+        // No-ops on a non-heap value or a borrow view (`cap == 0`).
+        if self.expr_yields_fresh_owned_temp(path_arg) {
+            self.free_str_vec_buffer_if_heap(path_val);
+        }
+        Ok(out)
     }
 
     /// Value-core of `compile_file_read_to_string` (path already compiled).
@@ -510,7 +523,17 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let path_val = self.compile_expr(path_arg)?;
         let contents_val = self.compile_expr(contents_arg)?;
-        self.compile_fs_write_vals(path_val, contents_val)
+        let out = self.compile_fs_write_vals(path_val, contents_val)?;
+        // B-2026-08-25-9 — the runtime borrows `(ptr, len)` and copies, so a
+        // fresh owned temporary argument had no owner left to free it.
+        // No-ops on a non-heap value or a borrow view (`cap == 0`).
+        if self.expr_yields_fresh_owned_temp(path_arg) {
+            self.free_str_vec_buffer_if_heap(path_val);
+        }
+        if self.expr_yields_fresh_owned_temp(contents_arg) {
+            self.free_str_vec_buffer_if_heap(contents_val);
+        }
+        Ok(out)
     }
 
     /// Value-core of `compile_fs_write` (both args already compiled). The
@@ -583,7 +606,14 @@ impl<'ctx> super::Codegen<'ctx> {
         path_arg: &Expr,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let path_val = self.compile_expr(path_arg)?;
-        self.compile_fs_read_lines_val(path_val)
+        let out = self.compile_fs_read_lines_val(path_val)?;
+        // B-2026-08-25-9 — the runtime borrows `(ptr, len)` and copies, so a
+        // fresh owned temporary argument had no owner left to free it.
+        // No-ops on a non-heap value or a borrow view (`cap == 0`).
+        if self.expr_yields_fresh_owned_temp(path_arg) {
+            self.free_str_vec_buffer_if_heap(path_val);
+        }
+        Ok(out)
     }
 
     /// Value-core of `compile_fs_read_lines` (path already compiled). The

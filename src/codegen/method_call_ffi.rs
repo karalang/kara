@@ -678,7 +678,27 @@ impl<'ctx> super::Codegen<'ctx> {
                  docs/implementation_checklist/phase-7-codegen.md."
             ));
         }
-        self.compile_ambient_ffi(resource, method, &arg_vals)
+        let out = self.compile_ambient_ffi(resource, method, &arg_vals)?;
+        // B-2026-08-25-9 — release argument TEMPORARIES. Every ambient FFI
+        // default takes its string/vec arguments as a borrowed `(ptr, len)`
+        // pair and copies on the Rust side (`karac_runtime_file_open`,
+        // `_fs_write`, `_env_var`, …), so nothing downstream ever owned the
+        // buffer: a `fs.read_to_string(dir + "/" + name)` leaked its path on
+        // every call. `free_str_vec_buffer_if_heap` no-ops on a non-heap value
+        // and on a borrow view (whose `cap` is zeroed), so only a genuinely
+        // fresh owned temporary is freed.
+        //
+        // Deliberately AFTER the call and only on this FFI-default path. The
+        // two override paths above return early and are left alone: an
+        // override is a user function reached by RUNTIME dispatch, and if its
+        // parameter is owned it frees the buffer itself — freeing here as well
+        // would double-free. That remainder is tracked on the row.
+        for (arg, val) in args.iter().zip(arg_vals.iter()) {
+            if self.expr_yields_fresh_owned_temp(&arg.value) {
+                self.free_str_vec_buffer_if_heap(*val);
+            }
+        }
+        Ok(out)
     }
 
     /// Emit the runtime override-vs-default branch for an ambient method

@@ -52890,4 +52890,55 @@ fn main() {
             4,
         );
     }
+
+    /// B-2026-08-25-9. A TEMPORARY passed as the path argument to a
+    /// `#[compiler_builtin]` fs entry point was never freed.
+    ///
+    /// The runtime side borrows — `karac_runtime_file_open` / `_fs_read_to_
+    /// string` / `_fs_write` all take `(ptr, len)` and copy into a
+    /// PathBuf/String on the Rust side — so nothing downstream ever owned the
+    /// caller's buffer. Under the OWNED signature the front end treated the
+    /// temporary as moved into the callee and emitted no release; the callee
+    /// never took ownership. ~47 bytes per call, on both the owned and the
+    /// `ref String` signature (B-2026-08-24-24 was leak-NEUTRAL here).
+    ///
+    /// HERMETIC BY DESIGN: the path does not exist and every call returns
+    /// `Err`. That is deliberate — the leak is in ARGUMENT handling, which
+    /// happens whether or not the open succeeds, so the fixture needs no
+    /// filesystem state and cannot flake on a sandbox that forbids writes.
+    ///
+    /// Covers BOTH lowering paths, which needed separate fixes, and both
+    /// temporary shapes (a function return and a `.clone()`):
+    ///
+    /// - `fs.read_to_string(..)` — the lowercase ambient-alias path, compiled
+    ///   in `compile_ambient_resource_method`.
+    /// - `File.open(..)` — the capitalized associated-call path, compiled in
+    ///   `compile_file_constructor`.
+    ///
+    /// The plain BINDING argument (`f(p)`) is here as the counter-case: it
+    /// must NOT be freed, and `p` is used after every call. Freeing it would
+    /// be a use-after-free rather than a leak, which is the failure mode this
+    /// fix could plausibly have introduced.
+    #[test]
+    fn asan_builtin_fs_call_frees_temporary_path_argument() {
+        assert_clean_asan_run(
+            r#"
+fn mk() -> String { "no-such-file-b20260825-9.txt" }
+fn main() {
+    let p = "no-such-file-b20260825-9.txt";
+    let mut n: i64 = 0;
+    // temporaries: must be freed by the caller
+    match fs.read_to_string(mk()) { Ok(s) => { n = n + s.len(); } Err(e) => { n = n + 1; } }
+    match fs.read_to_string(p.clone()) { Ok(s) => { n = n + s.len(); } Err(e) => { n = n + 1; } }
+    match File.open(mk()) { Ok(f) => { n = n + 2; } Err(e) => { n = n + 1; } }
+    match File.open(p.clone()) { Ok(f) => { n = n + 2; } Err(e) => { n = n + 1; } }
+    // binding: must NOT be freed — `p` is still live below
+    match fs.read_to_string(p) { Ok(s) => { n = n + s.len(); } Err(e) => { n = n + 1; } }
+    println(f"n={n} p={p.len()}");
+}
+"#,
+            &["n=5 p=28"],
+            "builtin-fs-temp-path-arg",
+        );
+    }
 }
