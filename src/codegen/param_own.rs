@@ -217,7 +217,25 @@ impl<'ctx> super::Codegen<'ctx> {
             self.drop_rc.deep_copy_rc_inc_bare_shared = true;
             self.deep_copy_struct_heap_fields_in_place(slot, type_name);
             self.drop_rc.deep_copy_rc_inc_bare_shared = saved;
-            self.track_struct_var(type_name, slot);
+            // B-2026-08-25-14 — register the drop at the param's declared
+            // INSTANTIATION, exactly as the copy-unsupported branch above
+            // already does. This branch discarded `inst` and keyed the drop by
+            // NAME alone, so an owned `self: Heap[T]` got the name-shared
+            // `__karac_drop_struct_Heap`, which resolves the `xs: Vec[T]` field
+            // from the erased `T`, classifies it as outer-only, and never walks
+            // the elements. The entry copy directly above is element-deep inside
+            // a monomorph (B-2026-08-25-10), so every element buffer it
+            // allocated was left with no owner: a method that takes `self` and
+            // transfers nothing out (`fn take(self) -> i64 { self.xs.len() }`)
+            // leaked the whole container's elements.
+            //
+            // `track_struct_var` IS `track_struct_var_inst(.., None)`, and that
+            // function's own doc names this failure mode. The sibling shapes hid
+            // it: `let mut h = self` hands ownership to `h`, whose drop is
+            // selected from the binding's recorded instantiation, and `self`'s
+            // drop is then cap/len-zeroed by the move-suppression — so the
+            // erased drop was reached only when nothing moved out of `self`.
+            self.track_struct_var_inst(type_name, slot, inst);
             return true;
         }
         // Non-shared user ENUM (NOT the type-erased Option/Result, whose

@@ -53117,4 +53117,71 @@ fn main() {
             "mono-receiver-drop-elementless-inst",
         );
     }
+
+    /// B-2026-08-25-14 — an owned aggregate param's own scope-exit drop was
+    /// registered by NAME, so it never walked the elements its entry copy owned.
+    ///
+    /// `make_aggregate_param_callee_owned_inst` has two branches. The
+    /// copy-unsupported one registers the drop at the param's declared
+    /// INSTANTIATION; the copy-supported one — which a `Heap[T] { xs: Vec[T] }`
+    /// takes — discarded that instantiation and called the name-keyed
+    /// `track_struct_var`, i.e. `track_struct_var_inst(.., None)`. The resulting
+    /// `__karac_drop_struct_Heap` resolves the `xs: Vec[T]` field from the erased
+    /// `T`, classifies it outer-only, and frees only the copied outer buffer.
+    /// Since B-2026-08-25-10 that entry copy is element-deep inside a monomorph,
+    /// so every element buffer it allocated was left with no owner at all.
+    ///
+    /// `count` takes `self` and transfers NOTHING out — that is the trigger, not
+    /// an incidental detail. The sibling shapes hid this for two prior rows:
+    /// `let mut h = self` hands ownership to `h`, whose drop comes from the
+    /// binding's recorded instantiation, and `self`'s drop is then cap/len-zeroed
+    /// by the move-suppression, so the erased drop is only ever REACHED when
+    /// nothing moves out of `self`.
+    ///
+    /// (b) is a CASE, not a control, and the distinction matters: in
+    /// B-2026-08-25-11 a `String` element was genuinely exempt, because that
+    /// erasure lived in the instantiation record and `String` is a single name a
+    /// name-to-name map carries losslessly. Here the drop is unmangled outright,
+    /// so any heap-owning element leaks. Its Strings are built on the heap —
+    /// literals live in static rodata with cap 0 and leak nothing, the
+    /// false-negative that mis-narrowed B-2026-08-25-10.
+    ///
+    /// Verified RED pre-fix: 63 bytes in 6 allocations — (a)'s three Vec buffers
+    /// (16 + 8 + 24) plus (b)'s three String bodies (5 each).
+    #[test]
+    fn asan_owned_aggregate_param_drop_frees_its_entry_copied_elements() {
+        assert_clean_asan_run(
+            r#"
+struct Heap[T] { xs: Vec[T] }
+impl[T] Heap[T] {
+    // Takes `self` by value and transfers NOTHING out. The entry deep-copy's
+    // element buffers are the ones that leaked.
+    fn count(self) -> i64 { self.xs.len() }
+}
+struct PlainHeap { xs: Vec[Vec[i64]] }
+impl PlainHeap {
+    fn count(self) -> i64 { self.xs.len() }
+}
+fn main() {
+    // (a) nested-Vec element.
+    let a = Heap { xs: [[1, 2], [3], [4, 5, 6]] };
+    println(f"a={a.count()}");
+    // (b) HEAP-allocated String elements — a CASE here, unlike in -11.
+    let mut ss: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < 3 { ss.push(f"item{i}"); i = i + 1; }
+    let b = Heap { xs: ss };
+    println(f"b={b.count()}");
+    // (c) control: scalar element, no inner buffer to own.
+    let c = Heap { xs: [7, 8, 9] };
+    println(f"c={c.count()}");
+    // (d) control: the NON-generic twin at the same element type.
+    let d = PlainHeap { xs: [[1], [2]] };
+    println(f"d={d.count()}");
+}
+"#,
+            &["a=3", "b=3", "c=3", "d=2"],
+            "owned-aggregate-param-drop-elements",
+        );
+    }
 }
