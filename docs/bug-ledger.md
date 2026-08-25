@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 284 | 1 |
+| miscompile | 285 | 1 |
 | leak | 189 | 0 |
 | missing-feature | 167 | 1 |
 | run-vs-build | 159 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1021 | 3 |
+| codegen | 1022 | 3 |
 | typecheck | 252 | 1 |
 | interp | 180 | 0 |
 | ownership | 65 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1550 surfaced · 4 open · 1521 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-25). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1551 surfaced · 4 open · 1522 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-25). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (4)
 
@@ -133,7 +133,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1550 surfaced
 | B-2026-08-24-24 | 2026-08-24 | typecheck | low | `File.open` takes an owned `String`, so a read-only path predicate cannot borrow one and must clone | kara-katas/apps/cumulus/README.md |
 | B-2026-08-25-2 | 2026-08-25 | codegen | high | `std.cli` IS NOT AOT-COMPILABLE: every pure-Kāra INSTANCE method on its types (`Arg.required`, `Parser.about`, ... ) dies in codegen with `no handler for method '<m>' on variable '<v>'`, so `karac check` passes and `karac build` fails -- while roadmap.md marks the feature `[x]` done and deferred.md ships it at v1 | roadmap.md:531 (`std.cli` marked [x]) + deferred.md § std.cli; codegen method dispatch falls through to the catch-all in src/codegen/method_call.rs for these receivers |
 | B-2026-08-25-3 | 2026-08-25 | codegen | medium | `codegen_tests::vec_mutation_methods_bounds_check_out_of_range_index` IS FLAKY, and it fails by showing exactly the PRE-FIX symptom of the high-severity bug it guards: `v.insert(7i64, 9i64)` produced no `Vec.insert index out of bounds` panic, stdout empty, stderr `free(): invalid pointer`. Observed once in a full `cargo test --features llvm` run; the same test then passed 3/3 in isolation, 3198/3198 in a codegen-only run, and the next FULL run was green at 125 suites / 15090 tests. | roadmap.md |
-| B-2026-08-25-5 | 2026-08-25 | codegen | high | A generic method calling a MUTATING sibling generic method in a loop HANGS under codegen (interp ok) | implementation_checklist/phase-11-stdlib-longtail.md#general-purpose-collections |
+| B-2026-08-25-7 | 2026-08-25 | codegen | high | A generic method that REBINDS its owned receiver to a local (`let mut h = self`) and drains through a sibling `mut ref self` method returns EMPTY elements at a heap-carrying `T`: `Heap[String].into_sorted()` yields the right COUNT but every String is empty under JIT and AOT, while the interpreter is correct. Needs all three of generic impl + the rebinding + a heap element type -- `T = i64` is correct, and the identical shape on a NON-generic impl is correct at String too. | phase-7-codegen.md |
 
 ### Relocated (1)
 
@@ -164,9 +164,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1550 surfaced
 
 </details>
 
-### Fixed (1521)
+### Fixed (1522)
 
-<details><summary>1521 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1522 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -18103,6 +18103,25 @@ is the same gap in a smaller form. The JSON now reproduces the note's
 partition exactly. |
 | B-2026-08-25-1 | codegen | low | An RVALUE `break` value that owns heap is still refused: `break Node { v: 11 }` (shared), `break Map.new()`, and `break f"x"` in a labeled-block TAIL… | FIXED by 0892679. An rvalue carrier needs NO ownership action -- only permission to store. `compile_break`'s `owned_ptr` now accepts a second proof beside the binding disarm: `break_value_is_fresh_owned_handle`, an ALLOWLIST of the two forms that manufacture ownership -- a `shared` struct literal (mallocs its own box, stores rc = 1) and a call / method call that is not declared to return a borrow (reusing `expr_yields_fresh_owned_temp`, which already carves that exception out). `shared enum` variant construction parses as a call, so it arrives through the second arm. `store_in_frame_at`'s pointer gate is unchanged; only the supply of proofs grew. |
 | B-2026-08-25-4 | typecheck | medium | An ASSOCIATED fn inside a BOUNDED generic impl saw the impl's OWN bound as unsatisfied on a local receiver | b4042fa |
+| B-2026-08-25-5 | codegen | high | A generic method calling a MUTATING sibling generic method in a loop HANGS under codegen (interp ok) | FIXED by 8e93189. `self` parses as `ExprKind::SelfValue`, NOT `Identifier("self")`, and the generic call path's ref-argument lowering (`compile_generic_call`, src/codegen/mono.rs) produced a pointer from exactly three arms: an `Identifier` through `get_data_ptr`, an index borrow through `ref_arg_index_borrow_ptr`, and `mut_ref_place_arg_ptr` -- which handles only `FieldAccess` / `TupleIndex`, on the explicit stated assumption that "a bare identifier already took the `get_data_ptr` fast path above". `SelfValue` matched NONE of the three, so it fell through to `materialize_rvalue_for_ref_arg` and the callee received a pointer to a COPY of the receiver. Every mutation the sibling made through `mut ref self` landed on that copy and was discarded.
+
+The fix normalises the receiver to the name `self` before the arm chain, so it takes `get_data_ptr`, which loads the stored pointer for a `ref`/`mut ref` param exactly as for any other borrow. Five lines. The same `SelfValue`-is-not-an-`Identifier` normalisation is already spelled out at `control_flow_for.rs`, `calls.rs` and `call_dispatch.rs` -- this is the fourth site to need it, which is the pattern worth noticing more than the individual fix.
+
+MEASURED at -O0, where nothing is inlined, the caller copied the whole `{data,len,cap}` Vec out of `self` into a stack temporary and passed its address:
+    mov 0x68(%rsp),%rdx    ; rdx = real self ptr
+    mov (%rdx),%rax        ; load self.xs.data
+    mov 0x8(%rdx),%rcx     ; load self.xs.len
+    mov 0x10(%rdx),%rdx    ; load self.xs.cap
+    mov %rax,0x70(%rsp)    ; ...into a LOCAL COPY
+    lea 0x70(%rsp),%rsi    ; pass &copy, not %rdi
+    call Box.one$i64
+At -O2 the same defect reads as a dead store: the optimizer inlined the sibling, saw the length store land somewhere never read back, deleted it, and `probe` returned the length it loaded at ENTRY.
+
+CORRECTION TO THIS ROW'S NARROWING, which matters for anyone trimming the regression test. The row reported (a) "one sibling call returning Option[T], NO loop -> correct" and (b) "sibling call + out.push(v), NO loop -> correct", concluding it "takes BOTH the loop and the sibling call". It does not. A SINGLE call already loses the mutation -- `probe()` above returns len 2 instead of 1 after one pop. (a) and (b) looked correct because they checked only the RETURNED VALUE, which is right either way: popping from a copy still returns the correct last element. The receiver's state afterward is the thing that has to be asserted. The loop is not a trigger, it is an amplifier -- it turns a silent wrong answer into a non-terminating one, which is why this surfaced as a hang. Blast radius is correspondingly wider than filed: every `mut ref self` sibling call in a generic impl was affected, loop or not.
+
+REGRESSION TEST `e2e_mut_ref_self_sibling_call_in_generic_impl_mutates_the_receiver` (tests/codegen.rs) pins the single-call shape FIRST (the minimal one), then the filed drain loop, then the same at a heap-carrying element type, and carries two controls that must not change: a NON-generic impl of the identical shape (always worked -- the concrete path resolves `SelfValue` elsewhere) and a `ref self` read-only sibling. Verified RED against the pre-fix compiler: the single-call case printed 2 instead of 1 and the loop case ran until the harness timeout.
+
+NOT COVERED, filed separately as B-2026-08-25-7: the row's "POSSIBLY-RELATED" note was right to warn against assuming one fix covers both. A generic method that rebinds an OWNED receiver to a local (`let mut h = self`) and drains through the sibling returns EMPTY STRINGS at `T = String` under the compiled backends. Verified byte-identical before and after this fix, so it is untouched by it and is a distinct defect. |
 | B-2026-08-25-6 | codegen | low | A BRANCHING `break` carrier that owns heap is still refused: `break if c { Node { v: 4 } } else { Node { v: 5 } }` fails module verification while th… | FIXED by e01dce4. `break_value_is_fresh_owned_handle` now recurses through `If` / `IfLet` / `Match` / `Block` / `Seq` / `Unsafe` tails. Exactly one tail runs, but the result slot is written once for all of them, so EVERY tail has to manufacture ownership -- an ALL-tails conjunction. An `if` with no `else` declines (it yields unit and can carry nothing) and an empty arm list is guarded explicitly, since `all` over an empty iterator is vacuously true and would claim ownership of a value no arm produces. No emission changed: this is still permission, not mechanism. |
 
 </details>
