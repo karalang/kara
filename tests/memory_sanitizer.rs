@@ -53245,4 +53245,77 @@ fn main() {
             "receiver-temporary-drop-elements",
         );
     }
+
+    /// B-2026-08-25-17. A DISCARDED heap-owning result leaked inside a generic
+    /// impl-method monomorph: `h.xs.pop();` freed nothing at a heap-carrying
+    /// `T`, one element per call.
+    ///
+    /// The row asked for the SCOPE to be established before fixing, on the
+    /// grounds that `pop()` is only a convenient producer. Measuring it made
+    /// the scope NARROWER, not wider: a 10-case producer matrix at top level
+    /// (`v.pop()`, `remove`, `swap_remove`, `Map.remove`, and functions/methods
+    /// returning `String`/`Vec`/an owning struct, discarded) is entirely clean,
+    /// as are a NON-generic impl method, a generic FREE FUNCTION, a plain local
+    /// rebind, and a scalar `T`. The trigger needs a generic IMPL METHOD whose
+    /// receiver was rebound from `self` — the B-2026-08-25-7 shape, whose fix
+    /// (`cbc545f`) is in and addressed the sibling-dispatch half only.
+    ///
+    /// Root cause: `enum_inst_type_exprs` is span-keyed and PRE-monomorphization,
+    /// so inside the monomorph it holds the generic `Option[T]`; the payload
+    /// element cannot be read off that, every tracker declined, and the temp
+    /// fell through to `materialize_owned_temp`, which does not free it in this
+    /// shape.
+    ///
+    /// Both cases below leak WITHOUT the fix and are clean with it. The
+    /// `String` arm matters because an earlier measurement said `T = String`
+    /// was clean — it was built from string LITERALS, which live in rodata with
+    /// `cap == 0` and never allocate. Built through an f-string it leaks 43
+    /// bytes, which is what shows the class is "any heap-owning element" rather
+    /// than "a nested Vec".
+    #[test]
+    fn asan_discarded_pop_in_generic_method_frees_element() {
+        assert_clean_asan_run(
+            r#"
+struct Heap[T] { xs: Vec[T] }
+impl[T] Heap[T] {
+    fn take(self) -> i64 { let mut h = self; h.xs.pop(); h.xs.len() }
+}
+fn main() {
+    let hv = Heap { xs: [[1], [2], [3]] };
+    println(f"vec={hv.take()}");
+    let mut v: Vec[String] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 3 { v.push(f"element-number-{i}-with-padding-to-exceed-sso"); i = i + 1; }
+    let hs = Heap { xs: v };
+    println(f"str={hs.take()}");
+}
+"#,
+            &["vec=2", "str=2"],
+            "discarded-pop-generic-method",
+        );
+    }
+
+    /// B-2026-08-25-17, precedence guard. The same rebind-and-discard shape in
+    /// a generic FREE FUNCTION is already handled correctly by the fallback
+    /// this fix runs alongside, and it must stay that way.
+    ///
+    /// This is not a hypothetical: the first two attempts at the fix — first
+    /// substituting the monomorph type in the inline-Option tracker itself,
+    /// then running that as a last resort — both turned this clean case into a
+    /// 16-byte leak, because claiming the temp here displaces the handler that
+    /// was already freeing it. The landed fix is gated to an impl-method
+    /// monomorph for exactly this reason, and without that gate this test
+    /// fails while the one above passes.
+    #[test]
+    fn asan_discarded_pop_in_generic_free_fn_stays_clean() {
+        assert_clean_asan_run(
+            r#"
+struct Heap[T] { xs: Vec[T] }
+fn take[T](s: Heap[T]) -> i64 { let mut h = s; h.xs.pop(); h.xs.len() }
+fn main() { let h = Heap { xs: [[1], [2], [3]] }; println(f"n={take(h)}"); }
+"#,
+            &["n=2"],
+            "discarded-pop-generic-free-fn",
+        );
+    }
 }

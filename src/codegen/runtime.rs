@@ -6278,6 +6278,66 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(te) = self.type_decls.enum_inst_type_exprs.get(&key).cloned() else {
             return false;
         };
+        self.track_discarded_inline_option_with_te(&te, val)
+    }
+
+    /// B-2026-08-25-17 — LAST-RESORT sibling of the tracker above, for a
+    /// discarded inline-`Option` temp inside a GENERIC monomorph.
+    ///
+    /// `enum_inst_type_exprs` is the span-keyed PRE-MONOMORPHIZATION record, so
+    /// in a `Heap[T]` method it holds the generic `Option[T]`; the payload
+    /// element cannot be read off that, the tracker above declines, and the
+    /// discarded temp's buffer is never freed — `h.xs.pop();` leaked one
+    /// element per call at every heap-carrying `T`. Rewriting the bare param
+    /// names through the active monomorph substitution makes `T` concrete.
+    ///
+    /// Deliberately a SEPARATE entry point wired at the END of
+    /// `track_discarded_temp_cleanup`'s chain rather than a substitution added
+    /// to the tracker above. That chain is mutually exclusive, and the boxed
+    /// tracker legitimately owns a WIDE payload (`Option[Vec[i64]]`):
+    /// substituting in place made this inline tracker claim those first and
+    /// free less than the boxed one would have, turning a clean generic FREE
+    /// FUNCTION case into a 16-byte leak. Running last claims only what every
+    /// existing handler already declined, so no established precedence moves.
+    ///
+    /// Same root-cause family as B-2026-08-25-7 (a pre-mono span table read
+    /// from inside a monomorph), different consumer: that row fixed the
+    /// BINDING's recorded instantiation, this one the DISCARD.
+    pub(super) fn try_track_discarded_inline_option_mono(
+        &mut self,
+        tail: &Expr,
+        val: BasicValueEnum<'ctx>,
+    ) -> bool {
+        if self.discarded_temp_aliases_armed_source(tail) {
+            return false;
+        }
+        // Gated to a generic IMPL-METHOD monomorph. `enum_inst_var_types`
+        // carries a "self" entry only there — the mono param prologue seeds it
+        // with the receiver's concrete instantiation (B-2026-08-25-7) — and
+        // that is exactly the shape whose discarded temp currently falls all
+        // the way through to `materialize_owned_temp` and leaks. A generic FREE
+        // FUNCTION with the same rebind (`fn take[T](s: Heap[T])`) is already
+        // handled correctly by that fallback, and claiming it here instead
+        // frees less: measured as a clean case turning into a 16-byte leak.
+        if !self.type_decls.enum_inst_var_types.contains_key("self") {
+            return false;
+        }
+        let key = (tail.span.offset, tail.span.length);
+        let Some(raw) = self.type_decls.enum_inst_type_exprs.get(&key).cloned() else {
+            return false;
+        };
+        let te = self.subst_monomorph_type_params(&raw);
+        self.track_discarded_inline_option_with_te(&te, val)
+    }
+
+    /// Shared core of the two trackers above: register the tag-guarded payload
+    /// free for an inline-`Option` temp of instantiated type `te`.
+    fn track_discarded_inline_option_with_te(
+        &mut self,
+        te: &TypeExpr,
+        val: BasicValueEnum<'ctx>,
+    ) -> bool {
+        let te = te.clone();
         let Some(payload_elem_ty) = self.option_inline_payload_elem(&te) else {
             return false;
         };

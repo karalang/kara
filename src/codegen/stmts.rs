@@ -13346,7 +13346,14 @@ impl<'ctx> super::Codegen<'ctx> {
             && !handled_shared_option
             && !handled_boxed_option
         {
-            self.materialize_owned_temp(val, (tail.span.offset, tail.span.length));
+            // B-2026-08-25-17 — last resort, and only once every handler above
+            // has declined: an inline-`Option` temp discarded inside a GENERIC
+            // monomorph, whose span-keyed type is the pre-mono `Option[T]`.
+            // Ordered here on purpose — claiming it earlier takes wide payloads
+            // away from the boxed tracker and frees less than it would.
+            if !(not_borrow && self.try_track_discarded_inline_option_mono(tail, val)) {
+                self.materialize_owned_temp(val, (tail.span.offset, tail.span.length));
+            }
         }
     }
 
