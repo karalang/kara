@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 285 | 0 |
 | leak | 194 | 0 |
 | missing-feature | 167 | 0 |
-| run-vs-build | 159 | 1 |
+| run-vs-build | 159 | 0 |
 | codegen-gap | 138 | 0 |
 | double-free | 138 | 0 |
 | diagnostics | 104 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1032 | 2 |
+| codegen | 1032 | 1 |
 | typecheck | 252 | 0 |
 | interp | 180 | 0 |
 | ownership | 65 | 0 |
@@ -124,13 +124,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1561 surfaced · 2 open · 1534 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-25). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1561 surfaced · 1 open · 1535 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-25). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (2)
+### Open (1)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-25-2 | 2026-08-25 | codegen | high | `std.cli` IS NOT AOT-COMPILABLE: every pure-Kāra INSTANCE method on its types (`Arg.required`, `Parser.about`, ... ) dies in codegen with `no handler for method '<m>' on variable '<v>'`, so `karac check` passes and `karac build` fails -- while roadmap.md marks the feature `[x]` done and deferred.md ships it at v1 | roadmap.md:531 (`std.cli` marked [x]) + deferred.md § std.cli; codegen method dispatch falls through to the catch-all in src/codegen/method_call.rs for these receivers |
 | B-2026-08-25-3 | 2026-08-25 | codegen | medium | `codegen_tests::vec_mutation_methods_bounds_check_out_of_range_index` IS FLAKY, and it fails by showing exactly the PRE-FIX symptom of the high-severity bug it guards: `v.insert(7i64, 9i64)` produced no `Vec.insert index out of bounds` panic, stdout empty, stderr `free(): invalid pointer`. Observed once in a full `cargo test --features llvm` run; the same test then passed 3/3 in isolation, 3198/3198 in a codegen-only run, and the next FULL run was green at 125 suites / 15090 tests. | roadmap.md |
 
 ### Relocated (1)
@@ -162,9 +161,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1561 surfaced
 
 </details>
 
-### Fixed (1534)
+### Fixed (1535)
 
-<details><summary>1534 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1535 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1688,6 +1687,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1561 surfaced
 | B-2026-08-24-23 | effect | low | The `--output=json` `mutual_recursion_groups` field still reports a VALUE-ONLY cycle as a mutual recursion group, the same false claim B-2026-08-23-1… | 7000780 |
 | B-2026-08-24-24 | typecheck | low | `File.open` takes an owned `String`, so a read-only path predicate cannot borrow one and must clone | 0382211 |
 | B-2026-08-25-1 | codegen | low | An RVALUE `break` value that owns heap is still refused: `break Node { v: 11 }` (shared), `break Map.new()`, and `break f"x"` in a labeled-block TAIL… | 0892679 |
+| B-2026-08-25-2 | codegen | high | `std.cli` IS NOT AOT-COMPILABLE: every pure-Kāra INSTANCE method on its types (`Arg.required`, `Parser.about`, .. | 47bf934 |
 | B-2026-08-25-4 | typecheck | medium | An ASSOCIATED fn inside a BOUNDED generic impl saw the impl's OWN bound as unsatisfied on a local receiver | b4042fa |
 | B-2026-08-25-5 | codegen | high | A generic method calling a MUTATING sibling generic method in a loop HANGS under codegen (interp ok) | 8e93189 |
 | B-2026-08-25-6 | codegen | low | A BRANCHING `break` carrier that owns heap is still refused: `break if c { Node { v: 4 } } else { Node { v: 5 } }` fails module verification while th… | e01dce4 |

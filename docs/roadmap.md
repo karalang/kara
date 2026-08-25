@@ -528,7 +528,7 @@ Note: Core stdlib types (`Option`, `Result`, `Vec`, `String`, `Array[T, N]`) are
 - [ ] `Hash` trait, `Hasher` interface, default hasher; `#[derive(Hash)]` codegen path (interpreter form already shipped).
 
 ### `std.cli` (v66 graduation, 2026-05-11 — P1 v1)
-- [~] **Argument parser, builder-style API — INTERPRETER ONLY, does not AOT-compile (`B-2026-08-25-2`).** `Parser::new(name)`, `.arg(name, Arg)`, `.flag(name)`, `.subcommand(name, sub_parser)`, `.parse() -> Result[Args, CliError]`. Automatic `--help` / `--version`. Effect: `reads(Env)` on `.parse()`. API inspired by clap's builder pattern; the point at v1 is canonicality in stdlib so the ecosystem standardizes from day one. See `deferred.md § std.cli`.
+- [x] **Argument parser, builder-style API.** `Parser::new(name)`, `.arg(name, Arg)`, `.flag(name)`, `.subcommand(name, sub_parser)`, `.parse() -> Result[Args, CliError]`. Automatic `--help` / `--version`. Effect: `reads(Env)` on `.parse()`. API inspired by clap's builder pattern; the point at v1 is canonicality in stdlib so the ecosystem standardizes from day one. See `deferred.md § std.cli`.
   - The surface is complete and correct under `karac run --interp`, which is why this was marked done. But every pure-Kāra INSTANCE method on its types (`a.required()`, `p.about(s)`) dies in codegen with `no handler for method '<m>' on variable '<v>'`, so `karac check` passes and `karac build` fails. Static constructors (`Arg.string()`, `Parser.new(…)`) build fine; the split is static-vs-instance. **A CLI tool is precisely the program a user AOT-compiles and ships**, so the one execution mode this module needs is the one it lacks — the box goes back to `[~]` until `karac build` works.
 
 ### Compiler Queries Channel (P0 architectural commit)
