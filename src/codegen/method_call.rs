@@ -8512,36 +8512,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                 .cloned()
                                 .or_else(|| self.enum_inst_type_from_span(object)),
                             _ => self.enum_inst_type_of_expr(object),
-                        };
-                        // B-2026-08-25-28 — resolve the receiver instantiation
-                        // INTO the enclosing monomorph before using it to select
-                        // the callee.
-                        //
-                        // A struct-literal receiver inside a generic impl
-                        // (`fn mk(v: Vec[T]) -> Vec[T] { Bag { xs: v }.inner() }`)
-                        // resolves here to `Bag[T]` — the impl's own type
-                        // PARAMETER, not the concrete type this monomorph was
-                        // generated for. `Bag[T]` pins nothing, so no monomorph is
-                        // selected and `inner` is emitted ONCE, unmangled, at the
-                        // erased base layout. Both `mk$i64` and
-                        // `mk$struct$T_ct_String` then call that single prototype,
-                        // and the String instantiation reads a heap pointer
-                        // through the wrong layout — a SEGFAULT, not a wrong
-                        // answer, and masked entirely at a scalar `T`.
-                        //
-                        // The collapse cascades: with `inner` unmangled, the
-                        // `self`-receiver calls inside it (`arrange`, then
-                        // `swap2`) resolve to no instantiation either, so a single
-                        // unsubstituted receiver takes the whole call chain down
-                        // with it. That is why the symbol table shows `Bag.inner`
-                        // / `Bag.arrange` / `Bag.swap2` bare while the named-binding
-                        // spelling emits `$i64` and `$struct$T_ct_String` pairs of
-                        // each.
-                        //
-                        // `subst_monomorph_type_params` is a no-op outside a
-                        // monomorph and for an already-concrete `te`, so this only
-                        // ever tightens a receiver that is still parametric.
-                        let te = te.map(|t| self.subst_monomorph_type_params(&t))?;
+                        }?;
                         let TypeKind::Path(p) = &te.kind else {
                             return None;
                         };
