@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 159 | 1 |
 | codegen-gap | 138 | 0 |
 | double-free | 136 | 0 |
-| diagnostics | 104 | 1 |
+| diagnostics | 104 | 0 |
 | false-positive | 96 | 0 |
 | perf | 84 | 0 |
 | other | 60 | 1 |
@@ -120,17 +120,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | parser | 41 | 0 |
 | runtime | 31 | 0 |
 | resolver | 26 | 0 |
-| effect | 23 | 1 |
+| effect | 23 | 0 |
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1550 surfaced · 6 open · 1519 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-25). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1550 surfaced · 4 open · 1521 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-25). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-24-23 | 2026-08-24 | effect | low | The `--output=json` `mutual_recursion_groups` field still reports a VALUE-ONLY cycle as a mutual recursion group, the same false claim B-2026-08-23-13 fixed in the terminal note. Two functions that each stash the other in a struct field, neither calling the other, appear in that array under a name asserting they mutually recurse. | roadmap.md |
 | B-2026-08-24-24 | 2026-08-24 | typecheck | low | `File.open` takes an owned `String`, so a read-only path predicate cannot borrow one and must clone | kara-katas/apps/cumulus/README.md |
 | B-2026-08-25-2 | 2026-08-25 | codegen | high | `std.cli` IS NOT AOT-COMPILABLE: every pure-Kāra INSTANCE method on its types (`Arg.required`, `Parser.about`, ... ) dies in codegen with `no handler for method '<m>' on variable '<v>'`, so `karac check` passes and `karac build` fails -- while roadmap.md marks the feature `[x]` done and deferred.md ships it at v1 | roadmap.md:531 (`std.cli` marked [x]) + deferred.md § std.cli; codegen method dispatch falls through to the catch-all in src/codegen/method_call.rs for these receivers |
 | B-2026-08-25-3 | 2026-08-25 | codegen | medium | `codegen_tests::vec_mutation_methods_bounds_check_out_of_range_index` IS FLAKY, and it fails by showing exactly the PRE-FIX symptom of the high-severity bug it guards: `v.insert(7i64, 9i64)` produced no `Vec.insert index out of bounds` panic, stdout empty, stderr `free(): invalid pointer`. Observed once in a full `cargo test --features llvm` run; the same test then passed 3/3 in isolation, 3198/3198 in a codegen-only run, and the next FULL run was green at 125 suites / 15090 tests. | roadmap.md |
@@ -165,9 +164,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1550 surfaced
 
 </details>
 
-### Fixed (1519)
+### Fixed (1521)
 
-<details><summary>1519 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1521 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -18082,6 +18081,26 @@ UseAfterMove arm immediately below already applied, and the key
 SEQUENCE differed every run. Now sorted on the same key. This half was
 INVISIBLE to the first measurement, which sorted before hashing and so saw
 only a stable set; it took an unsorted diff to surface it. |
+| B-2026-08-24-23 | effect | low | The `--output=json` `mutual_recursion_groups` field still reports a VALUE-ONLY cycle as a mutual recursion group, the same false claim B-2026-08-23-1… | FIXED by 7000780, as an ADDITIVE contract change -- the shape the row
+predicted, with one field more than it proposed.
+
+`MutualRecursionGroup` gains `kind` ("mutual_recursion" |
+"value_reference_cycle" | "mixed") and `call_recursive_members` (the
+members that recurse THROUGH CALLS). `functions` and `resolution_trace`
+keep exactly their previous meaning, so a consumer reading only those is
+untouched.
+
+MEMBERSHIP IS STILL NOT NARROWED, and the row's reasoning for that stands:
+both edge kinds in the inference graph are real effect dependencies, so a
+value-only cycle genuinely required the fixed point. Dropping the group
+would discard the true half of what the field reports -- which is what
+`resolution_trace` describes.
+
+`call_recursive_members` goes beyond the row's proposal because `kind`
+alone cannot say WHICH functions a "mixed" claim covers. The terminal note
+already draws that partition in prose; leaving the JSON channel unable to
+is the same gap in a smaller form. The JSON now reproduces the note's
+partition exactly. |
 | B-2026-08-25-1 | codegen | low | An RVALUE `break` value that owns heap is still refused: `break Node { v: 11 }` (shared), `break Map.new()`, and `break f"x"` in a labeled-block TAIL… | FIXED by 0892679. An rvalue carrier needs NO ownership action -- only permission to store. `compile_break`'s `owned_ptr` now accepts a second proof beside the binding disarm: `break_value_is_fresh_owned_handle`, an ALLOWLIST of the two forms that manufacture ownership -- a `shared` struct literal (mallocs its own box, stores rc = 1) and a call / method call that is not declared to return a borrow (reusing `expr_yields_fresh_owned_temp`, which already carves that exception out). `shared enum` variant construction parses as a call, so it arrives through the second arm. `store_in_frame_at`'s pointer gate is unchanged; only the supply of proofs grew. |
 | B-2026-08-25-4 | typecheck | medium | An ASSOCIATED fn inside a BOUNDED generic impl saw the impl's OWN bound as unsatisfied on a local receiver | b4042fa |
 | B-2026-08-25-6 | codegen | low | A BRANCHING `break` carrier that owns heap is still refused: `break if c { Node { v: 4 } } else { Node { v: 5 } }` fails module verification while th… | FIXED by e01dce4. `break_value_is_fresh_owned_handle` now recurses through `If` / `IfLet` / `Match` / `Block` / `Seq` / `Unsafe` tails. Exactly one tail runs, but the result slot is written once for all of them, so EVERY tail has to manufacture ownership -- an ALL-tails conjunction. An `if` with no `else` declines (it yields unit and can carry nothing) and an empty arm list is guarded explicitly, since `all` over an empty iterator is vacuously true and would claim ownership of a value no arm produces. No emission changed: this is still permission, not mechanism. |
