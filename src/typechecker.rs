@@ -2394,6 +2394,24 @@ pub struct TypeChecker<'a> {
     /// user sees the accurate literal-anchored diagnostic followed by a
     /// `` `<error>` does not implement `Ord` `` that names the wrong problem.
     pub(super) reported_uninferrable_empty_literal: bool,
+    /// Binding name → span of the bare `[]` literal that left that binding's
+    /// type un-inferrable (B-2026-08-25-31).
+    ///
+    /// A bare empty `[]` in synthesis mode yields `Vec[Type::Error]`, and
+    /// `Type::Error` is payload-free, so by the time the un-inferred `T`
+    /// surfaces — at the first call that has to discharge a bound on it — the
+    /// literal that caused it is unrecoverable and the caret lands on the use,
+    /// arbitrarily far from the edit the message asks for.
+    ///
+    /// This records the link at the ONE place both halves are in hand: the
+    /// `let` that binds the literal's type. It is exact, not a proximity
+    /// guess — a "nearest empty literal" table would happily blame an
+    /// unrelated literal elsewhere in the function, and a confidently wrong
+    /// caret reads worse than a correct-but-distant one. So an entry is
+    /// written only when the initializer contains EXACTLY ONE bare empty
+    /// literal, and a binding that fails that test REMOVES any stale entry
+    /// under its name rather than leaving one to be misread.
+    pub(super) uninferrable_binding_origins: FxHashMap<String, Span>,
     /// When `Some(name)`, `register_baked_stdlib` skips the [`crate::prelude::STDLIB_PROGRAMS`]
     /// entry whose key is `name` (e.g. `"cli.kara"`), so a baked module
     /// type-checked as its own program does not see an INJECTED SECOND COPY of
@@ -2574,6 +2592,7 @@ impl<'a> TypeChecker<'a> {
             current_fn_stdlib_origin: false,
             compiling_stdlib: false,
             reported_uninferrable_empty_literal: false,
+            uninferrable_binding_origins: FxHashMap::default(),
             stdlib_self_module: None,
             lint_override_stack: Vec::new(),
             cli_lint_overrides: crate::lints::CliLintOverrides::default(),

@@ -45396,6 +45396,97 @@ fn annotated_empty_literal_still_typechecks() {
     ));
 }
 
+// ── B-2026-08-25-31: anchor the caret on the literal, not the use ──
+//
+// B-2026-08-25-26 fixed the WORDS but left the SPAN: the caret landed on
+// the first call that had to discharge a bound on the un-inferred `T`,
+// which is an unbounded number of lines from the `[]` the message asks
+// the user to annotate. `Type::Error` is payload-free, so the link is
+// recorded at the one place both halves are in hand — the `let`.
+//
+// Exactness is the whole design. A "nearest empty literal" table would
+// point confidently at an unrelated literal, which reads worse than a
+// correct-but-distant caret, so provenance is recorded only when the
+// initializer holds EXACTLY ONE bare `[]` and is dropped otherwise.
+
+/// The span must cover the literal itself. Asserting on the source slice
+/// rather than a line number keeps the test readable and makes a
+/// regression print what it actually underlined.
+fn underlined<'a>(src: &'a str, err: &karac::typechecker::TypeError) -> &'a str {
+    &src[err.span.offset..err.span.offset + err.span.length]
+}
+
+#[test]
+fn uninferrable_type_arg_underlines_the_empty_literal() {
+    let src = format!(
+        "{EMPTY_LITERAL_W}fn main() {{\n\
+         \x20   let g = W.from([]);\n\
+         \x20   println(\"a\");\n\
+         \x20   println(\"b\");\n\
+         \x20   println(g.size());\n\
+         }}"
+    );
+    let errors = typecheck_errors(&src);
+    assert_eq!(errors.len(), 1, "expected exactly one error: {errors:?}");
+    assert_eq!(
+        underlined(&src, &errors[0]),
+        "[]",
+        "the caret must sit on the literal the message asks the user to annotate"
+    );
+}
+
+#[test]
+fn two_empty_literals_fall_back_rather_than_guess() {
+    // Nothing distinguishes which literal left `T` un-inferred, so the
+    // diagnostic must NOT pick one. Falling back to the call span is the
+    // pre-fix behaviour and is correct-but-distant, never wrong.
+    let src = r#"struct P[T] { xs: Vec[T] }
+impl[T: Ord] P[T] {
+    fn pair(a: Vec[T], b: Vec[T]) -> P[T] { P { xs: a } }
+    fn size(ref self) -> i64 { self.xs.len() }
+}
+fn main() { let g = P.pair([], []); println(g.size()); }
+"#;
+    let errors = typecheck_errors(src);
+    assert_eq!(errors.len(), 1, "expected exactly one error: {errors:?}");
+    assert_ne!(
+        underlined(src, &errors[0]),
+        "[]",
+        "with two candidate literals the caret must not claim either one"
+    );
+}
+
+/// The guard that makes the above safe, measured rather than assumed:
+/// without dropping the stale entry, an error in `main` underlined a
+/// literal inside `helper` — a confidently wrong caret in a different
+/// function, which is strictly worse than the bug being fixed.
+#[test]
+fn a_stale_origin_is_not_reused_by_a_later_binding() {
+    let src = r#"struct P[T] { xs: Vec[T] }
+impl[T: Ord] P[T] {
+    fn from(v: Vec[T]) -> P[T] { P { xs: v } }
+    fn pair(a: Vec[T], b: Vec[T]) -> P[T] { P { xs: a } }
+    fn size(ref self) -> i64 { self.xs.len() }
+}
+fn helper() { let g = P.from([]); println("z"); }
+fn main() { let g = P.pair([], []); println(g.size()); }
+"#;
+    let errors = typecheck_errors(src);
+    let reported: Vec<&str> = errors.iter().map(|e| underlined(src, e)).collect();
+    assert!(
+        !reported.contains(&"[]"),
+        "no diagnostic may underline `helper`'s literal for an error in `main`; \
+         underlined: {reported:?}"
+    );
+}
+
+#[test]
+fn a_healthy_binding_records_nothing_and_still_compiles() {
+    typecheck_ok(&format!(
+        "{EMPTY_LITERAL_W}fn main() {{ let g = W.from([1, 2]); println(g.size()); }}"
+    ));
+}
+
 #[test]
 fn unbounded_impl_with_empty_literal_is_unchanged() {
     // The un-inferred element type is only visible when a bound has to be

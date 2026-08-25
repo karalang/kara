@@ -4018,6 +4018,37 @@ impl<'a> super::TypeChecker<'a> {
     /// without a check-mode expected type to pin them, any `TypeParam(T)`
     /// in `inferred` that isn't an enclosing function/impl generic is
     /// unsolvable at this site. Item 131 sub-step 2a.
+    /// Link a binding to the bare `[]` literal that left its type
+    /// un-inferrable, so the diagnostic raised at the eventual USE can anchor
+    /// its caret on the literal instead (B-2026-08-25-31).
+    ///
+    /// See [`TypeChecker::uninferrable_binding_origins`] for why this is
+    /// recorded here and why it is exact-or-nothing. The `None` arm is
+    /// load-bearing: without it a stale entry from an earlier binding of the
+    /// same name could be read by a later, unrelated inference failure and
+    /// produce a confidently wrong caret.
+    fn record_uninferrable_binding_origin(
+        &mut self,
+        pattern: &Pattern,
+        inferred: &Type,
+        value: &Expr,
+    ) {
+        let PatternKind::Binding(name) = &pattern.kind else {
+            return;
+        };
+        if !type_mentions_error(inferred) {
+            return;
+        }
+        match sole_bare_empty_literal_span(value) {
+            Some(span) => {
+                self.uninferrable_binding_origins.insert(name.clone(), span);
+            }
+            None => {
+                self.uninferrable_binding_origins.remove(name);
+            }
+        }
+    }
+
     fn check_unsolved_type_param(&mut self, inferred: &Type, span: &Span) {
         if matches!(inferred, Type::Error) {
             return;
@@ -4151,6 +4182,7 @@ impl<'a> super::TypeChecker<'a> {
                 } else {
                     let inferred = self.infer_expr(value);
                     self.check_unsolved_type_param(&inferred, &value.span);
+                    self.record_uninferrable_binding_origin(pattern, &inferred, value);
                     inferred
                 };
                 // B-2026-07-31-20 — record the result type of a
@@ -4233,6 +4265,7 @@ impl<'a> super::TypeChecker<'a> {
                 } else {
                     let inferred = self.infer_expr(value);
                     self.check_unsolved_type_param(&inferred, &value.span);
+                    self.record_uninferrable_binding_origin(pattern, &inferred, value);
                     inferred
                 };
                 // The else block runs on the NON-matching edge, so the
@@ -4691,5 +4724,110 @@ fn references_self_outside_old(expr: &Expr) -> bool {
             references_self_outside_old(object) || references_self_outside_old(index)
         }
         _ => false,
+    }
+}
+
+/// Whether `ty` mentions [`Type::Error`] anywhere in its structure.
+///
+/// The un-inferred element of `Vec[Type::Error]` is nested, not the type
+/// itself, so a bare `matches!(ty, Type::Error)` misses exactly the case
+/// B-2026-08-25-31 is about.
+fn type_mentions_error(ty: &Type) -> bool {
+    match ty {
+        Type::Error => true,
+        Type::Named { args, .. } => args.iter().any(type_mentions_error),
+        Type::Tuple(elems) => elems.iter().any(type_mentions_error),
+        Type::Array { element, .. }
+        | Type::Vector { element, .. }
+        | Type::Slice { element, .. } => type_mentions_error(element),
+        Type::Ref(inner)
+        | Type::MutRef(inner)
+        | Type::Rc(inner)
+        | Type::Arc(inner)
+        | Type::Weak(inner) => type_mentions_error(inner),
+        _ => false,
+    }
+}
+
+/// The span of the one bare empty `[]` literal in `expr`, or `None` when
+/// there is not exactly one.
+///
+/// "Exactly one" is the whole point (B-2026-08-25-31): with two empty
+/// literals in the same initializer there is no way to tell which produced
+/// the un-inferred parameter, and pointing at either would be a guess. The
+/// caller treats `None` as "say nothing new", which leaves the pre-existing
+/// diagnostic exactly as it was.
+///
+/// Only the BARE form counts. `Vec[]` and friends already report at their
+/// own span through `E_EMPTY_PREFIX_LITERAL_NEEDS_ANNOTATION`, so counting
+/// them here would let a prefix literal claim a bare literal's diagnostic.
+fn sole_bare_empty_literal_span(expr: &Expr) -> Option<Span> {
+    let mut found: Vec<Span> = Vec::new();
+    collect_bare_empty_literals(expr, &mut found);
+    match found.as_slice() {
+        [only] => Some(*only),
+        _ => None,
+    }
+}
+
+fn collect_bare_empty_literals(expr: &Expr, out: &mut Vec<Span>) {
+    match &expr.kind {
+        ExprKind::ArrayLiteral(elements) => {
+            if elements.is_empty() {
+                out.push(expr.span);
+            } else {
+                for e in elements {
+                    collect_bare_empty_literals(e, out);
+                }
+            }
+        }
+        ExprKind::Call { callee, args } => {
+            collect_bare_empty_literals(callee, out);
+            for a in args {
+                collect_bare_empty_literals(&a.value, out);
+            }
+        }
+        ExprKind::MethodCall { object, args, .. } => {
+            collect_bare_empty_literals(object, out);
+            for a in args {
+                collect_bare_empty_literals(&a.value, out);
+            }
+        }
+        ExprKind::StructLiteral { fields, spread, .. } => {
+            for f in fields {
+                collect_bare_empty_literals(&f.value, out);
+            }
+            if let Some(s) = spread {
+                collect_bare_empty_literals(s, out);
+            }
+        }
+        ExprKind::Tuple(elems) => {
+            for e in elems {
+                collect_bare_empty_literals(e, out);
+            }
+        }
+        ExprKind::PrefixCollectionLiteral { items, .. } => {
+            for i in items {
+                collect_bare_empty_literals(i, out);
+            }
+        }
+        ExprKind::Binary { left, right, .. } => {
+            collect_bare_empty_literals(left, out);
+            collect_bare_empty_literals(right, out);
+        }
+        ExprKind::Unary { operand, .. } => collect_bare_empty_literals(operand, out),
+        ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+            collect_bare_empty_literals(object, out)
+        }
+        ExprKind::Cast { expr: inner, .. } => collect_bare_empty_literals(inner, out),
+        ExprKind::Index { object, index } => {
+            collect_bare_empty_literals(object, out);
+            collect_bare_empty_literals(index, out);
+        }
+        // Every other shape either cannot host a bare literal in a position
+        // that feeds this binding's type, or is a body whose literals belong
+        // to their own bindings. Missing one costs a `None` — the pre-fix
+        // diagnostic — never a wrong caret.
+        _ => {}
     }
 }

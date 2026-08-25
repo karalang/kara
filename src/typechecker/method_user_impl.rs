@@ -737,13 +737,36 @@ impl<'a> super::TypeChecker<'a> {
                     // is actually wrong.
                     if matches!(concrete, Type::Error) {
                         if !self.reported_uninferrable_empty_literal {
+                            // Anchor the caret on the empty literal that caused
+                            // this, when the receiver is a binding whose origin
+                            // was recorded exactly (B-2026-08-25-31). Pre-fix
+                            // the caret always landed on the USE, which sits an
+                            // unbounded number of lines from the edit the
+                            // message asks for — and the sibling `Vec[]` form
+                            // already reports at its own literal, so pointing
+                            // there makes the two halves of one rule agree.
+                            //
+                            // Falls back to the call span whenever provenance
+                            // is not exact, which keeps a wrong caret off the
+                            // screen: a confidently mis-placed underline reads
+                            // worse than a correct but distant one.
+                            let origin = match &object.kind {
+                                ExprKind::Identifier(name) => {
+                                    self.uninferrable_binding_origins.get(name).copied()
+                                }
+                                _ => None,
+                            };
                             let msg = format!(
                                 "method '{}' is not callable on this `{}`: the type \
                                  argument for `{}` could not be inferred — annotate the \
                                  value it came from, e.g. `let v: Vec[i64] = [];`",
                                 method, type_name, param_name
                             );
-                            self.type_error(msg, *span, TypeErrorKind::TypeMismatch);
+                            self.type_error(
+                                msg,
+                                origin.unwrap_or(*span),
+                                TypeErrorKind::TypeMismatch,
+                            );
                         }
                         return Type::Error;
                     }
