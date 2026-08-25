@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 189 | 0 |
 | missing-feature | 166 | 0 |
 | run-vs-build | 159 | 1 |
-| codegen-gap | 137 | 1 |
+| codegen-gap | 138 | 1 |
 | double-free | 136 | 0 |
 | diagnostics | 104 | 2 |
 | false-positive | 96 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1020 | 4 |
+| codegen | 1021 | 4 |
 | typecheck | 251 | 0 |
 | interp | 180 | 0 |
 | ownership | 65 | 1 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1548 surfaced · 6 open · 1517 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-25). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1549 surfaced · 6 open · 1518 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-25). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (6)
 
@@ -132,10 +132,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1548 surfaced
 |---|---|---|---|---|---|
 | B-2026-08-24-22 | 2026-08-24 | ownership | medium | `karac check` IS NOT DETERMINISTIC: the same binary on the same unchanged input emits a DIFFERENT rc-fallback diagnostic run to run. On runtime/stdlib/protobuf.kara the `ename` note cites `consume at 1630:59, other use at 1650:59` in some runs and `consume at 1750:57, other use at 1763:59` in others -- measured 9/11 and 11/9 over two 20-run batches of ONE binary. Diagnostic ORDER is unstable too: 200 differing lines across a 1111-file sweep of one binary against itself, same files and same exit codes throughout. | roadmap.md |
 | B-2026-08-24-23 | 2026-08-24 | effect | low | The `--output=json` `mutual_recursion_groups` field still reports a VALUE-ONLY cycle as a mutual recursion group, the same false claim B-2026-08-23-13 fixed in the terminal note. Two functions that each stash the other in a struct field, neither calling the other, appear in that array under a name asserting they mutually recurse. | roadmap.md |
-| B-2026-08-25-1 | 2026-08-25 | codegen | low | An RVALUE `break` value that owns heap is still refused: `break Node { v: 11 }` (shared), `break Map.new()`, and `break f"x"` in a labeled-block TAIL position have no source BINDING to retain against or disarm, so they fail at module verification while the interpreter returns them. Loud, not silent -- but a spec-legal program that does not compile. | roadmap.md |
 | B-2026-08-25-2 | 2026-08-25 | codegen | high | `std.cli` IS NOT AOT-COMPILABLE: every pure-Kāra INSTANCE method on its types (`Arg.required`, `Parser.about`, ... ) dies in codegen with `no handler for method '<m>' on variable '<v>'`, so `karac check` passes and `karac build` fails -- while roadmap.md marks the feature `[x]` done and deferred.md ships it at v1 | roadmap.md:531 (`std.cli` marked [x]) + deferred.md § std.cli; codegen method dispatch falls through to the catch-all in src/codegen/method_call.rs for these receivers |
 | B-2026-08-25-3 | 2026-08-25 | codegen | medium | `codegen_tests::vec_mutation_methods_bounds_check_out_of_range_index` IS FLAKY, and it fails by showing exactly the PRE-FIX symptom of the high-severity bug it guards: `v.insert(7i64, 9i64)` produced no `Vec.insert index out of bounds` panic, stdout empty, stderr `free(): invalid pointer`. Observed once in a full `cargo test --features llvm` run; the same test then passed 3/3 in isolation, 3198/3198 in a codegen-only run, and the next FULL run was green at 125 suites / 15090 tests. | roadmap.md |
 | B-2026-08-25-5 | 2026-08-25 | codegen | high | A generic method calling a MUTATING sibling generic method in a loop HANGS under codegen (interp ok) | implementation_checklist/phase-11-stdlib-longtail.md#general-purpose-collections |
+| B-2026-08-25-6 | 2026-08-25 | codegen | low | A BRANCHING `break` carrier that owns heap is still refused: `break if c { Node { v: 4 } } else { Node { v: 5 } }` fails module verification while the interpreter returns 4. Each tail is a fresh temporary, but the `If` itself is not one of the forms `break_value_is_fresh_owned_handle` admits. | roadmap.md |
 
 ### Relocated (1)
 
@@ -166,9 +166,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1548 surfaced
 
 </details>
 
-### Fixed (1517)
+### Fixed (1518)
 
-<details><summary>1517 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1518 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -18065,6 +18065,7 @@ The row's suggested remedy ("needs a matching RETAIN rather than a cap-zero") wa
 MAP AND `shared` NOW TAKE OPPOSITE TREATMENTS THROUGH THE SAME FUNCTION — Map/Set disarm by zeroing, `shared` deliberately does not — so both mechanisms and the reason they differ are written at `disarm_moved_handle_by_zeroing`. The trap that makes the wrong one look right is that `RcDec` is ALREADY null-guarded, for the unrelated case of a body-local slot whose `let` never ran.
 
 STILL REFUSED, unchanged: an RVALUE source (`break Node { v: 11 }`) has no binding to retain against, exactly as `break Map.new()` has none to disarm. Both fail loudly at module verification rather than being half-supported. |
+| B-2026-08-25-1 | codegen | low | An RVALUE `break` value that owns heap is still refused: `break Node { v: 11 }` (shared), `break Map.new()`, and `break f"x"` in a labeled-block TAIL… | FIXED by 0892679. An rvalue carrier needs NO ownership action -- only permission to store. `compile_break`'s `owned_ptr` now accepts a second proof beside the binding disarm: `break_value_is_fresh_owned_handle`, an ALLOWLIST of the two forms that manufacture ownership -- a `shared` struct literal (mallocs its own box, stores rc = 1) and a call / method call that is not declared to return a borrow (reusing `expr_yields_fresh_owned_temp`, which already carves that exception out). `shared enum` variant construction parses as a call, so it arrives through the second arm. `store_in_frame_at`'s pointer gate is unchanged; only the supply of proofs grew. |
 | B-2026-08-25-4 | typecheck | medium | An ASSOCIATED fn inside a BOUNDED generic impl saw the impl's OWN bound as unsatisfied on a local receiver | b4042fa |
 
 </details>
