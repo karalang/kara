@@ -72,14 +72,21 @@ struct ParsedValue {
     value: String,
 }
 
-// One declared subcommand. Holds the subcommand's own `Parser` so its
-// args/flags/about-text/help can be matched + rendered. Storing the
-// `Parser` by value relies on Kāra accepting the recursive type cycle
-// `Parser -> Vec[Subcommand] -> Subcommand -> Parser`; the `Vec`
-// indirection breaks the size cycle (Vec is a heap reference).
+// One declared subcommand. Flat by construction: holds the sub-parser's OWN fields rather than a
+// nested `Parser`. A `parser: Parser` field closed a mutual type cycle
+// (`Parser.subcommands: Vec[Subcommand]`), which the copy-support analysis
+// must decline to unroll -- leaving a by-value `Parser` param caller-retains
+// and segfaulting `Parser.parse(self)`, which moves fields out of `self`
+// (own-by-transfer excludes self-referential structs by design,
+// B-2026-08-05-33). The cycle bought nothing: v1 is ONE level of subcommand
+// depth, the nested parser's own `subcommands` were never read, and only
+// `.args` / `.flags` / `.about_text` were ever projected off it.
+// `SubcommandResult` is already flat for exactly this reason.
 struct Subcommand {
     name: String,
-    parser: Parser,
+    about_text: String,
+    args: Vec[ArgEntry],
+    flags: Vec[FlagEntry],
 }
 
 // Result of dispatching into a subcommand. Mirrors `Args`'s
@@ -196,7 +203,12 @@ impl Parser {
 
     fn subcommand(self, name: String, sub_parser: Parser) -> Parser {
         let mut new_subs = self.subcommands;
-        new_subs.push(Subcommand { name: name, parser: sub_parser });
+        new_subs.push(Subcommand {
+            name: name,
+            about_text: sub_parser.about_text,
+            args: sub_parser.args,
+            flags: sub_parser.flags,
+        });
         Parser {
             program_name: self.program_name,
             about_text: self.about_text,
@@ -256,8 +268,8 @@ impl Parser {
                         match self.subcommands.get(sub_parser_idx) {
                             Some(sentry) => {
                                 let mut j: i64 = 0;
-                                while j < sentry.parser.args.len() {
-                                    match sentry.parser.args.get(j) {
+                                while j < sentry.args.len() {
+                                    match sentry.args.get(j) {
                                         Some(entry) => {
                                             if entry.name == token {
                                                 i = i + 1;
@@ -265,7 +277,7 @@ impl Parser {
                                                     Some(val) => {
                                                         sub_values.push(ParsedValue {
                                                             name: entry.name,
-                                                            value: val,
+                                                            value: val.clone(),
                                                         });
                                                     }
                                                     None => {
@@ -283,8 +295,8 @@ impl Parser {
                                 }
                                 if not matched {
                                     let mut k: i64 = 0;
-                                    while k < sentry.parser.flags.len() {
-                                        match sentry.parser.flags.get(k) {
+                                    while k < sentry.flags.len() {
+                                        match sentry.flags.get(k) {
                                             Some(fentry) => {
                                                 if fentry.name == token {
                                                     sub_flags_set.push(fentry.name);
@@ -297,7 +309,7 @@ impl Parser {
                                     }
                                 }
                                 if not matched {
-                                    sub_positional.push(token);
+                                    sub_positional.push(token.clone());
                                 }
                             }
                             None => { }
@@ -315,7 +327,7 @@ impl Parser {
                                             Some(val) => {
                                                 values.push(ParsedValue {
                                                     name: entry.name,
-                                                    value: val,
+                                                    value: val.clone(),
                                                 });
                                             }
                                             None => {
@@ -368,7 +380,7 @@ impl Parser {
                             }
                         }
                         if not matched {
-                            positional.push(token);
+                            positional.push(token.clone());
                         }
                     }
                 }
@@ -413,8 +425,8 @@ impl Parser {
             match self.subcommands.get(sub_parser_idx) {
                 Some(sentry) => {
                     let mut rs: i64 = 0;
-                    while rs < sentry.parser.args.len() {
-                        match sentry.parser.args.get(rs) {
+                    while rs < sentry.args.len() {
+                        match sentry.args.get(rs) {
                             Some(entry) => {
                                 if entry.is_required {
                                     let mut found: bool = false;
@@ -530,8 +542,8 @@ impl Parser {
                 match self.subcommands.get(i) {
                     Some(sentry) => {
                         out = out + "    " + sentry.name;
-                        if sentry.parser.about_text != "" {
-                            out = out + "  " + sentry.parser.about_text;
+                        if sentry.about_text != "" {
+                            out = out + "  " + sentry.about_text;
                         }
                         out = out + "\n";
                     }

@@ -1686,6 +1686,14 @@ pub(super) struct Codegen<'ctx> {
     /// flags the stdlib against itself — refusing every legitimate regex
     /// program. See B-2026-08-02-13.
     pub(crate) declaring_stdlib_program: bool,
+    /// Baked stdlib `Program`s whose LAYOUTS have already been declared, keyed
+    /// by the `&'static Program`'s address. Makes [`Self::declare_stdlib_layouts`]
+    /// idempotent so the early hoisted pass and the later
+    /// `declare_stdlib_program` call cannot register one program's layouts
+    /// twice — a second `declare_enums` / `build_struct_types` would mint a
+    /// fresh LLVM named struct (`Foo.0`) and split the type identity that
+    /// `struct_types` and the field side tables key on.
+    pub(crate) stdlib_layouts_declared: std::collections::HashSet<usize>,
     /// HTTP handler ABI trampoline (2026-05-09): cache of per-handler-fn
     /// `extern "C"` shims. Key is the user handler's mangled fn name (e.g.
     /// `"handle"`); value is the synthesized shim function. Sharing the
@@ -5804,6 +5812,7 @@ impl<'ctx> Codegen<'ctx> {
                 provider_frame_ty,
             },
             declaring_stdlib_program: false,
+            stdlib_layouts_declared: std::collections::HashSet::new(),
             http_shim_cache: HashMap::new(),
             target_data: init_target_data,
             main_symbol_override: None,
@@ -6814,6 +6823,20 @@ impl<'ctx> Codegen<'ctx> {
         }
         // Name-only `shared`/`par` set, before `declare_enums` — see the field doc.
         self.collect_shared_type_names(program);
+        // Baked-stdlib LAYOUTS, ahead of every user layout + signature pass:
+        // a user struct field, fn return type, or binding may NAME a stdlib
+        // struct, and an unknown name silently lowers to `i64`. See
+        // `declare_stdlib_layouts` for the two miscompiles this ordering fixes
+        // and why stdlib-before-user is the safe direction. The impl-METHOD
+        // declaration half stays where it was, after the user impl loop.
+        if !user_redefines_stdlib_type(program, tracing_stdlib_program()) {
+            self.declare_stdlib_layouts(tracing_stdlib_program());
+        }
+        for tp in compiled_stdlib_programs(program) {
+            if !user_redefines_stdlib_type(program, tp) {
+                self.declare_stdlib_layouts(tp);
+            }
+        }
         self.register_struct_metadata(program);
         // AFTER `register_struct_metadata`, because this seed measures the
         // program's channel element types — including user structs — to size
@@ -8293,6 +8316,52 @@ impl<'ctx> Codegen<'ctx> {
     /// Mirrors the value-self-first two-pass dedup of the user impl
     /// declaration loop in `compile_program`, kept identical so the two
     /// stay in lockstep.
+    /// Declare one baked stdlib `Program`'s LAYOUTS ONLY — the field/variant
+    /// side tables (`struct_types` / `struct_field_*` / `enum_layouts`), no IR
+    /// and no function signatures.
+    ///
+    /// Split out of [`Self::declare_stdlib_program`] and hoisted ahead of the
+    /// USER program's own layout + signature passes, because a user item may
+    /// NAME a baked stdlib struct and every such name resolves through
+    /// `struct_types`. Declared too late, the name is unknown and
+    /// `llvm_type_for_name` hands back its `i64` fall-through — silently, since
+    /// the report behind it is gated on `KARAC_STRICT_TYPE_LOWERING`. Two
+    /// shapes were measurably wrong before this ran early (B-2026-08-25-2):
+    ///
+    /// - `fn build() -> Parser` got an `i64` LLVM return type while its body
+    ///   returned the real aggregate — "Function return type does not match
+    ///   operand type of return inst". Not `std.cli`-specific: `-> Command`
+    ///   and `-> Regex` failed identically, in modules registered for months.
+    /// - `struct Holder { c: Command }` laid the field out AS `i64`, so the
+    ///   enclosing struct got `{ i64, i64 }` and the literal's `insertvalue`
+    ///   was rejected against it.
+    ///
+    /// Ordering within a program is the same metadata→enums→types sequence
+    /// `compile_program` uses, so a stdlib struct field naming a stdlib enum
+    /// resolves at that enum's tagged-union shape rather than `i64`. Stdlib
+    /// programs can never name a USER type, so running the whole stdlib set
+    /// before the user's own layouts is safe in that direction; a user type
+    /// that SHADOWS a stdlib one still wins, both because the shadowing module
+    /// is skipped wholesale by `user_redefines_stdlib_type` and because the
+    /// user's later `build_struct_types` overwrites the entry.
+    ///
+    /// Idempotent: a program already covered short-circuits, so the call left
+    /// behind in `declare_stdlib_program` does not re-register a layout (which
+    /// would mint a SECOND LLVM named struct — `Foo.0` — and split the type
+    /// identity the side tables key on).
+    fn declare_stdlib_layouts(&mut self, tp: &Program) {
+        let key = tp as *const Program as usize;
+        if !self.stdlib_layouts_declared.insert(key) {
+            return;
+        }
+        let prev_declaring_stdlib = self.declaring_stdlib_program;
+        self.declaring_stdlib_program = true;
+        self.register_struct_metadata(tp);
+        self.declare_enums(tp);
+        self.build_struct_types(tp);
+        self.declaring_stdlib_program = prev_declaring_stdlib;
+    }
+
     fn declare_stdlib_program(&mut self, tp: &Program) -> Result<(), String> {
         let prev_declaring_stdlib = self.declaring_stdlib_program;
         self.declaring_stdlib_program = true;
@@ -8302,16 +8371,13 @@ impl<'ctx> Codegen<'ctx> {
     }
 
     fn declare_stdlib_program_inner(&mut self, tp: &Program) -> Result<(), String> {
-        // Layouts + field/variant side tables (struct_types / struct_field_* /
-        // enum layouts), no IR — so literals, field access, `match` on a
-        // stdlib enum, and aggregate fields all lower at the right shape.
-        // `declare_enums` is the addition over the original tracing-only pass
-        // (tracing has no enums; `Ordering` does). Same metadata→enums→types
-        // ordering as `compile_program` so a stdlib struct field that names a
-        // stdlib enum resolves at the enum's tagged-union shape, not `i64`.
-        self.register_struct_metadata(tp);
-        self.declare_enums(tp);
-        self.build_struct_types(tp);
+        // Layouts are declared by `declare_stdlib_layouts`, which runs in an
+        // EARLIER pass (see its doc + the call site in `compile_program`).
+        // This call is the idempotent no-op for any program that pass already
+        // covered, and does the real work for one it did not (a module reached
+        // only from here). What remains below is the impl-method DECLARATION
+        // half, which must stay after the user impl-declaration loop.
+        self.declare_stdlib_layouts(tp);
         let mut declared: std::collections::HashSet<String> = std::collections::HashSet::new();
         for value_self_pass in [true, false] {
             for item in &tp.items {

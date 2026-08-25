@@ -96750,6 +96750,53 @@ fn main() {
         }
     }
 
+    /// A user fn whose declared RETURN TYPE names a baked stdlib struct got an
+    /// `i64` LLVM signature while its body returned the real aggregate, so the
+    /// module failed verification with "Function return type does not match
+    /// operand type of return inst" (B-2026-08-25-2). Stdlib layouts were
+    /// declared AFTER user function signatures, so the name resolved against an
+    /// empty `struct_types` and hit `llvm_type_for_name`'s `i64` fall-through.
+    /// `-> Command` and `-> Regex` failed identically in modules that had been
+    /// registered for months, so this was never `std.cli`-specific.
+    #[test]
+    fn test_e2e_user_fn_returning_stdlib_struct_compiles() {
+        let out = run_program(
+            r#"
+fn mk() -> Command { return Command.new("echo"); }
+
+fn main() {
+    let c = mk();
+    println("ok");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "ok");
+        }
+    }
+
+    /// The same missing-layout ordering, one position over: a user struct FIELD
+    /// naming a baked stdlib struct was laid out AS `i64`, so the enclosing
+    /// struct became `{ i64, i64 }` and the literal's `insertvalue` was rejected
+    /// against it. This is why the layout pass is hoisted ahead of the user's
+    /// `build_struct_types`, not merely ahead of its signatures.
+    #[test]
+    fn test_e2e_user_struct_field_naming_stdlib_struct_compiles() {
+        let out = run_program(
+            r#"
+struct Holder { c: Command, n: i64 }
+
+fn main() {
+    let h = Holder { c: Command.new("echo"), n: 7 };
+    println(h.n);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "7");
+        }
+    }
+
     /// The DIRECT cycle B-2026-07-28-3 already handled, kept alongside its
     /// mutual sibling so a future edit to the guard cannot fix one by
     /// regressing the other.
