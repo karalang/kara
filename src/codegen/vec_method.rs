@@ -5000,10 +5000,15 @@ impl<'ctx> super::Codegen<'ctx> {
             // OOM. The panic block (`unreachable` terminator) and the OOM block
             // (branches to merge) simply coexist as distinct successors of the
             // grow block.
-            "try_extend_from_slice" => {
+            // `try_extend` is the spec's spelling of the same operation and
+            // shares this arm, exactly as `extend` shares the panicking
+            // `extend_from_slice` arm above — the alias is established in the
+            // typechecker and interpreter too, so all three phases agree that
+            // the two names denote one method. B-2026-08-25-20.
+            "try_extend_from_slice" | "try_extend" => {
                 if args.len() != 1 {
                     return Err(format!(
-                        "try_extend_from_slice expects 1 argument (source), got {}",
+                        "{method} expects 1 argument (source), got {}",
                         args.len()
                     ));
                 }

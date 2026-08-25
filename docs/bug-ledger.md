@@ -95,8 +95,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 288 | 0 |
 | leak | 195 | 0 |
 | missing-feature | 173 | 5 |
-| run-vs-build | 159 | 0 |
-| codegen-gap | 138 | 0 |
+| run-vs-build | 160 | 1 |
+| codegen-gap | 139 | 1 |
 | double-free | 138 | 0 |
 | diagnostics | 108 | 1 |
 | false-positive | 97 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1036 | 1 |
+| codegen | 1038 | 3 |
 | typecheck | 260 | 5 |
 | interp | 180 | 0 |
 | other | 65 | 1 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1576 surfaced · 7 open · 1544 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-25). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1578 surfaced · 9 open · 1544 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-25). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (7)
+### Open (9)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -137,6 +137,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1576 surfaced
 | B-2026-08-25-29 | 2026-08-25 | typecheck | medium | TWO OPERATOR BEHAVIOURS design.md § Operator Traits presents as SHIPPED v1 SURFACE DO NOT EXIST. (1) IMPLICIT LOSSLESS WIDENING AT OPERATOR BOUNDARIES: the section states "`(x: i32) + (y: i64)` is valid -- the compiler widens `x` to `i64` before dispatch, and the result type is `i64`", but the compiler rejects it with `cannot mix integer types 'i32' and 'i64' in arithmetic -- they must match; cast the 'i32' operand up`. Same for `u8 + u32` and for `f32 + f64` (`cannot mix float types`). A LITERAL operand still widens (`let x: i32 = 1; x + 2` is fine), so what is missing is specifically the two-typed-operand case. (2) BITWISE `Not` ON INTEGER PRIMITIVES: the v1 trait set lists `Not` under Bitwise and the stdlib-impl list says the bitwise traits ship "only on integer primitives and bool", but `not a` on an `i64` or `u8` is rejected -- `unary '!' requires 'bool', found 'i64'`. Only `bool` works. | roadmap.md |
 | B-2026-08-25-30 | 2026-08-25 | typecheck | medium | OPERATOR-FAILURE DIAGNOSTICS DO NOT SPEAK THE TRAIT LANGUAGE design.md § Operator Traits mandates, and two of them NAME A TRAIT THE USER DOES NOT NEED. The spec is explicit: "Diagnostics for a missing impl (e.g., `vec1 + vec2`) speak the trait language -- \"type Vec[T] does not implement trait Add\" -- not operator language -- \"+ is not defined for Vec[T]\"", and § Notably absent adds that `vec1 + vec2` gets "a diagnostic pointing at `vec.concat(other)` or `vec.extend(other)`". Measured, `[1,2] + [3,4]` reports `arithmetic operator requires numeric type, found 'Vec[i64]'` -- operator language, no trait named, no method redirect. Separately, `==` on a struct reports `does not implement Eq; add #[derive(Eq)]` and `<` reports `does not implement Ord; add #[derive(Ord)]`, but the desugaring runs through `PartialEq` / `PartialOrd` and `#[derive(PartialEq)]` / `#[derive(PartialOrd)]` ALONE is sufficient to compile -- so the message names the total trait when the partial one is what is required. The spec states the `Eq` marker "is never named by the desugaring". | roadmap.md |
 | B-2026-08-25-32 | 2026-08-25 | other | medium | `PriorityQueue` HAS NO `peek`: there is NO non-destructive way to read the root, so the archetypal two-heap median use case cannot read a queue's head at the O(1) its own doc comment advertises -- and `runtime/stdlib/priority_queue.kara`'s header promises `peek / len O(1)` for a method that does not exist in the file or in design.md | runtime/stdlib/priority_queue.kara (header complexity table promises `peek`); design.md § `PriorityQueue[T]` method table needs the row too |
+| B-2026-08-25-33 | 2026-08-25 | codegen | high | `?` in `main()` SEGFAULTS under `karac run` (the default JIT executor) whenever main's error type is an enum with an INLINE SCALAR payload -- `AllocError` included -- while `--interp`, `karac build` and `KARAC_AUTO_PAR=0 karac build` all produce the correct output. Minimal repro allocates nothing and never takes the `Err` arm: `fn ok() -> Result[i64, AllocError] { return Ok(7); }` + `fn main() -> Result[(), AllocError] { let x = ok()?; println(x); return Ok(()); }` gives rc=139 with no output, 5/5 runs. An all-unit error enum works, and a `String`-payload error enum (`IoError`) works, so the discriminator is the payload REPRESENTATION, not its presence. `?` in a non-main function is fine, and `main -> Result` without `?` is fine -- it takes both. This silently breaks the fallible-allocation API as design.md spells it, since `v.try_push(x)?` inside `fn main() -> Result[(), AllocError]` is the spec's own example. | roadmap.md |
+| B-2026-08-25-34 | 2026-08-25 | codegen | medium | `AllocError`'s `Display` renders the Debug form (`OutOfMemory { requested_bytes: 4096 }`) into the user-facing `Error: {e}` entry-point line, and the spec-sanctioned fix -- a manual `impl Display`, per § `#[derive(Display)]` on enums' "Implement `Display` manually to override" -- CANNOT LAND without codegen work: a prelude impl lives in `STDLIB_PROGRAMS`, which codegen does not walk, so the impl reaches the interpreter only. Registering the module as a compiled stdlib program fixes `.to_string()` under AOT but leaves `f"{e}"` and the entry-point line unfixed. Worse, the half-done state FAILS OPEN: dropping the derive without teaching codegen about the impl makes `karac build` emit `Error: ` with an EMPTY message rather than erroring, because the typechecker sees the impl and codegen does not. | roadmap.md |
 
 ### Relocated (1)
 

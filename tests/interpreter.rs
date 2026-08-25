@@ -11596,6 +11596,34 @@ fn test_try_extend_from_slice_wraps_ok() {
 }
 
 #[test]
+fn test_try_extend_alias_wraps_ok() {
+    // `try_extend` is the spelling design.md § Fallible Allocation's table
+    // uses (`extend(iter)` / `try_extend(iter)`); it denotes the same
+    // operation as `try_extend_from_slice`, exactly as the panicking `extend`
+    // aliases `extend_from_slice`. Asserted against the sibling spelling in
+    // the SAME program so the two cannot silently drift apart.
+    // B-2026-08-25-20.
+    let output = run("fn main() {\n\
+             let mut a: Vec[i64] = [1_i64];\n\
+             let mut b: Vec[i64] = [1_i64];\n\
+             let src: Vec[i64] = [2_i64, 3_i64];\n\
+             match a.try_extend(src) {\n\
+                 Ok(_) => println(\"ok\"),\n\
+                 Err(e) => println(\"err\"),\n\
+             }\n\
+             match b.try_extend_from_slice(src) {\n\
+                 Ok(_) => println(\"ok\"),\n\
+                 Err(e) => println(\"err\"),\n\
+             }\n\
+             println(a.len());\n\
+             println(b.len());\n\
+             println(a[2]);\n\
+             println(b[2]);\n\
+         }");
+    assert_eq!(output, "ok\nok\n3\n3\n3\n3\n");
+}
+
+#[test]
 fn test_try_push_str_and_try_push_char_string() {
     let output = run("fn main() {\n\
              let mut s: String = \"\";\n\

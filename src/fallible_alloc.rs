@@ -17,8 +17,13 @@
 //!
 //! Only `try_<base>` forms whose panicking `<base>` already exists on a builtin
 //! collection are registered. Companions whose base operation does not exist yet
-//! (`Vec.reserve` / `Vec.append` / `Vec.resize` / `Box.new` / `Rc.new` / …) are
-//! deferred until that base lands — see the tracker entry.
+//! (`Vec.reserve` / `Vec.reserve_exact` / `Vec.append` / `Vec.resize` /
+//! `String.reserve` / `Map.reserve` / `Box.new` / `Rc.new` / …) are deferred
+//! until that base lands — see the tracker entry. That rule is the whole
+//! explanation for the gap B-2026-08-25-20 reported as three missing `try_*`
+//! methods: the missing half is the PANICKING base, not the companion layer,
+//! which is why `try_extend` was a one-line registration here (its base
+//! `Vec.extend` already existed) while its two row-mates were not.
 
 /// Instance methods whose `try_<base>` companion returns
 /// `Result[<base-ret>, AllocError]`. Each base is a panicking, heap-allocating
@@ -32,8 +37,14 @@ pub const TRY_ALLOC_INSTANCE_BASES: &[&str] = &[
     "push_back",         // VecDeque.push_back
     "push_front",        // VecDeque.push_front
     "extend_from_slice", // Vec.extend_from_slice
-    "insert",            // Map.insert, Set.insert, SortedSet.insert, SortedMap.insert
-    "clone",             // Vec/String/Map/SortedMap/Set/SortedSet/VecDeque.clone
+    // `extend` is the spec's spelling (design.md § Fallible Allocation's table
+    // row `extend(iter)` / `try_extend(iter)`); the typechecker, interpreter
+    // and codegen all already treat it as an exact alias of
+    // `extend_from_slice`, so registering it here is the whole of
+    // `Vec.try_extend`. B-2026-08-25-20.
+    "extend",
+    "insert", // Map.insert, Set.insert, SortedSet.insert, SortedMap.insert
+    "clone",  // Vec/String/Map/SortedMap/Set/SortedSet/VecDeque.clone
 ];
 
 /// Static constructors whose `Type.try_<base>(...)` companion returns
@@ -81,6 +92,7 @@ pub const CODEGEN_FALLIBLE_INSTANCE_BASES: &[&str] = &[
     "push_str",          // String.try_push_str
     "push_front",        // VecDeque.try_push_front
     "extend_from_slice", // Vec.try_extend_from_slice
+    "extend",            // Vec.try_extend (alias of the above, all phases)
     "clone",             // Vec/VecDeque/String.try_clone (Map/Set rejected at dispatch)
     "insert", // Map/Set/SortedSet.try_insert (routes to compile_map_method / compile_set_method)
 ];

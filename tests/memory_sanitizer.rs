@@ -14725,6 +14725,44 @@ fn main() {
         );
     }
 
+    #[test]
+    fn asan_vec_try_extend_alias_grow_and_clone_paths_clean() {
+        // `Vec.try_extend` (B-2026-08-25-20) shares the
+        // `try_extend_from_slice` lowering, so what needs proving under ASAN
+        // is that the ALIAS reaches the same arm rather than some other one —
+        // a mis-routed name would silently take the panicking `extend` path,
+        // whose ownership handling of the grown buffer differs. Exercises
+        // both element classes in one program: i64 takes the trivial memcpy
+        // path, String takes the per-element clone path (the one that
+        // double-frees if the source and destination both claim the elements).
+        // Spelled with `match`, not `?` in `main`: the latter segfaults under
+        // the JIT for an inline-scalar-payload error enum (B-2026-08-25-33).
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let src: Vec[i64] = Vec.filled(4, 5);
+    let mut dst: Vec[i64] = Vec.with_capacity(2);
+    dst.push(1);
+    match dst.try_extend(src) {
+        Ok(_) => println(dst.len()),
+        Err(_) => println("err"),
+    }
+    let ssrc: Vec[String] = Vec.filled(3, "abc");
+    let mut sdst: Vec[String] = Vec.with_capacity(1);
+    sdst.push("z");
+    match sdst.try_extend(ssrc) {
+        Ok(_) => println(sdst.len()),
+        Err(_) => println("err"),
+    }
+    println(sdst[3]);
+    println(ssrc[0]);
+}
+"#,
+            &["5", "4", "abc", "abc"],
+            "vec_try_extend_alias_grow_and_clone_paths_clean",
+        );
+    }
+
     // ── extend_from_slice + from_slice: RC-bearing element types ─
     // The bit-copy code path bit-copies String / Vec / shared-T
     // aggregates between source and dest. Both observers then alias

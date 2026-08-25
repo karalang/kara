@@ -35363,6 +35363,45 @@ fn main() {
     }
 
     #[test]
+    fn e2e_try_extend_alias_codegen() {
+        // `Vec.try_extend` — the spelling design.md § Fallible Allocation's
+        // method table names (`extend(iter)` / `try_extend(iter)`), which did
+        // not exist until B-2026-08-25-20. It shares the
+        // `try_extend_from_slice` lowering, so the assertion is EQUIVALENCE:
+        // both spellings run in one program over identical inputs and every
+        // observable has to match. A drift in either arm breaks this.
+        //
+        // Deliberately spelled with `match`, not `?` in `main`: the latter
+        // segfaults under `karac run` for any error enum with an inline
+        // scalar payload, `AllocError` included (B-2026-08-25-33) — a
+        // pre-existing JIT defect this method merely inherits.
+        if let Some(out) = run_program(
+            "fn main() {\n\
+                 let src: Vec[i64] = Vec.filled(4_i64, 5_i64);\n\
+                 let mut a: Vec[i64] = Vec.with_capacity(2);\n\
+                 a.push(1_i64);\n\
+                 let mut b: Vec[i64] = Vec.with_capacity(2);\n\
+                 b.push(1_i64);\n\
+                 match a.try_extend(src) {\n\
+                     Ok(_) => println(\"ok\"),\n\
+                     Err(_) => println(\"err\"),\n\
+                 }\n\
+                 match b.try_extend_from_slice(src) {\n\
+                     Ok(_) => println(\"ok\"),\n\
+                     Err(_) => println(\"err\"),\n\
+                 }\n\
+                 println(a.len());\n\
+                 println(b.len());\n\
+                 println(a[0]);\n\
+                 println(a[4]);\n\
+                 println(b[4]);\n\
+             }",
+        ) {
+            assert_eq!(out, "ok\nok\n5\n5\n1\n5\n5\n");
+        }
+    }
+
+    #[test]
     fn e2e_try_extend_from_slice_clone_path_codegen() {
         // The heap-element path (Vec[String]) takes the per-element clone loop
         // (not the bit-copy memcpy), so the cloned strings are independent of the
