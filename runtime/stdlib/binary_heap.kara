@@ -1,0 +1,182 @@
+// runtime/stdlib/binary_heap.kara
+//
+// `BinaryHeap[T: Ord]` — a `Vec[T]`-backed binary heap (priority queue).
+// Phase 11 § General-purpose collections.
+//
+// **STATUS (2026-08-25): written and interpreter-correct, NOT YET
+// REGISTERED.** This file is deliberately absent from `STDLIB_SOURCES`,
+// `PRELUDE_TYPES` and `compiled_stdlib_programs` — so nothing imports it
+// and no user program can reach `BinaryHeap` yet. The bodies below are
+// correct under the tree-walk interpreter for both an `i64` and a
+// `String` element, and the codegen machinery that compiles a GENERIC
+// baked stdlib module now exists (see
+// `Codegen::declare_stdlib_program_inner`). Registration waits on
+// B-2026-08-25-2: a generic method that calls a MUTATING sibling generic
+// method inside a loop hangs under codegen — a defect that predates this
+// module and reproduces without it, but which `into_sorted_vec` below
+// hits head-on. Re-registering is a four-line change once that clears;
+// the phase-11 tracker entry names the four lines.
+//
+// **This module is written in Kāra, with real bodies.** Every other
+// collection (`Vec`, `Map`, `Set`, `VecDeque`, `SortedMap`, `SortedSet`)
+// is a `#[compiler_builtin]` signature stub backed by a Rust
+// implementation, because each of those owns a runtime representation —
+// a hash table, a B-tree, a ring buffer. A heap owns none: it is a
+// `Vec[T]` plus comparisons, so a Rust twin would buy nothing that the
+// monomorphized `Vec[T]` does not already give, and would put a third
+// copy of the sift algorithm (interpreter + codegen + runtime) where the
+// language can express one. The bodies below are compiled through the
+// baked-stdlib path (`lower_stdlib_source` → `declare_stdlib_program` /
+// `compile_stdlib_program`, `src/codegen.rs`), the same path `Ordering`,
+// `protobuf` and `process` already use for their non-builtin bodies.
+//
+// **Direction: MIN by default.** `BinaryHeap.new()` is a min-heap;
+// `BinaryHeap.max()` is the max-heap sibling. This DIVERGES from Rust,
+// whose `BinaryHeap` is a max-heap that makes the caller wrap elements in
+// `Reverse` to get the other direction. The divergence is deliberate: a
+// priority queue is reached for far more often to get the *smallest*
+// thing next (Dijkstra, k-way merge, meeting rooms, event simulation),
+// and every hand-rolled heap in the kata corpus wanted min. The
+// direction is a field on the heap rather than two types, so a heap can
+// be handed to a generic consumer without the direction leaking into its
+// signature.
+//
+// Ordering is `T: Ord` on the impl block; the comparison helper
+// `outranks` takes INDICES rather than values so a non-`Copy` `T`
+// (`String`, a nested `Vec`) is never moved out of the backing store to
+// be compared.
+
+struct BinaryHeap[T] {
+    xs: Vec[T],
+    max: bool,
+}
+
+impl[T: Ord] BinaryHeap[T] {
+    // An empty MIN-heap — the smallest element pops first.
+    fn new() -> BinaryHeap[T] {
+        BinaryHeap { xs: Vec.new(), max: false }
+    }
+
+    // An empty MAX-heap — the largest element pops first. Rust's default
+    // direction, this language's opt-in.
+    fn max() -> BinaryHeap[T] {
+        BinaryHeap { xs: Vec.new(), max: true }
+    }
+
+    // Build a min-heap from an existing vector in O(n) — Floyd's
+    // heapify, sifting down from the last internal node rather than
+    // pushing n times (which would be O(n log n)).
+    fn from(v: Vec[T]) -> BinaryHeap[T] {
+        let mut h = BinaryHeap { xs: v, max: false };
+        let n = h.xs.len();
+        let mut i = n / 2 - 1;
+        while i >= 0 {
+            h.sift_down(i);
+            i = i - 1;
+        }
+        h
+    }
+
+    fn len(ref self) -> i64 {
+        self.xs.len()
+    }
+
+    fn is_empty(ref self) -> bool {
+        self.xs.len() == 0
+    }
+
+    fn clear(mut ref self) {
+        self.xs.clear();
+    }
+
+    // Does the element at `i` sit closer to the root than the one at `j`?
+    // The ONE place the two directions differ. Indices, not values: a
+    // `String` element is compared in place, never moved out to compare.
+    fn outranks(ref self, i: i64, j: i64) -> bool {
+        if self.max {
+            return self.xs[i] > self.xs[j];
+        }
+        return self.xs[i] < self.xs[j];
+    }
+
+    fn swap(mut ref self, i: i64, j: i64) {
+        let t = self.xs[i];
+        self.xs[i] = self.xs[j];
+        self.xs[j] = t;
+    }
+
+    // Sift the element at `start` up toward the root until the heap
+    // property holds above it.
+    fn sift_up(mut ref self, start: i64) {
+        let mut i = start;
+        while i > 0 {
+            let parent = (i - 1) / 2;
+            if self.outranks(i, parent) {
+                self.swap(i, parent);
+                i = parent;
+            } else {
+                return;
+            }
+        }
+    }
+
+    // Sift the element at `start` down until the heap property holds
+    // below it.
+    fn sift_down(mut ref self, start: i64) {
+        let n = self.xs.len();
+        let mut i = start;
+        while true {
+            let l = 2 * i + 1;
+            let r = 2 * i + 2;
+            let mut best = i;
+            if l < n and self.outranks(l, best) {
+                best = l;
+            }
+            if r < n and self.outranks(r, best) {
+                best = r;
+            }
+            if best == i {
+                return;
+            }
+            self.swap(i, best);
+            i = best;
+        }
+    }
+
+    fn push(mut ref self, x: T) {
+        self.xs.push(x);
+        let n = self.xs.len();
+        self.sift_up(n - 1);
+    }
+
+    // Remove and return the root — the smallest element of a min-heap,
+    // the largest of a max-heap — or `None` when empty. Swaps the root to
+    // the end so the pop is O(1) on the backing vector, then sifts the
+    // replacement root down.
+    fn pop(mut ref self) -> Option[T] {
+        let n = self.xs.len();
+        if n == 0 {
+            return None;
+        }
+        self.swap(0, n - 1);
+        let top = self.xs.pop();
+        self.sift_down(0);
+        top
+    }
+
+    // Drain into a vector in pop order: ascending for a min-heap,
+    // descending for a max-heap.
+    fn into_sorted_vec(self) -> Vec[T] {
+        let mut h = self;
+        let mut out: Vec[T] = Vec.new();
+        while h.xs.len() > 0 {
+            match h.pop() {
+                Some(v) => {
+                    out.push(v);
+                }
+                None => {}
+            }
+        }
+        out
+    }
+}

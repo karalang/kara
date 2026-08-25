@@ -3218,7 +3218,21 @@ impl<'a> super::TypeChecker<'a> {
                             TypeErrorKind::ParMutSelfReceiver,
                         );
                     }
-                    self.check_function(method, Some(&self_type), &[]);
+                    // The impl block's own generic params are in scope for
+                    // every method body, associated functions included. Passing
+                    // `&[]` here left them out, so a type param mentioned in an
+                    // ASSOCIATED fn's signature lowered as `Named { name: "T",
+                    // args: [] }` rather than `Type::TypeParam("T")` — the same
+                    // fallthrough the GAT arm below documents. An instance
+                    // method masked the gap (its `self_type` supplies `T`
+                    // already bound), which is why this only ever surfaced on
+                    // the no-receiver form: inside `impl[T: Ord] W[T]`, a
+                    // `fn make(x: Vec[T]) -> W[T]` that called any method on a
+                    // local `W` was rejected with the impl's OWN bound reported
+                    // unsatisfied ("`T` does not implement `Ord`"), because
+                    // `first_unsatisfied_bound` skips a `TypeParam` arg but
+                    // discharges a `Named` one against the impl table.
+                    self.check_function(method, Some(&self_type), &gp);
                 }
                 ImplItem::AssocType(binding) => {
                     // GAT slice 5: extend the generic scope with the GAT's

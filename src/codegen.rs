@@ -8319,7 +8319,44 @@ impl<'ctx> Codegen<'ctx> {
                     if let Some(type_name) = impl_target_name(&imp.target_type) {
                         for impl_item in &imp.items {
                             if let ImplItem::Method(method) = impl_item {
-                                if method.generic_params.is_some() {
+                                // A method that is generic — via its OWN params
+                                // or via the IMPL's (`impl[T: Ord]
+                                // BinaryHeap[T]`) — cannot be declared at a
+                                // single signature here; it has to be
+                                // monomorphized per concrete instantiation at
+                                // the user's call site. Register it in
+                                // `generic_fns` exactly as the user-program
+                                // declaration pass does (see the
+                                // `make_generic_impl_method_function` arm there,
+                                // B-2026-07-03-23 layer 4), keyed by the same
+                                // `Type.method` string a call site forms.
+                                //
+                                // Before this, both kinds were `continue`d — so
+                                // a generic baked stdlib type's methods were
+                                // neither declared nor seeded anywhere and a
+                                // call site fell through to "no handler for
+                                // method". That closed the door on a stdlib
+                                // module written in Kāra over a type parameter,
+                                // which is what `BinaryHeap[T: Ord]` is. The
+                                // non-generic path below is unchanged.
+                                if method.generic_params.is_some() || imp.generic_params.is_some() {
+                                    if method_is_compiler_builtin(method) {
+                                        continue;
+                                    }
+                                    let qualified = format!("{}.{}", type_name, method.name);
+                                    self.mono_state.generic_fns.entry(qualified).or_insert_with(
+                                        || {
+                                            if imp.generic_params.is_some() {
+                                                make_generic_impl_method_function(imp, method)
+                                            } else {
+                                                make_impl_method_function(
+                                                    &type_name,
+                                                    method,
+                                                    &imp.target_type,
+                                                )
+                                            }
+                                        },
+                                    );
                                     continue;
                                 }
                                 // 889: `#[compiler_builtin]` methods have
@@ -8573,7 +8610,21 @@ impl<'ctx> Codegen<'ctx> {
                     if let Some(type_name) = impl_target_name(&imp.target_type) {
                         for impl_item in &imp.items {
                             if let ImplItem::Method(method) = impl_item {
-                                if method.generic_params.is_some() {
+                                // Mirror of the declaration pass: a method that
+                                // is generic via its own params OR via the
+                                // impl's is seeded into `generic_fns` there, not
+                                // declared, so there is no single signature to
+                                // emit a body into here — `compile_generic_call`
+                                // emits one monomorph per concrete
+                                // instantiation at the user's call site instead.
+                                // Emitting here would look up an LLVM function
+                                // that was deliberately never declared
+                                // ("Function 'BinaryHeap.new' not declared").
+                                // The two filters MUST stay in lockstep, for
+                                // the reason the module doc gives: a declared
+                                // method whose body is skipped leaves an
+                                // undefined symbol, and vice-versa.
+                                if method.generic_params.is_some() || imp.generic_params.is_some() {
                                     continue;
                                 }
                                 // 889: skip `#[compiler_builtin]` — bodies are

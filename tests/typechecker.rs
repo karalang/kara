@@ -45246,3 +45246,72 @@ fn labeled_loop_break_value_is_collected_too() {
     // unlabeled ones did — neither pushed a collector frame.
     typecheck_ok("fn go() -> i64 { outer: loop { break outer 7 } }");
 }
+
+// ── Impl-block generics are in scope for ASSOCIATED functions ───
+//
+// B-2026-08-25-1. `check_impl_block` passed an EMPTY enclosing generic
+// scope to `check_function` for every method, so the impl's own type
+// params were absent from method bodies. An instance method masked the
+// gap — its `self_type` is already `W[TypeParam(T)]`, and
+// `first_unsatisfied_bound` skips a `TypeParam` argument as
+// undischargeable-yet. An associated fn has no receiver to supply that
+// binding, so `T` in its signature lowered as `Named { name: "T" }`, a
+// local of the impl's own type inherited it, and the bound check then
+// discharged a NAMED type against the impl table — reporting the impl's
+// OWN bound as unsatisfied on the type param that carries it.
+
+#[test]
+fn test_assoc_fn_sees_impl_generic_bound_on_local_receiver() {
+    // The constructor-plus-helper shape: an associated fn building a
+    // value of its own type and calling a method on it. Rejected before
+    // the fix with "trait bound `T: Ord` is not satisfied; `T` does not
+    // implement `Ord`" — the bound the impl block itself declares.
+    typecheck_ok(
+        "struct W[T] { v: Vec[T] }\n\
+         impl[T: Ord] W[T] {\n\
+             fn helper(mut ref self, i: i64) { let _ = i; }\n\
+             fn make(x: Vec[T]) -> W[T] {\n\
+                 let mut w = W { v: x };\n\
+                 w.helper(0);\n\
+                 w\n\
+             }\n\
+         }",
+    );
+}
+
+#[test]
+fn test_instance_method_local_receiver_under_impl_bound_still_ok() {
+    // The leg that always worked — kept so a future change that fixes
+    // the associated-fn case by weakening the bound check would fail
+    // here instead of passing quietly.
+    typecheck_ok(
+        "struct W[T] { v: Vec[T] }\n\
+         impl[T: Ord] W[T] {\n\
+             fn helper(ref self) -> i64 { self.v.len() }\n\
+             fn local_in_method(ref self) -> i64 {\n\
+                 let w2 = W { v: Vec.new() };\n\
+                 w2.helper()\n\
+             }\n\
+         }",
+    );
+}
+
+#[test]
+fn test_assoc_fn_unsatisfied_bound_still_rejected_at_call_site() {
+    // The fix must not blanket-disable the bound gate: a CONCRETE
+    // instantiation that fails the impl's bound is still an error.
+    // `NotOrd` implements nothing, so `W[NotOrd]` does not discharge
+    // `T: Ord`.
+    let errors = typecheck_errors(
+        "struct NotOrd { a: i64 }\n\
+         struct W[T] { v: Vec[T] }\n\
+         impl[T: Ord] W[T] {\n\
+             fn helper(ref self) -> i64 { self.v.len() }\n\
+         }\n\
+         fn use_it(w: W[NotOrd]) -> i64 { w.helper() }",
+    );
+    assert!(
+        !errors.is_empty(),
+        "an unsatisfied bound on a concrete instantiation must still be rejected"
+    );
+}
