@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 189 | 0 |
 | missing-feature | 166 | 1 |
 | run-vs-build | 158 | 0 |
-| codegen-gap | 136 | 1 |
+| codegen-gap | 137 | 1 |
 | double-free | 136 | 0 |
 | diagnostics | 104 | 2 |
 | false-positive | 95 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1016 | 1 |
+| codegen | 1017 | 1 |
 | typecheck | 250 | 1 |
 | interp | 180 | 0 |
 | ownership | 65 | 1 |
@@ -124,16 +124,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1543 surfaced · 4 open · 1515 fixed · 10 wontfix** (2026-05-20 → 2026-08-24). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1544 surfaced · 4 open · 1516 fixed · 10 wontfix** (2026-05-20 → 2026-08-25). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-23-11 | 2026-08-23 | typecheck | medium | `Type::Function` carries NO EFFECT ROW, so design.md § First-Class Functions' `let f = save;  // f: Fn(User) -> () with writes(UserDB)` is not representable and a function value's effects cannot propagate through its TYPE. NARROWED 7e7972b: the IMPRECISION this caused -- a function value that is bound and never called still demanding the enclosing function declare its effects -- is FIXED, in the effect checker and without the type row (bind-an-alias, attribute-at-every-other-mention). What remains is representability only, and the prescription in the original title does not work as written: the typechecker cannot populate an effect row, because `effectcheck` runs after `typecheck` AND consumes its output, so inferred effects at typecheck time would need a cycle. Read the detail before picking this up. | roadmap.md |
-| B-2026-08-24-21 | 2026-08-24 | codegen | low | A `shared` STRUCT OR ENUM BREAK VALUE cannot leave a loop on the compiled backends, and the OBVIOUS FIX MAKES IT WORSE: `loop { ...; let n = Node { v: i }; break n }` fails at module verification today (interpreter returns it), but disarming the source binding the way Map/Set now does -- which LOOKS correct, because `RcDec` is already null-guarded -- was MEASURED to HANG for a `shared struct` and to die with a BUS ERROR for a `shared enum`. | roadmap.md |
 | B-2026-08-24-22 | 2026-08-24 | ownership | medium | `karac check` IS NOT DETERMINISTIC: the same binary on the same unchanged input emits a DIFFERENT rc-fallback diagnostic run to run. On runtime/stdlib/protobuf.kara the `ename` note cites `consume at 1630:59, other use at 1650:59` in some runs and `consume at 1750:57, other use at 1763:59` in others -- measured 9/11 and 11/9 over two 20-run batches of ONE binary. Diagnostic ORDER is unstable too: 200 differing lines across a 1111-file sweep of one binary against itself, same files and same exit codes throughout. | roadmap.md |
 | B-2026-08-24-23 | 2026-08-24 | effect | low | The `--output=json` `mutual_recursion_groups` field still reports a VALUE-ONLY cycle as a mutual recursion group, the same false claim B-2026-08-23-13 fixed in the terminal note. Two functions that each stash the other in a struct field, neither calling the other, appear in that array under a name asserting they mutually recurse. | roadmap.md |
+| B-2026-08-25-1 | 2026-08-25 | codegen | low | An RVALUE `break` value that owns heap is still refused: `break Node { v: 11 }` (shared), `break Map.new()`, and `break f"x"` in a labeled-block TAIL position have no source BINDING to retain against or disarm, so they fail at module verification while the interpreter returns them. Loud, not silent -- but a spec-legal program that does not compile. | roadmap.md |
 
 ### Wontfix (10)
 
@@ -154,9 +154,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1543 surfaced
 
 </details>
 
-### Fixed (1515)
+### Fixed (1516)
 
-<details><summary>1515 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1516 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -18034,6 +18034,25 @@ gains a `Call` arm (via `extract_callee_name`) and a `MethodCall` arm (via
 walk stops -- correct, since there is then no annotation to call a lie -- and a
 generic return resolves to the unbound parameter and is a silent no-op, exactly
 as a generic struct field is. Both pinned by tests. |
+| B-2026-08-24-21 | codegen | low | A `shared` STRUCT OR ENUM BREAK VALUE cannot leave a loop on the compiled backends, and the OBVIOUS FIX MAKES IT WORSE: `loop { ...; let n = Node { v… | FIXED by 54fcfd3, and the fix is much smaller than this row assumed — the whole change is to PERMIT the pointer store in `store_in_frame_at` and emit nothing extra.
+
+AN RC'D VALUE MOVES OUT BY RETAIN, NOT BY SUPPRESSION. The IR of the working function-tail path — `fn f() -> Node { let n = ...; n }`, which has always compiled — settles it:
+
+    %move.rc.load = load ptr, ptr %n
+    %rc_inc = add i64 %rc, 1          ; retain at the move
+    store i64 %rc_inc, ptr %rc_ptr2
+    ...                                ; the source's queued RcDec STILL FIRES
+    ret ptr %n1                        ; net +1, which the receiver releases
+
+The source is not disarmed; a balancing `+1` is added against its still-live dec. That retain already lives inside `suppress_source_vec_cleanup_for_arg_ex` under the `apply_shared_transfer` flag, and `compile_break` has been calling that helper since B-2026-08-24-13. So the transfer was already correct at the break site; the only thing blocking it was `store_in_frame_at` refusing pointers.
+
+THIS ROW'S DIAGNOSIS WAS WRONG, and correcting it is the useful part. It recorded that "disarming the source is evidently NOT sufficient for an RC'd value" and listed three candidate causes. The real cause was ORDERING, and it was self-inflicted: the failed attempt's zero-store ran BEFORE the retain, so `move.rc.load` read null out of the slot and `emit_refcount_inc` incremented through it. That is the bus error, and the hang is the same write landing in malloc's bookkeeping. Nothing about RC semantics was the obstacle — two things written in the wrong order were.
+
+The row's suggested remedy ("needs a matching RETAIN rather than a cap-zero") was directionally right for the wrong reason: no new retain was needed, only the removal of the zeroing that broke the existing one.
+
+MAP AND `shared` NOW TAKE OPPOSITE TREATMENTS THROUGH THE SAME FUNCTION — Map/Set disarm by zeroing, `shared` deliberately does not — so both mechanisms and the reason they differ are written at `disarm_moved_handle_by_zeroing`. The trap that makes the wrong one look right is that `RcDec` is ALREADY null-guarded, for the unrelated case of a body-local slot whose `let` never ran.
+
+STILL REFUSED, unchanged: an RVALUE source (`break Node { v: 11 }`) has no binding to retain against, exactly as `break Map.new()` has none to disarm. Both fail loudly at module verification rather than being half-supported. |
 
 </details>
 
