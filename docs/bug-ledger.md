@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 285 | 0 |
-| leak | 191 | 1 |
+| leak | 192 | 1 |
 | missing-feature | 167 | 0 |
 | run-vs-build | 159 | 1 |
 | codegen-gap | 138 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1028 | 5 |
+| codegen | 1029 | 5 |
 | typecheck | 252 | 0 |
 | interp | 180 | 0 |
 | ownership | 65 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1557 surfaced · 5 open · 1527 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-25). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1558 surfaced · 5 open · 1528 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-25). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (5)
 
@@ -132,9 +132,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1557 surfaced
 |---|---|---|---|---|---|
 | B-2026-08-25-2 | 2026-08-25 | codegen | high | `std.cli` IS NOT AOT-COMPILABLE: every pure-Kāra INSTANCE method on its types (`Arg.required`, `Parser.about`, ... ) dies in codegen with `no handler for method '<m>' on variable '<v>'`, so `karac check` passes and `karac build` fails -- while roadmap.md marks the feature `[x]` done and deferred.md ships it at v1 | roadmap.md:531 (`std.cli` marked [x]) + deferred.md § std.cli; codegen method dispatch falls through to the catch-all in src/codegen/method_call.rs for these receivers |
 | B-2026-08-25-3 | 2026-08-25 | codegen | medium | `codegen_tests::vec_mutation_methods_bounds_check_out_of_range_index` IS FLAKY, and it fails by showing exactly the PRE-FIX symptom of the high-severity bug it guards: `v.insert(7i64, 9i64)` produced no `Vec.insert index out of bounds` panic, stdout empty, stderr `free(): invalid pointer`. Observed once in a full `cargo test --features llvm` run; the same test then passed 3/3 in isolation, 3198/3198 in a codegen-only run, and the next FULL run was green at 125 suites / 15090 tests. | roadmap.md |
-| B-2026-08-25-11 | 2026-08-25 | codegen | medium | A monomorph's per-element drop for a `Vec[T]` field is emitted as an EMPTY STUB (`karac_drop_Vec`, `ret void`) when the impl's `T` is recorded head-only, so the callee's deep-copied elements are never freed: `Heap[Vec[i64]].take()` leaks 24 bytes in 2 allocations under LeakSanitizer while running correctly. The struct drop mangles `__karac_drop_struct_Heap$Vec` instead of `...$Vec_i64` -- it walks the elements, but the element drop it calls does nothing. | — |
 | B-2026-08-25-12 | 2026-08-25 | codegen | high | `match` on a `Result` whose Ok payload is a struct with THREE OR MORE `Vec` fields SEGFAULTS the compiled binary while the interpreter is correct. 10 lines, no stdlib, no flags; `let r = f()` on the same program is clean, so it is the payload extraction, not the call. This is what blocks registering `std.cli` for AOT. | roadmap.md |
 | B-2026-08-25-13 | 2026-08-25 | codegen | high | `lower_stdlib_source` DISCARDS the typecheck errors it computes for every baked stdlib module, so a baked module can ship code `karac check` rejects in user programs -- which is how cli.kara shipped four borrowed-String-into-owned-field stores that DOUBLE-FREED when compiled. The naive fail-closed gate is a FALSE POSITIVE on pool.kara; see detail for what a real fix needs. | roadmap.md |
+| B-2026-08-25-14 | 2026-08-25 | codegen | medium | An owned `self` aggregate param's OWN scope-exit drop is the UNMANGLED base drop (`__karac_drop_struct_Heap`, outer-only), not the monomorph's, so a generic impl method that takes `self` and transfers NOTHING out leaks every element its entry deep-copy allocated: `fn take(self) -> i64 { self.xs.len() }` on a 3-element `Heap[Vec[i64]]` leaks 24 bytes in 3 allocations while printing the right answer. | — |
 
 ### Relocated (1)
 
@@ -165,9 +165,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1557 surfaced
 
 </details>
 
-### Fixed (1527)
+### Fixed (1528)
 
-<details><summary>1527 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1528 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -18206,6 +18206,23 @@ FIX (src/codegen/param_own.rs): resolve the element through the active monomorph
 REGRESSION TEST: `asan_generic_owned_self_field_move_out_does_not_double_free_elements` in tests/memory_sanitizer.rs, so it runs under ASAN and (on Linux) LeakSanitizer. Case (b) uses HEAP-allocated Strings deliberately -- see the correction below. Controls (c) scalar-`T` and (d) non-generic were both correct pre-fix and pin the diagnosis rather than merely passing. Verified RED pre-fix.
 
 VERIFIED: 14 probe programs covering both fixed and control shapes are clean under ASAN post-fix, and the four that exercise the fix are clean under LeakSanitizer too. |
+| B-2026-08-25-11 | codegen | medium | A monomorph's per-element drop for a `Vec[T]` field is emitted as an EMPTY STUB (`karac_drop_Vec`, `ret void`) when the impl's `T` is recorded head-o… | FIXED by 6789e4a. ROOT CAUSE: `concrete_generic_struct_inst` (src/codegen/mono.rs) records a generic-struct param's CONCRETE instantiation into the name-keyed `enum_inst_var_types`, resolving each bare type param through `mono_state.type_subst_names`. That map is name -> NAME, and the resolved name is wrapped back into a `PathExpr` with `generic_args: None`. A param bound to a type that carries its OWN generic args cannot survive that round-trip: `T = Vec[i64]` came back as the bare head `Vec`, so the recorded instantiation was `Heap[Vec]` instead of `Heap[Vec[i64]]`.
+
+That record is what a receiver binding's scope-exit drop is selected from, so the elementless instantiation picked `__karac_drop_struct_Heap$Vec`. Its body IS element-deep -- it has the len-driven walk -- but the per-element drop it calls is `karac_drop_Vec`, whose entire body is `ret void`: a `Vec` with no element gives the drop synthesizer nothing to free, so it emits a stub. The CALLER's own drop of the same struct resolved correctly to `__karac_drop_struct_Heap$Vec_i64` with a real `karac_drop_Vec_i64`, which is why one program emitted both drops and only the monomorph's elements leaked.
+
+The discriminator falls out of the same fact and is what the controls pin: `String` and `i64` are SINGLE NAMES, which a name -> name map represents losslessly, so they were always correct. Only a param bound to a generic-args-bearing type (`Vec[i64]`) reaches the defect.
+
+FIX: prefer the element-aware `mono_state.type_subst_type_exprs` before falling back to the head-only name map -- exactly the precedence `subst_monomorph_type_params` already uses, and the table was already populated at this call site by `resolve_generic_struct_param_substs`. Three lines; the fallback is untouched, so every param bound to a plain name behaves as before.
+
+MEASURED, against main at 682cba8 (which already carries B-2026-08-25-10's fix). No shape regressed; two improved beyond what this row claimed:
+  the row's repro   24 bytes / 2 allocations  ->  CLEAN
+  temporary receiver 32 / 4                   ->  16 / 2
+  rebind, no return  24 / 3                   ->   8 / 1
+  read-only method   24 / 3                   ->  24 / 3  (untouched; see REMAINDER / B-2026-08-25-14)
+
+REGRESSION TEST: `asan_mono_receiver_drop_frees_elements_of_a_generic_arg_bearing_param` in tests/memory_sanitizer.rs, so it runs under ASAN and LeakSanitizer. Verified RED pre-fix at 24 bytes in 2 allocations -- exactly the two elements case (a) leaves behind.
+
+VACUITY NOTE, worth reading before editing this fixture: the method must take ONE element and drop the rest. An earlier draft used a full `into_sorted` drain and PASSED pre-fix, because draining every element leaves nothing behind for the stub drop to fail to free. The leak is in the remainder, not in what the method returns. |
 
 </details>
 
