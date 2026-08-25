@@ -52841,4 +52841,53 @@ fn main() {
             8,
         );
     }
+
+    /// B-2026-08-25-6 — a BRANCHING rvalue carrier. Both tails allocate, one
+    /// runs, and the per-iteration `scratch` node still has to be freed on the
+    /// breaking path as well as the two that fall through.
+    ///
+    /// The recursion admits this branch only because EVERY tail manufactures
+    /// ownership; the mixed-tail counterpart stays refused at compile time, so
+    /// it cannot be exercised here and is pinned in `tests/codegen.rs`
+    /// instead.
+    #[test]
+    fn asan_loop_break_branching_rvalue_single_owner() {
+        assert_clean_asan_run_min_allocs(
+            "shared struct Node { v: i64 }\n\
+             fn pick() -> Node {\n\
+             \x20   let mut i = 0;\n\
+             \x20   loop {\n\
+             \x20       i = i + 1;\n\
+             \x20       let scratch = Node { v: i };\n\
+             \x20       if i == 3 { break if scratch.v > 2 { Node { v: i * 11 } } else { Node { v: i } } }\n\
+             \x20   }\n\
+             }\n\
+             fn main() { println(pick().v); }\n",
+            &["33"],
+            "loop-break-branching-rvalue",
+            4,
+        );
+    }
+
+    /// The `match`-arm sibling on a `shared enum` — a different heap layout
+    /// reached through a different node of the same recursion.
+    #[test]
+    fn asan_loop_break_match_arm_rvalue_single_owner() {
+        assert_clean_asan_run_min_allocs(
+            "shared enum Tree { Leaf(i64), Node(i64, i64) }\n\
+             fn pick() -> Tree {\n\
+             \x20   let mut i = 0;\n\
+             \x20   loop {\n\
+             \x20       i = i + 1;\n\
+             \x20       let scratch = Tree.Leaf(i);\n\
+             \x20       let stop = match scratch { Leaf(a) => a == 2, Node(a, b) => a == b };\n\
+             \x20       if stop { break match i { 2 => Tree.Node(i, i * 2), _ => Tree.Leaf(i) } }\n\
+             \x20   }\n\
+             }\n\
+             fn main() { match pick() { Leaf(a) => println(a), Node(a, b) => println(a + b) } }\n",
+            &["6"],
+            "loop-break-match-arm-rvalue",
+            4,
+        );
+    }
 }

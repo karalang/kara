@@ -96566,6 +96566,105 @@ fn main() { let o = Outer { inner: Inner { v: 5 } }; println(pick(o).v); }
         );
     }
 
+    /// B-2026-08-25-6 — a BRANCHING carrier: `break if c { Node { .. } } else
+    /// { Node { .. } }`. Exactly one tail runs, but the slot is written once
+    /// for all of them, so the allowlist recurses with an ALL-tails rule.
+    #[test]
+    fn test_e2e_loop_break_if_else_rvalue_round_trips() {
+        let out = run_program(
+            r#"
+shared struct Node { v: i64 }
+
+fn pick() -> Node {
+    let mut i = 0;
+    loop {
+        i = i + 1;
+        if i == 2 { break if i > 1 { Node { v: 4 } } else { Node { v: 5 } } }
+    }
+}
+
+fn main() { println(pick().v); }
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "4");
+        }
+    }
+
+    /// The `match` sibling, plus a BLOCK tail — the same recursion through two
+    /// other nodes.
+    #[test]
+    fn test_e2e_loop_break_match_and_block_rvalues_round_trip() {
+        let out = run_program(
+            r#"
+shared struct Node { v: i64 }
+
+fn pick_match() -> Node {
+    let mut i = 0;
+    loop {
+        i = i + 1;
+        if i == 2 { break match i { 2 => Node { v: 7 }, _ => Node { v: 9 } } }
+    }
+}
+
+fn pick_block() -> Node {
+    let mut i = 0;
+    loop {
+        i = i + 1;
+        if i == 2 { break { let k = i * 3; Node { v: k } } }
+    }
+}
+
+fn main() { println(pick_match().v); println(pick_block().v); }
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "7\n6");
+        }
+    }
+
+    /// The MIXED-tail case, and the reason the recursion quantifies with
+    /// `all` rather than `any`.
+    ///
+    /// One tail manufactures a fresh node; the other reads a handle the
+    /// container still owns. Admitting the branch on the strength of the
+    /// fresh tail alone would make the slot a second owner on the *other*
+    /// path — a use-after-free reachable only when `c` is false. So a single
+    /// place-reading tail has to sink the whole expression, and this test is
+    /// what fails if someone later "aligns" the quantifier with the ANY-tail
+    /// sibling walker (`init_projects_out_of_container_element`), which
+    /// narrows a registration where this widens a permission.
+    #[test]
+    fn test_loop_break_mixed_branch_tails_stay_refused() {
+        let src = r#"
+shared struct Inner { v: i64 }
+struct Outer { inner: Inner }
+
+fn pick(o: Outer, c: bool) -> Inner {
+    let mut i = 0;
+    loop {
+        i = i + 1;
+        if i == 2 { break if c { Inner { v: 1 } } else { o.inner } }
+    }
+}
+
+fn main() { let o = Outer { inner: Inner { v: 5 } }; println(pick(o, false).v); }
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        karac::prepare_for_resolve(&mut parsed.program);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        let err = compile_to_ir(&parsed.program, Some(&ownership), None)
+            .expect_err("one place-reading tail must sink the whole branch");
+        assert!(
+            err.contains("Module verification failed"),
+            "expected the loud refusal, got: {err}"
+        );
+    }
+
     #[test]
     fn test_e2e_value_fn_loop_tail_terminates_with_unreachable() {
         // A value-returning function whose body's final expression is a

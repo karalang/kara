@@ -2784,6 +2784,55 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::StructLiteral { path, .. } => path
                 .last()
                 .is_some_and(|n| self.type_decls.shared_types.contains_key(n.as_str())),
+            // A BRANCHING carrier — `break if c { Node { v: 4 } } else
+            // { Node { v: 5 } }` (B-2026-08-25-6). Exactly one tail runs, but
+            // the slot is written once for all of them, so EVERY tail has to
+            // manufacture ownership: a single place-reading tail would make
+            // the store a second owner on that path.
+            //
+            // ALL-tails, and the quantifier is the whole subtlety. The sibling
+            // walker over these same nodes —
+            // `init_projects_out_of_container_element` — uses ANY-tail, and
+            // the two are not inconsistent: that one NARROWS a registration
+            // (being wrong leaves the container owning what it already owned),
+            // this one WIDENS a permission (being wrong is a use-after-free).
+            // The quantifier flips with the direction of the risk, so a
+            // future edit that "aligns" them by copying `any` across would be
+            // a soundness bug, not a cleanup.
+            ExprKind::Block(b) | ExprKind::Seq(b) | ExprKind::Unsafe(b) => b
+                .final_expr
+                .as_deref()
+                .is_some_and(|t| self.break_value_is_fresh_owned_handle(t)),
+            // An `if` with no `else` yields unit and can carry nothing, so it
+            // declines rather than admitting a half-covered slot.
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            }
+            | ExprKind::IfLet {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                let Some(otherwise) = else_branch.as_deref() else {
+                    return false;
+                };
+                then_block
+                    .final_expr
+                    .as_deref()
+                    .is_some_and(|t| self.break_value_is_fresh_owned_handle(t))
+                    && self.break_value_is_fresh_owned_handle(otherwise)
+            }
+            // `all` over an EMPTY arm list is vacuously true, which would
+            // claim ownership of a value no arm produces — hence the explicit
+            // non-empty guard.
+            ExprKind::Match { arms, .. } => {
+                !arms.is_empty()
+                    && arms
+                        .iter()
+                        .all(|a| self.break_value_is_fresh_owned_handle(&a.body))
+            }
             // Calls and method calls — `make_map(n)`, `Map.new()`, and every
             // `shared enum` variant construction, which parses as a call.
             // Kāra's convention is that a call returns an owned value, and
