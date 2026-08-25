@@ -901,7 +901,7 @@ can be pasted straight in:
                        `karac check --output=json` record
     TYPE_MISMATCH      a diagnostic class — the `class` field of the
                        same record (UPPER_SNAKE)
-    closures           a concept page (lower-case)
+    closures           a concept page (lower-case, may contain `-`)
 
 CODES:
     Catalogued for the `resolve` and `typecheck` families (E01xx,
@@ -920,6 +920,20 @@ CONCEPTS:
                        `karac query ownership <fn>` inspection
                        surface for per-function inferred capture
                        modes.
+    operators          The operator-to-trait desugaring table, which
+                       types implement which operator trait, and the
+                       four rejections that account for nearly every
+                       failed operator call — with the exact
+                       diagnostic wording for each and the fix.
+    module-state       Module-level `let` / `let mut`: the
+                       compile-time initializer rule and its error
+                       codes, the synthetic per-binding effect
+                       resource, why a `let mut` cannot be written
+                       from inside `par { }`, the full alternatives
+                       menu the `module_mut_binding` lint offers
+                       (context struct, Atomic, Mutex,
+                       `#[thread_local]`, LazyLock, OnceLock), and
+                       per-profile gating.
 
 OPTIONS:
     --format=text|json Output shape. `text` (default) is human prose;

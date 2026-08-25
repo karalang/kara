@@ -11747,6 +11747,320 @@ fn test_subcommand_help_explain() {
     }
 }
 
+/// Compile `src` through `karac check` in a scratch dir and return
+/// stdout+stderr joined. Used by the concept-page drift guards below,
+/// which assert that the diagnostics a page QUOTES are still the
+/// diagnostics the compiler EMITS.
+fn check_source_output(tag: &str, src: &str) -> String {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-explain-{}-{}-{}",
+        tag,
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let path = tmp.join("probe.kara");
+    std::fs::write(&path, src).unwrap();
+    let out = karac_bin()
+        .args(["check", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let joined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+    joined
+}
+
+fn concept_page(name: &str) -> String {
+    let out = karac_bin()
+        .args(["explain", &format!("--concept={name}")])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "explain --concept={name} should exit 0; stderr was: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).to_string()
+}
+
+// ── B-2026-08-25-23: the operators and module-state concept pages ──
+//
+// design.md names three `karac explain --concept=` pages by exact flag
+// and only `closures` existed. These cover two of them; the stable-hash
+// page is downstream of the module it would explain (B-2026-08-25-22).
+
+#[test]
+fn test_explain_unknown_concept_lists_every_page() {
+    // The hint is derived from ALL_CONCEPTS rather than hand-listed, so
+    // this doubles as the guard that a newly added page reaches it.
+    let out = karac_bin()
+        .args(["explain", "--concept=definitely-not-a-page"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    for name in ["closures", "operators", "module-state"] {
+        assert!(
+            stderr.contains(name),
+            "unknown-concept hint must list `{name}`; got: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn test_explain_concept_operators_renders_page() {
+    let page = concept_page("operators");
+    assert!(page.contains("Operators: trait dispatch, desugaring"));
+    assert!(page.contains("The desugaring table"));
+    assert!(page.contains("Why your operator call failed"));
+    assert!(page.contains("Which types implement what"));
+    // Every operator trait design.md's v1 set names must appear.
+    for tr in [
+        "Add",
+        "Sub",
+        "Mul",
+        "Div",
+        "Rem",
+        "Neg",
+        "PartialEq",
+        "PartialOrd",
+        "BitAnd",
+        "BitOr",
+        "BitXor",
+        "Shl",
+        "Shr",
+        "Not",
+        "Index",
+        "IndexMut",
+    ] {
+        assert!(page.contains(tr), "operators page must name `{tr}`");
+    }
+    // `and` / `or` are keywords, not traits — the page must say so, or
+    // a reader will hunt for a trait to implement.
+    assert!(page.contains("short-circuit KEYWORDS"));
+}
+
+#[test]
+fn test_explain_concept_module_state_renders_page() {
+    let page = concept_page("module-state");
+    assert!(page.contains("Module state: bindings, effects"));
+    assert!(page.contains("The compile-time initializer rule"));
+    assert!(page.contains("The `par { }` rule"));
+    assert!(page.contains("The alternatives menu"));
+    // design.md pins the exact alternative menu this page exists to
+    // spell out; every entry must be present.
+    for alt in [
+        "Context struct",
+        "Atomic[T]",
+        "Mutex[T]",
+        "#[thread_local]",
+        "LazyLock[T]",
+        "OnceLock[T]",
+    ] {
+        assert!(page.contains(alt), "menu must offer `{alt}`");
+    }
+    assert!(page.contains("#[allow(module_mut_binding)]"));
+}
+
+/// Drift guard, not a snapshot: compile the failing programs and assert
+/// the page quotes the diagnostic the compiler ACTUALLY emits. A page
+/// that tells a user which trait they need is worse than useless if the
+/// wording it teaches no longer matches what they saw in their terminal,
+/// and hand-pinned strings drift silently because nothing links them.
+#[test]
+fn test_operators_page_quotes_live_diagnostics() {
+    let page = concept_page("operators");
+
+    let cases: &[(&str, &str, &str)] = &[
+        (
+            "vecadd",
+            "fn main() { let a = [1, 2]; let b = [3, 4]; let c = a + b; }",
+            "arithmetic operator requires numeric type",
+        ),
+        (
+            "eqderive",
+            "struct Q { x: i64 }\n\
+             fn main() { let a = Q { x: 1 }; println(a == Q { x: 1 }); }",
+            "does not implement Eq; add #[derive(Eq)] to use == or !=",
+        ),
+        (
+            "ordderive",
+            "struct Q { x: i64 }\n\
+             fn main() { let a = Q { x: 1 }; println(a < Q { x: 2 }); }",
+            "does not implement Ord;",
+        ),
+        (
+            "mixint",
+            "fn main() { let x: i32 = 1; let y: i64 = 2; let z = x + y; }",
+            "cannot mix integer types",
+        ),
+        (
+            "userimpl",
+            "struct P { x: i64 }\n\
+             impl Add for P { fn add(self, r: P) -> P { P { x: self.x } } }\n\
+             fn main() { }",
+            "operator traits are stdlib-only",
+        ),
+    ];
+
+    for (tag, src, fragment) in cases {
+        let emitted = check_source_output(tag, src);
+        assert!(
+            emitted.contains(fragment),
+            "compiler no longer emits `{fragment}` for case `{tag}` — the \
+             operators page quotes it and must be updated with the new \
+             wording. Got:\n{emitted}"
+        );
+        assert!(
+            page.contains(fragment),
+            "operators page must quote the live diagnostic `{fragment}`"
+        );
+    }
+}
+
+#[test]
+fn test_module_state_page_quotes_live_diagnostics() {
+    let page = concept_page("module-state");
+
+    let cases: &[(&str, &str, &str)] = &[
+        (
+            "heaptype",
+            "pub let HOST: String = \"localhost\";\nfn main() { println(HOST); }",
+            "E_MODULE_BINDING_HEAP_TYPE",
+        ),
+        (
+            "effectinit",
+            "fn load() -> i64 with reads(FileSystem) { 1 }\n\
+             let CONFIG: i64 = load();\n\
+             fn main() { println(CONFIG); }",
+            "E_MODULE_BINDING_EFFECTFUL_INIT",
+        ),
+        (
+            "naming",
+            "let g: i64 = 1;\nfn main() { println(g); }",
+            "E_MODULE_BINDING_NAMING",
+        ),
+        (
+            "oncecell",
+            "let CACHE: OnceCell[i64] = OnceCell.new();\nfn main() { }",
+            "E_ONCE_CELL_AT_MODULE_SCOPE",
+        ),
+        (
+            "parwrite",
+            "let mut COUNTER: i64 = 0;\n\
+             fn bump() { COUNTER = COUNTER + 1; }\n\
+             fn main() { par { bump(); bump(); } }",
+            "from inside par { } — wrap in Atomic[T], Mutex[T], or use",
+        ),
+    ];
+
+    for (tag, src, fragment) in cases {
+        let emitted = check_source_output(tag, src);
+        assert!(
+            emitted.contains(fragment),
+            "compiler no longer emits `{fragment}` for case `{tag}` — the \
+             module-state page quotes it and must be updated. Got:\n{emitted}"
+        );
+        assert!(
+            page.contains(fragment),
+            "module-state page must quote the live diagnostic `{fragment}`"
+        );
+    }
+}
+
+/// The warning that sends a reader here must keep naming the concept,
+/// otherwise the page is unreachable from the diagnostic that needs it.
+#[test]
+fn test_module_mut_binding_warning_menu_matches_the_page() {
+    let emitted = check_source_output(
+        "menu",
+        "let mut COUNTER: i64 = 0;\n\
+         fn bump() { COUNTER = COUNTER + 1; }\n\
+         fn main() { bump(); println(COUNTER); }",
+    );
+    assert!(
+        emitted.contains("module_mut_binding"),
+        "the lint must still fire on a module-level `let mut`; got:\n{emitted}"
+    );
+    let page = concept_page("module-state");
+    // Each alternative the warning offers must be explained on the page
+    // it hands off to — that handoff is the page's whole reason to exist.
+    for alt in ["Mutex", "Atomic", "#[thread_local]", "LazyLock", "OnceLock"] {
+        assert!(
+            emitted.contains(alt),
+            "warning should offer `{alt}`; got:\n{emitted}"
+        );
+        assert!(page.contains(alt), "page must explain `{alt}`");
+    }
+}
+
+/// Concept pages are read in a terminal. Keep every line inside 78
+/// columns so no page wraps at 80 and destroys its own tables.
+#[test]
+fn test_every_concept_page_fits_a_terminal() {
+    for name in ["closures", "operators", "module-state"] {
+        let page = concept_page(name);
+        assert!(!page.trim().is_empty(), "`{name}` page must not be empty");
+        for (i, line) in page.lines().enumerate() {
+            let width = line.chars().count();
+            assert!(
+                width <= 78,
+                "`{name}` page line {} is {width} columns (max 78): {line}",
+                i + 1
+            );
+        }
+    }
+}
+
+/// The bare-name form is the one a reader actually types after seeing
+/// a concept named in prose. `module-state` carries a hyphen, so this
+/// also guards the shape classifier against treating `-` as anything
+/// other than part of a lower-case concept name.
+#[test]
+fn test_bare_name_lookup_reaches_every_concept_page() {
+    for (name, marker) in [
+        ("closures", "Closures: parameter modes"),
+        ("operators", "Operators: trait dispatch"),
+        ("module-state", "Module state: bindings"),
+    ] {
+        let out = karac_bin().args(["explain", name]).output().unwrap();
+        assert!(
+            out.status.success(),
+            "`karac explain {name}` should exit 0; stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            stdout.contains(marker),
+            "bare-name `{name}` must render its page; got: {stdout}"
+        );
+    }
+}
+
+#[test]
+fn test_every_concept_page_has_a_json_envelope() {
+    for name in ["closures", "operators", "module-state"] {
+        let out = karac_bin()
+            .args(["explain", &format!("--concept={name}"), "--format=json"])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "`{name}` json should exit 0");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(stdout.contains("\"kind\":\"concept\""), "got: {stdout}");
+        assert!(
+            stdout.contains(&format!("\"concept\":\"{name}\"")),
+            "envelope must carry the wire name `{name}`; got: {stdout}"
+        );
+        assert!(stdout.contains("\"body\":\""), "got: {stdout}");
+    }
+}
+
 #[test]
 fn test_explain_concept_closures_renders_page() {
     let out = karac_bin()

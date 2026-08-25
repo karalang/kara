@@ -18,12 +18,16 @@ use std::process;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ExplainConcept {
     Closures,
+    Operators,
+    ModuleState,
 }
 
 impl ExplainConcept {
     pub fn parse(name: &str) -> Option<Self> {
         match name {
             "closures" => Some(ExplainConcept::Closures),
+            "operators" => Some(ExplainConcept::Operators),
+            "module-state" => Some(ExplainConcept::ModuleState),
             _ => None,
         }
     }
@@ -31,6 +35,8 @@ impl ExplainConcept {
     pub fn page(self) -> &'static str {
         match self {
             ExplainConcept::Closures => CLOSURES_PAGE,
+            ExplainConcept::Operators => OPERATORS_PAGE,
+            ExplainConcept::ModuleState => MODULE_STATE_PAGE,
         }
     }
 
@@ -38,6 +44,8 @@ impl ExplainConcept {
     pub fn as_str(self) -> &'static str {
         match self {
             ExplainConcept::Closures => "closures",
+            ExplainConcept::Operators => "operators",
+            ExplainConcept::ModuleState => "module-state",
         }
     }
 }
@@ -944,11 +952,26 @@ fn render_code_json(code: &str, entries: Vec<CodeEntry>) -> String {
     format!("{{\"kind\":\"diagnostic_code\",\"code\":\"{code}\",\"entries\":[{rows}]}}")
 }
 
+/// Every concept name `--concept=` accepts, rendered for the
+/// unknown-name hint.
+///
+/// Derived from [`ALL_CONCEPTS`] rather than hand-listed, so a new page
+/// cannot be added to the enum and forgotten here — which is precisely
+/// how the hint would start lying about what is available.
 fn concept_list() -> String {
-    // Single concept today; the list shape future-proofs against
-    // additional pages without rewriting the dispatch surface.
-    "closures".to_string()
+    ALL_CONCEPTS
+        .iter()
+        .map(|c| c.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
+
+/// The concept pages, in the order the unknown-name hint lists them.
+const ALL_CONCEPTS: &[ExplainConcept] = &[
+    ExplainConcept::Closures,
+    ExplainConcept::Operators,
+    ExplainConcept::ModuleState,
+];
 
 fn parse_class_name(name: &str) -> Option<DiagnosticClass> {
     all_classes()
@@ -1328,6 +1351,319 @@ Sample shape:
         }
       ]
     }
+";
+
+const OPERATORS_PAGE: &str = "\
+karac explain — Operators: trait dispatch, desugaring, and why a call fails
+
+Source of truth: docs/design.md § Operator Traits and § Index / IndexMut.
+This page documents what the compiler ENFORCES TODAY; where that differs
+from the spec, the divergence is called out in the last section rather
+than papered over, because the point of this page is to tell you why a
+real operator call was rejected.
+
+────────────────────────────────────────────────────────────────────
+The desugaring table
+────────────────────────────────────────────────────────────────────
+
+Operators are trait-dispatched; there is no parser-level operator table
+for built-in types. After type checking, the lowering phase rewrites the
+AST node to a trait call with the span preserved.
+
+    Operator        Trait        Desugars to
+    ─────────────   ──────────   ─────────────────────────────────
+    a + b           Add          Add.add(a, b)
+    a - b           Sub          Sub.sub(a, b)
+    a * b           Mul          Mul.mul(a, b)
+    a / b           Div          Div.div(a, b)
+    a % b           Rem          Rem.rem(a, b)
+    -a              Neg          Neg.neg(a)
+    a == b          PartialEq    PartialEq.eq(ref a, ref b)
+    a != b          PartialEq    not PartialEq.eq(ref a, ref b)
+    a < b           PartialOrd   partial_cmp(ref a, ref b).is_lt()
+    a <= b          PartialOrd   partial_cmp(ref a, ref b).is_le()
+    a > b           PartialOrd   partial_cmp(ref a, ref b).is_gt()
+    a >= b          PartialOrd   partial_cmp(ref a, ref b).is_ge()
+    a & b           BitAnd       BitAnd.bitand(a, b)
+    a | b           BitOr        BitOr.bitor(a, b)
+    a ^ b           BitXor       BitXor.bitxor(a, b)
+    a << b          Shl          Shl.shl(a, b)
+    a >> b          Shr          Shr.shr(a, b)
+    not a  (bool)   Not          Not.not(a)
+    c[key]          Index        Index.index(ref c, key)
+    c[i, j]         Index        Index.index(ref c, (i, j))
+    c[key] = v      IndexMut     *IndexMut.index_mut(mut ref c, key) = v
+
+Arithmetic and bitwise traits take `self` (owned) because they produce a
+new value. Comparison traits take `ref self` — comparing two values never
+consumes them.
+
+`and` / `or` are short-circuit KEYWORDS, not trait-dispatched operators.
+They have no trait and cannot be implemented.
+
+Compound assignment desugars through the binary operator: `a += b` means
+`a = a + b`, checked under `Add`. There is no `AddAssign` trait in v1.
+When `a` is a `mut ref T` lvalue the desugar is assign-through —
+`*a = *a + b` — so the caller's value is updated rather than the local
+name being rebound.
+
+────────────────────────────────────────────────────────────────────
+Why your operator call failed
+────────────────────────────────────────────────────────────────────
+
+Four rejections cover nearly every case. Each row is the diagnostic you
+will actually see, followed by the fix.
+
+1.  arithmetic operator requires numeric type, found 'T'
+
+    `+ - * / %` are accepted only on the numeric primitives (i8..i64,
+    u8..u64, f32, f64, usize, isize) and on `String` for `+`. A struct,
+    enum, Vec, or distinct type reaches this error.
+
+    For a Vec, there is deliberately no `impl Add` — the ambiguity
+    between concatenation and elementwise addition is why the language
+    makes you name the method: use `.concat(other)` or `.extend(other)`.
+
+    For a `distinct` type, opt in with `#[derive(Arithmetic)]`, which
+    enables the operators between two values of the SAME distinct type.
+    Cross-type arithmetic stays an error by design — that is what
+    `distinct` is for. Without the derive, unwrap: `FloorNum(a.raw() + 1)`.
+
+2.  type 'T' does not implement Eq; add #[derive(Eq)] to use == or !=
+    type 'T' does not implement Ord;
+      add #[derive(Ord)] to use <, <=, >, or >=
+
+    Add the derive. Note that `#[derive(PartialEq)]` alone is sufficient
+    for `==` / `!=`, and `#[derive(PartialOrd)]` alone is sufficient for
+    the ordering operators, even though the messages name the total
+    traits — see the divergence section below.
+
+3.  cannot mix integer types 'i32' and 'i64' in arithmetic — they must match
+    cannot mix integer and floating-point operands ('i64' and 'f64')
+
+    Operands must have the SAME type. Cast the narrower one explicitly:
+    `(x as i64) + y`. There is no implicit widening at operator
+    boundaries today — see the divergence section.
+
+4.  user-defined `impl Add for T` is not supported in v1;
+    operator traits are stdlib-only
+
+    v1 implements the operator traits for stdlib types only. The trait
+    names, signatures, and desugaring are already what user impls will
+    use, so lifting this is a non-breaking, additive change. Until then,
+    write a named method.
+
+────────────────────────────────────────────────────────────────────
+Which types implement what
+────────────────────────────────────────────────────────────────────
+
+  Arithmetic     numeric primitives; `Add` additionally on `String`
+                 (`a + b` consumes `a`, borrows `b`, allocates)
+  Bitwise        integer primitives; `not` on `bool`
+  PartialEq      every primitive, both string types, and lifted through
+                 Vec / Option / Result / tuples when elements qualify
+  Eq             the same minus `f32` / `f64` — IEEE NaN != NaN breaks
+                 reflexivity, so floats are PartialEq but not Eq
+  PartialOrd     every primitive including floats, both string types,
+                 lifted through Vec / Option / Result / tuples
+  Ord            the same minus `f32` / `f64` — NaN is incomparable.
+                 The `F32` / `F64` total-order wrappers implement both
+                 Eq and Ord, treating NaN == NaN and sorting NaN last
+  Index          Vec, Array, Slice, Map; range indexing `c[a..b]`
+                 yields `Slice[T]`
+
+Indexing panics on an invalid index rather than returning `Result`,
+contributing a `panics` effect to the calling function. When bounds are
+uncertain use `.get(idx)`, which returns `Option[ref T]`.
+
+────────────────────────────────────────────────────────────────────
+Where the implementation differs from design.md today
+────────────────────────────────────────────────────────────────────
+
+Measured, not inferred. Each is tracked; see docs/bug-ledger.jsonl.
+
+  • Missing-impl diagnostics speak OPERATOR language, not trait
+    language. design.md specifies `vec1 + vec2` should report \"type
+    Vec[T] does not implement trait Add\" and point at `.concat` /
+    `.extend`; it currently reports \"arithmetic operator requires
+    numeric type, found 'Vec[i64]'\" and names no trait or method.
+
+  • The equality and ordering diagnostics name the TOTAL trait (`Eq`,
+    `Ord`) though the desugaring runs through the PARTIAL one, and
+    though deriving only the partial trait is enough to compile. The
+    spec is explicit that `Eq` is never named by the desugaring.
+
+  • Implicit lossless widening at operator boundaries is NOT
+    implemented. design.md says `(x: i32) + (y: i64)` is valid and
+    widens to `i64`; the compiler rejects it and asks for a cast.
+
+  • Bitwise `Not` on integer primitives is not available — `not` on an
+    integer reports \"unary '!' requires 'bool'\", which also spells the
+    operator with Rust's `!` rather than Kāra's `not`.
+";
+
+const MODULE_STATE_PAGE: &str = "\
+karac explain — Module state: bindings, effects, and the alternatives
+
+Source of truth: docs/design.md § Module-Level Bindings. This page is
+the concept-level summary; the design.md section is authoritative when
+the two disagree.
+
+This is the page the `module_mut_binding` warning points at.
+
+────────────────────────────────────────────────────────────────────
+The compile-time initializer rule
+────────────────────────────────────────────────────────────────────
+
+A `.kara` file may declare `let` and `let mut` bindings at file scope.
+Their initializers must be compile-time constant expressions. Kāra has
+no module initialization: no code runs before `main`, so there is no
+init-order problem, no unattributed startup effects, and no lazy
+first-access semantics. Module-level bindings are constant data in the
+binary.
+
+Allowed: literals; arithmetic, comparison and boolean operations on
+constants; enum variant constructors with constant arguments; struct
+and tuple literals over constants; array and repeat literals; and
+references to other module-level bindings.
+
+Rejected, each with its own error code:
+
+    E_MODULE_BINDING_EFFECTFUL_INIT
+        the initializer is a call, a closure, or anything carrying an
+        effect. `let CONFIG: i64 = load();` is rejected even when
+        `load` only reads — an effect at module scope has no function
+        to attribute it to and no caller to catch its failure.
+
+    E_MODULE_BINDING_HEAP_TYPE
+        the binding's type needs runtime heap allocation. `String` is
+        the common case: use `StringSlice`, which borrows the binary's
+        read-only data segment at no cost. A string literal at module
+        scope IS a `StringSlice` — the function-body default of
+        `String` does not apply here.
+
+    E_MODULE_BINDING_NAMING
+        the binding name is Type-class (e.g. `G`, `Config`). Module
+        bindings use SCREAMING_SNAKE_CASE.
+
+────────────────────────────────────────────────────────────────────
+`let mut` and the synthetic per-binding resource
+────────────────────────────────────────────────────────────────────
+
+Every module-level `let mut BINDING` implicitly declares a synthetic
+effect resource. Reading it contributes `reads(BINDING_resource)` to
+the reading function's inferred effect set; assigning contributes
+`writes(BINDING_resource)`. This feeds conflict analysis directly: two
+readers never conflict, a reader and a writer always do, two writers
+always do.
+
+The resource is per-binding on purpose. A single global bucket would
+force every module-level mutation to serialize against every other,
+which defeats the point. It is not exportable and cannot be named in
+user code — it exists only for conflict analysis.
+
+Only module-level `let mut` gets one. Inside a function body, reads and
+writes to struct fields and Vec elements do not contribute named
+resources; the ownership system's aliasing analysis governs those.
+
+────────────────────────────────────────────────────────────────────
+The `par { }` rule
+────────────────────────────────────────────────────────────────────
+
+A `par { }` branch or `spawn()`-ed task whose TRANSITIVE effect set
+contains `writes(BINDING_resource)` is a compile error:
+
+    error[effect]: module-level let mut 'COUNTER' cannot be written
+    from inside par { } — wrap in Atomic[T], Mutex[T], or use
+    #[thread_local] for per-task state (binding declared at line 1)
+
+The check is effect-set-based, not syntactic — calling a helper that
+carries the effect is caught exactly as if the assignment were inline.
+A reader branch beside a writer branch is the same error. Two branches
+that both only read are fine.
+
+The conflict analysis would already have serialized these branches,
+but serializing inside `par { }` is almost never what was meant, so
+the compiler upgrades the conflict to an error.
+
+────────────────────────────────────────────────────────────────────
+The alternatives menu
+────────────────────────────────────────────────────────────────────
+
+What the `module_mut_binding` warning is steering you toward, and what
+each one is actually for:
+
+  Context struct     Build the value in `main` and pass it down. The
+                     default answer for loaded config, database pools,
+                     compiled regexes — anything needing runtime init.
+
+  Atomic[T]          Lock-free scalar. Module scope OK.
+
+  Mutex[T]           Mutual exclusion around a value. Module scope OK.
+
+  #[thread_local]    Per-task disjoint copies of a `let mut`. Effect
+                     becomes writes(ThreadLocal[BINDING_resource]),
+                     which never conflicts with itself across tasks,
+                     so it is legal inside `par { }`. Initializer must
+                     still be compile-time constant.
+
+  LazyLock[T]        Write-once, thread-safe, initialized by an
+                     embedded closure that may capture only other
+                     module-level constants. For \"compile a regex
+                     once, use it forever\". Method surface: `get`.
+
+  OnceLock[T]        Write-once, thread-safe, set explicitly at
+                     runtime. For values depending on input the
+                     closure cannot see at module-load time — CLI
+                     flags, env vars, config files. `main` calls
+                     `set` once; the rest of the program calls `get`.
+                     Surface: `new`, `set`, `get`, `get_or_init`,
+                     `is_set`.
+
+  OnceCell[T]        The single-task sibling of `OnceLock`, for
+                     struct-field memoization. REJECTED at module
+                     scope in every profile
+                     (E_ONCE_CELL_AT_MODULE_SCOPE) — module bindings
+                     are visible to every task, and `OnceCell` carries
+                     no synchronization.
+
+`RwLock[T]` appears in design.md's supported-paths list but its
+constructor is not currently accepted as a module-level initializer —
+it fails E_MODULE_BINDING_EFFECTFUL_INIT. Use `Mutex[T]` at module
+scope.
+
+There is no `static mut`. The absence of a \"raw mutable global,
+caller's responsibility to synchronize\" path is deliberate.
+
+────────────────────────────────────────────────────────────────────
+Suppressing the warning
+────────────────────────────────────────────────────────────────────
+
+    #[allow(module_mut_binding)]
+    let mut COUNTER: i64 = 0;
+
+The suppression is per-binding, not module-wide, so each site opts in
+explicitly. The attribute attaches to the binding name the diagnostic
+underlines.
+
+────────────────────────────────────────────────────────────────────
+Profile gating
+────────────────────────────────────────────────────────────────────
+
+    Profile              Module-level `let mut`
+    ──────────────────   ──────────────────────────────────────────
+    lib (default)        Warning — module_mut_binding
+    embedded             Permitted (MMIO, DMA, static buffers)
+    app                  Specified as a hard error; NOT IMPLEMENTED
+    gpu                  Specified as a hard error; NOT IMPLEMENTED
+
+The warning fires only under the default profile, matching the table's
+`lib` row. `embedded` permits the form outright — that is where the
+feature's justification lives — so firing there would be a lint beyond
+its documented trigger. The `app` and `gpu` rows specify a hard error
+rather than a lint, and no such profile variant exists in
+`CompileProfile` yet, so those rows are left unimplemented rather than
+approximated by the warning.
 ";
 
 #[cfg(test)]
