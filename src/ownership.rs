@@ -2511,10 +2511,35 @@ impl<'a> OwnershipChecker<'a> {
                 other_use_span: w.other_use_span,
                 type_name,
             };
-            self.rc_values
-                .entry(fn_key.to_string())
-                .or_default()
-                .insert(binding, entry);
+            // B-2026-08-24-22 — DETERMINISTIC witness selection on a name
+            // collision. `rc_witnesses` is a `HashMap` keyed by the CFG
+            // builder's *mangled* name, so two distinct bindings in one
+            // function that demangle to the same spelling (`ename@arm1` /
+            // `ename@arm2` — different scopes, same name) land on the same key
+            // here. An unconditional `.insert` is last-write-wins over a
+            // per-process hash order, so WHICH witness survived flipped run to
+            // run: measured 11/9 over 20 runs of ONE binary on
+            // runtime/stdlib/protobuf.kara, where the `perf[rc-fallback]` note
+            // cited `consume at 1630:59` in some runs and `1750:57` in others.
+            // Keep the earliest witness in source order instead — the same
+            // one-witness-per-binding rule the UAM arm below already applies,
+            // and the same ordering key `emit_rc_fallback_notes` sorts on.
+            //
+            // Codegen is NOT affected either way, so this is a diagnostics fix
+            // rather than a miscompile one: `load_rc_fallback` consumes only
+            // `rc_map.keys()` (the binding NAMES) and the key set is identical
+            // whichever entry wins. Verified, not assumed — 20 builds of a
+            // program exhibiting the flip produced one byte-identical binary
+            // while the note variant moved 12/8 across the same runs.
+            let slot = self.rc_values.entry(fn_key.to_string()).or_default();
+            let order = |e: &RcEntry| (e.other_use_span.offset, e.consume_span.offset);
+            let replace = match slot.get(&binding) {
+                Some(prev) => order(&entry) < order(prev),
+                None => true,
+            };
+            if replace {
+                slot.insert(binding, entry);
+            }
         }
         // Round 12.21: emit UseAfterMove errors directly from the
         // predicate's UAM witnesses. One error per binding (the
@@ -2533,7 +2558,32 @@ impl<'a> OwnershipChecker<'a> {
         for sp in crate::rc_predicate::direct_uam_all_consume_sites_from_sites(&sites, &dom) {
             self.all_uam_consume_sites.insert((sp.offset, sp.length));
         }
-        let uam_witnesses = crate::rc_predicate::direct_uam_candidates_from_sites(&sites, &dom);
+        // B-2026-08-24-22 (second half) — SORT before emitting. The witnesses
+        // come back in a `HashMap`, and pushing them into `self.errors` in
+        // iteration order put the `warning[ownership]` block in per-process
+        // hash order: the SET was stable but the SEQUENCE differed on every
+        // run (measured 15 distinct orderings over 15 runs of one binary on
+        // runtime/stdlib/protobuf.kara, and 204 differing lines across two
+        // sweeps of a 1232-file corpus by one binary against itself). That
+        // reaches `karac check --output=json`, which the Mend loop diffs, so
+        // any expected-output test over an affected program is latently flaky.
+        //
+        // Same key as the RC arm above and as `emit_rc_fallback_notes`: the
+        // reported span first (`other_use_span` is what the warning points
+        // at), then the consume site, then the binding name as a total-order
+        // tie-break. This is the ordering the "first witness in source order"
+        // sentence above always intended; nothing was sorting it.
+        let mut uam_witnesses: Vec<_> =
+            crate::rc_predicate::direct_uam_candidates_from_sites(&sites, &dom)
+                .into_iter()
+                .collect();
+        uam_witnesses.sort_by(|(ab, aw), (bb, bw)| {
+            aw.other_use_span
+                .offset
+                .cmp(&bw.other_use_span.offset)
+                .then_with(|| aw.consume_span.offset.cmp(&bw.consume_span.offset))
+                .then_with(|| ab.cmp(bb))
+        });
         drop(sites);
         for (binding, w) in uam_witnesses {
             // Strip the internal rename suffix for the user-facing message

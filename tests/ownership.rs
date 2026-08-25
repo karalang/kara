@@ -13245,3 +13245,105 @@ fn gpu_upload_and_a_user_named_min_still_consume() {
         "a user `.min` taking an OWNED Vec must keep the consume default: {errors:?}"
     );
 }
+
+// ── B-2026-08-24-22: `karac check` determinism ──────────────────
+//
+// Both halves of the same defect: an ownership diagnostic derived by walking a
+// `HashMap`, so its content or its order fell out of per-process hash order and
+// the same binary on the same input printed something different run to run.
+// `--output=json` is what the Mend loop diffs, so an expected-output test over
+// an affected program was latently flaky — it passed or failed on a coin flip,
+// which is the failure mode hardest to attribute.
+//
+// Neither reaches codegen: `load_rc_fallback` consumes only the binding NAMES
+// out of `rc_values`, and `use_after_move_consume_sites` is a `HashSet` of
+// offsets. Verified rather than assumed — 20 builds of a program exhibiting the
+// flip produced one byte-identical binary. These are diagnostics pins.
+
+#[test]
+fn rc_fallback_witness_survives_deterministically_on_a_name_collision() {
+    // Two DISTINCT `s` bindings in one function, in sibling `if` blocks. The CFG
+    // builder renames them apart (`s@armN`), but `rc_values` is keyed by the
+    // DEMANGLED name — codegen looks RC decisions up by the original spelling —
+    // so both land on `("f", "s")` and one overwrites the other.
+    //
+    // Pre-fix the insert was unconditional, so the survivor was whichever the
+    // `HashMap` walk reached last: the note cited line 7 in some runs and line
+    // 12 in others, at roughly even odds. The rule is now the same one the UAM
+    // arm applies — keep the FIRST witness in source order.
+    let result = ownership_ok(
+        "fn takes(s: String) -> i64 { s.len() }\n\
+         fn f(b: bool, c: bool) -> i64 {\n\
+        \x20    let mut t = 0;\n\
+        \x20    if b {\n\
+        \x20        let s = \"aaa\" + \"bbb\";\n\
+        \x20        let n = if c { takes(s) } else { 0 };\n\
+        \x20        t = t + n + s.len();\n\
+        \x20    }\n\
+        \x20    if not b {\n\
+        \x20        let s = \"ccc\" + \"ddd\";\n\
+        \x20        let n = if c { takes(s) } else { 0 };\n\
+        \x20        t = t + n + s.len();\n\
+        \x20    }\n\
+        \x20    t\n\
+         }",
+    );
+    let entry = result
+        .rc_values
+        .get("f")
+        .and_then(|m| m.get("s"))
+        .expect("both `s` bindings RC-promote and collide on one key");
+    assert_eq!(
+        (entry.consume_span.line, entry.other_use_span.line),
+        (6, 7),
+        "the EARLIER witness (consume line 6, use line 7) must win the collision; \
+         getting lines 11/12 means the later one overwrote it, and getting either \
+         at random is the bug this pins"
+    );
+}
+
+#[test]
+fn use_after_move_warnings_are_emitted_in_source_order() {
+    // The witnesses arrive in a `HashMap`, and pre-fix they were pushed into the
+    // error list in iteration order: the SET was stable but the SEQUENCE differed
+    // on every run (15 distinct orderings over 15 runs of one binary on
+    // runtime/stdlib/protobuf.kara; 204 differing lines across two sweeps of a
+    // 1232-file corpus by one binary against itself).
+    //
+    // Asserting ascending offsets rather than a fixed permutation keeps the pin
+    // on the property that matters — a reader scans diagnostics top-down, so
+    // source order is the contract — without pinning span arithmetic that
+    // unrelated parser changes could shift.
+    let errors = ownership_errors(
+        "fn takes(s: String) -> i64 { s.len() }\n\
+         fn g() -> i64 {\n\
+        \x20    let a = \"a\" + \"1\";\n\
+        \x20    let ra = takes(a) + a.len();\n\
+        \x20    let b = \"b\" + \"2\";\n\
+        \x20    let rb = takes(b) + b.len();\n\
+        \x20    let c = \"c\" + \"3\";\n\
+        \x20    let rc = takes(c) + c.len();\n\
+        \x20    let d = \"d\" + \"4\";\n\
+        \x20    let rd = takes(d) + d.len();\n\
+        \x20    ra + rb + rc + rd\n\
+         }",
+    );
+    let offsets: Vec<usize> = errors
+        .iter()
+        .filter(|e| e.kind == OwnershipErrorKind::UseAfterMove)
+        .map(|e| e.span.offset)
+        .collect();
+    assert_eq!(
+        offsets.len(),
+        4,
+        "all four reused moves must warn (non-vacuity: an empty list would make \
+         the ordering assertion below trivially true): {errors:?}"
+    );
+    let mut sorted = offsets.clone();
+    sorted.sort_unstable();
+    assert_eq!(
+        offsets, sorted,
+        "UseAfterMove warnings must come out in ascending source order; an \
+         unsorted sequence here is per-process hash order leaking into output"
+    );
+}
