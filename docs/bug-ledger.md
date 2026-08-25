@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 286 | 0 |
+| miscompile | 288 | 1 |
 | leak | 195 | 0 |
 | missing-feature | 171 | 4 |
 | run-vs-build | 159 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1034 | 1 |
+| codegen | 1036 | 2 |
 | typecheck | 257 | 4 |
 | interp | 180 | 0 |
 | ownership | 65 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1570 surfaced · 6 open · 1539 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-25). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1572 surfaced · 7 open · 1540 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-25). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (7)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -136,6 +136,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1570 surfaced
 | B-2026-08-25-22 | 2026-08-25 | typecheck | medium | The STABLE-HASH module does not exist, so the escape design.md prescribes for every use case where `Hash` is explicitly the wrong tool is unavailable. § `Hash` and `Hasher`, stability policy: hash values are "not stable across runs, not stable across Kara versions, not stable across targets", and therefore "Code that needs stable digests (content addressing, on-disk indexes, snapshot tests, distributed sharding) does **not** use `Hash`. Kara's stdlib SHIPS explicit, versioned functions for that purpose -- `hash::stable::siphash24(bytes, key)`, `hash::stable::xxh3(bytes)`, and the `crypto` module for cryptographic hashes." Neither `siphash24` nor `xxh3` appears anywhere in `src/` or `runtime/stdlib/`, and there is no `hash.stable` namespace to call. The paragraph's closing promise is unreachable too: "Users who reach for `Hash` for stability are pointed at the stable-hash module by a `karac explain` page" -- see B-2026-08-25-23 for the state of `karac explain --concept=`. | roadmap.md |
 | B-2026-08-25-23 | 2026-08-25 | cli | low | `karac explain --concept=` supports exactly ONE concept, `closures`, and it is not one of the pages design.md names. The error message self-documents the gap: `error: unknown concept 'operators'. Supported: closures.` design.md names two pages by exact flag -- `karac explain --concept=operators`, which § Operator Traits says "documents the full desugaring table so that users can see why a given operator call fails and which trait they would need", and `karac explain --concept=module-state` -- plus a stable-hash page referenced in prose (§ Hash stability policy: "Users who reach for `Hash` for stability are pointed at the stable-hash module by a `karac explain` page"). None of the three exists. The document makes 36 references to `karac explain` overall, so the surface is load-bearing for the AI-first diagnostics story. | roadmap.md |
 | B-2026-08-25-26 | 2026-08-25 | typecheck | low | An un-inferrable `T` from an EMPTY array literal is reported as a BOUND failure naming `<error>` as the type, pointed at a later method call rather than at the literal: `W.from([])` on `impl[T: Ord]` says "trait bound `T: Ord` is not satisfied; `<error>` does not implement `Ord`" | implementation_checklist/phase-11-stdlib-longtail.md#general-purpose-collections |
+| B-2026-08-25-28 | 2026-08-25 | codegen | high | A method call whose receiver is an unnamed TEMPORARY inside a generic impl dispatches to the unmangled base prototype and SEGFAULTS at a heap-carrying `T`: `Bag { xs: v }.inner()` and `mkbag(v).inner()` crash where `let q = Bag { xs: v }; q.inner()` is correct | implementation_checklist/phase-11-stdlib-longtail.md#general-purpose-collections |
 
 ### Relocated (1)
 
@@ -166,9 +167,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1570 surfaced
 
 </details>
 
-### Fixed (1539)
+### Fixed (1540)
 
-<details><summary>1539 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1540 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1711,6 +1712,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1570 surfaced
 | B-2026-08-25-21 | typecheck | low | `m.try_insert(k, v)?;` as a statement warns `discarded 'Option' value`, though the displaced-value must-use exemption exists precisely for that shape… | 0fcc886 |
 | B-2026-08-25-24 | resolver | low | The unassigned-layout-fields warning renders as `warning[resolve]` instead of `warning[layout_unassigned_fields]`, so the suppression design.md presc… | 733c0f2 |
 | B-2026-08-25-25 | codegen | high | An ASSOCIATED fn in a GENERIC impl that binds a struct LITERAL to a local and calls a MUTATING sibling through it dispatches to the UNMANGLED base pr… | 8d32a0d |
+| B-2026-08-25-27 | codegen | high | SIX `let`-RHS forms bound a generic-struct value with NO recorded instantiation, so the sibling call dispatched to the unmangled base prototype and S… | 14c6d32 |
 
 </details>
 
