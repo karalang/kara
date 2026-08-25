@@ -3710,7 +3710,20 @@ impl<'ctx> super::Codegen<'ctx> {
                             }
                             _ => None,
                         })
-                        .or_else(|| self.enum_inst_type_from_span(value))
+                        // The span record is PRE-monomorphization, so for an
+                        // RHS inside a generic impl it holds the GENERIC form
+                        // (`Bag[T]`) — which the sibling call site cannot bind
+                        // concrete params from, so it is not merely useless but
+                        // actively wrong: it satisfies the chain and stops the
+                        // search. Resolve its bare params through the active
+                        // monomorph's substitution, exactly as the struct-literal
+                        // arm above does; `concrete_generic_struct_inst` returns
+                        // None when nothing binds, so an already-concrete record
+                        // passes through untouched.
+                        .or_else(|| {
+                            self.enum_inst_type_from_span(value)
+                                .map(|i| self.concrete_generic_struct_inst(&i).unwrap_or(i))
+                        })
                         // B-2026-07-15-24 — a generic struct FIELD moved out
                         // (`let bound = o.inner`, `inner: GInner[T]`) is a
                         // FieldAccess, which the lowering pass records no

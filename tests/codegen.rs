@@ -11211,6 +11211,63 @@ fn main() {
             .expect("a std.cli associated fn + instance method must compile");
     }
 
+    /// The `let`-site instantiation family, swept across every RHS form that
+    /// can bind a generic-struct value inside a monomorph. Each of these
+    /// SEGFAULTED at a heap-carrying `T` before the span-resolution arm landed
+    /// (audit of B-2026-08-25-25): the span record is pre-monomorphization, so
+    /// it holds the GENERIC form (`Bag[T]`), which is worse than holding
+    /// nothing — it satisfies the chain and stops the search, then the sibling
+    /// call site cannot bind concrete params from it.
+    ///
+    /// Every case runs at BOTH `i64` and `String`. The scalar leg is not
+    /// decoration: at `T = i64` all of these were silently CORRECT, because the
+    /// base prototype's layout happens to match, so a scalar-only test reports
+    /// green on every one of them.
+    #[test]
+    fn e2e_generic_let_binding_instantiation_across_rhs_forms() {
+        // (form-name, impl-extra, free-fn-extra)
+        let forms: &[(&str, &str, &str)] = &[
+            ("identifier copy",
+             "fn mk(v: Vec[T]) -> Vec[T] { let a = Bag { xs: v }; let mut c = a; c.arrange(); c.xs }", ""),
+            ("free-fn call",
+             "fn mk(v: Vec[T]) -> Vec[T] { let mut b = mkbag(v); b.arrange(); b.xs }",
+             "fn mkbag[T: Ord](v: Vec[T]) -> Bag[T] { Bag { xs: v } }"),
+            ("assoc-fn returning Self",
+             "fn make(v: Vec[T]) -> Bag[T] { Bag { xs: v } }\n    \
+              fn mk(v: Vec[T]) -> Vec[T] { let mut b = Bag.make(v); b.arrange(); b.xs }", ""),
+            ("method returning Self",
+             "fn dup(ref self) -> Bag[T] { Bag { xs: self.xs } }\n    \
+              fn mk(v: Vec[T]) -> Vec[T] { let q = Bag { xs: v }; let mut b = q.dup(); b.arrange(); b.xs }", ""),
+            ("block expression",
+             "fn mk(v: Vec[T]) -> Vec[T] { let mut b = { Bag { xs: v } }; b.arrange(); b.xs }", ""),
+            ("index into Vec[Bag[T]]",
+             "fn mk(v: Vec[T]) -> Vec[T] { let bs = [Bag { xs: v }]; let mut b = bs[0]; b.arrange(); b.xs }", ""),
+            ("named binding, then consuming method",
+             "fn inner(self) -> Vec[T] { let mut b = self; b.arrange(); b.xs }\n    \
+              fn mk(v: Vec[T]) -> Vec[T] { let q = Bag { xs: v }; q.inner() }", ""),
+        ];
+        for (name, impl_extra, free_extra) in forms {
+            let src = format!(
+                "struct Bag[=T] {{ xs: Vec[T] }}\n\
+                 impl[T: Ord] Bag[T] {{\n    \
+                     fn swap2(mut ref self, i: i64, j: i64) {{ let t = self.xs[i]; self.xs[i] = self.xs[j]; self.xs[j] = t; }}\n    \
+                     fn arrange(mut ref self) {{ let n = self.xs.len(); if n > 1 {{ self.swap2(0, n - 1); }} }}\n    \
+                     {impl_extra}\n\
+                 }}\n\
+                 {free_extra}\n\
+                 fn main() {{\n    \
+                     let a = Bag.mk([\"x\", \"y\", \"z\"]); println(a[0]);\n    \
+                     let b = Bag.mk([1, 2, 3]); println(b[0]);\n\
+                 }}\n"
+            );
+            assert_eq!(
+                run_program(&src).as_deref(),
+                Some("z\n3\n"),
+                "let-binding RHS form `{name}` did not round-trip at both T = String and T = i64",
+            );
+        }
+    }
+
     /// An ASSOCIATED fn in a generic impl that binds a struct LITERAL to a
     /// local and calls a mutating sibling through it — the third shape of the
     /// wrong-monomorph family, after B-2026-08-25-7's `let mut h = self` and
