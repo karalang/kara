@@ -1066,6 +1066,8 @@ let verbose = args.get_flag("--verbose");
 
 Effect: `reads(Env)` on `.parse()` (consumes `env.args()`). API surface inspired by clap's builder pattern; v1 perfection not required, canonicality is.
 
+> **Implementation status (2026-08-25): the surface above is complete and correct under `karac run --interp`, and DOES NOT AOT-COMPILE** — `B-2026-08-25-2`. Every pure-Kāra instance method on these types (`Arg.string().required()`, `parser.about(…)`) dies in codegen with `no handler for method '<m>' on variable '<v>'`, so `karac check` passes and `karac build` fails; static constructors build fine. The decision above is unchanged — this is a codegen gap, not a reversal — but the shape in this section cannot be compiled today, and a CLI tool is the archetypal program a user ships as a binary. Do not read this section as describing working compiled behaviour until that row closes.
+
 Cross-reference: `brainstorming/archive/v66_general_purpose_with_data_bonus.md § 2.2`.
 
 ---
