@@ -92,12 +92,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 285 | 1 |
+| miscompile | 285 | 0 |
 | leak | 190 | 0 |
 | missing-feature | 167 | 0 |
 | run-vs-build | 159 | 1 |
 | codegen-gap | 138 | 0 |
-| double-free | 136 | 0 |
+| double-free | 137 | 1 |
 | diagnostics | 104 | 0 |
 | false-positive | 96 | 0 |
 | perf | 84 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1024 | 3 |
+| codegen | 1025 | 3 |
 | typecheck | 252 | 0 |
 | interp | 180 | 0 |
 | ownership | 65 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1553 surfaced · 3 open · 1525 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-25). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1554 surfaced · 3 open · 1526 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-25). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (3)
 
@@ -132,7 +132,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1553 surfaced
 |---|---|---|---|---|---|
 | B-2026-08-25-2 | 2026-08-25 | codegen | high | `std.cli` IS NOT AOT-COMPILABLE: every pure-Kāra INSTANCE method on its types (`Arg.required`, `Parser.about`, ... ) dies in codegen with `no handler for method '<m>' on variable '<v>'`, so `karac check` passes and `karac build` fails -- while roadmap.md marks the feature `[x]` done and deferred.md ships it at v1 | roadmap.md:531 (`std.cli` marked [x]) + deferred.md § std.cli; codegen method dispatch falls through to the catch-all in src/codegen/method_call.rs for these receivers |
 | B-2026-08-25-3 | 2026-08-25 | codegen | medium | `codegen_tests::vec_mutation_methods_bounds_check_out_of_range_index` IS FLAKY, and it fails by showing exactly the PRE-FIX symptom of the high-severity bug it guards: `v.insert(7i64, 9i64)` produced no `Vec.insert index out of bounds` panic, stdout empty, stderr `free(): invalid pointer`. Observed once in a full `cargo test --features llvm` run; the same test then passed 3/3 in isolation, 3198/3198 in a codegen-only run, and the next FULL run was green at 125 suites / 15090 tests. | roadmap.md |
-| B-2026-08-25-7 | 2026-08-25 | codegen | high | A generic method that REBINDS its owned receiver to a local (`let mut h = self`) and drains through a sibling `mut ref self` method returns EMPTY elements at a heap-carrying `T`: `Heap[String].into_sorted()` yields the right COUNT but every String is empty under JIT and AOT, while the interpreter is correct. Needs all three of generic impl + the rebinding + a heap element type -- `T = i64` is correct, and the identical shape on a NON-generic impl is correct at String too. | phase-7-codegen.md |
+| B-2026-08-25-10 | 2026-08-25 | codegen | high | A generic impl method that REBINDS its owned receiver (`let mut h = self`) DOUBLE-FREES when the element type is itself a heap-owning aggregate: `Heap[Vec[i64]].take()` aborts with `free(): double free detected in tcache 2` under both JIT and AOT, while the interpreter is correct. Needs all three of generic impl + the `self` rebinding + a NESTED-heap `T` -- `T = String` (a single buffer) is correct, `T = i64` is correct, and the identical shape on a NON-generic impl is correct at `Vec[i64]`. | — |
 
 ### Relocated (1)
 
@@ -163,9 +163,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1553 surfaced
 
 </details>
 
-### Fixed (1525)
+### Fixed (1526)
 
-<details><summary>1525 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1526 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -18148,6 +18148,17 @@ REGRESSION TEST `e2e_mut_ref_self_sibling_call_in_generic_impl_mutates_the_recei
 
 NOT COVERED, filed separately as B-2026-08-25-7: the row's "POSSIBLY-RELATED" note was right to warn against assuming one fix covers both. A generic method that rebinds an OWNED receiver to a local (`let mut h = self`) and drains through the sibling returns EMPTY STRINGS at `T = String` under the compiled backends. Verified byte-identical before and after this fix, so it is untouched by it and is a distinct defect. |
 | B-2026-08-25-6 | codegen | low | A BRANCHING `break` carrier that owns heap is still refused: `break if c { Node { v: 4 } } else { Node { v: 5 } }` fails module verification while th… | FIXED by e01dce4. `break_value_is_fresh_owned_handle` now recurses through `If` / `IfLet` / `Match` / `Block` / `Seq` / `Unsafe` tails. Exactly one tail runs, but the result slot is written once for all of them, so EVERY tail has to manufacture ownership -- an ALL-tails conjunction. An `if` with no `else` declines (it yields unit and can carry nothing) and an empty arm list is guarded explicitly, since `all` over an empty iterator is vacuously true and would claim ownership of a value no arm produces. No emission changed: this is still permission, not mechanism. |
+| B-2026-08-25-7 | codegen | high | A generic method that REBINDS its owned receiver to a local (`let mut h = self`) and drains through a sibling `mut ref self` method returns EMPTY ele… | FIXED by cbc545f. ROOT CAUSE: `self` parses as `ExprKind::SelfValue`, NOT `Identifier("self")`, so the `let`-binding site in `src/codegen/stmts.rs` that records a binding's concrete generic instantiation into `enum_inst_var_types` never fired for `let mut h = self`. Its chain was: a concrete generic ANNOTATION, else the span-keyed `enum_inst_type_from_span(value)`, else `field_move_out_struct_inst(value)`. A bare `self` RHS has no annotation, is not a FieldAccess, and the span table is a PRE-monomorphization record -- it can only ever hold the generic form (`Heap[T]`), and for a bare `self` token it holds nothing at all. So `h` got no recorded instantiation.
+
+The consequence is at the sibling CALL site, not at the `let`. `compile_method_call`'s generic-impl arm binds the impl's type params from the RECEIVER's recorded instantiation (the impl's `T` appears only inside the `self` param's `Heap[T]` shape, which `infer_type_args` does not recurse into). With no record for `h`, that binding produced None, so no monomorph was selected and the call was lowered against the UNMANGLED default prototype -- `Heap.pop_one`, built at the all-`i64` base layout.
+
+PROOF, from `objdump` of an -O0 AOT build of the minimal repro: pre-fix the binary contains `Heap.take$struct` and a bare `Heap.pop_one`; post-fix it contains `Heap.take$struct` and `Heap.pop_one$struct`. The working control (the same method called directly from `main`) emitted `Heap.pop_one$struct` all along.
+
+That is also the whole explanation for the two conditions the row narrowed but could not account for. `T = i64` was correct because the default prototype's base layout IS i64 -- a coincidence, not a working path; its symbol table shows the same unmangled `Heap.pop_one`. A heap-carrying `T` reads a 24-byte String control block as a single i64, which is why the Vec length still decremented (giving the right COUNT and a terminating loop) while every element came back empty.
+
+FIX: at the `let` site, resolve a `SelfValue` RHS through the name-keyed `enum_inst_var_types["self"]`, which the monomorph param prologue seeds with the receiver's CONCRETE instantiation. Placed BEFORE the span fallback deliberately: for `self` the name-keyed record is authoritative and the span table structurally cannot carry the concrete args.
+
+REGRESSION TEST: `e2e_generic_impl_rebinding_owned_self_drains_through_sibling_at_heap_t` in tests/codegen.rs. Case (a) is the minimal SINGLE sibling call, (b) the filed drain loop asserting CONTENTS rather than the count, (c) a scalar-`T` control and (d) a non-generic control -- both correct pre-fix, so they pin the diagnosis rather than merely passing. Verified RED pre-fix: (a) and (b) printed empty lines, (c) and (d) printed correctly. |
 | B-2026-08-25-8 | codegen | high | A MUTUAL type cycle through a `Vec` CRASHES THE COMPILER: `struct Inner { owner: Outer }` + `struct Outer { kids: Vec[Inner] }` passes `karac check`… | FIXED by 39b159e. `field_copy_supported`'s `Vec`/`VecDeque` arm now asks whether unrolling the emitter's per-element struct copy TERMINATES (`vec_elem_copy_emission_terminates`) rather than whether the element type is already on the walk stack. It declines when the element is an ancestor (B-2026-07-28-3's direct case), can REACH an ancestor (the mutual cycle this row is about), or reaches itself. That makes the analysis walk exactly as deep as the emitter, which is what B-2026-07-28-3's own comment states it intended. An ACYCLIC element type still answers "terminates" and keeps the arm's unconditional `true`, so programs that compile today emit byte-identical IR; only a genuine cycle newly declines, falling back to caller-retains like every other non-copyable field shape. Both cycle shapes are pinned by `tests/codegen.rs::test_e2e_mutual_type_cycle_through_vec_compiles` and `..._direct_type_cycle_...`, so a later edit cannot fix one by regressing the other. SUITES: llvm 15114 passed / 0 failed, default 9895 / 0, clippy clean on both feature legs, fmt clean. |
 | B-2026-08-25-9 | codegen | medium | A TEMPORARY passed as the path argument to a `#[compiler_builtin]` fs entry point is never freed: ~47 bytes leak per call, under BOTH the owned and `… | FIXED by e7a99bb.
 

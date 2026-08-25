@@ -7867,8 +7867,9 @@ fn main() {
     ///
     /// The element type is deliberately `String` and not `Vec[i64]`: a
     /// nested-heap element reaches a SEPARATE, pre-existing double-free in the
-    /// same rebinding shape (present identically before this fix, filed on its
-    /// own row), which would make this test fail for an unrelated reason.
+    /// same rebinding shape (present identically before this fix, so not a
+    /// regression from it; B-2026-08-25-10), which would make this test fail
+    /// for an unrelated reason.
     #[test]
     fn e2e_generic_impl_rebinding_owned_self_drains_through_sibling_at_heap_t() {
         let src = r#"
