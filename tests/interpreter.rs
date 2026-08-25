@@ -26411,6 +26411,56 @@ fn test_module_binding_computed_unannotated() {
 }
 
 #[test]
+fn test_priority_queue_min_and_max_at_scalar_and_heap_t() {
+    // Phase-11 `PriorityQueue[T: Ord]` on the tree-walk backend. The compiled
+    // twin is `tests/codegen.rs`'s
+    // `e2e_stdlib_priority_queue_min_and_max_at_scalar_and_heap_t`, and the two
+    // assert the SAME expected string on purpose: this module's bodies are real
+    // Kāra compiled through the baked-stdlib path, so interpreter/codegen
+    // parity is the property that keeps one source honest across two backends.
+    // No `import` — `PriorityQueue` is prelude-visible like `SortedSet`.
+    let out = run(r#"
+fn main() {
+    let mut q: PriorityQueue[i64] = PriorityQueue.new();
+    q.push(5); q.push(1); q.push(4); q.push(2); q.push(3);
+    println(q.len());
+    println(q.is_empty());
+    let a = q.into_sorted_vec();
+    let mut i = 0;
+    while i < a.len() { println(a[i]); i = i + 1; }
+    let mut m: PriorityQueue[i64] = PriorityQueue.max_first();
+    m.push(5); m.push(1); m.push(4);
+    let b = m.into_sorted_vec();
+    let mut j = 0;
+    while j < b.len() { println(b[j]); j = j + 1; }
+    let v: Vec[i64] = [9, 7, 8, 1, 3];
+    let c = PriorityQueue.from(v).into_sorted_vec();
+    let mut k = 0;
+    while k < c.len() { println(c[k]); k = k + 1; }
+    let mut s: PriorityQueue[String] = PriorityQueue.new();
+    s.push("pear"); s.push("apple"); s.push("fig");
+    let d = s.into_sorted_vec();
+    let mut z = 0;
+    while z < d.len() { println(d[z]); z = z + 1; }
+    let e = PriorityQueue.max_first_from(["pear", "apple", "fig"]).into_sorted_vec();
+    let mut w = 0;
+    while w < e.len() { println(e[w]); w = w + 1; }
+    let mut f: PriorityQueue[i64] = PriorityQueue.new();
+    println(f.is_empty());
+    match f.pop() { Some(x) => { println(x); } None => { println("none"); } }
+    let empty: Vec[i64] = [];
+    let g = PriorityQueue.from(empty).into_sorted_vec();
+    println(g.len());
+}
+"#);
+    assert_eq!(
+        out,
+        "5\nfalse\n1\n2\n3\n4\n5\n5\n4\n1\n1\n3\n7\n8\n9\n\
+         apple\nfig\npear\npear\nfig\napple\ntrue\nnone\n0\n"
+    );
+}
+
+#[test]
 fn test_secret_expose_reads_inner() {
     // `std.secret.Secret[T]` — `Secret.new(v)` wraps a sensitive value and
     // `.expose()` reads the inner value back (both Copy `i64` and non-Copy

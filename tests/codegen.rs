@@ -11211,6 +11211,176 @@ fn main() {
             .expect("a std.cli associated fn + instance method must compile");
     }
 
+    /// An ASSOCIATED fn in a generic impl that binds a struct LITERAL to a
+    /// local and calls a mutating sibling through it — the third shape of the
+    /// wrong-monomorph family, after B-2026-08-25-7's `let mut h = self` and
+    /// B-2026-07-15-24's moved-out field.
+    ///
+    /// The `let` site records a binding's concrete instantiation so the sibling
+    /// call can bind the impl's type params from it. A struct literal has no
+    /// entry in the span table at all, so the binding got nothing, the subst
+    /// came back empty, and `mangle_mono_name` maps an empty subst to the base
+    /// name — the call went to the UNMANGLED prototype built at the all-`i64`
+    /// base layout. At a heap-carrying `T` that reads a 24-byte String control
+    /// block as one i64 and SEGFAULTS.
+    ///
+    /// Case (b) is a scalar-`T` control and (c) a non-generic one; both were
+    /// correct before the fix, so they pin the diagnosis rather than merely
+    /// passing. Verified RED: pre-fix this program segfaults, and `nm` shows a
+    /// bare `Bag.arrange` / `Bag.swap2` with no `$i64` / `$struct` sibling —
+    /// one prototype serving both instantiations. Post-fix all four exist.
+    #[test]
+    fn e2e_generic_assoc_fn_struct_literal_local_calls_mutating_sibling() {
+        let src = r#"
+struct Bag[T] { xs: Vec[T] }
+impl[T: Ord] Bag[T] {
+    fn swap2(mut ref self, i: i64, j: i64) {
+        let t = self.xs[i]; self.xs[i] = self.xs[j]; self.xs[j] = t;
+    }
+    fn arrange(mut ref self) { let n = self.xs.len(); if n > 1 { self.swap2(0, n - 1); } }
+    fn build(v: Vec[T]) -> Bag[T] { let mut b = Bag { xs: v }; b.arrange(); b }
+    fn take(mut ref self) -> Option[T] { self.xs.pop() }
+}
+struct PlainBag { xs: Vec[String] }
+impl PlainBag {
+    fn swap2(mut ref self, i: i64, j: i64) {
+        let t = self.xs[i]; self.xs[i] = self.xs[j]; self.xs[j] = t;
+    }
+    fn arrange(mut ref self) { let n = self.xs.len(); if n > 1 { self.swap2(0, n - 1); } }
+    fn build(v: Vec[String]) -> PlainBag { let mut b = PlainBag { xs: v }; b.arrange(); b }
+}
+fn main() {
+    // (a) heap-carrying T — segfaulted pre-fix. Assert CONTENTS, not the count.
+    let mut a = Bag.build(["x", "y", "z"]);
+    match a.take() { Some(v) => { println(v); } None => {} }
+    println(a.xs.len());
+    println(a.xs[0]);
+    // (b) scalar control: correct pre-fix, because the base layout IS i64.
+    let mut b = Bag.build([1, 2, 3]);
+    match b.take() { Some(v) => { println(v); } None => {} }
+    // (c) NON-generic control at the same heap element type.
+    let c = PlainBag.build(["p", "q"]);
+    println(c.xs[0]);
+}
+"#;
+        assert_eq!(run_program(src).as_deref(), Some("x\n2\nz\n1\nq\n"));
+    }
+
+    /// Phase-11 `PriorityQueue[T: Ord]` — the first stdlib collection whose
+    /// bodies are real Kāra over a generic, trait-bounded impl.
+    ///
+    /// Exercises both directions and both element classes in one program,
+    /// because the two axes have historically failed independently: a scalar
+    /// `T` rides the default all-`i64` base layout (which is why B-2026-08-25-7
+    /// looked correct at `T = i64` while every `String` came back empty), and
+    /// the direction flag is the one branch `outranks` takes.
+    ///
+    /// `into_sorted_vec` is deliberately the drain used throughout — it is the
+    /// `let mut h = self` + sibling-`mut ref self` shape that B-2026-08-25-5
+    /// hung on and B-2026-08-25-7 emptied. A regression in either resurfaces
+    /// here as a hang or as blank lines rather than as a subtle ordering bug.
+    ///
+    /// Runs on a 16 MB worker, matching what the compiler gives itself in
+    /// production: `src/main.rs` spawns the whole CLI on a
+    /// `.stack_size(16 * 1024 * 1024)` thread and `src/lib.rs` does the same,
+    /// because on-demand monomorphization recurses through the callee chain —
+    /// here `into_sorted_vec` → `pop` → `sift_down` → `outranks` / `swap`, at
+    /// two instantiations. libtest's default thread is smaller than that, so
+    /// without the worker this test overflows the stack while `karac build` on
+    /// the identical source succeeds — a harness artifact, not a codegen bug,
+    /// and the same reason `tests/interpreter.rs` and `tests/parser.rs` already
+    /// spawn sized workers for their deep cases.
+    #[test]
+    fn e2e_stdlib_priority_queue_min_and_max_at_scalar_and_heap_t() {
+        let src = r#"
+fn main() {
+    // (a) smallest-first, scalar T: push order is deliberately not sorted.
+    let mut q: PriorityQueue[i64] = PriorityQueue.new();
+    q.push(5); q.push(1); q.push(4); q.push(2); q.push(3);
+    println(q.len());
+    println(q.is_empty());
+    let a = q.into_sorted_vec();
+    let mut i = 0;
+    while i < a.len() { println(a[i]); i = i + 1; }
+    // (b) largest-first: the other arm of `outranks`.
+    let mut m: PriorityQueue[i64] = PriorityQueue.max_first();
+    m.push(5); m.push(1); m.push(4);
+    let b = m.into_sorted_vec();
+    let mut j = 0;
+    while j < b.len() { println(b[j]); j = j + 1; }
+    // (c) O(n) Floyd heapify rather than n pushes.
+    let v: Vec[i64] = [9, 7, 8, 1, 3];
+    let c = PriorityQueue.from(v).into_sorted_vec();
+    let mut k = 0;
+    while k < c.len() { println(c[k]); k = k + 1; }
+    // (d) heap-carrying T: asserts CONTENTS, since the count stayed right
+    //     while every element was empty under B-2026-08-25-7.
+    let mut s: PriorityQueue[String] = PriorityQueue.new();
+    s.push("pear"); s.push("apple"); s.push("fig");
+    let d = s.into_sorted_vec();
+    let mut z = 0;
+    while z < d.len() { println(d[z]); z = z + 1; }
+    // (e) largest-first at a heap T — both axes crossed.
+    let e = PriorityQueue.max_first_from(["pear", "apple", "fig"]).into_sorted_vec();
+    let mut w = 0;
+    while w < e.len() { println(e[w]); w = w + 1; }
+    // (f) empty queue: pop is None, and heapify's `n / 2 - 1` start index
+    //     must not run the sift loop at n == 0.
+    let mut f: PriorityQueue[i64] = PriorityQueue.new();
+    println(f.is_empty());
+    match f.pop() { Some(x) => { println(x); } None => { println("none"); } }
+    let empty: Vec[i64] = [];
+    let g = PriorityQueue.from(empty).into_sorted_vec();
+    println(g.len());
+}
+"#;
+        let out = std::thread::Builder::new()
+            .stack_size(16 * 1024 * 1024)
+            .spawn(move || run_program(src))
+            .expect("failed to spawn sized worker")
+            .join()
+            .expect("compile worker panicked");
+        assert_eq!(
+            out.as_deref(),
+            Some(
+                "5\nfalse\n1\n2\n3\n4\n5\n5\n4\n1\n1\n3\n7\n8\n9\n\
+                 apple\nfig\npear\npear\nfig\napple\ntrue\nnone\n0\n"
+            )
+        );
+    }
+
+    /// `PriorityQueue` needs no usage gate, and this pins the reason.
+    ///
+    /// `std.cli`'s bodies had to be gated (see the sibling test below) because
+    /// they are non-generic: registering the module emitted them into every
+    /// program, leaking clone calls and overflow intrinsics that two IR-shape
+    /// tests assert the absence of. Every `PriorityQueue` method instead lives
+    /// on a generic impl, so `declare_stdlib_program_inner` seeds it into
+    /// `mono_state.generic_fns` for on-demand monomorphization — a program that
+    /// never names the type instantiates nothing. The genericity IS the gate,
+    /// which is a structural property worth a test rather than a comment: if a
+    /// future non-generic helper is added to the impl, this fails and whoever
+    /// added it learns the module now needs cli's treatment.
+    #[test]
+    fn stdlib_priority_queue_bodies_stay_out_of_a_queue_free_program() {
+        let mut parsed = karac::parse("fn main() { let x = 1 + 2; println(f\"{x}\"); }\n");
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        karac::prepare_for_resolve(&mut parsed.program);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let ir =
+            compile_to_ir(&parsed.program, None, None).expect("queue-free program must compile");
+        assert!(
+            !ir.contains("PriorityQueue"),
+            "a PriorityQueue body leaked into a program that never mentions the type"
+        );
+    }
+
     /// B-2026-08-25-2 — the gate is a GATE: a program that never mentions a
     /// `std.cli` type must not drag cli's bodies into its module.
     ///

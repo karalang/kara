@@ -1,0 +1,207 @@
+// runtime/stdlib/priority_queue.kara
+//
+// `PriorityQueue[T: Ord]` — a `Vec[T]`-backed binary heap.
+// Phase 11 § General-purpose collections.
+//
+// **Why `PriorityQueue` and not `BinaryHeap`.** Rust names its
+// collections after their IMPLEMENTATION (`HashMap`, `BTreeMap`,
+// `BinaryHeap`) so the performance profile is visible at the use site.
+// Kāra does not: it ships `Map` and `Set`, not `HashMap` / `HashSet`,
+// and qualifies only when there is a real choice to make (`SortedMap`).
+// `BinaryHeap` would be the one implementation-named collection in the
+// stdlib. `PriorityQueue` is also the ADT name, so it survives an
+// implementation change — a later pairing or d-ary heap can back this
+// same type, where `BinaryHeap` would become a lie. The cost of an ADT
+// name is that the complexity profile is no longer in it, so it is
+// stated here instead:
+//
+//     push / pop      O(log n)
+//     peek / len      O(1)
+//     from            O(n)      — Floyd heapify, not n pushes
+//     into_sorted_vec O(n log n)
+//     decrease-key    NOT PROVIDED — no handle is returned by `push`.
+//     merge           NOT PROVIDED — no better than push-each here.
+//
+// A caller who needs decrease-key (the textbook Dijkstra bound) or a
+// cheap meld wants a Fibonacci or pairing heap, which this is not.
+//
+// **This module is written in Kāra, with real bodies.** Every other
+// collection (`Vec`, `Map`, `Set`, `VecDeque`, `SortedMap`, `SortedSet`)
+// is a `#[compiler_builtin]` signature stub backed by a Rust
+// implementation, because each of those owns a runtime representation —
+// a hash table, a B-tree, a ring buffer. A binary heap owns none: with
+// exactly two children per node the tree is index arithmetic over a flat
+// array (children of `i` at `2i+1` / `2i+2`), so it is a `Vec[T]` plus
+// comparisons. A Rust twin would buy nothing the monomorphized `Vec[T]`
+// does not already give, and would put a third copy of the sift
+// algorithm (interpreter + codegen + runtime) where the language can
+// express one. The bodies below compile through the baked-stdlib path
+// (`lower_stdlib_source` → `declare_stdlib_program` /
+// `compile_stdlib_program`, `src/codegen.rs`), the same path `Ordering`,
+// `protobuf`, `process` and `cli` already use for their non-builtin
+// bodies.
+//
+// **Direction: SMALLEST FIRST by default.** `PriorityQueue.new()` pops
+// the smallest element; `PriorityQueue.max_first()` is the sibling that
+// pops the largest. This is the natural reading of a priority queue —
+// lowest priority number served first — and it matches Java's
+// `PriorityQueue` and Python's `heapq`. (Rust's `BinaryHeap` is
+// max-first, but that default is only workable there because
+// `std::cmp::Reverse` makes the other direction cheap; Kāra has no such
+// wrapper, and all five hand-rolled heaps in the kata corpus want
+// smallest-first.) The direction is a FIELD rather than two types, so a
+// queue can be handed to a generic consumer without the direction
+// entering its signature.
+//
+// Ordering is `T: Ord` on the impl block; the comparison helper
+// `outranks` takes INDICES rather than values so a non-`Copy` `T`
+// (`String`, a nested `Vec`) is never moved out of the backing store to
+// be compared.
+
+struct PriorityQueue[=T] {
+    xs: Vec[T],
+    max: bool,
+}
+
+impl[T: Ord] PriorityQueue[T] {
+    // An empty queue that pops the SMALLEST element first.
+    fn new() -> PriorityQueue[T] {
+        PriorityQueue { xs: Vec.new(), max: false }
+    }
+
+    // An empty queue that pops the LARGEST element first.
+    fn max_first() -> PriorityQueue[T] {
+        PriorityQueue { xs: Vec.new(), max: true }
+    }
+
+    // Build a smallest-first queue from an existing vector in O(n) —
+    // Floyd's heapify, sifting down from the last internal node rather
+    // than pushing n times (which would be O(n log n)).
+    fn from(v: Vec[T]) -> PriorityQueue[T] {
+        let mut h = PriorityQueue { xs: v, max: false };
+        h.heapify();
+        h
+    }
+
+    // `from`'s largest-first sibling, same O(n) build.
+    fn max_first_from(v: Vec[T]) -> PriorityQueue[T] {
+        let mut h = PriorityQueue { xs: v, max: true };
+        h.heapify();
+        h
+    }
+
+    // Restore the heap property over the whole backing vector in O(n).
+    // Starts at the last internal node: every later index is a leaf, and
+    // a leaf is trivially a valid heap of one.
+    fn heapify(mut ref self) {
+        let n = self.xs.len();
+        let mut i = n / 2 - 1;
+        while i >= 0 {
+            self.sift_down(i);
+            i = i - 1;
+        }
+    }
+
+    fn len(ref self) -> i64 {
+        self.xs.len()
+    }
+
+    fn is_empty(ref self) -> bool {
+        self.xs.len() == 0
+    }
+
+    fn clear(mut ref self) {
+        self.xs.clear();
+    }
+
+    // Does the element at `i` sit closer to the root than the one at `j`?
+    // The ONE place the two directions differ. Indices, not values: a
+    // `String` element is compared in place, never moved out to compare.
+    fn outranks(ref self, i: i64, j: i64) -> bool {
+        if self.max {
+            return self.xs[i] > self.xs[j];
+        }
+        return self.xs[i] < self.xs[j];
+    }
+
+    fn swap(mut ref self, i: i64, j: i64) {
+        let t = self.xs[i];
+        self.xs[i] = self.xs[j];
+        self.xs[j] = t;
+    }
+
+    // Sift the element at `start` up toward the root until the heap
+    // property holds above it.
+    fn sift_up(mut ref self, start: i64) {
+        let mut i = start;
+        while i > 0 {
+            let parent = (i - 1) / 2;
+            if self.outranks(i, parent) {
+                self.swap(i, parent);
+                i = parent;
+            } else {
+                return;
+            }
+        }
+    }
+
+    // Sift the element at `start` down until the heap property holds
+    // below it.
+    fn sift_down(mut ref self, start: i64) {
+        let n = self.xs.len();
+        let mut i = start;
+        while true {
+            let l = 2 * i + 1;
+            let r = 2 * i + 2;
+            let mut best = i;
+            if l < n and self.outranks(l, best) {
+                best = l;
+            }
+            if r < n and self.outranks(r, best) {
+                best = r;
+            }
+            if best == i {
+                return;
+            }
+            self.swap(i, best);
+            i = best;
+        }
+    }
+
+    fn push(mut ref self, x: T) {
+        self.xs.push(x);
+        let n = self.xs.len();
+        self.sift_up(n - 1);
+    }
+
+    // Remove and return the next element — the smallest of a
+    // smallest-first queue, the largest of a largest-first one — or
+    // `None` when empty. Swaps the root to the end so the pop is O(1) on
+    // the backing vector, then sifts the replacement root down.
+    fn pop(mut ref self) -> Option[T] {
+        let n = self.xs.len();
+        if n == 0 {
+            return None;
+        }
+        self.swap(0, n - 1);
+        let top = self.xs.pop();
+        self.sift_down(0);
+        top
+    }
+
+    // Drain into a vector in pop order: ascending for a smallest-first
+    // queue, descending for a largest-first one.
+    fn into_sorted_vec(self) -> Vec[T] {
+        let mut h = self;
+        let mut out: Vec[T] = Vec.new();
+        while h.xs.len() > 0 {
+            match h.pop() {
+                Some(v) => {
+                    out.push(v);
+                }
+                None => {}
+            }
+        }
+        out
+    }
+}

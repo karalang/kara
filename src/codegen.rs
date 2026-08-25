@@ -546,6 +546,30 @@ fn pool_stdlib_program() -> &'static Program {
     &POOL_LOWERED_PROGRAM
 }
 
+static PRIORITY_QUEUE_LOWERED_PROGRAM: std::sync::LazyLock<Program> =
+    std::sync::LazyLock::new(|| {
+        lower_stdlib_source(
+            "priority_queue",
+            include_str!("../runtime/stdlib/priority_queue.kara"),
+        )
+    });
+
+/// The lowered `PriorityQueue` program — the first stdlib module whose bodies
+/// are real Kāra over a GENERIC, trait-bounded impl (`impl[T: Ord]`).
+///
+/// It needs no usage gate, unlike `std.cli`. Every method lives on that generic
+/// impl, so `declare_stdlib_program_inner` seeds them into
+/// `mono_state.generic_fns` for ON-DEMAND monomorphization rather than emitting
+/// a body per method up front. A program that never names `PriorityQueue`
+/// instantiates nothing and pays nothing — the genericity IS the gate, which is
+/// why cli's problem (bodies leaking clone calls and overflow intrinsics into
+/// every module, un-pruned because its helpers call each other) cannot arise
+/// here. `stdlib_priority_queue_bodies_stay_out_of_a_queue_free_program` pins
+/// that by name.
+fn priority_queue_stdlib_program() -> &'static Program {
+    &PRIORITY_QUEUE_LOWERED_PROGRAM
+}
+
 static PROCESS_LOWERED_PROGRAM: std::sync::LazyLock<Program> = std::sync::LazyLock::new(|| {
     lower_stdlib_source("process", include_str!("../runtime/stdlib/process.kara"))
 });
@@ -740,6 +764,7 @@ fn compiled_stdlib_programs(user: &Program) -> Vec<&'static Program> {
         regex_stdlib_program(),
         process_stdlib_program(),
         pool_stdlib_program(),
+        priority_queue_stdlib_program(),
     ];
     if program_uses_protobuf(user) {
         programs.push(protobuf_stdlib_program());

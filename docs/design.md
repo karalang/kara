@@ -1670,6 +1670,7 @@ let evens = Vec.from_fn(5, |i| i * 2);   // [0, 2, 4, 6, 8]
 | `VecDeque[T]` | `VecDeque<T>` | Double-ended queue (ring buffer) |
 | `SortedMap[K, V]` | `BTreeMap<K, V>` | Sorted key-value lookup (`K: Ord`) |
 | `SortedSet[T]` | `BTreeSet<T>` | Sorted set (`T: Ord`); O(log n) insert/remove/contains; ordered iteration, min/max, range queries |
+| `PriorityQueue[T]` | `BinaryHeap<T>` | Priority queue (`T: Ord`), binary-heap backed; O(log n) push/pop, O(n) build. SMALLEST-first by default (`max_first()` for the other direction) — note this is the opposite of Rust's `BinaryHeap` |
 | `(A, B, C)` | `(A, B, C)` | Tuple |
 | `Option[T]` | `Option<T>` | Nullable values |
 | `Result[T, E]` | `Result<T, E>` | Error handling |
@@ -1813,6 +1814,39 @@ B-tree–backed ordered set. All operations are O(log n). Because `T: Ord` (not 
 | `union` | `fn union(ref self, other: ref SortedSet[T]) -> SortedSet[T]` | Set union |
 | `intersection` | `fn intersection(ref self, other: ref SortedSet[T]) -> SortedSet[T]` | Set intersection |
 | `difference` | `fn difference(ref self, other: ref SortedSet[T]) -> SortedSet[T]` | Elements in `self` not in `other` |
+
+**`PriorityQueue[T]` where `T: Ord`**
+
+Binary-heap–backed priority queue: a `Vec[T]` in which the next element to come out is always at the root. `push` and `pop` are O(log n), `len` and `is_empty` are O(1), and building from an existing vector is O(n) rather than n pushes.
+
+Unlike every other collection here, `PriorityQueue` is implemented in Kāra rather than behind a compiler builtin (`runtime/stdlib/priority_queue.kara`). A binary heap owns no runtime representation of its own — with two children per node the tree is index arithmetic over a flat array (children of `i` at `2i+1` / `2i+2`) — so it is a `Vec[T]` plus comparisons.
+
+**Direction.** `PriorityQueue.new()` pops the SMALLEST element first, matching Java's `PriorityQueue` and Python's `heapq` and the plain reading of "priority queue". `PriorityQueue.max_first()` is the sibling that pops the largest. **This is the opposite of Rust's `BinaryHeap`**, which is max-first; Rust can afford that default because `std::cmp::Reverse` makes the other direction cheap, and Kāra has no such wrapper. The direction is a field on the queue, not a second type, so a queue can be passed to a generic consumer without the direction entering its signature.
+
+**Not provided:** a non-consuming `peek` (it would have to hand back an `Option[ref T]`, which needs a compiler intercept rather than a Kāra body — see `OnceCell.get`), `decrease_key` (no handle is returned by `push`) and a cheap `merge`. Both want a Fibonacci or pairing heap, which this is not. Use `SortedSet[T]` if you need ordered iteration over the whole collection rather than repeated extraction of the extreme.
+
+| Method | Signature | Notes |
+|---|---|---|
+| `new` | `fn new() -> PriorityQueue[T]` | Empty queue, SMALLEST element first |
+| `max_first` | `fn max_first() -> PriorityQueue[T]` | Empty queue, LARGEST element first |
+| `from` | `fn from(v: Vec[T]) -> PriorityQueue[T]` | O(n) heapify, smallest-first |
+| `max_first_from` | `fn max_first_from(v: Vec[T]) -> PriorityQueue[T]` | O(n) heapify, largest-first |
+| `push` | `fn push(mut ref self, x: T)` | O(log n) |
+| `pop` | `fn pop(mut ref self) -> Option[T]` | Removes and returns the next element; `None` if empty |
+| `len` | `fn len(ref self) -> i64` | Number of elements |
+| `is_empty` | `fn is_empty(ref self) -> bool` | `self.len() == 0` |
+| `clear` | `fn clear(mut ref self)` | Drops every element |
+| `into_sorted_vec` | `fn into_sorted_vec(self) -> Vec[T]` | Consumes the queue, draining in pop order: ascending for a smallest-first queue, descending for a largest-first one |
+
+```kara
+let mut pq: PriorityQueue[i64] = PriorityQueue.new();
+pq.push(5); pq.push(1); pq.push(4);
+match pq.pop() { Some(v) => { println(v); } None => {} }   // 1
+
+// O(n) build, then drain in ascending order.
+let sorted = PriorityQueue.from([9, 7, 8, 1, 3]).into_sorted_vec();   // [1, 3, 7, 8, 9]
+```
+
 | `clear` | `fn clear(mut ref self)` | Removes all elements |
 
 **`String`**

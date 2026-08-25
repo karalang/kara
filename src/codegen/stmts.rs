@@ -3654,6 +3654,62 @@ impl<'ctx> super::Codegen<'ctx> {
                             }
                             _ => None,
                         })
+                        // A struct-LITERAL RHS inside a generic impl
+                        // (`let mut h = PriorityQueue { xs: v, max: false }`)
+                        // is the third shape of this defect, after the
+                        // `SelfValue` arm above and the field-move-out arm
+                        // below — and the span table cannot help with it
+                        // either: it records no entry for a struct literal at
+                        // all, so `h` got NO instantiation. The sibling call
+                        // site then bound the impl's params from nothing,
+                        // `mangle_mono_name` mapped that empty subst back to
+                        // the base name, and `h.heapify()` called the UNMANGLED
+                        // prototype built at the all-`i64` base layout. At a
+                        // heap-carrying `T` that reads a 24-byte String control
+                        // block as one i64 — a SEGFAULT, and silently correct at
+                        // `T = i64` because the base layout happens to match.
+                        //
+                        // The literal names its struct but writes no type args
+                        // in the common `C { .. }` form, so reconstruct them
+                        // from the struct's DECLARED parameter names and let
+                        // `concrete_generic_struct_inst` resolve those through
+                        // the active monomorph's substitution. That helper
+                        // returns `None` when nothing was bound — no monomorph
+                        // in flight, or an already-concrete literal — so this
+                        // arm is inert outside the case it exists for.
+                        .or_else(|| match &value.kind {
+                            ExprKind::StructLiteral { path, .. } => {
+                                let name = path.last()?;
+                                let params =
+                                    self.type_decls.struct_generic_params.get(name)?.clone();
+                                if params.is_empty() {
+                                    return None;
+                                }
+                                let args: Vec<GenericArg> = params
+                                    .iter()
+                                    .map(|p| {
+                                        GenericArg::Type(TypeExpr {
+                                            kind: TypeKind::Path(PathExpr {
+                                                segments: vec![p.clone()],
+                                                generic_args: None,
+                                                span: value.span,
+                                            }),
+                                            span: value.span,
+                                        })
+                                    })
+                                    .collect();
+                                let generic_form = TypeExpr {
+                                    kind: TypeKind::Path(PathExpr {
+                                        segments: vec![name.clone()],
+                                        generic_args: Some(args),
+                                        span: value.span,
+                                    }),
+                                    span: value.span,
+                                };
+                                self.concrete_generic_struct_inst(&generic_form)
+                            }
+                            _ => None,
+                        })
                         .or_else(|| self.enum_inst_type_from_span(value))
                         // B-2026-07-15-24 — a generic struct FIELD moved out
                         // (`let bound = o.inner`, `inner: GInner[T]`) is a

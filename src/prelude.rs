@@ -145,6 +145,12 @@ pub const PRELUDE_TYPES: &[&str] = &[
     "ExitCode",
     "SortedSet",
     "SortedMap",
+    // `PriorityQueue[T: Ord]` — `Vec[T]`-backed binary heap (phase-11
+    // general-purpose collections). Scope-0 like its `SortedSet`/`SortedMap`
+    // collection peers. UNLIKE them it is not a `#[compiler_builtin]` stub:
+    // `runtime/stdlib/priority_queue.kara` carries real Kāra bodies, compiled
+    // through the baked-stdlib path.
+    "PriorityQueue",
     "Channel",
     "Sender",
     "Receiver",
@@ -755,6 +761,10 @@ pub const STDLIB_SOURCES: &[(&str, &str)] = &[
     (
         "sorted_map.kara",
         include_str!("../runtime/stdlib/sorted_map.kara"),
+    ),
+    (
+        "priority_queue.kara",
+        include_str!("../runtime/stdlib/priority_queue.kara"),
     ),
     (
         "channel.kara",
@@ -1948,7 +1958,7 @@ fn stub_generics(name: &str, span: &Span) -> Option<GenericParams> {
     let params: &[&str] = match name {
         "Option" | "Vec" | "VecDeque" | "Slice" | "Array" | "Vector" | "Set" | "Atomic"
         | "Mutex" | "SortedSet" | "Channel" | "Sender" | "Receiver" | "BufReader" | "BufWriter"
-        | "GpuBuffer" => &["T"],
+        | "GpuBuffer" | "PriorityQueue" => &["T"],
         "Result" => &["T", "E"],
         "Map" | "Entry" | "SortedMap" => &["K", "V"],
         _ => return None,

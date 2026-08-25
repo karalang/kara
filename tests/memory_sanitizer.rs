@@ -29482,6 +29482,63 @@ fn main() {
     /// buffer free — this guards that it neither leaks nor double-frees (a
     /// stray free / mis-sized memset would trip ASAN). Multiple secrets built,
     /// used, and dropped across a fn boundary.
+    /// `PriorityQueue[String]` under LSan — `pop` transfers ownership of an
+    /// element OUT of the backing `Vec`, and `swap` moves elements between
+    /// slots, so every heap-carrying element crosses the ownership boundary
+    /// twice on the way through a drain.
+    ///
+    /// The drain is the interesting half: `into_sorted_vec` consumes the queue
+    /// by value and rebinds it (`let mut h = self`), so the backing Vec's
+    /// buffer must be freed exactly once while each String it held is
+    /// transferred, not copied and not double-freed. The `clear()` case is the
+    /// other direction — elements dropped in place rather than handed out.
+    ///
+    /// Linux-only in effect: `-fsanitize=address` runs LeakSanitizer on Linux
+    /// but not on macOS, so a green local Mac run does not clear this (see
+    /// CLAUDE.md § leak detection).
+    #[test]
+    fn asan_priority_queue_string_drain_no_leak() {
+        let label = "priority_queue_string_drain";
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let src = r#"
+fn main() {
+    let mut q: PriorityQueue[String] = PriorityQueue.new();
+    q.push("pear"); q.push("apple"); q.push("fig"); q.push("banana");
+    let sorted = q.into_sorted_vec();
+    let mut i = 0;
+    while i < sorted.len() { println(sorted[i]); i = i + 1; }
+    // Elements dropped in place rather than transferred out.
+    let mut r: PriorityQueue[String] = PriorityQueue.max_first();
+    r.push("x"); r.push("yy");
+    r.clear();
+    println(r.len());
+    // O(n) heapify then a partial drain: some elements handed out, the rest
+    // dropped with the queue.
+    let mut p = PriorityQueue.from(["delta", "alpha", "charlie", "bravo"]);
+    match p.pop() { Some(v) => { println(v); } None => {} }
+    println(p.len());
+}
+"#;
+        let Some((stdout, status)) = run_under_asan(src, label) else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN/LSan reported a memory error (exit code {:?}) — \
+             check pop's transfer out of the backing Vec and swap's element moves",
+            status.code()
+        );
+        assert_eq!(
+            stdout.trim(),
+            "apple\nbanana\nfig\npear\n0\nalpha\n3",
+            "[{label}] unexpected stdout (ASAN passed, output mismatched)"
+        );
+    }
+
     #[test]
     fn asan_secret_string_zeroize_no_leak() {
         let label = "secret_string_zeroize";
