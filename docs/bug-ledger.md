@@ -97,20 +97,20 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | missing-feature | 167 | 0 |
 | run-vs-build | 159 | 1 |
 | codegen-gap | 138 | 0 |
-| double-free | 137 | 0 |
+| double-free | 138 | 1 |
 | diagnostics | 104 | 0 |
 | false-positive | 96 | 0 |
 | perf | 84 | 0 |
 | other | 60 | 1 |
 | soundness | 59 | 1 |
-| crash | 57 | 1 |
+| crash | 57 | 0 |
 | use-after-free | 20 | 0 |
 
 ### By surface
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1029 | 5 |
+| codegen | 1030 | 5 |
 | typecheck | 252 | 0 |
 | interp | 180 | 0 |
 | ownership | 65 | 0 |
@@ -118,13 +118,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | cli | 62 | 0 |
 | autopar | 55 | 0 |
 | parser | 41 | 0 |
-| runtime | 31 | 0 |
+| runtime | 32 | 1 |
 | resolver | 26 | 0 |
 | effect | 23 | 0 |
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1558 surfaced · 5 open · 1528 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-25). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1559 surfaced · 5 open · 1529 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-25). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (5)
 
@@ -132,9 +132,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1558 surfaced
 |---|---|---|---|---|---|
 | B-2026-08-25-2 | 2026-08-25 | codegen | high | `std.cli` IS NOT AOT-COMPILABLE: every pure-Kāra INSTANCE method on its types (`Arg.required`, `Parser.about`, ... ) dies in codegen with `no handler for method '<m>' on variable '<v>'`, so `karac check` passes and `karac build` fails -- while roadmap.md marks the feature `[x]` done and deferred.md ships it at v1 | roadmap.md:531 (`std.cli` marked [x]) + deferred.md § std.cli; codegen method dispatch falls through to the catch-all in src/codegen/method_call.rs for these receivers |
 | B-2026-08-25-3 | 2026-08-25 | codegen | medium | `codegen_tests::vec_mutation_methods_bounds_check_out_of_range_index` IS FLAKY, and it fails by showing exactly the PRE-FIX symptom of the high-severity bug it guards: `v.insert(7i64, 9i64)` produced no `Vec.insert index out of bounds` panic, stdout empty, stderr `free(): invalid pointer`. Observed once in a full `cargo test --features llvm` run; the same test then passed 3/3 in isolation, 3198/3198 in a codegen-only run, and the next FULL run was green at 125 suites / 15090 tests. | roadmap.md |
-| B-2026-08-25-12 | 2026-08-25 | codegen | high | `match` on a `Result` whose Ok payload is a struct with THREE OR MORE `Vec` fields SEGFAULTS the compiled binary while the interpreter is correct. 10 lines, no stdlib, no flags; `let r = f()` on the same program is clean, so it is the payload extraction, not the call. This is what blocks registering `std.cli` for AOT. | roadmap.md |
 | B-2026-08-25-13 | 2026-08-25 | codegen | high | `lower_stdlib_source` DISCARDS the typecheck errors it computes for every baked stdlib module, so a baked module can ship code `karac check` rejects in user programs -- which is how cli.kara shipped four borrowed-String-into-owned-field stores that DOUBLE-FREED when compiled. The naive fail-closed gate is a FALSE POSITIVE on pool.kara; see detail for what a real fix needs. | roadmap.md |
 | B-2026-08-25-14 | 2026-08-25 | codegen | medium | An owned `self` aggregate param's OWN scope-exit drop is the UNMANGLED base drop (`__karac_drop_struct_Heap`, outer-only), not the monomorph's, so a generic impl method that takes `self` and transfers NOTHING out leaks every element its entry deep-copy allocated: `fn take(self) -> i64 { self.xs.len() }` on a 3-element `Heap[Vec[i64]]` leaks 24 bytes in 3 allocations while printing the right answer. | — |
+| B-2026-08-25-15 | 2026-08-25 | codegen+runtime | high | `std.cli`'s `args.get_string(name)` DOUBLE-FREES when the argument was supplied: `return Ok(pv.value)` returns a `String` field read out of a BORROWED `ref self` payload. ASAN-confirmed (2-byte `karac_string_clone` buffer, both frees in main); `parse()` alone is clean. The last blocker on registering std.cli for AOT. | roadmap.md |
 
 ### Relocated (1)
 
@@ -165,9 +165,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1558 surfaced
 
 </details>
 
-### Fixed (1528)
+### Fixed (1529)
 
-<details><summary>1528 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1529 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -18223,6 +18223,13 @@ MEASURED, against main at 682cba8 (which already carries B-2026-08-25-10's fix).
 REGRESSION TEST: `asan_mono_receiver_drop_frees_elements_of_a_generic_arg_bearing_param` in tests/memory_sanitizer.rs, so it runs under ASAN and LeakSanitizer. Verified RED pre-fix at 24 bytes in 2 allocations -- exactly the two elements case (a) leaves behind.
 
 VACUITY NOTE, worth reading before editing this fixture: the method must take ONE element and drop the rest. An earlier draft used a full `into_sorted` drain and PASSED pre-fix, because draining every element leaves nothing behind for the stub drop to fail to free. The leak is in the remainder, not in what the method returns. |
+| B-2026-08-25-12 | codegen | high | `match` on a `Result` whose Ok payload is a struct with THREE OR MORE `Vec` fields SEGFAULTS the compiled binary while the interpreter is correct | FIXED by 443a902. The `FreeInlineResultPayload` cleanup assumes the payload struct "lays out there bit-for-bit" at `&slot.w0` -- true only when the payload is INLINE. A payload wider than `Result`'s 5-word area is heap-BOXED, so w0 holds a POINTER and the drop read that pointer word as the payload's first word, then walked off the end of the 6-word `Result` alloca and freed what followed.
+
+B-2026-08-06-26 had already established this exact class and gated `track_inline_result_payload_var`, stating the rule the fix reuses verbatim: boxed-ness is a property of the payload TYPE, `llvm_type_word_count(T) > area`. The gate simply never reached the OTHER TWO registration sites -- the fresh-temp scrutinee (`control_flow_match.rs`, the `__freshtemp_inline_res` alloca this repro produces) and the discarded-`Result`-temp path (`runtime.rs`). Both now apply it, per half, so a boxed `Ok` beside an inline-heap `Err` keeps the `Err` drop. The overlay-elem, struct-drop and Vec-elem-agg-drop halves are all gated, matching the named-binding site exactly. The third site in `par_blocks.rs` matches over already-registered actions rather than creating one, so it needs no gate.
+
+Suppressing the inline drop is correct rather than a leak because the `BoxedEnumDrop` registered for the same value owns the box and its contents -- which is asserted, not assumed: `tests/memory_sanitizer.rs::test_boxed_wide_result_payload_match_no_leak_no_double_free` runs the boxed shape with real heap in two of three Vecs plus the narrow-Err half, under ASAN+LSan (LSan being the half that would catch a traded-away free; it is live on this Linux container, and the test passes with `KARAC_REQUIRE_RUNTIME_ARCHIVE=1`, which turns a soft skip into a panic). Two E2E tests pin the crash itself and a heap-carrying read-back.
+
+VERIFIED: the original 1..4-Vec x opt/noopt matrix is now 8/8 clean and byte-identical to the interpreter, where it was 4 SEGFAULTs before. SUITES: llvm 15126 passed / 0 failed, default 9898 / 0, clippy clean on both feature legs, fmt clean. |
 
 </details>
 
