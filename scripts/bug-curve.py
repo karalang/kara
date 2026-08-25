@@ -182,12 +182,16 @@ def ledger_view(rows) -> str:
     the full write-up lives in the ledger, grep-able by id. `wontfix` bugs get
     their own collapsed index: real and reproduced, but measured to a standstill
     and carrying no action — kept visible so the next reader does not re-derive
-    the dead ends, kept OUT of Open so the queue means something.
+    the dead ends, kept OUT of Open so the queue means something. `relocated`
+    bugs get theirs, with the tracker pointer as a column: the work is real and
+    still scheduled, it just lives on a canonical tracker now, and the pointer
+    is the entire reason the row is still here.
     """
     total = len(rows)
     opens = [r for r in rows if r["status"] == "open"]
     fixed = [r for r in rows if r["status"] == "fixed"]
     wontf = [r for r in rows if r["status"] == "wontfix"]
+    reloc = [r for r in rows if r["status"] == "relocated"]
     out = []
     out.append(GEN_BEGIN)
     # Compact retro tables: failure-mode class and surface (compound surfaces
@@ -214,10 +218,11 @@ def ledger_view(rows) -> str:
     out.append("## Current state")
     out.append("")
     wf_note = f" · {len(wontf)} wontfix" if wontf else ""
+    rl_note = f" · {len(reloc)} relocated" if reloc else ""
     out.append(
         f"_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — "
         f"**{total} surfaced · {len(opens)} open · {len(fixed)} fixed"
-        f"{wf_note}** "
+        f"{wf_note}{rl_note}** "
         f"({rows[0]['date']} → {rows[-1]['date']}). Do not edit this block by "
         f"hand; edit the ledger and regenerate._"
     )
@@ -235,6 +240,25 @@ def ledger_view(rows) -> str:
     else:
         out.append("_None — the ledger is fully drained._")
     out.append("")
+    if reloc:
+        out.append(f"### Relocated ({len(reloc)})")
+        out.append("")
+        out.append(
+            "<details><summary>"
+            f"{len(reloc)} relocated — real and still scheduled, but with no "
+            "action item today and a concrete external trigger, so the work "
+            "now lives on a canonical tracker. Not wontfix (that is "
+            "'measured to a standstill'); follow the tracker column.</summary>\n"
+        )
+        out.append("| id | date | surface | sev | title | tracker |")
+        out.append("|---|---|---|---|---|---|")
+        for r in sorted(reloc, key=lambda r: r["date"]):
+            out.append(
+                f"| {r['id']} | {r['date']} | {r['surface']} | {r['severity']} "
+                f"| {r['title']} | {r.get('tracker','') or '—'} |"
+            )
+        out.append("\n</details>")
+        out.append("")
     if wontf:
         out.append(f"### Wontfix ({len(wontf)})")
         out.append("")

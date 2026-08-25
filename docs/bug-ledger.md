@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1546 surfaced · 5 open · 1516 fixed · 11 wontfix** (2026-05-20 → 2026-08-25). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1546 surfaced · 5 open · 1516 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-25). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (5)
 
@@ -136,9 +136,19 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1546 surfaced
 | B-2026-08-25-2 | 2026-08-25 | codegen | high | `std.cli` IS NOT AOT-COMPILABLE: every pure-Kāra INSTANCE method on its types (`Arg.required`, `Parser.about`, ... ) dies in codegen with `no handler for method '<m>' on variable '<v>'`, so `karac check` passes and `karac build` fails -- while roadmap.md marks the feature `[x]` done and deferred.md ships it at v1 | roadmap.md:531 (`std.cli` marked [x]) + deferred.md § std.cli; codegen method dispatch falls through to the catch-all in src/codegen/method_call.rs for these receivers |
 | B-2026-08-25-3 | 2026-08-25 | codegen | medium | `codegen_tests::vec_mutation_methods_bounds_check_out_of_range_index` IS FLAKY, and it fails by showing exactly the PRE-FIX symptom of the high-severity bug it guards: `v.insert(7i64, 9i64)` produced no `Vec.insert index out of bounds` panic, stdout empty, stderr `free(): invalid pointer`. Observed once in a full `cargo test --features llvm` run; the same test then passed 3/3 in isolation, 3198/3198 in a codegen-only run, and the next FULL run was green at 125 suites / 15090 tests. | roadmap.md |
 
-### Wontfix (11)
+### Relocated (1)
 
-<details><summary>11 wontfix — real and reproduced, measured to a standstill, no action left. Titles are kept in full: they carry the measurements that closed the question, so read one before reopening its subject.</summary>
+<details><summary>1 relocated — real and still scheduled, but with no action item today and a concrete external trigger, so the work now lives on a canonical tracker. Not wontfix (that is 'measured to a standstill'); follow the tracker column.</summary>
+
+| id | date | surface | sev | title | tracker |
+|---|---|---|---|---|---|
+| B-2026-08-23-11 | 2026-08-23 | typecheck | medium | `Type::Function` carries NO EFFECT ROW, so design.md § First-Class Functions' `let f = save;  // f: Fn(User) -> () with writes(UserDB)` is not representable and a function value's effects cannot propagate through its TYPE. NARROWED 7e7972b: the IMPRECISION this caused -- a function value that is bound and never called still demanding the enclosing function declare its effects -- is FIXED, in the effect checker and without the type row (bind-an-alias, attribute-at-every-other-mention). What remains is representability only, and the prescription in the original title does not work as written: the typechecker cannot populate an effect row, because `effectcheck` runs after `typecheck` AND consumes its output, so inferred effects at typecheck time would need a cycle. Read the detail before picking this up. | implementation_checklist/phase-5-diagnostics.md#fn-type-effect-row-deferred |
+
+</details>
+
+### Wontfix (10)
+
+<details><summary>10 wontfix — real and reproduced, measured to a standstill, no action left. Titles are kept in full: they carry the measurements that closed the question, so read one before reopening its subject.</summary>
 
 | id | date | surface | sev | title |
 |---|---|---|---|---|
@@ -151,7 +161,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1546 surfaced
 | B-2026-08-17-40 | 2026-08-17 | codegen | medium | Kata 236's 14.5% kāra-only slowdown is CODE PLACEMENT, not a codegen regression — hot code byte-identical, moved 152 bytes; instructions flat to 0.002% |
 | B-2026-08-21-3 | 2026-08-21 | codegen | low | MEASURED NEGATIVE RESULT -- hoisting the ASCII test to the top of the `String.push` codegen arm removes 34% of the program's retired instructions and makes it 10% SLOWER; the string-build inner loop is latency-bound, not instruction-bound, so instruction-count reasoning does not predict its wall time |
 | B-2026-08-21-52 | 2026-08-22 | effect | low | CHANNEL EFFECT RESOURCES HAVE NO PER-VALUE IDENTITY -- every channel collapses to the single `Channel` resource. The conflict-analysis motivation this row was filed on has since been REFUTED by measurement (the producer/consumer case already worked; two-producer serialization was a verb-lattice defect, fixed separately) -- what remains is a narrow spec-fidelity gap against design.md:6049, where only the NON-communication verbs on distinct channels over-serialize |
-| B-2026-08-23-11 | 2026-08-23 | typecheck | medium | `Type::Function` carries NO EFFECT ROW, so design.md § First-Class Functions' `let f = save;  // f: Fn(User) -> () with writes(UserDB)` is not representable and a function value's effects cannot propagate through its TYPE. NARROWED 7e7972b: the IMPRECISION this caused -- a function value that is bound and never called still demanding the enclosing function declare its effects -- is FIXED, in the effect checker and without the type row (bind-an-alias, attribute-at-every-other-mention). What remains is representability only, and the prescription in the original title does not work as written: the typechecker cannot populate an effect row, because `effectcheck` runs after `typecheck` AND consumes its output, so inferred effects at typecheck time would need a cycle. Read the detail before picking this up. |
 | B-2026-08-24-18 | 2026-08-24 | codegen | low | `dbg(x)` REFUSES for a HEADERLESS or WEAK-HEADERED `shared` type -- the last two shapes in the shared family the compiled `Debug` renderers do not cover. MEASURED UNREACHABLE and closed without an implementation: `dbg(x)` hands `x` to a call, which is exactly the escape the headerless purity gate demotes on, so a type can be headerless or `dbg`-able but never both (16 probe programs, both arms, controls green). `has_weak_header` is false for every type today. The guard is KEPT as insurance -- making `dbg` a borrowing intrinsic would stop it demoting and turn the arm into a silent one-word field-offset miscompile -- and the exclusion is now pinned by tests instead of assumed. |
 
 </details>

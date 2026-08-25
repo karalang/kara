@@ -58,8 +58,22 @@ for i, line in enumerate(pathlib.Path(ledger).read_text().splitlines(), 1):
     # refuted; saying so about a reproducible finding puts a false claim in the
     # ledger). `wontfix` rows render as their own collapsed section, so the
     # measurements that closed the question stay visible without being work.
-    if r.get("status") not in {"open","fixed","invalid","not-reproduced","wontfix"}:
+    #
+    # `relocated` is the fourth closed-without-a-fix value and it is NOT
+    # `wontfix`: the work is real, wanted, and still scheduled — it simply
+    # lives on a canonical tracker now (a `[->]` checklist entry, a roadmap
+    # item, a deferred.md tier) because it has no action item today and a
+    # concrete external trigger. `wontfix` says "measured to a standstill";
+    # `relocated` says "tracked elsewhere, here is where". Collapsing the two
+    # loses exactly the information a future reader needs, which is the
+    # pointer — so a relocated row MUST carry a non-empty `tracker`.
+    if r.get("status") not in {"open","fixed","invalid","not-reproduced","wontfix","relocated"}:
         errs.append(f"{bid}: bad status '{r.get('status')}'")
+    if r.get("status") == "relocated" and r.get("tracker","").strip() in ("", "none", "closed"):
+        errs.append(
+            f"{bid}: status 'relocated' requires a `tracker` naming where the "
+            f"work now lives (got '{r.get('tracker','')}')"
+        )
     if r.get("severity") not in {"high","medium","low"}:
         errs.append(f"{bid}: bad severity '{r.get('severity')}'")
     # surface: one base value, or a '+'-joined compound of base values

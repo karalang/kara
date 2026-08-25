@@ -35,8 +35,11 @@ USAGE
 
 `--fix` / `--append-detail` take a file path, or `-` for stdin. `--status`
 defaults to `fixed`; the other closed-without-a-fix values (`wontfix`,
-`invalid`, `not-reproduced`) are accepted and are NOT interchangeable — see
-CLAUDE.md for which means what.
+`invalid`, `not-reproduced`, `relocated`) are accepted and are NOT
+interchangeable — see CLAUDE.md for which means what. `relocated` additionally
+requires the row to carry a `tracker` naming where the work went; bug-lint.sh
+enforces that, because a relocation whose pointer is missing is just a
+disappearance.
 
 After a successful write this regenerates `docs/bug-ledger.md`, because a close
 that skips the regeneration leaves the rollup lying about the queue.
@@ -53,7 +56,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 LEDGER = ROOT / "docs" / "bug-ledger.jsonl"
 ROLLUP = ROOT / "docs" / "bug-ledger.md"
 
-CLOSED = {"fixed", "wontfix", "invalid", "not-reproduced"}
+CLOSED = {"fixed", "wontfix", "invalid", "not-reproduced", "relocated"}
 
 
 def die(msg: str) -> typing.NoReturn:
@@ -98,6 +101,10 @@ def main() -> None:
     ap.add_argument("--append-detail", help="file with prose to append to detail, or -")
     ap.add_argument("--title", help="replace the row's title (file path, or -)")
     ap.add_argument("--status", default="fixed", choices=sorted(CLOSED))
+    ap.add_argument("--tracker",
+                    help="set the row's `tracker` field — where the work now "
+                         "lives. REQUIRED by --status relocated (a relocation "
+                         "whose pointer is missing is just a disappearance).")
     ap.add_argument("--allow-reclose", action="store_true",
                     help="permit closing a row that is already closed (default: refuse)")
     ap.add_argument("--dry-run", action="store_true")
@@ -159,6 +166,17 @@ def main() -> None:
 
     new = dict(row)
     new["status"] = args.status
+    if args.tracker:
+        new["tracker"] = args.tracker.strip()
+    if new["status"] == "relocated" and new.get("tracker", "").strip() in ("", "none", "closed"):
+        sys.exit(
+            "bug-close: --status relocated requires a tracker naming where the "
+            "work now lives.\n"
+            "  Pass --tracker <path-or-anchor>. `relocated` means TRACKED "
+            "ELSEWHERE, and\n"
+            "  without the pointer the row says only that the work vanished.\n"
+            "  If nothing tracks it, the honest status is wontfix, not relocated."
+        )
     new["fix"] = fix_text
     if args.title:
         new["title"] = read_text_arg(args.title).strip()
