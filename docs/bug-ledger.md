@@ -93,11 +93,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 285 | 0 |
-| leak | 190 | 0 |
+| leak | 191 | 1 |
 | missing-feature | 167 | 0 |
 | run-vs-build | 159 | 1 |
 | codegen-gap | 138 | 0 |
-| double-free | 137 | 1 |
+| double-free | 137 | 0 |
 | diagnostics | 104 | 0 |
 | false-positive | 96 | 0 |
 | perf | 84 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1025 | 3 |
+| codegen | 1026 | 3 |
 | typecheck | 252 | 0 |
 | interp | 180 | 0 |
 | ownership | 65 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1554 surfaced · 3 open · 1526 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-25). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1555 surfaced · 3 open · 1527 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-25). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (3)
 
@@ -132,7 +132,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1554 surfaced
 |---|---|---|---|---|---|
 | B-2026-08-25-2 | 2026-08-25 | codegen | high | `std.cli` IS NOT AOT-COMPILABLE: every pure-Kāra INSTANCE method on its types (`Arg.required`, `Parser.about`, ... ) dies in codegen with `no handler for method '<m>' on variable '<v>'`, so `karac check` passes and `karac build` fails -- while roadmap.md marks the feature `[x]` done and deferred.md ships it at v1 | roadmap.md:531 (`std.cli` marked [x]) + deferred.md § std.cli; codegen method dispatch falls through to the catch-all in src/codegen/method_call.rs for these receivers |
 | B-2026-08-25-3 | 2026-08-25 | codegen | medium | `codegen_tests::vec_mutation_methods_bounds_check_out_of_range_index` IS FLAKY, and it fails by showing exactly the PRE-FIX symptom of the high-severity bug it guards: `v.insert(7i64, 9i64)` produced no `Vec.insert index out of bounds` panic, stdout empty, stderr `free(): invalid pointer`. Observed once in a full `cargo test --features llvm` run; the same test then passed 3/3 in isolation, 3198/3198 in a codegen-only run, and the next FULL run was green at 125 suites / 15090 tests. | roadmap.md |
-| B-2026-08-25-10 | 2026-08-25 | codegen | high | A generic impl method that REBINDS its owned receiver (`let mut h = self`) DOUBLE-FREES when the element type is itself a heap-owning aggregate: `Heap[Vec[i64]].take()` aborts with `free(): double free detected in tcache 2` under both JIT and AOT, while the interpreter is correct. Needs all three of generic impl + the `self` rebinding + a NESTED-heap `T` -- `T = String` (a single buffer) is correct, `T = i64` is correct, and the identical shape on a NON-generic impl is correct at `Vec[i64]`. | — |
+| B-2026-08-25-11 | 2026-08-25 | codegen | medium | A monomorph's per-element drop for a `Vec[T]` field is emitted as an EMPTY STUB (`karac_drop_Vec`, `ret void`) when the impl's `T` is recorded head-only, so the callee's deep-copied elements are never freed: `Heap[Vec[i64]].take()` leaks 24 bytes in 2 allocations under LeakSanitizer while running correctly. The struct drop mangles `__karac_drop_struct_Heap$Vec` instead of `...$Vec_i64` -- it walks the elements, but the element drop it calls does nothing. | — |
 
 ### Relocated (1)
 
@@ -163,9 +163,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1554 surfaced
 
 </details>
 
-### Fixed (1526)
+### Fixed (1527)
 
-<details><summary>1526 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1527 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -18193,6 +18193,17 @@ too would DOUBLE-FREE. Trading a bounded leak for a double free is the
 wrong trade. A `with_provider[FileSystem]` override called with a temporary
 path therefore still leaks; fixing it needs the free emitted inside the
 default arm's basic block, or the override's param modes consulted. |
+| B-2026-08-25-10 | codegen | high | A generic impl method that transfers heap-owning content OUT of an owned `self` (`fn into_vec(self) -> Vec[T] { self.xs }`, or a drain through `pop`)… | FIXED by c91d018. ROOT CAUSE: a copy-depth / drop-depth mismatch, reached through the one path that erases the element's identity. An owned by-value aggregate param is deep-copied at function entry so the callee owns it (`deep_copy_owned_aggregate_field_in_place`, src/codegen/param_own.rs). That copy decides whether to ALSO duplicate each element of a `Vec` field by classifying the element TypeExpr -- `vec_inner_type_expr(fte)` filtered by `elem_te_needs_direct_recursive_drain`. Inside `impl[T] Heap[T]`, a field declared `xs: Vec[T]` yields the BARE PARAM `T`, which is neither String nor Vec nor Map/Set by name, so the filter said "no" and the entry-copy stayed outer-only: a fresh outer buffer, but the element control blocks memcpy'd verbatim, aliasing the caller's element buffers.
+
+The monomorph's struct drop does NOT have that blind spot -- it resolves `T` and is element-deep -- so both the caller's drop and the callee's copy freed the same element buffers. The comment directly above the defective line states the invariant it was violating: "copy-depth must equal drop-depth".
+
+PROOF (ASAN, via `cargo run --features llvm --example asan_build`): `attempting double-free` on an 8-byte region, freed once inline in `main` (the returned Vec's element walk) and once by `main` -> `__karac_drop_struct_Heap$Vec_i64` -> `karac_drop_Vec_i64`. Element counts chosen so the outer buffer, the element control blocks and each inner buffer have distinct sizes, which is what identifies the region as a single inner element buffer rather than the outer one. Confirmed in the IR: the non-generic twin's entry copy branches to a `dcopy.elem.loop` that clones each element; the generic one has no such loop and goes straight from `memcpy` to building the result.
+
+FIX (src/codegen/param_own.rs): resolve the element through the active monomorph substitution BEFORE classifying it, via `subst_monomorph_type_params`. That helper consults `type_subst_type_exprs` first, so `T` recovers its FULL concrete type (`Vec[i64]`) rather than the head-only `Vec` that `type_subst_names` would give -- which the recursive copy needs in order to size the inner element. Outside a monomorph it is a no-op clone, so every concrete field keeps its existing behaviour.
+
+REGRESSION TEST: `asan_generic_owned_self_field_move_out_does_not_double_free_elements` in tests/memory_sanitizer.rs, so it runs under ASAN and (on Linux) LeakSanitizer. Case (b) uses HEAP-allocated Strings deliberately -- see the correction below. Controls (c) scalar-`T` and (d) non-generic were both correct pre-fix and pin the diagnosis rather than merely passing. Verified RED pre-fix.
+
+VERIFIED: 14 probe programs covering both fixed and control shapes are clean under ASAN post-fix, and the four that exercise the fix are clean under LeakSanitizer too. |
 
 </details>
 
