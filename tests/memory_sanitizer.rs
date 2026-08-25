@@ -52997,4 +52997,74 @@ fn main() {
             "generic-owned-self-field-move-out",
         );
     }
+
+    /// B-2026-08-25-11 — a monomorph's receiver drop was selected from an
+    /// ELEMENTLESS instantiation, so its per-element drop was an empty stub and
+    /// the elements it owned leaked.
+    ///
+    /// `concrete_generic_struct_inst` records the receiver's concrete
+    /// instantiation by resolving each bare type param through
+    /// `type_subst_names`, which is name -> NAME. A param bound to a type that
+    /// has generic args of its own (`T = Vec[i64]`) cannot survive that
+    /// round-trip: it came back as the bare head `Vec`, and the recorded
+    /// instantiation became `Heap[Vec]`. The scope-exit drop selected from it
+    /// mangled `__karac_drop_struct_Heap$Vec`, whose per-element drop is
+    /// `karac_drop_Vec` — body `ret void`, because a `Vec` with no element gives
+    /// the drop synthesizer nothing to free. The caller's own drop of the same
+    /// struct resolved correctly to `$Vec_i64`, so one program emitted both and
+    /// only the monomorph's elements leaked. Fixed by preferring the
+    /// element-aware `type_subst_type_exprs`, the precedence
+    /// `subst_monomorph_type_params` already used.
+    ///
+    /// `take` deliberately removes ONE element and drops the rest: a method that
+    /// drains the container completely leaves nothing behind and is CLEAN even
+    /// while the bug is fully present. An earlier draft of this fixture used
+    /// `into_sorted` and passed pre-fix for exactly that reason.
+    ///
+    /// (b) and (c) are controls that were already clean, and they are what
+    /// identify the trigger: `String` and `i64` are SINGLE NAMES, which the
+    /// name -> name map represents losslessly, so only a param bound to a
+    /// generic-args-carrying type reaches the defect. (d) is the non-generic
+    /// twin. Verified RED pre-fix: 24 bytes leaked in 2 allocations — exactly
+    /// the two elements case (a) leaves behind.
+    #[test]
+    fn asan_mono_receiver_drop_frees_elements_of_a_generic_arg_bearing_param() {
+        assert_clean_asan_run(
+            r#"
+struct Heap[T] { xs: Vec[T] }
+impl[T] Heap[T] {
+    fn pop_one(mut ref self) -> Option[T] { self.xs.pop() }
+    // Takes ONE element and drops the rest on the floor. The elements left
+    // behind are the ones that leaked.
+    fn take(self) -> Option[T] { let mut h = self; h.pop_one() }
+}
+struct PlainHeap { xs: Vec[Vec[i64]] }
+impl PlainHeap {
+    fn pop_one(mut ref self) -> Option[Vec[i64]] { self.xs.pop() }
+    fn take(self) -> Option[Vec[i64]] { let mut h = self; h.pop_one() }
+}
+fn main() {
+    // (a) the filed shape: `T` bound to `Vec[i64]`, which carries its own
+    // generic arg and so cannot survive a name-to-name substitution.
+    let a = Heap { xs: [[1, 2], [3], [4, 5, 6]] };
+    match a.take() { Some(v) => { println(f"a={v.len()}"); } None => {} }
+    // (b) control: HEAP-allocated Strings. Clean pre-fix — `String` is a single
+    // name, so the head-only map loses nothing.
+    let mut ss: Vec[String] = Vec.new();
+    let mut i = 0;
+    while i < 3 { ss.push(f"item{i}"); i = i + 1; }
+    let b = Heap { xs: ss };
+    match b.take() { Some(v) => { println(f"b={v}"); } None => {} }
+    // (c) control: scalar element.
+    let c = Heap { xs: [7, 8, 9] };
+    match c.take() { Some(v) => { println(f"c={v}"); } None => {} }
+    // (d) control: the NON-generic twin at the same element type.
+    let d = PlainHeap { xs: [[1], [2], [3]] };
+    match d.take() { Some(v) => { println(f"d={v.len()}"); } None => {} }
+}
+"#,
+            &["a=3", "b=item2", "c=9", "d=1"],
+            "mono-receiver-drop-elementless-inst",
+        );
+    }
 }

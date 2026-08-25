@@ -3364,6 +3364,37 @@ impl<'ctx> super::Codegen<'ctx> {
                     // Path TypeExpr. Already-concrete args pass through.
                     if let TypeKind::Path(p) = &t.kind {
                         if p.segments.len() == 1 && p.generic_args.is_none() {
+                            // B-2026-08-25-11 — prefer the ELEMENT-AWARE full
+                            // `TypeExpr` before the head-only name map, the same
+                            // precedence `subst_monomorph_type_params` already
+                            // uses. `type_subst_names` is name→name, so a param
+                            // bound to a collection (`T = Vec[i64]`) resolves to
+                            // the bare head `"Vec"` and the element is silently
+                            // dropped — this function then recorded
+                            // `enum_inst_var_types["self"] = Heap[Vec]`.
+                            //
+                            // That record is what the receiver's scope-exit drop
+                            // is selected from, so the elementless instantiation
+                            // picked `__karac_drop_struct_Heap$Vec`, whose
+                            // per-element drop is `karac_drop_Vec` — an EMPTY
+                            // STUB (`ret void`), because a `Vec` with no element
+                            // gives the drop synthesizer nothing to free. The
+                            // caller's own drop of the same struct is correctly
+                            // mangled `$Vec_i64`, so one program emitted both and
+                            // only the monomorph's elements leaked.
+                            //
+                            // Before B-2026-08-25-10 the callee's entry-copy
+                            // aliased the caller's element buffers, so the
+                            // caller's drop freed them and the stub's no-op-ness
+                            // was invisible — that aliasing WAS that double free.
+                            // Making the copy element-deep left the callee owning
+                            // real buffers its own drop did not free.
+                            if let Some(full) =
+                                self.mono_state.type_subst_type_exprs.get(&p.segments[0])
+                            {
+                                any_bound = true;
+                                return GenericArg::Type(full.clone());
+                            }
                             if let Some(concrete) =
                                 self.mono_state.type_subst_names.get(&p.segments[0])
                             {
