@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 159 | 0 |
 | codegen-gap | 138 | 0 |
 | double-free | 138 | 0 |
-| diagnostics | 106 | 2 |
+| diagnostics | 106 | 1 |
 | false-positive | 97 | 0 |
 | perf | 84 | 0 |
 | other | 60 | 1 |
@@ -119,14 +119,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | autopar | 55 | 0 |
 | parser | 41 | 0 |
 | runtime | 32 | 0 |
-| resolver | 27 | 1 |
+| resolver | 27 | 0 |
 | effect | 23 | 0 |
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1570 surfaced · 7 open · 1538 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-25). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1570 surfaced · 6 open · 1539 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-25). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (7)
+### Open (6)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -135,7 +135,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1570 surfaced
 | B-2026-08-25-20 | 2026-08-25 | typecheck | medium | Three of the fallible-allocation `try_*` methods design.md names by name do not exist, and `AllocError`'s `Display` is Debug formatting rather than the specified text. § Fallible Allocation API: "Operations that report only success/failure return `Result[(), AllocError]` (`try_push`, `try_insert`, `try_reserve`, `try_extend`, `try_append`)". Measured one method per compile: `Vec.try_reserve` -> `no method 'try_reserve' on type 'Vec'`; `Vec.try_extend` -> `no method 'try_extend'`; `Vec.try_append` -> `no method 'try_append'`. Working: `Vec.try_push`, `Vec.try_insert`, `Vec.try_with_capacity`, `String.try_push`, `String.try_push_str`, `Set.try_insert`. SEPARATELY, the same section specifies "The `Display` formatting names the failed operation's byte size on the `OutOfMemory` arm and \"capacity overflow\" on the `CapacityOverflow` arm" -- measured, `f"{e}"` renders `CapacityOverflow` and `OutOfMemory { requested_bytes: 4096 }`, which is the DEBUG form for both arms. | roadmap.md |
 | B-2026-08-25-22 | 2026-08-25 | typecheck | medium | The STABLE-HASH module does not exist, so the escape design.md prescribes for every use case where `Hash` is explicitly the wrong tool is unavailable. § `Hash` and `Hasher`, stability policy: hash values are "not stable across runs, not stable across Kara versions, not stable across targets", and therefore "Code that needs stable digests (content addressing, on-disk indexes, snapshot tests, distributed sharding) does **not** use `Hash`. Kara's stdlib SHIPS explicit, versioned functions for that purpose -- `hash::stable::siphash24(bytes, key)`, `hash::stable::xxh3(bytes)`, and the `crypto` module for cryptographic hashes." Neither `siphash24` nor `xxh3` appears anywhere in `src/` or `runtime/stdlib/`, and there is no `hash.stable` namespace to call. The paragraph's closing promise is unreachable too: "Users who reach for `Hash` for stability are pointed at the stable-hash module by a `karac explain` page" -- see B-2026-08-25-23 for the state of `karac explain --concept=`. | roadmap.md |
 | B-2026-08-25-23 | 2026-08-25 | cli | low | `karac explain --concept=` supports exactly ONE concept, `closures`, and it is not one of the pages design.md names. The error message self-documents the gap: `error: unknown concept 'operators'. Supported: closures.` design.md names two pages by exact flag -- `karac explain --concept=operators`, which § Operator Traits says "documents the full desugaring table so that users can see why a given operator call fails and which trait they would need", and `karac explain --concept=module-state` -- plus a stable-hash page referenced in prose (§ Hash stability policy: "Users who reach for `Hash` for stability are pointed at the stable-hash module by a `karac explain` page"). None of the three exists. The document makes 36 references to `karac explain` overall, so the surface is load-bearing for the AI-first diagnostics story. | roadmap.md |
-| B-2026-08-25-24 | 2026-08-25 | resolver | low | The unassigned-layout-fields warning renders as `warning[resolve]` instead of `warning[layout_unassigned_fields]`, so the suppression design.md prescribes cannot be discovered from the message. § Layout Rules: "The compiler emits a warning once per layout block listing the unassigned fields — suppress with `#[allow(layout_unassigned_fields)]` when the omission is intentional." The warning fires correctly and the allow DOES suppress it -- `#[allow(layout_unassigned_fields)]` on the layout block turns `warning[resolve]: layout 'ps': fields not assigned to any group or cold section: b. These will be placed in an implicit trailing hot group.` into "All checks passed." But the rendered tag names the PHASE, not the lint, and the message text never states the lint name either, so a user who sees the warning has nothing to pass to `#[allow(...)]`. Sibling lint-backed diagnostics render with their own name -- `warning[deprecated]: use of deprecated item 'old_api'` and `warning[must_use]: discarded 'C' value` in the same compiler, on the same surface. | roadmap.md |
 | B-2026-08-25-26 | 2026-08-25 | typecheck | low | An un-inferrable `T` from an EMPTY array literal is reported as a BOUND failure naming `<error>` as the type, pointed at a later method call rather than at the literal: `W.from([])` on `impl[T: Ord]` says "trait bound `T: Ord` is not satisfied; `<error>` does not implement `Ord`" | implementation_checklist/phase-11-stdlib-longtail.md#general-purpose-collections |
 
 ### Relocated (1)
@@ -167,9 +166,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1570 surfaced
 
 </details>
 
-### Fixed (1538)
+### Fixed (1539)
 
-<details><summary>1538 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1539 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1710,6 +1709,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1570 surfaced
 | B-2026-08-25-17 | codegen | medium | A DISCARDED method-call result that owns heap is never freed: `h.xs.pop();` as a bare expression statement leaks the popped element's buffer (8 bytes… | c8753cd |
 | B-2026-08-25-18 | codegen | medium | Discarded heap-owning pop in a generic FREE FUNCTION leaks the container's elements at -O0 -- B-2026-08-25-17's free-fn precedence guard was not actu… | Fixed in two paired sites |
 | B-2026-08-25-21 | typecheck | low | `m.try_insert(k, v)?;` as a statement warns `discarded 'Option' value`, though the displaced-value must-use exemption exists precisely for that shape… | 0fcc886 |
+| B-2026-08-25-24 | resolver | low | The unassigned-layout-fields warning renders as `warning[resolve]` instead of `warning[layout_unassigned_fields]`, so the suppression design.md presc… | 733c0f2 |
 | B-2026-08-25-25 | codegen | high | An ASSOCIATED fn in a GENERIC impl that binds a struct LITERAL to a local and calls a MUTATING sibling through it dispatches to the UNMANGLED base pr… | 8d32a0d |
 
 </details>
