@@ -93,8 +93,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 294 | 1 |
-| leak | 197 | 1 |
-| missing-feature | 183 | 3 |
+| leak | 197 | 0 |
+| missing-feature | 184 | 4 |
 | run-vs-build | 171 | 1 |
 | codegen-gap | 142 | 0 |
 | double-free | 140 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1065 | 3 |
+| codegen | 1066 | 3 |
 | typecheck | 269 | 3 |
-| interp | 186 | 1 |
+| interp | 187 | 2 |
 | other | 70 | 1 |
 | ownership | 65 | 0 |
 | cli | 63 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1619 surfaced · 8 open · 1585 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-26). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1620 surfaced · 8 open · 1586 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-26). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (8)
 
@@ -133,11 +133,11 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1619 surfaced
 | B-2026-08-26-4 | 2026-08-26 | other | low | design.md's CANONICAL `?`-operator example calls `input.parse_i64()?` and names `ParseError` -- NEITHER EXISTS: the real API is `i64.parse(s) -> Option[i64]`, which cannot be used with `?` the way the example shows | docs/design.md § `?` operator and cross-error-type propagation |
 | B-2026-08-26-15 | 2026-08-26 | typecheck | low | `LazyLock.new`'s closure-capture restriction is UNENFORCED: design.md says the closure "may only capture other module-level compile-time bindings; captures of runtime state are a compile error", but a closure capturing a function local is accepted silently. Measured to be a missing RESTRICTION rather than a correctness hazard -- the capturing form produces identical, correct results on `--interp`, `karac run` and `karac build` -- which is why it is split out of B-2026-08-26-3 rather than blocking it. | — |
 | B-2026-08-26-21 | 2026-08-26 | codegen+interp | medium | A RELOCATING element store (`b.xs[i] = b.xs[j]`, then `b.xs[j] = t`) runs the displaced element's user `Drop` BODY, even though the value is being moved to another slot rather than destroyed. A two-element swap of a `Drop` type prints FIVE drop bodies, all during the swap and none at scope exit; the correct sequence is one body per element when it finally dies. | — |
-| B-2026-08-26-32 | 2026-08-26 | codegen | medium | `Map.get` WITH AN INLINE TEMPORARY STRUCT KEY THAT OWNS HEAP LEAKS THE TEMPORARY -- one allocation per lookup. Binding the key first is clean, a `Map[String, _]` looked up with a temporary f-string is clean, and INSERT is unaffected (the key is moved into the map); it is specifically a borrowed-then-discarded struct key on the lookup path. NOT specific to hand-written impls -- the `#[derive(Hash, Eq, PartialEq)]` path leaks identically. | — |
 | B-2026-08-26-36 | 2026-08-26 | parser | high | `ref` IN EXPRESSION POSITION IS SPECIFIED BUT UNIMPLEMENTED: design.md shows `let r = ref some_function();` (§ Binding-extension exception) and `let p: ref i32 = ref 42;`, and the parser rejects both with "'ref' is a reserved keyword and cannot be used as an identifier". This BLOCKS the B-2026-08-26-21 index-move rejection, whose only fix-it for a `Clone`-less element type is the borrow spelling. | — |
 | B-2026-08-26-37 | 2026-08-26 | typecheck | low | The index-move rule covers only a `let` initializer and an assignment RHS; OTHER value positions still read a non-`Copy` element by value and silently clone. Measured: `take(b.xs[0])` where `fn take(it: Item)` compiles and runs, and `b.xs[0]` survives it. | — |
 | B-2026-08-26-39 | 2026-08-26 | codegen | medium | THE `Error return trace` SECTION IS NONDETERMINISTIC ON THE COMPILED BACKENDS: the same AOT binary, same input, same pinned `KARAC_HASH_SEED`, emits a DIFFERENT NUMBER OF FRAMES run to run -- and sometimes omits the section entirely -- while `--interp` emits the same four frames every time. Measured on `examples/json.kara`, 20 consecutive AOT runs at `KARAC_HASH_SEED=7`: 4 runs printed 0 frames, 1 run printed 1, 11 printed 3, 4 printed 4. The interpreter printed 4 frames in 6/6. The program's own stdout (the parsed JSON and the `ERROR:` lines) is byte-identical across all runs -- only the trace varies. | — |
 | B-2026-08-26-40 | 2026-08-26 | typecheck | low | A WRONG-ARITY CALL TO AN ASSOCIATED FUNCTION IS REPORTED AS IF THE FUNCTION DID NOT EXIST: `String.with_capacity()` and `String.with_capacity(1i64, 2i64)` both report `no associated function 'with_capacity' on type 'String'` -- byte-identical to the message for a name that genuinely is not there -- while `String.with_capacity(8i64)` typechecks fine. INSTANCE methods get this right (`s.push()` reports `'push' expects 1 argument, found 0`), so the defect is specific to the associated-function/static path and shows up as an asymmetry between the two call forms. | — |
+| B-2026-08-26-41 | 2026-08-26 | codegen+interp | medium | A USER `impl Drop` ON A MAP **KEY** TYPE NEVER FIRES, while the same impl on the VALUE type does. B-2026-07-30-11 shipped the Map-VALUES drop-body leg (`emit_map_val_user_drop_bodies_fn`); keys have only `emit_map_key_drop_fn_walk`, which reclaims memory and runs no user bodies. Identical under `--interp` and `build`, so it is a resource-cleanup gap for RAII key types rather than a run-vs-build divergence. | — |
 
 ### Relocated (2)
 
@@ -169,9 +169,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1619 surfaced
 
 </details>
 
-### Fixed (1585)
+### Fixed (1586)
 
-<details><summary>1585 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1586 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1756,6 +1756,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1619 surfaced
 | B-2026-08-26-29 | interp+codegen | medium | A MANUAL `impl Display` IS IGNORED AS SOON AS THE VALUE IS NESTED: an enum with a hand-written `Display` renders through its impl at top level (`f"{e… | 59d6568 |
 | B-2026-08-26-30 | codegen | medium | SWEEP THE REMAINING ENTRY-HOISTED-ALLOCA / CONDITIONAL-STORE / SCOPE-TRACKED SITES | b9b2a9d |
 | B-2026-08-26-31 | codegen | medium | A local MOVED into a container's struct element slot (`b.xs[j] = t`) kept its own `UserDrop` registration, so its `impl Drop` body ran a SECOND time… | 0af8b28 |
+| B-2026-08-26-32 | codegen | medium | `Map.get` WITH AN INLINE TEMPORARY STRUCT KEY THAT OWNS HEAP LEAKS THE TEMPORARY -- one allocation per lookup | b46cb47 |
 | B-2026-08-26-33 | codegen | medium | A `#[derive(Display)]` STRUCT WITH A PAYLOAD-BEARING ENUM FIELD IS REFUSED BY `karac build` -- and the refusal is INVERTED with respect to difficulty… | 7b5f733 |
 | B-2026-08-26-34 | codegen | medium | `Vec.swap` HAD NO CODEGEN ARM: `karac build` hard-errored "Vec/String method 'swap' is not yet supported in codegen" on a program `karac run` execute… | 4d75c59 |
 | B-2026-08-26-35 | interp | medium | `Vec.swap` with an out-of-range index SILENTLY DID NOTHING in the interpreter: `v.swap(0, 99)` on a two-element Vec left the vector untouched and exi… | 4d75c59 |
