@@ -95,8 +95,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 294 | 2 |
 | leak | 197 | 1 |
 | missing-feature | 181 | 3 |
-| run-vs-build | 168 | 1 |
-| codegen-gap | 141 | 1 |
+| run-vs-build | 168 | 0 |
+| codegen-gap | 142 | 2 |
 | double-free | 140 | 0 |
 | diagnostics | 109 | 1 |
 | false-positive | 98 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1061 | 5 |
+| codegen | 1062 | 5 |
 | typecheck | 267 | 1 |
-| interp | 185 | 2 |
+| interp | 185 | 1 |
 | other | 70 | 3 |
 | ownership | 65 | 0 |
 | cli | 63 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1611 surfaced · 9 open · 1577 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-26). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1612 surfaced · 9 open · 1578 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-26). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (9)
 
@@ -136,9 +136,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1611 surfaced
 | B-2026-08-26-15 | 2026-08-26 | typecheck | low | `LazyLock.new`'s closure-capture restriction is UNENFORCED: design.md says the closure "may only capture other module-level compile-time bindings; captures of runtime state are a compile error", but a closure capturing a function local is accepted silently. Measured to be a missing RESTRICTION rather than a correctness hazard -- the capturing form produces identical, correct results on `--interp`, `karac run` and `karac build` -- which is why it is split out of B-2026-08-26-3 rather than blocking it. | — |
 | B-2026-08-26-21 | 2026-08-26 | codegen+interp | medium | A RELOCATING element store (`b.xs[i] = b.xs[j]`, then `b.xs[j] = t`) runs the displaced element's user `Drop` BODY, even though the value is being moved to another slot rather than destroyed. A two-element swap of a `Drop` type prints FIVE drop bodies, all during the swap and none at scope exit; the correct sequence is one body per element when it finally dies. | — |
 | B-2026-08-26-28 | 2026-08-26 | codegen | medium | A NESTED `Result` AS `main`'s ERROR TYPE LOSES BOTH ITS TAG AND ITS PAYLOAD on every compiled backend: `main() -> Result[(), Result[A, B]]` returning `Err(Ok(3))` prints `Error: Ok(3)` under `--interp` and `Error: Err(0)` under JIT and AOT -- the WRONG variant with a zeroed payload, not merely an unrendered one. Reproduced on `Result[i64, i64]` (both `Ok` and `Err` inner values collapse to `Err(0)`), `Result[bool, bool]` (`Err(false)`) and `Result[i64, String]` (`Err()`), so the inner discriminant is dropped unconditionally rather than truncated by width. | — |
-| B-2026-08-26-29 | 2026-08-26 | interp+codegen | medium | A MANUAL `impl Display` IS IGNORED AS SOON AS THE VALUE IS NESTED: an enum with a hand-written `Display` renders through its impl at top level (`f"{e}"` -> `aye 7`) and through the DERIVED/Debug shape one level down (`f"{[e]}"` -> `[A { n: 7 }, B]`, `f"{Some(e)}"` -> `Some(A { n: 7 })`). So the ONE mechanism design.md offers for overriding a rendering silently stops applying inside a container, and a type whose `Display` exists to hide its internals leaks them from inside any `Vec` or `Option`. The interpreter does this consistently; codegen cannot render the `Option` case at all, which is the run-vs-build half. | docs/design.md § `#[derive(Display)]` on enums — needs a sentence saying which trait a container's ELEMENT rendering dispatches through |
 | B-2026-08-26-30 | 2026-08-26 | codegen | medium | SWEEP THE REMAINING ENTRY-HOISTED-ALLOCA / CONDITIONAL-STORE / SCOPE-TRACKED SITES. The shape behind B-2026-08-25-33 -- and behind a fifth instance found in B-2026-08-25-34 -- is `create_entry_alloca` plus a store emitted at the USE site plus `track_vec_var`, whose function-scope drain then reads an uninitialized `cap` on any path that skipped the store and frees a garbage pointer. A mechanical scan finds ~16 further `create_entry_alloca`-then-track pairs with no `zero_init_str_acc_at_entry`; each needs classifying as genuinely unconditional (safe) or conditional (a latent free-of-garbage). | — |
 | B-2026-08-26-32 | 2026-08-26 | codegen | medium | `Map.get` WITH AN INLINE TEMPORARY STRUCT KEY THAT OWNS HEAP LEAKS THE TEMPORARY -- one allocation per lookup. Binding the key first is clean, a `Map[String, _]` looked up with a temporary f-string is clean, and INSERT is unaffected (the key is moved into the map); it is specifically a borrowed-then-discarded struct key on the lookup path. NOT specific to hand-written impls -- the `#[derive(Hash, Eq, PartialEq)]` path leaks identically. | — |
+| B-2026-08-26-33 | 2026-08-26 | codegen | medium | A `#[derive(Display)]` STRUCT WITH A PAYLOAD-BEARING ENUM FIELD IS REFUSED BY `karac build` -- and the refusal is INVERTED with respect to difficulty: the same struct renders fine NESTED IN A `Vec` (`f"{[h]}"` -> `[Dh { u: B }]`), and the field renders fine ON ITS OWN (`f"{h.u}"` -> `A { n: 4 }`), but interpolating the struct itself (`f"{h}"`) fails the whole compile with "field 'u' has a type (...) whose Display is not yet supported under `karac build`". The interpreter renders all three. An ALL-UNIT enum field is the working control, so the gap is exactly the payload-bearing case. | — |
 
 ### Relocated (1)
 
@@ -169,9 +169,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1611 surfaced
 
 </details>
 
-### Fixed (1577)
+### Fixed (1578)
 
-<details><summary>1577 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1578 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1751,6 +1751,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1611 surfaced
 | B-2026-08-26-25 | typecheck | medium | ORDERING OPERATORS ON A `shared struct` ARE ADMITTED BY THE TYPECHECKER AND IMPLEMENTED BY NEITHER BACKEND: `a < b` on a shared struct passes `karac… | 47a6810 |
 | B-2026-08-26-26 | effect+codegen | medium | RUN-VS-BUILD ON EVERY FALLIBLE `try_*` COMPANION CONSUMED WITH `?`: the auto-parallelizer hoists the call into a worker function, which returns void,… | aae805f |
 | B-2026-08-26-27 | codegen | medium | `Vec.try_from_iter` CANNOT BE REGISTERED UNTIL `collect` HAS A FALLIBLE LOWERING: its base `Vec.from_iter` lowers to `iter.collect()`, whose codegen… | c5da7e8 |
+| B-2026-08-26-29 | interp+codegen | medium | A MANUAL `impl Display` IS IGNORED AS SOON AS THE VALUE IS NESTED: an enum with a hand-written `Display` renders through its impl at top level (`f"{e… | 59d6568 |
 | B-2026-08-26-31 | codegen | medium | A local MOVED into a container's struct element slot (`b.xs[j] = t`) kept its own `UserDrop` registration, so its `impl Drop` body ran a SECOND time… | 0af8b28 |
 
 </details>
