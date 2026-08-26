@@ -195,7 +195,44 @@ impl core::hash::Hasher for FxHasher {
 /// touching process state, and so the KATs below can run the published
 /// reference vectors.
 pub fn hash_bytes_with_key(bytes: &[u8], k0: u64, k1: u64) -> u64 {
-    let mut st = State::new(k0, k1);
+    sip::<1, 3>(bytes, k0, k1)
+}
+
+/// SipHash-**2-4** with an explicit 128-bit key — the STABLE digest behind
+/// `StableHash.siphash24(bytes, k0, k1)` (design.md § `Hash` and `Hasher`,
+/// stability policy).
+///
+/// # Why this exists next to a hash that is already SipHash
+///
+/// [`hash_bytes`] is deliberately UNSTABLE: it is keyed from a per-process
+/// random seed, so its digest differs between two runs of the same binary.
+/// That is the right default for a `Map`, and exactly wrong for the four use
+/// cases design.md enumerates — content addressing, on-disk indexes, snapshot
+/// tests, distributed sharding — where the whole point is that the same bytes
+/// give the same number tomorrow, on another machine, under another build.
+///
+/// So this takes its key as an ARGUMENT and reads no process state. Same bytes
+/// plus same key gives the same digest, always. `2-4` rather than the `1-3`
+/// above because 2-4 is the round count the SipHash paper specifies as the
+/// default, and therefore the one another language's `siphash24` will agree
+/// with — interoperability is the property being bought here, and it is the
+/// reason this is a separate entry point rather than `hash_bytes_with_key`
+/// with the seed made explicit.
+///
+/// Verified against `std`'s (deprecated) `SipHasher`, which is SipHash-2-4 —
+/// see the `agrees_with_stds_siphash24` test. That oracle also reproduces the
+/// reference vectors from the paper's Appendix A, so agreeing with it is
+/// agreeing with the specification.
+pub fn siphash24(bytes: &[u8], k0: u64, k1: u64) -> u64 {
+    sip::<2, 4>(bytes, k0, k1)
+}
+
+/// The absorb loop both round-count variants share, so the block split, the
+/// little-endian word decode and the length byte exist ONCE. `C` compression
+/// rounds per message word, `D` finalization rounds.
+#[inline]
+fn sip<const C: usize, const D: usize>(bytes: &[u8], k0: u64, k1: u64) -> u64 {
+    let mut st = State::<C, D>::new(k0, k1);
     let len = bytes.len();
     let (chunks, rem) = bytes.as_chunks::<8>();
     for c in chunks {
@@ -216,17 +253,26 @@ pub fn hash_bytes_with_key(bytes: &[u8], k0: u64, k1: u64) -> u64 {
     st.finish()
 }
 
-/// The SipHash permutation state. `1` compression round per message word and
-/// `3` finalization rounds — the "1-3" in the name, and the tradeoff Rust's
-/// `HashMap` also picked over the original paper's 2-4.
-struct State {
+/// The SipHash permutation state, generic over the two round counts that name
+/// the variant: `C` compression rounds per message word and `D` finalization
+/// rounds.
+///
+/// `State<1, 3>` is SipHash-1-3, the `Map`/`Set` default — the tradeoff Rust's
+/// `HashMap` also picked over the original paper's 2-4. `State<2, 4>` is the
+/// paper's 2-4, used only by [`siphash24`], where matching other
+/// implementations is the point.
+///
+/// The counts are const parameters rather than fields so each variant
+/// monomorphizes to a straight-line unrolled permutation, exactly as the
+/// hand-written 1-3 did before 2-4 joined it.
+struct State<const C: usize, const D: usize> {
     v0: u64,
     v1: u64,
     v2: u64,
     v3: u64,
 }
 
-impl State {
+impl<const C: usize, const D: usize> State<C, D> {
     #[inline]
     fn new(k0: u64, k1: u64) -> Self {
         Self {
@@ -258,20 +304,22 @@ impl State {
         self.v2 = self.v2.rotate_left(32);
     }
 
-    /// Absorb one 64-bit message word: xor in, one round, xor out.
+    /// Absorb one 64-bit message word: xor in, `C` rounds, xor out.
     #[inline]
     fn round_msg(&mut self, m: u64) {
         self.v3 ^= m;
-        self.sip_round();
+        for _ in 0..C {
+            self.sip_round();
+        }
         self.v0 ^= m;
     }
 
     #[inline]
     fn finish(mut self) -> u64 {
         self.v2 ^= 0xff;
-        self.sip_round();
-        self.sip_round();
-        self.sip_round();
+        for _ in 0..D {
+            self.sip_round();
+        }
         self.v0 ^ self.v1 ^ self.v2 ^ self.v3
     }
 }
@@ -304,6 +352,66 @@ mod tests {
                 "length {n} disagrees with std's SipHash-1-3"
             );
         }
+    }
+
+    /// [`siphash24`] against the same class of oracle: `std`'s (deprecated)
+    /// `SipHasher` IS SipHash-2-4, so this checks the STABLE digest against an
+    /// independent implementation rather than against constants typed in by
+    /// hand.
+    ///
+    /// Non-zero keys are the point here, unlike the 1-3 test above: this
+    /// function's key is a caller ARGUMENT rather than process state, so a
+    /// variant that silently ignored `k0`/`k1` — or transposed them — would
+    /// still pass a zero-key check while producing a digest nobody else
+    /// computes. The keys below include the reference key from the SipHash
+    /// paper's Appendix A (`0x0706..0900`, `0x0f0e..0908`), so the vectors the
+    /// oracle reproduces are the specified ones.
+    #[test]
+    fn agrees_with_stds_siphash24() {
+        use std::hash::Hasher;
+        #[allow(deprecated)]
+        use std::hash::SipHasher;
+        let keys = [
+            (0, 0),
+            (0x0706_0504_0302_0100, 0x0f0e_0d0c_0b0a_0908),
+            (u64::MAX, 1),
+            (1, u64::MAX),
+        ];
+        for (k0, k1) in keys {
+            for n in 0..=40usize {
+                let input: Vec<u8> = (0..n).map(|i| (i as u8).wrapping_mul(31)).collect();
+                #[allow(deprecated)]
+                let mut oracle = SipHasher::new_with_keys(k0, k1);
+                oracle.write(&input);
+                assert_eq!(
+                    siphash24(&input, k0, k1),
+                    oracle.finish(),
+                    "length {n} under key ({k0:#x}, {k1:#x}) disagrees with std's SipHash-2-4"
+                );
+            }
+        }
+    }
+
+    /// The property the whole stable-hash surface is FOR: the digest depends on
+    /// the caller's key and the bytes, and on nothing else. A regression that
+    /// reintroduced a read of the process seed would pass every fixed-key
+    /// comparison above if the oracle were seeded the same way — it is not, but
+    /// stating the invariant directly is cheap and it is the one users rely on.
+    ///
+    /// `KARAC_HASH_SEED` is deliberately NOT set here: this binary seeds itself
+    /// randomly like any other process, so a seed-reading `siphash24` would
+    /// fail this on nearly every run.
+    #[test]
+    fn siphash24_is_stable_and_does_not_read_the_process_seed() {
+        // Pinned constants, computed by the oracle above. They are what a user
+        // doing content addressing writes into a snapshot test, so they must
+        // survive a rebuild, a reseed, and a new machine.
+        assert_eq!(siphash24(b"", 0, 0), 0x1e92_4b9d_7377_00d7);
+        assert_eq!(siphash24(b"kara", 0, 0), 0x7a87_69d5_c8c7_ce3b);
+        // The unstable default, on the same bytes, is a different function --
+        // asserting they differ is what keeps a future refactor from
+        // accidentally routing the stable entry point through the seeded one.
+        assert_ne!(siphash24(b"kara", 0, 0), hash_bytes(b"kara"));
     }
 
     /// The Fx digest is PINNED to constants, and the pin is what proves it

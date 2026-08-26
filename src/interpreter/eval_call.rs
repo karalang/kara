@@ -23,7 +23,7 @@ use super::exec::ControlFlow;
 use super::helpers::{
     base64_decode, base64_encode, decode_err, decode_ok_bytes, decode_ok_string, eval_http_get,
     eval_http_post, eval_stats_fn, eval_stats_fn_int, hex_decode, hex_encode, make_json_error,
-    serde_json_to_kara_json, url_decode, url_encode,
+    serde_json_to_kara_json, url_decode, url_encode, value_bytes,
 };
 use super::method_call::result_ok;
 use super::value::narrow_to_i64;
@@ -1426,6 +1426,89 @@ impl<'a> super::Interpreter<'a> {
                             }
                         }
                     };
+                }
+                // `StableHash.siphash24(bytes, k0, k1) -> u64` (B-2026-08-25-22)
+                // — the interpreted twin of the `karac_stable_siphash24`
+                // lowering in `codegen/assoc_call.rs`. BOTH call
+                // `karac_hash::siphash24`, so the two backends agree by
+                // construction; that is the entire point of a digest sold as
+                // stable, and it is why neither side open-codes the
+                // permutation.
+                //
+                // Unlike the encoding arm below, a shape this does not
+                // recognise is a hard error rather than an empty input. A
+                // digest that silently hashes `""` is the worst possible
+                // failure for this function: it returns a plausible `u64`, the
+                // caller writes it into a content address or an on-disk index,
+                // and every distinct input collides. Failing loudly is the
+                // only safe default here.
+                "StableHash.siphash24" => {
+                    // B-2026-08-02-13 class — stdlib and user types share one
+                    // flat namespace, so a program declaring its own
+                    // `struct StableHash` reaches this arm and gets the BUILT-IN
+                    // digest instead of its own method body. Measured: a user
+                    // `siphash24` returning `42` printed the SipHash value on
+                    // both backends. That is the worst shape of this bug for a
+                    // hash function (a plausible number nobody asked for), so
+                    // refuse and name the fix. `codegen/assoc_call.rs` refuses
+                    // the same program through `reject_shadowed_prelude_types`,
+                    // so `karac run` and `karac build` agree.
+                    if self
+                        .program
+                        .items
+                        .iter()
+                        .any(|i| matches!(i, Item::StructDef(s) if s.name == "StableHash"))
+                    {
+                        return self.record_runtime_error(
+                            "this program declares its own `struct StableHash`, which shadows \
+                             the built-in stdlib namespace of that name, so \
+                             `StableHash.siphash24(..)` would run the built-in digest rather \
+                             than your method. Rename the user-defined struct (e.g. \
+                             `MyStableHash`). Stdlib and user types currently share one \
+                             namespace — tracked as B-2026-08-02-13."
+                                .to_string(),
+                            span,
+                        );
+                    }
+                    let bytes = match args.first().map(|a| self.eval_expr_inner(&a.value)) {
+                        Some(Value::Array(rc)) => value_bytes(&rc.read().unwrap()),
+                        Some(Value::Slice {
+                            storage,
+                            start,
+                            len,
+                            ..
+                        }) => value_bytes(&storage.read().unwrap()[start..start + len]),
+                        other => {
+                            return self.record_runtime_error(
+                                format!(
+                                    "internal: StableHash.siphash24 expected a Slice[u8] or \
+                                     Vec[u8] first argument, got {}",
+                                    match &other {
+                                        Some(v) => v.variant_name(),
+                                        None => "no argument",
+                                    }
+                                ),
+                                span,
+                            );
+                        }
+                    };
+                    let mut key = [0u64; 2];
+                    for (slot, arg) in key.iter_mut().zip(args.iter().skip(1)) {
+                        match self.eval_expr_inner(&arg.value) {
+                            Value::Int(i) => *slot = i as u64,
+                            other => {
+                                return self.record_runtime_error(
+                                    format!(
+                                        "internal: StableHash.siphash24 expected an integer key \
+                                         half, got {}",
+                                        other.variant_name()
+                                    ),
+                                    span,
+                                );
+                            }
+                        }
+                    }
+                    return Value::Int(karac_hash::siphash24(&bytes, key[0], key[1]) as i128);
                 }
                 "Base64.encode" | "Base64.encode_url_safe" | "Hex.encode" | "Hex.encode_upper" => {
                     let to_bytes = |vals: &[Value]| -> Vec<u8> {

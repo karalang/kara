@@ -730,6 +730,67 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(result.into());
         }
 
+        // `StableHash.siphash24(bytes, k0, k1) -> u64` (B-2026-08-25-22) — the
+        // compiled twin of the `eval_call.rs` arm. Both bottom out in
+        // `karac_hash::siphash24`: the interpreter calls it directly, this
+        // calls it through `karac_stable_siphash24`. That shared bottom is not
+        // a convenience, it is the feature — a digest advertised as stable
+        // across runs, machines and targets is worthless if `karac run` and
+        // `karac build` disagree about it, so neither backend open-codes the
+        // permutation. `tests/codegen.rs` pins the two against each other.
+        if type_name == "StableHash" && method == "siphash24" {
+            // B-2026-08-02-13 class — see the twin guard in
+            // `interpreter/eval_call.rs`. A user `struct StableHash` shadows
+            // the namespace and would silently get the built-in digest.
+            self.reject_shadowed_prelude_types("StableHash.siphash24", &["StableHash"])?;
+            if _args.len() != 3 {
+                return Err(format!(
+                    "StableHash.siphash24 expects 3 arguments (bytes, k0, k1), got {}",
+                    _args.len()
+                ));
+            }
+            // The declared param is `Slice[u8]`, so route the argument through
+            // the SAME coercion every other slice-taking call uses rather than
+            // hand-rolling one: that is what makes a `Vec[u8]`, a bare `[1u8,
+            // 2u8]` literal, `s.bytes()` and an already-`Slice` binding all
+            // reach here as one `{ptr, len}` shape. `None` means "not a
+            // recognized sequence source", and its contract is that no IR was
+            // emitted, so the fallback compile below cannot double-emit.
+            let bytes_val =
+                match self.coerce_to_slice(&_args[0].value, self.context.i8_type().into())? {
+                    Some(v) => v,
+                    None => self.compile_expr(&_args[0].value)?,
+                };
+            let bytes_sv = self.require_struct_value(bytes_val, "StableHash.siphash24")?;
+            let data = self
+                .builder
+                .build_extract_value(bytes_sv, 0, "sip24.data")
+                .unwrap()
+                .into_pointer_value();
+            let len = self
+                .builder
+                .build_extract_value(bytes_sv, 1, "sip24.len")
+                .unwrap()
+                .into_int_value();
+            let k0 = self.compile_expr(&_args[1].value)?.into_int_value();
+            let k1 = self.compile_expr(&_args[2].value)?.into_int_value();
+            let sip_fn = self
+                .module
+                .get_function("karac_stable_siphash24")
+                .expect("karac_stable_siphash24 declared in Codegen::new");
+            let digest = self
+                .builder
+                .build_call(
+                    sip_fn,
+                    &[data.into(), len.into(), k0.into(), k1.into()],
+                    "sip24",
+                )
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic();
+            return Ok(digest);
+        }
+
         // `Regex.compile(pattern: String) -> Result[Regex, RegexError]`
         // (B-2026-07-14-19) — the AOT backend for `runtime/stdlib/regex.kara`'s
         // `#[compiler_builtin]` stub, matching the interpreter's

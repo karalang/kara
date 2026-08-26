@@ -1,0 +1,54 @@
+// runtime/stdlib/stable_hash.kara
+//
+// B-2026-08-25-22. The escape hatch design.md § `Hash` and `Hasher`'s
+// stability policy prescribes and, until now, did not ship.
+//
+// THE PROBLEM THIS SOLVES. `Map` and `Set` hash through SipHash-1-3 under a
+// per-process RANDOM key, so a digest taken from `Hash` differs between two
+// runs of the same binary — deliberately, because the common attack on a
+// request-keyed map is hash flooding. design.md therefore tells anyone who
+// needs a digest to stay put ("content addressing, on-disk indexes, snapshot
+// tests, distributed sharding") NOT to use `Hash`, and names this module as
+// where to go instead. Without it that paragraph left those users with no
+// option at all: the only hash the language exposed was the one it had just
+// told them not to use.
+//
+// WHAT STABLE MEANS HERE, precisely. The key is a caller ARGUMENT and nothing
+// else feeds the digest. Same bytes plus same key gives the same `u64` across
+// runs, across machines, across targets, and across Kāra versions — the exact
+// four axes `Hash` disclaims. That is a promise about this function's output
+// forever, which is why it is spelled with the algorithm in its name: a future
+// Kāra may change what `Map` defaults to, and this must not move with it.
+//
+// `StableHash` is a NAMESPACE, not a value: a zero-field struct nobody ever
+// constructs, the same shape `Base64` / `Hex` / `Url` use in
+// `runtime/stdlib/encoding.kara`. design.md writes the path Rust-style as
+// `hash::stable::siphash24`; Kāra has no `::` separator and its module tree
+// comes from the directory layout, so the spec text was corrected to this
+// spelling when the function landed rather than the other way round.
+struct StableHash { }
+
+impl StableHash {
+    // SipHash-2-4 of `bytes` under the 128-bit key `(k0, k1)`.
+    //
+    // 2-4 is the round count the SipHash paper specifies as its default, so
+    // this digest is the one another language's `siphash24` computes for the
+    // same input — interoperability is the property being bought, and it is
+    // why the round count is in the name rather than left to the compiler's
+    // discretion. (The `Map` default is 1-3, a different function; asking for
+    // it here would defeat the purpose.)
+    //
+    // The key is REQUIRED rather than defaulted. A single well-known key is
+    // what most callers want and `(0, 0)` is a fine choice for a content
+    // address, but writing it makes the digest's dependence on it visible at
+    // the call site — which matters because changing the key later changes
+    // every digest, and a caller who never saw a key would not know that.
+    //
+    // One implementation, both backends: the interpreter and compiled code
+    // both bottom out in the `karac-hash` crate (through
+    // `karac_stable_siphash24` when compiled), so the two agree by
+    // construction rather than by convention — the same rule the Arrow IPC
+    // twin and `String.normalize` follow.
+    #[compiler_builtin]
+    fn siphash24(bytes: Slice[u8], k0: u64, k1: u64) -> u64 { 0 }
+}

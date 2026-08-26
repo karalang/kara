@@ -38000,3 +38000,137 @@ fn test_question_mark_propagation_survives_the_guard() {
         "err odd\nok 5\n"
     );
 }
+
+// ── `StableHash.siphash24` — the stable-digest escape hatch (B-2026-08-25-22) ──
+//
+// design.md § `Hash` and `Hasher`'s stability policy tells anyone who needs a
+// digest that outlives the process NOT to use `Hash`, whose key is drawn from
+// a random source once per process, and names this namespace as where to go
+// instead. Until the row that these tests close, the namespace did not exist,
+// so that paragraph left those users with no option at all.
+//
+// EVERY EXPECTED VALUE BELOW IS AN ORACLE RESULT, not a transcription of what
+// karac printed. `std`'s (deprecated) `SipHasher` IS SipHash-2-4, and each
+// constant here was computed with it before being written down. That matters
+// more than usual for this function: its entire value proposition is that
+// another implementation of `siphash24` computes the same number, so a pin
+// taken from our own output would confirm nothing except self-consistency.
+// (`hash/src/lib.rs`'s `agrees_with_stds_siphash24` runs the same oracle over
+// 4 keys x 41 lengths; these are the end-to-end spot checks through the
+// language surface.)
+
+#[test]
+fn stable_hash_siphash24_matches_the_reference_algorithm() {
+    assert_eq!(
+        run("fn main() {\n\
+                 let s: String = \"kara\";\n\
+                 println(StableHash.siphash24(s.bytes(), 0u64, 0u64));\n\
+             }\n"),
+        "8829141961400634939\n"
+    );
+}
+
+/// The `Slice[u8]` parameter must accept every byte source the language
+/// offers, because a digest API you have to marshal into is one users route
+/// around. All three spellings below are the same three bytes and must give
+/// the same digest.
+#[test]
+fn stable_hash_siphash24_accepts_every_byte_source() {
+    assert_eq!(
+        run("fn main() {\n\
+                 let v: Vec[u8] = [1u8, 2u8, 3u8];\n\
+                 println(StableHash.siphash24(v, 0u64, 0u64));\n\
+                 println(StableHash.siphash24([1u8, 2u8, 3u8], 0u64, 0u64));\n\
+                 let sl = v.as_slice();\n\
+                 println(StableHash.siphash24(sl, 0u64, 0u64));\n\
+             }\n"),
+        "7196089002619860989\n7196089002619860989\n7196089002619860989\n"
+    );
+}
+
+/// The empty input is legal and has a defined digest — it reaches the runtime
+/// as `(null, 0)`. Worth its own test because "no bytes" is exactly the case a
+/// null-check written defensively turns into a silent zero, and a digest that
+/// returns 0 for empty input collides every empty key with a real one.
+#[test]
+fn stable_hash_siphash24_hashes_the_empty_input() {
+    assert_eq!(
+        run("fn main() {\n\
+                 let v: Vec[u8] = [];\n\
+                 println(StableHash.siphash24(v, 0u64, 0u64));\n\
+             }\n"),
+        "2202906307356721367\n"
+    );
+}
+
+/// The key is a real 128-bit key, and its halves are not interchangeable.
+///
+/// A wiring bug that dropped `k1`, or passed the halves in the wrong order,
+/// would still produce a plausible avalanche and would still be stable across
+/// runs — so every other test here would pass while the digest silently
+/// disagreed with every other `siphash24` in the world. Pinning `(1, 2)` and
+/// `(2, 1)` to their two distinct oracle values is what catches that.
+#[test]
+fn stable_hash_siphash24_uses_both_key_halves_in_order() {
+    assert_eq!(
+        run("fn main() {\n\
+                 let s: String = \"kara\";\n\
+                 println(StableHash.siphash24(s.bytes(), 1u64, 2u64));\n\
+                 println(StableHash.siphash24(s.bytes(), 2u64, 1u64));\n\
+                 println(StableHash.siphash24(s.bytes(), 506097522914230528u64, 1084818905618843912u64));\n\
+             }\n"),
+        "9152030712822536581\n14841467261521516778\n12078748455302492582\n"
+    );
+}
+
+/// The stable digest and the `Map` default are DIFFERENT FUNCTIONS, and must
+/// stay that way. Routing `siphash24` through the seeded default would pass a
+/// single-run equality check and then fail in the field, on the one axis this
+/// function exists to guarantee — so assert the inequality directly rather
+/// than trusting that nobody will "simplify" two SipHashes into one.
+#[test]
+fn stable_hash_siphash24_is_not_the_seeded_map_hasher() {
+    assert_eq!(
+        run("fn main() {\n\
+                 let s: String = \"kara\";\n\
+                 let mut m: Map[String, i64] = Map.new();\n\
+                 m.insert(\"kara\", 1);\n\
+                 println(StableHash.siphash24(s.bytes(), 0u64, 0u64) == 0);\n\
+                 println(m.len());\n\
+             }\n"),
+        "false\n1\n"
+    );
+}
+
+/// A user `struct StableHash` shadows the built-in namespace, and the built-in
+/// arm must REFUSE rather than quietly answer for it (B-2026-08-02-13 class).
+///
+/// Measured before the guard: a user `siphash24` whose body returned `42`
+/// printed the SipHash digest instead, on the interpreter AND on AOT. Stdlib
+/// and user types share one flat namespace, so the shadowing program
+/// typechecks — nothing upstream catches it. For a hash function that is the
+/// worst shape of the bug: the wrong answer is a plausible `u64` a caller may
+/// go on to store as a content address.
+///
+/// `codegen/assoc_call.rs` refuses the same program via
+/// `reject_shadowed_prelude_types`, so the two backends agree about it.
+#[test]
+fn stable_hash_refuses_to_answer_for_a_user_shadowed_namespace() {
+    let errors = runtime_errors(
+        "struct StableHash { }\n\
+         impl StableHash {\n\
+             fn siphash24(bytes: Slice[u8], k0: u64, k1: u64) -> u64 { 42 }\n\
+         }\n\
+         fn main() {\n\
+             let v: Vec[u8] = [1u8, 2u8, 3u8];\n\
+             println(StableHash.siphash24(v, 0u64, 0u64));\n\
+         }\n",
+    );
+    assert!(
+        errors.iter().any(
+            |e| e.message.contains("declares its own `struct StableHash`")
+                && e.message.contains("Rename")
+        ),
+        "expected a rename diagnostic for the shadowed namespace, got: {errors:?}"
+    );
+}

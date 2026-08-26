@@ -46,6 +46,37 @@ pub unsafe extern "C" fn karac_hash_bytes_fx(ptr: *const u8, len: usize) -> u64 
     karac_hash::fx_hash_bytes(bytes)
 }
 
+/// `karac_stable_siphash24(ptr, len, k0, k1) -> u64` — SipHash-2-4 of `len`
+/// bytes at `ptr` under the CALLER's 128-bit key. The compiled backend for
+/// `StableHash.siphash24` (design.md § `Hash` and `Hasher`, stability policy).
+///
+/// Unlike [`karac_hash_bytes`] this reads NO process state, which is the whole
+/// contract: content addressing, on-disk indexes, snapshot tests and
+/// distributed sharding all need the same bytes to give the same number in a
+/// different process, on a different machine, in a later build. The seeded
+/// default cannot do that by design, and this is the escape hatch design.md
+/// points those users at.
+///
+/// Same null/empty contract as [`karac_hash_bytes`]: an empty input is legal
+/// and arrives as `(null, 0)`.
+///
+/// # Safety
+/// `ptr` must be null, or point to `len` initialized readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn karac_stable_siphash24(
+    ptr: *const u8,
+    len: usize,
+    k0: u64,
+    k1: u64,
+) -> u64 {
+    let bytes: &[u8] = if ptr.is_null() || len == 0 {
+        &[]
+    } else {
+        unsafe { core::slice::from_raw_parts(ptr, len) }
+    };
+    karac_hash::siphash24(bytes, k0, k1)
+}
+
 /// `karac_hash_seed() -> u64` — the low half of the process seed, for
 /// diagnostics and for the tests that assert a pin took effect. Not used for
 /// hashing; the seed reaches the hash through `karac-hash` directly.

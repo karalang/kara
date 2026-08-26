@@ -781,6 +781,21 @@ fn stats_option_none() -> Value {
     }
 }
 
+/// The `u8` bytes behind a `Vec[u8]` / `Slice[u8]` argument's element values.
+///
+/// Each element is an `i128`-backed `Value::Int` in range `0..=255` (the
+/// typechecker guarantees the element type), so the narrowing is exact. A
+/// non-`Int` element cannot occur for a `u8` sequence; it maps to `0` rather
+/// than panicking, matching how every other byte-taking stdlib arm degrades.
+pub(crate) fn value_bytes(vals: &[Value]) -> Vec<u8> {
+    vals.iter()
+        .map(|v| match v {
+            Value::Int(i) => *i as u8,
+            _ => 0,
+        })
+        .collect()
+}
+
 // ── Encoding stdlib helpers (Base64 / Hex / Url) ────────────────────────────
 
 const BASE64_STD: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";

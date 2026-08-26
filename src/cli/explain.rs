@@ -20,6 +20,7 @@ pub enum ExplainConcept {
     Closures,
     Operators,
     ModuleState,
+    StableHash,
 }
 
 impl ExplainConcept {
@@ -28,6 +29,7 @@ impl ExplainConcept {
             "closures" => Some(ExplainConcept::Closures),
             "operators" => Some(ExplainConcept::Operators),
             "module-state" => Some(ExplainConcept::ModuleState),
+            "stable-hash" => Some(ExplainConcept::StableHash),
             _ => None,
         }
     }
@@ -37,6 +39,7 @@ impl ExplainConcept {
             ExplainConcept::Closures => CLOSURES_PAGE,
             ExplainConcept::Operators => OPERATORS_PAGE,
             ExplainConcept::ModuleState => MODULE_STATE_PAGE,
+            ExplainConcept::StableHash => STABLE_HASH_PAGE,
         }
     }
 
@@ -46,6 +49,7 @@ impl ExplainConcept {
             ExplainConcept::Closures => "closures",
             ExplainConcept::Operators => "operators",
             ExplainConcept::ModuleState => "module-state",
+            ExplainConcept::StableHash => "stable-hash",
         }
     }
 }
@@ -971,6 +975,7 @@ const ALL_CONCEPTS: &[ExplainConcept] = &[
     ExplainConcept::Closures,
     ExplainConcept::Operators,
     ExplainConcept::ModuleState,
+    ExplainConcept::StableHash,
 ];
 
 fn parse_class_name(name: &str) -> Option<DiagnosticClass> {
@@ -1508,6 +1513,118 @@ Measured, not inferred. Each is tracked; see docs/bug-ledger.jsonl.
     `vec1 + vec2`, but `Vec.concat()` here is the zero-argument
     `Vec[String]` join, not a two-Vec concatenation. The diagnostic names
     only `extend`, which is the one that exists.
+";
+
+const STABLE_HASH_PAGE: &str = "\
+karac explain — Stable hashing: digests that outlive the process
+
+Source of truth: docs/design.md § `Hash` and `Hasher`, stability
+policy. This page is the concept-level summary; the design.md section
+is authoritative when the two disagree.
+
+This is the page a `Hash` reached for the wrong reason points at.
+
+────────────────────────────────────────────────────────────────────
+Why `Hash` cannot give you a stable digest
+────────────────────────────────────────────────────────────────────
+
+`Map` and `Set` hash through SipHash-1-3 under a key drawn from a
+random source once per process. Two runs of the same binary, over the
+same input, produce different digests — and therefore different
+iteration orders. That is deliberate: the common attack on a map keyed
+by request data is hash flooding, and a key the attacker cannot
+predict is the defence.
+
+So a `Hash` digest is explicitly NOT stable across runs, NOT stable
+across Kara versions, and NOT stable across targets. Nothing stops you
+writing one to disk. Everything stops that from working.
+
+────────────────────────────────────────────────────────────────────
+What to use instead
+────────────────────────────────────────────────────────────────────
+
+    StableHash.siphash24(bytes, k0, k1) -> u64
+
+SipHash-2-4 over `bytes` under the 128-bit key `(k0, k1)`. It reads no
+process state, so the same bytes under the same key give the same
+`u64` across runs, across machines, across targets, and across Kara
+versions — the four axes `Hash` disclaims, in that order.
+
+    let id = StableHash.siphash24(payload.bytes(), 0, 0);
+
+The first parameter is `Slice[u8]`, so a `Vec[u8]`, a `[u8]` literal,
+`s.bytes()` and an existing slice all pass straight in.
+
+Reach for it whenever the digest outlives the process that took it:
+
+    content addressing    the digest IS the name of the thing
+    on-disk indexes       written by one run, read by the next
+    snapshot tests        a fixture that must not churn
+    distributed sharding  two machines must agree on the owner
+
+2-4 rather than the `Map` default's 1-3 because 2-4 is the round count
+the SipHash paper specifies, and therefore the one another language's
+`siphash24` computes for the same input. Interoperability is the whole
+point, which is why the algorithm is named in the function rather than
+left to the compiler to choose.
+
+────────────────────────────────────────────────────────────────────
+The key, and why you have to write it
+────────────────────────────────────────────────────────────────────
+
+`(0, 0)` is a perfectly good key for a content address and is what
+most callers want. It is required rather than defaulted because
+changing the key later changes every digest you have ever stored —
+a fact that belongs where the digest is taken, not in a default nobody
+reads.
+
+Use a non-zero key when the input is adversarial AND the digest must
+still be stable. Pick one, keep it secret, and store it outside the
+source.
+
+────────────────────────────────────────────────────────────────────
+Two things that look like the answer and are not
+────────────────────────────────────────────────────────────────────
+
+    KARAC_HASH_SEED     Pins the per-process key so a run reproduces
+                        exactly. A testing and debugging affordance:
+                        a published key is the same as no key, which
+                        is precisely the DoS resistance the random
+                        default exists to provide. Never set it in a
+                        deployment, and never let a digest that
+                        leaves the process depend on it.
+
+    Map[K, V,           Unkeyed, so iteration order IS stable across
+    FxBuildHasher]      runs of one binary. Still not a stable
+                        DIGEST: the algorithm is a `Map`
+                        implementation detail free to change between
+                        Kara versions, and it is floodable by anyone
+                        who can read the compiler's source.
+
+────────────────────────────────────────────────────────────────────
+Where the implementation differs from design.md today
+────────────────────────────────────────────────────────────────────
+
+design.md's stability paragraph names three things. One of them
+ships, and the spec spells its path Rust-style (`hash::stable::`);
+Kara has no `::` separator, so the real spelling is the namespace
+below.
+
+    StableHash.siphash24  ships — this page.
+
+    hash.stable.xxh3      DOES NOT EXIST. There is no faster unkeyed
+                          stable digest; use `siphash24`.
+
+    the `crypto` module   DOES NOT EXIST. There is no cryptographic
+                          hash in the stdlib. Do NOT substitute
+                          `siphash24` for one: SipHash is a fast
+                          keyed PRF, not a collision-resistant hash,
+                          and it is unfit for signatures, for
+                          deduplication against an adversary, or for
+                          anything where a chosen collision is a
+                          problem.
+
+Tracked as B-2026-08-26-2 in docs/bug-ledger.jsonl.
 ";
 
 const MODULE_STATE_PAGE: &str = "\

@@ -934,6 +934,13 @@ CONCEPTS:
                        (context struct, Atomic, Mutex,
                        `#[thread_local]`, LazyLock, OnceLock), and
                        per-profile gating.
+    stable-hash        Why a `Hash` digest is not stable across runs
+                       (per-process random key), the four use cases
+                       that need one anyway, and the
+                       `StableHash.siphash24(bytes, k0, k1)` escape
+                       hatch — plus the two near-misses
+                       (`KARAC_HASH_SEED`, `FxBuildHasher`) and what
+                       design.md names that does not exist yet.
 
 OPTIONS:
     --format=text|json Output shape. `text` (default) is human prose;

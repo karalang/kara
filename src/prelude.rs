@@ -219,6 +219,13 @@ pub const PRELUDE_TYPES: &[&str] = &[
     "Hex",
     "Url",
     "DecodeError",
+    // B-2026-08-25-22 — `StableHash` is a namespace struct (never
+    // constructed) whose one associated fn is the stable-digest escape hatch.
+    // Prelude-scope like `Base64` / `Hex` / `Url`, and for the same reason:
+    // the paragraph that sends users here does not also tell them to import
+    // anything, and a stability escape hatch behind an import is one more
+    // reason to reach for the wrong hash instead.
+    "StableHash",
     // Phase 8 `File` handle slice F1 (2026-05-26): stateful file I/O.
     // Constructors `File.open` / `.create` / `.append` return
     // `Result[File, IoError]`; methods `read` / `write` / `flush`
@@ -796,6 +803,13 @@ pub const STDLIB_SOURCES: &[(&str, &str)] = &[
     ("bf16.kara", include_str!("../runtime/stdlib/bf16.kara")),
     ("stats.kara", include_str!("../runtime/stdlib/stats.kara")),
     ("regex.kara", include_str!("../runtime/stdlib/regex.kara")),
+    // B-2026-08-25-22 — `StableHash.siphash24`, the versioned stable digest
+    // design.md § `Hash` and `Hasher`'s stability policy sends users to when
+    // `Hash` (per-process seeded, deliberately unstable) is the wrong tool.
+    (
+        "stable_hash.kara",
+        include_str!("../runtime/stdlib/stable_hash.kara"),
+    ),
     ("http.kara", include_str!("../runtime/stdlib/http.kara")),
     // Phase 6 line 17 — `TcpListener` stdlib type composing through
     // the `karac_park_on_fd` leaf parking primitive (Slice 6 + 7).
@@ -2650,6 +2664,19 @@ mod tests {
             &["encode", "encode_upper", "decode"],
         );
         assert_inherent_impl_compiler_builtin("encoding.kara", "Url", &["encode", "decode"]);
+    }
+
+    /// B-2026-08-25-22 — `StableHash` is registered as a baked namespace with
+    /// its one associated fn.
+    ///
+    /// The typechecker learns `siphash24`'s signature from THIS source and
+    /// nowhere else (there is no hand-written `env.functions` entry), so a
+    /// silent drop of the file from `STDLIB_SOURCES` would turn every call
+    /// into `undefined name` — which is precisely the state the row was filed
+    /// about, restored by omission.
+    #[test]
+    fn baked_stable_hash_carries_inherent_impl_with_compiler_builtin_methods() {
+        assert_inherent_impl_compiler_builtin("stable_hash.kara", "StableHash", &["siphash24"]);
     }
 
     /// `drop_carries_soundness` audit gate (design.md § Drop >

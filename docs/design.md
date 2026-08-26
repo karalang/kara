@@ -5463,7 +5463,21 @@ Rationale for the parameterized form over a simpler `fn hash(ref self) -> u64`: 
 
 **Stability policy.** The default hasher shipped with `Map` and `Set` is **DoS-resistant and seeded per process**. Hash values are **not stable across runs**, **not stable across Kāra versions**, and **not stable across targets**. This matches Python and modern Java: the overwhelmingly common use case is in-memory keying, and the overwhelmingly common attack vector is hash-flooding from adversarial input.
 
-Code that needs stable digests (content addressing, on-disk indexes, snapshot tests, distributed sharding) does **not** use `Hash`. Kāra's stdlib ships explicit, versioned functions for that purpose — `hash::stable::siphash24(bytes, key)`, `hash::stable::xxh3(bytes)`, and the `crypto` module for cryptographic hashes. These are byte-oriented, take an explicit algorithm and seed, and are semver-locked separately from the `Hash` trait. Users who reach for `Hash` for stability are pointed at the stable-hash module by a `karac explain` page.
+Code that needs stable digests (content addressing, on-disk indexes, snapshot tests, distributed sharding) does **not** use `Hash`. Kāra's stdlib ships explicit, versioned functions for that purpose, in the `StableHash` namespace. These are byte-oriented, take the algorithm in the function name and the key as an argument, and are semver-locked separately from the `Hash` trait. Users who reach for `Hash` for stability are pointed at them by `karac explain --concept=stable-hash`.
+
+**What ships today (B-2026-08-25-22).** One function, `StableHash.siphash24(bytes: Slice[u8], k0: u64, k1: u64) -> u64`:
+
+```kara
+fn content_id(payload: ref String) -> u64 {
+    StableHash.siphash24(payload.bytes(), 0, 0)
+}
+```
+
+SipHash-2-4 over `bytes` under the caller's 128-bit key, reading no process state — so the same bytes under the same key give the same `u64` across runs, across Kāra versions and across targets — the three axes the paragraph above disclaims, inverted one for one (and across machines, which follows from the last two). 2-4 rather than the `Map` default's 1-3 because 2-4 is the round count the SipHash paper specifies, and therefore the one another language's `siphash24` agrees with; interoperability is the property being bought, which is why the algorithm is named in the function rather than chosen by the compiler. The key is required rather than defaulted because changing it later changes every digest already stored, and that fact belongs at the call site. Both backends bottom out in the same `karac-hash` entry point (the interpreter directly, compiled code through `karac_stable_siphash24`), so they agree by construction — the rule the Arrow IPC twin and `String.normalize` follow, and a load-bearing one here: a digest sold as stable is worthless if `karac run` and `karac build` disagree about it.
+
+`StableHash` is a namespace struct nobody constructs, the shape `Base64` / `Hex` / `Url` already use. An earlier draft of this section wrote the path Rust-style as `hash::stable::siphash24`; Kāra has no `::` separator and derives its module tree from the directory layout, so that spelling could never have parsed and the text was corrected to the shipped one rather than the reverse.
+
+**Not yet shipped, and not to be improvised around:** a faster unkeyed stable digest (`xxh3`), and the `crypto` module for cryptographic hashes. `siphash24` is **not** a substitute for the latter — SipHash is a fast keyed PRF, not a collision-resistant hash, and it is unfit for signatures, for deduplication against an adversary, or for anything where a chosen collision is a problem.
 
 **`Eq` consistency contract.** Every `Hash` impl must satisfy `a == b ⇒ hash(a, h) feeds identical bytes to hash(b, h)` for any hasher `h`. This is documented as a contract, not statically checked — verifying it would require reasoning about arbitrary user code. Violating the contract is a logic bug (lookups miss valid keys), not a safety bug.
 

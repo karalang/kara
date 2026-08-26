@@ -5285,6 +5285,29 @@ impl<'ctx> Codegen<'ctx> {
             Some(Linkage::External),
         );
 
+        // `StableHash.siphash24(bytes, k0, k1)` (B-2026-08-25-22) — the same
+        // byte-oriented shape plus the caller's 128-bit key, which is what
+        // makes it STABLE where the two above are deliberately not: they read
+        // the per-process seed, this reads only its arguments. Lives in the
+        // DEFAULT runtime feature set (`runtime/src/hashing.rs`), not behind an
+        // opt-in archive like the unicode/regex/arrow entry points below, so
+        // the lean, full, wasm and wasm-threads archives all carry it and
+        // `karac run`'s JIT resolves it from the sibling runner.
+        //   `u64 karac_stable_siphash24(*const u8 data, i64 len, u64 k0, u64 k1)`
+        module.add_function(
+            "karac_stable_siphash24",
+            i64_type.fn_type(
+                &[
+                    ptr_type.into(),
+                    i64_type.into(),
+                    i64_type.into(),
+                    i64_type.into(),
+                ],
+                false,
+            ),
+            Some(Linkage::External),
+        );
+
         // `String.normalize(form)` — the same shape plus an i32 form selector
         // (design.md § Strings, Equality; B-2026-08-20-41). Resolved from the
         // opt-in `libkarac_runtime_unicode.a`, which `karac` selects on any

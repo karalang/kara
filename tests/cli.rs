@@ -12035,6 +12035,80 @@ fn test_module_mut_binding_warning_menu_matches_the_page() {
 
 /// Concept pages are read in a terminal. Keep every line inside 78
 /// columns so no page wraps at 80 and destroys its own tables.
+/// B-2026-08-25-22 — the `stable-hash` page's claims are MEASURED, not
+/// transcribed, and this is what keeps them that way.
+///
+/// The page tells a user three things about what the stdlib has. Each is a
+/// statement about the compiler that can rot independently:
+///
+///   1. `StableHash.siphash24(bytes, k0, k1)` exists and compiles.
+///   2. `hash.stable.xxh3` does not exist.
+///   3. There is no `crypto` module.
+///
+/// (2) and (3) are the dangerous ones. A page that says "does not exist" about
+/// something that later ships is worse than silence — it actively tells a user
+/// to go without a tool they have. So each negative is asserted by compiling a
+/// program that uses it and requiring the compiler to still reject it; the day
+/// either ships, this test fails and the page has to be updated with it. That
+/// is the same contract `test_operators_page_quotes_live_diagnostics` holds for
+/// the operators page.
+#[test]
+fn test_stable_hash_page_claims_match_the_compiler() {
+    let page = concept_page("stable-hash");
+
+    // (1) The positive claim: the function the page sends users to must
+    // actually compile. A page recommending a call that does not typecheck is
+    // the failure mode this whole row was filed about.
+    let ok = check_source_output(
+        "stablehash-ships",
+        "fn main() {\n\
+             let s: String = \"kara\";\n\
+             println(StableHash.siphash24(s.bytes(), 0u64, 0u64));\n\
+         }\n",
+    );
+    assert!(
+        !ok.contains("error"),
+        "the page recommends `StableHash.siphash24`, but it does not compile:\n{ok}"
+    );
+    assert!(
+        page.contains("StableHash.siphash24(bytes, k0, k1)"),
+        "the page must show the signature it recommends"
+    );
+
+    // (2) `xxh3` — design.md names it; nothing implements it.
+    let xxh3 = check_source_output(
+        "stablehash-xxh3",
+        "fn main() { println(StableHash.xxh3([1u8, 2u8])); }\n",
+    );
+    assert!(
+        xxh3.contains("error"),
+        "`xxh3` now compiles — the stable-hash page still says it DOES NOT \
+         EXIST and must be updated:\n{xxh3}"
+    );
+    assert!(
+        page.contains("hash.stable.xxh3") && page.contains("DOES NOT EXIST"),
+        "the page must name what design.md promises and does not ship"
+    );
+
+    // (3) The `crypto` module. Checked through a plausible spelling rather
+    // than a contrived one, so the day a real `crypto` lands this trips.
+    let crypto = check_source_output(
+        "stablehash-crypto",
+        "fn main() { println(crypto.sha256([1u8, 2u8])); }\n",
+    );
+    assert!(
+        crypto.contains("error"),
+        "a `crypto` module now resolves — the stable-hash page still says it \
+         DOES NOT EXIST and must be updated:\n{crypto}"
+    );
+    assert!(
+        page.contains("the `crypto` module") && page.contains("keyed PRF"),
+        "the page must say a crypto module is absent AND why `siphash24` is \
+         not a substitute — the omission is what makes a user reach for the \
+         wrong one"
+    );
+}
+
 #[test]
 fn test_every_concept_page_fits_a_terminal() {
     for name in ["closures", "operators", "module-state"] {
@@ -30388,6 +30462,67 @@ fn map_iteration_order_varies_per_process_and_a_pinned_seed_reproduces() {
         "iteration order did not vary across 6 processes — the per-process \
          seed is not reaching bucket placement (design.md § Map requires it to)"
     );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// B-2026-08-25-22 — the OTHER half of that property: `StableHash.siphash24`
+/// must NOT move when the process seed does.
+///
+/// design.md § `Hash` and `Hasher`'s stability policy is a matched pair. The
+/// test above pins the first half — a `Map`'s order varies per process, and
+/// `KARAC_HASH_SEED` re-keys it. This pins the second: the escape hatch that
+/// paragraph sends users to reads no process state at all, so the same bytes
+/// under the same key give one answer under every seed.
+///
+/// In a SUBPROCESS, and with the seed VARIED rather than merely cleared,
+/// because the cheapest wrong implementation of this function —
+/// `hash_bytes_with_key(bytes, seed().0, seed().1)` — is indistinguishable
+/// from the right one inside any single process. Both backends are covered:
+/// `--interp` and the default JIT run the same source, and the codegen suite's
+/// `e2e_stable_hash_siphash24_agrees_with_the_interpreter` chains AOT to the
+/// interpreter, so all three are pinned to one digest by these two tests.
+///
+/// The expected value is an ORACLE result — `std`'s (deprecated) `SipHasher`
+/// is SipHash-2-4 — not a transcription of what karac printed. A self-taken
+/// pin would prove only self-consistency, and interoperability with other
+/// implementations of `siphash24` is the entire point of the function.
+#[test]
+fn stable_hash_digest_does_not_move_with_the_process_hash_seed() {
+    let dir = std::env::temp_dir().join(format!("kara_stablehash_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let src = dir.join("stable.kara");
+    std::fs::write(
+        &src,
+        "fn main() {\n\
+             let s: String = \"kara\";\n\
+             println(StableHash.siphash24(s.bytes(), 0u64, 0u64));\n\
+         }",
+    )
+    .unwrap();
+
+    let run = |interp: bool, seed: &str| -> String {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_karac"));
+        c.arg("run");
+        if interp {
+            c.arg("--interp");
+        }
+        c.arg(&src).env("KARAC_HASH_SEED", seed);
+        String::from_utf8_lossy(&c.output().expect("karac run").stdout).into_owned()
+    };
+
+    // The value SipHash-2-4 defines for these bytes under a zero key.
+    const ORACLE: &str = "8829141961400634939\n";
+    for interp in [true, false] {
+        for seed in ["1", "2", "99"] {
+            let got = run(interp, seed);
+            assert_eq!(
+                got, ORACLE,
+                "stable digest moved (or is wrong) under KARAC_HASH_SEED={seed} \
+                 with interp={interp} — `StableHash.siphash24` must read only \
+                 its arguments, and must agree with the reference algorithm"
+            );
+        }
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }
 

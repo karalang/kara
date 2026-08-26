@@ -812,6 +812,101 @@ mod codegen_tests {
         }
     }
 
+    /// The codegen half of the shadowed-namespace refusal (B-2026-08-02-13
+    /// class). Its twin lives in `tests/interpreter.rs`; both must refuse the
+    /// same program, or `karac run` and `karac build` disagree about a digest
+    /// whose entire contract is that nothing disagrees about it.
+    #[test]
+    fn stable_hash_refuses_a_user_shadowed_namespace() {
+        let err = ir_result(
+            "struct StableHash { }\n\
+             impl StableHash {\n\
+                 fn siphash24(bytes: Slice[u8], k0: u64, k1: u64) -> u64 { 42 }\n\
+             }\n\
+             fn main() {\n\
+                 let v: Vec[u8] = [1u8, 2u8, 3u8];\n\
+                 println(StableHash.siphash24(v, 0u64, 0u64));\n\
+             }\n",
+        )
+        .expect_err("a user struct shadowing `StableHash` must be refused, not silently hijacked");
+        assert!(
+            err.contains("StableHash") && err.contains("Rename"),
+            "expected the rename diagnostic, got: {err}"
+        );
+    }
+
+    /// `StableHash.siphash24` — the compiled backend must agree with the
+    /// interpreter, byte for byte (B-2026-08-25-22).
+    ///
+    /// This is the load-bearing test for the whole feature, and the reason it
+    /// is written as a TWIN comparison rather than a pinned constant. The
+    /// function's contract is that the same bytes under the same key give the
+    /// same `u64` "across runs, across machines, across targets" — a promise
+    /// that is already broken if `karac run` and `karac build` disagree, and a
+    /// user storing a digest to disk would have no way to notice. Pinning both
+    /// sides to the same literal would still pass if both drifted together;
+    /// running the interpreter as an in-process oracle over the same source
+    /// cannot.
+    ///
+    /// The cases cover the four byte sources that reach different codegen
+    /// paths — a `String`'s bytes, a named `Vec[u8]`, a bare array literal
+    /// (no alloca), and the empty input (`(null, 0)` at the FFI boundary) —
+    /// plus a non-zero 128-bit key, since a lowering that dropped `k1` would
+    /// agree with a `k1`-dropping interpreter and disagree with the world.
+    #[test]
+    fn e2e_stable_hash_siphash24_agrees_with_the_interpreter() {
+        let cases: &[(&str, &str)] = &[
+            (
+                "string bytes",
+                "let s: String = \"kara\";\n\
+                 println(StableHash.siphash24(s.bytes(), 0u64, 0u64));",
+            ),
+            (
+                "named Vec[u8]",
+                "let v: Vec[u8] = [1u8, 2u8, 3u8];\n\
+                 println(StableHash.siphash24(v, 0u64, 0u64));",
+            ),
+            (
+                "bare array literal",
+                "println(StableHash.siphash24([1u8, 2u8, 3u8], 0u64, 0u64));",
+            ),
+            (
+                "empty input",
+                "let v: Vec[u8] = [];\n\
+                 println(StableHash.siphash24(v, 0u64, 0u64));",
+            ),
+            (
+                "non-zero 128-bit key",
+                "let s: String = \"kara\";\n\
+                 println(StableHash.siphash24(s.bytes(), 506097522914230528u64, \
+                 1084818905618843912u64));",
+            ),
+        ];
+        for (label, body) in cases {
+            let src = format!("fn main() {{\n{body}\n}}\n");
+            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            assert!(
+                interp_errs.is_empty(),
+                "{label}: interpreter errors: {interp_errs:?}"
+            );
+            let expected = interp_out.join("");
+            // A digest of 0 would make the comparison vacuous on both sides —
+            // it is exactly what a stubbed-out lowering returns.
+            assert!(
+                expected.trim() != "0" && !expected.trim().is_empty(),
+                "{label}: interpreter produced a vacuous digest: {expected:?}"
+            );
+            if let Some(aot) = run_program(&src) {
+                assert_eq!(
+                    aot, expected,
+                    "{label}: AOT `StableHash.siphash24` must compute the same \
+                     digest as the interpreter — a stable digest that differs \
+                     between `karac run` and `karac build` is not stable",
+                );
+            }
+        }
+    }
+
     #[test]
     fn test_e2e_from_arrow_ipc_round_trips() {
         // Phase-11 Arrow IPC read direction — `karac_arrow_column_from_ipc` /
