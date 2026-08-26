@@ -53536,4 +53536,125 @@ fn main() {
             "stdlib-cli-builder-and-parse",
         );
     }
+
+    /// B-2026-08-25-32 — `PriorityQueue.peek` over a HEAP-CARRYING `T`.
+    ///
+    /// `peek` returns `Option[T]`, not `Option[ref T]`: a Kāra body cannot
+    /// construct a borrow-carrying `Option`, so the root is COPIED out of the
+    /// backing `Vec` while `self` keeps its own. That copy is exactly the shape
+    /// that has produced this repo's ownership defects before — read an element
+    /// out of a container behind a `ref` receiver and either the copy is shallow
+    /// (double free when both are dropped) or the original is orphaned (leak).
+    ///
+    /// LSan is the oracle that can see both, and only on Linux. The `Drop` body
+    /// count is the second oracle: `peek` must fire NO drop of its own beyond
+    /// the peeked copy's, and must leave the queue's element count intact — a
+    /// `peek` that moved the root out would drop one element early and print a
+    /// short queue at the end.
+    #[test]
+    fn asan_priority_queue_peek_copies_a_heap_root_without_disturbing_it() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut q: PriorityQueue[String] = PriorityQueue.new();
+    q.push(f"pear{1}");
+    q.push(f"apple{2}");
+    q.push(f"fig{3}");
+
+    // Peek twice: the root is copied, never moved out, so the second read
+    // sees the same element and the queue still holds all three.
+    match q.peek() { Some(v) => { println(v); } None => { println("none"); } }
+    match q.peek() { Some(v) => { println(v); } None => { println("none"); } }
+    println(q.len());
+
+    // Drain: every element must still be there, in order.
+    while q.len() > 0 {
+        match q.pop() { Some(v) => { println(v); } None => {} }
+    }
+    match q.peek() { Some(v) => { println(v); } None => { println("none"); } }
+    println("end");
+}
+"#,
+            &[
+                "apple2", "apple2", "3", "apple2", "fig3", "pear1", "none", "end",
+            ],
+            "priority-queue-peek-heap-root",
+        );
+    }
+
+    /// B-2026-08-25-32 — the same `peek`, but on a `T` that reports its own
+    /// destruction, so the drop COUNT is asserted rather than inferred.
+    ///
+    /// Two peeks over a three-element queue must produce exactly two extra drops
+    /// (one per returned copy, each dying at the end of its `match` arm) and the
+    /// three elements must still drop exactly once each afterwards. A shallow
+    /// copy would double-free one buffer; a move-out would drop `apple` early
+    /// and leave the queue two long.
+    ///
+    /// IGNORED, and the reason is itself a bug (B-2026-08-25-35): the fixture
+    /// needs a `T` that is both `Ord` (to go in the queue) and `Drop` (to count
+    /// drops), and no user struct can currently be both. `#[derive(Ord)]` makes
+    /// `<`/`>` work but does not satisfy the `T: Ord` BOUND, while a hand-written
+    /// `impl Ord` satisfies the bound but leaves `<`/`>` a hard error inside
+    /// `outranks`. The two paths recognize disjoint sets of implementations, so
+    /// no spelling compiles. The sibling `String` fixture above is unaffected and
+    /// is the live leak oracle for `peek`.
+    #[test]
+    #[ignore = "B-2026-08-25-35: no user struct can be both `Ord` and `Drop`, so this \
+                fixture cannot compile until that row is fixed. Un-ignoring it is that \
+                row's acceptance test."]
+    fn asan_priority_queue_peek_drop_count_is_one_per_returned_copy() {
+        assert_clean_asan_run(
+            r#"
+struct Item { id: i64, name: String }
+impl Drop for Item {
+    fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
+}
+impl PartialEq for Item { fn eq(ref self, other: ref Item) -> bool { self.id == other.id } }
+impl Eq for Item {}
+impl PartialOrd for Item {
+    fn partial_cmp(ref self, other: ref Item) -> Option[Ordering] { Some(self.cmp(other)) }
+}
+impl Ord for Item {
+    fn cmp(ref self, other: ref Item) -> Ordering {
+        if self.id < other.id { return Ordering.Less; }
+        if self.id > other.id { return Ordering.Greater; }
+        Ordering.Equal
+    }
+}
+fn main() {
+    let mut q: PriorityQueue[Item] = PriorityQueue.new();
+    q.push(Item { id: 3, name: f"ccc{3}" });
+    q.push(Item { id: 1, name: f"a{1}" });
+    q.push(Item { id: 2, name: f"bb{2}" });
+    println("built");
+    match q.peek() { Some(v) => { println(f"peek {v.id}"); } None => {} }
+    match q.peek() { Some(v) => { println(f"peek {v.id}"); } None => {} }
+    println(q.len());
+    println("draining");
+    while q.len() > 0 {
+        match q.pop() { Some(v) => { println(f"pop {v.id}"); } None => {} }
+    }
+    println("end");
+}
+"#,
+            &[
+                "built",
+                "peek 1",
+                "drop 1 a1",
+                "peek 1",
+                "drop 1 a1",
+                "3",
+                "draining",
+                "pop 1",
+                "drop 1 a1",
+                "pop 2",
+                "drop 2 bb2",
+                "pop 3",
+                "drop 3 ccc3",
+                "end",
+            ],
+            "priority-queue-peek-drop-count",
+        );
+    }
 }

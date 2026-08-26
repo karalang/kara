@@ -26488,6 +26488,120 @@ fn main() {
     );
 }
 
+/// B-2026-08-25-32 — `PriorityQueue.peek`: read the root WITHOUT removing it.
+///
+/// `peek` returns `Option[T]`, not the `Option[ref T]` Rust's
+/// `BinaryHeap::peek` hands back, because a Kāra body cannot construct a
+/// borrow-carrying `Option` — see the method's own note in
+/// `runtime/stdlib/priority_queue.kara`. The root is therefore COPIED, and
+/// the properties worth pinning are that the copy is faithful and that the
+/// queue is left alone.
+///
+/// Both element classes appear for the reason the sibling
+/// `..._min_and_max_at_scalar_and_heap_t` states: a scalar `T` rides the
+/// all-`i64` base layout, so a `String` failure hides completely behind an
+/// `i64`-only fixture (B-2026-08-25-7 looked correct at `T = i64` while every
+/// `String` came back empty). Both DIRECTIONS appear because `outranks` is the
+/// one branch that differs, and a `peek` that read index 0 without the heap
+/// property holding would still look right on a min-first queue.
+///
+/// The non-disturbance assertions are the load-bearing ones: peek twice and
+/// the same element must come back, `len` must not move, and the following
+/// `pop` must return exactly what `peek` promised. A `peek` that moved the
+/// root out would satisfy the first read and fail all three.
+///
+/// Twin of `tests/codegen.rs`'s `e2e_stdlib_priority_queue_peek_reads_the_root`,
+/// asserting the SAME string: this module's bodies are real Kāra compiled
+/// through the baked-stdlib path, so interpreter/codegen parity is what keeps
+/// one source honest across two backends.
+#[test]
+fn test_priority_queue_peek_reads_the_root_without_removing_it() {
+    let out = run(r#"
+fn main() {
+    let e: PriorityQueue[i64] = PriorityQueue.new();
+    match e.peek() { Some(v) => { println(v); } None => { println("none"); } }
+    let mut q: PriorityQueue[i64] = PriorityQueue.new();
+    q.push(5); q.push(1); q.push(4); q.push(9);
+    match q.peek() { Some(v) => { println(v); } None => {} }
+    match q.peek() { Some(v) => { println(v); } None => {} }
+    println(q.len());
+    match q.pop() { Some(v) => { println(v); } None => {} }
+    match q.peek() { Some(v) => { println(v); } None => {} }
+    println(q.len());
+    let mut m: PriorityQueue[i64] = PriorityQueue.max_first();
+    m.push(5); m.push(1); m.push(4); m.push(9);
+    match m.peek() { Some(v) => { println(v); } None => {} }
+    let h = PriorityQueue.from([9, 7, 8, 1, 3]);
+    match h.peek() { Some(v) => { println(v); } None => {} }
+    let hm = PriorityQueue.max_first_from([9, 7, 8, 1, 3]);
+    match hm.peek() { Some(v) => { println(v); } None => {} }
+    let mut s: PriorityQueue[String] = PriorityQueue.new();
+    s.push("pear"); s.push("apple"); s.push("fig");
+    match s.peek() { Some(v) => { println(v); } None => {} }
+    match s.peek() { Some(v) => { println(v); } None => {} }
+    println(s.len());
+    match s.pop() { Some(v) => { println(v); } None => {} }
+    match s.peek() { Some(v) => { println(v); } None => {} }
+}
+"#);
+    assert_eq!(
+        out,
+        "none\n1\n1\n4\n1\n4\n3\n9\n1\n9\napple\napple\n3\napple\nfig\n"
+    );
+}
+
+/// B-2026-08-25-32 — the streaming median over two queues, which is the use
+/// case the row was filed from (LeetCode 295, kata 295) and the reason `peek`
+/// is worth having at all.
+///
+/// Hold a max-first queue over the lower half and a min-first queue over the
+/// upper half; the median is THE TWO ROOTS. That query is O(1) only because
+/// reading a root is O(1) — without `peek` the textbook algorithm has to
+/// `pop` and `push` back (O(log n) twice, and mutating where a reader wants
+/// `ref`), so it cannot be written at its textbook cost.
+///
+/// The medians are cross-checked against an independent oracle (Python
+/// `bisect.insort` + midpoint over the same feed): 5, 10, 5, 4, 5, 6, 7, 7,
+/// 8, 7. The trailing `lo.len() + hi.len()` is the non-disturbance assertion
+/// that matters most here — after ten iterations each calling `peek` up to
+/// twice, all ten elements must still be in the queues. A `peek` that removed
+/// what it read would print a number below 10 while every median above it
+/// stayed plausible.
+///
+/// Twin of `tests/codegen.rs`'s
+/// `e2e_stdlib_priority_queue_peek_drives_a_streaming_median`.
+#[test]
+fn test_priority_queue_peek_drives_a_streaming_median() {
+    let out = run(r#"
+fn main() {
+    let mut lo: PriorityQueue[i64] = PriorityQueue.max_first();
+    let mut hi: PriorityQueue[i64] = PriorityQueue.new();
+    let feed: Vec[i64] = [5, 15, 1, 3, 8, 7, 9, 10, 20, 2];
+    let mut k = 0;
+    while k < feed.len() {
+        lo.push(feed[k]);
+        match lo.pop() { Some(t) => { hi.push(t); } None => {} }
+        if hi.len() > lo.len() {
+            match hi.pop() { Some(t) => { lo.push(t); } None => {} }
+        }
+        if lo.len() == hi.len() {
+            match lo.peek() {
+                Some(a) => {
+                    match hi.peek() { Some(b) => { println((a + b) / 2); } None => {} }
+                }
+                None => {}
+            }
+        } else {
+            match lo.peek() { Some(a) => { println(a); } None => {} }
+        }
+        k = k + 1;
+    }
+    println(lo.len() + hi.len());
+}
+"#);
+    assert_eq!(out, "5\n10\n5\n4\n5\n6\n7\n7\n8\n7\n10\n");
+}
+
 #[test]
 fn test_secret_expose_reads_inner() {
     // `std.secret.Secret[T]` — `Secret.new(v)` wraps a sensitive value and

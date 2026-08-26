@@ -16,7 +16,7 @@
 // stated here instead:
 //
 //     push / pop      O(log n)
-//     peek / len      O(1)
+//     peek / len      O(1)      — `peek` COPIES the root; see its note
 //     from            O(n)      — Floyd heapify, not n pushes
 //     into_sorted_vec O(n log n)
 //     decrease-key    NOT PROVIDED — no handle is returned by `push`.
@@ -172,6 +172,30 @@ impl[T: Ord] PriorityQueue[T] {
         self.xs.push(x);
         let n = self.xs.len();
         self.sift_up(n - 1);
+    }
+
+    // Read the next element WITHOUT removing it — the smallest of a
+    // smallest-first queue, the largest of a largest-first one — or
+    // `None` when empty. Both directions keep their winner at the root,
+    // and the root of a heap is always index 0, so this is one indexing
+    // operation and no comparisons.
+    //
+    // **Why `Option[T]` and not the `Option[ref T]` Rust's
+    // `BinaryHeap::peek` hands back.** A Kāra body cannot CONSTRUCT a
+    // borrow-carrying `Option`: there is no way to spell `Some(<a
+    // reference into self>)`, and `None` is an `Option[T]`, so the type
+    // is inhabitable only from a `#[compiler_builtin]` whose real body
+    // is Rust — which is exactly what `OnceCell.get` is. The consequence
+    // is that `peek` COPIES the root: free for a scalar `T`, a clone for
+    // a heap-carrying one. It leaves the queue undisturbed either way,
+    // which is the property that makes it a peek rather than a
+    // `pop`-then-`push` (O(log n) twice, and needing `mut ref` where a
+    // reader wants `ref`).
+    fn peek(ref self) -> Option[T] {
+        if self.xs.len() == 0 {
+            return None;
+        }
+        Some(self.xs[0])
     }
 
     // Remove and return the next element — the smallest of a

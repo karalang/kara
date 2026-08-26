@@ -31,7 +31,7 @@
 /// [`karac::prelude::STDLIB_SOURCES`] keys.
 ///
 /// Kept honest by `lowered_module_list_matches_codegen`, which re-derives the
-/// set from `src/codegen.rs` itself — a 9th lowered module added without a line
+/// set from `src/codegen.rs` itself — a 10th lowered module added without a line
 /// here fails that test rather than silently escaping the gate.
 const LOWERED_MODULES: &[&str] = &[
     "tracing.kara",
@@ -42,6 +42,7 @@ const LOWERED_MODULES: &[&str] = &[
     "pool.kara",
     "process.kara",
     "cli.kara",
+    "priority_queue.kara",
 ];
 
 fn source_of(module: &str) -> &'static str {
@@ -186,10 +187,21 @@ fn errors_are_meaningful_only_with_the_self_copy_excluded() {
 #[test]
 fn lowered_module_list_matches_codegen() {
     let codegen_src = include_str!("../src/codegen.rs");
+    // Match the call name, then skip whatever whitespace separates it from its
+    // first argument: `lower_stdlib_source("mem", ..)` and the rustfmt-wrapped
+    // `lower_stdlib_source(\n    "priority_queue",\n    ..)` are the same call.
+    // Anchoring on `lower_stdlib_source("` instead misses every wrapped call —
+    // which is exactly how `priority_queue` escaped this gate from the day the
+    // gate landed (B-2026-08-25-13) until B-2026-08-25-32, with this very test
+    // reporting green throughout because the omission was SYMMETRIC: the module
+    // was missing from the scan AND from the list, so the two agreed. A guard
+    // that derives both sides of a comparison through the same blind spot
+    // cannot see it.
     let mut found: Vec<String> = codegen_src
-        .match_indices("lower_stdlib_source(\"")
+        .match_indices("lower_stdlib_source(")
         .filter_map(|(i, pat)| {
-            let rest = &codegen_src[i + pat.len()..];
+            let rest = codegen_src[i + pat.len()..].trim_start();
+            let rest = rest.strip_prefix('"')?;
             rest.find('"').map(|end| format!("{}.kara", &rest[..end]))
         })
         .collect();
