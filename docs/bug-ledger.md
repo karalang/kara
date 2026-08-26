@@ -92,8 +92,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 291 | 0 |
-| leak | 196 | 1 |
+| miscompile | 292 | 1 |
+| leak | 196 | 0 |
 | missing-feature | 178 | 5 |
 | run-vs-build | 164 | 1 |
 | codegen-gap | 140 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1050 | 5 |
+| codegen | 1051 | 5 |
 | typecheck | 265 | 3 |
 | interp | 182 | 0 |
 | other | 70 | 3 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1599 surfaced · 10 open · 1564 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-26). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1600 surfaced · 10 open · 1565 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-26). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (10)
 
@@ -138,8 +138,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1599 surfaced
 | B-2026-08-26-11 | 2026-08-26 | other | medium | design.md's `String` METHOD TABLE names the char-append method `push_char`, which DOES NOT EXIST -- the working method is `push(c: char)`, and the table has NO ROW FOR IT, so the documented spelling fails and the real one is undocumented | docs/design.md § `String` method table (the `push_char` row) |
 | B-2026-08-26-13 | 2026-08-26 | other | medium | `String.split` HAS NO BORROWING FORM: it returns `Vec[String]`, so tokenizing costs one heap allocation and one byte copy PER FIELD, and there is no slice-returning variant to reach for. Measured at 0.67 s where C's in-place split is 0.03 s and Rust's `Vec[&str]` is 0.18 s -- but Kara BEATS Rust's same-semantics `Vec[String]` version (1.17 s) by 1.7x, so the implementation is fine and the API's return shape is the entire gap. | — |
 | B-2026-08-26-15 | 2026-08-26 | typecheck | low | `LazyLock.new`'s closure-capture restriction is UNENFORCED: design.md says the closure "may only capture other module-level compile-time bindings; captures of runtime state are a compile error", but a closure capturing a function local is accepted silently. Measured to be a missing RESTRICTION rather than a correctness hazard -- the capturing form produces identical, correct results on `--interp`, `karac run` and `karac build` -- which is why it is split out of B-2026-08-26-3 rather than blocking it. | — |
-| B-2026-08-26-18 | 2026-08-26 | codegen | medium | A `PriorityQueue[T]` whose element T is a STRUCT CARRYING A HEAP FIELD leaks that field's buffer -- 31 bytes in 8 allocations on the three-push fixture. Independent of `impl Drop`; a plain `Vec[T]` holding the same struct is clean, and `PriorityQueue[String]` is clean, so the gap is specifically the generic queue's handling of a struct element's interior heap. | — |
 | B-2026-08-26-20 | 2026-08-26 | codegen | medium | A `char` returned through a CLOSURE prints as its integer code point under both compiled backends while the interpreter prints the character: `let c: char = 'z'; let f: Fn() -> char = || c; println(f())` gives `z` under `--interp` and `122` under `karac run` / `karac build`. No borrow involved — the same `char` printed directly, or returned from a plain function, renders correctly on every backend. | — |
+| B-2026-08-26-21 | 2026-08-26 | codegen | medium | A RELOCATING element store (`b.xs[i] = b.xs[j]`, then `b.xs[j] = t`) runs the displaced element's user `Drop` BODY, even though the value is being moved to another slot rather than destroyed. A two-element swap of a `Drop` type prints SIX drop bodies, all during the swap and none at scope exit; the correct sequence is one body per element when it finally dies. | — |
 
 ### Relocated (1)
 
@@ -170,9 +170,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1599 surfaced
 
 </details>
 
-### Fixed (1564)
+### Fixed (1565)
 
-<details><summary>1564 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1565 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1739,6 +1739,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1599 surfaced
 | B-2026-08-26-14 | codegen | high | A `par` BRANCH WHOSE BODY CALLS A VALUE-PRESERVING SCALAR METHOD (`abs` / `sqrt` / a `float_math` transcendental) ON A NARROW-INTEGER RECEIVER FAILS… | 08410c2 |
 | B-2026-08-26-16 | effect | medium | UNDECLARED EFFECTS ESCAPE THROUGH `LazyLock.get()`: design.md says the effect system attributes first-access initialization to the CALLING function,… | b77511f |
 | B-2026-08-26-17 | codegen | high | A MODULE-SCOPE `Atomic[T]` failed BOTH compiled backends with `codegen: Atomic receiver 'X' has no slot` while `--interp` was correct -- and module s… | f79cefd |
+| B-2026-08-26-18 | codegen | medium | A `PriorityQueue[T]` whose element T is a STRUCT CARRYING A HEAP FIELD leaks that field's buffer -- 31 bytes in 8 allocations on the three-push fixtu… | 54c5421 |
 | B-2026-08-26-19 | typecheck | low | A `ref T`-returning method is accepted in a plain value position but REJECTED as a closure tail against `Fn() -> T`: `\|\| cell.get_or_init(\|\| 7)` fail… | fa5e169 |
 
 </details>
