@@ -2097,9 +2097,24 @@ impl<'a> super::TypeChecker<'a> {
     ///
     /// It must therefore agree with `lowering::ordering_dispatch_comparator`.
     /// Accepting here without a matching desugaring there is the failure mode
-    /// the row warns about — a rejection traded for a silent wrong answer — so
-    /// both sides ask for exactly the same thing: an ordering impl that supplies
-    /// `cmp`, or the direct `lt`/`le`/`gt`/`ge` method.
+    /// the row warns about — a rejection traded for a broken program — so both
+    /// sides ask for exactly the same thing: an ordering impl that supplies
+    /// `cmp`, or ALL FOUR of the direct `lt`/`le`/`gt`/`ge` methods.
+    ///
+    /// All four, not any one, and this gate was measured getting it wrong. This
+    /// arm accepts a type for the whole `<` `<=` `>` `>=` surface at once, but
+    /// lowering picks a target per operator: with `lt` defined and no `cmp`,
+    /// `a < b` lowered to the real `P.lt` while `a > b` lowered to a `P.gt`
+    /// nobody wrote, and the program passed `karac check` before dying with
+    /// `path 'P.gt' has no interpreter evaluation rule` — the very symptom this
+    /// row exists to remove, reintroduced through the front door. A partial
+    /// direct-method impl is now refused, and the author is pointed at `cmp`,
+    /// which covers all four by construction.
+    ///
+    /// The method lookup is TYPE-WIDE rather than per-impl-block for the same
+    /// agree-with-lowering reason: lowering reads `trait_impl_methods`, which is
+    /// keyed `(type, method)` with no impl-block boundary, so asking per-block
+    /// here could refuse a spelling lowering would have accepted.
     ///
     /// `partial_cmp` is deliberately NOT enough. The desugaring it would need,
     /// `partial_cmp(a, b).is_lt()`, lands on `Option[Ordering].is_lt()`, which
@@ -2112,15 +2127,22 @@ impl<'a> super::TypeChecker<'a> {
             Type::Named { name, .. } | Type::Shared(name) => name.as_str(),
             _ => return false,
         };
-        self.env.impls.iter().any(|imp| {
+        let has_ordering_impl = self.env.impls.iter().any(|imp| {
             imp.trait_name
                 .as_deref()
                 .is_some_and(|t| t == "PartialOrd" || t == "Ord")
                 && imp.target_type == name
-                && ["cmp", "lt", "le", "gt", "ge"]
-                    .iter()
-                    .any(|m| imp.methods.contains_key(*m))
-        })
+        });
+        if !has_ordering_impl {
+            return false;
+        }
+        let provides = |m: &str| {
+            self.env
+                .impls
+                .iter()
+                .any(|imp| imp.target_type == name && imp.methods.contains_key(m))
+        };
+        provides("cmp") || ["lt", "le", "gt", "ge"].iter().all(|m| provides(m))
     }
 
     /// The rejection message for a comparison operator whose derive-based gate

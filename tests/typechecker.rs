@@ -45914,6 +45914,48 @@ fn main() { println(needs_eq(Bare { id: 1 })); }
 }
 
 #[test]
+fn a_partial_direct_method_ordering_impl_is_refused_rather_than_half_lowered() {
+    // B-2026-08-26-10 — this gate accepts a type for the WHOLE `< <= > >=`
+    // surface at once, but lowering picks its target PER OPERATOR. An impl
+    // defining only `lt` therefore passed `karac check` and then broke on the
+    // operators it had no body for: `a < b` reached the real `P.lt` while
+    // `a > b` reached a `P.gt` nobody wrote, dying with
+    //
+    //   internal: path 'P.gt' has no interpreter evaluation rule
+    //
+    // which is the exact symptom this row exists to remove — reintroduced
+    // through the front door by the fix for it. Measured before this assertion
+    // existed. The gate now demands `cmp` (which covers all four by
+    // construction) or all four direct methods, and the sibling test
+    // `test_user_impl_ord_drives_comparison_operators` pins that the complete
+    // four-method spelling still works.
+    let errs = typecheck_errors(
+        r#"
+struct P { x: i64 }
+impl PartialEq for P { fn eq(ref self, other: ref P) -> bool { self.x == other.x } }
+impl Eq for P {}
+impl PartialOrd for P { fn partial_cmp(ref self, other: ref P) -> Option[Ordering] { Some(self.x.cmp(other.x)) } }
+impl Ord for P {
+    fn lt(self, other: P) -> bool { self.x < other.x }
+}
+fn main() {
+    let a = P { x: 1 };
+    let b = P { x: 5 };
+    println(f"{a < b}");
+    println(f"{a > b}");
+}
+"#,
+    );
+    assert!(
+        errs.iter().any(|e| e
+            .message
+            .contains("ordering operators dispatch through 'cmp'")),
+        "an ordering impl defining only `lt` must be refused, not accepted and \
+         then half-lowered, got: {errs:?}"
+    );
+}
+
+#[test]
 fn partial_cmp_without_cmp_is_still_rejected_and_names_the_workaround() {
     // The one ordering shape that still cannot be lowered: an impl supplying
     // `partial_cmp` but no `cmp`. Its desugaring would be
