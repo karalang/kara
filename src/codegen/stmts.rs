@@ -5647,9 +5647,23 @@ impl<'ctx> super::Codegen<'ctx> {
                             // the binding then dispatched `b.method()` against
                             // the wrong type. Surfaced by a `-> Self` method
                             // called through a generic bound (B-2026-07-03-11).
-                            ExprKind::MethodCall { .. } => self
-                                .type_name_of_expr(value)
-                                .filter(|n| matches!(self.type_decls.struct_types.get(n.as_str()), Some(t) if *t == st)),
+                            ExprKind::MethodCall { .. } => self.type_name_of_expr(value).filter(
+                                |n| {
+                                    matches!(self.type_decls.struct_types.get(n.as_str()), Some(t) if *t == st)
+                                        // An ENUM-returning method lowers to an
+                                        // aggregate as well, but its layout lives
+                                        // in `enum_layouts` — a struct-only filter
+                                        // drops the name, and the reverse-lookup
+                                        // below searches only structs too, so the
+                                        // binding ends up with no type at all.
+                                        // `let o = a.cmp(b); o.is_lt()` was the
+                                        // shape: it ran under `--interp` and failed
+                                        // to build with "no handler for method
+                                        // 'is_lt' on variable 'o'"
+                                        // (B-2026-08-26-23).
+                                        || matches!(self.type_decls.enum_layouts.get(n.as_str()), Some(l) if l.llvm_type == st)
+                                },
+                            ),
                             _ => None,
                         };
                         if let Some(name) = ast_hint {

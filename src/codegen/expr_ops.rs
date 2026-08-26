@@ -3650,6 +3650,36 @@ impl<'ctx> super::Codegen<'ctx> {
             {
                 self.type_name_of_expr(object)
             }
+            // `a.cmp(b)` answered by the BUILTIN comparator yields an
+            // `Ordering`, and nothing else records that (B-2026-08-26-23). A
+            // user `impl Ord`'s `cmp` is a declared function, so its return type
+            // is in `fn_return_type_names` and the predicates dispatch fine; the
+            // builtin arm in `method_call.rs` materializes the aggregate inline
+            // with no declaration anywhere. The result is a `StructValue`, so
+            // the let-binding fallback's LLVM-identity reverse-lookup cannot
+            // name it either — that searches `struct_types`, and `Ordering` is
+            // an ENUM. So `a.cmp(b).is_lt()` and `let o = a.cmp(b); o.is_lt()`
+            // both failed to build ("no handler for method 'is_lt'") while
+            // running correctly under `--interp`.
+            //
+            // The condition mirrors that builtin arm exactly — `cmp`, one
+            // argument, and no user impl owning it — so this cannot claim
+            // `Ordering` for a call the builtin will not answer. An INHERENT
+            // `fn cmp` returning something else is a user impl by that test, and
+            // keeps its own declared return type.
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } if method == "cmp"
+                && args.len() == 1
+                && !self
+                    .type_name_of_expr(object)
+                    .is_some_and(|t| self.user_impl_method_exists(&expr.span, &t, method)) =>
+            {
+                Some("Ordering".to_string())
+            }
             // `Stats.min`/`max` → `Option[f64]`, `Stats.argmin`/`argmax` →
             // `Option[i64]` (intercepted in `try_compile_stats_call`). A direct
             // `match Stats.argmin(v) { … }` needs the scrutinee's enum resolved

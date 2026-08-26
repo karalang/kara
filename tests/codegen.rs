@@ -86907,6 +86907,57 @@ fn main() {
     }
 
     #[test]
+    fn e2e_ordering_predicates_build_on_every_receiver_shape() {
+        // B-2026-08-26-23 — three shapes ran correctly under `--interp` and
+        // failed to BUILD, each for its own reason:
+        //
+        //   1. a CHAINED `a.cmp(b).is_lt()` on a primitive, and
+        //   2. the same comparator bound to a local first,
+        //      both because the builtin `cmp` arm materializes its `Ordering`
+        //      aggregate inline with no declaration, so nothing named the
+        //      result type (a user `impl Ord`'s `cmp` IS declared, which is why
+        //      that shape always worked);
+        //   3. EVERY `Option[Ordering]` receiver, including a plainly annotated
+        //      local, because `impl Option[Ordering]`'s five predicates lived in
+        //      `option.kara`, which codegen does not compile.
+        //
+        // All three are asserted here rather than only the chained one, because
+        // they were three separate defects wearing one error message ("no
+        // handler for method 'is_lt'").
+        let out = run_program(
+            r#"
+fn main() {
+    let a: i64 = 1;
+    let b: i64 = 5;
+    println(a.cmp(b).is_lt());
+    let o = a.cmp(b);
+    println(o.is_gt());
+    let lt: Option[Ordering] = Some(Ordering.Less);
+    let no: Option[Ordering] = None;
+    println(f"{lt.is_lt()} {lt.is_ge()}");
+    println(f"{no.is_lt()} {no.is_eq()}");
+}
+"#,
+        );
+        let out = out.expect("all three Ordering-predicate shapes must build");
+        let lines: Vec<&str> = out.trim().lines().collect();
+        assert_eq!(
+            lines,
+            vec![
+                "true",  // 1 < 5
+                "false", // not greater
+                // `Some(Less)`: is_lt yes, is_ge no.
+                "true false",
+                // `None` is INCOMPARABLE — design.md § Comparison Traits has
+                // every predicate answer false, matching IEEE-754's `NaN < 5.0`
+                // and `NaN == NaN` both being false. Asserted because a naive
+                // "unwrap and compare" lowering would answer true for `is_eq`.
+                "false false",
+            ]
+        );
+    }
+
+    #[test]
     fn e2e_string_and_primitive_cmp_still_use_the_builtin_comparator() {
         // The guard that stops codegen's builtin `cmp` arm from answering for a
         // user `impl Ord` (B-2026-08-26-10) asks `user_impl_method_exists` about
