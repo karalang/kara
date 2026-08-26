@@ -10978,6 +10978,99 @@ fn main() {
         }
     }
 
+    /// Every integer WIDTH through the `-> Self` return-slot arm, not just
+    /// the one the two tests above happen to use.
+    ///
+    /// B-2026-08-26-14 widened that arm's guard from "exactly i64" to the real
+    /// integer widths, and the fix was verified on `i32` alone — the same
+    /// shape of thin coverage that let the bug exist. `i8`/`i16`/`i128` are
+    /// asserted here so the guard's width list is pinned by a test rather than
+    /// by the commit message that introduced it.
+    ///
+    /// Each arm is `base.abs() + (base + 100)` with `base = -7`, so every
+    /// width answers 100 and a width that falls out of the guard fails to
+    /// compile rather than answering wrongly.
+    #[test]
+    fn test_e2e_par_join_branch_narrow_int_method_every_width() {
+        for (ty, lit) in [
+            ("i8", "-7i8"),
+            ("i16", "-7i16"),
+            ("i32", "-7i32"),
+            ("i64", "-7i64"),
+            ("i128", "-7i128"),
+        ] {
+            let src = format!(
+                "fn main() {{\n\
+                 \x20   let base: {ty} = {lit};\n\
+                 \x20   let total = par {{\n\
+                 \x20       let x = base.abs();\n\
+                 \x20       let y = base + 100{ty};\n\
+                 \x20       x + y\n\
+                 \x20   }};\n\
+                 \x20   println(total);\n\
+                 }}\n"
+            );
+            if let Some(out) = run_program(&src) {
+                assert_eq!(out.trim(), "100", "width {ty} got {out:?}");
+            }
+        }
+    }
+
+    /// Narrow return slots through the sizer's OTHER arms — struct field, Vec
+    /// index, and a user `impl` method.
+    ///
+    /// Before B-2026-08-26-7 a `let x: u8 = ...` inside a branch produced an
+    /// i64 slot, because the annotation was ignored and the literal defaulted.
+    /// Narrow slots are now the COMMON case here rather than a rare one, so
+    /// these arms are worth pinning at a narrow width even though none of them
+    /// was ever broken: the change moved which path they take.
+    ///
+    /// Each branch reads its OWN binding — a plain struct or `Vec` reachable
+    /// from two branches is an ownership error by design, not a slot problem.
+    #[test]
+    fn test_e2e_par_join_narrow_slots_through_other_sizer_arms() {
+        let cases: &[(&str, &str, &str)] = &[
+            (
+                "structfield",
+                "struct P { a: u8 }\n\
+                 fn main() {\n\
+                 \x20   let p = P { a: 7 };\n\
+                 \x20   let q = P { a: 3 };\n\
+                 \x20   let t = par { let x: u8 = p.a; let y: u8 = q.a + 100; x + y };\n\
+                 \x20   println(t);\n\
+                 }\n",
+                "110",
+            ),
+            (
+                "vecindex",
+                "fn main() {\n\
+                 \x20   let v: Vec[i32] = [7, 3];\n\
+                 \x20   let w: Vec[i32] = [3, 7];\n\
+                 \x20   let t = par { let x = v[0]; let y = w[1] + 100; x + y };\n\
+                 \x20   println(t);\n\
+                 }\n",
+                "114",
+            ),
+            (
+                "userimpl",
+                "struct W { v: i32 }\n\
+                 impl W { fn get(ref self) -> i32 { self.v } }\n\
+                 fn main() {\n\
+                 \x20   let a = W { v: 7 };\n\
+                 \x20   let b = W { v: 3 };\n\
+                 \x20   let t = par { let x = a.get(); let y = b.get() + 100; x + y };\n\
+                 \x20   println(t);\n\
+                 }\n",
+                "110",
+            ),
+        ];
+        for (tag, src, want) in cases {
+            if let Some(out) = run_program(src) {
+                assert_eq!(out.trim(), *want, "case {tag} got {out:?}");
+            }
+        }
+    }
+
     /// Variant: a FLOAT scalar-method branch. `base.sqrt()` types as `-> Self`
     /// (f64), so the `a` slot must be sized f64, not the i64 default.
     /// Expected `3.0 + 10.0 = 13`.
