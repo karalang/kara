@@ -188,6 +188,55 @@ mod memory_sanitizer_tests {
         count_allocs: bool,
         auto_par: bool,
     ) -> Option<(String, String, std::process::ExitStatus)> {
+        // Compile on a FAT-STACK thread, matching how `karac` actually runs.
+        //
+        // This harness drives the compiler phases IN-PROCESS, and a cargo test
+        // thread gets ~2 MB. That is the one place in the repo where the
+        // compiler runs on a small stack: `main.rs` puts the whole CLI on 16 MB
+        // and `lib.rs`'s `run_on_interp_thread` does the same for the library
+        // entry points, both because — in `main.rs`'s words — "the compiler
+        // phases are deeply recursive" and the default is a platform lottery.
+        // This harness never got that treatment, so its real ceiling was ~2 MB
+        // while every user-facing path had 16.
+        //
+        // Measured (B-2026-08-26-24): compiling a `PriorityQueue[String]`
+        // program overflowed at 2 MB and passed at 3, taking 0.89s — deep but
+        // finite, and only a little over the line. Lowering a `T: Ord`
+        // comparison to `a.cmp(b).is_lt()` added the frames that crossed it, and
+        // any future change of that shape would have crossed it again. 16 MB
+        // matches the two production entry points rather than inventing a third
+        // number.
+        // The spawned thread INHERITS THE TEST'S NAME. Several gates this
+        // harness runs through — the ownership gate in `tests/common/mod.rs`
+        // most sharply — identify the current test by `thread::current().name()`
+        // and match it against a grandfather list. An unnamed worker reports
+        // itself as `<unnamed>`, no entry matches, and two deliberately
+        // grandfathered fixtures started failing with the gate's own "fix the
+        // test program" message. Measured, not guessed at.
+        let thread_name = std::thread::current()
+            .name()
+            .unwrap_or("asan-harness")
+            .to_string();
+        std::thread::scope(|scope| {
+            std::thread::Builder::new()
+                .name(thread_name)
+                .stack_size(16 * 1024 * 1024)
+                .spawn_scoped(scope, || {
+                    run_under_asan_opts_inner(src, label, detect_leaks, count_allocs, auto_par)
+                })
+                .expect("failed to spawn asan-harness compile thread")
+                .join()
+                .unwrap_or_else(|payload| std::panic::resume_unwind(payload))
+        })
+    }
+
+    fn run_under_asan_opts_inner(
+        src: &str,
+        label: &str,
+        detect_leaks: bool,
+        count_allocs: bool,
+        auto_par: bool,
+    ) -> Option<(String, String, std::process::ExitStatus)> {
         use std::sync::atomic::{AtomicU64, Ordering};
         static COUNTER: AtomicU64 = AtomicU64::new(0);
 
