@@ -665,10 +665,23 @@ impl<'ctx> super::Codegen<'ctx> {
     > {
         match &object.kind {
             ExprKind::Identifier(name) => {
-                let slot =
-                    self.variables.get(name.as_str()).copied().ok_or_else(|| {
-                        format!("codegen: Atomic receiver '{}' has no slot", name)
-                    })?;
+                let Some(slot) = self.variables.get(name.as_str()).copied() else {
+                    // MODULE-LEVEL `let COUNTER: Atomic[i64] = Atomic.new(0)` —
+                    // the storage is an LLVM global, not a local alloca, and
+                    // this lookup only ever consulted `variables`. So the
+                    // module-scope Atomic that the `module_mut_binding` warning
+                    // recommends as the FIRST alternative to `let mut` checked
+                    // and interpreted fine, then failed both compiled backends
+                    // with "has no slot" (B-2026-08-26-17). The global IS the
+                    // storage — same posture `get_data_ptr` documents for the
+                    // Vec/Map/Set method paths — so it substitutes for the
+                    // alloca directly.
+                    if let Some(info) = self.mod_bindings.module_bindings.get(name.as_str()) {
+                        let is_bool = self.atomic_var_inner_is_bool.contains(name.as_str());
+                        return Ok((info.global.as_pointer_value(), info.llvm_ty, is_bool));
+                    }
+                    return Err(format!("codegen: Atomic receiver '{}' has no slot", name));
+                };
                 let is_bool = self.atomic_var_inner_is_bool.contains(name.as_str());
                 // A `ref Atomic[T]` / `mut ref Atomic[T]` PARAMETER: its alloca
                 // holds a POINTER to the caller's atomic storage (recorded in

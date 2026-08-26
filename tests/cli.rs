@@ -12322,6 +12322,47 @@ fn main() {
         assert_eq!(a, expected, "`karac build` must agree with the interpreter");
     }
 }
+
+/// B-2026-08-26-17 — a MODULE-SCOPE `Atomic[T]`, the first alternative the
+/// `module_mut_binding` warning offers, checked and interpreted correctly but
+/// failed both compiled backends with "Atomic receiver 'X' has no slot": the
+/// storage resolver consulted only local allocas, never the module-binding
+/// global. Found by making the recommendation guard above actually RUN its
+/// probes instead of only checking them.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_module_scope_atomic_lowers_on_every_backend() {
+    let tmp = scratch_project("module-atomic");
+    let src = r#"let COUNTER: Atomic[i64] = Atomic.new(0);
+fn main() {
+    COUNTER.store(7, MemoryOrdering.SeqCst);
+    println(COUNTER.load(MemoryOrdering.SeqCst));
+}
+"#;
+    write(&tmp.join("m.kara"), src);
+    let run = |args: &[&str]| -> Option<String> {
+        let o = karac_bin().current_dir(&tmp).args(args).output().ok()?;
+        o.status
+            .success()
+            .then(|| String::from_utf8_lossy(&o.stdout).into_owned())
+    };
+    let interp = run(&["run", "--interp", "m.kara"]);
+    let jit = run(&["run", "m.kara"]);
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    assert_eq!(
+        interp.as_deref(),
+        Some("7\n"),
+        "`--interp` must read back 7"
+    );
+    assert_eq!(
+        jit.as_deref(),
+        Some("7\n"),
+        "a module-scope Atomic must lower under the JIT, not fail with \
+         `has no slot`"
+    );
+}
+
 /// Concept pages are read in a terminal. Keep every line inside 78
 /// columns so no page wraps at 80 and destroys its own tables.
 /// B-2026-08-25-22 — the `stable-hash` page's claims are MEASURED, not
