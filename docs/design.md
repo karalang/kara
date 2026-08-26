@@ -1710,6 +1710,7 @@ Method signatures for the standard collections. All methods that grow the collec
 | `remove_first` | `fn remove_first[with E](mut ref self, pred: Fn(ref T) -> bool with E) -> Option[T] with E` | Removes and returns the first element satisfying the predicate; `None` if no match. O(n) |
 | `[]` | `fn index(ref self, idx: i64) -> ref T` | Index operator; panics if out of bounds |
 | `[]=` | `fn index_set(mut ref self, idx: i64, val: T)` | Index assignment; panics if out of bounds |
+| `swap` | `fn swap(mut ref self, i: i64, j: i64)` | Exchanges the elements at `i` and `j`. Neither value is destroyed — both stay live, merely relocated, so no `Drop` body runs. Panics if either index is out of bounds; `i == j` is a no-op. This is the sanctioned spelling for an element exchange: the `let t = xs[i]; xs[i] = xs[j]; xs[j] = t` form is **rejected** for non-`Copy` `T` (see [The index operator](#the-index-operator-expri)). `std.mem.swap` cannot express it — that would need two `mut ref` into one container, which the aliasing rule forbids |
 
 **`Map[K, V]` where `K: Hash + Eq`**
 
@@ -8127,6 +8128,70 @@ fn bump(counter: mut ref i64) {
 **Deref as a place expression.** `*r` where `r: mut ref T` is a **place expression** and is valid on the left-hand side of `=` and of compound-assignment operators (`+=`, `-=`, etc.). The assignment writes through the reference without consuming the old value; non-`Copy` types are handled by drop-then-write, same as direct assignment to a `let mut` binding. `*r` where `r: ref T` (shared borrow) is read-only — assigning through it is a compile error.
 
 **No implicit coercions.** There is no `Deref` trait, no `&` / `&mut` prefix operators to create references (references are created implicitly at call sites by the parameter-mode rules), and no auto-reborrow at binary operators. `*` is the one and only operator that crosses a reference boundary in expression context; the rest of reference handling is implicit and lives in the call-site / parameter-mode machinery.
+
+#### The index operator (`expr[i]`)
+
+**Indexing is not a consume.** `v[i]` evaluates to `ref T` — `Index.index` is
+`fn index(ref self, idx: i64) -> ref T`, so an index expression *produces a
+borrow*, not a value. Binding one in value position therefore reads **through** a
+reference and obeys the same rule as `*r` above: it requires `T: Copy`. For a
+non-`Copy` element, `let t = v[i]` is a compile error.
+
+The same follows for an element-to-element store. `Index.index_set` is
+`fn index_set(mut ref self, idx: i64, val: T)` — it takes the incoming value
+**by value**, which a `ref T` cannot supply — so `v[i] = v[j]` is rejected for
+non-`Copy` `T` as well.
+
+This is not a restriction indexing adds; it is the dereference rule applied to
+the one other place a reference is produced implicitly. The underlying reason is
+the same one `std.mem` gives for `mut ref` in its own doc comment (`runtime/stdlib/mem.kara`): **a container is not
+partially movable.** There is no representation for a `Vec` with a hole in it, so
+moving an element out of a live container is not expressible, and a language that
+let it through would owe the slot either a drop flag or an undefined value.
+
+Three spellings say what was meant, and the diagnostic offers all three as
+fix-its:
+
+| Intent | Spelling | Cost |
+|---|---|---|
+| Read it without owning it | `let t = ref v[i];` | none — a borrow |
+| Take an independent copy | `let t = v[i].clone();` | requires `T: Clone`; allocation is visible at the call |
+| Exchange two elements | `v.swap(i, j)` | none — neither value dies, so no `Drop` body runs |
+
+```
+error[E_INDEX_MOVE_NON_COPY]: cannot move out of an index expression
+   --> heap.kara:128:17
+    |
+128 |         let t = self.xs[i];
+    |                 ^^^^^^^^^^ `Item` does not implement `Copy`
+    |
+    = note: `v[i]` evaluates to `ref Item`; binding it by value would move the
+            element out of `self.xs`, leaving a hole the container cannot represent
+help: borrow the element instead
+    |         let t = ref self.xs[i];
+help: or take an independent copy
+    |         let t = self.xs[i].clone();
+help: to exchange two elements, use `swap`
+    |         self.xs.swap(i, j);
+```
+
+**Why this is stated rather than left to inference.** Both backends previously
+*accepted* the rejected forms and improvised different semantics for them: a
+two-element swap written through index reads printed a different sequence of
+`Drop` bodies under `karac run` than under `karac build`, because the interpreter
+read the store as destroying the displaced element while codegen read it as
+relocating one (B-2026-08-26-21). That disagreement was not a backend defect to
+arbitrate — it was a program the language never sanctioned, and each backend had
+filled the gap in good faith. Rejecting the form at the front end removes the
+question instead of answering it.
+
+What remains legal has exactly one meaning. `v[i] = <fresh owned value>` — an
+aggregate literal, a call result, any expression that *constructs* rather than
+borrows — is a **destroying** overwrite: the displaced element is destroyed in
+place and its `Drop` body runs there, per `index_set` taking ownership of the
+incoming value. Both backends already implement that, and it is the only element
+store form the language admits for a non-`Copy` `T`.
+
 
 ### Match Arm Binding Modes
 
