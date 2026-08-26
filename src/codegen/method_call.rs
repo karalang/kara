@@ -5039,7 +5039,29 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
-        if method == "cmp" && args.len() == 1 {
+        // B-2026-08-26-10 — a USER `impl Ord for T { fn cmp(...) }` owns `.cmp`
+        // on its own type; the builtin comparator below must not answer for it.
+        //
+        // The catch-all's own comment used to assert "user-struct `.cmp` is
+        // rejected at typecheck and never arrives", and that stopped being true
+        // once `type_supports_ord` grew its `has_user_impl_ord` fallback: a user
+        // `.cmp` call typechecks, reaches here, and — for a single-field struct,
+        // which lowers to a bare int — matched the `(IntValue, IntValue)` arm
+        // and was answered by a DECLARATION-ORDER integer compare. Measured with
+        // a `cmp` returning `Ordering.Greater` unconditionally: the interpreter
+        // said `is_lt() == false` (the body) and the compiled binary said `true`
+        // (the field). A silent wrong answer in compiled output only, which is
+        // the shape no single-backend test can catch.
+        //
+        // Declining here lets the existing user-impl dispatch further down take
+        // it, the same `user_impl_method_exists` gate the Vec / Map / Set / Slice
+        // arms already use for this exact purpose.
+        let user_owns_cmp = matches!(method, "cmp" | "partial_cmp")
+            && args.len() == 1
+            && self
+                .type_name_of_expr(object)
+                .is_some_and(|t| self.user_impl_method_exists(call_span, &t, method));
+        if method == "cmp" && args.len() == 1 && !user_owns_cmp {
             let lhs = self.compile_expr(object)?;
             let rhs = self.compile_expr(&args[0].value)?;
             if let (BasicValueEnum::IntValue(l), BasicValueEnum::IntValue(r)) = (lhs, rhs) {

@@ -86455,6 +86455,185 @@ fn main() {
     }
 
     #[test]
+    fn e2e_user_ord_cmp_body_drives_comparison_operators() {
+        // B-2026-08-26-10 — the compiled twin of
+        // `test_user_impl_ord_cmp_body_drives_comparison_operators`. `<` on a
+        // user type now lowers to `Item.cmp(a, b).is_lt()` rather than a
+        // `Item.lt` no impl defines.
+        //
+        // The `cmp` reverses the order deliberately: field declaration order
+        // answers `true false true false` for ids 1 vs 5, the body demands the
+        // exact opposite, so only a backend that really calls the body passes.
+        // Both spellings are checked in one program — `a < b` and the direct
+        // `a.cmp(b).is_lt()` — because they used to disagree with each other
+        // as well as with the interpreter.
+        let out = run_program(
+            r#"
+struct Item { id: i64 }
+impl PartialEq for Item { fn eq(ref self, other: ref Item) -> bool { self.id == other.id } }
+impl Eq for Item {}
+impl PartialOrd for Item { fn partial_cmp(ref self, other: ref Item) -> Option[Ordering] { Some(other.id.cmp(self.id)) } }
+impl Ord for Item { fn cmp(ref self, other: ref Item) -> Ordering { other.id.cmp(self.id) } }
+fn main() {
+    let a = Item { id: 1 };
+    let b = Item { id: 5 };
+    println(a < b);
+    println(a > b);
+    println(a <= b);
+    println(a >= b);
+    println(a.cmp(b).is_lt());
+}
+"#,
+        );
+        let out = out.expect("user-`impl Ord` comparison operators must build");
+        let lines: Vec<&str> = out.trim().lines().collect();
+        assert_eq!(lines, vec!["false", "true", "false", "true", "false"]);
+    }
+
+    #[test]
+    fn e2e_user_cmp_method_call_is_not_answered_by_the_builtin_comparator() {
+        // The silent-wrong-answer half of B-2026-08-26-10, and the reason the
+        // operator fix could not stop at lowering.
+        //
+        // codegen's builtin `method == "cmp"` arm ran BEFORE user-impl dispatch,
+        // and its own comment asserted "user-struct `.cmp` is rejected at
+        // typecheck and never arrives" — untrue since `type_supports_ord` grew
+        // its `has_user_impl_ord` fallback. A single-field struct lowers to a
+        // bare int, so the call matched the arm's `(IntValue, IntValue)` case and
+        // was answered by a DECLARATION-ORDER integer compare.
+        //
+        // `cmp` returns `Ordering.Greater` unconditionally here, so the body says
+        // `is_lt() == false` while a field compare of 1 vs 5 says `true`. The
+        // interpreter said `false` and the compiled binary said `true`: a wrong
+        // answer in compiled output only, invisible to any single-backend test.
+        // The interpreter twin
+        // (`test_user_cmp_method_call_is_not_answered_by_the_builtin_comparator`)
+        // pins the other side of that pair.
+        let out = run_program(
+            r#"
+struct Item { id: i64 }
+impl PartialEq for Item { fn eq(ref self, other: ref Item) -> bool { self.id == other.id } }
+impl Eq for Item {}
+impl PartialOrd for Item { fn partial_cmp(ref self, other: ref Item) -> Option[Ordering] { Some(Ordering.Greater) } }
+impl Ord for Item { fn cmp(ref self, other: ref Item) -> Ordering { Ordering.Greater } }
+fn main() {
+    let a = Item { id: 1 };
+    let b = Item { id: 5 };
+    println(a.cmp(b).is_lt());
+    println(a < b);
+}
+"#,
+        );
+        let out = out.expect("user-`impl Ord` `.cmp` must build");
+        let lines: Vec<&str> = out.trim().lines().collect();
+        assert_eq!(lines, vec!["false", "false"]);
+    }
+
+    #[test]
+    fn e2e_user_ord_cmp_dispatch_across_struct_shapes() {
+        // The operator fix must not be specific to the single-i64-field struct
+        // that exposed the codegen half (that one flattens to a bare int, which
+        // is exactly why the builtin comparator could intercept it). Three
+        // shapes that lower differently, each with a `cmp` whose answer no
+        // structural comparison can imitate:
+        //
+        //   Pair  — two fields, compares by the SECOND only, so declaration
+        //           order (which reads `a` first) gives the opposite answer;
+        //   Name  — a HEAP field, compared in REVERSE (also exercises the
+        //           owned-String receiver through the synthesised call);
+        //   Level — a unit-only enum whose `cmp` is unconditionally `Greater`.
+        let out = run_program(
+            r#"
+struct Pair { a: i64, b: i64 }
+impl PartialEq for Pair { fn eq(ref self, other: ref Pair) -> bool { self.b == other.b } }
+impl Eq for Pair {}
+impl PartialOrd for Pair { fn partial_cmp(ref self, other: ref Pair) -> Option[Ordering] { Some(self.b.cmp(other.b)) } }
+impl Ord for Pair { fn cmp(ref self, other: ref Pair) -> Ordering { self.b.cmp(other.b) } }
+
+struct Name { s: String }
+impl PartialEq for Name { fn eq(ref self, other: ref Name) -> bool { self.s == other.s } }
+impl Eq for Name {}
+impl PartialOrd for Name { fn partial_cmp(ref self, other: ref Name) -> Option[Ordering] { Some(other.s.cmp(self.s)) } }
+impl Ord for Name { fn cmp(ref self, other: ref Name) -> Ordering { other.s.cmp(self.s) } }
+
+enum Level { Lo, Hi }
+impl PartialEq for Level { fn eq(ref self, other: ref Level) -> bool { true } }
+impl Eq for Level {}
+impl PartialOrd for Level { fn partial_cmp(ref self, other: ref Level) -> Option[Ordering] { Some(Ordering.Greater) } }
+impl Ord for Level { fn cmp(ref self, other: ref Level) -> Ordering { Ordering.Greater } }
+
+fn main() {
+    let p1 = Pair { a: 9, b: 1 };
+    let p2 = Pair { a: 1, b: 9 };
+    println(p1 < p2);
+    let n1 = Name { s: "aaa" };
+    let n2 = Name { s: "zzz" };
+    println(n1 < n2);
+    println(Level.Lo < Level.Hi);
+    println(Level.Lo >= Level.Hi);
+}
+"#,
+        );
+        let out = out.expect("user-`impl Ord` operators must build for every struct shape");
+        let lines: Vec<&str> = out.trim().lines().collect();
+        assert_eq!(lines, vec!["true", "false", "false", "true"]);
+    }
+
+    #[test]
+    fn e2e_derived_ord_still_compares_by_declaration_order() {
+        // The counterweight to the three tests above: `#[derive(Ord)]` must keep
+        // comparing field-by-field in DECLARATION ORDER. The operator fix routes
+        // to a user `cmp` only when an ordering impl supplies one — a derived
+        // type has no impl body, so nothing about its lowering changed, and this
+        // pins that. Same `Pair` shape as the dispatch test, so the two answers
+        // are directly opposed: `b`-only dispatch says `true`, declaration order
+        // (reading `a` first, 9 vs 1) says `false`.
+        let out = run_program(
+            r#"
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct Pair { a: i64, b: i64 }
+fn main() {
+    let p1 = Pair { a: 9, b: 1 };
+    let p2 = Pair { a: 1, b: 9 };
+    println(p1 < p2);
+    println(p1 > p2);
+}
+"#,
+        );
+        let out = out.expect("derived-`Ord` comparison must build");
+        let lines: Vec<&str> = out.trim().lines().collect();
+        assert_eq!(lines, vec!["false", "true"]);
+    }
+
+    #[test]
+    fn e2e_partial_cmp_only_rejection_names_a_workaround_that_works() {
+        // The rejection for an `impl PartialOrd` without a `cmp` prescribes
+        // "add `impl Ord for T { fn cmp(...) }`". This compiles and runs exactly
+        // that program, so the advice cannot rot into a lie the way the wording
+        // it replaced did (`#[derive(PartialOrd)]`, which compiles and then
+        // compares by declaration order without calling the impl).
+        //
+        // The `cmp` reverses, so `true` would mean the derive-style comparator
+        // answered and `false` means the prescribed impl did.
+        let out = run_program(
+            r#"
+struct Item { id: i64 }
+impl PartialEq for Item { fn eq(ref self, other: ref Item) -> bool { self.id == other.id } }
+impl Eq for Item {}
+impl PartialOrd for Item { fn partial_cmp(ref self, other: ref Item) -> Option[Ordering] { Some(other.id.cmp(self.id)) } }
+impl Ord for Item { fn cmp(ref self, other: ref Item) -> Ordering { other.id.cmp(self.id) } }
+fn main() {
+    let a = Item { id: 1 };
+    let b = Item { id: 5 };
+    println(a < b);
+}
+"#,
+        );
+        let out = out.expect("the prescribed workaround must build");
+        assert_eq!(out.trim(), "false");
+    }
+
+    #[test]
     fn test_e2e_user_impl_ord_cmp_returns_ordering() {
         // Regression: `impl Ord for T { fn cmp(self, other: T) -> Ordering }`
         // used to emit the function with `i64` return type (the int tag of

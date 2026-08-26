@@ -45699,8 +45699,8 @@ fn main() {
 /// workaround and ordering has none, which is exactly why B-2026-08-26-10's
 /// two diagnostics differ (`comparison_impl_written_but_undispatched`).
 #[test]
-fn hand_written_partial_ord_impl_still_does_not_enable_the_operator() {
-    let errs = typecheck_errors(
+fn hand_written_ordering_impl_now_drives_the_operator_through_cmp() {
+    let result = typecheck_ok(
         r#"
 struct Item { id: i64 }
 impl PartialEq for Item { fn eq(ref self, other: ref Item) -> bool { self.id == other.id } }
@@ -45720,27 +45720,89 @@ fn main() {
 }
 "#,
     );
-    // The GATE is what this test pins, not the wording; B-2026-08-26-10
-    // rewrote the message for exactly this shape, because the old one
-    // ("does not implement PartialOrd; add #[derive(PartialOrd)]") denied an
-    // impl the author is looking at and prescribed a derive that compiles and
-    // then ignores it. Both halves are asserted: still rejected, and rejected
-    // with a message that does not recommend the silently-discarding derive as
-    // the fix.
+    // HISTORY, because this test used to assert the OPPOSITE and the reason it
+    // flipped is the whole point (B-2026-08-26-10).
+    //
+    // It began life as `hand_written_partial_ord_impl_still_does_not_enable_
+    // the_operator`, pinning that `<` stayed REJECTED here. That pin was not
+    // protecting a design decision — it was protecting against a specific
+    // shortcut. The bug row had measured what happens if you make the rejection
+    // go away by teaching the derive-support predicate to accept a hand-written
+    // impl: the operator still ran the DECLARATION-ORDER comparator, so a `cmp`
+    // that reverses the order produced the opposite answer, silently. The pin
+    // existed so nobody could call that "fixed".
+    //
+    // It is retired here because the shortcut was not taken. The derive
+    // predicate (`type_supports_partial_ord`) is untouched; what changed is that
+    // the operator now LOWERS to the user's body — `T.cmp(a, b).is_lt()` instead
+    // of a `T.lt` no impl defines — and a separate predicate at the operator's
+    // own gate accepts exactly the shapes that lowering can route.
+    //
+    // Deleting the pin outright would lose the guarantee, so it is replaced by
+    // a STRONGER one: acceptance here, plus execution tests that a REVERSING
+    // `cmp` really is what answers the operator on every backend
+    // (`test_user_impl_ord_cmp_body_drives_comparison_operators` in
+    // tests/interpreter.rs, `e2e_user_ord_cmp_body_drives_comparison_operators`
+    // in tests/codegen.rs). Those are the assertions the old pin was standing in
+    // for; compiling was never the bar.
+    assert!(
+        result.errors.is_empty(),
+        "`<` on a complete hand-written `impl PartialOrd` + `impl Ord` should now \
+         typecheck and lower to the user's `cmp`, got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn partial_cmp_without_cmp_is_still_rejected_and_names_the_workaround() {
+    // The one ordering shape that still cannot be lowered: an impl supplying
+    // `partial_cmp` but no `cmp`. Its desugaring would be
+    // `partial_cmp(a, b).is_lt()`, and `Option[Ordering].is_lt()` is
+    // unimplemented in codegen — measured on a plain `let o: Option[Ordering]`
+    // local, which builds nowhere and runs fine under `--interp`. Accepting on
+    // that basis would trade a clean typecheck rejection for a run-vs-build
+    // divergence, so the gate holds here.
+    //
+    // What the message must NOT do is repeat the two mistakes the previous
+    // wording made: deny the impl the author is looking at, and prescribe
+    // `#[derive(PartialOrd)]`, which compiles and then compares by declaration
+    // order. It names the `impl Ord` that actually works instead — advice
+    // pinned end to end by
+    // `e2e_partial_cmp_only_rejection_names_a_workaround_that_works` so it
+    // cannot rot into a lie.
+    let errs = typecheck_errors(
+        r#"
+struct Item { id: i64 }
+impl PartialEq for Item { fn eq(ref self, other: ref Item) -> bool { self.id == other.id } }
+impl PartialOrd for Item { fn partial_cmp(ref self, other: ref Item) -> Option[Ordering] { Some(other.id.cmp(self.id)) } }
+fn main() {
+    let a = Item { id: 1 };
+    let b = Item { id: 5 };
+    println(f"{a < b}");
+}
+"#,
+    );
     let msg = errs
         .iter()
-        .find(|e| e.message.contains("cannot dispatch to your"))
+        .find(|e| {
+            e.message
+                .contains("ordering operators dispatch through 'cmp'")
+        })
         .map(|e| e.message.clone())
         .unwrap_or_else(|| {
-            panic!("expected the derive-only gate to still reject `<` on a hand-written impl, got: {errs:?}")
+            panic!("expected `partial_cmp` without `cmp` to still be rejected, got: {errs:?}")
         });
     assert!(
-        msg.contains("'impl PartialOrd' and 'impl Ord'"),
-        "the message should name the impls the user actually wrote, got: {msg}"
+        msg.contains("'impl PartialOrd'"),
+        "the message should name the impl the user actually wrote, got: {msg}"
+    );
+    assert!(
+        msg.contains("impl Ord for Item"),
+        "the message should prescribe the impl that enables the operator, got: {msg}"
     );
     assert!(
         msg.contains("DECLARATION ORDER"),
-        "the message should say what the derive would do instead of calling the impl, got: {msg}"
+        "the message should still say what the derive would do instead, got: {msg}"
     );
 }
 

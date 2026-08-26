@@ -2058,11 +2058,56 @@ impl<'a> super::TypeChecker<'a> {
     ///   with an `eq` that returns `false` for identical values. That is
     ///   actionable advice, so the message gives it.
     ///
-    /// * ORDERING has none. Its lowering targets `T.lt` / `T.le` / …, methods
-    ///   no user impl provides (design.md specifies `partial_cmp(a, b).is_lt()`
-    ///   instead), so even a complete `impl PartialOrd + impl Ord` cannot be
-    ///   dispatched to. The message says that plainly rather than inventing a
-    ///   workaround that does not exist.
+    /// * ORDERING now dispatches through `cmp`, so a complete
+    ///   `impl PartialOrd + impl Ord` never reaches this message at all
+    ///   (`ordering_operator_dispatches` accepts it and lowering emits
+    ///   `T.cmp(a, b).is_lt()`). What is left here is the ONE ordering shape
+    ///   that still cannot be lowered: an impl that supplies `partial_cmp` but
+    ///   no `cmp`, because the `Option[Ordering].is_lt()` its desugaring needs
+    ///   is unimplemented in codegen. That has a real workaround — write the
+    ///   `impl Ord` too — so the message gives it rather than prescribing the
+    ///   derive that would discard the body.
+    /// Whether an ordering operator on `ty` can be lowered to a hand-written
+    /// comparator body (B-2026-08-26-10).
+    ///
+    /// This is deliberately NOT a relaxation of `type_supports_partial_ord`.
+    /// That predicate answers "does the DERIVE machinery support this type",
+    /// and the bug row that opened this work measured what happens when it is
+    /// made to answer yes for a hand-written impl: the operator still runs the
+    /// declaration-order comparator, so a reversing `cmp` silently produced the
+    /// opposite answer. The derive predicate stays exactly as it was; this is a
+    /// separate question — "is there a user body for the operator to call" —
+    /// asked only at the operator's own gate, and it is true only when lowering
+    /// really will route to that body.
+    ///
+    /// It must therefore agree with `lowering::ordering_dispatch_comparator`.
+    /// Accepting here without a matching desugaring there is the failure mode
+    /// the row warns about — a rejection traded for a silent wrong answer — so
+    /// both sides ask for exactly the same thing: an ordering impl that supplies
+    /// `cmp`, or the direct `lt`/`le`/`gt`/`ge` method.
+    ///
+    /// `partial_cmp` is deliberately NOT enough. The desugaring it would need,
+    /// `partial_cmp(a, b).is_lt()`, lands on `Option[Ordering].is_lt()`, which
+    /// codegen does not implement at all; accepting on that basis would turn a
+    /// typecheck rejection into a run-vs-build divergence. Since `Ord` requires
+    /// `PartialOrd`, this only excludes a type that wrote `impl PartialOrd`
+    /// alone — and the rejection message says so.
+    pub(super) fn ordering_operator_dispatches(&self, ty: &Type) -> bool {
+        let name = match ty {
+            Type::Named { name, .. } | Type::Shared(name) => name.as_str(),
+            _ => return false,
+        };
+        self.env.impls.iter().any(|imp| {
+            imp.trait_name
+                .as_deref()
+                .is_some_and(|t| t == "PartialOrd" || t == "Ord")
+                && imp.target_type == name
+                && ["cmp", "lt", "le", "gt", "ge"]
+                    .iter()
+                    .any(|m| imp.methods.contains_key(*m))
+        })
+    }
+
     fn comparison_impl_written_but_undispatched(
         &self,
         ty: &Type,
@@ -2091,6 +2136,9 @@ impl<'a> super::TypeChecker<'a> {
         if !has_po && !has_o {
             return None;
         }
+        // Reaching here with a dispatchable impl is impossible — the gate
+        // short-circuits on `ordering_operator_dispatches` — so the only
+        // ordering impl that gets this message is one without a `cmp` body.
         let written = if has_po && has_o {
             "'impl PartialOrd' and 'impl Ord'"
         } else if has_po {
@@ -2099,9 +2147,11 @@ impl<'a> super::TypeChecker<'a> {
             "'impl Ord'"
         };
         Some(format!(
-            "ordering operators cannot dispatch to your {written} for '{disp}' — \
-             operator dispatch to hand-written ordering impls is not implemented \
-             yet; '#[derive(PartialOrd)]' would compile but compare by field \
+            "ordering operators dispatch through 'cmp', which your {written} for \
+             '{disp}' does not define — add 'impl Ord for {disp} {{ fn cmp(ref \
+             self, other: ref {disp}) -> Ordering {{ ... }} }}' to enable '<', \
+             '<=', '>', '>='; 'partial_cmp' alone cannot be lowered yet, and \
+             '#[derive(PartialOrd)]' would compile but compare by field \
              DECLARATION ORDER, never calling your impl"
         ))
     }
@@ -2698,6 +2748,7 @@ impl<'a> super::TypeChecker<'a> {
                     );
                 } else if matches!(cmp_left, Type::Named { name, .. } if self.env.distinct_types.contains_key(name))
                     && !self.type_supports_partial_ord(cmp_left)
+                    && !self.ordering_operator_dispatches(cmp_left)
                 {
                     // Distinct types are opaque — ordering comparisons require
                     // an explicit `#[derive(Ord)]` (design.md § Distinct Types:
@@ -2723,6 +2774,7 @@ impl<'a> super::TypeChecker<'a> {
                 } else if matches!(cmp_left, Type::Named { name, .. }
                         if self.env.structs.contains_key(name) || self.env.enums.contains_key(name))
                     && !self.type_supports_partial_ord(cmp_left)
+                    && !self.ordering_operator_dispatches(cmp_left)
                 {
                     // A user struct / enum orders with `<`, `<=`, `>`, `>=` only
                     // when it opts in via `#[derive(Ord)]` / `#[derive(PartialOrd)]`

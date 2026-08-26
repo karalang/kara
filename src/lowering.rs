@@ -1922,6 +1922,33 @@ impl<'a> Lowerer<'a> {
             });
         }
 
+        // Ordering operators on a user type: `trait Ord` declares only `cmp`
+        // and `trait PartialOrd` only `partial_cmp`, so the direct
+        // `T.lt(a, b)` form below lands on a method no idiomatic impl
+        // defines. Route through the comparator the impl actually supplies
+        // (B-2026-08-26-10); `ordering_dispatch_receiver` returns `None` when
+        // the impl provides the direct method, leaving the legacy form.
+        if matches!(op, BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq) {
+            if let Some(cmp_method) = ordering_dispatch_comparator(lhs_ty, method, &target, self.tc)
+            {
+                let cmp_call = Expr {
+                    span: left.span,
+                    kind: call_path(vec![target, cmp_method], vec![left.clone(), right.clone()]),
+                };
+                return Some(ExprKind::MethodCall {
+                    object: Box::new(cmp_call),
+                    method: format!("is_{method}"),
+                    turbofish: None,
+                    args: Vec::new(),
+                    // Method-call side tables key on the (call, args-close)
+                    // span pair; `right.span` distinguishes the two comparisons
+                    // in `a < b < c`-style chains the same way
+                    // `desugar_nil_coalesce` uses its fallback's span.
+                    args_close_span: right.span,
+                });
+            }
+        }
+
         Some(call_path(
             vec![target, method.to_string()],
             vec![left.clone(), right.clone()],
@@ -2041,6 +2068,53 @@ fn target_type_name(ty: &Type, op: &BinOp, tc: &TypeCheckResult) -> Option<Strin
         }
     }
     None
+}
+
+/// Pick the comparator an ordering operator on a USER type should route
+/// through, or `None` to keep the direct `T.lt(a, b)` form (B-2026-08-26-10).
+///
+/// `trait Ord` declares exactly one method — `cmp` — and `trait PartialOrd`
+/// exactly one — `partial_cmp` (design.md § Comparison Traits). Neither
+/// declares `lt`/`le`/`gt`/`ge`, so lowering `a < b` straight to `T.lt(a, b)`
+/// named a body an idiomatic impl never writes: the interpreter reported
+/// `path 'T.lt' has no interpreter evaluation rule` and codegen branched on a
+/// raw i64. The fix is design.md's own desugaring, `partial_cmp(a, b).is_lt()`,
+/// with `cmp` as the equivalent when only `impl Ord` is present.
+///
+/// `cmp` and NOT `partial_cmp`, even though design.md's table names the latter.
+/// Both were measured; only one of them has a backend on both sides:
+/// `Option[Ordering].is_lt()` is unimplemented in codegen — not merely for a
+/// synthetic receiver, but for a plain `let o: Option[Ordering]` local, which
+/// builds nowhere and runs fine under `--interp`. Desugaring through it would
+/// convert a clean typecheck rejection into a run-vs-build divergence, which is
+/// strictly worse than the rejection. `Ord: PartialOrd + Eq` is enforced at
+/// impl registration, so every type carrying `impl Ord` carries `partial_cmp`
+/// too and nothing is lost by preferring `cmp`; the one case this leaves out is
+/// an `impl PartialOrd` with NO `impl Ord`, which keeps its typecheck rejection
+/// and is named as such in the message. The `Option[Ordering]` gap is filed
+/// separately.
+///
+/// `None` for a type whose impl really does define the direct method: that
+/// form predates this and is pinned by
+/// `test_user_impl_ord_drives_comparison_operators`, so an author who wrote
+/// `fn lt` keeps getting their `fn lt` called.
+fn ordering_dispatch_comparator(
+    ty: &Type,
+    method: &str,
+    target: &str,
+    tc: &TypeCheckResult,
+) -> Option<String> {
+    if !matches!(ty, Type::Named { .. } | Type::Shared(_)) {
+        return None;
+    }
+    let provides = |m: &str| {
+        tc.trait_impl_methods
+            .contains(&(target.to_string(), m.to_string()))
+    };
+    if provides(method) {
+        return None;
+    }
+    provides("cmp").then(|| "cmp".to_string())
 }
 
 /// Returns the canonical name of a primitive type for impl-target lookup,

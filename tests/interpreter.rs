@@ -2398,6 +2398,74 @@ fn test_user_impl_eq_drives_equality_operator() {
 }
 
 #[test]
+fn test_user_impl_ord_cmp_body_drives_comparison_operators() {
+    // B-2026-08-26-10 — the IDIOMATIC ordering impl: `trait Ord` declares
+    // exactly one method, `cmp`, so this is the shape an author who reads
+    // design.md writes. It used to lower to `Item.lt(a, b)` — a method the
+    // trait does not declare and this impl does not define — and died with
+    // `path 'Item.lt' has no interpreter evaluation rule`. It now lowers to
+    // `Item.cmp(a, b).is_lt()`.
+    //
+    // The `cmp` REVERSES the order on purpose. That is what makes this a test
+    // of DISPATCH rather than of compilation: field declaration order would
+    // answer `true false true false` for ids 1 vs 5, and the body demands the
+    // exact opposite. A `cmp` that merely agreed with declaration order would
+    // pass this test while dispatching nowhere.
+    assert_eq!(
+        run("struct Item { id: i64 }
+             impl PartialEq for Item { fn eq(ref self, other: ref Item) -> bool { self.id == other.id } }
+             impl Eq for Item {}
+             impl PartialOrd for Item {
+                 fn partial_cmp(ref self, other: ref Item) -> Option[Ordering] { Some(other.id.cmp(self.id)) }
+             }
+             impl Ord for Item {
+                 fn cmp(ref self, other: ref Item) -> Ordering { other.id.cmp(self.id) }
+             }
+             fn main() {
+                 let a = Item { id: 1 };
+                 let b = Item { id: 5 };
+                 println(a < b);
+                 println(a > b);
+                 println(a <= b);
+                 println(a >= b);
+             }"),
+        "false\ntrue\nfalse\ntrue\n"
+    );
+}
+
+#[test]
+fn test_user_cmp_method_call_is_not_answered_by_the_builtin_comparator() {
+    // The `.cmp()` half of B-2026-08-26-10, which is what made the operator fix
+    // land on a wrong answer in compiled output until it was fixed too: codegen's
+    // builtin `method == "cmp"` arm answered for a user `impl Ord` whose receiver
+    // flattened to an int, comparing the FIELD instead of running the body.
+    //
+    // `cmp` here returns `Ordering.Greater` unconditionally, so a backend that
+    // runs the body must print `false` and one that compares `id` (1 vs 5) must
+    // print `true`. The interpreter always got this right; this pins the answer
+    // it must keep agreeing with (see the codegen twin,
+    // `e2e_user_cmp_method_call_is_not_answered_by_the_builtin_comparator`).
+    assert_eq!(
+        run("struct Item { id: i64 }
+             impl PartialEq for Item { fn eq(ref self, other: ref Item) -> bool { self.id == other.id } }
+             impl Eq for Item {}
+             impl PartialOrd for Item {
+                 fn partial_cmp(ref self, other: ref Item) -> Option[Ordering] { Some(Ordering.Greater) }
+             }
+             impl Ord for Item {
+                 fn cmp(ref self, other: ref Item) -> Ordering { Ordering.Greater }
+             }
+             fn main() {
+                 let a = Item { id: 1 };
+                 let b = Item { id: 5 };
+                 println(a.cmp(b).is_lt());
+                 println(a < b);
+             }"),
+        "false\nfalse\n"
+    );
+}
+
+#[test]
 fn test_user_impl_ord_drives_comparison_operators() {
     // `impl Ord for Point` with direct `lt`/`le`/`gt`/`ge` methods — `<`
     // lowers to `Point.lt(a, b)`, etc. Domain-specific ordering (here by x

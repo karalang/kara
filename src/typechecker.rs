@@ -1381,6 +1381,21 @@ pub struct TypeCheckResult {
     /// non-primitive operand has an applicable trait impl (e.g. user
     /// `impl Eq for MyStruct` drives `==` dispatch).
     pub trait_impls: FxHashSet<(String, String)>,
+    /// `(target_type_name, method_name)` for every method a TRAIT impl block
+    /// provides. `trait_impls` answers "is trait X implemented for T"; this
+    /// answers "which method bodies did that impl actually supply", which is
+    /// what operator lowering needs to pick a desugaring that lands on a body
+    /// that exists (B-2026-08-26-10).
+    ///
+    /// The concrete need: `a < b` on a user type used to lower to `T.lt(a, b)`
+    /// unconditionally, but `trait Ord` declares only `cmp` — so an idiomatic
+    /// `impl Ord for T { fn cmp(...) }` produced a call to a method nobody
+    /// wrote, and the program died with `path 'T.lt' has no interpreter
+    /// evaluation rule`. Lowering now consults this table to emit
+    /// `T.cmp(a, b).is_lt()` (design.md § Comparison Traits) when the impl
+    /// supplies `cmp`/`partial_cmp`, and keeps the direct `T.lt(a, b)` form
+    /// when the impl really does define `lt`.
+    pub trait_impl_methods: FxHashSet<(String, String)>,
     /// Phase 7 user-`impl Drop` dispatch — Prereq.1 side-table.
     /// `type_name → "Type.drop"` for every `impl Drop for Type` block
     /// that passes `env_add_impl`'s focused signature validation
@@ -2746,6 +2761,21 @@ impl<'a> TypeChecker<'a> {
             .iter()
             .filter_map(|imp| imp.trait_name.clone().map(|t| (t, imp.target_type.clone())))
             .collect();
+        // Companion to `trait_impls`: which method bodies each trait impl
+        // supplies. See the field doc on `trait_impl_methods` for why the
+        // operator-lowering pass needs the method names and not just the
+        // trait names.
+        let trait_impl_methods: FxHashSet<(String, String)> = self
+            .env
+            .impls
+            .iter()
+            .filter(|imp| imp.trait_name.is_some())
+            .flat_map(|imp| {
+                imp.methods
+                    .keys()
+                    .map(|m| (imp.target_type.clone(), m.clone()))
+            })
+            .collect();
         // Phase 7 user-`impl Drop` dispatch — Prereq.1. Surface the
         // `Type → "Type.drop"` mapping for every `impl Drop for Type`
         // that passed `env_add_impl`'s focused signature validation.
@@ -2811,6 +2841,7 @@ impl<'a> TypeChecker<'a> {
             question_ok_payload_types: self.question_ok_payload_types,
             wp_result_types: self.wp_result_types,
             trait_impls,
+            trait_impl_methods,
             drop_method_keys,
             into_conversions: self.into_conversions,
             parse_conversions: self.parse_conversions,
