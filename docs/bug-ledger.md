@@ -94,15 +94,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 291 | 0 |
 | leak | 195 | 0 |
-| missing-feature | 177 | 4 |
-| run-vs-build | 162 | 1 |
+| missing-feature | 178 | 5 |
+| run-vs-build | 163 | 0 |
 | codegen-gap | 140 | 1 |
 | double-free | 140 | 2 |
 | diagnostics | 109 | 1 |
 | false-positive | 97 | 0 |
 | perf | 84 | 0 |
 | other | 62 | 1 |
-| soundness | 59 | 0 |
+| soundness | 60 | 1 |
 | crash | 57 | 0 |
 | use-after-free | 20 | 0 |
 
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1047 | 6 |
-| typecheck | 263 | 3 |
+| codegen | 1048 | 5 |
+| typecheck | 264 | 3 |
 | interp | 182 | 0 |
 | other | 70 | 3 |
 | ownership | 65 | 0 |
@@ -120,26 +120,27 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | parser | 41 | 0 |
 | runtime | 32 | 0 |
 | resolver | 27 | 0 |
-| effect | 23 | 0 |
+| effect | 24 | 1 |
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1593 surfaced · 10 open · 1558 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-26). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1596 surfaced · 11 open · 1560 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-26). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (10)
+### Open (11)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-25-3 | 2026-08-25 | codegen | medium | `codegen_tests::vec_mutation_methods_bounds_check_out_of_range_index` IS FLAKY, and it fails by showing exactly the PRE-FIX symptom of the high-severity bug it guards: `v.insert(7i64, 9i64)` produced no `Vec.insert index out of bounds` panic, stdout empty, stderr `free(): invalid pointer`. Observed once in a full `cargo test --features llvm` run; the same test then passed 3/3 in isolation, 3198/3198 in a codegen-only run, and the next FULL run was green at 125 suites / 15090 tests. | roadmap.md |
 | B-2026-08-25-20 | 2026-08-25 | typecheck | medium | Three of the fallible-allocation `try_*` methods design.md names by name do not exist, and `AllocError`'s `Display` is Debug formatting rather than the specified text. § Fallible Allocation API: "Operations that report only success/failure return `Result[(), AllocError]` (`try_push`, `try_insert`, `try_reserve`, `try_extend`, `try_append`)". Measured one method per compile: `Vec.try_reserve` -> `no method 'try_reserve' on type 'Vec'`; `Vec.try_extend` -> `no method 'try_extend'`; `Vec.try_append` -> `no method 'try_append'`. Working: `Vec.try_push`, `Vec.try_insert`, `Vec.try_with_capacity`, `String.try_push`, `String.try_push_str`, `Set.try_insert`. SEPARATELY, the same section specifies "The `Display` formatting names the failed operation's byte size on the `OutOfMemory` arm and \"capacity overflow\" on the `CapacityOverflow` arm" -- measured, `f"{e}"` renders `CapacityOverflow` and `OutOfMemory { requested_bytes: 4096 }`, which is the DEBUG form for both arms. | roadmap.md |
 | B-2026-08-25-34 | 2026-08-25 | codegen | medium | `AllocError`'s `Display` renders the Debug form (`OutOfMemory { requested_bytes: 4096 }`) into the user-facing `Error: {e}` entry-point line, and the spec-sanctioned fix -- a manual `impl Display`, per § `#[derive(Display)]` on enums' "Implement `Display` manually to override" -- CANNOT LAND without codegen work: a prelude impl lives in `STDLIB_PROGRAMS`, which codegen does not walk, so the impl reaches the interpreter only. Registering the module as a compiled stdlib program fixes `.to_string()` under AOT but leaves `f"{e}"` and the entry-point line unfixed. Worse, the half-done state FAILS OPEN: dropping the derive without teaching codegen about the impl makes `karac build` emit `Error: ` with an EMPTY message rather than erroring, because the typechecker sees the impl and codegen does not. | roadmap.md |
-| B-2026-08-26-3 | 2026-08-26 | typecheck+codegen | high | `LazyLock[T]` IS A CHECK-ONLY PHANTOM: `let TABLE: LazyLock[i64] = LazyLock.new(|| 40 + 2);` passes `karac check` cleanly and then fails on EVERY execution backend -- `--interp` dies with "path 'LazyLock.new' has no interpreter evaluation rule", and `karac run` (JIT) and `karac build` both reject `TABLE.get()` with "codegen: no handler for method 'get'". It is not a type outside that one special-cased module-binding form either: `fn f(x: LazyLock[i64])` is `undefined type 'LazyLock'`. Until this was found, the live `module_mut_binding` WARNING recommended it by name ("Prefer a context struct, `Mutex`, `Atomic`, `#[thread_local]`, `LazyLock`, or `OnceLock`"), so following the compiler's own advice produced a program that checks and then cannot be run or built. | roadmap.md |
 | B-2026-08-26-4 | 2026-08-26 | other | low | design.md's CANONICAL `?`-operator example calls `input.parse_i64()?` and names `ParseError` -- NEITHER EXISTS: the real API is `i64.parse(s) -> Option[i64]`, which cannot be used with `?` the way the example shows | docs/design.md § `?` operator and cross-error-type propagation |
 | B-2026-08-26-9 | 2026-08-26 | codegen | high | `PriorityQueue.push` RUNS THE DROP GLUE FOR ITS BY-VALUE PARAMETER ON A VALUE IT HAS ALREADY MOVED into the backing `Vec`, so an element type with `impl Drop` drops ONCE AT PUSH AND AGAIN AT POP on the compiled backend -- the interpreter drops once. LSan: 31 bytes leaked in 8 allocations once the element also owns a `String`. | — |
 | B-2026-08-26-10 | 2026-08-26 | typecheck+codegen | medium | OPERATORS NEVER CALL A HAND-WRITTEN OPERATOR-TRAIT BODY: `==` uses structural comparison, `<` uses a DECLARATION-ORDER comparator, and `Map` uses a structural hash, so a user `impl PartialEq` / `impl Ord` / `impl Hash` is silently bypassed rather than dispatched. The derive-only typecheck gate is currently the only thing preventing that silence, which is why it must NOT be relaxed to 'make the two paths agree'. | — |
 | B-2026-08-26-11 | 2026-08-26 | other | medium | design.md's `String` METHOD TABLE names the char-append method `push_char`, which DOES NOT EXIST -- the working method is `push(c: char)`, and the table has NO ROW FOR IT, so the documented spelling fails and the real one is undocumented | docs/design.md § `String` method table (the `push_char` row) |
 | B-2026-08-26-12 | 2026-08-26 | codegen | high | HEAP CORRUPTION ON BOTH COMPILED BACKENDS: an `if`-EXPRESSION whose arms yield an `Option[shared]` binding, passed BY VALUE to a function inside a loop that rebinds it, aborts with glibc's `malloc(): unaligned tcache chunk detected` on the SECOND iteration -- `karac run` (JIT) and `karac build` alike, with or without auto-par -- while `--interp` prints the correct answer. Replacing the if-EXPRESSION with `show(a)` (one token) makes it green, and so does an if-STATEMENT around two calls, so the defect is the if as a value-producing form. ASAN DOES NOT REPRODUCE IT, which is why ~1200 `memory_sanitizer.rs` fixtures never saw the class. | — |
 | B-2026-08-26-13 | 2026-08-26 | other | medium | `String.split` HAS NO BORROWING FORM: it returns `Vec[String]`, so tokenizing costs one heap allocation and one byte copy PER FIELD, and there is no slice-returning variant to reach for. Measured at 0.67 s where C's in-place split is 0.03 s and Rust's `Vec[&str]` is 0.18 s -- but Kara BEATS Rust's same-semantics `Vec[String]` version (1.17 s) by 1.7x, so the implementation is fine and the API's return shape is the entire gap. | — |
+| B-2026-08-26-15 | 2026-08-26 | typecheck | low | `LazyLock.new`'s closure-capture restriction is UNENFORCED: design.md says the closure "may only capture other module-level compile-time bindings; captures of runtime state are a compile error", but a closure capturing a function local is accepted silently. Measured to be a missing RESTRICTION rather than a correctness hazard -- the capturing form produces identical, correct results on `--interp`, `karac run` and `karac build` -- which is why it is split out of B-2026-08-26-3 rather than blocking it. | — |
+| B-2026-08-26-16 | 2026-08-26 | effect | medium | UNDECLARED EFFECTS ESCAPE THROUGH `LazyLock.get()`: design.md says the effect system attributes first-access initialization to the CALLING function, but a `pub fn` whose only effectful work is a `LazyLock.get()` running an effectful closure passes `karac check` clean, while the identical direct call is correctly rejected. The public-function effect-declaration rule is bypassed. | — |
 
 ### Relocated (1)
 
@@ -170,9 +171,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1593 surfaced
 
 </details>
 
-### Fixed (1558)
+### Fixed (1560)
 
-<details><summary>1558 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1560 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1729,11 +1730,13 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1593 surfaced
 | B-2026-08-25-35 | typecheck+codegen | high | `PriorityQueue[T]` IS UNINSTANTIABLE FOR EVERY USER TYPE, because the OPERATOR path and the TRAIT-BOUND path recognize DISJOINT sets of `Ord` impleme… | 8af03a8 |
 | B-2026-08-26-1 | other | low | design.md § Operator Traits § Notably absent prescribes `vec.concat(other)` as one of the two redirects for `vec1 + vec2`, but `Vec.concat()` in this… | 5964c16 |
 | B-2026-08-26-2 | typecheck | medium | TWO MORE FACILITIES design.md § `Hash` and `Hasher`'s stability paragraph NAMES AS SHIPPED DO NOT EXIST, after B-2026-08-25-22 built the third | 7da2bfe |
+| B-2026-08-26-3 | typecheck+codegen | high | `LazyLock[T]` IS A CHECK-ONLY PHANTOM: `let TABLE: LazyLock[i64] = LazyLock.new(\|\| 40 + 2);` passes `karac check` cleanly and then fails on EVERY exe… | 3988b47 |
 | B-2026-08-26-5 | codegen | medium | `?` in `main() -> Result[(), E]` reconstructed `E` from only its first THREE payload words, so any error held inline in four or more words rendered g… | 06880a4 |
 | B-2026-08-26-6 | interp+codegen | high | `~` COMPLEMENTS AT THE CARRIER WIDTH, NOT THE DECLARED WIDTH, so every narrow UNSIGNED integer gets a wrong value and the two backends disagree on wh… | 297ef4f |
 | B-2026-08-26-7 | codegen | high | A NARROW LOCAL INITIALIZED FROM AN UNSUFFIXED LITERAL IS ALLOCATED AT i64 IN CODEGEN, so every width-sensitive operation on it runs at 64 bits and ca… | 08410c2 |
 | B-2026-08-26-8 | interp | medium | INTERPRETER `Vector[T, N]` LANE ARITHMETIC IGNORES THE LANE WIDTH, so a narrow-lane vector computes on the i128 carrier and diverges from codegen, wh… | ff403a3 |
 | B-2026-08-26-14 | codegen | high | A `par` BRANCH WHOSE BODY CALLS A VALUE-PRESERVING SCALAR METHOD (`abs` / `sqrt` / a `float_math` transcendental) ON A NARROW-INTEGER RECEIVER FAILS… | 08410c2 |
+| B-2026-08-26-17 | codegen | high | A MODULE-SCOPE `Atomic[T]` failed BOTH compiled backends with `codegen: Atomic receiver 'X' has no slot` while `--interp` was correct -- and module s… | f79cefd |
 
 </details>
 
