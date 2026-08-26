@@ -5643,6 +5643,7 @@ impl<'ctx> Codegen<'ctx> {
                 param_view_locals: HashSet::new(),
             },
             drop_rc: DropRc {
+                zero_inited_vec_slots: rustc_hash::FxHashSet::default(),
                 inline_optres_retained_sources: std::collections::HashSet::new(),
                 scope_cleanup_actions: Vec::new(),
                 deep_copy_rc_inc_bare_shared: false,
@@ -9625,6 +9626,86 @@ impl<'ctx> Codegen<'ctx> {
         b.build_store(data_pp, ptr_ty.const_null()).unwrap();
         b.build_store(len_p, i64_t.const_int(0, false)).unwrap();
         b.build_store(cap_p, i64_t.const_int(0, false)).unwrap();
+    }
+
+    /// Zero-initialize a slot registered for `FreeVecBuffer` cleanup, at its
+    /// own alloca. B-2026-08-26-30 — the structural close of the
+    /// entry-hoisted-alloca / conditional-store / scope-tracked class.
+    ///
+    /// THE CLASS. `create_entry_alloca` hoists a `{ptr, len, cap}` slot to the
+    /// entry block; the value-initializing store is emitted later, at the USE
+    /// site; `track_vec_var` registers the slot for unconditional scope-exit
+    /// cleanup. If the use site sits in a block that never runs — a `for` body
+    /// over an empty range, an untaken `if` arm — the slot still holds
+    /// uninitialized stack when the drain reads it, so the drain frees a
+    /// garbage pointer. Four rows paid for this one site at a time (the
+    /// f-string-in-a-loop double free, B-2026-08-25-33, and two under
+    /// B-2026-08-25-34) before it was filed as a class.
+    ///
+    /// WHY ZEROING AT THE ALLOCA IS THE RIGHT PLACE. Registering a slot for
+    /// cleanup and making it safe to clean up become the SAME ACT, so a future
+    /// tracking site cannot reintroduce the bug by forgetting a separate
+    /// guard call. The store goes immediately after the alloca instruction,
+    /// which dominates every use of that slot by definition, and `cap == 0`
+    /// makes the drain's existing `cap > 0` / owned-heap test skip the free.
+    ///
+    /// WHY IT IS SAFE TO DO BLIND, which is the question the row left open.
+    /// The concern was shape: the guard GEPs with `vec_struct_type()`, so a
+    /// tracked alloca of some other shape would be miscompiled by the guard
+    /// rather than protected by it. But the DRAIN already GEPs the very same
+    /// pointer with the very same `vec_struct_type()` — field 2 for `cap`,
+    /// field 0 for `data`, and every caller of `emit_cleanup_action` binds
+    /// `vec_ty = self.vec_struct_type()`. So the `{ptr, len, cap}` shape is
+    /// not a new requirement this guard imposes; it is a load-bearing
+    /// invariant of `FreeVecBuffer` that predates it. Any site that violated
+    /// it would already be miscompiled today by the cleanup itself.
+    ///
+    /// That argument covers reads. The guard also WRITES, which the drain does
+    /// not, so it carries two checks the drain does not need: the pointer must
+    /// be an `alloca` instruction (a GEP or parameter names storage that may
+    /// already hold a live value, and `{null, 0, 0}` over it would destroy
+    /// that value), and its ALLOCATED TYPE must actually be the vec struct.
+    /// Anything else is left untouched — the guard declines rather than
+    /// guesses. `KARAC_TRACKED_SLOT_CENSUS=1` reports the split, which is how
+    /// the invariant was measured rather than assumed.
+    #[track_caller]
+    pub(super) fn zero_init_tracked_vec_slot(&mut self, slot: PointerValue<'ctx>) {
+        // Read the env once per process, not once per tracked slot: a single
+        // compile registers thousands of these.
+        static CENSUS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        let census = *CENSUS.get_or_init(|| std::env::var("KARAC_TRACKED_SLOT_CENSUS").is_ok());
+        // `caller()` must be read in the function body, not inside the
+        // closure: a closure is its own `#[track_caller]` frame, so calling it
+        // there reports this file rather than the tracking site.
+        let caller = std::panic::Location::caller();
+        let note = |what: &str| {
+            if census {
+                eprintln!("TRACKEDSLOT\t{what}\t{}:{}", caller.file(), caller.line());
+            }
+        };
+        let Some(inst) = slot.as_instruction() else {
+            // Not an instruction at all: a parameter, global, or constant.
+            note("not-an-instruction");
+            return;
+        };
+        if inst.get_opcode() != inkwell::values::InstructionOpcode::Alloca {
+            note("not-an-alloca");
+            return;
+        }
+        let Ok(allocated) = inst.get_allocated_type() else {
+            note("no-allocated-type");
+            return;
+        };
+        if allocated != self.vec_struct_type().into() {
+            note("wrong-shape");
+            return;
+        }
+        if !self.drop_rc.zero_inited_vec_slots.insert(slot) {
+            note("already-zeroed");
+            return;
+        }
+        note("zeroed");
+        self.zero_init_str_acc_at_entry(slot);
     }
 
     fn param_name(&self, param: &Param) -> String {

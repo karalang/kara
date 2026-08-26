@@ -2080,11 +2080,20 @@ impl<'ctx> super::Codegen<'ctx> {
     /// can recursively drop nested heap-owning element types — critical
     /// for `Vec[Vec[T]]`, `Vec[String]`, `Vec[Map[K, V]]`, etc., where the
     /// outer buffer's free does not reach the inner allocations.
+    #[track_caller]
     pub(super) fn track_vec_var(
         &mut self,
         vec_alloca: PointerValue<'ctx>,
         elem_ty: Option<BasicTypeEnum<'ctx>>,
     ) {
+        // B-2026-08-26-30 — registering a slot for cleanup and making it SAFE
+        // to clean up are the same act. The drain is unconditional, so a slot
+        // whose value-initializing store sits on a path that never runs would
+        // otherwise be freed from uninitialized stack. Zeroing at the alloca
+        // (not here at the tracking site) is what makes the guard dominate
+        // every use. See `zero_init_tracked_vec_slot` for why this is safe to
+        // apply blind.
+        self.zero_init_tracked_vec_slot(vec_alloca);
         if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
             frame.push(CleanupAction::FreeVecBuffer {
                 vec_alloca,
@@ -2112,12 +2121,16 @@ impl<'ctx> super::Codegen<'ctx> {
     /// from a dispatch site holding the element `TypeExpr`
     /// (`vec_elem_agg_drop_for_type_expr`) — reverse-lookup by LLVM type is
     /// unsafe (anonymous by-shape struct types collide).
+    #[track_caller]
     pub(super) fn track_vec_of_aggs_var(
         &mut self,
         vec_alloca: PointerValue<'ctx>,
         elem_ty: BasicTypeEnum<'ctx>,
         agg_drop: inkwell::values::FunctionValue<'ctx>,
     ) {
+        // B-2026-08-26-30 — same contract as `track_vec_var`: an unconditional
+        // scope-exit drain must not be able to read an uninitialized slot.
+        self.zero_init_tracked_vec_slot(vec_alloca);
         if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
             frame.push(CleanupAction::FreeVecBuffer {
                 vec_alloca,
@@ -2139,11 +2152,15 @@ impl<'ctx> super::Codegen<'ctx> {
     /// makes the Vec the OWNER of its map elements — the precondition for the
     /// move-into-Vec ownership transfer (`suppress_map_cleanup_for_tail_identifier`
     /// at the push site) to be leak-free rather than a premature-free / UAF.
+    #[track_caller]
     pub(super) fn track_vec_of_maps_var(
         &mut self,
         vec_alloca: PointerValue<'ctx>,
         map_elem_drop: crate::codegen::state::MapElemDrop<'ctx>,
     ) {
+        // B-2026-08-26-30 — same contract as `track_vec_var`: an unconditional
+        // scope-exit drain must not be able to read an uninitialized slot.
+        self.zero_init_tracked_vec_slot(vec_alloca);
         if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
             frame.push(CleanupAction::FreeVecBuffer {
                 vec_alloca,
@@ -2163,7 +2180,11 @@ impl<'ctx> super::Codegen<'ctx> {
     /// per-element free, since a `ptr` element can't be told apart from a
     /// Map handle / borrow by type alone. Used for the `iter_axis`
     /// result Vec (`src/codegen/tensor.rs`).
+    #[track_caller]
     pub(super) fn track_vec_of_tensors_var(&mut self, vec_alloca: PointerValue<'ctx>) {
+        // B-2026-08-26-30 — same contract as `track_vec_var`: an unconditional
+        // scope-exit drain must not be able to read an uninitialized slot.
+        self.zero_init_tracked_vec_slot(vec_alloca);
         if let Some(frame) = self.drop_rc.scope_cleanup_actions.last_mut() {
             frame.push(CleanupAction::FreeVecBuffer {
                 vec_alloca,

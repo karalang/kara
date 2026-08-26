@@ -26,7 +26,7 @@
 use std::collections::{HashMap, HashSet};
 
 use inkwell::types::StructType;
-use inkwell::values::FunctionValue;
+use inkwell::values::{FunctionValue, PointerValue};
 
 use super::state::CleanupAction;
 use crate::ast::TypeExpr;
@@ -52,6 +52,14 @@ pub(crate) struct DropRc<'ctx> {
     /// Per-scope cleanup stack.  Each inner `Vec` is one scope frame; entries
     /// are emitted in reverse-push order at scope exit (innermost first).
     pub(crate) scope_cleanup_actions: Vec<Vec<CleanupAction<'ctx>>>,
+    /// B-2026-08-26-30 — slots already zero-initialized at their alloca by
+    /// `zero_init_tracked_vec_slot`. Purely a de-duplicator: a slot tracked
+    /// more than once would otherwise collect one identical `{null, 0, 0}`
+    /// store per registration. The repeats are harmless (same value, same
+    /// dominating position, folded by LLVM) but they are IR noise, and this
+    /// keeps the emitted entry block readable when a slot is re-tracked in a
+    /// loop.
+    pub(crate) zero_inited_vec_slots: rustc_hash::FxHashSet<PointerValue<'ctx>>,
     /// B-2026-07-10-4 — when set, the deep-copy field walker
     /// (`deep_copy_one_aggregate_field` / `deep_copy_vec_aggregate_elements_in_place`)
     /// additionally rc-INCs a bare `shared` handle it would otherwise leave shallow:

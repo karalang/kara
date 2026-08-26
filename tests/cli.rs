@@ -33977,6 +33977,108 @@ fn test_main_result_error_nested_result_keeps_tag_and_payload() {
     }
 }
 
+/// B-2026-08-26-30 — EVERY SLOT REGISTERED FOR `FreeVecBuffer` CLEANUP MUST BE
+/// A `{ptr, len, cap}`-SHAPED ALLOCA. This test enforces the invariant the
+/// structural fix rests on.
+///
+/// THE CLASS. `create_entry_alloca` hoists a vec-shaped slot to the entry
+/// block, the value-initializing store is emitted later at the USE site, and
+/// `track_vec_var` registers the slot for UNCONDITIONAL scope-exit cleanup. If
+/// the use site sits in a block that never runs, the drain reads uninitialized
+/// stack and frees a garbage pointer. Four rows paid for that one site at a
+/// time before it was filed as a class, and the fix — zeroing inside the
+/// tracker, so registering for cleanup and being safe to clean up are the same
+/// act — is safe only if every tracked slot really is vec-shaped.
+///
+/// WHY THIS IS THE RIGHT TEST. The invariant was already load-bearing before
+/// the guard existed: the drain GEPs the same pointer with the same
+/// `vec_struct_type()` (field 2 for `cap`, field 0 for `data`), and every
+/// caller of `emit_cleanup_action` binds `vec_ty = self.vec_struct_type()`. So
+/// a violating site would ALREADY be miscompiled by the cleanup itself. It was
+/// simply never checked anywhere. `KARAC_TRACKED_SLOT_CENSUS=1` makes codegen
+/// classify each tracked slot, and this test fails the moment one is not an
+/// alloca or is not vec-shaped — which is precisely the case that would also
+/// silently corrupt the drain.
+///
+/// It is a REGRESSION test for a premise, not for an output: no user-visible
+/// behaviour changed when the guard landed (every remaining site was either
+/// already guarded, unconditionally stored, or scoped to a frame that drains
+/// only on the path that stores). What the guard removes is the ability for
+/// the NEXT tracking site to reintroduce the class.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_every_tracked_vec_slot_is_a_vec_shaped_alloca() {
+    // Shapes chosen to exercise as many distinct `track_vec_var` call sites as
+    // possible: plain and nested heap bindings, an f-string accumulator inside
+    // a loop (the site the original double free came from), a match arm that
+    // binds a heap payload, and a never-taken arm / never-entered loop, which
+    // are the conditional-store paths the class is about.
+    let program = "enum Payload { Empty, Items(Vec[i64]), Named(String) }\n\
+         fn main() {\n\
+         \x20   let v: Vec[i64] = [1, 2, 3];\n\
+         \x20   let nested: Vec[Vec[i64]] = [[1], [2, 3]];\n\
+         \x20   let names: Vec[String] = [\"a\", \"bb\"];\n\
+         \x20   let mut total = 0i64;\n\
+         \x20   for i in 0..v.len() {\n\
+         \x20       let line: String = f\"row {i}\";\n\
+         \x20       total = total + line.len();\n\
+         \x20   }\n\
+         \x20   let empty = 0i64;\n\
+         \x20   for j in 0..empty {\n\
+         \x20       let skipped: String = f\"never {j}\";\n\
+         \x20       total = total + skipped.len();\n\
+         \x20   }\n\
+         \x20   let p: Payload = Payload.Empty;\n\
+         \x20   match p {\n\
+         \x20       Payload.Items(xs) => { total = total + xs.len(); }\n\
+         \x20       Payload.Named(s) => { total = total + s.len(); }\n\
+         \x20       Payload.Empty => { total = total + 1i64; }\n\
+         \x20   }\n\
+         \x20   println(f\"{total} {nested.len()} {names.len()}\");\n\
+         }\n";
+    let tmp = scratch_project("tracked-slot-census");
+    write(&tmp.join("m.kara"), program);
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .env("KARAC_TRACKED_SLOT_CENSUS", "1")
+        .args(["build", "m.kara"])
+        .output()
+        .expect("spawn karac build");
+    assert!(
+        out.status.success(),
+        "the census program must compile: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let rows: Vec<&str> = stderr
+        .lines()
+        .filter(|l| l.starts_with("TRACKEDSLOT\t"))
+        .collect();
+    // Guard the guard: if the census stops reporting, the assertion below
+    // would pass over an empty set and this test would silently stop testing.
+    assert!(
+        rows.len() >= 8,
+        "expected the census to report many tracked slots for this program, \
+         got {} — has KARAC_TRACKED_SLOT_CENSUS or the tracking path changed?",
+        rows.len()
+    );
+    let bad: Vec<&&str> = rows
+        .iter()
+        .filter(|l| {
+            let verdict = l.split('\t').nth(1).unwrap_or("");
+            verdict != "zeroed" && verdict != "already-zeroed"
+        })
+        .collect();
+    assert!(
+        bad.is_empty(),
+        "every slot registered for FreeVecBuffer cleanup must be a vec-shaped \
+         alloca — the drain GEPs it with `vec_struct_type()` regardless, so a \
+         violating site is already miscompiled by the cleanup itself. \
+         Offending census rows: {bad:#?}"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// B-2026-08-26-28, second door — the SAME nested-`Result` loss reached through
 /// `?` rather than a tail `return Err(..)`.
 ///
