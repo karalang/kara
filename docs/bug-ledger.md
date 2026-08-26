@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 292 | 1 |
 | leak | 196 | 0 |
-| missing-feature | 178 | 5 |
+| missing-feature | 179 | 5 |
 | run-vs-build | 164 | 1 |
 | codegen-gap | 140 | 1 |
 | double-free | 140 | 0 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1051 | 5 |
-| typecheck | 265 | 3 |
+| codegen | 1052 | 6 |
+| typecheck | 266 | 3 |
 | interp | 182 | 0 |
 | other | 70 | 3 |
 | ownership | 65 | 0 |
@@ -124,14 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1600 surfaced · 10 open · 1565 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-26). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1601 surfaced · 10 open · 1566 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-26). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (10)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-25-3 | 2026-08-25 | codegen | medium | `codegen_tests::vec_mutation_methods_bounds_check_out_of_range_index` IS FLAKY, and it fails by showing exactly the PRE-FIX symptom of the high-severity bug it guards: `v.insert(7i64, 9i64)` produced no `Vec.insert index out of bounds` panic, stdout empty, stderr `free(): invalid pointer`. Observed once in a full `cargo test --features llvm` run; the same test then passed 3/3 in isolation, 3198/3198 in a codegen-only run, and the next FULL run was green at 125 suites / 15090 tests. | roadmap.md |
-| B-2026-08-25-20 | 2026-08-25 | typecheck | medium | Three of the fallible-allocation `try_*` methods design.md names by name do not exist, and `AllocError`'s `Display` is Debug formatting rather than the specified text. § Fallible Allocation API: "Operations that report only success/failure return `Result[(), AllocError]` (`try_push`, `try_insert`, `try_reserve`, `try_extend`, `try_append`)". Measured one method per compile: `Vec.try_reserve` -> `no method 'try_reserve' on type 'Vec'`; `Vec.try_extend` -> `no method 'try_extend'`; `Vec.try_append` -> `no method 'try_append'`. Working: `Vec.try_push`, `Vec.try_insert`, `Vec.try_with_capacity`, `String.try_push`, `String.try_push_str`, `Set.try_insert`. SEPARATELY, the same section specifies "The `Display` formatting names the failed operation's byte size on the `OutOfMemory` arm and \"capacity overflow\" on the `CapacityOverflow` arm" -- measured, `f"{e}"` renders `CapacityOverflow` and `OutOfMemory { requested_bytes: 4096 }`, which is the DEBUG form for both arms. | roadmap.md |
 | B-2026-08-25-34 | 2026-08-25 | codegen | medium | `AllocError`'s `Display` renders the Debug form (`OutOfMemory { requested_bytes: 4096 }`) into the user-facing `Error: {e}` entry-point line, and the spec-sanctioned fix -- a manual `impl Display`, per § `#[derive(Display)]` on enums' "Implement `Display` manually to override" -- CANNOT LAND without codegen work: a prelude impl lives in `STDLIB_PROGRAMS`, which codegen does not walk, so the impl reaches the interpreter only. Registering the module as a compiled stdlib program fixes `.to_string()` under AOT but leaves `f"{e}"` and the entry-point line unfixed. Worse, the half-done state FAILS OPEN: dropping the derive without teaching codegen about the impl makes `karac build` emit `Error: ` with an EMPTY message rather than erroring, because the typechecker sees the impl and codegen does not. | roadmap.md |
 | B-2026-08-26-4 | 2026-08-26 | other | low | design.md's CANONICAL `?`-operator example calls `input.parse_i64()?` and names `ParseError` -- NEITHER EXISTS: the real API is `i64.parse(s) -> Option[i64]`, which cannot be used with `?` the way the example shows | docs/design.md § `?` operator and cross-error-type propagation |
 | B-2026-08-26-10 | 2026-08-26 | typecheck+codegen | medium | OPERATORS NEVER CALL A HAND-WRITTEN OPERATOR-TRAIT BODY: `==` uses structural comparison, `<` uses a DECLARATION-ORDER comparator, and `Map` uses a structural hash, so a user `impl PartialEq` / `impl Ord` / `impl Hash` is silently bypassed rather than dispatched. The derive-only typecheck gate is currently the only thing preventing that silence, which is why it must NOT be relaxed to 'make the two paths agree'. | — |
@@ -140,6 +139,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1600 surfaced
 | B-2026-08-26-15 | 2026-08-26 | typecheck | low | `LazyLock.new`'s closure-capture restriction is UNENFORCED: design.md says the closure "may only capture other module-level compile-time bindings; captures of runtime state are a compile error", but a closure capturing a function local is accepted silently. Measured to be a missing RESTRICTION rather than a correctness hazard -- the capturing form produces identical, correct results on `--interp`, `karac run` and `karac build` -- which is why it is split out of B-2026-08-26-3 rather than blocking it. | — |
 | B-2026-08-26-20 | 2026-08-26 | codegen | medium | A `char` returned through a CLOSURE prints as its integer code point under both compiled backends while the interpreter prints the character: `let c: char = 'z'; let f: Fn() -> char = || c; println(f())` gives `z` under `--interp` and `122` under `karac run` / `karac build`. No borrow involved — the same `char` printed directly, or returned from a plain function, renders correctly on every backend. | — |
 | B-2026-08-26-21 | 2026-08-26 | codegen | medium | A RELOCATING element store (`b.xs[i] = b.xs[j]`, then `b.xs[j] = t`) runs the displaced element's user `Drop` BODY, even though the value is being moved to another slot rather than destroyed. A two-element swap of a `Drop` type prints SIX drop bodies, all during the swap and none at scope exit; the correct sequence is one body per element when it finally dies. | — |
+| B-2026-08-26-22 | 2026-08-26 | typecheck+codegen | medium | The fallible-allocation table's REMAINING gaps, after B-2026-08-25-20 landed the Vec capacity family: `try_resize` / `try_append` have panicking bases now but no fallible codegen arm and so are NOT registered; `String.reserve`, `Map.reserve` and `Vec.from_iter` still have no base at all. Measured one per compile on the commit that closed -20: `v.try_resize(4, 0)` -> `no method 'try_resize' on type 'Vec'`; `v.try_append(b)` -> `no method 'try_append'`; `s.reserve(16)` -> `no method 'reserve' on type 'String'`; `m.reserve(16)` -> `no method 'reserve' on type 'Map'`; `Vec.from_iter(0..4)` -> `no associated function 'from_iter' on type 'Vec'`. design.md's panicking/fallible table names all five. | — |
 
 ### Relocated (1)
 
@@ -170,9 +170,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1600 surfaced
 
 </details>
 
-### Fixed (1565)
+### Fixed (1566)
 
-<details><summary>1565 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1566 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1713,6 +1713,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1600 surfaced
 | B-2026-08-25-17 | codegen | medium | A DISCARDED method-call result that owns heap is never freed: `h.xs.pop();` as a bare expression statement leaks the popped element's buffer (8 bytes… | c8753cd |
 | B-2026-08-25-18 | codegen | medium | Discarded heap-owning pop in a generic FREE FUNCTION leaks the container's elements at -O0 -- B-2026-08-25-17's free-fn precedence guard was not actu… | Fixed in two paired sites |
 | B-2026-08-25-19 | typecheck | medium | The ENTIRE `Box` / `Rc` / `Arc` smart-pointer family is UNDEFINED -- all six of `Box.new`, `Box.try_new`, `Rc.new`, `Rc.try_new`, `Arc.new`, `Arc.try… | 803d173 |
+| B-2026-08-25-20 | typecheck | medium | Three of the fallible-allocation `try_*` methods design.md names by name do not exist, and `AllocError`'s `Display` is Debug formatting rather than t… | 2242d1c |
 | B-2026-08-25-21 | typecheck | low | `m.try_insert(k, v)?;` as a statement warns `discarded 'Option' value`, though the displaced-value must-use exemption exists precisely for that shape… | 0fcc886 |
 | B-2026-08-25-22 | typecheck | medium | The STABLE-HASH module does not exist, so the escape design.md prescribes for every use case where `Hash` is explicitly the wrong tool is unavailable | 44851f9 |
 | B-2026-08-25-23 | cli | low | `karac explain --concept=` supports exactly ONE concept, `closures`, and it is not one of the pages design.md names | 7472e06 |
