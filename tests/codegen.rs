@@ -5136,13 +5136,19 @@ fn main() { println(build2().v); }
     fn e2e_compound_struct_payload_display_matches_interpreter() {
         // B-2026-07-08-18: a struct payload nested in a container's Display
         // (`Option[P]` / `Result[P,E]` / `Vec[P]` / a user enum) rendered a
-        // codegen error (or crash) while the interpreter rendered it in DEBUG
-        // format `P { field: val, … }` (NOT the struct's own Display impl — that
-        // is only the top-level `println(p)` spelling). Codegen now emits the
-        // same debug format for a small all-scalar-field struct (≤3 words,
-        // reconstructable from the inline enum-payload area), matching the
-        // interpreter now that `karac run` is JIT-default (Slice 6c). Bare
-        // `println(p)` still uses the Display impl — both backends agree.
+        // codegen error (or crash) while the interpreter rendered it. That row
+        // closed the DIVERGENCE by teaching codegen to emit what the
+        // interpreter emitted — the debug format `P { field: val, … }` — which
+        // agreed, but agreed on the wrong shape: design.md § Strings named that
+        // exact rendering "a `Debug`-in-`Display` bug to be aligned to this
+        // rule", the rule being that a payload renders through its own
+        // `Display`.
+        //
+        // B-2026-08-26-29 aligned it. A hand-written `impl Display` now wins at
+        // every depth, so the payload renders `(3,4)` — the impl — in every
+        // position, exactly as the bare `println(p)` spelling always did. The
+        // two backends stay byte-identical, which is what this test is for;
+        // what changed is which of the two shapes they agree on.
         if let Some(out) = run_program(
             "struct P { x: i64, y: i64 }\n\
              impl Display for P { fn to_string(ref self) -> String { f\"({self.x},{self.y})\" } }\n\
@@ -5162,7 +5168,7 @@ fn main() { println(build2().v); }
         ) {
             assert_eq!(
                 out,
-                "(3,4)\nSome(P { x: 3, y: 4 })\nNone\nOk(P { x: 1, y: 2 })\n[P { x: 5, y: 6 }]\ngot Some(P { x: 3, y: 4 })\n"
+                "(3,4)\nSome((3,4))\nNone\nOk((1,2))\n[(5,6)]\ngot Some((3,4))\n"
             );
         }
     }
@@ -104891,6 +104897,176 @@ fn main() {
 "#
             ),
             Some("Up\nDown\nfast_path\nMouseUp\nUp then Down\n".to_string())
+        );
+    }
+
+    /// B-2026-08-26-29 — a hand-written `impl Display` must win at EVERY
+    /// depth, not just at the top level. `f"{e}"` rendered through the impl
+    /// while `f"{[e]}"` rendered the DERIVED shape one level down, on BOTH
+    /// backends: `[A { n: 7 }, B]` where the impl says `[aye 7, bee]`. So the
+    /// one mechanism the language offers for overriding a rendering stopped
+    /// applying inside a container, and a type whose `Display` exists to hide
+    /// its internals leaked them from inside any `Vec` / tuple / struct field.
+    ///
+    /// Every container contributes only its punctuation; each element renders
+    /// through its own `Display`. Paired with
+    /// `user_impl_display_wins_at_every_depth_not_just_the_top_level` in
+    /// `tests/interpreter.rs` — the two assert the same bytes, which is the
+    /// run-vs-build oracle.
+    ///
+    /// `B => "bee"` is load-bearing: a `to_string` returning a string LITERAL
+    /// comes back with `cap == 0` pointing at a read-only global, so the
+    /// synthesized wrapper's free has to be guarded on `cap > 0` or the
+    /// program aborts.
+    #[test]
+    fn test_e2e_user_impl_display_wins_at_every_depth() {
+        assert_eq!(
+            run_program(
+                r#"
+enum Ue { A { n: i64 }, B }
+impl Display for Ue {
+    fn to_string(ref self) -> String {
+        match self { A { n } => f"aye {n}", B => "bee" }
+    }
+}
+struct Wrap { u: Ue }
+impl Display for Wrap {
+    fn to_string(ref self) -> String { f"<{self.u}>" }
+}
+struct Holder { u: Ue }
+fn main() {
+    let e = Ue.A { n: 7 };
+    println(f"top={e}")
+    let v = [Ue.A { n: 7 }, Ue.B];
+    println(f"vec={v}")
+    println(f"lit={[Ue.B]}")
+    let nest = [[Ue.B]];
+    println(f"nest={nest}")
+    let t = (Ue.B, 1);
+    println(f"tup={t}")
+    let h = Holder { u: Ue.B };
+    println(f"fld={h.u}")
+    let w = Wrap { u: Ue.A { n: 3 } };
+    println(f"wrap={w}")
+    println(f"vw={[Wrap { u: Ue.B }]}")
+    let mut m: Map[String, Ue] = Map.new();
+    m.insert("k", Ue.B);
+    println(f"map={m}")
+    println(f"str={v.to_string()}")
+    println(v)
+}
+"#
+            ),
+            Some(
+                "top=aye 7\nvec=[aye 7, bee]\nlit=[bee]\nnest=[[bee]]\ntup=(bee, 1)\n\
+                 fld=bee\nwrap=<aye 3>\nvw=[<bee>]\nmap={k: bee}\nstr=[aye 7, bee]\n\
+                 [aye 7, bee]\n"
+                    .to_string()
+            )
+        );
+    }
+
+    /// B-2026-08-26-29, `Set` leg. Codegen's Set renderer recurses through the
+    /// same `emit_display_fn_for_type_expr` dispatcher every other container
+    /// uses, so it picked up the user impl for free — while the interpreter's
+    /// typed walker never destructured `Value::Set` and kept rendering the
+    /// derived shape. This asserts the two agree; its interpreter twin is
+    /// `user_impl_display_reaches_set_and_sorted_collection_elements`.
+    #[test]
+    fn test_e2e_user_impl_display_reaches_set_elements() {
+        assert_eq!(
+            run_program(
+                r#"
+#[derive(Hash, Eq, PartialEq)]
+enum Ue { A { n: i64 }, B }
+impl Display for Ue {
+    fn to_string(ref self) -> String {
+        match self { A { n } => f"aye {n}", B => "bee" }
+    }
+}
+fn main() {
+    let mut s: Set[Ue] = Set.new();
+    s.insert(Ue.B);
+    println(f"set={s}")
+}
+"#
+            ),
+            Some("set=Set{bee}\n".to_string())
+        );
+    }
+
+    /// B-2026-08-26-29, shared-struct leg. Codegen already honored a
+    /// `shared struct`'s `impl Display` at depth 0 while the interpreter did
+    /// not — a run-vs-build divergence that predated this row — and the depth
+    /// dispatch would have extended it to containers. Both are aligned now;
+    /// this is the compiled half of
+    /// `user_impl_display_on_a_shared_struct_is_honored_like_any_other`.
+    #[test]
+    fn test_e2e_user_impl_display_on_shared_struct() {
+        assert_eq!(
+            run_program(
+                r#"
+shared struct Sh { v: i64 }
+impl Display for Sh {
+    fn to_string(ref self) -> String { f"sh({self.v})" }
+}
+fn main() {
+    let a = Sh { v: 1 };
+    println(f"top={a}")
+    println(a.to_string())
+    let v = [Sh { v: 2 }];
+    println(f"vec={v}")
+}
+"#
+            ),
+            Some("top=sh(1)\nsh(1)\nvec=[sh(2)]\n".to_string())
+        );
+    }
+
+    /// The control for the test above: the depth dispatch fires ONLY for a
+    /// hand-written impl. A `#[derive(Display)]` type keeps the derived shape
+    /// at every depth, so the fix cannot have shifted an existing rendering.
+    #[test]
+    fn test_e2e_derived_display_unaffected_by_depth_dispatch() {
+        assert_eq!(
+            run_program(
+                r#"
+#[derive(Display)]
+struct Plain { n: i64 }
+fn main() {
+    let p = Plain { n: 5 };
+    println(f"top={p}")
+    let v = [Plain { n: 5 }];
+    println(f"vec={v}")
+}
+"#
+            ),
+            Some("top=Plain { n: 5 }\nvec=[Plain { n: 5 }]\n".to_string())
+        );
+    }
+
+    /// design.md § Strings names this exact example: `Some(p)` for a
+    /// `p: Point` with an `impl Display` prints `Some((3, 4))`, NOT the
+    /// field-name form. Both backends rendered `Some(Point { x: 3, y: 4 })`
+    /// before B-2026-08-26-29 — the `Debug`-in-`Display` bug that paragraph
+    /// was written against, which it attributed to the interpreter alone.
+    #[test]
+    fn test_e2e_compound_option_payload_renders_through_its_own_display() {
+        assert_eq!(
+            run_program(
+                r#"
+struct Point { x: i64, y: i64 }
+impl Display for Point {
+    fn to_string(ref self) -> String { f"({self.x}, {self.y})" }
+}
+fn main() {
+    let p = Point { x: 3, y: 4 };
+    let o = Some(p);
+    println(f"{o}")
+}
+"#
+            ),
+            Some("Some((3, 4))\n".to_string())
         );
     }
 

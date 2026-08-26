@@ -33639,6 +33639,89 @@ fn test_alloc_error_displays_its_specified_prose_on_every_backend() {
     }
 }
 
+/// B-2026-08-26-29 — a hand-written `impl Display` wins at every DEPTH, and
+/// `Debug` is not swept along with it.
+///
+/// The two halves need one test because they are one dispatch. Codegen renders
+/// `Display` and `Debug` through the SAME synthesized-function dispatcher,
+/// distinguished only by `display.debug_render` (which picks the symbol prefix
+/// and the per-mode cache) — so the arm that routes a container element to the
+/// user's `to_string` captures `dbg()` too unless it is gated on that flag.
+/// It was not, at first: `dbg(e)` reported the Display prose. The
+/// `AllocError` test above caught that, but only for a PRELUDE type; this is
+/// the same assertion for a user-defined one, across all three backends.
+///
+/// `dbg` writes to stderr, which is why this lives here and not in
+/// `tests/codegen.rs` — `run_program` there captures stdout only, so the
+/// regression was invisible to the E2E oracle.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_user_display_impl_wins_at_depth_without_capturing_debug() {
+    let tmp = scratch_project("user-display-depth");
+    let src = r#"enum Ue { A { n: i64 }, B }
+impl Display for Ue {
+    fn to_string(ref self) -> String {
+        match self { A { n } => f"aye {n}", B => "bee" }
+    }
+}
+fn main() {
+    let e = Ue.A { n: 7 };
+    let v = [Ue.A { n: 7 }, Ue.B];
+    println(f"top={e}");
+    println(f"vec={v}");
+    dbg(v);
+}
+"#;
+    write(&tmp.join("m.kara"), src);
+    let expected = "top=aye 7\nvec=[aye 7, bee]\n";
+
+    let run = |args: &[&str]| -> Option<(String, String)> {
+        let o = karac_bin().current_dir(&tmp).args(args).output().ok()?;
+        o.status.success().then(|| {
+            (
+                String::from_utf8_lossy(&o.stdout).into_owned(),
+                String::from_utf8_lossy(&o.stderr).into_owned(),
+            )
+        })
+    };
+    let interp = run(&["run", "--interp", "m.kara"]);
+    let jit = run(&["run", "m.kara"]);
+    let built = karac_bin()
+        .current_dir(&tmp)
+        .args(["build", "m.kara"])
+        .output();
+    let exe = tmp.join("m");
+    let aot_ok = built.map(|o| o.status.success()).unwrap_or(false) && exe.exists();
+    let aot = aot_ok.then(|| {
+        let o = std::process::Command::new(&exe)
+            .output()
+            .expect("run built");
+        (
+            String::from_utf8_lossy(&o.stdout).into_owned(),
+            String::from_utf8_lossy(&o.stderr).into_owned(),
+        )
+    });
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    for (label, got) in [("--interp", &interp), ("JIT", &jit), ("AOT", &aot)] {
+        let Some((out, err)) = got else {
+            // The AOT leg soft-skips without a runtime archive, matching the
+            // convention in this file; the other two legs always run.
+            assert_eq!(label, "AOT", "{label} must not fail to run");
+            continue;
+        };
+        assert_eq!(out, expected, "{label}: user impl must win at every depth");
+        assert!(
+            err.contains("[A { n: 7 }, B]"),
+            "{label}: `dbg` must keep the Debug field shape; got stderr: {err}"
+        );
+        assert!(
+            !err.contains("aye 7"),
+            "{label}: the user Display must not reach `Debug`; got stderr: {err}"
+        );
+    }
+}
+
 /// B-2026-08-25-34 — a `main() -> Result[(), E]` error must never print as a
 /// bare `Error: `, and the entry point must render whatever a real `f"{e}"`
 /// renders.

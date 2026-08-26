@@ -617,6 +617,218 @@ fn test_user_impl_display_dispatches_through_to_string() {
 }
 
 #[test]
+fn user_impl_display_wins_at_every_depth_not_just_the_top_level() {
+    // B-2026-08-26-29. A hand-written `impl Display` took effect at depth 0
+    // (`f"{e}"` -> `aye 7`) and was IGNORED one level down, where the DERIVED
+    // shape rendered instead (`f"{[e]}"` -> `[A { n: 7 }, B]`). That made the
+    // one mechanism the language offers for overriding a rendering stop
+    // applying inside a container, so a type whose `Display` exists to hide its
+    // internals leaked them from inside any `Vec` / `Option` / struct field.
+    //
+    // Every container contributes only its punctuation; each element renders
+    // through its own `Display` (design.md § derive(Display) on enums, "The
+    // override applies at every depth").
+    let src = "enum Ue { A { n: i64 }, B }
+        impl Display for Ue {
+            fn to_string(ref self) -> String {
+                match self { A { n } => f\"aye {n}\", B => \"bee\" }
+            }
+        }
+        struct Wrap { u: Ue }
+        impl Display for Wrap {
+            fn to_string(ref self) -> String { f\"<{self.u}>\" }
+        }
+        struct Holder { u: Ue }
+        fn main() {
+            let e = Ue.A { n: 7 };
+            println(f\"top={e}\");
+            let v = [Ue.A { n: 7 }, Ue.B];
+            println(f\"vec={v}\");
+            println(f\"nest={[[Ue.B]]}\");
+            let o = Some(Ue.B);
+            println(f\"opt={o}\");
+            let r: Result[Ue, i64] = Ok(Ue.B);
+            println(f\"res={r}\");
+            let t = (Ue.B, 1);
+            println(f\"tup={t}\");
+            let h = Holder { u: Ue.B };
+            println(f\"fld={h.u}\");
+            let w = Wrap { u: Ue.A { n: 3 } };
+            println(f\"wrap={w}\");
+            println(f\"vw={[Wrap { u: Ue.B }]}\");
+            let mut m: Map[String, Ue] = Map.new();
+            m.insert(\"k\", Ue.B);
+            println(f\"map={m}\");
+            println(f\"str={v.to_string()}\");
+        }";
+    let out = run_no_errors(src);
+    for want in [
+        "top=aye 7\n",
+        "vec=[aye 7, bee]\n",
+        "nest=[[bee]]\n",
+        "opt=Some(bee)\n",
+        "res=Ok(bee)\n",
+        "tup=(bee, 1)\n",
+        "fld=bee\n",
+        "wrap=<aye 3>\n",
+        "vw=[<bee>]\n",
+        "map={k: bee}\n",
+        "str=[aye 7, bee]\n",
+    ] {
+        assert!(out.contains(want), "missing {want:?} in:\n{out}");
+    }
+    // The derived shape must not leak from ANY position — that is the bug.
+    assert!(!out.contains("A {"), "derived shape leaked: {out}");
+    assert!(!out.contains("Some(B)"), "derived shape leaked: {out}");
+}
+
+#[test]
+fn user_impl_display_reaches_set_and_sorted_collection_elements() {
+    // B-2026-08-26-29, second half. `Set` / `SortedSet` / `SortedMap` were the
+    // three shapes the typed walker never destructured — they fell to a
+    // catch-all that formats through `Value`'s RUST `Display`, which cannot
+    // reach a user impl. Codegen's Set renderer DOES recurse through the shared
+    // dispatcher, so honoring the impl there and not here would have turned a
+    // consistent-but-wrong rendering into a run-vs-build divergence.
+    //
+    // `SortedSet`/`SortedMap` with a user-enum key are refused by codegen today
+    // for an unrelated reason, so only the `Set` line has a compiled twin; the
+    // other two are asserted here because the rule is the interpreter's to keep
+    // either way.
+    let src = "#[derive(Hash, Eq, PartialEq, Ord)]
+        enum Ue { A { n: i64 }, B }
+        impl Display for Ue {
+            fn to_string(ref self) -> String {
+                match self { A { n } => f\"aye {n}\", B => \"bee\" }
+            }
+        }
+        fn main() {
+            let mut s: Set[Ue] = Set.new();
+            s.insert(Ue.B);
+            println(f\"set={s}\");
+            let mut ss: SortedSet[Ue] = SortedSet.new();
+            ss.insert(Ue.B);
+            println(f\"sset={ss}\");
+            let mut sm: SortedMap[Ue, i64] = SortedMap.new();
+            sm.insert(Ue.B, 1);
+            println(f\"smap={sm}\");
+        }";
+    assert_eq!(
+        run_no_errors(src),
+        "set=Set{bee}\nsset=SortedSet{bee}\nsmap=SortedMap{bee: 1}\n"
+    );
+}
+
+#[test]
+fn user_impl_display_on_a_shared_struct_is_honored_like_any_other() {
+    // B-2026-08-26-29, third leg — and the only one that was ALREADY a
+    // run-vs-build divergence at DEPTH 0 before this row touched anything.
+    //
+    // `user_display_impl_to_string_key` matched `Struct` and `EnumVariant` and
+    // not `SharedStruct`, so the interpreter ignored a `shared struct`'s
+    // `impl Display` everywhere — even for a bare `println(a)` and an explicit
+    // `a.to_string()`. Codegen resolves a shared struct through
+    // `expr_user_struct_name` (shared types are registered in
+    // `struct_field_names`), so it honored the impl and printed `sh(1)` where
+    // `--interp` printed `Sh { v: 1 }`.
+    //
+    // A shared ENUM was never affected: it rides as a `Value::EnumVariant`,
+    // which the helper already matched. It is asserted here as the control.
+    let src = "shared struct Sh { v: i64 }
+        impl Display for Sh {
+            fn to_string(ref self) -> String { f\"sh({self.v})\" }
+        }
+        shared enum Se { X { n: i64 }, Y }
+        impl Display for Se {
+            fn to_string(ref self) -> String { \"se\" }
+        }
+        fn main() {
+            let a = Sh { v: 1 };
+            println(f\"top={a}\");
+            println(a.to_string());
+            let v = [Sh { v: 2 }];
+            println(f\"vec={v}\");
+            let e = Se.Y;
+            println(f\"enum={e}\");
+        }";
+    assert_eq!(
+        run_no_errors(src),
+        "top=sh(1)\nsh(1)\nvec=[sh(2)]\nenum=se\n"
+    );
+}
+
+#[test]
+fn debug_keeps_the_field_shape_when_display_is_overridden() {
+    // The companion invariant to the test above: `Debug` is a DIFFERENT trait
+    // and a user `impl Display` must not reach it. `dbg()` reports the `{:?}`
+    // form, which design.md pins as the field-name shape — so the same vector
+    // that prints `[aye 7, bee]` through `Display` must still report
+    // `[A { n: 7 }, B]` through `Debug`.
+    let src = "enum Ue { A { n: i64 }, B }
+        impl Display for Ue {
+            fn to_string(ref self) -> String {
+                match self { A { n } => f\"aye {n}\", B => \"bee\" }
+            }
+        }
+        fn main() {
+            let v = [Ue.A { n: 7 }, Ue.B];
+            println(f\"disp={v}\");
+            dbg(v);
+        }";
+    let (out, dbg) = run_program_with_dbg(src, DbgOutputMode::Terminal);
+    let out = out.join("");
+    assert!(out.contains("disp=[aye 7, bee]\n"), "Display: {out}");
+    assert_eq!(dbg.len(), 1, "expected one dbg line, got {dbg:?}");
+    assert!(
+        dbg[0].contains("[A { n: 7 }, B]"),
+        "Debug must keep the field shape: {:?}",
+        dbg[0]
+    );
+    assert!(
+        !dbg[0].contains("aye 7"),
+        "the user Display must not reach Debug: {:?}",
+        dbg[0]
+    );
+}
+
+#[test]
+fn a_derived_display_is_unaffected_by_the_depth_dispatch() {
+    // Control for the two tests above: the depth dispatch fires ONLY for a
+    // hand-written impl. A `#[derive(Display)]` type keeps the derived shape at
+    // every depth, so the fix cannot have shifted any existing rendering.
+    let src = "#[derive(Display)]
+        struct Plain { n: i64 }
+        fn main() {
+            let p = Plain { n: 5 };
+            println(f\"top={p}\");
+            println(f\"vec={[Plain { n: 5 }]}\");
+            println(f\"opt={Some(Plain { n: 5 })}\");
+        }";
+    assert_eq!(
+        run_no_errors(src),
+        "top=Plain { n: 5 }\nvec=[Plain { n: 5 }]\nopt=Some(Plain { n: 5 })\n"
+    );
+}
+
+#[test]
+fn a_compound_option_payload_renders_through_its_own_display() {
+    // design.md § Strings names this exact example: `Some(p)` for a `p: Point`
+    // with an `impl Display` prints `Some((3, 4))`, NOT the field-name form.
+    // Both backends rendered `Some(Point { x: 3, y: 4 })` before B-2026-08-26-29
+    // — the `Debug`-in-`Display` bug that paragraph was written against.
+    let src = "struct Point { x: i64, y: i64 }
+        impl Display for Point {
+            fn to_string(ref self) -> String { f\"({self.x}, {self.y})\" }
+        }
+        fn main() {
+            let p = Point { x: 3, y: 4 };
+            let o = Some(p);
+            println(f\"{o}\");
+        }";
+    assert_eq!(run_no_errors(src), "Some((3, 4))\n");
+}
+
+#[test]
 fn test_struct_display_nested_in_container() {
     // A struct nested in a Vec still renders in declaration order (the
     // renderer recurses through containers).

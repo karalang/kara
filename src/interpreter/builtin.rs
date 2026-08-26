@@ -87,7 +87,7 @@ impl<'a> super::Interpreter<'a> {
     /// parent type was itself unknown). That degrades to exactly the previous
     /// behaviour — signed — so an unresolved type is never worse than before.
     pub(crate) fn display_render_typed(
-        &self,
+        &mut self,
         v: &Value,
         ty: Option<&crate::typechecker::Type>,
     ) -> String {
@@ -113,7 +113,7 @@ impl<'a> super::Interpreter<'a> {
     /// `Value::debug_fmt` calls. Every compound shape renders identically in
     /// the two modes, which is why one walker serves both.
     pub(crate) fn debug_render_typed(
-        &self,
+        &mut self,
         v: &Value,
         ty: Option<&crate::typechecker::Type>,
     ) -> String {
@@ -123,12 +123,35 @@ impl<'a> super::Interpreter<'a> {
     /// Shared body of `display_render_typed` / `debug_render_typed`. `debug`
     /// selects the quoted-leaf rendering; the structural arms are common.
     fn render_typed_mode(
-        &self,
+        &mut self,
         v: &Value,
         ty: Option<&crate::typechecker::Type>,
         debug: bool,
     ) -> String {
         use crate::typechecker::Type;
+        // A user `impl Display` wins at EVERY depth, not just at the top level
+        // (B-2026-08-26-29). The depth-0 dispatch in `eval_method_call` already
+        // reaches the user body, so `f"{e}"` printed `aye 7` — but the
+        // recursive positions below rendered the DERIVED shape, so the same
+        // value one level down inside a `Vec` / `Option` / struct field printed
+        // `A { n: 7 }`. That made the one mechanism the language offers for
+        // overriding a rendering stop applying inside a container, and leaked
+        // the internals of any type whose `Display` exists to hide them.
+        //
+        // The typechecker already demands the element be `Display` to
+        // interpolate a container at all (`Vec[P]` for a non-`Display` `P` is
+        // rejected outright), so honoring the impl here is what makes the
+        // renderer agree with the trait bound the gate enforces — not a new
+        // policy. Never in `debug` mode: `Debug` is a different trait and keeps
+        // the field-name shape, which is what `dbg()` reports and what
+        // design.md calls the `{:?}` form.
+        if !debug {
+            if let Some(key) = self.user_display_impl_to_string_key(v) {
+                if let Value::String(s) = self.call_function(&key, std::slice::from_ref(v)) {
+                    return s;
+                }
+            }
+        }
         match v {
             Value::Struct { name, fields } => {
                 // std.secret: never render a `Secret[T]`'s wrapped value in a
@@ -156,42 +179,44 @@ impl<'a> super::Interpreter<'a> {
                     .map(|si| si.fields.iter().map(|(n, _, _)| n.clone()).collect())
                     .unwrap_or_else(|| fields.keys().cloned().collect());
                 let field_tys = self.struct_field_display_types(name, ty);
-                let body = order
-                    .iter()
-                    .filter_map(|fname| {
-                        fields.get(fname).map(|fv| {
-                            let fty = field_tys.get(fname);
-                            format!("{}: {}", fname, self.render_typed_mode(fv, fty, debug))
-                        })
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("{} {{ {} }}", name, body)
+                let name = name.clone();
+                let mut parts: Vec<String> = Vec::new();
+                for fname in &order {
+                    let Some(fv) = fields.get(fname).cloned() else {
+                        continue;
+                    };
+                    let fty = field_tys.get(fname).cloned();
+                    let rendered = self.render_typed_mode(&fv, fty.as_ref(), debug);
+                    parts.push(format!("{}: {}", fname, rendered));
+                }
+                format!("{} {{ {} }}", name, parts.join(", "))
             }
             Value::Tuple(vals) => {
                 let elem_tys: Option<&Vec<Type>> = match ty {
                     Some(Type::Tuple(ts)) => Some(ts),
                     _ => None,
                 };
-                let body = vals
-                    .iter()
-                    .enumerate()
-                    .map(|(i, x)| {
-                        self.render_typed_mode(x, elem_tys.and_then(|ts| ts.get(i)), debug)
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("({})", body)
+                let elem_tys = elem_tys.cloned();
+                let vals = vals.clone();
+                let mut parts: Vec<String> = Vec::new();
+                for (i, x) in vals.iter().enumerate() {
+                    let t = elem_tys.as_ref().and_then(|ts| ts.get(i)).cloned();
+                    parts.push(self.render_typed_mode(x, t.as_ref(), debug));
+                }
+                format!("({})", parts.join(", "))
             }
             Value::Array(rc) => {
-                let elem = Self::display_element_type(ty);
-                let vals = rc.read().unwrap();
-                let body = vals
-                    .iter()
-                    .map(|x| self.render_typed_mode(x, elem, debug))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("[{}]", body)
+                let elem = Self::display_element_type(ty).cloned();
+                // Copy the elements OUT of the lock before rendering. A user
+                // `impl Display` runs arbitrary Kāra code, which may read (or
+                // write) the very container being printed — holding the read
+                // guard across that call would deadlock on the write.
+                let vals: Vec<Value> = rc.read().unwrap().clone();
+                let mut parts: Vec<String> = Vec::new();
+                for x in &vals {
+                    parts.push(self.render_typed_mode(x, elem.as_ref(), debug));
+                }
+                format!("[{}]", parts.join(", "))
             }
             Value::Slice {
                 storage,
@@ -199,17 +224,21 @@ impl<'a> super::Interpreter<'a> {
                 len,
                 ..
             } => {
-                let elem = Self::display_element_type(ty);
-                let vals = storage.read().unwrap();
-                let body = vals[*start..*start + *len]
-                    .iter()
-                    .map(|x| self.render_typed_mode(x, elem, debug))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("[{}]", body)
+                let elem = Self::display_element_type(ty).cloned();
+                // Same lock-release rationale as the `Array` arm above.
+                let vals: Vec<Value> = storage.read().unwrap()[*start..*start + *len].to_vec();
+                let mut parts: Vec<String> = Vec::new();
+                for x in &vals {
+                    parts.push(self.render_typed_mode(x, elem.as_ref(), debug));
+                }
+                format!("[{}]", parts.join(", "))
             }
             Value::Map(entries) => {
-                let entries = entries.read().unwrap();
+                // Copy the entries OUT of the lock first — see the `Array`
+                // arm: a user `impl Display` on a key or value runs Kāra code
+                // that may touch this same map.
+                let entries: Vec<(Value, Value)> =
+                    entries.read().unwrap().iter_observable().cloned().collect();
                 // `Map[K, V]` / `SortedMap[K, V]` — both K and V can be an
                 // unsigned scalar, so both sides peel.
                 let (kt, vt) = match ty {
@@ -223,18 +252,14 @@ impl<'a> super::Interpreter<'a> {
                 // Hash order — the `Display` / `for` / `.iter()` walks all
                 // agree, and design.md § Map requires it to vary per process
                 // (B-2026-08-21-6).
-                let body = entries
-                    .iter_observable()
-                    .map(|(k, val)| {
-                        format!(
-                            "{}: {}",
-                            self.render_typed_mode(k, kt, debug),
-                            self.render_typed_mode(val, vt, debug)
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("{{{}}}", body)
+                let (kt, vt) = (kt.cloned(), vt.cloned());
+                let mut parts: Vec<String> = Vec::new();
+                for (k, val) in &entries {
+                    let ks = self.render_typed_mode(k, kt.as_ref(), debug);
+                    let vs = self.render_typed_mode(val, vt.as_ref(), debug);
+                    parts.push(format!("{}: {}", ks, vs));
+                }
+                format!("{{{}}}", parts.join(", "))
             }
             // Enum variants render `Variant` / `Variant(f0, f1)` /
             // `Variant { name: v }`, recursing so nested payloads format the
@@ -250,19 +275,13 @@ impl<'a> super::Interpreter<'a> {
                 EnumData::Unit => variant.clone(),
                 EnumData::Tuple(vals) => {
                     let ptys = self.variant_payload_display_types(enum_name, variant, ty);
-                    let body = vals
-                        .iter()
-                        .enumerate()
-                        .map(|(i, x)| {
-                            self.render_typed_mode(
-                                x,
-                                ptys.as_ref().and_then(|(_, t)| t.get(i)),
-                                debug,
-                            )
-                        })
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    format!("{}({})", variant, body)
+                    let vals = vals.clone();
+                    let mut parts: Vec<String> = Vec::new();
+                    for (i, x) in vals.iter().enumerate() {
+                        let t = ptys.as_ref().and_then(|(_, t)| t.get(i)).cloned();
+                        parts.push(self.render_typed_mode(x, t.as_ref(), debug));
+                    }
+                    format!("{}({})", variant, parts.join(", "))
                 }
                 EnumData::Struct(fields) => {
                     let order: Vec<String> = self
@@ -278,19 +297,22 @@ impl<'a> super::Interpreter<'a> {
                         })
                         .unwrap_or_else(|| fields.keys().cloned().collect());
                     let ptys = self.variant_payload_display_types(enum_name, variant, ty);
-                    let body = order
-                        .iter()
-                        .filter_map(|fname| {
-                            fields.get(fname).map(|fv| {
-                                let fty = ptys.as_ref().and_then(|(names, t)| {
-                                    names.iter().position(|n| n == fname).and_then(|i| t.get(i))
-                                });
-                                format!("{}: {}", fname, self.render_typed_mode(fv, fty, debug))
+                    let variant = variant.clone();
+                    let mut parts: Vec<String> = Vec::new();
+                    for fname in &order {
+                        let Some(fv) = fields.get(fname).cloned() else {
+                            continue;
+                        };
+                        let fty = ptys
+                            .as_ref()
+                            .and_then(|(names, t)| {
+                                names.iter().position(|n| n == fname).and_then(|i| t.get(i))
                             })
-                        })
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    format!("{} {{ {} }}", variant, body)
+                            .cloned();
+                        let rendered = self.render_typed_mode(&fv, fty.as_ref(), debug);
+                        parts.push(format!("{}: {}", fname, rendered));
+                    }
+                    format!("{} {{ {} }}", variant, parts.join(", "))
                 }
             },
             // The one leaf that depends on its type. An unsigned value at a
@@ -351,38 +373,99 @@ impl<'a> super::Interpreter<'a> {
                     }
                 };
                 let field_tys = self.struct_field_display_types(&inner.name, ty);
-                let body = order
-                    .iter()
-                    .filter_map(|fname| {
-                        let fty = field_tys.get(fname);
-                        let rendered = if let Some(v) = inner.immutable_fields.get(fname) {
-                            self.render_typed_mode(v, fty, debug)
-                        } else if let Some(cell) = inner.mut_fields.get(fname) {
-                            let v = cell.value.try_read().expect(
-                                "shared struct field write-locked during debug render — unreachable in single-task interpreter",
-                            );
-                            self.render_typed_mode(&v, fty, debug)
-                        } else if let Some(weak) = inner.weak_immutable_fields.get(fname) {
-                            self.render_typed_mode(&upgrade_weak_to_option(weak), None, debug)
-                        } else {
-                            // Declared but absent: skip rather than invent a
-                            // placeholder, matching the `Struct` arm's
-                            // `fields.get(fname)` filter. `?` short-circuits the
-                            // `filter_map` closure with `None` when the field is
-                            // in none of the maps (floating-stable clippy's
-                            // `question_mark` lint requires this over an explicit
-                            // `else { return None }`).
-                            let slot = inner.weak_mut_fields.get(fname)?;
-                            let weak = slot.try_read().expect(
-                                "shared struct weak field write-locked during debug render — unreachable in single-task interpreter",
-                            );
-                            self.render_typed_mode(&upgrade_weak_to_option(&weak), None, debug)
-                        };
-                        Some(format!("{}: {}", fname, rendered))
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("{} {{ {} }}", inner.name, body)
+                let inner = inner.clone();
+                let mut parts: Vec<String> = Vec::new();
+                for fname in &order {
+                    let fty = field_tys.get(fname).cloned();
+                    // Read each field's value OUT of its cell before rendering:
+                    // a user `impl Display` runs Kāra code that may touch this
+                    // same shared struct, and holding the borrow across that
+                    // call would trip the `try_read` on re-entry.
+                    let owned: Value = if let Some(v) = inner.immutable_fields.get(fname) {
+                        v.clone()
+                    } else if let Some(cell) = inner.mut_fields.get(fname) {
+                        cell.value.try_read().expect(
+                            "shared struct field write-locked during debug render — unreachable in single-task interpreter",
+                        ).clone()
+                    } else if let Some(weak) = inner.weak_immutable_fields.get(fname) {
+                        upgrade_weak_to_option(weak)
+                    } else if let Some(slot) = inner.weak_mut_fields.get(fname) {
+                        let weak = slot.try_read().expect(
+                            "shared struct weak field write-locked during debug render — unreachable in single-task interpreter",
+                        );
+                        upgrade_weak_to_option(&weak)
+                    } else {
+                        // Declared but absent: skip rather than invent a
+                        // placeholder, matching the `Struct` arm's
+                        // `fields.get(fname)` filter.
+                        continue;
+                    };
+                    // A weak field renders through the upgrade, whose
+                    // `Option[T]` shape carries no declared type here — pass
+                    // `None`, as the closure form did.
+                    let is_weak = inner.weak_immutable_fields.contains_key(fname)
+                        || inner.weak_mut_fields.contains_key(fname);
+                    let fty = if is_weak { None } else { fty };
+                    let rendered = self.render_typed_mode(&owned, fty.as_ref(), debug);
+                    parts.push(format!("{}: {}", fname, rendered));
+                }
+                format!("{} {{ {} }}", inner.name, parts.join(", "))
+            }
+            // Sets and the sorted collections, in DISPLAY mode only
+            // (B-2026-08-26-29). These three fell to the catch-all below, which
+            // formats through `Value`'s RUST `Display` — a renderer that cannot
+            // reach a user `impl Display`, so a `Set[Ue]` printed `Set{B}` while
+            // codegen, whose Set renderer recurses through the shared
+            // `emit_display_fn_for_type_expr` dispatcher, printed `Set{bee}`.
+            // Honoring the impl on one backend and not the other turned a
+            // consistent-but-wrong rendering into a run-vs-build divergence, so
+            // the walker has to destructure them too.
+            //
+            // Punctuation is copied verbatim from the `Value` `Display` arms
+            // these replace (`Set{…}` / `SortedSet{…}` / `SortedMap{k: v}`,
+            // `, `-separated) so nothing but the element dispatch changes.
+            //
+            // `debug` keeps the old path deliberately: `Debug` is a different
+            // trait that must NOT reach the user impl, and routing these three
+            // through the typed walker in that mode would also start quoting
+            // their leaves — a real improvement, but a separate change from
+            // this one, and not one to make silently.
+            Value::Set(items) if !debug => {
+                let items: Vec<Value> = items.read().unwrap().iter_observable().cloned().collect();
+                let et = Self::display_element_type(ty).cloned();
+                let mut parts: Vec<String> = Vec::new();
+                for x in &items {
+                    parts.push(self.render_typed_mode(x, et.as_ref(), debug));
+                }
+                format!("Set{{{}}}", parts.join(", "))
+            }
+            Value::SortedSet(set) if !debug => {
+                let items: Vec<Value> = set.keys().map(|k| k.0.clone()).collect();
+                let et = Self::display_element_type(ty).cloned();
+                let mut parts: Vec<String> = Vec::new();
+                for x in &items {
+                    parts.push(self.render_typed_mode(x, et.as_ref(), debug));
+                }
+                format!("SortedSet{{{}}}", parts.join(", "))
+            }
+            Value::SortedMap(map) if !debug => {
+                let entries: Vec<(Value, Value)> =
+                    map.iter().map(|(k, v)| (k.0.clone(), v.clone())).collect();
+                let (kt, vt) = match ty {
+                    Some(Type::Named { name, args })
+                        if (name == "Map" || name == "SortedMap") && args.len() == 2 =>
+                    {
+                        (Some(args[0].clone()), Some(args[1].clone()))
+                    }
+                    _ => (None, None),
+                };
+                let mut parts: Vec<String> = Vec::new();
+                for (k, v) in &entries {
+                    let ks = self.render_typed_mode(k, kt.as_ref(), debug);
+                    let vs = self.render_typed_mode(v, vt.as_ref(), debug);
+                    parts.push(format!("{}: {}", ks, vs));
+                }
+                format!("SortedMap{{{}}}", parts.join(", "))
             }
             // `debug_fmt` for the shapes this walker does not destructure
             // (shared structs, sets, sorted collections): still quoted at the
@@ -495,7 +578,20 @@ impl<'a> super::Interpreter<'a> {
     /// effect for `x.to_string()`, `f"{x}"`, and `println(x)`. GAP-W4.
     pub(crate) fn user_display_impl_to_string_key(&self, v: &Value) -> Option<String> {
         match v {
-            Value::Struct { .. } | Value::EnumVariant { .. } => {}
+            // `SharedStruct` belongs here for the same reason the other two do
+            // — it is a user-declared nominal type that can carry an
+            // `impl Display` — and its absence was a run-vs-build divergence at
+            // DEPTH 0, not just under a container (B-2026-08-26-29): codegen's
+            // `user_display_impl_type` resolves a shared struct through
+            // `expr_user_struct_name` (shared types are registered in
+            // `struct_field_names`), so `println(a)` on a `shared struct Sh`
+            // with an `impl Display` printed `sh(1)` under `karac build` and
+            // `Sh { v: 1 }` under `--interp`. `value_type_name` already names a
+            // `SharedStruct` by `inner.name`, so the key lookup needed nothing.
+            //
+            // A shared ENUM needs no entry: it rides as a `Value::EnumVariant`
+            // and was already matched.
+            Value::Struct { .. } | Value::EnumVariant { .. } | Value::SharedStruct(_) => {}
             _ => return None,
         }
         let key = format!("{}.to_string", self.value_type_name(v));

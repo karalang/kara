@@ -29891,6 +29891,53 @@ fn main() {
     }
 
     #[test]
+    fn asan_user_impl_display_in_container_no_leak() {
+        // B-2026-08-26-29. Rendering a container element through the element's
+        // user `impl Display` calls that method once per element, and each call
+        // hands back an OWNING String the synthesized wrapper has to free.
+        //
+        // Both payload shapes are exercised on purpose, because they need
+        // OPPOSITE handling and one guard covers both: `A` returns an f-string
+        // (heap, `cap > 0`) which MUST be freed or every element leaks, while
+        // `B` returns a string LITERAL (a read-only global, `cap == 0`) which
+        // must NOT be freed or the program aborts. 60 elements so a per-element
+        // leak is far above noise.
+        let label = "user_impl_display_in_container";
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let src = r#"
+enum Ue { A { n: i64 }, B }
+impl Display for Ue {
+    fn to_string(ref self) -> String {
+        match self { A { n } => f"aye-{n}-padding-padding-padding", B => "bee" }
+    }
+}
+fn main() {
+    let mut v: Vec[Ue] = Vec.new();
+    let mut i = 0;
+    while i < 60 {
+        if i % 2 == 0 { v.push(Ue.A { n: i }); } else { v.push(Ue.B); }
+        i = i + 1;
+    }
+    let s = f"{v}";
+    println(s.len() > 0);
+    println(v.len());
+}
+"#;
+        let Some((stdout, status)) = run_under_asan(src, label) else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN run failed (status {status:?}); stdout:\n{stdout}"
+        );
+        assert_eq!(stdout.trim(), "true\n60");
+    }
+
+    #[test]
     fn asan_priority_queue_string_drain_no_leak() {
         let label = "priority_queue_string_drain";
         if !asan_available() {

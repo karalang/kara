@@ -1486,6 +1486,32 @@ impl<'ctx> super::Codegen<'ctx> {
                 // and expr-driven; this path is the buffer-append, by-pointer
                 // form needed for nested/recursive field rendering).
                 if let Some(seg) = p.segments.last() {
+                    // A hand-written `impl Display` wins over every built-in
+                    // renderer below, at EVERY depth (B-2026-08-26-29). The
+                    // expression-driven sites (`println(x)` / `f"{x}"` /
+                    // `x.to_string()`) already prefer the user method via
+                    // `user_display_impl_type`, but this by-pointer path is the
+                    // one every CONTAINER element goes through — so before this,
+                    // `f"{e}"` printed the user's text while `f"{[e]}"` printed
+                    // the derived shape one level down.
+                    //
+                    // Checked ahead of the shared / enum / struct arms for the
+                    // same reason the shared arm precedes the other two: those
+                    // claim the type by name and would emit the built-in shape
+                    // without ever asking whether the user wrote an impl.
+                    //
+                    // `debug_render` gates it, exactly as the interpreter's
+                    // walker takes this branch only when `debug` is false:
+                    // `Debug` is a DIFFERENT trait and keeps the field-name
+                    // shape. This dispatcher serves both modes (the two
+                    // families differ only by `disp_sym_prefix` / the mode's
+                    // own cache), so without the gate a user `impl Display`
+                    // would capture `dbg()` too — `dbg(e)` on an `AllocError`
+                    // reported its Display prose instead of
+                    // `OutOfMemory { requested_bytes: 4096 }`.
+                    if !self.display.debug_render && self.user_display_impl_fn(seg).is_some() {
+                        return self.emit_user_display_impl_fn(seg);
+                    }
                     // B-2026-08-24-2 — a `shared struct` handle. Checked BEFORE
                     // the enum and struct arms below, because a shared type is
                     // registered in BOTH `struct_field_names` (which the struct
@@ -1924,6 +1950,131 @@ impl<'ctx> super::Codegen<'ctx> {
         } else {
             None
         }
+    }
+
+    /// The compiled `<type_name>.to_string` function, when the program carries
+    /// a hand-written `impl Display` for that type. The function NAME is the
+    /// discriminator: only a user impl produces one: the built-in and derived
+    /// renderers are named `karac_display_<T>`. Value-driven twin of
+    /// `user_display_impl_type`, which asks the same question of an `Expr`.
+    pub(super) fn user_display_impl_fn(&self, type_name: &str) -> Option<FunctionValue<'ctx>> {
+        self.module.get_function(&format!("{type_name}.to_string"))
+    }
+
+    /// Emit (or reuse) the append-form Display fn for a type with a
+    /// hand-written `impl Display`: call the user's `to_string` and append the
+    /// String it returns to the accumulator.
+    ///
+    /// Signature matches every other `karac_display_<T>`
+    /// (`void(ptr value, ptr acc)`), which is what lets a container element,
+    /// a struct field, and an enum payload all reach a user impl through the
+    /// one dispatcher they already call (B-2026-08-26-29).
+    pub(super) fn emit_user_display_impl_fn(&mut self, type_name: &str) -> FunctionValue<'ctx> {
+        let key = type_name.to_string();
+        if let Some(f) = self.disp_cache_get(&key) {
+            return f;
+        }
+        let fn_name = format!("{}{key}", self.disp_sym_prefix());
+        if let Some(f) = self.module.get_function(&fn_name) {
+            self.disp_cache_put(key, f);
+            return f;
+        }
+        let user_fn = self
+            .user_display_impl_fn(type_name)
+            .expect("emit_user_display_impl_fn: caller checked the user impl exists");
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let saved_bb = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+        let display_fn_ty = self
+            .context
+            .void_type()
+            .fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let display_fn = self
+            .module
+            .add_function(&fn_name, display_fn_ty, Some(Linkage::Internal));
+        self.disp_cache_put(key, display_fn);
+
+        let entry_bb = self.context.append_basic_block(display_fn, "entry");
+        self.builder.position_at_end(entry_bb);
+        self.current_fn = Some(display_fn);
+        let val_ptr = display_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let acc = display_fn.get_nth_param(1).unwrap().into_pointer_value();
+
+        // `fn to_string(ref self)` takes the receiver by pointer, which is what
+        // this signature already hands us. A receiver lowered BY VALUE (a
+        // scalar-shaped type) needs the load instead, so branch on the callee's
+        // own parameter type rather than assuming either shape.
+        let recv: BasicMetadataValueEnum<'ctx> = match user_fn.get_type().get_param_types().first()
+        {
+            Some(t) if !t.is_pointer_type() => {
+                let bt = BasicTypeEnum::try_from(*t)
+                    .expect("emit_user_display_impl_fn: receiver is a basic type");
+                self.builder
+                    .build_load(bt, val_ptr, "ud.recv")
+                    .unwrap()
+                    .into()
+            }
+            _ => val_ptr.into(),
+        };
+        let sval = self
+            .builder
+            .build_call(user_fn, &[recv], "ud.s")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_struct_value();
+        let data = self
+            .builder
+            .build_extract_value(sval, 0, "ud.data")
+            .unwrap()
+            .into_pointer_value();
+        let len = self
+            .builder
+            .build_extract_value(sval, 1, "ud.len")
+            .unwrap()
+            .into_int_value();
+        let cap = self
+            .builder
+            .build_extract_value(sval, 2, "ud.cap")
+            .unwrap()
+            .into_int_value();
+        self.emit_string_append_raw(acc, data, len);
+
+        // Free only an OWNING String — `cap == 0 ⇔ non-owning`. A user
+        // `to_string` that returns a string LITERAL (`match self { B => "bee" }`)
+        // points `data` at a read-only global and carries `cap == 0`; freeing
+        // that aborts. Same invariant and same guard as
+        // `emit_write_and_free_string`, which the `println` path uses.
+        let fn_val = self.current_fn.unwrap();
+        let do_free = self.context.append_basic_block(fn_val, "ud.free");
+        let after = self.context.append_basic_block(fn_val, "ud.after");
+        let owns = self
+            .builder
+            .build_int_compare(
+                IntPredicate::UGT,
+                cap,
+                self.context.i64_type().const_zero(),
+                "ud.owns",
+            )
+            .unwrap();
+        self.builder
+            .build_conditional_branch(owns, do_free, after)
+            .unwrap();
+        self.builder.position_at_end(do_free);
+        self.builder
+            .build_call(self.runtime_fns.free_fn, &[data.into()], "")
+            .unwrap();
+        self.builder.build_unconditional_branch(after).unwrap();
+
+        self.builder.position_at_end(after);
+        self.builder.build_return(None).unwrap();
+
+        self.current_fn = saved_fn;
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        display_fn
     }
 
     pub(super) fn expr_user_struct_name(&self, expr: &Expr) -> Option<String> {
