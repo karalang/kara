@@ -1,0 +1,161 @@
+diff --git a/src/cli/diag_json.rs b/src/cli/diag_json.rs
+index 0208c37..32635dc 100644
+--- a/src/cli/diag_json.rs
++++ b/src/cli/diag_json.rs
+@@ -1812,6 +1812,7 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
+                 crate::typechecker::TypeErrorKind::StringNotIndexable => "E0268",
+                 crate::typechecker::TypeErrorKind::IteratorNotIndexable => "E0274",
+                 crate::typechecker::TypeErrorKind::TypeNotIndexable => "E0275",
++                crate::typechecker::TypeErrorKind::IndexMoveNonCopy => "E0282",
+                 crate::typechecker::TypeErrorKind::NilCoalesceNotWrapped => "E0276",
+                 crate::typechecker::TypeErrorKind::OptionalChainNotOption => "E0277",
+                 // B-2026-06-30-3 — reassignment of a non-`mut` field on a
+diff --git a/src/typechecker.rs b/src/typechecker.rs
+index a3325bb..4418127 100644
+--- a/src/typechecker.rs
++++ b/src/typechecker.rs
+@@ -630,6 +630,22 @@ pub enum TypeErrorKind {
+     /// (design.md § Character type). Run-fatal: the interpreter has no
+     /// `Value::String[Value::Int]` lowering, so a downgrade-and-run
+     /// would hit an `unreachable!` rather than emit a clean diagnostic.
++    /// `let t = v[i]` / `x = v[j]` where the element type is not `Copy`.
++    ///
++    /// design.md § "The index operator (`expr[i]`)": `Index.index` is
++    /// `fn index(ref self, idx) -> ref T`, so an index expression produces a
++    /// BORROW. Binding it in value position reads THROUGH that reference and
++    /// obeys the same rule as `*r` — it requires `T: Copy`. A container is not
++    /// partially movable (there is no `Vec` with a hole in it), so moving an
++    /// element out of a live container is not expressible.
++    ///
++    /// Run-fatal for the `ImplTraitMultipleWitnesses` reason: both backends
++    /// previously ACCEPTED this and improvised DIFFERENT semantics for it — a
++    /// swap written through index reads printed a different `Drop` sequence
++    /// under `karac run` than under `karac build` (B-2026-08-26-21). Letting
++    /// the interpreter keep running it would preserve exactly the divergence
++    /// the rejection exists to remove.
++    IndexMoveNonCopy,
+     StringNotIndexable,
+     /// `it[i]` applied to an `Iterator[T]` — the value `.chars()`,
+     /// `.iter()`, `.map(...)` and friends return. An iterator is a lazy
+@@ -1151,6 +1167,7 @@ impl TypeErrorKind {
+         matches!(
+             self,
+             TypeErrorKind::InvalidCast
++                | TypeErrorKind::IndexMoveNonCopy
+                 | TypeErrorKind::StringNotIndexable
+                 | TypeErrorKind::IteratorNotIndexable
+                 | TypeErrorKind::TypeNotIndexable
+@@ -1189,6 +1206,7 @@ pub(crate) fn class_for_type_error_kind(
+         | TypeErrorKind::ImplTraitMultipleWitnesses
+         | TypeErrorKind::AtomicInvalidInnerType
+         | TypeErrorKind::InvalidTupleIndex
++        | TypeErrorKind::IndexMoveNonCopy
+         | TypeErrorKind::StringNotIndexable
+         | TypeErrorKind::IteratorNotIndexable
+         | TypeErrorKind::TypeNotIndexable
+diff --git a/src/typechecker/items.rs b/src/typechecker/items.rs
+index b644b05..3de0cd7 100644
+--- a/src/typechecker/items.rs
++++ b/src/typechecker/items.rs
+@@ -4171,6 +4171,74 @@ impl<'a> super::TypeChecker<'a> {
+         self.check_stmt_inner(stmt)
+     }
+ 
++    /// design.md § "The index operator (`expr[i]`)" — reject reading a
++    /// non-`Copy` element out of a container in VALUE position.
++    ///
++    /// `Index.index` is `fn index(ref self, idx) -> ref T`, so `v[i]` produces
++    /// a BORROW. Binding it by value reads through that reference, which the
++    /// dereference rule already restricts to `T: Copy`; and `Index.index_set`
++    /// takes `val: T` by value, which a `ref T` cannot supply, so
++    /// `v[i] = v[j]` falls to the same rule. Underneath both is that a
++    /// container is not partially movable — there is no `Vec` with a hole in
++    /// it, and Kāra has no per-slot drop flags.
++    ///
++    /// Scope is deliberately the two forms design.md pins (a `let`
++    /// initializer and an assignment RHS). Other value positions — notably a
++    /// call argument, `f(v[i])` — read an element by value too and are the
++    /// same rule, but they are a much larger blast radius and are tracked
++    /// separately rather than swept in silently here.
++    ///
++    /// The `.clone()` fix-it is offered ONLY when the element type actually
++    /// has one. B-2026-07-29-31 is the standing lesson: the Mend loop is an
++    /// LLM acting on this sentence, so a confident wrong steer (suggesting
++    /// `.clone()` on a move-only struct, which then fails with `no method
++    /// 'clone'`) is worse than offering no fix-it at all.
++    fn reject_index_move_non_copy(&mut self, value: &Expr, ty: &Type) {
++        if !matches!(value.kind, ExprKind::Index { .. }) {
++            return;
++        }
++        if matches!(ty, Type::Error | Type::Never) || self.is_copy_type_during_check(ty) {
++            return;
++        }
++        let has_clone = self.type_supports_clone(ty);
++        let message = if has_clone {
++            "error[E_INDEX_MOVE_NON_COPY]: cannot move out of an index expression: "
++                .to_owned()
++                + "`v[i]` evaluates to `ref T`, and this element type is not `Copy`. "
++                + "Borrow it (`ref v[i]`), take an independent copy "
++                + "(`v[i].clone()`), or exchange two elements with `v.swap(i, j)`"
++        } else {
++            "error[E_INDEX_MOVE_NON_COPY]: cannot move out of an index expression: "
++                .to_owned()
++                + "`v[i]` evaluates to `ref T`, and this element type is not `Copy`. "
++                + "Borrow it (`ref v[i]`), or exchange two elements with "
++                + "`v.swap(i, j)`. (No `.clone()` is offered: this element type "
++                + "does not have one.)"
++        };
++        if has_clone {
++            // Behaviour-PRESERVING migration: reading an element already
++            // cloned, so appending `.clone()` leaves the program's meaning
++            // exactly as it is today and only makes the cost visible. That is
++            // what lets `karac fix` mechanically migrate existing code.
++            self.type_error_with_fix_it(
++                message,
++                value.span,
++                TypeErrorKind::IndexMoveNonCopy,
++                crate::typechecker::FixIt {
++                    span: Span {
++                        offset: value.span.offset + value.span.length,
++                        length: 0,
++                        line: value.span.line,
++                        column: value.span.column,
++                    },
++                    replacement: ".clone()".to_string(),
++                },
++            );
++        } else {
++            self.type_error(message, value.span, TypeErrorKind::IndexMoveNonCopy);
++        }
++    }
++
+     fn check_stmt_inner(&mut self, stmt: &Stmt) -> Type {
+         if let StmtKind::Expr(expr) = &stmt.kind {
+             return self.infer_expr(expr);
+@@ -4199,6 +4267,10 @@ impl<'a> super::TypeChecker<'a> {
+                     self.record_uninferrable_binding_origin(pattern, &inferred, value);
+                     inferred
+                 };
++                // design.md § "The index operator (`expr[i]`)" — a `let`
++                // initializer is the canonical value position, so a non-`Copy`
++                // element read here is rejected (B-2026-08-26-21).
++                self.reject_index_move_non_copy(value, &expected_ty);
+                 // B-2026-07-31-20 — record the result type of a
+                 // `with_provider[R](p, || ...)` RHS for codegen's Let arm
+                 // (read as an implicit binding annotation). The intercept in
+@@ -4357,6 +4429,15 @@ impl<'a> super::TypeChecker<'a> {
+                 self.in_defer = prev;
+             }
+             StmtKind::Assign { target, value } => {
++                // design.md § "The index operator (`expr[i]`)" — the RHS of an
++                // assignment is a value position exactly as a `let` initializer
++                // is, so `v[i] = v[j]` falls to the same rule
++                // (B-2026-08-26-21). `Index.index_set` takes `val: T` by value,
++                // which a `ref T` cannot supply.
++                {
++                    let rhs_ty = self.infer_expr(value);
++                    self.reject_index_move_non_copy(value, &rhs_ty);
++                }
+                 // Reject `*r = v` when `r: ref T` — shared borrow is read-only.
+                 if let ExprKind::Unary {
+                     op: UnaryOp::Deref,

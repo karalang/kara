@@ -1,0 +1,191 @@
+diff --git a/src/ast/exprs.rs b/src/ast/exprs.rs
+index cccf085..baccaa9 100644
+--- a/src/ast/exprs.rs
++++ b/src/ast/exprs.rs
+@@ -434,6 +434,14 @@ pub enum UnaryOp {
+     Not,    // !
+     BitNot, // ~
+     Deref,  // *
++    /// `ref expr` — a shared borrow in expression position.
++    ///
++    /// design.md § "Binding-extension exception" specs `let r = ref f();`
++    /// and `let p: ref i32 = ref 42;`. It is the zero-cost half of the
++    /// `E_INDEX_MOVE_NON_COPY` fix-it pair (B-2026-08-26-21): where an
++    /// element type has no `.clone()`, borrowing is the ONLY way to read
++    /// `v[i]` without moving out of the container.
++    Ref, // ref
+ }
+ 
+ // ── Closures ─────────────────────────────────────────────────────
+diff --git a/src/codegen/expr_ops.rs b/src/codegen/expr_ops.rs
+index 82c5896..f156830 100644
+--- a/src/codegen/expr_ops.rs
++++ b/src/codegen/expr_ops.rs
+@@ -8539,6 +8539,7 @@ impl<'ctx> super::Codegen<'ctx> {
+             }
+             // Deref is handled in compile_expr before reaching here.
+             UnaryOp::Deref => Err("unreachable: Deref handled in compile_expr".into()),
++            UnaryOp::Ref => Err("unreachable: Ref handled in compile_expr".into()),
+         }
+     }
+ 
+diff --git a/src/codegen/stmts.rs b/src/codegen/stmts.rs
+index 9ee8914..af44f3a 100644
+--- a/src/codegen/stmts.rs
++++ b/src/codegen/stmts.rs
+@@ -2176,7 +2176,7 @@ impl<'ctx> super::Codegen<'ctx> {
+             ExprKind::Unary { op, operand } => match op {
+                 UnaryOp::Not => Some(self.context.bool_type().into()),
+                 UnaryOp::Neg | UnaryOp::BitNot => self.infer_expr_llvm_type(operand, locals),
+-                UnaryOp::Deref => None,
++                UnaryOp::Deref | UnaryOp::Ref => None,
+             },
+ 
+             // Block expression: its value is the tail expression's value.
+diff --git a/src/formatter/exprs.rs b/src/formatter/exprs.rs
+index 9ef9a35..c190334 100644
+--- a/src/formatter/exprs.rs
++++ b/src/formatter/exprs.rs
+@@ -143,6 +143,7 @@ impl super::Formatter {
+                     UnaryOp::Not => "not ",
+                     UnaryOp::BitNot => "~",
+                     UnaryOp::Deref => "*",
++                    UnaryOp::Ref => "ref ",
+                 });
+                 self.format_expr(operand);
+             }
+diff --git a/src/lowering.rs b/src/lowering.rs
+index 4d1fd7f..e3f1bd8 100644
+--- a/src/lowering.rs
++++ b/src/lowering.rs
+@@ -2117,8 +2117,10 @@ impl<'a> Lowerer<'a> {
+     }
+ 
+     fn rewrite_unary(&self, op: &UnaryOp, operand: &Expr, _span: &Span) -> Option<ExprKind> {
+-        // `*expr` is a built-in dereference — no trait-method lowering needed.
+-        if matches!(op, UnaryOp::Deref) {
++        // `*expr` (dereference) and `ref expr` (borrow) are BUILT-IN
++        // reference-boundary operators, not trait dispatch — neither has a
++        // method to lower to.
++        if matches!(op, UnaryOp::Deref | UnaryOp::Ref) {
+             return None;
+         }
+         let method = match op {
+@@ -2127,7 +2129,7 @@ impl<'a> Lowerer<'a> {
+             // the `Not` trait's `not` method. The target type disambiguates:
+             // `!bool` → `bool.not`, `~i32` → `i32.not`.
+             UnaryOp::Not | UnaryOp::BitNot => "not",
+-            UnaryOp::Deref => unreachable!(),
++            UnaryOp::Deref | UnaryOp::Ref => unreachable!(),
+         };
+         let ty = self.type_at(&operand.span)?;
+         // Gate each op to its valid operand types (mirrors typechecker rules).
+@@ -2135,7 +2137,7 @@ impl<'a> Lowerer<'a> {
+             UnaryOp::Neg => matches!(ty, Type::Int(_) | Type::Float(_)),
+             UnaryOp::Not => matches!(ty, Type::Bool),
+             UnaryOp::BitNot => matches!(ty, Type::Int(_) | Type::UInt(_)),
+-            UnaryOp::Deref => unreachable!(),
++            UnaryOp::Deref | UnaryOp::Ref => unreachable!(),
+         };
+         if !ok {
+             return None;
+diff --git a/src/parser/exprs.rs b/src/parser/exprs.rs
+index 8cbd55e..c2638cc 100644
+--- a/src/parser/exprs.rs
++++ b/src/parser/exprs.rs
+@@ -801,6 +801,29 @@ impl super::Parser {
+                     },
+                 })
+             }
++            // `ref expr` — shared borrow in expression position (design.md
++            // § "Binding-extension exception"). Same binding power as the
++            // other prefix operators, so `ref v[i]` borrows the ELEMENT
++            // (postfix `[]` binds tighter) rather than borrowing `v` and
++            // then indexing the reference.
++            // NOT `ref |...|` / `ref ||...` — that spelling is the closure
++            // capture-mode prefix (Rule 2½) and is handled by its own arm
++            // further down. This arm sits EARLIER in `parse_prefix`, so
++            // without the negative lookahead it would shadow that one and
++            // parse the capture-mode prefix as a borrow of a closure value.
++            Token::Ref
++                if !matches!(self.peek_token_ref_at(1), Token::Pipe | Token::PipePipe) =>
++            {
++                self.advance();
++                let operand = self.parse_expr_bp(24)?;
++                Some(Expr {
++                    span: self.span_from(&start),
++                    kind: ExprKind::Unary {
++                        op: UnaryOp::Ref,
++                        operand: Box::new(operand),
++                    },
++                })
++            }
+             // Half-open ranges in prefix (start-less) position:
+             //   `..expr`  → RangeTo[T]
+             //   `..=expr` → RangeToInclusive[T]
+diff --git a/src/simd_report.rs b/src/simd_report.rs
+index 445f2a1..17d8e74 100644
+--- a/src/simd_report.rs
++++ b/src/simd_report.rs
+@@ -708,6 +708,7 @@ fn unop_desc(op: &UnaryOp) -> String {
+         UnaryOp::BitNot => "bitwise `~`".to_string(),
+         UnaryOp::Not => "`!`".to_string(),
+         UnaryOp::Deref => "`*`".to_string(),
++        UnaryOp::Ref => "`ref`".to_string(),
+     }
+ }
+ 
+diff --git a/src/typechecker/const_eval.rs b/src/typechecker/const_eval.rs
+index b4352a5..678e0b8 100644
+--- a/src/typechecker/const_eval.rs
++++ b/src/typechecker/const_eval.rs
+@@ -248,6 +248,7 @@ pub(super) fn unaryop_glyph(op: &UnaryOp) -> &'static str {
+         UnaryOp::Not => "!",
+         UnaryOp::BitNot => "~",
+         UnaryOp::Deref => "*",
++        UnaryOp::Ref => "ref",
+     }
+ }
+ 
+diff --git a/src/typechecker/env_build.rs b/src/typechecker/env_build.rs
+index 60e0188..50f4f9c 100644
+--- a/src/typechecker/env_build.rs
++++ b/src/typechecker/env_build.rs
+@@ -3286,6 +3286,10 @@ fn validate_refinement_predicate(expr: &Expr) -> Result<(), (String, crate::toke
+                 format!("{PREFIX} dereference (`*`) is not allowed in a refinement predicate"),
+                 expr.span,
+             )),
++            UnaryOp::Ref => Err((
++                format!("{PREFIX} borrow (`ref`) is not allowed in a refinement predicate"),
++                expr.span,
++            )),
+         },
+         // `self.field` — and nested field chains rooted at an allowed
+         // sub-expression (`self.lo`, `self.inner.x`).
+diff --git a/src/typechecker/expr_ops.rs b/src/typechecker/expr_ops.rs
+index 15fe373..672de9b 100644
+--- a/src/typechecker/expr_ops.rs
++++ b/src/typechecker/expr_ops.rs
+@@ -2973,6 +2973,22 @@ impl<'a> super::TypeChecker<'a> {
+         }
+ 
+         match op {
++            // `ref expr` — a shared borrow in expression position. The result
++            // type is `ref T` for an operand of type `T` (design.md
++            // § "Binding-extension exception": `let r = ref f();` extends the
++            // temporary's live range to the binding's).
++            //
++            // Borrowing an already-borrowed value is idempotent rather than an
++            // error: `ref r` where `r: ref T` stays `ref T`. That keeps a
++            // mechanically-applied fix-it (`ref v[i]` inserted by `karac fix`)
++            // from becoming a `ref ref T` the rest of the checker has no rule
++            // for. A `mut ref T` operand narrows to `ref T` — a shared reborrow
++            // of a unique one, which is the safe direction.
++            UnaryOp::Ref => match ty {
++                Type::Ref(_) => ty,
++                Type::MutRef(inner) => Type::Ref(inner),
++                other => Type::Ref(Box::new(other)),
++            },
+             UnaryOp::Neg => {
+                 // Element-wise negation of a `Tensor[T, Shape]` — result is a
+                 // fresh tensor of the same shape (rank must be statically known,
