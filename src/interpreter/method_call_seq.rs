@@ -1978,11 +1978,33 @@ impl<'a> super::Interpreter<'a> {
                             _ => "<value>".to_string(),
                         };
                         let mut guard = try_write_or_panic(rc, &label);
-                        let i = i_val as usize;
-                        let j = j_val as usize;
-                        if i < guard.len() && j < guard.len() {
-                            guard.swap(i, j);
+                        let len = guard.len();
+                        // B-2026-08-26-21 follow-up: an out-of-range `swap`
+                        // used to SILENTLY DO NOTHING here (the old guard was
+                        // `if i < len && j < len { .. }` with no else), so
+                        // `v.swap(0, 99)` on a 2-element Vec left the vector
+                        // untouched and the program exited 0. Every sibling in
+                        // this family panics — `v[i]` (design.md, Core
+                        // Collections), `insert`, `remove`, `swap_remove` — and
+                        // design.md § Array indexing pins negative indices as
+                        // out-of-bounds panics too, which the old `as usize`
+                        // cast silently turned into a no-op by wrapping. Codegen
+                        // emits a real bounds check (`emit_vec_mutation_bounds_
+                        // check`), so leaving this arm permissive would have
+                        // made the two backends disagree on the same program.
+                        if i_val < 0 || i_val as usize >= len {
+                            return Some(self.record_runtime_error(
+                                format!("Vec.swap: index {} out of bounds (len {})", i_val, len),
+                                span,
+                            ));
                         }
+                        if j_val < 0 || j_val as usize >= len {
+                            return Some(self.record_runtime_error(
+                                format!("Vec.swap: index {} out of bounds (len {})", j_val, len),
+                                span,
+                            ));
+                        }
+                        guard.swap(i_val as usize, j_val as usize);
                         return Some(Value::Unit);
                     }
                 } else {

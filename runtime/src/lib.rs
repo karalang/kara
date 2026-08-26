@@ -517,6 +517,7 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         karac_vec_sort_by,
         karac_vec_sort_i64_8,
         karac_vec_reverse,
+        karac_vec_swap,
     );
     // par-block + reduce, error-return trace, test-runner outcome bridge,
     // ordered-output console chokepoint (auto-par ordered-output).
@@ -8946,6 +8947,39 @@ pub unsafe extern "C" fn karac_vec_reverse(data: *mut u8, len: i64, elem_size: i
             lo += 1;
             hi -= 1;
         }
+    }
+}
+
+/// Exchange two elements of a raw byte buffer in place (`elem_size` bytes
+/// each). Backs `Vec.swap` codegen. See `src/codegen/vec_method.rs` `"swap"`
+/// arm and the matching interpreter arm in
+/// `src/interpreter/method_call_seq.rs`.
+///
+/// NEITHER value is destroyed — this is a pure relocation of two live values,
+/// so no user `Drop` body and no RC traffic is involved. That guarantee is what
+/// makes `Vec.swap` the sanctioned spelling for an element exchange under
+/// design.md § "The index operator (`expr[i]`)", which rejects the
+/// `let t = xs[i]; xs[i] = xs[j]; xs[j] = t` form for non-`Copy` `T`.
+///
+/// Bounds are checked by the CALLER (codegen emits the check and panics), which
+/// mirrors `swap_remove`'s split; this function assumes `i` and `j` are already
+/// in range. `i == j` is a no-op.
+///
+/// # Safety
+///
+/// `data` must point to at least `max(i, j) + 1` elements of `elem_size`
+/// initialized, contiguous bytes that the caller exclusively owns for the
+/// duration of the call. `elem_size <= 0` or a null `data` produce a no-op.
+#[no_mangle]
+pub unsafe extern "C" fn karac_vec_swap(data: *mut u8, i: i64, j: i64, elem_size: i64) {
+    unsafe {
+        if data.is_null() || elem_size <= 0 || i == j || i < 0 || j < 0 {
+            return;
+        }
+        let sz = elem_size as usize;
+        let ip = data.add(i as usize * sz);
+        let jp = data.add(j as usize * sz);
+        ptr::swap_nonoverlapping(ip, jp, sz);
     }
 }
 

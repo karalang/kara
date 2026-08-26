@@ -12752,6 +12752,51 @@ fn main() {
     /// move, clone, or error?). Pinning codegen's side here keeps the SETTLED
     /// half from regressing; when the model question is decided, this
     /// expectation and the interpreter's must be re-derived together.
+    /// B-2026-08-26-21 — `Vec.swap` is the SANCTIONED spelling for an element
+    /// exchange, and this pins the guarantee that makes it sanctioned: neither
+    /// value is destroyed, so exactly one `Drop` body runs per element, at the
+    /// container's death, and NONE during the swap itself.
+    ///
+    /// This is the shape the row was really about. The hand-written spelling
+    /// (`let t = xs[i]; xs[i] = xs[j]; xs[j] = t`) is the one design.md §
+    /// "The index operator (`expr[i]`)" now rejects for non-`Copy` `T`, because
+    /// the two backends disagreed on what it meant. `swap` has one meaning and
+    /// both backends now agree on it.
+    ///
+    /// Unlike its sibling above, this one IS an A/B oracle: `karac run` and
+    /// `karac build` produce identical output, verified for this exact fixture
+    /// under the interpreter, the default (auto-par) build, and
+    /// `KARAC_AUTO_PAR=0`.
+    ///
+    /// Codegen had no `swap` arm at all before this — `karac build` failed with
+    /// "Vec/String method 'swap' is not yet supported in codegen" on a program
+    /// the interpreter ran correctly, so the method the rejection points people
+    /// toward was itself a run-vs-build divergence.
+    #[test]
+    fn test_e2e_vec_swap_relocates_without_running_drop_bodies() {
+        let Some(out) = run_program(
+            r#"
+struct Item { id: i64, tag: String }
+impl Drop for Item { fn drop(mut ref self) { println(f"D{self.id}"); } }
+struct Bag { xs: Vec[Item] }
+fn main() {
+    let mut b = Bag { xs: Vec.new() };
+    b.xs.push(Item { id: 1, tag: "first_payload_long_enough_to_heap".to_string() });
+    b.xs.push(Item { id: 2, tag: "second_payload_long_enough_to_heap".to_string() });
+    println("built");
+    b.xs.swap(0, 1);
+    println(f"{b.xs[0].id}{b.xs[1].id}");
+}
+"#,
+        ) else {
+            return;
+        };
+        // `built` then the swapped ids, then exactly two bodies at scope exit.
+        // A body printed BEFORE the id line would mean the swap destroyed a
+        // live value; a third body would mean one was dropped twice.
+        assert_eq!(out, "built\n21\nD2\nD1\n", "got: {out:?}");
+    }
+
     #[test]
     fn test_e2e_local_moved_into_elem_slot_drops_once() {
         let Some(out) = run_program(
@@ -47199,6 +47244,15 @@ fn driver() -> i64 {
     /// Plain indexing `v[i]` was always checked, which is what made this an
     /// inconsistency inside one type rather than a no-checks policy. All three
     /// must now panic exactly as `--interp` and design.md say they do.
+    ///
+    /// B-2026-08-26-21 follow-up adds `Vec.swap` to the family, and it was the
+    /// worst of the four: codegen had NO `swap` arm at all (`karac build`
+    /// hard-errored "not yet supported"), while the interpreter accepted an
+    /// out-of-range swap and SILENTLY DID NOTHING — `v.swap(0, 99)` on a
+    /// two-element Vec left the vector untouched and exited 0. Negative indices
+    /// were swallowed the same way, by an `as usize` cast that wrapped them out
+    /// of range. Both halves are fixed; the negative cases below are what pin
+    /// the wrap.
     #[test]
     fn vec_mutation_methods_bounds_check_out_of_range_index() {
         const PRELUDE: &str = "fn main() {\n\
@@ -47226,6 +47280,10 @@ fn driver() -> i64 {
                 "let x = v.swap_remove(-1i64); println(x);",
                 "Vec.swap_remove index out of bounds",
             ),
+            ("v.swap(7i64, 0i64);", "Vec.swap index out of bounds"),
+            ("v.swap(0i64, 7i64);", "Vec.swap index out of bounds"),
+            ("v.swap(-1i64, 0i64);", "Vec.swap index out of bounds"),
+            ("v.swap(0i64, -1i64);", "Vec.swap index out of bounds"),
         ];
 
         for (call, want) in cases {

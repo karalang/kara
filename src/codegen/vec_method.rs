@@ -7116,6 +7116,94 @@ impl<'ctx> super::Codegen<'ctx> {
 
                 Ok(self.context.i64_type().const_int(0, false).into())
             }
+            // `Vec[T].swap(i, j)` — exchange two elements in place. NEITHER
+            // value is destroyed: this is a pure relocation of two live values,
+            // so no user `Drop` body runs and no RC traffic is emitted. That
+            // guarantee is the whole point of the method — design.md § "The
+            // index operator (`expr[i]`)" rejects the
+            // `let t = xs[i]; xs[i] = xs[j]; xs[j] = t` spelling for non-`Copy`
+            // `T`, and `std.mem.swap` cannot express an intra-container
+            // exchange (it would need two `mut ref` into one `Vec`, which the
+            // aliasing rule forbids), so this is the ONLY sanctioned way to
+            // swap two elements of a `Vec`.
+            //
+            // B-2026-08-26-21: codegen previously had no arm at all here, so
+            // `karac build` hard-errored ("method 'swap' is not yet supported")
+            // on a program `karac run` executed correctly — a run-vs-build
+            // divergence in the very method the index-move rejection tells
+            // people to use.
+            //
+            // Bounds are checked HERE and panic, matching `insert` / `remove` /
+            // `swap_remove` and `v[i]` itself; the runtime helper assumes both
+            // indices are already in range.
+            "swap" => {
+                if args.len() != 2 {
+                    return Err(format!("Vec.swap expects 2 arguments, got {}", args.len()));
+                }
+                let i_val = self.compile_expr(&args[0].value)?.into_int_value();
+                let j_val = self.compile_expr(&args[1].value)?.into_int_value();
+                let data_ptr_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 0, "swap.data.ptr")
+                    .unwrap();
+                let len_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 1, "swap.len.ptr")
+                    .unwrap();
+                let len = self
+                    .builder
+                    .build_load(i64_t, len_ptr, "swap.len")
+                    .unwrap()
+                    .into_int_value();
+                self.emit_vec_mutation_bounds_check(
+                    "swap.i",
+                    i_val,
+                    len,
+                    false,
+                    "Vec.swap index out of bounds",
+                );
+                self.emit_vec_mutation_bounds_check(
+                    "swap.j",
+                    j_val,
+                    len,
+                    false,
+                    "Vec.swap index out of bounds",
+                );
+                let data = self
+                    .builder
+                    .build_load(ptr_ty, data_ptr_ptr, "swap.data")
+                    .unwrap()
+                    .into_pointer_value();
+                let elem_size = elem_ty.size_of().unwrap();
+
+                let runtime_fn = self
+                    .module
+                    .get_function("karac_vec_swap")
+                    .unwrap_or_else(|| {
+                        let void_t = self.context.void_type();
+                        let fn_ty = void_t.fn_type(
+                            &[ptr_ty.into(), i64_t.into(), i64_t.into(), i64_t.into()],
+                            false,
+                        );
+                        self.module
+                            .add_function("karac_vec_swap", fn_ty, Some(Linkage::External))
+                    });
+
+                self.builder
+                    .build_call(
+                        runtime_fn,
+                        &[
+                            BasicMetadataValueEnum::from(data),
+                            BasicMetadataValueEnum::from(i_val),
+                            BasicMetadataValueEnum::from(j_val),
+                            BasicMetadataValueEnum::from(elem_size),
+                        ],
+                        "",
+                    )
+                    .unwrap();
+
+                Ok(self.context.i64_type().const_int(0, false).into())
+            }
             "reverse" => {
                 if !args.is_empty() {
                     return Err(format!(
