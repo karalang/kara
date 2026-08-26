@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | diagnostics | 109 | 1 |
 | false-positive | 97 | 0 |
 | perf | 84 | 0 |
-| other | 61 | 2 |
+| other | 61 | 1 |
 | soundness | 59 | 0 |
 | crash | 57 | 0 |
 | use-after-free | 20 | 0 |
@@ -113,7 +113,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen | 1041 | 4 |
 | typecheck | 263 | 5 |
 | interp | 180 | 0 |
-| other | 67 | 2 |
+| other | 67 | 1 |
 | ownership | 65 | 0 |
 | cli | 63 | 0 |
 | autopar | 55 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1584 surfaced · 9 open · 1550 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-26). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1584 surfaced · 8 open · 1551 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-26). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (9)
+### Open (8)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -135,7 +135,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1584 surfaced
 | B-2026-08-25-29 | 2026-08-25 | typecheck | medium | TWO OPERATOR BEHAVIOURS design.md § Operator Traits presents as SHIPPED v1 SURFACE DO NOT EXIST. (1) IMPLICIT LOSSLESS WIDENING AT OPERATOR BOUNDARIES: the section states "`(x: i32) + (y: i64)` is valid -- the compiler widens `x` to `i64` before dispatch, and the result type is `i64`", but the compiler rejects it with `cannot mix integer types 'i32' and 'i64' in arithmetic -- they must match; cast the 'i32' operand up`. Same for `u8 + u32` and for `f32 + f64` (`cannot mix float types`). A LITERAL operand still widens (`let x: i32 = 1; x + 2` is fine), so what is missing is specifically the two-typed-operand case. (2) BITWISE `Not` ON INTEGER PRIMITIVES: the v1 trait set lists `Not` under Bitwise and the stdlib-impl list says the bitwise traits ship "only on integer primitives and bool", but `not a` on an `i64` or `u8` is rejected -- `unary '!' requires 'bool', found 'i64'`. Only `bool` works. | roadmap.md |
 | B-2026-08-25-34 | 2026-08-25 | codegen | medium | `AllocError`'s `Display` renders the Debug form (`OutOfMemory { requested_bytes: 4096 }`) into the user-facing `Error: {e}` entry-point line, and the spec-sanctioned fix -- a manual `impl Display`, per § `#[derive(Display)]` on enums' "Implement `Display` manually to override" -- CANNOT LAND without codegen work: a prelude impl lives in `STDLIB_PROGRAMS`, which codegen does not walk, so the impl reaches the interpreter only. Registering the module as a compiled stdlib program fixes `.to_string()` under AOT but leaves `f"{e}"` and the entry-point line unfixed. Worse, the half-done state FAILS OPEN: dropping the derive without teaching codegen about the impl makes `karac build` emit `Error: ` with an EMPTY message rather than erroring, because the typechecker sees the impl and codegen does not. | roadmap.md |
 | B-2026-08-25-35 | 2026-08-25 | typecheck+codegen | high | `PriorityQueue[T]` IS UNINSTANTIABLE FOR EVERY USER TYPE, because the OPERATOR path and the TRAIT-BOUND path recognize DISJOINT sets of `Ord` implementations: `#[derive(Ord)]` makes `<`/`>` work but does NOT satisfy a `T: Ord` bound, while a hand-written `impl Ord` DOES satisfy the bound but leaves `<`/`>` a hard error. Neither spelling reaches a working `PriorityQueue[UserType]`, and the operator diagnostic actively misdirects: it tells the hand-impl author to `add #[derive(Ord)]`, which then fails at the bound instead. | — |
-| B-2026-08-26-1 | 2026-08-26 | other | low | design.md § Operator Traits § Notably absent prescribes `vec.concat(other)` as one of the two redirects for `vec1 + vec2`, but `Vec.concat()` in this implementation is a DIFFERENT operation: zero-argument and `Vec[String]`-only, joining a Vec's own String elements into one String. There is no two-Vec concatenation method at all -- `a.concat(b)` on a `Vec[i64]` reports `Vec.concat() requires String elements`, `a.concat("-")` reports `Vec.concat() expects 0 argument(s), found 1`, and `append` does not exist. Only `extend` (in-place, any element type) does what the spec sentence promises. | docs/design.md |
 | B-2026-08-26-2 | 2026-08-26 | typecheck | medium | TWO MORE FACILITIES design.md § `Hash` and `Hasher`'s stability paragraph NAMES AS SHIPPED DO NOT EXIST, after B-2026-08-25-22 built the third. (1) `xxh3(bytes)` -- a faster UNKEYED stable digest; nothing in `src/`, `runtime/` or `hash/` implements XXH3, and there is now no fast stable option at all (`StableHash.siphash24` is the only one, and it is the keyed, slower one). (2) "the `crypto` module for cryptographic hashes" -- there is NO cryptographic hash anywhere in the stdlib: no sha256, no blake3, no `crypto` namespace. The second is the consequential one, because `siphash24` is now sitting where a user looking for a digest will find it, and SipHash is a fast keyed PRF, NOT collision-resistant -- a user who substitutes it for a cryptographic hash (signatures, dedup against an adversary, anything where a chosen collision matters) gets something that looks like it works. | roadmap.md |
 | B-2026-08-26-3 | 2026-08-26 | typecheck+codegen | high | `LazyLock[T]` IS A CHECK-ONLY PHANTOM: `let TABLE: LazyLock[i64] = LazyLock.new(|| 40 + 2);` passes `karac check` cleanly and then fails on EVERY execution backend -- `--interp` dies with "path 'LazyLock.new' has no interpreter evaluation rule", and `karac run` (JIT) and `karac build` both reject `TABLE.get()` with "codegen: no handler for method 'get'". It is not a type outside that one special-cased module-binding form either: `fn f(x: LazyLock[i64])` is `undefined type 'LazyLock'`. Until this was found, the live `module_mut_binding` WARNING recommended it by name ("Prefer a context struct, `Mutex`, `Atomic`, `#[thread_local]`, `LazyLock`, or `OnceLock`"), so following the compiler's own advice produced a program that checks and then cannot be run or built. | roadmap.md |
 | B-2026-08-26-4 | 2026-08-26 | other | low | design.md's CANONICAL `?`-operator example calls `input.parse_i64()?` and names `ParseError` -- NEITHER EXISTS: the real API is `i64.parse(s) -> Option[i64]`, which cannot be used with `?` the way the example shows | docs/design.md § `?` operator and cross-error-type propagation |
@@ -169,9 +168,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1584 surfaced
 
 </details>
 
-### Fixed (1550)
+### Fixed (1551)
 
-<details><summary>1550 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1551 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1724,6 +1723,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1584 surfaced
 | B-2026-08-25-31 | typecheck | low | The un-inferrable-type-argument diagnostic points at the first USE, not at the empty literal that caused it, because `Type::Error` carries no provena… | a54d41d |
 | B-2026-08-25-32 | other | medium | `PriorityQueue` HAS NO `peek`: there is NO non-destructive way to read the root, so the archetypal two-heap median use case cannot read a queue's hea… | e2673b8 |
 | B-2026-08-25-33 | codegen | high | `?` in `main()` SEGFAULTS under `karac run` (the default JIT executor) whenever main's error type is an enum with an INLINE SCALAR payload -- `AllocE… | 7d20106 |
+| B-2026-08-26-1 | other | low | design.md § Operator Traits § Notably absent prescribes `vec.concat(other)` as one of the two redirects for `vec1 + vec2`, but `Vec.concat()` in this… | 5964c16 |
 | B-2026-08-26-5 | codegen | medium | `?` in `main() -> Result[(), E]` reconstructed `E` from only its first THREE payload words, so any error held inline in four or more words rendered g… | 06880a4 |
 
 </details>
