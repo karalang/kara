@@ -31470,6 +31470,71 @@ fn main() -> Result[(), AllocError] {
     }
 }
 
+/// B-2026-08-26-5 — the `?`-in-`main` error-staging site reconstructed `E`
+/// from only its first three words, so a `?`-propagated error wider than that
+/// rendered garbage on every COMPILED backend while `--interp` was correct.
+///
+/// Third and last site of the same three-word cap: B-2026-08-04-12 lifted it
+/// off the fn-level `Err` aggregate and B-2026-08-23-20 off the tail
+/// `return Err(…)` exit, but this branch kept the narrow call. A 4-word
+/// struct payload is the shape the sibling tail-site test uses, so the two
+/// pin the same `Wide` through the two different exits; a 3-word ENUM payload
+/// (tag + 3) reproduces it too, since the tag consumes a word.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_main_question_mark_err_renders_every_payload_word() {
+    let tmp = scratch_project("main-q-wide-err");
+    let src = r#"struct Wide { a: i64, b: i64, c: i64, d: i64 }
+impl Display for Wide {
+    fn to_string(ref self) -> String { f"W({self.a},{self.b},{self.c},{self.d})" }
+}
+fn bad() -> Result[i64, Wide] { return Err(Wide { a: 1, b: 2, c: 3, d: 4 }) }
+fn main() -> Result[(), Wide] {
+    let x = bad()?;
+    println(x);
+    return Ok(())
+}
+"#;
+    write(&tmp.join("m.kara"), src);
+
+    let jit = karac_bin()
+        .current_dir(&tmp)
+        .args(["run", "m.kara"])
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stderr).into_owned());
+    let built = karac_bin()
+        .current_dir(&tmp)
+        .args(["build", "m.kara"])
+        .output();
+    let exe = tmp.join("m");
+    let aot = if built.map(|o| o.status.success()).unwrap_or(false) && exe.exists() {
+        std::process::Command::new(&exe)
+            .output()
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stderr).into_owned())
+    } else {
+        None
+    };
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    let Some(j) = jit else {
+        panic!("JIT must run — it needs no runtime archive");
+    };
+    assert!(
+        j.contains("Error: W(1,2,3,4)"),
+        "the JIT `?`-in-main error exit must render every field of a 4-word \
+         payload; got: {j}"
+    );
+    if let Some(a) = aot.as_ref() {
+        assert!(
+            a.contains("Error: W(1,2,3,4)"),
+            "the AOT `?`-in-main error exit must render every field of a 4-word \
+             payload; got: {a}"
+        );
+    }
+}
+
 /// B-2026-08-23-21 — the `main() -> Result[(), E]` error exit must print the
 /// SAME string under `karac run --interp` as under JIT and AOT, and the same
 /// string on every run.

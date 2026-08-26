@@ -2209,7 +2209,43 @@ impl<'ctx> super::Codegen<'ctx> {
                 None => match self.main_result_err_te.clone() {
                     Some(te) => {
                         let e_ty = self.llvm_type_for_type_expr(&te);
-                        self.rebuild_value_from_payload_words(e_ty, w0_i, w1_i, w2_i)
+                        // ALL of the inner error's words, not the first three
+                        // (B-2026-08-26-5). An `E` held inline in more than
+                        // three words rendered its first three fields and
+                        // garbage for the rest on every compiled backend
+                        // (`W(1,2,3,0)` under AOT, `W(1,2,3,<garbage>)` under
+                        // the JIT, for a four-field struct), while `--interp`
+                        // printed it correctly. An enum `E` shows it a word
+                        // earlier, since its tag consumes one. Same three-word cap
+                        // that B-2026-08-04-12 lifted off the fn-level Err
+                        // aggregate and B-2026-08-23-20 off the tail
+                        // `return Err(…)` site; this `?`-in-`main` branch was
+                        // the third and last one holding it.
+                        //
+                        // Built from `inner_word_count` rather than reusing the
+                        // `ret_words` vector below: that one is additionally
+                        // clamped to `outer_word_count`, which is derived from
+                        // the ENCLOSING fn's return enum — and `main`'s LLVM
+                        // signature is the C entry `i32`, not a `Result`
+                        // aggregate, so the clamp collapses the list and even a
+                        // 1-word payload comes back garbage.
+                        let words: Vec<_> = (0..inner_word_count)
+                            .map(|i| match i {
+                                0 => w0_i,
+                                1 => w1_i,
+                                2 => w2_i,
+                                _ => self
+                                    .builder
+                                    .build_extract_value(
+                                        val.into_struct_value(),
+                                        (i + 1) as u32,
+                                        "q_main_wider",
+                                    )
+                                    .unwrap()
+                                    .into_int_value(),
+                            })
+                            .collect();
+                        self.rebuild_value_from_payload_word_slice(e_ty, &words)
                             .unwrap_or(w0)
                     }
                     None => w0,
