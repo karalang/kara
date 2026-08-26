@@ -12231,7 +12231,7 @@ fn every_type_the_module_mut_binding_warning_names_actually_runs() {
 /// statement about the compiler that can rot independently:
 ///
 ///   1. `StableHash.siphash24(bytes, k0, k1)` exists and compiles.
-///   2. `hash.stable.xxh3` does not exist.
+///   2. `xxh3` does not exist, and is not planned (B-2026-08-26-2).
 ///   3. There is no `crypto` module.
 ///
 /// (2) and (3) are the dangerous ones. A page that says "does not exist" about
@@ -12275,8 +12275,10 @@ fn test_stable_hash_page_claims_match_the_compiler() {
          EXIST and must be updated:\n{xxh3}"
     );
     assert!(
-        page.contains("hash.stable.xxh3") && page.contains("DOES NOT EXIST"),
-        "the page must name what design.md promises and does not ship"
+        page.contains("A FASTER UNKEYED DIGEST") && page.contains("NOT planned"),
+        "the page must still tell a reader looking for `xxh3` that it is absent \
+         BY DECISION — B-2026-08-26-2 removed it from design.md rather than \
+         scheduling it, so silence here would read as an oversight"
     );
 
     // (3) The `crypto` module. Checked through a plausible spelling rather
@@ -12291,10 +12293,17 @@ fn test_stable_hash_page_claims_match_the_compiler() {
          DOES NOT EXIST and must be updated:\n{crypto}"
     );
     assert!(
-        page.contains("the `crypto` module") && page.contains("keyed PRF"),
-        "the page must say a crypto module is absent AND why `siphash24` is \
+        page.contains("A CRYPTOGRAPHIC HASH") && page.contains("keyed PRF"),
+        "the page must say a crypto hash is absent AND why `siphash24` is \
          not a substitute — the omission is what makes a user reach for the \
          wrong one"
+    );
+    // The crypto gap is SCHEDULED, not undesigned, and the page has to say so:
+    // "there is none" alone invites someone to build one here.
+    assert!(
+        page.contains("deferred.md § std.crypto") && page.contains("BLAKE3"),
+        "the page must point at where the crypto work actually lives, so the \
+         absence reads as a schedule rather than a hole to fill locally"
     );
 }
 

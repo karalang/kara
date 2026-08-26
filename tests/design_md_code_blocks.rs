@@ -663,3 +663,44 @@ fn operator_traits_vec_redirect_names_only_extend() {
          name a Rust reader tries first"
     );
 }
+
+/// B-2026-08-26-2 — § `Hash` and `Hasher`'s account of the MISSING
+/// cryptographic hash must stay pointed at where that work actually lives.
+///
+/// The paragraph's job is to stop a reader substituting `siphash24` (a keyed
+/// PRF, not collision-resistant) for a cryptographic hash. Saying only "there
+/// is none" does half that job and invites the other failure: someone deciding
+/// the gap is theirs to fill in this namespace. `std.crypto` is committed —
+/// `deferred.md § std.crypto` fixes BLAKE3 as the general-hashing algorithm and
+/// roadmap.md schedules the module at Phase 11+ (P1) behind FFI stabilisation —
+/// so the absence is a schedule, and the text has to say which.
+///
+/// A prose guard, like the `vec.concat` one above: the claim lives in a
+/// sentence rather than a fenced block, so `scripts/design-conformance.py`
+/// cannot see it.
+#[test]
+fn hash_section_points_the_crypto_gap_at_its_tracker() {
+    let section = DESIGN_MD
+        .split("**Stability policy.**")
+        .nth(1)
+        .expect("§ `Hash` and `Hasher` must still carry the stability policy");
+    let window: String = section.chars().take(4000).collect();
+
+    assert!(
+        window.contains("deferred.md § std.crypto"),
+        "the stability paragraph must name where the cryptographic-hash work \
+         lives, or its \"there is none\" reads as an unclaimed gap rather than \
+         a schedule (B-2026-08-26-2)"
+    );
+    assert!(
+        window.contains("BLAKE3"),
+        "the paragraph should name the committed algorithm — a reader deciding \
+         whether to wait or reach for an external library needs to know what \
+         is coming"
+    );
+    assert!(
+        window.contains("not a collision-resistant hash"),
+        "the substitution warning is the paragraph's whole reason to exist and \
+         must survive edits to the surrounding text"
+    );
+}

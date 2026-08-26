@@ -1610,29 +1610,29 @@ Two things that look like the answer and are not
                         who can read the compiler's source.
 
 ────────────────────────────────────────────────────────────────────
-Where the implementation differs from design.md today
+What this namespace does NOT give you
 ────────────────────────────────────────────────────────────────────
 
-design.md's stability paragraph names three things. One of them
-ships, and the spec spells its path Rust-style (`hash::stable::`);
-Kara has no `::` separator, so the real spelling is the namespace
-below.
+`StableHash.siphash24` is the whole namespace. Two things a reader
+may arrive looking for are deliberately absent, and design.md § `Hash`
+and `Hasher` agrees with this page on both.
 
-    StableHash.siphash24  ships — this page.
+    A CRYPTOGRAPHIC HASH.  There is none in the stdlib — no sha256,
+    no blake3, no `crypto` namespace. Do NOT reach for `siphash24`
+    instead: SipHash is a fast keyed PRF, not a collision-resistant
+    hash, and it is unfit for signatures, for deduplication against
+    an adversary, or for anything where a chosen collision is a
+    problem. This is scheduled rather than undesigned —
+    `deferred.md § std.crypto` commits BLAKE3 as the general-hashing
+    algorithm and roadmap.md places the module at Phase 11+ (P1),
+    blocked on FFI stabilisation. Until then the honest answer is an
+    external library.
 
-    hash.stable.xxh3      DOES NOT EXIST. There is no faster unkeyed
-                          stable digest; use `siphash24`.
-
-    the `crypto` module   DOES NOT EXIST. There is no cryptographic
-                          hash in the stdlib. Do NOT substitute
-                          `siphash24` for one: SipHash is a fast
-                          keyed PRF, not a collision-resistant hash,
-                          and it is unfit for signatures, for
-                          deduplication against an adversary, or for
-                          anything where a chosen collision is a
-                          problem.
-
-Tracked as B-2026-08-26-2 in docs/bug-ledger.jsonl.
+    A FASTER UNKEYED DIGEST.  `xxh3` was named in an earlier draft of
+    the spec and is NOT planned: BLAKE3 above is in the same speed
+    class and is collision-resistant too, so a third option that is
+    neither DoS-resistant nor collision-resistant would be a choice
+    to get wrong for no new capability. Use `siphash24`.
 ";
 
 const MODULE_STATE_PAGE: &str = "\
