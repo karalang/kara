@@ -91,3 +91,57 @@ struct SipHash13BuildHasher { }
 // a correctness defect on the non-default path (B-2026-08-22-27). Until both
 // are closed, pinning this buys nothing but the stable order.
 struct FxBuildHasher { }
+
+// ── The sink a user `impl Hash` writes into ───────────────────────────
+//
+// `Map`/`Set` key hashing has two halves, and design.md § `Hash` and `Hasher`
+// keeps them apart on purpose: `Hash` decides WHICH BYTES a value contributes,
+// `BuildHasher`/`Hasher` decides HOW those bytes become a digest. This type is
+// the seam. When a key's type carries its own `impl Hash`, both backends hand
+// the impl one of these, let it write whatever it likes, and then feed the
+// collected bytes to the container's hasher — the same `karac_hash_bytes` (or
+// the same user `BuildHasher`) a key without an `impl Hash` would reach.
+//
+// A CONSEQUENCE WORTH NAMING: this makes the two backends agree byte for byte.
+// Without an `impl Hash` they deliberately do not — the section above records
+// that a compiled binary feeds the key's memory image while the interpreter
+// feeds a canonical flattening of the `Value`, so digests differ between
+// `karac run` and a compiled binary. Once the user's impl decides the bytes,
+// there is no memory image and no flattening left to disagree about.
+//
+// `finish` exists only to satisfy the trait. The compiler reads `bytes`
+// directly and never calls it, because the digest is the CONTAINER's business
+// and this type has no way to know which hasher the container was built with.
+struct KeyByteSink { mut bytes: Vec[u8] }
+
+// The `write_*` convenience methods are SPELLED OUT rather than inherited.
+// `synthesize_trait_default_methods` copies a trait's default bodies into
+// implementing blocks, but it runs over the USER program — a baked stdlib impl
+// like this one is spliced in from the prelude and never passes through it, so
+// the defaults are absent from this impl's item list. Both backends key off
+// that list (`eval_method_call` dispatch and codegen's
+// `make_impl_method_function` alike), so an inherited default is missing in
+// both: the interpreter reported "method 'write_i64' not found on type
+// 'KeyByteSink'". Each body below is the trait's own default, verbatim, so the
+// bytes are identical to what an inheriting impl would produce.
+impl Hasher for KeyByteSink {
+    fn write(mut ref self, bytes: ref Slice[u8]) {
+        let mut i = 0;
+        while i < bytes.len() {
+            self.bytes.push(bytes[i]);
+            i = i + 1;
+        }
+    }
+    fn finish(ref self) -> u64 { 0 }
+
+    fn write_u8(mut ref self, n: u8) { self.write([n]) }
+    fn write_u16(mut ref self, n: u16) { self.write(n.to_ne_bytes()) }
+    fn write_u32(mut ref self, n: u32) { self.write(n.to_ne_bytes()) }
+    fn write_u64(mut ref self, n: u64) { self.write(n.to_ne_bytes()) }
+    fn write_usize(mut ref self, n: usize) { self.write(n.to_ne_bytes()) }
+    fn write_i8(mut ref self, n: i8) { self.write(n.to_ne_bytes()) }
+    fn write_i16(mut ref self, n: i16) { self.write(n.to_ne_bytes()) }
+    fn write_i32(mut ref self, n: i32) { self.write(n.to_ne_bytes()) }
+    fn write_i64(mut ref self, n: i64) { self.write(n.to_ne_bytes()) }
+    fn write_isize(mut ref self, n: isize) { self.write(n.to_ne_bytes()) }
+}

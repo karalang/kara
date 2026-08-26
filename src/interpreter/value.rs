@@ -901,6 +901,22 @@ pub struct SharedStructInner {
 /// either — the consistency contract holds per-container, which is the only
 /// place it has to.
 pub(crate) fn hash_value_with(kind: &HasherKind, v: &Value) -> u64 {
+    // A user `impl Hash` on the KEY TYPE decides which bytes the key
+    // contributes; the container's hasher — whichever of the three it is —
+    // still decides how those bytes become a digest (B-2026-08-26-10). The two
+    // are separate traits in design.md § `Hash` and `Hasher` for exactly this
+    // reason, so they compose here rather than one overriding the other.
+    //
+    // Before this the impl was ignored outright: a key type carrying one was
+    // hashed structurally, so an `impl Hash` that deliberately ignored a field
+    // still split two keys equal under it into different buckets.
+    if let Some(bytes) = super::user_hasher::user_hash_bytes(v) {
+        return match kind {
+            HasherKind::SipHash13 => karac_hash::hash_bytes(&bytes),
+            HasherKind::Fx => karac_hash::fx_hash_bytes(&bytes),
+            HasherKind::User(builder) => super::user_hasher::hash_bytes_for(builder, &bytes),
+        };
+    }
     match kind {
         HasherKind::SipHash13 => hash_value_generic::<karac_hash::KaraHasher>(v),
         HasherKind::Fx => hash_value_generic::<karac_hash::FxHasher>(v),

@@ -97,6 +97,118 @@ impl<'ctx> super::Codegen<'ctx> {
             .into_int_value()
     }
 
+    /// The whole per-key-type hash function for a type carrying a user
+    /// `impl Hash`, or `None` when it carries none (B-2026-08-26-10).
+    ///
+    /// A user `impl Hash` decides WHICH BYTES the key contributes; every other
+    /// arm derives them structurally from the key's memory image. `desugar.rs`
+    /// synthesized `karac_hash_bytes_of_<T>` to run the impl against a
+    /// `KeyByteSink` and hand back the collected `Vec[u8]`, so all this does is
+    /// feed those bytes to the container's hasher.
+    ///
+    /// Routing through `emit_hash_bytes_call` rather than computing a digest
+    /// here is what keeps a user `impl Hash` COMPOSING with a user
+    /// `BuildHasher` instead of overriding it — the two answer different
+    /// questions, and design.md § `Hash` and `Hasher` keeps them apart on
+    /// purpose.
+    fn try_emit_user_impl_hash_fn(
+        &mut self,
+        type_name: &str,
+        fn_name: &str,
+    ) -> Option<FunctionValue<'ctx>> {
+        let bytes_fn = self
+            .module
+            .get_function(&format!("karac_hash_bytes_of_{type_name}"))?;
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let saved_bb = self.builder.get_insert_block();
+
+        let hash_fn = self.module.add_function(
+            fn_name,
+            i64_t.fn_type(&[ptr_ty.into()], false),
+            Some(Linkage::Internal),
+        );
+        let entry_bb = self.context.append_basic_block(hash_fn, "entry");
+        self.builder.position_at_end(entry_bb);
+        let key_ptr = hash_fn.get_nth_param(0).unwrap().into_pointer_value();
+
+        // `current_fn` has to point at the function being EMITTED, not at
+        // whatever was being compiled when the map asked for a hash function.
+        // The buffer free appends basic blocks to `current_fn`, so leaving the
+        // outer one installed put this body's branch targets in another
+        // function — "Referring to a basic block in another function!" from the
+        // module verifier, with the return landing in a block that was not this
+        // function's either.
+        let saved_fn = self.current_fn.replace(hash_fn);
+        let digest = self.emit_user_impl_hash_call(bytes_fn, key_ptr);
+        match digest {
+            Some(h) => self.builder.build_return(Some(&h)).unwrap(),
+            None => self
+                .builder
+                .build_return(Some(&i64_t.const_zero()))
+                .unwrap(),
+        };
+        self.current_fn = saved_fn;
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        Some(hash_fn)
+    }
+
+    /// `karac_hash_bytes_of_<T>(key)` → hash the returned `Vec[u8]` → free it.
+    ///
+    /// The wrapper returns an OWNED `Vec[u8]` freshly built per call, so its
+    /// buffer is this function's to release. Freeing it matters more than it
+    /// looks: this runs once per key hash, which is the map's hot path, so a
+    /// leak here would be per-insert and per-lookup rather than per-program.
+    ///
+    /// `None` when the call produces no value, which cannot happen for a
+    /// `-> Vec[u8]` signature but keeps the caller on its structural path
+    /// instead of emitting a broken function if it ever does.
+    fn emit_user_impl_hash_call(
+        &mut self,
+        bytes_fn: FunctionValue<'ctx>,
+        key_ptr: PointerValue<'ctx>,
+    ) -> Option<IntValue<'ctx>> {
+        let vec_ty = self.vec_struct_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+
+        let ret = self
+            .builder
+            .build_call(bytes_fn, &[key_ptr.into()], "hash.bytes.of")
+            .unwrap()
+            .try_as_basic_value()
+            .basic()?;
+        let slot = self.builder.build_alloca(vec_ty, "hash.bytes.vec").unwrap();
+        self.builder.build_store(slot, ret).unwrap();
+
+        let data_pp = self
+            .builder
+            .build_struct_gep(vec_ty, slot, 0, "hash.bytes.data.pp")
+            .unwrap();
+        let data = self
+            .builder
+            .build_load(ptr_ty, data_pp, "hash.bytes.data")
+            .unwrap()
+            .into_pointer_value();
+        let len_pp = self
+            .builder
+            .build_struct_gep(vec_ty, slot, 1, "hash.bytes.len.pp")
+            .unwrap();
+        let len = self
+            .builder
+            .build_load(i64_t, len_pp, "hash.bytes.len")
+            .unwrap()
+            .into_int_value();
+
+        let digest = self.emit_hash_bytes_call(data, len);
+        // AFTER the digest is computed — the hash reads the buffer.
+        self.emit_free_vec_buffer_if_owned(slot, 1);
+        Some(digest)
+    }
+
     /// Emit `B.build()` → `S.write(bytes)` → `S.finish()` for a user hasher
     /// (design.md § `Hash` and `Hasher`, "User-extensible hashers";
     /// B-2026-08-22-6).
@@ -271,6 +383,9 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> FunctionValue<'ctx> {
         let fn_name = format!("karac_hash_{type_name}{}", self.hash_hasher.mangle_suffix());
         if let Some(f) = self.module.get_function(&fn_name) {
+            return f;
+        }
+        if let Some(f) = self.try_emit_user_impl_hash_fn(type_name, &fn_name) {
             return f;
         }
 
@@ -624,6 +739,13 @@ impl<'ctx> super::Codegen<'ctx> {
         let type_name = Self::mangled_type_name(te);
         let fn_name = format!("karac_hash_{type_name}{}", self.hash_hasher.mangle_suffix());
         if let Some(f) = self.module.get_function(&fn_name) {
+            return f;
+        }
+        // BEFORE the per-shape match: a struct key takes the
+        // `emit_hash_fn_for_struct` arm below and would never reach
+        // `emit_hash_fn_for_type`, so checking only there left the user's impl
+        // unused for the one shape it is written for (B-2026-08-26-10).
+        if let Some(f) = self.try_emit_user_impl_hash_fn(&type_name, &fn_name) {
             return f;
         }
         match &te.kind {

@@ -516,6 +516,19 @@ fn alloc_error_stdlib_program() -> &'static Program {
     &ALLOC_ERROR_LOWERED_PROGRAM
 }
 
+static HASH_LOWERED_PROGRAM: std::sync::LazyLock<Program> = std::sync::LazyLock::new(|| {
+    lower_stdlib_source("hash", include_str!("../runtime/stdlib/hash.kara"))
+});
+
+/// The lowered `std` hash program. Its ONLY compiled bodies are
+/// `impl Hasher for KeyByteSink` — the sink a user `impl Hash` writes into
+/// (B-2026-08-26-10). The two selector structs are zero-field and nothing
+/// constructs them, and the three traits contribute declarations rather than
+/// bodies.
+fn hash_stdlib_program() -> &'static Program {
+    &HASH_LOWERED_PROGRAM
+}
+
 static PROTOBUF_LOWERED_PROGRAM: std::sync::LazyLock<Program> = std::sync::LazyLock::new(|| {
     lower_stdlib_source("protobuf", include_str!("../runtime/stdlib/protobuf.kara"))
 });
@@ -682,6 +695,19 @@ fn layout_only_stdlib_programs(user: &Program) -> Vec<&'static Program> {
     }
 }
 
+/// True when some type in `user` carries a user `impl Hash`, so the
+/// `KeyByteSink` its `karac_hash_bytes_of_<T>` wrapper writes into has to be
+/// compiled into this module (B-2026-08-26-10).
+///
+/// Tests for the SYNTHESIZED WRAPPER rather than for the impl block, because
+/// the wrapper is what actually references the sink — one condition, checked
+/// where it is used, instead of two that could drift apart.
+fn program_uses_user_hash(user: &Program) -> bool {
+    user.items
+        .iter()
+        .any(|i| matches!(i, Item::Function(f) if f.name.starts_with("karac_hash_bytes_of_")))
+}
+
 /// True when `user` could hold a value of one of `std.cli`'s types — the gate
 /// on compiling cli's ~600 lines of method bodies into the module.
 ///
@@ -793,6 +819,20 @@ fn compiled_stdlib_programs(user: &Program) -> Vec<&'static Program> {
     ];
     if program_uses_protobuf(user) {
         programs.push(protobuf_stdlib_program());
+    }
+    // Gated for the reason the `cli` comment below spells out, and measured the
+    // same way: `KeyByteSink.write`'s `i = i + 1` loop emits checked-overflow
+    // intrinsics into every module that compiles it, and
+    // `wrapping_arith_lowers_without_overflow_trap` asserts their absence.
+    // Unconditional inclusion failed it. The zero-use prune does not save this
+    // module for the same reason it does not save cli's — the sink's methods
+    // call each other.
+    //
+    // The gate is exact rather than approximate: the wrapper `desugar.rs`
+    // synthesizes exists if and only if some type carries a user `impl Hash`,
+    // which is the only thing that needs the sink.
+    if program_uses_user_hash(user) {
+        programs.push(hash_stdlib_program());
     }
     // B-2026-08-25-2 — cli's bodies cannot ride along unconditionally: they
     // emit `karac_clone_String` calls and checked-overflow intrinsics into

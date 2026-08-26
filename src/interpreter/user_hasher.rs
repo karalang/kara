@@ -99,17 +99,173 @@ pub(crate) fn install(program: &Program, typecheck_result: &TypeCheckResult) {
     if WORLD.get().is_some() {
         return;
     }
+    // A user `impl Hash for K` needs the same world for the same reason a user
+    // BUILDER does — `MapData::hash_key` runs deep inside a container with no
+    // interpreter in sight — so either one arms it (B-2026-08-26-10).
+    let hash_impls = user_hash_impl_targets(program);
     if !program
         .container_hashers
         .values()
         .any(|k| k.user_builder().is_some())
+        && hash_impls.is_empty()
     {
         return;
     }
+    let _ = HASH_IMPLS.set(hash_impls);
     let _ = WORLD.set((
         Box::leak(Box::new(program.clone())),
         Box::leak(Box::new(typecheck_result.clone())),
     ));
+}
+
+/// Type names carrying a user `impl Hash`, computed once at [`install`].
+///
+/// Recomputing this per key hash would put an AST walk on the map hot path;
+/// asking the typechecker's tables instead would work equally well but this is
+/// already the module that owns a leaked `Program`.
+static HASH_IMPLS: OnceLock<std::collections::HashSet<String>> = OnceLock::new();
+
+/// The sink the user's `hash` writes into — `runtime/stdlib/hash.kara`'s
+/// `KeyByteSink`. Its `bytes` field is read back out after the call; its
+/// `finish` is never invoked, because the digest is the CONTAINER's business.
+const SINK_TYPE: &str = "KeyByteSink";
+const SINK_VAR: &str = "__karac_hash_sink";
+const KEY_VAR: &str = "__karac_hash_key";
+
+fn user_hash_impl_targets(program: &Program) -> std::collections::HashSet<String> {
+    let mut out = std::collections::HashSet::new();
+    for item in &program.items {
+        if let crate::ast::Item::ImplBlock(imp) = item {
+            let is_hash = imp
+                .trait_name
+                .as_ref()
+                .and_then(|t| t.segments.last())
+                .is_some_and(|n| n == "Hash");
+            if !is_hash {
+                continue;
+            }
+            // The sink's own `impl Hasher` is not a `Hash` impl, but a user
+            // could legitimately write `impl Hash` for a type the sink is built
+            // from; guarding on the trait name alone is enough.
+            if let crate::ast::TypeKind::Path(p) = &imp.target_type.kind {
+                if let Some(name) = p.segments.last() {
+                    out.insert(name.clone());
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The bytes a user `impl Hash` writes for `v`, or `None` when `v`'s type has
+/// no such impl and the caller should fall back to its own encoding.
+///
+/// This is the `Hash` half of the split design.md § `Hash` and `Hasher` draws:
+/// the impl decides WHICH BYTES a key contributes, and the container's hasher —
+/// unchanged, whichever it is — decides how they become a digest. So this
+/// composes with a user `BuildHasher` rather than competing with it.
+pub(crate) fn user_hash_bytes(v: &Value) -> Option<Vec<u8>> {
+    let impls = HASH_IMPLS.get()?;
+    let type_name = match v {
+        Value::Struct { name, .. } => name.clone(),
+        Value::EnumVariant { enum_name, .. } => enum_name.clone(),
+        Value::SharedStruct(s) => s.name.clone(),
+        _ => return None,
+    };
+    if !impls.contains(&type_name) {
+        return None;
+    }
+    let &(program, tc) = WORLD.get()?;
+    // Same re-entrancy shape as `hash_bytes`: a key whose `hash` body itself
+    // touches a user-hashed container re-enters here while this thread's cached
+    // interpreter is borrowed. A throwaway interpreter keeps the answer correct
+    // on that pathological path rather than returning a different digest for
+    // the same key, which would corrupt the outer container's index.
+    let nested = SUB.with(|cell| match cell.try_borrow_mut() {
+        Ok(mut slot) => {
+            let interp = slot.get_or_insert_with(|| {
+                let mut i = Interpreter::new(program, tc);
+                i.register_items();
+                i
+            });
+            Some(run_hash(interp, v))
+        }
+        Err(_) => None,
+    });
+    match nested {
+        Some(r) => r,
+        None => {
+            let mut interp = Interpreter::new(program, tc);
+            interp.register_items();
+            run_hash(&mut interp, v)
+        }
+    }
+}
+
+/// `key.hash(sink)` through ordinary method dispatch, then read `sink.bytes`.
+///
+/// Dispatched rather than called directly for the reason [`run`] documents:
+/// `mut ref self` is only observable through the write-back `eval_method_call`
+/// performs on its receiver BINDING, so the sink has to be a binding.
+fn run_hash(interp: &mut Interpreter<'static>, key: &Value) -> Option<Vec<u8>> {
+    interp.env.push_scope();
+    interp.env.define(KEY_VAR.to_string(), key.clone());
+    interp.env.define(
+        SINK_VAR.to_string(),
+        Value::Struct {
+            name: SINK_TYPE.to_string(),
+            fields: HashMap::from([("bytes".to_string(), Value::array_of(Vec::new()))]),
+        },
+    );
+    interp.eval_method_call(
+        &ident(KEY_VAR),
+        "hash",
+        &[CallArg {
+            label: None,
+            mut_marker: false,
+            mut_marker_span: None,
+            value: ident(SINK_VAR),
+            span: SYNTH_SPAN,
+        }],
+        &SYNTH_SPAN,
+        &SYNTH_SPAN,
+    );
+    let sink = interp.env.get(SINK_VAR);
+    interp.env.pop_scope();
+
+    // A `hash` body that raised leaves this CACHED interpreter poisoned for the
+    // next key, so the signal is drained here — same as `run`.
+    let faulted = interp.pending_cf.take().is_some() || !interp.runtime_errors.is_empty();
+    // Carry the first error's TEXT into the warning. A bare "a user `hash` body
+    // raised" names the symptom and hides the cause, and this path has no other
+    // way to surface one — the error belongs to a sub-interpreter with no user
+    // program to attribute it to.
+    let why = interp
+        .runtime_errors
+        .first()
+        .map(|e| e.message.clone())
+        .unwrap_or_else(|| "control flow escaped the body".to_string());
+    interp.runtime_errors.clear();
+    if faulted {
+        report_fallback(&format!("a user `hash` body raised: {why}"));
+        return None;
+    }
+    let Some(Value::Struct { fields, .. }) = sink else {
+        return None;
+    };
+    let bytes = match fields.get("bytes") {
+        Some(Value::Array(rc)) => rc
+            .read()
+            .ok()?
+            .iter()
+            .map(|b| match b {
+                Value::Int(i) => *i as u8,
+                _ => 0,
+            })
+            .collect(),
+        _ => return None,
+    };
+    Some(bytes)
 }
 
 /// Hash `v` through the user hasher built by `builder`.
@@ -125,6 +281,13 @@ pub(crate) fn hash_value(builder: &str, v: &Value) -> u64 {
     let mut bytes = Vec::new();
     encode_value(v, &mut bytes);
     hash_bytes(builder, &bytes)
+}
+
+/// `hash_bytes` for a caller that already has the bytes — the user-`impl Hash`
+/// path, whose bytes come from the key's own impl rather than from
+/// [`encode_value`].
+pub(crate) fn hash_bytes_for(builder: &str, bytes: &[u8]) -> u64 {
+    hash_bytes(builder, bytes)
 }
 
 fn hash_bytes(builder: &str, bytes: &[u8]) -> u64 {

@@ -111,6 +111,12 @@ pub const PRELUDE_TYPES: &[&str] = &[
     // annotation, where an import would be pure ceremony.
     "SipHash13BuildHasher",
     "FxBuildHasher",
+    // `KeyByteSink` — the sink a user `impl Hash` writes into when a container
+    // hashes one of its keys (B-2026-08-26-10). Prelude-visible because the
+    // `karac_hash_bytes_of_<T>` wrapper `desugar.rs` synthesizes names it in
+    // ordinary source, and that source goes through name resolution like any
+    // other. User code has no reason to name it.
+    "KeyByteSink",
     "Ordering",
     "MemoryOrdering",
     // `NormalizationForm` — the `form` selector for `String.normalize(form)`

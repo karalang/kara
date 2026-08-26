@@ -22,6 +22,7 @@ pub fn desugar_program(program: &mut Program) {
     hoist_assoc_bindings_in_program(program);
     synthesize_default_impls(program);
     synthesize_trait_default_methods(program);
+    synthesize_user_hash_byte_wrappers(program);
     propagate_codegen_hints(program);
     desugar_impl_trait_args_in_program(program);
     desugar_stmt_rewrites_in_program(program);
@@ -2612,4 +2613,91 @@ fn desugar_collect_target_at(ty: &TypeExpr, value: &mut Expr, synth_base: Span) 
         }),
         span: block_span,
     };
+}
+
+/// One `karac_hash_bytes_of_<T>` per type carrying a user `impl Hash`, so a
+/// `Map`/`Set` key can be hashed through the impl the author wrote
+/// (B-2026-08-26-10).
+///
+/// # Why a synthesized Kāra function rather than direct emission
+///
+/// `Hash.hash` is GENERIC over the hasher (`fn hash[H: Hasher](ref self,
+/// hasher: mut ref H)`), so calling it needs a monomorph bound to a concrete
+/// `H`. Codegen's monomorphizer is driven from CALL SITES — it infers the
+/// substitution from an argument list — so requesting an instance from inside
+/// the synthesized LLVM hash function, which works below the AST, would mean
+/// reimplementing that inference at the wrong layer. Emitting the call as
+/// ORDINARY KĀRA source instead lets the existing pipeline do all of it:
+/// resolve, typecheck, and mono see a normal call and produce
+/// `<T>.hash$KeyByteSink` with no new machinery. The synthesized hash function
+/// then calls one plain non-generic symbol.
+///
+/// It also gives the interpreter and codegen the same bytes by construction,
+/// since both run the same wrapper body.
+///
+/// # Why it returns BYTES rather than a digest
+///
+/// design.md § `Hash` and `Hasher` splits the two questions: `Hash` decides
+/// WHICH BYTES a value contributes, the container's `BuildHasher` decides how
+/// they become a digest. Returning the byte string keeps that split — the
+/// caller feeds it to whichever hasher the container was built with, so a user
+/// `impl Hash` composes with a user `BuildHasher` instead of competing with it.
+///
+/// Parsed from source rather than hand-built as AST nodes: the body is six
+/// lines, and a parsed one cannot drift from what the same text would mean if a
+/// user wrote it.
+fn synthesize_user_hash_byte_wrappers(program: &mut Program) {
+    let targets: Vec<String> = program
+        .items
+        .iter()
+        .filter_map(|item| {
+            let Item::ImplBlock(imp) = item else {
+                return None;
+            };
+            let is_hash = imp
+                .trait_name
+                .as_ref()
+                .and_then(|t| t.segments.last())
+                .is_some_and(|n| n == "Hash");
+            if !is_hash {
+                return None;
+            }
+            match &imp.target_type.kind {
+                TypeKind::Path(p) => p.segments.last().cloned(),
+                _ => None,
+            }
+        })
+        .collect();
+    if targets.is_empty() {
+        return;
+    }
+    let mut src = String::new();
+    for t in &targets {
+        // A wrapper already present (a re-desugar of an already-desugared
+        // program, which the REPL does) must not be added twice.
+        if program
+            .items
+            .iter()
+            .any(|i| matches!(i, Item::Function(f) if f.name == format!("karac_hash_bytes_of_{t}")))
+        {
+            continue;
+        }
+        src.push_str(&format!(
+            "fn karac_hash_bytes_of_{t}(k: ref {t}) -> Vec[u8] {{\n\
+             \x20   let mut s = KeyByteSink {{ bytes: [] }};\n\
+             \x20   k.hash(s);\n\
+             \x20   return s.bytes;\n\
+             }}\n"
+        ));
+    }
+    if src.is_empty() {
+        return;
+    }
+    let parsed = crate::parse(&src);
+    debug_assert!(
+        parsed.errors.is_empty(),
+        "synthesized hash-byte wrapper failed to parse: {:?}",
+        parsed.errors
+    );
+    program.items.extend(parsed.program.items);
 }
