@@ -4193,6 +4193,41 @@ impl<'ctx> super::Codegen<'ctx> {
     /// supply three keeps its previous behaviour exactly -- which is why the
     /// wrapper above is a pure delegation and every existing call site is
     /// unchanged.
+    /// Rebuild `target_ty` from an enum payload's words, DEBOXING first when
+    /// the pack side had to spill. B-2026-08-26-28.
+    ///
+    /// `coerce_to_payload_words` heap-boxes any payload whose true width
+    /// exceeds the variant's payload area, leaving the box pointer in word 0.
+    /// A consumer that rebuilds straight from the words then reinterprets that
+    /// pointer as the target's FIRST FIELD. When the target is itself an enum,
+    /// field 0 is its TAG — and a heap address is never a valid tag — so the
+    /// value decodes as the wrong VARIANT with a zeroed payload rather than as
+    /// obvious garbage. `main() -> Result[(), Result[i64, i64]]` returning
+    /// `Err(Ok(3))` printed `Error: Err(0)`.
+    ///
+    /// The predicate is the unpack mirror of pack's `out.len() > num_words`,
+    /// stated once here so the entry-point return, the `?`-into-`main` branch,
+    /// and the match-arm unpacker agree by construction instead of by three
+    /// separate copies — two of which did not have it.
+    pub(super) fn rebuild_payload_deboxing_if_spilled(
+        &self,
+        target_ty: BasicTypeEnum<'ctx>,
+        words: &[inkwell::values::IntValue<'ctx>],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        if Self::llvm_type_word_count(target_ty) > words.len() && !words.is_empty() {
+            let ptr_ty = self.context.ptr_type(AddressSpace::default());
+            let box_ptr = self
+                .builder
+                .build_int_to_ptr(words[0], ptr_ty, "plbox.p")
+                .map_err(|e| format!("rebuild_payload: inttoptr failed: {e:?}"))?;
+            return self
+                .builder
+                .build_load(target_ty, box_ptr, "plbox.ld")
+                .map_err(|e| format!("rebuild_payload: load failed: {e:?}"));
+        }
+        self.rebuild_value_from_payload_word_slice(target_ty, words)
+    }
+
     pub(super) fn rebuild_value_from_payload_word_slice(
         &self,
         target_ty: BasicTypeEnum<'ctx>,

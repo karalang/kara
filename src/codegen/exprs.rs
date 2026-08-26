@@ -2269,7 +2269,15 @@ impl<'ctx> super::Codegen<'ctx> {
                                     .into_int_value(),
                             })
                             .collect();
-                        self.rebuild_value_from_payload_word_slice(e_ty, &words)
+                        // B-2026-08-26-28 — debox first. A nested `Result`
+                        // as `main`'s `E` is six words against a five-word
+                        // area, so it arrives boxed and rebuilding inline read
+                        // the box pointer as the inner TAG: `inner()?`
+                        // propagating `Err(Ok(3))` out of `main` printed
+                        // `Error: Err(0)` under JIT and AOT while `--interp`
+                        // printed `Error: Ok(3)`. Same defect as the tail
+                        // `return Err(…)` site, reached through `?` instead.
+                        self.rebuild_payload_deboxing_if_spilled(e_ty, &words)
                             .unwrap_or(w0)
                     }
                     None => w0,

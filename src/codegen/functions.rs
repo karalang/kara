@@ -3204,7 +3204,14 @@ impl<'ctx> super::Codegen<'ctx> {
         let err_val = match self.main_result_err_te.clone() {
             Some(te) => {
                 let e_ty = self.llvm_type_for_type_expr(&te);
-                self.rebuild_value_from_payload_word_slice(e_ty, &payload_words)
+                // B-2026-08-26-28 — an `E` wider than `Result`'s fixed
+                // five-word payload area was heap-boxed by the pack side, so
+                // rebuild through the deboxing helper. Straight-from-the-words
+                // read the box POINTER as `E`'s field 0 — for a nested
+                // `Result[A, B]`, its inner TAG — so `Err(Ok(3))` surfaced as
+                // `Error: Err(0)`: the wrong variant, zero payload, on every
+                // compiled backend.
+                self.rebuild_payload_deboxing_if_spilled(e_ty, &payload_words)
                     .unwrap_or_else(|_| w0.into())
             }
             None => w0.into(),

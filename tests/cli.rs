@@ -33762,6 +33762,16 @@ fn test_main_result_error_never_prints_a_bare_prefix() {
             "let v = [(1, 2)]; return Err(v);",
         ),
         ("opt", "Option[i64]", "return Err(Some(5));"),
+        // B-2026-08-26-28 — a nested `Result` as `E`. Six words against the
+        // five-word payload area, so it is heap-boxed and needs the debox on
+        // the way back out; `opt` above is the four-word near-miss that fits.
+        ("resok", "Result[i64, i64]", "return Err(Ok(3));"),
+        ("reserr", "Result[i64, i64]", "return Err(Err(7));"),
+        (
+            "resstr",
+            "Result[i64, String]",
+            "return Err(Err(\"boom\"));",
+        ),
         ("ioerr", "IoError", "return Err(IoError.NotFound);"),
         (
             "allocerr",
@@ -33847,6 +33857,191 @@ fn test_unrenderable_main_error_is_a_build_error_not_an_empty_message() {
         "the diagnostic must name the offending error type and say the exit \
          line would print nothing; got: {stderr}"
     );
+}
+
+/// B-2026-08-26-28 — A NESTED `Result` AS `main`'s ERROR TYPE MUST KEEP BOTH
+/// ITS TAG AND ITS PAYLOAD on every backend.
+///
+/// `main() -> Result[(), Result[i64, i64]]` returning `Err(Ok(3))` printed
+/// `Error: Ok(3)` under `--interp` but `Error: Err(0)` under JIT and AOT — the
+/// WRONG VARIANT with a zeroed payload. That is worse than an unrendered
+/// error: `Err(0)` is a well-formed `Result`, so nothing about the line says
+/// the value was lost. Distinct from B-2026-08-25-34's fail-open, which
+/// printed a bare prefix; here a renderer runs and renders a mis-reconstructed
+/// value.
+///
+/// MECHANISM, and why the obvious control misleads. `Result`'s payload area is
+/// a fixed FIVE words. An inner `Result[A, B]` is itself a six-word
+/// `{tag, w0..w4}` aggregate, so it does not fit and `coerce_to_payload_words`
+/// heap-boxes it, leaving a box pointer in word 0. `emit_main_result_return`
+/// rebuilt `E` straight from those words, so the pointer was read as `E`'s
+/// field 0 — the inner TAG. A heap address is never 1, so the variant always
+/// decoded as `Err`, and the payload words past the area read as zero.
+///
+/// `Option[i64]` renders correctly and looks like it refutes a width story,
+/// which is why the row filed it as "suspected, not confirmed". It does not:
+/// `Option[i64]` is FOUR words, fits the five-word area, and never boxes at
+/// all. Six versus five is the entire difference.
+///
+/// The fix is the unpack mirror of pack's `out.len() > num_words`, which the
+/// match-arm unpacker `reconstruct_payload_value` already applied to boxed
+/// variant payloads — this site had simply never grown the same check.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_main_result_error_nested_result_keeps_tag_and_payload() {
+    // Every case is a shape codegen MUST render, so unlike the sibling test
+    // above the AOT half asserts the build succeeded rather than skipping —
+    // a build failure here is the regression, not a reason to pass vacuously.
+    let cases: &[(&str, &str, &str, &str)] = &[
+        (
+            "ok_i64",
+            "Result[i64, i64]",
+            "return Err(Ok(3));",
+            "Error: Ok(3)",
+        ),
+        (
+            "err_i64",
+            "Result[i64, i64]",
+            "return Err(Err(7));",
+            "Error: Err(7)",
+        ),
+        (
+            "ok_bool",
+            "Result[bool, bool]",
+            "return Err(Ok(true));",
+            "Error: Ok(true)",
+        ),
+        (
+            "err_bool",
+            "Result[bool, bool]",
+            "return Err(Err(false));",
+            "Error: Err(false)",
+        ),
+        (
+            "err_string",
+            "Result[i64, String]",
+            "return Err(Err(\"boom\"));",
+            "Error: Err(boom)",
+        ),
+        (
+            "ok_in_str_res",
+            "Result[i64, String]",
+            "return Err(Ok(42));",
+            "Error: Ok(42)",
+        ),
+    ];
+    for (name, ty, body, want) in cases {
+        let tmp = scratch_project(&format!("mainnest-{name}"));
+        write(
+            &tmp.join("m.kara"),
+            &format!("fn main() -> Result[(), {ty}] {{ {body} }}\n"),
+        );
+        let first = |s: &str| s.lines().next().unwrap_or("").to_string();
+        let stderr_of = |args: &[&str]| -> String {
+            let o = karac_bin().current_dir(&tmp).args(args).output();
+            o.map(|o| String::from_utf8_lossy(&o.stderr).into_owned())
+                .unwrap_or_default()
+        };
+
+        // The interpreter is the oracle, and it was already correct — pin it
+        // so a regression there cannot quietly redefine "agreement".
+        let interp = first(&stderr_of(&["run", "--interp", "m.kara"]));
+        assert_eq!(interp, *want, "{name}: interpreter oracle");
+
+        let jit = first(&stderr_of(&["run", "m.kara"]));
+        assert_eq!(jit, *want, "{name}: `karac run` (JIT) must match --interp");
+
+        let built = karac_bin()
+            .current_dir(&tmp)
+            .args(["build", "m.kara"])
+            .output()
+            .expect("spawn karac build");
+        let exe = tmp.join("m");
+        assert!(
+            built.status.success() && exe.exists(),
+            "{name}: codegen must render this shape, but the build failed: {}",
+            String::from_utf8_lossy(&built.stderr)
+        );
+        let o = std::process::Command::new(&exe)
+            .output()
+            .expect("run built");
+        assert_eq!(
+            first(&String::from_utf8_lossy(&o.stderr)),
+            *want,
+            "{name}: `karac build` must match --interp"
+        );
+        // The error exit still reports failure — the debox must not disturb
+        // the `ret i32 1` half of the path.
+        assert_eq!(o.status.code(), Some(1), "{name}: error exit code");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+}
+
+/// B-2026-08-26-28, second door — the SAME nested-`Result` loss reached through
+/// `?` rather than a tail `return Err(..)`.
+///
+/// Two independent sites rebuild `main`'s error from payload words: the tail
+/// return (`emit_main_result_return`) and the `?`-propagation branch. Both
+/// rebuilt inline, so both read a spilled payload's box pointer as the inner
+/// tag; fixing only the one the row reproduced would have left `?` — which the
+/// row's own detail names as a way this shape arises ("an unflattened
+/// `?`-chain") — still printing `Error: Err(0)`. A third site, the errdefer
+/// staging helper, already deboxed; all three now share one predicate.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_main_result_error_nested_result_survives_question_propagation() {
+    let tmp = scratch_project("mainnest-question");
+    write(
+        &tmp.join("m.kara"),
+        "fn inner() -> Result[i64, Result[i64, i64]] {\n\
+         \x20   return Err(Ok(3));\n\
+         }\n\
+         fn main() -> Result[(), Result[i64, i64]] {\n\
+         \x20   let x = inner()?;\n\
+         \x20   println(f\"got {x}\");\n\
+         \x20   return Ok(());\n\
+         }\n",
+    );
+    // `?` also emits an "Error return trace" after the message, so compare the
+    // FIRST stderr line rather than the last.
+    let first = |s: &str| s.lines().next().unwrap_or("").to_string();
+    let stderr_of = |args: &[&str]| -> String {
+        let o = karac_bin().current_dir(&tmp).args(args).output();
+        o.map(|o| String::from_utf8_lossy(&o.stderr).into_owned())
+            .unwrap_or_default()
+    };
+    let want = "Error: Ok(3)";
+    assert_eq!(
+        first(&stderr_of(&["run", "--interp", "m.kara"])),
+        want,
+        "interpreter oracle"
+    );
+    assert_eq!(
+        first(&stderr_of(&["run", "m.kara"])),
+        want,
+        "`karac run` (JIT) must match --interp"
+    );
+    let built = karac_bin()
+        .current_dir(&tmp)
+        .args(["build", "m.kara"])
+        .output()
+        .expect("spawn karac build");
+    let exe = tmp.join("m");
+    assert!(
+        built.status.success() && exe.exists(),
+        "codegen must render this shape, but the build failed: {}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    let o = std::process::Command::new(&exe)
+        .output()
+        .expect("run built");
+    assert_eq!(
+        first(&String::from_utf8_lossy(&o.stderr)),
+        want,
+        "`karac build` must match --interp"
+    );
+    assert_eq!(o.status.code(), Some(1), "error exit code");
+    let _ = std::fs::remove_dir_all(&tmp);
 }
 
 /// B-2026-08-25-3 — CODEGEN OUTPUT MUST BE BYTE-REPRODUCIBLE ACROSS PROCESSES.
