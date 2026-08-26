@@ -277,6 +277,12 @@ impl<'a> super::Interpreter<'a> {
                 self.eval_binary(op, l, r, &expr.span, unsigned_hint)
             }
             ExprKind::Unary { op, operand } => {
+                // `ref <place>` needs the PLACE, not the operand's value, so it
+                // is intercepted here rather than reaching `eval_unary` (the
+                // same shape codegen uses for `Deref`). B-2026-08-26-36.
+                if matches!(op, UnaryOp::Ref) {
+                    return self.eval_ref_borrow(operand, &expr.span);
+                }
                 let val = self.eval_expr_inner(operand);
                 if self.pending_cf.is_some() {
                     return val;
@@ -287,6 +293,7 @@ impl<'a> super::Interpreter<'a> {
             ExprKind::Identifier(name) => self
                 .env
                 .get(name)
+                .map(Self::deref_elem_ref)
                 .map(|v| self.retag_bare_unit_variant(v, &expr.span))
                 .unwrap_or_else(|| {
                     // A bare identifier that names a struct / enum / union, used in
@@ -2128,5 +2135,64 @@ fn f16_bits_to_f64(h: u16) -> f64 {
         -v
     } else {
         v
+    }
+}
+
+impl<'a> super::Interpreter<'a> {
+    /// Resolve a `Value::ElemRef` to the element's CURRENT value.
+    ///
+    /// Called at every identifier read, which is what makes `let r = ref v[i]`
+    /// a live borrow rather than a snapshot: the read goes through the shared
+    /// `Arc` each time, so it observes changes the container has undergone
+    /// since the borrow was taken — matching the pointer codegen emits.
+    /// Non-`ElemRef` values pass through untouched.
+    pub(crate) fn deref_elem_ref(v: Value) -> Value {
+        if let Value::ElemRef { arr, idx } = &v {
+            if let Ok(guard) = arr.read() {
+                if let Some(elem) = guard.get(*idx) {
+                    return elem.clone();
+                }
+            }
+        }
+        v
+    }
+
+    /// Evaluate `ref <place>` (B-2026-08-26-36).
+    ///
+    /// v1 supports exactly one operand shape — an index into a sequence —
+    /// because that is the shape the `E_INDEX_MOVE_NON_COPY` fix-it needs and
+    /// the one BOTH backends can alias identically. The typechecker rejects
+    /// every other shape, so reaching this function with one is a compiler bug
+    /// rather than a user error; it degrades to evaluating the operand by
+    /// value rather than panicking.
+    fn eval_ref_borrow(&mut self, operand: &Expr, span: &crate::token::Span) -> Value {
+        if let ExprKind::Index { object, index } = &operand.kind {
+            let obj = self.eval_expr_inner(object);
+            if self.pending_cf.is_some() {
+                return obj;
+            }
+            let iv = self.eval_expr_inner(index);
+            if self.pending_cf.is_some() {
+                return iv;
+            }
+            if let (Value::Array(arc), Value::Int(i)) = (&obj, &iv) {
+                let len = arc.read().map(|g| g.len()).unwrap_or(0);
+                // Same bounds rule as `v[i]` itself (design.md § Array
+                // indexing): out of range panics, and a negative index is
+                // always out of range rather than wrapping.
+                if *i < 0 || (*i as usize) >= len {
+                    return self.record_runtime_error(
+                        format!("ref v[i]: index {} out of bounds (len {})", i, len),
+                        span,
+                    );
+                }
+                return Value::ElemRef {
+                    arr: arc.clone(),
+                    idx: *i as usize,
+                };
+            }
+            return obj;
+        }
+        self.eval_expr_inner(operand)
     }
 }

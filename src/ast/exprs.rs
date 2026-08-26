@@ -434,6 +434,14 @@ pub enum UnaryOp {
     Not,    // !
     BitNot, // ~
     Deref,  // *
+    /// `ref expr` — a shared borrow in expression position.
+    ///
+    /// design.md § "Binding-extension exception" specs `let r = ref f();`
+    /// and `let p: ref i32 = ref 42;`. It is the zero-cost half of the
+    /// `E_INDEX_MOVE_NON_COPY` fix-it pair (B-2026-08-26-21): where an
+    /// element type has no `.clone()`, borrowing is the ONLY way to read
+    /// `v[i]` without moving out of the container.
+    Ref, // ref
 }
 
 // ── Closures ─────────────────────────────────────────────────────

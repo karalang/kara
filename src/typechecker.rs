@@ -630,6 +630,18 @@ pub enum TypeErrorKind {
     /// (design.md § Character type). Run-fatal: the interpreter has no
     /// `Value::String[Value::Int]` lowering, so a downgrade-and-run
     /// would hit an `unreachable!` rather than emit a clean diagnostic.
+    /// `ref <expr>` where `<expr>` is not an index into a sequence.
+    ///
+    /// v1 supports only `ref <seq>[i]` — the one shape BOTH backends alias
+    /// identically (the interpreter binds `Value::ElemRef` over the
+    /// container's `Arc`, codegen a pointer into the same buffer).
+    ///
+    /// Run-fatal, and that is the point: without it `karac run` executes a
+    /// program `karac build` refuses, which is an acceptance divergence of
+    /// exactly the kind this feature exists to remove. Measured before this
+    /// kind existed — `let r = ref make()` printed `3` under the interpreter
+    /// while failing to compile under codegen (B-2026-08-26-36).
+    RefOperandUnsupported,
     StringNotIndexable,
     /// `it[i]` applied to an `Iterator[T]` — the value `.chars()`,
     /// `.iter()`, `.map(...)` and friends return. An iterator is a lazy
@@ -1151,6 +1163,7 @@ impl TypeErrorKind {
         matches!(
             self,
             TypeErrorKind::InvalidCast
+                | TypeErrorKind::RefOperandUnsupported
                 | TypeErrorKind::StringNotIndexable
                 | TypeErrorKind::IteratorNotIndexable
                 | TypeErrorKind::TypeNotIndexable
@@ -1189,6 +1202,7 @@ pub(crate) fn class_for_type_error_kind(
         | TypeErrorKind::ImplTraitMultipleWitnesses
         | TypeErrorKind::AtomicInvalidInnerType
         | TypeErrorKind::InvalidTupleIndex
+        | TypeErrorKind::RefOperandUnsupported
         | TypeErrorKind::StringNotIndexable
         | TypeErrorKind::IteratorNotIndexable
         | TypeErrorKind::TypeNotIndexable

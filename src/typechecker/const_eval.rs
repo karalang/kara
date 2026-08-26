@@ -248,6 +248,7 @@ pub(super) fn unaryop_glyph(op: &UnaryOp) -> &'static str {
         UnaryOp::Not => "!",
         UnaryOp::BitNot => "~",
         UnaryOp::Deref => "*",
+        UnaryOp::Ref => "ref",
     }
 }
 

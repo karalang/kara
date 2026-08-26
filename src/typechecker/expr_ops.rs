@@ -2973,6 +2973,44 @@ impl<'a> super::TypeChecker<'a> {
         }
 
         match op {
+            // `ref expr` — a shared borrow in expression position. The result
+            // type is `ref T` for an operand of type `T` (design.md
+            // § "Binding-extension exception": `let r = ref f();` extends the
+            // temporary's live range to the binding's).
+            //
+            // Borrowing an already-borrowed value is idempotent rather than an
+            // error: `ref r` where `r: ref T` stays `ref T`. That keeps a
+            // mechanically-applied fix-it (`ref v[i]` inserted by `karac fix`)
+            // from becoming a `ref ref T` the rest of the checker has no rule
+            // for. A `mut ref T` operand narrows to `ref T` — a shared reborrow
+            // of a unique one, which is the safe direction.
+            UnaryOp::Ref => {
+                // v1 SCOPE: only `ref <seq>[i]` is available. That is the shape
+                // the `E_INDEX_MOVE_NON_COPY` fix-it needs, and — decisively —
+                // the one both backends can alias IDENTICALLY: the interpreter
+                // holds the container's `Arc` plus an index, codegen holds a
+                // pointer into the same buffer. Any other operand is rejected
+                // HERE rather than left to the backends, because a shape one
+                // backend aliases and the other snapshots would reintroduce the
+                // run-vs-build divergence this whole line of work exists to
+                // close (B-2026-08-26-21 / -36).
+                if !matches!(operand.kind, ExprKind::Index { .. }) {
+                    self.type_error(
+                        "error[E_REF_OPERAND_UNSUPPORTED]: only `ref <sequence>[i]` is \
+                         supported in v1; borrowing this expression is not yet \
+                         implemented"
+                            .to_string(),
+                        *span,
+                        TypeErrorKind::RefOperandUnsupported,
+                    );
+                    return Type::Error;
+                }
+                match ty {
+                    Type::Ref(_) => ty,
+                    Type::MutRef(inner) => Type::Ref(inner),
+                    other => Type::Ref(Box::new(other)),
+                }
+            }
             UnaryOp::Neg => {
                 // Element-wise negation of a `Tensor[T, Shape]` — result is a
                 // fresh tensor of the same shape (rank must be statically known,

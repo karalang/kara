@@ -1359,7 +1359,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// this widens what builds without turning any current error into a
     /// miscompile.
     #[allow(clippy::type_complexity)]
-    fn nested_index_field_base_elem(
+    pub(super) fn nested_index_field_base_elem(
         &mut self,
         inner_object: &Expr,
         inner_idx: &Expr,

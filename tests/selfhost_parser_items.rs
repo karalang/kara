@@ -226,6 +226,7 @@ fn unaryop_name(op: &UnaryOp) -> &'static str {
         UnaryOp::Not => "not",
         UnaryOp::BitNot => "~",
         UnaryOp::Deref => "*",
+        UnaryOp::Ref => "ref",
     }
 }
 

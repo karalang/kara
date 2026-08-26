@@ -2176,7 +2176,7 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::Unary { op, operand } => match op {
                 UnaryOp::Not => Some(self.context.bool_type().into()),
                 UnaryOp::Neg | UnaryOp::BitNot => self.infer_expr_llvm_type(operand, locals),
-                UnaryOp::Deref => None,
+                UnaryOp::Deref | UnaryOp::Ref => None,
             },
 
             // Block expression: its value is the tail expression's value.
@@ -3036,6 +3036,14 @@ impl<'ctx> super::Codegen<'ctx> {
         // This closes the interpreter-vs-JIT semantic gap for
         // primitive-typed lets (see slice c-repl.B.5 design).
         if self.try_compile_snapshot_replay(stmt)? {
+            return Ok(());
+        }
+        // `let r = ref v[i]` / `let r = ref b.xs[i]` — bind `r` to a POINTER
+        // into the container's buffer rather than a copy of the element
+        // (B-2026-08-26-36). Intercepted here, ahead of the `Let` arms below,
+        // because it needs the element's ADDRESS and every one of those arms is
+        // written around a compiled VALUE.
+        if self.try_compile_ref_binding(stmt)? {
             return Ok(());
         }
 
@@ -12107,6 +12115,91 @@ impl<'ctx> super::Codegen<'ctx> {
     /// the per-stmt dispatch (including the original RHS lowering).
     /// Returns `Ok(false)` for every non-replay stmt; non-REPL builds
     /// always take the false arm because `snapshot_replay` is empty.
+    /// `let <name> = ref <container>[<idx>]` — bind `<name>` to a pointer into
+    /// the container's buffer (B-2026-08-26-36).
+    ///
+    /// Uses the same "ref shim" the pattern-binding path uses for a `ref`
+    /// scrutinee: an alloca holding the element pointer, the name registered in
+    /// `ref_params` with the POINTEE type, so every later read auto-derefs and
+    /// scope cleanup does not try to drop through the borrow.
+    ///
+    /// The aliasing is the contract, not an optimisation: the interpreter binds
+    /// `Value::ElemRef { arr, idx }` over the SAME buffer, so both backends
+    /// observe a container mutation made while the borrow is live. A copy here
+    /// would put the two backends back into disagreement, which is the whole
+    /// failure class this line of work closes.
+    ///
+    /// Returns `Ok(false)` for any shape it does not handle, leaving the normal
+    /// `Let` arms to compile it — the typechecker has already restricted `ref`
+    /// to an index operand, so the only shapes reaching that fallback are
+    /// container classes this lowering has no layout for.
+    fn try_compile_ref_binding(&mut self, stmt: &Stmt) -> Result<bool, String> {
+        let StmtKind::Let { pattern, value, .. } = &stmt.kind else {
+            return Ok(false);
+        };
+        let ExprKind::Unary {
+            op: UnaryOp::Ref,
+            operand,
+        } = &value.kind
+        else {
+            return Ok(false);
+        };
+        let PatternKind::Binding(name) = &pattern.kind else {
+            return Ok(false);
+        };
+        let ExprKind::Index { object, index } = &operand.kind else {
+            return Ok(false);
+        };
+
+        // Two bases: a named local `v[i]`, and a struct field `b.xs[i]` — the
+        // shape `std.autograd`'s tape reads take.
+        let (elem_ptr, elem_ty, elem_te) = match &object.kind {
+            ExprKind::Identifier(container) => {
+                let (ptr, ty) = self.lower_indexed_elem_ptr_vec(container, index)?;
+                let te = self.var_types.var_elem_type_exprs.get(container).cloned();
+                (ptr, ty, te)
+            }
+            ExprKind::FieldAccess { .. } => {
+                match self.nested_index_field_base_elem(object, index)? {
+                    Some((ptr, ty, te)) => (ptr, ty, Some(te)),
+                    None => return Ok(false),
+                }
+            }
+            _ => return Ok(false),
+        };
+
+        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        let shim = self
+            .builder
+            .build_alloca(ptr_ty, &format!("{name}.refshim"))
+            .map_err(|e| e.to_string())?;
+        self.builder
+            .build_store(shim, elem_ptr)
+            .map_err(|e| e.to_string())?;
+        self.variables.insert(
+            name.clone(),
+            VarSlot {
+                ptr: shim,
+                ty: ptr_ty.into(),
+            },
+        );
+        self.borrow_vars.ref_params.insert(name.clone(), elem_ty);
+        // Record the BORROWED ELEMENT's type, or `r.field` cannot resolve —
+        // the shim only carries a pointer, and field lowering reads the
+        // receiver's type name from `var_type_names`.
+        if let Some(te) = elem_te {
+            if let TypeKind::Path(path) = &te.kind {
+                if let Some(head) = path.segments.first() {
+                    self.var_types
+                        .var_type_names
+                        .insert(name.clone(), head.clone());
+                }
+            }
+            self.var_types.var_elem_type_exprs.insert(name.clone(), te);
+        }
+        Ok(true)
+    }
+
     fn try_compile_snapshot_replay(&mut self, stmt: &Stmt) -> Result<bool, String> {
         let StmtKind::Let { pattern, .. } = &stmt.kind else {
             return Ok(false);

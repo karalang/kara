@@ -75,6 +75,32 @@ fn typecheck_errors(source: &str) -> Vec<TypeError> {
 
 // ── Category 1: Literals and Basic Types ────────────────────────
 
+/// B-2026-08-26-36 — v1 accepts only `ref <sequence>[i]`.
+///
+/// Every other operand is rejected in the TYPECHECKER, not left to the
+/// backends: a shape one backend aliases and the other copies would reintroduce
+/// exactly the run-vs-build divergence this feature exists to close. The kind is
+/// run-fatal too, so `karac run` cannot execute what `karac build` refuses —
+/// before that it printed `3` under the interpreter while failing to compile.
+#[test]
+fn ref_binding_rejects_a_non_index_operand() {
+    let errs = typecheck_errors(
+        r#"
+fn make() -> i64 { return 3; }
+fn main() { let r = ref make(); println(f"{r}"); }
+"#,
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("E_REF_OPERAND_UNSUPPORTED")),
+        "borrowing a call result must be a typecheck error; got {errs:?}"
+    );
+    assert!(
+        errs.iter().any(|e| e.kind.is_run_fatal()),
+        "the rejection must be run-fatal so `karac run` cannot execute it"
+    );
+}
+
 #[test]
 fn test_empty_program() {
     typecheck_ok("");

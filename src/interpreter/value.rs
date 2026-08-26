@@ -457,6 +457,21 @@ pub enum Value {
     /// borrow-tracking parity § sub-item 3 "Aliased interpreter
     /// representation".
     Array(Arc<RwLock<Vec<Value>>>),
+    /// A live borrow of one element of an `Array` — what `ref v[i]` evaluates
+    /// to (B-2026-08-26-36). Holds the SAME `Arc` the container holds plus the
+    /// element index, so a read through it sees the element's current value,
+    /// not a snapshot taken at the borrow.
+    ///
+    /// Aliasing rather than copying is the whole point. Codegen compiles
+    /// `ref v[i]` to a pointer into the container's buffer; if the interpreter
+    /// took a snapshot the two backends would disagree the moment the
+    /// container changed while the borrow was live — which is precisely the
+    /// run-vs-build divergence class B-2026-08-26-21 exists to close. Reads
+    /// resolve through `Interpreter::deref_elem_ref` at every identifier use.
+    ElemRef {
+        arr: Arc<RwLock<Vec<Value>>>,
+        idx: usize,
+    },
     /// `Vector[T, N]` — the portable-SIMD lane vector (design.md § Portable
     /// SIMD). Plain `Vec<Value>` of exactly `N` numeric lanes with **value
     /// (Copy) semantics** — distinct from `Value::Array`'s shared
@@ -1841,6 +1856,16 @@ pub enum IteratorStep {
 impl std::fmt::Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            // A borrow displays as the value it borrows: `println(r)` where
+            // `r = ref v[i]` must print the element, not the handle. Reads the
+            // element live, matching `deref_elem_ref`.
+            Value::ElemRef { arr, idx } => match arr.read() {
+                Ok(g) => match g.get(*idx) {
+                    Some(e) => write!(f, "{}", e),
+                    None => write!(f, "<dangling ref>"),
+                },
+                Err(_) => write!(f, "<poisoned ref>"),
+            },
             Value::Int(v) => write!(f, "{}", v),
             Value::Float(v) => write!(f, "{}", v),
             Value::Bool(v) => write!(f, "{}", v),
@@ -2294,6 +2319,7 @@ impl Value {
     /// a real typechecker miss.
     pub fn variant_name(&self) -> &'static str {
         match self {
+            Value::ElemRef { .. } => "ElemRef",
             Value::Int(_) => "Int",
             Value::Float(_) => "Float",
             Value::Bool(_) => "Bool",

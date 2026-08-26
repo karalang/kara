@@ -3286,6 +3286,10 @@ fn validate_refinement_predicate(expr: &Expr) -> Result<(), (String, crate::toke
                 format!("{PREFIX} dereference (`*`) is not allowed in a refinement predicate"),
                 expr.span,
             )),
+            UnaryOp::Ref => Err((
+                format!("{PREFIX} borrow (`ref`) is not allowed in a refinement predicate"),
+                expr.span,
+            )),
         },
         // `self.field` — and nested field chains rooted at an allowed
         // sub-expression (`self.lo`, `self.inner.x`).

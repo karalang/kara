@@ -2117,8 +2117,10 @@ impl<'a> Lowerer<'a> {
     }
 
     fn rewrite_unary(&self, op: &UnaryOp, operand: &Expr, _span: &Span) -> Option<ExprKind> {
-        // `*expr` is a built-in dereference — no trait-method lowering needed.
-        if matches!(op, UnaryOp::Deref) {
+        // `*expr` (dereference) and `ref expr` (borrow) are BUILT-IN
+        // reference-boundary operators, not trait dispatch — neither has a
+        // method to lower to.
+        if matches!(op, UnaryOp::Deref | UnaryOp::Ref) {
             return None;
         }
         let method = match op {
@@ -2127,7 +2129,7 @@ impl<'a> Lowerer<'a> {
             // the `Not` trait's `not` method. The target type disambiguates:
             // `!bool` → `bool.not`, `~i32` → `i32.not`.
             UnaryOp::Not | UnaryOp::BitNot => "not",
-            UnaryOp::Deref => unreachable!(),
+            UnaryOp::Deref | UnaryOp::Ref => unreachable!(),
         };
         let ty = self.type_at(&operand.span)?;
         // Gate each op to its valid operand types (mirrors typechecker rules).
@@ -2135,7 +2137,7 @@ impl<'a> Lowerer<'a> {
             UnaryOp::Neg => matches!(ty, Type::Int(_) | Type::Float(_)),
             UnaryOp::Not => matches!(ty, Type::Bool),
             UnaryOp::BitNot => matches!(ty, Type::Int(_) | Type::UInt(_)),
-            UnaryOp::Deref => unreachable!(),
+            UnaryOp::Deref | UnaryOp::Ref => unreachable!(),
         };
         if !ok {
             return None;

@@ -48,6 +48,31 @@ fn run_no_errors(source: &str) -> String {
     out.join("")
 }
 
+/// B-2026-08-26-36 — `let r = ref v[i]` is a LIVE BORROW, not a snapshot.
+///
+/// The aliasing is the contract, not an optimisation. Codegen compiles the
+/// binding to a pointer into the container's buffer; the interpreter binds
+/// `Value::ElemRef { arr, idx }` over the same `Arc`. If either side took a
+/// copy, the two backends would disagree the moment the container changed
+/// while the borrow was live — the run-vs-build divergence class
+/// B-2026-08-26-21 exists to close. So the swap between the two reads is the
+/// whole point of the fixture: it must be observed through `r`.
+#[test]
+fn ref_binding_is_a_live_alias_not_a_snapshot() {
+    let out = run(r#"
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(4);
+    v.push(5);
+    let r = ref v[1];
+    println(f"{r}");
+    v.swap(0, 1);
+    println(f"{r}");
+}
+"#);
+    assert_eq!(out, "5\n4\n", "ref must observe the swap; got {out:?}");
+}
+
 #[test]
 fn test_cstr_as_ptr_rejects_with_runtime_error_not_panic() {
     // B-2026-08-02-3: the interpreter's raw-pointer refusal must be a

@@ -12778,6 +12778,63 @@ fn main() {
     /// "Vec/String method 'swap' is not yet supported in codegen" on a program
     /// the interpreter ran correctly, so the method the rejection points people
     /// toward was itself a run-vs-build divergence.
+    /// B-2026-08-26-36 — the codegen half of the `ref` binding: `let r = ref
+    /// v[i]` compiles to a POINTER into the container's buffer, so a read
+    /// through `r` after the container changes sees the new value.
+    ///
+    /// This is an A/B oracle by construction: the interpreter's
+    /// `ref_binding_is_a_live_alias_not_a_snapshot` asserts the identical
+    /// sequence via `Value::ElemRef`. The two must not drift — a copy on
+    /// either side reintroduces the run-vs-build divergence of
+    /// B-2026-08-26-21, which is the whole reason the borrow aliases rather
+    /// than snapshots.
+    #[test]
+    fn test_e2e_ref_binding_is_a_live_alias() {
+        let Some(out) = run_program(
+            r#"
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(4);
+    v.push(5);
+    let r = ref v[1];
+    println(f"{r}");
+    v.swap(0, 1);
+    println(f"{r}");
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(out, "5\n4\n", "ref must observe the swap; got: {out:?}");
+    }
+
+    /// B-2026-08-26-36 — a `ref` binding over a STRUCT FIELD container
+    /// (`b.xs[i]`), which is the shape `std.autograd`'s tape reads take and
+    /// therefore the one the `E_INDEX_MOVE_NON_COPY` fix-it will lean on.
+    /// Borrows a non-`Copy` element, so it also pins that the borrow neither
+    /// moves out of the container nor runs the element's cleanup.
+    #[test]
+    fn test_e2e_ref_binding_over_a_struct_field_container() {
+        let Some(out) = run_program(
+            r#"
+struct Item { id: i64, tag: String }
+struct Bag { xs: Vec[Item] }
+fn main() {
+    let mut b = Bag { xs: Vec.new() };
+    b.xs.push(Item { id: 7, tag: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string() });
+    b.xs.push(Item { id: 9, tag: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string() });
+    let r = ref b.xs[0];
+    println(f"read {r.id}");
+    b.xs.swap(0, 1);
+    println(f"after swap {r.id}");
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(out, "read 7\nafter swap 9\n", "got: {out:?}");
+    }
+
     #[test]
     fn test_e2e_vec_swap_relocates_without_running_drop_bodies() {
         let Some(out) = run_program(

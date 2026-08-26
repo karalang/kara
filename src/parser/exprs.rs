@@ -801,6 +801,27 @@ impl super::Parser {
                     },
                 })
             }
+            // `ref expr` — shared borrow in expression position (design.md
+            // § "Binding-extension exception"). Same binding power as the
+            // other prefix operators, so `ref v[i]` borrows the ELEMENT
+            // (postfix `[]` binds tighter) rather than borrowing `v` and
+            // then indexing the reference.
+            // NOT `ref |...|` / `ref ||...` — that spelling is the closure
+            // capture-mode prefix (Rule 2½) and is handled by its own arm
+            // further down. This arm sits EARLIER in `parse_prefix`, so
+            // without the negative lookahead it would shadow that one and
+            // parse the capture-mode prefix as a borrow of a closure value.
+            Token::Ref if !matches!(self.peek_token_ref_at(1), Token::Pipe | Token::PipePipe) => {
+                self.advance();
+                let operand = self.parse_expr_bp(24)?;
+                Some(Expr {
+                    span: self.span_from(&start),
+                    kind: ExprKind::Unary {
+                        op: UnaryOp::Ref,
+                        operand: Box::new(operand),
+                    },
+                })
+            }
             // Half-open ranges in prefix (start-less) position:
             //   `..expr`  → RangeTo[T]
             //   `..=expr` → RangeToInclusive[T]

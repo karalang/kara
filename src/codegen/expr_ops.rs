@@ -8539,6 +8539,7 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             // Deref is handled in compile_expr before reaching here.
             UnaryOp::Deref => Err("unreachable: Deref handled in compile_expr".into()),
+            UnaryOp::Ref => Err("unreachable: Ref handled in compile_expr".into()),
         }
     }
 
