@@ -92,12 +92,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 291 | 1 |
+| miscompile | 291 | 0 |
 | leak | 195 | 0 |
 | missing-feature | 177 | 4 |
 | run-vs-build | 162 | 1 |
+| codegen-gap | 140 | 1 |
 | double-free | 140 | 2 |
-| codegen-gap | 139 | 1 |
 | diagnostics | 109 | 1 |
 | false-positive | 97 | 0 |
 | perf | 84 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1046 | 7 |
+| codegen | 1047 | 6 |
 | typecheck | 263 | 3 |
 | interp | 182 | 0 |
 | other | 70 | 3 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1592 surfaced · 11 open · 1556 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-26). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1593 surfaced · 10 open · 1558 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-26). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (11)
+### Open (10)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -135,7 +135,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1592 surfaced
 | B-2026-08-25-34 | 2026-08-25 | codegen | medium | `AllocError`'s `Display` renders the Debug form (`OutOfMemory { requested_bytes: 4096 }`) into the user-facing `Error: {e}` entry-point line, and the spec-sanctioned fix -- a manual `impl Display`, per § `#[derive(Display)]` on enums' "Implement `Display` manually to override" -- CANNOT LAND without codegen work: a prelude impl lives in `STDLIB_PROGRAMS`, which codegen does not walk, so the impl reaches the interpreter only. Registering the module as a compiled stdlib program fixes `.to_string()` under AOT but leaves `f"{e}"` and the entry-point line unfixed. Worse, the half-done state FAILS OPEN: dropping the derive without teaching codegen about the impl makes `karac build` emit `Error: ` with an EMPTY message rather than erroring, because the typechecker sees the impl and codegen does not. | roadmap.md |
 | B-2026-08-26-3 | 2026-08-26 | typecheck+codegen | high | `LazyLock[T]` IS A CHECK-ONLY PHANTOM: `let TABLE: LazyLock[i64] = LazyLock.new(|| 40 + 2);` passes `karac check` cleanly and then fails on EVERY execution backend -- `--interp` dies with "path 'LazyLock.new' has no interpreter evaluation rule", and `karac run` (JIT) and `karac build` both reject `TABLE.get()` with "codegen: no handler for method 'get'". It is not a type outside that one special-cased module-binding form either: `fn f(x: LazyLock[i64])` is `undefined type 'LazyLock'`. Until this was found, the live `module_mut_binding` WARNING recommended it by name ("Prefer a context struct, `Mutex`, `Atomic`, `#[thread_local]`, `LazyLock`, or `OnceLock`"), so following the compiler's own advice produced a program that checks and then cannot be run or built. | roadmap.md |
 | B-2026-08-26-4 | 2026-08-26 | other | low | design.md's CANONICAL `?`-operator example calls `input.parse_i64()?` and names `ParseError` -- NEITHER EXISTS: the real API is `i64.parse(s) -> Option[i64]`, which cannot be used with `?` the way the example shows | docs/design.md § `?` operator and cross-error-type propagation |
-| B-2026-08-26-7 | 2026-08-26 | codegen | high | A NARROW LOCAL INITIALIZED FROM AN UNSUFFIXED LITERAL IS ALLOCATED AT i64 IN CODEGEN, so every width-sensitive operation on it runs at 64 bits and can produce a value the declared type cannot represent. The literal suffix -- which ought to be semantically inert once the binding carries an explicit type annotation -- decides the storage width: `let a: u8 = 200u8` gets a real `i8` alloca, `let b: u8 = 200` stays in the i64 carrier. MEASURED in AOT, against `karac run --interp` which is correct in every arm: `b << 4` is 3200 (should be 128), and `let d: i32 = 1; d << 31` is 2147483648 -- a value an `i32` cannot hold. THAT LAST CASE IS THE SOUNDNESS HOLE B-2026-08-06-7 CLAIMS TO HAVE CLOSED: its regression tests assert exactly `1i32 << 31 == -2147483648`, but spell the literal WITH a suffix, so the fix was only ever exercised on the path that allocates `i32` and the ordinary spelling still miscompiles. `~` had the identical hole and was fixed at the operator (B-2026-08-26-6) rather than at this root; every operator whose correctness depends on the operand's LLVM width is a candidate, and only shifts and `~` have been checked. | roadmap.md |
 | B-2026-08-26-9 | 2026-08-26 | codegen | high | `PriorityQueue.push` RUNS THE DROP GLUE FOR ITS BY-VALUE PARAMETER ON A VALUE IT HAS ALREADY MOVED into the backing `Vec`, so an element type with `impl Drop` drops ONCE AT PUSH AND AGAIN AT POP on the compiled backend -- the interpreter drops once. LSan: 31 bytes leaked in 8 allocations once the element also owns a `String`. | — |
 | B-2026-08-26-10 | 2026-08-26 | typecheck+codegen | medium | OPERATORS NEVER CALL A HAND-WRITTEN OPERATOR-TRAIT BODY: `==` uses structural comparison, `<` uses a DECLARATION-ORDER comparator, and `Map` uses a structural hash, so a user `impl PartialEq` / `impl Ord` / `impl Hash` is silently bypassed rather than dispatched. The derive-only typecheck gate is currently the only thing preventing that silence, which is why it must NOT be relaxed to 'make the two paths agree'. | — |
 | B-2026-08-26-11 | 2026-08-26 | other | medium | design.md's `String` METHOD TABLE names the char-append method `push_char`, which DOES NOT EXIST -- the working method is `push(c: char)`, and the table has NO ROW FOR IT, so the documented spelling fails and the real one is undocumented | docs/design.md § `String` method table (the `push_char` row) |
@@ -171,9 +170,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1592 surfaced
 
 </details>
 
-### Fixed (1556)
+### Fixed (1558)
 
-<details><summary>1556 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1558 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1732,7 +1731,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1592 surfaced
 | B-2026-08-26-2 | typecheck | medium | TWO MORE FACILITIES design.md § `Hash` and `Hasher`'s stability paragraph NAMES AS SHIPPED DO NOT EXIST, after B-2026-08-25-22 built the third | 7da2bfe |
 | B-2026-08-26-5 | codegen | medium | `?` in `main() -> Result[(), E]` reconstructed `E` from only its first THREE payload words, so any error held inline in four or more words rendered g… | 06880a4 |
 | B-2026-08-26-6 | interp+codegen | high | `~` COMPLEMENTS AT THE CARRIER WIDTH, NOT THE DECLARED WIDTH, so every narrow UNSIGNED integer gets a wrong value and the two backends disagree on wh… | 297ef4f |
+| B-2026-08-26-7 | codegen | high | A NARROW LOCAL INITIALIZED FROM AN UNSUFFIXED LITERAL IS ALLOCATED AT i64 IN CODEGEN, so every width-sensitive operation on it runs at 64 bits and ca… | 08410c2 |
 | B-2026-08-26-8 | interp | medium | INTERPRETER `Vector[T, N]` LANE ARITHMETIC IGNORES THE LANE WIDTH, so a narrow-lane vector computes on the i128 carrier and diverges from codegen, wh… | ff403a3 |
+| B-2026-08-26-14 | codegen | high | A `par` BRANCH WHOSE BODY CALLS A VALUE-PRESERVING SCALAR METHOD (`abs` / `sqrt` / a `float_math` transcendental) ON A NARROW-INTEGER RECEIVER FAILS… | 08410c2 |
 
 </details>
 
