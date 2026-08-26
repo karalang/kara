@@ -47,6 +47,11 @@ const LOWERED_MODULES: &[&str] = &[
     // `impl Display for AllocError`; gated here like every other lowered
     // module, since `lower_stdlib_source` discards their typecheck errors.
     "alloc_error.kara",
+    // B-2026-08-26-10 — registered so codegen can compile
+    // `impl Hasher for KeyByteSink`, the sink a user `impl Hash` writes into.
+    // Gated here for the same reason as the rest: a module whose typecheck
+    // errors are discarded at lowering has to have them checked somewhere.
+    "hash.kara",
 ];
 
 fn source_of(module: &str) -> &'static str {
