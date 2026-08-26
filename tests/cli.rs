@@ -12323,6 +12323,91 @@ fn main() {
     }
 }
 
+/// B-2026-08-26-19 — a `ref`-to-scalar returned from a closure tail must
+/// satisfy an expected `Fn() -> T`, and must RUN, on every backend.
+///
+/// `check_assignable` performs a one-level scalar `ref` peel in every value
+/// position (B-2026-07-15-3), so `ref i64` reads as `i64` when returned,
+/// passed, or printed. The closure path accepted the body via that same peel
+/// and then discarded the result: `body_ty` kept the borrow, the closure's own
+/// type became `Fn() -> ref i64`, and the trailing whole-type check rejected a
+/// body it had just approved.
+///
+/// The test asserts BOTH halves for a reason. Fixing only the typechecker
+/// turned the false rejection into a hard codegen failure — the tail handed
+/// back the pointer and the function returned `ptr` where `i64` was declared,
+/// which LLVM's module verifier caught. So `check` passing proves nothing here;
+/// the program has to produce the right value.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_ref_scalar_closure_tail_coerces_and_runs() {
+    // One case per scalar kind `scalar_reads_as_value` admits, since the peel
+    // is gated on exactly that set. `char` is deliberately absent: it is
+    // covered by the predicate, but a `char` returned through ANY closure
+    // prints as its code point under the compiled backends — a pre-existing
+    // divergence unrelated to borrows (`|| c` on a plain `char` local shows it
+    // with no `ref` anywhere), filed as B-2026-08-26-20. Adding it here would
+    // pin that defect rather than this one.
+    let cases: &[(&str, &str, &str)] = &[
+        ("i64", "7", "7"),
+        ("f64", "2.5", "2.5"),
+        ("bool", "true", "true"),
+        ("u8", "200", "200"),
+    ];
+    for (ty, lit, expect) in cases {
+        let tmp = scratch_project(&format!("refret-{ty}"));
+        let src = format!(
+            "struct Box {{ v: {ty} }}\n\
+             impl Box {{ fn peek(ref self) -> ref {ty} {{ return self.v; }} }}\n\
+             fn main() {{\n\
+                 let b = Box {{ v: {lit} }};\n\
+                 let f: Fn() -> {ty} = || b.peek();\n\
+                 println(f());\n\
+             }}\n"
+        );
+        write(&tmp.join("m.kara"), &src);
+        let run = |args: &[&str]| -> Option<String> {
+            let o = karac_bin().current_dir(&tmp).args(args).output().ok()?;
+            o.status
+                .success()
+                .then(|| String::from_utf8_lossy(&o.stdout).into_owned())
+        };
+        let interp = run(&["run", "--interp", "m.kara"]);
+        let jit = run(&["run", "m.kara"]);
+        let _ = std::fs::remove_dir_all(&tmp);
+        let want = format!("{expect}\n");
+        assert_eq!(
+            interp.as_deref(),
+            Some(want.as_str()),
+            "`ref {ty}` as a closure tail must interpret to {expect}"
+        );
+        assert_eq!(
+            jit.as_deref(),
+            Some(want.as_str()),
+            "`ref {ty}` as a closure tail must COMPILE and run, not just check \
+             — a typecheck-only fix returns the pointer and fails LLVM \
+             verification"
+        );
+    }
+
+    // The peel is scalar-gated, and must stay that way: `ref String` cannot
+    // become an owned `String` by reading it. This is already how the return
+    // position behaves, so the closure tail must agree rather than become a
+    // hole that the widened rule opened.
+    let non_scalar = check_source_output(
+        "refret-string",
+        "struct Box { v: String }\n\
+         impl Box { fn peek(ref self) -> ref String { return self.v; } }\n\
+         fn take(f: Fn() -> String) -> String { return f(); }\n\
+         fn main() { let b = Box { v: \"hi\" }; println(take(|| b.peek())); }",
+    );
+    assert!(
+        non_scalar.contains("expected 'String', found 'ref String'"),
+        "the peel must stay scalar-gated — `ref String` must not satisfy \
+         `Fn() -> String`; got:\n{non_scalar}"
+    );
+}
+
 /// B-2026-08-26-16 — a `LazyLock`'s first-access initialization must be
 /// attributed to the CALLING function (design.md § Module-Level Bindings), so
 /// a `pub fn` whose only effectful work is a `get()` running an effectful

@@ -1075,7 +1075,32 @@ impl<'a> super::TypeChecker<'a> {
                 // with the tail the way the infer arm has to do.
                 self.closure_return_types
                     .push(super::ClosureReturnFrame::default());
-                let body_ty = self.check_expr(body, expected_ret);
+                let mut body_ty = self.check_expr(body, expected_ret);
+                // B-2026-08-26-19 — the scalar `ref` peel that `check_assignable`
+                // performs (B-2026-07-15-3) has ALREADY accepted this body
+                // against `expected_ret` by the line above; record that it
+                // happened, or the closure's own type keeps the borrow and the
+                // trailing whole-type check compares `Fn() -> ref i64` against
+                // `Fn() -> i64` and rejects a body it just approved.
+                //
+                // That mismatch is why the failure looked so odd: `ref i64` in
+                // a plain value, return, or argument position coerced fine, and
+                // only the closure tail refused it. The asymmetry is exactly
+                // this — the coercion was permitted but never written back, so
+                // it survived the inner check and died at the outer one. A
+                // non-scalar (`ref String`) fails the inner check instead and
+                // reports there, which is the correct answer and stays put.
+                //
+                // Condition mirrors `check_assignable`'s peel verbatim so the
+                // two cannot drift into disagreeing about what coerces.
+                if let Type::Ref(inner) | Type::MutRef(inner) = &body_ty {
+                    let inner = (**inner).clone();
+                    if Self::scalar_reads_as_value(&inner)
+                        && self.is_subtype_with_projections(expected_ret, &inner)
+                    {
+                        body_ty = inner;
+                    }
+                }
                 let collected = self
                     .closure_return_types
                     .pop()

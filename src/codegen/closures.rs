@@ -1284,6 +1284,39 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Vec/String helper.
                 result = self.deepcopy_captured_heap_agg_tail(t, result, &heap_struct_captures);
             }
+            // B-2026-08-26-19 — the closure's tail produced a BORROW of a
+            // scalar (`|| b.peek()` where `peek` returns `ref i64`) while the
+            // closure's own type says it returns the scalar. The typechecker
+            // accepts that: it is the same one-level scalar `ref` peel
+            // `check_assignable` performs in every other value position
+            // (B-2026-07-15-3). Nothing had performed the READ, though, so the
+            // tail handed back the pointer and the function returned `ptr`
+            // where `i64` was declared — caught by LLVM's module verifier
+            // ("Function return type does not match operand type of return
+            // inst"), not silently, but still a hard failure on a program the
+            // front end had approved.
+            //
+            // Emitted BEFORE the cleanup drain on purpose: the pointer may
+            // address storage this frame is about to release, so the load has
+            // to happen while it is still live.
+            //
+            // Keyed on the actual LLVM shapes rather than on a Kāra type,
+            // which makes it self-limiting — a closure whose value already
+            // matches its declared return is untouched by construction, so
+            // this cannot perturb any program that compiles today.
+            if let Some(ret_ty) = self
+                .builder
+                .get_insert_block()
+                .and_then(|b| b.get_parent())
+                .and_then(|f| f.get_type().get_return_type())
+            {
+                if result.is_pointer_value() && (ret_ty.is_int_type() || ret_ty.is_float_type()) {
+                    result = self
+                        .builder
+                        .build_load(ret_ty, result.into_pointer_value(), "closure.refret.deref")
+                        .unwrap();
+                }
+            }
             // Drain the closure's own cleanup frame before returning, so its
             // f-string / heap-local cleanups are emitted in THIS fn
             // (alloca-dominated) rather than leaking into the outer frame.
