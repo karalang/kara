@@ -9969,6 +9969,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         value,
                         rhs_index_deep_cloned,
                         clone_log_mark,
+                        true,
                     );
                     self.compile_index_store(object, index, val, rhs_is_fresh, Some(value))?;
                     // B-2026-07-11-32: an f-string RHS stored into a Vec element
@@ -12936,6 +12937,19 @@ impl<'ctx> super::Codegen<'ctx> {
         })
     }
 
+    /// `run_bodies` says whether the displaced element's user `Drop` BODIES
+    /// may run alongside the memory release. Every pre-existing caller passes
+    /// `true` (the behaviour this helper has always had). The self-rooted arm
+    /// added by B-2026-08-26-18 passes `false`: a self-rooted store previously
+    /// emitted NEITHER half, so restoring the memory release fixes the leak the
+    /// row is about, while leaving bodies off keeps `PriorityQueue.swap`'s
+    /// relocating stores from firing a `Drop` body on an element that is being
+    /// MOVED to another slot rather than destroyed. Turning bodies on for that
+    /// arm was measured: it prints `drop 1 / drop 3` at every push and breaks
+    /// `asan_priority_queue_push_drops_a_drop_element_exactly_once`, whose
+    /// one-drop-per-element-at-pop sequence is the correct semantics. Whether
+    /// the NAMED-root arm has the same body-on-relocation defect is tracked
+    /// separately as B-2026-08-26-21 (it does; verified pre-existing on main).
     fn emit_displaced_index_elem_drop(
         &mut self,
         object: &Expr,
@@ -12943,6 +12957,7 @@ impl<'ctx> super::Codegen<'ctx> {
         rhs: &Expr,
         rhs_index_deep_cloned: bool,
         clone_log_mark: usize,
+        run_bodies: bool,
     ) {
         // Field-rooted container (`h.xs[i] = <new>`, B-2026-08-01-22 leg a):
         // resolve the field's storage pointer exactly like the store arm
@@ -12955,12 +12970,51 @@ impl<'ctx> super::Codegen<'ctx> {
             field,
         } = &object.kind
         {
+            // B-2026-08-26-18 — `self.xs[i] = <new>` never reached this drop.
+            // `self` parses as `ExprKind::SelfValue`, not `Identifier`, so the
+            // direct-Identifier gate below returned early for EVERY
+            // self-rooted element store and the displaced element's heap
+            // fields were simply orphaned. Measured on
+            // `struct Item { id: i64, name: String }`: the identical statement
+            // written against a NAMED root (`b.xs[0] = Item { .. }` from
+            // `main`) is LSan-clean, the `self.` form leaks the overwritten
+            // element's buffer, and the two binaries differ by exactly one
+            // `karac_free_buf` call. `PriorityQueue.swap`'s
+            // `self.xs[i] = self.xs[j]` is how the stdlib hit it.
+            //
+            // The normalisation mirrors `compile_index_store`'s FieldAccess
+            // arm verbatim (`src/codegen/collections.rs`), which already
+            // rewrites the receiver for exactly this reason — the STORE half
+            // was taught about `self` and this DROP half was not, which is
+            // why the store landed correctly while the release went missing.
+            let self_ident;
+            let receiver_is_self = matches!(inner.kind, ExprKind::SelfValue);
+            let inner: &Expr = if receiver_is_self {
+                self_ident = Expr {
+                    kind: ExprKind::Identifier("self".to_string()),
+                    span: inner.span,
+                };
+                &self_ident
+            } else {
+                inner
+            };
             let ExprKind::Identifier(root) = &inner.kind else {
                 return;
             };
-            if !rhs_index_deep_cloned
-                && !self.expr_cannot_carry_container_heap(rhs, root, clone_log_mark)
-            {
+            // The alias guard is keyed on the container's NAME, and its first
+            // act is `expr_mentions_name_deep(rhs, container)` — a walk that
+            // has no `SelfValue` arm at all. So for a self-rooted container it
+            // reports "no mention" for every RHS, including `self.xs[j]`, and
+            // answers "cannot carry container heap" unconditionally. Feeding
+            // the normalised root straight in would therefore not just fail to
+            // guard the aliasing store, it would DISARM the guard completely
+            // and turn this leak into a double free — the one direction this
+            // family documents as unacceptable. Require the absence of any
+            // `self` in the RHS as the self-rooted stand-in for the mention
+            // test, so an aliasing RHS declines exactly as a named root's does.
+            let rhs_may_alias_container = (receiver_is_self && expr_contains_self_value(rhs))
+                || !self.expr_cannot_carry_container_heap(rhs, root, clone_log_mark);
+            if !rhs_index_deep_cloned && rhs_may_alias_container {
                 return;
             }
             let Ok(Some((field_ptr, field_ll_ty, field_te))) =
@@ -12982,12 +13036,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 kind: ExprKind::Identifier(synth.clone()),
                 span: object.span,
             };
+            // Bodies only for a NAMED root — that is this arm's long-standing
+            // behaviour and the green tests encode it. A self-rooted store gets
+            // the MEMORY half alone; see the `run_bodies` note on this fn.
             self.emit_displaced_index_elem_drop(
                 &synth_expr,
                 index,
                 rhs,
                 rhs_index_deep_cloned,
                 clone_log_mark,
+                run_bodies && !receiver_is_self,
             );
             self.variables.remove(&synth);
             self.var_types.vec_elem_types.remove(&synth);
@@ -13074,7 +13132,7 @@ impl<'ctx> super::Codegen<'ctx> {
         let Ok((elem_ptr, _)) = self.lower_indexed_elem_ptr_vec(&container, index) else {
             return;
         };
-        if self.type_runs_user_drop(&etn, &mut Vec::new()) {
+        if run_bodies && self.type_runs_user_drop(&etn, &mut Vec::new()) {
             let owns_body = self
                 .program_snapshot
                 .as_deref()
@@ -14490,4 +14548,26 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         self.type_decls.struct_types.contains_key(name.as_str())
     }
+}
+
+/// Does `e` mention the receiver `self` anywhere?
+///
+/// B-2026-08-26-18. `crate::deque_head::expr_mentions_name_deep` matches on
+/// `ExprKind::Identifier`, and `self` is its own node (`ExprKind::SelfValue`),
+/// so no name-keyed mention test can see a self-rooted read. This is the
+/// narrow stand-in used by `emit_displaced_index_elem_drop` to decide whether
+/// a self-rooted element store's RHS might alias the container it is about to
+/// release — see the call site for why answering that wrong is a double free
+/// rather than a leak.
+fn expr_contains_self_value(e: &Expr) -> bool {
+    if matches!(e.kind, ExprKind::SelfValue) {
+        return true;
+    }
+    let mut found = false;
+    crate::rc_elide::walk_children_pub(&e.kind, &mut |sub| {
+        if !found && expr_contains_self_value(sub) {
+            found = true;
+        }
+    });
+    found
 }

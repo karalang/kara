@@ -53672,29 +53672,132 @@ fn main() {
     /// `drop 3 / drop 1 / drop 2` before `built` while `--interp` printed
     /// nothing there, and LSan reported 31 bytes leaked in 8 allocations.
     ///
-    /// Both are fixed, and the DROP SEQUENCE below now matches exactly on both
-    /// backends. What still holds this test down is a THIRD defect the original
-    /// row bundled in by mistake: B-2026-08-26-18, a leak of the element
-    /// struct's `String` buffer that has nothing to do with drop counts. The
-    /// row attributed its `31 byte(s) leaked in 8 allocation(s)` to the double
-    /// drop; measurement says otherwise — the same fixture with the `impl Drop`
-    /// REMOVED leaks too, and a plain `Vec[Item]` holding that same struct is
-    /// clean, so the leak is `PriorityQueue`-of-a-heap-bearing-struct and is
-    /// independent of `Drop` entirely.
+    /// The `31 byte(s) leaked in 8 allocation(s)` the row reported was NOT
+    /// caused by that double drop and did not go away with it — it was a
+    /// second, independent defect the row had bundled in, split out as
+    /// B-2026-08-26-18 and fixed in turn: an index-assign whose container is
+    /// reached through a field of `self` (`PriorityQueue.swap`'s
+    /// `self.xs[i] = self.xs[j]`) never released the element it overwrote,
+    /// because the displaced-element drop gated on a direct `Identifier` root
+    /// and `self` is its own AST node. With both fixed this fixture is live:
+    /// the drop SEQUENCE below covers -9 and LSan cleanliness covers -18.
+    /// B-2026-08-26-18 regression oracle — the MINIMAL shape.
     ///
-    /// The drop-count half of this fixture is therefore covered by live
-    /// oracles rather than by this test: `asan_priority_queue_push_drops_a_-
-    /// drop_element_exactly_once` (heap-free element, so no -15 interference)
-    /// plus the two `e2e_*_drops_a_stored_by_value_argument_once` cases in
-    /// `tests/codegen.rs` and their interpreter twins. Un-ignoring THIS one is
-    /// -15's acceptance test; its expectations are correct and must not be
-    /// relaxed.
+    /// An index-assign whose container is reached through a field of `self`
+    /// never released the element it overwrote, so the displaced struct's
+    /// `String` buffer was orphaned on every store. `self` parses as
+    /// `ExprKind::SelfValue`, not `Identifier`, and
+    /// `emit_displaced_index_elem_drop`'s field-rooted arm gated on a direct
+    /// `Identifier` root — so it returned early for every self-rooted store
+    /// while `compile_index_store` (which normalises `SelfValue`) happily
+    /// emitted the store. The store landed; the release did not.
+    ///
+    /// The contrast that localises it is
+    /// `named_root_index_assign_releases_displaced_element` below: the SAME
+    /// statement written against a named root is clean, and pre-fix the two
+    /// binaries differed by exactly one `karac_free_buf` call.
     #[test]
-    #[ignore = "B-2026-08-26-18: a `PriorityQueue` element struct carrying a `String` leaks its \
-                buffer (31 bytes in 8 allocations here) — independent of `impl Drop`, and NOT \
-                the drop-count defect B-2026-08-26-9 fixed, whose sequence this fixture now \
-                matches exactly on both backends. Un-ignoring this is -15's acceptance test; \
-                the expectations below are correct and must not be relaxed."]
+    fn asan_self_rooted_index_assign_releases_displaced_element() {
+        assert_clean_asan_run(
+            r#"
+struct Item { id: i64, name: String }
+struct Bag { xs: Vec[Item] }
+impl Bag {
+    fn go(mut ref self) { self.xs[0] = Item { id: 9, name: f"z{9}" }; }
+}
+fn main() {
+    let mut b = Bag { xs: Vec.new() };
+    b.xs.push(Item { id: 1, name: f"a{1}" });
+    b.go();
+    println(f"{b.xs[0].id}");
+}
+"#,
+            &["9"],
+            "self-rooted-index-assign-release",
+        );
+    }
+
+    /// B-2026-08-26-18 CONTRAST oracle — the named-root twin of the fixture
+    /// above, which was already clean before the fix. It pins the asymmetry
+    /// that identified the bug, so a future change that regresses the NAMED
+    /// path fails here rather than silently making both roots leak and
+    /// leaving the pair looking consistent.
+    #[test]
+    fn asan_named_root_index_assign_releases_displaced_element() {
+        assert_clean_asan_run(
+            r#"
+struct Item { id: i64, name: String }
+struct Bag { xs: Vec[Item] }
+fn main() {
+    let mut b = Bag { xs: Vec.new() };
+    b.xs.push(Item { id: 1, name: f"a{1}" });
+    b.xs[0] = Item { id: 9, name: f"z{9}" };
+    println(f"{b.xs[0].id}");
+}
+"#,
+            &["9"],
+            "named-root-index-assign-release",
+        );
+    }
+
+    /// B-2026-08-26-18, the ALIASING leg — `self.xs[i] = self.xs[j]`, the
+    /// shape `PriorityQueue.swap` is built from.
+    ///
+    /// This is the case that makes the fix's second half mandatory. The alias
+    /// guard is keyed on the container's NAME and its first act is a
+    /// `expr_mentions_name_deep` walk that has no `SelfValue` arm, so for a
+    /// self-rooted container it reports "no mention" for EVERY rhs — including
+    /// this one — and answers "safe to release" unconditionally. Normalising
+    /// the receiver without also standing in for that mention test would have
+    /// released a buffer this rhs still points into: a double free, the one
+    /// direction the displaced-element family documents as unacceptable.
+    #[test]
+    fn asan_self_rooted_index_assign_from_sibling_element_is_not_double_freed() {
+        assert_clean_asan_run(
+            r#"
+struct Item { id: i64, name: String }
+struct Bag { xs: Vec[Item] }
+impl Bag {
+    fn go(mut ref self) { self.xs[0] = self.xs[1]; }
+}
+fn main() {
+    let mut b = Bag { xs: Vec.new() };
+    b.xs.push(Item { id: 1, name: f"a{1}" });
+    b.xs.push(Item { id: 2, name: f"bb{2}" });
+    b.go();
+    println(f"{b.xs[0].id}");
+}
+"#,
+            &["2"],
+            "self-rooted-index-assign-sibling",
+        );
+    }
+
+    /// B-2026-08-26-18 — `PriorityQueue[T]` where `T` is a struct carrying a
+    /// heap field, the shape the row was filed on. `push`'s `sift_up` calls
+    /// `swap`, whose three self-rooted element stores orphaned a buffer each.
+    /// Three pushes trigger exactly one swap, and pre-fix this leaked exactly
+    /// the two strings that swap touched (6 bytes in 2 objects).
+    #[test]
+    fn asan_priority_queue_of_heap_bearing_struct_sift_no_leak() {
+        assert_clean_asan_run(
+            r#"
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct Item { id: i64, name: String }
+fn main() {
+    let mut q: PriorityQueue[Item] = PriorityQueue.new();
+    q.push(Item { id: 3, name: f"ccc{3}" });
+    q.push(Item { id: 1, name: f"a{1}" });
+    q.push(Item { id: 2, name: f"bb{2}" });
+    println(f"{q.len()}");
+}
+"#,
+            &["3"],
+            "pq-heap-struct-sift",
+        );
+    }
+
+    #[test]
     fn asan_priority_queue_peek_drop_count_is_one_per_returned_copy() {
         assert_clean_asan_run(
             r#"
