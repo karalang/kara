@@ -46483,3 +46483,125 @@ fn a_genuinely_absent_associated_function_still_reports_absence() {
         );
     }
 }
+
+// ── B-2026-08-26-15: LazyLock capture restriction ───────────────
+
+/// design.md § Module-Level Bindings — the closure passed to `LazyLock.new`
+/// "may only capture other module-level compile-time bindings; captures of
+/// runtime state are a compile error". B-2026-08-26-15.
+///
+/// The restriction was specified and shipped UNENFORCED. Nothing miscompiled:
+/// the capturing form produced identical, correct results on `--interp`,
+/// `karac run` and `karac build`, which is why the row is `low` — what was
+/// missing is exactly the compile error the spec promises, not a right answer.
+///
+/// Only the LOCAL `let c: LazyLock[T] = …` form can trip this. At module scope
+/// there are no locals to capture, so the rule is inert there; module-level
+/// initializers are policed separately by `check_module_binding_init`, which
+/// asks a different and stricter question (is the initializer a compile-time
+/// constant at all).
+#[test]
+fn lazylock_init_closure_rejects_a_captured_local() {
+    let cases: &[(&str, &str, &str)] = &[
+        (
+            "plain local",
+            "fn main() {\n\
+             \x20   let runtime = 7i64;\n\
+             \x20   let c: LazyLock[i64] = LazyLock.new(|| runtime + 1i64);\n\
+             \x20   println(f\"{c.get()}\");\n\
+             }\n",
+            "runtime",
+        ),
+        (
+            // The row's second measured case: a fresh cell per iteration, each
+            // capturing the loop variable.
+            "loop variable",
+            "fn main() {\n\
+             \x20   let mut i = 0i64;\n\
+             \x20   while i < 3i64 {\n\
+             \x20       let c: LazyLock[i64] = LazyLock.new(|| i * 10i64);\n\
+             \x20       println(f\"{c.get()}\");\n\
+             \x20       i = i + 1i64;\n\
+             \x20   }\n\
+             }\n",
+            "i",
+        ),
+        (
+            // The capture sits below an inner `let`, so a walker that stopped
+            // at the first binding form would miss it.
+            "nested below an inner let",
+            "fn main() {\n\
+             \x20   let n = 3i64;\n\
+             \x20   let c: LazyLock[i64] = LazyLock.new(|| { let a = 1i64; return a + n; });\n\
+             \x20   println(f\"{c.get()}\");\n\
+             }\n",
+            "n",
+        ),
+    ];
+    for (label, src, want_name) in cases {
+        let msgs: Vec<String> = typecheck_errors(src)
+            .iter()
+            .map(|e| e.message.clone())
+            .collect();
+        assert!(
+            msgs.iter().any(|m| m.contains("E_LAZYLOCK_RUNTIME_CAPTURE")
+                && m.contains(&format!("`{want_name}`"))),
+            "{label}: expected the capture of `{want_name}` to be rejected, got {msgs:?}"
+        );
+    }
+}
+
+/// The shapes the restriction must NOT reject. B-2026-08-26-15.
+///
+/// This is the half that decides whether the rule is correct rather than
+/// merely present: the spec permits capturing MODULE-level bindings, and the
+/// walker must be shadow-aware so a closure parameter or an inner `let` of the
+/// same name is not mistaken for a capture. A rule that rejected these would
+/// break the feature's primary use.
+#[test]
+fn lazylock_init_closure_accepts_module_bindings_and_shadows() {
+    let cases: &[(&str, &str)] = &[
+        (
+            "module-level LazyLock, the primary form",
+            "let TABLE: LazyLock[i64] = LazyLock.new(|| 6i64 * 7i64);\n\
+             fn main() { println(f\"{TABLE.get()}\"); }\n",
+        ),
+        (
+            // Exactly what design.md permits: capture of another module-level
+            // compile-time binding, from a LOCAL cell.
+            "local cell capturing a module-level binding",
+            "let BASE: i64 = 10i64;\n\
+             fn main() {\n\
+             \x20   let c: LazyLock[i64] = LazyLock.new(|| BASE + 1i64);\n\
+             \x20   println(f\"{c.get()}\");\n\
+             }\n",
+        ),
+        (
+            "an inner `let` shadowing an outer local is not a capture",
+            "fn main() {\n\
+             \x20   let x = 1i64;\n\
+             \x20   let c: LazyLock[i64] = LazyLock.new(|| { let x = 5i64; return x + 1i64; });\n\
+             \x20   println(f\"{c.get()} {x}\");\n\
+             }\n",
+        ),
+        (
+            "a free function is not a capture",
+            "fn helper() -> i64 { return 9i64; }\n\
+             fn main() {\n\
+             \x20   let c: LazyLock[i64] = LazyLock.new(|| helper());\n\
+             \x20   println(f\"{c.get()}\");\n\
+             }\n",
+        ),
+    ];
+    for (label, src) in cases {
+        let result = typecheck_ok(src);
+        assert!(
+            !result
+                .errors
+                .iter()
+                .any(|e| e.message.contains("E_LAZYLOCK_RUNTIME_CAPTURE")),
+            "{label}: must not be rejected; errors: {:?}",
+            result.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+}

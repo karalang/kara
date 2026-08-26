@@ -642,6 +642,8 @@ pub enum TypeErrorKind {
     /// kind existed — `let r = ref make()` printed `3` under the interpreter
     /// while failing to compile under codegen (B-2026-08-26-36).
     RefOperandUnsupported,
+    /// B-2026-08-26-15 — a `LazyLock.new` closure captured a function local.
+    LazyLockRuntimeCapture,
     StringNotIndexable,
     /// `it[i]` applied to an `Iterator[T]` — the value `.chars()`,
     /// `.iter()`, `.map(...)` and friends return. An iterator is a lazy
@@ -1275,6 +1277,7 @@ pub(crate) fn class_for_type_error_kind(
         | TypeErrorKind::MainReturnType
         | TypeErrorKind::MainErrNotDisplay
         | TypeErrorKind::CrossTaskUnsafeCapture
+        | TypeErrorKind::LazyLockRuntimeCapture
         | TypeErrorKind::GpuNotSafe
         | TypeErrorKind::ReprTransparentInvalid
         | TypeErrorKind::DiscriminantInvalid

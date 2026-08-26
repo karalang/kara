@@ -659,6 +659,20 @@ impl<'a> super::TypeChecker<'a> {
         // the callee isn't bare `spawn` or the arg isn't a closure
         // literal, the call is a no-op — regular dispatch follows
         // unchanged.
+        // B-2026-08-26-15 — `LazyLock.new(|| …)` may only capture module-level
+        // compile-time bindings. Hooked HERE, beside the `spawn` check and for
+        // the same ordering reason: the snapshot must be taken before the
+        // closure body's typecheck pushes its params onto the local scope.
+        if let ExprKind::Path { segments, .. } = &callee.kind {
+            if segments.len() == 2
+                && segments[0] == "LazyLock"
+                && segments[1] == "new"
+                && args.len() == 1
+            {
+                self.check_lazylock_init_captures(&args[0].value, span);
+            }
+        }
+
         if let ExprKind::Identifier(name) = &callee.kind {
             if name == "spawn" && args.len() == 1 && self.local_scope.lookup("spawn").is_none() {
                 self.check_cross_task_safe_captures(&args[0].value, span, "spawn");

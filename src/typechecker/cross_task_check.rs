@@ -290,7 +290,7 @@ fn format_cross_task_diagnostic(lead: &str, value_ty: &Type, path: &CrossTaskUns
 // and returning a (name, first-reference-span) pair so the diagnostic
 // anchors at the actual leak site inside the body.
 
-fn collect_captures_expr(
+pub(super) fn collect_captures_expr(
     expr: &Expr,
     outer: &HashMap<String, Type>,
     shadows: &mut Vec<HashSet<String>>,
@@ -594,4 +594,78 @@ fn collect_captures_block(
 
 fn name_is_shadowed(name: &str, shadows: &[HashSet<String>]) -> bool {
     shadows.iter().any(|s| s.contains(name))
+}
+
+impl super::TypeChecker<'_> {
+    /// design.md § Module-Level Bindings — the closure passed to
+    /// `LazyLock.new` "may only capture other module-level compile-time
+    /// bindings; captures of runtime state are a compile error".
+    /// B-2026-08-26-15.
+    ///
+    /// The restriction was specified and shipped unenforced: a closure
+    /// capturing a function local was accepted silently. Nothing miscompiled
+    /// — all three backends agree on the capturing form and produce the same
+    /// correct value — so what was missing is precisely the compile error the
+    /// spec promises, which is why the row is `low` and why this change adds a
+    /// rejection rather than repairing behaviour.
+    ///
+    /// SCOPE: only the LOCAL `let c: LazyLock[T] = LazyLock.new(|| …)` form can
+    /// trip this. At module scope there are no locals in the snapshot, so the
+    /// walk finds nothing and the rule is inert — module-level initializers are
+    /// already policed by `check_module_binding_init`, which is a different and
+    /// stricter question (is the initializer a compile-time constant at all).
+    ///
+    /// Reuses `collect_captures_expr` — the same shadow-aware walker the
+    /// `spawn` / `par` cross-task checks use. That walker, rather than
+    /// `gpu_safe.rs`'s, because it is not specialized to a type predicate and
+    /// it returns each capture's FIRST-REFERENCE span, so the diagnostic
+    /// anchors inside the closure body at the offending name instead of at the
+    /// closure as a whole.
+    pub(super) fn check_lazylock_init_captures(&mut self, closure_expr: &Expr, call_span: &Span) {
+        let ExprKind::Closure { params, body, .. } = &closure_expr.kind else {
+            return;
+        };
+        let outer_snapshot = self.flatten_local_scope_snapshot();
+        if outer_snapshot.is_empty() {
+            return;
+        }
+        let mut closure_param_names: HashSet<String> = HashSet::new();
+        for p in params {
+            for n in p.pattern.binding_names() {
+                closure_param_names.insert(n);
+            }
+        }
+        let mut captures: Vec<(String, Span)> = Vec::new();
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut shadow_stack: Vec<HashSet<String>> = vec![closure_param_names];
+        collect_captures_expr(
+            body,
+            &outer_snapshot,
+            &mut shadow_stack,
+            &mut captures,
+            &mut seen,
+        );
+        for (name, anchor_span) in captures {
+            // Fall back to the call span when the capture's own reference
+            // carries no width — same fallback the cross-task sites use.
+            let anchor = if anchor_span.length == 0 {
+                *call_span
+            } else {
+                anchor_span
+            };
+            self.type_error(
+                format!(
+                    "error[E_LAZYLOCK_RUNTIME_CAPTURE]: the closure passed to \
+                     `LazyLock.new` may only capture module-level compile-time \
+                     bindings, but it captures the local `{name}`. The cell is \
+                     initialized once, on first access, so a captured local \
+                     would fix the value of a binding whose lifetime is shorter \
+                     than the cell's. hint: make `{name}` a module-level binding, \
+                     or compute the value inside the closure"
+                ),
+                anchor,
+                TypeErrorKind::LazyLockRuntimeCapture,
+            );
+        }
+    }
 }

@@ -525,6 +525,8 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
         "E0283",
         ty("RefOperandUnsupported", Some(DiagnosticClass::TypeMismatch)),
     ),
+    // B-2026-08-26-15 — `LazyLock.new` closure captured a function local.
+    ("E0284", ty("LazyLockRuntimeCapture", None)),
     (
         "E0276",
         ty("NilCoalesceNotWrapped", Some(DiagnosticClass::TypeMismatch)),
