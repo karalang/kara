@@ -993,9 +993,15 @@ impl<'ctx> super::Codegen<'ctx> {
         // `set`/`get` call via `once_var_types`), so no generic-arg info is
         // needed. A local binding's scope-exit `FreeOnceHandle` frees it (a
         // module-level binding lives for the process). B-8 OnceLock codegen.
-        if (type_name == "OnceLock" || type_name == "OnceCell")
+        // `LazyLock.new(|| ...)` joins this arm: the runtime cell it allocates
+        // is identical, and the initializer closure is NOT part of it — that
+        // travels compile-time-side in `lazy_var_inits` and is inlined at each
+        // `get`. Hence the argument is accepted and ignored here, and the arity
+        // test differs per type rather than being a blanket `is_empty`
+        // (B-2026-08-26-3).
+        if (((type_name == "OnceLock" || type_name == "OnceCell") && _args.is_empty())
+            || (type_name == "LazyLock" && _args.len() == 1))
             && method == "new"
-            && _args.is_empty()
         {
             let new_fn = self
                 .module

@@ -5516,6 +5516,7 @@ impl<'ctx> Codegen<'ctx> {
                 array_elem_type_exprs: HashMap::new(),
                 closure_ret_vec_te: HashMap::new(),
                 once_var_types: HashMap::new(),
+                lazy_var_inits: HashMap::new(),
                 interner_vars: std::collections::HashSet::new(),
                 arena_vars: HashMap::new(),
                 arena_checkpoint_owner: HashMap::new(),

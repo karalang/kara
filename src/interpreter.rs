@@ -403,6 +403,13 @@ pub struct Interpreter<'a> {
     /// Starts at 1 so a hand-rolled `handle_id: 0` literal that bypassed
     /// `*.new` (no table entry) is distinguishable from a real cell.
     pub(crate) once_handle_counter: i64,
+    /// `LazyLock[T]` stored initializers — keyed by the same `handle_id`
+    /// space as `once_table`, which holds the CACHED VALUE once the
+    /// closure has run. The split mirrors the primitive: `OnceLock` has a
+    /// slot and no closure, `LazyLock` has both, and the value slot is
+    /// filled by the first `get` rather than by an external `set`
+    /// (B-2026-08-26-3). See `src/interpreter/method_call_once.rs`.
+    pub(crate) lazy_init_table: HashMap<i64, Value>,
     /// `Semaphore` backpressure primitive — permit counter keyed by
     /// `Semaphore.handle_id`. `Semaphore.new` populates an entry;
     /// `acquire` / `release` adjust `available`. See
@@ -866,6 +873,7 @@ impl<'a> Interpreter<'a> {
             interner_table: HashMap::new(),
             interner_handle_counter: 0,
             once_table: HashMap::new(),
+            lazy_init_table: HashMap::new(),
             once_handle_counter: 0,
             semaphore_table: HashMap::new(),
             semaphore_handle_counter: 0,

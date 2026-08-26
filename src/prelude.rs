@@ -337,6 +337,10 @@ pub const PRELUDE_TYPES: &[&str] = &[
     "OnceLock",
     "OnceCell",
     "AlreadySetError",
+    // `LazyLock[T]` closure-initialized write-once cell (B-2026-08-26-3).
+    // Same `once.kara` module; its initializer is baked in at construction
+    // rather than supplied later by `set`, so its surface is `get` alone.
+    "LazyLock",
     // `Tensor[T, Shape]` shape-typed N-D container (phase-11 numerical
     // stdlib, interpreter MVP). See `runtime/stdlib/tensor.kara`.
     "Tensor",

@@ -158,6 +158,13 @@ pub(crate) struct VarTypes<'ctx> {
     /// `Option[ref T]` / `Result` payload shape. Both primitives share one
     /// runtime primitive at v1 (the `OnceCell` never contends the lock).
     pub(crate) once_var_types: HashMap<String, (TypeExpr, bool)>,
+    /// Per-`LazyLock[T]` binding: the initializer closure recorded at the
+    /// `LazyLock.new(|| ...)` site. `LazyLock.new` is legal ONLY as a
+    /// module-level binding's initializer, so the closure is statically known
+    /// at every `get` site and needs no runtime function pointer — `get`
+    /// compiles exactly as `get_or_init(<this closure>)` against the shared
+    /// once-cell engine (B-2026-08-26-3).
+    pub(crate) lazy_var_inits: HashMap<String, crate::ast::Expr>,
     /// Local bindings holding an `Interner` handle (`let i = Interner.new()`
     /// or an `Interner`-annotated binding). Membership is the dispatch gate
     /// for `compile_interner_method` — `Interner` is a baked stdlib struct

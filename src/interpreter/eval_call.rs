@@ -995,6 +995,14 @@ impl<'a> super::Interpreter<'a> {
                         return v;
                     }
                 }
+                // `LazyLock.new(|| ...)` — store the closure against a fresh
+                // handle and hand back an UNFILLED cell. The closure runs on
+                // the first `get`, not here (B-2026-08-26-3).
+                "LazyLock.new" => {
+                    if let Some(v) = self.eval_lazy_new(args) {
+                        return v;
+                    }
+                }
                 "OnceLock.new" => {
                     if let Some(v) = self.eval_once_new("OnceLock") {
                         return v;

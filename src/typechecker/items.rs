@@ -3363,24 +3363,25 @@ impl<'a> super::TypeChecker<'a> {
             return;
         }
         self.lint_override_stack.push(b.lint_overrides.clone());
-        // EVERY TYPE NAMED HERE MUST RESOLVE. This menu used to recommend
-        // `LazyLock`, which does not exist: `Prefer ... \`LazyLock\`` sent the
-        // reader straight into `undefined type 'LazyLock'`, which is worse than
-        // saying nothing — a diagnostic that names a fix is trusted precisely
-        // because the compiler is the thing that would know. design.md § Module-
-        // Level Bindings still specifies `LazyLock[T]` in detail (a family-
-        // comparison table, a picking guide, and the whole rightmost column of
-        // the profile-gating table), so the spec is the half that is ahead of
-        // the implementation; until it ships, the menu lists only what a user
-        // can actually type. `tests/typechecker.rs::
-        // every_type_the_module_mut_binding_warning_names_resolves` compiles one
-        // program per name and fails if any of them stops resolving, so this
-        // cannot rot again in either direction.
+        // EVERY TYPE NAMED HERE MUST RESOLVE, AND MUST RUN. `LazyLock` was
+        // pulled from this menu when it turned out to be a check-only phantom
+        // (B-2026-08-26-3) — recommending it sent the reader straight into
+        // `undefined type 'LazyLock'` on the parameter form and a codegen error
+        // on `.get()`, which is worse than saying nothing: a diagnostic that
+        // names a fix is trusted precisely because the compiler is the thing
+        // that would know. It is back because the type now ships — prelude
+        // entry, interpreter arm, and codegen through the shared once-cell
+        // engine, verified byte-identical under `--interp`, `karac run` and
+        // `karac build`. `tests/cli.rs::
+        // every_type_the_module_mut_binding_warning_names_actually_runs`
+        // compiles AND RUNS one module-scope program per name, so a
+        // recommendation that only survives `karac check` cannot re-enter this
+        // menu; a name-resolves check would not have caught the original.
         self.type_lint_warning(
             format!(
                 "module-level `let mut {}` is mutable global state. Prefer a \
-                 context struct, `Mutex`, `Atomic`, `#[thread_local]`, or \
-                 `OnceLock`; suppress per-binding with \
+                 context struct, `Mutex`, `Atomic`, `#[thread_local]`, \
+                 `LazyLock`, or `OnceLock`; suppress per-binding with \
                  `#[allow(module_mut_binding)]`",
                 b.name
             ),

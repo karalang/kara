@@ -152,6 +152,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     },
                 );
                 self.mod_bindings.once_module_inits.push(b.name.clone());
+                if let Some(init) = module_binding_lazy_init(b) {
+                    self.var_types.lazy_var_inits.insert(b.name.clone(), init);
+                }
                 continue;
             }
             let Some((llvm_ty, initializer)) = self.module_binding_init(b) else {
@@ -757,13 +760,44 @@ fn module_binding_is_once_new(b: &ModuleBinding) -> bool {
     let ExprKind::Call { callee, args } = &b.value.kind else {
         return false;
     };
-    if !args.is_empty() {
-        return false;
-    }
     let ExprKind::Path { segments, .. } = &callee.kind else {
         return false;
     };
-    segments.len() == 2 && segments[0] == "OnceLock" && segments[1] == "new"
+    if segments.len() != 2 || segments[1] != "new" {
+        return false;
+    }
+    match segments[0].as_str() {
+        "OnceLock" => args.is_empty(),
+        // `LazyLock.new(|| ...)` takes the initializer closure, and lowers to
+        // the SAME null-ptr global + `karac_runtime_once_new` prologue: the
+        // closure is not part of the runtime cell at all, it is recorded
+        // compile-time-side and inlined at each `get` (B-2026-08-26-3).
+        "LazyLock" => args.len() == 1,
+        _ => false,
+    }
+}
+
+/// The initializer closure of a `LazyLock.new(|| ...)` call expression, or
+/// `None` for any other expression. Shared by the module-binding registrar
+/// here and the local `let` registrar in `stmts.rs`, so the two sites cannot
+/// drift on what counts as a recognized ctor (B-2026-08-26-3).
+pub(super) fn lazy_init_closure_of(e: &crate::ast::Expr) -> Option<crate::ast::Expr> {
+    let ExprKind::Call { callee, args } = &e.kind else {
+        return None;
+    };
+    let ExprKind::Path { segments, .. } = &callee.kind else {
+        return None;
+    };
+    if segments.len() != 2 || segments[0] != "LazyLock" || segments[1] != "new" {
+        return None;
+    }
+    args.first().map(|a| a.value.clone())
+}
+
+/// The initializer closure of a `let X: LazyLock[T] = LazyLock.new(|| ...)`
+/// module binding, or `None` for any other binding shape.
+fn module_binding_lazy_init(b: &ModuleBinding) -> Option<crate::ast::Expr> {
+    lazy_init_closure_of(&b.value)
 }
 
 /// `true` when `ty` names `StringSlice` (single-segment path). The

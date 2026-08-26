@@ -1911,16 +1911,19 @@ impl<'ctx> super::Codegen<'ctx> {
         // `struct_types`, so it needs an explicit arm). Returns early.
         if let TypeKind::Path(path) = &te.kind {
             let head = path.segments.last().map(|s| s.as_str());
-            if head == Some("OnceLock") || head == Some("OnceCell") {
+            if head == Some("OnceLock") || head == Some("OnceCell") || head == Some("LazyLock") {
                 self.var_types
                     .var_type_names
                     .insert(var_name.to_string(), head.unwrap().to_string());
                 if let Some(GenericArg::Type(elem)) =
                     path.generic_args.as_ref().and_then(|gargs| gargs.first())
                 {
+                    // The bool is "thread-safe cell": `OnceCell` is the only
+                    // single-task member of the family, so `LazyLock` groups
+                    // with `OnceLock` here (B-2026-08-26-3).
                     self.var_types.once_var_types.insert(
                         var_name.to_string(),
-                        (elem.clone(), head == Some("OnceLock")),
+                        (elem.clone(), head != Some("OnceCell")),
                     );
                 }
                 return;

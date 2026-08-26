@@ -52,6 +52,29 @@ impl<'ctx> super::Codegen<'ctx> {
         method: &str,
         args: &[CallArg],
     ) -> Result<BasicValueEnum<'ctx>, String> {
+        // `LazyLock[T]` shares this engine but exposes only `get`, and its
+        // `get` IS `get_or_init` against the closure recorded at the
+        // `LazyLock.new(|| ...)` site (B-2026-08-26-3). Because that ctor is
+        // legal only as a module-binding initializer, the closure is
+        // statically known here — no runtime function pointer, and the
+        // once-cell guard below is what makes it run at most once.
+        if let Some(init) = self.var_types.lazy_var_inits.get(recv).cloned() {
+            if method != "get" {
+                return Err(format!(
+                    "codegen: unsupported LazyLock method `{method}` (its surface \
+                     is `get` alone — design.md § Module-Level Bindings)"
+                ));
+            }
+            let span = init.span;
+            let synthetic = [CallArg {
+                label: None,
+                mut_marker: false,
+                mut_marker_span: None,
+                span,
+                value: init,
+            }];
+            return self.compile_once_get_or_init(recv, &synthetic);
+        }
         match method {
             "set" => self.compile_once_set(recv, args),
             "get" => self.compile_once_get(recv),

@@ -4120,9 +4120,21 @@ impl<'ctx> super::Codegen<'ctx> {
                         if let TypeKind::Path(p) = &te.kind {
                             if matches!(
                                 p.segments.last().map(|s| s.as_str()),
-                                Some("OnceLock") | Some("OnceCell")
+                                Some("OnceLock") | Some("OnceCell") | Some("LazyLock")
                             ) {
                                 self.register_var_from_type_expr(var_name, te);
+                                // A LOCAL `let c: LazyLock[T] = LazyLock.new(|| ...)`
+                                // needs its closure recorded too, or `c.get()` finds
+                                // no initializer and falls through method dispatch —
+                                // which is a run-vs-build divergence, since the
+                                // interpreter has no such restriction
+                                // (B-2026-08-26-3). The module-binding twin lives in
+                                // `module_bindings.rs`.
+                                if let Some(init) =
+                                    super::module_bindings::lazy_init_closure_of(value)
+                                {
+                                    self.var_types.lazy_var_inits.insert(var_name.clone(), init);
+                                }
                                 detected = true;
                             }
                         }

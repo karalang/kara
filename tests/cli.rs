@@ -11856,31 +11856,41 @@ fn test_explain_concept_module_state_renders_page() {
     // design.md pins the exact alternative menu this page exists to
     // spell out; every entry must be present.
     //
-    // `LazyLock[T]` is NOT in this list any more (B-2026-08-26-3). It is still
-    // named on the page, but in the "these do not exist" section, so a plain
-    // `page.contains("LazyLock[T]")` would keep passing while asserting the
-    // opposite of what the page now says — a stale assertion that reads as a
-    // lie is worse than a missing one. The check below pins the real claim.
+    // `LazyLock[T]` is back in the offered menu (B-2026-08-26-3 shipped it).
+    // It spent a while in the page's "does not exist" section, which is why
+    // this test pins WHICH section a name appears in rather than merely that
+    // the page mentions it — a plain `page.contains("LazyLock[T]")` passed
+    // happily while the page said the opposite of the truth.
     for alt in [
         "Context struct",
         "Atomic[T]",
         "Mutex[T]",
         "#[thread_local]",
         "OnceLock[T]",
+        "LazyLock[T]",
     ] {
         assert!(page.contains(alt), "menu must offer `{alt}`");
     }
-    for absent in ["RwLock[T]", "LazyLock[T]"] {
-        assert!(
-            page.contains(absent),
-            "the page must still NAME `{absent}` — design.md lists it, so a \
-             reader arrives looking for it and needs to be told what it does"
-        );
-    }
     assert!(
-        page.contains("DO NOT EXIST"),
-        "the page must say plainly that those two are unavailable, not merely \
-         omit them"
+        page.contains("RwLock[T]"),
+        "the page must still NAME `RwLock[T]` — design.md lists it, so a \
+         reader arrives looking for it and needs to be told it is absent"
+    );
+    assert!(
+        page.contains("DOES NOT EXIST"),
+        "the page must say plainly that `RwLock[T]` is unavailable, not merely \
+         omit it"
+    );
+    let (menu, absent_section) = page
+        .split_once("DOES NOT EXIST")
+        .expect("the page has an absent-primitives section");
+    assert!(
+        menu.contains("LazyLock[T]") && !absent_section.contains("LazyLock[T]"),
+        "`LazyLock[T]` must be offered in the menu, not listed as absent"
+    );
+    assert!(
+        absent_section.contains("RwLock[T]"),
+        "`RwLock[T]` must be listed as absent, not offered in the menu"
     );
     assert!(page.contains("#[allow(module_mut_binding)]"));
 }
@@ -12143,23 +12153,18 @@ fn test_module_mut_binding_warning_menu_matches_the_page() {
     // Each alternative the warning offers must be explained on the page
     // it hands off to — that handoff is the page's whole reason to exist.
     //
-    // `LazyLock` was in this list until B-2026-08-26-3 and is deliberately
-    // NOT any more: it is a check-only phantom (see the test below), so the
-    // warning naming it sent a reader into `undefined type` / a codegen
-    // error. Re-adding it here is only correct once that row closes.
-    for alt in ["Mutex", "Atomic", "#[thread_local]", "OnceLock"] {
+    // `LazyLock` left this list while it was a check-only phantom and is back
+    // now that it ships (B-2026-08-26-3): prelude type, interpreter arm, and
+    // codegen through the shared once-cell engine. The sibling test below is
+    // what enforces the property that matters — every name here must RUN, not
+    // merely check, which is the bar the phantom cleared.
+    for alt in ["Mutex", "Atomic", "#[thread_local]", "OnceLock", "LazyLock"] {
         assert!(
             emitted.contains(alt),
             "warning should offer `{alt}`; got:\n{emitted}"
         );
         assert!(page.contains(alt), "page must explain `{alt}`");
     }
-    assert!(
-        !emitted.contains("LazyLock"),
-        "the warning must not recommend `LazyLock` while it is a check-only \
-         phantom — a diagnostic that names a fix is trusted because the \
-         compiler is the thing that would know. Got:\n{emitted}"
-    );
 }
 
 /// B-2026-08-26-3 — EVERY TYPE THE `module_mut_binding` WARNING NAMES MUST
@@ -12206,6 +12211,15 @@ fn every_type_the_module_mut_binding_warning_names_actually_runs() {
             "let SLOT: OnceLock[i64] = OnceLock.new();\n\
              fn main() { println(1); }",
         ),
+        (
+            // B-2026-08-26-3 — the name this guard exists for. It was a
+            // check-only phantom: `karac check` passed and every execution
+            // backend failed. The probe reads the value back through `get()`
+            // precisely because that is the call the phantom died on.
+            "LazyLock",
+            "let SLOT: LazyLock[i64] = LazyLock.new(|| 1);\n\
+             fn main() { println(SLOT.get()); }",
+        ),
     ];
     for (name, src) in probes {
         assert!(
@@ -12219,9 +12233,95 @@ fn every_type_the_module_mut_binding_warning_names_actually_runs() {
             "the warning recommends `{name}`, but a module-scope program using \
              it does not even check:\n{out}"
         );
+        // ...and it must RUN. Checking alone is exactly the bar `LazyLock`
+        // cleared while being unusable on every backend, so a check-only guard
+        // would not have caught the defect it is named for (B-2026-08-26-3).
+        let tmp =
+            std::env::temp_dir().join(format!("karac-menu-run-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let path = tmp.join("probe.kara");
+        std::fs::write(&path, src).unwrap();
+        let run = karac_bin()
+            .args(["run", path.to_str().unwrap()])
+            .output()
+            .unwrap();
+        let run_err = String::from_utf8_lossy(&run.stderr).into_owned();
+        let ok = run.status.success();
+        let _ = std::fs::remove_dir_all(&tmp);
+        assert!(
+            ok,
+            "the warning recommends `{name}`, and a module-scope program using \
+             it checks — but does not RUN:\n{run_err}"
+        );
     }
 }
 
+/// B-2026-08-26-3 — `LazyLock[T]` must behave identically on all three
+/// execution backends, and its initializer must run EXACTLY ONCE.
+///
+/// It shipped as a check-only phantom: `karac check` passed, `--interp` had no
+/// evaluation rule for `LazyLock.new`, and both compiled backends rejected
+/// `.get()`. So this pins the property that was missing rather than merely
+/// that the type resolves — a resolve-level test would have passed throughout.
+///
+/// The exactly-once assertion is the load-bearing half: a `get` that re-ran the
+/// closure would still print the right value and pass a value-only check, while
+/// silently breaking the one guarantee the primitive exists to provide.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_lazy_lock_runs_its_initializer_once_on_every_backend() {
+    let tmp = scratch_project("lazylock-once");
+    // `INIT` marks each closure execution; three `get`s must produce one mark.
+    let src = r#"fn build() -> i64 { println("INIT"); return 42; }
+let TABLE: LazyLock[i64] = LazyLock.new(|| build());
+fn main() {
+    println(TABLE.get());
+    println(TABLE.get());
+    println(TABLE.get());
+}
+"#;
+    write(&tmp.join("m.kara"), src);
+    let expected = "INIT\n42\n42\n42\n";
+
+    let run = |args: &[&str]| -> Option<String> {
+        let o = karac_bin().current_dir(&tmp).args(args).output().ok()?;
+        o.status
+            .success()
+            .then(|| String::from_utf8_lossy(&o.stdout).into_owned())
+    };
+    let interp = run(&["run", "--interp", "m.kara"]);
+    let jit = run(&["run", "m.kara"]);
+    let built = karac_bin()
+        .current_dir(&tmp)
+        .args(["build", "m.kara"])
+        .output();
+    let exe = tmp.join("m");
+    let aot = if built.map(|o| o.status.success()).unwrap_or(false) && exe.exists() {
+        std::process::Command::new(&exe)
+            .output()
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+    } else {
+        None
+    };
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    assert_eq!(
+        interp.as_deref(),
+        Some(expected),
+        "`--interp` must run the initializer exactly once and cache it"
+    );
+    assert_eq!(
+        jit.as_deref(),
+        Some(expected),
+        "`karac run` (JIT) must agree with the interpreter"
+    );
+    // AOT needs the runtime archive; absent it, `link_or_skip`'s posture is to
+    // skip rather than fail, so only assert when a binary was actually built.
+    if let Some(a) = aot.as_deref() {
+        assert_eq!(a, expected, "`karac build` must agree with the interpreter");
+    }
+}
 /// Concept pages are read in a terminal. Keep every line inside 78
 /// columns so no page wraps at 80 and destroys its own tables.
 /// B-2026-08-25-22 — the `stable-hash` page's claims are MEASURED, not

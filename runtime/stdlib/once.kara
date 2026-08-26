@@ -74,6 +74,28 @@ struct OnceCell[=T] {
     handle_id: i64,
 }
 
+// Lazily-initialized, cross-task-safe cell whose initializer is baked in
+// at construction (design.md § Module-Level Bindings, "`LazyLock[T]` --
+// expensive-init, thread-safe, write-once"; B-2026-08-26-3).
+//
+// The distinguishing feature against `OnceLock[T]` is WHERE the value
+// comes from: `OnceLock` is late-bound and filled by an explicit `set`
+// from a function context, while `LazyLock` carries a closure that is
+// known at module-load time and runs on first `get`. That is why the
+// method surface is `get` alone -- there is nothing to set, and no
+// unfilled state a caller can observe, so `get` returns `ref T` rather
+// than `Option[ref T]`.
+//
+// `LazyLock.new(|| ...)` is a compiler-recognized constant-init form
+// (`typechecker/items.rs`'s module-binding recognizer), permitted only
+// as a module-level binding's initializer: the closure is stored, not
+// run, so the binding itself stays a compile-time constant. Its captures
+// are restricted to other module-level bindings, which is what keeps the
+// stored closure independent of any runtime state.
+struct LazyLock[=T] {
+    handle_id: i64,
+}
+
 impl[T] OnceLock[T] {
     // Create a fresh empty cell. Dispatched through `eval_call.rs`'s
     // `"OnceLock.new"` path-string arm, which allocates an empty slot
@@ -147,5 +169,26 @@ impl[T] OnceCell[T] {
     #[compiler_builtin]
     fn is_set(ref self) -> bool {
         false
+    }
+}
+
+impl[T] LazyLock[T] {
+    // Store `init` and return an unfilled cell. Dispatched through
+    // `eval_call.rs`'s `"LazyLock.new"` path-string arm, which records
+    // the closure against a fresh handle in `lazy_init_table` and
+    // returns a `LazyLock { handle_id }`. The closure is NOT run here --
+    // that is the whole point of the primitive.
+    #[compiler_builtin]
+    fn new(init: Fn() -> T) -> LazyLock[T] {
+        LazyLock { handle_id: 0 }
+    }
+
+    // Return the cell's value, running the stored initializer first if
+    // this is the first access. The initializer runs at most once across
+    // all calls and all tasks. Body is a never-evaluated placeholder (a
+    // self-call, so it stays type-correct as `ref T`).
+    #[compiler_builtin]
+    fn get(ref self) -> ref T {
+        self.get()
     }
 }

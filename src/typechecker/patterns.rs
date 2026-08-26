@@ -1754,6 +1754,7 @@ impl<'a> super::TypeChecker<'a> {
                 | "VolatileCell"
                 | "OnceLock"
                 | "OnceCell"
+                | "LazyLock"
                 | "Tensor"
                 | "Column"
                 | "DataFrame"

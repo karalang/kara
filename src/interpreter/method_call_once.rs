@@ -63,6 +63,15 @@ impl<'a> super::Interpreter<'a> {
         // here without cloning, falling through to the next dispatch
         // guard.
         once_handle(obj)?;
+        // `LazyLock` shares the handle space and the value slot but not the
+        // method surface: `get` is its only method, and it initializes from
+        // the STORED closure rather than returning `Option` (B-2026-08-26-3).
+        if is_lazy_lock(obj) {
+            return match method {
+                "get" => self.eval_lazy_get(obj, span),
+                _ => None,
+            };
+        }
         match method {
             "set" => self.eval_once_set(obj, args),
             "get" => self.eval_once_get(obj),
@@ -70,6 +79,52 @@ impl<'a> super::Interpreter<'a> {
             "is_set" => self.eval_once_is_set(obj),
             _ => None,
         }
+    }
+
+    /// `LazyLock.new(|| ...)` — mint a handle, record the closure as this
+    /// cell's initializer, and return an unfilled `LazyLock { handle_id }`.
+    /// The closure is stored, never run here: deferring it is the primitive.
+    pub(super) fn eval_lazy_new(&mut self, args: &[CallArg]) -> Option<Value> {
+        let closure = args.first().map(|a| self.eval_expr_inner(&a.value))?;
+        if self.check_cf() {
+            return Some(Value::Unit);
+        }
+        self.once_handle_counter += 1;
+        let handle = self.once_handle_counter;
+        self.once_table.insert(handle, None);
+        self.lazy_init_table.insert(handle, closure);
+
+        let mut fields = HashMap::new();
+        fields.insert("handle_id".to_string(), Value::Int(handle.into()));
+        Some(Value::Struct {
+            name: "LazyLock".to_string(),
+            fields,
+        })
+    }
+
+    /// `cell.get() -> ref T` — the cached value, running the stored
+    /// initializer first on the very first call. Exactly-once is what the
+    /// filled `once_table` slot enforces: a second `get` short-circuits
+    /// before the closure is looked up at all.
+    fn eval_lazy_get(&mut self, obj: &Value, span: &Span) -> Option<Value> {
+        let handle = once_handle(obj)?;
+        if let Some(Some(v)) = self.once_table.get(&handle) {
+            return Some(v.clone());
+        }
+        // A hand-rolled `LazyLock { handle_id: 0 }` literal has no stored
+        // closure. There is no correct value to invent and no `Option` in
+        // this method's return type to signal absence, so degrade to `Unit`
+        // rather than panic — the same posture the sibling cells take for a
+        // foreign handle.
+        let closure = self.lazy_init_table.get(&handle).cloned()?;
+        let produced = self.invoke_zero_arg_closure(closure, span);
+        if self.check_cf() {
+            return Some(produced);
+        }
+        if let Some(slot) = self.once_table.get_mut(&handle) {
+            *slot = Some(produced.clone());
+        }
+        Some(produced)
     }
 
     /// `cell.set(value) -> Result[Unit, AlreadySetError[T]]` — fill the
@@ -157,13 +212,20 @@ fn once_handle(obj: &Value) -> Option<i64> {
     let Value::Struct { name, fields } = obj else {
         return None;
     };
-    if name != "OnceLock" && name != "OnceCell" {
+    if name != "OnceLock" && name != "OnceCell" && name != "LazyLock" {
         return None;
     }
     match fields.get("handle_id") {
         Some(Value::Int(h)) => Some(narrow_to_i64(*h)),
         _ => None,
     }
+}
+
+/// Whether `obj` is specifically a `LazyLock` receiver. Split from
+/// `once_handle` because the three cells share a handle space and a value
+/// slot but not a method surface.
+fn is_lazy_lock(obj: &Value) -> bool {
+    matches!(obj, Value::Struct { name, .. } if name == "LazyLock")
 }
 
 fn already_set_error(rejected: Value) -> Value {

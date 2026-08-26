@@ -1740,6 +1740,20 @@ each one is actually for:
                      so it is legal inside `par { }`. Initializer must
                      still be compile-time constant.
 
+  LazyLock[T]        Write-once, thread-safe, initialized by a
+                     closure baked in at construction:
+                     `let X: LazyLock[T] = LazyLock.new(|| ...)`,
+                     read with `X.get()`. The closure runs on the
+                     first `get` and at most once. For values
+                     derivable from module constants — compile a
+                     regex once, build a lookup table on first use.
+                     Surface: `get` alone. Two specified rules are
+                     NOT yet enforced: the closure's captures are
+                     meant to be restricted to module-level
+                     bindings, and first-access effects are meant to
+                     be attributed to the calling function
+                     (B-2026-08-26-15, B-2026-08-26-16).
+
   OnceLock[T]        Write-once, thread-safe, set explicitly at
                      runtime. For values depending on input the
                      closure cannot see at module-load time — CLI
@@ -1755,19 +1769,13 @@ each one is actually for:
                      are visible to every task, and `OnceCell` carries
                      no synchronization.
 
-Two primitives design.md names in this menu DO NOT EXIST, and are
+One primitive design.md names in this menu DOES NOT EXIST, and is
 left out above rather than listed with a caveat, because a menu is
 read as a list of things you can type:
 
     RwLock[T]     Not a type at all — `undefined type 'RwLock'`.
                   Use `Mutex[T]` at module scope.
 
-    LazyLock[T]   Passes `karac check` in the module-binding form
-                  design.md shows, then fails on EVERY execution
-                  backend: the interpreter has no evaluation rule for
-                  `LazyLock.new`, and both `karac run` and
-                  `karac build` reject `.get()` with a codegen error.
-                  Use `OnceLock[T]` and `set` it from `main`.
 
 There is no `static mut`. The absence of a \"raw mutable global,
 caller's responsibility to synchronize\" path is deliberate.
