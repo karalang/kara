@@ -12323,6 +12323,121 @@ fn main() {
     }
 }
 
+/// B-2026-08-26-16 — a `LazyLock`'s first-access initialization must be
+/// attributed to the CALLING function (design.md § Module-Level Bindings), so
+/// a `pub fn` whose only effectful work is a `get()` running an effectful
+/// closure must be made to declare that effect.
+///
+/// It was not: the closure lives at the module binding rather than at the call
+/// site, so unlike `cell.get_or_init(|| load())` — whose closure is a syntactic
+/// argument the effect walk descends into — there was nothing at the `get()`
+/// site to walk, and `LazyLock.get` is a `#[compiler_builtin]` with no `with`
+/// clause. Undeclared effects escaped a public function.
+///
+/// Written end-to-end (`karac check`) rather than against the effectchecker
+/// unit harness ON PURPOSE: the fix keys off the TYPECHECKER's resolved callee
+/// table, and `effectcheck_with_profile_config` builds a checker with that
+/// table empty, so a unit-level test would exercise none of it.
+///
+/// The correctness criterion throughout is PARITY WITH THE EQUIVALENT DIRECT
+/// CALL — each case pairs the `LazyLock` form with the direct-call control it
+/// should behave identically to.
+#[test]
+fn test_lazy_lock_get_attributes_init_effects_to_the_caller() {
+    let effectful = "resource Db;\n\
+                     fn load() -> i64 with reads(Db) { return 5; }\n";
+
+    // 1. The defect itself: undeclared `pub fn`, effects reached through
+    //    `get()`. Must be rejected, exactly as the direct-call control is.
+    let undeclared = check_source_output(
+        "lazy-eff-undeclared",
+        &format!(
+            "{effectful}\
+             let CACHE: LazyLock[i64] = LazyLock.new(|| load());\n\
+             pub fn peek() -> i64 {{ return CACHE.get(); }}\n\
+             fn main() {{ println(peek()); }}"
+        ),
+    );
+    assert!(
+        undeclared.contains("reads(Db)") && undeclared.contains("no effect declaration"),
+        "a `pub fn` reaching `reads(Db)` through `LazyLock.get()` must be made \
+         to declare it; got:\n{undeclared}"
+    );
+
+    // 2. ...and declaring it must satisfy the checker. A fix that rejected
+    //    unconditionally would pass assertion 1 while making the type unusable.
+    let declared = check_source_output(
+        "lazy-eff-declared",
+        &format!(
+            "{effectful}\
+             let CACHE: LazyLock[i64] = LazyLock.new(|| load());\n\
+             pub fn peek() -> i64 with reads(Db) {{ return CACHE.get(); }}\n\
+             fn main() {{ println(peek()); }}"
+        ),
+    );
+    assert!(
+        !declared.contains("error"),
+        "declaring the effect must satisfy the checker; got:\n{declared}"
+    );
+
+    // 3. Effects must also be INFERRED through a private caller, not merely
+    //    verified at the public boundary.
+    let via_private = check_source_output(
+        "lazy-eff-private",
+        &format!(
+            "{effectful}\
+             let CACHE: LazyLock[i64] = LazyLock.new(|| load());\n\
+             fn helper() -> i64 {{ return CACHE.get(); }}\n\
+             pub fn peek() -> i64 {{ return helper(); }}\n\
+             fn main() {{ println(peek()); }}"
+        ),
+    );
+    assert!(
+        via_private.contains("reads(Db)"),
+        "effects must be inferred through a private caller; got:\n{via_private}"
+    );
+
+    // 4. NO TAINT of an unrelated `get`. A local may shadow the module
+    //    binding's name, and attributing by NAME pinned the LazyLock's effects
+    //    onto a `Map.get` that has nothing to do with it. The fix keys off the
+    //    resolved callee type instead, so this must stay clean.
+    let shadowed = check_source_output(
+        "lazy-eff-shadow",
+        &format!(
+            "{effectful}\
+             let CACHE: LazyLock[i64] = LazyLock.new(|| load());\n\
+             pub fn other() -> Option[i64] {{\n\
+                 let CACHE: Map[String, i64] = Map.new();\n\
+                 return CACHE.get(\"k\");\n\
+             }}\n\
+             fn main() {{ println(\"ok\"); }}"
+        ),
+    );
+    assert!(
+        !shadowed.contains("reads(Db)"),
+        "a local `Map` shadowing the module `LazyLock`'s name must not inherit \
+         its effects; got:\n{shadowed}"
+    );
+
+    // 5. Cycles through the BINDING TABLE must terminate. Two LazyLocks whose
+    //    closures call each other's `get()` form a loop the AST does not
+    //    contain, so structural descent alone would not stop.
+    let cyclic = check_source_output(
+        "lazy-eff-cycle",
+        &format!(
+            "{effectful}\
+             let ALPHA: LazyLock[i64] = LazyLock.new(|| BETA.get() + load());\n\
+             let BETA: LazyLock[i64] = LazyLock.new(|| ALPHA.get() + 1);\n\
+             pub fn peek() -> i64 {{ return ALPHA.get(); }}\n\
+             fn main() {{ println(peek()); }}"
+        ),
+    );
+    assert!(
+        cyclic.contains("reads(Db)"),
+        "a cyclic pair must still terminate AND attribute the effect; got:\n{cyclic}"
+    );
+}
+
 /// B-2026-08-26-17 — a MODULE-SCOPE `Atomic[T]`, the first alternative the
 /// `module_mut_binding` warning offers, checked and interpreted correctly but
 /// failed both compiled backends with "Atomic receiver 'X' has no slot": the

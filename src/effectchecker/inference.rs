@@ -936,6 +936,66 @@ impl<'a> super::EffectChecker<'a> {
                 if let Some(precise_key) = self.resolve_method_callee_key(&expr.span) {
                     calls.push((precise_key, expr.span));
                 }
+                // `CACHE.get()` on a module-level `LazyLock[T]` — attribute the
+                // stored initializer's effects to THIS function, which is what
+                // design.md § Module-Level Bindings requires: "the effect system
+                // attributes the first-access initialization to the *calling*
+                // function, not to the module" (B-2026-08-26-16).
+                //
+                // Without this the effects vanished entirely. `LazyLock.get` is
+                // a `#[compiler_builtin]` with no `with` clause, so the callee
+                // key contributes nothing, and the closure is at the BINDING
+                // rather than at the call site — so unlike
+                // `cell.get_or_init(|| load())`, whose closure is a syntactic
+                // argument the walk below descends into, there was nothing here
+                // to descend into. A `pub fn` could therefore perform undeclared
+                // effects, and since effect sets drive conflict analysis, what
+                // the checker could not see the scheduler could not conflict-
+                // check either.
+                //
+                // Attributing at EVERY `get()` rather than only the first is
+                // deliberate: which call runs the initializer is a runtime race,
+                // so the static answer has to hold for all of them. That
+                // over-approximates for the callers that hit the cache, which is
+                // the sound direction — and it is the same answer the caller
+                // would get from `get_or_init`.
+                //
+                // Gated on the TYPECHECKER's resolved callee, not on the
+                // receiver's name alone. A local binding may shadow a module
+                // `LazyLock`'s name — `let CACHE: Map[String, i64] = ...;
+                // CACHE.get("k")` inside a function, with a module-level
+                // `CACHE: LazyLock[i64]` in scope — and a name-only test
+                // attributes the LazyLock's effects to that unrelated
+                // `Map.get`, which is the exact `map.get()` taint the precise-
+                // resolution comment above exists to avoid. The resolved key
+                // is `Map.get` there and `LazyLock.get` here, so it separates
+                // them by type rather than by spelling.
+                // (`is_some` matters: if neither name was ever minted both
+                // sides are `None` and a bare `==` would compare equal.)
+                let lazy_get_key = self.interner.get("LazyLock.get");
+                if method == "get"
+                    && lazy_get_key.is_some()
+                    && self.resolve_method_callee_key(&expr.span) == lazy_get_key
+                {
+                    if let ExprKind::Identifier(recv) = &object.kind {
+                        if let Some(sym) = self.interner.get(recv.as_str()) {
+                            // Cloned out of the map so the borrow ends before the
+                            // recursive call, which re-reads `self`.
+                            let init = self.lazy_lock_inits.get(&sym).cloned();
+                            if let Some(init) = init {
+                                // Cycle guard: two `LazyLock`s whose closures call
+                                // each other's `get()` form a loop through the
+                                // binding table, not through the AST, so
+                                // structural descent alone would not terminate.
+                                let fresh = self.lazy_lock_in_progress.borrow_mut().insert(sym);
+                                if fresh {
+                                    self.collect_calls_in_expr(&init, calls, bounds);
+                                    self.lazy_lock_in_progress.borrow_mut().remove(&sym);
+                                }
+                            }
+                        }
+                    }
+                }
                 // The bare method name as a symbol — a non-inserting probe:
                 // a name the interner never minted cannot key the index, the
                 // stdlib-seed map, or match a pre-minted builtin symbol.

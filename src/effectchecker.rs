@@ -870,6 +870,31 @@ pub struct EffectChecker<'a> {
     /// `__modbind_write.<NAME>` synthetic call entries at every
     /// read/write site (design.md §1322 + §1330).
     pub(crate) modbind_let_mut: FxHashMap<Symbol, ModBindingInfo>,
+    /// Per-`LazyLock[T]` MODULE binding: the initializer closure recorded at
+    /// its `LazyLock.new(|| ...)` site, so a `X.get()` call site can be
+    /// attributed the closure's effects (B-2026-08-26-16).
+    ///
+    /// design.md § Module-Level Bindings: "the effect system attributes the
+    /// first-access initialization to the *calling* function, not to the
+    /// module." The closure is stored at module scope and RUN at an
+    /// arbitrary later call site, so the attribution has to travel from the
+    /// binding to each `get()` caller — which is exactly what this map
+    /// carries. It is the effect-checker twin of codegen's `lazy_var_inits`
+    /// and the interpreter's `lazy_init_table`; all three exist because the
+    /// same closure has to be found again from the binding's NAME.
+    ///
+    /// Only MODULE bindings are recorded. A local
+    /// `let c: LazyLock[T] = LazyLock.new(|| ...)` needs no entry: its
+    /// closure is a sub-expression of the enclosing function body, so the
+    /// ordinary walk already descends into it and attributes it to that
+    /// function (verified — the local form was never part of this defect).
+    pub(crate) lazy_lock_inits: FxHashMap<Symbol, crate::ast::Expr>,
+    /// Re-entrancy guard for the walk above. `let A = LazyLock.new(|| B.get())`
+    /// paired with `let B = LazyLock.new(|| A.get())` is a cycle through the
+    /// binding table that the AST itself does not contain, so the recursion
+    /// needs a visited set that plain structural descent does not. `RefCell`
+    /// because `collect_calls_in_expr` takes `&self`.
+    pub(crate) lazy_lock_in_progress: std::cell::RefCell<rustc_hash::FxHashSet<Symbol>>,
     /// Names of refinement type aliases (`type Name = Base where <pred>`).
     /// Derived directly from the AST. Consulted by the `Cast` arm of
     /// `collect_calls_in_expr`: an `x as Refined` cast is a runtime
@@ -1003,6 +1028,8 @@ impl<'a> EffectChecker<'a> {
             call_type_subs: FxHashMap::default(),
             call_effect_subs: FxHashMap::default(),
             modbind_let_mut: FxHashMap::default(),
+            lazy_lock_inits: FxHashMap::default(),
+            lazy_lock_in_progress: std::cell::RefCell::new(rustc_hash::FxHashSet::default()),
             refinement_type_names,
             errors: Vec::new(),
         }
@@ -1763,6 +1790,7 @@ impl<'a> EffectChecker<'a> {
         // propagation pass picks up the synthetic effect at every
         // read / write site emitted by the body walker.
         self.collect_module_let_mut_bindings();
+        self.collect_lazy_lock_inits();
         self.seed_modbind_synth_effects(&builtin_span);
 
         // Phase A: Collect declarations

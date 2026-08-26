@@ -124,6 +124,32 @@ impl<'a> super::EffectChecker<'a> {
         }
     }
 
+    /// Walk `program.items` and record the initializer closure of every
+    /// `let X: LazyLock[T] = LazyLock.new(|| ...)` MODULE binding, keyed by
+    /// the binding's name.
+    ///
+    /// design.md § Module-Level Bindings specifies that a `LazyLock`'s
+    /// first-access initialization is attributed to the CALLING function.
+    /// The closure is not at the call site — it is at the binding — so the
+    /// walk needs a way back from `CACHE.get()` to the closure `CACHE` was
+    /// built with, and this map is it (B-2026-08-26-16).
+    ///
+    /// `let mut` is irrelevant here (a `LazyLock` is declared with plain
+    /// `let` by construction), so unlike the sibling above this does not
+    /// filter on mutability.
+    pub(crate) fn collect_lazy_lock_inits(&mut self) {
+        for item in &self.program.items {
+            let Item::ModuleBinding(b) = item else {
+                continue;
+            };
+            let Some(init) = lazy_lock_init_closure(&b.value) else {
+                continue;
+            };
+            self.lazy_lock_inits
+                .insert(self.interner.intern(&b.name), init.clone());
+        }
+    }
+
     /// Look up a binding name in the `let mut` table and return its
     /// metadata. Slice 7's par-block check uses this through the
     /// synthetic resource name carried on the offending effect.
@@ -1877,4 +1903,22 @@ impl<'a> ModBindingSynthWalker<'a> {
             | ExprKind::Error => {}
         }
     }
+}
+
+/// The initializer closure of a `LazyLock.new(|| ...)` call expression, or
+/// `None` for any other expression. Mirrors codegen's
+/// `module_bindings::lazy_init_closure_of` — the two recognizers must agree
+/// on what counts as a `LazyLock` construction, or the effects attributed
+/// would not match the closure actually compiled in.
+fn lazy_lock_init_closure(e: &Expr) -> Option<&Expr> {
+    let ExprKind::Call { callee, args } = &e.kind else {
+        return None;
+    };
+    let ExprKind::Path { segments, .. } = &callee.kind else {
+        return None;
+    };
+    if segments.len() != 2 || segments[0] != "LazyLock" || segments[1] != "new" {
+        return None;
+    }
+    args.first().map(|a| &a.value)
 }
