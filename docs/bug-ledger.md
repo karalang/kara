@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 291 | 1 |
 | leak | 195 | 0 |
-| missing-feature | 177 | 5 |
+| missing-feature | 177 | 4 |
 | run-vs-build | 162 | 1 |
 | double-free | 140 | 2 |
 | codegen-gap | 139 | 1 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 1046 | 7 |
-| typecheck | 263 | 4 |
+| typecheck | 263 | 3 |
 | interp | 182 | 0 |
 | other | 70 | 3 |
 | ownership | 65 | 0 |
@@ -124,16 +124,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1592 surfaced · 12 open · 1555 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-26). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1592 surfaced · 11 open · 1556 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-26). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (12)
+### Open (11)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-25-3 | 2026-08-25 | codegen | medium | `codegen_tests::vec_mutation_methods_bounds_check_out_of_range_index` IS FLAKY, and it fails by showing exactly the PRE-FIX symptom of the high-severity bug it guards: `v.insert(7i64, 9i64)` produced no `Vec.insert index out of bounds` panic, stdout empty, stderr `free(): invalid pointer`. Observed once in a full `cargo test --features llvm` run; the same test then passed 3/3 in isolation, 3198/3198 in a codegen-only run, and the next FULL run was green at 125 suites / 15090 tests. | roadmap.md |
 | B-2026-08-25-20 | 2026-08-25 | typecheck | medium | Three of the fallible-allocation `try_*` methods design.md names by name do not exist, and `AllocError`'s `Display` is Debug formatting rather than the specified text. § Fallible Allocation API: "Operations that report only success/failure return `Result[(), AllocError]` (`try_push`, `try_insert`, `try_reserve`, `try_extend`, `try_append`)". Measured one method per compile: `Vec.try_reserve` -> `no method 'try_reserve' on type 'Vec'`; `Vec.try_extend` -> `no method 'try_extend'`; `Vec.try_append` -> `no method 'try_append'`. Working: `Vec.try_push`, `Vec.try_insert`, `Vec.try_with_capacity`, `String.try_push`, `String.try_push_str`, `Set.try_insert`. SEPARATELY, the same section specifies "The `Display` formatting names the failed operation's byte size on the `OutOfMemory` arm and \"capacity overflow\" on the `CapacityOverflow` arm" -- measured, `f"{e}"` renders `CapacityOverflow` and `OutOfMemory { requested_bytes: 4096 }`, which is the DEBUG form for both arms. | roadmap.md |
 | B-2026-08-25-34 | 2026-08-25 | codegen | medium | `AllocError`'s `Display` renders the Debug form (`OutOfMemory { requested_bytes: 4096 }`) into the user-facing `Error: {e}` entry-point line, and the spec-sanctioned fix -- a manual `impl Display`, per § `#[derive(Display)]` on enums' "Implement `Display` manually to override" -- CANNOT LAND without codegen work: a prelude impl lives in `STDLIB_PROGRAMS`, which codegen does not walk, so the impl reaches the interpreter only. Registering the module as a compiled stdlib program fixes `.to_string()` under AOT but leaves `f"{e}"` and the entry-point line unfixed. Worse, the half-done state FAILS OPEN: dropping the derive without teaching codegen about the impl makes `karac build` emit `Error: ` with an EMPTY message rather than erroring, because the typechecker sees the impl and codegen does not. | roadmap.md |
-| B-2026-08-26-2 | 2026-08-26 | typecheck | medium | TWO MORE FACILITIES design.md § `Hash` and `Hasher`'s stability paragraph NAMES AS SHIPPED DO NOT EXIST, after B-2026-08-25-22 built the third. (1) `xxh3(bytes)` -- a faster UNKEYED stable digest; nothing in `src/`, `runtime/` or `hash/` implements XXH3, and there is now no fast stable option at all (`StableHash.siphash24` is the only one, and it is the keyed, slower one). (2) "the `crypto` module for cryptographic hashes" -- there is NO cryptographic hash anywhere in the stdlib: no sha256, no blake3, no `crypto` namespace. The second is the consequential one, because `siphash24` is now sitting where a user looking for a digest will find it, and SipHash is a fast keyed PRF, NOT collision-resistant -- a user who substitutes it for a cryptographic hash (signatures, dedup against an adversary, anything where a chosen collision matters) gets something that looks like it works. | roadmap.md |
 | B-2026-08-26-3 | 2026-08-26 | typecheck+codegen | high | `LazyLock[T]` IS A CHECK-ONLY PHANTOM: `let TABLE: LazyLock[i64] = LazyLock.new(|| 40 + 2);` passes `karac check` cleanly and then fails on EVERY execution backend -- `--interp` dies with "path 'LazyLock.new' has no interpreter evaluation rule", and `karac run` (JIT) and `karac build` both reject `TABLE.get()` with "codegen: no handler for method 'get'". It is not a type outside that one special-cased module-binding form either: `fn f(x: LazyLock[i64])` is `undefined type 'LazyLock'`. Until this was found, the live `module_mut_binding` WARNING recommended it by name ("Prefer a context struct, `Mutex`, `Atomic`, `#[thread_local]`, `LazyLock`, or `OnceLock`"), so following the compiler's own advice produced a program that checks and then cannot be run or built. | roadmap.md |
 | B-2026-08-26-4 | 2026-08-26 | other | low | design.md's CANONICAL `?`-operator example calls `input.parse_i64()?` and names `ParseError` -- NEITHER EXISTS: the real API is `i64.parse(s) -> Option[i64]`, which cannot be used with `?` the way the example shows | docs/design.md § `?` operator and cross-error-type propagation |
 | B-2026-08-26-7 | 2026-08-26 | codegen | high | A NARROW LOCAL INITIALIZED FROM AN UNSUFFIXED LITERAL IS ALLOCATED AT i64 IN CODEGEN, so every width-sensitive operation on it runs at 64 bits and can produce a value the declared type cannot represent. The literal suffix -- which ought to be semantically inert once the binding carries an explicit type annotation -- decides the storage width: `let a: u8 = 200u8` gets a real `i8` alloca, `let b: u8 = 200` stays in the i64 carrier. MEASURED in AOT, against `karac run --interp` which is correct in every arm: `b << 4` is 3200 (should be 128), and `let d: i32 = 1; d << 31` is 2147483648 -- a value an `i32` cannot hold. THAT LAST CASE IS THE SOUNDNESS HOLE B-2026-08-06-7 CLAIMS TO HAVE CLOSED: its regression tests assert exactly `1i32 << 31 == -2147483648`, but spell the literal WITH a suffix, so the fix was only ever exercised on the path that allocates `i32` and the ordinary spelling still miscompiles. `~` had the identical hole and was fixed at the operator (B-2026-08-26-6) rather than at this root; every operator whose correctness depends on the operand's LLVM width is a candidate, and only shifts and `~` have been checked. | roadmap.md |
@@ -172,9 +171,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1592 surfaced
 
 </details>
 
-### Fixed (1555)
+### Fixed (1556)
 
-<details><summary>1555 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1556 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1730,6 +1729,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1592 surfaced
 | B-2026-08-25-33 | codegen | high | `?` in `main()` SEGFAULTS under `karac run` (the default JIT executor) whenever main's error type is an enum with an INLINE SCALAR payload -- `AllocE… | 7d20106 |
 | B-2026-08-25-35 | typecheck+codegen | high | `PriorityQueue[T]` IS UNINSTANTIABLE FOR EVERY USER TYPE, because the OPERATOR path and the TRAIT-BOUND path recognize DISJOINT sets of `Ord` impleme… | 8af03a8 |
 | B-2026-08-26-1 | other | low | design.md § Operator Traits § Notably absent prescribes `vec.concat(other)` as one of the two redirects for `vec1 + vec2`, but `Vec.concat()` in this… | 5964c16 |
+| B-2026-08-26-2 | typecheck | medium | TWO MORE FACILITIES design.md § `Hash` and `Hasher`'s stability paragraph NAMES AS SHIPPED DO NOT EXIST, after B-2026-08-25-22 built the third | 7da2bfe |
 | B-2026-08-26-5 | codegen | medium | `?` in `main() -> Result[(), E]` reconstructed `E` from only its first THREE payload words, so any error held inline in four or more words rendered g… | 06880a4 |
 | B-2026-08-26-6 | interp+codegen | high | `~` COMPLEMENTS AT THE CARRIER WIDTH, NOT THE DECLARED WIDTH, so every narrow UNSIGNED integer gets a wrong value and the two backends disagree on wh… | 297ef4f |
 | B-2026-08-26-8 | interp | medium | INTERPRETER `Vector[T, N]` LANE ARITHMETIC IGNORES THE LANE WIDTH, so a narrow-lane vector computes on the i128 carrier and diverges from codegen, wh… | ff403a3 |
