@@ -2103,6 +2103,14 @@ fn ordering_dispatch_comparator(
     target: &str,
     tc: &TypeCheckResult,
 ) -> Option<String> {
+    // The `Shared` arm is currently UNREACHABLE, and deliberately kept anyway.
+    // `target_type_name` above only resolves `Type::Named`, so a `shared struct`
+    // never gets this far. It also never gets as far as the typechecker's
+    // ordering gate, whose two branches both test `Type::Named` — which is why a
+    // shared struct with no derive and no impl at all passes `karac check` today
+    // and then fails on both backends (a pre-existing run-vs-build hole, filed
+    // separately). Whoever closes that must widen `target_type_name` in the same
+    // change, or accepting shared operands at the gate just moves the failure.
     if !matches!(ty, Type::Named { .. } | Type::Shared(_)) {
         return None;
     }

@@ -153,13 +153,45 @@ impl<'a> super::TypeChecker<'a> {
             } else {
                 "Eq"
             };
+            // B-2026-08-26-10 — do not deny an impl the author is looking at.
+            // `Map` keys are gated on the DERIVE tables, so a hand-written
+            // `impl Hash for K` leaves this message telling its author that
+            // their key type "does not implement `Hash`" while the impl sits a
+            // few lines up. The derive really is required here, but the reason
+            // has to be said, and the consequence with it: `Map` hashing does
+            // NOT dispatch to a user `hash` body, so adding the derive makes
+            // the key work by hashing its fields structurally and the impl goes
+            // unused. That is a surprise worth spending a clause on rather than
+            // letting the author discover it from a bucket count.
+            let hand_written: Vec<&str> = ["Hash", "Eq"]
+                .into_iter()
+                .filter(|t| match key {
+                    Type::Named { name, .. } | Type::Shared(name) => {
+                        self.env.has_impl(t, name, &[])
+                    }
+                    _ => false,
+                })
+                .collect();
+            let note = if hand_written.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "; you have written `impl {} for {}`, but a `Map` key is checked \
+                     against the derives and key hashing does not dispatch to a \
+                     hand-written body — adding the derive makes the key work, and it \
+                     will hash/compare fields structurally rather than using your impl",
+                    hand_written.join("` and `impl "),
+                    type_display(key)
+                )
+            };
             self.type_error(
                 format!(
                     "Map[{}, ...]: key type does not implement `{}`; \
                      only hashable equality-comparable types (integers, bool, char, String, \
-                     or structs/enums with `#[derive(Hash, Eq)]`) can be Map keys",
+                     or structs/enums with `#[derive(Hash, Eq)]`) can be Map keys{}",
                     type_display(key),
-                    missing
+                    missing,
+                    note
                 ),
                 *span,
                 TypeErrorKind::TraitBoundNotSatisfied,

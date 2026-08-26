@@ -45754,6 +45754,74 @@ fn main() {
 }
 
 #[test]
+fn map_key_rejection_names_a_hand_written_impl_and_what_the_derive_costs() {
+    // B-2026-08-26-10 — the `Map` key gate reads the DERIVE tables, so a
+    // hand-written `impl Hash for K` left this message telling its author that
+    // their key "does not implement `Hash`" with the impl sitting a few lines up.
+    //
+    // The derive genuinely is required, so the message keeps demanding it — what
+    // it adds is the reason and the CONSEQUENCE. `Map` hashing does not dispatch
+    // to a user `hash` body, so adding the derive makes the key work and leaves
+    // the impl unused. Measured: with `#[derive(Hash, Eq, PartialEq)]` AND an
+    // `impl Hash` collapsing every key to one bucket, two keys differing only in
+    // an ignored field still give `m.len() == 2` on both backends. That is the
+    // surprise the clause exists to pre-empt, and it is why B-2026-08-26-10 stays
+    // open — the honest end state is dispatch, not a better message.
+    let errs = typecheck_errors(
+        r#"
+struct Item { id: i64 }
+impl PartialEq for Item { fn eq(ref self, other: ref Item) -> bool { self.id == other.id } }
+impl Eq for Item {}
+impl Hash for Item { fn hash[H: Hasher](ref self, hasher: mut ref H) { hasher.write_u64(1) } }
+fn main() {
+    let mut m: Map[Item, i64] = Map.new();
+    m.insert(Item { id: 1 }, 10);
+    println(m.len());
+}
+"#,
+    );
+    let msg = errs
+        .iter()
+        .find(|e| e.message.contains("can be Map keys"))
+        .map(|e| e.message.clone())
+        .unwrap_or_else(|| panic!("expected the Map key bound to be rejected, got: {errs:?}"));
+    assert!(
+        msg.contains("you have written `impl Hash`"),
+        "the message should name the impl the author actually wrote: {msg}"
+    );
+    assert!(
+        msg.contains("does not dispatch to a hand-written body"),
+        "the message should say the derive will be used instead of the impl: {msg}"
+    );
+}
+
+#[test]
+fn map_key_rejection_is_unchanged_for_a_type_with_no_impl() {
+    // The counterweight: the clause above must not attach to the ordinary case.
+    // A key type with no impl at all has nothing to reconcile, so it keeps the
+    // plain derive advice and gains no explanation that would not apply to it.
+    let errs = typecheck_errors(
+        r#"
+struct Bare { id: i64 }
+fn main() {
+    let mut m: Map[Bare, i64] = Map.new();
+    m.insert(Bare { id: 1 }, 10);
+    println(m.len());
+}
+"#,
+    );
+    let msg = errs
+        .iter()
+        .find(|e| e.message.contains("can be Map keys"))
+        .map(|e| e.message.clone())
+        .expect("expected the Map key bound to be rejected");
+    assert!(
+        !msg.contains("you have written"),
+        "a key type with no impl has no impl to reconcile against: {msg}"
+    );
+}
+
+#[test]
 fn unsatisfied_bound_never_lists_the_failing_type_as_its_own_candidate() {
     // B-2026-08-26-10 — the message used to contradict itself inside one
     // sentence:
