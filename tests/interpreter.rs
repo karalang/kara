@@ -26673,6 +26673,93 @@ fn main() {
     assert_eq!(out, "5\n10\n5\n4\n5\n6\n7\n7\n8\n7\n10\n");
 }
 
+/// B-2026-08-25-35 — a `#[derive(Ord)]` user type satisfies a `T: Ord` bound on
+/// a GENERIC IMPL's method, not only on a free generic fn.
+///
+/// Two gates discharge bounds and they had different powers. `type_satisfies_bound`
+/// (typechecker layer) recognizes `#[derive]` on a named type; `Env::bound_satisfied`
+/// (the gate method resolution uses for a bound on a generic impl) did not, and its
+/// own comment asserted the derive tables were unreachable from there — they are not,
+/// `TypeEnv` owns `structs`/`enums`. So the SAME type against the SAME bound got two
+/// answers depending on which side of the call the bound was written on: `fn
+/// free[T: Ord](..)` accepted it, `impl[T: Ord] Holder[T] { fn tag(..) }` rejected it
+/// with "`Item` does not implement `Ord`; trait `Ord` is implemented by: <primitives>".
+///
+/// `PriorityQueue[T]`'s whole surface is the second kind, which is why no derived
+/// user type could be put in one — the point of the sibling test below.
+///
+/// Twin of `tests/codegen.rs`'s `e2e_derived_ord_satisfies_a_generic_impl_bound`.
+/// PARITY test, NOT the regression oracle: this harness's `run()` executes and
+/// joins output without asserting the typecheck is clean, and `karac run`
+/// demotes typecheck errors to warnings, so this passes on the UNFIXED tree
+/// too — the tree-walker never enforced the bound. The oracles that go red are
+/// `tests/typechecker.rs`'s `derived_ord_satisfies_a_bound_on_a_generic_impl_method`
+/// and the codegen twin. What this pins is that the two backends agree once the
+/// program is accepted.
+#[test]
+fn test_derived_ord_satisfies_a_generic_impl_bound() {
+    let out = run(r#"
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct Item { id: i64 }
+struct Holder[=T] { v: T }
+impl[T: Ord] Holder[T] {
+    fn tag(ref self) -> i64 { 7 }
+}
+fn free[T: Ord](a: T) -> i64 { 9 }
+fn main() {
+    let h = Holder { v: Item { id: 1 } };
+    println(h.tag());
+    println(free(Item { id: 1 }));
+}
+"#);
+    assert_eq!(out, "7\n9\n");
+}
+
+/// B-2026-08-25-35 — the end-to-end payoff: a user struct in a `PriorityQueue`.
+///
+/// Needs BOTH halves of that row's fix. The bound gate above lets `Task` in at
+/// all; then `outranks` compares two INDEXED elements (`self.xs[i] > self.xs[j]`),
+/// and resolving that element's type name walked the DECLARED field type — `Vec[T]`
+/// on `struct PriorityQueue[=T]` — yielding `T`, the impl's type PARAMETER rather
+/// than the monomorph's argument. `T` names no struct, so the ordered-comparison
+/// dispatch declined and codegen failed with "Unsupported struct binary op: Gt".
+/// Same class as B-2026-08-25-28: a type expr left in terms of the impl's parameter
+/// inside a monomorph.
+///
+/// Both directions and `peek`/`pop`/`len` appear because `outranks` is the one
+/// branch that differs between them, and because a comparison that silently read
+/// index 0 without the heap property holding would still look right on a min-first
+/// queue of three.
+///
+/// Twin of `tests/codegen.rs`'s `e2e_priority_queue_of_a_derived_ord_struct`.
+/// PARITY test, not the regression oracle — see the sibling above for why the
+/// tree-walk harness cannot fail on a bound rejection. Its codegen twin and
+/// `tests/typechecker.rs`'s `derived_ord_struct_is_accepted_by_priority_queue`
+/// are the ones that go red on the unfixed tree.
+#[test]
+fn test_priority_queue_of_a_derived_ord_struct() {
+    let out = run(r#"
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct Task { pri: i64, id: i64 }
+fn main() {
+    let mut q: PriorityQueue[Task] = PriorityQueue.new();
+    q.push(Task { pri: 3, id: 30 });
+    q.push(Task { pri: 1, id: 10 });
+    q.push(Task { pri: 2, id: 20 });
+    match q.peek() { Some(t) => { println(t.id); } None => {} }
+    println(q.len());
+    while q.len() > 0 {
+        match q.pop() { Some(t) => { println(t.id); } None => {} }
+    }
+    let mut m: PriorityQueue[Task] = PriorityQueue.max_first();
+    m.push(Task { pri: 3, id: 30 });
+    m.push(Task { pri: 1, id: 10 });
+    match m.peek() { Some(t) => { println(t.id); } None => {} }
+}
+"#);
+    assert_eq!(out, "10\n3\n10\n20\n30\n30\n");
+}
+
 #[test]
 fn test_secret_expose_reads_inner() {
     // `std.secret.Secret[T]` — `Secret.new(v)` wraps a sensitive value and

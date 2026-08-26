@@ -45539,3 +45539,102 @@ fn a_genuinely_unsatisfied_bound_still_names_the_bound() {
         "a concrete unsatisfied bound must still be reported as one, got: {joined}"
     );
 }
+
+/// B-2026-08-25-35 — the TYPECHECK oracle for the bound half.
+///
+/// The interpreter twins of this fix (`tests/interpreter.rs`) do NOT go red
+/// without it: that harness's `run()` executes and joins output without
+/// asserting the typecheck is clean, and `karac run` deliberately demotes
+/// typecheck errors to warnings, so the tree-walker produced the right answer
+/// while the program was still being REJECTED. Only the codegen twins and this
+/// test actually fail on the unfixed tree — which is the whole shape of the
+/// bug: a bound rejection that the compiled backend enforced and the
+/// interpreter did not.
+///
+/// A `#[derive(Ord)]` type must satisfy `T: Ord` on a GENERIC IMPL's method,
+/// not only on a free generic fn. `type_satisfies_bound` recognized the derive;
+/// `Env::bound_satisfied` — the gate method resolution uses — did not, so the
+/// same type against the same bound got two answers depending on which side of
+/// the call the bound was written on.
+#[test]
+fn derived_ord_satisfies_a_bound_on_a_generic_impl_method() {
+    typecheck_ok(
+        r#"
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct Item { id: i64 }
+struct Holder[=T] { v: T }
+impl[T: Ord] Holder[T] {
+    fn tag(ref self) -> i64 { 7 }
+}
+fn free[T: Ord](a: T) -> i64 { 9 }
+fn main() {
+    let h = Holder { v: Item { id: 1 } };
+    println(h.tag());
+    println(free(Item { id: 1 }));
+}
+"#,
+    );
+}
+
+/// B-2026-08-25-35 — same, for the stdlib generic whose entire surface is
+/// bounded impl methods. Every `PriorityQueue` method lives on
+/// `impl[T: Ord] PriorityQueue[T]`, so before the fix NO derived user type
+/// could be put in one.
+#[test]
+fn derived_ord_struct_is_accepted_by_priority_queue() {
+    typecheck_ok(
+        r#"
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct Task { pri: i64, id: i64 }
+fn main() {
+    let mut q: PriorityQueue[Task] = PriorityQueue.new();
+    q.push(Task { pri: 1, id: 10 });
+    match q.peek() { Some(t) => { println(t.id); } None => {} }
+    match q.pop() { Some(t) => { println(t.id); } None => {} }
+    println(q.len());
+}
+"#,
+    );
+}
+
+/// B-2026-08-25-35 — the deliberate NON-fix, pinned so it is not "fixed" later
+/// by making the predicates agree.
+///
+/// A hand-written `impl PartialOrd` / `impl Ord` still does NOT enable `<`.
+/// That looks like the same disjointness, and admitting it is a one-line
+/// change, but it was measured to be actively harmful: the operators lower to
+/// `karac_cmp_<T>`, a DECLARATION-ORDER comparator, so a user `cmp` body that
+/// reverses the order is silently overruled rather than called. A struct whose
+/// `impl Ord` reversed the order compiled and popped the declaration-order
+/// winner; the `==` twin silently ignored a user `eq` that compared one field;
+/// `Map` ignored a user `hash`. The derive-only gate is what stands between a
+/// user and those silent wrong answers, so it stays until operator-trait
+/// dispatch actually calls user bodies (tracked separately).
+#[test]
+fn hand_written_partial_ord_impl_still_does_not_enable_the_operator() {
+    let errs = typecheck_errors(
+        r#"
+struct Item { id: i64 }
+impl PartialEq for Item { fn eq(ref self, other: ref Item) -> bool { self.id == other.id } }
+impl Eq for Item {}
+impl PartialOrd for Item { fn partial_cmp(ref self, other: ref Item) -> Option[Ordering] { Some(self.cmp(other)) } }
+impl Ord for Item {
+    fn cmp(ref self, other: ref Item) -> Ordering {
+        if self.id < other.id { return Ordering.Less; }
+        if self.id > other.id { return Ordering.Greater; }
+        Ordering.Equal
+    }
+}
+fn main() {
+    let a = Item { id: 1 };
+    let b = Item { id: 2 };
+    println(f"{a < b}");
+}
+"#,
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("does not implement PartialOrd")),
+        "expected the derive-only gate to still reject `<` on a hand-written impl, got: {errs:?}"
+    );
+}

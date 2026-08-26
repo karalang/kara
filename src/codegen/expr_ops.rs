@@ -3825,6 +3825,23 @@ impl<'ctx> super::Codegen<'ctx> {
                     let elem_te = vec_inner_type_expr(field_te)
                         .or_else(|| slice_inner_type_expr(field_te))
                         .or_else(|| super::helpers::array_inner_type_expr(field_te))?;
+                    // B-2026-08-25-35 — `struct_field_type_exprs` holds the
+                    // DECLARED field type, so inside `impl[T: Ord] Bag[T]` the
+                    // field `xs: Vec[T]` yields element `T`, the impl's type
+                    // PARAMETER, not the monomorph's argument. Returning "T"
+                    // names no struct, so a caller that checks the name against
+                    // `struct_field_type_exprs` / `enum_layouts` — which is what
+                    // the `<`/`>` ordered-user-cmp dispatch in `exprs.rs` does —
+                    // silently declines and falls through to `compile_binop`'s
+                    // "Unsupported struct binary op" error. That is why
+                    // `self.xs[i] > self.xs[j]` failed while the same comparison
+                    // through two local bindings compiled: the locals resolve via
+                    // `var_type_names`, which already holds the concrete name.
+                    // `PriorityQueue.outranks` is exactly the failing shape, so
+                    // NO user type could go in a `PriorityQueue` on the compiled
+                    // backend. Same class as B-2026-08-25-28: a type expr left in
+                    // terms of the impl's parameter inside a monomorph.
+                    let elem_te = self.subst_monomorph_type_params(&elem_te);
                     match &elem_te.kind {
                         TypeKind::Path(p) => p.segments.last().cloned(),
                         _ => None,

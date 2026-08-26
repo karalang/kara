@@ -53591,36 +53591,39 @@ fn main() {
     /// copy would double-free one buffer; a move-out would drop `apple` early
     /// and leave the queue two long.
     ///
-    /// IGNORED, and the reason is itself a bug (B-2026-08-25-35): the fixture
-    /// needs a `T` that is both `Ord` (to go in the queue) and `Drop` (to count
-    /// drops), and no user struct can currently be both. `#[derive(Ord)]` makes
-    /// `<`/`>` work but does not satisfy the `T: Ord` BOUND, while a hand-written
-    /// `impl Ord` satisfies the bound but leaves `<`/`>` a hard error inside
-    /// `outranks`. The two paths recognize disjoint sets of implementations, so
-    /// no spelling compiles. The sibling `String` fixture above is unaffected and
-    /// is the live leak oracle for `peek`.
+    /// STILL IGNORED, but for a different and narrower reason than when it was
+    /// written. B-2026-08-25-35 fixed the half that made this fixture
+    /// *uncompilable*: a `#[derive(Ord)]` struct now satisfies the `T: Ord`
+    /// bound on a generic impl's method, so it can go in a `PriorityQueue` at
+    /// all — hence the switch from a hand-written `impl Ord` to the derive form
+    /// below. (A hand-written `impl Ord` still cannot: see that row for why
+    /// admitting it would silently overrule the user's `cmp` body.)
+    ///
+    /// What it now exposes is B-2026-08-26-9, a real defect this fixture is the
+    /// oracle for: `PriorityQueue.push` runs the drop glue for its by-value
+    /// parameter on a value it has already moved into the backing `Vec`, so an
+    /// `impl Drop` element drops once at push AND again at pop. AOT prints
+    /// `drop 3 / drop 1 / drop 2` before `built`; the interpreter prints
+    /// nothing there. LSan reports 31 bytes leaked in 8 allocations once the
+    /// element also owns a `String`.
+    ///
+    /// The expectations below are the CORRECT sequence — do not relax them to
+    /// match current AOT output. The sibling `String` fixture above has no
+    /// `Drop` impl, is unaffected, and remains the live leak oracle for `peek`.
     #[test]
-    #[ignore = "B-2026-08-25-35: no user struct can be both `Ord` and `Drop`, so this \
-                fixture cannot compile until that row is fixed. Un-ignoring it is that \
-                row's acceptance test."]
+    #[ignore = "B-2026-08-26-9: `PriorityQueue.push` runs the by-value param's drop glue on a \
+                value it already moved into the backing Vec, so an `impl Drop` element drops \
+                once per push AND again per pop (AOT only; the interpreter drops once). LSan \
+                reports 31 bytes leaked in 8 allocations when the element also owns a String. \
+                Un-ignoring this is that row's acceptance test — the fixture below is correct \
+                and its expectations are the CORRECT drop sequence."]
     fn asan_priority_queue_peek_drop_count_is_one_per_returned_copy() {
         assert_clean_asan_run(
             r#"
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
 struct Item { id: i64, name: String }
 impl Drop for Item {
     fn drop(mut ref self) { println(f"drop {self.id} {self.name}") }
-}
-impl PartialEq for Item { fn eq(ref self, other: ref Item) -> bool { self.id == other.id } }
-impl Eq for Item {}
-impl PartialOrd for Item {
-    fn partial_cmp(ref self, other: ref Item) -> Option[Ordering] { Some(self.cmp(other)) }
-}
-impl Ord for Item {
-    fn cmp(ref self, other: ref Item) -> Ordering {
-        if self.id < other.id { return Ordering.Less; }
-        if self.id > other.id { return Ordering.Greater; }
-        Ordering.Equal
-    }
 }
 fn main() {
     let mut q: PriorityQueue[Item] = PriorityQueue.new();

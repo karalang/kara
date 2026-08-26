@@ -3498,12 +3498,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     let d = crate::typechecker::extract_derived_traits(&s.attributes);
                     if d.contains("Ord") || d.contains("PartialOrd") {
                         self.type_decls.ord_orderable_types.insert(s.name.clone());
+                        self.type_decls.ord_derived_types.insert(s.name.clone());
                     }
                 }
                 crate::ast::Item::EnumDef(e) => {
                     let d = crate::typechecker::extract_derived_traits(&e.attributes);
                     if d.contains("Ord") || d.contains("PartialOrd") {
                         self.type_decls.ord_orderable_types.insert(e.name.clone());
+                        self.type_decls.ord_derived_types.insert(e.name.clone());
                     }
                 }
                 crate::ast::Item::ImplBlock(imp) => {
@@ -5336,6 +5338,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.type_decls
                     .struct_field_names
                     .insert(name.to_string(), vec!["value".to_string()]);
+                // B-2026-08-25-35 — the total-order float wrappers really do
+                // carry `#[derive(Eq, Ord, Hash, PartialEq, PartialOrd, Copy)]`
+                // (`runtime/stdlib/f64.kara` and siblings), but they are seeded
+                // HERE from hard-coded shapes rather than walked out of the
+                // prelude AST, so `register_ord_orderable_types` — which only
+                // walks the user program's items — never sees those attributes.
+                // Record the derive explicitly, or the `<`/`>` dispatch's
+                // derive gate declines on them and `iter.max()` / `.min()` over
+                // an `F64` fails with "Unsupported struct binary op: Gt".
+                self.type_decls.ord_derived_types.insert(name.to_string());
+                self.type_decls.ord_orderable_types.insert(name.to_string());
                 let scalar = match name {
                     "F32" => "f32",
                     "F64" => "f64",

@@ -5661,6 +5661,7 @@ impl<'ctx> Codegen<'ctx> {
                 struct_field_type_names: HashMap::new(),
                 struct_field_type_exprs: HashMap::new(),
                 ord_orderable_types: std::collections::HashSet::new(),
+                ord_derived_types: std::collections::HashSet::new(),
                 struct_generic_params: HashMap::new(),
                 shared_type_decl_names: std::collections::HashSet::new(),
                 union_types: HashMap::new(),

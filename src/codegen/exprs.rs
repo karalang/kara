@@ -580,9 +580,33 @@ impl<'ctx> super::Codegen<'ctx> {
                             .or_else(|| self.enum_name_of_expr(left))
                             .or_else(|| self.enum_name_of_expr(right))
                         {
-                            if (self.type_decls.struct_field_type_exprs.contains_key(&name)
-                                && !self.type_decls.shared_types.contains_key(&name))
-                                || self.type_decls.enum_layouts.contains_key(&name)
+                            // B-2026-08-25-35 — require a DERIVE, not merely
+                            // "orderable". `compile_ordered_user_cmp` lowers to
+                            // `karac_cmp_<T>`, a DECLARATION-ORDER lexicographic
+                            // comparator. That is exactly what `#[derive(Ord)]`
+                            // means, but it is not what a hand-written `impl Ord`
+                            // necessarily means: a `cmp` body that reverses the
+                            // order, or keys on one field, is silently overruled.
+                            // Measured — a `PriorityQueue[Item]` whose `impl Ord`
+                            // reverses the order popped the declaration-order
+                            // winner, not the user's.
+                            //
+                            // Hand-written impls therefore decline here and fall
+                            // through to `compile_binop`'s honest "Unsupported
+                            // struct binary op" error, which is also what the
+                            // interpreter does (`aggregate_is_orderable` is
+                            // derive-only), so the two backends agree. Wiring
+                            // `<` to a user `cmp` body is a separate, larger
+                            // feature — operator-trait dispatch — tracked on its
+                            // own row.
+                            //
+                            // `Vec.sort()` deliberately keeps the WIDER
+                            // `ord_orderable_types`: this narrows only the
+                            // operator dispatch.
+                            if self.type_decls.ord_derived_types.contains(&name)
+                                && ((self.type_decls.struct_field_type_exprs.contains_key(&name)
+                                    && !self.type_decls.shared_types.contains_key(&name))
+                                    || self.type_decls.enum_layouts.contains_key(&name))
                             {
                                 if let Some(r) =
                                     self.compile_ordered_user_cmp(op, &name, lhs, rhs)?

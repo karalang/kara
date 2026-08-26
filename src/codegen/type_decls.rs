@@ -57,6 +57,19 @@ pub(crate) struct TypeDecls<'ctx> {
     /// gate). Populated in `declare_structs` / enum registration from the def's
     /// attributes + impl scan.
     pub(crate) ord_orderable_types: std::collections::HashSet<String>,
+    /// The subset of [`Self::ord_orderable_types`] that is orderable because it
+    /// DERIVES `Ord`/`PartialOrd`, excluding types that only hand-write an
+    /// `impl Ord` / `impl PartialOrd`.
+    ///
+    /// The distinction matters because the comparator both are routed to
+    /// (`karac_cmp_<T>`) implements DECLARATION-ORDER lexicographic ordering —
+    /// which is what a derive means, and is NOT necessarily what a hand-written
+    /// `cmp` body says. Sites that merely need "this type has an order"
+    /// (`Vec.sort()`) keep using the wider set; the `<`/`>` operator dispatch
+    /// uses this one, so a hand-written `impl Ord` whose body disagrees with
+    /// declaration order fails loudly instead of being silently overruled
+    /// (B-2026-08-25-35).
+    pub(crate) ord_derived_types: std::collections::HashSet<String>,
     /// Declared generic-param names of each OWNED (non-shared) struct, recorded
     /// by `register_struct_metadata`. Empty vec for a non-generic struct. Lets
     /// the generic-struct monomorphization path (`mono_struct_type`) zip a

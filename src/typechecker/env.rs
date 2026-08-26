@@ -871,8 +871,7 @@ impl TypeEnv {
         // / `Hash` — matching the TypeChecker-layer `type_supports_*` helpers a
         // float would fail (and preserving the `f64`-as-`Ord`-key rejection).
         // A non-primitive (or a float against `Eq`/`Ord`/`Hash`) falls through
-        // to the impl-table walk; named-type `#[derive]` satisfaction stays with
-        // the richer `type_satisfies_bound`, which this env gate cannot reach.
+        // to the impl-table walk, and then to the derive tables below.
         let prim_all = matches!(
             ty,
             Type::Int(_) | Type::UInt(_) | Type::Float(_) | Type::Bool | Type::Char
@@ -885,6 +884,41 @@ impl TypeEnv {
         };
         if builtin_satisfied {
             return true;
+        }
+        // B-2026-08-25-35 — named-type `#[derive]` satisfaction. This used to
+        // be left to `type_satisfies_bound`, on the reasoning that this env
+        // gate "cannot reach" it; but the derive tables ARE reachable, because
+        // `TypeEnv` owns `structs`/`enums`, and the two gates serve different
+        // callers rather than different types. `type_satisfies_bound` runs for
+        // a bound on a FREE generic fn; this one runs for a bound on a GENERIC
+        // IMPL's method. So `#[derive(Ord)] struct Item` satisfied
+        // `fn f[T: Ord](..)` and was rejected by `impl[T: Ord] Box[T] { fn
+        // g(..) }` — the same type, the same bound, two answers decided by
+        // which side of the call the bound was written on. `PriorityQueue[T]`
+        // is entirely the second kind, which is why NO derived type could be
+        // put in one.
+        //
+        // The derive names checked per trait mirror the `type_supports_*`
+        // helpers exactly, supertrait closure included: `#[derive(Ord)]`
+        // answers a `PartialOrd` query and `#[derive(Eq)]` a `PartialEq` one.
+        // Floats are already handled above and never reach here as named
+        // types, so no float carve-out is needed.
+        if let Type::Named { name, .. } | Type::Shared(name) = ty {
+            let derived = self
+                .structs
+                .get(name)
+                .map(|i| &i.derived_traits)
+                .or_else(|| self.enums.get(name).map(|i| &i.derived_traits));
+            if let Some(derived) = derived {
+                let satisfied = match trait_name.as_str() {
+                    "PartialOrd" => derived.contains("PartialOrd") || derived.contains("Ord"),
+                    "PartialEq" => derived.contains("PartialEq") || derived.contains("Eq"),
+                    other => derived.contains(other),
+                };
+                if satisfied {
+                    return true;
+                }
+            }
         }
         let Some((ty_name, ty_args)) = impl_table_key(ty) else {
             // Type variables, function types, etc. don't appear in
