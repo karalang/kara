@@ -2039,6 +2039,73 @@ impl<'a> super::TypeChecker<'a> {
     ///
     /// An operator with no entry in the table above keeps the old operator-
     /// language wording rather than inventing a trait name for it.
+    /// The rejection message for a comparison operator whose derive-based gate
+    /// failed, specialized for a type that carries a HAND-WRITTEN
+    /// operator-trait impl (B-2026-08-26-10).
+    ///
+    /// The plain "type 'T' does not implement PartialEq" is a flat denial of an
+    /// impl the author is looking at, and "add #[derive(PartialEq)]" is worse
+    /// than useless there: it compiles, and then the operator uses structural
+    /// comparison (or, for ordering, a DECLARATION-ORDER comparator) while the
+    /// body they wrote is never called. Measured on both backends.
+    ///
+    /// What the two families can offer differs, so they are not merged:
+    ///
+    /// * EQUALITY has a real workaround. Lowering gates `==` on `impl Eq`
+    ///   (`target_type_name` in `lowering.rs` looks up the trait name "Eq", not
+    ///   "PartialEq"), so adding the marker `impl Eq for T {}` makes `==` lower
+    ///   to the user's `eq` and dispatch correctly — verified on both backends
+    ///   with an `eq` that returns `false` for identical values. That is
+    ///   actionable advice, so the message gives it.
+    ///
+    /// * ORDERING has none. Its lowering targets `T.lt` / `T.le` / …, methods
+    ///   no user impl provides (design.md specifies `partial_cmp(a, b).is_lt()`
+    ///   instead), so even a complete `impl PartialOrd + impl Ord` cannot be
+    ///   dispatched to. The message says that plainly rather than inventing a
+    ///   workaround that does not exist.
+    fn comparison_impl_written_but_undispatched(
+        &self,
+        ty: &Type,
+        equality: bool,
+    ) -> Option<String> {
+        let name = match ty {
+            Type::Named { name, .. } | Type::Shared(name) => name.as_str(),
+            _ => return None,
+        };
+        let disp = type_display(ty);
+        if equality {
+            // `has_impl("Eq")` short-circuits the gate, so reaching here with
+            // an `Eq` impl is impossible; only the partial one can be present.
+            if self.env.has_impl("PartialEq", name, &[]) {
+                return Some(format!(
+                    "'==' cannot dispatch to your 'impl PartialEq for {disp}': the \
+                     operator lowers through the 'Eq' marker, so add 'impl Eq for \
+                     {disp} {{}}' to enable it — '#[derive(PartialEq)]' would compile \
+                     but compare structurally and never call your 'eq'"
+                ));
+            }
+            return None;
+        }
+        let has_po = self.env.has_impl("PartialOrd", name, &[]);
+        let has_o = self.env.has_impl("Ord", name, &[]);
+        if !has_po && !has_o {
+            return None;
+        }
+        let written = if has_po && has_o {
+            "'impl PartialOrd' and 'impl Ord'"
+        } else if has_po {
+            "'impl PartialOrd'"
+        } else {
+            "'impl Ord'"
+        };
+        Some(format!(
+            "ordering operators cannot dispatch to your {written} for '{disp}' — \
+             operator dispatch to hand-written ordering impls is not implemented \
+             yet; '#[derive(PartialOrd)]' would compile but compare by field \
+             DECLARATION ORDER, never calling your impl"
+        ))
+    }
+
     pub(super) fn arithmetic_rejection_message(
         &self,
         op: &BinOp,
@@ -2591,21 +2658,24 @@ impl<'a> super::TypeChecker<'a> {
                     );
                 } else if !self.type_supports_partial_eq(cmp_left) {
                     self.type_error(
-                        format!(
-                            // B-2026-08-25-30 — name the PARTIAL trait: the
-                            // desugaring runs through `PartialEq` (the guard
-                            // right above is `type_supports_partial_eq`), and
-                            // `#[derive(PartialEq)]` ALONE compiles. Prescribing
-                            // `Eq` was not merely imprecise — for a type with an
-                            // `f32`/`f64` field it named a derive the language
-                            // deliberately does not offer on floats (`NaN != NaN`
-                            // breaks reflexivity), sending that reader to a dead
-                            // end. design.md: the `Eq` marker "is never named by
-                            // the desugaring".
-                            "type '{}' does not implement PartialEq; add \
-                             #[derive(PartialEq)] to use == or !=",
-                            type_display(cmp_left)
-                        ),
+                        // B-2026-08-25-30 — name the PARTIAL trait: the
+                        // desugaring runs through `PartialEq` (the guard
+                        // right above is `type_supports_partial_eq`), and
+                        // `#[derive(PartialEq)]` ALONE compiles. Prescribing
+                        // `Eq` was not merely imprecise — for a type with an
+                        // `f32`/`f64` field it named a derive the language
+                        // deliberately does not offer on floats (`NaN != NaN`
+                        // breaks reflexivity), sending that reader to a dead
+                        // end. design.md: the `Eq` marker "is never named by
+                        // the desugaring".
+                        self.comparison_impl_written_but_undispatched(cmp_left, true)
+                            .unwrap_or_else(|| {
+                                format!(
+                                    "type '{}' does not implement PartialEq; add \
+                                 #[derive(PartialEq)] to use == or !=",
+                                    type_display(cmp_left)
+                                )
+                            }),
                         *span,
                         TypeErrorKind::InvalidBinaryOp,
                     );
@@ -2634,16 +2704,19 @@ impl<'a> super::TypeChecker<'a> {
                     // "no comparison unless opted in"). Other named types keep
                     // their pre-existing comparison behavior.
                     self.type_error(
-                        format!(
-                            // B-2026-08-25-30 — the `PartialOrd` sibling of
-                            // the `PartialEq` correction above: the guard is
-                            // `type_supports_partial_ord` and
-                            // `#[derive(PartialOrd)]` alone compiles, on a
-                            // struct/enum and on a distinct type alike.
-                            "type '{}' does not implement PartialOrd; add \
-                             #[derive(PartialOrd)] to use <, <=, >, or >=",
-                            type_display(cmp_left)
-                        ),
+                        // B-2026-08-25-30 — the `PartialOrd` sibling of
+                        // the `PartialEq` correction above: the guard is
+                        // `type_supports_partial_ord` and
+                        // `#[derive(PartialOrd)]` alone compiles, on a
+                        // struct/enum and on a distinct type alike.
+                        self.comparison_impl_written_but_undispatched(cmp_left, false)
+                            .unwrap_or_else(|| {
+                                format!(
+                                    "type '{}' does not implement PartialOrd; add \
+                                 #[derive(PartialOrd)] to use <, <=, >, or >=",
+                                    type_display(cmp_left)
+                                )
+                            }),
                         *span,
                         TypeErrorKind::InvalidBinaryOp,
                     );
@@ -2661,16 +2734,19 @@ impl<'a> super::TypeChecker<'a> {
                     // and derived types lower through the `karac_cmp`/`value_compare`
                     // declaration-order comparator (B-2026-07-03-7).
                     self.type_error(
-                        format!(
-                            // B-2026-08-25-30 — the `PartialOrd` sibling of
-                            // the `PartialEq` correction above: the guard is
-                            // `type_supports_partial_ord` and
-                            // `#[derive(PartialOrd)]` alone compiles, on a
-                            // struct/enum and on a distinct type alike.
-                            "type '{}' does not implement PartialOrd; add \
-                             #[derive(PartialOrd)] to use <, <=, >, or >=",
-                            type_display(cmp_left)
-                        ),
+                        // B-2026-08-25-30 — the `PartialOrd` sibling of
+                        // the `PartialEq` correction above: the guard is
+                        // `type_supports_partial_ord` and
+                        // `#[derive(PartialOrd)]` alone compiles, on a
+                        // struct/enum and on a distinct type alike.
+                        self.comparison_impl_written_but_undispatched(cmp_left, false)
+                            .unwrap_or_else(|| {
+                                format!(
+                                    "type '{}' does not implement PartialOrd; add \
+                                 #[derive(PartialOrd)] to use <, <=, >, or >=",
+                                    type_display(cmp_left)
+                                )
+                            }),
                         *span,
                         TypeErrorKind::InvalidBinaryOp,
                     );

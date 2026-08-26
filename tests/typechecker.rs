@@ -45597,6 +45597,85 @@ fn main() {
     );
 }
 
+/// B-2026-08-26-10 — a rejection must not deny an impl the author can see, nor
+/// prescribe a derive that would silently discard it.
+///
+/// `impl PartialEq for Item` alone is legal and is what design.md's desugaring
+/// runs through, but lowering gates `==` on the `Eq` MARKER, so the operator
+/// was refused with "type 'Item' does not implement PartialEq; add
+/// #[derive(PartialEq)]" — a flat denial of the impl on the line above, whose
+/// advice compiles and then compares structurally, never calling `eq`.
+///
+/// The replacement names the impl and gives the workaround that actually
+/// works. `..._advice_is_true` below follows that advice literally and checks
+/// the result, so the message cannot rot into a lie.
+#[test]
+fn equality_rejection_names_the_hand_written_impl_and_the_real_workaround() {
+    let errs = typecheck_errors(
+        r#"
+struct Item { id: i64, tag: i64 }
+impl PartialEq for Item { fn eq(ref self, other: ref Item) -> bool { self.id == other.id } }
+fn main() {
+    let a = Item { id: 1, tag: 5 };
+    let b = Item { id: 1, tag: 9 };
+    println(f"{a == b}");
+}
+"#,
+    );
+    let msg = errs
+        .iter()
+        .find(|e| e.message.contains("cannot dispatch to your"))
+        .map(|e| e.message.clone())
+        .unwrap_or_else(|| panic!("expected `==` to be rejected, got: {errs:?}"));
+    assert!(
+        msg.contains("'impl PartialEq for Item'"),
+        "must name the impl the user wrote, got: {msg}"
+    );
+    assert!(
+        msg.contains("impl Eq for Item {}"),
+        "must give the workaround that enables dispatch, got: {msg}"
+    );
+    assert!(
+        !msg.contains("does not implement PartialEq"),
+        "must not deny an impl that exists, got: {msg}"
+    );
+}
+
+/// A type with NO operator impl keeps the plain derive advice — the new
+/// message must not swallow the common case.
+#[test]
+fn equality_rejection_without_any_impl_still_recommends_the_derive() {
+    let errs = typecheck_errors(
+        r#"
+struct Item { id: i64 }
+fn main() {
+    let a = Item { id: 1 };
+    let b = Item { id: 2 };
+    println(f"{a == b}");
+    println(f"{a < b}");
+}
+"#,
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("does not implement PartialEq")
+                && e.message.contains("#[derive(PartialEq)]")),
+        "no-impl equality should still recommend the derive, got: {errs:?}"
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("does not implement PartialOrd")
+                && e.message.contains("#[derive(PartialOrd)]")),
+        "no-impl ordering should still recommend the derive, got: {errs:?}"
+    );
+    assert!(
+        !errs
+            .iter()
+            .any(|e| e.message.contains("cannot dispatch to your")),
+        "a type with no impl must not be told about dispatching to one, got: {errs:?}"
+    );
+}
+
 /// B-2026-08-25-35 — the deliberate NON-fix, pinned so it is not "fixed" later
 /// by making the predicates agree.
 ///
@@ -45606,10 +45685,19 @@ fn main() {
 /// `karac_cmp_<T>`, a DECLARATION-ORDER comparator, so a user `cmp` body that
 /// reverses the order is silently overruled rather than called. A struct whose
 /// `impl Ord` reversed the order compiled and popped the declaration-order
-/// winner; the `==` twin silently ignored a user `eq` that compared one field;
-/// `Map` ignored a user `hash`. The derive-only gate is what stands between a
-/// user and those silent wrong answers, so it stays until operator-trait
-/// dispatch actually calls user bodies (tracked separately).
+/// winner, and `Map` ignored a user `hash`. The derive-only gate is what
+/// stands between a user and those silent wrong answers, so it stays until
+/// operator-trait dispatch actually calls user bodies (tracked separately).
+///
+/// ONE CLAIM IN THE ORIGINAL WRITE-UP IS NARROWER THAN IT READ, and the
+/// correction is why this test's ordering scope is not extended to `==`:
+/// "the `==` twin silently ignored a user `eq`" holds ONLY for an `impl
+/// PartialEq` written WITHOUT the `Eq` marker. Lowering gates `==` on `Eq`
+/// (`target_type_name`), so `impl PartialEq` + `impl Eq for T {}` DOES
+/// dispatch to the user's `eq` — verified on all three backends with an `eq`
+/// returning `false` for identical values. Equality therefore has a real
+/// workaround and ordering has none, which is exactly why B-2026-08-26-10's
+/// two diagnostics differ (`comparison_impl_written_but_undispatched`).
 #[test]
 fn hand_written_partial_ord_impl_still_does_not_enable_the_operator() {
     let errs = typecheck_errors(
@@ -45632,9 +45720,26 @@ fn main() {
 }
 "#,
     );
+    // The GATE is what this test pins, not the wording; B-2026-08-26-10
+    // rewrote the message for exactly this shape, because the old one
+    // ("does not implement PartialOrd; add #[derive(PartialOrd)]") denied an
+    // impl the author is looking at and prescribed a derive that compiles and
+    // then ignores it. Both halves are asserted: still rejected, and rejected
+    // with a message that does not recommend the silently-discarding derive as
+    // the fix.
+    let msg = errs
+        .iter()
+        .find(|e| e.message.contains("cannot dispatch to your"))
+        .map(|e| e.message.clone())
+        .unwrap_or_else(|| {
+            panic!("expected the derive-only gate to still reject `<` on a hand-written impl, got: {errs:?}")
+        });
     assert!(
-        errs.iter()
-            .any(|e| e.message.contains("does not implement PartialOrd")),
-        "expected the derive-only gate to still reject `<` on a hand-written impl, got: {errs:?}"
+        msg.contains("'impl PartialOrd' and 'impl Ord'"),
+        "the message should name the impls the user actually wrote, got: {msg}"
+    );
+    assert!(
+        msg.contains("DECLARATION ORDER"),
+        "the message should say what the derive would do instead of calling the impl, got: {msg}"
     );
 }

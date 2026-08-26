@@ -5850,6 +5850,44 @@ fn main() { println(build2().v); }
         );
     }
 
+    /// The workaround B-2026-08-26-10's equality diagnostic prescribes is TRUE:
+    /// `impl PartialEq` + the `Eq` marker really does dispatch `==` to the
+    /// user's `eq` body, on the compiled backends as well as the interpreter.
+    ///
+    /// This is the honesty pin for that message. The diagnostic tells an author
+    /// with a hand-written `impl PartialEq` to add `impl Eq for T {}`; if
+    /// lowering ever stops gating on the `Eq` marker
+    /// (`target_type_name` in `lowering.rs`), the advice becomes a lie that
+    /// silently returns structural comparison, and no typechecker test would
+    /// notice — the program still compiles, it just answers wrongly.
+    ///
+    /// `eq` returns `false` unconditionally and the two values are IDENTICAL,
+    /// so structural comparison and the user's body give opposite answers:
+    /// structural says `true`/`false`, the body says `false`/`true`. A test
+    /// whose `eq` merely ignored a field would pass under either.
+    #[test]
+    fn e2e_user_eq_impl_with_eq_marker_is_dispatched_by_the_operator() {
+        let Some(out) = run_program(
+            "struct Item { id: i64, tag: i64 }\n\
+             impl PartialEq for Item {\n\
+             \x20   fn eq(ref self, other: ref Item) -> bool { false }\n\
+             }\n\
+             impl Eq for Item {}\n\
+             fn main() {\n\
+             \x20   let a = Item { id: 7, tag: 7 };\n\
+             \x20   let b = Item { id: 7, tag: 7 };\n\
+             \x20   println(a == b);\n\
+             \x20   println(a != b);\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out, "false\ntrue\n",
+            "`==` must call the user's `eq` (false), not compare structurally (true)"
+        );
+    }
+
     /// `~` complements at the DECLARED width, not the carrier's.
     ///
     /// `~5u8` is 250. It produced 18446744073709551610 in the compiled
