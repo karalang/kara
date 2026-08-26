@@ -46306,3 +46306,180 @@ fn map_reserve_rejects_wrong_arity() {
         );
     }
 }
+
+// ── B-2026-08-26-40: wrong arity on a builtin static ────────────
+
+/// A WRONG-ARITY call to a builtin associated function must report the ARITY,
+/// not claim the function does not exist. B-2026-08-26-40.
+///
+/// `String.with_capacity()` reported `no associated function 'with_capacity'
+/// on type 'String'` — byte-identical to the message for a genuine typo —
+/// while `String.with_capacity(8i64)` typechecked fine. The builtin statics
+/// are recognized by arms guarded on an exact `args.len()`, so an arity
+/// mismatch matched no arm and fell through to the catch-all that reports
+/// absence.
+///
+/// The message matters more than the severity suggests: "no associated
+/// function" is a claim about EXISTENCE, so a user who miscounted arguments is
+/// told the function is not there, and the natural next move is to hunt for a
+/// different NAME. That is the same wasted trip B-2026-08-26-11 sent a reader
+/// on, arriving from the opposite direction.
+#[test]
+fn wrong_arity_on_a_builtin_static_reports_arity_not_absence() {
+    let cases: &[(&str, &str, &str)] = &[
+        (
+            "String.with_capacity/0",
+            "let _ = String.with_capacity();",
+            "String.with_capacity",
+        ),
+        (
+            "String.with_capacity/2",
+            "let _ = String.with_capacity(1i64, 2i64);",
+            "String.with_capacity",
+        ),
+        ("Vec.new/1", "let _: Vec[i64] = Vec.new(1i64);", "Vec.new"),
+        (
+            "Map.new/1",
+            "let _: Map[String, i64] = Map.new(1i64);",
+            "Map.new",
+        ),
+        ("Set.new/1", "let _: Set[i64] = Set.new(1i64);", "Set.new"),
+        (
+            "Vec.filled/1",
+            "let _: Vec[i64] = Vec.filled(1i64);",
+            "Vec.filled",
+        ),
+        (
+            "VecDeque.with_capacity/0",
+            "let _: VecDeque[i64] = VecDeque.with_capacity();",
+            "VecDeque.with_capacity",
+        ),
+    ];
+    for (label, body, want_name) in cases {
+        let errs = typecheck_errors(&format!("fn probe() {{ {body} }}"));
+        let msgs: Vec<&String> = errs.iter().map(|e| &e.message).collect();
+        assert!(
+            msgs.iter()
+                .any(|m| m.contains("expects") && m.contains(want_name)),
+            "{label}: expected an arity diagnostic naming '{want_name}', got {msgs:?}"
+        );
+        assert!(
+            !msgs.iter().any(|m| m.contains("no associated function")),
+            "{label}: must not claim the function does not exist; got {msgs:?}"
+        );
+    }
+}
+
+/// A fallible companion must be reported under THE NAME THE USER WROTE.
+/// B-2026-08-26-40, second half.
+///
+/// `Vec.try_with_capacity()` reported `no associated function 'with_capacity'
+/// on type 'Vec'` — a spelling absent from the source the user is looking at.
+/// `infer_call` resolves a companion by cloning the callee, rewriting the
+/// segment to the BASE name, and recursing, so any diagnostic raised inside
+/// that recursion has already lost the `try_` prefix. The arity check
+/// therefore runs at the companion site, before the rewrite.
+#[test]
+fn wrong_arity_on_a_fallible_companion_keeps_the_try_prefix() {
+    let cases = [
+        ("Vec.try_with_capacity", "let _ = Vec.try_with_capacity();"),
+        ("Vec.try_from_slice", "let _ = Vec.try_from_slice();"),
+        (
+            "String.try_with_capacity",
+            "let _ = String.try_with_capacity();",
+        ),
+    ];
+    for (want_name, body) in cases {
+        let src = format!("fn probe() -> Result[i64, AllocError] {{ {body} return Ok(0i64); }}");
+        let msgs: Vec<String> = typecheck_errors(&src)
+            .iter()
+            .map(|e| e.message.clone())
+            .collect();
+        assert!(
+            msgs.iter()
+                .any(|m| m.contains(want_name) && m.contains("expects")),
+            "expected an arity diagnostic naming '{want_name}' as written, got {msgs:?}"
+        );
+        // The base spelling must not appear alone — that is the leak.
+        let base = want_name.replace("try_", "");
+        assert!(
+            !msgs
+                .iter()
+                .any(|m| m.contains(&base) && !m.contains(want_name)),
+            "the diagnostic leaked the base name '{base}', which the user never \
+             wrote; got {msgs:?}"
+        );
+    }
+}
+
+/// The arity table must not drift from the compiler. B-2026-08-26-40.
+///
+/// `BUILTIN_ASSOC_FN_ARITIES` is diagnostic-only and hand-maintained, which is
+/// safe in one direction and not the other. A MISSING row degrades to the old
+/// "no associated function" message and costs nothing new. A WRONG row is the
+/// harmful case: it would announce an arity for a function that does not
+/// exist, turning a correct absence diagnostic into a confident lie. This test
+/// closes that direction by calling every row at its listed arity and
+/// requiring the compiler not to report the name as missing.
+#[test]
+fn builtin_assoc_fn_arity_table_matches_the_compiler() {
+    // (type, member, arity, type annotation needed to pin the element type)
+    let rows: &[(&str, &str, usize, &str)] = &[
+        ("String", "new", 0, ": String"),
+        ("String", "with_capacity", 1, ": String"),
+        ("Vec", "new", 0, ": Vec[i64]"),
+        ("Vec", "with_capacity", 1, ": Vec[i64]"),
+        ("Vec", "filled", 2, ": Vec[i64]"),
+        ("VecDeque", "new", 0, ": VecDeque[i64]"),
+        ("VecDeque", "with_capacity", 1, ": VecDeque[i64]"),
+        ("Map", "new", 0, ": Map[String, i64]"),
+        ("Set", "new", 0, ": Set[i64]"),
+        ("SortedSet", "new", 0, ": SortedSet[i64]"),
+        ("SortedMap", "new", 0, ": SortedMap[String, i64]"),
+    ];
+    for (ty, member, arity, ann) in rows {
+        let args = vec!["0i64"; *arity].join(", ");
+        let src = format!("fn probe() {{ let _{ann} = {ty}.{member}({args}); }}");
+        // Not `typecheck_errors`: that helper asserts errors EXIST, and a
+        // correct row produces none.
+        let parsed = parse(&src);
+        assert!(parsed.errors.is_empty(), "{ty}.{member}: parse errors");
+        let resolved = resolve(&parsed.program);
+        let msgs: Vec<String> = typecheck(&parsed.program, &resolved)
+            .errors
+            .iter()
+            .map(|e| e.message.clone())
+            .collect();
+        assert!(
+            !msgs.iter().any(|m| m.contains("no associated function")
+                || (m.contains("expects") && m.contains(&format!("{ty}.{member}")))),
+            "table row {ty}.{member}/{arity} does not resolve at that arity — the \
+             table has drifted from the compiler, and a stale row makes the arity \
+             diagnostic lie about a function that is not there. Errors: {msgs:?}"
+        );
+    }
+}
+
+/// A name that genuinely is not there must still say so. B-2026-08-26-40.
+///
+/// The fix narrows the "no associated function" message rather than removing
+/// it, and that message is load-bearing: it is what stops an unknown
+/// `Type.method` from reaching codegen as a permissive sentinel and failing
+/// there with a misleading "no handler for method" (the reason the catch-all
+/// was added in the first place). This pins the half that must not change.
+#[test]
+fn a_genuinely_absent_associated_function_still_reports_absence() {
+    for (ty, ann) in [("String", ": String"), ("Vec", ": Vec[i64]")] {
+        let src = format!("fn probe() {{ let _{ann} = {ty}.definitely_not_a_real_fn(1i64); }}");
+        let msgs: Vec<String> = typecheck_errors(&src)
+            .iter()
+            .map(|e| e.message.clone())
+            .collect();
+        assert!(
+            msgs.iter()
+                .any(|m| m.contains("no associated function")
+                    && m.contains("definitely_not_a_real_fn")),
+            "{ty}: an absent name must still report absence, got {msgs:?}"
+        );
+    }
+}

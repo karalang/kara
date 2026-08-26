@@ -606,6 +606,34 @@ impl<'a> super::TypeChecker<'a> {
                         _ => false,
                     };
                     if recognized {
+                        // B-2026-08-26-40 — check arity HERE, before the
+                        // rewrite below recurses with the BASE name. The
+                        // companion resolves through its base and shares its
+                        // arity, but the recursion also replaces the name, so a
+                        // diagnostic raised inside it would report a spelling
+                        // absent from the user's source: `Vec.try_with_capacity()`
+                        // used to report "no associated function 'with_capacity'".
+                        if let Some(expected) =
+                            builtin_assoc_fn_arity_mismatch(coll, &segments[1], args.len())
+                        {
+                            let want = expected
+                                .iter()
+                                .map(|n| n.to_string())
+                                .collect::<Vec<_>>()
+                                .join(" or ");
+                            self.type_error(
+                                format!(
+                                    "associated function '{}.{}' expects {} argument(s), found {}",
+                                    coll,
+                                    segments[1],
+                                    want,
+                                    args.len()
+                                ),
+                                *span,
+                                TypeErrorKind::WrongNumberOfArgs,
+                            );
+                            return Type::Error;
+                        }
                         let mut base_callee = callee.clone();
                         if let ExprKind::Path { segments, .. } = &mut base_callee.kind {
                             segments[1] = base.to_string();
@@ -2044,6 +2072,60 @@ impl<'a> super::TypeChecker<'a> {
             _ => None,
         };
 
+        // B-2026-08-26-40 — a WRONG-ARITY call to a BUILTIN associated function
+        // must not be reported as if the function did not exist.
+        //
+        // The builtin statics are recognized by special arms above, each guarded
+        // on an exact `args.len()`. When the arity does not match, no arm fires
+        // and the call falls through to `infer_expr(callee)` →
+        // `resolve_path_type`, whose catch-all emits "no associated function
+        // 'x' on type 'T'" — the SAME message a genuine typo produces. So
+        // `String.with_capacity()` claimed the function was missing while
+        // `String.with_capacity(8i64)` typechecked fine.
+        //
+        // That is a claim about EXISTENCE, and it points the user at the wrong
+        // problem: the likely next move is to hunt for the right NAME — rename
+        // the call, search the docs, file a "documented method missing" bug —
+        // when the name was right and only the argument count was wrong. It
+        // misleads a model reading the error just as badly, which is the
+        // AI-first surface this compiler is built around.
+        //
+        // USER-DEFINED `impl` STATICS WERE NEVER AFFECTED: they resolve through
+        // a real signature and already report "expected 2 argument(s), found 1".
+        // Instance methods, builtin and user alike, were fine too. The defect is
+        // specific to the builtin/baked-stdlib static path, which is why the fix
+        // sits here rather than in the shared catch-all.
+        if let ExprKind::Path { segments, .. } = &callee.kind {
+            if segments.len() == 2 {
+                if let Some(expected) =
+                    builtin_assoc_fn_arity_mismatch(&segments[0], &segments[1], args.len())
+                {
+                    let want = expected
+                        .iter()
+                        .map(|n| n.to_string())
+                        .collect::<Vec<_>>()
+                        .join(" or ");
+                    // Report the name the USER WROTE. A fallible companion
+                    // resolves through its base, and the old message leaked
+                    // that: `Vec.try_with_capacity()` reported "no associated
+                    // function 'with_capacity'" — a name absent from the source
+                    // the user is staring at.
+                    self.type_error(
+                        format!(
+                            "associated function '{}.{}' expects {} argument(s), found {}",
+                            segments[0],
+                            segments[1],
+                            want,
+                            args.len()
+                        ),
+                        *span,
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    return Type::Error;
+                }
+            }
+        }
+
         let callee_ty = self.infer_expr(annotated_callee.as_ref().unwrap_or(callee));
 
         // Closure-VALUE call through a non-identifier callee — a struct field
@@ -2753,4 +2835,59 @@ fn collect_tensor_literal<'e>(
         leaves.extend(elements.iter());
     }
     Ok(())
+}
+
+/// Valid arities for the BUILTIN associated functions, for diagnostics only.
+/// B-2026-08-26-40.
+///
+/// The builtin statics have no signature the typechecker can consult — each is
+/// an ad-hoc arm guarded on an exact `args.len()` — so producing "expects N,
+/// found M" needs the N stated somewhere. This is that somewhere, and it is
+/// deliberately diagnostic-only: it never admits a call, it only decides which
+/// MESSAGE a call that has already failed to match any arm receives.
+///
+/// DRIFT IS BOUNDED BY CONSTRUCTION, which is what makes a hand-maintained
+/// table acceptable here. A MISSING entry degrades to the previous behaviour
+/// (the catch-all "no associated function"), so forgetting one costs nothing
+/// new. A WRONG entry is the only harmful case — it would announce an arity
+/// for a function that does not exist — and
+/// `builtin_assoc_fn_arity_table_matches_the_compiler` pins every row against
+/// the real compiler, failing if an entry stops resolving at a listed arity.
+/// The table was not written from the arms by hand: it was MEASURED by probing
+/// each candidate across arities 0..=3 and recording which ones the
+/// typechecker accepts.
+const BUILTIN_ASSOC_FN_ARITIES: &[(&str, &str, &[usize])] = &[
+    ("String", "new", &[0]),
+    ("String", "with_capacity", &[1]),
+    ("Vec", "new", &[0]),
+    ("Vec", "with_capacity", &[1]),
+    ("Vec", "filled", &[2]),
+    ("Vec", "from_slice", &[1]),
+    ("Vec", "from_iter", &[1]),
+    ("VecDeque", "new", &[0]),
+    ("VecDeque", "with_capacity", &[1]),
+    ("Map", "new", &[0]),
+    ("Set", "new", &[0]),
+    ("SortedSet", "new", &[0]),
+    ("SortedMap", "new", &[0]),
+];
+
+/// `Some(valid_arities)` when `ty::member` is a known builtin associated
+/// function that does NOT accept `found` arguments; `None` when it accepts
+/// them, or when the name is not a builtin static at all (in which case the
+/// existing "no associated function" path is correct and keeps running).
+///
+/// A leading `try_` is stripped for the lookup: a fallible companion resolves
+/// through its base and shares its arity. The caller reports the name as the
+/// user spelled it.
+fn builtin_assoc_fn_arity_mismatch(ty: &str, member: &str, found: usize) -> Option<Vec<usize>> {
+    let base = member.strip_prefix("try_").unwrap_or(member);
+    let (_, _, arities) = BUILTIN_ASSOC_FN_ARITIES
+        .iter()
+        .find(|(t, n, _)| *t == ty && *n == base)?;
+    if arities.contains(&found) {
+        None
+    } else {
+        Some(arities.to_vec())
+    }
 }
