@@ -12053,10 +12053,17 @@ fn test_operators_page_carries_no_superseded_wording() {
              works; `not a` is the bool negation. Neither was missing",
         ),
         (
-            "partial_cmp(ref a, ref b).is_lt()",
-            "B-2026-08-26-10: the compiler does not emit this. A primitive \
-             uses the direct `lt`; a user `impl Ord` goes through `cmp`. The \
-             page must not print a desugaring no backend produces",
+            // The TABLE ROW, not the bare desugaring string. The page now
+            // quotes `partial_cmp(ref a, ref b).is_lt()` on purpose, to say
+            // design.md specifies it and the compiler does not emit it —
+            // banning the string outright would ban the explanation along with
+            // the claim. The row is what must not come back: the trait column
+            // reading `PartialOrd` is exactly the superseded claim, since a
+            // primitive uses the direct `lt` and a user type goes through
+            // `Ord.cmp` (B-2026-08-26-10).
+            "a < b           PartialOrd",
+            "B-2026-08-26-10: no backend emits a `PartialOrd` desugaring for \
+             `<`; the table row must name what actually runs",
         ),
         (
             "Five rejections cover",
