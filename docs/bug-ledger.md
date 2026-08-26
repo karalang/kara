@@ -94,8 +94,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 292 | 1 |
 | leak | 196 | 0 |
-| missing-feature | 179 | 5 |
-| run-vs-build | 164 | 1 |
+| missing-feature | 180 | 6 |
+| run-vs-build | 166 | 3 |
 | codegen-gap | 140 | 1 |
 | double-free | 140 | 0 |
 | diagnostics | 109 | 1 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1052 | 6 |
-| typecheck | 266 | 3 |
-| interp | 182 | 0 |
+| codegen | 1054 | 8 |
+| typecheck | 267 | 4 |
+| interp | 183 | 1 |
 | other | 70 | 3 |
 | ownership | 65 | 0 |
 | cli | 63 | 0 |
@@ -124,22 +124,25 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1601 surfaced · 10 open · 1566 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-26). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1604 surfaced · 13 open · 1566 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-26). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (10)
+### Open (13)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-25-3 | 2026-08-25 | codegen | medium | `codegen_tests::vec_mutation_methods_bounds_check_out_of_range_index` IS FLAKY, and it fails by showing exactly the PRE-FIX symptom of the high-severity bug it guards: `v.insert(7i64, 9i64)` produced no `Vec.insert index out of bounds` panic, stdout empty, stderr `free(): invalid pointer`. Observed once in a full `cargo test --features llvm` run; the same test then passed 3/3 in isolation, 3198/3198 in a codegen-only run, and the next FULL run was green at 125 suites / 15090 tests. | roadmap.md |
 | B-2026-08-25-34 | 2026-08-25 | codegen | medium | `AllocError`'s `Display` renders the Debug form (`OutOfMemory { requested_bytes: 4096 }`) into the user-facing `Error: {e}` entry-point line, and the spec-sanctioned fix -- a manual `impl Display`, per § `#[derive(Display)]` on enums' "Implement `Display` manually to override" -- CANNOT LAND without codegen work: a prelude impl lives in `STDLIB_PROGRAMS`, which codegen does not walk, so the impl reaches the interpreter only. Registering the module as a compiled stdlib program fixes `.to_string()` under AOT but leaves `f"{e}"` and the entry-point line unfixed. Worse, the half-done state FAILS OPEN: dropping the derive without teaching codegen about the impl makes `karac build` emit `Error: ` with an EMPTY message rather than erroring, because the typechecker sees the impl and codegen does not. | roadmap.md |
 | B-2026-08-26-4 | 2026-08-26 | other | low | design.md's CANONICAL `?`-operator example calls `input.parse_i64()?` and names `ParseError` -- NEITHER EXISTS: the real API is `i64.parse(s) -> Option[i64]`, which cannot be used with `?` the way the example shows | docs/design.md § `?` operator and cross-error-type propagation |
-| B-2026-08-26-10 | 2026-08-26 | typecheck+codegen | medium | OPERATORS NEVER CALL A HAND-WRITTEN OPERATOR-TRAIT BODY: `==` uses structural comparison, `<` uses a DECLARATION-ORDER comparator, and `Map` uses a structural hash, so a user `impl PartialEq` / `impl Ord` / `impl Hash` is silently bypassed rather than dispatched. The derive-only typecheck gate is currently the only thing preventing that silence, which is why it must NOT be relaxed to 'make the two paths agree'. | — |
+| B-2026-08-26-10 | 2026-08-26 | typecheck+codegen | medium | `Map` HASHING NEVER CALLS A HAND-WRITTEN `impl Hash`: with the derive absent the key is REJECTED, and with `#[derive(Hash)]` present alongside the impl the program checks clean and the DERIVE SILENTLY WINS. The comparison half of this row is fixed -- `==` and `< <= > >=` now dispatch to a user body on all three backends -- and the original title's claim that they used structural/declaration-order comparison held only under the relaxed-gate experiment. | — |
 | B-2026-08-26-11 | 2026-08-26 | other | medium | design.md's `String` METHOD TABLE names the char-append method `push_char`, which DOES NOT EXIST -- the working method is `push(c: char)`, and the table has NO ROW FOR IT, so the documented spelling fails and the real one is undocumented | docs/design.md § `String` method table (the `push_char` row) |
 | B-2026-08-26-13 | 2026-08-26 | other | medium | `String.split` HAS NO BORROWING FORM: it returns `Vec[String]`, so tokenizing costs one heap allocation and one byte copy PER FIELD, and there is no slice-returning variant to reach for. Measured at 0.67 s where C's in-place split is 0.03 s and Rust's `Vec[&str]` is 0.18 s -- but Kara BEATS Rust's same-semantics `Vec[String]` version (1.17 s) by 1.7x, so the implementation is fine and the API's return shape is the entire gap. | — |
 | B-2026-08-26-15 | 2026-08-26 | typecheck | low | `LazyLock.new`'s closure-capture restriction is UNENFORCED: design.md says the closure "may only capture other module-level compile-time bindings; captures of runtime state are a compile error", but a closure capturing a function local is accepted silently. Measured to be a missing RESTRICTION rather than a correctness hazard -- the capturing form produces identical, correct results on `--interp`, `karac run` and `karac build` -- which is why it is split out of B-2026-08-26-3 rather than blocking it. | — |
 | B-2026-08-26-20 | 2026-08-26 | codegen | medium | A `char` returned through a CLOSURE prints as its integer code point under both compiled backends while the interpreter prints the character: `let c: char = 'z'; let f: Fn() -> char = || c; println(f())` gives `z` under `--interp` and `122` under `karac run` / `karac build`. No borrow involved — the same `char` printed directly, or returned from a plain function, renders correctly on every backend. | — |
 | B-2026-08-26-21 | 2026-08-26 | codegen | medium | A RELOCATING element store (`b.xs[i] = b.xs[j]`, then `b.xs[j] = t`) runs the displaced element's user `Drop` BODY, even though the value is being moved to another slot rather than destroyed. A two-element swap of a `Drop` type prints SIX drop bodies, all during the swap and none at scope exit; the correct sequence is one body per element when it finally dies. | — |
 | B-2026-08-26-22 | 2026-08-26 | typecheck+codegen | medium | The fallible-allocation table's REMAINING gaps, after B-2026-08-25-20 landed the Vec capacity family: `try_resize` / `try_append` have panicking bases now but no fallible codegen arm and so are NOT registered; `String.reserve`, `Map.reserve` and `Vec.from_iter` still have no base at all. Measured one per compile on the commit that closed -20: `v.try_resize(4, 0)` -> `no method 'try_resize' on type 'Vec'`; `v.try_append(b)` -> `no method 'try_append'`; `s.reserve(16)` -> `no method 'reserve' on type 'String'`; `m.reserve(16)` -> `no method 'reserve' on type 'Map'`; `Vec.from_iter(0..4)` -> `no associated function 'from_iter' on type 'Vec'`. design.md's panicking/fallible table names all five. | — |
+| B-2026-08-26-23 | 2026-08-26 | codegen | medium | `Ordering`'s PREDICATE METHODS (`is_lt` / `is_le` / `is_gt` / `is_ge` / `is_eq`) fail to BUILD whenever codegen cannot name the receiver's type -- a chained `a.cmp(b).is_lt()` on a PRIMITIVE, and EVERY `Option[Ordering]` receiver including a plainly-annotated local. All three shapes run correctly under `--interp`, so this is a run-vs-build divergence, and it is what forced the ordering operators to desugar through `cmp` instead of design.md's specified `partial_cmp`. | — |
+| B-2026-08-26-24 | 2026-08-26 | codegen+interp | medium | A COMPARISON OPERATOR INSIDE A GENERIC BODY never dispatches to the element's user `impl Ord`: operator lowering resolves only CONCRETE operand types, so `a < b` on a `T: Ord` stays unlowered and dies with `operator 'Lt' is not defined for operands of type 'Struct'` / `Unsupported struct binary op: Gt`. `PriorityQueue[T]` is the shipping casualty -- it works for `#[derive(Ord)]` and fails for every hand-written impl. | — |
+| B-2026-08-26-25 | 2026-08-26 | typecheck | medium | ORDERING OPERATORS ON A `shared struct` ARE ADMITTED BY THE TYPECHECKER AND IMPLEMENTED BY NEITHER BACKEND: `a < b` on a shared struct passes `karac check` with NO derive and NO impl at all, then fails with `operator 'Lt' is not defined for operands of type 'SharedStruct'` under `--interp` and `Binary op Lt: left operand has non-comparable type PointerType` at build. Adding `#[derive(Ord)]` does not help. | — |
 
 ### Relocated (1)
 
