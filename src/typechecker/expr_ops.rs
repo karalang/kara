@@ -2127,20 +2127,29 @@ impl<'a> super::TypeChecker<'a> {
             Type::Named { name, .. } | Type::Shared(name) => name.as_str(),
             _ => return false,
         };
-        let has_ordering_impl = self.env.impls.iter().any(|imp| {
-            imp.trait_name
-                .as_deref()
-                .is_some_and(|t| t == "PartialOrd" || t == "Ord")
-                && imp.target_type == name
-        });
-        if !has_ordering_impl {
+        // Mirror `target_type_name`'s FIRST question exactly: it resolves a user
+        // operand only when `trait_impls` — `(trait, type)` pairs — carries
+        // `("Ord", name)`. Anything weaker accepts a type lowering will refuse.
+        // Measured: with `partial_cmp` in an `impl PartialOrd` and `cmp` in an
+        // INHERENT `impl P`, a laxer gate passed `karac check` and both backends
+        // then failed ("operator 'Lt' is not defined for operands of type
+        // 'Struct'" / "Unsupported struct binary op: Lt"), because lowering found
+        // no `impl Ord` and emitted nothing at all.
+        let has_ord_impl = self
+            .env
+            .impls
+            .iter()
+            .any(|imp| imp.trait_name.as_deref() == Some("Ord") && imp.target_type == name);
+        if !has_ord_impl {
             return false;
         }
+        // Mirror its SECOND question the same way: lowering reads
+        // `trait_impl_methods`, which is built from TRAIT impls only, so an
+        // inherent `fn cmp` must not count here either.
         let provides = |m: &str| {
-            self.env
-                .impls
-                .iter()
-                .any(|imp| imp.target_type == name && imp.methods.contains_key(m))
+            self.env.impls.iter().any(|imp| {
+                imp.trait_name.is_some() && imp.target_type == name && imp.methods.contains_key(m)
+            })
         };
         provides("cmp") || ["lt", "le", "gt", "ge"].iter().all(|m| provides(m))
     }

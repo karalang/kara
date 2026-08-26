@@ -45956,6 +45956,44 @@ fn main() {
 }
 
 #[test]
+fn an_inherent_cmp_without_an_impl_ord_does_not_enable_the_operators() {
+    // The second way this gate and lowering could disagree (B-2026-08-26-10).
+    // `target_type_name` resolves a user operand only when `trait_impls` carries
+    // `("Ord", name)`. A `cmp` living in an INHERENT `impl P` block satisfies
+    // "the type has a `cmp`" without satisfying that, so a gate asking the
+    // looser question accepted the program and lowering then emitted nothing at
+    // all — `karac check` clean, and both backends failing on the raw operator:
+    //
+    //   --interp: operator 'Lt' is not defined for operands of type 'Struct'
+    //   build:    codegen failed: Unsupported struct binary op: Lt
+    //
+    // Measured before this assertion existed. Both halves of the gate now mirror
+    // lowering exactly — the `impl Ord` must exist, and the method must come
+    // from a TRAIT impl, because `trait_impl_methods` is built from those alone.
+    let errs = typecheck_errors(
+        r#"
+struct P { x: i64 }
+impl PartialEq for P { fn eq(ref self, other: ref P) -> bool { self.x == other.x } }
+impl Eq for P {}
+impl PartialOrd for P { fn partial_cmp(ref self, other: ref P) -> Option[Ordering] { Some(self.x.cmp(other.x)) } }
+impl P { fn cmp(ref self, other: ref P) -> Ordering { self.x.cmp(other.x) } }
+fn main() {
+    let a = P { x: 1 };
+    let b = P { x: 5 };
+    println(f"{a < b}");
+}
+"#,
+    );
+    assert!(
+        errs.iter().any(|e| e
+            .message
+            .contains("ordering operators dispatch through 'cmp'")),
+        "an inherent `cmp` with no `impl Ord` must be refused, not accepted and \
+         then left unlowered, got: {errs:?}"
+    );
+}
+
+#[test]
 fn partial_cmp_without_cmp_is_still_rejected_and_names_the_workaround() {
     // The one ordering shape that still cannot be lowered: an impl supplying
     // `partial_cmp` but no `cmp`. Its desugaring would be
