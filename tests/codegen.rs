@@ -47205,6 +47205,128 @@ fn driver() -> i64 {
         }
     }
 
+    /// B-2026-08-25-3 — THE STRUCTURAL GUARD for
+    /// `vec_mutation_methods_bounds_check_out_of_range_index`.
+    ///
+    /// That test proves the check FIRED on one execution. It cannot distinguish
+    /// "the check is present" from "the check is absent but this run happened
+    /// not to expose it" — which is exactly why an intermittent green on it was
+    /// alarming enough to open B-2026-08-25-3 at high priority: a guard that
+    /// sometimes passes lets CI go green while a heap-corruption bug is live.
+    /// Sampling cannot fix that property (30,000 clean compile+runs on arm64
+    /// bounded the rate and settled nothing). Asserting on the EMITTED CODE can.
+    ///
+    /// This asserts the panic path for each of the three methods survives into
+    /// the object file, i.e. past BOTH codegen and the LLVM pipeline — an
+    /// IR-only assertion would miss a backend that deleted the branch later.
+    ///
+    /// THE INDEX MUST BE OPAQUE, and this is the whole subtlety. LLVM removing
+    /// the check when it can PROVE the index in range is CORRECT optimization,
+    /// not a bug, so a literal index would assert against legitimate behaviour.
+    /// `env.args().len()` is the codebase's opacity idiom (a stable 1 at run
+    /// time, unknowable at compile time). Measured while writing this: with a
+    /// literal `0` all three messages correctly VANISH from the binary.
+    ///
+    /// ONE PROGRAM PER METHOD, also load-bearing. Chaining them lets the
+    /// compiler carry a range fact across calls — a combined program had
+    /// `remove`'s check correctly folded away, because a preceding successful
+    /// `insert(i, _)` proves `i <= len` and so `i < len+1`.
+    ///
+    /// Runs on the OBJECT, so it needs no linker and no runtime archive: unlike
+    /// the E2E guard it has no soft-skip path and cannot report a vacuous green.
+    #[test]
+    fn vec_mutation_bounds_checks_survive_into_emitted_object() {
+        use karac::codegen::compile_to_object_with_options;
+
+        // (method, call form, panic message)
+        let cases = [
+            (
+                "insert",
+                "v.insert(i, 9); println(v.len());",
+                "Vec.insert index out of bounds",
+            ),
+            (
+                "remove",
+                "let x = v.remove(i); println(x);",
+                "Vec.remove index out of bounds",
+            ),
+            (
+                "swap_remove",
+                "let x = v.swap_remove(i); println(x);",
+                "Vec.swap_remove index out of bounds",
+            ),
+        ];
+
+        let emit = |body: &str, tag: &str| -> Vec<u8> {
+            let src = format!(
+                "fn main() {{\n\
+                 \x20   let mut v: Vec[i64] = Vec.new();\n\
+                 \x20   v.push(11);\n\
+                 \x20   v.push(22);\n\
+                 \x20   let i: i64 = env.args().len() as i64;\n\
+                 \x20   {body}\n\
+                 }}"
+            );
+            let mut parsed = karac::parse(&src);
+            assert!(
+                parsed.errors.is_empty(),
+                "parse errors: {:?}",
+                parsed.errors
+            );
+            karac::prepare_for_resolve(&mut parsed.program);
+            let resolved = karac::resolve(&parsed.program);
+            let typed = karac::typecheck(&parsed.program, &resolved);
+            super::common::assert_check_clean(&resolved, &typed, &src);
+            karac::lower(&mut parsed.program, &typed);
+            let ownership = karac::ownershipcheck(&parsed.program, &typed);
+            let obj = format!("/tmp/karac_boundsguard_{}_{}.o", std::process::id(), tag);
+            let _ = std::fs::remove_file(&obj);
+            compile_to_object_with_options(
+                &parsed.program,
+                &obj,
+                Some(&ownership),
+                None,
+                None,
+                None,
+            )
+            .unwrap_or_else(|e| panic!("codegen failed for {tag}: {e}"));
+            let bytes = std::fs::read(&obj)
+                .unwrap_or_else(|e| panic!("emitted object for {tag} unreadable: {e}"));
+            let _ = std::fs::remove_file(&obj);
+            assert!(!bytes.is_empty(), "emitted object for {tag} was empty");
+            bytes
+        };
+
+        let contains = |hay: &[u8], needle: &str| -> bool {
+            hay.windows(needle.len()).any(|w| w == needle.as_bytes())
+        };
+
+        // ANTI-VACUITY: a program that never calls these methods must carry
+        // none of the three messages. Without this, a match on some unrelated
+        // always-present string would make every assertion below trivially true.
+        let baseline = emit("println(v.len());", "baseline");
+        for (method, _, msg) in cases {
+            assert!(
+                !contains(&baseline, msg),
+                "anti-vacuity failed: {msg:?} appears in an object whose program \
+                 never calls Vec.{method} — the search is matching something \
+                 unrelated, so the assertions below prove nothing"
+            );
+        }
+
+        for (method, call, msg) in cases {
+            let bytes = emit(call, method);
+            assert!(
+                contains(&bytes, msg),
+                "Vec.{method}'s bounds check did NOT survive into the emitted \
+                 object: {msg:?} is absent. The index is `env.args().len()`, \
+                 which is opaque at compile time, so the check cannot be \
+                 legitimately optimised away — its absence means an \
+                 out-of-range {method} would corrupt the heap (B-2026-08-24-15)."
+            );
+        }
+    }
+
     /// The other half of B-2026-08-24-15: the new bounds checks must not
     /// reject anything legal. `insert(len, v)` is an APPEND and is valid —
     /// `insert` alone accepts `idx == len`, which is why it needs `UGT` where
