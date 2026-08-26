@@ -92,11 +92,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 292 | 1 |
+| miscompile | 293 | 2 |
 | leak | 196 | 0 |
 | missing-feature | 181 | 5 |
-| run-vs-build | 167 | 0 |
-| codegen-gap | 140 | 1 |
+| run-vs-build | 168 | 1 |
+| codegen-gap | 141 | 1 |
 | double-free | 140 | 0 |
 | diagnostics | 109 | 1 |
 | false-positive | 98 | 0 |
@@ -110,9 +110,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1056 | 5 |
+| codegen | 1059 | 7 |
 | typecheck | 267 | 2 |
-| interp | 184 | 1 |
+| interp | 185 | 2 |
 | other | 70 | 3 |
 | ownership | 65 | 0 |
 | cli | 63 | 0 |
@@ -124,14 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1606 surfaced · 9 open · 1572 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-26). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1609 surfaced · 11 open · 1573 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-26). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (9)
+### Open (11)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-25-3 | 2026-08-25 | codegen | medium | `codegen_tests::vec_mutation_methods_bounds_check_out_of_range_index` IS FLAKY, and it fails by showing exactly the PRE-FIX symptom of the high-severity bug it guards: `v.insert(7i64, 9i64)` produced no `Vec.insert index out of bounds` panic, stdout empty, stderr `free(): invalid pointer`. Observed once in a full `cargo test --features llvm` run; the same test then passed 3/3 in isolation, 3198/3198 in a codegen-only run, and the next FULL run was green at 125 suites / 15090 tests. | roadmap.md |
-| B-2026-08-25-34 | 2026-08-25 | codegen | medium | `AllocError`'s `Display` renders the Debug form (`OutOfMemory { requested_bytes: 4096 }`) into the user-facing `Error: {e}` entry-point line, and the spec-sanctioned fix -- a manual `impl Display`, per § `#[derive(Display)]` on enums' "Implement `Display` manually to override" -- CANNOT LAND without codegen work: a prelude impl lives in `STDLIB_PROGRAMS`, which codegen does not walk, so the impl reaches the interpreter only. Registering the module as a compiled stdlib program fixes `.to_string()` under AOT but leaves `f"{e}"` and the entry-point line unfixed. Worse, the half-done state FAILS OPEN: dropping the derive without teaching codegen about the impl makes `karac build` emit `Error: ` with an EMPTY message rather than erroring, because the typechecker sees the impl and codegen does not. | roadmap.md |
 | B-2026-08-26-4 | 2026-08-26 | other | low | design.md's CANONICAL `?`-operator example calls `input.parse_i64()?` and names `ParseError` -- NEITHER EXISTS: the real API is `i64.parse(s) -> Option[i64]`, which cannot be used with `?` the way the example shows | docs/design.md § `?` operator and cross-error-type propagation |
 | B-2026-08-26-10 | 2026-08-26 | typecheck+codegen | medium | `Map` HASHING NEVER CALLS A HAND-WRITTEN `impl Hash`: with the derive absent the key is REJECTED, and with `#[derive(Hash)]` present alongside the impl the program checks clean and the DERIVE SILENTLY WINS. The COMPARISON half is fixed and now matches design.md -- `==` and `< <= > >=` dispatch to a user body on all three backends, ordering desugars through `PartialOrd.partial_cmp` as specified, and the generic-body / shared-struct surfaces are closed on B-2026-08-26-24 and -25. | — |
 | B-2026-08-26-11 | 2026-08-26 | other | medium | design.md's `String` METHOD TABLE names the char-append method `push_char`, which DOES NOT EXIST -- the working method is `push(c: char)`, and the table has NO ROW FOR IT, so the documented spelling fails and the real one is undocumented | docs/design.md § `String` method table (the `push_char` row) |
@@ -139,6 +138,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1606 surfaced
 | B-2026-08-26-15 | 2026-08-26 | typecheck | low | `LazyLock.new`'s closure-capture restriction is UNENFORCED: design.md says the closure "may only capture other module-level compile-time bindings; captures of runtime state are a compile error", but a closure capturing a function local is accepted silently. Measured to be a missing RESTRICTION rather than a correctness hazard -- the capturing form produces identical, correct results on `--interp`, `karac run` and `karac build` -- which is why it is split out of B-2026-08-26-3 rather than blocking it. | — |
 | B-2026-08-26-21 | 2026-08-26 | codegen+interp | medium | A RELOCATING element store (`b.xs[i] = b.xs[j]`, then `b.xs[j] = t`) runs the displaced element's user `Drop` BODY, even though the value is being moved to another slot rather than destroyed. A two-element swap of a `Drop` type prints FIVE drop bodies, all during the swap and none at scope exit; the correct sequence is one body per element when it finally dies. | — |
 | B-2026-08-26-27 | 2026-08-26 | codegen | medium | `Vec.try_from_iter` CANNOT BE REGISTERED UNTIL `collect` HAS A FALLIBLE LOWERING: its base `Vec.from_iter` lowers to `iter.collect()`, whose codegen grows the accumulator through the PANICKING allocator, so a companion built on that rewrite would return `Ok` unconditionally and then abort inside `collect` on real OOM. design.md § Fallible Allocation names `try_from_iter` in its table AND leans on it in prose -- `let v = Vec.try_from_iter(0..1024)?` is the sanctioned replacement for a `.collect()` rejected under `panic_on_alloc_failure = false` -- so this is the one row in that table with a spec consumer already pointing at it. Measured on the commit that closed B-2026-08-26-22: `Vec.try_from_iter(0..4)` reports `no associated function 'try_from_iter' on type 'Vec'` at typecheck, identically under `karac check` and `karac build`. | — |
+| B-2026-08-26-28 | 2026-08-26 | codegen | medium | A NESTED `Result` AS `main`'s ERROR TYPE LOSES BOTH ITS TAG AND ITS PAYLOAD on every compiled backend: `main() -> Result[(), Result[A, B]]` returning `Err(Ok(3))` prints `Error: Ok(3)` under `--interp` and `Error: Err(0)` under JIT and AOT -- the WRONG variant with a zeroed payload, not merely an unrendered one. Reproduced on `Result[i64, i64]` (both `Ok` and `Err` inner values collapse to `Err(0)`), `Result[bool, bool]` (`Err(false)`) and `Result[i64, String]` (`Err()`), so the inner discriminant is dropped unconditionally rather than truncated by width. | — |
+| B-2026-08-26-29 | 2026-08-26 | interp+codegen | medium | A MANUAL `impl Display` IS IGNORED AS SOON AS THE VALUE IS NESTED: an enum with a hand-written `Display` renders through its impl at top level (`f"{e}"` -> `aye 7`) and through the DERIVED/Debug shape one level down (`f"{[e]}"` -> `[A { n: 7 }, B]`, `f"{Some(e)}"` -> `Some(A { n: 7 })`). So the ONE mechanism design.md offers for overriding a rendering silently stops applying inside a container, and a type whose `Display` exists to hide its internals leaks them from inside any `Vec` or `Option`. The interpreter does this consistently; codegen cannot render the `Option` case at all, which is the run-vs-build half. | docs/design.md § `#[derive(Display)]` on enums — needs a sentence saying which trait a container's ELEMENT rendering dispatches through |
+| B-2026-08-26-30 | 2026-08-26 | codegen | medium | SWEEP THE REMAINING ENTRY-HOISTED-ALLOCA / CONDITIONAL-STORE / SCOPE-TRACKED SITES. The shape behind B-2026-08-25-33 -- and behind a fifth instance found in B-2026-08-25-34 -- is `create_entry_alloca` plus a store emitted at the USE site plus `track_vec_var`, whose function-scope drain then reads an uninitialized `cap` on any path that skipped the store and frees a garbage pointer. A mechanical scan finds ~16 further `create_entry_alloca`-then-track pairs with no `zero_init_str_acc_at_entry`; each needs classifying as genuinely unconditional (safe) or conditional (a latent free-of-garbage). | — |
 
 ### Relocated (1)
 
@@ -169,9 +171,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1606 surfaced
 
 </details>
 
-### Fixed (1572)
+### Fixed (1573)
 
-<details><summary>1572 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1573 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1726,6 +1728,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1606 surfaced
 | B-2026-08-25-31 | typecheck | low | The un-inferrable-type-argument diagnostic points at the first USE, not at the empty literal that caused it, because `Type::Error` carries no provena… | a54d41d |
 | B-2026-08-25-32 | other | medium | `PriorityQueue` HAS NO `peek`: there is NO non-destructive way to read the root, so the archetypal two-heap median use case cannot read a queue's hea… | e2673b8 |
 | B-2026-08-25-33 | codegen | high | `?` in `main()` SEGFAULTS under `karac run` (the default JIT executor) whenever main's error type is an enum with an INLINE SCALAR payload -- `AllocE… | 7d20106 |
+| B-2026-08-25-34 | codegen | medium | `AllocError`'s `Display` renders the Debug form (`OutOfMemory { requested_bytes: 4096 }`) into the user-facing `Error: {e}` entry-point line, and the… | 7553a08 |
 | B-2026-08-25-35 | typecheck+codegen | high | `PriorityQueue[T]` IS UNINSTANTIABLE FOR EVERY USER TYPE, because the OPERATOR path and the TRAIT-BOUND path recognize DISJOINT sets of `Ord` impleme… | 8af03a8 |
 | B-2026-08-26-1 | other | low | design.md § Operator Traits § Notably absent prescribes `vec.concat(other)` as one of the two redirects for `vec1 + vec2`, but `Vec.concat()` in this… | 5964c16 |
 | B-2026-08-26-2 | typecheck | medium | TWO MORE FACILITIES design.md § `Hash` and `Hasher`'s stability paragraph NAMES AS SHIPPED DO NOT EXIST, after B-2026-08-25-22 built the third | 7da2bfe |
