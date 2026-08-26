@@ -47581,6 +47581,89 @@ fn driver() -> i64 {
         }
     }
 
+    /// B-2026-08-26-27 — `Vec.try_from_iter`, twinned against the interpreter.
+    ///
+    /// The two backends do NOT do the same work here, and that is the point of
+    /// twinning them: the interpreter always answers `Ok` (its host allocator
+    /// does not OOM), while codegen genuinely grows the accumulator through
+    /// `karac_alloc_fallible` and can return
+    /// `Err(AllocError.OutOfMemory { requested_bytes })`. On the success path —
+    /// the only one reachable without an allocator that fails on demand — they
+    /// must agree exactly, which is what this asserts.
+    ///
+    /// The shapes are the same three `e2e_vec_from_iter_and_collect_are_the_same_program`
+    /// uses, deliberately: `try_from_iter` routes through the SAME collect
+    /// engine as its panicking base, so any shape one accepts the other must.
+    #[test]
+    fn e2e_vec_try_from_iter_agrees_with_the_interpreter() {
+        let src = "fn build() -> Result[i64, AllocError] {\n\
+                       let a: Vec[i64] = Vec.try_from_iter(0..4)?;\n\
+                       println(f\"{a.len()} {a[0]} {a[3]}\");\n\
+                       let b: Vec[i64] = Vec.try_from_iter((0..6).map(|x| x * 2))?;\n\
+                       println(f\"{b.len()} {b[5]}\");\n\
+                       let s: Vec[i64] = [5, 6, 7];\n\
+                       let c: Vec[i64] = Vec.try_from_iter(s.iter().map(|x| x + 1))?;\n\
+                       println(f\"{c.len()} {c[2]}\");\n\
+                       let h: Vec[String] = [\"a\", \"bb\"];\n\
+                       let hu: Vec[String] = Vec.try_from_iter(h.iter().map(|t| t.to_uppercase()))?;\n\
+                       println(f\"{hu.len()} {hu[0]} {hu[1]}\");\n\
+                       return Ok(a.len() + b.len() + c.len() + hu.len());\n\
+                   }\n\
+                   fn main() {\n\
+                       match build() {\n\
+                           Ok(n) => { println(f\"ok {n}\"); }\n\
+                           Err(e) => { println(\"oom\"); }\n\
+                       }\n\
+                   }";
+        let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+        assert!(
+            interp_errs.is_empty(),
+            "interpreter errored: {interp_errs:?}"
+        );
+        let expected = interp_out.join("");
+        assert_eq!(expected, "4 0 3\n6 10\n3 8\n2 A BB\nok 15\n");
+        if let Some(aot) = run_program(src) {
+            assert_eq!(
+                aot, expected,
+                "the fallible collect must produce the same Vec as the interpreter's"
+            );
+        }
+    }
+
+    /// ANTI-DRIFT: `try_from_iter` and `from_iter` must accept the same shapes
+    /// and produce the same contents. They share one engine — the fallible
+    /// switch changes the leaf append and the block's tail, nothing else — and
+    /// this is what would catch someone giving the companion its own lowering.
+    #[test]
+    fn e2e_vec_try_from_iter_matches_its_panicking_base() {
+        let fallible = "fn build() -> Result[i64, AllocError] {\n\
+                            let a: Vec[i64] = Vec.try_from_iter((0..9).map(|x| x * 3))?;\n\
+                            println(f\"{a.len()} {a[0]} {a[8]}\");\n\
+                            return Ok(a.len());\n\
+                        }\n\
+                        fn main() { match build() { Ok(n) => { println(f\"n {n}\"); } Err(e) => { println(\"oom\"); } } }";
+        let panicking = "fn main() {\n\
+                             let a: Vec[i64] = Vec.from_iter((0..9).map(|x| x * 3));\n\
+                             println(f\"{a.len()} {a[0]} {a[8]}\");\n\
+                             println(f\"n {a.len()}\");\n\
+                         }";
+        let (f_out, f_errs, _, _) = karac::run_program_full(fallible);
+        let (p_out, p_errs, _, _) = karac::run_program_full(panicking);
+        assert!(
+            f_errs.is_empty() && p_errs.is_empty(),
+            "{f_errs:?} {p_errs:?}"
+        );
+        assert_eq!(
+            f_out.join(""),
+            p_out.join(""),
+            "try_from_iter and from_iter must collect identically"
+        );
+        if let (Some(fa), Some(pa)) = (run_program(fallible), run_program(panicking)) {
+            assert_eq!(fa, pa, "and identically when compiled");
+            assert_eq!(fa, f_out.join(""), "and with the interpreter");
+        }
+    }
+
     /// B-2026-08-26-22 — the fallible-allocation remainder, twinned against the
     /// interpreter.
     ///

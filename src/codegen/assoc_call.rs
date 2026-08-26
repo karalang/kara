@@ -3349,6 +3349,51 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(agg.into());
         }
 
+        // B-2026-08-26-27 — `Vec.try_from_iter(it) -> Result[Vec[T], AllocError]`.
+        //
+        // Routed through the SAME collect engine its panicking base uses, with
+        // the fallible switch on: the leaf append becomes a guarded `try_push`
+        // and the block's tail becomes a `Result` instead of the bare
+        // accumulator. Everything between — the adaptor peel, the fused loop,
+        // the element typing — is the identical code path, which is why
+        // `from_iter` and `try_from_iter` cannot drift in which iterator shapes
+        // they accept.
+        //
+        // A `None` from the engine means the chain is one it declines to lower.
+        // That must be LOUD here rather than a silent fall-through: this is a
+        // registered companion, so a quiet decline would be a `karac check`
+        // that passes and a `karac build` that fails.
+        if type_name == "Vec" && method == "try_from_iter" {
+            if args.len() != 1 {
+                return Err(format!(
+                    "Vec.try_from_iter expects 1 argument (the iterator), got {}",
+                    args.len()
+                ));
+            }
+            // The engine keys the accumulator's element type off
+            // `owned_temp_drops[call_span]`. The typechecker published the
+            // `Vec[U]` at this derived span for exactly this lookup — see the
+            // `Vec.from_iter` arm in `typechecker/expr_call.rs`.
+            let arg_span = crate::token::Span {
+                line: args[0].value.span.line,
+                column: args[0].value.span.column,
+                offset: usize::MAX - args[0].value.span.offset - 1,
+                length: 1,
+            };
+            return match self.try_compile_iter_adaptor_collect_to_vec_ex(
+                &args[0].value,
+                &arg_span,
+                true,
+            )? {
+                Some(v) => Ok(v),
+                None => Err(concat!(
+                    "Vec.try_from_iter: this iterator shape has no collect lowering yet — ",
+                    "the same shapes `.collect()` accepts are the ones it accepts",
+                )
+                .to_string()),
+            };
+        }
+
         // `Vec.try_with_capacity(n: i64) -> Result[Vec[T], AllocError]` —
         // fallible `with_capacity` (phase-8-stdlib-floor item 8). Same empty
         // `{data, len=0, cap=n}` Vec as `with_capacity`, but the reservation

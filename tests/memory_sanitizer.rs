@@ -27295,6 +27295,43 @@ fn main() {
         );
     }
 
+    /// B-2026-08-26-27 — `Vec.try_from_iter` over HEAP elements must not leak.
+    ///
+    /// The fallible collect builds its accumulator through `try_push`, so every
+    /// growth goes through `karac_alloc_fallible` + memcpy + free rather than
+    /// the panicking `realloc`. That is a different allocation path from the
+    /// one the infallible `collect` exercises, and it moves per-element
+    /// `{ptr,len,cap}` headers across each time — exactly the shape where an
+    /// off-by-one on the copied byte count leaks or double-frees a String
+    /// buffer. LeakSanitizer is what holds it honest; the E2E twins in
+    /// tests/codegen.rs only check the values.
+    #[test]
+    fn asan_vec_try_from_iter_over_heap_elements_no_leak() {
+        assert_clean_asan_run(
+            r#"
+fn build(n: i64) -> Result[i64, AllocError] {
+    let src: Vec[String] = ["alpha", "beta", "gamma", "delta"];
+    let mut total = 0i64;
+    let mut k = 0i64;
+    while k < n {
+        let up: Vec[String] = Vec.try_from_iter(src.iter().map(|s| s.to_uppercase()))?;
+        total = total + up.len() + up[0].len();
+        k = k + 1i64;
+    }
+    return Ok(total);
+}
+fn main() {
+    match build(64i64) {
+        Ok(n) => { println(f"ok {n}"); }
+        Err(e) => { println("oom"); }
+    }
+}
+"#,
+            &["ok 576"],
+            "vec_try_from_iter_heap_elements_no_leak",
+        );
+    }
+
     /// B-2026-08-26-26 — a fallible `try_*` companion consumed with `?` must be
     /// SEEDED receiver-mutating, or the auto-parallelizer hoists it into a
     /// worker function and the `?` early-return cannot compile there.

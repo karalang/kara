@@ -46247,26 +46247,23 @@ fn vec_from_iter_types_as_its_own_collect() {
     );
 }
 
-/// `Vec.try_from_iter` is deliberately NOT a registered companion, and this
-/// test is what keeps it that way. `from_iter` lowers to `iter.collect()`,
-/// whose codegen grows its accumulator through the PANICKING allocator — so a
-/// companion built on it would return `Ok` unconditionally and abort inside
-/// `collect` on real OOM. A companion that lies about being fallible is worse
-/// than one that does not exist; registering it needs a fallible `collect`
-/// first.
+/// B-2026-08-26-27 — `Vec.try_from_iter` IS a registered companion now.
+///
+/// This replaces `vec_try_from_iter_stays_absent_until_collect_can_fail`, which
+/// asserted the opposite. That test was never meant to be permanent: it existed
+/// to stop the companion being re-registered on top of an INFALLIBLE `collect`,
+/// where it would have returned `Ok` unconditionally and aborted inside
+/// `collect` on real OOM. The collect engine now has a fallible switch, so the
+/// condition it guarded is met and the guard is deleted rather than weakened.
 #[test]
-fn vec_try_from_iter_stays_absent_until_collect_can_fail() {
-    let errs = typecheck_errors(
+fn vec_try_from_iter_is_registered_now_that_collect_can_fail() {
+    typecheck_ok(
         "fn go() -> Result[i64, AllocError] {\n\
              let a: Vec[i64] = Vec.try_from_iter(0..4)?;\n\
-             return Ok(a.len());\n\
+             let b: Vec[i64] = Vec.try_from_iter((0..3).map(|x| x * 2))?;\n\
+             return Ok(a.len() + b.len());\n\
          }\n\
          fn main() { let _ = go(); }",
-    );
-    assert!(
-        errs.iter().any(|e| e.message.contains("try_from_iter")),
-        "Vec.try_from_iter must stay rejected; got {:?}",
-        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
     );
 }
 

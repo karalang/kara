@@ -24,14 +24,14 @@
 //! layer, which is why `try_extend` was a one-line registration here (its base
 //! `Vec.extend` already existed) while its two row-mates were not.
 //!
-//! `Vec.from_iter` is the one base that shipped WITHOUT its companion
-//! (B-2026-08-26-22), and deliberately. `from_iter` lowers to `iter.collect()`,
-//! reusing the one implementation both backends already have; but `collect`'s
-//! codegen grows its accumulator through the PANICKING allocator, so a
-//! `try_from_iter` built on it would return `Ok` unconditionally and abort
-//! inside `collect` on real OOM — a companion that lies about being fallible,
-//! which is worse than one that does not exist. It stays unregistered until
-//! `collect` itself has a fallible lowering.
+//! `Vec.from_iter` shipped WITHOUT its companion for one release
+//! (B-2026-08-26-22) and gained it in B-2026-08-26-27. The gap was not an
+//! oversight: `from_iter` lowers to `iter.collect()`, and `collect`'s codegen
+//! grew its accumulator through the PANICKING allocator, so a `try_from_iter`
+//! built on that would have returned `Ok` unconditionally and aborted inside
+//! `collect` on real OOM — a companion that lies about being fallible, which is
+//! worse than one that does not exist. The fix was to give the collect engine
+//! itself a fallible switch rather than to wrap an infallible one.
 //!
 //! `Vec.reserve` / `Vec.reserve_exact` LEFT that deferred list in the same
 //! change that landed their bases (B-2026-08-25-20), which is what the rule is
@@ -81,7 +81,7 @@ pub const TRY_ALLOC_INSTANCE_BASES: &[&str] = &[
 /// `Result[<constructor-ret>, AllocError]`. Each base is a path-form
 /// constructor recognized by the typechecker (`Vec.with_capacity`,
 /// `VecDeque.with_capacity`, `String.with_capacity`, `Vec.from_slice`).
-pub const TRY_ALLOC_STATIC_BASES: &[&str] = &["with_capacity", "from_slice"];
+pub const TRY_ALLOC_STATIC_BASES: &[&str] = &["with_capacity", "from_slice", "from_iter"];
 
 /// Effect-checker seed key for any instance `try_*` companion. Seeded once with
 /// `allocates(Heap)`; the method-call effect walker routes every recognized
@@ -149,6 +149,7 @@ pub const CODEGEN_FALLIBLE_STATIC: &[(&str, &str)] = &[
     ("Vec", "with_capacity"),      // Vec.try_with_capacity
     ("VecDeque", "with_capacity"), // VecDeque.try_with_capacity (shared Vec storage)
     ("String", "with_capacity"),   // String.try_with_capacity (byte element)
+    ("Vec", "from_iter"),          // Vec.try_from_iter (B-2026-08-26-27)
 ];
 
 /// `true` when `type_name.<method>` is a static `try_*` constructor companion

@@ -1349,6 +1349,14 @@ impl<'a> EffectChecker<'a> {
             "VecDeque.try_with_capacity",
             "String.try_with_capacity",
             "Vec.try_from_slice",
+            // B-2026-08-26-27 — the constructor companion needs the same seed
+            // its instance siblings got in B-2026-08-26-26, and for the same
+            // reason: unseeded, the auto-parallelizer hoists a `?`-consumed
+            // call into a worker function, where the early return's
+            // `ret {i64, i64}` fails module verification. Measured the moment
+            // `try_from_iter` landed — its ASAN fixture failed with exactly
+            // that message before this line existed.
+            "Vec.try_from_iter",
             // B-2026-08-26-26 — the MUTATING instance companions need their
             // FULLY-QUALIFIED names here, not just the shared
             // `TRY_ALLOC_EFFECT_KEY` below.

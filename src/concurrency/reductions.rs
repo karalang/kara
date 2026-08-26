@@ -627,6 +627,44 @@ impl<'a> super::ConcurrencyChecker<'a> {
                     });
                 }
             };
+            // B-2026-08-26-27 — A `?` IN THE BODY DISQUALIFIES THE LOOP.
+            //
+            // A recognized reduction is lowered onto worker threads, and a
+            // worker function returns void. `x?` returns from the ENCLOSING
+            // function on its failure arm, so hoisting a body that contains one
+            // emits `ret {i64, i64}` inside a void function: the module
+            // verifier rejects it and `karac build` refuses a program
+            // `--interp` runs correctly.
+            //
+            // Gated HERE, on the property, rather than by naming the fallible
+            // functions that happen to be spelled with `?`. B-2026-08-26-26 hit
+            // this same crash through `Vec.try_push` and fixed it by seeding
+            // those companion NAMES as receiver-mutating; that stopped the
+            // par-GROUP path for those names and left the loop-REDUCTION path
+            // and every unnamed future companion exposed. `Vec.try_from_iter`
+            // walked straight into it — a constructor, so there was no receiver
+            // to mark, and a reduction, so the group path never saw it. The
+            // predicate now answers for `?` itself and covers both.
+            //
+            // `break` / `continue` are deliberately NOT disqualifying: they jump
+            // to the nearest enclosing loop, so inside a nested one they never
+            // leave the body being lowered. Gating on the broader,
+            // jump-inclusive `stmt_has_early_exit` was tried here and
+            // de-parallelized working code —
+            // `test_ir_reduction_fires_with_break_in_nested_loop` caught it.
+            // A `break` that DOES escape the parallelized loop is rejected
+            // later by the depth/label-aware `reduce::block_has_early_exit`.
+            if crate::concurrency::predicates::block_escapes_enclosing_fn(body) {
+                note_decline(
+                    declined,
+                    concat!(
+                        "the loop body can return out of the enclosing function (`?` or ",
+                        "`return`), which a parallel worker cannot do — a worker returns ",
+                        "void, so the early return would not compile",
+                    ),
+                );
+                continue;
+            }
             let classified = self.classify_loop_body(body, attributes, induction_var.as_deref());
             let classified = match classified {
                 Ok(c) => Some(c),

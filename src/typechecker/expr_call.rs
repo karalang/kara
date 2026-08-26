@@ -602,6 +602,7 @@ impl<'a> super::TypeChecker<'a> {
                     let recognized = match base {
                         "with_capacity" => matches!(coll, "Vec" | "VecDeque" | "String"),
                         "from_slice" => coll == "Vec",
+                        "from_iter" => coll == "Vec",
                         _ => false,
                     };
                     if recognized {
@@ -1653,6 +1654,34 @@ impl<'a> super::TypeChecker<'a> {
                     },
                 };
                 let ty = self.infer_expr(&synthetic);
+                // B-2026-08-26-27 — PUBLISH THE `Vec[U]` AT A SPAN CODEGEN CAN
+                // RECOMPUTE, so `Vec.try_from_iter` can reach the collect
+                // engine.
+                //
+                // That engine reads the accumulator's element type out of
+                // `owned_temp_drops`, which `lowering.rs` derives from every
+                // droppable `expr_types` entry keyed by its span. A real
+                // `.collect()` populates it at its own call span; a
+                // `try_from_iter` cannot, because the companion gate overwrites
+                // that span with the wrapping `Result[Vec[U], AllocError]`
+                // immediately after. So the `Vec[U]` is ALSO recorded at a
+                // synthetic key derived from the ARGUMENT's offset — the one
+                // span both this arm and `compile_assoc_call` can compute, since
+                // the latter receives no call span at all.
+                //
+                // `usize::MAX - offset - 1` mirrors the synthetic-span
+                // convention already used for the staged prefix-collect in
+                // `method_call_iter.rs`, and cannot collide with a real source
+                // offset.
+                if let Some(arg) = args.first() {
+                    let key = Span {
+                        line: arg.value.span.line,
+                        column: arg.value.span.column,
+                        offset: usize::MAX - arg.value.span.offset - 1,
+                        length: 1,
+                    };
+                    self.record_expr_type(&key, &ty);
+                }
                 self.record_expr_type(span, &ty);
                 return ty;
             }

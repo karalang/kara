@@ -351,6 +351,13 @@ impl<'a> super::Interpreter<'a> {
                     let recognized = match base {
                         "with_capacity" => matches!(coll, "Vec" | "VecDeque" | "String"),
                         "from_slice" => coll == "Vec",
+                        // B-2026-08-26-27 — `Vec.try_from_iter`. See the
+                        // dedicated arm below: it cannot use the rewrite-and-
+                        // recurse path the others take, because its base
+                        // `Vec.from_iter` has no interpreter rule of its own
+                        // (`lowering.rs` eliminates it into `iter.collect()`
+                        // before the interpreter ever sees it).
+                        "from_iter" => false,
                         _ => false,
                     };
                     if recognized {
@@ -362,6 +369,38 @@ impl<'a> super::Interpreter<'a> {
                         return super::method_call::result_ok(base_val);
                     }
                 }
+            }
+        }
+
+        // B-2026-08-26-27 — `Vec.try_from_iter(it)`. Evaluated as
+        // `it.collect()` wrapped in `Result.Ok`, which is the same shape the
+        // companions above take and the same lowering its panicking base gets;
+        // it needs its own arm only because that base is rewritten away before
+        // the interpreter runs, so there is nothing to recurse into.
+        //
+        // Always `Ok` here, deliberately and consistently with every other
+        // `try_*` companion in this backend: the tree-walk host allocator does
+        // not OOM. Codegen is where the failure path is real — it grows the
+        // accumulator through `karac_alloc_fallible` and returns
+        // `Err(AllocError.OutOfMemory { requested_bytes })`.
+        if let ExprKind::Path { segments, .. } = &callee.kind {
+            if segments.len() == 2
+                && segments[0] == "Vec"
+                && segments[1] == "try_from_iter"
+                && args.len() == 1
+            {
+                let collect_call = Expr {
+                    span: *span,
+                    kind: ExprKind::MethodCall {
+                        object: Box::new(args[0].value.clone()),
+                        method: "collect".to_string(),
+                        turbofish: None,
+                        args: Vec::new(),
+                        args_close_span: *span,
+                    },
+                };
+                let v = self.eval_expr_inner(&collect_call);
+                return super::method_call::result_ok(v);
             }
         }
 

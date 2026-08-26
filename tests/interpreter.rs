@@ -39047,3 +39047,57 @@ fn main() {
 "#);
     assert_eq!(out, "4 0 3\n6 10\n3 6 8\n3 2\n");
 }
+
+// ── B-2026-08-26-27: the fallible collect ───────────────────────
+
+/// `Vec.try_from_iter` accepts exactly the iterator shapes `.collect()` does,
+/// because it IS the collect engine with a fallible switch rather than a
+/// parallel lowering. The interpreter always answers `Ok` — its host allocator
+/// does not OOM — which is the same contract every other `try_*` companion has
+/// in this backend.
+#[test]
+fn vec_try_from_iter_collects_every_shape_collect_accepts() {
+    let out = run(r#"
+fn build() -> Result[i64, AllocError] {
+    let a: Vec[i64] = Vec.try_from_iter(0..4)?;
+    println(f"{a.len()} {a[0]} {a[3]}");
+    let b: Vec[i64] = Vec.try_from_iter((0..6).map(|x| x * 2))?;
+    println(f"{b.len()} {b[5]}");
+    let src: Vec[i64] = [5, 6, 7];
+    let c: Vec[i64] = Vec.try_from_iter(src.iter().map(|x| x + 1))?;
+    println(f"{c.len()} {c[2]}");
+    return Ok(a.len() + b.len() + c.len());
+}
+fn main() {
+    match build() {
+        Ok(n) => { println(f"ok {n}"); }
+        Err(e) => { println("oom"); }
+    }
+}
+"#);
+    assert_eq!(out, "4 0 3\n6 10\n3 8\nok 13\n");
+}
+
+/// Heap elements, where the accumulator owns per-element buffers rather than a
+/// flat spine of scalars. This covers the `Ok` path only — the interpreter has
+/// no allocation-failure path to take, so the partial-container question lives
+/// with the codegen backend. `asan_vec_try_from_iter_over_heap_elements_no_leak`
+/// is the fixture that answers it there.
+#[test]
+fn vec_try_from_iter_handles_heap_elements() {
+    let out = run(r#"
+fn build() -> Result[i64, AllocError] {
+    let src: Vec[String] = ["a", "bb", "ccc"];
+    let out: Vec[String] = Vec.try_from_iter(src.iter().map(|s| s.to_uppercase()))?;
+    println(f"{out.len()} {out[0]} {out[2]}");
+    return Ok(out.len());
+}
+fn main() {
+    match build() {
+        Ok(n) => { println(f"ok {n}"); }
+        Err(e) => { println("oom"); }
+    }
+}
+"#);
+    assert_eq!(out, "3 A CCC\nok 3\n");
+}

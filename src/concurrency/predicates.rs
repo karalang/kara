@@ -119,16 +119,16 @@ pub(super) fn expr_is_constant_init(expr: &Expr) -> bool {
     }
 }
 
-/// `true` iff this statement contains a `return`, `break`, or
-/// `continue` that escapes a directly-nested expression's control flow
-/// — i.e., that would, at codegen time, emit a `ret X` (or branch to a
-/// loop's exit edge) bypassing the statement's "fall through" exit.
-/// Used by `find_parallel_groups` to keep such statements out of
-/// par groups; a par branch is lowered to a standalone `void` LLVM
-/// function and an embedded `return X` from the original body would
-/// produce `ret <T> X` inside the void branch and fail LLVM module
-/// verification.
-pub(super) fn stmt_has_early_exit(stmt: &Stmt) -> bool {
+/// `true` iff this statement contains a jump that escapes a directly-nested
+/// expression's control flow — i.e., that would, at codegen time, emit a
+/// `ret X` (or branch to a loop's exit edge) bypassing the statement's
+/// "fall through" exit. `loop_jumps` selects which jumps count; see
+/// [`block_exits`].
+///
+/// This matters because a par branch is lowered to a standalone `void` LLVM
+/// function, and an embedded `return X` from the original body would produce
+/// `ret <T> X` inside the void branch and fail LLVM module verification.
+fn stmt_exits(stmt: &Stmt, loop_jumps: bool) -> bool {
     match &stmt.kind {
         StmtKind::MultiAssign { .. } => unreachable!(
             "StmtKind::MultiAssign is removed by the desugar pass before reaching this phase"
@@ -136,40 +136,65 @@ pub(super) fn stmt_has_early_exit(stmt: &Stmt) -> bool {
         StmtKind::Let { value, .. }
         | StmtKind::Assign { value, .. }
         | StmtKind::CompoundAssign { value, .. }
-        | StmtKind::Expr(value) => expr_has_early_exit(value),
+        | StmtKind::Expr(value) => expr_exits(value, loop_jumps),
         StmtKind::LetElse {
             value, else_block, ..
-        } => expr_has_early_exit(value) || block_has_early_exit(else_block),
-        StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => block_has_early_exit(body),
+        } => expr_exits(value, loop_jumps) || block_exits(else_block, loop_jumps),
+        StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => block_exits(body, loop_jumps),
         StmtKind::LetUninit { .. } => false,
     }
 }
 
-/// True when `block` contains a `return` / `break` / `continue` that would
-/// transfer control out of it. Used (via `stmt_has_early_exit`) by
-/// `find_parallel_groups` to keep such statements out of par groups.
-pub(super) fn block_has_early_exit(block: &Block) -> bool {
-    block.stmts.iter().any(stmt_has_early_exit)
+/// True when `block` can transfer control out of itself. `loop_jumps` selects
+/// which jumps count: `true` includes `break` / `continue` (what
+/// `find_parallel_groups` needs, since a par group is a block boundary),
+/// `false` counts only jumps that leave the enclosing FUNCTION — `return` and
+/// `?`. See [`stmt_has_early_exit`] and [`block_escapes_enclosing_fn`].
+fn block_exits(block: &Block, loop_jumps: bool) -> bool {
+    block.stmts.iter().any(|s| stmt_exits(s, loop_jumps))
         || block
             .final_expr
             .as_ref()
-            .is_some_and(|e| expr_has_early_exit(e))
+            .is_some_and(|e| expr_exits(e, loop_jumps))
 }
 
-pub(super) fn expr_has_early_exit(expr: &Expr) -> bool {
+fn expr_exits(expr: &Expr, loop_jumps: bool) -> bool {
     match &expr.kind {
         ExprKind::Return(_) => true,
-        ExprKind::Break { .. } => true,
-        ExprKind::Continue { .. } => true,
-        ExprKind::Block(b) => block_has_early_exit(b),
+        ExprKind::Break { .. } => loop_jumps,
+        ExprKind::Continue { .. } => loop_jumps,
+        // B-2026-08-26-27 — `?` IS AN EARLY EXIT, and omitting it here is why
+        // two separate rows had to be filed for the same crash.
+        //
+        // `x?` returns from the ENCLOSING function on its failure arm. A
+        // statement containing one therefore cannot be hoisted into a parallel
+        // worker: a worker returns void, so the `?`'s early-return lowers to a
+        // `ret {i64, i64}` inside a void function and the module verifier
+        // rejects it — `karac build` refuses a program `--interp` runs
+        // correctly.
+        //
+        // B-2026-08-26-26 treated the same crash as a MISSING EFFECT SEED and
+        // fixed it by naming each fallible companion (`Vec.try_push`, …) so the
+        // analyzer would read it as receiver-mutating. That worked for those
+        // names and left the invariant unstated, so the next `?`-bearing call
+        // to arrive — `Vec.try_from_iter`, a CONSTRUCTOR companion with no
+        // receiver to mutate — crashed again in exactly the same way. This is
+        // the property that actually holds: it is about `?`, not about which
+        // function is being called, so it covers every future one for free.
+        // No need to walk the operand: a `?` nested inside one (`f(g()?)?`) is
+        // subsumed by this `true`.
+        ExprKind::Question(_) => true,
+        ExprKind::Block(b) => block_exits(b, loop_jumps),
         ExprKind::If {
             condition,
             then_block,
             else_branch,
         } => {
-            expr_has_early_exit(condition)
-                || block_has_early_exit(then_block)
-                || else_branch.as_ref().is_some_and(|e| expr_has_early_exit(e))
+            expr_exits(condition, loop_jumps)
+                || block_exits(then_block, loop_jumps)
+                || else_branch
+                    .as_ref()
+                    .is_some_and(|e| expr_exits(e, loop_jumps))
         }
         ExprKind::IfLet {
             value,
@@ -177,41 +202,67 @@ pub(super) fn expr_has_early_exit(expr: &Expr) -> bool {
             else_branch,
             ..
         } => {
-            expr_has_early_exit(value)
-                || block_has_early_exit(then_block)
-                || else_branch.as_ref().is_some_and(|e| expr_has_early_exit(e))
+            expr_exits(value, loop_jumps)
+                || block_exits(then_block, loop_jumps)
+                || else_branch
+                    .as_ref()
+                    .is_some_and(|e| expr_exits(e, loop_jumps))
         }
         ExprKind::Match { scrutinee, arms } => {
-            expr_has_early_exit(scrutinee) || arms.iter().any(|a| expr_has_early_exit(&a.body))
+            expr_exits(scrutinee, loop_jumps)
+                || arms.iter().any(|a| expr_exits(&a.body, loop_jumps))
         }
         ExprKind::While {
             condition, body, ..
-        } => expr_has_early_exit(condition) || block_has_early_exit(body),
+        } => expr_exits(condition, loop_jumps) || block_exits(body, loop_jumps),
         ExprKind::For { iterable, body, .. } => {
-            expr_has_early_exit(iterable) || block_has_early_exit(body)
+            expr_exits(iterable, loop_jumps) || block_exits(body, loop_jumps)
         }
-        ExprKind::Loop { body, .. } => block_has_early_exit(body),
+        ExprKind::Loop { body, .. } => block_exits(body, loop_jumps),
         ExprKind::Binary { left, right, .. }
         | ExprKind::Pipe { left, right }
         | ExprKind::NilCoalesce { left, right } => {
-            expr_has_early_exit(left) || expr_has_early_exit(right)
+            expr_exits(left, loop_jumps) || expr_exits(right, loop_jumps)
         }
-        ExprKind::Unary { operand, .. } => expr_has_early_exit(operand),
+        ExprKind::Unary { operand, .. } => expr_exits(operand, loop_jumps),
         ExprKind::Call { callee, args } => {
-            expr_has_early_exit(callee) || args.iter().any(|a| expr_has_early_exit(&a.value))
+            expr_exits(callee, loop_jumps) || args.iter().any(|a| expr_exits(&a.value, loop_jumps))
         }
         ExprKind::MethodCall { object, args, .. } => {
-            expr_has_early_exit(object) || args.iter().any(|a| expr_has_early_exit(&a.value))
+            expr_exits(object, loop_jumps) || args.iter().any(|a| expr_exits(&a.value, loop_jumps))
         }
         ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
-            expr_has_early_exit(object)
+            expr_exits(object, loop_jumps)
         }
         ExprKind::Index { object, index } => {
-            expr_has_early_exit(object) || expr_has_early_exit(index)
+            expr_exits(object, loop_jumps) || expr_exits(index, loop_jumps)
         }
-        ExprKind::Tuple(elems) => elems.iter().any(expr_has_early_exit),
+        ExprKind::Tuple(elems) => elems.iter().any(|e| expr_exits(e, loop_jumps)),
         _ => false,
     }
+}
+
+/// `true` when `stmt` can transfer control out of its enclosing block —
+/// `return`, `break`, `continue`, or a `?` whose failure arm returns.
+pub(super) fn stmt_has_early_exit(stmt: &Stmt) -> bool {
+    stmt_exits(stmt, /* loop_jumps = */ true)
+}
+
+/// `true` when `block` can transfer control out of the enclosing FUNCTION —
+/// `return`, or a `?` whose failure arm returns. B-2026-08-26-27.
+///
+/// The distinction from [`stmt_has_early_exit`] is `break` / `continue`, and
+/// it is the difference between a correct gate and one that de-parallelizes
+/// working code. Those two jump to the nearest enclosing loop, so inside a
+/// NESTED loop they never leave the body being considered for parallel
+/// lowering — `test_ir_reduction_fires_with_break_in_nested_loop` exists
+/// precisely to keep such a reduction firing, and gating reductions on the
+/// broader predicate broke it.
+///
+/// `?` and `return` are different in kind: both leave the FUNCTION, so a
+/// parallel worker (which returns void) cannot host either.
+pub(super) fn block_escapes_enclosing_fn(block: &Block) -> bool {
+    block_exits(block, /* loop_jumps = */ false)
 }
 
 /// `true` iff the function body contains a user `defer` / `errdefer`

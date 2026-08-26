@@ -401,6 +401,19 @@ impl<'ctx> super::Codegen<'ctx> {
         collect_recv: &Expr,
         call_span: &crate::token::Span,
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        self.try_compile_iter_adaptor_collect_to_vec_ex(collect_recv, call_span, false)
+    }
+
+    /// [`Self::try_compile_iter_adaptor_collect_to_vec`] with the fallible
+    /// switch. `fallible == true` yields `Result[Vec[U], AllocError]` instead of
+    /// `Vec[U]` and is what `Vec.try_from_iter` compiles to (B-2026-08-26-27);
+    /// every other caller takes the infallible wrapper above.
+    pub(super) fn try_compile_iter_adaptor_collect_to_vec_ex(
+        &mut self,
+        collect_recv: &Expr,
+        call_span: &crate::token::Span,
+        fallible: bool,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
         // Walk the chain outer → inner, peeling `map`/`filter` adaptors until we
         // reach the base iterable (`s.iter()`, a range, an array literal, …).
         // `steps` is collected outermost-first, then reversed to application
@@ -1247,6 +1260,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // Build the for-loop body (base → out), threading the "current element"
         // expression through each stage. Recursion keeps `filter`'s downstream
         // stages nested inside its `if`.
+        //
+        // One parameter over clippy's threshold since B-2026-08-26-27 added
+        // `err_name`. Bundling them into a struct would mean a type declared
+        // solely to carry seven values already threaded verbatim through a
+        // purely local recursion — more code to read for no clearer contract.
+        #[allow(clippy::too_many_arguments)]
         fn build_body(
             steps: &[IterAdaptor],
             i: usize,
@@ -1255,8 +1274,194 @@ impl<'ctx> super::Codegen<'ctx> {
             uid: u32,
             sp: &crate::token::Span,
             ident: &dyn Fn(&str, &crate::token::Span) -> Expr,
+            // B-2026-08-26-27 — `Some(<err binding>)` makes the leaf append
+            // fallible (`Vec.try_from_iter`); `None` keeps the infallible
+            // `push` every other collect caller wants.
+            err_name: Option<&str>,
         ) -> Vec<Stmt> {
             if i == steps.len() {
+                // B-2026-08-26-27 — THE ONE APPEND SITE, and the whole of what
+                // makes this engine fallible. `err_name` is `Some` only for
+                // `Vec.try_from_iter`; every other caller keeps the infallible
+                // `push` verbatim.
+                //
+                //   `match <acc>.try_push(<current>) {
+                //        Ok(_u) => { }
+                //        Err(e) => { <err> = Some(e); }
+                //    }`
+                //
+                // NO `break` AND NO GUARD, both deliberately. A `break` would
+                // have to thread through whatever loop shape the adaptor stack
+                // built around this leaf — `take_while`'s early exit,
+                // `flat_map`'s inner loop — and each is a separate place to get
+                // wrong. A guard (`if <err>.is_none()`) would be correct but
+                // needs a method call on a SYNTHETIC local, which codegen has no
+                // side-table for: measured, it fails dispatch with "no handler
+                // for method 'is_none' on variable '__icerr_0'".
+                //
+                // Neither is needed. After the first OOM every later `try_push`
+                // attempts the same growth and fails the same way, so the flag
+                // is simply rewritten and the loop drains. The result is
+                // identical — a `Some(e)` at the tail means `Err` regardless of
+                // which failure wrote it — and the cost is a bounded run of
+                // already-failing allocations on a path where the process is out
+                // of memory anyway.
+                if let Some(err) = err_name {
+                    let try_push = Expr {
+                        kind: ExprKind::MethodCall {
+                            object: Box::new(ident(vec_name, sp)),
+                            method: "try_push".to_string(),
+                            turbofish: None,
+                            args: vec![CallArg {
+                                label: None,
+                                mut_marker: false,
+                                mut_marker_span: None,
+                                value: current,
+                                span: *sp,
+                            }],
+                            args_close_span: *sp,
+                        },
+                        span: *sp,
+                    };
+                    let ok_arm = MatchArm {
+                        pattern: Pattern {
+                            kind: PatternKind::TupleVariant {
+                                path: vec!["Ok".to_string()],
+                                patterns: vec![Pattern {
+                                    kind: PatternKind::Binding(format!("__icu_{uid}")),
+                                    span: *sp,
+                                }],
+                            },
+                            span: *sp,
+                        },
+                        guard: None,
+                        body: Expr {
+                            kind: ExprKind::Block(Block {
+                                stmts: vec![],
+                                final_expr: None,
+                                span: *sp,
+                            }),
+                            span: *sp,
+                        },
+                        span: *sp,
+                    };
+                    let e_name = format!("__ice_{uid}");
+                    let b_name = format!("__icb_{uid}");
+                    // Recover the byte count rather than reporting a zero:
+                    // `AllocError.OutOfMemory` carries the size the allocator
+                    // could not satisfy, and design.md § Fallible Allocation
+                    // sells it for diagnostics and retry-with-smaller
+                    // strategies. `e_name` is a binding from a `Result` match
+                    // whose scrutinee is a real method call, so codegen has its
+                    // type and CAN bind the nested payload — unlike a synthetic
+                    // `Option[AllocError]` LOCAL, which it cannot (measured:
+                    // "Undefined variable '__iceo_0'"). That asymmetry is why
+                    // the flag below is a plain `i64` and the count is extracted
+                    // HERE instead of being carried as an enum value.
+                    let assign_err = |value: Expr| Stmt {
+                        kind: StmtKind::Assign {
+                            target: ident(err, sp),
+                            value,
+                        },
+                        span: *sp,
+                    };
+                    let inner_match = Expr {
+                        kind: ExprKind::Match {
+                            scrutinee: Box::new(ident(&e_name, sp)),
+                            arms: vec![
+                                MatchArm {
+                                    pattern: Pattern {
+                                        kind: PatternKind::Struct {
+                                            path: vec![
+                                                "AllocError".to_string(),
+                                                "OutOfMemory".to_string(),
+                                            ],
+                                            fields: vec![crate::ast::FieldPattern {
+                                                name: "requested_bytes".to_string(),
+                                                pattern: Some(Pattern {
+                                                    kind: PatternKind::Binding(b_name.clone()),
+                                                    span: *sp,
+                                                }),
+                                                span: *sp,
+                                            }],
+                                            has_rest: false,
+                                        },
+                                        span: *sp,
+                                    },
+                                    guard: None,
+                                    body: Expr {
+                                        kind: ExprKind::Block(Block {
+                                            stmts: vec![assign_err(ident(&b_name, sp))],
+                                            final_expr: None,
+                                            span: *sp,
+                                        }),
+                                        span: *sp,
+                                    },
+                                    span: *sp,
+                                },
+                                MatchArm {
+                                    pattern: Pattern {
+                                        kind: PatternKind::Wildcard,
+                                        span: *sp,
+                                    },
+                                    guard: None,
+                                    body: Expr {
+                                        kind: ExprKind::Block(Block {
+                                            stmts: vec![assign_err(Expr {
+                                                kind: ExprKind::Integer(
+                                                    0.into(),
+                                                    Some(crate::token::IntSuffix::I64),
+                                                ),
+                                                span: *sp,
+                                            })],
+                                            final_expr: None,
+                                            span: *sp,
+                                        }),
+                                        span: *sp,
+                                    },
+                                    span: *sp,
+                                },
+                            ],
+                        },
+                        span: *sp,
+                    };
+                    let err_arm = MatchArm {
+                        pattern: Pattern {
+                            kind: PatternKind::TupleVariant {
+                                path: vec!["Err".to_string()],
+                                patterns: vec![Pattern {
+                                    kind: PatternKind::Binding(e_name.clone()),
+                                    span: *sp,
+                                }],
+                            },
+                            span: *sp,
+                        },
+                        guard: None,
+                        body: Expr {
+                            kind: ExprKind::Block(Block {
+                                stmts: vec![Stmt {
+                                    kind: StmtKind::Expr(inner_match),
+                                    span: *sp,
+                                }],
+                                final_expr: None,
+                                span: *sp,
+                            }),
+                            span: *sp,
+                        },
+                        span: *sp,
+                    };
+                    let match_expr = Expr {
+                        kind: ExprKind::Match {
+                            scrutinee: Box::new(try_push),
+                            arms: vec![ok_arm, err_arm],
+                        },
+                        span: *sp,
+                    };
+                    return vec![Stmt {
+                        kind: StmtKind::Expr(match_expr),
+                        span: *sp,
+                    }];
+                }
                 // `__icv_N.push(<current>)`
                 let push_call = Expr {
                     kind: ExprKind::MethodCall {
@@ -1424,7 +1629,16 @@ impl<'ctx> super::Codegen<'ctx> {
                     // *non-terminal* map with an f-string body (which would still
                     // need the poisoned `let`).
                     if i + 1 == steps.len() {
-                        return build_body(steps, i + 1, map_value, vec_name, uid, sp, ident);
+                        return build_body(
+                            steps,
+                            i + 1,
+                            map_value,
+                            vec_name,
+                            uid,
+                            sp,
+                            ident,
+                            err_name,
+                        );
                     }
                     // Non-terminal map: materialize into a fresh `let` so the
                     // threaded "current" stays a simple identifier (no downstream
@@ -1452,6 +1666,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         uid,
                         sp,
                         ident,
+                        err_name,
                     ));
                     out
                 }
@@ -1487,7 +1702,8 @@ impl<'ctx> super::Codegen<'ctx> {
                             span: *sp,
                         }
                     };
-                    let then_stmts = build_body(steps, i + 1, current, vec_name, uid, sp, ident);
+                    let then_stmts =
+                        build_body(steps, i + 1, current, vec_name, uid, sp, ident, err_name);
                     let if_expr = Expr {
                         kind: ExprKind::If {
                             condition: Box::new(guard),
@@ -1518,7 +1734,16 @@ impl<'ctx> super::Codegen<'ctx> {
                     let cond = bin(BinOp::GtEq, ident(&st_i, sp), ident(&stn_i, sp));
                     let mut out = vec![if_stmt(cond, vec![break_stmt()], None)];
                     out.push(assign(&st_i, bin(BinOp::Add, ident(&st_i, sp), i64_lit(1))));
-                    out.extend(build_body(steps, i + 1, current, vec_name, uid, sp, ident));
+                    out.extend(build_body(
+                        steps,
+                        i + 1,
+                        current,
+                        vec_name,
+                        uid,
+                        sp,
+                        ident,
+                        err_name,
+                    ));
                     out
                 }
                 IterAdaptor::Skip { .. } => {
@@ -1527,7 +1752,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // the rest through.
                     let cond = bin(BinOp::Lt, ident(&st_i, sp), ident(&stn_i, sp));
                     let then = vec![assign(&st_i, bin(BinOp::Add, ident(&st_i, sp), i64_lit(1)))];
-                    let els = build_body(steps, i + 1, current, vec_name, uid, sp, ident);
+                    let els = build_body(steps, i + 1, current, vec_name, uid, sp, ident, err_name);
                     vec![if_stmt(cond, then, Some(els))]
                 }
                 IterAdaptor::StepBy { .. } => {
@@ -1536,7 +1761,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     // stage's input) and advance the counter every element.
                     let modulo = bin(BinOp::Mod, ident(&st_i, sp), ident(&stn_i, sp));
                     let cond = bin(BinOp::Eq, modulo, i64_lit(0));
-                    let rest = build_body(steps, i + 1, current, vec_name, uid, sp, ident);
+                    let rest =
+                        build_body(steps, i + 1, current, vec_name, uid, sp, ident, err_name);
                     vec![
                         if_stmt(cond, rest, None),
                         assign(&st_i, bin(BinOp::Add, ident(&st_i, sp), i64_lit(1))),
@@ -1552,7 +1778,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     // `break` gives the same "predicate runs through the first
                     // failure, then iteration stops" shape without a latch.
                     let guard = bind_param_expr(param, pred);
-                    let rest = build_body(steps, i + 1, current, vec_name, uid, sp, ident);
+                    let rest =
+                        build_body(steps, i + 1, current, vec_name, uid, sp, ident, err_name);
                     vec![if_stmt(guard, rest, Some(vec![break_stmt()]))]
                 }
                 IterAdaptor::SkipWhile { param, pred } => {
@@ -1571,7 +1798,16 @@ impl<'ctx> super::Codegen<'ctx> {
                         span: *sp,
                     };
                     let mut then = vec![assign(&st_i, bool_lit_e(false, sp))];
-                    then.extend(build_body(steps, i + 1, current, vec_name, uid, sp, ident));
+                    then.extend(build_body(
+                        steps,
+                        i + 1,
+                        current,
+                        vec_name,
+                        uid,
+                        sp,
+                        ident,
+                        err_name,
+                    ));
                     vec![if_stmt(cond, then, None)]
                 }
                 IterAdaptor::Inspect { param, body } => {
@@ -1583,7 +1819,16 @@ impl<'ctx> super::Codegen<'ctx> {
                         kind: StmtKind::Expr(side_effect),
                         span: *sp,
                     }];
-                    out.extend(build_body(steps, i + 1, current, vec_name, uid, sp, ident));
+                    out.extend(build_body(
+                        steps,
+                        i + 1,
+                        current,
+                        vec_name,
+                        uid,
+                        sp,
+                        ident,
+                        err_name,
+                    ));
                     out
                 }
                 IterAdaptor::Enumerate => {
@@ -1663,12 +1908,14 @@ impl<'ctx> super::Codegen<'ctx> {
                         uid,
                         sp,
                         ident,
+                        err_name,
                     ));
                     out
                 }
             }
         }
 
+        let err_name = fallible.then(|| format!("__icerr_{uid}"));
         let for_body = build_body(
             &steps,
             0,
@@ -1677,7 +1924,63 @@ impl<'ctx> super::Codegen<'ctx> {
             uid,
             &sp,
             &ident,
+            err_name.as_deref(),
         );
+
+        // B-2026-08-26-27 — BAIL ON THE FIRST FAILURE. Once the accumulator
+        // has refused to grow it will refuse again for every element left in
+        // the source, so without this guard an OOM at element 3 of 10_000 runs
+        // 9_997 more `try_push` calls that cannot succeed. That is not merely
+        // wasted work: each remaining element is still MATERIALIZED by the
+        // adaptor chain and moved into a `try_push` that stores nothing, so a
+        // heap-bearing element type (`Vec[String]`) leaks one buffer per
+        // remaining element rather than one in total. `<err> >= 0` is a plain
+        // i64 compare on a synthetic local — the one predicate shape codegen
+        // needs no side-table for, which is why the flag is an i64 and not the
+        // `Option[AllocError]` this started as.
+        let mut for_body = for_body;
+        if let Some(err) = &err_name {
+            for_body.insert(
+                0,
+                Stmt {
+                    kind: StmtKind::Expr(Expr {
+                        kind: ExprKind::If {
+                            condition: Box::new(Expr {
+                                kind: ExprKind::Binary {
+                                    op: crate::ast::BinOp::GtEq,
+                                    left: Box::new(ident(err, &sp)),
+                                    right: Box::new(Expr {
+                                        kind: ExprKind::Integer(
+                                            0.into(),
+                                            Some(crate::token::IntSuffix::I64),
+                                        ),
+                                        span: sp,
+                                    }),
+                                },
+                                span: sp,
+                            }),
+                            then_block: Block {
+                                stmts: vec![Stmt {
+                                    kind: StmtKind::Expr(Expr {
+                                        kind: ExprKind::Break {
+                                            label: None,
+                                            value: None,
+                                        },
+                                        span: sp,
+                                    }),
+                                    span: sp,
+                                }],
+                                final_expr: None,
+                                span: sp,
+                            },
+                            else_branch: None,
+                        },
+                        span: sp,
+                    }),
+                    span: sp,
+                },
+            );
+        }
 
         // `for __ice_N in <base_iterable> { <for_body> }`
         let for_stmt = Stmt {
@@ -1842,12 +2145,149 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // `{ <let_vec>; <state_stmts…>; <for_stmt>; __icv_N }`
         let mut block_stmts = vec![let_vec];
+        // B-2026-08-26-27 — the fallible variant adds ONE binding and swaps the
+        // tail; the loop in between is byte-for-byte the infallible one, which
+        // is the point of routing `Vec.try_from_iter` through this engine rather
+        // than giving it a parallel lowering to keep in step.
+        //
+        //   `let mut __icerr_N: i64 = -1;`
+        //   … loop, whose leaf append writes `__icerr_N` on failure and whose
+        //     head breaks once it is set …
+        //   `if __icerr_N >= 0 { Result.Err(AllocError.OutOfMemory { .. }) }
+        //    else { Result.Ok(__icv_N) }`
+        //
+        // THE PARTIAL CONTAINER UNWINDS FOR FREE, which is the part worth
+        // naming: on the `Err` tail `__icv_N` is simply not moved out, so it
+        // dies as an ordinary block-local and the existing scope-exit cleanup
+        // runs each collected element's drop. No bespoke unwind path — the row
+        // that filed this expected one to be the hard part, and the desugaring
+        // is what makes it unnecessary.
+        //
+        // The flag carries the requested BYTE COUNT (`-1` = no failure yet), so
+        // `requested_bytes` reaches the caller intact without codegen ever
+        // having to bind a payload out of a synthetic local.
+        if let Some(err) = &err_name {
+            block_stmts.insert(
+                0,
+                Stmt {
+                    kind: StmtKind::Let {
+                        is_mut: true,
+                        pattern: Pattern {
+                            kind: PatternKind::Binding(err.clone()),
+                            span: sp,
+                        },
+                        ty: Some(crate::ast::TypeExpr {
+                            kind: crate::ast::TypeKind::Path(crate::ast::PathExpr {
+                                segments: vec!["i64".to_string()],
+                                generic_args: None,
+                                span: sp,
+                            }),
+                            span: sp,
+                        }),
+                        value: Expr {
+                            kind: ExprKind::Unary {
+                                op: crate::ast::UnaryOp::Neg,
+                                operand: Box::new(Expr {
+                                    kind: ExprKind::Integer(
+                                        1.into(),
+                                        Some(crate::token::IntSuffix::I64),
+                                    ),
+                                    span: sp,
+                                }),
+                            },
+                            span: sp,
+                        },
+                    },
+                    span: sp,
+                },
+            );
+        }
         block_stmts.extend(state_stmts);
         block_stmts.push(for_stmt);
+        let tail = match &err_name {
+            None => ident(&vec_name, &sp),
+            Some(err) => {
+                // `if <err> >= 0 { Result.Err(AllocError.OutOfMemory { requested_bytes: <err> }) }
+                //  else { Result.Ok(__icv_N) }`
+                //
+                // An `if` on an i64 rather than a `match` on an
+                // `Option[AllocError]`: codegen has no side-table for a
+                // SYNTHETIC local, so it cannot bind a payload out of one
+                // ("Undefined variable '__iceo_0'", measured). Primitives need
+                // no such table, which is why the flag carries the byte count
+                // directly and the enum is rebuilt here.
+                let variant_call = |path: Vec<&str>, arg: Expr| Expr {
+                    kind: ExprKind::Call {
+                        callee: Box::new(Expr {
+                            kind: ExprKind::Path {
+                                segments: path.into_iter().map(str::to_string).collect(),
+                                generic_args: None,
+                            },
+                            span: sp,
+                        }),
+                        args: vec![CallArg {
+                            label: None,
+                            mut_marker: false,
+                            mut_marker_span: None,
+                            value: arg,
+                            span: sp,
+                        }],
+                    },
+                    span: sp,
+                };
+                let oom = Expr {
+                    kind: ExprKind::StructLiteral {
+                        path: vec!["AllocError".to_string(), "OutOfMemory".to_string()],
+                        fields: vec![crate::ast::FieldInit {
+                            name: "requested_bytes".to_string(),
+                            value: ident(err, &sp),
+                            shorthand: false,
+                            span: sp,
+                        }],
+                        spread: None,
+                        generic_args: None,
+                    },
+                    span: sp,
+                };
+                let cond = Expr {
+                    kind: ExprKind::Binary {
+                        op: crate::ast::BinOp::GtEq,
+                        left: Box::new(ident(err, &sp)),
+                        right: Box::new(Expr {
+                            kind: ExprKind::Integer(0.into(), Some(crate::token::IntSuffix::I64)),
+                            span: sp,
+                        }),
+                    },
+                    span: sp,
+                };
+                Expr {
+                    kind: ExprKind::If {
+                        condition: Box::new(cond),
+                        then_block: Block {
+                            stmts: vec![],
+                            final_expr: Some(Box::new(variant_call(vec!["Result", "Err"], oom))),
+                            span: sp,
+                        },
+                        else_branch: Some(Box::new(Expr {
+                            kind: ExprKind::Block(Block {
+                                stmts: vec![],
+                                final_expr: Some(Box::new(variant_call(
+                                    vec!["Result", "Ok"],
+                                    ident(&vec_name, &sp),
+                                ))),
+                                span: sp,
+                            }),
+                            span: sp,
+                        })),
+                    },
+                    span: sp,
+                }
+            }
+        };
         let block = Expr {
             kind: ExprKind::Block(Block {
                 stmts: block_stmts,
-                final_expr: Some(Box::new(ident(&vec_name, &sp))),
+                final_expr: Some(Box::new(tail)),
                 span: sp,
             }),
             span: sp,
