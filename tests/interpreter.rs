@@ -2466,6 +2466,52 @@ fn test_user_cmp_method_call_is_not_answered_by_the_builtin_comparator() {
 }
 
 #[test]
+fn interp_priority_queue_honours_a_hand_written_ord_impl() {
+    // The INTERPRETER half of B-2026-08-26-24, and it needed a different fix
+    // from the compiled half — which is the point of pinning it separately.
+    //
+    // Lowering rewrites `a < b` into `a.cmp(b).is_lt()` when it can see the
+    // operand's type, and for a `T: Ord` param it reads the bound. It cannot see
+    // either inside a STDLIB body: the baked stdlib is signature-registered, not
+    // type-checked in the user's pipeline, so `expr_types` is empty for it and
+    // the rewrite is skipped. `PriorityQueue`'s `self.xs[i] < self.xs[j]` is
+    // exactly that. codegen was unaffected because it lowers its stdlib from
+    // source — so fixing only lowering left the two backends DISAGREEING, with
+    // the compiled binary right and the interpreter erroring. The interpreter
+    // now dispatches to a hand-written comparator at runtime.
+    //
+    // The impl reverses, so the queue pops 3, 2, 1; a derive pops 1, 2, 3.
+    assert_eq!(
+        run("struct Item { id: i64 }
+             impl PartialEq for Item { fn eq(ref self, other: ref Item) -> bool { self.id == other.id } }
+             impl Eq for Item {}
+             impl PartialOrd for Item { fn partial_cmp(ref self, other: ref Item) -> Option[Ordering] { Some(other.id.cmp(self.id)) } }
+             impl Ord for Item { fn cmp(ref self, other: ref Item) -> Ordering { other.id.cmp(self.id) } }
+             fn main() {
+                 let mut q: PriorityQueue[Item] = PriorityQueue.new();
+                 q.push(Item { id: 1 });
+                 q.push(Item { id: 3 });
+                 q.push(Item { id: 2 });
+                 while q.len() > 0 { match q.pop() { Some(it) => println(it.id), None => {} } }
+             }"),
+        "3\n2\n1\n"
+    );
+    // The derive path must be untouched.
+    assert_eq!(
+        run("#[derive(PartialEq, Eq, PartialOrd, Ord)]
+             struct Item { id: i64 }
+             fn main() {
+                 let mut q: PriorityQueue[Item] = PriorityQueue.new();
+                 q.push(Item { id: 1 });
+                 q.push(Item { id: 3 });
+                 q.push(Item { id: 2 });
+                 while q.len() > 0 { match q.pop() { Some(it) => println(it.id), None => {} } }
+             }"),
+        "1\n2\n3\n"
+    );
+}
+
+#[test]
 fn test_user_impl_ord_drives_comparison_operators() {
     // `impl Ord for Point` with direct `lt`/`le`/`gt`/`ge` methods — `<`
     // lowers to `Point.lt(a, b)`, etc. Domain-specific ordering (here by x

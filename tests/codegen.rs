@@ -86907,6 +86907,95 @@ fn main() {
     }
 
     #[test]
+    fn e2e_priority_queue_honours_a_hand_written_ord_impl() {
+        // B-2026-08-26-24 — the shipping casualty. `PriorityQueue`'s sift loops
+        // compare `self.xs[i] < self.xs[j]` with `T: Ord`, and operator lowering
+        // resolved only CONCRETE operand types, so a type-param comparison
+        // survived unlowered into both backends: "operator 'Lt' is not defined
+        // for operands of type 'Struct'" / "Unsupported struct binary op: Gt".
+        // The queue worked for `#[derive(Ord)]`, whose ordering reaches the
+        // declaration-order comparator without passing through the operator
+        // rewrite, and failed for EVERY hand-written impl.
+        //
+        // The impl here REVERSES the order, so the queue must pop 3, 2, 1. A
+        // derive would pop 1, 2, 3 — asserted separately below so a regression
+        // that quietly falls back to declaration order fails rather than passes.
+        let out = run_program(
+            r#"
+struct Item { id: i64 }
+impl PartialEq for Item { fn eq(ref self, other: ref Item) -> bool { self.id == other.id } }
+impl Eq for Item {}
+impl PartialOrd for Item { fn partial_cmp(ref self, other: ref Item) -> Option[Ordering] { Some(other.id.cmp(self.id)) } }
+impl Ord for Item { fn cmp(ref self, other: ref Item) -> Ordering { other.id.cmp(self.id) } }
+fn main() {
+    let mut q: PriorityQueue[Item] = PriorityQueue.new();
+    q.push(Item { id: 1 });
+    q.push(Item { id: 3 });
+    q.push(Item { id: 2 });
+    while q.len() > 0 { match q.pop() { Some(it) => println(it.id), None => {} } }
+}
+"#,
+        );
+        assert_eq!(
+            out.expect("a PriorityQueue over a hand-written Ord must build")
+                .trim(),
+            "3
+2
+1"
+        );
+
+        // The derive path must be untouched by the fix.
+        let derived = run_program(
+            r#"
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct Item { id: i64 }
+fn main() {
+    let mut q: PriorityQueue[Item] = PriorityQueue.new();
+    q.push(Item { id: 1 });
+    q.push(Item { id: 3 });
+    q.push(Item { id: 2 });
+    while q.len() > 0 { match q.pop() { Some(it) => println(it.id), None => {} } }
+}
+"#,
+        );
+        assert_eq!(
+            derived.expect("the derived queue must still build").trim(),
+            "1
+2
+3"
+        );
+    }
+
+    #[test]
+    fn e2e_a_generic_body_comparison_reaches_the_element_impl() {
+        // The user-written half of B-2026-08-26-24: `a < b` on a `T: Ord`
+        // inside a generic function. Lowering runs BEFORE monomorphization, so
+        // there is no concrete type to resolve an impl against — the fix emits
+        // a METHOD call, which dispatches on the receiver and so needs no `T`
+        // substitution in either backend.
+        //
+        // The comparator reverses, so `smaller(1, 5)` is FALSE. A fallback to
+        // declaration order or to field values would print true.
+        let out = run_program(
+            r#"
+struct Item { id: i64 }
+impl PartialEq for Item { fn eq(ref self, other: ref Item) -> bool { self.id == other.id } }
+impl Eq for Item {}
+impl PartialOrd for Item { fn partial_cmp(ref self, other: ref Item) -> Option[Ordering] { Some(other.id.cmp(self.id)) } }
+impl Ord for Item { fn cmp(ref self, other: ref Item) -> Ordering { other.id.cmp(self.id) } }
+fn smaller[T: Ord](a: T, b: T) -> bool { a < b }
+fn main() {
+    println(smaller(Item { id: 1 }, Item { id: 5 }));
+}
+"#,
+        );
+        assert_eq!(
+            out.expect("a generic-body comparison must build").trim(),
+            "false"
+        );
+    }
+
+    #[test]
     fn e2e_a_shared_struct_comparison_calls_the_impl_on_both_backends() {
         // B-2026-08-26-25. A `shared struct` was absent from BOTH branches of
         // the ordering gate — they match `Type::Named` and a shared type is

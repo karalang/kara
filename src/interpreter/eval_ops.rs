@@ -195,6 +195,25 @@ impl<'a> super::Interpreter<'a> {
     /// whose `TypeParam` payload the `karac_cmp` family can't order without the
     /// instantiation) and the non-generic baked prelude enums (`Ordering`,
     /// `MemoryOrdering` — never in the user's `program.items`), keeping parity.
+    /// The env key of a hand-written comparator for `v`'s type, and whether it
+    /// is the `Option`-returning one. `partial_cmp` is preferred, matching both
+    /// design.md § Comparison Traits and what lowering emits.
+    fn user_comparator_for(&self, v: &Value) -> Option<(String, bool)> {
+        let name = match v {
+            Value::Struct { name, .. } => name.clone(),
+            Value::EnumVariant { enum_name, .. } => enum_name.clone(),
+            Value::SharedStruct(s) => s.name.clone(),
+            _ => return None,
+        };
+        for (method, is_partial) in [("partial_cmp", true), ("cmp", false)] {
+            let key = format!("{name}.{method}");
+            if matches!(self.env.get(&key), Some(Value::Function { .. })) {
+                return Some((key, is_partial));
+            }
+        }
+        None
+    }
+
     fn aggregate_is_orderable(&self, v: &Value) -> bool {
         let name = match v {
             Value::Struct { name, .. } => name,
@@ -710,6 +729,73 @@ impl<'a> super::Interpreter<'a> {
             // `karac_cmp_<T>` family and `Vec[Struct].sort()`. The typechecker
             // gates these on the operand deriving `PartialOrd`/`Ord`; reaching
             // here means two same-shape aggregates.
+            // A hand-written comparator, reached at RUNTIME (B-2026-08-26-24).
+            // Lowering rewrites `a < b` into `a.cmp(b).is_lt()` when it can see
+            // the operand type, including for a type param whose bound names a
+            // comparator. It cannot see either inside a STDLIB body: the baked
+            // stdlib is signature-registered, not type-checked in the user's
+            // pipeline, so `expr_types` is empty for it and the rewrite is
+            // skipped. `PriorityQueue`'s `self.xs[i] < self.xs[j]` is exactly
+            // that, and it is the reason this arm exists — without it the
+            // interpreter raised "operator 'Lt' is not defined for operands of
+            // type 'Struct'" on a queue whose element type has a perfectly good
+            // `impl Ord`, while the compiled binary (whose stdlib IS lowered
+            // from source) got the right answer. A divergence, and the
+            // interpreter was the wrong half.
+            //
+            // Placed BEFORE the derived-order arm below so a hand-written
+            // comparator wins over declaration order, matching what lowering
+            // does for a type it can see. A type with only a derive has no such
+            // method registered and falls through unchanged.
+            (
+                BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq,
+                l @ (Value::Struct { .. } | Value::EnumVariant { .. } | Value::SharedStruct(_)),
+                r @ (Value::Struct { .. } | Value::EnumVariant { .. } | Value::SharedStruct(_)),
+            ) if self.user_comparator_for(&l).is_some() => {
+                let (key, is_partial) = self
+                    .user_comparator_for(&l)
+                    .expect("guard just checked this");
+                let Some(f) = self.env.get(&key) else {
+                    return self.record_runtime_error(
+                        format!("comparator '{key}' vanished between lookup and call"),
+                        span,
+                    );
+                };
+                let ord = self.invoke_function_value(f, vec![l, r]);
+                // `partial_cmp` yields `Option[Ordering]`; `None` is
+                // "incomparable" and answers false to every predicate, per
+                // design.md § Comparison Traits (the IEEE-754 NaN rule).
+                let tag = match (&ord, is_partial) {
+                    (Value::EnumVariant { variant, data, .. }, true) => {
+                        if variant == "Some" {
+                            match data {
+                                crate::interpreter::value::EnumData::Tuple(items) => {
+                                    match items.first() {
+                                        Some(Value::EnumVariant { variant, .. }) => {
+                                            Some(variant.clone())
+                                        }
+                                        _ => None,
+                                    }
+                                }
+                                _ => None,
+                            }
+                        } else {
+                            None
+                        }
+                    }
+                    (Value::EnumVariant { variant, .. }, false) => Some(variant.clone()),
+                    _ => None,
+                };
+                let Some(tag) = tag else {
+                    return Value::Bool(false);
+                };
+                Value::Bool(match op {
+                    BinOp::Lt => tag == "Less",
+                    BinOp::LtEq => tag == "Less" || tag == "Equal",
+                    BinOp::Gt => tag == "Greater",
+                    _ => tag == "Greater" || tag == "Equal",
+                })
+            }
             (
                 BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq,
                 l @ (Value::Struct { .. } | Value::EnumVariant { .. }),

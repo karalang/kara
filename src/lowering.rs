@@ -187,7 +187,10 @@ fn substitute_impl_trait_returns(program: &mut Program, tc: &TypeCheckResult) {
 
 /// Rewrite operator expressions across the entire program in place.
 pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
-    let mut lowerer = Lowerer { tc };
+    let mut lowerer = Lowerer {
+        tc,
+        type_param_bounds: std::collections::HashMap::new(),
+    };
     for item in &mut program.items {
         lowerer.lower_item(item);
     }
@@ -1055,6 +1058,18 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
 
 struct Lowerer<'a> {
     tc: &'a TypeCheckResult,
+    /// Trait-bound names for the type params in scope, innermost last
+    /// (`{"T": ["Ord"]}`). Seeded from the enclosing impl block's generics and
+    /// then the function's own, so a method of `impl[T: Ord] PriorityQueue[T]`
+    /// sees `T: Ord` (B-2026-08-26-24).
+    ///
+    /// Lowering runs BEFORE monomorphization, so a comparison between two `T`s
+    /// has no concrete type to resolve an impl against — which is why
+    /// `target_type_name` returns `None` for it and the operator survived
+    /// unlowered into both backends. The bounds are what make the right
+    /// desugaring emittable anyway: a METHOD call dispatches on the receiver,
+    /// so `a.cmp(b).is_lt()` needs no `T` substitution at all.
+    type_param_bounds: std::collections::HashMap<String, Vec<String>>,
 }
 
 impl<'a> Lowerer<'a> {
@@ -1062,11 +1077,13 @@ impl<'a> Lowerer<'a> {
         match item {
             Item::Function(f) => self.lower_function(f),
             Item::ImplBlock(imp) => {
+                let saved = self.push_type_param_bounds(imp.generic_params.as_ref());
                 for it in &mut imp.items {
                     if let ImplItem::Method(m) = it {
                         self.lower_function(m);
                     }
                 }
+                self.type_param_bounds = saved;
             }
             Item::ConstDecl(c) => self.lower_expr(&mut c.value),
             _ => {}
@@ -1074,7 +1091,50 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_function(&mut self, f: &mut Function) {
+        let saved = self.push_type_param_bounds(f.generic_params.as_ref());
         self.lower_block(&mut f.body);
+        self.type_param_bounds = saved;
+    }
+
+    /// Add `params`' bounds to the in-scope set, returning the previous map for
+    /// the caller to restore. Inner params SHADOW outer ones of the same name,
+    /// matching how the typechecker scopes them.
+    fn push_type_param_bounds(
+        &mut self,
+        params: Option<&crate::ast::GenericParams>,
+    ) -> std::collections::HashMap<String, Vec<String>> {
+        let saved = self.type_param_bounds.clone();
+        if let Some(gp) = params {
+            for p in &gp.params {
+                let names: Vec<String> = p
+                    .bounds
+                    .iter()
+                    .filter_map(|b| b.path.last().cloned())
+                    .collect();
+                self.type_param_bounds.insert(p.name.clone(), names);
+            }
+        }
+        saved
+    }
+
+    /// The comparator method an ordering operator between two values of type
+    /// param `name` should call, or `None` when its bounds supply neither.
+    ///
+    /// `partial_cmp` is preferred, per design.md § Comparison Traits, but the
+    /// choice is forced by the BOUND rather than by preference: supertrait
+    /// methods do not re-export through the requiring trait (design.md
+    /// § "Constraints and method resolution"), so `T: Ord` cannot call
+    /// `partial_cmp` and `T: PartialOrd` cannot call `cmp`. Emitting the wrong
+    /// one produces "no method 'partial_cmp' on type parameter 'T'".
+    fn type_param_comparator(&self, name: &str) -> Option<&'static str> {
+        let bounds = self.type_param_bounds.get(name)?;
+        if bounds.iter().any(|b| b == "PartialOrd") {
+            Some("partial_cmp")
+        } else if bounds.iter().any(|b| b == "Ord") {
+            Some("cmp")
+        } else {
+            None
+        }
     }
 
     fn lower_block(&mut self, block: &mut Block) {
@@ -1957,6 +2017,53 @@ impl<'a> Lowerer<'a> {
         if lhs_ty != rhs_ty {
             return None;
         }
+        // A comparison between two TYPE PARAMS (`a < b` inside `fn f[T: Ord]`,
+        // or `self.xs[i] > self.xs[j]` in `impl[T: Ord] PriorityQueue[T]`).
+        // `target_type_name` just below resolves only CONCRETE operands, so this
+        // survived unlowered into both backends and died there —
+        // "operator 'Lt' is not defined for operands of type 'Struct'" and
+        // "Unsupported struct binary op: Gt". `PriorityQueue` was the shipping
+        // casualty: it worked for `#[derive(Ord)]`, whose ordering reaches the
+        // declaration-order comparator without passing through here, and failed
+        // for every hand-written impl (B-2026-08-26-24).
+        //
+        // A METHOD call is what makes this lowerable before monomorphization:
+        // it dispatches on the receiver, so no `T` needs substituting and the
+        // same emitted AST works in the tree-walk interpreter and in each
+        // monomorph. Verified by hand first — `a.cmp(b).is_lt()` written
+        // directly in a `T: Ord` body already ran and built correctly on both
+        // backends, which is what made this the small fix rather than a
+        // deferred-rewrite pass.
+        if matches!(op, BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq) {
+            if let Type::TypeParam(param) = &lhs_ty {
+                if let Some(cmp_method) = self.type_param_comparator(param) {
+                    let cmp_call = Expr {
+                        span: left.span,
+                        kind: ExprKind::MethodCall {
+                            object: Box::new(left.clone()),
+                            method: cmp_method.to_string(),
+                            turbofish: None,
+                            args: vec![CallArg {
+                                label: None,
+                                mut_marker: false,
+                                mut_marker_span: None,
+                                span: right.span,
+                                value: right.clone(),
+                            }],
+                            args_close_span: right.span,
+                        },
+                    };
+                    return Some(ExprKind::MethodCall {
+                        object: Box::new(cmp_call),
+                        method: format!("is_{method}"),
+                        turbofish: None,
+                        args: Vec::new(),
+                        args_close_span: right.span,
+                    });
+                }
+            }
+        }
+
         let target = target_type_name(lhs_ty, op, self.tc)?;
 
         // User impls of `Eq` conventionally provide only `eq`; mirror the
@@ -1984,8 +2091,7 @@ impl<'a> Lowerer<'a> {
         // (B-2026-08-26-10); `ordering_dispatch_comparator` returns `None`
         // when the impl provides the direct method, leaving the legacy form.
         if matches!(op, BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq) {
-            if let Some(cmp_method) = ordering_dispatch_comparator(lhs_ty, method, &target, self.tc)
-            {
+            if let Some(cmp_method) = ordering_dispatch_comparator(lhs_ty, &target, self.tc) {
                 let cmp_call = Expr {
                     span: left.span,
                     kind: call_path(vec![target, cmp_method], vec![left.clone(), right.clone()]),
@@ -2174,12 +2280,7 @@ fn target_type_name(ty: &Type, op: &BinOp, tc: &TypeCheckResult) -> Option<Strin
 /// form predates this and is pinned by
 /// `test_user_impl_ord_drives_comparison_operators`, so an author who wrote
 /// `fn lt` keeps getting their `fn lt` called.
-fn ordering_dispatch_comparator(
-    ty: &Type,
-    method: &str,
-    target: &str,
-    tc: &TypeCheckResult,
-) -> Option<String> {
+fn ordering_dispatch_comparator(ty: &Type, target: &str, tc: &TypeCheckResult) -> Option<String> {
     // The `Shared` arm is currently UNREACHABLE, and deliberately kept anyway.
     // `target_type_name` above only resolves `Type::Named`, so a `shared struct`
     // never gets this far. It also never gets as far as the typechecker's
