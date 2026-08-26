@@ -38406,3 +38406,99 @@ fn stable_hash_refuses_to_answer_for_a_user_shadowed_namespace() {
         "expected a rename diagnostic for the shadowed namespace, got: {errors:?}"
     );
 }
+
+// ── `Vector[T, N]` integer lane arithmetic WRAPS (B-2026-08-26-8) ──────────
+//
+// The one deliberate exception to design.md § Integer overflow's trap rule.
+// Pre-fix the interpreter did NEITHER: it computed on the i128 carrier, so a
+// `u8` lane sum of 200 + 200 was 400 — wrong under wrap (144) AND under trap
+// (`integer overflow`), and divergent from codegen, whose lanes are a real
+// `<N x iX>`. See `docs/design.md § Portable SIMD` for why `Vector` departs
+// from `Column` / `Tensor`, which trap at the element width in both backends.
+
+#[test]
+fn vector_unsigned_lane_add_wraps_at_the_lane_width() {
+    assert_eq!(
+        run("fn main() {\n\
+                 let v: Vector[u8, 4] = Vector[u8, 4].splat(200);\n\
+                 let w = v + v;\n\
+                 println(w[0] as i64);\n\
+             }\n"),
+        "144\n"
+    );
+}
+
+/// Signed lanes wrap in two's complement, not toward zero and not saturating.
+/// `100 + 100` is `200`, which is `-56` read back as `i8`.
+#[test]
+fn vector_signed_lane_arithmetic_wraps_in_twos_complement() {
+    assert_eq!(
+        run("fn main() {\n\
+                 let a: Vector[i8, 4] = Vector[i8, 4].splat(100);\n\
+                 println((a + a)[0] as i64);\n\
+                 let b: Vector[i16, 4] = Vector[i16, 4].splat(300);\n\
+                 println((b * b)[0] as i64);\n\
+             }\n"),
+        "-56\n24464\n"
+    );
+}
+
+/// Unsigned underflow wraps around the bottom of the lane rather than trapping
+/// or clamping at 0 — `5 - 10` on a `u8` lane is `251`.
+#[test]
+fn vector_unsigned_lane_underflow_wraps_rather_than_trapping() {
+    assert_eq!(
+        run("fn main() {\n\
+                 let c: Vector[u8, 4] = Vector[u8, 4].splat(5);\n\
+                 let d: Vector[u8, 4] = Vector[u8, 4].splat(10);\n\
+                 println((c - d)[0] as i64);\n\
+             }\n"),
+        "251\n"
+    );
+}
+
+/// A WIDE `N` — past what any native vector unit covers, so codegen legalizes
+/// it into several narrower vectors — must wrap identically. Pinned because
+/// design.md promises "the user's source program is identical across targets —
+/// performance, not correctness, is what varies", and a lane rule that held
+/// only at machine-native widths would break exactly that.
+#[test]
+fn vector_lane_wrap_is_independent_of_the_lane_count() {
+    assert_eq!(
+        run("fn main() {\n\
+                 let v: Vector[u8, 64] = Vector[u8, 64].splat(200);\n\
+                 println((v + v)[0] as i64);\n\
+             }\n"),
+        "144\n"
+    );
+}
+
+/// THE GUARD ON THE EXCEPTION. Making `Vector` wrap must not have widened into
+/// the trapping widths it sits beside — `narrow_oob` is still the path for
+/// every one of them. `Column[T]` element ops and plain scalars are the two
+/// nearest neighbours, and both must still trap.
+#[test]
+fn wrapping_vector_lanes_did_not_stop_columns_or_scalars_trapping() {
+    for (label, src) in [
+        (
+            "Column[i32] element op",
+            "fn main() {\n\
+                 let c: Column[i32] = Column.from_vec([2147483647]);\n\
+                 let d = c + 1;\n\
+                 match d[0] { Some(x) => { println(x); }, None => { println(0); } }\n\
+             }\n",
+        ),
+        (
+            "scalar i32",
+            "fn main() { let x: i32 = 2147483647; let y = x + 1; println(y); }\n",
+        ),
+    ] {
+        let errors = runtime_errors(src);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("integer overflow")),
+            "{label} must still trap at its declared width; got {errors:?}"
+        );
+    }
+}

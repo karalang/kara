@@ -471,18 +471,33 @@ impl<'a> super::Interpreter<'a> {
             // simply fits in i128 — so the 64-bit widths are explicit arms in
             // `narrow_oob` now. This is the whole reason the carrier change is
             // not a pure refactor.
-            (BinOp::Add, Value::Int(a), Value::Int(b)) => match a.checked_add(b) {
-                Some(v) if !self.narrow_oob(v, span) => Value::Int(v),
-                _ => self.record_integer_overflow(span),
-            },
-            (BinOp::Sub, Value::Int(a), Value::Int(b)) => match a.checked_sub(b) {
-                Some(v) if !self.narrow_oob(v, span) => Value::Int(v),
-                _ => self.record_integer_overflow(span),
-            },
-            (BinOp::Mul, Value::Int(a), Value::Int(b)) => match a.checked_mul(b) {
-                Some(v) if !self.narrow_oob(v, span) => Value::Int(v),
-                _ => self.record_integer_overflow(span),
-            },
+            (BinOp::Add, Value::Int(a), Value::Int(b)) => {
+                match a
+                    .checked_add(b)
+                    .and_then(|v| self.settle_int_binop(v, span))
+                {
+                    Some(v) => Value::Int(v),
+                    None => self.record_integer_overflow(span),
+                }
+            }
+            (BinOp::Sub, Value::Int(a), Value::Int(b)) => {
+                match a
+                    .checked_sub(b)
+                    .and_then(|v| self.settle_int_binop(v, span))
+                {
+                    Some(v) => Value::Int(v),
+                    None => self.record_integer_overflow(span),
+                }
+            }
+            (BinOp::Mul, Value::Int(a), Value::Int(b)) => {
+                match a
+                    .checked_mul(b)
+                    .and_then(|v| self.settle_int_binop(v, span))
+                {
+                    Some(v) => Value::Int(v),
+                    None => self.record_integer_overflow(span),
+                }
+            }
             (BinOp::Div, Value::Int(a), Value::Int(b)) => {
                 if b == 0 {
                     return self.record_runtime_error("division by zero", span);
@@ -490,9 +505,12 @@ impl<'a> super::Interpreter<'a> {
                 if self.div_overflows_at_width(a, b, span) {
                     return self.record_integer_overflow(span);
                 }
-                match a.checked_div(b) {
-                    Some(v) if !self.narrow_oob(v, span) => Value::Int(v),
-                    _ => self.record_integer_overflow(span),
+                match a
+                    .checked_div(b)
+                    .and_then(|v| self.settle_int_binop(v, span))
+                {
+                    Some(v) => Value::Int(v),
+                    None => self.record_integer_overflow(span),
                 }
             }
             (BinOp::Mod, Value::Int(a), Value::Int(b)) => {
@@ -504,9 +522,12 @@ impl<'a> super::Interpreter<'a> {
                 if self.div_overflows_at_width(a, b, span) {
                     return self.record_integer_overflow(span);
                 }
-                match a.checked_rem(b) {
-                    Some(v) if !self.narrow_oob(v, span) => Value::Int(v),
-                    _ => self.record_integer_overflow(span),
+                match a
+                    .checked_rem(b)
+                    .and_then(|v| self.settle_int_binop(v, span))
+                {
+                    Some(v) => Value::Int(v),
+                    None => self.record_integer_overflow(span),
                 }
             }
 
@@ -1070,6 +1091,73 @@ impl<'a> super::Interpreter<'a> {
     pub(super) fn narrow_oob(&self, v: i128, span: &Span) -> bool {
         let (lo, hi) = self.span_int_bounds(span);
         v < lo || v > hi
+    }
+
+    /// Settle an integer binop result against the width the typechecker
+    /// assigned at `span`: `Some(v)` when it fits, `Some(wrapped)` for a
+    /// `Vector[T, N]` lane, `None` when it overflows a TRAPPING width.
+    ///
+    /// B-2026-08-26-8 — `Vector` lane arithmetic WRAPS, and is the one integer
+    /// shape in the language that does. Every other narrow width here traps
+    /// (design.md § Integer overflow), and `Column[T]` / `Tensor[T, S]` element
+    /// ops trap too via [`Self::span_int_bounds`]'s peel. `Vector` departs
+    /// because it is the portable-SIMD type: design.md § Portable SIMD defines
+    /// it as lowering "to the widest available primitive on the target", so its
+    /// contract is machine lane semantics, and no SIMD ISA traps. Codegen
+    /// already wraps at every `N` (measured at 4 and 64); this is the
+    /// interpreter catching up, not a new rule.
+    ///
+    /// Pre-fix the interpreter did NEITHER: it computed on the i128 carrier and
+    /// kept 400 for a `u8` lane sum of 200 + 200, a value wrong under wrap
+    /// (144) AND under trap (`integer overflow`).
+    fn settle_int_binop(&self, v: i128, span: &Span) -> Option<i128> {
+        if let Some(wrapped) = self.vector_lane_wrap(v, span) {
+            return Some(wrapped);
+        }
+        if self.narrow_oob(v, span) {
+            return None;
+        }
+        Some(v)
+    }
+
+    /// `v` truncated to the lane width when `span` is an integer-lane
+    /// `Vector[T, N]` op, else `None`.
+    ///
+    /// Deliberately a sibling of [`Self::span_int_bounds`] rather than a peel
+    /// inside it: that function answers "which range TRAPS", and a `Vector`
+    /// entry there would make the interpreter reject a lane sum codegen
+    /// happily wraps.
+    fn vector_lane_wrap(&self, v: i128, span: &Span) -> Option<i128> {
+        use crate::typechecker::types::{IntSize, Type, UIntSize};
+        let key = crate::resolver::SpanKey::from_span(span);
+        let Type::Vector { element, .. } = self.typecheck_result.expr_types.get(&key)? else {
+            return None;
+        };
+        let (bits, unsigned) = match element.as_ref() {
+            Type::Int(IntSize::I8) => (8u32, false),
+            Type::Int(IntSize::I16) => (16, false),
+            Type::Int(IntSize::I32) => (32, false),
+            Type::Int(IntSize::I64) | Type::Int(IntSize::Isize) => (64, false),
+            Type::UInt(UIntSize::U8) => (8, true),
+            Type::UInt(UIntSize::U16) => (16, true),
+            Type::UInt(UIntSize::U32) => (32, true),
+            Type::UInt(UIntSize::U64) | Type::UInt(UIntSize::Usize) => (64, true),
+            // A float lane never reaches the integer arms, and a 128-bit lane
+            // has no `<N x i128>` codegen to agree with — leave both to the
+            // existing path rather than inventing a truncation for them.
+            _ => return None,
+        };
+        // Two's-complement truncation to `bits`, which is what an `<N x iX>`
+        // add/sub/mul does on every target.
+        let masked = (v as u128) & (u128::MAX >> (128 - bits));
+        Some(if unsigned {
+            masked as i128
+        } else if bits < 128 && masked >> (bits - 1) & 1 == 1 {
+            // Sign-extend: the lane's top bit is set.
+            (masked | (u128::MAX << bits)) as i128
+        } else {
+            masked as i128
+        })
     }
 
     /// Would a division-family op on `(a, b)` overflow the DECLARED width?

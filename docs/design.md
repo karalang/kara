@@ -13535,6 +13535,12 @@ Checked at monomorphization — the concrete effect set provided by the caller i
 
 **Decision:** `Vector[T: Numeric, const N: i64]` is the single portable-SIMD type — the same type used for CPU SIMD, GPU vectors, and any future accelerator. Element-wise arithmetic, dot product, cross product (`N == 3`), and shuffle / lane-access operations are part of the type's surface. Codegen lowers to the widest available primitive on the target; when no native vector unit covers `N` lanes, the compiler emits a scalar fallback. The user's source program is identical across targets — performance, not correctness, is what varies.
 
+**Integer lane arithmetic WRAPS (B-2026-08-26-8).** `+`, `-`, `*`, `/` and `%` on an integer-lane `Vector[T, N]` truncate to the lane width in two's complement. `Vector[u8, 4]` lanes of `200` added to themselves give `144`, not a trap: `Vector[i8, 4]` lanes of `100` doubled give `-56`.
+
+This is a **deliberate exception** to [§ Integer overflow](#integer-overflow--real-fixed-width-types)'s trap-at-the-declared-width rule, and the only one in the language. Scalar integer arithmetic traps; so does element-wise `Column[T]` and `Tensor[T, S]` arithmetic, at the element's width, in both backends. `Vector[T, N]` departs because its contract is different in kind: it is the portable-SIMD type, defined above as lowering "to the widest available primitive on the target", so what a user asks for when they reach for it is *machine lane semantics*. No SIMD ISA traps, and checking each lane would mean a per-operation cross-lane reduction to decide whether to fault — plausibly costlier than the arithmetic itself, on the one type in the language whose entire purpose is arithmetic throughput.
+
+The exception is recorded here rather than left implicit precisely because the `Column` / `Tensor` precedent points the other way: a reader who finds the wrap and assumes the trap rule was forgotten should find this paragraph instead. Code that needs the trap should compute in the scalar or `Column` surface; code that needs the wrap in a scalar context has no shorthand today.
+
 **Why deferred:** Requires the LLVM backend (Phase 7) for CPU lowering and the GPU backend (Phase 10) for SPIR-V / WGSL emission. The type, the operations, and the auto-fallback rule are all locked in at v1; only the codegen pipelines are post-MVP.
 
 **Why non-breaking:** Purely additive. `Array[f32, 4]` and other element-wise patterns continue to work; `Vector[T, N]` is a separate type, not a re-typing of fixed-size arrays.

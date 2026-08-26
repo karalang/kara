@@ -835,6 +835,71 @@ mod codegen_tests {
         );
     }
 
+    /// `Vector[T, N]` integer lane arithmetic must give the SAME value in both
+    /// backends (B-2026-08-26-8).
+    ///
+    /// This row's whole class is run-vs-build: codegen's lanes are a real
+    /// `<N x iX>` and wrap, while the interpreter computed on its i128 carrier
+    /// and kept 400 for a `u8` lane sum of 200 + 200 — a value wrong under
+    /// wrap (144) AND under trap. Written as a TWIN comparison rather than
+    /// pinned constants so the two cannot drift together; the interpreter side
+    /// additionally pins the exact values in `tests/interpreter.rs`.
+    ///
+    /// The wide-`N` case is here on purpose: design.md § Portable SIMD promises
+    /// "the user's source program is identical across targets — performance,
+    /// not correctness, is what varies", and `N = 64` is past what a native
+    /// vector unit covers, so codegen legalizes it into several narrower
+    /// vectors. A lane rule that held only at machine-native widths would break
+    /// exactly the promise the section makes.
+    #[test]
+    fn e2e_vector_lane_arithmetic_agrees_with_the_interpreter() {
+        let cases: &[(&str, &str)] = &[
+            (
+                "u8 add overflow",
+                "let v: Vector[u8, 4] = Vector[u8, 4].splat(200);\n\
+                 println((v + v)[0] as i64);",
+            ),
+            (
+                "i8 signed add wrap",
+                "let a: Vector[i8, 4] = Vector[i8, 4].splat(100);\n\
+                 println((a + a)[0] as i64);",
+            ),
+            (
+                "u8 subtraction underflow",
+                "let c: Vector[u8, 4] = Vector[u8, 4].splat(5);\n\
+                 let d: Vector[u8, 4] = Vector[u8, 4].splat(10);\n\
+                 println((c - d)[0] as i64);",
+            ),
+            (
+                "i16 multiply wrap",
+                "let b: Vector[i16, 4] = Vector[i16, 4].splat(300);\n\
+                 println((b * b)[0] as i64);",
+            ),
+            (
+                "wide N past a native vector unit",
+                "let v: Vector[u8, 64] = Vector[u8, 64].splat(200);\n\
+                 println((v + v)[0] as i64);",
+            ),
+        ];
+        for (label, body) in cases {
+            let src = format!("fn main() {{\n{body}\n}}\n");
+            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            assert!(
+                interp_errs.is_empty(),
+                "{label}: interpreter errored — lane arithmetic WRAPS, it must \
+                 not trap: {interp_errs:?}"
+            );
+            let expected = interp_out.join("");
+            if let Some(aot) = run_program(&src) {
+                assert_eq!(
+                    aot, expected,
+                    "{label}: AOT and the interpreter disagree on a `Vector` \
+                     lane result — the divergence B-2026-08-26-8 closed",
+                );
+            }
+        }
+    }
+
     /// `StableHash.siphash24` — the compiled backend must agree with the
     /// interpreter, byte for byte (B-2026-08-25-22).
     ///
