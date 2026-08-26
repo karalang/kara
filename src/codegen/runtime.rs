@@ -11462,6 +11462,19 @@ impl<'ctx> super::Codegen<'ctx> {
                 "fstr.ud.acc",
                 sval.get_type().into(),
             );
+            // The alloca is HOISTED to the entry block but stored HERE, and
+            // `track_vec_var` below registers it for FUNCTION-scope cleanup —
+            // a drain that runs on every exit path, including ones that never
+            // reach this store. Without the entry zero-init it reads an
+            // uninitialized `cap`, sees garbage > 0, and frees a garbage
+            // pointer. `fn main() -> Result[(), AllocError] { let x = ok()?; }`
+            // segfaulted under `karac run` on the SUCCESS path for exactly
+            // this reason once `AllocError` gained a user `impl Display` and
+            // started routing through this arm (B-2026-08-25-34). Same defect
+            // and same fix as B-2026-08-25-33; the payload-enum arm below is
+            // already covered, because `render_via_display_fn` zero-inits its
+            // own accumulator.
+            self.zero_init_str_acc_at_entry(acc);
             self.builder.build_store(acc, sval).unwrap();
             let u8_ty: inkwell::types::BasicTypeEnum<'ctx> = self.context.i8_type().into();
             self.track_vec_var(acc, Some(u8_ty));
@@ -11667,6 +11680,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 "fstr.str.acc",
                 sv.get_type().into(),
             );
+            // Entry zero-init for the same reason as the user-Display arm
+            // above: hoisted alloca, conditional store, function-scope
+            // cleanup. Fixed alongside its sibling rather than left as the
+            // one unguarded twin of a defect that has now cost four rows.
+            self.zero_init_str_acc_at_entry(acc);
             self.builder.build_store(acc, sv).unwrap();
             let u8_ty: inkwell::types::BasicTypeEnum<'ctx> = self.context.i8_type().into();
             self.track_vec_var(acc, Some(u8_ty));

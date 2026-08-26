@@ -15,6 +15,26 @@ use inkwell::AddressSpace;
 
 use super::state::VarSlot;
 
+/// The span carried by the entry point's synthesized `Error: {e}` operand.
+///
+/// A synthesized expression has no source location, and the previous
+/// `Span::default()` was not merely absent — it was the perfectly ordinary key
+/// `(0, 0)`, which a real expression at the start of a file could in principle
+/// answer to. The offset is `usize::MAX` so the key is unreachable from any
+/// source position, which is what makes it safe for
+/// [`Codegen::seed_synthetic_display_tables`] to claim as its own.
+const MAIN_ERR_SYNTH_SPAN: crate::token::Span = crate::token::Span {
+    line: 0,
+    column: 0,
+    offset: usize::MAX,
+    length: 0,
+};
+
+/// [`MAIN_ERR_SYNTH_SPAN`] in the `(offset, length)` form the span-keyed
+/// Display tables are indexed by.
+const MAIN_ERR_SYNTH_SPAN_KEY: (usize, usize) =
+    (MAIN_ERR_SYNTH_SPAN.offset, MAIN_ERR_SYNTH_SPAN.length);
+
 /// True when `return_type` denotes `Self` or the named type `type_name` — the
 /// constructor return shape (a `-> Self` parses as `TypeKind::Path(["Self"])`;
 /// an explicit `-> Type` is `Path([…, "Type"])`). Distinguishes a constructor
@@ -2951,7 +2971,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // (no Result return) keeps the unconditional `ret i32 0`.
                 if self.main_result_err_te.is_some() {
                     if let Some(val) = result {
-                        self.emit_main_result_return(val);
+                        self.emit_main_result_return(val)?;
                     } else {
                         let zero = self.context.i32_type().const_int(0, false);
                         self.builder.build_return(Some(&zero)).unwrap();
@@ -3122,7 +3142,10 @@ impl<'ctx> super::Codegen<'ctx> {
     /// payload words and routes to `emit_main_result_err_exit` (prints
     /// `Error: {e}\n` to stderr, exits 1). Per design.md § Entry Point.
     /// Terminates the current block (both arms `ret`).
-    pub(super) fn emit_main_result_return(&mut self, result_val: BasicValueEnum<'ctx>) {
+    pub(super) fn emit_main_result_return(
+        &mut self,
+        result_val: BasicValueEnum<'ctx>,
+    ) -> Result<(), String> {
         let i32_t = self.context.i32_type();
         let i64_t = self.context.i64_type();
         let sv = result_val.into_struct_value();
@@ -3186,7 +3209,7 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             None => w0.into(),
         };
-        self.emit_main_result_err_exit(err_val);
+        self.emit_main_result_err_exit(err_val)
     }
 
     /// Emit the `main() -> Result` error exit: print `Error: {e}\n` to stderr
@@ -3263,10 +3286,12 @@ impl<'ctx> super::Codegen<'ctx> {
         box_ptr.into()
     }
 
-    pub(super) fn emit_main_result_err_exit(&mut self, err_val: BasicValueEnum<'ctx>) {
+    pub(super) fn emit_main_result_err_exit(
+        &mut self,
+        err_val: BasicValueEnum<'ctx>,
+    ) -> Result<(), String> {
         use crate::ast::ParsedInterpolationPart as P;
         let i32_t = self.context.i32_type();
-        let i64_t = self.context.i64_type();
 
         // Spill + register the error as a synthetic local. The name is private
         // (never user-visible) and the per-function side-table clear at the
@@ -3284,6 +3309,7 @@ impl<'ctx> super::Codegen<'ctx> {
         );
         if let Some(te) = self.main_result_err_te.clone() {
             self.register_var_from_type_expr(synth, &te);
+            self.seed_synthetic_display_tables(MAIN_ERR_SYNTH_SPAN_KEY, &te);
         }
 
         // Compile `f"Error: {e}\n"` → owning String, write to stderr, free it.
@@ -3294,7 +3320,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // the manual free here is the sole, correct release.
         let id_expr = Expr {
             kind: ExprKind::Identifier(synth.to_string()),
-            span: crate::token::Span::default(),
+            span: MAIN_ERR_SYNTH_SPAN,
         };
         let lit = Expr {
             kind: ExprKind::InterpolatedStringLit(vec![
@@ -3302,28 +3328,114 @@ impl<'ctx> super::Codegen<'ctx> {
                 P::Expr(Box::new(id_expr), None),
                 P::Text("\n".to_string()),
             ]),
-            span: crate::token::Span::default(),
+            span: MAIN_ERR_SYNTH_SPAN,
         };
-        match self.compile_expr(&lit) {
-            Ok(sval) => self.emit_write_and_free_string(sval, "", true),
-            Err(_) => {
-                // Display unsupported for this E (e.g. a data-carrying enum,
-                // still subtask-5 territory): emit the bare prefix + newline so
-                // the exit is still observable and well-formed.
-                let prefix = self
-                    .builder
-                    .build_global_string_ptr("Error: \n", "main_err_prefix")
-                    .unwrap();
-                self.emit_nul_safe_write(
-                    prefix.as_pointer_value(),
-                    i64_t.const_int(8, false),
-                    "",
-                    true,
-                );
-            }
-        }
+        // FAIL CLOSED. This used to swallow the error and emit a bare
+        // `Error: \n`, on the theory that an unrenderable `E` should still
+        // produce a well-formed exit. It does the opposite: the ONLY thing the
+        // line carries is the error, so dropping it turns a compiler gap into a
+        // program that reports failure and says nothing about it — silently,
+        // and only under codegen, since the interpreter renders these fine.
+        // Measured live on `main() -> Result[(), (i64, i64)]`: `Error: (1, 2)`
+        // under `--interp`, `Error: ` under both JIT and AOT (B-2026-08-25-34).
+        // It also made the typechecker's `E_MAIN_ERR_NOT_DISPLAY` guarantee a
+        // lie downstream — a type that PASSES that check can still reach here
+        // unrenderable, and the whole point of the check is that it cannot.
+        let sval = self.compile_expr(&lit).map_err(|e| {
+            let ty = self
+                .main_result_err_te
+                .as_ref()
+                .map(crate::formatter::render_type_expr)
+                .unwrap_or_else(|| "E".to_string());
+            format!(
+                "codegen: `main() -> Result[(), {ty}]` returned an error value \
+                 that codegen cannot render, so the `Error: {{e}}` exit line \
+                 would print nothing after the prefix. The typechecker admits \
+                 `{ty}` as `Display`, so this is a codegen gap, not a program \
+                 error — teach the f-string renderer this shape (underlying \
+                 failure: {e})"
+            )
+        })?;
+        self.emit_write_and_free_string(sval, "", true);
         self.builder
             .build_return(Some(&i32_t.const_int(1, false)))
             .unwrap();
+        Ok(())
+    }
+
+    /// Make a SYNTHESIZED Display operand of type `te` look, to the f-string
+    /// renderer, exactly like a real source expression of that type.
+    ///
+    /// The renderer answers "what shape is this operand?" from SPAN-KEYED side
+    /// tables that `lowering.rs` fills off the typechecker's `expr_types`. A
+    /// synthesized expression has no source span, so every one of those lookups
+    /// misses and the operand falls through to the value-kind arms — which
+    /// cannot tell a tuple from a struct. Shapes that ALSO have a name-keyed
+    /// registration (`Vec`, `Map`, `Set`, `Option`-of-scalar, via
+    /// `register_var_from_type_expr`) survived that on the strength of the
+    /// second lookup; a tuple has no name-keyed twin, so it rendered as nothing.
+    ///
+    /// Seeding the same tables at the operand's own span fixes every shape at
+    /// once rather than growing a name-keyed twin per shape, and keeps the
+    /// entry-point line rendering whatever a real `f"{x}"` renders. The
+    /// operand's span is deliberately `usize::MAX`-offset ([`MAIN_ERR_SYNTH_SPAN`])
+    /// so the key cannot collide with a real expression's.
+    fn seed_synthetic_display_tables(&mut self, key: (usize, usize), te: &crate::ast::TypeExpr) {
+        use crate::ast::{GenericArg, TypeKind};
+        match &te.kind {
+            TypeKind::Tuple(elems) if !elems.is_empty() => {
+                self.display.display_tuple_types.insert(key, te.clone());
+            }
+            TypeKind::Path(p) => {
+                let Some(name) = p.segments.last().map(|s| s.as_str()) else {
+                    return;
+                };
+                let args: Vec<crate::ast::TypeExpr> = p
+                    .generic_args
+                    .iter()
+                    .flatten()
+                    .filter_map(|a| match a {
+                        GenericArg::Type(t) => Some(t.clone()),
+                        _ => None,
+                    })
+                    .collect();
+                match (name, args.len()) {
+                    ("Option", 1) | ("Result", 2) => {
+                        self.display
+                            .display_option_result_types
+                            .insert(key, te.clone());
+                    }
+                    ("Vec", 1) => {
+                        self.display.display_vec_types.insert(key, args[0].clone());
+                    }
+                    ("Map", 2) | ("SortedMap", 2) => {
+                        self.display
+                            .display_map_types
+                            .insert(key, (args[0].clone(), args[1].clone()));
+                        if name == "SortedMap" {
+                            self.display.display_sorted_collection_spans.insert(key);
+                        }
+                    }
+                    ("Set", 1) | ("SortedSet", 1) => {
+                        self.display.display_set_types.insert(key, args[0].clone());
+                        if name == "SortedSet" {
+                            self.display.display_sorted_collection_spans.insert(key);
+                        }
+                    }
+                    // A GENERIC user enum needs its concrete arguments, or the
+                    // Display synthesizer reads bare parameters off the
+                    // declaration (B-2026-08-19-30). Non-generic enums have
+                    // nothing to substitute and are served by the declaration
+                    // alone, matching `lowering.rs`'s split.
+                    _ if !args.is_empty() && self.type_decls.enum_layouts.contains_key(name) => {
+                        self.display
+                            .display_generic_enum_types
+                            .insert(key, te.clone());
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
     }
 }

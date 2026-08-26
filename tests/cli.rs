@@ -33547,3 +33547,221 @@ fn test_tail_position_loop_value_matches_across_backends() {
         }
     }
 }
+
+/// B-2026-08-25-34 — `AllocError` must render the prose design.md pins, on
+/// every backend and through every Display path.
+///
+/// design.md § Fallible Allocation: the `Display` "names the failed
+/// operation's byte size on the `OutOfMemory` arm and \"capacity overflow\"
+/// on the `CapacityOverflow` arm". It rendered the DEBUG form instead —
+/// `OutOfMemory { requested_bytes: 4096 }` — and that string is not an
+/// internal detail: a `main() -> Result[(), AllocError]` prints it as the
+/// whole user-facing `Error: {e}` line.
+///
+/// The fix is the escape § `#[derive(Display)]` on enums names — "Implement
+/// `Display` manually to override the derived representation entirely" — so
+/// the assertion that matters is that a MANUAL impl on a PRELUDE type reaches
+/// all three Display paths under codegen. Prelude impls live in
+/// `STDLIB_PROGRAMS`, which codegen does not walk, so before this each path
+/// failed differently: `.to_string()` and `f"{e}"` as hard "no handler"
+/// errors, and the entry-point line as a silent `Error: ` with nothing after
+/// it. Testing one path would have missed the other two.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_alloc_error_displays_its_specified_prose_on_every_backend() {
+    let tmp = scratch_project("allocerr-display");
+    // Every Display path, both variants: `println`, `.to_string()`, f-string.
+    // `dbg` is included as the CONTROL — `Debug` stays derived, so it must
+    // keep rendering the struct-variant shape a `Display` override replaces.
+    let src = r#"fn main() {
+    let e = AllocError.OutOfMemory { requested_bytes: 4096 };
+    let c = AllocError.CapacityOverflow;
+    println(e);
+    println(c);
+    println(e.to_string());
+    println(c.to_string());
+    println(f"[{e}] and [{c}]");
+    dbg(e);
+}
+"#;
+    write(&tmp.join("m.kara"), src);
+    let expected = "out of memory: 4096 bytes\n\
+                    capacity overflow\n\
+                    out of memory: 4096 bytes\n\
+                    capacity overflow\n\
+                    [out of memory: 4096 bytes] and [capacity overflow]\n";
+
+    let run = |args: &[&str]| -> Option<String> {
+        let o = karac_bin().current_dir(&tmp).args(args).output().ok()?;
+        o.status
+            .success()
+            .then(|| String::from_utf8_lossy(&o.stdout).into_owned())
+    };
+    let interp = run(&["run", "--interp", "m.kara"]);
+    let jit = run(&["run", "m.kara"]);
+    let built = karac_bin()
+        .current_dir(&tmp)
+        .args(["build", "m.kara"])
+        .output();
+    let exe = tmp.join("m");
+    let aot_ok = built.map(|o| o.status.success()).unwrap_or(false) && exe.exists();
+    let aot = aot_ok.then(|| {
+        let o = std::process::Command::new(&exe)
+            .output()
+            .expect("run built");
+        (
+            String::from_utf8_lossy(&o.stdout).into_owned(),
+            String::from_utf8_lossy(&o.stderr).into_owned(),
+        )
+    });
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    assert_eq!(
+        interp.as_deref(),
+        Some(expected),
+        "`--interp` must render the design.md prose"
+    );
+    assert_eq!(
+        jit.as_deref(),
+        Some(expected),
+        "`karac run` (JIT) must agree with the interpreter"
+    );
+    if let Some((out, err)) = aot {
+        assert_eq!(
+            out, expected,
+            "`karac build` must agree with the interpreter"
+        );
+        // `Debug` is untouched: the control line still names the field.
+        assert!(
+            err.contains("OutOfMemory { requested_bytes: 4096 }"),
+            "`dbg` must keep the derived Debug shape; got stderr: {err}"
+        );
+    }
+}
+
+/// B-2026-08-25-34 — a `main() -> Result[(), E]` error must never print as a
+/// bare `Error: `, and the entry point must render whatever a real `f"{e}"`
+/// renders.
+///
+/// `emit_main_result_err_exit` compiled `f"Error: {e}\n"` and, on any codegen
+/// failure, fell back to writing the prefix alone. The only thing that line
+/// carries IS the error, so the fallback turned a compiler gap into a program
+/// that reports failure and says nothing about it — silently, and only under
+/// codegen. Measured live: `main() -> Result[(), (i64, i64)]` printed
+/// `Error: (1, 2)` under `--interp` and `Error: ` under both compiled
+/// backends. It also made `E_MAIN_ERR_NOT_DISPLAY` a lie downstream: a type
+/// that PASSES that typecheck could still reach codegen unrenderable.
+///
+/// Two halves, and the tuple cases need both. The operand is SYNTHESIZED, so
+/// it carried no source span and every span-keyed Display table missed;
+/// shapes with a name-keyed registration (`Vec`, `Map`, `Set`) survived on
+/// that second lookup, and a tuple — which has no name-keyed twin — did not.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_main_result_error_never_prints_a_bare_prefix() {
+    // Shapes reachable as `E`, spanning both lookup routes: tuples (span-keyed
+    // only — the shapes that regressed), and the collection/primitive/enum
+    // shapes that were already fine and must stay that way.
+    let cases: &[(&str, &str, &str)] = &[
+        ("tuple2", "(i64, i64)", "return Err((1, 2));"),
+        (
+            "tuple3",
+            "(i64, String, bool)",
+            "return Err((1, \"x\", true));",
+        ),
+        ("tuple1", "(i64,)", "return Err((1,));"),
+        ("str", "String", "return Err(\"boom\");"),
+        ("int", "i64", "return Err(42);"),
+        ("vec", "Vec[i64]", "let v = [1, 2, 3]; return Err(v);"),
+        (
+            "vectup",
+            "Vec[(i64, i64)]",
+            "let v = [(1, 2)]; return Err(v);",
+        ),
+        ("opt", "Option[i64]", "return Err(Some(5));"),
+        ("ioerr", "IoError", "return Err(IoError.NotFound);"),
+        (
+            "allocerr",
+            "AllocError",
+            "return Err(AllocError.CapacityOverflow);",
+        ),
+    ];
+    for (name, ty, body) in cases {
+        let tmp = scratch_project(&format!("mainerr-{name}"));
+        write(
+            &tmp.join("m.kara"),
+            &format!("fn main() -> Result[(), {ty}] {{ {body} }}\n"),
+        );
+        let stderr_of = |args: &[&str]| -> Option<String> {
+            let o = karac_bin().current_dir(&tmp).args(args).output().ok()?;
+            Some(String::from_utf8_lossy(&o.stderr).into_owned())
+        };
+        // The interpreter is the oracle — it renders every one of these.
+        let interp = stderr_of(&["run", "--interp", "m.kara"]).unwrap_or_default();
+        let first = |s: &str| s.lines().next().unwrap_or("").to_string();
+        let want = first(&interp);
+        assert!(
+            want.starts_with("Error: ") && want.len() > "Error: ".len(),
+            "{name}: the interpreter oracle itself printed nothing after the \
+             prefix ({want:?}) — fix the oracle before trusting the comparison"
+        );
+
+        let jit = first(&stderr_of(&["run", "m.kara"]).unwrap_or_default());
+        assert_eq!(jit, want, "{name}: `karac run` (JIT) must match --interp");
+
+        let built = karac_bin()
+            .current_dir(&tmp)
+            .args(["build", "m.kara"])
+            .output();
+        let exe = tmp.join("m");
+        if built.map(|o| o.status.success()).unwrap_or(false) && exe.exists() {
+            let o = std::process::Command::new(&exe)
+                .output()
+                .expect("run built");
+            let aot = first(&String::from_utf8_lossy(&o.stderr));
+            assert_eq!(aot, want, "{name}: `karac build` must match --interp");
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+}
+
+/// B-2026-08-25-34 — the companion to the test above: when codegen genuinely
+/// CANNOT render an `E`, the build must fail loudly rather than emit an empty
+/// message.
+///
+/// `Option[(i64, i64)]` is the live example. It passes
+/// `E_MAIN_ERR_NOT_DISPLAY`, the interpreter renders it `Some((1, 2))`, and
+/// the f-string renderer has no path for an `Option` with an aggregate
+/// payload — so before the fail-closed change `karac build` succeeded and the
+/// program printed `Error: ` and exited 1. The same operand in an ordinary
+/// `f"{o}"` was already a hard codegen error, so the fallback was also making
+/// the entry point disagree with the rest of the language.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_unrenderable_main_error_is_a_build_error_not_an_empty_message() {
+    let tmp = scratch_project("mainerr-failclosed");
+    write(
+        &tmp.join("m.kara"),
+        "fn main() -> Result[(), Option[(i64, i64)]] { return Err(Some((1, 2))); }\n",
+    );
+    let o = karac_bin()
+        .current_dir(&tmp)
+        .args(["build", "m.kara"])
+        .output()
+        .expect("karac build");
+    let exe = tmp.join("m");
+    let built_ok = o.status.success() && exe.exists();
+    let stderr = String::from_utf8_lossy(&o.stderr).into_owned();
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    assert!(
+        !built_ok,
+        "an `E` codegen cannot render must fail the build, not produce a \
+         binary that prints `Error: ` with nothing after it"
+    );
+    assert!(
+        stderr.contains("cannot render") && stderr.contains("Option[(i64, i64)]"),
+        "the diagnostic must name the offending error type and say the exit \
+         line would print nothing; got: {stderr}"
+    );
+}

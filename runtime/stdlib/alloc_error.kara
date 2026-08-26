@@ -13,8 +13,29 @@
 // attempted. Both variants are pure-`Copy` (the only payload is a `usize`),
 // so the type derives `Eq` + `Copy` like `Ordering`.
 
-#[derive(Debug, Display, Eq, Copy)]
+#[derive(Debug, Eq, Copy)]
 enum AllocError {
     OutOfMemory { requested_bytes: usize },
     CapacityOverflow,
+}
+
+// `Display` is written out rather than derived. design.md § Fallible
+// Allocation pins the user-facing prose — "names the failed operation's byte
+// size on the `OutOfMemory` arm and "capacity overflow" on the
+// `CapacityOverflow` arm" — and the derived enum shape cannot say that: it
+// renders the DEBUG form, `OutOfMemory { requested_bytes: 4096 }`, braces and
+// field name included. That form is correct for `Debug` (which stays derived)
+// and wrong here, because this is the string a program's user reads: a
+// `main() -> Result[(), AllocError]` prints it as the whole `Error: {e}` line
+// (design.md § Entry Point). § `#[derive(Display)]` on enums names this exact
+// escape — "Implement `Display` manually to override the derived
+// representation entirely" — so overriding is the sanctioned move, not a
+// workaround. B-2026-08-25-34.
+impl Display for AllocError {
+    fn to_string(ref self) -> String {
+        match self {
+            OutOfMemory { requested_bytes } => f"out of memory: {requested_bytes} bytes",
+            CapacityOverflow => "capacity overflow",
+        }
+    }
 }

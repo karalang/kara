@@ -25021,6 +25021,13 @@ fn alloc_error_prelude_type_usable_without_import() {
     // available without import as `Result[T, AllocError]`, constructs both
     // variants (struct + unit), compares with `==`, renders via Display, and
     // pattern-matches with field binding.
+    //
+    // The Display line expected `"CapacityOverflow"` — the DERIVED enum shape
+    // — until B-2026-08-25-34 gave the type the prose design.md § Fallible
+    // Allocation actually pins ("capacity overflow" on this arm). The old
+    // expectation was written against what the compiler did, not what the spec
+    // said, so it passed while the spec sentence was false. Recorded here so
+    // it does not get "fixed" back.
     let output = run(r#"
 fn try_make(fail: bool) -> Result[i64, AllocError] {
     if fail {
@@ -25044,7 +25051,7 @@ fn main() {
     }
 }
 "#);
-    assert_eq!(output, "true\nfalse\nCapacityOverflow\noom:64\n");
+    assert_eq!(output, "true\nfalse\ncapacity overflow\noom:64\n");
 }
 
 // ── `mut ref self` receiver write-back (CICO) ──────────────────

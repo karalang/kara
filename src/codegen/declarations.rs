@@ -3835,17 +3835,50 @@ impl<'ctx> super::Codegen<'ctx> {
     /// the prelude AST (e.g. Option[T]) so that variant construction/matching
     /// and methods like `first`/`last`/`get` can produce properly typed LLVM.
     pub(super) fn seed_builtin_enum_layouts(&mut self) {
-        // Record which baked-stdlib enums derive `Display` so the f-string /
-        // `println` dispatch (`expr_user_enum_name_any`) re-admits them despite
-        // their seeded status. Done once here, before the seeds below register
-        // them in `seeded_enum_names`.
+        // Record which baked-stdlib enums HAVE a `Display` — derived or written
+        // out — so the f-string / `println` dispatch
+        // (`expr_user_enum_name_any`) re-admits them despite their seeded
+        // status. Done once here, before the seeds below register them in
+        // `seeded_enum_names`.
+        //
+        // A MANUAL `impl Display for E` counts for exactly the same reason a
+        // derive does, and the two must not be spelled differently here: the
+        // set's job is "this enum's Display goes through the value/user path
+        // rather than a bespoke one", which is a property of HAVING a Display,
+        // not of how it was written. When only the derive was recognised,
+        // taking design.md § `#[derive(Display)]` on enums up on its own
+        // sanctioned escape — "Implement `Display` manually to override the
+        // derived representation entirely" — dropped a prelude enum out of the
+        // set and out of every Display path under codegen (B-2026-08-25-34).
+        // Recognising the impl is what lets `AllocError` carry the prose
+        // design.md § Fallible Allocation pins.
         for (_, p) in crate::prelude::STDLIB_PROGRAMS.iter() {
             for item in &p.items {
-                if let crate::ast::Item::EnumDef(e) = item {
-                    if crate::typechecker::extract_derived_traits(&e.attributes).contains("Display")
-                    {
-                        self.display.baked_display_enum_names.insert(e.name.clone());
+                match item {
+                    crate::ast::Item::EnumDef(e) => {
+                        if crate::typechecker::extract_derived_traits(&e.attributes)
+                            .contains("Display")
+                        {
+                            self.display.baked_display_enum_names.insert(e.name.clone());
+                        }
                     }
+                    crate::ast::Item::ImplBlock(ib) => {
+                        let is_display = ib
+                            .trait_name
+                            .as_ref()
+                            .and_then(|t| t.segments.last())
+                            .map(|s| s == "Display")
+                            .unwrap_or(false);
+                        if !is_display {
+                            continue;
+                        }
+                        if let crate::ast::TypeKind::Path(tp) = &ib.target_type.kind {
+                            if let Some(name) = tp.segments.last() {
+                                self.display.baked_display_enum_names.insert(name.clone());
+                            }
+                        }
+                    }
+                    _ => {}
                 }
             }
         }

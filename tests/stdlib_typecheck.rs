@@ -43,6 +43,10 @@ const LOWERED_MODULES: &[&str] = &[
     "process.kara",
     "cli.kara",
     "priority_queue.kara",
+    // B-2026-08-25-34 — registered so codegen can compile its hand-written
+    // `impl Display for AllocError`; gated here like every other lowered
+    // module, since `lower_stdlib_source` discards their typecheck errors.
+    "alloc_error.kara",
 ];
 
 fn source_of(module: &str) -> &'static str {

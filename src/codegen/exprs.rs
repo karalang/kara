@@ -1313,7 +1313,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         // `main() -> Result[(), E]`: adapt to a process exit
                         // code rather than `ret`-ing the `{tag, …}` aggregate
                         // against `main`'s `i32` signature (B-2026-06-12-9).
-                        self.emit_main_result_return(v);
+                        self.emit_main_result_return(v)?;
                     } else if self.current_fn_ret_is_niche() {
                         // Niche-ABI return (`Option[shared T]` →
                         // nullable ptr): pack the conventional 4-i64
@@ -2275,7 +2275,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     None => w0,
                 },
             };
-            self.emit_main_result_err_exit(err_val);
+            self.emit_main_result_err_exit(err_val)?;
         } else if self.current_fn_ret_is_niche() {
             // Niche-ABI enclosing fn (`-> Option[shared T]` declared as
             // a nullable ptr): the `?` failure path early-returns None,

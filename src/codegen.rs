@@ -492,6 +492,30 @@ fn ordering_stdlib_program() -> &'static Program {
     &ORDERING_LOWERED_PROGRAM
 }
 
+static ALLOC_ERROR_LOWERED_PROGRAM: std::sync::LazyLock<Program> = std::sync::LazyLock::new(|| {
+    lower_stdlib_source(
+        "alloc_error",
+        include_str!("../runtime/stdlib/alloc_error.kara"),
+    )
+});
+
+/// The lowered `AllocError` program. Carried for its ONE non-derived item: a
+/// hand-written `impl Display`, whose prose design.md § Fallible Allocation
+/// pins and the `#[derive(Display)]` enum shape cannot express.
+///
+/// Prelude impls otherwise live only in `STDLIB_PROGRAMS`, which codegen does
+/// not walk, so the impl reached the interpreter and nothing else — the whole
+/// reason the manual-Display escape was unusable for a prelude type before
+/// B-2026-08-25-34. Registered unconditionally, like `ordering` and for the
+/// same reason: `AllocError.to_string` calls nothing that calls it back, so
+/// the zero-use prune in `compile_stdlib_program_method_bodies` removes it
+/// whole from every program that never displays an `AllocError`. (`protobuf`
+/// and `cli` need usage gates precisely because their bodies are mutually
+/// recursive and survive that prune.)
+fn alloc_error_stdlib_program() -> &'static Program {
+    &ALLOC_ERROR_LOWERED_PROGRAM
+}
+
 static PROTOBUF_LOWERED_PROGRAM: std::sync::LazyLock<Program> = std::sync::LazyLock::new(|| {
     lower_stdlib_source("protobuf", include_str!("../runtime/stdlib/protobuf.kara"))
 });
@@ -760,6 +784,7 @@ fn program_uses_protobuf(user: &Program) -> bool {
 fn compiled_stdlib_programs(user: &Program) -> Vec<&'static Program> {
     let mut programs = vec![
         ordering_stdlib_program(),
+        alloc_error_stdlib_program(),
         mem_stdlib_program(),
         regex_stdlib_program(),
         process_stdlib_program(),
