@@ -54081,4 +54081,75 @@ fn main() {
             "method-store-into-self-drop-once",
         );
     }
+
+    /// B-2026-08-26-31, the MEMORY half — and the half that was ALREADY
+    /// CORRECT, which is the whole point of pinning it.
+    ///
+    /// A local moved into a container's element slot (`b.xs[2] = t`) had its
+    /// heap cleanup disarmed by `zero_struct_move_caps` (B-2026-08-12-22) but
+    /// kept its `UserDrop` registration, so the bug was a duplicate Drop BODY
+    /// with no double free behind it. This fixture was ASAN-clean BEFORE the
+    /// bodies fix and is ASAN-clean after; it exists so that editing the
+    /// bodies half cannot silently re-arm the memory half. Only one of the two
+    /// halves has a sanitizer behind it, so the observable-count fixture in
+    /// `tests/codegen.rs`
+    /// (`test_e2e_local_moved_into_elem_slot_drops_once`) is the other guard.
+    ///
+    /// Reading an element CLONES, so slot 0 still holds its original `1` after
+    /// `let t = b.xs[0]` — the vector reads `1,2,1`, not `_,2,1`. That is the
+    /// model disagreement tracked as the open remainder of B-2026-08-26-21;
+    /// here it is simply the observed behaviour the expectation encodes.
+    #[test]
+    fn asan_local_moved_into_struct_elem_slot_is_not_double_freed() {
+        assert_clean_asan_run(
+            r#"
+struct Item { id: i64, tag: String }
+struct Bag { xs: Vec[Item] }
+fn main() {
+    let mut b = Bag { xs: Vec.new() };
+    b.xs.push(Item { id: 1i64, tag: f"payload_one_{1}" });
+    b.xs.push(Item { id: 2i64, tag: f"payload_two_{2}" });
+    b.xs.push(Item { id: 3i64, tag: f"payload_three_{3}" });
+    let t = b.xs[0];
+    b.xs[2] = t;
+    println(f"{b.xs[0].id}{b.xs[1].id}{b.xs[2].id}");
+}
+"#,
+            &["121"],
+            "local-moved-into-struct-elem-slot",
+        );
+    }
+
+    /// B-2026-08-26-31, the swap-rotation shape — the one at the heart of any
+    /// hand-written sort, over elements that genuinely own heap.
+    ///
+    /// Like its sibling above this was ASAN-clean on both sides of the bodies
+    /// fix: `zero_struct_move_caps` had the memory right, and only the Drop
+    /// body count was wrong. Kept as a regression floor for the memory half
+    /// while the bodies half is edited.
+    ///
+    /// Every `tag` is an f-STRING on purpose. A string LITERAL has `cap` 0, so
+    /// a second free would be a guarded no-op and the shape would look clean
+    /// even if it were not — three of B-2026-08-12-22's "safe" boundary rows
+    /// were literal-valued and aborted once the field was genuinely allocated.
+    #[test]
+    fn asan_swap_rotation_over_heap_bearing_elements_is_clean() {
+        assert_clean_asan_run(
+            r#"
+struct Item { id: i64, tag: String }
+struct Bag { xs: Vec[Item] }
+fn main() {
+    let mut b = Bag { xs: Vec.new() };
+    b.xs.push(Item { id: 1i64, tag: f"payload_one_{1}" });
+    b.xs.push(Item { id: 2i64, tag: f"payload_two_{2}" });
+    let t = b.xs[0];
+    b.xs[0] = b.xs[1];
+    b.xs[1] = t;
+    println(f"{b.xs[0].id}{b.xs[1].id}");
+}
+"#,
+            &["21"],
+            "swap-rotation-heap-bearing-elements",
+        );
+    }
 }

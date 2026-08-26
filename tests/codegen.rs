@@ -12728,6 +12728,58 @@ fn main() {
         assert_eq!(out, "beta1 alpha1\ngamma1 alpha1\n");
     }
 
+    /// B-2026-08-26-31 — the BODIES half of the move B-2026-08-12-22 fixed the
+    /// MEMORY half of. `zero_struct_move_caps` disarmed the moved-from source's
+    /// heap cleanup, but its `UserDrop` action stayed armed, so a local moved
+    /// into a container's element slot (`b.xs[j] = t`) still ran its `impl Drop`
+    /// BODY a second time at the binding's live-range end. Two live values here,
+    /// so exactly two bodies; the third `D1` was the bug.
+    ///
+    /// Because the memory half was already correct, ASAN stayed silent on this
+    /// shape — only the observable body count showed it. The sanitizer fixtures
+    /// in `tests/memory_sanitizer.rs`
+    /// (`asan_local_moved_into_struct_elem_slot_is_not_double_freed`,
+    /// `asan_swap_rotation_over_heap_bearing_elements_is_clean`) keep that half
+    /// from regressing while this one pins the bodies.
+    ///
+    /// DELIBERATELY NOT AN A/B ORACLE — do not "fix" one backend to match the
+    /// other in isolation. The interpreter still prints an extra `D2` for the
+    /// element that `b.xs[0] = b.xs[1]` displaces, because it treats an element
+    /// READ as clone-then-destroy while codegen's `store_destroys_displaced`
+    /// treats the same store as a RELOCATION. That divergence is the open
+    /// remainder of B-2026-08-26-21, and it is a model question design.md does
+    /// not yet answer (what does `let t = v[i]` mean for a non-`Copy` element —
+    /// move, clone, or error?). Pinning codegen's side here keeps the SETTLED
+    /// half from regressing; when the model question is decided, this
+    /// expectation and the interpreter's must be re-derived together.
+    #[test]
+    fn test_e2e_local_moved_into_elem_slot_drops_once() {
+        let Some(out) = run_program(
+            r#"
+struct Item { id: i64, tag: String }
+impl Drop for Item { fn drop(mut ref self) { println(f"D{self.id}"); } }
+struct Box { xs: Vec[Item] }
+fn main() {
+    let mut b = Box { xs: Vec.new() };
+    b.xs.push(Item { id: 1i64, tag: "first_payload_long_enough_to_heap".to_string() });
+    b.xs.push(Item { id: 2i64, tag: "second_payload_long_enough_to_heap".to_string() });
+    println("built");
+    let t = b.xs[0];
+    b.xs[0] = b.xs[1];
+    b.xs[1] = t;
+    println(f"{b.xs[0].id}{b.xs[1].id}");
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out, "built\n21\nD2\nD1\n",
+            "two live values must run exactly two Drop bodies; a third (`D1`) is \
+             the moved-from source firing again at live-range end"
+        );
+    }
+
     /// B-2026-08-12-27 — the SILENT half, and the reason the fix had to be a
     /// clone rather than a move. A heap field read out of a Vec element used
     /// to cap-zero the SOURCE, i.e. treat `let w = ps[0].word` as a MOVE.

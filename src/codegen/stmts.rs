@@ -10143,6 +10143,21 @@ impl<'ctx> super::Codegen<'ctx> {
                                 if let Some(src_slot) = self.variables.get(src).copied() {
                                     self.zero_struct_move_caps(src_slot.ptr, &sname);
                                 }
+                                // B-2026-08-26-31 — the BODIES half of the
+                                // same move. `zero_struct_move_caps` disarms
+                                // the source's MEMORY cleanup, but its
+                                // `UserDrop` action stayed armed, so a
+                                // moved-from `t` still ran its `impl Drop`
+                                // body at live-range end. The container's
+                                // element now owns the value and runs the
+                                // body when the container drops, so the
+                                // source's own registration is a duplicate.
+                                // Same helper and reasoning as the by-value
+                                // call-arg move in call_dispatch.rs
+                                // (B-2026-07-30-11); this arm is the
+                                // index-store peer that never got it. The
+                                // interpreter is already correct here.
+                                self.suppress_user_drop_for_var(src);
                             }
                         }
                     }
