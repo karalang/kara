@@ -5780,6 +5780,76 @@ fn main() { println(build2().v); }
         assert_eq!(out, "-2147483648\n603979776\nfalse\n128\n-4\n");
     }
 
+    /// A narrow local's SLOT is sized by its ANNOTATION, not by the width its
+    /// initializer literal happened to compile at.
+    ///
+    /// `const_int_for_suffix` reads the SUFFIX alone, so a bare `5` compiled
+    /// at the default i64 however the binding was annotated, and
+    /// `bind_pattern` — which allocas at `val.get_type()` — then handed a
+    /// `u8` binding a 64-bit slot. Every width-sensitive operation on it ran
+    /// at 64 bits.
+    ///
+    /// Arm (c) is why this is a soundness bug and not a cosmetic one: a
+    /// binding declared `i32` compared GREATER than `i32::MAX`. It is also
+    /// exactly the case `e2e_shift_runs_at_declared_width` above asserts — but
+    /// that test writes `1i32 << 31i32` WITH suffixes, and the suffixed
+    /// spelling was always correct, so B-2026-08-06-7's fix was never
+    /// exercised on the spelling anyone would actually write. Hence the
+    /// suffixed/unsuffixed PAIRS here: the point is that the two agree.
+    ///
+    /// Arm (e) pins the negated literal, which reaches codegen as a lowered
+    /// `i8.neg(100)` CALL rather than a `Unary` — a first pass at the fix
+    /// matched only the `Unary` spelling and left this arm still wrong.
+    ///
+    /// Arm (f) is the opposite direction (B-2026-08-13-15): a `u8` value under
+    /// an `i64` annotation must still WIDEN into a 64-bit slot. The two legs
+    /// share one helper, so a fix to either can break the other.
+    #[test]
+    fn e2e_narrow_let_slot_is_sized_by_its_annotation() {
+        let Some(out) = run_program(
+            "fn main() {\n\
+             \x20   // (a) unsuffixed narrow shift == suffixed narrow shift\n\
+             \x20   let a: u8 = 200u8;\n\
+             \x20   println(a << 4u8);\n\
+             \x20   let b: u8 = 200;\n\
+             \x20   println(b << 4);\n\
+             \x20   // (b) same for a signed narrow sign-bit flip\n\
+             \x20   let c: i32 = 1i32;\n\
+             \x20   println(c << 31i32);\n\
+             \x20   let d: i32 = 1;\n\
+             \x20   println(d << 31);\n\
+             \x20   // (c) …so an `i32` binding can no longer exceed i32::MAX\n\
+             \x20   println(d << 31 > 2147483647);\n\
+             \x20   // (d) the value still round-trips as its declared type\n\
+             \x20   let e: u8 = 255;\n\
+             \x20   println(e);\n\
+             \x20   let f: i8 = -128;\n\
+             \x20   println(f);\n\
+             \x20   // (e) a NEGATED unsuffixed literal (a lowered `neg` call)\n\
+             \x20   let g: i8 = -100;\n\
+             \x20   println(g << 1);\n\
+             \x20   let h: i8 = -100i8;\n\
+             \x20   println(h << 1i8);\n\
+             \x20   // (f) the WIDENING direction still widens\n\
+             \x20   let i: u8 = 200;\n\
+             \x20   let j: i64 = i;\n\
+             \x20   println(j);\n\
+             \x20   // (g) 64-bit and pointer-width annotations are untouched\n\
+             \x20   let k: u64 = 5;\n\
+             \x20   println(k);\n\
+             \x20   let l: usize = 5;\n\
+             \x20   println(l);\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            "128\n128\n-2147483648\n-2147483648\nfalse\n\
+             255\n-128\n56\n56\n200\n5\n5\n"
+        );
+    }
+
     /// `~` complements at the DECLARED width, not the carrier's.
     ///
     /// `~5u8` is 250. It produced 18446744073709551610 in the compiled

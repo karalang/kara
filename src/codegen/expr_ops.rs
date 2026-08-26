@@ -7803,7 +7803,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // did not compile at all, while the same conversion through an
             // annotated `let` or a `Vec[f64]` element was fine — those two
             // positions have their own `sitofp` leg
-            // (`widen_let_value_to_annotation`, `coerce_literal_elem_to_type`),
+            // (`fit_let_value_to_annotation`, `coerce_literal_elem_to_type`),
             // which is what kept the gap to three boundaries.
             //
             // The signedness half matters on its own: `sitofp` on a `u8` 200
@@ -7830,8 +7830,8 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
-    /// Widen a `let` initializer to the binding's ANNOTATED width, so the
-    /// slot is the size the annotation declares rather than the size the RHS
+    /// Fit a `let` initializer to the binding's ANNOTATED width, so the slot
+    /// is the size the annotation declares rather than the size the RHS
     /// happened to compile at.
     ///
     /// `bind_pattern` allocas at `val.get_type()`, which is the right default
@@ -7840,12 +7840,52 @@ impl<'ctx> super::Codegen<'ctx> {
     /// one byte under a binding every later use treats as `i64`. Reading it
     /// back sign-extended: 200 printed as -56 (B-2026-08-13-15).
     ///
-    /// WIDENING ONLY, on purpose. Narrowing at a `let` is already handled (an
-    /// out-of-range literal is a typecheck error, and an in-range one is
-    /// range-checked and packed by the literal path), so restricting this to
-    /// the growing direction leaves every existing path bit-identical and
-    /// touches only the shape that was broken.
-    pub(super) fn widen_let_value_to_annotation(
+    /// This was WIDENING ONLY, on the stated grounds that "narrowing at a
+    /// `let` is already handled ... an in-range [literal] is range-checked and
+    /// packed by the literal path". That was FALSE for integers, and
+    /// B-2026-08-26-7 is what it cost: `const_int_for_suffix` reads the SUFFIX
+    /// alone, so a bare `5` compiles at the default i64 no matter what the
+    /// annotation says. Both directions are handled now; only the float half
+    /// of the claim was ever true, and that leg had already been added
+    /// separately (B-2026-08-14-11).
+    /// Is this `let` RHS an integer literal written WITHOUT a suffix — the
+    /// one shape whose LLVM width comes from the suffix alone, and so needs
+    /// the annotation to size it?
+    ///
+    /// A NEGATED literal counts, and reaches codegen in two different shapes.
+    /// `-100` parses as `Neg(Integer(100))`, but `lowering.rs` rewrites every
+    /// unary operator to its trait method, so at a typed `let` it normally
+    /// arrives already desugared as a CALL — `i8.neg(100)` — and only stays a
+    /// `Unary` when lowering declined to rewrite (no recorded type). Matching
+    /// just the `Unary` spelling silently missed the case that actually
+    /// occurs: `let a: i8 = -100; a << 1` was -200, a value an `i8` cannot
+    /// hold, and stayed that way until the `Call` arm was added.
+    ///
+    /// The `Call` arm does not need to re-check the receiver is an integer
+    /// type: `iN.neg` is the only `neg` whose argument is an integer literal
+    /// (`f64.neg(1.0)` carries a `Float`), and the caller only acts on the
+    /// result when both the value and the annotation are integers anyway.
+    fn is_unsuffixed_int_literal(e: &Expr) -> bool {
+        let is_bare_int = |x: &Expr| matches!(&x.kind, ExprKind::Integer(_, None));
+        match &e.kind {
+            ExprKind::Integer(_, None) => true,
+            ExprKind::Unary { op, operand } => {
+                matches!(op, crate::ast::UnaryOp::Neg) && is_bare_int(operand)
+            }
+            ExprKind::Call { callee, args } => {
+                let ExprKind::Path { segments, .. } = &callee.kind else {
+                    return false;
+                };
+                segments.len() == 2
+                    && segments[1] == "neg"
+                    && args.len() == 1
+                    && is_bare_int(&args[0].value)
+            }
+            _ => false,
+        }
+    }
+
+    pub(super) fn fit_let_value_to_annotation(
         &self,
         val: BasicValueEnum<'ctx>,
         ty: Option<&TypeExpr>,
@@ -7876,6 +7916,40 @@ impl<'ctx> super::Codegen<'ctx> {
                         .into();
                 }
                 return val;
+            }
+        }
+        // B-2026-08-26-7 — the INTEGER twin of the float leg above, and the
+        // counter-example to this function's former "narrowing is already
+        // handled" claim. `const_int_for_suffix` reads the SUFFIX only, so
+        // `let a: u8 = 5` materialized the literal at the default i64 and
+        // `bind_pattern`, which allocas at `val.get_type()`, then gave a `u8`
+        // binding a 64-bit slot. Every width-sensitive op on it ran at 64
+        // bits: `let b: u8 = 200; b << 4` was 3200, and `let d: i32 = 1;
+        // d << 31` was 2147483648 — a value an `i32` cannot represent, which
+        // made `d << 31 > 2147483647` TRUE for a binding typed `i32`. The
+        // SUFFIXED spelling of the same program was already correct, because
+        // `5u8` gives the literal, and hence the slot, a real i8; this makes
+        // the suffix inert, which is what it should always have been.
+        //
+        // Gated on the LITERAL, exactly as the float leg is and for exactly
+        // its reason: an i64-typed VALUE at a `u8` annotation is an implicit
+        // narrowing between two DECLARED types, which the language refuses.
+        // Truncating that here would hide a diagnostic rather than fix a bug.
+        //
+        // Truncation is safe because an out-of-range literal never reaches
+        // codegen — `integer literal 300 out of range for 'u8' (expected
+        // 0..=255)` is a typecheck error.
+        if Self::is_unsuffixed_int_literal(src) {
+            if let (BasicValueEnum::IntValue(iv), BasicTypeEnum::IntType(tt)) =
+                (val, self.llvm_type_for_type_expr(te))
+            {
+                if tt.get_bit_width() < iv.get_type().get_bit_width() {
+                    return self
+                        .builder
+                        .build_int_truncate(iv, tt, "let.inarrow")
+                        .unwrap()
+                        .into();
+                }
             }
         }
         let BasicValueEnum::IntValue(iv) = val else {

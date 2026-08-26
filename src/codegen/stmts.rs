@@ -2254,15 +2254,28 @@ impl<'ctx> super::Codegen<'ctx> {
             //      types these as `x.m(..) -> Self` (see
             //      `expr_method_call.rs`), so the result is the receiver's own
             //      numeric type — which is exactly the receiver's INFERRED
-            //      LLVM type, because codegen widens every integer local to
-            //      i64 in both storage and value flow and keeps floats at
-            //      their own width. That i64-backing is why a source-level
-            //      narrow annotation (`let n: i32`) still resolves here: its
-            //      slot IS i64. The i64/float guard is therefore not a
-            //      narrowing exclusion but a receiver-shape filter — it
-            //      rejects a non-numeric receiver (a struct, `bool` (i1),
-            //      `char` (i32), …) whose `-> Self` claim these methods don't
-            //      make, so the slot stays un-inferrable rather than mis-sized.
+            //      LLVM type. This guard used to accept ONLY i64, on the
+            //      stated grounds that "codegen widens every integer local to
+            //      i64 in both storage and value flow", so a narrow annotation
+            //      still resolved here because its slot WAS i64.
+            //
+            //      That was already untrue — `let n: i32 = 7i32` gets a real
+            //      i32 slot — and such a receiver fell through to `None`, so
+            //      the slot was dropped and the branch body then failed to
+            //      compile outright: `Undefined variable 'x'`, a hard codegen
+            //      error rather than a mis-sized slot. It stayed hidden
+            //      because the UNSUFFIXED spelling did produce an i64, and
+            //      that is the spelling the par tests use. B-2026-08-26-7
+            //      makes both spellings narrow, which is what surfaced it.
+            //
+            //      Accepting the real integer widths is the fix. The old
+            //      i64-only test was never a narrowing exclusion but a
+            //      receiver-shape filter, and the widths listed keep that
+            //      role: `bool` is i1 and stays out, and while `char` is also
+            //      i32, the typechecker rejects `c.abs()` / `c.sqrt()` on it
+            //      (`no method 'abs' on type 'char'`), so no non-numeric
+            //      receiver can reach this arm with one of these methods. A
+            //      struct receiver lowers to a StructType and misses anyway.
             ExprKind::MethodCall { object, method, .. } => {
                 // `n.to_ne_bytes()` -> `[N x i8]` (B-2026-08-21-10). Checked
                 // before the user-impl lookup because this is a builtin whose
@@ -2310,7 +2323,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     || crate::float_math::classify(method).is_some();
                 if returns_receiver_numeric {
                     match self.infer_expr_llvm_type(object, locals) {
-                        Some(BasicTypeEnum::IntType(t)) if t.get_bit_width() == 64 => {
+                        Some(BasicTypeEnum::IntType(t))
+                            if matches!(t.get_bit_width(), 8 | 16 | 32 | 64 | 128) =>
+                        {
                             return Some(t.into());
                         }
                         Some(recv @ BasicTypeEnum::FloatType(_)) => return Some(recv),
@@ -5852,8 +5867,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     // width the RHS compiled at — `bind_pattern` allocas at
                     // `val.get_type()`, so `let x: i64 = b` with `b: u8` got a
                     // one-byte slot under an i64-typed binding
-                    // (B-2026-08-13-15). Widening only; see the helper.
-                    let val = self.widen_let_value_to_annotation(val, ty.as_ref(), value);
+                    // (B-2026-08-13-15), and the reverse — a bare `5` under
+                    // a `u8` annotation getting an i64 slot (B-2026-08-26-7).
+                    // Both directions; see the helper.
+                    let val = self.fit_let_value_to_annotation(val, ty.as_ref(), value);
                     let bind_res = self.bind_pattern(pattern, val);
                     self.suppress_shadow_metadata_purge = false;
                     bind_res?;

@@ -10945,6 +10945,39 @@ fn main() {
         }
     }
 
+    /// The same branch with a SUFFIXED narrow receiver — which, unlike the
+    /// unsuffixed spelling above, has always produced a real `i32` slot.
+    ///
+    /// That made it a standing hard failure (`codegen failed: Undefined
+    /// variable 'x'`) rather than a wrong answer: the return-slot sizer's
+    /// `-> Self` arm accepted an i64 receiver only, so a narrow one was
+    /// un-inferrable, the slot was dropped, and the branch body then
+    /// referenced a binding that no longer existed. It went unnoticed because
+    /// every par test here writes the literal WITHOUT a suffix, and that
+    /// spelling used to compile at i64 — so the one narrow-receiver test
+    /// covered the i64 path twice and the narrow path never (B-2026-08-26-7).
+    ///
+    /// Expected `7 + (7 + 100) = 114`.
+    #[test]
+    fn test_e2e_par_join_branch_suffixed_narrow_int_method() {
+        let out = run_program(
+            r#"
+fn main() {
+    let base: i32 = 7i32;
+    let total = par {
+        let x = base.abs();
+        let y = base + 100i32;
+        x + y
+    };
+    println(total);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "114", "got {out:?}");
+        }
+    }
+
     /// Variant: a FLOAT scalar-method branch. `base.sqrt()` types as `-> Self`
     /// (f64), so the `a` slot must be sized f64, not the i64 default.
     /// Expected `3.0 + 10.0 = 13`.
