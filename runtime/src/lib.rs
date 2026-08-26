@@ -401,6 +401,11 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         map::karac_map_remove_old,
         map::karac_map_contains,
         map::karac_map_len,
+        // B-2026-08-26-22 — `Map.reserve` / `Map.try_reserve`. Without these
+        // keep-list entries the JIT runner cannot `dlsym` them and `karac run`
+        // dies with `Symbols not found`, even though AOT links fine.
+        map::karac_map_reserve,
+        map::karac_map_try_reserve,
         map::karac_map_clear,
         map::karac_map_clear_with_drop_vec,
         map::karac_map_clear_with_val_drop_fn,

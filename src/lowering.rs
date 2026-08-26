@@ -1596,7 +1596,8 @@ impl<'a> Lowerer<'a> {
                 .or_else(|| self.rewrite_try_into_call(object, method, args, &expr.span))
                 .or_else(|| self.rewrite_parse_call(object, method, args, &expr.span)),
             ExprKind::Call { callee, args } => self
-                .rewrite_path_call_to_method_call(callee, args, &expr.span)
+                .rewrite_vec_from_iter(callee, args, &expr.span)
+                .or_else(|| self.rewrite_path_call_to_method_call(callee, args, &expr.span))
                 .or_else(|| self.rewrite_bare_assoc_fn_call(callee, args, &expr.span))
                 .or_else(|| self.rewrite_enum_literal_method_call(callee, args, &expr.span)),
             _ => None,
@@ -1757,6 +1758,46 @@ impl<'a> Lowerer<'a> {
             // span; consumers that care about the call's source extent
             // (L205 lock-block edit emission) only fire on user-source
             // method-call receivers, never on synthetic lowerings.
+            args_close_span: *span,
+        })
+    }
+
+    /// B-2026-08-26-22 — `Vec.from_iter(it)` / `Vec.try_from_iter(it)` become
+    /// `it.collect()`, which is the whole of their implementation.
+    ///
+    /// Both backends already build a `Vec` from an arbitrary iterator for
+    /// `collect`, across ranges, adaptor chains and `.iter()` sources. Giving
+    /// `from_iter` its own lowering would mean a second implementation to keep
+    /// in step for no behavioural difference, so it gets the SAME one — the
+    /// "exact alias" discipline `Vec.extend` / `extend_from_slice` already
+    /// follow. The typechecker types `from_iter` by inferring this same
+    /// synthetic `collect()`, so the rewrite cannot change a program's type.
+    ///
+    /// `try_from_iter` is NOT handled here and is not registered as a
+    /// companion at all: `collect`'s codegen grows its accumulator through the
+    /// panicking allocator, so a companion built on this rewrite would return
+    /// `Ok` unconditionally and abort inside `collect` on real OOM. See
+    /// `fallible_alloc.rs`.
+    fn rewrite_vec_from_iter(
+        &self,
+        callee: &Expr,
+        args: &[CallArg],
+        span: &Span,
+    ) -> Option<ExprKind> {
+        let ExprKind::Path { segments, .. } = &callee.kind else {
+            return None;
+        };
+        if segments.len() != 2 || segments[0] != "Vec" || args.len() != 1 {
+            return None;
+        }
+        if segments[1] != "from_iter" {
+            return None;
+        }
+        Some(ExprKind::MethodCall {
+            object: Box::new(args[0].value.clone()),
+            method: "collect".to_string(),
+            turbofish: None,
+            args: Vec::new(),
             args_close_span: *span,
         })
     }

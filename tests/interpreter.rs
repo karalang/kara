@@ -38870,3 +38870,80 @@ fn main() {
         "grow 6 7\nshrink 2\nappend 2 30\nheap 4 pad tail\nok 4\n"
     );
 }
+
+// ── B-2026-08-26-22: Map/Set reserve and Vec.from_iter ──────────
+
+/// `Map.reserve` / `Set.reserve` are hints with no `capacity()` accessor — a
+/// Map's bucket count is an implementation detail of the probing scheme (a
+/// power of two sized off a 3/4 load factor, counting tombstones), and
+/// publishing it would make that scheme observable. What both backends owe is
+/// that CONTENTS and `len()` are unchanged.
+#[test]
+fn map_and_set_reserve_leave_contents_and_len_alone() {
+    let out = run(r#"
+fn main() {
+    let mut m: Map[i64, i64] = Map.new();
+    m.reserve(1000);
+    let mut i = 0;
+    while i < 200 { m.insert(i, i * 2); i = i + 1; }
+    m.reserve(-5);
+    m.reserve(0);
+    println(f"{m.len()} {m.get(7).unwrap()} {m.get(199).unwrap()}");
+    let mut s: Set[i64] = Set.new();
+    s.reserve(500);
+    s.insert(1); s.insert(2);
+    s.reserve(-3);
+    println(f"{s.len()} {s.contains(1)} {s.contains(9)}");
+}
+"#);
+    assert_eq!(out, "200 14 398\n2 true false\n");
+}
+
+/// A NEGATIVE reserve must be a no-op on every collection. This is not
+/// symmetry for its own sake: the `Map`/`Set` path goes through an FFI
+/// boundary, and typing that parameter `u64` instead of `i64` reinterprets
+/// `reserve(-5)` as a reservation of 18 quintillion entries — measured, it
+/// aborted the process with `panic: out of memory`.
+#[test]
+fn a_negative_reserve_is_a_no_op_on_every_collection() {
+    let out = run(r#"
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1);
+    v.reserve(-100);
+    let mut s: String = String.new();
+    s.push_str("k");
+    s.reserve(-100);
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(1, 1);
+    m.reserve(-100);
+    let mut t: Set[i64] = Set.new();
+    t.insert(1);
+    t.reserve(-100);
+    println(f"{v.len()} [{s}] {m.len()} {t.len()}");
+}
+"#);
+    assert_eq!(out, "1 [k] 1 1\n");
+}
+
+/// `Vec.from_iter(it)` IS `it.collect()` — the typechecker types it by
+/// inferring that synthetic call and lowering rewrites to it, so the two
+/// spellings run one implementation. The last case has no type annotation,
+/// which `collect` alone cannot do.
+#[test]
+fn vec_from_iter_matches_collect_across_iterator_shapes() {
+    let out = run(r#"
+fn main() {
+    let a: Vec[i64] = Vec.from_iter(0..4);
+    println(f"{a.len()} {a[0]} {a[3]}");
+    let b: Vec[i64] = Vec.from_iter((0..6).map(|x| x * 2));
+    println(f"{b.len()} {b[5]}");
+    let src: Vec[i64] = [5, 6, 7];
+    let c: Vec[i64] = Vec.from_iter(src.iter().map(|x| x + 1));
+    println(f"{c.len()} {c[0]} {c[2]}");
+    let d = Vec.from_iter(0..3);
+    println(f"{d.len()} {d[2]}");
+}
+"#);
+    assert_eq!(out, "4 0 3\n6 10\n3 6 8\n3 2\n");
+}

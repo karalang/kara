@@ -1859,6 +1859,37 @@ impl<'a> super::Interpreter<'a> {
                     }
                     return Some(Value::Unit);
                 }
+                // B-2026-08-26-22 — `Map.reserve` / `Set.reserve`. The
+                // interpreter's `Value::Map` is a host `HashMap`, so this
+                // forwards to its `reserve`; the COMPILED backend calls
+                // `karac_map_reserve`, which widens its own open-addressed
+                // table. Neither exposes a `capacity()` accessor, so the two
+                // are not obliged to agree on a bucket count — what both owe is
+                // that the map's CONTENTS and `len()` are unchanged.
+                if let Value::Map(ref m) = obj {
+                    let n = match args.first().map(|a| self.eval_expr_inner(&a.value)) {
+                        Some(Value::Int(n)) => n,
+                        _ => return Some(Value::Unit),
+                    };
+                    if n > 0 {
+                        if let Ok(mut g) = m.write() {
+                            g.reserve(n as usize);
+                        }
+                    }
+                    return Some(Value::Unit);
+                }
+                if let Value::Set(ref st) = obj {
+                    let n = match args.first().map(|a| self.eval_expr_inner(&a.value)) {
+                        Some(Value::Int(n)) => n,
+                        _ => return Some(Value::Unit),
+                    };
+                    if n > 0 {
+                        if let Ok(mut g) = st.write() {
+                            g.reserve(n as usize);
+                        }
+                    }
+                    return Some(Value::Unit);
+                }
                 if let Value::Array(ref rc) = obj {
                     if let Some(Value::Int(n)) =
                         args.first().map(|a| self.eval_expr_inner(&a.value))

@@ -206,6 +206,14 @@ pub(crate) struct RuntimeFns<'ctx> {
     pub(crate) karac_map_contains_fn: FunctionValue<'ctx>,
     pub(crate) karac_map_len_fn: FunctionValue<'ctx>,
     pub(crate) karac_map_clear_fn: FunctionValue<'ctx>,
+    /// `karac_map_reserve(map, additional)` — widen the table so `additional`
+    /// more entries fit without tripping the insert-time growth guard. Panics
+    /// on OOM; the fallible twin below is how a caller opts out (B-2026-08-26-22).
+    pub(crate) karac_map_reserve_fn: FunctionValue<'ctx>,
+    /// `karac_map_try_reserve(map, additional, out_failed_bytes) -> bool` — the
+    /// all-or-nothing fallible twin: on failure the map is unchanged and the
+    /// byte count that could not be allocated is written out.
+    pub(crate) karac_map_try_reserve_fn: FunctionValue<'ctx>,
     /// `karac_map_clear_with_drop_vec(map, drop_key, drop_val)` — clear that
     /// frees heap key/value buffers first (peer of
     /// `karac_map_free_with_drop_vec`); selected for heap-keyed/valued maps.

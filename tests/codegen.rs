@@ -47501,6 +47501,116 @@ fn driver() -> i64 {
         }
     }
 
+    /// B-2026-08-26-22 — `Map.reserve` / `Set.reserve` and their `try_` twins,
+    /// twinned against the interpreter.
+    ///
+    /// The two backends do genuinely different work: the interpreter reserves
+    /// on a host `HashMap`, codegen calls `karac_map_reserve`, which widens its
+    /// own open-addressed table. Neither exposes a `capacity()` accessor, so
+    /// they are not obliged to agree on a bucket count — CONTENTS and `len()`
+    /// are the contract, and that is what this compares.
+    ///
+    /// The negative-reserve leg is not padding. The Map path crosses an FFI
+    /// boundary, and typing that parameter `u64` rather than `i64` turns
+    /// `reserve(-5)` into a reservation of 18 quintillion entries; measured, it
+    /// aborted the process with `panic: out of memory`.
+    #[test]
+    fn e2e_map_and_set_reserve_agree_with_the_interpreter() {
+        let cases: &[(&str, &str)] = &[
+            (
+                "Map.reserve keeps contents",
+                "let mut m: Map[i64, i64] = Map.new();\n\
+                 m.reserve(1000);\n\
+                 let mut i = 0;\n\
+                 while i < 200 { m.insert(i, i * 2); i = i + 1; }\n\
+                 m.reserve(-5);\n\
+                 m.reserve(0);\n\
+                 println(f\"{m.len()} {m.get(7).unwrap()} {m.get(199).unwrap()}\");",
+            ),
+            (
+                "Set.reserve keeps contents",
+                "let mut s: Set[i64] = Set.new();\n\
+                 s.reserve(500);\n\
+                 let mut i = 0;\n\
+                 while i < 100 { s.insert(i); i = i + 1; }\n\
+                 s.reserve(-3);\n\
+                 println(f\"{s.len()} {s.contains(7)} {s.contains(999)}\");",
+            ),
+            (
+                "negative reserve is a no-op everywhere",
+                "let mut v: Vec[i64] = Vec.new();\n\
+                 v.push(1);\n\
+                 v.reserve(-100);\n\
+                 let mut s: String = String.new();\n\
+                 s.push_str(\"k\");\n\
+                 s.reserve(-100);\n\
+                 let mut m: Map[i64, i64] = Map.new();\n\
+                 m.insert(1, 1);\n\
+                 m.reserve(-100);\n\
+                 let mut t: Set[i64] = Set.new();\n\
+                 t.insert(1);\n\
+                 t.reserve(-100);\n\
+                 println(f\"{v.len()} [{s}] {m.len()} {t.len()}\");",
+            ),
+            (
+                "Vec.from_iter is collect",
+                "let a: Vec[i64] = Vec.from_iter(0..4);\n\
+                 let b: Vec[i64] = Vec.from_iter((0..6).map(|x| x * 2));\n\
+                 let src: Vec[i64] = [5, 6, 7];\n\
+                 let c: Vec[i64] = Vec.from_iter(src.iter().map(|x| x + 1));\n\
+                 let d = Vec.from_iter(0..3);\n\
+                 println(f\"{a[3]} {b[5]} {c[2]} {d.len()}\");",
+            ),
+        ];
+        for (label, body) in cases {
+            let src = format!("fn main() {{\n{body}\n}}\n");
+            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            assert!(
+                interp_errs.is_empty(),
+                "{label}: interpreter errored: {interp_errs:?}"
+            );
+            let expected = interp_out.join("");
+            if let Some(aot) = run_program(&src) {
+                assert_eq!(aot, expected, "{label}: AOT and the interpreter disagree");
+            }
+        }
+    }
+
+    /// `Vec.from_iter(it)` and `it.collect()` must produce the SAME program,
+    /// not merely similar answers: the typechecker types the former by
+    /// inferring the latter, and lowering rewrites to it. Comparing the two
+    /// spellings directly is what keeps a future "optimisation" from giving
+    /// `from_iter` its own divergent path.
+    #[test]
+    fn e2e_vec_from_iter_and_collect_are_the_same_program() {
+        let via_from_iter = "fn main() {\n\
+             let a: Vec[i64] = Vec.from_iter((0..8).map(|x| x * 3));\n\
+             println(f\"{a.len()} {a[0]} {a[7]}\");\n\
+         }\n";
+        let via_collect = "fn main() {\n\
+             let a: Vec[i64] = (0..8).map(|x| x * 3).collect();\n\
+             println(f\"{a.len()} {a[0]} {a[7]}\");\n\
+         }\n";
+        let (interp_a, errs_a, _, _) = karac::run_program_full(via_from_iter);
+        let (interp_b, errs_b, _, _) = karac::run_program_full(via_collect);
+        assert!(
+            errs_a.is_empty() && errs_b.is_empty(),
+            "{errs_a:?} {errs_b:?}"
+        );
+        assert_eq!(
+            interp_a.join(""),
+            interp_b.join(""),
+            "from_iter and collect must agree in the interpreter"
+        );
+        if let (Some(aot_a), Some(aot_b)) = (run_program(via_from_iter), run_program(via_collect)) {
+            assert_eq!(
+                aot_a, aot_b,
+                "from_iter and collect must agree when compiled"
+            );
+            assert_eq!(aot_a, interp_a.join(""), "and with the interpreter");
+        }
+    }
+
     /// `try_resize` / `try_append` end to end. Both are all-or-nothing: the
     /// fallible allocation happens before anything is mutated, so an `Err`
     /// leaves the receiver's buffer, length and contents untouched — and for

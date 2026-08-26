@@ -5138,6 +5138,27 @@ impl<'ctx> Codegen<'ctx> {
         let karac_map_clear_fn =
             module.add_function("karac_map_clear", map_clear_ty, Some(Linkage::External));
 
+        // B-2026-08-26-22 — `Map.reserve` / `Map.try_reserve`. A Map is an
+        // opaque handle, so unlike `Vec.reserve` there is no `{ptr,len,cap}`
+        // to do capacity arithmetic on here: the whole operation lives in the
+        // runtime, which knows the probing scheme's load factor and power-of-two
+        // bucket count.
+        // karac_map_reserve(map: ptr, additional: i64) -> void
+        let map_reserve_ty = context
+            .void_type()
+            .fn_type(&[ptr_md, i64_type.into()], false);
+        let karac_map_reserve_fn =
+            module.add_function("karac_map_reserve", map_reserve_ty, Some(Linkage::External));
+        // karac_map_try_reserve(map: ptr, additional: i64, out_failed_bytes: ptr) -> i1
+        let map_try_reserve_ty = context
+            .bool_type()
+            .fn_type(&[ptr_md, i64_type.into(), ptr_md], false);
+        let karac_map_try_reserve_fn = module.add_function(
+            "karac_map_try_reserve",
+            map_try_reserve_ty,
+            Some(Linkage::External),
+        );
+
         // karac_map_clear_with_drop_vec(map: ptr, drop_key: i32, drop_val: i32) -> void
         // In-place clear that frees per-entry heap key/value buffers first.
         let karac_map_clear_with_drop_vec_fn = module.add_function(
@@ -5621,6 +5642,8 @@ impl<'ctx> Codegen<'ctx> {
                 karac_map_contains_fn,
                 karac_map_len_fn,
                 karac_map_clear_fn,
+                karac_map_reserve_fn,
+                karac_map_try_reserve_fn,
                 karac_map_clear_with_drop_vec_fn,
                 karac_map_clear_with_val_drop_fn_fn,
                 karac_map_iter_new_fn,

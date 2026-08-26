@@ -1033,6 +1033,20 @@ impl MapData {
         Self::default()
     }
 
+    /// Make room for `additional` more entries. B-2026-08-26-22 — the
+    /// interpreter half of `Map.reserve`.
+    ///
+    /// Reserves on BOTH backing structures: `entries` holds the insertion-order
+    /// pairs and `index` maps hash to their positions, so reserving only one
+    /// leaves the other to reallocate on the very inserts the call was meant to
+    /// smooth out. Purely a hint — no `Map.capacity()` accessor exists in
+    /// either backend, so nothing observes the difference except allocation
+    /// counts.
+    pub fn reserve(&mut self, additional: usize) {
+        self.entries.reserve(additional);
+        self.index.reserve(additional);
+    }
+
     pub fn from_entries(entries: Vec<(Value, Value)>) -> Self {
         Self::from_entries_with_hasher(HasherKind::default(), entries)
     }
@@ -1228,6 +1242,15 @@ impl Clone for SetData {
 impl SetData {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Make room for `additional` more items. B-2026-08-26-22 — the `Set`
+    /// sibling of [`MapData::reserve`], reserving on both backing structures
+    /// for the same reason: `items` holds insertion order and `index` maps hash
+    /// to position, so reserving one leaves the other to reallocate anyway.
+    pub fn reserve(&mut self, additional: usize) {
+        self.items.reserve(additional);
+        self.index.reserve(additional);
     }
 
     pub fn from_items(items: Vec<Value>) -> Self {

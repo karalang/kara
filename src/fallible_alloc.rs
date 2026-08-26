@@ -24,6 +24,15 @@
 //! layer, which is why `try_extend` was a one-line registration here (its base
 //! `Vec.extend` already existed) while its two row-mates were not.
 //!
+//! `Vec.from_iter` is the one base that shipped WITHOUT its companion
+//! (B-2026-08-26-22), and deliberately. `from_iter` lowers to `iter.collect()`,
+//! reusing the one implementation both backends already have; but `collect`'s
+//! codegen grows its accumulator through the PANICKING allocator, so a
+//! `try_from_iter` built on it would return `Ok` unconditionally and abort
+//! inside `collect` on real OOM — a companion that lies about being fallible,
+//! which is worse than one that does not exist. It stays unregistered until
+//! `collect` itself has a fallible lowering.
+//!
 //! `Vec.reserve` / `Vec.reserve_exact` LEFT that deferred list in the same
 //! change that landed their bases (B-2026-08-25-20), which is what the rule is
 //! for: the base arrives, the companion follows, and nothing here has to know

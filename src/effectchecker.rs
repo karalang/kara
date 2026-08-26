@@ -1279,6 +1279,10 @@ impl<'a> EffectChecker<'a> {
             // a co-grouped sibling read would hold a freed `ptr`. Same standing
             // rule (B-2026-07-14-17) that `Vec.reserve` is seeded under.
             "String.reserve",
+            // B-2026-08-26-22 — a rehash moves every entry, so a co-grouped
+            // sibling read of the same map would be reading a freed table.
+            "Map.reserve",
+            "Set.reserve",
             "Map.new",
             "Map.with_capacity",
             "Map.insert",
@@ -1378,6 +1382,7 @@ impl<'a> EffectChecker<'a> {
             "Vec.try_reserve_exact",
             "Vec.try_resize",
             "Vec.try_append",
+            "Map.try_reserve",
             "String.try_push_str",
             "VecDeque.try_push_back",
             "VecDeque.try_push_front",

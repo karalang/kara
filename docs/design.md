@@ -1705,6 +1705,7 @@ Method signatures for the standard collections. All methods that grow the collec
 | `resize` | `fn resize(mut ref self, n: i64, val: T) where T: Clone` | Sets the length to exactly `n` — truncates (dropping the tail, as `truncate` does) when shrinking, appends copies of `val` when growing. `n < 0` clamps to 0. `val` is consumed: it is moved into the first new slot and cloned into the rest, and dropped outright when there is no new slot |
 | `append` | `fn append(mut ref self, other: Vec[T])` | Moves every element of `other` into `self`. The parameter is **owned**, unlike Rust's `&mut Vec<T>`: Kāra call sites never write `mut` on a method argument (§ *Part 1½: Call-site Mutation Markers*), so a borrow-and-drain spelling would leave `other` silently emptied with nothing at the call site to say so. Consuming it makes the transfer a move like any other |
 | `extend` | `fn extend[I: Iterator[Item = T]](mut ref self, iter: I)` | Appends from iterator |
+| `from_iter` | `fn from_iter[I: Iterator[Item = T]](iter: I) -> Vec[T]` | Builds a `Vec` from an iterator. Exactly `iter.collect()` — the typechecker types it by inferring that call and lowering rewrites to it, so the two spellings are one implementation. Unlike bare `collect()` it needs no type annotation, since the element type comes from the iterator |
 | `retain` | `fn retain[with E](mut ref self, pred: Fn(ref T) -> bool with E) with E` | Keeps elements where predicate is true; removes the rest in-place. O(n), one pass |
 | `remove_first` | `fn remove_first[with E](mut ref self, pred: Fn(ref T) -> bool with E) -> Option[T] with E` | Removes and returns the first element satisfying the predicate; `None` if no match. O(n) |
 | `[]` | `fn index(ref self, idx: i64) -> ref T` | Index operator; panics if out of bounds |
@@ -1724,6 +1725,7 @@ Method signatures for the standard collections. All methods that grow the collec
 | `keys` | `fn keys(ref self) -> impl Iterator[Item = ref K]` | Iterator over keys |
 | `values` | `fn values(ref self) -> impl Iterator[Item = ref V]` | Iterator over values |
 | `clear` | `fn clear(mut ref self)` | Removes all entries |
+| `reserve` | `fn reserve(mut ref self, additional: i64)` | Makes room for `additional` **more** entries, rehashing if needed. `additional <= 0` is a no-op. No `capacity()` companion: the bucket count is an implementation detail of the probing scheme, and `len()` is what user code has business reading. `Set` has the same method (it is a `Map[T, ()]` over the same table); `SortedSet` / `SortedMap` do not — that is what "where applicable" means in the Fallible Allocation table below |
 | `entry` | `fn entry(mut ref self, key: K) -> Entry[K, V]` | Returns a view into the map for the given key, occupied or vacant |
 | `[]` | `fn index(ref self, key: ref K) -> ref V` | Index operator; panics if key missing |
 
@@ -1867,6 +1869,7 @@ let sorted = PriorityQueue.from([9, 7, 8, 1, 3]).into_sorted_vec();   // [1, 3, 
 | `is_empty` | `fn is_empty(ref self) -> bool` | `self.len() == 0` |
 | `push_char` | `fn push_char(mut ref self, c: char)` | Appends a single Unicode scalar; encodes to UTF-8 in-place |
 | `push_str` | `fn push_str(mut ref self, s: ref String)` | Appends a string slice in-place |
+| `reserve` | `fn reserve(mut ref self, additional: i64)` | Makes room for `additional` **more** bytes. A hint only: `additional <= 0` is a no-op, and there is deliberately **no** `String.capacity()` — the interpreter's string is copy-on-write, so a reservation would not survive the next mutation there while a compiled build keeps it, and exposing the number would make that a run-vs-build divergence |
 | `chars` | `fn chars(ref self) -> impl Iterator[Item = char]` | Iterator over Unicode scalar values |
 | `contains` | `fn contains(ref self, pat: ref String) -> bool` | Substring search |
 | `starts_with` | `fn starts_with(ref self, pat: ref String) -> bool` | Prefix test |

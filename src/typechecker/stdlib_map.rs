@@ -375,6 +375,37 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 Type::Unit
             }
+            // B-2026-08-26-22 — `Map.reserve(additional)`, the last panicking
+            // base design.md § Fallible Allocation's table names for the
+            // hashed collections. `Map.try_reserve` derives from it, since
+            // `reserve` is already in `TRY_ALLOC_INSTANCE_BASES`.
+            //
+            // Unlike `Vec.reserve` there is no `capacity()` companion, and for
+            // a different reason than `String`'s: a `Map` is an opaque runtime
+            // handle whose bucket count is an implementation detail of the
+            // probing scheme (a power of two, sized off a 3/4 load factor and
+            // counting tombstones). Exposing it would publish that scheme as
+            // observable behaviour; `len()` is what user code has business
+            // reading.
+            "reserve" => {
+                if args.len() != 1 {
+                    self.type_error(
+                        format!(
+                            "Map.reserve expects 1 argument (additional entries), found {}",
+                            args.len()
+                        ),
+                        *span,
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                } else {
+                    let at = self.infer_expr(&args[0].value);
+                    self.check_assignable(&Type::Int(IntSize::I64), &at, args[0].value.span);
+                }
+                Type::Unit
+            }
             "entry" => {
                 // `entry(key: K) -> Entry[K, V]` — view returned for the given
                 // key, occupied or vacant. Drives the in-place insert-or-modify
@@ -1086,11 +1117,38 @@ impl<'a> super::TypeChecker<'a> {
                 self.expect_no_args("Set.clear", args, span);
                 Type::Unit
             }
+            // B-2026-08-26-22 — `Set.reserve(additional)`. design.md's
+            // panicking/fallible table names `reserve(n)` for the
+            // `Map`/`Set`/`VecDeque`/`SortedSet` row "where applicable"; a
+            // `Set` lowers to `Map[T, ()]` over the same open-addressed runtime
+            // table, so it is applicable here for free. `SortedSet` is a
+            // different structure with no bucket array, which is what "where
+            // applicable" is doing in that sentence.
+            "reserve" => {
+                if args.len() != 1 {
+                    self.type_error(
+                        format!(
+                            "Set.reserve expects 1 argument (additional entries), found {}",
+                            args.len()
+                        ),
+                        *span,
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                } else {
+                    let at = self.infer_expr(&args[0].value);
+                    self.check_assignable(&Type::Int(IntSize::I64), &at, args[0].value.span);
+                }
+                Type::Unit
+            }
             _ => self.require_known_method(
                 "Set",
                 method,
                 &[
                     "clear",
+                    "reserve",
                     "contains",
                     "difference",
                     "insert",

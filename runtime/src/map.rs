@@ -611,6 +611,78 @@ impl KaracMap {
     /// intact — and the attempted allocation size (status + kv arrays) is
     /// returned as `Err(bytes)`. The new storage is allocated *before* any
     /// `self` field is mutated, so the failure path needs no rollback.
+    /// Widen the table so `additional` more entries fit WITHOUT tripping the
+    /// insert-time growth guard. B-2026-08-26-22.
+    ///
+    /// The target follows from that guard rather than from any new policy: an
+    /// insert resizes when `(len + tombstones + 1) * 4 > capacity * 3`, so a
+    /// table that is to absorb `len + additional` live entries untouched needs
+    /// `capacity >= ceil((len + additional) * 4 / 3)`. Tombstones are counted
+    /// in too — they occupy probe slots and count toward that same guard, so
+    /// ignoring them would under-reserve exactly on the tables that most need
+    /// the reservation.
+    ///
+    /// Capacity stays a power of two (`hash & (capacity - 1)` is the whole
+    /// index computation), so the target is rounded up by doubling rather than
+    /// taken verbatim.
+    ///
+    /// Returns `Err(bytes)` if the allocation fails, leaving the map untouched;
+    /// `Ok(())` when it grew OR when the reservation was already satisfied —
+    /// a reserve that needs no allocation cannot fail.
+    unsafe fn reserve_additional(&mut self, additional: usize) -> Result<(), u64> {
+        unsafe {
+            let target = self
+                .len
+                .saturating_add(self.tombstones)
+                .saturating_add(additional);
+            // ceil(target * 4 / 3), saturating so a nonsense `additional`
+            // cannot wrap into a small capacity.
+            let needed = target.saturating_mul(4).saturating_add(2) / 3;
+            if needed <= self.capacity {
+                return Ok(());
+            }
+            let mut new_cap = self.capacity.max(INITIAL_CAPACITY);
+            while new_cap < needed {
+                match new_cap.checked_mul(2) {
+                    Some(n) => new_cap = n,
+                    None => return Err(u64::MAX),
+                }
+            }
+            let (new_status, new_kv) =
+                match Self::alloc_storage_fallible(new_cap, self.key_size, self.val_size) {
+                    Some(pair) => pair,
+                    None => {
+                        let kv_size = (self.key_size + self.val_size).max(1);
+                        let bytes = (new_cap as u64)
+                            .saturating_add((new_cap as u64).saturating_mul(kv_size as u64));
+                        return Err(bytes);
+                    }
+                };
+
+            let old_status = self.status;
+            let old_kv = self.kv;
+            let old_cap = self.capacity;
+
+            self.status = new_status;
+            self.kv = new_kv;
+            self.capacity = new_cap;
+            self.len = 0;
+            self.tombstones = 0;
+
+            // Rehashing drops tombstones on the floor, which is why the target
+            // above counts them: after this the table holds `len` live entries
+            // in `new_cap` buckets with no tombstones at all.
+            self.rehash_from(old_status, old_kv, old_cap);
+
+            let status_layout = Layout::array::<u8>(old_cap).unwrap();
+            dealloc(old_status, status_layout);
+            let kv_layout =
+                Layout::array::<u8>(old_cap * (self.key_size + self.val_size).max(1)).unwrap();
+            dealloc(old_kv, kv_layout);
+            Ok(())
+        }
+    }
+
     unsafe fn try_resize(&mut self) -> Result<(), u64> {
         unsafe {
             // Same live-count-driven width choice as `resize` (B-2026-07-31-21);
@@ -1234,6 +1306,75 @@ pub unsafe extern "C" fn karac_map_lookup_slot(
             true
         } else {
             false
+        }
+    }
+}
+
+/// Reserve room for `additional` more entries in `map`, growing (and
+/// rehashing) if the current table could not absorb them without tripping the
+/// insert-time growth guard. B-2026-08-26-22 — the runtime half of
+/// `Map.reserve`, which design.md § Fallible Allocation's panicking/fallible
+/// table names for `Map` / `Set` / `VecDeque` / `SortedSet`.
+///
+/// A `Map` is an opaque handle behind this FFI, so unlike `Vec.reserve` there
+/// is no `{ptr,len,cap}` for codegen to do capacity arithmetic on — the whole
+/// operation has to live here.
+///
+/// PANICS on allocation failure, matching `karac_map_insert`; the fallible twin
+/// is [`karac_map_try_reserve`]. A reservation that is already satisfied
+/// allocates nothing and cannot fail.
+///
+/// `additional` IS SIGNED, AND MUST STAY SIGNED. Kāra's `reserve` treats a
+/// non-positive argument as a no-op (`Vec` and `String` clamp it in codegen),
+/// and Kāra integers arrive here as `i64`. Typing this parameter `u64` instead
+/// reinterprets `reserve(-5)` as a reservation of 18 quintillion entries, which
+/// saturates the capacity search and aborts the process with
+/// `panic: out of memory` — measured, not hypothetical.
+/// # Safety
+/// `map` must be a live `karac_map_new` handle.
+#[no_mangle]
+pub unsafe extern "C" fn karac_map_reserve(map: *mut c_void, additional: i64) {
+    unsafe {
+        if map.is_null() || additional <= 0 {
+            return;
+        }
+        let m = &mut *(map as *mut KaracMap);
+        if m.reserve_additional(additional as usize).is_err() {
+            // Same abort path the byte allocators take (`karac_alloc_or_panic`):
+            // the default profile's contract is that OOM aborts, and the
+            // fallible twin below is how a caller opts out of it.
+            crate::fatal::write_stderr(b"panic: out of memory\n");
+            std::process::abort();
+        }
+    }
+}
+
+/// Fallible twin of [`karac_map_reserve`]. Returns `true` on success; on
+/// failure returns `false`, writes the byte count that could not be allocated
+/// through `out_failed_bytes` (when non-null), and leaves the map UNCHANGED —
+/// the same all-or-nothing contract `karac_map_try_insert` offers.
+/// # Safety
+/// As [`karac_map_reserve`]; additionally `out_failed_bytes` is null or
+/// writable.
+#[no_mangle]
+pub unsafe extern "C" fn karac_map_try_reserve(
+    map: *mut c_void,
+    additional: i64,
+    out_failed_bytes: *mut u64,
+) -> bool {
+    unsafe {
+        if map.is_null() || additional <= 0 {
+            return true;
+        }
+        let m = &mut *(map as *mut KaracMap);
+        match m.reserve_additional(additional as usize) {
+            Ok(()) => true,
+            Err(bytes) => {
+                if !out_failed_bytes.is_null() {
+                    *out_failed_bytes = bytes;
+                }
+                false
+            }
         }
     }
 }

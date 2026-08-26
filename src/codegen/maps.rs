@@ -1581,6 +1581,89 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap_or(i64_t.into());
 
         match method {
+            // B-2026-08-26-22 — `Map.reserve(n)` / `Map.try_reserve(n)`. Both
+            // are one runtime call: the bucket count, load factor and
+            // power-of-two rounding are the probing scheme's business, not
+            // codegen's, so there is nothing to inline here the way
+            // `Vec.reserve` inlines its `{ptr,len,cap}` arithmetic.
+            //
+            // No monomorph routing: reserving touches only the table's shape,
+            // never a key or value, so the erased handle is all it needs.
+            "reserve" => {
+                if args.len() != 1 {
+                    return Err(format!(
+                        "Map.reserve expects 1 argument (additional entries), got {}",
+                        args.len()
+                    ));
+                }
+                let additional = self.compile_expr(&args[0].value)?.into_int_value();
+                self.builder
+                    .build_call(
+                        self.runtime_fns.karac_map_reserve_fn,
+                        &[map_handle.into(), additional.into()],
+                        "",
+                    )
+                    .unwrap();
+                Ok(self.context.i64_type().const_zero().into())
+            }
+            "try_reserve" => {
+                if args.len() != 1 {
+                    return Err(format!(
+                        "Map.try_reserve expects 1 argument (additional entries), got {}",
+                        args.len()
+                    ));
+                }
+                let fn_val = self.current_fn.unwrap();
+                let i64_t = self.context.i64_type();
+                let additional = self.compile_expr(&args[0].value)?.into_int_value();
+                // The runtime writes the byte count it could not allocate here,
+                // which is what `AllocError.OutOfMemory` carries.
+                let bytes_slot = self.create_entry_alloca(fn_val, "mrsv.bytes", i64_t.into());
+                self.builder
+                    .build_store(bytes_slot, i64_t.const_zero())
+                    .unwrap();
+                let ok = self
+                    .builder
+                    .build_call(
+                        self.runtime_fns.karac_map_try_reserve_fn,
+                        &[map_handle.into(), additional.into(), bytes_slot.into()],
+                        "mrsv.ok",
+                    )
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_int_value();
+                let ok_bb = self.context.append_basic_block(fn_val, "mrsv.ok.bb");
+                let oom_bb = self.context.append_basic_block(fn_val, "mrsv.oom");
+                let merge_bb = self.context.append_basic_block(fn_val, "mrsv.merge");
+                self.builder
+                    .build_conditional_branch(ok, ok_bb, oom_bb)
+                    .unwrap();
+
+                self.builder.position_at_end(oom_bb);
+                let bytes = self
+                    .builder
+                    .build_load(i64_t, bytes_slot, "mrsv.failed_bytes")
+                    .unwrap()
+                    .into_int_value();
+                let err_result = self.build_alloc_oom_result(bytes)?;
+                let oom_end = self.builder.get_insert_block().unwrap();
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+                self.builder.position_at_end(ok_bb);
+                let unit_val = i64_t.const_zero().into();
+                let ok_result = self.build_nonshared_enum_value("Result", "Ok", &[unit_val])?;
+                let ok_end = self.builder.get_insert_block().unwrap();
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+                self.builder.position_at_end(merge_bb);
+                let phi = self
+                    .builder
+                    .build_phi(ok_result.get_type(), "mrsv.result")
+                    .unwrap();
+                phi.add_incoming(&[(&ok_result, ok_end), (&err_result, oom_end)]);
+                Ok(phi.as_basic_value())
+            }
             "len" => {
                 // Slice 1a: route Map[i64, i64].len through the
                 // monomorphized symbol family; every other K/V tuple

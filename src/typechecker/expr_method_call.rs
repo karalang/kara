@@ -53,6 +53,7 @@ pub(super) const SET_BUILTIN_METHODS: &[&str] = &[
     "iter",
     "len",
     "remove",
+    "reserve",
     "to_string",
     "union",
 ];
@@ -70,6 +71,7 @@ pub(super) const MAP_BUILTIN_METHODS: &[&str] = &[
     "len",
     "merge",
     "remove",
+    "reserve",
     "to_string",
     "values",
 ];

@@ -475,6 +475,79 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap();
                 Ok(i64_t.const_int(0, false).into())
             }
+            // B-2026-08-26-22 — `Set.reserve` / `Set.try_reserve`. A `Set` is a
+            // `Map[T, ()]` over the same runtime table, so these are the same
+            // two runtime calls the `Map` arms make (`maps.rs`) — the handle is
+            // the only thing that differs.
+            "reserve" => {
+                if args.len() != 1 {
+                    return Err(format!(
+                        "Set.reserve expects 1 argument (additional entries), got {}",
+                        args.len()
+                    ));
+                }
+                let additional = self.compile_expr(&args[0].value)?.into_int_value();
+                self.builder
+                    .build_call(
+                        self.runtime_fns.karac_map_reserve_fn,
+                        &[set_handle.into(), additional.into()],
+                        "",
+                    )
+                    .unwrap();
+                Ok(i64_t.const_int(0, false).into())
+            }
+            "try_reserve" => {
+                if args.len() != 1 {
+                    return Err(format!(
+                        "Set.try_reserve expects 1 argument (additional entries), got {}",
+                        args.len()
+                    ));
+                }
+                let fn_val = self.current_fn.unwrap();
+                let additional = self.compile_expr(&args[0].value)?.into_int_value();
+                let bytes_slot = self.create_entry_alloca(fn_val, "srsv.bytes", i64_t.into());
+                self.builder
+                    .build_store(bytes_slot, i64_t.const_zero())
+                    .unwrap();
+                let ok = self
+                    .builder
+                    .build_call(
+                        self.runtime_fns.karac_map_try_reserve_fn,
+                        &[set_handle.into(), additional.into(), bytes_slot.into()],
+                        "srsv.ok",
+                    )
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_int_value();
+                let ok_bb = self.context.append_basic_block(fn_val, "srsv.ok.bb");
+                let oom_bb = self.context.append_basic_block(fn_val, "srsv.oom");
+                let merge_bb = self.context.append_basic_block(fn_val, "srsv.merge");
+                self.builder
+                    .build_conditional_branch(ok, ok_bb, oom_bb)
+                    .unwrap();
+                self.builder.position_at_end(oom_bb);
+                let bytes = self
+                    .builder
+                    .build_load(i64_t, bytes_slot, "srsv.failed_bytes")
+                    .unwrap()
+                    .into_int_value();
+                let err_result = self.build_alloc_oom_result(bytes)?;
+                let oom_end = self.builder.get_insert_block().unwrap();
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+                self.builder.position_at_end(ok_bb);
+                let unit_val = i64_t.const_zero().into();
+                let ok_result = self.build_nonshared_enum_value("Result", "Ok", &[unit_val])?;
+                let ok_end = self.builder.get_insert_block().unwrap();
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+                self.builder.position_at_end(merge_bb);
+                let phi = self
+                    .builder
+                    .build_phi(ok_result.get_type(), "srsv.result")
+                    .unwrap();
+                phi.add_incoming(&[(&ok_result, ok_end), (&err_result, oom_end)]);
+                Ok(phi.as_basic_value())
+            }
             "union" | "intersection" | "difference" => {
                 if args.is_empty() {
                     return Err(format!("Set.{method} requires another set as argument"));

@@ -46177,3 +46177,69 @@ fn vec_try_resize_and_try_append_are_registered_companions() {
          fn main() { let _ = go(); }",
     );
 }
+
+// ── B-2026-08-26-22: Map/Set reserve, from_iter, and what is absent ──
+
+#[test]
+fn map_and_set_reserve_accept_their_signatures_and_derive_try_reserve() {
+    typecheck_ok(
+        "fn go() -> Result[i64, AllocError] {\n\
+             let mut m: Map[i64, i64] = Map.new();\n\
+             m.reserve(8);\n\
+             m.try_reserve(8)?;\n\
+             let mut s: Set[i64] = Set.new();\n\
+             s.reserve(8);\n\
+             s.try_reserve(8)?;\n\
+             return Ok(m.len() + s.len());\n\
+         }\n\
+         fn main() { let _ = go(); }",
+    );
+}
+
+#[test]
+fn vec_from_iter_types_as_its_own_collect() {
+    typecheck_ok(
+        "fn main() {\n\
+             let a: Vec[i64] = Vec.from_iter(0..4);\n\
+             let b = Vec.from_iter((0..3).map(|x| x * 2));\n\
+             println(f\"{a.len()} {b.len()}\");\n\
+         }",
+    );
+}
+
+/// `Vec.try_from_iter` is deliberately NOT a registered companion, and this
+/// test is what keeps it that way. `from_iter` lowers to `iter.collect()`,
+/// whose codegen grows its accumulator through the PANICKING allocator — so a
+/// companion built on it would return `Ok` unconditionally and abort inside
+/// `collect` on real OOM. A companion that lies about being fallible is worse
+/// than one that does not exist; registering it needs a fallible `collect`
+/// first.
+#[test]
+fn vec_try_from_iter_stays_absent_until_collect_can_fail() {
+    let errs = typecheck_errors(
+        "fn go() -> Result[i64, AllocError] {\n\
+             let a: Vec[i64] = Vec.try_from_iter(0..4)?;\n\
+             return Ok(a.len());\n\
+         }\n\
+         fn main() { let _ = go(); }",
+    );
+    assert!(
+        errs.iter().any(|e| e.message.contains("try_from_iter")),
+        "Vec.try_from_iter must stay rejected; got {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn map_reserve_rejects_wrong_arity() {
+    for stmt in ["m.reserve();", "m.reserve(1, 2);"] {
+        let errs = typecheck_errors(&format!(
+            "fn main() {{\n let mut m: Map[i64, i64] = Map.new();\n {stmt}\n}}"
+        ));
+        assert!(
+            errs.iter().any(|e| e.message.contains("reserve")),
+            "`{stmt}` should name `reserve`; got {:?}",
+            errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+}

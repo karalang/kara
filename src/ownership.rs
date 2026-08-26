@@ -3419,7 +3419,11 @@ pub(crate) fn stdlib_method_self_borrow_kind(key: &str) -> Option<BorrowKind> {
         | "String.insert_str"
         // B-2026-08-26-22 — `reserve` may reallocate the byte buffer, so it is
         // a write borrow of the receiver even though it changes no content.
-        | "String.reserve" => MutRef,
+        | "String.reserve"
+        // B-2026-08-26-22 — `Map.reserve` rehashes the whole table, so it is a
+        // write borrow even though no entry changes.
+        | "Map.reserve"
+        | "Set.reserve" => MutRef,
         // String read methods.
         "String.len" | "String.is_empty" | "String.contains" | "String.starts_with"
         | "String.ends_with" | "String.bytes" | "String.chars" | "String.clone"

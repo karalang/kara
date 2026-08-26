@@ -1623,6 +1623,41 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // B-2026-08-26-22 — `Vec.from_iter(iter)`, the `FromIterator`
+        // constructor design.md § Fallible Allocation's table names (and whose
+        // `try_from_iter` twin its own prose offers as the sanctioned
+        // replacement for a `.collect()` rejected under
+        // `panic_on_alloc_failure = false`).
+        //
+        // TYPED AS ITS OWN `collect()`, LITERALLY: a synthetic `<iter>.collect()`
+        // is built and inferred, so the two spellings cannot drift apart in
+        // element type, in accepted iterator shapes, or in diagnostics for a
+        // non-iterator argument. `lowering.rs` then rewrites the call to that
+        // same `collect()`, so both backends run one implementation — the same
+        // "exact alias" discipline `Vec.extend` / `extend_from_slice` follow,
+        // rather than a second code path that has to be kept in step.
+        if let ExprKind::Path { segments, .. } = &callee.kind {
+            if segments.len() == 2
+                && segments[0] == "Vec"
+                && segments[1] == "from_iter"
+                && args.len() == 1
+            {
+                let synthetic = Expr {
+                    span: *span,
+                    kind: ExprKind::MethodCall {
+                        object: Box::new(args[0].value.clone()),
+                        method: "collect".to_string(),
+                        turbofish: None,
+                        args: Vec::new(),
+                        args_close_span: *span,
+                    },
+                };
+                let ty = self.infer_expr(&synthetic);
+                self.record_expr_type(span, &ty);
+                return ty;
+            }
+        }
+
         // `String.from(x)` — codegen-only builtin (no syntactic
         // `impl From for String` in baked stdlib); historically used to
         // convert a `StringSlice` / string literal to an owned `String`,
