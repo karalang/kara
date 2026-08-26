@@ -1868,7 +1868,7 @@ let sorted = PriorityQueue.from([9, 7, 8, 1, 3]).into_sorted_vec();   // [1, 3, 
 | `with_capacity` | `fn with_capacity(cap: i64) -> String` | Pre-allocates `cap` bytes; avoids reallocation when final length is known |
 | `len` | `fn len(ref self) -> i64` | Length in bytes |
 | `is_empty` | `fn is_empty(ref self) -> bool` | `self.len() == 0` |
-| `push_char` | `fn push_char(mut ref self, c: char)` | Appends a single Unicode scalar; encodes to UTF-8 in-place |
+| `push` | `fn push(mut ref self, c: char)` | Appends a single Unicode scalar; encodes to UTF-8 in-place. Named `push` to match `Vec.push`, and matching the name the fallible-alloc table and the OOM-default prose below already use |
 | `push_str` | `fn push_str(mut ref self, s: ref String)` | Appends a string slice in-place |
 | `reserve` | `fn reserve(mut ref self, additional: i64)` | Makes room for `additional` **more** bytes. A hint only: `additional <= 0` is a no-op, and there is deliberately **no** `String.capacity()` — the interpreter's string is copy-on-write, so a reservation would not survive the next mutation there while a compiled build keeps it, and exposing the number would make that a run-vs-build divergence |
 | `chars` | `fn chars(ref self) -> impl Iterator[Item = char]` | Iterator over Unicode scalar values |

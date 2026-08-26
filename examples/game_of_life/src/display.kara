@@ -1,12 +1,17 @@
 // display.kara — Terminal rendering of a Grid.
 //
-// GAP-K: No string builder / efficient string accumulation.
-//   Rendering a row requires concatenating one character per cell.
-//   The idiomatic approach is a string builder (append to a buffer, flush once).
-//   Kāra's String supports `+` (concatenation, allocates), but chaining N `+`
-//   calls is O(N²).  A `StringBuilder` or `String.with_capacity(n)` + repeated
-//   `push_char` would fix this.  Without it, we fall back to per-cell println,
-//   which issues one write syscall per cell — a significant IO overhead.
+// GAP-K: CLOSED (2026-08-26, B-2026-08-26-11) — efficient string accumulation
+//   exists.  This note used to say a `StringBuilder` or `String.with_capacity(n)`
+//   + repeated `push_char` "would fix this", and that "without it, we fall back
+//   to per-cell println".  Both halves are now available: `String.with_capacity(n)`
+//   and `String.push(c: char)` — the char-append is spelled `push`, matching
+//   `Vec.push`, which is why a search for `push_char` found nothing.  `push`
+//   encodes the scalar to UTF-8 in place with an inline ASCII fast path, so a
+//   build-a-row-then-flush-once renderer is O(n) with one write per ROW.
+//
+//   The renderer below still uses the per-cell fallback: rewriting it is a real
+//   change needing its own expected-output check, not a doc fix, so it was left
+//   for a separate pass rather than folded into the correction of this comment.
 //
 // GAP-L: No ANSI / terminal control in stdlib.
 //   Clearing the screen requires writing the ANSI escape sequence directly

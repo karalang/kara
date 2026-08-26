@@ -704,3 +704,137 @@ fn hash_section_points_the_crypto_gap_at_its_tracker() {
          must survive edits to the surrounding text"
     );
 }
+
+/// Every method named in design.md's **`String`** method table must actually
+/// exist on `String`. B-2026-08-26-11.
+///
+/// That row: the table listed `push_char` — `fn push_char(mut ref self, c: char)`
+/// — which the compiler has never had, while the method that DOES append a
+/// char, `push`, had no row at all. Both directions were broken, which is what
+/// separated it from a rename: a reader following the spec got a typecheck
+/// error, and a reader looking for how to append a char found no documented
+/// way to do it.
+///
+/// A method TABLE is the surface a user is expected to program against, and
+/// this document is also the corpus an LLM reads when writing Kāra blind —
+/// the same premise the rest of this file's lints rest on. A table row naming
+/// a method that does not exist teaches an API that isn't there.
+///
+/// EXISTENCE, NOT SIGNATURE, is what this checks, and the distinction is what
+/// makes it cheap enough to be worth having. Calling a documented method with
+/// deliberately wrong arguments produces either "no method 'x' on type
+/// 'String'" (it does not exist — the bug) or some argument/type complaint
+/// (it exists, and this lint is satisfied). So the probe needs no per-row
+/// signature parsing: it only has to tell those two apart. Static
+/// constructors are tried in `String.x()` form as well, since they are not
+/// callable on an instance.
+#[test]
+fn design_md_string_table_names_only_methods_that_exist() {
+    let table = string_method_table(DESIGN_MD)
+        .expect("could not locate the **`String`** method table in design.md");
+    // A floor, so a table that moves or a parser that stops matching cannot
+    // make this lint silently pass over an empty set.
+    assert!(
+        table.len() >= 15,
+        "expected the String table to yield many method names, got {}: {table:?}",
+        table.len()
+    );
+    let missing: Vec<&String> = table
+        .iter()
+        .filter(|name| !string_method_exists(name))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "design.md's `String` method table names {} method(s) the compiler does \
+         not have: {missing:?}. A table row is the surface users program \
+         against — either implement the method or correct the row (B-2026-08-26-11 \
+         was `push_char`, which never existed; the real spelling is `push`).",
+        missing.len()
+    );
+}
+
+/// Extract the first-column method names from design.md's **`String`** table.
+/// Stops at the first blank line after the table starts, so it cannot run on
+/// into the sections that follow. Operator rows (`+`) and anything that is not
+/// a bare identifier are skipped — they are not method-name lookups.
+fn string_method_table(text: &str) -> Option<Vec<String>> {
+    let start = text.find("**`String`**")?;
+    let mut names = Vec::new();
+    let mut seen_header = false;
+    for line in text[start..].lines().skip(1) {
+        let t = line.trim();
+        if t.is_empty() {
+            if seen_header {
+                break;
+            }
+            continue;
+        }
+        if !t.starts_with('|') {
+            if seen_header {
+                break;
+            }
+            continue;
+        }
+        seen_header = true;
+        let cell = t.trim_matches('|').split('|').next().unwrap_or("").trim();
+        let name = cell.trim_matches('`').trim();
+        if name.is_empty()
+            || name == "Method"
+            || name.starts_with("---")
+            || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        {
+            continue;
+        }
+        names.push(name.to_string());
+    }
+    Some(names)
+}
+
+/// `true` when `String` has a method (or associated function) of this name.
+///
+/// Probed by CALLING it and inspecting the diagnostic. A name the compiler
+/// does not know reports "no method 'x'" / "no associated function 'x'"; a
+/// name it does know reports an argument complaint instead ("'push' expects a
+/// Char argument, found 'i64'"). Telling those two apart is all this lint
+/// needs, so it never has to parse the signature column.
+///
+/// Several arities are tried because resolution is ARITY-KEYED: measured,
+/// `String.with_capacity()` reports "no associated function 'with_capacity'"
+/// even though `String.with_capacity(8i64)` typechecks. A single zero-arg
+/// probe would therefore report every arity-taking method as missing. Both
+/// call forms are tried too, since the table mixes instance methods with
+/// constructors. Existence is claimed as soon as ANY probe avoids the
+/// does-not-exist diagnostic.
+fn string_method_exists(name: &str) -> bool {
+    let says_absent = |src: &str| -> bool {
+        let parsed = karac::parse(src);
+        if !parsed.errors.is_empty() {
+            // A probe that does not parse proves nothing either way; do not
+            // let it count as evidence of absence.
+            return false;
+        }
+        let resolved = karac::resolve(&parsed.program);
+        let res = karac::typecheck(&parsed.program, &resolved);
+        res.errors.iter().any(|e| {
+            let m = &e.message;
+            (m.contains(&format!("no method '{name}'"))
+                || m.contains(&format!("no associated function '{name}'")))
+                && m.contains("String")
+        })
+    };
+    // `0i64` is a deliberately wrong argument type for most of these; a type
+    // complaint is a PASS, because only an existing method can complain about
+    // its arguments.
+    let arg_lists = ["", "0i64", "0i64, 0i64"];
+    for args in arg_lists {
+        let instance = format!("fn probe() {{ let mut s: String = \"\"; s.{name}({args}); }}");
+        if !says_absent(&instance) {
+            return true;
+        }
+        let statik = format!("fn probe() {{ let _ = String.{name}({args}); }}");
+        if !says_absent(&statik) {
+            return true;
+        }
+    }
+    false
+}
