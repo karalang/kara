@@ -45754,6 +45754,98 @@ fn main() {
 }
 
 #[test]
+fn unsatisfied_bound_never_lists_the_failing_type_as_its_own_candidate() {
+    // B-2026-08-26-10 — the message used to contradict itself inside one
+    // sentence:
+    //
+    //   trait bound `T: Hash` is not satisfied; `Item` does not implement
+    //   `Hash`; trait `Hash` is implemented by: Item
+    //
+    // The verdict comes from `type_satisfies_bound`, which for the derive-backed
+    // traits answers from `derived_traits` and never reads the impl table; the
+    // candidate list is built FROM the impl table, where the author's
+    // `impl Hash for Item` sits. So the author was told they had not written the
+    // impl they were looking at, and the list of types that would work pointed
+    // back at the one just refused.
+    //
+    // Both traits are checked in one program because they take different paths
+    // through the list — `Hash` has no other candidates, so the list vanished
+    // entirely and only the explanation is left; `Eq` has seventeen primitives,
+    // so the list survives with `Item` removed from it.
+    let errs = typecheck_errors(
+        r#"
+struct Item { id: i64 }
+impl PartialEq for Item { fn eq(ref self, other: ref Item) -> bool { self.id == other.id } }
+impl Eq for Item {}
+impl Hash for Item { fn hash[H: Hasher](ref self, hasher: mut ref H) { hasher.write_u64(1) } }
+fn needs_hash[T: Hash](x: T) -> i64 { 1 }
+fn needs_eq[T: Eq](x: T) -> i64 { 2 }
+fn main() {
+    println(needs_hash(Item { id: 1 }));
+    println(needs_eq(Item { id: 1 }));
+}
+"#,
+    );
+    for trait_name in ["Hash", "Eq"] {
+        let msg = errs
+            .iter()
+            .find(|e| {
+                e.message
+                    .contains(&format!("trait bound `T: {trait_name}`"))
+            })
+            .map(|e| e.message.clone())
+            .unwrap_or_else(|| {
+                panic!("expected the `{trait_name}` bound to be rejected, got: {errs:?}")
+            });
+        let listed = msg
+            .split("is implemented by: ")
+            .nth(1)
+            .map(|tail| tail.split(", ").any(|c| c.trim() == "Item"))
+            .unwrap_or(false);
+        assert!(
+            !listed,
+            "`Item` is named as a candidate for the bound it just failed: {msg}"
+        );
+        assert!(
+            msg.contains("that verdict is about the derive, not your impl"),
+            "the message should reconcile the denial with the impl the author wrote: {msg}"
+        );
+        assert!(
+            msg.contains(&format!("#[derive({trait_name})]")),
+            "the message should name the derive the bound is actually checked against: {msg}"
+        );
+    }
+}
+
+#[test]
+fn unsatisfied_bound_on_a_type_with_no_impl_keeps_the_plain_candidate_list() {
+    // The counterweight: the split above must not swallow the ordinary case.
+    // A type with no impl at all is not in its own candidate list, so the
+    // message keeps the plain "is implemented by" wording and gains no
+    // explanation about derives-versus-impls that would not apply to it.
+    let errs = typecheck_errors(
+        r#"
+struct Bare { id: i64 }
+fn needs_eq[T: Eq](x: T) -> i64 { 2 }
+fn main() { println(needs_eq(Bare { id: 1 })); }
+"#,
+    );
+    let msg = errs
+        .iter()
+        .find(|e| e.message.contains("trait bound `T: Eq`"))
+        .map(|e| e.message.clone())
+        .expect("expected the `Eq` bound to be rejected");
+    assert!(
+        msg.contains("trait `Eq` is implemented by: "),
+        "a type with no impl should still get the candidate list: {msg}"
+    );
+    assert!(
+        !msg.contains("that verdict is about the derive"),
+        "a type with no impl has no impl to reconcile against: {msg}"
+    );
+}
+
+#[test]
 fn partial_cmp_without_cmp_is_still_rejected_and_names_the_workaround() {
     // The one ordering shape that still cannot be lowered: an impl supplying
     // `partial_cmp` but no `cmp`. Its desugaring would be

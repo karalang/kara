@@ -2636,12 +2636,55 @@ impl<'a> super::TypeChecker<'a> {
                 ));
             }
         }
-        let candidates = self.impl_candidates_for_trait(trait_name);
-        if !candidates.is_empty() {
+        // B-2026-08-26-10 — the failing type must never appear in its own
+        // "is implemented by" list. It could, and did:
+        //
+        //   trait bound `T: Hash` is not satisfied; `Item` does not implement
+        //   `Hash`; trait `Hash` is implemented by: Item
+        //
+        // Two tables disagreeing inside one sentence. The VERDICT comes from
+        // `type_satisfies_bound`, which for the derive-backed traits (`Hash`,
+        // `Eq`, `PartialEq`, `PartialOrd`, `Display`, `Clone`, `Copy`, `Debug`,
+        // `Default`, …) answers from `derived_traits` and never consults the
+        // impl table at all; the CANDIDATE LIST is built from the impl table,
+        // where the author's `impl Hash for Item` is sitting. So a reader who
+        // wrote the impl is told in the same breath that they did not and that
+        // they did — and the list, whose job is to point at types that WOULD
+        // work, points back at the one just refused.
+        //
+        // Splitting on the failing type is the whole fix, and it is keyed on
+        // PRESENCE rather than on a hard-coded trait list on purpose: a trait
+        // whose bound consults the impl table normally can never put the failing
+        // type in this list, so the branch cannot misfire on one. `Ord` is the
+        // live proof — `type_supports_ord` accepts a user `impl Ord`, so an
+        // `Ord` bound that fails is one with no impl, and this never triggers.
+        let (self_impls, other_impls): (Vec<String>, Vec<String>) = self
+            .impl_candidates_for_trait(trait_name)
+            .into_iter()
+            .partition(|c| c == &self_render || c.starts_with(&format!("{self_render}[")));
+        if !self_impls.is_empty() {
+            // Lead with the reconciliation. Without it the sentence still reads
+            // as a contradiction — the headline is the standard "does not
+            // implement" phrasing and cannot be reworded per-trait from here —
+            // so the clause has to say WHICH question the headline answered.
+            //
+            // The wording stays neutral about what the derive replaces
+            // ("generated implementation", not "your body") because `Eq` and
+            // `Copy` are MARKER impls with no body at all, and naming one would
+            // be wrong for exactly the traits most likely to hit this.
+            out.push_str(&format!(
+                "; that verdict is about the derive, not your impl — you have \
+                 written `impl {trait_name} for {self_render}`, but this bound is \
+                 checked against `#[derive({trait_name})]`, which a hand-written \
+                 impl does not satisfy. Adding the derive satisfies it, and the \
+                 generated field-by-field implementation is what will be used"
+            ));
+        }
+        if !other_impls.is_empty() {
             out.push_str("; trait `");
             out.push_str(trait_name);
             out.push_str("` is implemented by: ");
-            out.push_str(&candidates.join(", "));
+            out.push_str(&other_impls.join(", "));
         }
         // Float primitives deliberately do NOT implement the total-order /
         // total-equality / hashing traits — IEEE-754 NaN breaks reflexivity
