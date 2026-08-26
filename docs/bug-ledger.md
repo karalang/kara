@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 288 | 0 |
 | leak | 195 | 0 |
-| missing-feature | 173 | 5 |
+| missing-feature | 174 | 5 |
 | run-vs-build | 160 | 1 |
 | codegen-gap | 139 | 1 |
 | double-free | 138 | 0 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 1038 | 3 |
-| typecheck | 260 | 4 |
+| typecheck | 261 | 4 |
 | interp | 180 | 0 |
 | other | 66 | 2 |
 | ownership | 65 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1579 surfaced · 9 open · 1545 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-26). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1580 surfaced · 9 open · 1546 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-26). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (9)
 
@@ -133,12 +133,12 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1579 surfaced
 | B-2026-08-25-3 | 2026-08-25 | codegen | medium | `codegen_tests::vec_mutation_methods_bounds_check_out_of_range_index` IS FLAKY, and it fails by showing exactly the PRE-FIX symptom of the high-severity bug it guards: `v.insert(7i64, 9i64)` produced no `Vec.insert index out of bounds` panic, stdout empty, stderr `free(): invalid pointer`. Observed once in a full `cargo test --features llvm` run; the same test then passed 3/3 in isolation, 3198/3198 in a codegen-only run, and the next FULL run was green at 125 suites / 15090 tests. | roadmap.md |
 | B-2026-08-25-19 | 2026-08-25 | typecheck | medium | The ENTIRE `Box` / `Rc` / `Arc` smart-pointer family is UNDEFINED -- all six of `Box.new`, `Box.try_new`, `Rc.new`, `Rc.try_new`, `Arc.new`, `Arc.try_new` fail at RESOLVE with `undefined name`, and `Box[T]` in type position is `undefined type 'Box', did you mean 'Hex'?`. design.md carries them in three separate places as shipped surface: § Type Inference's variance table has `Box[=T] | invariant | Owned heap pointer; consuming `Box[T]` yields `T`...`; § Fallible Allocation's table has the row `Box[T] / Rc[T] / Arc[T] | new(t) | try_new(t)`; and § Fallible Allocation's indirect-allocator rules name `every `Box.new(...)` literal` as one of the sites that must be rejected under a no-panic profile. `Arc` is additionally LOAD-BEARING FOR A DOCUMENTED CONCURRENCY RULE -- § Module-Level Bindings says a `let mut` binding may be written from inside `par { }` only when its type is `Atomic[T]`, `Mutex[T]`, `RwLock[T]`, or `Arc[shared struct S]`, so one of the four sanctioned escapes cannot be spelled. | roadmap.md |
 | B-2026-08-25-20 | 2026-08-25 | typecheck | medium | Three of the fallible-allocation `try_*` methods design.md names by name do not exist, and `AllocError`'s `Display` is Debug formatting rather than the specified text. § Fallible Allocation API: "Operations that report only success/failure return `Result[(), AllocError]` (`try_push`, `try_insert`, `try_reserve`, `try_extend`, `try_append`)". Measured one method per compile: `Vec.try_reserve` -> `no method 'try_reserve' on type 'Vec'`; `Vec.try_extend` -> `no method 'try_extend'`; `Vec.try_append` -> `no method 'try_append'`. Working: `Vec.try_push`, `Vec.try_insert`, `Vec.try_with_capacity`, `String.try_push`, `String.try_push_str`, `Set.try_insert`. SEPARATELY, the same section specifies "The `Display` formatting names the failed operation's byte size on the `OutOfMemory` arm and \"capacity overflow\" on the `CapacityOverflow` arm" -- measured, `f"{e}"` renders `CapacityOverflow` and `OutOfMemory { requested_bytes: 4096 }`, which is the DEBUG form for both arms. | roadmap.md |
-| B-2026-08-25-22 | 2026-08-25 | typecheck | medium | The STABLE-HASH module does not exist, so the escape design.md prescribes for every use case where `Hash` is explicitly the wrong tool is unavailable. § `Hash` and `Hasher`, stability policy: hash values are "not stable across runs, not stable across Kara versions, not stable across targets", and therefore "Code that needs stable digests (content addressing, on-disk indexes, snapshot tests, distributed sharding) does **not** use `Hash`. Kara's stdlib SHIPS explicit, versioned functions for that purpose -- `hash::stable::siphash24(bytes, key)`, `hash::stable::xxh3(bytes)`, and the `crypto` module for cryptographic hashes." Neither `siphash24` nor `xxh3` appears anywhere in `src/` or `runtime/stdlib/`, and there is no `hash.stable` namespace to call. The paragraph's closing promise is unreachable too: "Users who reach for `Hash` for stability are pointed at the stable-hash module by a `karac explain` page" -- see B-2026-08-25-23 for the state of `karac explain --concept=`. | roadmap.md |
 | B-2026-08-25-29 | 2026-08-25 | typecheck | medium | TWO OPERATOR BEHAVIOURS design.md § Operator Traits presents as SHIPPED v1 SURFACE DO NOT EXIST. (1) IMPLICIT LOSSLESS WIDENING AT OPERATOR BOUNDARIES: the section states "`(x: i32) + (y: i64)` is valid -- the compiler widens `x` to `i64` before dispatch, and the result type is `i64`", but the compiler rejects it with `cannot mix integer types 'i32' and 'i64' in arithmetic -- they must match; cast the 'i32' operand up`. Same for `u8 + u32` and for `f32 + f64` (`cannot mix float types`). A LITERAL operand still widens (`let x: i32 = 1; x + 2` is fine), so what is missing is specifically the two-typed-operand case. (2) BITWISE `Not` ON INTEGER PRIMITIVES: the v1 trait set lists `Not` under Bitwise and the stdlib-impl list says the bitwise traits ship "only on integer primitives and bool", but `not a` on an `i64` or `u8` is rejected -- `unary '!' requires 'bool', found 'i64'`. Only `bool` works. | roadmap.md |
 | B-2026-08-25-32 | 2026-08-25 | other | medium | `PriorityQueue` HAS NO `peek`: there is NO non-destructive way to read the root, so the archetypal two-heap median use case cannot read a queue's head at the O(1) its own doc comment advertises -- and `runtime/stdlib/priority_queue.kara`'s header promises `peek / len O(1)` for a method that does not exist in the file or in design.md | runtime/stdlib/priority_queue.kara (header complexity table promises `peek`); design.md § `PriorityQueue[T]` method table needs the row too |
 | B-2026-08-25-33 | 2026-08-25 | codegen | high | `?` in `main()` SEGFAULTS under `karac run` (the default JIT executor) whenever main's error type is an enum with an INLINE SCALAR payload -- `AllocError` included -- while `--interp`, `karac build` and `KARAC_AUTO_PAR=0 karac build` all produce the correct output. Minimal repro allocates nothing and never takes the `Err` arm: `fn ok() -> Result[i64, AllocError] { return Ok(7); }` + `fn main() -> Result[(), AllocError] { let x = ok()?; println(x); return Ok(()); }` gives rc=139 with no output, 5/5 runs. An all-unit error enum works, and a `String`-payload error enum (`IoError`) works, so the discriminator is the payload REPRESENTATION, not its presence. `?` in a non-main function is fine, and `main -> Result` without `?` is fine -- it takes both. This silently breaks the fallible-allocation API as design.md spells it, since `v.try_push(x)?` inside `fn main() -> Result[(), AllocError]` is the spec's own example. | roadmap.md |
 | B-2026-08-25-34 | 2026-08-25 | codegen | medium | `AllocError`'s `Display` renders the Debug form (`OutOfMemory { requested_bytes: 4096 }`) into the user-facing `Error: {e}` entry-point line, and the spec-sanctioned fix -- a manual `impl Display`, per § `#[derive(Display)]` on enums' "Implement `Display` manually to override" -- CANNOT LAND without codegen work: a prelude impl lives in `STDLIB_PROGRAMS`, which codegen does not walk, so the impl reaches the interpreter only. Registering the module as a compiled stdlib program fixes `.to_string()` under AOT but leaves `f"{e}"` and the entry-point line unfixed. Worse, the half-done state FAILS OPEN: dropping the derive without teaching codegen about the impl makes `karac build` emit `Error: ` with an EMPTY message rather than erroring, because the typechecker sees the impl and codegen does not. | roadmap.md |
 | B-2026-08-26-1 | 2026-08-26 | other | low | design.md § Operator Traits § Notably absent prescribes `vec.concat(other)` as one of the two redirects for `vec1 + vec2`, but `Vec.concat()` in this implementation is a DIFFERENT operation: zero-argument and `Vec[String]`-only, joining a Vec's own String elements into one String. There is no two-Vec concatenation method at all -- `a.concat(b)` on a `Vec[i64]` reports `Vec.concat() requires String elements`, `a.concat("-")` reports `Vec.concat() expects 0 argument(s), found 1`, and `append` does not exist. Only `extend` (in-place, any element type) does what the spec sentence promises. | docs/design.md |
+| B-2026-08-26-2 | 2026-08-26 | typecheck | medium | TWO MORE FACILITIES design.md § `Hash` and `Hasher`'s stability paragraph NAMES AS SHIPPED DO NOT EXIST, after B-2026-08-25-22 built the third. (1) `xxh3(bytes)` -- a faster UNKEYED stable digest; nothing in `src/`, `runtime/` or `hash/` implements XXH3, and there is now no fast stable option at all (`StableHash.siphash24` is the only one, and it is the keyed, slower one). (2) "the `crypto` module for cryptographic hashes" -- there is NO cryptographic hash anywhere in the stdlib: no sha256, no blake3, no `crypto` namespace. The second is the consequential one, because `siphash24` is now sitting where a user looking for a digest will find it, and SipHash is a fast keyed PRF, NOT collision-resistant -- a user who substitutes it for a cryptographic hash (signatures, dedup against an adversary, anything where a chosen collision matters) gets something that looks like it works. | roadmap.md |
 
 ### Relocated (1)
 
@@ -169,9 +169,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1579 surfaced
 
 </details>
 
-### Fixed (1545)
+### Fixed (1546)
 
-<details><summary>1545 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1546 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1712,6 +1712,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1579 surfaced
 | B-2026-08-25-17 | codegen | medium | A DISCARDED method-call result that owns heap is never freed: `h.xs.pop();` as a bare expression statement leaks the popped element's buffer (8 bytes… | c8753cd |
 | B-2026-08-25-18 | codegen | medium | Discarded heap-owning pop in a generic FREE FUNCTION leaks the container's elements at -O0 -- B-2026-08-25-17's free-fn precedence guard was not actu… | Fixed in two paired sites |
 | B-2026-08-25-21 | typecheck | low | `m.try_insert(k, v)?;` as a statement warns `discarded 'Option' value`, though the displaced-value must-use exemption exists precisely for that shape… | 0fcc886 |
+| B-2026-08-25-22 | typecheck | medium | The STABLE-HASH module does not exist, so the escape design.md prescribes for every use case where `Hash` is explicitly the wrong tool is unavailable | 44851f9 |
 | B-2026-08-25-23 | cli | low | `karac explain --concept=` supports exactly ONE concept, `closures`, and it is not one of the pages design.md names | 7472e06 |
 | B-2026-08-25-24 | resolver | low | The unassigned-layout-fields warning renders as `warning[resolve]` instead of `warning[layout_unassigned_fields]`, so the suppression design.md presc… | 733c0f2 |
 | B-2026-08-25-25 | codegen | high | An ASSOCIATED fn in a GENERIC impl that binds a struct LITERAL to a local and calls a MUTATING sibling through it dispatches to the UNMANGLED base pr… | 8d32a0d |
