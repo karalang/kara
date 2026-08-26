@@ -1,0 +1,300 @@
+diff --git a/src/codegen/maps.rs b/src/codegen/maps.rs
+index f6976d8..457c8da 100644
+--- a/src/codegen/maps.rs
++++ b/src/codegen/maps.rs
+@@ -488,8 +488,13 @@ impl<'ctx> super::Codegen<'ctx> {
+             // actions so no body fires over a moved-from slot).
+             self.disarm_container_bodies_for_arg(k_expr);
+             self.disarm_container_bodies_for_arg(v_expr);
+-            // Value side: the moved binding's own body belongs to the map's
+-            // value walk now.
++            // The moved binding's own body belongs to the map's walk now —
++            // BOTH halves since B-2026-08-26-41 gave keys their walk. Before
++            // it, the key stayed on the container-only disarm because nothing
++            // else would ever run its body; now leaving it armed fires the
++            // body twice (once at the source's NLL end over a MOVED-FROM slot,
++            // printing an emptied field, and once at the map's key walk).
++            self.disarm_moved_value_arg_user_drops(k_expr);
+             self.disarm_moved_value_arg_user_drops(v_expr);
+             self.builder.build_store(key_slot, k_val).unwrap();
+             self.builder.build_store(val_slot, v_val).unwrap();
+@@ -1738,6 +1743,8 @@ impl<'ctx> super::Codegen<'ctx> {
+                 // Container-bodies twin of the cap-zeros above.
+                 self.disarm_container_bodies_for_arg(&args[0].value);
+                 self.disarm_container_bodies_for_arg(&args[1].value);
++                // Key half too — see the same pair at the primary insert site.
++                self.disarm_moved_value_arg_user_drops(&args[0].value);
+                 self.disarm_moved_value_arg_user_drops(&args[1].value);
+                 self.suppress_boxed_enum_payload_cleanup_for_moved_arg(&args[1].value);
+                 self.suppress_inline_option_payload_cleanup_for_moved_arg(&args[1].value);
+@@ -1940,6 +1947,10 @@ impl<'ctx> super::Codegen<'ctx> {
+                 if borrowed_key.is_none() {
+                     self.suppress_source_vec_cleanup_for_arg(&args[0].value);
+                     self.disarm_container_bodies_for_arg(&args[0].value);
++                    // Only on the OWNING path: a borrowed key is not moved in,
++                    // so the source keeps its own body and the map's key walk
++                    // never sees it.
++                    self.disarm_moved_value_arg_user_drops(&args[0].value);
+                 }
+                 self.suppress_source_vec_cleanup_for_arg_ex(&args[1].value, !weak_val);
+                 // Container-bodies twin of the cap-zero above.
+diff --git a/src/codegen/runtime.rs b/src/codegen/runtime.rs
+index fa8cf45..2065ed6 100644
+--- a/src/codegen/runtime.rs
++++ b/src/codegen/runtime.rs
+@@ -8141,6 +8141,23 @@ impl<'ctx> super::Codegen<'ctx> {
+                 .insert(var_name.to_string(), te.clone());
+             self.track_user_drop_var_with_fn("", var_name, slot.ptr, bodies);
+         }
++        // B-2026-08-26-41 — the KEY half needs the same walk. Registered from
++        // the same resolved `te` and under the same side-table entry, because
++        // both walks are keyed on the MAP's type; a `Map[K, V]` where both K
++        // and V run a user drop gets two cleanup actions and both fire.
++        //
++        // Registered after the values walk, which puts the observed teardown
++        // order at VALUE then KEY (measured, not assumed). Either order is
++        // defensible; design.md fixes neither. What matters is that it is fixed
++        // and that the interpreter matches it, since the bodies are observable
++        // — `run_map_key_user_drops` is called after `run_map_val_user_drops`
++        // for exactly that reason.
++        if let Some(key_bodies) = self.emit_map_key_user_drop_bodies_fn(&te) {
++            self.mapset
++                .map_val_bodies_tes
++                .insert(var_name.to_string(), te.clone());
++            self.track_user_drop_var_with_fn("", var_name, slot.ptr, key_bodies);
++        }
+     }
+ 
+     /// Consuming-ARG form of [`Self::disarm_container_bodies_move_sources`]:
+@@ -8222,9 +8239,15 @@ impl<'ctx> super::Codegen<'ctx> {
+     /// value — own `impl Drop` body included — now belongs to the container,
+     /// whose element/value walk runs it. Leaving the source's own-body action
+     /// armed printed the body twice on both backends (`let r = Res{..};
+-    /// v.push(r);` fired at r's NLL end AND at the container walk). Key args
+-    /// stay on the container-only disarm: no container walk covers keys, so
+-    /// a key source's own body firing once is today's (leak-free) behavior.
++    /// v.push(r);` fired at r's NLL end AND at the container walk).
++    ///
++    /// Map KEY args take this too, as of B-2026-08-26-41. They previously
++    /// stayed on the container-only disarm for a stated reason — "no
++    /// container walk covers keys, so a key source's own body firing once is
++    /// today's (leak-free) behavior" — and that reason expired when
++    /// `emit_map_key_user_drop_bodies_fn` gave keys their walk. The two must
++    /// move together: the walk alone double-fires a bound-local key, and the
++    /// disarm alone stops an RAII key releasing at all.
+     /// Interp twin: `record_ctor_arg_moves` at the same method sites.
+     pub(super) fn disarm_moved_value_arg_user_drops(&mut self, e: &Expr) {
+         match &e.kind {
+diff --git a/src/codegen/synth_drop.rs b/src/codegen/synth_drop.rs
+index 7ebbcca..4bda411 100644
+--- a/src/codegen/synth_drop.rs
++++ b/src/codegen/synth_drop.rs
+@@ -7684,6 +7684,37 @@ impl<'ctx> super::Codegen<'ctx> {
+     pub(super) fn emit_map_val_user_drop_bodies_fn(
+         &mut self,
+         map_te: &TypeExpr,
++    ) -> Option<FunctionValue<'ctx>> {
++        self.emit_map_half_user_drop_bodies_fn(map_te, false)
++    }
++
++    /// KEY-half twin of [`Self::emit_map_val_user_drop_bodies_fn`]
++    /// (B-2026-08-26-41). B-2026-07-30-11 shipped the values leg and keys
++    /// were left with `emit_map_key_drop_fn_walk`, which reclaims MEMORY and
++    /// runs no user bodies — so an `impl Drop` on a key type never fired at
++    /// map teardown, and design.md § Drop ("the compiler invokes `drop` at the
++    /// end of each value's live range") owes it: a key stored in a map is a
++    /// value whose live range ends when the map is destroyed.
++    ///
++    /// The walk itself needed no new machinery. `at_key_half` already existed
++    /// for `Set`/`SortedSet`, whose elements live in the key half, so a Map
++    /// key walk is that same configuration with the Map's own stride
++    /// (`key_size + val_size`, which the loop already computes).
++    pub(super) fn emit_map_key_user_drop_bodies_fn(
++        &mut self,
++        map_te: &TypeExpr,
++    ) -> Option<FunctionValue<'ctx>> {
++        self.emit_map_half_user_drop_bodies_fn(map_te, true)
++    }
++
++    /// Shared body of the two entry points above. `key_half` selects which
++    /// half of a `Map`/`SortedMap` blob the bodies run over; it is meaningless
++    /// for `Set`/`SortedSet` (whose single element already lives in the key
++    /// half) and declines there rather than emitting a duplicate walk.
++    fn emit_map_half_user_drop_bodies_fn(
++        &mut self,
++        map_te: &TypeExpr,
++        key_half: bool,
+     ) -> Option<FunctionValue<'ctx>> {
+         let TypeKind::Path(p) = &map_te.kind else {
+             return None;
+@@ -7693,7 +7724,13 @@ impl<'ctx> super::Codegen<'ctx> {
+         // generic arg 0 and the blob offset skips the +key_size step
+         // (B-2026-07-30-11 Set-elements leg).
+         let (elem_idx, at_key_half) = match p.segments.last().map(|s| s.as_str()) {
++            // Key mode walks generic arg 0 at offset 0; value mode walks arg 1
++            // past `key_size`. A Set has one element and it is already in the
++            // key half, so key mode would emit the same walk twice under a
++            // different name — decline instead (B-2026-08-26-41).
++            Some("Map") | Some("SortedMap") if key_half => (0usize, true),
+             Some("Map") | Some("SortedMap") => (1usize, false),
++            Some("Set") | Some("SortedSet") if key_half => return None,
+             Some("Set") | Some("SortedSet") => (0usize, true),
+             _ => return None,
+         };
+@@ -7760,7 +7797,13 @@ impl<'ctx> super::Codegen<'ctx> {
+             None
+         };
+ 
+-        let fn_name = format!("__karac_dropelems_map_{}", Self::display_mangle_te(map_te));
++        // The two halves must not share a symbol: a Map with a dropping key
++        // AND a dropping value needs both walks live at once.
++        let fn_name = format!(
++            "__karac_drop{}_map_{}",
++            if key_half { "keys" } else { "elems" },
++            Self::display_mangle_te(map_te)
++        );
+         if let Some(f) = self.module.get_function(&fn_name) {
+             return Some(f);
+         }
+diff --git a/src/interpreter/eval_stmt.rs b/src/interpreter/eval_stmt.rs
+index a702f22..8b9e6d4 100644
+--- a/src/interpreter/eval_stmt.rs
++++ b/src/interpreter/eval_stmt.rs
+@@ -879,8 +879,15 @@ impl<'a> super::Interpreter<'a> {
+         if self.run_array_element_user_drops(name) {
+             return;
+         }
+-        // Map-values leg: same treatment for a `Map` binding's stored values.
+-        if self.run_map_val_user_drops(name) {
++        // Map-values leg: same treatment for a `Map` binding's stored values,
++        // then the KEY half (B-2026-08-26-41). Values first: that is the order
++        // the compiled backend was measured to drain in, and the bodies are
++        // observable, so the two have to agree. Both are consulted before the
++        // early return — a map whose KEY drops and whose value does not must
++        // still short-circuit here rather than fall through to `drop_target`.
++        let ran_vals = self.run_map_val_user_drops(name);
++        let ran_keys = self.run_map_key_user_drops(name);
++        if ran_vals || ran_keys {
+             return;
+         }
+         // Resolve the binding's type (and, for a shared struct, its Arc
+@@ -2595,21 +2602,30 @@ impl<'a> super::Interpreter<'a> {
+             // ELEMENT arg (B-2026-07-30-11 Set-elements leg — a Set lowers
+             // to the key half of the same table, so the walk is the
+             // key-side sibling of the values walk).
+-            let elem_idx = match p.segments.last().map(String::as_str) {
+-                Some("Map") | Some("SortedMap") => 1usize,
+-                Some("Set") | Some("SortedSet") => 0usize,
++            // B-2026-08-26-41 — a Map qualifies on EITHER half. The gate read
++            // the value arg alone, so `Map[K, i64]` with a dropping K never
++            // armed and the key walk had nothing to resolve: the walk was
++            // present and silent, the gate-before-walk shape B-2026-08-02-24
++            // and B-2026-08-03-1 both hit. Codegen needs no equivalent — its
++            // `register_map_val_bodies` tries both emitters and each declines
++            // on its own.
++            let elem_idxs: &[usize] = match p.segments.last().map(String::as_str) {
++                Some("Map") | Some("SortedMap") => &[0, 1],
++                Some("Set") | Some("SortedSet") => &[0],
+                 _ => return false,
+             };
+-            matches!(
+-                p.generic_args.as_ref().and_then(|a| a.get(elem_idx)),
+-                Some(crate::ast::GenericArg::Type(v)) if self.type_expr_runs_user_drop(v)
+-                    || self.te_vec_elem_runs_user_drop(v)
+-                    // B-2026-08-03-1 — an Option/Result-valued V. This is the
+-                    // REGISTRATION gate, not the walk: without it the walk
+-                    // (which now has its Option arm) never armed, the same
+-                    // gate-before-walk shape as B-2026-08-02-24.
+-                    || self.field_te_runs_user_drop(v, &mut Vec::new())
+-            )
++            elem_idxs.iter().any(|&elem_idx| {
++                matches!(
++                    p.generic_args.as_ref().and_then(|a| a.get(elem_idx)),
++                    Some(crate::ast::GenericArg::Type(v)) if self.type_expr_runs_user_drop(v)
++                        || self.te_vec_elem_runs_user_drop(v)
++                        // B-2026-08-03-1 — an Option/Result-valued V. This is the
++                        // REGISTRATION gate, not the walk: without it the walk
++                        // (which now has its Option arm) never armed, the same
++                        // gate-before-walk shape as B-2026-08-02-24.
++                        || self.field_te_runs_user_drop(v, &mut Vec::new())
++                )
++            })
+         });
+         if qualifies {
+             self.map_val_bodies_tes
+@@ -2677,6 +2693,18 @@ impl<'a> super::Interpreter<'a> {
+     }
+ 
+     fn run_map_val_user_drops(&mut self, name: &str) -> bool {
++        self.run_map_half_user_drops(name, false)
++    }
++
++    /// KEY-half twin of [`Self::run_map_val_user_drops`] (B-2026-08-26-41).
++    /// Codegen twin: `emit_map_key_user_drop_bodies_fn`. Declines for
++    /// `Set`/`SortedSet`, whose single element is already walked as the value
++    /// half — running it again here would fire each element's body twice.
++    fn run_map_key_user_drops(&mut self, name: &str) -> bool {
++        self.run_map_half_user_drops(name, true)
++    }
++
++    fn run_map_half_user_drops(&mut self, name: &str, key_half: bool) -> bool {
+         // SortedMap shares the walk (same declared-V gate); its values come
+         // out in key order vs the Map's insertion order — the same
+         // ordered-vs-unordered difference `for (k, v) in m` already has, so
+@@ -2686,13 +2714,23 @@ impl<'a> super::Interpreter<'a> {
+                 .read()
+                 .unwrap()
+                 .iter()
+-                .map(|(_, v)| v.clone())
++                .map(|(k, v)| if key_half { k.clone() } else { v.clone() })
+                 .collect(),
+-            Some(Value::SortedMap(entries)) => entries.into_values().collect(),
++            Some(Value::SortedMap(entries)) => {
++                if key_half {
++                    entries.into_keys().map(|k| k.0).collect()
++                } else {
++                    entries.into_values().collect()
++                }
++            }
+             // Set-elements leg (B-2026-07-30-11): the walked values are the
+-            // ELEMENTS — the key half of the same table shape.
+-            Some(Value::Set(items)) => items.read().unwrap().items().to_vec(),
+-            Some(Value::SortedSet(items)) => items.into_keys().map(|k| k.0).collect(),
++            // ELEMENTS — the key half of the same table shape. So the key pass
++            // must decline, or each element's body fires twice.
++            Some(Value::Set(items)) if !key_half => items.read().unwrap().items().to_vec(),
++            Some(Value::SortedSet(items)) if !key_half => {
++                items.into_keys().map(|k| k.0).collect()
++            }
++            Some(Value::Set(_)) | Some(Value::SortedSet(_)) => return true,
+             _ => return false,
+         };
+         if self.moved_out_container_bodies_bindings.contains(name) {
+@@ -2705,6 +2743,7 @@ impl<'a> super::Interpreter<'a> {
+             return true;
+         };
+         let elem_idx = match p.segments.last().map(String::as_str) {
++            _ if key_half => 0usize,
+             Some("Set") | Some("SortedSet") => 0usize,
+             _ => 1usize,
+         };
+diff --git a/src/interpreter/method_call_map.rs b/src/interpreter/method_call_map.rs
+index fa9212b..3e2b1e8 100644
+--- a/src/interpreter/method_call_map.rs
++++ b/src/interpreter/method_call_map.rs
+@@ -201,7 +201,14 @@ impl<'a> super::Interpreter<'a> {
+                     }
+                 }
+                 if args.len() > 1 {
+-                    self.record_ctor_arg_moves(&args[1..2]);
++                    // Both halves (B-2026-08-26-41): a bound-local KEY moved
++                    // into the map hands its own body to the map's key walk,
++                    // exactly as the value does. This was `&args[1..2]` — value
++                    // only — because no key walk existed to take ownership; now
++                    // one does, and leaving the key armed fires its body twice.
++                    // Codegen twin: `disarm_moved_value_arg_user_drops` on the
++                    // key expr at the three `Map.insert` sites.
++                    self.record_ctor_arg_moves(&args[..2]);
+                     self.record_container_move_sources_in_aggregate_arg(&args[1].value);
+                 }
+                 // B-2026-08-02-20 (leg 2) — an aggregate-literal KEY/element
