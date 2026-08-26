@@ -1743,9 +1743,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1606 surfaced
 | B-2026-08-26-19 | typecheck | low | A `ref T`-returning method is accepted in a plain value position but REJECTED as a closure tail against `Fn() -> T`: `\|\| cell.get_or_init(\|\| 7)` fail… | fa5e169 |
 | B-2026-08-26-20 | codegen | medium | A `char` returned through a CLOSURE prints as its integer code point under both compiled backends while the interpreter prints the character: `let c:… | d3b3053 |
 | B-2026-08-26-22 | typecheck+codegen | medium | The fallible-allocation table's REMAINING gaps, after B-2026-08-25-20 landed the Vec capacity family: `try_resize` / `try_append` have panicking base… | 4c3da28 |
-| B-2026-08-26-23 | codegen | medium | `Ordering`'s PREDICATE METHODS (`is_lt` / `is_le` / `is_gt` / `is_ge` / `is_eq`) fail to BUILD whenever codegen cannot name the receiver's type -- a… | 585d562 |
-| B-2026-08-26-24 | codegen+interp | medium | A COMPARISON OPERATOR INSIDE A GENERIC BODY never dispatches to the element's user `impl Ord`: operator lowering resolves only CONCRETE operand types… | 2e33639 |
-| B-2026-08-26-25 | typecheck | medium | ORDERING OPERATORS ON A `shared struct` ARE ADMITTED BY THE TYPECHECKER AND IMPLEMENTED BY NEITHER BACKEND: `a < b` on a shared struct passes `karac… | c9f49aa |
+| B-2026-08-26-23 | codegen | medium | `Ordering`'s PREDICATE METHODS (`is_lt` / `is_le` / `is_gt` / `is_ge` / `is_eq`) fail to BUILD whenever codegen cannot name the receiver's type -- a… | 4e75708 |
+| B-2026-08-26-24 | codegen+interp | medium | A COMPARISON OPERATOR INSIDE A GENERIC BODY never dispatches to the element's user `impl Ord`: operator lowering resolves only CONCRETE operand types… | 191dc02 |
+| B-2026-08-26-25 | typecheck | medium | ORDERING OPERATORS ON A `shared struct` ARE ADMITTED BY THE TYPECHECKER AND IMPLEMENTED BY NEITHER BACKEND: `a < b` on a shared struct passes `karac… | 47a6810 |
 | B-2026-08-26-26 | effect+codegen | medium | RUN-VS-BUILD ON EVERY FALLIBLE `try_*` COMPANION CONSUMED WITH `?`: the auto-parallelizer hoists the call into a worker function, which returns void,… | aae805f |
 
 </details>
