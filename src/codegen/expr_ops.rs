@@ -4256,6 +4256,32 @@ impl<'ctx> super::Codegen<'ctx> {
     /// result routes the value through `emit_codepoint_to_utf8` so the
     /// glyph is rendered rather than the integer codepoint.
     pub(super) fn expr_is_char(&self, expr: &Expr) -> bool {
+        // AUTHORITATIVE ANSWER FIRST (B-2026-08-26-20). The typechecker
+        // already types every expression; `char_typed_exprs` is that answer
+        // filtered to `Type::Char` and forwarded by the lowering pass, the
+        // same way `string_typed_exprs` carries `String`.
+        //
+        // The syntactic arms below stay as a FALLBACK, not as the mechanism.
+        // They are a per-form allowlist, and a form nobody added returns
+        // `false` — the wrong answer, silently, in the direction that prints
+        // an integer where a glyph belongs. That failure mode had already
+        // recurred four times (the arms below record each), and a closure
+        // call was the fifth: `let f: Fn() -> char = || c; println(f())`
+        // printed `122` compiled and `z` interpreted. Adding a sixth arm
+        // would have fixed that one program and left the pattern intact.
+        //
+        // Consulting the table first makes every form correct at once,
+        // including ones not yet written. The arms remain because some spans
+        // never reach `expr_types` — desugared and codegen-synthesized nodes
+        // carry spans the typechecker never saw — so dropping them would
+        // trade this gap for a different one.
+        if self
+            .span_tables
+            .char_typed_exprs
+            .contains(&(expr.span.offset, expr.span.length))
+        {
+            return true;
+        }
         match &expr.kind {
             ExprKind::CharLit(_) => true,
             // `b as char` — an explicit cast TO char. Without this arm the

@@ -12377,6 +12377,96 @@ fn main() {
     }
 }
 
+/// B-2026-08-26-20 — a `char` must render as its glyph on every backend, no
+/// matter which syntactic form produced it.
+///
+/// A `char` returned from a closure printed as its integer codepoint under
+/// both compiled backends (`122` for `'z'`) while the interpreter printed the
+/// glyph — a run-vs-build divergence on a four-line program.
+///
+/// The cause was structural, not a missing case. `expr_is_char` decided
+/// char-ness from a hand-maintained list of syntactic forms, and any form
+/// without an arm answered `false` silently — the wrong answer, in the
+/// direction that prints an integer where a glyph belongs. Its own comments
+/// record four prior instances; a closure call was the fifth. The fix routes
+/// the question to the typechecker's `expr_types` (via `char_typed_exprs`),
+/// so forms nobody has enumerated are correct too.
+///
+/// This test therefore sweeps RENDERING SITES rather than char-producing
+/// forms: the point is that the answer no longer depends on which syntax
+/// reached the renderer.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_char_renders_as_glyph_through_a_closure_on_every_backend() {
+    let cases: &[(&str, &str, &str)] = &[
+        (
+            "println",
+            "let c: char = 'z';\n\
+             let f: Fn() -> char = || c;\n\
+             println(f());",
+            "z\n",
+        ),
+        (
+            "to-string",
+            "let c: char = 'z';\n\
+             let f: Fn() -> char = || c;\n\
+             println(f().to_string());",
+            "z\n",
+        ),
+        (
+            "f-string",
+            "let c: char = 'z';\n\
+             let f: Fn() -> char = || c;\n\
+             println(f\"[{f()}]\");",
+            "[z]\n",
+        ),
+        (
+            // No `Fn` annotation: the closure's type is inferred, so this also
+            // pins that the table lookup does not depend on an annotation
+            // being present.
+            "inferred",
+            "let c: char = 'z';\n\
+             let g = || c;\n\
+             println(g());",
+            "z\n",
+        ),
+        (
+            // The other direction must NOT change: an explicit cast away from
+            // `char` still renders as the integer. A fix that made everything
+            // char-shaped render as a glyph would pass every case above and
+            // break this one.
+            "cast-away",
+            "let c: char = 'z';\n\
+             println(c as i32);",
+            "122\n",
+        ),
+    ];
+    for (tag, body, expect) in cases {
+        let tmp = scratch_project(&format!("charglyph-{tag}"));
+        write(&tmp.join("m.kara"), &format!("fn main() {{\n{body}\n}}\n"));
+        let run = |args: &[&str]| -> Option<String> {
+            let o = karac_bin().current_dir(&tmp).args(args).output().ok()?;
+            o.status
+                .success()
+                .then(|| String::from_utf8_lossy(&o.stdout).into_owned())
+        };
+        let interp = run(&["run", "--interp", "m.kara"]);
+        let jit = run(&["run", "m.kara"]);
+        let _ = std::fs::remove_dir_all(&tmp);
+        assert_eq!(
+            interp.as_deref(),
+            Some(*expect),
+            "`{tag}`: interpreter must render {expect:?}"
+        );
+        assert_eq!(
+            jit.as_deref(),
+            Some(*expect),
+            "`{tag}`: the compiled backend must agree with the interpreter — a \
+             codepoint here is the run-vs-build divergence this test exists for"
+        );
+    }
+}
+
 /// B-2026-08-26-19 — a `ref`-to-scalar returned from a closure tail must
 /// satisfy an expected `Fn() -> T`, and must RUN, on every backend.
 ///

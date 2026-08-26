@@ -5921,6 +5921,7 @@ impl<'ctx> Codegen<'ctx> {
                 iter_terminal_acc_types: HashMap::new(),
                 stats_elem_types: HashMap::new(),
                 string_typed_exprs: HashSet::new(),
+                char_typed_exprs: HashSet::new(),
                 borrow_vec_typed_exprs: HashSet::new(),
                 iterator_typed_exprs: HashSet::new(),
                 fn_value_typed_exprs: HashMap::new(),
@@ -7205,6 +7206,7 @@ impl<'ctx> Codegen<'ctx> {
         // LLVM struct shape is identical to `Vec[u8]` and a few other
         // 3-word types, so the value alone can't distinguish them.
         self.span_tables.string_typed_exprs = program.string_typed_exprs.clone();
+        self.span_tables.char_typed_exprs = program.char_typed_exprs.clone();
         self.span_tables.borrow_vec_typed_exprs = program.borrow_vec_typed_exprs.clone();
         self.span_tables.iterator_typed_exprs = program.iterator_typed_exprs.clone();
         self.span_tables.fn_value_typed_exprs = program.fn_value_typed_exprs.clone();

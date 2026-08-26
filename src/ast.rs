@@ -994,6 +994,16 @@ pub struct Program {
     /// `TypeCheckResult` dependency.
     pub string_typed_exprs: StringTypedExprsTable,
     /// Set by the lowering pass from `TypeCheckResult.expr_types`: spans of
+    /// every expression whose Kāra type is `char`. Lets the print / f-string
+    /// renderer ask the TYPECHECKER whether a value is a char, instead of
+    /// re-deriving it syntactically (B-2026-08-26-20).
+    ///
+    /// `char` lowers to a bare `i32`, so the value alone cannot say whether
+    /// it should render as a glyph or as its codepoint — exactly the
+    /// shape-sharing problem `string_typed_exprs` exists to solve for
+    /// `String` vs `Vec[T]`.
+    pub char_typed_exprs: StringTypedExprsTable,
+    /// Set by the lowering pass from `TypeCheckResult.expr_types`: spans of
     /// every expression whose Kāra type is a BORROW of a `Vec` / `VecDeque` /
     /// `Slice` (`Ref(Vec[T])` / `MutRef(..)`). Lets codegen recognise a
     /// whole-collection re-borrow — `let ps = params` where `params: ref

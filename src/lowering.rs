@@ -603,6 +603,20 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
             }
         })
         .collect();
+    // Sibling to `string_typed_exprs`: spans of every `char`-typed expression.
+    // `expr_is_char` consults this FIRST, which is what stops its recurring
+    // "this syntactic form was never given an arm" gap (B-2026-08-26-20).
+    program.char_typed_exprs = tc
+        .expr_types
+        .iter()
+        .filter_map(|(k, ty)| {
+            if matches!(ty, Type::Char) {
+                Some((k.0, k.1))
+            } else {
+                None
+            }
+        })
+        .collect();
     // Sibling to `string_typed_exprs`: spans of every expression typed as a
     // BORROW of a `Vec`/`VecDeque`/`Slice`. Codegen consults it to bind a
     // whole-collection re-borrow (`let ps = params`, `params: ref Vec[T]`) as

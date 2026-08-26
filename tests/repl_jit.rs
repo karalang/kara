@@ -312,11 +312,17 @@ fn repl_jit_snapshot_covers_f64_bool_char() {
         "replay should skip every RHS; stdout: {:?}",
         stdout,
     );
-    // Kāra's `println` on a `char` value prints the Unicode codepoint
-    // as an integer (107 == 'k'), not the glyph. The captured-value
-    // assertion checks the codepoint.
+    // This assertion used to read `107` — the codepoint — under a comment
+    // stating that "Kāra's `println` on a `char` value prints the Unicode
+    // codepoint as an integer, not the glyph". That was never the language's
+    // behaviour: `println('k')` prints `k`, and so does the interpreter here.
+    // What the author had actually hit was B-2026-08-26-20 — a `char` whose
+    // producing form had no arm in codegen's `expr_is_char` allowlist rendered
+    // as its integer — and the REPL's global-load replay is one such form. The
+    // defect got written down as the specification, so the test passed while
+    // pinning the wrong answer, and would have blocked the fix.
     assert!(
-        stdout.contains("3.5") && stdout.contains("true") && stdout.contains("107"),
+        stdout.contains("3.5") && stdout.contains("true") && stdout.contains('k'),
         "replay should bind each name to its captured value; stdout: {:?}",
         stdout,
     );
