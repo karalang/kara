@@ -94,11 +94,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 294 | 1 |
 | leak | 197 | 1 |
-| missing-feature | 183 | 4 |
+| missing-feature | 183 | 3 |
 | run-vs-build | 171 | 1 |
 | codegen-gap | 142 | 0 |
 | double-free | 140 | 0 |
-| diagnostics | 109 | 1 |
+| diagnostics | 110 | 2 |
 | false-positive | 98 | 0 |
 | perf | 84 | 0 |
 | other | 62 | 0 |
@@ -111,9 +111,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 1065 | 3 |
-| typecheck | 268 | 2 |
+| typecheck | 269 | 3 |
 | interp | 186 | 1 |
-| other | 70 | 2 |
+| other | 70 | 1 |
 | ownership | 65 | 0 |
 | cli | 63 | 0 |
 | autopar | 55 | 0 |
@@ -124,20 +124,20 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1618 surfaced · 8 open · 1584 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-26). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1619 surfaced · 8 open · 1585 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-26). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (8)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-26-4 | 2026-08-26 | other | low | design.md's CANONICAL `?`-operator example calls `input.parse_i64()?` and names `ParseError` -- NEITHER EXISTS: the real API is `i64.parse(s) -> Option[i64]`, which cannot be used with `?` the way the example shows | docs/design.md § `?` operator and cross-error-type propagation |
-| B-2026-08-26-11 | 2026-08-26 | other | medium | design.md's `String` METHOD TABLE names the char-append method `push_char`, which DOES NOT EXIST -- the working method is `push(c: char)`, and the table has NO ROW FOR IT, so the documented spelling fails and the real one is undocumented | docs/design.md § `String` method table (the `push_char` row) |
 | B-2026-08-26-15 | 2026-08-26 | typecheck | low | `LazyLock.new`'s closure-capture restriction is UNENFORCED: design.md says the closure "may only capture other module-level compile-time bindings; captures of runtime state are a compile error", but a closure capturing a function local is accepted silently. Measured to be a missing RESTRICTION rather than a correctness hazard -- the capturing form produces identical, correct results on `--interp`, `karac run` and `karac build` -- which is why it is split out of B-2026-08-26-3 rather than blocking it. | — |
 | B-2026-08-26-21 | 2026-08-26 | codegen+interp | medium | A RELOCATING element store (`b.xs[i] = b.xs[j]`, then `b.xs[j] = t`) runs the displaced element's user `Drop` BODY, even though the value is being moved to another slot rather than destroyed. A two-element swap of a `Drop` type prints FIVE drop bodies, all during the swap and none at scope exit; the correct sequence is one body per element when it finally dies. | — |
 | B-2026-08-26-32 | 2026-08-26 | codegen | medium | `Map.get` WITH AN INLINE TEMPORARY STRUCT KEY THAT OWNS HEAP LEAKS THE TEMPORARY -- one allocation per lookup. Binding the key first is clean, a `Map[String, _]` looked up with a temporary f-string is clean, and INSERT is unaffected (the key is moved into the map); it is specifically a borrowed-then-discarded struct key on the lookup path. NOT specific to hand-written impls -- the `#[derive(Hash, Eq, PartialEq)]` path leaks identically. | — |
 | B-2026-08-26-36 | 2026-08-26 | parser | high | `ref` IN EXPRESSION POSITION IS SPECIFIED BUT UNIMPLEMENTED: design.md shows `let r = ref some_function();` (§ Binding-extension exception) and `let p: ref i32 = ref 42;`, and the parser rejects both with "'ref' is a reserved keyword and cannot be used as an identifier". This BLOCKS the B-2026-08-26-21 index-move rejection, whose only fix-it for a `Clone`-less element type is the borrow spelling. | — |
 | B-2026-08-26-37 | 2026-08-26 | typecheck | low | The index-move rule covers only a `let` initializer and an assignment RHS; OTHER value positions still read a non-`Copy` element by value and silently clone. Measured: `take(b.xs[0])` where `fn take(it: Item)` compiles and runs, and `b.xs[0]` survives it. | — |
 | B-2026-08-26-39 | 2026-08-26 | codegen | medium | THE `Error return trace` SECTION IS NONDETERMINISTIC ON THE COMPILED BACKENDS: the same AOT binary, same input, same pinned `KARAC_HASH_SEED`, emits a DIFFERENT NUMBER OF FRAMES run to run -- and sometimes omits the section entirely -- while `--interp` emits the same four frames every time. Measured on `examples/json.kara`, 20 consecutive AOT runs at `KARAC_HASH_SEED=7`: 4 runs printed 0 frames, 1 run printed 1, 11 printed 3, 4 printed 4. The interpreter printed 4 frames in 6/6. The program's own stdout (the parsed JSON and the `ERROR:` lines) is byte-identical across all runs -- only the trace varies. | — |
+| B-2026-08-26-40 | 2026-08-26 | typecheck | low | A WRONG-ARITY CALL TO AN ASSOCIATED FUNCTION IS REPORTED AS IF THE FUNCTION DID NOT EXIST: `String.with_capacity()` and `String.with_capacity(1i64, 2i64)` both report `no associated function 'with_capacity' on type 'String'` -- byte-identical to the message for a name that genuinely is not there -- while `String.with_capacity(8i64)` typechecks fine. INSTANCE methods get this right (`s.push()` reports `'push' expects 1 argument, found 0`), so the defect is specific to the associated-function/static path and shows up as an asymmetry between the two call forms. | — |
 
 ### Relocated (2)
 
@@ -169,9 +169,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1618 surfaced
 
 </details>
 
-### Fixed (1584)
+### Fixed (1585)
 
-<details><summary>1584 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1585 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1738,6 +1738,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1618 surfaced
 | B-2026-08-26-8 | interp | medium | INTERPRETER `Vector[T, N]` LANE ARITHMETIC IGNORES THE LANE WIDTH, so a narrow-lane vector computes on the i128 carrier and diverges from codegen, wh… | ff403a3 |
 | B-2026-08-26-9 | codegen | high | `PriorityQueue.push` RUNS THE DROP GLUE FOR ITS BY-VALUE PARAMETER ON A VALUE IT HAS ALREADY MOVED into the backing `Vec`, so an element type with `i… | d9c520e |
 | B-2026-08-26-10 | typecheck+codegen | medium | `Map` HASHING NEVER CALLS A HAND-WRITTEN `impl Hash`: with the derive absent the key is REJECTED, and with `#[derive(Hash)]` present alongside the im… | 095087d |
+| B-2026-08-26-11 | other | medium | design.md's `String` METHOD TABLE names the char-append method `push_char`, which DOES NOT EXIST -- the working method is `push(c: char)`, and the ta… | 0564ee2 |
 | B-2026-08-26-12 | codegen | high | HEAP CORRUPTION ON BOTH COMPILED BACKENDS: an `if`-EXPRESSION whose arms yield an `Option[shared]` binding, passed BY VALUE to a function inside a lo… | 3454927 |
 | B-2026-08-26-14 | codegen | high | A `par` BRANCH WHOSE BODY CALLS A VALUE-PRESERVING SCALAR METHOD (`abs` / `sqrt` / a `float_math` transcendental) ON A NARROW-INTEGER RECEIVER FAILS… | 08410c2 |
 | B-2026-08-26-16 | effect | medium | UNDECLARED EFFECTS ESCAPE THROUGH `LazyLock.get()`: design.md says the effect system attributes first-access initialization to the CALLING function,… | b77511f |
