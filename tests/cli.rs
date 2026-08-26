@@ -33639,6 +33639,137 @@ fn test_alloc_error_displays_its_specified_prose_on_every_backend() {
     }
 }
 
+/// B-2026-08-26-39 — the `Error return trace` section was NONDETERMINISTIC on
+/// the compiled backends: the same binary, same input, same pinned
+/// `KARAC_HASH_SEED`, printed a different number of frames run to run and
+/// sometimes omitted the section entirely. Measured on `examples/json.kara`:
+/// 7 distinct traces over 30 runs, between 0 and 4 frames, in varying order.
+///
+/// Cause: the trace was ONE global buffer, while design.md § Error return
+/// traces specifies "a thread-local fixed-depth ring buffer". The difference
+/// is invisible on a sequential program and wrong as soon as two `?` chains
+/// are live at once — which auto-parallelization makes routine. `json.kara`
+/// contains no `par`, `spawn` or `TaskGroup` and still ran its `?` sites
+/// across five threads, so pushes from one task interleaved with CLEARS from
+/// another and the surviving frames were a function of the scheduling.
+///
+/// This asserts the property the row is actually about — the same binary must
+/// print the same thing every run — rather than pinning a particular trace,
+/// which is what let the bug hide (no test pinned a multi-frame trace on a
+/// compiled backend). It cannot be flaky by construction: it compares runs
+/// against each other, so it holds whichever branch the printer takes.
+///
+/// It uses `examples/json.kara` deliberately, because that is the program the
+/// row measured and it is the one known to reach the worker pool. A
+/// hand-written loop was tried first and was VACUOUS — it neither ended on a
+/// failing `?` nor triggered auto-par, so it printed an empty trace on every
+/// run and would have passed against the unfixed compiler.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_error_return_trace_is_deterministic_across_runs() {
+    let tmp = scratch_project("trace-determinism");
+    write(&tmp.join("m.kara"), include_str!("../examples/json.kara"));
+    let built = karac_bin()
+        .current_dir(&tmp)
+        .args(["build", "m.kara"])
+        .output();
+    let exe = tmp.join("m");
+    let ok = built.map(|o| o.status.success()).unwrap_or(false) && exe.exists();
+    if !ok {
+        let _ = std::fs::remove_dir_all(&tmp);
+        eprintln!("[trace-determinism] build unavailable — skipping");
+        return;
+    }
+    let mut seen: Vec<(String, String)> = Vec::new();
+    for _ in 0..12 {
+        let o = std::process::Command::new(&exe)
+            .env("KARAC_HASH_SEED", "7")
+            .output()
+            .expect("run built");
+        seen.push((
+            String::from_utf8_lossy(&o.stdout).into_owned(),
+            String::from_utf8_lossy(&o.stderr).into_owned(),
+        ));
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+    let first = &seen[0];
+    // The program must actually have propagated something, or this proves
+    // nothing — `json.kara` ends on three failing parses.
+    assert!(
+        !first.1.is_empty(),
+        "expected the run to emit a trace or the parallel-task note; got empty stderr"
+    );
+    for (i, run) in seen.iter().enumerate().skip(1) {
+        assert_eq!(
+            run.0, first.0,
+            "run {i}: stdout differs from run 0 — the program itself is nondeterministic"
+        );
+        assert_eq!(
+            run.1, first.1,
+            "run {i}: stderr differs from run 0 — the error return trace is \
+             nondeterministic (B-2026-08-26-39); run 0 was {:?}",
+            first.1
+        );
+    }
+}
+
+/// The sequential half of B-2026-08-26-39: with the worker pool out of the
+/// picture, a `?` chain must still produce its COMPLETE trace, byte-identical
+/// to what `--interp` prints. Determinism alone is satisfiable by printing
+/// nothing, so this pins that the fix did not buy stability by dropping the
+/// diagnostic.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_error_return_trace_is_complete_without_the_pool() {
+    let tmp = scratch_project("trace-complete");
+    let src = r#"fn inner() -> Result[i64, i64] { Err(7_i64) }
+fn middle() -> Result[i64, i64] {
+    let v = inner()?;
+    Ok(v + 1)
+}
+fn outer() -> Result[i64, i64] {
+    let v = middle()?;
+    Ok(v * 2)
+}
+fn main() {
+    match outer() {
+        Ok(v) => println(v),
+        Err(e) => println(e),
+    }
+}
+"#;
+    write(&tmp.join("m.kara"), src);
+    let built = karac_bin()
+        .current_dir(&tmp)
+        .args(["build", "m.kara"])
+        .env("KARAC_NO_AUTOPAR", "1")
+        .output();
+    let exe = tmp.join("m");
+    let ok = built.map(|o| o.status.success()).unwrap_or(false) && exe.exists();
+    if !ok {
+        let _ = std::fs::remove_dir_all(&tmp);
+        eprintln!("[trace-complete] build unavailable — skipping");
+        return;
+    }
+    let o = std::process::Command::new(&exe)
+        .output()
+        .expect("run built");
+    let err = String::from_utf8_lossy(&o.stderr).into_owned();
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(
+        err.contains("Error return trace:"),
+        "expected a complete trace, got {err:?}"
+    );
+    // Two `?` sites propagated, so two frames — not a fragment and not the
+    // parallel-task note.
+    let frames = err.lines().filter(|l| l.starts_with("  ")).count();
+    assert_eq!(frames, 2, "expected 2 frames, got {frames} in {err:?}");
+    assert!(
+        !err.contains("unavailable"),
+        "the sequential path must not take the parallel-task note: {err:?}"
+    );
+}
+
 /// B-2026-08-26-29 — a hand-written `impl Display` wins at every DEPTH, and
 /// `Debug` is not swept along with it.
 ///

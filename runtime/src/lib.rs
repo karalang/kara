@@ -769,6 +769,10 @@ pub fn __preserve_no_mangle_symbols() -> usize {
 }
 
 use std::cell::Cell;
+// `HashMap` is NOT pool-gated: the per-thread error-trace registry
+// (`ERROR_TRACES`) exists on every target, including the sequential wasm
+// lowering, where it simply holds a single entry.
+use std::collections::HashMap;
 #[cfg(any(not(target_family = "wasm"), feature = "wasm-threads"))]
 use std::collections::VecDeque;
 use std::ffi::c_void;
@@ -786,6 +790,7 @@ use std::sync::{Mutex, OnceLock};
 use std::sync::{Arc, Condvar};
 #[cfg(any(not(target_family = "wasm"), feature = "wasm-threads"))]
 use std::thread;
+use std::thread::ThreadId;
 
 /// A single branch of a `par {}` block: a function pointer and its opaque
 /// context. The context is heap-allocated by the compiler and freed by the
@@ -1958,6 +1963,9 @@ unsafe fn karac_par_run_pooled(
     parent_cancel: *const AtomicBool,
 ) {
     unsafe {
+        // A `?` chain crossing into these branches can no longer be recovered
+        // from any single thread's buffer — see `PAR_DISPATCHED`.
+        PAR_DISPATCHED.store(true, Ordering::Relaxed);
         let track_frames = runtime_debug_metadata_enabled();
         let parent_addr: usize = if track_frames {
             CURRENT_FRAME.with(|c| c.get()) as usize
@@ -3535,7 +3543,53 @@ impl ErrorTraceState {
     }
 }
 
-static ERROR_TRACE: Mutex<ErrorTraceState> = Mutex::new(ErrorTraceState::new());
+/// One trace buffer PER THREAD, keyed by `ThreadId` (B-2026-08-26-39).
+///
+/// design.md § Error return traces specifies "a thread-local fixed-depth ring
+/// buffer"; this was a single shared `Mutex<ErrorTraceState>`, which is
+/// indistinguishable from the spec on a sequential program and wrong the
+/// moment two `?` chains are live at once. Auto-parallelization makes that
+/// routine — `examples/json.kara` has no `par`, `spawn` or `TaskGroup` in it
+/// and still ran its `?` sites across five threads — so pushes from one task
+/// interleaved with CLEARS from another and the surviving frames were a
+/// function of the scheduling. Same binary, same input, same pinned
+/// `KARAC_HASH_SEED`: 7 distinct traces over 30 runs, between 0 and 4 frames,
+/// in varying order. `KARAC_NO_AUTOPAR=1` pinned it to 3 frames on 12/12.
+///
+/// A `HashMap` keyed by thread rather than a `thread_local!` because the
+/// printer runs from an `atexit` handler, and the comment on `CURRENT_FRAME`
+/// above records why that rules TLS out: TLS destructors run during thread
+/// shutdown, BEFORE the C runtime's atexit handlers, so a TLS read from
+/// inside `atexit` panics. A plain global map has no destructor ordering
+/// hazard, and it delivers the same isolation: each thread only ever touches
+/// its own entry, so no chain can be interleaved with or cleared by another.
+static ERROR_TRACES: Mutex<Option<HashMap<ThreadId, ErrorTraceState>>> = Mutex::new(None);
+
+/// Set once the program actually dispatches work to the WORKER POOL.
+///
+/// This — not "did another thread record frames" — is what tells the exit
+/// printer whether a `?` chain could have been split, and the difference
+/// matters. WHICH thread runs a given branch is decided by a work-helping
+/// join and varies run to run: the same four pushes in `examples/json.kara`
+/// landed on threads {1,2,5}, {2,3,5} and {1,5} on consecutive runs of one
+/// binary, so keying off observed frame placement is itself nondeterministic.
+/// WHETHER the pool was used at all is a property of the program's call
+/// structure — `karac_par_run_auto` picks pooled vs sequential on a
+/// fork-depth check, not on timing — so this flag is stable run to run.
+///
+/// Set in `karac_par_run_pooled` only. `seq_par_run`, the sequential
+/// fallback, runs the branches on the CALLING thread, so a chain through it
+/// stays intact and must keep printing.
+static PAR_DISPATCHED: AtomicBool = AtomicBool::new(false);
+
+/// Run `f` against the CURRENT thread's trace buffer, creating it on demand.
+fn with_current_trace<R>(f: impl FnOnce(&mut ErrorTraceState) -> R) -> Option<R> {
+    let mut guard = ERROR_TRACES.lock().ok()?;
+    let map = guard.get_or_insert_with(HashMap::new);
+    Some(f(map
+        .entry(std::thread::current().id())
+        .or_insert_with(ErrorTraceState::new)))
+}
 
 extern "C" {
     /// POSIX `atexit(3)` — register a handler to run on normal program
@@ -3572,13 +3626,13 @@ pub unsafe extern "C" fn karac_error_trace_push(
             let bytes = std::slice::from_raw_parts(file_ptr, file_len);
             String::from_utf8_lossy(bytes).into_owned()
         };
-        if let Ok(mut state) = ERROR_TRACE.lock() {
+        with_current_trace(|state| {
             if state.frames.len() >= ERROR_TRACE_MAX_DEPTH {
                 state.frames.remove(0);
                 state.truncated = true;
             }
             state.frames.push(ErrorTraceFrame { file, line, col });
-        }
+        });
     }
 }
 
@@ -3587,10 +3641,10 @@ pub unsafe extern "C" fn karac_error_trace_push(
 /// a recovered earlier propagation.
 #[no_mangle]
 pub extern "C" fn karac_error_trace_clear() {
-    if let Ok(mut state) = ERROR_TRACE.lock() {
+    with_current_trace(|state| {
         state.frames.clear();
         state.truncated = false;
-    }
+    });
 }
 
 /// Emit a structured `KARAC_TEST_FAILURE` JSONL line to stderr. Called by
@@ -3720,19 +3774,56 @@ impl TraceFormat {
 }
 
 extern "C" fn print_trace_at_exit() {
-    // `lock()` may fail only if a prior holder panicked. In that case we
-    // can still try to print via `into_inner` on the poisoned guard.
-    let state = match ERROR_TRACE.lock() {
+    // An `atexit` handler runs on the thread that returned from `main` (or
+    // called `exit`), so "the current thread's chain" IS main's chain — the
+    // one that would have carried an `Err` out of the program. A worker's
+    // chain is deliberately not printed: design.md § Error return traces
+    // defers cross-task `?` propagation ("No async interaction yet") to
+    // Phase 6, and folding a worker's frames in is precisely what made this
+    // output nondeterministic.
+    //
+    // `lock()` may fail only if a prior holder panicked. In that case we can
+    // still try to print via `into_inner` on the poisoned guard.
+    let guard = match ERROR_TRACES.lock() {
         Ok(g) => g,
         Err(p) => p.into_inner(),
+    };
+    let me = std::thread::current().id();
+    let map = match guard.as_ref() {
+        Some(m) => m,
+        None => return,
+    };
+
+    // If any OTHER thread also recorded frames, this chain is a FRAGMENT of a
+    // propagation that auto-parallelization split across threads, and printing
+    // it would be worse than printing nothing: nothing in the output would
+    // distinguish "these are all the frames" from "these are the frames that
+    // happened to land on the exiting thread this run". Which sites land on
+    // which thread is not stable — the same 4 pushes in `examples/json.kara`
+    // were observed spread over threads {1,2,5}, {2,3,5} and {1,5} on
+    // consecutive runs of one binary — so a fragment is not even stable run to
+    // run. Say so instead. design.md § Error return traces defers cross-task
+    // `?` propagation ("No async interaction yet") to Phase 6; this is that
+    // case, reached without the program containing any concurrency of its own.
+    let here = map.get(&me);
+    if PAR_DISPATCHED.load(Ordering::Relaxed) {
+        eprintln!(
+            "Error return trace: unavailable — the `?` chain was split across \
+             parallel tasks (cross-task propagation is not yet tracked). \
+             Rebuild with KARAC_NO_AUTOPAR=1 for a complete trace."
+        );
+        return;
+    }
+    let Some(state) = here else {
+        return;
     };
     if state.frames.is_empty() {
         return;
     }
     match TraceFormat::from_env() {
-        TraceFormat::Text => emit_text(&state),
-        TraceFormat::Json => emit_json(&state),
-        TraceFormat::Jsonl => emit_jsonl(&state),
+        TraceFormat::Text => emit_text(state),
+        TraceFormat::Json => emit_json(state),
+        TraceFormat::Jsonl => emit_jsonl(state),
     }
 }
 
