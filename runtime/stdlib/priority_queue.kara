@@ -124,10 +124,16 @@ impl[T: Ord] PriorityQueue[T] {
         return self.xs[i] < self.xs[j];
     }
 
+    // `Vec.swap` rather than the read-and-reassign spelling: exchanging two
+    // elements through index reads (`let t = xs[i]; xs[i] = xs[j]; xs[j] = t`)
+    // is the form design.md § "The index operator (`expr[i]`)" rejects for a
+    // non-`Copy` `T`, and `T` here is unconstrained. It also ran the wrong
+    // number of `Drop` bodies (B-2026-08-26-21): the two backends disagreed on
+    // whether such a store destroys or relocates the displaced element.
+    // `swap` has ONE meaning — both values stay live, so no body runs — and
+    // both backends now implement it identically.
     fn swap(mut ref self, i: i64, j: i64) {
-        let t = self.xs[i];
-        self.xs[i] = self.xs[j];
-        self.xs[j] = t;
+        self.xs.swap(i, j);
     }
 
     // Sift the element at `start` up toward the root until the heap

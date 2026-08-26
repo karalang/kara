@@ -8160,7 +8160,7 @@ fix-its:
 
 | Intent | Spelling | Cost |
 |---|---|---|
-| Read it without owning it | `let t = ref v[i];` | none — a borrow |
+| Read it without owning it | `let t = ref v[i];` | none — a borrow (**not yet implemented**, see below) |
 | Take an independent copy | `let t = v[i].clone();` | requires `T: Clone`; allocation is visible at the call |
 | Exchange two elements | `v.swap(i, j)` | none — neither value dies, so no `Drop` body runs |
 
@@ -8180,6 +8180,17 @@ help: or take an independent copy
 help: to exchange two elements, use `swap`
     |         self.xs.swap(i, j);
 ```
+
+**Implementation status — this rule is NOT yet enforced.** The `ref` spelling
+in the table above is specified (§ *Binding-extension exception*) but the parser
+does not yet accept `ref` in expression position, so `let t = ref v[i];` does not
+compile today (B-2026-08-26-36). That matters because `ref` is the *only* fix-it
+available for an element type with no `.clone()` — `Tensor` among them — and
+`std.autograd` alone holds 67 such reads. Rejecting the form before the borrow
+spelling works would leave those sites with a diagnostic and no way to satisfy
+it, so the rejection is gated on the borrow form landing first. Measured across
+`runtime/stdlib`: 80 sites in 4 files (`autograd` 67, `protobuf` 9,
+`embeddings` 2, `priority_queue` 2 — the last now migrated to `Vec.swap`).
 
 **Why this is stated rather than left to inference.** Both backends previously
 *accepted* the rejected forms and improvised different semantics for them: a

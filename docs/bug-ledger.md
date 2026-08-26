@@ -94,15 +94,15 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 294 | 1 |
 | leak | 197 | 1 |
-| missing-feature | 181 | 3 |
-| run-vs-build | 168 | 0 |
+| missing-feature | 183 | 5 |
+| run-vs-build | 169 | 0 |
 | codegen-gap | 142 | 1 |
 | double-free | 140 | 0 |
 | diagnostics | 109 | 1 |
 | false-positive | 98 | 0 |
 | perf | 84 | 0 |
 | other | 62 | 0 |
-| soundness | 60 | 0 |
+| soundness | 61 | 0 |
 | crash | 57 | 0 |
 | use-after-free | 20 | 0 |
 
@@ -110,23 +110,23 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1062 | 3 |
-| typecheck | 267 | 1 |
-| interp | 185 | 1 |
+| codegen | 1063 | 3 |
+| typecheck | 268 | 2 |
+| interp | 186 | 1 |
 | other | 70 | 3 |
 | ownership | 65 | 0 |
 | cli | 63 | 0 |
 | autopar | 55 | 0 |
-| parser | 41 | 0 |
+| parser | 42 | 1 |
 | runtime | 32 | 0 |
 | resolver | 27 | 0 |
 | effect | 25 | 0 |
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1612 surfaced · 7 open · 1580 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-26). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1616 surfaced · 9 open · 1582 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-26). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (7)
+### Open (9)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -137,6 +137,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1612 surfaced
 | B-2026-08-26-21 | 2026-08-26 | codegen+interp | medium | A RELOCATING element store (`b.xs[i] = b.xs[j]`, then `b.xs[j] = t`) runs the displaced element's user `Drop` BODY, even though the value is being moved to another slot rather than destroyed. A two-element swap of a `Drop` type prints FIVE drop bodies, all during the swap and none at scope exit; the correct sequence is one body per element when it finally dies. | — |
 | B-2026-08-26-30 | 2026-08-26 | codegen | medium | SWEEP THE REMAINING ENTRY-HOISTED-ALLOCA / CONDITIONAL-STORE / SCOPE-TRACKED SITES. The shape behind B-2026-08-25-33 -- and behind a fifth instance found in B-2026-08-25-34 -- is `create_entry_alloca` plus a store emitted at the USE site plus `track_vec_var`, whose function-scope drain then reads an uninitialized `cap` on any path that skipped the store and frees a garbage pointer. A mechanical scan finds ~16 further `create_entry_alloca`-then-track pairs with no `zero_init_str_acc_at_entry`; each needs classifying as genuinely unconditional (safe) or conditional (a latent free-of-garbage). | — |
 | B-2026-08-26-32 | 2026-08-26 | codegen | medium | `Map.get` WITH AN INLINE TEMPORARY STRUCT KEY THAT OWNS HEAP LEAKS THE TEMPORARY -- one allocation per lookup. Binding the key first is clean, a `Map[String, _]` looked up with a temporary f-string is clean, and INSERT is unaffected (the key is moved into the map); it is specifically a borrowed-then-discarded struct key on the lookup path. NOT specific to hand-written impls -- the `#[derive(Hash, Eq, PartialEq)]` path leaks identically. | — |
+| B-2026-08-26-36 | 2026-08-26 | parser | high | `ref` IN EXPRESSION POSITION IS SPECIFIED BUT UNIMPLEMENTED: design.md shows `let r = ref some_function();` (§ Binding-extension exception) and `let p: ref i32 = ref 42;`, and the parser rejects both with "'ref' is a reserved keyword and cannot be used as an identifier". This BLOCKS the B-2026-08-26-21 index-move rejection, whose only fix-it for a `Clone`-less element type is the borrow spelling. | — |
+| B-2026-08-26-37 | 2026-08-26 | typecheck | low | The index-move rule covers only a `let` initializer and an assignment RHS; OTHER value positions still read a non-`Copy` element by value and silently clone. Measured: `take(b.xs[0])` where `fn take(it: Item)` compiles and runs, and `b.xs[0]` survives it. | — |
 
 ### Relocated (1)
 
@@ -167,9 +169,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1612 surfaced
 
 </details>
 
-### Fixed (1580)
+### Fixed (1582)
 
-<details><summary>1580 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1582 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1753,6 +1755,8 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1612 surfaced
 | B-2026-08-26-29 | interp+codegen | medium | A MANUAL `impl Display` IS IGNORED AS SOON AS THE VALUE IS NESTED: an enum with a hand-written `Display` renders through its impl at top level (`f"{e… | 59d6568 |
 | B-2026-08-26-31 | codegen | medium | A local MOVED into a container's struct element slot (`b.xs[j] = t`) kept its own `UserDrop` registration, so its `impl Drop` body ran a SECOND time… | 0af8b28 |
 | B-2026-08-26-33 | codegen | medium | A `#[derive(Display)]` STRUCT WITH A PAYLOAD-BEARING ENUM FIELD IS REFUSED BY `karac build` -- and the refusal is INVERTED with respect to difficulty… | 7b5f733 |
+| B-2026-08-26-34 | codegen | medium | `Vec.swap` HAD NO CODEGEN ARM: `karac build` hard-errored "Vec/String method 'swap' is not yet supported in codegen" on a program `karac run` execute… | 4d75c59 |
+| B-2026-08-26-35 | interp | medium | `Vec.swap` with an out-of-range index SILENTLY DID NOTHING in the interpreter: `v.swap(0, 99)` on a two-element Vec left the vector untouched and exi… | 4d75c59 |
 
 </details>
 
