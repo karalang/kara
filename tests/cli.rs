@@ -31417,6 +31417,59 @@ fn main() -> Result[(), Wide] {
     }
 }
 
+/// B-2026-08-25-33 — `?` in `main() -> Result[(), E]` SEGFAULTED under
+/// `karac run` (the default JIT executor) whenever `E`'s payload is held
+/// inline, on the SUCCESS path, with the `Err` arm never taken.
+///
+/// The entry-point error exit renders `Error: {e}` through a synthetic
+/// Display accumulator (`cd.acc`). Its alloca is hoisted to the entry block
+/// but its `{null, 0, 0}` init was emitted only at the USE site — inside the
+/// error branch — while the accumulator is registered for FUNCTION-scope
+/// cleanup. The scope-exit drain therefore ran on the success path too, read
+/// an uninitialized `cap`, saw garbage > 0 and called `free` on a garbage
+/// pointer. `--interp` was unaffected (no codegen), and AOT survived only
+/// because `main`'s frame lands on fresh, zeroed kernel stack pages, whereas
+/// under the JIT it sits on stack the LLVM compilation machinery has already
+/// dirtied — so this asserts the JIT, which is where the fault is reachable.
+///
+/// Both halves are needed to reproduce: `main -> Result` without `?`, and `?`
+/// in a non-`main` function, are each fine on their own.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_main_question_mark_success_path_does_not_free_uninit_display_acc() {
+    let tmp = scratch_project("main-q-success-uninit-acc");
+    let src = r#"fn ok() -> Result[i64, AllocError] { return Ok(7); }
+fn main() -> Result[(), AllocError] {
+    let x = ok()?;
+    println(x);
+    return Ok(());
+}
+"#;
+    write(&tmp.join("m.kara"), src);
+
+    // Repeat: the fault depends on what the JIT left on the stack, so a single
+    // clean run is not evidence. Pre-fix this segfaulted 5/5.
+    for i in 0..5 {
+        let out = karac_bin()
+            .current_dir(&tmp)
+            .args(["run", "m.kara"])
+            .output()
+            .expect("JIT must run — it needs no runtime archive");
+        let so = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(
+            out.status.success(),
+            "run {i}: `?` on the success path must not fault under the JIT; \
+             status={:?} stdout={so:?} stderr={:?}",
+            out.status.code(),
+            String::from_utf8_lossy(&out.stderr),
+        );
+        assert!(
+            so.contains('7'),
+            "run {i}: the unwrapped value must still be printed; got: {so:?}"
+        );
+    }
+}
+
 /// B-2026-08-23-21 — the `main() -> Result[(), E]` error exit must print the
 /// SAME string under `karac run --interp` as under JIT and AOT, and the same
 /// string on every run.

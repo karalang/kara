@@ -9500,7 +9500,7 @@ impl<'ctx> Codegen<'ctx> {
     /// never-executed path, so the `cap > 0` free guard skips it. The
     /// expression site keeps its own re-init (a loop body re-evaluates the
     /// f-string each iteration and must start from empty).
-    fn zero_init_str_acc_at_entry(&self, acc: PointerValue<'ctx>) {
+    pub(super) fn zero_init_str_acc_at_entry(&self, acc: PointerValue<'ctx>) {
         let vec_ty = self.vec_struct_type();
         let i64_t = self.context.i64_type();
         let ptr_ty = self.context.ptr_type(AddressSpace::default());

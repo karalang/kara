@@ -3190,6 +3190,21 @@ impl<'ctx> super::Codegen<'ctx> {
         let i64_t = self.context.i64_type();
         let fn_val = self.current_fn.unwrap();
         let acc = self.create_entry_alloca(fn_val, "cd.acc", vec_ty.into());
+        // Zero the slot AT ENTRY as well as at the use site (B-2026-08-25-33).
+        // The use-site init below is what makes a loop correct, but it only
+        // runs on the paths that reach it — and a caller may register this
+        // accumulator for FUNCTION-scope cleanup (the `main() -> Result[(), E]`
+        // entry-point wrapper does, via `emit_main_result_err_exit`'s f-string
+        // bridge). That drain runs on every exit path, including the ones that
+        // never rendered anything, so without the entry store the success path
+        // reads an uninitialized `cap`, sees garbage > 0, and frees a garbage
+        // pointer. `fn main() -> Result[(), AllocError] { let x = ok()?; … }`
+        // segfaulted under `karac run` for exactly this reason; AOT survived
+        // only because `main`'s frame lands on fresh, zeroed kernel stack
+        // pages, while under the JIT it sits on stack the LLVM compilation
+        // machinery has already dirtied. Same defect, same fix, as the
+        // f-string accumulator this helper was written for.
+        self.zero_init_str_acc_at_entry(acc);
         // Init {null, 0, 0} at the use site (the alloca lives in the entry
         // block; re-init each time this point executes — loop-safe).
         let dpp = self
