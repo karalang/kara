@@ -46973,6 +46973,76 @@ fn driver() -> i64 {
         );
     }
 
+    /// B-2026-08-26-12 — an `if`-EXPRESSION whose arms yield an
+    /// `Option[shared]` binding, passed BY VALUE to a function, inside a loop
+    /// that rebinds it, corrupts the heap on both compiled backends.
+    ///
+    /// The control below is the same program with the `if` removed
+    /// (`show(a)` instead of `show(if s == 0 { a } else { a })`) and is green,
+    /// so the whole delta is the if-expression. `--interp` prints `v 0` /
+    /// `v 1` correctly; `karac run` (JIT) and `karac build` both die with
+    /// glibc's `malloc(): unaligned tcache chunk detected` (SIGABRT).
+    ///
+    /// Deliberately an E2E test and NOT an ASAN fixture: the
+    /// `-fsanitize=address` link does not reproduce it at all — under ASAN's
+    /// allocator this program runs clean AND prints the right answer, which is
+    /// why the ~1200-fixture `tests/memory_sanitizer.rs` corpus never caught
+    /// the class. Measured, not assumed.
+    #[test]
+    #[ignore = "B-2026-08-26-12 — open: if-expression over Option[shared] corrupts the heap"]
+    fn option_shared_through_if_expression_survives_a_rebinding_loop() {
+        let src = "shared struct Node { val: i64 }\n\
+                   fn make(n: i64) -> Option[Node] { return Some(Node { val: n }); }\n\
+                   fn show(t: Option[Node]) {\n\
+                       match t { None => { } Some(n) => { println(f\"v {n.val}\"); } }\n\
+                   }\n\
+                   fn main() {\n\
+                       let mut s = 0;\n\
+                       while s < 2 {\n\
+                           let a = make(s);\n\
+                           show(if s == 0 { a } else { a });\n\
+                           s = s + 1;\n\
+                       }\n\
+                   }";
+        if let Some(c) = run_program_capturing(src) {
+            assert_eq!(
+                c.stdout, "v 0\nv 1\n",
+                "if-expression over an Option[shared] must not change the value"
+            );
+            assert!(
+                c.status.success(),
+                "process died ({:?}) — stderr: {}",
+                c.status,
+                c.stderr
+            );
+        }
+    }
+
+    /// The control for `option_shared_through_if_expression_survives_a_rebinding_loop`:
+    /// identical except the if-expression is gone. Green today, and it is what
+    /// makes that test's failure attributable to the if-expression rather than
+    /// to `Option[shared]` in a loop generally.
+    #[test]
+    fn option_shared_without_an_if_expression_survives_a_rebinding_loop() {
+        let src = "shared struct Node { val: i64 }\n\
+                   fn make(n: i64) -> Option[Node] { return Some(Node { val: n }); }\n\
+                   fn show(t: Option[Node]) {\n\
+                       match t { None => { } Some(n) => { println(f\"v {n.val}\"); } }\n\
+                   }\n\
+                   fn main() {\n\
+                       let mut s = 0;\n\
+                       while s < 2 {\n\
+                           let a = make(s);\n\
+                           show(a);\n\
+                           s = s + 1;\n\
+                       }\n\
+                   }";
+        if let Some(c) = run_program_capturing(src) {
+            assert_eq!(c.stdout, "v 0\nv 1\n");
+            assert!(c.status.success(), "stderr: {}", c.stderr);
+        }
+    }
+
     #[test]
     fn test_ir_descending_loop_bce_skip_wiring() {
         // B-2026-07-17-1: the descending-loop skip proves `k < row.len()` for

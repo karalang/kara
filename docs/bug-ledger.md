@@ -94,10 +94,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 291 | 1 |
 | leak | 195 | 0 |
-| missing-feature | 175 | 3 |
+| missing-feature | 177 | 5 |
 | run-vs-build | 162 | 1 |
+| double-free | 140 | 2 |
 | codegen-gap | 139 | 1 |
-| double-free | 139 | 1 |
 | diagnostics | 109 | 1 |
 | false-positive | 97 | 0 |
 | perf | 84 | 0 |
@@ -110,10 +110,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1045 | 6 |
+| codegen | 1046 | 7 |
 | typecheck | 263 | 4 |
 | interp | 182 | 0 |
-| other | 68 | 1 |
+| other | 70 | 3 |
 | ownership | 65 | 0 |
 | cli | 63 | 0 |
 | autopar | 55 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1589 surfaced · 9 open · 1555 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-26). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1592 surfaced · 12 open · 1555 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-26). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (9)
+### Open (12)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -139,6 +139,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1589 surfaced
 | B-2026-08-26-7 | 2026-08-26 | codegen | high | A NARROW LOCAL INITIALIZED FROM AN UNSUFFIXED LITERAL IS ALLOCATED AT i64 IN CODEGEN, so every width-sensitive operation on it runs at 64 bits and can produce a value the declared type cannot represent. The literal suffix -- which ought to be semantically inert once the binding carries an explicit type annotation -- decides the storage width: `let a: u8 = 200u8` gets a real `i8` alloca, `let b: u8 = 200` stays in the i64 carrier. MEASURED in AOT, against `karac run --interp` which is correct in every arm: `b << 4` is 3200 (should be 128), and `let d: i32 = 1; d << 31` is 2147483648 -- a value an `i32` cannot hold. THAT LAST CASE IS THE SOUNDNESS HOLE B-2026-08-06-7 CLAIMS TO HAVE CLOSED: its regression tests assert exactly `1i32 << 31 == -2147483648`, but spell the literal WITH a suffix, so the fix was only ever exercised on the path that allocates `i32` and the ordinary spelling still miscompiles. `~` had the identical hole and was fixed at the operator (B-2026-08-26-6) rather than at this root; every operator whose correctness depends on the operand's LLVM width is a candidate, and only shifts and `~` have been checked. | roadmap.md |
 | B-2026-08-26-9 | 2026-08-26 | codegen | high | `PriorityQueue.push` RUNS THE DROP GLUE FOR ITS BY-VALUE PARAMETER ON A VALUE IT HAS ALREADY MOVED into the backing `Vec`, so an element type with `impl Drop` drops ONCE AT PUSH AND AGAIN AT POP on the compiled backend -- the interpreter drops once. LSan: 31 bytes leaked in 8 allocations once the element also owns a `String`. | — |
 | B-2026-08-26-10 | 2026-08-26 | typecheck+codegen | medium | OPERATORS NEVER CALL A HAND-WRITTEN OPERATOR-TRAIT BODY: `==` uses structural comparison, `<` uses a DECLARATION-ORDER comparator, and `Map` uses a structural hash, so a user `impl PartialEq` / `impl Ord` / `impl Hash` is silently bypassed rather than dispatched. The derive-only typecheck gate is currently the only thing preventing that silence, which is why it must NOT be relaxed to 'make the two paths agree'. | — |
+| B-2026-08-26-11 | 2026-08-26 | other | medium | design.md's `String` METHOD TABLE names the char-append method `push_char`, which DOES NOT EXIST -- the working method is `push(c: char)`, and the table has NO ROW FOR IT, so the documented spelling fails and the real one is undocumented | docs/design.md § `String` method table (the `push_char` row) |
+| B-2026-08-26-12 | 2026-08-26 | codegen | high | HEAP CORRUPTION ON BOTH COMPILED BACKENDS: an `if`-EXPRESSION whose arms yield an `Option[shared]` binding, passed BY VALUE to a function inside a loop that rebinds it, aborts with glibc's `malloc(): unaligned tcache chunk detected` on the SECOND iteration -- `karac run` (JIT) and `karac build` alike, with or without auto-par -- while `--interp` prints the correct answer. Replacing the if-EXPRESSION with `show(a)` (one token) makes it green, and so does an if-STATEMENT around two calls, so the defect is the if as a value-producing form. ASAN DOES NOT REPRODUCE IT, which is why ~1200 `memory_sanitizer.rs` fixtures never saw the class. | — |
+| B-2026-08-26-13 | 2026-08-26 | other | medium | `String.split` HAS NO BORROWING FORM: it returns `Vec[String]`, so tokenizing costs one heap allocation and one byte copy PER FIELD, and there is no slice-returning variant to reach for. Measured at 0.67 s where C's in-place split is 0.03 s and Rust's `Vec[&str]` is 0.18 s -- but Kara BEATS Rust's same-semantics `Vec[String]` version (1.17 s) by 1.7x, so the implementation is fine and the API's return shape is the entire gap. | — |
 
 ### Relocated (1)
 
