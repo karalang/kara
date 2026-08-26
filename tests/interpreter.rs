@@ -617,6 +617,53 @@ fn test_user_impl_display_dispatches_through_to_string() {
 }
 
 #[test]
+fn a_match_bound_string_slice_keeps_its_methods() {
+    // Oracle twin of `test_e2e_match_bound_string_slice_keeps_method_dispatch`
+    // in `tests/codegen.rs` — the two assert the same bytes. The interpreter
+    // always ran this; codegen refused every method but `to_string` on a
+    // match-bound view, so the pair is what pins the two backends together.
+    //
+    // The `SplitIter` is the zero-copy tokenizing spelling the language can
+    // express today, and the reason the codegen gap mattered: it is the
+    // non-allocating alternative to `s.split(",")` (B-2026-08-26-13).
+    let src = "fn head(s: ref String) -> Option[StringSlice] { return Some(s.slice(0, 3)); }
+        struct SplitIter { rest: StringSlice, done: bool }
+        impl SplitIter {
+            fn next(mut ref self) -> Option[StringSlice] {
+                if self.done { return None; }
+                match self.rest.find(\",\") {
+                    Some(k) => {
+                        let head = self.rest.slice(0, k);
+                        self.rest = self.rest.slice(k + 1, self.rest.len());
+                        return Some(head);
+                    }
+                    None => { self.done = true; return Some(self.rest); }
+                }
+            }
+        }
+        fn main() {
+            let s = \"hello\";
+            match head(s) {
+                Some(v) => println(f\"len={v.len()}\"),
+                None => println(\"none\")
+            }
+            match head(s) {
+                Some(v) => println(f\"sub={v.slice(0, 2).to_string()}\"),
+                None => println(\"none\")
+            }
+            let text = \"aa,bb,cc\";
+            let mut it = SplitIter { rest: text.slice(0, text.len()), done: false };
+            let mut n = 0;
+            let mut c = 0;
+            while true {
+                match it.next() { None => break, Some(f) => { n = n + f.len(); c = c + 1; } }
+            }
+            println(f\"{c} fields, {n} bytes\");
+        }";
+    assert_eq!(run_no_errors(src), "len=3\nsub=he\n3 fields, 6 bytes\n");
+}
+
+#[test]
 fn user_impl_display_wins_at_every_depth_not_just_the_top_level() {
     // B-2026-08-26-29. A hand-written `impl Display` took effect at depth 0
     // (`f"{e}"` -> `aye 7`) and was IGNORED one level down, where the DERIVED

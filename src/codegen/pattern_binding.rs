@@ -531,6 +531,26 @@ impl<'ctx> super::Codegen<'ctx> {
                         let u8_ty: BasicTypeEnum<'ctx> = self.context.i8_type().into();
                         self.var_types.vec_elem_types.insert(name.clone(), u8_ty);
                         bound_vec_elem = Some(u8_ty);
+                    } else if type_name == "StringSlice" {
+                        // DISPATCH ONLY — deliberately NOT `bound_vec_elem`
+                        // (B-2026-08-26-13). The two are separable and were
+                        // being conflated: `vec_elem_types` is the side table
+                        // METHOD DISPATCH reads to pick the String-shaped arm,
+                        // while `bound_vec_elem` is what schedules the
+                        // end-of-arm `track_vec_var` buffer free. A borrow has
+                        // nothing to free, so the comment above is right to skip
+                        // the free — but skipping it also skipped the dispatch,
+                        // because the one `if` did both jobs.
+                        //
+                        // Registering only the first half gives a match-bound
+                        // view the same dispatch a LET-bound one already gets
+                        // (`stmts.rs`'s `surface == "String" || surface ==
+                        // "StringSlice"` arm, which registers both tables and
+                        // argues the free is `cap > 0`-guarded to a no-op) while
+                        // leaving this path's stricter no-free choice intact.
+                        self.var_types
+                            .vec_elem_types
+                            .insert(name.clone(), self.context.i8_type().into());
                     }
                     // B-2026-08-05-8 — ALSO register the binding as a string
                     // var, not only as a `Vec[u8]`-shaped buffer to free.
@@ -557,7 +577,29 @@ impl<'ctx> super::Codegen<'ctx> {
                     // `CString` is deliberately excluded: its methods route
                     // through the `CString.<method>` key, so putting it in
                     // `string_vars` would aim dispatch at the wrong table.
-                    if type_name == "String" {
+                    //
+                    // `StringSlice` belongs here for the same reason `String`
+                    // does, and its absence was the same defect one payload kind
+                    // over. The `track_vec_var` arm above rightly skips it —
+                    // a borrow with `cap == 0` has nothing to free — but skipping
+                    // the FREE silently skipped the DISPATCH too, and those are
+                    // separate concerns: the let-binding path registers a
+                    // `StringSlice` in `string_vars` precisely because it shares
+                    // String's `{ptr,len,cap}` layout and its read-methods
+                    // dispatch identically (see the `surface == "String" ||
+                    // surface == "StringSlice"` arm in `stmts.rs`).
+                    //
+                    // Without it, a match-bound view lost every method except
+                    // `to_string` — `match f(s) { Some(v) => v.len() }` over an
+                    // `Option[StringSlice]` ran fine under `--interp` and failed
+                    // `karac build` with "no handler for method 'len' on variable
+                    // 'v'", while the identical view reached through a LET, a
+                    // tuple element or a struct field compiled. That blocked the
+                    // one zero-copy tokenizing spelling the language can express
+                    // today (a cursor yielding `Option[StringSlice]`) on the very
+                    // backend where the allocation-free win matters
+                    // (B-2026-08-26-13).
+                    if type_name == "String" || type_name == "StringSlice" {
                         self.var_types.string_vars.insert(name.clone());
                     }
                     // Map[K,V] / Set[T] payload binding — register the

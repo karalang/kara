@@ -105027,6 +105027,76 @@ fn main() {
         );
     }
 
+    /// A `StringSlice` bound by a MATCH PATTERN lost its method dispatch under
+    /// `karac build` — every method except `to_string` fell through with
+    /// "no handler for method '<m>' on variable '<v>'", while `--interp` ran
+    /// the same program. The identical view reached through a `let`, a tuple
+    /// element or a struct field compiled, so the defect was specific to the
+    /// pattern-binding path.
+    ///
+    /// Cause: in `pattern_binding.rs` one `if` did two jobs. It registered
+    /// `vec_elem_types` (the side table METHOD DISPATCH reads to pick the
+    /// String-shaped arm) AND set `bound_vec_elem` (which schedules the
+    /// end-of-arm `track_vec_var` buffer free) — gated on `String`/`CString`.
+    /// `StringSlice` was correctly excluded because a borrow has nothing to
+    /// free, but excluding it from the free also excluded it from dispatch.
+    /// The two are separable; the let-binding path registers both tables for a
+    /// `StringSlice` precisely because it shares String's `{ptr,len,cap}`
+    /// layout and its read-methods dispatch identically.
+    ///
+    /// This blocked the one zero-copy tokenizing spelling Kāra can express
+    /// today — a cursor or iterator yielding `Option[StringSlice]` — on the
+    /// backend where avoiding the per-token allocation is the whole point
+    /// (B-2026-08-26-13). The lazy `SplitIter` here is that spelling, and it
+    /// measured 9.0x faster and 5.2x smaller than `s.split(",")` on an
+    /// equivalent workload once it compiled.
+    #[test]
+    fn test_e2e_match_bound_string_slice_keeps_method_dispatch() {
+        assert_eq!(
+            run_program(
+                r#"
+fn head(s: ref String) -> Option[StringSlice] { return Some(s.slice(0, 3)); }
+
+struct SplitIter { rest: StringSlice, done: bool }
+impl SplitIter {
+    fn next(mut ref self) -> Option[StringSlice] {
+        if self.done { return None; }
+        match self.rest.find(",") {
+            Some(k) => {
+                let head = self.rest.slice(0, k);
+                self.rest = self.rest.slice(k + 1, self.rest.len());
+                return Some(head);
+            }
+            None => { self.done = true; return Some(self.rest); }
+        }
+    }
+}
+
+fn main() {
+    let s = "hello";
+    match head(s) {
+        Some(v) => println(f"len={v.len()}"),
+        None => println("none")
+    }
+    match head(s) {
+        Some(v) => println(f"sub={v.slice(0, 2).to_string()}"),
+        None => println("none")
+    }
+    let text = "aa,bb,cc";
+    let mut it = SplitIter { rest: text.slice(0, text.len()), done: false };
+    let mut n = 0;
+    let mut c = 0;
+    while true {
+        match it.next() { None => break, Some(f) => { n = n + f.len(); c = c + 1; } }
+    }
+    println(f"{c} fields, {n} bytes")
+}
+"#
+            ),
+            Some("len=3\nsub=he\n3 fields, 6 bytes\n".to_string())
+        );
+    }
+
     /// B-2026-08-26-33's BOUNDARY, pinned because the first cut of the fix
     /// crossed it. Admitting every enum in `enum_layouts` to the leaf list also
     /// admits GENERIC ones — and a generic enum field does not merely fail

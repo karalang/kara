@@ -29891,6 +29891,65 @@ fn main() {
     }
 
     #[test]
+    fn asan_match_bound_string_slice_is_not_freed() {
+        // A `StringSlice` is a BORROW (`cap == 0`) — it must never be freed.
+        // Registering a match-bound view for method dispatch meant touching
+        // `vec_elem_types`, the same table that feeds the end-of-arm
+        // `track_vec_var` buffer free, so this pins the half that was
+        // deliberately left out: dispatch yes, free no. Re-conflating the two
+        // would free the SOURCE string's buffer once per token here.
+        //
+        // 20k iterations over a view that keeps re-slicing itself, so a
+        // double-free or use-after-free is immediate rather than probabilistic.
+        let label = "match_bound_string_slice";
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let src = r#"
+struct SplitIter { rest: StringSlice, done: bool }
+impl SplitIter {
+    fn next(mut ref self) -> Option[StringSlice] {
+        if self.done { return None; }
+        match self.rest.find(",") {
+            Some(k) => {
+                let head = self.rest.slice(0, k);
+                self.rest = self.rest.slice(k + 1, self.rest.len());
+                return Some(head);
+            }
+            None => { self.done = true; return Some(self.rest); }
+        }
+    }
+}
+fn main() {
+    let mut s = "".to_string();
+    let mut i = 0;
+    while i < 2000 { s.push_str("abcdefg,"); i = i + 1; }
+    let mut total = 0;
+    let mut r = 0;
+    while r < 10 {
+        let mut it = SplitIter { rest: s.slice(0, s.len()), done: false };
+        while true {
+            match it.next() { None => break, Some(f) => { total = total + f.len(); } }
+        }
+        r = r + 1;
+    }
+    println(total);
+}
+"#;
+        let Some((stdout, status)) = run_under_asan(src, label) else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN run failed (status {status:?}); stdout:\n{stdout}"
+        );
+        // 2000 tokens of 7 bytes + a trailing empty field, 10 rounds.
+        assert_eq!(stdout.trim(), "140000");
+    }
+
+    #[test]
     fn asan_user_impl_display_in_container_no_leak() {
         // B-2026-08-26-29. Rendering a container element through the element's
         // user `impl Display` calls that method once per element, and each call
