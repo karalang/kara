@@ -101,7 +101,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | diagnostics | 109 | 1 |
 | false-positive | 98 | 0 |
 | perf | 84 | 0 |
-| other | 62 | 1 |
+| other | 62 | 0 |
 | soundness | 60 | 0 |
 | crash | 57 | 0 |
 | use-after-free | 20 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1060 | 7 |
+| codegen | 1060 | 6 |
 | typecheck | 267 | 2 |
 | interp | 185 | 2 |
 | other | 70 | 3 |
@@ -124,13 +124,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1610 surfaced · 11 open · 1574 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-26). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1610 surfaced · 10 open · 1575 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-26). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (11)
+### Open (10)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-25-3 | 2026-08-25 | codegen | medium | `codegen_tests::vec_mutation_methods_bounds_check_out_of_range_index` IS FLAKY, and it fails by showing exactly the PRE-FIX symptom of the high-severity bug it guards: `v.insert(7i64, 9i64)` produced no `Vec.insert index out of bounds` panic, stdout empty, stderr `free(): invalid pointer`. Observed once in a full `cargo test --features llvm` run; the same test then passed 3/3 in isolation, 3198/3198 in a codegen-only run, and the next FULL run was green at 125 suites / 15090 tests. | roadmap.md |
 | B-2026-08-26-4 | 2026-08-26 | other | low | design.md's CANONICAL `?`-operator example calls `input.parse_i64()?` and names `ParseError` -- NEITHER EXISTS: the real API is `i64.parse(s) -> Option[i64]`, which cannot be used with `?` the way the example shows | docs/design.md § `?` operator and cross-error-type propagation |
 | B-2026-08-26-10 | 2026-08-26 | typecheck+codegen | medium | `Map` HASHING NEVER CALLS A HAND-WRITTEN `impl Hash`: with the derive absent the key is REJECTED, and with `#[derive(Hash)]` present alongside the impl the program checks clean and the DERIVE SILENTLY WINS. The COMPARISON half is fixed and now matches design.md -- `==` and `< <= > >=` dispatch to a user body on all three backends, ordering desugars through `PartialOrd.partial_cmp` as specified, and the generic-body / shared-struct surfaces are closed on B-2026-08-26-24 and -25. | — |
 | B-2026-08-26-11 | 2026-08-26 | other | medium | design.md's `String` METHOD TABLE names the char-append method `push_char`, which DOES NOT EXIST -- the working method is `push(c: char)`, and the table has NO ROW FOR IT, so the documented spelling fails and the real one is undocumented | docs/design.md § `String` method table (the `push_char` row) |
@@ -171,9 +170,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1610 surfaced
 
 </details>
 
-### Fixed (1574)
+### Fixed (1575)
 
-<details><summary>1574 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1575 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1698,6 +1697,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1610 surfaced
 | B-2026-08-24-24 | typecheck | low | `File.open` takes an owned `String`, so a read-only path predicate cannot borrow one and must clone | 0382211 |
 | B-2026-08-25-1 | codegen | low | An RVALUE `break` value that owns heap is still refused: `break Node { v: 11 }` (shared), `break Map.new()`, and `break f"x"` in a labeled-block TAIL… | 0892679 |
 | B-2026-08-25-2 | codegen | high | `std.cli` IS NOT AOT-COMPILABLE: every pure-Kāra INSTANCE method on its types (`Arg.required`, `Parser.about`, .. | d7bd8ac9 |
+| B-2026-08-25-3 | codegen | medium | `codegen_tests::vec_mutation_methods_bounds_check_out_of_range_index` IS FLAKY, and it fails by showing exactly the PRE-FIX symptom of the high-sever… | e647b5a |
 | B-2026-08-25-4 | typecheck | medium | An ASSOCIATED fn inside a BOUNDED generic impl saw the impl's OWN bound as unsatisfied on a local receiver | b4042fa |
 | B-2026-08-25-5 | codegen | high | A generic method calling a MUTATING sibling generic method in a loop HANGS under codegen (interp ok) | 8e93189 |
 | B-2026-08-25-6 | codegen | low | A BRANCHING `break` carrier that owns heap is still refused: `break if c { Node { v: 4 } } else { Node { v: 5 } }` fails module verification while th… | e01dce4 |
