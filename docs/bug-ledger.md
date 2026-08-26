@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 294 | 1 |
 | leak | 197 | 0 |
-| missing-feature | 184 | 4 |
+| missing-feature | 184 | 3 |
 | run-vs-build | 171 | 0 |
 | codegen-gap | 142 | 0 |
 | double-free | 140 | 0 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 1066 | 2 |
-| typecheck | 269 | 2 |
+| typecheck | 269 | 1 |
 | interp | 187 | 2 |
 | other | 70 | 1 |
 | ownership | 65 | 0 |
@@ -124,14 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1620 surfaced · 6 open · 1588 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-26). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1620 surfaced · 5 open · 1589 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-26). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (6)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-26-4 | 2026-08-26 | other | low | design.md's CANONICAL `?`-operator example calls `input.parse_i64()?` and names `ParseError` -- NEITHER EXISTS: the real API is `i64.parse(s) -> Option[i64]`, which cannot be used with `?` the way the example shows | docs/design.md § `?` operator and cross-error-type propagation |
-| B-2026-08-26-15 | 2026-08-26 | typecheck | low | `LazyLock.new`'s closure-capture restriction is UNENFORCED: design.md says the closure "may only capture other module-level compile-time bindings; captures of runtime state are a compile error", but a closure capturing a function local is accepted silently. Measured to be a missing RESTRICTION rather than a correctness hazard -- the capturing form produces identical, correct results on `--interp`, `karac run` and `karac build` -- which is why it is split out of B-2026-08-26-3 rather than blocking it. | — |
 | B-2026-08-26-21 | 2026-08-26 | codegen+interp | medium | A RELOCATING element store (`b.xs[i] = b.xs[j]`, then `b.xs[j] = t`) runs the displaced element's user `Drop` BODY, even though the value is being moved to another slot rather than destroyed. A two-element swap of a `Drop` type prints FIVE drop bodies, all during the swap and none at scope exit; the correct sequence is one body per element when it finally dies. | — |
 | B-2026-08-26-36 | 2026-08-26 | parser | high | `ref` IN EXPRESSION POSITION IS SPECIFIED BUT UNIMPLEMENTED: design.md shows `let r = ref some_function();` (§ Binding-extension exception) and `let p: ref i32 = ref 42;`, and the parser rejects both with "'ref' is a reserved keyword and cannot be used as an identifier". This BLOCKS the B-2026-08-26-21 index-move rejection, whose only fix-it for a `Clone`-less element type is the borrow spelling. | — |
 | B-2026-08-26-37 | 2026-08-26 | typecheck | low | The index-move rule covers only a `let` initializer and an assignment RHS; OTHER value positions still read a non-`Copy` element by value and silently clone. Measured: `take(b.xs[0])` where `fn take(it: Item)` compiles and runs, and `b.xs[0]` survives it. | — |
@@ -167,9 +166,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1620 surfaced
 
 </details>
 
-### Fixed (1588)
+### Fixed (1589)
 
-<details><summary>1588 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1589 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1739,6 +1738,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1620 surfaced
 | B-2026-08-26-11 | other | medium | design.md's `String` METHOD TABLE names the char-append method `push_char`, which DOES NOT EXIST -- the working method is `push(c: char)`, and the ta… | 0564ee2 |
 | B-2026-08-26-12 | codegen | high | HEAP CORRUPTION ON BOTH COMPILED BACKENDS: an `if`-EXPRESSION whose arms yield an `Option[shared]` binding, passed BY VALUE to a function inside a lo… | 3454927 |
 | B-2026-08-26-14 | codegen | high | A `par` BRANCH WHOSE BODY CALLS A VALUE-PRESERVING SCALAR METHOD (`abs` / `sqrt` / a `float_math` transcendental) ON A NARROW-INTEGER RECEIVER FAILS… | 08410c2 |
+| B-2026-08-26-15 | typecheck | low | `LazyLock.new`'s closure-capture restriction is UNENFORCED: design.md says the closure "may only capture other module-level compile-time bindings; ca… | bd68c8a |
 | B-2026-08-26-16 | effect | medium | UNDECLARED EFFECTS ESCAPE THROUGH `LazyLock.get()`: design.md says the effect system attributes first-access initialization to the CALLING function,… | b77511f |
 | B-2026-08-26-17 | codegen | high | A MODULE-SCOPE `Atomic[T]` failed BOTH compiled backends with `codegen: Atomic receiver 'X' has no slot` while `--interp` was correct -- and module s… | f79cefd |
 | B-2026-08-26-18 | codegen | medium | A `PriorityQueue[T]` whose element T is a STRUCT CARRYING A HEAP FIELD leaks that field's buffer -- 31 bytes in 8 allocations on the three-push fixtu… | 54c5421 |
