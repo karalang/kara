@@ -2466,6 +2466,53 @@ fn test_user_cmp_method_call_is_not_answered_by_the_builtin_comparator() {
 }
 
 #[test]
+fn interp_map_and_set_honour_a_hand_written_hash_and_eq() {
+    // The interpreter half of B-2026-08-26-10's `Map` hashing, pinned separately
+    // because it reaches the user's impl by a different route: codegen calls a
+    // synthesized `karac_hash_bytes_of_T`, while the interpreter runs the impl in
+    // a sub-interpreter from inside `MapData`, which has no interpreter of its own.
+    //
+    // Both impls key on `id` alone while `tag` varies, so every line fails under
+    // structural hashing or structural equality.
+    assert_eq!(
+        run("struct Item { id: i64, tag: i64 }
+             impl PartialEq for Item { fn eq(ref self, other: ref Item) -> bool { self.id == other.id } }
+             impl Eq for Item {}
+             impl Hash for Item { fn hash[H: Hasher](ref self, hasher: mut ref H) { hasher.write_i64(self.id) } }
+             fn main() {
+                 let mut m: Map[Item, i64] = Map.new();
+                 m.insert(Item { id: 1, tag: 100 }, 10);
+                 m.insert(Item { id: 2, tag: 200 }, 20);
+                 m.insert(Item { id: 1, tag: 999 }, 11);
+                 println(m.len());
+                 match m.get(Item { id: 1, tag: 0 }) { Some(v) => println(v), None => println(-1) }
+                 println(m.contains_key(Item { id: 2, tag: 7 }));
+                 m.remove(Item { id: 2, tag: 12345 });
+                 println(m.len());
+                 let mut s: Set[Item] = Set.new();
+                 s.insert(Item { id: 5, tag: 1 });
+                 s.insert(Item { id: 5, tag: 2 });
+                 println(s.len());
+                 println(s.contains(Item { id: 5, tag: 3 }));
+             }"),
+        "2\n11\ntrue\n1\n1\ntrue\n"
+    );
+    // The derive path must be undisturbed — every answer structural.
+    assert_eq!(
+        run("#[derive(Hash, Eq, PartialEq)]
+             struct Item { id: i64, tag: i64 }
+             fn main() {
+                 let mut m: Map[Item, i64] = Map.new();
+                 m.insert(Item { id: 1, tag: 100 }, 10);
+                 m.insert(Item { id: 1, tag: 999 }, 11);
+                 println(m.len());
+                 match m.get(Item { id: 1, tag: 0 }) { Some(v) => println(v), None => println(-1) }
+             }"),
+        "2\n-1\n"
+    );
+}
+
+#[test]
 fn interp_priority_queue_honours_a_hand_written_ord_impl() {
     // The INTERPRETER half of B-2026-08-26-24, and it needed a different fix
     // from the compiled half — which is the point of pinning it separately.

@@ -153,35 +153,41 @@ impl<'a> super::TypeChecker<'a> {
             } else {
                 "Eq"
             };
-            // B-2026-08-26-10 — do not deny an impl the author is looking at.
-            // `Map` keys are gated on the DERIVE tables, so a hand-written
-            // `impl Hash for K` leaves this message telling its author that
-            // their key type "does not implement `Hash`" while the impl sits a
-            // few lines up. The derive really is required here, but the reason
-            // has to be said, and the consequence with it: `Map` hashing does
-            // NOT dispatch to a user `hash` body, so adding the derive makes
-            // the key work by hashing its fields structurally and the impl goes
-            // unused. That is a surprise worth spending a clause on rather than
-            // letting the author discover it from a bucket count.
-            let hand_written: Vec<&str> = ["Hash", "Eq"]
+            // B-2026-08-26-10 — do not deny an impl the author is looking at,
+            // and do not describe a compiler that no longer exists.
+            //
+            // This clause first said key hashing "does not dispatch to a
+            // hand-written body", which was true and is now the opposite of
+            // true: a user `impl Hash` decides the key's bytes and a user
+            // `impl PartialEq` + `Eq` decides which keys are the same key. So
+            // what is left to say is which HALF is missing — a `Map` key needs
+            // both, and writing one is the easy way to have only one.
+            let has = |t: &str| match key {
+                Type::Named { name, .. } | Type::Shared(name) => self.env.has_impl(t, name, &[]),
+                _ => false,
+            };
+            let written: Vec<&str> = ["Hash", "PartialEq", "Eq"]
                 .into_iter()
-                .filter(|t| match key {
-                    Type::Named { name, .. } | Type::Shared(name) => {
-                        self.env.has_impl(t, name, &[])
-                    }
-                    _ => false,
-                })
+                .filter(|t| has(t))
                 .collect();
-            let note = if hand_written.is_empty() {
+            let note = if written.is_empty() {
                 String::new()
             } else {
+                let missing = if !has("Hash") {
+                    "`impl Hash`"
+                } else if !has("PartialEq") {
+                    "`impl PartialEq`"
+                } else {
+                    "the `impl Eq` marker"
+                };
                 format!(
-                    "; you have written `impl {} for {}`, but a `Map` key is checked \
-                     against the derives and key hashing does not dispatch to a \
-                     hand-written body — adding the derive makes the key work, and it \
-                     will hash/compare fields structurally rather than using your impl",
-                    hand_written.join("` and `impl "),
-                    type_display(key)
+                    "; you have written `impl {} for {}` — a `Map` key needs `Hash` AND `Eq`, \
+                     and both dispatch to your impls once present, so add {} to finish the pair \
+                     (`#[derive(Hash, Eq)]` is the other way, and compares fields structurally \
+                     instead of using what you wrote)",
+                    written.join("` and `impl "),
+                    type_display(key),
+                    missing
                 )
             };
             self.type_error(

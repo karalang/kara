@@ -87032,6 +87032,87 @@ fn main() {
     }
 
     #[test]
+    fn e2e_map_and_set_honour_a_hand_written_hash_and_eq() {
+        // B-2026-08-26-10's remaining half. A key type carrying its own
+        // `impl Hash` was hashed STRUCTURALLY, so an impl that deliberately
+        // ignored a field still split two keys equal under it into different
+        // buckets — and with no derive present the key was refused outright.
+        //
+        // Both impls here key on `id` ALONE while `tag` varies, so every
+        // assertion below fails under structural hashing or structural equality:
+        // the two `id: 1` inserts would stay separate, the `get` with an unseen
+        // tag would miss, and the `Set` would hold two elements. That is the
+        // point of choosing a comparator that disagrees with the derived one.
+        let out = run_program(
+            r#"
+struct Item { id: i64, tag: i64 }
+impl PartialEq for Item { fn eq(ref self, other: ref Item) -> bool { self.id == other.id } }
+impl Eq for Item {}
+impl Hash for Item { fn hash[H: Hasher](ref self, hasher: mut ref H) { hasher.write_i64(self.id) } }
+fn main() {
+    let mut m: Map[Item, i64] = Map.new();
+    m.insert(Item { id: 1, tag: 100 }, 10);
+    m.insert(Item { id: 2, tag: 200 }, 20);
+    m.insert(Item { id: 1, tag: 999 }, 11);
+    println(m.len());
+    match m.get(Item { id: 1, tag: 0 }) { Some(v) => println(v), None => println(-1) }
+    println(m.contains_key(Item { id: 2, tag: 7 }));
+    m.remove(Item { id: 2, tag: 12345 });
+    println(m.len());
+    let mut s: Set[Item] = Set.new();
+    s.insert(Item { id: 5, tag: 1 });
+    s.insert(Item { id: 5, tag: 2 });
+    println(s.len());
+    println(s.contains(Item { id: 5, tag: 3 }));
+}
+"#,
+        );
+        let out = out.expect("a Map keyed by a hand-written Hash + Eq must build");
+        assert_eq!(
+            out.trim().lines().collect::<Vec<_>>(),
+            vec![
+                "2",    // the second `id: 1` insert OVERWROTE the first
+                "11",   // ...with the newer value, found by a tag never inserted
+                "true", // contains_key ignores tag too
+                "1",    // remove found the entry by id alone
+                "1",    // Set deduped two elements differing only in tag
+                "true", // and contains agrees
+            ]
+        );
+    }
+
+    #[test]
+    fn e2e_a_derived_key_still_hashes_and_compares_structurally() {
+        // The counterweight to the test above: adding user-impl dispatch must
+        // not disturb the derive path, which is what almost every Map key uses.
+        // Same struct, same operations, derives instead of impls — every answer
+        // is the structural one.
+        let out = run_program(
+            r#"
+#[derive(Hash, Eq, PartialEq)]
+struct Item { id: i64, tag: i64 }
+fn main() {
+    let mut m: Map[Item, i64] = Map.new();
+    m.insert(Item { id: 1, tag: 100 }, 10);
+    m.insert(Item { id: 1, tag: 999 }, 11);
+    println(m.len());
+    match m.get(Item { id: 1, tag: 0 }) { Some(v) => println(v), None => println(-1) }
+    let mut s: Set[Item] = Set.new();
+    s.insert(Item { id: 5, tag: 1 });
+    s.insert(Item { id: 5, tag: 2 });
+    println(s.len());
+}
+"#,
+        );
+        assert_eq!(
+            out.expect("the derived key must still build").trim(),
+            "2
+-1
+2"
+        );
+    }
+
+    #[test]
     fn e2e_priority_queue_honours_a_hand_written_ord_impl() {
         // B-2026-08-26-24 — the shipping casualty. `PriorityQueue`'s sift loops
         // compare `self.xs[i] < self.xs[j]` with `T: Ord`, and operator lowering

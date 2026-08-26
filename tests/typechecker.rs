@@ -45754,47 +45754,82 @@ fn main() {
 }
 
 #[test]
-fn map_key_rejection_names_a_hand_written_impl_and_what_the_derive_costs() {
-    // B-2026-08-26-10 — the `Map` key gate reads the DERIVE tables, so a
-    // hand-written `impl Hash for K` left this message telling its author that
-    // their key "does not implement `Hash`" with the impl sitting a few lines up.
+fn a_map_key_with_hand_written_hash_and_eq_is_accepted() {
+    // B-2026-08-26-10. This asserted a REJECTION and the message that came with
+    // it, and both were right at the time: `Map` keys were gated on the derives,
+    // key hashing ignored a hand-written `impl Hash`, and the honest thing was
+    // to demand the derive and say the impl would go unused.
     //
-    // The derive genuinely is required, so the message keeps demanding it — what
-    // it adds is the reason and the CONSEQUENCE. `Map` hashing does not dispatch
-    // to a user `hash` body, so adding the derive makes the key work and leaves
-    // the impl unused. Measured: with `#[derive(Hash, Eq, PartialEq)]` AND an
-    // `impl Hash` collapsing every key to one bucket, two keys differing only in
-    // an ignored field still give `m.len() == 2` on both backends. That is the
-    // surprise the clause exists to pre-empt, and it is why B-2026-08-26-10 stays
-    // open — the honest end state is dispatch, not a better message.
-    let errs = typecheck_errors(
+    // Both backends now dispatch — the impl decides the key's bytes, the user's
+    // `eq` decides which keys are the same key — so the program below is
+    // accepted rather than refused, and `m.len()` is 1 because both impls key on
+    // `id` alone. The execution half is pinned in the codegen and interpreter
+    // suites; what belongs here is that the gate lets it through.
+    typecheck_ok(
         r#"
-struct Item { id: i64 }
+struct Item { id: i64, tag: i64 }
 impl PartialEq for Item { fn eq(ref self, other: ref Item) -> bool { self.id == other.id } }
 impl Eq for Item {}
-impl Hash for Item { fn hash[H: Hasher](ref self, hasher: mut ref H) { hasher.write_u64(1) } }
+impl Hash for Item { fn hash[H: Hasher](ref self, hasher: mut ref H) { hasher.write_i64(self.id) } }
 fn main() {
     let mut m: Map[Item, i64] = Map.new();
-    m.insert(Item { id: 1 }, 10);
-    println(m.len());
+    m.insert(Item { id: 1, tag: 1 }, 10);
+    m.insert(Item { id: 1, tag: 2 }, 20);
+    println(f"{m.len()}");
 }
 "#,
     );
-    let msg = errs
-        .iter()
-        .find(|e| e.message.contains("can be Map keys"))
-        .map(|e| e.message.clone())
-        .unwrap_or_else(|| panic!("expected the Map key bound to be rejected, got: {errs:?}"));
-    assert!(
-        msg.contains("you have written `impl Hash`"),
-        "the message should name the impl the author actually wrote: {msg}"
-    );
-    assert!(
-        msg.contains("does not dispatch to a hand-written body"),
-        "the message should say the derive will be used instead of the impl: {msg}"
-    );
 }
 
+#[test]
+fn a_map_key_with_only_half_the_pair_is_refused_and_told_which_half() {
+    // The counterweight. A `Map` key needs `Hash` AND `Eq`, and writing one by
+    // hand is the easy way to end up with only one — so the rejection survives
+    // for a PARTIAL set, and has to name the missing half rather than repeat the
+    // old "your impl will go unused", which is no longer true of either.
+    for (src, missing) in [
+        (
+            r#"
+struct Item { id: i64 }
+impl Hash for Item { fn hash[H: Hasher](ref self, hasher: mut ref H) { hasher.write_i64(self.id) } }
+fn main() {
+    let mut m: Map[Item, i64] = Map.new();
+    m.insert(Item { id: 1 }, 10);
+    println(f"{m.len()}");
+}
+"#,
+            "`impl PartialEq`",
+        ),
+        (
+            r#"
+struct Item { id: i64 }
+impl PartialEq for Item { fn eq(ref self, other: ref Item) -> bool { self.id == other.id } }
+impl Hash for Item { fn hash[H: Hasher](ref self, hasher: mut ref H) { hasher.write_i64(self.id) } }
+fn main() {
+    let mut m: Map[Item, i64] = Map.new();
+    m.insert(Item { id: 1 }, 10);
+    println(f"{m.len()}");
+}
+"#,
+            "the `impl Eq` marker",
+        ),
+    ] {
+        let errs = typecheck_errors(src);
+        let msg = errs
+            .iter()
+            .find(|e| e.message.contains("can be Map keys"))
+            .map(|e| e.message.clone())
+            .unwrap_or_else(|| panic!("expected a Map key rejection, got: {errs:?}"));
+        assert!(
+            msg.contains(missing),
+            "the rejection should name the missing half ({missing}): {msg}"
+        );
+        assert!(
+            !msg.contains("does not dispatch"),
+            "key hashing DOES dispatch now; the message must not say otherwise: {msg}"
+        );
+    }
+}
 #[test]
 fn map_key_rejection_is_unchanged_for_a_type_with_no_impl() {
     // The counterweight: the clause above must not attach to the ordinary case.
@@ -45826,45 +45861,47 @@ fn unsatisfied_bound_never_lists_the_failing_type_as_its_own_candidate() {
     // B-2026-08-26-10 — the message used to contradict itself inside one
     // sentence:
     //
-    //   trait bound `T: Hash` is not satisfied; `Item` does not implement
-    //   `Hash`; trait `Hash` is implemented by: Item
+    //   trait bound `T: Clone` is not satisfied; `Item` does not implement
+    //   `Clone`; trait `Clone` is implemented by: Item
     //
     // The verdict comes from `type_satisfies_bound`, which for the derive-backed
     // traits answers from `derived_traits` and never reads the impl table; the
-    // candidate list is built FROM the impl table, where the author's
-    // `impl Hash for Item` sits. So the author was told they had not written the
-    // impl they were looking at, and the list of types that would work pointed
-    // back at the one just refused.
+    // candidate list is built FROM the impl table, where the author's impl sits.
+    // So the author was told they had not written the impl they were looking at,
+    // and the list of types that would work pointed back at the one just
+    // refused.
     //
-    // Both traits are checked in one program because they take different paths
-    // through the list — `Hash` has no other candidates, so the list vanished
-    // entirely and only the explanation is left; `Eq` has seventeen primitives,
-    // so the list survives with `Item` removed from it.
+    // Originally written against `Hash` and `Eq`. Both now accept a hand-written
+    // impl (the containers dispatch to it), so neither reaches this message any
+    // more and the test moved to `PartialOrd`, which still answers from the
+    // derive tables — the ordering OPERATORS route around that predicate through
+    // a gate of their own, but a bare `T: PartialOrd` BOUND does not. The defect
+    // being pinned is unchanged: whatever the trait, the failing type must not
+    // appear in its own candidate list.
     let errs = typecheck_errors(
         r#"
 struct Item { id: i64 }
 impl PartialEq for Item { fn eq(ref self, other: ref Item) -> bool { self.id == other.id } }
-impl Eq for Item {}
-impl Hash for Item { fn hash[H: Hasher](ref self, hasher: mut ref H) { hasher.write_u64(1) } }
-fn needs_hash[T: Hash](x: T) -> i64 { 1 }
-fn needs_eq[T: Eq](x: T) -> i64 { 2 }
+impl PartialOrd for Item { fn partial_cmp(ref self, other: ref Item) -> Option[Ordering] { Some(self.id.cmp(other.id)) } }
+fn needs_po[T: PartialOrd](x: T) -> i64 { 1 }
 fn main() {
-    println(needs_hash(Item { id: 1 }));
-    println(needs_eq(Item { id: 1 }));
+    println(f"{needs_po(Item { id: 1 })}");
 }
 "#,
     );
-    for trait_name in ["Hash", "Eq"] {
-        let msg = errs
+    let mut checked = 0;
+    for trait_name in ["PartialOrd"] {
+        let Some(msg) = errs
             .iter()
             .find(|e| {
                 e.message
                     .contains(&format!("trait bound `T: {trait_name}`"))
             })
             .map(|e| e.message.clone())
-            .unwrap_or_else(|| {
-                panic!("expected the `{trait_name}` bound to be rejected, got: {errs:?}")
-            });
+        else {
+            continue;
+        };
+        checked += 1;
         let listed = msg
             .split("is implemented by: ")
             .nth(1)
@@ -45878,13 +45915,12 @@ fn main() {
             msg.contains("that verdict is about the derive, not your impl"),
             "the message should reconcile the denial with the impl the author wrote: {msg}"
         );
-        assert!(
-            msg.contains(&format!("#[derive({trait_name})]")),
-            "the message should name the derive the bound is actually checked against: {msg}"
-        );
     }
+    assert!(
+        checked > 0,
+        "neither bound was rejected, so nothing was pinned: {errs:?}"
+    );
 }
-
 #[test]
 fn unsatisfied_bound_on_a_type_with_no_impl_keeps_the_plain_candidate_list() {
     // The counterweight: the split above must not swallow the ordinary case.

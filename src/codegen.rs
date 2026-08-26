@@ -1404,6 +1404,12 @@ pub(super) struct Codegen<'ctx> {
     /// `compile_program`, and for the same reason: it is a plain-data reading
     /// of the AST, which `Codegen::new` does not have.
     pub(crate) user_hasher_states: rustc_hash::FxHashMap<String, String>,
+    /// Types carrying BOTH a hand-written `impl PartialEq` and the `Eq` marker
+    /// (B-2026-08-26-10). The container's per-key-type equality function
+    /// dispatches to `T.eq` for these instead of comparing structurally, which
+    /// is what lets a user `impl Hash` and a user `impl PartialEq` agree about
+    /// which keys are the same key.
+    pub(crate) user_eq_impl_types: std::collections::HashSet<String>,
     pub(crate) mod_bindings: ModBindings<'ctx>,
     pub(crate) borrow_vars: BorrowVars<'ctx>,
     pub(crate) span_tables: SpanTables,
@@ -5567,6 +5573,7 @@ impl<'ctx> Codegen<'ctx> {
             hash_hasher: crate::hasher_kind::HasherKind::default(),
             container_hashers: rustc_hash::FxHashMap::default(),
             user_hasher_states: rustc_hash::FxHashMap::default(),
+            user_eq_impl_types: std::collections::HashSet::new(),
             context,
             module,
             builder,
@@ -6953,6 +6960,7 @@ impl<'ctx> Codegen<'ctx> {
         // B-2026-08-22-6 — and the builder → per-hash-state hop a USER hasher
         // needs, read off the same AST in the same place.
         self.collect_user_hasher_states(program);
+        self.collect_user_eq_impl_types(program);
         // B-2026-08-07-10 — `KARAC_TEXT_PAD=<bytes>`: a filler function ahead
         // of the program's own code, so a measurement can move `main` (and the
         // hot loop inside it) by a CHOSEN number of bytes while every

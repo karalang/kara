@@ -50,7 +50,6 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
-use std::sync::OnceLock;
 
 use super::{EnumData, Interpreter, Value};
 use crate::ast::{CallArg, Expr, ExprKind, Program};
@@ -76,8 +75,61 @@ const SYNTH_SPAN: Span = Span {
     length: 0,
 };
 
-/// The leaked program every hasher sub-interpreter runs against.
-static WORLD: OnceLock<(&'static Program, &'static TypeCheckResult)> = OnceLock::new();
+thread_local! {
+    /// This thread's installed world, and the fingerprint of the program it was
+    /// built from.
+    ///
+    /// THREAD-LOCAL, not global, and both halves of that matter.
+    ///
+    /// Not a `OnceLock`: one process runs MANY programs — the test suites and
+    /// the REPL both do — and a set-once world answered the second program's key
+    /// hashes out of the first program's impls. Measured: a
+    /// `#[derive(Hash, Eq)]` map run after an unrelated program whose key type
+    /// had a hand-written `impl Hash` was hashed and compared through THAT impl,
+    /// collapsing two keys the derive keeps distinct.
+    ///
+    /// Not a global `RwLock` either: the suites run tests in PARALLEL, so a
+    /// single mutable world thrashes between programs and a map can consult a
+    /// world another thread installed a moment earlier. Per-thread state gives
+    /// each interpreter its own, and every interpreter — including each
+    /// par-branch one — installs on the thread that will use it, because
+    /// `Interpreter::new` is the universal chokepoint.
+    static WORLD: RefCell<Option<(&'static Program, &'static TypeCheckResult)>> =
+        const { RefCell::new(None) };
+    static WORLD_FP: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+    static HASH_IMPLS: RefCell<std::collections::HashSet<String>> =
+        RefCell::new(std::collections::HashSet::new());
+    static EQ_IMPLS: RefCell<std::collections::HashSet<String>> =
+        RefCell::new(std::collections::HashSet::new());
+}
+
+/// A cheap structural fingerprint: item count, plus every impl block's
+/// `(trait, target)` pair and every top-level function name. Two programs that
+/// agree on all of that and disagree elsewhere would share a world, which is why
+/// the fingerprint covers the impl table — the only part of a program this
+/// module reads.
+fn program_fingerprint(program: &Program) -> u64 {
+    use std::hash::{Hash as _, Hasher as _};
+    let mut h = karac_hash::FxHasher::default();
+    program.items.len().hash(&mut h);
+    for item in &program.items {
+        match item {
+            crate::ast::Item::ImplBlock(imp) => {
+                imp.trait_name
+                    .as_ref()
+                    .and_then(|t| t.segments.last())
+                    .hash(&mut h);
+                if let crate::ast::TypeKind::Path(p) = &imp.target_type.kind {
+                    p.segments.last().hash(&mut h);
+                }
+                imp.items.len().hash(&mut h);
+            }
+            crate::ast::Item::Function(f) => f.name.hash(&mut h),
+            _ => {}
+        }
+    }
+    h.finish()
+}
 
 /// Latches the first time a user hasher call falls back, so the warning is
 /// printed once rather than once per key.
@@ -96,34 +148,63 @@ thread_local! {
 /// no user hasher pays one `values().any(…)` scan of a table that is empty for
 /// almost every program, and leaks nothing.
 pub(crate) fn install(program: &Program, typecheck_result: &TypeCheckResult) {
-    if WORLD.get().is_some() {
+    let fp = program_fingerprint(program);
+    if WORLD_FP.with(|c| c.get()) == Some(fp) {
         return;
     }
-    // A user `impl Hash for K` needs the same world for the same reason a user
-    // BUILDER does — `MapData::hash_key` runs deep inside a container with no
-    // interpreter in sight — so either one arms it (B-2026-08-26-10).
     let hash_impls = user_hash_impl_targets(program);
-    if !program
+    // Only types that ALSO carry the `Eq` marker, matching the `==` operator's
+    // own rule: a bare `impl PartialEq` does not drive `==` either, and a
+    // container that hashed through a user impl while comparing structurally
+    // could break the `a == b ⇒ same hash` contract in the direction that loses
+    // entries.
+    let eq_impls = user_eq_impl_targets(program);
+    let needs_world = program
         .container_hashers
         .values()
         .any(|k| k.user_builder().is_some())
-        && hash_impls.is_empty()
-    {
+        || !hash_impls.is_empty()
+        || !eq_impls.is_empty();
+
+    // Refreshed for EVERY new program, including one that needs no world at all.
+    // Returning early in that case left the previous program's sets installed,
+    // which is the cross-program leak described on `WORLD`.
+    HASH_IMPLS.with(|c| *c.borrow_mut() = hash_impls);
+    EQ_IMPLS.with(|c| *c.borrow_mut() = eq_impls);
+    WORLD_FP.with(|c| c.set(Some(fp)));
+    // The cached sub-interpreter belongs to the program being replaced.
+    SUB.with(|c| {
+        if let Ok(mut slot) = c.try_borrow_mut() {
+            *slot = None;
+        }
+    });
+
+    if !needs_world {
+        WORLD.with(|c| *c.borrow_mut() = None);
         return;
     }
-    let _ = HASH_IMPLS.set(hash_impls);
-    let _ = WORLD.set((
-        Box::leak(Box::new(program.clone())),
-        Box::leak(Box::new(typecheck_result.clone())),
-    ));
+    WORLD.with(|c| {
+        *c.borrow_mut() = Some((
+            Box::leak(Box::new(program.clone())),
+            Box::leak(Box::new(typecheck_result.clone())),
+        ))
+    });
 }
 
-/// Type names carrying a user `impl Hash`, computed once at [`install`].
-///
-/// Recomputing this per key hash would put an AST walk on the map hot path;
-/// asking the typechecker's tables instead would work equally well but this is
-/// already the module that owns a leaked `Program`.
-static HASH_IMPLS: OnceLock<std::collections::HashSet<String>> = OnceLock::new();
+/// This thread's sub-interpreter, built on first use. [`install`] drops it when
+/// it replaces the world, so it can never answer out of a program that is no
+/// longer installed.
+fn fresh_sub<'s>(
+    slot: &'s mut Option<Interpreter<'static>>,
+    program: &'static Program,
+    tc: &'static TypeCheckResult,
+) -> &'s mut Interpreter<'static> {
+    slot.get_or_insert_with(|| {
+        let mut i = Interpreter::new(program, tc);
+        i.register_items();
+        i
+    })
+}
 
 /// The sink the user's `hash` writes into — `runtime/stdlib/hash.kara`'s
 /// `KeyByteSink`. Its `bytes` field is read back out after the call; its
@@ -132,6 +213,12 @@ const SINK_TYPE: &str = "KeyByteSink";
 const SINK_VAR: &str = "__karac_hash_sink";
 const KEY_VAR: &str = "__karac_hash_key";
 
+/// Type names carrying a user `impl Hash`, computed once per program at
+/// [`install`] and cached in `HASH_IMPLS`.
+///
+/// Recomputing per key hash would put an AST walk on the map hot path; asking
+/// the typechecker's tables instead would work equally well, but this is already
+/// the module that owns a leaked `Program`.
 fn user_hash_impl_targets(program: &Program) -> std::collections::HashSet<String> {
     let mut out = std::collections::HashSet::new();
     for item in &program.items {
@@ -157,6 +244,104 @@ fn user_hash_impl_targets(program: &Program) -> std::collections::HashSet<String
     out
 }
 
+/// Type names carrying BOTH a user `impl PartialEq` and the `Eq` marker, cached
+/// in `EQ_IMPLS` for the same reason its `Hash` sibling is.
+fn user_eq_impl_targets(program: &Program) -> std::collections::HashSet<String> {
+    let mut partial = std::collections::HashSet::new();
+    let mut marker = std::collections::HashSet::new();
+    for item in &program.items {
+        let crate::ast::Item::ImplBlock(imp) = item else {
+            continue;
+        };
+        let Some(trait_name) = imp.trait_name.as_ref().and_then(|t| t.segments.last()) else {
+            continue;
+        };
+        let crate::ast::TypeKind::Path(p) = &imp.target_type.kind else {
+            continue;
+        };
+        let Some(target) = p.segments.last().cloned() else {
+            continue;
+        };
+        match trait_name.as_str() {
+            "PartialEq" => {
+                partial.insert(target);
+            }
+            "Eq" => {
+                marker.insert(target);
+            }
+            _ => {}
+        }
+    }
+    partial.intersection(&marker).cloned().collect()
+}
+
+/// Whether two container keys are equal under a user `impl PartialEq`, or
+/// `None` when the type has none and the caller should compare structurally.
+///
+/// The hash half of this pair decides which BUCKET a key lands in; this decides
+/// which key in that bucket is the one being looked up. Both have to move
+/// together or a container can hash a key through the user's impl and then fail
+/// to recognise it (B-2026-08-26-10).
+pub(crate) fn user_values_eq(a: &Value, b: &Value) -> Option<bool> {
+    let type_name = match a {
+        Value::Struct { name, .. } => name.clone(),
+        Value::EnumVariant { enum_name, .. } => enum_name.clone(),
+        Value::SharedStruct(s) => s.name.clone(),
+        _ => return None,
+    };
+    if !EQ_IMPLS.with(|c| c.borrow().contains(&type_name)) {
+        return None;
+    }
+    let (program, tc) = WORLD.with(|c| *c.borrow())?;
+    let nested = SUB.with(|cell| match cell.try_borrow_mut() {
+        Ok(mut slot) => {
+            let interp = fresh_sub(&mut slot, program, tc);
+            Some(run_eq(interp, a, b))
+        }
+        Err(_) => None,
+    });
+    match nested {
+        Some(r) => r,
+        None => {
+            let mut interp = Interpreter::new(program, tc);
+            interp.register_items();
+            run_eq(&mut interp, a, b)
+        }
+    }
+}
+
+const EQ_LHS_VAR: &str = "__karac_eq_lhs";
+const EQ_RHS_VAR: &str = "__karac_eq_rhs";
+
+fn run_eq(interp: &mut Interpreter<'static>, a: &Value, b: &Value) -> Option<bool> {
+    interp.env.push_scope();
+    interp.env.define(EQ_LHS_VAR.to_string(), a.clone());
+    interp.env.define(EQ_RHS_VAR.to_string(), b.clone());
+    let out = interp.eval_method_call(
+        &ident(EQ_LHS_VAR),
+        "eq",
+        &[CallArg {
+            label: None,
+            mut_marker: false,
+            mut_marker_span: None,
+            value: ident(EQ_RHS_VAR),
+            span: SYNTH_SPAN,
+        }],
+        &SYNTH_SPAN,
+        &SYNTH_SPAN,
+    );
+    interp.env.pop_scope();
+    let faulted = interp.pending_cf.take().is_some() || !interp.runtime_errors.is_empty();
+    interp.runtime_errors.clear();
+    if faulted {
+        return None;
+    }
+    match out {
+        Value::Bool(v) => Some(v),
+        _ => None,
+    }
+}
+
 /// The bytes a user `impl Hash` writes for `v`, or `None` when `v`'s type has
 /// no such impl and the caller should fall back to its own encoding.
 ///
@@ -165,17 +350,16 @@ fn user_hash_impl_targets(program: &Program) -> std::collections::HashSet<String
 /// unchanged, whichever it is — decides how they become a digest. So this
 /// composes with a user `BuildHasher` rather than competing with it.
 pub(crate) fn user_hash_bytes(v: &Value) -> Option<Vec<u8>> {
-    let impls = HASH_IMPLS.get()?;
     let type_name = match v {
         Value::Struct { name, .. } => name.clone(),
         Value::EnumVariant { enum_name, .. } => enum_name.clone(),
         Value::SharedStruct(s) => s.name.clone(),
         _ => return None,
     };
-    if !impls.contains(&type_name) {
+    if !HASH_IMPLS.with(|c| c.borrow().contains(&type_name)) {
         return None;
     }
-    let &(program, tc) = WORLD.get()?;
+    let (program, tc) = WORLD.with(|c| *c.borrow())?;
     // Same re-entrancy shape as `hash_bytes`: a key whose `hash` body itself
     // touches a user-hashed container re-enters here while this thread's cached
     // interpreter is borrowed. A throwaway interpreter keeps the answer correct
@@ -183,11 +367,7 @@ pub(crate) fn user_hash_bytes(v: &Value) -> Option<Vec<u8>> {
     // the same key, which would corrupt the outer container's index.
     let nested = SUB.with(|cell| match cell.try_borrow_mut() {
         Ok(mut slot) => {
-            let interp = slot.get_or_insert_with(|| {
-                let mut i = Interpreter::new(program, tc);
-                i.register_items();
-                i
-            });
+            let interp = fresh_sub(&mut slot, program, tc);
             Some(run_hash(interp, v))
         }
         Err(_) => None,
@@ -291,7 +471,7 @@ pub(crate) fn hash_bytes_for(builder: &str, bytes: &[u8]) -> u64 {
 }
 
 fn hash_bytes(builder: &str, bytes: &[u8]) -> u64 {
-    let Some(&(program, tc)) = WORLD.get() else {
+    let Some((program, tc)) = WORLD.with(|c| *c.borrow()) else {
         report_fallback("no hasher program was installed");
         return 0;
     };
@@ -302,11 +482,7 @@ fn hash_bytes(builder: &str, bytes: &[u8]) -> u64 {
     // same key, which would corrupt the outer container's index.
     let nested = SUB.with(|cell| match cell.try_borrow_mut() {
         Ok(mut slot) => {
-            let interp = slot.get_or_insert_with(|| {
-                let mut i = Interpreter::new(program, tc);
-                i.register_items();
-                i
-            });
+            let interp = fresh_sub(&mut slot, program, tc);
             Some(run(interp, builder, bytes))
         }
         Err(_) => None,

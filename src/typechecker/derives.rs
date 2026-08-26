@@ -148,9 +148,9 @@ impl<'a> super::TypeChecker<'a> {
             }
             Type::Named { name, .. } => {
                 if let Some(info) = self.env.structs.get(name) {
-                    info.derived_traits.contains("Eq")
+                    info.derived_traits.contains("Eq") || self.has_user_impl_eq(name)
                 } else if let Some(info) = self.env.enums.get(name) {
-                    info.derived_traits.contains("Eq")
+                    info.derived_traits.contains("Eq") || self.has_user_impl_eq(name)
                 } else {
                     // Unknown type — permissive to avoid cascading errors
                     // when the resolver has already flagged it.
@@ -160,9 +160,9 @@ impl<'a> super::TypeChecker<'a> {
             Type::Rc(inner) | Type::Arc(inner) => self.type_supports_eq(inner),
             Type::Shared(name) => {
                 if let Some(info) = self.env.structs.get(name) {
-                    info.derived_traits.contains("Eq")
+                    info.derived_traits.contains("Eq") || self.has_user_impl_eq(name)
                 } else if let Some(info) = self.env.enums.get(name) {
-                    info.derived_traits.contains("Eq")
+                    info.derived_traits.contains("Eq") || self.has_user_impl_eq(name)
                 } else {
                     true
                 }
@@ -211,9 +211,9 @@ impl<'a> super::TypeChecker<'a> {
             }
             Type::Named { name, .. } => {
                 if let Some(info) = self.env.structs.get(name) {
-                    info.derived_traits.contains("Hash")
+                    info.derived_traits.contains("Hash") || self.has_user_impl_hash(name)
                 } else if let Some(info) = self.env.enums.get(name) {
-                    info.derived_traits.contains("Hash")
+                    info.derived_traits.contains("Hash") || self.has_user_impl_hash(name)
                 } else {
                     true
                 }
@@ -221,9 +221,9 @@ impl<'a> super::TypeChecker<'a> {
             Type::Rc(inner) | Type::Arc(inner) => self.type_supports_hash(inner),
             Type::Shared(name) => {
                 if let Some(info) = self.env.structs.get(name) {
-                    info.derived_traits.contains("Hash")
+                    info.derived_traits.contains("Hash") || self.has_user_impl_hash(name)
                 } else if let Some(info) = self.env.enums.get(name) {
-                    info.derived_traits.contains("Hash")
+                    info.derived_traits.contains("Hash") || self.has_user_impl_hash(name)
                 } else {
                     true
                 }
@@ -256,6 +256,35 @@ impl<'a> super::TypeChecker<'a> {
     /// codegen consumer (`emit_sort_by_key_inline_thunk`) consults
     /// `Program.user_ord_typed_exprs` to dispatch to the user's compiled
     /// `Type.cmp` indirectly.
+    /// Whether `name` carries a hand-written `impl Hash` (B-2026-08-26-10).
+    ///
+    /// Counts toward the `Hash` bound for the same reason `has_user_impl_ord`
+    /// counts toward `Ord`: both backends now dispatch to the impl, so refusing
+    /// it here would reject a program they can both run correctly.
+    pub(super) fn has_user_impl_hash(&self, name: &str) -> bool {
+        self.env
+            .impls
+            .iter()
+            .any(|imp| imp.trait_name.as_deref() == Some("Hash") && imp.target_type == name)
+    }
+
+    /// Whether `name` carries a hand-written `impl PartialEq` AND the `impl Eq`
+    /// marker.
+    ///
+    /// BOTH, because that is already the `==` operator's rule — a bare
+    /// `impl PartialEq` does not drive `==`, and a container that hashed through
+    /// a user impl while comparing structurally would place a key by one rule
+    /// and look it up by another.
+    pub(super) fn has_user_impl_eq(&self, name: &str) -> bool {
+        let has = |t: &str| {
+            self.env
+                .impls
+                .iter()
+                .any(|imp| imp.trait_name.as_deref() == Some(t) && imp.target_type == name)
+        };
+        has("PartialEq") && has("Eq")
+    }
+
     pub(super) fn has_user_impl_ord(&self, name: &str) -> bool {
         self.env
             .impls

@@ -97,6 +97,73 @@ impl<'ctx> super::Codegen<'ctx> {
             .into_int_value()
     }
 
+    /// The per-key-type EQUALITY function for a type carrying a hand-written
+    /// `impl PartialEq` plus the `Eq` marker, or `None` (B-2026-08-26-10).
+    ///
+    /// The twin of [`Self::try_emit_user_impl_hash_fn`], and they must ship
+    /// together: hashing a key through the user's impl while comparing it
+    /// structurally places the key by one rule and looks it up by another, which
+    /// loses entries rather than merely reordering them.
+    ///
+    /// Simpler than the hash side because `eq` is NOT generic — there is a
+    /// single `T.eq` symbol to call, with no monomorph to request and so no
+    /// synthesized wrapper. Requires the `Eq` marker as well as `PartialEq`,
+    /// which is already what the `==` operator itself requires.
+    fn try_emit_user_impl_eq_fn(
+        &mut self,
+        type_name: &str,
+        fn_name: &str,
+    ) -> Option<FunctionValue<'ctx>> {
+        if !self.user_eq_impl_types.contains(type_name) {
+            return None;
+        }
+        let user_eq = self.module.get_function(&format!("{type_name}.eq"))?;
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i8_t = self.context.i8_type();
+        let saved_bb = self.builder.get_insert_block();
+
+        let eq_fn = self.module.add_function(
+            fn_name,
+            i8_t.fn_type(&[ptr_ty.into(), ptr_ty.into()], false),
+            Some(Linkage::Internal),
+        );
+        let entry_bb = self.context.append_basic_block(eq_fn, "entry");
+        self.builder.position_at_end(entry_bb);
+        let a = eq_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let b = eq_fn.get_nth_param(1).unwrap().into_pointer_value();
+
+        let saved_fn = self.current_fn.replace(eq_fn);
+        let called = self
+            .builder
+            .build_call(user_eq, &[a.into(), b.into()], "user.eq")
+            .unwrap()
+            .try_as_basic_value()
+            .basic();
+        // `eq` returns `bool`, which lowers to `i1` or `i8` depending on the
+        // signature; the container's comparator slot is `i8`, so normalize
+        // rather than assume.
+        let out = match called {
+            Some(v) => {
+                let iv = v.into_int_value();
+                if iv.get_type().get_bit_width() == 8 {
+                    iv
+                } else {
+                    self.builder
+                        .build_int_z_extend(iv, i8_t, "user.eq.i8")
+                        .unwrap()
+                }
+            }
+            None => i8_t.const_zero(),
+        };
+        self.builder.build_return(Some(&out)).unwrap();
+        self.current_fn = saved_fn;
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        Some(eq_fn)
+    }
+
     /// The whole per-key-type hash function for a type carrying a user
     /// `impl Hash`, or `None` when it carries none (B-2026-08-26-10).
     ///
@@ -321,6 +388,33 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap_or_else(|| i64_t.const_zero())
     }
 
+    /// Record every type with BOTH `impl PartialEq` and the `Eq` marker
+    /// (B-2026-08-26-10). Both, because that is the `==` operator's own rule —
+    /// a bare `impl PartialEq` does not drive `==` either.
+    pub(super) fn collect_user_eq_impl_types(&mut self, program: &Program) {
+        let mut partial = std::collections::HashSet::new();
+        let mut marker = std::collections::HashSet::new();
+        for item in &program.items {
+            let Item::ImplBlock(imp) = item else { continue };
+            let Some(trait_name) = imp.trait_name.as_ref().and_then(|t| t.segments.last()) else {
+                continue;
+            };
+            let Some(target) = super::helpers::impl_target_name(&imp.target_type) else {
+                continue;
+            };
+            match trait_name.as_str() {
+                "PartialEq" => {
+                    partial.insert(target);
+                }
+                "Eq" => {
+                    marker.insert(target);
+                }
+                _ => {}
+            }
+        }
+        self.user_eq_impl_types = partial.intersection(&marker).cloned().collect();
+    }
+
     /// Read every `impl BuildHasher for B { type Hasher = S }` out of the
     /// program into [`Codegen::user_hasher_states`] (B-2026-08-22-6).
     ///
@@ -499,6 +593,9 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> FunctionValue<'ctx> {
         let fn_name = format!("karac_eq_{type_name}");
         if let Some(f) = self.module.get_function(&fn_name) {
+            return f;
+        }
+        if let Some(f) = self.try_emit_user_impl_eq_fn(type_name, &fn_name) {
             return f;
         }
 
@@ -806,6 +903,12 @@ impl<'ctx> super::Codegen<'ctx> {
         let type_name = Self::mangled_type_name(te);
         let fn_name = format!("karac_eq_{type_name}");
         if let Some(f) = self.module.get_function(&fn_name) {
+            return f;
+        }
+        // Before the per-shape match, for the reason the hash twin documents: a
+        // struct key takes the `emit_eq_fn_for_struct` arm below and would never
+        // reach `emit_eq_fn_for_type`.
+        if let Some(f) = self.try_emit_user_impl_eq_fn(&type_name, &fn_name) {
             return f;
         }
         match &te.kind {

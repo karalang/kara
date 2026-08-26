@@ -900,6 +900,20 @@ pub struct SharedStructInner {
 /// hasher differs, so a key that is `Eq` to another still hashes equal under
 /// either — the consistency contract holds per-container, which is the only
 /// place it has to.
+/// Container key equality: a user `impl PartialEq` (plus the `Eq` marker) when
+/// the key type has one, structural otherwise (B-2026-08-26-10).
+///
+/// The twin of the user-`impl Hash` arm in [`hash_value_with`]. They move
+/// together on purpose: hashing a key through the user's impl while comparing
+/// it structurally would place the key by one rule and look it up by another,
+/// which loses entries rather than merely ordering them differently.
+pub(crate) fn key_values_eq(a: &Value, b: &Value) -> bool {
+    match super::user_hasher::user_values_eq(a, b) {
+        Some(v) => v,
+        None => a == b,
+    }
+}
+
 pub(crate) fn hash_value_with(kind: &HasherKind, v: &Value) -> u64 {
     // A user `impl Hash` on the KEY TYPE decides which bytes the key
     // contributes; the container's hasher — whichever of the three it is —
@@ -1155,7 +1169,10 @@ impl MapData {
     /// a wrong one.
     pub fn position_of(&self, key: &Value) -> Option<usize> {
         let bucket = self.index.get(&self.hash_key(key))?;
-        bucket.iter().copied().find(|&i| self.entries[i].0 == *key)
+        bucket
+            .iter()
+            .copied()
+            .find(|&i| key_values_eq(&self.entries[i].0, key))
     }
 
     pub fn contains_key(&self, key: &Value) -> bool {
@@ -1348,7 +1365,10 @@ impl SetData {
 
     pub fn position_of(&self, item: &Value) -> Option<usize> {
         let bucket = self.index.get(&self.hash_item(item))?;
-        bucket.iter().copied().find(|&i| self.items[i] == *item)
+        bucket
+            .iter()
+            .copied()
+            .find(|&i| key_values_eq(&self.items[i], item))
     }
 
     pub fn contains(&self, item: &Value) -> bool {
