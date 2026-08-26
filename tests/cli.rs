@@ -12053,22 +12053,31 @@ fn test_operators_page_carries_no_superseded_wording() {
              works; `not a` is the bool negation. Neither was missing",
         ),
         (
-            // The TABLE ROW, not the bare desugaring string. The page now
-            // quotes `partial_cmp(ref a, ref b).is_lt()` on purpose, to say
-            // design.md specifies it and the compiler does not emit it —
-            // banning the string outright would ban the explanation along with
-            // the claim. The row is what must not come back: the trait column
-            // reading `PartialOrd` is exactly the superseded claim, since a
-            // primitive uses the direct `lt` and a user type goes through
-            // `Ord.cmp` (B-2026-08-26-10).
-            "a < b           PartialOrd",
-            "B-2026-08-26-10: no backend emits a `PartialOrd` desugaring for \
-             `<`; the table row must name what actually runs",
+            // This ban ran in the OTHER direction for one commit, and the flip
+            // is the point. While `Option[Ordering].is_lt()` had no codegen
+            // lowering, `PartialOrd` in this column was the false claim and
+            // `Ord` was the truth; B-2026-08-26-23 made the specified form
+            // buildable, so `Ord` became the stale one. A pin on page wording
+            // has to be re-read whenever the behaviour it describes changes —
+            // it cannot tell "still correct" from "correct when written".
+            "a < b           Ord ",
+            "B-2026-08-26-23: `<` desugars through `PartialOrd.partial_cmp` as \
+             design.md specifies; the `Ord` column was the codegen-gap fallback",
+        ),
+        (
+            "has no codegen lowering yet",
+            "B-2026-08-26-23: `Option[Ordering]`'s predicates compile now, so \
+             the page must not still call the specified desugaring unbuildable",
         ),
         (
             "Five rejections cover",
             "a sixth rejection was added for an `impl PartialOrd` with no \
              `cmp` (B-2026-08-26-10)",
+        ),
+        (
+            "cannot be lowered: an impl that supplies `partial_cmp`",
+            "B-2026-08-26-23 lifted that rejection — `partial_cmp` alone is \
+             now the SPECIFIED desugaring and it builds",
         ),
     ];
     for (fragment, why) in dead {

@@ -45914,28 +45914,29 @@ fn main() { println(needs_eq(Bare { id: 1 })); }
 }
 
 #[test]
-fn a_partial_direct_method_ordering_impl_is_refused_rather_than_half_lowered() {
-    // B-2026-08-26-10 — this gate accepts a type for the WHOLE `< <= > >=`
-    // surface at once, but lowering picks its target PER OPERATOR. An impl
-    // defining only `lt` therefore passed `karac check` and then broke on the
-    // operators it had no body for: `a < b` reached the real `P.lt` while
-    // `a > b` reached a `P.gt` nobody wrote, dying with
+fn a_partial_direct_method_ordering_impl_routes_every_operator_through_one_comparator() {
+    // B-2026-08-26-10. This gate accepts a type for the WHOLE `< <= > >=`
+    // surface at once while lowering picks its target PER OPERATOR, so a
+    // partial set of hand-written direct methods is the shape that can split
+    // one program across two comparators. It first split as a FAILURE — with
+    // only `lt` written, `a < b` reached the real `P.lt` and `a > b` reached a
+    // `P.gt` nobody wrote, dying with `path 'P.gt' has no interpreter
+    // evaluation rule`.
     //
-    //   internal: path 'P.gt' has no interpreter evaluation rule
-    //
-    // which is the exact symptom this row exists to remove — reintroduced
-    // through the front door by the fix for it. Measured before this assertion
-    // existed. The gate now demands `cmp` (which covers all four by
-    // construction) or all four direct methods, and the sibling test
-    // `test_user_impl_ord_drives_comparison_operators` pins that the complete
-    // four-method spelling still works.
-    let errs = typecheck_errors(
+    // Now that the operators desugar through `PartialOrd.partial_cmp`
+    // (B-2026-08-26-23 made that buildable), the shape is SUPPORTED rather than
+    // refused — but it must not split a different way, calling the hand-written
+    // `lt` for `<` and `partial_cmp` for `>`. A disagreeing pair would then
+    // report both `a < b` and `a > b` true. The direct form is taken only when
+    // all four are present, so this program runs entirely on `partial_cmp`.
+    typecheck_ok(
         r#"
 struct P { x: i64 }
 impl PartialEq for P { fn eq(ref self, other: ref P) -> bool { self.x == other.x } }
 impl Eq for P {}
 impl PartialOrd for P { fn partial_cmp(ref self, other: ref P) -> Option[Ordering] { Some(self.x.cmp(other.x)) } }
 impl Ord for P {
+    fn cmp(ref self, other: ref P) -> Ordering { self.x.cmp(other.x) }
     fn lt(self, other: P) -> bool { self.x < other.x }
 }
 fn main() {
@@ -45946,36 +45947,29 @@ fn main() {
 }
 "#,
     );
-    assert!(
-        errs.iter().any(|e| e
-            .message
-            .contains("ordering operators dispatch through 'cmp'")),
-        "an ordering impl defining only `lt` must be refused, not accepted and \
-         then half-lowered, got: {errs:?}"
-    );
 }
-
 #[test]
-fn an_inherent_cmp_without_an_impl_ord_does_not_enable_the_operators() {
-    // The second way this gate and lowering could disagree (B-2026-08-26-10).
-    // `target_type_name` resolves a user operand only when `trait_impls` carries
-    // `("Ord", name)`. A `cmp` living in an INHERENT `impl P` block satisfies
-    // "the type has a `cmp`" without satisfying that, so a gate asking the
-    // looser question accepted the program and lowering then emitted nothing at
-    // all — `karac check` clean, and both backends failing on the raw operator:
+fn an_inherent_cmp_with_no_ordering_trait_impl_does_not_enable_the_operators() {
+    // The gate must ask what lowering asks (B-2026-08-26-10). `target_type_name`
+    // resolves a user operand only when `trait_impls` carries an ordering trait
+    // for it, and reads methods from `trait_impl_methods`, which is built from
+    // TRAIT impls alone. A `cmp` living in an INHERENT `impl P` block satisfies
+    // "the type has a `cmp`" without satisfying either, so a gate asking the
+    // looser question accepted the program and lowering emitted nothing at all —
+    // `karac check` clean, and both backends failing on the raw operator:
     //
     //   --interp: operator 'Lt' is not defined for operands of type 'Struct'
     //   build:    codegen failed: Unsupported struct binary op: Lt
     //
-    // Measured before this assertion existed. Both halves of the gate now mirror
-    // lowering exactly — the `impl Ord` must exist, and the method must come
-    // from a TRAIT impl, because `trait_impl_methods` is built from those alone.
+    // Measured before this assertion existed. Note the impl block here is
+    // inherent and there is no `impl PartialOrd`/`impl Ord` — with one present
+    // the operators route through it and the program is legitimately accepted,
+    // which is what the sibling test above covers.
     let errs = typecheck_errors(
         r#"
 struct P { x: i64 }
 impl PartialEq for P { fn eq(ref self, other: ref P) -> bool { self.x == other.x } }
 impl Eq for P {}
-impl PartialOrd for P { fn partial_cmp(ref self, other: ref P) -> Option[Ordering] { Some(self.x.cmp(other.x)) } }
 impl P { fn cmp(ref self, other: ref P) -> Ordering { self.x.cmp(other.x) } }
 fn main() {
     let a = P { x: 1 };
@@ -45985,69 +45979,43 @@ fn main() {
 "#,
     );
     assert!(
-        errs.iter().any(|e| e
-            .message
-            .contains("ordering operators dispatch through 'cmp'")),
-        "an inherent `cmp` with no `impl Ord` must be refused, not accepted and \
-         then left unlowered, got: {errs:?}"
+        errs.iter()
+            .any(|e| e.message.contains("does not implement PartialOrd")),
+        "an inherent `cmp` with no ordering trait impl must be refused, not \
+         accepted and then left unlowered, got: {errs:?}"
     );
 }
-
 #[test]
-fn partial_cmp_without_cmp_is_still_rejected_and_names_the_workaround() {
-    // The one ordering shape that still cannot be lowered: an impl supplying
-    // `partial_cmp` but no `cmp`. Its desugaring would be
-    // `partial_cmp(a, b).is_lt()`, and `Option[Ordering].is_lt()` is
-    // unimplemented in codegen — measured on a plain `let o: Option[Ordering]`
-    // local, which builds nowhere and runs fine under `--interp`. Accepting on
-    // that basis would trade a clean typecheck rejection for a run-vs-build
-    // divergence, so the gate holds here.
+fn partial_cmp_alone_now_drives_the_ordering_operators() {
+    // This shape — `impl PartialOrd` with NO `impl Ord` — was REJECTED, and the
+    // rejection was correct at the time: design.md § Comparison Traits specifies
+    // `a < b` as `PartialOrd.partial_cmp(ref a, ref b).is_lt()`, and
+    // `Option[Ordering].is_lt()` had no codegen lowering, so accepting would
+    // have traded a clean rejection for a run-vs-build divergence.
     //
-    // What the message must NOT do is repeat the two mistakes the previous
-    // wording made: deny the impl the author is looking at, and prescribe
-    // `#[derive(PartialOrd)]`, which compiles and then compares by declaration
-    // order. It names the `impl Ord` that actually works instead — advice
-    // pinned end to end by
-    // `e2e_partial_cmp_only_rejection_names_a_workaround_that_works` so it
-    // cannot rot into a lie.
-    let errs = typecheck_errors(
+    // B-2026-08-26-23 closed that gap (the five `Option[Ordering]` predicates
+    // now compile), so the operators desugar through `partial_cmp` as specified
+    // and this program is accepted. The compiler and design.md agree again; the
+    // divergence note that stood beside the spec's table is gone.
+    //
+    // `impl Ord` alone still cannot skip `impl PartialOrd` — the `Ord:
+    // PartialOrd` supertrait rule rejects that separately, and this test does
+    // not weaken it.
+    typecheck_ok(
         r#"
 struct Item { id: i64 }
 impl PartialEq for Item { fn eq(ref self, other: ref Item) -> bool { self.id == other.id } }
-impl PartialOrd for Item { fn partial_cmp(ref self, other: ref Item) -> Option[Ordering] { Some(other.id.cmp(self.id)) } }
+impl PartialOrd for Item {
+    fn partial_cmp(ref self, other: ref Item) -> Option[Ordering] { Some(other.id.cmp(self.id)) }
+}
 fn main() {
     let a = Item { id: 1 };
     let b = Item { id: 5 };
-    println(f"{a < b}");
+    println(f"{a < b} {a > b} {a <= b} {a >= b}");
 }
 "#,
     );
-    let msg = errs
-        .iter()
-        .find(|e| {
-            e.message
-                .contains("ordering operators dispatch through 'cmp'")
-        })
-        .map(|e| e.message.clone())
-        .unwrap_or_else(|| {
-            panic!("expected `partial_cmp` without `cmp` to still be rejected, got: {errs:?}")
-        });
-    assert!(
-        msg.contains("'impl PartialOrd'"),
-        "the message should name the impl the user actually wrote, got: {msg}"
-    );
-    assert!(
-        msg.contains("impl Ord for Item"),
-        "the message should prescribe the impl that enables the operator, got: {msg}"
-    );
-    assert!(
-        msg.contains("DECLARATION ORDER"),
-        "the message should still say what the derive would do instead, got: {msg}"
-    );
 }
-
-// ── B-2026-08-25-20: the Vec capacity family's signatures ───────
-
 #[test]
 fn vec_capacity_family_accepts_its_specified_signatures() {
     typecheck_ok(

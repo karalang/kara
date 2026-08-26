@@ -86907,6 +86907,43 @@ fn main() {
     }
 
     #[test]
+    fn e2e_partial_ord_alone_drives_the_operators_through_partial_cmp() {
+        // design.md § Comparison Traits specifies `a < b` as
+        // `PartialOrd.partial_cmp(ref a, ref b).is_lt()` and says the operators
+        // go "through `PartialOrd`, never `Ord` directly". The compiler could
+        // not do that until B-2026-08-26-23: `Option[Ordering].is_lt()` had no
+        // codegen lowering, so the desugaring was routed through `Ord.cmp` and
+        // an `impl PartialOrd` with no `impl Ord` was REJECTED rather than
+        // accepted into a program that would check, interpret, then fail to
+        // build.
+        //
+        // `partial_cmp` REVERSES the order here, so declaration order and the
+        // body disagree on every one of the four operators — a test whose
+        // comparator agreed with declaration order would pass without the body
+        // ever being called.
+        let out = run_program(
+            r#"
+struct Item { id: i64 }
+impl PartialEq for Item { fn eq(ref self, other: ref Item) -> bool { self.id == other.id } }
+impl PartialOrd for Item {
+    fn partial_cmp(ref self, other: ref Item) -> Option[Ordering] { Some(other.id.cmp(self.id)) }
+}
+fn main() {
+    let a = Item { id: 1 };
+    let b = Item { id: 5 };
+    println(f"{a < b} {a > b} {a <= b} {a >= b}");
+}
+"#,
+        );
+        // Reversed: a(1) vs b(5) compares as Greater, so `<` is false and `>`
+        // is true — the opposite of what the field values suggest.
+        assert_eq!(
+            out.expect("`impl PartialOrd` alone must build").trim(),
+            "false true false true"
+        );
+    }
+
+    #[test]
     fn e2e_ordering_predicates_build_on_every_receiver_shape() {
         // B-2026-08-26-23 — three shapes ran correctly under `--interp` and
         // failed to BUILD, each for its own reason:

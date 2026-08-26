@@ -1385,10 +1385,10 @@ AST node to a trait call with the span preserved.
     -a              Neg          Neg.neg(a)
     a == b          PartialEq    PartialEq.eq(ref a, ref b)
     a != b          PartialEq    not PartialEq.eq(ref a, ref b)
-    a < b           Ord          T.lt(a, b) / T.cmp(a, b).is_lt()
-    a <= b          Ord          T.le(a, b) / T.cmp(a, b).is_le()
-    a > b           Ord          T.gt(a, b) / T.cmp(a, b).is_gt()
-    a >= b          Ord          T.gt(a, b) / T.cmp(a, b).is_ge()
+    a < b           PartialOrd   T.partial_cmp(a, b).is_lt()
+    a <= b          PartialOrd   T.partial_cmp(a, b).is_le()
+    a > b           PartialOrd   T.partial_cmp(a, b).is_gt()
+    a >= b          PartialOrd   T.partial_cmp(a, b).is_ge()
     a & b           BitAnd       BitAnd.bitand(a, b)
     a | b           BitOr        BitOr.bitor(a, b)
     a ^ b           BitXor       BitXor.bitxor(a, b)
@@ -1403,16 +1403,22 @@ Arithmetic and bitwise traits take `self` (owned) because they produce a
 new value. Comparison traits take `ref self` — comparing two values never
 consumes them.
 
-The ordering row has two forms because the desugaring depends on what
-provides the comparison. A PRIMITIVE uses the direct `lt`/`le`/`gt`/`ge`
-the stdlib registers. A USER type with `impl Ord` goes through its `cmp`
-— `a < b` becomes `T.cmp(a, b).is_lt()` — because `trait Ord` declares
-`cmp` and nothing else, so there is no `lt` body on such a type to call.
-(design.md's table writes this as `partial_cmp(ref a, ref b).is_lt()`;
-the implementation routes through `cmp` instead, because
-`Option[Ordering].is_lt()` has no codegen lowering yet. The two agree
-whenever `cmp` and `partial_cmp` do, which the `Ord: PartialOrd`
-requirement makes the normal case.)
+The ordering rows name `partial_cmp` because the operators go through
+`PartialOrd`, never `Ord` directly. A PRIMITIVE still uses the direct
+`lt`/`le`/`gt`/`ge` the stdlib registers — those bodies exist. A USER
+type goes through the comparator its impl supplies, because `trait
+PartialOrd` declares `partial_cmp` and nothing else and `trait Ord`
+declares `cmp` and nothing else, so there is no `lt` body on such a type
+to call:
+
+    impl PartialOrd  ->  T.partial_cmp(a, b).is_lt()   (the specified form)
+    impl Ord only    ->  T.cmp(a, b).is_lt()           (equivalent fallback)
+
+An impl that writes all four of `lt`/`le`/`gt`/`ge` itself keeps getting
+those called. A PARTIAL set does not: with only `lt` written, taking it
+for `<` while `>` went through the comparator would let a disagreeing
+pair report both `a < b` and `a > b` true, so the direct form is used
+only when all four are present.
 
 `and` / `or` are short-circuit KEYWORDS, not trait-dispatched operators.
 They have no trait and cannot be implemented.
@@ -1500,24 +1506,26 @@ will actually see, followed by the fix.
     `~flags` to flip an integer's bits, and `not done` to negate a flag.
 
 6.  ordering operators dispatch through 'cmp', which your
-    'impl PartialOrd' for 'T' does not define
+    'impl PartialOrd' and 'impl Ord' for 'T' does not define
 
-    `< <= > >=` lower to `T.cmp(a, b).is_lt()` and friends, so the body
-    they need is `cmp`. An `impl PartialOrd` supplies `partial_cmp`
-    instead, and the desugaring that would use it —
-    `partial_cmp(a, b).is_lt()` — has no codegen lowering, so accepting
-    it would give you a program that checks and runs but does not build.
+    `< <= > >=` need ONE comparator that answers all four. An impl that
+    supplies `partial_cmp` or `cmp` has it; an impl that hand-writes only
+    SOME of `lt`/`le`/`gt`/`ge` does not, and the operators it left out
+    have no body to call. Supplying a comparator is the fix — it covers
+    all four by construction:
 
-    Write the `impl Ord` too; `Ord` requires `PartialOrd`, so this is the
-    pair you were heading for anyway:
-
-        impl Ord for T {
-            fn cmp(ref self, other: ref T) -> Ordering { ... }
+        impl PartialOrd for T {
+            fn partial_cmp(ref self, other: ref T) -> Option[Ordering] { ... }
         }
 
     Do NOT reach for `#[derive(PartialOrd)]` here. It compiles, and then
     compares your fields in declaration order without ever calling the
     impl you wrote.
+
+    An `impl PartialOrd` with no `impl Ord` is FINE and always was the
+    specified shape — it drives the operators on its own. What `Ord`
+    cannot do is skip `PartialOrd`: `Ord` requires it, and that is a
+    separate rejection.
 
 ────────────────────────────────────────────────────────────────────
 Which types implement what

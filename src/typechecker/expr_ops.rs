@@ -2135,12 +2135,14 @@ impl<'a> super::TypeChecker<'a> {
         // then failed ("operator 'Lt' is not defined for operands of type
         // 'Struct'" / "Unsupported struct binary op: Lt"), because lowering found
         // no `impl Ord` and emitted nothing at all.
-        let has_ord_impl = self
-            .env
-            .impls
-            .iter()
-            .any(|imp| imp.trait_name.as_deref() == Some("Ord") && imp.target_type == name);
-        if !has_ord_impl {
+        // Either ordering trait: `target_type_name` accepts both, because the
+        // operators desugar through `PartialOrd.partial_cmp` per design.md and
+        // fall back to `Ord.cmp` for a type that carries only the latter.
+        let has_ordering_impl = self.env.impls.iter().any(|imp| {
+            matches!(imp.trait_name.as_deref(), Some("PartialOrd") | Some("Ord"))
+                && imp.target_type == name
+        });
+        if !has_ordering_impl {
             return false;
         }
         // Mirror its SECOND question the same way: lowering reads
@@ -2151,7 +2153,9 @@ impl<'a> super::TypeChecker<'a> {
                 imp.trait_name.is_some() && imp.target_type == name && imp.methods.contains_key(m)
             })
         };
-        provides("cmp") || ["lt", "le", "gt", "ge"].iter().all(|m| provides(m))
+        provides("partial_cmp")
+            || provides("cmp")
+            || ["lt", "le", "gt", "ge"].iter().all(|m| provides(m))
     }
 
     /// The rejection message for a comparison operator whose derive-based gate

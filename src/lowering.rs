@@ -2110,14 +2110,20 @@ fn target_type_name(ty: &Type, op: &BinOp, tc: &TypeCheckResult) -> Option<Strin
         return Some(name);
     }
     if let Type::Named { name, .. } = ty {
-        let trait_name = match op {
-            BinOp::Eq | BinOp::NotEq => "Eq",
-            BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq => "Ord",
+        // Ordering operators resolve through EITHER trait. design.md
+        // § Comparison Traits routes them through `PartialOrd`, so that is the
+        // one that matters; `Ord` stays accepted because a type may carry only
+        // the direct `lt`/`le`/`gt`/`ge` methods on its `impl Ord`, the legacy
+        // form `test_user_impl_ord_drives_comparison_operators` pins
+        // (B-2026-08-26-10).
+        let trait_names: &[&str] = match op {
+            BinOp::Eq | BinOp::NotEq => &["Eq"],
+            BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq => &["PartialOrd", "Ord"],
             _ => return None,
         };
-        if tc
-            .trait_impls
-            .contains(&(trait_name.to_string(), name.clone()))
+        if trait_names
+            .iter()
+            .any(|t| tc.trait_impls.contains(&(t.to_string(), name.clone())))
         {
             return Some(name.clone());
         }
@@ -2173,8 +2179,29 @@ fn ordering_dispatch_comparator(
         tc.trait_impl_methods
             .contains(&(target.to_string(), m.to_string()))
     };
-    if provides(method) {
+    // The legacy direct form is taken only when the impl supplies ALL FOUR
+    // methods. With a partial set the operators would split across two
+    // comparators — `a < b` calling a hand-written `lt` while `a > b` went
+    // through `partial_cmp` — so a pair that disagreed could report both `a < b`
+    // and `a > b` true. Requiring the complete set keeps each program on ONE
+    // comparator, and `test_user_impl_ord_drives_comparison_operators`, which
+    // writes all four, is unaffected.
+    if ["lt", "le", "gt", "ge"].iter().all(|m| provides(m)) {
         return None;
+    }
+    // `partial_cmp` FIRST — design.md § Comparison Traits specifies
+    // `a < b` as `PartialOrd.partial_cmp(ref a, ref b).is_lt()` and says the
+    // operators go "through `PartialOrd`, never `Ord` directly".
+    //
+    // This preference was inverted until B-2026-08-26-23 closed the gap that
+    // made the specified form unbuildable: `Option[Ordering].is_lt()` had no
+    // codegen lowering, so desugaring through it would have turned a clean
+    // typecheck rejection into a run-vs-build divergence. Those five predicates
+    // now compile (they moved into `ordering.kara`, which codegen compiles), so
+    // the spec's form is the one emitted and `cmp` is the fallback for a type
+    // carrying only `impl Ord`.
+    if provides("partial_cmp") {
+        return Some("partial_cmp".to_string());
     }
     provides("cmp").then(|| "cmp".to_string())
 }
