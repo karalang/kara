@@ -12052,12 +12052,59 @@ fn test_operators_page_carries_no_superseded_wording() {
             "design.md was corrected: `~a` is the integer complement and it \
              works; `not a` is the bool negation. Neither was missing",
         ),
+        (
+            "partial_cmp(ref a, ref b).is_lt()",
+            "B-2026-08-26-10: the compiler does not emit this. A primitive \
+             uses the direct `lt`; a user `impl Ord` goes through `cmp`. The \
+             page must not print a desugaring no backend produces",
+        ),
+        (
+            "Five rejections cover",
+            "a sixth rejection was added for an `impl PartialOrd` with no \
+             `cmp` (B-2026-08-26-10)",
+        ),
     ];
     for (fragment, why) in dead {
         assert!(
             !page.contains(fragment),
             "operators page still quotes superseded wording `{fragment}` — \
              {why}"
+        );
+    }
+
+    // B-2026-08-26-10 — the page must state what the compiler ACTUALLY does
+    // with a hand-written comparison impl, because the advice it replaced sent
+    // the reader to a derive that compiles and then ignores their body. Each
+    // claim below is executed by a test elsewhere, so the page cannot drift
+    // into describing a compiler that no longer exists:
+    //   `impl Eq for T {}` enabling `==`   — e2e_user_eq_impl_with_eq_marker_
+    //                                        is_dispatched_by_the_operator
+    //   `cmp` enabling `< <= > >=`         — e2e_user_ord_cmp_body_drives_
+    //                                        comparison_operators
+    //   the derive still ordering by field — e2e_derived_ord_still_compares_
+    //                                        by_declaration_order
+    let required: &[(&str, &str)] = &[
+        (
+            "T.cmp(a, b).is_lt()",
+            "the desugaring a user `impl Ord` actually gets",
+        ),
+        (
+            "impl Eq for T {}",
+            "the marker that enables `==` on a hand-written `impl PartialEq`",
+        ),
+        (
+            "DECLARATION ORDER",
+            "what the derive does instead of calling a hand-written impl",
+        ),
+        (
+            "ordering operators dispatch through 'cmp'",
+            "rejection 6 — an `impl PartialOrd` with no `cmp`",
+        ),
+    ];
+    for (fragment, why) in required {
+        assert!(
+            page.contains(fragment),
+            "operators page no longer explains `{fragment}` — {why}"
         );
     }
 

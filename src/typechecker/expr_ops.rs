@@ -2039,34 +2039,49 @@ impl<'a> super::TypeChecker<'a> {
     ///
     /// An operator with no entry in the table above keeps the old operator-
     /// language wording rather than inventing a trait name for it.
-    /// The rejection message for a comparison operator whose derive-based gate
-    /// failed, specialized for a type that carries a HAND-WRITTEN
-    /// operator-trait impl (B-2026-08-26-10).
-    ///
-    /// The plain "type 'T' does not implement PartialEq" is a flat denial of an
-    /// impl the author is looking at, and "add #[derive(PartialEq)]" is worse
-    /// than useless there: it compiles, and then the operator uses structural
-    /// comparison (or, for ordering, a DECLARATION-ORDER comparator) while the
-    /// body they wrote is never called. Measured on both backends.
-    ///
-    /// What the two families can offer differs, so they are not merged:
-    ///
-    /// * EQUALITY has a real workaround. Lowering gates `==` on `impl Eq`
-    ///   (`target_type_name` in `lowering.rs` looks up the trait name "Eq", not
-    ///   "PartialEq"), so adding the marker `impl Eq for T {}` makes `==` lower
-    ///   to the user's `eq` and dispatch correctly — verified on both backends
-    ///   with an `eq` that returns `false` for identical values. That is
-    ///   actionable advice, so the message gives it.
-    ///
-    /// * ORDERING now dispatches through `cmp`, so a complete
-    ///   `impl PartialOrd + impl Ord` never reaches this message at all
-    ///   (`ordering_operator_dispatches` accepts it and lowering emits
-    ///   `T.cmp(a, b).is_lt()`). What is left here is the ONE ordering shape
-    ///   that still cannot be lowered: an impl that supplies `partial_cmp` but
-    ///   no `cmp`, because the `Option[Ordering].is_lt()` its desugaring needs
-    ///   is unimplemented in codegen. That has a real workaround — write the
-    ///   `impl Ord` too — so the message gives it rather than prescribing the
-    ///   derive that would discard the body.
+    pub(super) fn arithmetic_rejection_message(
+        &self,
+        op: &BinOp,
+        ty: &Type,
+        right_ty: &Type,
+    ) -> String {
+        let Some(trait_name) = Self::arithmetic_operator_trait(op) else {
+            return format!(
+                "arithmetic operator requires numeric type, found '{}'",
+                type_display(ty)
+            );
+        };
+        // A `String` LEFT operand under `+` reaches this arm only because the
+        // RIGHT one is not a String — `String + String` is accepted a few
+        // branches above. Saying "does not implement trait Add" here would be
+        // FALSE, and falsely specific in a way the old vague wording never was:
+        // String does implement Add, the other operand is the fault. Report the
+        // operand instead. (`String - String` still lands on the missing-impl
+        // message below, which is correct — there is no `Sub` for String.)
+        if matches!(op, BinOp::Add) && is_string_concat_operand(ty) {
+            return format!(
+                "'+' on 'String' requires a 'String' right operand, found '{}'",
+                type_display(right_ty)
+            );
+        }
+        let base = format!(
+            "type '{}' does not implement trait {}",
+            type_display(ty),
+            trait_name
+        );
+        match ty {
+            Type::Named { name, .. } if name == "Vec" || name == "VecDeque" => format!(
+                "{base}; there is deliberately no `impl {trait_name} for {name}[T]` — \
+                 use `a.extend(b)` to append b's elements to a"
+            ),
+            Type::Named { name, .. } if self.env.distinct_types.contains_key(name) => format!(
+                "{base}; add #[derive(Arithmetic)] to '{name}' to use arithmetic \
+                 operators between two '{name}' values, or unwrap explicitly"
+            ),
+            _ => base,
+        }
+    }
+
     /// Whether an ordering operator on `ty` can be lowered to a hand-written
     /// comparator body (B-2026-08-26-10).
     ///
@@ -2108,6 +2123,34 @@ impl<'a> super::TypeChecker<'a> {
         })
     }
 
+    /// The rejection message for a comparison operator whose derive-based gate
+    /// failed, specialized for a type that carries a HAND-WRITTEN
+    /// operator-trait impl (B-2026-08-26-10).
+    ///
+    /// The plain "type 'T' does not implement PartialEq" is a flat denial of an
+    /// impl the author is looking at, and "add #[derive(PartialEq)]" is worse
+    /// than useless there: it compiles, and then the operator uses structural
+    /// comparison (or, for ordering, a DECLARATION-ORDER comparator) while the
+    /// body they wrote is never called. Measured on both backends.
+    ///
+    /// What the two families can offer differs, so they are not merged:
+    ///
+    /// * EQUALITY has a real workaround. Lowering gates `==` on `impl Eq`
+    ///   (`target_type_name` in `lowering.rs` looks up the trait name "Eq", not
+    ///   "PartialEq"), so adding the marker `impl Eq for T {}` makes `==` lower
+    ///   to the user's `eq` and dispatch correctly — verified on both backends
+    ///   with an `eq` that returns `false` for identical values. That is
+    ///   actionable advice, so the message gives it.
+    ///
+    /// * ORDERING now dispatches through `cmp`, so a complete
+    ///   `impl PartialOrd + impl Ord` never reaches this message at all
+    ///   (`ordering_operator_dispatches` accepts it and lowering emits
+    ///   `T.cmp(a, b).is_lt()`). What is left here is the ONE ordering shape
+    ///   that still cannot be lowered: an impl that supplies `partial_cmp` but
+    ///   no `cmp`, because the `Option[Ordering].is_lt()` its desugaring needs
+    ///   is unimplemented in codegen. That has a real workaround — write the
+    ///   `impl Ord` too — so the message gives it rather than prescribing the
+    ///   derive that would discard the body.
     fn comparison_impl_written_but_undispatched(
         &self,
         ty: &Type,
@@ -2154,49 +2197,6 @@ impl<'a> super::TypeChecker<'a> {
              '#[derive(PartialOrd)]' would compile but compare by field \
              DECLARATION ORDER, never calling your impl"
         ))
-    }
-
-    pub(super) fn arithmetic_rejection_message(
-        &self,
-        op: &BinOp,
-        ty: &Type,
-        right_ty: &Type,
-    ) -> String {
-        let Some(trait_name) = Self::arithmetic_operator_trait(op) else {
-            return format!(
-                "arithmetic operator requires numeric type, found '{}'",
-                type_display(ty)
-            );
-        };
-        // A `String` LEFT operand under `+` reaches this arm only because the
-        // RIGHT one is not a String — `String + String` is accepted a few
-        // branches above. Saying "does not implement trait Add" here would be
-        // FALSE, and falsely specific in a way the old vague wording never was:
-        // String does implement Add, the other operand is the fault. Report the
-        // operand instead. (`String - String` still lands on the missing-impl
-        // message below, which is correct — there is no `Sub` for String.)
-        if matches!(op, BinOp::Add) && is_string_concat_operand(ty) {
-            return format!(
-                "'+' on 'String' requires a 'String' right operand, found '{}'",
-                type_display(right_ty)
-            );
-        }
-        let base = format!(
-            "type '{}' does not implement trait {}",
-            type_display(ty),
-            trait_name
-        );
-        match ty {
-            Type::Named { name, .. } if name == "Vec" || name == "VecDeque" => format!(
-                "{base}; there is deliberately no `impl {trait_name} for {name}[T]` — \
-                 use `a.extend(b)` to append b's elements to a"
-            ),
-            Type::Named { name, .. } if self.env.distinct_types.contains_key(name) => format!(
-                "{base}; add #[derive(Arithmetic)] to '{name}' to use arithmetic \
-                 operators between two '{name}' values, or unwrap explicitly"
-            ),
-            _ => base,
-        }
     }
 
     /// The binary operator a compound assignment implies — `x += y` means

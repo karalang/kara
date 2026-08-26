@@ -5056,7 +5056,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // Declining here lets the existing user-impl dispatch further down take
         // it, the same `user_impl_method_exists` gate the Vec / Map / Set / Slice
         // arms already use for this exact purpose.
-        let user_owns_cmp = matches!(method, "cmp" | "partial_cmp")
+        // Only `cmp` needs the guard: codegen has no builtin `partial_cmp` arm,
+        // so that name reaches user-impl dispatch already. `String` and the
+        // integer primitives are unaffected — no `String.cmp` / `i64.cmp`
+        // symbol is declared for `user_impl_method_exists` to find, verified by
+        // `e2e_string_and_primitive_cmp_still_use_the_builtin_comparator`.
+        let user_owns_cmp = method == "cmp"
             && args.len() == 1
             && self
                 .type_name_of_expr(object)

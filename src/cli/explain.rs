@@ -1385,10 +1385,10 @@ AST node to a trait call with the span preserved.
     -a              Neg          Neg.neg(a)
     a == b          PartialEq    PartialEq.eq(ref a, ref b)
     a != b          PartialEq    not PartialEq.eq(ref a, ref b)
-    a < b           PartialOrd   partial_cmp(ref a, ref b).is_lt()
-    a <= b          PartialOrd   partial_cmp(ref a, ref b).is_le()
-    a > b           PartialOrd   partial_cmp(ref a, ref b).is_gt()
-    a >= b          PartialOrd   partial_cmp(ref a, ref b).is_ge()
+    a < b           Ord          T.lt(a, b) / T.cmp(a, b).is_lt()
+    a <= b          Ord          T.le(a, b) / T.cmp(a, b).is_le()
+    a > b           Ord          T.gt(a, b) / T.cmp(a, b).is_gt()
+    a >= b          Ord          T.gt(a, b) / T.cmp(a, b).is_ge()
     a & b           BitAnd       BitAnd.bitand(a, b)
     a | b           BitOr        BitOr.bitor(a, b)
     a ^ b           BitXor       BitXor.bitxor(a, b)
@@ -1403,6 +1403,17 @@ Arithmetic and bitwise traits take `self` (owned) because they produce a
 new value. Comparison traits take `ref self` — comparing two values never
 consumes them.
 
+The ordering row has two forms because the desugaring depends on what
+provides the comparison. A PRIMITIVE uses the direct `lt`/`le`/`gt`/`ge`
+the stdlib registers. A USER type with `impl Ord` goes through its `cmp`
+— `a < b` becomes `T.cmp(a, b).is_lt()` — because `trait Ord` declares
+`cmp` and nothing else, so there is no `lt` body on such a type to call.
+(design.md's table writes this as `partial_cmp(ref a, ref b).is_lt()`;
+the implementation routes through `cmp` instead, because
+`Option[Ordering].is_lt()` has no codegen lowering yet. The two agree
+whenever `cmp` and `partial_cmp` do, which the `Ord: PartialOrd`
+requirement makes the normal case.)
+
 `and` / `or` are short-circuit KEYWORDS, not trait-dispatched operators.
 They have no trait and cannot be implemented.
 
@@ -1416,7 +1427,7 @@ name being rebound.
 Why your operator call failed
 ────────────────────────────────────────────────────────────────────
 
-Five rejections cover nearly every case. Each row is the diagnostic you
+Six rejections cover nearly every case. Each row is the diagnostic you
 will actually see, followed by the fix.
 
 1.  type 'T' does not implement trait Add
@@ -1452,6 +1463,13 @@ will actually see, followed by the fix.
     is not derivable at all on a type with an `f32`/`f64` field, since
     `NaN != NaN` breaks reflexivity.
 
+    A derive is not the only route. Hand-written comparison impls are
+    dispatched to, and the derive is the wrong answer when you have one:
+    it compares FIELD BY FIELD IN DECLARATION ORDER and never calls your
+    body. `==` needs `impl PartialEq` plus the marker `impl Eq for T {}`;
+    `< <= > >=` need an `impl Ord` supplying `cmp`. If you wrote only
+    `impl PartialOrd`, see rejection 6.
+
 3.  cannot mix integer types 'i32' and 'i64' in arithmetic — they must match
     cannot mix integer and floating-point operands ('i64' and 'f64')
 
@@ -1464,10 +1482,12 @@ will actually see, followed by the fix.
 4.  user-defined `impl Add for T` is not supported in v1;
     operator traits are stdlib-only
 
-    v1 implements the operator traits for stdlib types only. The trait
-    names, signatures, and desugaring are already what user impls will
-    use, so lifting this is a non-breaking, additive change. Until then,
-    write a named method.
+    v1 implements the ARITHMETIC and BITWISE operator traits for stdlib
+    types only. The trait names, signatures, and desugaring are already
+    what user impls will use, so lifting this is a non-breaking, additive
+    change. Until then, write a named method. This limit does NOT cover
+    the comparison operators: `== != < <= > >=` do dispatch to a user
+    impl (see rejections 2 and 6).
 
 5.  unary 'not' requires 'bool', found 'T'
     unary '~' requires an integer or integer-lane Vector type, found 'T'
@@ -1478,6 +1498,26 @@ will actually see, followed by the fix.
     (or an integer-lane `Vector[T, N]`, complementing every lane). Both
     desugar to `Not.not(a)` — the operand type picks the impl. So write
     `~flags` to flip an integer's bits, and `not done` to negate a flag.
+
+6.  ordering operators dispatch through 'cmp', which your
+    'impl PartialOrd' for 'T' does not define
+
+    `< <= > >=` lower to `T.cmp(a, b).is_lt()` and friends, so the body
+    they need is `cmp`. An `impl PartialOrd` supplies `partial_cmp`
+    instead, and the desugaring that would use it —
+    `partial_cmp(a, b).is_lt()` — has no codegen lowering, so accepting
+    it would give you a program that checks and runs but does not build.
+
+    Write the `impl Ord` too; `Ord` requires `PartialOrd`, so this is the
+    pair you were heading for anyway:
+
+        impl Ord for T {
+            fn cmp(ref self, other: ref T) -> Ordering { ... }
+        }
+
+    Do NOT reach for `#[derive(PartialOrd)]` here. It compiles, and then
+    compares your fields in declaration order without ever calling the
+    impl you wrote.
 
 ────────────────────────────────────────────────────────────────────
 Which types implement what

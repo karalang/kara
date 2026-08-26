@@ -86580,6 +86580,34 @@ fn main() {
     }
 
     #[test]
+    fn e2e_string_and_primitive_cmp_still_use_the_builtin_comparator() {
+        // The guard that stops codegen's builtin `cmp` arm from answering for a
+        // user `impl Ord` (B-2026-08-26-10) asks `user_impl_method_exists` about
+        // the RECEIVER'S type name, and it is asked on every one-argument `.cmp`
+        // — including `String`'s and the integers'. If a `String.cmp` symbol
+        // were ever declared, that guard would decline for strings too and take
+        // the `karac_string_cmp` lowering out of service. Nothing about the fix
+        // makes that impossible, so it is pinned rather than reasoned about.
+        //
+        // `<` on the same operands is checked alongside, since it shares the
+        // comparator.
+        let out = run_program(
+            r#"
+fn main() {
+    let a: String = "apple";
+    let b: String = "zebra";
+    println(a.cmp(b).is_lt());
+    println(a < b);
+    println(b < a);
+}
+"#,
+        );
+        let out = out.expect("String comparison must build");
+        let lines: Vec<&str> = out.trim().lines().collect();
+        assert_eq!(lines, vec!["true", "true", "false"]);
+    }
+
+    #[test]
     fn e2e_derived_ord_still_compares_by_declaration_order() {
         // The counterweight to the three tests above: `#[derive(Ord)]` must keep
         // comparing field-by-field in DECLARATION ORDER. The operator fix routes

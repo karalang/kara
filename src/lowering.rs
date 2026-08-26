@@ -1926,8 +1926,8 @@ impl<'a> Lowerer<'a> {
         // and `trait PartialOrd` only `partial_cmp`, so the direct
         // `T.lt(a, b)` form below lands on a method no idiomatic impl
         // defines. Route through the comparator the impl actually supplies
-        // (B-2026-08-26-10); `ordering_dispatch_receiver` returns `None` when
-        // the impl provides the direct method, leaving the legacy form.
+        // (B-2026-08-26-10); `ordering_dispatch_comparator` returns `None`
+        // when the impl provides the direct method, leaving the legacy form.
         if matches!(op, BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq) {
             if let Some(cmp_method) = ordering_dispatch_comparator(lhs_ty, method, &target, self.tc)
             {
@@ -2078,8 +2078,7 @@ fn target_type_name(ty: &Type, op: &BinOp, tc: &TypeCheckResult) -> Option<Strin
 /// declares `lt`/`le`/`gt`/`ge`, so lowering `a < b` straight to `T.lt(a, b)`
 /// named a body an idiomatic impl never writes: the interpreter reported
 /// `path 'T.lt' has no interpreter evaluation rule` and codegen branched on a
-/// raw i64. The fix is design.md's own desugaring, `partial_cmp(a, b).is_lt()`,
-/// with `cmp` as the equivalent when only `impl Ord` is present.
+/// raw i64. `a < b` becomes `T.cmp(a, b).is_lt()` instead.
 ///
 /// `cmp` and NOT `partial_cmp`, even though design.md's table names the latter.
 /// Both were measured; only one of them has a backend on both sides:
