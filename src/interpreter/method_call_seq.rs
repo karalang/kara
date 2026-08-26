@@ -1830,6 +1830,35 @@ impl<'a> super::Interpreter<'a> {
                 // `reserve(additional)` — Rust's convention: room for that many
                 // MORE elements. A negative or zero argument is a no-op, not an
                 // error, mirroring `truncate`'s clamp.
+                //
+                // B-2026-08-26-22 — ONE ARM SERVES BOTH `Vec.reserve` AND
+                // `String.reserve`, and it has to: interpreter dispatch is by
+                // METHOD NAME, so a separate `"reserve"` arm for String earlier
+                // in this match SHADOWS the Vec one entirely. That was measured,
+                // not reasoned about — every `Vec.reserve` call started failing
+                // with `method 'reserve' not found on type 'Vec' (no interpreter
+                // dispatch arm)`, which is at least a loud failure rather than a
+                // silent wrong answer.
+                //
+                // The String leg is a pure hint. `Value::String` is
+                // clone-on-write (every mutating arm clones and calls
+                // `write_back_receiver`), so the reservation is discarded by the
+                // next `push_str` — which is precisely why no
+                // `String.capacity()` accessor exists to observe the difference
+                // from codegen's persistent `{ptr,len,cap}`. What this owes, and
+                // keeps, is that the string's CONTENT is unchanged.
+                if let Value::String(st) = &obj {
+                    let n = match args.first().map(|a| self.eval_expr_inner(&a.value)) {
+                        Some(Value::Int(n)) => n,
+                        _ => return Some(Value::Unit),
+                    };
+                    if n > 0 {
+                        let mut next = st.clone();
+                        next.reserve(n as usize);
+                        self.write_back_receiver(object, Value::String(next));
+                    }
+                    return Some(Value::Unit);
+                }
                 if let Value::Array(ref rc) = obj {
                     if let Some(Value::Int(n)) =
                         args.first().map(|a| self.eval_expr_inner(&a.value))

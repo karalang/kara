@@ -46114,3 +46114,66 @@ fn vec_append_rejects_a_mismatched_element_type() {
         "appending a Vec[String] to a Vec[i64] must be rejected"
     );
 }
+
+// ── B-2026-08-26-22: String.reserve and the derived companions ──
+
+#[test]
+fn string_reserve_accepts_its_signature_and_derives_try_reserve() {
+    typecheck_ok(
+        "fn go() -> Result[i64, AllocError] {\n\
+             let mut s: String = String.new();\n\
+             s.reserve(16);\n\
+             s.try_reserve(16)?;\n\
+             return Ok(s.len());\n\
+         }\n\
+         fn main() { let _ = go(); }",
+    );
+}
+
+/// `String.capacity()` is deliberately ABSENT — `Value::String` is
+/// clone-on-write in the interpreter, so a reservation would not survive the
+/// next mutation there while codegen's `{ptr,len,cap}` keeps it. Exposing it
+/// would ship a guaranteed run-vs-build divergence, so its absence is a
+/// decision to hold, not a gap to fill.
+#[test]
+fn string_has_no_capacity_accessor() {
+    let errs = typecheck_errors(
+        "fn main() {\n\
+             let s: String = String.new();\n\
+             println(s.capacity());\n\
+         }",
+    );
+    assert!(
+        errs.iter().any(|e| e.message.contains("capacity")),
+        "String.capacity() must stay rejected; got {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn string_reserve_rejects_wrong_arity_and_argument_type() {
+    for (stmt, needle) in [("s.reserve();", "reserve"), ("s.reserve(1, 2);", "reserve")] {
+        let errs = typecheck_errors(&format!(
+            "fn main() {{\n let mut s: String = String.new();\n {stmt}\n}}"
+        ));
+        assert!(
+            errs.iter().any(|e| e.message.contains(needle)),
+            "`{stmt}` should name `{needle}`; got {:?}",
+            errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
+fn vec_try_resize_and_try_append_are_registered_companions() {
+    typecheck_ok(
+        "fn go() -> Result[i64, AllocError] {\n\
+             let mut v: Vec[i64] = Vec.new();\n\
+             v.try_resize(4, 0)?;\n\
+             let w: Vec[i64] = Vec.new();\n\
+             v.try_append(w)?;\n\
+             return Ok(v.len());\n\
+         }\n\
+         fn main() { let _ = go(); }",
+    );
+}

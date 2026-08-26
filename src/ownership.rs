@@ -3413,7 +3413,13 @@ pub(crate) fn stdlib_method_self_borrow_kind(key: &str) -> Option<BorrowKind> {
         | "SortedSet.len" | "SortedSet.is_empty" | "SortedSet.contains" | "SortedSet.iter"
         | "SortedSet.clone" => ImmRef,
         // String mutating methods.
-        "String.push" | "String.push_str" | "String.clear" | "String.insert_str" => MutRef,
+        "String.push"
+        | "String.push_str"
+        | "String.clear"
+        | "String.insert_str"
+        // B-2026-08-26-22 — `reserve` may reallocate the byte buffer, so it is
+        // a write borrow of the receiver even though it changes no content.
+        | "String.reserve" => MutRef,
         // String read methods.
         "String.len" | "String.is_empty" | "String.contains" | "String.starts_with"
         | "String.ends_with" | "String.bytes" | "String.chars" | "String.clone"

@@ -3262,6 +3262,454 @@ impl<'ctx> super::Codegen<'ctx> {
 
                 Ok(self.context.i64_type().const_int(0, false).into())
             }
+            // B-2026-08-26-22 — `Vec.try_resize(n, val)`, the fallible twin of
+            // the `resize` arm.
+            //
+            // Only the GROW leg can fail, and it is made all-or-nothing the same
+            // way `try_append` is: the allocation happens before anything is
+            // mutated, so on `Err` the vec keeps its old buffer, length and
+            // contents. The SHRINK leg touches no allocator at all and is always
+            // `Ok` — a shrink that could return `Err` would be a lie.
+            //
+            // `val` is consumed on the success path exactly as `resize`
+            // consumes it (moved into the first new slot, cloned into the rest,
+            // dropped outright when there is no new slot). On the OOM path it is
+            // dropped, since nothing took it.
+            "try_resize" => {
+                if args.len() != 2 {
+                    return Err(format!(
+                        "Vec.try_resize expects 2 arguments (new length, fill value), got {}",
+                        args.len()
+                    ));
+                }
+                let fn_val = self.current_fn.unwrap();
+                let elem_te = self.var_types.var_elem_type_exprs.get(var_name).cloned();
+                let needs_deep = match elem_te.as_ref() {
+                    Some(te) => !is_trivially_copyable_te(te),
+                    None => {
+                        return Err(
+                            "Vec.try_resize: could not resolve the element type in codegen"
+                                .to_string(),
+                        )
+                    }
+                };
+                let n_raw = self.compile_expr(&args[0].value)?.into_int_value();
+                let zero = i64_t.const_zero();
+                let one = i64_t.const_int(1, false);
+                let neg = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::SLT, n_raw, zero, "trsz.neg")
+                    .unwrap();
+                let target = self
+                    .builder
+                    .build_select(neg, zero, n_raw, "trsz.target")
+                    .unwrap()
+                    .into_int_value();
+                let len_p = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 1, "trsz.len.p")
+                    .unwrap();
+                let cap_p = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 2, "trsz.cap.p")
+                    .unwrap();
+                let cur_len = self
+                    .builder
+                    .build_load(i64_t, len_p, "trsz.len")
+                    .unwrap()
+                    .into_int_value();
+                let cur_cap = self
+                    .builder
+                    .build_load(i64_t, cap_p, "trsz.cap")
+                    .unwrap()
+                    .into_int_value();
+                let fill_val = self.compile_expr(&args[1].value)?;
+                let fill_val = self.coerce_scalar_to_type_from(fill_val, elem_ty, &args[1].value);
+                self.suppress_source_vec_cleanup_for_arg(&args[1].value);
+                let elem_size = elem_ty.size_of().unwrap();
+
+                let shrink_bb = self.context.append_basic_block(fn_val, "trsz.shrink");
+                let grow_bb = self.context.append_basic_block(fn_val, "trsz.grow");
+                let realloc_bb = self.context.append_basic_block(fn_val, "trsz.realloc");
+                let oom_bb = self.context.append_basic_block(fn_val, "trsz.oom");
+                let fill_bb = self.context.append_basic_block(fn_val, "trsz.fill");
+                let ok_bb = self.context.append_basic_block(fn_val, "trsz.ok");
+                let merge_bb = self.context.append_basic_block(fn_val, "trsz.merge");
+                let growing = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::SGT, target, cur_len, "trsz.growing")
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(growing, grow_bb, shrink_bb)
+                    .unwrap();
+
+                // Shrink / no-op: drop the [target, len) tail and the unused
+                // fill value, set len. Cannot fail.
+                self.builder.position_at_end(shrink_bb);
+                if needs_deep {
+                    let te = elem_te.clone().unwrap();
+                    let drop_fn = self.emit_drop_fn_for_type_expr(&te);
+                    let data = self
+                        .builder
+                        .build_load(ptr_ty, data_ptr, "trsz.s.data")
+                        .unwrap()
+                        .into_pointer_value();
+                    self.emit_index_range_loop(fn_val, target, cur_len, "trsz.s", &|cg, idx| {
+                        let slot = unsafe {
+                            cg.builder
+                                .build_gep(elem_ty, data, &[idx], "trsz.s.slot")
+                                .unwrap()
+                        };
+                        let _ = cg.builder.build_call(drop_fn, &[slot.into()], "");
+                    });
+                    let tmp = self.create_entry_alloca(fn_val, "trsz.s.fill", elem_ty);
+                    let _ = self.builder.build_store(tmp, fill_val);
+                    let _ = self.builder.build_call(drop_fn, &[tmp.into()], "");
+                }
+                self.builder.build_store(len_p, target).unwrap();
+                self.builder.build_unconditional_branch(ok_bb).unwrap();
+
+                // Grow: allocate first, mutate only after it succeeds.
+                self.builder.position_at_end(grow_bb);
+                let must_grow = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::SGT, target, cur_cap, "trsz.g.cmp")
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(must_grow, realloc_bb, fill_bb)
+                    .unwrap();
+                self.builder.position_at_end(realloc_bb);
+                let two = i64_t.const_int(2, false);
+                let four = i64_t.const_int(4, false);
+                let doubled = self
+                    .builder
+                    .build_int_mul(cur_cap, two, "trsz.doubled")
+                    .unwrap();
+                let big = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::SGT, doubled, four, "trsz.gt4")
+                    .unwrap();
+                let growth_min = self
+                    .builder
+                    .build_select(big, doubled, four, "trsz.min")
+                    .unwrap()
+                    .into_int_value();
+                let need_more = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::SGT, target, growth_min, "trsz.need")
+                    .unwrap();
+                let new_cap = self
+                    .builder
+                    .build_select(need_more, target, growth_min, "trsz.new_cap")
+                    .unwrap()
+                    .into_int_value();
+                let bytes = self
+                    .builder
+                    .build_int_mul(new_cap, elem_size, "trsz.bytes")
+                    .unwrap();
+                let fresh = self
+                    .builder
+                    .build_call(
+                        self.runtime_fns.alloc_fallible_fn,
+                        &[bytes.into()],
+                        "trsz.fresh",
+                    )
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_pointer_value();
+                let is_null = self.builder.build_is_null(fresh, "trsz.is_null").unwrap();
+                let moved_bb = self.context.append_basic_block(fn_val, "trsz.moved");
+                self.builder
+                    .build_conditional_branch(is_null, oom_bb, moved_bb)
+                    .unwrap();
+                self.builder.position_at_end(moved_bb);
+                let old_data = self
+                    .builder
+                    .build_load(ptr_ty, data_ptr, "trsz.old")
+                    .unwrap()
+                    .into_pointer_value();
+                let old_bytes = self
+                    .builder
+                    .build_int_mul(cur_len, elem_size, "trsz.old_bytes")
+                    .unwrap();
+                self.builder
+                    .build_memcpy(fresh, 8, old_data, 8, old_bytes)
+                    .unwrap();
+                let owned_heap = self.sso_string_is_owned_heap(cur_cap);
+                let free_bb = self.context.append_basic_block(fn_val, "trsz.free");
+                let freed_bb = self.context.append_basic_block(fn_val, "trsz.freed");
+                self.builder
+                    .build_conditional_branch(owned_heap, free_bb, freed_bb)
+                    .unwrap();
+                self.builder.position_at_end(free_bb);
+                self.builder
+                    .build_call(self.runtime_fns.free_fn, &[old_data.into()], "")
+                    .unwrap();
+                self.builder.build_unconditional_branch(freed_bb).unwrap();
+                self.builder.position_at_end(freed_bb);
+                self.builder.build_store(data_ptr, fresh).unwrap();
+                self.builder.build_store(cap_p, new_cap).unwrap();
+                self.builder.build_unconditional_branch(fill_bb).unwrap();
+
+                self.builder.position_at_end(oom_bb);
+                if needs_deep {
+                    let te = elem_te.clone().unwrap();
+                    let drop_fn = self.emit_drop_fn_for_type_expr(&te);
+                    let tmp = self.create_entry_alloca(fn_val, "trsz.oom.fill", elem_ty);
+                    let _ = self.builder.build_store(tmp, fill_val);
+                    let _ = self.builder.build_call(drop_fn, &[tmp.into()], "");
+                }
+                let err_result = self.build_alloc_oom_result(bytes)?;
+                let oom_end = self.builder.get_insert_block().unwrap();
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+                self.builder.position_at_end(fill_bb);
+                let data = self
+                    .builder
+                    .build_load(ptr_ty, data_ptr, "trsz.f.data")
+                    .unwrap()
+                    .into_pointer_value();
+                if needs_deep {
+                    let te = elem_te.clone().unwrap();
+                    let clone_fn = self.emit_clone_fn_for_type_expr(&te);
+                    let first = unsafe {
+                        self.builder
+                            .build_gep(elem_ty, data, &[cur_len], "trsz.f.first")
+                            .unwrap()
+                    };
+                    let _ = self.builder.build_store(first, fill_val);
+                    let from = self
+                        .builder
+                        .build_int_add(cur_len, one, "trsz.f.from")
+                        .unwrap();
+                    self.emit_index_range_loop(fn_val, from, target, "trsz.f.c", &|cg, idx| {
+                        let slot = unsafe {
+                            cg.builder
+                                .build_gep(elem_ty, data, &[idx], "trsz.f.slot")
+                                .unwrap()
+                        };
+                        let _ = cg
+                            .builder
+                            .build_call(clone_fn, &[first.into(), slot.into()], "");
+                    });
+                } else {
+                    self.emit_index_range_loop(fn_val, cur_len, target, "trsz.f.s", &|cg, idx| {
+                        let slot = unsafe {
+                            cg.builder
+                                .build_gep(elem_ty, data, &[idx], "trsz.f.slot")
+                                .unwrap()
+                        };
+                        let _ = cg.builder.build_store(slot, fill_val);
+                    });
+                }
+                self.builder.build_store(len_p, target).unwrap();
+                self.builder.build_unconditional_branch(ok_bb).unwrap();
+
+                self.builder.position_at_end(ok_bb);
+                let unit_val = i64_t.const_zero().into();
+                let ok_result = self.build_nonshared_enum_value("Result", "Ok", &[unit_val])?;
+                let ok_end = self.builder.get_insert_block().unwrap();
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+                self.builder.position_at_end(merge_bb);
+                let phi = self
+                    .builder
+                    .build_phi(ok_result.get_type(), "trsz.result")
+                    .unwrap();
+                phi.add_incoming(&[(&ok_result, ok_end), (&err_result, oom_end)]);
+                Ok(phi.as_basic_value())
+            }
+            // B-2026-08-26-22 — `Vec.try_append(other)`, the fallible twin of
+            // the `append` arm.
+            //
+            // ALL-OR-NOTHING, and the ordering is what buys that. The source's
+            // header is read first, the capacity check and the fallible
+            // allocation come next, and the source's cleanup is only disarmed on
+            // the path that actually copies. So on `Err` the receiver is
+            // untouched and the SOURCE STILL OWNS ITS ELEMENTS — its binding's
+            // scope-exit cleanup frees them exactly once. Disarming the source
+            // up front (which the infallible arm can do, because it cannot fail)
+            // would leak every element on the OOM path.
+            "try_append" => {
+                if args.len() != 1 {
+                    return Err(format!(
+                        "Vec.try_append expects 1 argument (the source Vec), got {}",
+                        args.len()
+                    ));
+                }
+                let fn_val = self.current_fn.unwrap();
+                let src_val = self.compile_expr(&args[0].value)?;
+                let BasicValueEnum::StructValue(src_sv) = src_val else {
+                    return Err(
+                        "Vec.try_append: the source argument is not a Vec header".to_string()
+                    );
+                };
+                let src_data = self
+                    .builder
+                    .build_extract_value(src_sv, 0, "tapp.src.data")
+                    .unwrap()
+                    .into_pointer_value();
+                let src_len = self
+                    .builder
+                    .build_extract_value(src_sv, 1, "tapp.src.len")
+                    .unwrap()
+                    .into_int_value();
+                let len_p = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 1, "tapp.len.p")
+                    .unwrap();
+                let cap_p = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 2, "tapp.cap.p")
+                    .unwrap();
+                let cur_len = self
+                    .builder
+                    .build_load(i64_t, len_p, "tapp.len")
+                    .unwrap()
+                    .into_int_value();
+                let cur_cap = self
+                    .builder
+                    .build_load(i64_t, cap_p, "tapp.cap")
+                    .unwrap()
+                    .into_int_value();
+                let needed = self
+                    .builder
+                    .build_int_add(cur_len, src_len, "tapp.needed")
+                    .unwrap();
+                let grow_bb = self.context.append_basic_block(fn_val, "tapp.grow");
+                let grow_ok_bb = self.context.append_basic_block(fn_val, "tapp.grow.ok");
+                let oom_bb = self.context.append_basic_block(fn_val, "tapp.oom");
+                let copy_bb = self.context.append_basic_block(fn_val, "tapp.copy");
+                let merge_bb = self.context.append_basic_block(fn_val, "tapp.merge");
+                let must_grow = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::SGT, needed, cur_cap, "tapp.cmp")
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(must_grow, grow_bb, copy_bb)
+                    .unwrap();
+
+                self.builder.position_at_end(grow_bb);
+                let two = i64_t.const_int(2, false);
+                let four = i64_t.const_int(4, false);
+                let doubled = self
+                    .builder
+                    .build_int_mul(cur_cap, two, "tapp.doubled")
+                    .unwrap();
+                let big = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::SGT, doubled, four, "tapp.gt4")
+                    .unwrap();
+                let growth_min = self
+                    .builder
+                    .build_select(big, doubled, four, "tapp.min")
+                    .unwrap()
+                    .into_int_value();
+                let need_more = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::SGT, needed, growth_min, "tapp.need")
+                    .unwrap();
+                let new_cap = self
+                    .builder
+                    .build_select(need_more, needed, growth_min, "tapp.new_cap")
+                    .unwrap()
+                    .into_int_value();
+                let elem_size = elem_ty.size_of().unwrap();
+                let bytes = self
+                    .builder
+                    .build_int_mul(new_cap, elem_size, "tapp.bytes")
+                    .unwrap();
+                let fresh = self
+                    .builder
+                    .build_call(
+                        self.runtime_fns.alloc_fallible_fn,
+                        &[bytes.into()],
+                        "tapp.fresh",
+                    )
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_pointer_value();
+                let is_null = self.builder.build_is_null(fresh, "tapp.is_null").unwrap();
+                self.builder
+                    .build_conditional_branch(is_null, oom_bb, grow_ok_bb)
+                    .unwrap();
+
+                self.builder.position_at_end(grow_ok_bb);
+                let old_data = self
+                    .builder
+                    .build_load(ptr_ty, data_ptr, "tapp.old")
+                    .unwrap()
+                    .into_pointer_value();
+                let old_bytes = self
+                    .builder
+                    .build_int_mul(cur_len, elem_size, "tapp.old_bytes")
+                    .unwrap();
+                self.builder
+                    .build_memcpy(fresh, 8, old_data, 8, old_bytes)
+                    .unwrap();
+                let owned_heap = self.sso_string_is_owned_heap(cur_cap);
+                let free_bb = self.context.append_basic_block(fn_val, "tapp.free");
+                let freed_bb = self.context.append_basic_block(fn_val, "tapp.freed");
+                self.builder
+                    .build_conditional_branch(owned_heap, free_bb, freed_bb)
+                    .unwrap();
+                self.builder.position_at_end(free_bb);
+                self.builder
+                    .build_call(self.runtime_fns.free_fn, &[old_data.into()], "")
+                    .unwrap();
+                self.builder.build_unconditional_branch(freed_bb).unwrap();
+                self.builder.position_at_end(freed_bb);
+                self.builder.build_store(data_ptr, fresh).unwrap();
+                self.builder.build_store(cap_p, new_cap).unwrap();
+                self.builder.build_unconditional_branch(copy_bb).unwrap();
+
+                self.builder.position_at_end(oom_bb);
+                let err_result = self.build_alloc_oom_result(bytes)?;
+                let oom_end = self.builder.get_insert_block().unwrap();
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+                // Success: the elements move across, the source's SPINE is
+                // freed (never its elements — they belong to the receiver now),
+                // and only here is the source binding's cleanup disarmed.
+                self.builder.position_at_end(copy_bb);
+                let dst_data = self
+                    .builder
+                    .build_load(ptr_ty, data_ptr, "tapp.dst")
+                    .unwrap()
+                    .into_pointer_value();
+                let tail = unsafe {
+                    self.builder
+                        .build_gep(elem_ty, dst_data, &[cur_len], "tapp.tail")
+                        .unwrap()
+                };
+                let copy_bytes = self
+                    .builder
+                    .build_int_mul(src_len, elem_size, "tapp.copy_bytes")
+                    .unwrap();
+                self.builder
+                    .build_memcpy(tail, 8, src_data, 8, copy_bytes)
+                    .unwrap();
+                self.builder
+                    .build_call(self.runtime_fns.free_fn, &[src_data.into()], "")
+                    .unwrap();
+                self.builder.build_store(len_p, needed).unwrap();
+                self.suppress_source_vec_cleanup_for_arg(&args[0].value);
+                self.disarm_container_bodies_for_arg(&args[0].value);
+                let unit_val = i64_t.const_zero().into();
+                let ok_result = self.build_nonshared_enum_value("Result", "Ok", &[unit_val])?;
+                let ok_end = self.builder.get_insert_block().unwrap();
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+                self.builder.position_at_end(merge_bb);
+                let phi = self
+                    .builder
+                    .build_phi(ok_result.get_type(), "tapp.result")
+                    .unwrap();
+                phi.add_incoming(&[(&ok_result, ok_end), (&err_result, oom_end)]);
+                Ok(phi.as_basic_value())
+            }
             // B-2026-08-25-20 — `Vec.try_reserve(n)` / `try_reserve_exact(n)`.
             // The fallible twin of the `reserve` arm above: same capacity
             // arithmetic, but the growth allocation goes through
@@ -3415,9 +3863,28 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.builder
                     .build_memcpy(new_data, 8, cur_data, 8, old_bytes)
                     .unwrap();
+                // B-2026-08-26-22 — FREE ONLY AN OWNED HEAP BUFFER. This arm
+                // serves `String.try_reserve` as well as `Vec.try_reserve`
+                // (`reserve` is one entry in `CODEGEN_FALLIBLE_INSTANCE_BASES`
+                // for both), and an SSO INLINE string carries `cap < 0` with a
+                // `data` pointer INTO its own struct — freeing that is a
+                // free-of-non-heap, not a leak. The guard is a no-op for every
+                // Vec (a Vec's `cap` is never negative) and for every string
+                // today (inline construction has not landed), so this is
+                // hardening ahead of that flip rather than a live fix — the same
+                // stance `emit_string_buffer_grow` already takes one arm over.
+                let owned_heap = self.sso_string_is_owned_heap(cur_cap);
+                let free_bb = self.context.append_basic_block(fn_val, "trsv.free");
+                let freed_bb = self.context.append_basic_block(fn_val, "trsv.freed");
+                self.builder
+                    .build_conditional_branch(owned_heap, free_bb, freed_bb)
+                    .unwrap();
+                self.builder.position_at_end(free_bb);
                 self.builder
                     .build_call(self.runtime_fns.free_fn, &[cur_data.into()], "")
                     .unwrap();
+                self.builder.build_unconditional_branch(freed_bb).unwrap();
+                self.builder.position_at_end(freed_bb);
                 self.builder.build_store(data_p, new_data).unwrap();
                 self.builder.build_store(cap_p, new_cap).unwrap();
                 self.builder.build_unconditional_branch(ok_bb).unwrap();
@@ -7136,6 +7603,68 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 let exact = method == "reserve_exact";
                 let fn_val = self.current_fn.unwrap();
+                // B-2026-08-26-22 — `String.reserve` shares this dispatcher and
+                // this method NAME with `Vec.reserve`, so the String receiver
+                // has to be split off before the Vec arithmetic runs.
+                // `string_vars` is the same disambiguator the `for`-loop element
+                // lowering uses for exactly this reason (Vec[u8] and String both
+                // present as an i8 element).
+                //
+                // It is not merely a different element size: a String's buffer
+                // may be an SSO INLINE buffer (`cap < 0`), which must not be
+                // `realloc`'d because it IS the struct. `emit_string_buffer_grow`
+                // already encodes that split, so the String path routes through
+                // it rather than duplicating the realloc here.
+                if self.var_types.string_vars.contains(var_name) {
+                    let additional = self.compile_expr(&args[0].value)?.into_int_value();
+                    let (data, len) = self.load_string_data_len(vec_ty, data_ptr, "srsv");
+                    let cap_p = self
+                        .builder
+                        .build_struct_gep(vec_ty, data_ptr, 2, "srsv.cap.p")
+                        .unwrap();
+                    let cur_cap = self
+                        .builder
+                        .build_load(i64_t, cap_p, "srsv.cap")
+                        .unwrap()
+                        .into_int_value();
+                    let zero = i64_t.const_zero();
+                    let neg = self
+                        .builder
+                        .build_int_compare(inkwell::IntPredicate::SLT, additional, zero, "srsv.neg")
+                        .unwrap();
+                    let add0 = self
+                        .builder
+                        .build_select(neg, zero, additional, "srsv.add0")
+                        .unwrap()
+                        .into_int_value();
+                    let needed = self
+                        .builder
+                        .build_int_add(len, add0, "srsv.needed")
+                        .unwrap();
+                    let grow_bb = self.context.append_basic_block(fn_val, "srsv.grow");
+                    let done_bb = self.context.append_basic_block(fn_val, "srsv.done");
+                    // An SSO INLINE string reports a negative `cap`, so a signed
+                    // `needed > cap` is true for it whenever `needed > 0` — which
+                    // sends it to the grow path and out to a heap buffer. That is
+                    // the correct answer for a reservation the inline capacity
+                    // cannot satisfy, and harmless (a fresh malloc + copy) when
+                    // it could.
+                    let must_grow = self
+                        .builder
+                        .build_int_compare(inkwell::IntPredicate::SGT, needed, cur_cap, "srsv.cmp")
+                        .unwrap();
+                    self.builder
+                        .build_conditional_branch(must_grow, grow_bb, done_bb)
+                        .unwrap();
+                    self.builder.position_at_end(grow_bb);
+                    let new_data =
+                        self.emit_string_buffer_grow(fn_val, data, cur_cap, len, needed, "srsv");
+                    self.builder.build_store(data_ptr, new_data).unwrap();
+                    self.builder.build_store(cap_p, needed).unwrap();
+                    self.builder.build_unconditional_branch(done_bb).unwrap();
+                    self.builder.position_at_end(done_bb);
+                    return Ok(i64_t.const_zero().into());
+                }
                 let additional = self.compile_expr(&args[0].value)?.into_int_value();
                 let len_p = self
                     .builder

@@ -763,6 +763,43 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 Type::Unit
             }
+            // B-2026-08-26-22 — `String.reserve(additional)`. design.md
+            // § Fallible Allocation's panicking/fallible table names it and its
+            // `try_reserve` twin; the twin derives for free once this base
+            // exists, because `fallible_alloc.rs` already lists `reserve` in
+            // `TRY_ALLOC_INSTANCE_BASES`.
+            //
+            // NO `String.capacity()` COMPANION, deliberately, and the reason is
+            // a measured difference between the two backends rather than an
+            // oversight. `Vec.capacity()` exists (B-2026-08-25-20) because the
+            // interpreter mutates a `Value::Array` IN PLACE through its `Rc`,
+            // so a reservation survives later pushes. A `Value::String` is
+            // CLONE-ON-WRITE — every mutating arm clones and calls
+            // `write_back_receiver` — so a reservation is discarded by the very
+            // next `push_str`, while codegen's `{ptr,len,cap}` keeps it.
+            // Exposing `capacity()` here would ship a guaranteed run-vs-build
+            // divergence for `s.reserve(100); s.push_str("x"); s.capacity()`.
+            // `reserve` itself stays honest under that model: it is a hint with
+            // no observable semantics beyond leaving the string unchanged.
+            "reserve" => {
+                if args.len() != 1 {
+                    self.type_error(
+                        format!(
+                            "'reserve' expects 1 argument (additional bytes), found {}",
+                            args.len()
+                        ),
+                        *span,
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                } else {
+                    let at = self.infer_expr(&args[0].value);
+                    self.check_assignable(&Type::Int(IntSize::I64), &at, args[0].value.span);
+                }
+                Type::Unit
+            }
             "push" => {
                 // push(c: char) -> (). Mutating append of a single Unicode
                 // scalar value, UTF-8 encoded into the receiver's byte

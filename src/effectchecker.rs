@@ -1275,6 +1275,10 @@ impl<'a> EffectChecker<'a> {
             "VecDeque.pop_front",
             "String.new",
             "String.push_str",
+            // B-2026-08-26-22 — a reallocating hint still MOVES the buffer, so
+            // a co-grouped sibling read would hold a freed `ptr`. Same standing
+            // rule (B-2026-07-14-17) that `Vec.reserve` is seeded under.
+            "String.reserve",
             "Map.new",
             "Map.with_capacity",
             "Map.insert",
@@ -1341,6 +1345,42 @@ impl<'a> EffectChecker<'a> {
             "VecDeque.try_with_capacity",
             "String.try_with_capacity",
             "Vec.try_from_slice",
+            // B-2026-08-26-26 — the MUTATING instance companions need their
+            // FULLY-QUALIFIED names here, not just the shared
+            // `TRY_ALLOC_EFFECT_KEY` below.
+            //
+            // `method_effects_imply_receiver_mutation` (concurrency/reads.rs)
+            // matches a seed key by `key == method || key.ends_with(".<method>")`.
+            // `__builtin_try_alloc` ends with neither, so every `try_*` instance
+            // call read as NON-mutating to the auto-parallelizer even though the
+            // shared key gave it an `allocates(Heap)` effect for the effect
+            // checker's own purposes. The analyzer then hoisted a `v.try_push(x)?`
+            // into a parallel worker function — and a worker returns void, so the
+            // `?` early-return's `ret {i64, i64}` failed module verification:
+            // `karac build` died on a program `--interp` runs correctly.
+            //
+            // Measured on clean HEAD before this fix, so it predates the
+            // `try_resize`/`try_append` arms that surfaced it: two `v.try_push(1)?`
+            // calls plus ONE unrelated second `Vec` binding is the whole repro —
+            // the second binding is what gives the analyzer an independent group
+            // to hoist.
+            //
+            // Suffix matching makes these name-based rather than type-based, so
+            // one key per METHOD NAME covers every receiver type (`Vec.try_insert`
+            // also answers for `Map`/`Set`/`SortedSet`). `try_clone` is
+            // deliberately absent: it allocates but does not mutate its receiver,
+            // and seeding it would over-serialize every clone for nothing.
+            "Vec.try_push",
+            "Vec.try_insert",
+            "Vec.try_extend",
+            "Vec.try_extend_from_slice",
+            "Vec.try_reserve",
+            "Vec.try_reserve_exact",
+            "Vec.try_resize",
+            "Vec.try_append",
+            "String.try_push_str",
+            "VecDeque.try_push_back",
+            "VecDeque.try_push_front",
             crate::fallible_alloc::TRY_ALLOC_EFFECT_KEY,
         ] {
             let mut set = EffectSet::new();

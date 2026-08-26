@@ -17,8 +17,8 @@
 //!
 //! Only `try_<base>` forms whose panicking `<base>` already exists on a builtin
 //! collection are registered. Companions whose base operation does not exist yet
-//! (`Vec.append` / `Vec.resize` / `String.reserve` / `Map.reserve` / …) are
-//! deferred until that base lands — see the tracker entry. That rule is the
+//! (`Map.reserve`, `Vec.from_iter` — see B-2026-08-26-22) are deferred until
+//! that base lands — see the tracker entry. That rule is the
 //! whole explanation for the gap B-2026-08-25-20 reported as three missing
 //! `try_*` methods: the missing half is the PANICKING base, not the companion
 //! layer, which is why `try_extend` was a one-line registration here (its base
@@ -57,6 +57,13 @@ pub const TRY_ALLOC_INSTANCE_BASES: &[&str] = &[
     // working exactly as written rather than an exception to it.
     "reserve",
     "reserve_exact",
+    // B-2026-08-26-22 — registered only now that each has a FALLIBLE codegen
+    // arm. B-2026-08-25-20 landed their panicking bases but deliberately left
+    // them off this list, because a name here without a matching
+    // `CODEGEN_FALLIBLE_INSTANCE_BASES` entry typechecks and then fails
+    // `karac build` — the run-vs-build shape.
+    "resize",
+    "append",
     "insert", // Map.insert, Set.insert, SortedSet.insert, SortedMap.insert
     "clone",  // Vec/String/Map/SortedMap/Set/SortedSet/VecDeque.clone
 ];
@@ -109,6 +116,8 @@ pub const CODEGEN_FALLIBLE_INSTANCE_BASES: &[&str] = &[
     "extend",            // Vec.try_extend (alias of the above, all phases)
     "reserve",           // Vec.try_reserve       (B-2026-08-25-20)
     "reserve_exact",     // Vec.try_reserve_exact (B-2026-08-25-20)
+    "resize",            // Vec.try_resize        (B-2026-08-26-22)
+    "append",            // Vec.try_append        (B-2026-08-26-22)
     "clone",             // Vec/VecDeque/String.try_clone (Map/Set rejected at dispatch)
     "insert", // Map/Set/SortedSet.try_insert (routes to compile_map_method / compile_set_method)
 ];

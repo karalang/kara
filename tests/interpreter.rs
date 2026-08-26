@@ -38786,3 +38786,87 @@ fn main() {
 "#);
     assert_eq!(out, "ok true\n");
 }
+
+// ── B-2026-08-26-22: the fallible-allocation remainder ──────────
+
+/// `String.reserve` is a pure hint — no `String.capacity()` exists to observe
+/// it, deliberately, because `Value::String` is clone-on-write and would
+/// discard the reservation on the next mutation while codegen's
+/// `{ptr,len,cap}` keeps it. What both backends owe is that the CONTENT is
+/// unchanged, which is what this asserts.
+#[test]
+fn string_reserve_is_a_hint_that_leaves_the_content_alone() {
+    let out = run(r#"
+fn main() {
+    let mut s: String = String.new();
+    s.push_str("hello");
+    s.reserve(1000);
+    println(f"[{s}] {s.len()}");
+    s.push_str(" world");
+    s.reserve(-5);
+    s.reserve(0);
+    println(f"[{s}] {s.len()}");
+}
+"#);
+    assert_eq!(out, "[hello] 5\n[hello world] 11\n");
+}
+
+/// THE ARM-SHADOWING GUARD. Interpreter method dispatch is by NAME, so
+/// `Vec.reserve` and `String.reserve` must be served by ONE match arm. A
+/// separate earlier `"reserve"` arm for String shadows the Vec one completely —
+/// measured, and it failed loudly with `method 'reserve' not found on type
+/// 'Vec' (no interpreter dispatch arm)` rather than silently. Both receivers in
+/// one program is what keeps them from drifting back apart.
+#[test]
+fn vec_and_string_reserve_are_served_by_the_same_dispatch_arm() {
+    let out = run(r#"
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.reserve(32);
+    v.push(1);
+    let mut s: String = String.new();
+    s.reserve(32);
+    s.push_str("x");
+    println(f"{v.len()} {v.capacity() >= 32} [{s}]");
+}
+"#);
+    assert_eq!(out, "1 true [x]\n");
+}
+
+#[test]
+fn vec_try_resize_and_try_append_derive_from_their_bases() {
+    let out = run(r#"
+fn build() -> Result[i64, AllocError] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1); v.push(2); v.push(3);
+    v.try_resize(6, 7)?;
+    println(f"grow {v.len()} {v[5]}");
+    v.try_resize(2, 0)?;
+    println(f"shrink {v.len()}");
+    let mut a: Vec[i64] = Vec.new();
+    a.push(10);
+    let mut c: Vec[i64] = Vec.new();
+    c.push(30);
+    a.try_append(c)?;
+    println(f"append {a.len()} {a[1]}");
+    let mut p: Vec[String] = Vec.new();
+    p.push("one");
+    p.try_resize(3, "pad")?;
+    let mut q: Vec[String] = Vec.new();
+    q.push("tail");
+    p.try_append(q)?;
+    println(f"heap {p.len()} {p[2]} {p[3]}");
+    return Ok(p.len());
+}
+fn main() {
+    match build() {
+        Ok(n) => { println(f"ok {n}"); }
+        Err(e) => { println("alloc failed"); }
+    }
+}
+"#);
+    assert_eq!(
+        out,
+        "grow 6 7\nshrink 2\nappend 2 30\nheap 4 pad tail\nok 4\n"
+    );
+}

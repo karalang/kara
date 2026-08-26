@@ -92,6 +92,7 @@ pub(super) const STRING_BUILTIN_METHODS: &[&str] = &[
     "repeat",
     "replace",
     "replacen",
+    "reserve",
     "slice",
     "sorted",
     "sorted_by",

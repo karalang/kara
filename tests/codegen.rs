@@ -47334,6 +47334,101 @@ fn driver() -> i64 {
         }
     }
 
+    /// B-2026-08-26-22 — the fallible-allocation remainder, twinned against the
+    /// interpreter.
+    ///
+    /// `String.reserve` carries no `capacity()` companion (see its typechecker
+    /// arm), so what the two backends are compared on is the CONTENT, which is
+    /// the whole of what a hint owes.
+    #[test]
+    fn e2e_fallible_alloc_remainder_agrees_with_the_interpreter() {
+        let cases: &[(&str, &str)] = &[
+            (
+                "String.reserve leaves content alone",
+                "let mut s: String = String.new();\n\
+                 s.push_str(\"hello\");\n\
+                 s.reserve(1000);\n\
+                 println(f\"[{s}] {s.len()}\");\n\
+                 s.push_str(\" world\");\n\
+                 s.reserve(-5);\n\
+                 s.reserve(0);\n\
+                 println(f\"[{s}] {s.len()}\");",
+            ),
+            (
+                "Vec and String reserve share one name",
+                "let mut v: Vec[i64] = Vec.new();\n\
+                 v.reserve(32);\n\
+                 v.push(1);\n\
+                 let mut s: String = String.new();\n\
+                 s.reserve(32);\n\
+                 s.push_str(\"x\");\n\
+                 println(f\"{v.len()} {v.capacity() >= 32} [{s}]\");",
+            ),
+        ];
+        for (label, body) in cases {
+            let src = format!("fn main() {{\n{body}\n}}\n");
+            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            assert!(
+                interp_errs.is_empty(),
+                "{label}: interpreter errored: {interp_errs:?}"
+            );
+            let expected = interp_out.join("");
+            if let Some(aot) = run_program(&src) {
+                assert_eq!(aot, expected, "{label}: AOT and the interpreter disagree");
+            }
+        }
+    }
+
+    /// `try_resize` / `try_append` end to end. Both are all-or-nothing: the
+    /// fallible allocation happens before anything is mutated, so an `Err`
+    /// leaves the receiver's buffer, length and contents untouched — and for
+    /// `try_append`, leaves the SOURCE still owning its elements, which is why
+    /// its cleanup is disarmed only on the success path.
+    #[test]
+    fn e2e_vec_try_resize_and_try_append_agree_with_the_interpreter() {
+        let src = "fn build() -> Result[i64, AllocError] {\n\
+                       let mut v: Vec[i64] = Vec.new();\n\
+                       v.push(1); v.push(2); v.push(3);\n\
+                       v.try_resize(6, 7)?;\n\
+                       println(f\"grow {v.len()} {v[5]}\");\n\
+                       v.try_resize(2, 0)?;\n\
+                       println(f\"shrink {v.len()}\");\n\
+                       let mut a: Vec[i64] = Vec.new();\n\
+                       a.push(10);\n\
+                       let mut c: Vec[i64] = Vec.new();\n\
+                       c.push(30);\n\
+                       a.try_append(c)?;\n\
+                       println(f\"append {a.len()} {a[1]}\");\n\
+                       let mut p: Vec[String] = Vec.new();\n\
+                       p.push(\"one\");\n\
+                       p.try_resize(3, \"pad\")?;\n\
+                       let mut q: Vec[String] = Vec.new();\n\
+                       q.push(\"tail\");\n\
+                       p.try_append(q)?;\n\
+                       println(f\"heap {p.len()} {p[2]} {p[3]}\");\n\
+                       return Ok(p.len());\n\
+                   }\n\
+                   fn main() {\n\
+                       match build() {\n\
+                           Ok(n) => { println(f\"ok {n}\"); }\n\
+                           Err(e) => { println(\"alloc failed\"); }\n\
+                       }\n\
+                   }";
+        let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+        assert!(
+            interp_errs.is_empty(),
+            "interpreter errored: {interp_errs:?}"
+        );
+        let expected = interp_out.join("");
+        assert_eq!(
+            expected,
+            "grow 6 7\nshrink 2\nappend 2 30\nheap 4 pad tail\nok 4\n"
+        );
+        if let Some(aot) = run_program(src) {
+            assert_eq!(aot, expected, "AOT and the interpreter disagree");
+        }
+    }
+
     /// The `try_*` half. The row's headline was three missing `try_*` methods;
     /// the actual missing half was the PANICKING base each one derives from
     /// (`fallible_alloc.rs` recurses into the base for argument validation and

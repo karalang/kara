@@ -27246,6 +27246,62 @@ fn main() {
         );
     }
 
+    /// B-2026-08-26-26 — a fallible `try_*` companion consumed with `?` must be
+    /// SEEDED receiver-mutating, or the auto-parallelizer hoists it into a
+    /// worker function and the `?` early-return cannot compile there.
+    ///
+    /// Found while landing `try_resize`/`try_append` (B-2026-08-26-22) but NOT
+    /// caused by them: verified on clean HEAD, with `try_push` — a companion
+    /// that has shipped for some time. The seed key every instance companion
+    /// shared, `__builtin_try_alloc`, matches neither `key == method` nor
+    /// `key.ends_with(".try_push")`, so
+    /// `method_effects_imply_receiver_mutation` read every one of them as
+    /// non-mutating. The analyzer then moved the call into a parallel worker,
+    /// which returns void, and the `?` failure path's `ret {i64, i64}` failed
+    /// module verification. `karac build` refused a program `--interp` runs
+    /// correctly.
+    ///
+    /// THE SECOND `Vec` IS LOAD-BEARING, not scenery: it is what gives the
+    /// analyzer an independent group to hoist into. Without it the same
+    /// `try_push` calls compile fine, which is why the shipped feature went
+    /// this long without tripping over it.
+    ///
+    /// AND THIS FIXTURE HAS TO LIVE HERE, for the same reason its
+    /// B-2026-08-25-20 neighbour below does: `run_program_capturing` passes
+    /// `None` for the concurrency analysis, so auto-par never runs under the
+    /// codegen E2E harness and no fixture there can reach this at all.
+    #[test]
+    fn asan_fallible_companions_are_seeded_against_the_auto_parallelizer() {
+        assert_clean_asan_run(
+            r#"
+fn build() -> Result[i64, AllocError] {
+    let mut v: Vec[i64] = Vec.new();
+    v.try_push(1)?;
+    v.try_push(2)?;
+    v.try_reserve(16)?;
+    v.try_resize(4, 9)?;
+    let mut spare: Vec[i64] = Vec.new();
+    spare.push(7);
+    v.try_append(spare)?;
+    let mut s: String = String.new();
+    s.try_push_str("hi")?;
+    let mut other: Vec[i64] = Vec.new();
+    other.push(99);
+    println(f"{v.len()} {v[3]} {v[4]} {other[0]} [{s}]");
+    return Ok(v.len());
+}
+fn main() {
+    match build() {
+        Ok(n) => { println(f"ok {n}"); }
+        Err(e) => { println("alloc failed"); }
+    }
+}
+"#,
+            &["5 9 7 99 [hi]", "ok 5"],
+            "fallible_companions_seeded_against_auto_par",
+        );
+    }
+
     /// B-2026-08-25-20 — `Vec.resize` / `Vec.append` must be SEEDED
     /// receiver-mutating in `effectchecker.rs`, or the auto-parallelizer races
     /// them.
