@@ -94,7 +94,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | miscompile | 292 | 1 |
 | leak | 196 | 0 |
-| missing-feature | 180 | 6 |
+| missing-feature | 181 | 6 |
 | run-vs-build | 167 | 2 |
 | codegen-gap | 140 | 1 |
 | double-free | 140 | 0 |
@@ -110,8 +110,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1055 | 7 |
-| typecheck | 267 | 4 |
+| codegen | 1056 | 7 |
+| typecheck | 267 | 3 |
 | interp | 184 | 2 |
 | other | 70 | 3 |
 | ownership | 65 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1605 surfaced · 12 open · 1568 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-26). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1606 surfaced · 12 open · 1569 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-26). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (12)
 
@@ -138,10 +138,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1605 surfaced
 | B-2026-08-26-13 | 2026-08-26 | other | medium | `String.split` HAS NO BORROWING FORM: it returns `Vec[String]`, so tokenizing costs one heap allocation and one byte copy PER FIELD, and there is no slice-returning variant to reach for. Measured at 0.67 s where C's in-place split is 0.03 s and Rust's `Vec[&str]` is 0.18 s -- but Kara BEATS Rust's same-semantics `Vec[String]` version (1.17 s) by 1.7x, so the implementation is fine and the API's return shape is the entire gap. | — |
 | B-2026-08-26-15 | 2026-08-26 | typecheck | low | `LazyLock.new`'s closure-capture restriction is UNENFORCED: design.md says the closure "may only capture other module-level compile-time bindings; captures of runtime state are a compile error", but a closure capturing a function local is accepted silently. Measured to be a missing RESTRICTION rather than a correctness hazard -- the capturing form produces identical, correct results on `--interp`, `karac run` and `karac build` -- which is why it is split out of B-2026-08-26-3 rather than blocking it. | — |
 | B-2026-08-26-21 | 2026-08-26 | codegen+interp | medium | A RELOCATING element store (`b.xs[i] = b.xs[j]`, then `b.xs[j] = t`) runs the displaced element's user `Drop` BODY, even though the value is being moved to another slot rather than destroyed. A two-element swap of a `Drop` type prints FIVE drop bodies, all during the swap and none at scope exit; the correct sequence is one body per element when it finally dies. | — |
-| B-2026-08-26-22 | 2026-08-26 | typecheck+codegen | medium | The fallible-allocation table's REMAINING gaps, after B-2026-08-25-20 landed the Vec capacity family: `try_resize` / `try_append` have panicking bases now but no fallible codegen arm and so are NOT registered; `String.reserve`, `Map.reserve` and `Vec.from_iter` still have no base at all. Measured one per compile on the commit that closed -20: `v.try_resize(4, 0)` -> `no method 'try_resize' on type 'Vec'`; `v.try_append(b)` -> `no method 'try_append'`; `s.reserve(16)` -> `no method 'reserve' on type 'String'`; `m.reserve(16)` -> `no method 'reserve' on type 'Map'`; `Vec.from_iter(0..4)` -> `no associated function 'from_iter' on type 'Vec'`. design.md's panicking/fallible table names all five. | — |
 | B-2026-08-26-23 | 2026-08-26 | codegen | medium | `Ordering`'s PREDICATE METHODS (`is_lt` / `is_le` / `is_gt` / `is_ge` / `is_eq`) fail to BUILD whenever codegen cannot name the receiver's type -- a chained `a.cmp(b).is_lt()` on a PRIMITIVE, and EVERY `Option[Ordering]` receiver including a plainly-annotated local. All three shapes run correctly under `--interp`, so this is a run-vs-build divergence, and it is what forced the ordering operators to desugar through `cmp` instead of design.md's specified `partial_cmp`. | — |
 | B-2026-08-26-24 | 2026-08-26 | codegen+interp | medium | A COMPARISON OPERATOR INSIDE A GENERIC BODY never dispatches to the element's user `impl Ord`: operator lowering resolves only CONCRETE operand types, so `a < b` on a `T: Ord` stays unlowered and dies with `operator 'Lt' is not defined for operands of type 'Struct'` / `Unsupported struct binary op: Gt`. `PriorityQueue[T]` is the shipping casualty -- it works for `#[derive(Ord)]` and fails for every hand-written impl. | — |
 | B-2026-08-26-25 | 2026-08-26 | typecheck | medium | ORDERING OPERATORS ON A `shared struct` ARE ADMITTED BY THE TYPECHECKER AND IMPLEMENTED BY NEITHER BACKEND: `a < b` on a shared struct passes `karac check` with NO derive and NO impl at all, then fails with `operator 'Lt' is not defined for operands of type 'SharedStruct'` under `--interp` and `Binary op Lt: left operand has non-comparable type PointerType` at build. Adding `#[derive(Ord)]` does not help. | — |
+| B-2026-08-26-27 | 2026-08-26 | codegen | medium | `Vec.try_from_iter` CANNOT BE REGISTERED UNTIL `collect` HAS A FALLIBLE LOWERING: its base `Vec.from_iter` lowers to `iter.collect()`, whose codegen grows the accumulator through the PANICKING allocator, so a companion built on that rewrite would return `Ok` unconditionally and then abort inside `collect` on real OOM. design.md § Fallible Allocation names `try_from_iter` in its table AND leans on it in prose -- `let v = Vec.try_from_iter(0..1024)?` is the sanctioned replacement for a `.collect()` rejected under `panic_on_alloc_failure = false` -- so this is the one row in that table with a spec consumer already pointing at it. Measured on the commit that closed B-2026-08-26-22: `Vec.try_from_iter(0..4)` reports `no associated function 'try_from_iter' on type 'Vec'` at typecheck, identically under `karac check` and `karac build`. | — |
 
 ### Relocated (1)
 
@@ -172,9 +172,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1605 surfaced
 
 </details>
 
-### Fixed (1568)
+### Fixed (1569)
 
-<details><summary>1568 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1569 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1745,6 +1745,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1605 surfaced
 | B-2026-08-26-18 | codegen | medium | A `PriorityQueue[T]` whose element T is a STRUCT CARRYING A HEAP FIELD leaks that field's buffer -- 31 bytes in 8 allocations on the three-push fixtu… | 54c5421 |
 | B-2026-08-26-19 | typecheck | low | A `ref T`-returning method is accepted in a plain value position but REJECTED as a closure tail against `Fn() -> T`: `\|\| cell.get_or_init(\|\| 7)` fail… | fa5e169 |
 | B-2026-08-26-20 | codegen | medium | A `char` returned through a CLOSURE prints as its integer code point under both compiled backends while the interpreter prints the character: `let c:… | d3b3053 |
+| B-2026-08-26-22 | typecheck+codegen | medium | The fallible-allocation table's REMAINING gaps, after B-2026-08-25-20 landed the Vec capacity family: `try_resize` / `try_append` have panicking base… | 4c3da28 |
 | B-2026-08-26-26 | effect+codegen | medium | RUN-VS-BUILD ON EVERY FALLIBLE `try_*` COMPANION CONSUMED WITH `?`: the auto-parallelizer hoists the call into a worker function, which returns void,… | aae805f |
 
 </details>
