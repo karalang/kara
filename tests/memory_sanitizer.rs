@@ -29760,6 +29760,100 @@ fn main() {
     /// but not on macOS, so a green local Mac run does not clear this (see
     /// CLAUDE.md § leak detection).
     #[test]
+    fn asan_user_hash_impl_key_no_leak() {
+        // The compiled user-`impl Hash` path allocates a `Vec[u8]` PER KEY HASH
+        // — the sink the impl writes into — and the synthesized hash function
+        // frees it after the digest is taken (B-2026-08-26-10). That free is on
+        // the map's hot path, so a missing one leaks per insert and per lookup
+        // rather than once per program.
+        //
+        // Heap-backed key fields and enough operations that a regressed free
+        // would be unmistakable. Lookups use a BOUND key rather than a
+        // temporary: `Map.get` with a temporary heap-owning struct key leaks
+        // that temporary on the DERIVED path too, so it is a pre-existing defect
+        // with its own row and not what this fixture measures.
+        let label = "user_hash_impl_key";
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let src = r#"
+struct Item { id: i64, name: String }
+impl PartialEq for Item { fn eq(ref self, other: ref Item) -> bool { self.id == other.id } }
+impl Eq for Item {}
+impl Hash for Item {
+    fn hash[H: Hasher](ref self, hasher: mut ref H) {
+        hasher.write_i64(self.id);
+        hasher.write(self.name.bytes());
+    }
+}
+fn main() {
+    let mut m: Map[Item, i64] = Map.new();
+    let mut i = 0;
+    while i < 40 {
+        m.insert(Item { id: i, name: f"key-{i}-padding-padding-padding" }, i);
+        i = i + 1;
+    }
+    let mut hits = 0;
+    let mut j = 0;
+    while j < 40 {
+        let probe = Item { id: j, name: f"key-{j}-padding-padding-padding" };
+        match m.get(probe) {
+            Some(v) => { hits = hits + v; }
+            None => {}
+        }
+        j = j + 1;
+    }
+    println(m.len());
+    println(hits);
+}
+"#;
+        let Some((stdout, status)) = run_under_asan(src, label) else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN run failed (status {status:?}); stdout:\n{stdout}"
+        );
+        assert_eq!(stdout.trim(), "40\n780");
+    }
+
+    #[test]
+    fn asan_derived_hash_key_control_no_leak() {
+        // Control for the fixture above: the same shape with derives instead of
+        // hand-written impls. Both must be clean — the user-impl path is not
+        // allowed to cost an allocation the derived path does not.
+        let label = "derived_hash_key_control";
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let src = r#"
+#[derive(Hash, Eq, PartialEq)]
+struct Item { id: i64, name: String }
+fn main() {
+    let mut m: Map[Item, i64] = Map.new();
+    let mut i = 0;
+    while i < 40 {
+        m.insert(Item { id: i, name: f"key-{i}-padding-padding-padding" }, i);
+        i = i + 1;
+    }
+    println(m.len());
+}
+"#;
+        let Some((stdout, status)) = run_under_asan(src, label) else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN run failed (status {status:?}); stdout:\n{stdout}"
+        );
+        assert_eq!(stdout.trim(), "40");
+    }
+
+    #[test]
     fn asan_priority_queue_string_drain_no_leak() {
         let label = "priority_queue_string_drain";
         if !asan_available() {

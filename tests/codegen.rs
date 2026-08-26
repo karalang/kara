@@ -87082,6 +87082,58 @@ fn main() {
     }
 
     #[test]
+    fn e2e_a_user_hash_impl_composes_with_a_user_build_hasher() {
+        // design.md § `Hash` and `Hasher` splits the two questions, and the
+        // implementation has to keep them split: `Hash` decides WHICH BYTES a key
+        // contributes, `BuildHasher` decides how those bytes become a digest. A
+        // key type with its own `impl Hash` inside a container with its own
+        // hasher exercises both at once — the impl must not override the builder,
+        // and the builder must not go back to hashing the key's memory image.
+        //
+        // The impl keys on `id` alone, so the two `id: 1` inserts collapse
+        // whatever the builder does; the builder is a real FNV-1a, so the digest
+        // is its own rather than the default's.
+        let out = run_program(
+            r#"
+struct Item { id: i64, tag: i64 }
+impl PartialEq for Item { fn eq(ref self, other: ref Item) -> bool { self.id == other.id } }
+impl Eq for Item {}
+impl Hash for Item { fn hash[H: Hasher](ref self, hasher: mut ref H) { hasher.write_i64(self.id) } }
+
+struct Fnv { mut h: u64 }
+impl Hasher for Fnv {
+    fn write(mut ref self, bytes: ref Slice[u8]) {
+        let mut i = 0;
+        while i < bytes.len() {
+            self.h = (self.h ^ (bytes[i] as u64)).wrapping_mul(16777619u64);
+            i = i + 1;
+        }
+    }
+    fn finish(ref self) -> u64 { self.h }
+}
+struct FnvBuild { }
+impl BuildHasher for FnvBuild {
+    type Hasher = Fnv;
+    fn build(ref self) -> Fnv { Fnv { h: 2166136261u64 } }
+}
+fn main() {
+    let mut m: Map[Item, i64, FnvBuild] = Map.new();
+    m.insert(Item { id: 1, tag: 100 }, 10);
+    m.insert(Item { id: 1, tag: 999 }, 11);
+    m.insert(Item { id: 2, tag: 5 }, 20);
+    println(m.len());
+    match m.get(Item { id: 1, tag: 0 }) { Some(v) => println(v), None => println(-1) }
+}
+"#,
+        );
+        assert_eq!(
+            out.expect("a user Hash impl under a user BuildHasher must build")
+                .trim(),
+            "2\n11"
+        );
+    }
+
+    #[test]
     fn e2e_a_derived_key_still_hashes_and_compares_structurally() {
         // The counterweight to the test above: adding user-impl dispatch must
         // not disturb the derive path, which is what almost every Map key uses.
