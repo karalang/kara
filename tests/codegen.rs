@@ -5715,6 +5715,75 @@ fn main() { println(build2().v); }
         assert_eq!(out, "-2147483648\n603979776\nfalse\n128\n-4\n");
     }
 
+    /// `~` complements at the DECLARED width, not the carrier's.
+    ///
+    /// `~5u8` is 250. It produced 18446744073709551610 in the compiled
+    /// backends and -6 in the interpreter — a value a `u8` cannot even hold —
+    /// so the two did not agree on the wrong answer either.
+    ///
+    /// THE SPELLING IS LOAD-BEARING, and a first draft of this test missed the
+    /// bug entirely by getting it wrong. A SUFFIXED initializer (`let a: u8 =
+    /// 5u8`) gives the local a real `i8` alloca, so `xor i8` already
+    /// complemented 8 bits and codegen was correct. An UNSUFFIXED one (`let a:
+    /// u8 = 5`) leaves it in the i64 carrier, `xor i64` flips all 64, and the
+    /// answer is wrong. Both spellings are here on purpose: the unsuffixed
+    /// arms are the regression, the suffixed arms pin the path that was
+    /// already right against the re-narrowing introduced to fix the other.
+    ///
+    /// Signed narrow was correct throughout (`~x == -x-1` never leaves a
+    /// narrow signed range) and so was `u64` (64 IS the carrier width), which
+    /// is why a test over `i32` and `u64` alone would pass in every state of
+    /// the code.
+    #[test]
+    fn e2e_bitwise_not_runs_at_declared_width() {
+        let Some(out) = run_program(
+            "fn main() {\n\
+             \x20   // (a) UNSUFFIXED narrow unsigned — the broken spelling\n\
+             \x20   let a: u8 = 5;\n\
+             \x20   println(~a);\n\
+             \x20   let b: u16 = 5;\n\
+             \x20   println(~b);\n\
+             \x20   let c: u32 = 5;\n\
+             \x20   println(~c);\n\
+             \x20   // (b) the same through a bound result, not just inline\n\
+             \x20   let d: u8 = 5;\n\
+             \x20   let rd: u8 = ~d;\n\
+             \x20   println(rd);\n\
+             \x20   // (c) SUFFIXED — already correct, must stay correct\n\
+             \x20   let e: u8 = 5u8;\n\
+             \x20   println(~e);\n\
+             \x20   let f: u8 = 5u8;\n\
+             \x20   let rf: u8 = ~f;\n\
+             \x20   println(rf);\n\
+             \x20   // (d) narrow signed and u64 — correct before and after\n\
+             \x20   let g: i8 = 5;\n\
+             \x20   println(~g);\n\
+             \x20   let h: i32 = 5;\n\
+             \x20   println(~h);\n\
+             \x20   let i: u64 = 5;\n\
+             \x20   println(~i);\n\
+             \x20   // (e) edges saturate the WIDTH, not the carrier\n\
+             \x20   let z: u8 = 0;\n\
+             \x20   println(~z);\n\
+             \x20   let m: u8 = 255;\n\
+             \x20   println(~m);\n\
+             \x20   let lo: i8 = -128;\n\
+             \x20   println(~lo);\n\
+             \x20   // (f) …so the result is a real narrow value: an equality\n\
+             \x20   // against the in-range answer holds\n\
+             \x20   let n: u8 = 250;\n\
+             \x20   println(~n == 5);\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            "250\n65530\n4294967290\n250\n250\n250\n\
+             -6\n-6\n18446744073709551610\n255\n0\n127\ntrue\n"
+        );
+    }
+
     /// B-2026-08-06-7 — every shift is guarded by an amount check.
     ///
     /// LLVM's `shl`/`lshr`/`ashr` are POISON at or above the operand width and

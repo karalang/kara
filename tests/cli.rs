@@ -11957,6 +11957,19 @@ fn test_operators_page_quotes_live_diagnostics() {
              fn main() { }",
             "operator traits are stdlib-only",
         ),
+        // The two complements Kara splits where Rust spells one `!`. Pinned
+        // as a PAIR: each rejects exactly the operand the other requires, and
+        // the page's rejection 5 is only true while both still hold.
+        (
+            "notonint",
+            "fn main() { let a: i64 = 5; let r: i64 = not a; }",
+            "unary 'not' requires 'bool'",
+        ),
+        (
+            "tildeonbool",
+            "fn main() { let b: bool = true; let r: bool = ~b; }",
+            "unary '~' requires an integer or integer-lane Vector type",
+        ),
     ];
 
     for (tag, src, fragment) in cases {
@@ -11972,6 +11985,94 @@ fn test_operators_page_quotes_live_diagnostics() {
             "operators page must quote the live diagnostic `{fragment}`"
         );
     }
+}
+
+/// The operators page must not quote diagnostics the compiler has STOPPED
+/// emitting, and every "differs from design.md" bullet it still carries must
+/// be backed by a live measurement.
+///
+/// `test_operators_page_quotes_live_diagnostics` above asserts the page
+/// CONTAINS each current wording. That is only half the contract, and the
+/// missing half rotted immediately: when B-2026-08-25-30 rewrote the
+/// arithmetic rejection into trait language, the divergence bullet claiming
+/// the compiler "currently reports \"arithmetic operator requires numeric
+/// type\"" was left behind by the same commit, and every test still passed —
+/// a page telling users the compiler does something it no longer does.
+///
+/// A negative claim ("X is not implemented") is exactly the kind that decays
+/// silently, because fixing X does not touch the page. So each surviving
+/// bullet is pinned to a program here: if the divergence is ever closed, this
+/// test fails and names the bullet to delete.
+#[test]
+fn test_operators_page_carries_no_superseded_wording() {
+    let page = concept_page("operators");
+
+    // Wordings replaced by B-2026-08-25-30, and divergence claims closed when
+    // design.md's § Operator Traits was corrected: the spec, not the
+    // compiler, was the side that was wrong about widening and about `Not`.
+    let dead: &[(&str, &str)] = &[
+        (
+            "arithmetic operator requires numeric type",
+            "replaced by the trait-language rejection",
+        ),
+        (
+            "add #[derive(Eq)]",
+            "the desugaring runs through PartialEq; the message names it now",
+        ),
+        (
+            "add #[derive(Ord)]",
+            "the desugaring runs through PartialOrd; the message names it now",
+        ),
+        (
+            "unary '!' requires",
+            "Kara spells the operator `not`; the parser rejects `!` outright",
+        ),
+        (
+            "widening at operator boundaries is NOT",
+            "design.md was corrected: no widening between two TYPED operands \
+             is the specified rule, matching the literal-promotion section",
+        ),
+        (
+            "design.md offers `vec.concat(other)`",
+            "design.md was corrected to name `extend` alone (B-2026-08-26-1); \
+             `Vec.concat()` is the zero-arg String join and always was",
+        ),
+        (
+            "Bitwise `Not` on integer primitives is not available",
+            "design.md was corrected: `~a` is the integer complement and it \
+             works; `not a` is the bool negation. Neither was missing",
+        ),
+    ];
+    for (fragment, why) in dead {
+        assert!(
+            !page.contains(fragment),
+            "operators page still quotes superseded wording `{fragment}` — \
+             {why}"
+        );
+    }
+
+    // Rejection 1 still asserts `Vec.concat()` is a DIFFERENT operation from
+    // the two-Vec join, so that claim is held to a program too. This is the
+    // shape a divergence bullet should have had all along: a sentence about
+    // the compiler, pinned to what the compiler actually emits.
+    let emitted = check_source_output(
+        "concatarity",
+        "fn main() { let a = [1, 2]; let b = [3, 4]; let c = a.concat(b); }",
+    );
+    assert!(
+        emitted.contains("Vec.concat() requires String elements"),
+        "`Vec.concat(other)` is no longer the zero-argument String join the \
+         page describes in rejection 1 — update that paragraph. Got:\n{emitted}"
+    );
+
+    // And the divergence section must still say so explicitly rather than
+    // being quietly deleted: an absent section cannot be checked, but a
+    // section that claims "nothing" fails loudly the moment it is wrong.
+    assert!(
+        page.contains("Nothing, as of this build."),
+        "the divergence section should state that nothing is outstanding, or \
+         list a bullet pinned to a program — not disappear"
+    );
 }
 
 #[test]

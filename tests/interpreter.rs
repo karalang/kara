@@ -21990,6 +21990,77 @@ fn test_shift_runs_at_declared_width() {
     );
 }
 
+// The interpreter half of "`~` complements at the DECLARED width", kept in
+// step with the codegen twin `e2e_bitwise_not_runs_at_declared_width` (same
+// arms, same expected output).
+//
+// The interpreter stores every integer in an i128 `Value::Int`, so `!i` on
+// the carrier is only the declared answer when the declared type IS the
+// carrier width. `~5u8` is 250; the carrier flip gave -6 — not merely wrong
+// but unrepresentable in a `u8` — and codegen's i64 twin gave 2^64-6, so the
+// backends disagreed with each other as well as with the spec.
+//
+// Unlike codegen, the interpreter was wrong for BOTH literal spellings
+// (suffixed and not), because the carrier has no notion of the local's
+// storage width at all. Both are kept so the two backends' tests stay
+// arm-for-arm comparable.
+#[test]
+fn test_bitwise_not_runs_at_declared_width() {
+    assert_eq!(
+        run("fn main() {\n\
+             \x20   let a: u8 = 5;\n\
+             \x20   println(~a);\n\
+             \x20   let b: u16 = 5;\n\
+             \x20   println(~b);\n\
+             \x20   let c: u32 = 5;\n\
+             \x20   println(~c);\n\
+             \x20   let d: u8 = 5;\n\
+             \x20   let rd: u8 = ~d;\n\
+             \x20   println(rd);\n\
+             \x20   let e: u8 = 5u8;\n\
+             \x20   println(~e);\n\
+             \x20   let f: u8 = 5u8;\n\
+             \x20   let rf: u8 = ~f;\n\
+             \x20   println(rf);\n\
+             \x20   let g: i8 = 5;\n\
+             \x20   println(~g);\n\
+             \x20   let h: i32 = 5;\n\
+             \x20   println(~h);\n\
+             \x20   let i: u64 = 5;\n\
+             \x20   println(~i);\n\
+             \x20   let z: u8 = 0;\n\
+             \x20   println(~z);\n\
+             \x20   let m: u8 = 255;\n\
+             \x20   println(~m);\n\
+             \x20   let lo: i8 = -128;\n\
+             \x20   println(~lo);\n\
+             \x20   let n: u8 = 250;\n\
+             \x20   println(~n == 5);\n\
+             }\n"),
+        "250\n65530\n4294967290\n250\n250\n250\n\
+         -6\n-6\n18446744073709551610\n255\n0\n127\ntrue\n"
+    );
+}
+
+// `~` on an integer-lane `Vector[T, N]` complements EACH LANE at the lane
+// width. The interpreter recurses into lanes carrying the CONTAINER's span,
+// so the width lookup has to peel `Vector` to reach the lane type — without
+// that peel it fell back to a signed 64 and `~Vector[u8, 4](5,…)` gave -6 per
+// lane while codegen, whose lanes are a real `<4 x i8>`, gave 250.
+#[test]
+fn test_bitwise_not_on_vector_lanes_uses_lane_width() {
+    assert_eq!(
+        run("fn main() {\n\
+             \x20   let a: u8 = 5;\n\
+             \x20   let v: Vector[u8, 4] = Vector[u8, 4](a, a, a, a);\n\
+             \x20   let w: Vector[u8, 4] = ~v;\n\
+             \x20   println(w[0]);\n\
+             \x20   println(w[3]);\n\
+             }\n"),
+        "250\n250\n"
+    );
+}
+
 #[test]
 fn test_vector_integer_shift() {
     // std.simd.math (phase-11): element-wise `<<` / `>>` on integer vectors

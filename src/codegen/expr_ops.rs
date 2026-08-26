@@ -6067,7 +6067,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// It is also what makes "a narrow-typed value always fits its declared
     /// width" a real invariant — the precondition B-2026-08-05-38's widening
     /// half needs before narrow ops can compute at native width.
-    fn truncate_to_narrow_width(
+    pub(super) fn truncate_to_narrow_width(
         &mut self,
         v: inkwell::values::IntValue<'ctx>,
         bits: u32,

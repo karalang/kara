@@ -1587,7 +1587,34 @@ impl<'ctx> super::Codegen<'ctx> {
                         operand: Box::new(_args[0].value.clone()),
                     },
                 };
-                return self.compile_expr(&synth);
+                let out = self.compile_expr(&synth)?;
+                // Re-narrow, exactly as the `neg` arm above range-checks:
+                // `compile_unaryop` gets only a VALUE, and every narrow local
+                // is carried in an i64 alloca, so `build_not` complemented all
+                // 64 bits. For signed that is already the declared value
+                // (`~x == -x-1` never leaves a narrow signed range), but for
+                // `u8`/`u16`/`u32` it produced 2^64-6 where `~5u8` is 250 —
+                // silently, and disagreeing with the interpreter's own
+                // carrier-width flip. `type_name` is the declared width, which
+                // is precisely what the synthesis step drops.
+                let narrow = match type_name {
+                    "i8" => Some((8u32, false)),
+                    "i16" => Some((16, false)),
+                    "i32" => Some((32, false)),
+                    "u8" => Some((8, true)),
+                    "u16" => Some((16, true)),
+                    "u32" => Some((32, true)),
+                    _ => None,
+                };
+                if let Some((bits, is_unsigned)) = narrow {
+                    if out.is_int_value() {
+                        let widened = self.widen_int_to_i64(out, is_unsigned);
+                        return Ok(self
+                            .truncate_to_narrow_width(widened, bits, is_unsigned)
+                            .into());
+                    }
+                }
+                return Ok(out);
             }
         }
         // Debugger Contract slice 5 — `std.runtime` introspection APIs

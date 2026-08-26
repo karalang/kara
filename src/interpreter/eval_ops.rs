@@ -76,7 +76,18 @@ impl<'a> super::Interpreter<'a> {
                 }
             }
             (UnaryOp::Not, Value::Bool(b)) => Value::Bool(!b),
-            (UnaryOp::BitNot, Value::Int(i)) => Value::Int(!i),
+            // Complement at the operand's DECLARED width, not the i128
+            // carrier's. `!i` on the carrier is only correct when the declared
+            // type IS the carrier width: `~(5u8)` is 250, but the bare carrier
+            // flip yielded -6 — a value a `u8` cannot even hold — and codegen's
+            // i64 twin yielded 2^64-6, so the two backends disagreed as well.
+            // Same shape as the `Neg` and shift arms (B-2026-08-06-7), and it
+            // restores the invariant `truncate_to_narrow_width` documents: a
+            // narrow-typed value always fits its declared width.
+            (UnaryOp::BitNot, Value::Int(i)) => {
+                let (bits, is_unsigned) = self.span_int_width(span);
+                Value::Int(Self::truncate_to_width(!(i as u128), bits, is_unsigned))
+            }
             // Integer-lane `Vector[T, N]` complement: `~v` folds `~` over each
             // lane (the typechecker restricts the element to integer lanes).
             (UnaryOp::BitNot, Value::Vector(lanes)) => {
@@ -1156,6 +1167,16 @@ impl<'a> super::Interpreter<'a> {
             {
                 &args[0]
             }
+            // A `Vector[T, N]` lane op recurses with the CONTAINER span
+            // (`eval_unary`'s BitNot arm, `eval_binary`'s lane arms), so the
+            // width must come from the LANE type or every narrow-lane op
+            // computes at the carrier. Peeled here rather than in `narrow_oob`
+            // on purpose: this function's only callers are `~` and the shifts,
+            // and for those codegen's real `<N x iX>` lanes are the oracle
+            // both backends must agree on. `narrow_oob` governs lane `+`/`-`/
+            // `*`, where codegen WRAPS rather than traps, so peeling there
+            // would trade one divergence for another.
+            Type::Vector { element, .. } => element,
             other => other,
         };
         match ty {

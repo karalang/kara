@@ -1416,7 +1416,7 @@ name being rebound.
 Why your operator call failed
 ────────────────────────────────────────────────────────────────────
 
-Four rejections cover nearly every case. Each row is the diagnostic you
+Five rejections cover nearly every case. Each row is the diagnostic you
 will actually see, followed by the fix.
 
 1.  type 'T' does not implement trait Add
@@ -1431,7 +1431,7 @@ will actually see, followed by the fix.
     makes you name the method: use `a.extend(b)` to append b's elements
     to a. Note that `Vec.concat()` is a DIFFERENT operation — it takes no
     argument and joins a `Vec[String]`'s own elements into one String —
-    so it is not the two-Vec join, despite design.md's wording.
+    so it is not the two-Vec join. `append` does not exist either.
 
     For a `distinct` type the diagnostic says: add #[derive(Arithmetic)]
     to 'T' to use arithmetic operators between two 'T' values, or unwrap
@@ -1456,8 +1456,10 @@ will actually see, followed by the fix.
     cannot mix integer and floating-point operands ('i64' and 'f64')
 
     Operands must have the SAME type. Cast the narrower one explicitly:
-    `(x as i64) + y`. There is no implicit widening at operator
-    boundaries today — see the divergence section.
+    `(x as i64) + y`. There is no implicit widening between two TYPED
+    operands — that is the specified rule, not a gap. A numeric LITERAL
+    does take the other operand's type, so `(x: i32) + 2` is fine; it is
+    only two typed expressions that never silently widen.
 
 4.  user-defined `impl Add for T` is not supported in v1;
     operator traits are stdlib-only
@@ -1467,13 +1469,27 @@ will actually see, followed by the fix.
     use, so lifting this is a non-breaking, additive change. Until then,
     write a named method.
 
+5.  unary 'not' requires 'bool', found 'T'
+    unary '~' requires an integer or integer-lane Vector type, found 'T'
+
+    Kāra splits the two complements that Rust spells with one `!`, and
+    neither accepts the other's operand. `not a` is logical negation and
+    takes a `bool`; `~a` is the bitwise complement and takes an integer
+    (or an integer-lane `Vector[T, N]`, complementing every lane). Both
+    desugar to `Not.not(a)` — the operand type picks the impl. So write
+    `~flags` to flip an integer's bits, and `not done` to negate a flag.
+
 ────────────────────────────────────────────────────────────────────
 Which types implement what
 ────────────────────────────────────────────────────────────────────
 
   Arithmetic     numeric primitives; `Add` additionally on `String`
                  (`a + b` consumes `a`, borrows `b`, allocates)
-  Bitwise        integer primitives; `not` on `bool`
+  Bitwise        `& | ^ << >>` on the integer primitives only (NOT on
+                 `bool` — use the `and` / `or` keywords). `Not` is reached
+                 by two operators: `~a` complements an integer (and every
+                 lane of an integer-lane Vector), `not a` negates a `bool`.
+                 Neither accepts the other's operand type
   PartialEq      every primitive, both string types, and lifted through
                  Vec / Option / Result / tuples when elements qualify
   Eq             the same minus `f32` / `f64` — IEEE NaN != NaN breaks
@@ -1494,14 +1510,17 @@ uncertain use `.get(idx)`, which returns `Option[ref T]`.
 Where the implementation differs from design.md today
 ────────────────────────────────────────────────────────────────────
 
-Measured, not inferred. Each is tracked; see docs/bug-ledger.jsonl.
+Nothing, as of this build. Every rule above is measured against a
+compiled program by tests/cli.rs, and the three divergences this
+section used to list are all closed: two were design.md being wrong
+about its own compiler (operator-boundary widening, and `Not` being
+written `not` rather than `~`), and one was design.md naming
+`concat` where only `extend` exists.
 
-  • Implicit lossless widening at operator boundaries is NOT
-    implemented. design.md says `(x: i32) + (y: i64)` is valid and
-    widens to `i64`; the compiler rejects it and asks for a cast.
+If you find a new one, add it here AND pin it to a program in
+tests/cli.rs. A bullet claiming something is missing is exactly the
+kind of note that stays behind after the gap is closed.
 
-  • Bitwise `Not` on integer primitives is not available — `not` on an
-    integer reports \"unary 'not' requires 'bool'\".
 ";
 
 const STABLE_HASH_PAGE: &str = "\
