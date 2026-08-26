@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 293 | 2 |
+| miscompile | 294 | 2 |
 | leak | 196 | 0 |
 | missing-feature | 181 | 5 |
 | run-vs-build | 168 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1059 | 7 |
+| codegen | 1060 | 7 |
 | typecheck | 267 | 2 |
 | interp | 185 | 2 |
 | other | 70 | 3 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1609 surfaced · 11 open · 1573 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-26). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1610 surfaced · 11 open · 1574 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-26). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (11)
 
@@ -171,9 +171,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1609 surfaced
 
 </details>
 
-### Fixed (1573)
+### Fixed (1574)
 
-<details><summary>1573 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1574 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1750,6 +1750,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1609 surfaced
 | B-2026-08-26-24 | codegen+interp | medium | A COMPARISON OPERATOR INSIDE A GENERIC BODY never dispatches to the element's user `impl Ord`: operator lowering resolves only CONCRETE operand types… | 191dc02 |
 | B-2026-08-26-25 | typecheck | medium | ORDERING OPERATORS ON A `shared struct` ARE ADMITTED BY THE TYPECHECKER AND IMPLEMENTED BY NEITHER BACKEND: `a < b` on a shared struct passes `karac… | 47a6810 |
 | B-2026-08-26-26 | effect+codegen | medium | RUN-VS-BUILD ON EVERY FALLIBLE `try_*` COMPANION CONSUMED WITH `?`: the auto-parallelizer hoists the call into a worker function, which returns void,… | aae805f |
+| B-2026-08-26-31 | codegen | medium | A local MOVED into a container's struct element slot (`b.xs[j] = t`) kept its own `UserDrop` registration, so its `impl Drop` body ran a SECOND time… | 0af8b28 |
 
 </details>
 
