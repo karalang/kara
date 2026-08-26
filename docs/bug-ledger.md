@@ -1738,7 +1738,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1611 surfaced
 | B-2026-08-26-7 | codegen | high | A NARROW LOCAL INITIALIZED FROM AN UNSUFFIXED LITERAL IS ALLOCATED AT i64 IN CODEGEN, so every width-sensitive operation on it runs at 64 bits and ca… | 08410c2 |
 | B-2026-08-26-8 | interp | medium | INTERPRETER `Vector[T, N]` LANE ARITHMETIC IGNORES THE LANE WIDTH, so a narrow-lane vector computes on the i128 carrier and diverges from codegen, wh… | ff403a3 |
 | B-2026-08-26-9 | codegen | high | `PriorityQueue.push` RUNS THE DROP GLUE FOR ITS BY-VALUE PARAMETER ON A VALUE IT HAS ALREADY MOVED into the backing `Vec`, so an element type with `i… | d9c520e |
-| B-2026-08-26-10 | typecheck+codegen | medium | `Map` HASHING NEVER CALLS A HAND-WRITTEN `impl Hash`: with the derive absent the key is REJECTED, and with `#[derive(Hash)]` present alongside the im… | 55b7768 |
+| B-2026-08-26-10 | typecheck+codegen | medium | `Map` HASHING NEVER CALLS A HAND-WRITTEN `impl Hash`: with the derive absent the key is REJECTED, and with `#[derive(Hash)]` present alongside the im… | 095087d |
 | B-2026-08-26-12 | codegen | high | HEAP CORRUPTION ON BOTH COMPILED BACKENDS: an `if`-EXPRESSION whose arms yield an `Option[shared]` binding, passed BY VALUE to a function inside a lo… | 3454927 |
 | B-2026-08-26-14 | codegen | high | A `par` BRANCH WHOSE BODY CALLS A VALUE-PRESERVING SCALAR METHOD (`abs` / `sqrt` / a `float_math` transcendental) ON A NARROW-INTEGER RECEIVER FAILS… | 08410c2 |
 | B-2026-08-26-16 | effect | medium | UNDECLARED EFFECTS ESCAPE THROUGH `LazyLock.get()`: design.md says the effect system attributes first-access initialization to the CALLING function,… | b77511f |
