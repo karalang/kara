@@ -33765,3 +33765,109 @@ fn test_unrenderable_main_error_is_a_build_error_not_an_empty_message() {
          line would print nothing; got: {stderr}"
     );
 }
+
+/// B-2026-08-25-3 — CODEGEN OUTPUT MUST BE BYTE-REPRODUCIBLE ACROSS PROCESSES.
+///
+/// That row's candidate (b) — "the emitted `Vec.insert` bounds check is
+/// intermittently absent" — has a premise nobody had tested directly: it
+/// requires codegen to emit DIFFERENT output for the same input on different
+/// runs. 30,000 compile+run samples on arm64 and 5,000 on x86_64 bounded the
+/// rate of the end-to-end symptom without ever asking that question. This asks
+/// it: build one source twice and compare the artifacts byte for byte.
+///
+/// TWO SEPARATE PROCESSES IS THE ENTIRE POINT, and an in-process version of
+/// this test would be close to worthless. The classic engine of compiler
+/// nondeterminism is iterating a `std::collections::HashMap`, whose
+/// `RandomState` key is drawn ONCE PER PROCESS — so two compilations inside one
+/// process share a key, iterate alike, and agree even when the compiler is
+/// thoroughly key-sensitive. `karac_bin()` spawns a fresh process per build, so
+/// each draws an independent key and a key-sensitive compiler diverges here.
+///
+/// SAME PATH, SAME OUTPUT NAME, ONLY THE CONTENTS VARY. The anti-vacuity half
+/// rewrites the same file rather than building a second, differently-named one,
+/// because a differing artifact name (or source path) can land in the binary
+/// and would make the control pass without the code ever differing.
+///
+/// Measured when written, on x86_64: 215 consecutive builds of this program
+/// produced ONE distinct SHA-256, and 20,000 executions of the resulting binary
+/// all exited 101.
+#[test]
+fn build_output_is_byte_reproducible_across_processes() {
+    let tmp = scratch_project("reproducible-codegen");
+    let src = tmp.join("prog.kara");
+    let out = tmp.join("prog");
+
+    // The B-2026-08-24-15 bounds-check program, which is what makes this the
+    // direct test of B-2026-08-25-3's candidate (b) rather than a generic
+    // reproducibility check.
+    let program = "fn main() {\n\
+         \x20   let mut v: Vec[i64] = Vec.new();\n\
+         \x20   v.push(11i64);\n\
+         \x20   v.push(22i64);\n\
+         \x20   v.insert(7i64, 9i64);\n\
+         \x20   println(\"survived\");\n\
+         }\n";
+
+    let build = |expect_ok: bool| -> Option<Vec<u8>> {
+        let _ = std::fs::remove_file(&out);
+        let r = karac_bin()
+            .current_dir(&tmp)
+            .arg("build")
+            .arg("prog.kara")
+            .output()
+            .unwrap();
+        if !r.status.success() {
+            assert!(
+                !expect_ok,
+                "build failed:\n{}",
+                String::from_utf8_lossy(&r.stderr)
+            );
+            return None;
+        }
+        // Read AFTER a delete-then-build, so a stale artifact cannot
+        // masquerade as a reproducible one.
+        Some(std::fs::read(&out).expect("karac build reported success but wrote no artifact"))
+    };
+
+    write(&src, program);
+    let first = build(true).unwrap();
+    let second = build(true).unwrap();
+    assert!(
+        !first.is_empty(),
+        "emitted artifact was empty — the comparison below would be vacuous"
+    );
+    assert_eq!(
+        first.len(),
+        second.len(),
+        "two builds of one unchanged source produced artifacts of different \
+         SIZE ({} vs {} bytes). Codegen is not reproducible, so an emitted \
+         check can be present on one run and absent on the next — which is \
+         exactly B-2026-08-25-3's candidate (b).",
+        first.len(),
+        second.len()
+    );
+    assert!(
+        first == second,
+        "two builds of one unchanged source produced artifacts that differ \
+         (both {} bytes). Codegen is not reproducible across processes; the \
+         usual cause is emission order taken from a HashMap whose RandomState \
+         key is per-process. See B-2026-08-25-3.",
+        first.len()
+    );
+
+    // ANTI-VACUITY: the comparison must be capable of failing. Same file, same
+    // artifact name, one changed index — the bytes must move.
+    write(
+        &src,
+        &program.replace("v.insert(7i64, 9i64);", "v.insert(1i64, 9i64);"),
+    );
+    let changed = build(true).unwrap();
+    assert!(
+        changed != first,
+        "anti-vacuity failed: changing the program left the artifact bytewise \
+         identical, so the equality assertions above prove nothing (the build \
+         is probably not rewriting the artifact at all)"
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}

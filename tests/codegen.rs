@@ -47379,6 +47379,79 @@ fn driver() -> i64 {
         }
     }
 
+    /// B-2026-08-25-3 — the RUNTIME half of the bounds check, which neither
+    /// sibling guard actually reaches.
+    ///
+    /// `vec_mutation_methods_bounds_check_out_of_range_index` uses LITERAL
+    /// indices on a `Vec` whose length is provable, so LLVM settles the
+    /// comparison at COMPILE time. Measured: `v.insert(7i64, …)` emits an
+    /// unconditional panic and DELETES the `println("survived")` fall-through —
+    /// the string is absent from the binary — while `v.insert(1i64, …)` drops
+    /// the panic message entirely. Its `!stdout.contains("survived")` assertion
+    /// is therefore discharged by dead-code elimination rather than by a check
+    /// firing. This surfaced as two different out-of-range literals compiling to
+    /// BYTE-IDENTICAL binaries (`insert(7)` and `insert(3)`, same SHA-256).
+    ///
+    /// `vec_mutation_bounds_checks_survive_into_emitted_object` keeps the index
+    /// opaque, but asserts only that the message is PRESENT in the object, and
+    /// its index (`env.args().len()`, a stable 1) is IN RANGE — so it never
+    /// fires either.
+    ///
+    /// So nothing covered the case real code actually hits: an index computed at
+    /// run time that turns out to be out of range. `env.args().len() + 6` is
+    /// opaque to the optimiser and equals 7 against a length of 2, so the check
+    /// must survive to the binary AND fire when it runs.
+    #[test]
+    fn vec_mutation_bounds_check_fires_for_a_runtime_opaque_index() {
+        let cases = [
+            ("v.insert(i, 9i64);", "Vec.insert index out of bounds"),
+            (
+                "let x = v.remove(i); println(x);",
+                "Vec.remove index out of bounds",
+            ),
+            (
+                "let x = v.swap_remove(i); println(x);",
+                "Vec.swap_remove index out of bounds",
+            ),
+        ];
+
+        for (call, want) in cases {
+            let src = format!(
+                "fn main() {{\n\
+                 \x20   let mut v: Vec[i64] = Vec.new();\n\
+                 \x20   v.push(11i64);\n\
+                 \x20   v.push(22i64);\n\
+                 \x20   let i: i64 = (env.args().len() as i64) + 6i64;\n\
+                 \x20   {call}\n\
+                 \x20   println(\"survived\");\n\
+                 }}"
+            );
+            let run = match run_program_capturing(&src) {
+                Some(r) => r,
+                None => return, // no runtime archive / linker — harness skip
+            };
+            assert!(
+                run.stderr.contains(want),
+                "a RUN-TIME out-of-range index must panic with {want:?}; got \
+                 stdout={:?} stderr={:?}",
+                run.stdout,
+                run.stderr
+            );
+            assert!(
+                !run.stdout.contains("survived"),
+                "{call} fell through to the next statement; got stdout={:?}",
+                run.stdout
+            );
+            assert_eq!(
+                run.status.code(),
+                Some(101),
+                "{call} must exit via panic (101), not abort or success; \
+                 stderr={:?}",
+                run.stderr
+            );
+        }
+    }
+
     /// The other half of B-2026-08-24-15: the new bounds checks must not
     /// reject anything legal. `insert(len, v)` is an APPEND and is valid —
     /// `insert` alone accepts `idx == len`, which is why it needs `UGT` where
