@@ -92,16 +92,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 289 | 0 |
+| miscompile | 291 | 1 |
 | leak | 195 | 0 |
-| missing-feature | 175 | 4 |
-| run-vs-build | 161 | 1 |
+| missing-feature | 174 | 3 |
+| run-vs-build | 162 | 2 |
 | codegen-gap | 139 | 1 |
 | double-free | 138 | 0 |
 | diagnostics | 109 | 1 |
 | false-positive | 97 | 0 |
 | perf | 84 | 0 |
-| other | 61 | 1 |
+| other | 62 | 1 |
 | soundness | 59 | 0 |
 | crash | 57 | 0 |
 | use-after-free | 20 | 0 |
@@ -110,10 +110,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1041 | 4 |
-| typecheck | 263 | 5 |
-| interp | 180 | 0 |
-| other | 67 | 1 |
+| codegen | 1043 | 5 |
+| typecheck | 262 | 4 |
+| interp | 182 | 1 |
+| other | 68 | 1 |
 | ownership | 65 | 0 |
 | cli | 63 | 0 |
 | autopar | 55 | 0 |
@@ -124,20 +124,21 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1584 surfaced · 8 open · 1551 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-26). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1587 surfaced · 9 open · 1553 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-26). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (8)
+### Open (9)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-25-3 | 2026-08-25 | codegen | medium | `codegen_tests::vec_mutation_methods_bounds_check_out_of_range_index` IS FLAKY, and it fails by showing exactly the PRE-FIX symptom of the high-severity bug it guards: `v.insert(7i64, 9i64)` produced no `Vec.insert index out of bounds` panic, stdout empty, stderr `free(): invalid pointer`. Observed once in a full `cargo test --features llvm` run; the same test then passed 3/3 in isolation, 3198/3198 in a codegen-only run, and the next FULL run was green at 125 suites / 15090 tests. | roadmap.md |
 | B-2026-08-25-20 | 2026-08-25 | typecheck | medium | Three of the fallible-allocation `try_*` methods design.md names by name do not exist, and `AllocError`'s `Display` is Debug formatting rather than the specified text. § Fallible Allocation API: "Operations that report only success/failure return `Result[(), AllocError]` (`try_push`, `try_insert`, `try_reserve`, `try_extend`, `try_append`)". Measured one method per compile: `Vec.try_reserve` -> `no method 'try_reserve' on type 'Vec'`; `Vec.try_extend` -> `no method 'try_extend'`; `Vec.try_append` -> `no method 'try_append'`. Working: `Vec.try_push`, `Vec.try_insert`, `Vec.try_with_capacity`, `String.try_push`, `String.try_push_str`, `Set.try_insert`. SEPARATELY, the same section specifies "The `Display` formatting names the failed operation's byte size on the `OutOfMemory` arm and \"capacity overflow\" on the `CapacityOverflow` arm" -- measured, `f"{e}"` renders `CapacityOverflow` and `OutOfMemory { requested_bytes: 4096 }`, which is the DEBUG form for both arms. | roadmap.md |
-| B-2026-08-25-29 | 2026-08-25 | typecheck | medium | TWO OPERATOR BEHAVIOURS design.md § Operator Traits presents as SHIPPED v1 SURFACE DO NOT EXIST. (1) IMPLICIT LOSSLESS WIDENING AT OPERATOR BOUNDARIES: the section states "`(x: i32) + (y: i64)` is valid -- the compiler widens `x` to `i64` before dispatch, and the result type is `i64`", but the compiler rejects it with `cannot mix integer types 'i32' and 'i64' in arithmetic -- they must match; cast the 'i32' operand up`. Same for `u8 + u32` and for `f32 + f64` (`cannot mix float types`). A LITERAL operand still widens (`let x: i32 = 1; x + 2` is fine), so what is missing is specifically the two-typed-operand case. (2) BITWISE `Not` ON INTEGER PRIMITIVES: the v1 trait set lists `Not` under Bitwise and the stdlib-impl list says the bitwise traits ship "only on integer primitives and bool", but `not a` on an `i64` or `u8` is rejected -- `unary '!' requires 'bool', found 'i64'`. Only `bool` works. | roadmap.md |
 | B-2026-08-25-34 | 2026-08-25 | codegen | medium | `AllocError`'s `Display` renders the Debug form (`OutOfMemory { requested_bytes: 4096 }`) into the user-facing `Error: {e}` entry-point line, and the spec-sanctioned fix -- a manual `impl Display`, per § `#[derive(Display)]` on enums' "Implement `Display` manually to override" -- CANNOT LAND without codegen work: a prelude impl lives in `STDLIB_PROGRAMS`, which codegen does not walk, so the impl reaches the interpreter only. Registering the module as a compiled stdlib program fixes `.to_string()` under AOT but leaves `f"{e}"` and the entry-point line unfixed. Worse, the half-done state FAILS OPEN: dropping the derive without teaching codegen about the impl makes `karac build` emit `Error: ` with an EMPTY message rather than erroring, because the typechecker sees the impl and codegen does not. | roadmap.md |
 | B-2026-08-25-35 | 2026-08-25 | typecheck+codegen | high | `PriorityQueue[T]` IS UNINSTANTIABLE FOR EVERY USER TYPE, because the OPERATOR path and the TRAIT-BOUND path recognize DISJOINT sets of `Ord` implementations: `#[derive(Ord)]` makes `<`/`>` work but does NOT satisfy a `T: Ord` bound, while a hand-written `impl Ord` DOES satisfy the bound but leaves `<`/`>` a hard error. Neither spelling reaches a working `PriorityQueue[UserType]`, and the operator diagnostic actively misdirects: it tells the hand-impl author to `add #[derive(Ord)]`, which then fails at the bound instead. | — |
 | B-2026-08-26-2 | 2026-08-26 | typecheck | medium | TWO MORE FACILITIES design.md § `Hash` and `Hasher`'s stability paragraph NAMES AS SHIPPED DO NOT EXIST, after B-2026-08-25-22 built the third. (1) `xxh3(bytes)` -- a faster UNKEYED stable digest; nothing in `src/`, `runtime/` or `hash/` implements XXH3, and there is now no fast stable option at all (`StableHash.siphash24` is the only one, and it is the keyed, slower one). (2) "the `crypto` module for cryptographic hashes" -- there is NO cryptographic hash anywhere in the stdlib: no sha256, no blake3, no `crypto` namespace. The second is the consequential one, because `siphash24` is now sitting where a user looking for a digest will find it, and SipHash is a fast keyed PRF, NOT collision-resistant -- a user who substitutes it for a cryptographic hash (signatures, dedup against an adversary, anything where a chosen collision matters) gets something that looks like it works. | roadmap.md |
 | B-2026-08-26-3 | 2026-08-26 | typecheck+codegen | high | `LazyLock[T]` IS A CHECK-ONLY PHANTOM: `let TABLE: LazyLock[i64] = LazyLock.new(|| 40 + 2);` passes `karac check` cleanly and then fails on EVERY execution backend -- `--interp` dies with "path 'LazyLock.new' has no interpreter evaluation rule", and `karac run` (JIT) and `karac build` both reject `TABLE.get()` with "codegen: no handler for method 'get'". It is not a type outside that one special-cased module-binding form either: `fn f(x: LazyLock[i64])` is `undefined type 'LazyLock'`. Until this was found, the live `module_mut_binding` WARNING recommended it by name ("Prefer a context struct, `Mutex`, `Atomic`, `#[thread_local]`, `LazyLock`, or `OnceLock`"), so following the compiler's own advice produced a program that checks and then cannot be run or built. | roadmap.md |
 | B-2026-08-26-4 | 2026-08-26 | other | low | design.md's CANONICAL `?`-operator example calls `input.parse_i64()?` and names `ParseError` -- NEITHER EXISTS: the real API is `i64.parse(s) -> Option[i64]`, which cannot be used with `?` the way the example shows | docs/design.md § `?` operator and cross-error-type propagation |
+| B-2026-08-26-7 | 2026-08-26 | codegen | high | A NARROW LOCAL INITIALIZED FROM AN UNSUFFIXED LITERAL IS ALLOCATED AT i64 IN CODEGEN, so every width-sensitive operation on it runs at 64 bits and can produce a value the declared type cannot represent. The literal suffix -- which ought to be semantically inert once the binding carries an explicit type annotation -- decides the storage width: `let a: u8 = 200u8` gets a real `i8` alloca, `let b: u8 = 200` stays in the i64 carrier. MEASURED in AOT, against `karac run --interp` which is correct in every arm: `b << 4` is 3200 (should be 128), and `let d: i32 = 1; d << 31` is 2147483648 -- a value an `i32` cannot hold. THAT LAST CASE IS THE SOUNDNESS HOLE B-2026-08-06-7 CLAIMS TO HAVE CLOSED: its regression tests assert exactly `1i32 << 31 == -2147483648`, but spell the literal WITH a suffix, so the fix was only ever exercised on the path that allocates `i32` and the ordinary spelling still miscompiles. `~` had the identical hole and was fixed at the operator (B-2026-08-26-6) rather than at this root; every operator whose correctness depends on the operand's LLVM width is a candidate, and only shifts and `~` have been checked. | roadmap.md |
+| B-2026-08-26-8 | 2026-08-26 | interp | medium | INTERPRETER `Vector[T, N]` LANE ARITHMETIC IGNORES THE LANE WIDTH, so a narrow-lane vector computes on the i128 carrier and diverges from codegen, whose lanes are a real `<N x iX>`. MEASURED with `Vector[u8, 4]` lanes of 200: `v + v` is 400 in the interpreter and 144 in AOT (144 is correct -- 400 truncated to `u8`). The `~` and `<<` arms of the same divergence were fixed by teaching `span_int_width` to peel `Type::Vector` to its lane type; the ARITHMETIC arms route through `narrow_oob` instead and are still divergent. LEFT DELIBERATELY, because the obvious one-line extension is wrong: `narrow_oob` is a TRAP predicate, so peeling `Vector` there would make the interpreter raise `integer overflow` on a lane sum of 400 while codegen WRAPS it to 144 -- trading a wrong-value divergence for one backend rejecting a program the other runs. Needs a design.md decision on narrow-lane overflow semantics first. | roadmap.md |
 
 ### Relocated (1)
 
@@ -168,9 +169,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1584 surfaced
 
 </details>
 
-### Fixed (1551)
+### Fixed (1553)
 
-<details><summary>1551 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1553 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1719,12 +1720,14 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1584 surfaced
 | B-2026-08-25-26 | typecheck | low | An un-inferrable `T` from an EMPTY array literal is reported as a BOUND failure naming `<error>` as the type, pointed at a later method call rather t… | 40a54f6 |
 | B-2026-08-25-27 | codegen | high | SIX `let`-RHS forms bound a generic-struct value with NO recorded instantiation, so the sibling call dispatched to the unmangled base prototype and S… | 14c6d32 |
 | B-2026-08-25-28 | codegen | high | A method call whose receiver is an unnamed TEMPORARY inside a generic impl dispatches to the unmangled base prototype and SEGFAULTS at a heap-carryin… | 5fa76a7 |
+| B-2026-08-25-29 | other | medium | TWO CLAIMS in design.md § Operator Traits contradicted the implementation, and BOTH TURNED OUT TO BE SPEC DEFECTS rather than the missing features th… | 297ef4f |
 | B-2026-08-25-30 | typecheck | medium | OPERATOR-FAILURE DIAGNOSTICS DO NOT SPEAK THE TRAIT LANGUAGE design.md § Operator Traits mandates, and two of them NAME A TRAIT THE USER DOES NOT NEED | 3964ede |
 | B-2026-08-25-31 | typecheck | low | The un-inferrable-type-argument diagnostic points at the first USE, not at the empty literal that caused it, because `Type::Error` carries no provena… | a54d41d |
 | B-2026-08-25-32 | other | medium | `PriorityQueue` HAS NO `peek`: there is NO non-destructive way to read the root, so the archetypal two-heap median use case cannot read a queue's hea… | e2673b8 |
 | B-2026-08-25-33 | codegen | high | `?` in `main()` SEGFAULTS under `karac run` (the default JIT executor) whenever main's error type is an enum with an INLINE SCALAR payload -- `AllocE… | 7d20106 |
 | B-2026-08-26-1 | other | low | design.md § Operator Traits § Notably absent prescribes `vec.concat(other)` as one of the two redirects for `vec1 + vec2`, but `Vec.concat()` in this… | 5964c16 |
 | B-2026-08-26-5 | codegen | medium | `?` in `main() -> Result[(), E]` reconstructed `E` from only its first THREE payload words, so any error held inline in four or more words rendered g… | 06880a4 |
+| B-2026-08-26-6 | interp+codegen | high | `~` COMPLEMENTS AT THE CARRIER WIDTH, NOT THE DECLARED WIDTH, so every narrow UNSIGNED integer gets a wrong value and the two backends disagree on wh… | 297ef4f |
 
 </details>
 
