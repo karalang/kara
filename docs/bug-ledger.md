@@ -98,10 +98,10 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 160 | 1 |
 | codegen-gap | 139 | 1 |
 | double-free | 138 | 0 |
-| diagnostics | 108 | 1 |
+| diagnostics | 108 | 0 |
 | false-positive | 97 | 0 |
 | perf | 84 | 0 |
-| other | 60 | 1 |
+| other | 61 | 2 |
 | soundness | 59 | 0 |
 | crash | 57 | 0 |
 | use-after-free | 20 | 0 |
@@ -111,9 +111,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 1038 | 3 |
-| typecheck | 260 | 5 |
+| typecheck | 260 | 4 |
 | interp | 180 | 0 |
-| other | 65 | 1 |
+| other | 66 | 2 |
 | ownership | 65 | 0 |
 | cli | 63 | 0 |
 | autopar | 55 | 0 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1578 surfaced · 9 open · 1544 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-25). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1579 surfaced · 9 open · 1545 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-26). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (9)
 
@@ -135,10 +135,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1578 surfaced
 | B-2026-08-25-20 | 2026-08-25 | typecheck | medium | Three of the fallible-allocation `try_*` methods design.md names by name do not exist, and `AllocError`'s `Display` is Debug formatting rather than the specified text. § Fallible Allocation API: "Operations that report only success/failure return `Result[(), AllocError]` (`try_push`, `try_insert`, `try_reserve`, `try_extend`, `try_append`)". Measured one method per compile: `Vec.try_reserve` -> `no method 'try_reserve' on type 'Vec'`; `Vec.try_extend` -> `no method 'try_extend'`; `Vec.try_append` -> `no method 'try_append'`. Working: `Vec.try_push`, `Vec.try_insert`, `Vec.try_with_capacity`, `String.try_push`, `String.try_push_str`, `Set.try_insert`. SEPARATELY, the same section specifies "The `Display` formatting names the failed operation's byte size on the `OutOfMemory` arm and \"capacity overflow\" on the `CapacityOverflow` arm" -- measured, `f"{e}"` renders `CapacityOverflow` and `OutOfMemory { requested_bytes: 4096 }`, which is the DEBUG form for both arms. | roadmap.md |
 | B-2026-08-25-22 | 2026-08-25 | typecheck | medium | The STABLE-HASH module does not exist, so the escape design.md prescribes for every use case where `Hash` is explicitly the wrong tool is unavailable. § `Hash` and `Hasher`, stability policy: hash values are "not stable across runs, not stable across Kara versions, not stable across targets", and therefore "Code that needs stable digests (content addressing, on-disk indexes, snapshot tests, distributed sharding) does **not** use `Hash`. Kara's stdlib SHIPS explicit, versioned functions for that purpose -- `hash::stable::siphash24(bytes, key)`, `hash::stable::xxh3(bytes)`, and the `crypto` module for cryptographic hashes." Neither `siphash24` nor `xxh3` appears anywhere in `src/` or `runtime/stdlib/`, and there is no `hash.stable` namespace to call. The paragraph's closing promise is unreachable too: "Users who reach for `Hash` for stability are pointed at the stable-hash module by a `karac explain` page" -- see B-2026-08-25-23 for the state of `karac explain --concept=`. | roadmap.md |
 | B-2026-08-25-29 | 2026-08-25 | typecheck | medium | TWO OPERATOR BEHAVIOURS design.md § Operator Traits presents as SHIPPED v1 SURFACE DO NOT EXIST. (1) IMPLICIT LOSSLESS WIDENING AT OPERATOR BOUNDARIES: the section states "`(x: i32) + (y: i64)` is valid -- the compiler widens `x` to `i64` before dispatch, and the result type is `i64`", but the compiler rejects it with `cannot mix integer types 'i32' and 'i64' in arithmetic -- they must match; cast the 'i32' operand up`. Same for `u8 + u32` and for `f32 + f64` (`cannot mix float types`). A LITERAL operand still widens (`let x: i32 = 1; x + 2` is fine), so what is missing is specifically the two-typed-operand case. (2) BITWISE `Not` ON INTEGER PRIMITIVES: the v1 trait set lists `Not` under Bitwise and the stdlib-impl list says the bitwise traits ship "only on integer primitives and bool", but `not a` on an `i64` or `u8` is rejected -- `unary '!' requires 'bool', found 'i64'`. Only `bool` works. | roadmap.md |
-| B-2026-08-25-30 | 2026-08-25 | typecheck | medium | OPERATOR-FAILURE DIAGNOSTICS DO NOT SPEAK THE TRAIT LANGUAGE design.md § Operator Traits mandates, and two of them NAME A TRAIT THE USER DOES NOT NEED. The spec is explicit: "Diagnostics for a missing impl (e.g., `vec1 + vec2`) speak the trait language -- \"type Vec[T] does not implement trait Add\" -- not operator language -- \"+ is not defined for Vec[T]\"", and § Notably absent adds that `vec1 + vec2` gets "a diagnostic pointing at `vec.concat(other)` or `vec.extend(other)`". Measured, `[1,2] + [3,4]` reports `arithmetic operator requires numeric type, found 'Vec[i64]'` -- operator language, no trait named, no method redirect. Separately, `==` on a struct reports `does not implement Eq; add #[derive(Eq)]` and `<` reports `does not implement Ord; add #[derive(Ord)]`, but the desugaring runs through `PartialEq` / `PartialOrd` and `#[derive(PartialEq)]` / `#[derive(PartialOrd)]` ALONE is sufficient to compile -- so the message names the total trait when the partial one is what is required. The spec states the `Eq` marker "is never named by the desugaring". | roadmap.md |
 | B-2026-08-25-32 | 2026-08-25 | other | medium | `PriorityQueue` HAS NO `peek`: there is NO non-destructive way to read the root, so the archetypal two-heap median use case cannot read a queue's head at the O(1) its own doc comment advertises -- and `runtime/stdlib/priority_queue.kara`'s header promises `peek / len O(1)` for a method that does not exist in the file or in design.md | runtime/stdlib/priority_queue.kara (header complexity table promises `peek`); design.md § `PriorityQueue[T]` method table needs the row too |
 | B-2026-08-25-33 | 2026-08-25 | codegen | high | `?` in `main()` SEGFAULTS under `karac run` (the default JIT executor) whenever main's error type is an enum with an INLINE SCALAR payload -- `AllocError` included -- while `--interp`, `karac build` and `KARAC_AUTO_PAR=0 karac build` all produce the correct output. Minimal repro allocates nothing and never takes the `Err` arm: `fn ok() -> Result[i64, AllocError] { return Ok(7); }` + `fn main() -> Result[(), AllocError] { let x = ok()?; println(x); return Ok(()); }` gives rc=139 with no output, 5/5 runs. An all-unit error enum works, and a `String`-payload error enum (`IoError`) works, so the discriminator is the payload REPRESENTATION, not its presence. `?` in a non-main function is fine, and `main -> Result` without `?` is fine -- it takes both. This silently breaks the fallible-allocation API as design.md spells it, since `v.try_push(x)?` inside `fn main() -> Result[(), AllocError]` is the spec's own example. | roadmap.md |
 | B-2026-08-25-34 | 2026-08-25 | codegen | medium | `AllocError`'s `Display` renders the Debug form (`OutOfMemory { requested_bytes: 4096 }`) into the user-facing `Error: {e}` entry-point line, and the spec-sanctioned fix -- a manual `impl Display`, per § `#[derive(Display)]` on enums' "Implement `Display` manually to override" -- CANNOT LAND without codegen work: a prelude impl lives in `STDLIB_PROGRAMS`, which codegen does not walk, so the impl reaches the interpreter only. Registering the module as a compiled stdlib program fixes `.to_string()` under AOT but leaves `f"{e}"` and the entry-point line unfixed. Worse, the half-done state FAILS OPEN: dropping the derive without teaching codegen about the impl makes `karac build` emit `Error: ` with an EMPTY message rather than erroring, because the typechecker sees the impl and codegen does not. | roadmap.md |
+| B-2026-08-26-1 | 2026-08-26 | other | low | design.md § Operator Traits § Notably absent prescribes `vec.concat(other)` as one of the two redirects for `vec1 + vec2`, but `Vec.concat()` in this implementation is a DIFFERENT operation: zero-argument and `Vec[String]`-only, joining a Vec's own String elements into one String. There is no two-Vec concatenation method at all -- `a.concat(b)` on a `Vec[i64]` reports `Vec.concat() requires String elements`, `a.concat("-")` reports `Vec.concat() expects 0 argument(s), found 1`, and `append` does not exist. Only `extend` (in-place, any element type) does what the spec sentence promises. | docs/design.md |
 
 ### Relocated (1)
 
@@ -169,9 +169,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1578 surfaced
 
 </details>
 
-### Fixed (1544)
+### Fixed (1545)
 
-<details><summary>1544 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1545 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1718,6 +1718,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1578 surfaced
 | B-2026-08-25-26 | typecheck | low | An un-inferrable `T` from an EMPTY array literal is reported as a BOUND failure naming `<error>` as the type, pointed at a later method call rather t… | 40a54f6 |
 | B-2026-08-25-27 | codegen | high | SIX `let`-RHS forms bound a generic-struct value with NO recorded instantiation, so the sibling call dispatched to the unmangled base prototype and S… | 14c6d32 |
 | B-2026-08-25-28 | codegen | high | A method call whose receiver is an unnamed TEMPORARY inside a generic impl dispatches to the unmangled base prototype and SEGFAULTS at a heap-carryin… | 5fa76a7 |
+| B-2026-08-25-30 | typecheck | medium | OPERATOR-FAILURE DIAGNOSTICS DO NOT SPEAK THE TRAIT LANGUAGE design.md § Operator Traits mandates, and two of them NAME A TRAIT THE USER DOES NOT NEED | 3964ede |
 | B-2026-08-25-31 | typecheck | low | The un-inferrable-type-argument diagnostic points at the first USE, not at the empty literal that caused it, because `Type::Error` carries no provena… | a54d41d |
 
 </details>
