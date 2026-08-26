@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 291 | 1 |
 | leak | 195 | 0 |
 | missing-feature | 175 | 3 |
-| run-vs-build | 162 | 2 |
+| run-vs-build | 162 | 1 |
 | codegen-gap | 139 | 1 |
 | double-free | 139 | 1 |
 | diagnostics | 109 | 1 |
@@ -112,7 +112,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 |---|---|---|
 | codegen | 1045 | 6 |
 | typecheck | 263 | 4 |
-| interp | 182 | 1 |
+| interp | 182 | 0 |
 | other | 68 | 1 |
 | ownership | 65 | 0 |
 | cli | 63 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1589 surfaced · 10 open · 1554 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-26). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1589 surfaced · 9 open · 1555 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-26). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (10)
+### Open (9)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -137,7 +137,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1589 surfaced
 | B-2026-08-26-3 | 2026-08-26 | typecheck+codegen | high | `LazyLock[T]` IS A CHECK-ONLY PHANTOM: `let TABLE: LazyLock[i64] = LazyLock.new(|| 40 + 2);` passes `karac check` cleanly and then fails on EVERY execution backend -- `--interp` dies with "path 'LazyLock.new' has no interpreter evaluation rule", and `karac run` (JIT) and `karac build` both reject `TABLE.get()` with "codegen: no handler for method 'get'". It is not a type outside that one special-cased module-binding form either: `fn f(x: LazyLock[i64])` is `undefined type 'LazyLock'`. Until this was found, the live `module_mut_binding` WARNING recommended it by name ("Prefer a context struct, `Mutex`, `Atomic`, `#[thread_local]`, `LazyLock`, or `OnceLock`"), so following the compiler's own advice produced a program that checks and then cannot be run or built. | roadmap.md |
 | B-2026-08-26-4 | 2026-08-26 | other | low | design.md's CANONICAL `?`-operator example calls `input.parse_i64()?` and names `ParseError` -- NEITHER EXISTS: the real API is `i64.parse(s) -> Option[i64]`, which cannot be used with `?` the way the example shows | docs/design.md § `?` operator and cross-error-type propagation |
 | B-2026-08-26-7 | 2026-08-26 | codegen | high | A NARROW LOCAL INITIALIZED FROM AN UNSUFFIXED LITERAL IS ALLOCATED AT i64 IN CODEGEN, so every width-sensitive operation on it runs at 64 bits and can produce a value the declared type cannot represent. The literal suffix -- which ought to be semantically inert once the binding carries an explicit type annotation -- decides the storage width: `let a: u8 = 200u8` gets a real `i8` alloca, `let b: u8 = 200` stays in the i64 carrier. MEASURED in AOT, against `karac run --interp` which is correct in every arm: `b << 4` is 3200 (should be 128), and `let d: i32 = 1; d << 31` is 2147483648 -- a value an `i32` cannot hold. THAT LAST CASE IS THE SOUNDNESS HOLE B-2026-08-06-7 CLAIMS TO HAVE CLOSED: its regression tests assert exactly `1i32 << 31 == -2147483648`, but spell the literal WITH a suffix, so the fix was only ever exercised on the path that allocates `i32` and the ordinary spelling still miscompiles. `~` had the identical hole and was fixed at the operator (B-2026-08-26-6) rather than at this root; every operator whose correctness depends on the operand's LLVM width is a candidate, and only shifts and `~` have been checked. | roadmap.md |
-| B-2026-08-26-8 | 2026-08-26 | interp | medium | INTERPRETER `Vector[T, N]` LANE ARITHMETIC IGNORES THE LANE WIDTH, so a narrow-lane vector computes on the i128 carrier and diverges from codegen, whose lanes are a real `<N x iX>`. MEASURED with `Vector[u8, 4]` lanes of 200: `v + v` is 400 in the interpreter and 144 in AOT (144 is correct -- 400 truncated to `u8`). The `~` and `<<` arms of the same divergence were fixed by teaching `span_int_width` to peel `Type::Vector` to its lane type; the ARITHMETIC arms route through `narrow_oob` instead and are still divergent. LEFT DELIBERATELY, because the obvious one-line extension is wrong: `narrow_oob` is a TRAP predicate, so peeling `Vector` there would make the interpreter raise `integer overflow` on a lane sum of 400 while codegen WRAPS it to 144 -- trading a wrong-value divergence for one backend rejecting a program the other runs. Needs a design.md decision on narrow-lane overflow semantics first. | roadmap.md |
 | B-2026-08-26-9 | 2026-08-26 | codegen | high | `PriorityQueue.push` RUNS THE DROP GLUE FOR ITS BY-VALUE PARAMETER ON A VALUE IT HAS ALREADY MOVED into the backing `Vec`, so an element type with `impl Drop` drops ONCE AT PUSH AND AGAIN AT POP on the compiled backend -- the interpreter drops once. LSan: 31 bytes leaked in 8 allocations once the element also owns a `String`. | — |
 | B-2026-08-26-10 | 2026-08-26 | typecheck+codegen | medium | OPERATORS NEVER CALL A HAND-WRITTEN OPERATOR-TRAIT BODY: `==` uses structural comparison, `<` uses a DECLARATION-ORDER comparator, and `Map` uses a structural hash, so a user `impl PartialEq` / `impl Ord` / `impl Hash` is silently bypassed rather than dispatched. The derive-only typecheck gate is currently the only thing preventing that silence, which is why it must NOT be relaxed to 'make the two paths agree'. | — |
 
@@ -170,9 +169,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1589 surfaced
 
 </details>
 
-### Fixed (1554)
+### Fixed (1555)
 
-<details><summary>1554 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1555 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1730,6 +1729,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1589 surfaced
 | B-2026-08-26-1 | other | low | design.md § Operator Traits § Notably absent prescribes `vec.concat(other)` as one of the two redirects for `vec1 + vec2`, but `Vec.concat()` in this… | 5964c16 |
 | B-2026-08-26-5 | codegen | medium | `?` in `main() -> Result[(), E]` reconstructed `E` from only its first THREE payload words, so any error held inline in four or more words rendered g… | 06880a4 |
 | B-2026-08-26-6 | interp+codegen | high | `~` COMPLEMENTS AT THE CARRIER WIDTH, NOT THE DECLARED WIDTH, so every narrow UNSIGNED integer gets a wrong value and the two backends disagree on wh… | 297ef4f |
+| B-2026-08-26-8 | interp | medium | INTERPRETER `Vector[T, N]` LANE ARITHMETIC IGNORES THE LANE WIDTH, so a narrow-lane vector computes on the i128 carrier and diverges from codegen, wh… | ff403a3 |
 
 </details>
 
