@@ -7240,7 +7240,28 @@ impl<'ctx> super::Codegen<'ctx> {
                     // No passthrough guard on this path (a method that returns
                     // its own by-value param is not a shape this arm models), so
                     // the arg never flows into the result here.
-                    self.track_inline_owned_aggregate_arg(val, &a.value, false);
+                    // B-2026-08-26-9 — a method that STORES this argument
+                    // into `self` (or into one of its own `ref`/`mut ref`
+                    // params) leaves the value alive in the caller when the
+                    // call returns, so its Drop BODY belongs to the value's new
+                    // home. `q.push(Item { .. })` on `fn push(mut ref self, x:
+                    // T) { self.xs.push(x); }` fired the body once at the push
+                    // and again at the pop under AOT while `--interp` fired it
+                    // once. The MEMORY half stays registered — `push`
+                    // defensive-copies the element's `String`, so the caller's
+                    // original buffer is orphaned and is still ours to free;
+                    // suppressing the whole registration instead orphaned it and
+                    // traded the double body for a 9-byte leak.
+                    //
+                    // `i`, NOT `pidx`: `find_function_ast` hands back a
+                    // `Function` whose `params` EXCLUDE the receiver (`self`
+                    // lives in `self_param`), so this argument's declared index
+                    // is its position among the non-self args. The sibling
+                    // `fn_returns_param(f, pidx)` call above is the odd one out
+                    // on this key, not this.
+                    let escapes_frame =
+                        self.call_arg_moves_into_outliving_place(&qualified, i, false);
+                    self.track_inline_owned_aggregate_arg(val, &a.value, escapes_frame);
                     // Fresh-heap by-value arg materialization — the method-call
                     // sibling of the #20 arm in `compile_call` (call_dispatch.rs).
                     // A `String`/`Vec` produced by a Call/MethodCall (or a block /

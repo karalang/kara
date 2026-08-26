@@ -53658,32 +53658,43 @@ fn main() {
     /// copy would double-free one buffer; a move-out would drop `apple` early
     /// and leave the queue two long.
     ///
-    /// STILL IGNORED, but for a different and narrower reason than when it was
-    /// written. B-2026-08-25-35 fixed the half that made this fixture
-    /// *uncompilable*: a `#[derive(Ord)]` struct now satisfies the `T: Ord`
-    /// bound on a generic impl's method, so it can go in a `PriorityQueue` at
-    /// all — hence the switch from a hand-written `impl Ord` to the derive form
-    /// below. (A hand-written `impl Ord` still cannot: see that row for why
-    /// admitting it would silently overrule the user's `cmp` body.)
+    /// Two rows had to close before this could run, and the history is worth
+    /// keeping because each one hid the next. B-2026-08-25-35 fixed the half
+    /// that made the fixture *uncompilable*: a `#[derive(Ord)]` struct now
+    /// satisfies the `T: Ord` bound on a generic impl's method, so it can go in
+    /// a `PriorityQueue` at all — hence the derive form below rather than a
+    /// hand-written `impl Ord` (which still cannot: see that row for why
+    /// admitting it would silently overrule the user's `cmp` body). Compiling
+    /// then exposed B-2026-08-26-9, and this fixture was the oracle for it:
+    /// the CALLER ran its fresh-temp drop for an argument
+    /// `PriorityQueue.push` had already moved into the backing `Vec`, so each
+    /// element dropped once at the push and again at the pop. AOT printed
+    /// `drop 3 / drop 1 / drop 2` before `built` while `--interp` printed
+    /// nothing there, and LSan reported 31 bytes leaked in 8 allocations.
     ///
-    /// What it now exposes is B-2026-08-26-9, a real defect this fixture is the
-    /// oracle for: `PriorityQueue.push` runs the drop glue for its by-value
-    /// parameter on a value it has already moved into the backing `Vec`, so an
-    /// `impl Drop` element drops once at push AND again at pop. AOT prints
-    /// `drop 3 / drop 1 / drop 2` before `built`; the interpreter prints
-    /// nothing there. LSan reports 31 bytes leaked in 8 allocations once the
-    /// element also owns a `String`.
+    /// Both are fixed, and the DROP SEQUENCE below now matches exactly on both
+    /// backends. What still holds this test down is a THIRD defect the original
+    /// row bundled in by mistake: B-2026-08-26-18, a leak of the element
+    /// struct's `String` buffer that has nothing to do with drop counts. The
+    /// row attributed its `31 byte(s) leaked in 8 allocation(s)` to the double
+    /// drop; measurement says otherwise — the same fixture with the `impl Drop`
+    /// REMOVED leaks too, and a plain `Vec[Item]` holding that same struct is
+    /// clean, so the leak is `PriorityQueue`-of-a-heap-bearing-struct and is
+    /// independent of `Drop` entirely.
     ///
-    /// The expectations below are the CORRECT sequence — do not relax them to
-    /// match current AOT output. The sibling `String` fixture above has no
-    /// `Drop` impl, is unaffected, and remains the live leak oracle for `peek`.
+    /// The drop-count half of this fixture is therefore covered by live
+    /// oracles rather than by this test: `asan_priority_queue_push_drops_a_-
+    /// drop_element_exactly_once` (heap-free element, so no -15 interference)
+    /// plus the two `e2e_*_drops_a_stored_by_value_argument_once` cases in
+    /// `tests/codegen.rs` and their interpreter twins. Un-ignoring THIS one is
+    /// -15's acceptance test; its expectations are correct and must not be
+    /// relaxed.
     #[test]
-    #[ignore = "B-2026-08-26-9: `PriorityQueue.push` runs the by-value param's drop glue on a \
-                value it already moved into the backing Vec, so an `impl Drop` element drops \
-                once per push AND again per pop (AOT only; the interpreter drops once). LSan \
-                reports 31 bytes leaked in 8 allocations when the element also owns a String. \
-                Un-ignoring this is that row's acceptance test — the fixture below is correct \
-                and its expectations are the CORRECT drop sequence."]
+    #[ignore = "B-2026-08-26-18: a `PriorityQueue` element struct carrying a `String` leaks its \
+                buffer (31 bytes in 8 allocations here) — independent of `impl Drop`, and NOT \
+                the drop-count defect B-2026-08-26-9 fixed, whose sequence this fixture now \
+                matches exactly on both backends. Un-ignoring this is -15's acceptance test; \
+                the expectations below are correct and must not be relaxed."]
     fn asan_priority_queue_peek_drop_count_is_one_per_returned_copy() {
         assert_clean_asan_run(
             r#"
@@ -53725,6 +53736,88 @@ fn main() {
                 "end",
             ],
             "priority-queue-peek-drop-count",
+        );
+    }
+
+    /// B-2026-08-26-9 regression oracle, ASAN leg. The caller of a function
+    /// that MOVES its by-value argument into a place the caller still holds
+    /// used to run its own fresh-temp drop anyway, so an `impl Drop` element
+    /// fired its body once at the push and again at the pop. Heap-FREE element
+    /// on purpose: it isolates the drop COUNT, which is what this row was
+    /// about, from `PriorityQueue`'s separate struct-element buffer leak
+    /// (B-2026-08-26-18) that a `String` field would drag in.
+    #[test]
+    fn asan_priority_queue_push_drops_a_drop_element_exactly_once() {
+        assert_clean_asan_run(
+            r#"
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct Item { id: i64 }
+impl Drop for Item { fn drop(mut ref self) { println(f"drop {self.id}") } }
+fn main() {
+    let mut q: PriorityQueue[Item] = PriorityQueue.new();
+    q.push(Item { id: 3 });
+    q.push(Item { id: 1 });
+    println("built");
+    while q.len() > 0 { match q.pop() { Some(v) => { println(f"pop {v.id}"); } None => {} } }
+    println("end");
+}
+"#,
+            &["built", "pop 1", "drop 1", "pop 3", "drop 3", "end"],
+            "pq-push-drop-once",
+        );
+    }
+
+    /// B-2026-08-26-9, the FREE-FUNCTION leg — and the one no run-vs-build
+    /// check could have caught, because the interpreter got it wrong the same
+    /// way AOT did (both printed `drop 7` twice). The `String` field is
+    /// load-bearing here rather than incidental: the fix suppresses the
+    /// argument's Drop BODY but must keep its MEMORY registration, since the
+    /// callee's `push` defensive-copies the buffer and leaves the caller's
+    /// original orphaned. Suppressing both halves traded the double body for a
+    /// silent 9-byte leak, which is exactly what this fixture would catch.
+    #[test]
+    fn asan_free_fn_storing_a_by_value_param_into_a_ref_param_drops_once() {
+        assert_clean_asan_run(
+            r#"
+struct Item { id: i64, name: String }
+impl Drop for Item { fn drop(mut ref self) { println(f"drop {self.id} {self.name}") } }
+fn add_to(v: mut ref Vec[Item], x: Item) { v.push(x); }
+fn main() {
+    let mut v: Vec[Item] = Vec.new();
+    add_to(mut v, Item { id: 7, name: f"nn{7}" });
+    println("built");
+    while v.len() > 0 { match v.pop() { Some(e) => { println(f"pop {e.id}"); } None => {} } }
+    println("end");
+}
+"#,
+            &["built", "pop 7", "drop 7 nn7", "end"],
+            "freefn-store-into-ref-param-drop-once",
+        );
+    }
+
+    /// B-2026-08-26-9, the METHOD leg (`self.xs.push(x)` on `mut ref self`) —
+    /// the shape `PriorityQueue.push` has and the only one of the three that
+    /// showed up as a run-vs-build divergence, since the interpreter runs its
+    /// fresh-temp arg drops on the free-function path only. Same bodies-vs-
+    /// memory split as the free-fn sibling above.
+    #[test]
+    fn asan_method_storing_a_by_value_param_into_self_drops_once() {
+        assert_clean_asan_run(
+            r#"
+struct Item { id: i64, name: String }
+impl Drop for Item { fn drop(mut ref self) { println(f"drop {self.id} {self.name}") } }
+struct Bag { xs: Vec[Item] }
+impl Bag { fn add(mut ref self, x: Item) { self.xs.push(x); } }
+fn main() {
+    let mut b = Bag { xs: Vec.new() };
+    b.add(Item { id: 7, name: f"nn{7}" });
+    println("built");
+    while b.xs.len() > 0 { match b.xs.pop() { Some(e) => { println(f"pop {e.id}"); } None => {} } }
+    println("end");
+}
+"#,
+            &["built", "pop 7", "drop 7 nn7", "end"],
+            "method-store-into-self-drop-once",
         );
     }
 }

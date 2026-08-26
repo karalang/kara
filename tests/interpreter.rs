@@ -38502,3 +38502,91 @@ fn wrapping_vector_lanes_did_not_stop_columns_or_scalars_trapping() {
         );
     }
 }
+
+// ── A by-value argument the callee STORES (B-2026-08-26-9) ──────────────
+//
+// The caller-drops convention runs the fresh temporary's `Drop` after the
+// call. When the callee STORES the argument into a place the caller still
+// holds, the value is alive in its new home when the call returns, so the
+// caller's fire is a second body for one value.
+
+/// A REGRESSION oracle for this backend, not a parity pin: the interpreter was
+/// wrong here on its own. `run_fresh_temp_arg_drops` fires on the FREE-FUNCTION
+/// call path, and its only escape guard was `fn_returns_param`, so a callee that
+/// stored the argument instead of returning it printed `drop 7` at the call and
+/// again at the container's drain — on this backend AND on AOT. Because both
+/// agreed, no run-vs-build comparison would have surfaced it; only counting the
+/// drops against the language's semantics does.
+#[test]
+fn free_fn_drops_a_stored_by_value_argument_once() {
+    let out = run(r#"
+struct Item { id: i64 }
+impl Drop for Item {
+    fn drop(mut ref self) { println(f"drop {self.id}") }
+}
+fn add_to(v: mut ref Vec[Item], x: Item) { v.push(x); }
+fn main() {
+    let mut v: Vec[Item] = Vec.new();
+    add_to(mut v, Item { id: 7 });
+    println("stored");
+    while v.len() > 0 {
+        match v.pop() { Some(e) => { println(f"pop {e.id}"); } None => {} }
+    }
+    println("end");
+}
+"#);
+    assert_eq!(out, "stored\npop 7\ndrop 7\nend\n");
+}
+
+/// A PARITY pin, NOT a regression oracle — it passed before the fix too. The
+/// interpreter never ran the fresh-temp argument drop on the METHOD path at
+/// all, so it happened to be right for the wrong reason while AOT double-fired.
+/// It earns its place by pinning the agreed answer: this is the shape whose
+/// backends disagreed, and it is the one a future change to either side is most
+/// likely to break. Its codegen twin
+/// (`e2e_method_drops_a_stored_by_value_argument_once`) is the half that goes
+/// red on a regression.
+#[test]
+fn method_drops_a_stored_by_value_argument_once_parity() {
+    let out = run(r#"
+struct Item { id: i64 }
+impl Drop for Item {
+    fn drop(mut ref self) { println(f"drop {self.id}") }
+}
+struct Bag { xs: Vec[Item] }
+impl Bag {
+    fn add(mut ref self, x: Item) { self.xs.push(x); }
+}
+fn main() {
+    let mut b = Bag { xs: Vec.new() };
+    b.add(Item { id: 7 });
+    println("stored");
+    while b.xs.len() > 0 {
+        match b.xs.pop() { Some(e) => { println(f"pop {e.id}"); } None => {} }
+    }
+    println("end");
+}
+"#);
+    assert_eq!(out, "stored\npop 7\ndrop 7\nend\n");
+}
+
+/// The negative side, mirroring the codegen fixture of the same shape: a callee
+/// that only READS its by-value parameter still leaves the drop to the caller,
+/// so exactly one `drop` must print. Fails if the escape predicate is ever
+/// widened to key on the receiver's mode rather than on an actual store.
+#[test]
+fn by_value_argument_that_is_only_read_still_drops_in_the_caller() {
+    let out = run(r#"
+struct Item { id: i64 }
+impl Drop for Item {
+    fn drop(mut ref self) { println(f"drop {self.id}") }
+}
+fn look(x: Item) -> i64 { x.id }
+fn main() {
+    let n = look(Item { id: 7 });
+    println(n);
+    println("end");
+}
+"#);
+    assert_eq!(out, "drop 7\n7\nend\n");
+}

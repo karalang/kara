@@ -1635,6 +1635,187 @@ pub fn fn_returns_param_payload(f: &Function, arg_index: usize) -> bool {
     walk_block_for(&f.body, param_name)
 }
 
+/// B-2026-08-26-9 — the third sibling of [`fn_returns_param`] and
+/// [`fn_returns_param_payload`]: does `f` MOVE by-value parameter `arg_index`
+/// into a place that OUTLIVES the call?
+///
+/// The two existing predicates ask whether the argument leaves the frame
+/// through the RETURN VALUE. This one asks whether it leaves through a
+/// *reference the caller already holds* — `self`, or a `ref` / `mut ref`
+/// parameter. `fn push(mut ref self, x: T) { self.xs.push(x); }` is the
+/// canonical shape: `x` never reaches a return site, so both existing
+/// predicates answer false, yet the value the caller handed over is alive in
+/// the caller's own object when the call returns.
+///
+/// Without this the caller ran its fresh-temp arg drop anyway, so the value
+/// was dropped once at the call and again when the container it now lives in
+/// was drained. Measured on `PriorityQueue[Item]` with `Item: Drop`:
+/// `drop 3, drop 1, built, pop 1, drop 1, pop 3, drop 3` from `karac build`
+/// against `built, pop 1, drop 1, pop 3, drop 3` from `--interp`, plus
+/// `31 byte(s) leaked in 8 allocation(s)` under LSan once `Item` also owned a
+/// `String`. The same defect on a FREE function (`fn add(v: mut ref Vec[Item],
+/// x: Item) { v.push(x); }`) double-drops on BOTH backends, so it is not an
+/// A/B divergence there and no run-vs-build check would have found it.
+///
+/// **Roots that outlive the call**, and only these:
+/// - `self` under a `ref self` / `mut ref self` receiver — the caller owns the
+///   object. An OWNED `self` receiver (`fn consume(self, x: T)`) is excluded:
+///   the receiver dies with the frame, so anything stored into it dies too and
+///   the caller's temp drop is the only one.
+/// - a parameter declared `ref T` / `mut ref T`.
+///
+/// A move into a purely local place is NOT a store site here even when that
+/// local is later returned — that route belongs to `fn_returns_param`, which
+/// already recognizes the param moved into a returned aggregate. A move into a
+/// module-level binding is not modelled at all; no such shape has been
+/// measured.
+///
+/// **CONSERVATIVE-TRUE**, the same direction and for the same reason as both
+/// siblings: an argument-position occurrence of the bare param under a
+/// qualifying receiver counts as a store, even for a method that only reads it
+/// (`self.index.contains(x)`). Answering true too often means the caller skips
+/// a drop that nothing else runs — a leak. Answering false too often means two
+/// owners free one value — a double free. Only the first is recoverable, so
+/// the predicate leans that way, exactly as `fn_returns_param_payload`'s
+/// mixed-path note records for its own channel.
+pub fn fn_moves_param_into_outliving_place(f: &Function, arg_index: usize) -> bool {
+    let Some(param) = f.params.get(arg_index) else {
+        return false;
+    };
+    // A by-ref parameter is not owned by this frame, so the caller never
+    // registered a temp drop for it and there is nothing to suppress.
+    if matches!(
+        param.ty.kind,
+        crate::ast::TypeKind::Ref(_) | crate::ast::TypeKind::MutRef(_)
+    ) {
+        return false;
+    }
+    let PatternKind::Binding(param_name) = &param.pattern.kind else {
+        return false;
+    };
+
+    // The set of roots whose storage outlives the call. `self` joins it only
+    // for a BORROWED receiver — see the doc comment.
+    let mut roots: Vec<&str> = Vec::new();
+    if matches!(f.self_param, Some(SelfParam::Ref) | Some(SelfParam::MutRef)) {
+        roots.push("self");
+    }
+    for p in &f.params {
+        if !matches!(
+            p.ty.kind,
+            crate::ast::TypeKind::Ref(_) | crate::ast::TypeKind::MutRef(_)
+        ) {
+            continue;
+        }
+        if let PatternKind::Binding(n) = &p.pattern.kind {
+            roots.push(n.as_str());
+        }
+    }
+    if roots.is_empty() {
+        return false;
+    }
+
+    /// Is `e` a place expression whose ROOT is one of `roots`? Walks through
+    /// field, index and tuple-index projections, so `self.buckets[i].inner`
+    /// resolves to root `self`.
+    fn place_root_outlives(e: &Expr, roots: &[&str]) -> bool {
+        match &e.kind {
+            ExprKind::SelfValue => roots.contains(&"self"),
+            ExprKind::Identifier(n) => roots.contains(&n.as_str()),
+            ExprKind::FieldAccess { object, .. }
+            | ExprKind::TupleIndex { object, .. }
+            | ExprKind::Index { object, .. } => place_root_outlives(object, roots),
+            _ => false,
+        }
+    }
+
+    /// Does `e` hand `name` over by value — bare, or nested inside an
+    /// aggregate literal being built around it? Mirrors `fn_returns_param`'s
+    /// `expr_is_ident` so the three predicates recognize the same move shapes.
+    /// A FIELD projection (`x.id`) is deliberately not a move: it copies one
+    /// field and leaves the value behind.
+    fn moves(e: &Expr, name: &str) -> bool {
+        match &e.kind {
+            ExprKind::Identifier(n) => n == name,
+            ExprKind::StructLiteral { fields, .. } => {
+                fields.iter().any(|fi| moves(&fi.value, name))
+            }
+            ExprKind::Tuple(elems) => elems.iter().any(|el| moves(el, name)),
+            ExprKind::Call { args, .. } => args.iter().any(|a| moves(&a.value, name)),
+            _ => false,
+        }
+    }
+
+    /// One expression: is it a store of `name` into an outliving place?
+    fn stores(e: &Expr, name: &str, roots: &[&str]) -> bool {
+        match &e.kind {
+            // `self.xs.push(x)`, `store.insert(k, x)`, `self.slots[i].set(x)`.
+            ExprKind::MethodCall { object, args, .. } => {
+                (place_root_outlives(object, roots) && args.iter().any(|a| moves(&a.value, name)))
+                    || stores(object, name, roots)
+                    || args.iter().any(|a| stores(&a.value, name, roots))
+            }
+            ExprKind::Call { args, .. } => args.iter().any(|a| stores(&a.value, name, roots)),
+            ExprKind::Block(b) | ExprKind::Unsafe(b) | ExprKind::Try(b) | ExprKind::Seq(b) => {
+                walk_block(b, name, roots)
+            }
+            // A `par` block's branches run concurrently but store into the same
+            // places; the question is unchanged.
+            ExprKind::Par(b) => walk_block(b, name, roots),
+            ExprKind::If {
+                condition,
+                then_block,
+                else_branch,
+            } => {
+                stores(condition, name, roots)
+                    || walk_block(then_block, name, roots)
+                    || else_branch
+                        .as_deref()
+                        .is_some_and(|x| stores(x, name, roots))
+            }
+            ExprKind::IfLet {
+                value,
+                then_block,
+                else_branch,
+                ..
+            } => {
+                stores(value, name, roots)
+                    || walk_block(then_block, name, roots)
+                    || else_branch
+                        .as_deref()
+                        .is_some_and(|x| stores(x, name, roots))
+            }
+            ExprKind::Match { scrutinee, arms } => {
+                stores(scrutinee, name, roots) || arms.iter().any(|a| stores(&a.body, name, roots))
+            }
+            ExprKind::While { body, .. }
+            | ExprKind::WhileLet { body, .. }
+            | ExprKind::For { body, .. }
+            | ExprKind::Loop { body, .. }
+            | ExprKind::LabeledBlock { body, .. } => walk_block(body, name, roots),
+            _ => false,
+        }
+    }
+
+    fn walk_block(b: &Block, name: &str, roots: &[&str]) -> bool {
+        b.stmts.iter().any(|st| match &st.kind {
+            StmtKind::Expr(e) => stores(e, name, roots),
+            // `self.slot = x`, `self.xs[i] = x`.
+            StmtKind::Assign { target, value } => {
+                (place_root_outlives(target, roots) && moves(value, name))
+                    || stores(value, name, roots)
+            }
+            StmtKind::Let { value, .. } => stores(value, name, roots),
+            _ => false,
+        }) || b
+            .final_expr
+            .as_deref()
+            .is_some_and(|fe| stores(fe, name, roots))
+    }
+
+    walk_block(&f.body, param_name, &roots)
+}
+
 /// The channel-endpoint type heads whose PARAMETERS may be named directly in
 /// an effect verb — `with sends(tx)` on a `tx: Sender[T]` (B-2026-08-21-32).
 ///

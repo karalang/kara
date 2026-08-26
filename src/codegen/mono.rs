@@ -1761,11 +1761,19 @@ impl<'ctx> super::Codegen<'ctx> {
         for (i, a) in args.iter().enumerate() {
             let val = arg_vals[i];
             let flows_into_return = self.call_arg_flows_into_return(name, i);
+            // B-2026-08-26-9 — the monomorphized leg of the same union the
+            // free-fn arg loop computes: a callee that STORES this argument into
+            // `self` or into a `ref`/`mut ref` param leaves it alive in the
+            // caller, so its Drop body belongs to the value's new home while the
+            // orphaned original's memory stays ours. This is the leg
+            // `PriorityQueue[Item].push` actually takes.
+            let escapes_frame =
+                flows_into_return || self.call_arg_moves_into_outliving_place(name, i, true);
             if !flows_into_return || self.arg_is_entry_copied_heap_struct(&a.value) {
                 self.track_inline_owned_aggregate_arg_inst(
                     val,
                     &a.value,
-                    flows_into_return,
+                    escapes_frame,
                     mono_agg[i].1.clone(),
                     mono_agg[i].0,
                 );

@@ -2025,6 +2025,13 @@ impl<'ctx> super::Codegen<'ctx> {
             // passthrough are unaffected (`arg_is_entry_copied_heap_struct`
             // matches only copy-supported heap structs).
             let flows_into_return = self.call_arg_flows_into_return(&name, i);
+            // B-2026-08-26-9 — the SECOND escape route. `flows_into_return`
+            // stays narrow because the admission test just below is about the
+            // entry-copy passthrough specifically; what the REGISTRAR needs is
+            // the union, since its bodies-vs-memory split turns on "does this
+            // value outlive the call" and not on which exit it took.
+            let escapes_frame =
+                flows_into_return || self.call_arg_moves_into_outliving_place(&name, i, false);
             // B-2026-08-05-7 — the TENSOR sibling of the `#20` arm above. A
             // tensor is a bare `ptr` to one `[rank][dims][data]` block, so
             // `llvm_ty_is_vec_struct` never admits it and the fresh-temp
@@ -2100,7 +2107,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // the registrar's enum arm).
                 || self.arg_is_entry_copied_heap_enum(&a.value)
             {
-                self.track_inline_owned_aggregate_arg(val, &a.value, flows_into_return);
+                self.track_inline_owned_aggregate_arg(val, &a.value, escapes_frame);
             }
             // B-2026-07-10-4 residual — an inline-heap `Option[String]`/
             // `Option[Vec]` binding MOVED by value into a user function that
@@ -2979,6 +2986,70 @@ impl<'ctx> super::Codegen<'ctx> {
         })
     }
 
+    /// B-2026-08-26-9 — the ESCAPE-THROUGH-A-BORROW sibling of
+    /// [`Self::call_arg_flows_into_return`]. That one asks whether the callee
+    /// hands the argument back through the return value; this asks whether it
+    /// stores the argument into `self` or into a `ref`/`mut ref` parameter —
+    /// a place the CALLER already holds, so the value is still alive when the
+    /// call returns and the caller's fresh-temp drop would be a second owner.
+    ///
+    /// Resolves through [`super::declarations::find_function_ast`] rather than
+    /// the free-function-only scan its sibling uses, because the shape that
+    /// motivated this is a METHOD (`q.push(Item { .. })` on
+    /// `fn push(mut ref self, x: T)`); a `Item::Function`-only lookup would
+    /// answer false for exactly the calls that need it.
+    ///
+    /// See [`crate::ast::fn_moves_param_into_outliving_place`] for the
+    /// predicate itself and for why it is conservative toward `true`.
+    ///
+    /// `receiver_counted` says whether `arg_index` counts the RECEIVER as
+    /// argument 0. The three call sites disagree and the mismatch is silent —
+    /// an index one off simply reads a parameter that isn't there and answers
+    /// `false`, i.e. the gate quietly stops existing. The free-fn arg loop and
+    /// the method arg loop both index the non-self args (`false`);
+    /// `compile_generic_call` receives a `make_generic_impl_method_function`
+    /// desugaring whose `all_args` puts the receiver at 0 (`true`), while the
+    /// AST this resolves against still carries that receiver in `self_param`
+    /// and not in `params`. Normalizing here rather than at each site keeps the
+    /// conversion in the one place that can see both conventions — the same
+    /// `checked_sub(1)` shape [`Self::callee_optres_param_entry_copied`] uses.
+    /// Argument 0 under `receiver_counted` IS the receiver, which is a borrow
+    /// with no caller temp drop to suppress, so `false` there is right.
+    pub(super) fn call_arg_moves_into_outliving_place(
+        &self,
+        callee_name: &str,
+        arg_index: usize,
+        receiver_counted: bool,
+    ) -> bool {
+        // `program_snapshot` holds the USER program only, so a stdlib callee
+        // (`PriorityQueue.push` — the shape this row was filed on) resolves to
+        // nothing there. `mono_state.generic_fns` carries it: every generic
+        // callee, stdlib included, is registered there as the
+        // `make_generic_impl_method_function` desugaring. That form moves the
+        // receiver into `params[0]` (still named `self`, still typed `mut ref
+        // Target[T]`) and leaves `self_param` empty, which is why the
+        // normalization below keys on `self_param` rather than on the call
+        // site's own shape — under the desugaring `receiver_counted` indices
+        // already line up with `params` and must NOT be shifted.
+        let Some(f) = self
+            .program_snapshot
+            .as_deref()
+            .and_then(|p| super::declarations::find_function_ast(p, callee_name))
+            .or_else(|| self.mono_state.generic_fns.get(callee_name))
+        else {
+            return false;
+        };
+        let declared = if receiver_counted && f.self_param.is_some() {
+            match arg_index.checked_sub(1) {
+                Some(d) => d,
+                None => return false,
+            }
+        } else {
+            arg_index
+        };
+        crate::ast::fn_moves_param_into_outliving_place(f, declared)
+    }
+
     /// B-2026-07-01-7 (discard position): register the caller-side
     /// UserDrop for a DISCARDED statement-position fn result whose
     /// declared return type has a user `impl Drop` (`make();` — silent on
@@ -3242,9 +3313,9 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         val: BasicValueEnum<'ctx>,
         arg: &Expr,
-        arg_flows_into_return: bool,
+        arg_escapes_frame: bool,
     ) {
-        self.track_inline_owned_aggregate_arg_inst(val, arg, arg_flows_into_return, None, false)
+        self.track_inline_owned_aggregate_arg_inst(val, arg, arg_escapes_frame, None, false)
     }
 
     /// [`Self::track_inline_owned_aggregate_arg`] with the struct-literal arg's
@@ -3276,7 +3347,7 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         val: BasicValueEnum<'ctx>,
         arg: &Expr,
-        arg_flows_into_return: bool,
+        arg_escapes_frame: bool,
         mono_inst: Option<TypeExpr>,
         callee_entry_copies_mono: bool,
     ) {
@@ -3318,7 +3389,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             let slot =
                                 self.create_entry_alloca(cur_fn, "__owned_agg_tmp", agg_ty.into());
                             self.builder.build_store(slot, val).unwrap();
-                            if arg_flows_into_return && is_struct {
+                            if arg_escapes_frame && is_struct {
                                 // B-2026-07-30-12 — MEMORY ONLY, for the reason
                                 // spelled out at the struct-literal sibling
                                 // below: on the entry-copy passthrough path the
@@ -3346,7 +3417,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     // the walk GEPs the parent's fields, and an enum payload is
                     // SHAPE 1 (out of scope, still leaks).
                     if !has_user_drop
-                        && !arg_flows_into_return
+                        && !arg_escapes_frame
                         && self.type_decls.struct_types.contains_key(&ret_ty_name)
                     {
                         let bodies_fn = self.field_bodies_fn_for_owned_temp(&ret_ty_name);
@@ -3472,7 +3543,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // consumer, so the ORIGINAL aggregate here is orphaned — free
             // it, MEMORY ONLY (the bodies belong to the result's consumer,
             // exactly the B-2026-07-30-12 struct rule).
-            if arg_flows_into_return {
+            if arg_escapes_frame {
                 if heap_payload && !shared {
                     let slot = self.create_entry_alloca(cur_fn, "__owned_agg_tmp", agg_ty.into());
                     self.builder.build_store(slot, val).unwrap();
@@ -3547,7 +3618,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // and off the passthrough path (a returned tuple's bodies belong
             // to the result's consumer). Interp twin:
             // `run_fresh_temp_arg_drops`' tuple arm.
-            if !arg_flows_into_return
+            if !arg_escapes_frame
                 && tuple_elems
                     .iter()
                     .all(|e| self.discard_tuple_elem_is_fresh_expr(e))
@@ -3609,7 +3680,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 if has_user_drop && !self.type_decls.shared_types.contains_key(&name) {
                     let slot = self.create_entry_alloca(cur_fn, "__owned_agg_tmp", agg_ty.into());
                     self.builder.build_store(slot, val).unwrap();
-                    if arg_flows_into_return {
+                    if arg_escapes_frame {
                         // B-2026-07-30-12 — MEMORY ONLY on the passthrough path.
                         // We are here despite the guard because
                         // `arg_is_entry_copied_heap_struct` overrode it
@@ -3641,7 +3712,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // it is materialized once here and reused.
                 //
                 // NOT on the passthrough path, and that asymmetry is the point.
-                // We only reach this helper with `arg_flows_into_return` when
+                // We only reach this helper with `arg_escapes_frame` when
                 // `arg_is_entry_copied_heap_struct` overrode the guard
                 // (B-2026-07-08-6) — the callee entry-COPIES the struct and
                 // returns an independent copy, so the caller's original buffer
@@ -3650,7 +3721,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // whose own drop runs it. Registering both would print the body
                 // twice for `let p = pass(Holder { .. })`. Memory follows the
                 // buffer; bodies follow the value.
-                let field_bodies_fn = if arg_flows_into_return {
+                let field_bodies_fn = if arg_escapes_frame {
                     None
                 } else {
                     self.field_bodies_fn_for_owned_temp(&name)

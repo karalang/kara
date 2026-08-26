@@ -2444,6 +2444,24 @@ impl<'a> super::Interpreter<'a> {
             }) {
                 continue;
             }
+            // B-2026-08-26-9 escape guard — the twin of codegen's
+            // `call_arg_moves_into_outliving_place`, kept here for the same
+            // reason the passthrough guard above is mirrored: when the callee
+            // STORES this argument into `self` or into one of its own
+            // `ref`/`mut ref` params, the value is still alive in the caller
+            // when the call returns and its new home owns the drop. Firing
+            // here too ran the body twice — `fn add(v: mut ref Vec[Item], x:
+            // Item) { v.push(x); }` printed `drop 7` at the call AND again at
+            // the container's drain, on this backend and on AOT alike (both
+            // wrong, so unlike the `PriorityQueue` method shape it produced no
+            // run-vs-build divergence to notice).
+            if self.program.items.iter().any(|item| {
+                matches!(item, crate::ast::Item::Function(f)
+                    if f.name == callee_name
+                        && crate::ast::fn_moves_param_into_outliving_place(f, i))
+            }) {
+                continue;
+            }
             // B-2026-07-30-11 (param-tuple leg, the A shape): a tuple
             // LITERAL arg (`take_tuple((Res { id: 41 }, 10))`) moved into
             // the callee's tuple param never ran its Drop-carrying

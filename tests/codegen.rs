@@ -11966,6 +11966,165 @@ fn main() {
         assert_eq!(out.as_deref(), Some("10\n3\n10\n20\n30\n30\n"));
     }
 
+    // ── A by-value argument the callee STORES (B-2026-08-26-9) ──────────
+    //
+    // Kāra's calling convention is caller-drops: a fresh temporary passed by
+    // value is dropped by the CALLER after the call, and the callee registers
+    // nothing for it. That is right whenever the value dies inside the call,
+    // and codegen already carved out the one escape route it knew about — the
+    // callee returning the parameter (`fn_returns_param`). It did not model the
+    // other route: the callee STORING the parameter into a place the caller
+    // still holds. `fn push(mut ref self, x: T) { self.xs.push(x); }` leaves
+    // the value alive in the caller's own queue, so the caller's drop and the
+    // container's element drain were two owners for one value.
+    //
+    // Three call paths reach the same registrar and each had to be gated
+    // separately — free function, concrete method, and monomorphized generic
+    // impl method (which is the leg `PriorityQueue.push` takes, and the leg
+    // whose callee AST lives in `mono_state.generic_fns` rather than in the
+    // user program snapshot, since the stdlib is baked).
+
+    /// The METHOD leg, and the only one of the three that presented as a
+    /// run-vs-build divergence: AOT printed the element's `drop` body at the
+    /// push AND at the pop while `--interp` printed it once. The interpreter
+    /// runs its fresh-temp argument drops on the free-function path only, which
+    /// is why the same defect on a free function (below) went unnoticed — both
+    /// backends were wrong there, so an A/B check reported agreement.
+    #[test]
+    fn e2e_method_drops_a_stored_by_value_argument_once() {
+        let src = r#"
+struct Item { id: i64 }
+impl Drop for Item {
+    fn drop(mut ref self) { println(f"drop {self.id}") }
+}
+struct Bag { xs: Vec[Item] }
+impl Bag {
+    fn add(mut ref self, x: Item) { self.xs.push(x); }
+}
+fn main() {
+    let mut b = Bag { xs: Vec.new() };
+    b.add(Item { id: 7 });
+    println("stored");
+    while b.xs.len() > 0 {
+        match b.xs.pop() { Some(e) => { println(f"pop {e.id}"); } None => {} }
+    }
+    println("end");
+}
+"#;
+        let out = std::thread::Builder::new()
+            .stack_size(16 * 1024 * 1024)
+            .spawn(move || run_program(src))
+            .expect("failed to spawn sized worker")
+            .join()
+            .expect("compile worker panicked");
+        assert_eq!(out.as_deref(), Some("stored\npop 7\ndrop 7\nend\n"));
+    }
+
+    /// The FREE-FUNCTION leg. Both backends double-dropped here before the fix,
+    /// so this one is a genuine regression oracle on each surface rather than
+    /// an A/B comparison — see the interpreter twin.
+    #[test]
+    fn e2e_free_fn_drops_a_stored_by_value_argument_once() {
+        let src = r#"
+struct Item { id: i64 }
+impl Drop for Item {
+    fn drop(mut ref self) { println(f"drop {self.id}") }
+}
+fn add_to(v: mut ref Vec[Item], x: Item) { v.push(x); }
+fn main() {
+    let mut v: Vec[Item] = Vec.new();
+    add_to(mut v, Item { id: 7 });
+    println("stored");
+    while v.len() > 0 {
+        match v.pop() { Some(e) => { println(f"pop {e.id}"); } None => {} }
+    }
+    println("end");
+}
+"#;
+        let out = std::thread::Builder::new()
+            .stack_size(16 * 1024 * 1024)
+            .spawn(move || run_program(src))
+            .expect("failed to spawn sized worker")
+            .join()
+            .expect("compile worker panicked");
+        assert_eq!(out.as_deref(), Some("stored\npop 7\ndrop 7\nend\n"));
+    }
+
+    /// The MONOMORPHIZED generic-impl leg — `PriorityQueue.push`, the shape the
+    /// row was filed on. Distinct from the concrete-method case above because
+    /// the callee is stdlib-baked: its AST is absent from the user program, so
+    /// resolving it needs the `generic_fns` fallback, and its receiver sits in
+    /// `params[0]` (the `make_generic_impl_method_function` desugaring) rather
+    /// than in `self_param`. Both details are load-bearing — with either one
+    /// wrong the gate silently answers "no escape" and this test double-drops.
+    ///
+    /// Heap-free element on purpose: `PriorityQueue` of a struct carrying a
+    /// `String` still leaks that buffer (B-2026-08-26-18), which is a separate
+    /// defect and would make this fixture assert two things at once.
+    #[test]
+    fn e2e_priority_queue_drops_a_stored_by_value_argument_once() {
+        let src = r#"
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct Item { id: i64 }
+impl Drop for Item {
+    fn drop(mut ref self) { println(f"drop {self.id}") }
+}
+fn main() {
+    let mut q: PriorityQueue[Item] = PriorityQueue.new();
+    q.push(Item { id: 3 });
+    q.push(Item { id: 1 });
+    println("stored");
+    while q.len() > 0 {
+        match q.pop() { Some(v) => { println(f"pop {v.id}"); } None => {} }
+    }
+    println("end");
+}
+"#;
+        let out = std::thread::Builder::new()
+            .stack_size(16 * 1024 * 1024)
+            .spawn(move || run_program(src))
+            .expect("failed to spawn sized worker")
+            .join()
+            .expect("compile worker panicked");
+        assert_eq!(
+            out.as_deref(),
+            Some("stored\npop 1\ndrop 1\npop 3\ndrop 3\nend\n")
+        );
+    }
+
+    /// The NEGATIVE side of the same gate, and the reason it is not simply
+    /// "suppress the caller's drop whenever the callee has a `mut ref` param".
+    /// A callee that merely READS its by-value parameter still hands the drop
+    /// back to the caller — nothing else will run it — so this must keep
+    /// printing exactly one `drop`. It is the fixture that fails if the escape
+    /// predicate is ever widened to match on the receiver's mode alone.
+    #[test]
+    fn e2e_by_value_argument_that_is_only_read_still_drops_in_the_caller() {
+        let src = r#"
+struct Item { id: i64 }
+impl Drop for Item {
+    fn drop(mut ref self) { println(f"drop {self.id}") }
+}
+struct Bag { n: i64 }
+impl Bag {
+    fn look(mut ref self, x: Item) { self.n = self.n + x.id; }
+}
+fn main() {
+    let mut b = Bag { n: 0 };
+    b.look(Item { id: 7 });
+    println(b.n);
+    println("end");
+}
+"#;
+        let out = std::thread::Builder::new()
+            .stack_size(16 * 1024 * 1024)
+            .spawn(move || run_program(src))
+            .expect("failed to spawn sized worker")
+            .join()
+            .expect("compile worker panicked");
+        assert_eq!(out.as_deref(), Some("drop 7\n7\nend\n"));
+    }
+
     /// `PriorityQueue` needs no usage gate, and this pins the reason.
     ///
     /// `std.cli`'s bodies had to be gated (see the sibling test below) because
