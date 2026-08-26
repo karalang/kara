@@ -522,6 +522,10 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
         ty("TypeNotIndexable", Some(DiagnosticClass::TypeMismatch)),
     ),
     (
+        "E0283",
+        ty("RefOperandUnsupported", Some(DiagnosticClass::TypeMismatch)),
+    ),
+    (
         "E0276",
         ty("NilCoalesceNotWrapped", Some(DiagnosticClass::TypeMismatch)),
     ),
@@ -2598,6 +2602,7 @@ mod tests {
             ("E0268", K::StringNotIndexable),
             ("E0274", K::IteratorNotIndexable),
             ("E0275", K::TypeNotIndexable),
+            ("E0283", K::RefOperandUnsupported),
             ("E0276", K::NilCoalesceNotWrapped),
             ("E0277", K::OptionalChainNotOption),
             ("E0270", K::AtomicMissingOrdering),
