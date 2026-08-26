@@ -3363,11 +3363,24 @@ impl<'a> super::TypeChecker<'a> {
             return;
         }
         self.lint_override_stack.push(b.lint_overrides.clone());
+        // EVERY TYPE NAMED HERE MUST RESOLVE. This menu used to recommend
+        // `LazyLock`, which does not exist: `Prefer ... \`LazyLock\`` sent the
+        // reader straight into `undefined type 'LazyLock'`, which is worse than
+        // saying nothing — a diagnostic that names a fix is trusted precisely
+        // because the compiler is the thing that would know. design.md § Module-
+        // Level Bindings still specifies `LazyLock[T]` in detail (a family-
+        // comparison table, a picking guide, and the whole rightmost column of
+        // the profile-gating table), so the spec is the half that is ahead of
+        // the implementation; until it ships, the menu lists only what a user
+        // can actually type. `tests/typechecker.rs::
+        // every_type_the_module_mut_binding_warning_names_resolves` compiles one
+        // program per name and fails if any of them stops resolving, so this
+        // cannot rot again in either direction.
         self.type_lint_warning(
             format!(
                 "module-level `let mut {}` is mutable global state. Prefer a \
-                 context struct, `Mutex`, `Atomic`, `#[thread_local]`, \
-                 `LazyLock`, or `OnceLock`; suppress per-binding with \
+                 context struct, `Mutex`, `Atomic`, `#[thread_local]`, or \
+                 `OnceLock`; suppress per-binding with \
                  `#[allow(module_mut_binding)]`",
                 b.name
             ),

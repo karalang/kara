@@ -12024,12 +12024,83 @@ fn test_module_mut_binding_warning_menu_matches_the_page() {
     let page = concept_page("module-state");
     // Each alternative the warning offers must be explained on the page
     // it hands off to — that handoff is the page's whole reason to exist.
-    for alt in ["Mutex", "Atomic", "#[thread_local]", "LazyLock", "OnceLock"] {
+    //
+    // `LazyLock` was in this list until B-2026-08-26-3 and is deliberately
+    // NOT any more: it is a check-only phantom (see the test below), so the
+    // warning naming it sent a reader into `undefined type` / a codegen
+    // error. Re-adding it here is only correct once that row closes.
+    for alt in ["Mutex", "Atomic", "#[thread_local]", "OnceLock"] {
         assert!(
             emitted.contains(alt),
             "warning should offer `{alt}`; got:\n{emitted}"
         );
         assert!(page.contains(alt), "page must explain `{alt}`");
+    }
+    assert!(
+        !emitted.contains("LazyLock"),
+        "the warning must not recommend `LazyLock` while it is a check-only \
+         phantom — a diagnostic that names a fix is trusted because the \
+         compiler is the thing that would know. Got:\n{emitted}"
+    );
+}
+
+/// B-2026-08-26-3 — EVERY TYPE THE `module_mut_binding` WARNING NAMES MUST
+/// SURVIVE ALL THE WAY TO A RUNNING PROGRAM, not merely resolve.
+///
+/// This is the guard whose absence let `LazyLock` sit in that menu. Checking
+/// only that the name resolves would NOT have caught it: the module-binding
+/// form `let TABLE: LazyLock[i64] = LazyLock.new(|| 5);` passes `karac check`
+/// cleanly, and then the interpreter has no evaluation rule for `LazyLock.new`
+/// while both compiled backends reject `.get()` with a codegen error. A
+/// recommendation that is true in one phase and false in the other three is
+/// exactly the shape a phase-local test misses, so this one RUNS the program.
+///
+/// `#[thread_local]` is excluded because it is an attribute, not a type, and
+/// "context struct" because it is a design pattern.
+#[test]
+fn every_type_the_module_mut_binding_warning_names_actually_runs() {
+    let emitted = check_source_output(
+        "menu-types",
+        "let mut COUNTER: i64 = 0;\n\
+         fn main() { COUNTER = COUNTER + 1; println(COUNTER); }",
+    );
+    // Each named TYPE, with a program that constructs it at module scope and
+    // reads it back — the shape the warning is actually steering a user into.
+    let probes: &[(&str, &str)] = &[
+        (
+            "Atomic",
+            // Every atomic op takes an explicit `MemoryOrdering` — there is no
+            // implicit-ordering form. Spelling it here keeps the probe about
+            // the TYPE's existence rather than about the ordering rule.
+            "let COUNTER: Atomic[i64] = Atomic.new(0);\n\
+             fn main() {\n\
+                 COUNTER.store(7, MemoryOrdering.SeqCst);\n\
+                 println(COUNTER.load(MemoryOrdering.SeqCst));\n\
+             }",
+        ),
+        (
+            "Mutex",
+            "let SLOT: Mutex[i64] = Mutex.new(0);\n\
+             fn main() { println(1); }",
+        ),
+        (
+            "OnceLock",
+            "let SLOT: OnceLock[i64] = OnceLock.new();\n\
+             fn main() { println(1); }",
+        ),
+    ];
+    for (name, src) in probes {
+        assert!(
+            emitted.contains(name),
+            "this test's probe list has drifted from the warning: it no longer \
+             names `{name}`. Update both together. Got:\n{emitted}"
+        );
+        let out = check_source_output(&format!("menu-{name}"), src);
+        assert!(
+            !out.contains("error"),
+            "the warning recommends `{name}`, but a module-scope program using \
+             it does not even check:\n{out}"
+        );
     }
 }
 

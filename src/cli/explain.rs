@@ -1732,11 +1732,6 @@ each one is actually for:
                      so it is legal inside `par { }`. Initializer must
                      still be compile-time constant.
 
-  LazyLock[T]        Write-once, thread-safe, initialized by an
-                     embedded closure that may capture only other
-                     module-level constants. For \"compile a regex
-                     once, use it forever\". Method surface: `get`.
-
   OnceLock[T]        Write-once, thread-safe, set explicitly at
                      runtime. For values depending on input the
                      closure cannot see at module-load time — CLI
@@ -1752,10 +1747,19 @@ each one is actually for:
                      are visible to every task, and `OnceCell` carries
                      no synchronization.
 
-`RwLock[T]` appears in design.md's supported-paths list but its
-constructor is not currently accepted as a module-level initializer —
-it fails E_MODULE_BINDING_EFFECTFUL_INIT. Use `Mutex[T]` at module
-scope.
+Two primitives design.md names in this menu DO NOT EXIST, and are
+left out above rather than listed with a caveat, because a menu is
+read as a list of things you can type:
+
+    RwLock[T]     Not a type at all — `undefined type 'RwLock'`.
+                  Use `Mutex[T]` at module scope.
+
+    LazyLock[T]   Passes `karac check` in the module-binding form
+                  design.md shows, then fails on EVERY execution
+                  backend: the interpreter has no evaluation rule for
+                  `LazyLock.new`, and both `karac run` and
+                  `karac build` reject `.get()` with a codegen error.
+                  Use `OnceLock[T]` and `set` it from `main`.
 
 There is no `static mut`. The absence of a \"raw mutable global,
 caller's responsibility to synchronize\" path is deliberate.
