@@ -878,6 +878,22 @@ impl<'ctx> super::Codegen<'ctx> {
                 // tail-return is the canonical Option-unwrap shape
                 // `match opt { Some(v) => v, None => default() }`.
                 self.suppress_source_vec_cleanup_for_arg(&arm.body);
+                // B-2026-08-26-12 — the `Option[shared T]` arm-tail retain, the
+                // match sibling of the value-position-block hook in
+                // `compile_block_with_frame`. A bare `Option[shared]` binding
+                // handed out as an arm's value (`show(match k { 0 => a, _ => a })`)
+                // moves by RETAIN — the source keeps its queued `RcDecOption`, so
+                // the escaping value needs its own `+1` or the consumer's dec and
+                // the source's dec both spend the one ref the box was built with.
+                //
+                // Gated on `tail.is_none()`: when this match IS the function's
+                // tail return, `compile_tail_final_expr` (called just above with
+                // that same `tail`) already emitted the leaf inc through its
+                // Identifier arm, and a second one here would strand the count
+                // one above zero — a leak in place of the double free.
+                if tail.is_none() {
+                    self.share_option_shared_ref_for_arg(&arm.body);
+                }
                 // B-2026-08-07-1 — an ARM tail that hands out a boxed-payload
                 // enum binding (`match k { 0 => found, _ => Option.None }` as a
                 // function's tail). Third and last of the branch-leaf

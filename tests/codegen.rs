@@ -47050,16 +47050,29 @@ fn driver() -> i64 {
     /// The control below is the same program with the `if` removed
     /// (`show(a)` instead of `show(if s == 0 { a } else { a })`) and is green,
     /// so the whole delta is the if-expression. `--interp` prints `v 0` /
-    /// `v 1` correctly; `karac run` (JIT) and `karac build` both die with
+    /// `v 1` correctly; `karac run` (JIT) and `karac build` both died with
     /// glibc's `malloc(): unaligned tcache chunk detected` (SIGABRT).
+    ///
+    /// FIXED: a branch leaf handing out an `Option[shared]` binding now takes
+    /// the same per-arm retain the plain-`shared` leaf already took. The
+    /// if-expression turned out to be one member of a family — see
+    /// `option_shared_through_every_branch_leaf_form_survives_a_rebinding_loop`
+    /// below, which covers the `match` arm, the bare block, the nested and
+    /// else-if chains, and the mixed-arm shape that pins the fix per-arm.
     ///
     /// Deliberately an E2E test and NOT an ASAN fixture: the
     /// `-fsanitize=address` link does not reproduce it at all — under ASAN's
     /// allocator this program runs clean AND prints the right answer, which is
     /// why the ~1200-fixture `tests/memory_sanitizer.rs` corpus never caught
-    /// the class. Measured, not assumed.
+    /// the class. Measured, not assumed — and structural, not luck: the
+    /// sanitizer is linked in, never compiled in (`link_executable_with_sanitizer`
+    /// passes `-fsanitize=address` to `cc` at LINK time only), so ASAN sees
+    /// allocator-level faults — double free, invalid free, leaks — and cannot
+    /// see a use-after-free ACCESS from the uninstrumented Kāra object. This
+    /// bug's fault is a stray refcount decrement THROUGH a freed box, which
+    /// writes `-1` where glibc keeps the tcache `fd` word and never calls
+    /// `free` twice, so there is nothing at the allocator boundary to catch.
     #[test]
-    #[ignore = "B-2026-08-26-12 — open: if-expression over Option[shared] corrupts the heap"]
     fn option_shared_through_if_expression_survives_a_rebinding_loop() {
         let src = "shared struct Node { val: i64 }\n\
                    fn make(n: i64) -> Option[Node] { return Some(Node { val: n }); }\n\
@@ -47111,6 +47124,81 @@ fn driver() -> i64 {
             assert_eq!(c.stdout, "v 0\nv 1\n");
             assert!(c.status.success(), "stderr: {}", c.stderr);
         }
+    }
+
+    /// B-2026-08-26-12, the FAMILY. The reported shape was an if-expression,
+    /// but the defect was never about `if`: any value-position branch leaf that
+    /// hands an `Option[shared]` binding to an owned parameter handed out an
+    /// UNCOUNTED alias, so the callee's exit dec took the box to rc 0 and freed
+    /// it while the source's still-armed `RcDecOption` decremented through the
+    /// freed memory. Every leg below aborted before the fix; only the direct
+    /// `show(a)` control did not.
+    ///
+    /// The `mixed` leg is the one with teeth. Its arms are not alike —
+    /// `{ d }` hands out a borrowed binding and needs the retain, `{ make(9) }`
+    /// carries `make`'s own `+1` and must not take a second — so it fails in
+    /// BOTH directions: a compiler that retains neither double frees, and one
+    /// that retains at the merge instead of per-arm leaks the fresh arm. That
+    /// is what forces the retain into each arm's own basic block.
+    ///
+    /// Twinned against `--interp` rather than a hardcoded string, so the two
+    /// backends are asserted equal as well as correct.
+    #[test]
+    fn option_shared_through_every_branch_leaf_form_survives_a_rebinding_loop() {
+        let src = "shared struct Node { val: i64 }\n\
+                   fn make(n: i64) -> Option[Node] { return Some(Node { val: n }); }\n\
+                   fn take(t: Option[Node]) -> i64 {\n\
+                       match t { None => { return 0; } Some(n) => { return n.val; } }\n\
+                   }\n\
+                   fn main() {\n\
+                       let mut s = 0;\n\
+                       let mut total = 0;\n\
+                       while s < 4 {\n\
+                           let a = make(s);\n\
+                           total = total + take(if s == 0 { a } else { a });\n\
+                           let b = make(s);\n\
+                           total = total + take(match s { 0 => b, _ => b });\n\
+                           let c = make(s);\n\
+                           total = total + take({ c });\n\
+                           let d = make(s);\n\
+                           total = total + take(if s < 2 { d } else { make(9) });\n\
+                           let e = make(s);\n\
+                           total = total + take(if s == 0 { if s == 0 { e } else { e } } else { e });\n\
+                           let g = make(s);\n\
+                           total = total + take(if s == 0 { g } else if s == 1 { g } else { g });\n\
+                           let h = make(s);\n\
+                           let bound = if s == 0 { h } else { h };\n\
+                           total = total + take(bound);\n\
+                           s = s + 1;\n\
+                       }\n\
+                       println(total);\n\
+                   }";
+        // 6 legs yield s (0+1+2+3 = 6 each = 36); the mixed leg yields s for
+        // s<2 (0+1 = 1) and 9 twice (18) = 19. 36 + 19 = 55.
+        let expected = "55\n";
+        if let Some(c) = run_program_capturing(src) {
+            assert_eq!(
+                c.stdout, expected,
+                "every branch-leaf form handing out an Option[shared] must \
+                 keep the value intact"
+            );
+            assert!(
+                c.status.success(),
+                "process died ({:?}) — stderr: {}",
+                c.status,
+                c.stderr
+            );
+        }
+        let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+        assert!(
+            interp_errs.is_empty(),
+            "interpreter errored on the twin: {interp_errs:?}"
+        );
+        assert_eq!(
+            interp_out.join(""),
+            expected,
+            "interpreter twin must agree with the compiled backend"
+        );
     }
 
     #[test]

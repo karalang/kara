@@ -750,6 +750,13 @@ impl<'ctx> super::Codegen<'ctx> {
         // env revert; the consuming `let`/arm re-derives its own metadata from
         // the typechecker's type, not from a block-local tail's name entry.
         let scope_snap = self.snapshot_var_env();
+        // B-2026-08-26-12 — is the FUNCTION-TAIL `Option[shared]` compensator
+        // already armed for this block's tail? Read it BEFORE `compile_block`
+        // `take()`s it. When it is armed, `compile_tail_final_expr` incs the
+        // tail leaf itself and the hand-out inc below must not fire a second
+        // time; when it is not, this block is handing its tail to some other
+        // consumer and nobody else compensates. See the call site below.
+        let tail_ret_armed = self.fn_ctx.tail_ret_inner.is_some();
         self.drop_rc.scope_cleanup_actions.push(Vec::new());
         let result = self.compile_block(block)?;
         let body_has_terminator = self
@@ -771,6 +778,41 @@ impl<'ctx> super::Codegen<'ctx> {
             // function's tail return.
             if let Some(tail) = block.final_expr.as_deref() {
                 self.suppress_block_tail_cleanup(tail);
+                // B-2026-08-26-12 — the `Option[shared T]` sibling of the
+                // plain-`shared` retain `suppress_block_tail_cleanup` reaches
+                // through `suppress_source_vec_cleanup_for_arg`.
+                //
+                // A `shared` binding handed out of a value-position block moves
+                // by RETAIN, not by suppression: the source keeps its queued dec
+                // and the escaping value takes an independent `+1`. That is what
+                // the plain-`shared` arm does (`move.rc.load` + `rc_inc`, emitted
+                // in this branch's own block). The `Option[shared]` shape reached
+                // NEITHER neutralizer — its slot is an Option aggregate, not a
+                // `ptr`, so `var_type_names` names `Option` and the shared arm
+                // declines — so `show(if c { a } else { a })` handed out an
+                // UNCOUNTED alias: the callee's param `RcDecOption` took the
+                // allocation to rc 0 and freed it, and then the source's own
+                // still-armed `RcDecOption` decremented through the freed box.
+                // On glibc that write lands in the freed chunk's tcache `fd`
+                // word, so the abort surfaces at the NEXT `malloc` as
+                // `malloc(): unaligned tcache chunk detected` — which is why the
+                // bug needs two loop iterations to show and why it reads like an
+                // allocator fault rather than an ownership one.
+                //
+                // Flow-sensitivity is the whole point of emitting it HERE: an
+                // `if`/`match` arm compiles through its own
+                // `compile_block_with_frame`, so the retain lands in the arm
+                // that actually hands the binding out and a sibling arm that
+                // yields something else (`else { make(99) }`) emits none. A
+                // single retain at the phi could not tell the two apart.
+                //
+                // `share_option_shared_ref_for_arg` self-gates on an Identifier
+                // in `var_option_shared_heap`, so every other tail shape is a
+                // no-op — including a `Some(..)`/call leaf, which already
+                // carries the producer's `+1`.
+                if !tail_ret_armed {
+                    self.share_option_shared_ref_for_arg(tail);
+                }
             }
             self.drain_top_frame_with_emit();
         } else {

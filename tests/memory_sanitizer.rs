@@ -27246,6 +27246,73 @@ fn main() {
         );
     }
 
+    /// B-2026-08-26-12 — an `Option[shared T]` binding handed out of a
+    /// VALUE-POSITION BRANCH LEAF (an `if`-expression arm, a `match`-expression
+    /// arm, a bare `{ }` block) into an OWNED parameter.
+    ///
+    /// The leaf moved the binding by ALIAS: no retain was emitted, while the
+    /// source kept its scope-exit `RcDecOption` and the callee's param queued
+    /// its own. Two decs against the one ref `make` allocated — the callee's
+    /// took the box to rc 0 and freed it, and the source's then decremented
+    /// THROUGH the freed box. That write lands in the freed chunk's tcache `fd`
+    /// word on glibc, so a shipped binary aborts at the NEXT `malloc` with
+    /// `malloc(): unaligned tcache chunk detected` rather than at the fault —
+    /// hence the two loop iterations, which are what make the corruption
+    /// observable at all.
+    ///
+    /// The `mixed` leg is the one that pins the fix's SHAPE. Its two arms are
+    /// not alike: `{ a }` hands out a borrowed binding and needs the `+1`,
+    /// `{ make(99) }` carries the producer's own `+1` and must not take a
+    /// second. Only a per-arm retain — emitted in the arm's own basic block —
+    /// satisfies both; a single retain at the phi either double frees one arm
+    /// or leaks the other.
+    ///
+    /// READ THIS BEFORE TRUSTING IT: this fixture is the LEAK half of the gate
+    /// and nothing more. It was MEASURED green against the unfixed compiler —
+    /// it does not catch the double free it is named for, and no ASAN fixture
+    /// can. `link_executable_with_sanitizer` passes `-fsanitize=address` to
+    /// `cc` at LINK time only, so ASAN interposes the allocator but never
+    /// instruments the Kāra-emitted object: it sees double free, invalid free
+    /// and leaks, and is blind to a use-after-free ACCESS. This bug's fault is
+    /// a stray refcount decrement THROUGH a freed box — one extra dec takes
+    /// the count to `-1`, not to a second `free` — so nothing crosses the
+    /// allocator boundary. The double-free half is gated E2E, by
+    /// `tests/codegen.rs::option_shared_through_every_branch_leaf_form_survives_a_rebinding_loop`.
+    /// What this fixture DOES gate is the inverse failure: over-retain a leaf
+    /// (the obvious wrong fix for the mixed arm) and LeakSanitizer fails it.
+    #[test]
+    fn asan_option_shared_through_branch_leaf_into_owned_param_no_double_free() {
+        assert_clean_asan_run(
+            r#"
+shared struct Node { val: i64 }
+fn make(n: i64) -> Option[Node] { return Some(Node { val: n }); }
+fn take(t: Option[Node]) -> i64 {
+    match t { None => { return 0; } Some(n) => { return n.val; } }
+}
+fn main() {
+    let mut s = 0i64;
+    let mut total = 0i64;
+    while s < 8i64 {
+        let a = make(s);
+        total = total + take(if s == 0i64 { a } else { a });
+        let b = make(s);
+        total = total + take(match s { 0 => b, _ => b });
+        let c = make(s);
+        total = total + take({ c });
+        let d = make(s);
+        total = total + take(if s < 4i64 { d } else { make(100i64) });
+        s = s + 1i64;
+    }
+    println(total);
+}
+"#,
+            // 3 * (0+1+..+7) = 84, plus the mixed leg: s<4 yields s (0+1+2+3=6),
+            // s>=4 yields 100 four times (400) — 84 + 6 + 400 = 490.
+            &["490"],
+            "option_shared_through_branch_leaf_into_owned_param",
+        );
+    }
+
     #[test]
     fn asan_option_shared_prepend_builder_rc_fallback_repeat() {
         // Regression for the RC-fallback boxing / `Option[shared T]`

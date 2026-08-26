@@ -458,9 +458,24 @@ fn resolve_wasm_runtime_path(threaded: bool) -> Result<String, String> {
 ///
 /// ASAN/LSAN interpose libc `malloc`/`free` globally, so the statically linked
 /// `libkarac_runtime.a` does not need to be rebuilt with sanitizer flags for
-/// leak detection from Kāra-emitted IR to work. UAF detection *inside* runtime
-/// code would require an instrumented runtime build; that is out of scope for
-/// this harness, which focuses on codegen-emitted heap operations.
+/// leak detection from Kāra-emitted IR to work.
+///
+/// KNOW WHAT THIS BUYS, because the corpus that depends on it is large enough
+/// that the limit matters (B-2026-08-26-12). The sanitizer is LINKED IN, never
+/// COMPILED IN — neither the runtime archive nor the Kāra-emitted object is
+/// instrumented — and ASAN's shadow-memory checks live in instrumented code.
+/// So the harness gates exactly the faults that cross the allocator boundary:
+/// double free, invalid free, and (with LSan) leaks. A use-after-free ACCESS
+/// from emitted code is invisible: nothing checks the shadow map on that load
+/// or store. That is not a runtime-code-only caveat, which an earlier version
+/// of this comment implied by saying the harness "focuses on codegen-emitted
+/// heap operations" — it applies to codegen's own output just as squarely.
+///
+/// The practical consequence: a bug whose only symptom is a stray write
+/// through a freed pointer runs CLEAN here, and needs an E2E test instead.
+/// B-2026-08-26-12 was one — an extra refcount dec through a freed box takes
+/// the count to `-1` rather than to a second `free`, so the whole
+/// ~1200-fixture suite passed a program that aborts in `malloc` when shipped.
 pub fn link_executable_with_sanitizer(
     obj_path: &str,
     exe_path: &str,
