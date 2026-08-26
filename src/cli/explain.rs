@@ -582,12 +582,6 @@ const CODE_TABLE: &[(&str, CodeEntry)] = &[
         "E0281",
         ty("ModuleMutBinding", Some(DiagnosticClass::LintWarning)),
     ),
-    // Minted by the `ref`-binding typecheck (B-2026-08-26-36) at
-    // `expr_ops.rs`, mapped to a number in `diag_json.rs`, but landed without
-    // a row here — which is exactly what this table's coverage test exists to
-    // catch, and it caught it. Row added by B-2026-08-26-40 to get `main`
-    // green again, not as part of that row's own subject.
-    ("E0283", ty("RefOperandUnsupported", None)),
     // The catch-all arm of the warning emitter: any `TypeErrorKind` that
     // reaches the warning loop without a code of its own lands here, so this
     // row names the bucket rather than one variant. A warning that deserves
