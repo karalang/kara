@@ -9969,7 +9969,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         value,
                         rhs_index_deep_cloned,
                         clone_log_mark,
-                        true,
+                        Self::store_destroys_displaced(value),
                     );
                     self.compile_index_store(object, index, val, rhs_is_fresh, Some(value))?;
                     // B-2026-07-11-32: an f-string RHS stored into a Vec element
@@ -12937,19 +12937,50 @@ impl<'ctx> super::Codegen<'ctx> {
         })
     }
 
+    /// Does storing `rhs` into an element slot DESTROY the value being
+    /// displaced, rather than relocate it? B-2026-08-26-21.
+    ///
+    /// True only for an rhs that constructs a genuinely new value — an
+    /// aggregate literal, or a call whose result is a fresh return value. A
+    /// bare identifier (`b.xs[j] = t`) or another element read
+    /// (`b.xs[i] = b.xs[j]`) is a RELOCATION: the value already existed, so the
+    /// slot's previous occupant is being shuffled rather than ended, and
+    /// running its `Drop` body would destroy something the program still holds.
+    ///
+    /// Conservative toward FALSE, which is the safe direction here and the
+    /// opposite of the memory half's: a missed body leaks observable cleanup,
+    /// an extra body destroys a live value and is visible as a duplicate drop.
+    /// An rhs that reaches the container through a call is already refused
+    /// upstream by the alias guard, so a `Call` that gets this far cannot be
+    /// handing back the displaced element itself.
+    fn store_destroys_displaced(rhs: &Expr) -> bool {
+        matches!(
+            rhs.kind,
+            ExprKind::StructLiteral { .. } | ExprKind::Call { .. } | ExprKind::MethodCall { .. }
+        )
+    }
+
     /// `run_bodies` says whether the displaced element's user `Drop` BODIES
-    /// may run alongside the memory release. Every pre-existing caller passes
-    /// `true` (the behaviour this helper has always had). The self-rooted arm
-    /// added by B-2026-08-26-18 passes `false`: a self-rooted store previously
-    /// emitted NEITHER half, so restoring the memory release fixes the leak the
-    /// row is about, while leaving bodies off keeps `PriorityQueue.swap`'s
-    /// relocating stores from firing a `Drop` body on an element that is being
-    /// MOVED to another slot rather than destroyed. Turning bodies on for that
-    /// arm was measured: it prints `drop 1 / drop 3` at every push and breaks
-    /// `asan_priority_queue_push_drops_a_drop_element_exactly_once`, whose
-    /// one-drop-per-element-at-pop sequence is the correct semantics. Whether
-    /// the NAMED-root arm has the same body-on-relocation defect is tracked
-    /// separately as B-2026-08-26-21 (it does; verified pre-existing on main).
+    /// may run alongside the memory release. Callers pass the DESTROY-vs-
+    /// RELOCATE answer for this store; see [`Self::store_destroys_displaced`].
+    ///
+    /// B-2026-08-26-21. A store only ENDS the displaced value's life when the
+    /// incoming value is a genuinely new one. `b.xs[i] = b.xs[j]` and
+    /// `b.xs[j] = t` (with `t` read out of the same container) RELOCATE what is
+    /// already there, and firing the displaced body then destroys a value the
+    /// program is still moving around: the two-element swap below printed FIVE
+    /// `Drop` bodies for two values, `drop 1` three times though at most two
+    /// `id == 1` objects ever exist — wrong under any drop-timing model, since
+    /// design.md § Drop pins "a value is dropped exactly once".
+    ///
+    /// ```text
+    /// let t = b.xs[0]; b.xs[0] = b.xs[1]; b.xs[1] = t;
+    /// ```
+    ///
+    /// The MEMORY half is unconditional and stays that way: the displaced slot's
+    /// buffers are orphaned by the store whether the value died or moved, and
+    /// the cap-guarded synthesizer no-ops on an already-moved element. Only the
+    /// observable bodies are gated.
     fn emit_displaced_index_elem_drop(
         &mut self,
         object: &Expr,
@@ -13036,16 +13067,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 kind: ExprKind::Identifier(synth.clone()),
                 span: object.span,
             };
-            // Bodies only for a NAMED root — that is this arm's long-standing
-            // behaviour and the green tests encode it. A self-rooted store gets
-            // the MEMORY half alone; see the `run_bodies` note on this fn.
             self.emit_displaced_index_elem_drop(
                 &synth_expr,
                 index,
                 rhs,
                 rhs_index_deep_cloned,
                 clone_log_mark,
-                run_bodies && !receiver_is_self,
+                run_bodies,
             );
             self.variables.remove(&synth);
             self.var_types.vec_elem_types.remove(&synth);
