@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 292 | 1 |
 | leak | 196 | 0 |
 | missing-feature | 180 | 6 |
-| run-vs-build | 166 | 3 |
+| run-vs-build | 167 | 3 |
 | codegen-gap | 140 | 1 |
 | double-free | 140 | 0 |
 | diagnostics | 109 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1054 | 8 |
+| codegen | 1055 | 8 |
 | typecheck | 267 | 4 |
 | interp | 184 | 2 |
 | other | 70 | 3 |
@@ -120,11 +120,11 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | parser | 41 | 0 |
 | runtime | 32 | 0 |
 | resolver | 27 | 0 |
-| effect | 24 | 0 |
+| effect | 25 | 0 |
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1604 surfaced · 13 open · 1566 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-26). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1605 surfaced · 13 open · 1567 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-26). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (13)
 
@@ -173,9 +173,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1604 surfaced
 
 </details>
 
-### Fixed (1566)
+### Fixed (1567)
 
-<details><summary>1566 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1567 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1745,6 +1745,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1604 surfaced
 | B-2026-08-26-17 | codegen | high | A MODULE-SCOPE `Atomic[T]` failed BOTH compiled backends with `codegen: Atomic receiver 'X' has no slot` while `--interp` was correct -- and module s… | f79cefd |
 | B-2026-08-26-18 | codegen | medium | A `PriorityQueue[T]` whose element T is a STRUCT CARRYING A HEAP FIELD leaks that field's buffer -- 31 bytes in 8 allocations on the three-push fixtu… | 54c5421 |
 | B-2026-08-26-19 | typecheck | low | A `ref T`-returning method is accepted in a plain value position but REJECTED as a closure tail against `Fn() -> T`: `\|\| cell.get_or_init(\|\| 7)` fail… | fa5e169 |
+| B-2026-08-26-26 | effect+codegen | medium | RUN-VS-BUILD ON EVERY FALLIBLE `try_*` COMPANION CONSUMED WITH `?`: the auto-parallelizer hoists the call into a worker function, which returns void,… | aae805f |
 
 </details>
 
