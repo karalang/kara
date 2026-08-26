@@ -95,8 +95,8 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 294 | 1 |
 | leak | 197 | 1 |
 | missing-feature | 183 | 4 |
-| run-vs-build | 170 | 0 |
-| codegen-gap | 142 | 1 |
+| run-vs-build | 171 | 1 |
+| codegen-gap | 142 | 0 |
 | double-free | 140 | 0 |
 | diagnostics | 109 | 1 |
 | false-positive | 98 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1064 | 3 |
+| codegen | 1065 | 3 |
 | typecheck | 268 | 2 |
 | interp | 186 | 1 |
 | other | 70 | 2 |
@@ -124,7 +124,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1617 surfaced · 8 open · 1583 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-26). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1618 surfaced · 8 open · 1584 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-26). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (8)
 
@@ -134,10 +134,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1617 surfaced
 | B-2026-08-26-11 | 2026-08-26 | other | medium | design.md's `String` METHOD TABLE names the char-append method `push_char`, which DOES NOT EXIST -- the working method is `push(c: char)`, and the table has NO ROW FOR IT, so the documented spelling fails and the real one is undocumented | docs/design.md § `String` method table (the `push_char` row) |
 | B-2026-08-26-15 | 2026-08-26 | typecheck | low | `LazyLock.new`'s closure-capture restriction is UNENFORCED: design.md says the closure "may only capture other module-level compile-time bindings; captures of runtime state are a compile error", but a closure capturing a function local is accepted silently. Measured to be a missing RESTRICTION rather than a correctness hazard -- the capturing form produces identical, correct results on `--interp`, `karac run` and `karac build` -- which is why it is split out of B-2026-08-26-3 rather than blocking it. | — |
 | B-2026-08-26-21 | 2026-08-26 | codegen+interp | medium | A RELOCATING element store (`b.xs[i] = b.xs[j]`, then `b.xs[j] = t`) runs the displaced element's user `Drop` BODY, even though the value is being moved to another slot rather than destroyed. A two-element swap of a `Drop` type prints FIVE drop bodies, all during the swap and none at scope exit; the correct sequence is one body per element when it finally dies. | — |
-| B-2026-08-26-30 | 2026-08-26 | codegen | medium | SWEEP THE REMAINING ENTRY-HOISTED-ALLOCA / CONDITIONAL-STORE / SCOPE-TRACKED SITES. The shape behind B-2026-08-25-33 -- and behind a fifth instance found in B-2026-08-25-34 -- is `create_entry_alloca` plus a store emitted at the USE site plus `track_vec_var`, whose function-scope drain then reads an uninitialized `cap` on any path that skipped the store and frees a garbage pointer. A mechanical scan finds ~16 further `create_entry_alloca`-then-track pairs with no `zero_init_str_acc_at_entry`; each needs classifying as genuinely unconditional (safe) or conditional (a latent free-of-garbage). | — |
 | B-2026-08-26-32 | 2026-08-26 | codegen | medium | `Map.get` WITH AN INLINE TEMPORARY STRUCT KEY THAT OWNS HEAP LEAKS THE TEMPORARY -- one allocation per lookup. Binding the key first is clean, a `Map[String, _]` looked up with a temporary f-string is clean, and INSERT is unaffected (the key is moved into the map); it is specifically a borrowed-then-discarded struct key on the lookup path. NOT specific to hand-written impls -- the `#[derive(Hash, Eq, PartialEq)]` path leaks identically. | — |
 | B-2026-08-26-36 | 2026-08-26 | parser | high | `ref` IN EXPRESSION POSITION IS SPECIFIED BUT UNIMPLEMENTED: design.md shows `let r = ref some_function();` (§ Binding-extension exception) and `let p: ref i32 = ref 42;`, and the parser rejects both with "'ref' is a reserved keyword and cannot be used as an identifier". This BLOCKS the B-2026-08-26-21 index-move rejection, whose only fix-it for a `Clone`-less element type is the borrow spelling. | — |
 | B-2026-08-26-37 | 2026-08-26 | typecheck | low | The index-move rule covers only a `let` initializer and an assignment RHS; OTHER value positions still read a non-`Copy` element by value and silently clone. Measured: `take(b.xs[0])` where `fn take(it: Item)` compiles and runs, and `b.xs[0]` survives it. | — |
+| B-2026-08-26-39 | 2026-08-26 | codegen | medium | THE `Error return trace` SECTION IS NONDETERMINISTIC ON THE COMPILED BACKENDS: the same AOT binary, same input, same pinned `KARAC_HASH_SEED`, emits a DIFFERENT NUMBER OF FRAMES run to run -- and sometimes omits the section entirely -- while `--interp` emits the same four frames every time. Measured on `examples/json.kara`, 20 consecutive AOT runs at `KARAC_HASH_SEED=7`: 4 runs printed 0 frames, 1 run printed 1, 11 printed 3, 4 printed 4. The interpreter printed 4 frames in 6/6. The program's own stdout (the parsed JSON and the `ERROR:` lines) is byte-identical across all runs -- only the trace varies. | — |
 
 ### Relocated (2)
 
@@ -169,9 +169,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1617 surfaced
 
 </details>
 
-### Fixed (1583)
+### Fixed (1584)
 
-<details><summary>1583 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1584 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1753,6 +1753,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1617 surfaced
 | B-2026-08-26-27 | codegen | medium | `Vec.try_from_iter` CANNOT BE REGISTERED UNTIL `collect` HAS A FALLIBLE LOWERING: its base `Vec.from_iter` lowers to `iter.collect()`, whose codegen… | c5da7e8 |
 | B-2026-08-26-28 | codegen | medium | A NESTED `Result` AS `main`'s ERROR TYPE LOSES BOTH ITS TAG AND ITS PAYLOAD on every compiled backend: `main() -> Result[(), Result[A, B]]` returning… | c9db880 |
 | B-2026-08-26-29 | interp+codegen | medium | A MANUAL `impl Display` IS IGNORED AS SOON AS THE VALUE IS NESTED: an enum with a hand-written `Display` renders through its impl at top level (`f"{e… | 59d6568 |
+| B-2026-08-26-30 | codegen | medium | SWEEP THE REMAINING ENTRY-HOISTED-ALLOCA / CONDITIONAL-STORE / SCOPE-TRACKED SITES | b9b2a9d |
 | B-2026-08-26-31 | codegen | medium | A local MOVED into a container's struct element slot (`b.xs[j] = t`) kept its own `UserDrop` registration, so its `impl Drop` body ran a SECOND time… | 0af8b28 |
 | B-2026-08-26-33 | codegen | medium | A `#[derive(Display)]` STRUCT WITH A PAYLOAD-BEARING ENUM FIELD IS REFUSED BY `karac build` -- and the refusal is INVERTED with respect to difficulty… | 7b5f733 |
 | B-2026-08-26-34 | codegen | medium | `Vec.swap` HAD NO CODEGEN ARM: `karac build` hard-errored "Vec/String method 'swap' is not yet supported in codegen" on a program `karac run` execute… | 4d75c59 |
