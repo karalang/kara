@@ -38590,3 +38590,131 @@ fn main() {
 "#);
     assert_eq!(out, "drop 7\n7\nend\n");
 }
+
+// ── B-2026-08-25-20: the Vec capacity family ────────────────────
+//
+// design.md § Fallible Allocation's panicking/fallible table named
+// `reserve` / `reserve_exact` / `resize` / `append` and their `try_*` twins;
+// none of the eight existed. The companions could not land first —
+// `fallible_alloc.rs` DERIVES every `try_X` from its panicking `X` — so the
+// missing half was always the base.
+//
+// `capacity()` lands with them because without it `reserve` is unobservable
+// from Kāra and no test can tell `v.reserve(1000)` from a no-op.
+
+/// Capacity is a LOWER-BOUND query, so every assertion here is `>=`. Pinning an
+/// exact number would be asserting something neither backend promises: the
+/// interpreter grows a host `Vec<Value>` on Rust's policy and codegen grows on
+/// `max(4, cap * 2)`. See the design.md row.
+#[test]
+fn vec_reserve_makes_room_without_changing_len() {
+    let out = run(r#"
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.reserve(100);
+    println(f"{v.len()} {v.capacity() >= 100}");
+    let mut i = 0;
+    while i < 100 { v.push(i); i = i + 1; }
+    println(f"{v.len()} {v[0]} {v[99]}");
+}
+"#);
+    assert_eq!(out, "0 true\n100 0 99\n");
+}
+
+#[test]
+fn vec_reserve_exact_and_a_nonpositive_reserve_is_a_no_op() {
+    let out = run(r#"
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1);
+    v.reserve_exact(7);
+    println(f"{v.capacity() >= 8} {v.len()}");
+    v.reserve(-5);
+    v.reserve(0);
+    println(f"{v.len()} {v[0]}");
+}
+"#);
+    assert_eq!(out, "true 1\n1 1\n");
+}
+
+#[test]
+fn vec_resize_grows_with_copies_and_shrinks_like_truncate() {
+    let out = run(r#"
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1); v.push(2); v.push(3);
+    v.resize(5, 9);
+    println(f"{v.len()} {v[3]} {v[4]}");
+    v.resize(2, 0);
+    println(f"{v.len()} {v[0]} {v[1]}");
+    v.resize(-3, 0);
+    println(v.len());
+}
+"#);
+    assert_eq!(out, "5 9 9\n2 1 2\n0\n");
+}
+
+/// The heap-element leg, which is where `resize`'s ownership rule bites: the
+/// fill value is MOVED into the first new slot and DEEP-CLONED into the rest,
+/// so no two slots share a buffer.
+#[test]
+fn vec_resize_deep_copies_a_heap_fill_value_into_every_new_slot() {
+    let out = run(r#"
+fn main() {
+    let mut v: Vec[String] = Vec.new();
+    v.push("a"); v.push("b");
+    v.resize(5, "z");
+    println(f"{v.len()} {v[2]} {v[3]} {v[4]}");
+    v.resize(1, "q");
+    println(f"{v.len()} {v[0]}");
+}
+"#);
+    assert_eq!(out, "5 z z z\n1 a\n");
+}
+
+/// `append` takes its source BY VALUE. That is the deliberate divergence from
+/// Rust's `&mut Vec<T>`: Kāra call sites never write `mut` on a method
+/// argument, so a borrow-and-drain spelling would empty `other` with nothing at
+/// the call site to say so.
+#[test]
+fn vec_append_moves_every_element_of_an_owned_source() {
+    let out = run(r#"
+fn main() {
+    let mut a: Vec[i64] = Vec.new();
+    a.push(10); a.push(20);
+    let mut b: Vec[i64] = Vec.new();
+    b.push(30); b.push(40);
+    a.append(b);
+    println(f"{a.len()} {a[0]} {a[1]} {a[2]} {a[3]}");
+    let mut e: Vec[String] = Vec.new();
+    let mut f: Vec[String] = Vec.new();
+    f.push("solo");
+    e.append(f);
+    println(f"{e.len()} {e[0]}");
+}
+"#);
+    assert_eq!(out, "4 10 20 30 40\n1 solo\n");
+}
+
+/// The whole point of the row: with the panicking bases in place, the `try_*`
+/// companions derive. `try_reserve` returns `Result[(), AllocError]` and
+/// propagates through `?` like any other `Result`.
+#[test]
+fn vec_try_reserve_companions_derive_from_their_panicking_bases() {
+    let out = run(r#"
+fn build() -> Result[bool, AllocError] {
+    let mut v: Vec[i64] = Vec.new();
+    v.try_reserve(64)?;
+    let mut w: Vec[i64] = Vec.new();
+    w.try_reserve_exact(9)?;
+    return Ok(v.capacity() >= 64 and w.capacity() >= 9);
+}
+fn main() {
+    match build() {
+        Ok(n) => { println(f"ok {n}"); }
+        Err(e) => { println("alloc failed"); }
+    }
+}
+"#);
+    assert_eq!(out, "ok true\n");
+}

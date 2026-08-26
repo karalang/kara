@@ -1226,6 +1226,28 @@ impl<'a> EffectChecker<'a> {
             // `.clear` suffix match also serializes `Map.clear` / `Set.clear`.
             "Vec.clear",
             "Vec.truncate",
+            // B-2026-08-25-20 — the reserve family reallocates the buffer, so
+            // it moves `data` and rewrites `cap`. That is exactly the
+            // stale-branch-capture hazard the `Vec.clear` note above describes,
+            // and it is WORSE here: a co-grouped sibling read would hold a
+            // {ptr,len,cap} copy whose `ptr` the realloc has already freed.
+            // Seeding both names is what makes the auto-parallelizer serialize
+            // them (`method_effects_imply_receiver_mutation`).
+            "Vec.reserve",
+            "Vec.reserve_exact",
+            // `resize` rewrites `len` (and reallocates when it grows);
+            // `append` rewrites `len`, may reallocate, and FREES the source's
+            // buffer. Both are exactly the standing B-2026-07-14-17 rule: an
+            // unseeded in-place mutator reads as read-only to
+            // `method_effects_imply_receiver_mutation`, and the auto-par gate
+            // then races it against a sibling read of the same binding. Landing
+            // these two WITHOUT the seed was measured, not theorized — an
+            // `a.append(b)` later in the body made an EARLIER `v[4]` read on an
+            // unrelated Vec panic with `vec index out of bounds` at -O2,
+            // because the analyzer had co-grouped the statements around a stale
+            // branch-capture header.
+            "Vec.resize",
+            "Vec.append",
             "Vec.fill",
             "Vec.swap",
             "Vec.swap_remove",

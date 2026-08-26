@@ -1451,6 +1451,8 @@ pub fn is_mutating_collection_method(method: &str) -> bool {
             | "swap_remove"
             | "clear"
             | "truncate"
+            | "reserve"
+            | "reserve_exact"
             | "reverse"
             | "sort"
             | "sort_by"

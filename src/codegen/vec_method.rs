@@ -391,6 +391,60 @@ impl<'ctx> super::Codegen<'ctx> {
         out.into()
     }
 
+    /// Emit `for idx in [from, to) { body(idx) }` as a counted loop, leaving
+    /// the builder positioned after it. B-2026-08-25-20 — extracted for
+    /// `Vec.resize`, whose shrink leg drops a tail and whose grow leg fills
+    /// one, and which therefore needs the same shape three times over.
+    ///
+    /// An empty or inverted range runs zero iterations: the guard is checked
+    /// BEFORE the body, so `from >= to` falls straight through. That is what
+    /// makes `resize(n, v)` with `n == len` safe without a separate case.
+    pub(super) fn emit_index_range_loop(
+        &mut self,
+        fn_val: inkwell::values::FunctionValue<'ctx>,
+        from: IntValue<'ctx>,
+        to: IntValue<'ctx>,
+        tag: &str,
+        body: &dyn Fn(&mut Self, IntValue<'ctx>),
+    ) {
+        let i64_t = self.context.i64_type();
+        let idx = self.create_entry_alloca(fn_val, &format!("{tag}.i"), i64_t.into());
+        let _ = self.builder.build_store(idx, from);
+        let head = self
+            .context
+            .append_basic_block(fn_val, &format!("{tag}.head"));
+        let body_bb = self
+            .context
+            .append_basic_block(fn_val, &format!("{tag}.body"));
+        let done = self
+            .context
+            .append_basic_block(fn_val, &format!("{tag}.done"));
+        self.builder.build_unconditional_branch(head).unwrap();
+        self.builder.position_at_end(head);
+        let cur = self
+            .builder
+            .build_load(i64_t, idx, &format!("{tag}.cur"))
+            .unwrap()
+            .into_int_value();
+        let go = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, cur, to, &format!("{tag}.go"))
+            .unwrap();
+        self.builder
+            .build_conditional_branch(go, body_bb, done)
+            .unwrap();
+        self.builder.position_at_end(body_bb);
+        body(self, cur);
+        let one = i64_t.const_int(1, false);
+        let next = self
+            .builder
+            .build_int_add(cur, one, &format!("{tag}.next"))
+            .unwrap();
+        let _ = self.builder.build_store(idx, next);
+        self.builder.build_unconditional_branch(head).unwrap();
+        self.builder.position_at_end(done);
+    }
+
     /// The element type NAME of a `Vec`/`Slice` variable (`var_elem_type_exprs`
     /// records the element `TypeExpr`), e.g. `"i64"` / `"u32"` / `"String"`.
     /// `None` when the binding has no recorded element type or it isn't a plain
@@ -3207,6 +3261,185 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.builder.build_store(len_ptr, new_len).unwrap();
 
                 Ok(self.context.i64_type().const_int(0, false).into())
+            }
+            // B-2026-08-25-20 — `Vec.try_reserve(n)` / `try_reserve_exact(n)`.
+            // The fallible twin of the `reserve` arm above: same capacity
+            // arithmetic, but the growth allocation goes through
+            // `karac_alloc_fallible` and a null result becomes
+            // `Result.Err(AllocError.OutOfMemory{requested_bytes})` instead of
+            // aborting. The no-grow path returns `Result.Ok(())` without
+            // touching the allocator, so a reserve that is already satisfied
+            // can never fail.
+            //
+            // `alloc_fallible` + memcpy + free rather than a fallible realloc,
+            // matching `try_push`: there is no `realloc`-shaped fallible entry
+            // point, and on failure the ORIGINAL buffer must survive intact for
+            // the caller to keep using — which a failed `realloc` does not
+            // guarantee to leave untouched in a form we can rely on here.
+            "try_reserve" | "try_reserve_exact" => {
+                if args.len() != 1 {
+                    return Err(format!(
+                        "Vec.{method} expects 1 argument (additional elements), got {}",
+                        args.len()
+                    ));
+                }
+                let exact = method == "try_reserve_exact";
+                let fn_val = self.current_fn.unwrap();
+                let additional = self.compile_expr(&args[0].value)?.into_int_value();
+                let data_p = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 0, "trsv.data.p")
+                    .unwrap();
+                let len_p = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 1, "trsv.len.p")
+                    .unwrap();
+                let cap_p = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 2, "trsv.cap.p")
+                    .unwrap();
+                let cur_data = self
+                    .builder
+                    .build_load(ptr_ty, data_p, "trsv.data")
+                    .unwrap()
+                    .into_pointer_value();
+                let cur_len = self
+                    .builder
+                    .build_load(i64_t, len_p, "trsv.len")
+                    .unwrap()
+                    .into_int_value();
+                let cur_cap = self
+                    .builder
+                    .build_load(i64_t, cap_p, "trsv.cap")
+                    .unwrap()
+                    .into_int_value();
+                let zero = i64_t.const_zero();
+                let neg = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::SLT, additional, zero, "trsv.neg")
+                    .unwrap();
+                let add0 = self
+                    .builder
+                    .build_select(neg, zero, additional, "trsv.add0")
+                    .unwrap()
+                    .into_int_value();
+                let needed = self
+                    .builder
+                    .build_int_add(cur_len, add0, "trsv.needed")
+                    .unwrap();
+                let grow_bb = self.context.append_basic_block(fn_val, "trsv.grow");
+                let grow_ok_bb = self.context.append_basic_block(fn_val, "trsv.grow.ok");
+                let oom_bb = self.context.append_basic_block(fn_val, "trsv.oom");
+                let ok_bb = self.context.append_basic_block(fn_val, "trsv.ok");
+                let merge_bb = self.context.append_basic_block(fn_val, "trsv.merge");
+                let must_grow = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::SGT, needed, cur_cap, "trsv.cmp")
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(must_grow, grow_bb, ok_bb)
+                    .unwrap();
+
+                self.builder.position_at_end(grow_bb);
+                let new_cap = if exact {
+                    needed
+                } else {
+                    let two = i64_t.const_int(2, false);
+                    let four = i64_t.const_int(4, false);
+                    let doubled = self
+                        .builder
+                        .build_int_mul(cur_cap, two, "trsv.doubled")
+                        .unwrap();
+                    let big = self
+                        .builder
+                        .build_int_compare(
+                            inkwell::IntPredicate::SGT,
+                            doubled,
+                            four,
+                            "trsv.doubled.gt4",
+                        )
+                        .unwrap();
+                    let growth_min = self
+                        .builder
+                        .build_select(big, doubled, four, "trsv.growth_min")
+                        .unwrap()
+                        .into_int_value();
+                    let need_more = self
+                        .builder
+                        .build_int_compare(
+                            inkwell::IntPredicate::SGT,
+                            needed,
+                            growth_min,
+                            "trsv.need.gt",
+                        )
+                        .unwrap();
+                    self.builder
+                        .build_select(need_more, needed, growth_min, "trsv.new_cap")
+                        .unwrap()
+                        .into_int_value()
+                };
+                let elem_size = elem_ty.size_of().unwrap();
+                let alloc_bytes = self
+                    .builder
+                    .build_int_mul(new_cap, elem_size, "trsv.bytes")
+                    .unwrap();
+                let new_data = self
+                    .builder
+                    .build_call(
+                        self.runtime_fns.alloc_fallible_fn,
+                        &[alloc_bytes.into()],
+                        "trsv.new_data",
+                    )
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_pointer_value();
+                let is_null = self
+                    .builder
+                    .build_is_null(new_data, "trsv.is_null")
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(is_null, oom_bb, grow_ok_bb)
+                    .unwrap();
+
+                // Grow succeeded: copy the LIVE PREFIX only (`len` elements,
+                // not `cap` — the tail past `len` is uninitialized), free the
+                // old buffer, publish the new pointer and capacity. `len` is
+                // deliberately untouched: reserving changes where the elements
+                // live, never how many there are.
+                self.builder.position_at_end(grow_ok_bb);
+                let old_bytes = self
+                    .builder
+                    .build_int_mul(cur_len, elem_size, "trsv.old_bytes")
+                    .unwrap();
+                self.builder
+                    .build_memcpy(new_data, 8, cur_data, 8, old_bytes)
+                    .unwrap();
+                self.builder
+                    .build_call(self.runtime_fns.free_fn, &[cur_data.into()], "")
+                    .unwrap();
+                self.builder.build_store(data_p, new_data).unwrap();
+                self.builder.build_store(cap_p, new_cap).unwrap();
+                self.builder.build_unconditional_branch(ok_bb).unwrap();
+
+                self.builder.position_at_end(oom_bb);
+                let err_result = self.build_alloc_oom_result(alloc_bytes)?;
+                let oom_end = self.builder.get_insert_block().unwrap();
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+                self.builder.position_at_end(ok_bb);
+                let unit_val = i64_t.const_zero().into();
+                let ok_result = self.build_nonshared_enum_value("Result", "Ok", &[unit_val])?;
+                let ok_end = self.builder.get_insert_block().unwrap();
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+                self.builder.position_at_end(merge_bb);
+                let phi = self
+                    .builder
+                    .build_phi(ok_result.get_type(), "trsv.result")
+                    .unwrap();
+                phi.add_incoming(&[(&ok_result, ok_end), (&err_result, oom_end)]);
+                Ok(phi.as_basic_value())
             }
             // `Vec.try_push(x)` / `VecDeque.try_push_back(x)` — fallible append
             // (phase-8-stdlib-floor item 8). Identical to `push`/`push_back`
@@ -6522,6 +6755,499 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_struct_gep(vec_ty, data_ptr, 2, "clear.cap.p")
                     .unwrap();
                 self.builder.build_store(cap_p, i64_t.const_zero()).unwrap();
+                Ok(i64_t.const_zero().into())
+            }
+            // B-2026-08-25-20 — `Vec.resize(n, val)`: set the length to
+            // exactly `n`. Shrinking drops the [n, len) tail (the `truncate`
+            // contract); growing appends copies of `val`.
+            //
+            // OWNERSHIP, which is the whole difficulty for a heap-owning
+            // element type. `val` is consumed: it is MOVED into the first new
+            // slot and DEEP-CLONED into the rest, so no two slots share a
+            // buffer — the same discipline `Slice.fill` uses, and for the same
+            // reason. When there is no new slot at all (a shrink, or `n ==
+            // len`), nothing consumed `val`, so it is dropped here rather than
+            // leaked.
+            "resize" => {
+                if args.len() != 2 {
+                    return Err(format!(
+                        "Vec.resize expects 2 arguments (new length, fill value), got {}",
+                        args.len()
+                    ));
+                }
+                let fn_val = self.current_fn.unwrap();
+                let elem_te = self.var_types.var_elem_type_exprs.get(var_name).cloned();
+                let needs_deep = match elem_te.as_ref() {
+                    Some(te) => !is_trivially_copyable_te(te),
+                    // Same rule as `Slice.fill`: with no element `TypeExpr`
+                    // there is no way to know whether a slot owns a buffer, and
+                    // guessing "it does not" silently leaks or double-frees.
+                    None => {
+                        return Err(
+                            "Vec.resize: could not resolve the element type in codegen".to_string()
+                        )
+                    }
+                };
+                let n_raw = self.compile_expr(&args[0].value)?.into_int_value();
+                let zero = i64_t.const_zero();
+                let one = i64_t.const_int(1, false);
+                let neg = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::SLT, n_raw, zero, "rsz.neg")
+                    .unwrap();
+                let target = self
+                    .builder
+                    .build_select(neg, zero, n_raw, "rsz.target")
+                    .unwrap()
+                    .into_int_value();
+                let len_p = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 1, "rsz.len.p")
+                    .unwrap();
+                let cap_p = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 2, "rsz.cap.p")
+                    .unwrap();
+                let cur_len = self
+                    .builder
+                    .build_load(i64_t, len_p, "rsz.len")
+                    .unwrap()
+                    .into_int_value();
+                let fill_val = self.compile_expr(&args[1].value)?;
+                let fill_val = self.coerce_scalar_to_type_from(fill_val, elem_ty, &args[1].value);
+                self.suppress_source_vec_cleanup_for_arg(&args[1].value);
+
+                let shrink_bb = self.context.append_basic_block(fn_val, "rsz.shrink");
+                let grow_bb = self.context.append_basic_block(fn_val, "rsz.grow");
+                let join_bb = self.context.append_basic_block(fn_val, "rsz.join");
+                let growing = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::SGT, target, cur_len, "rsz.growing")
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(growing, grow_bb, shrink_bb)
+                    .unwrap();
+
+                // ── Shrink (or no-op): drop [target, len), then set len. The
+                // fill value was never consumed, so drop it too.
+                self.builder.position_at_end(shrink_bb);
+                if needs_deep {
+                    let te = elem_te.clone().unwrap();
+                    let drop_fn = self.emit_drop_fn_for_type_expr(&te);
+                    let data = self
+                        .builder
+                        .build_load(ptr_ty, data_ptr, "rsz.s.data")
+                        .unwrap()
+                        .into_pointer_value();
+                    self.emit_index_range_loop(fn_val, target, cur_len, "rsz.s", &|cg, idx| {
+                        let slot = unsafe {
+                            cg.builder
+                                .build_gep(elem_ty, data, &[idx], "rsz.s.slot")
+                                .unwrap()
+                        };
+                        let _ = cg.builder.build_call(drop_fn, &[slot.into()], "");
+                    });
+                    let tmp = self.create_entry_alloca(fn_val, "rsz.s.fill", elem_ty);
+                    let _ = self.builder.build_store(tmp, fill_val);
+                    let _ = self.builder.build_call(drop_fn, &[tmp.into()], "");
+                }
+                self.builder.build_store(len_p, target).unwrap();
+                self.builder.build_unconditional_branch(join_bb).unwrap();
+
+                // ── Grow: make room, then write [len, target).
+                self.builder.position_at_end(grow_bb);
+                let cur_cap = self
+                    .builder
+                    .build_load(i64_t, cap_p, "rsz.g.cap")
+                    .unwrap()
+                    .into_int_value();
+                let cap_bb = self.context.append_basic_block(fn_val, "rsz.g.realloc");
+                let filled_bb = self.context.append_basic_block(fn_val, "rsz.g.fill");
+                let must_grow = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::SGT, target, cur_cap, "rsz.g.cmp")
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(must_grow, cap_bb, filled_bb)
+                    .unwrap();
+                self.builder.position_at_end(cap_bb);
+                let two = i64_t.const_int(2, false);
+                let four = i64_t.const_int(4, false);
+                let doubled = self
+                    .builder
+                    .build_int_mul(cur_cap, two, "rsz.g.doubled")
+                    .unwrap();
+                let big = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::SGT, doubled, four, "rsz.g.gt4")
+                    .unwrap();
+                let growth_min = self
+                    .builder
+                    .build_select(big, doubled, four, "rsz.g.min")
+                    .unwrap()
+                    .into_int_value();
+                let need_more = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::SGT, target, growth_min, "rsz.g.need")
+                    .unwrap();
+                let new_cap = self
+                    .builder
+                    .build_select(need_more, target, growth_min, "rsz.g.new_cap")
+                    .unwrap()
+                    .into_int_value();
+                let elem_size = elem_ty.size_of().unwrap();
+                let bytes = self
+                    .builder
+                    .build_int_mul(new_cap, elem_size, "rsz.g.bytes")
+                    .unwrap();
+                let old_data = self
+                    .builder
+                    .build_load(ptr_ty, data_ptr, "rsz.g.old")
+                    .unwrap()
+                    .into_pointer_value();
+                let realloc_fn = self.realloc_or_panic_fn_decl();
+                let new_data = self
+                    .builder
+                    .build_call(realloc_fn, &[old_data.into(), bytes.into()], "rsz.g.new")
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_pointer_value();
+                self.builder.build_store(data_ptr, new_data).unwrap();
+                self.builder.build_store(cap_p, new_cap).unwrap();
+                self.builder.build_unconditional_branch(filled_bb).unwrap();
+
+                self.builder.position_at_end(filled_bb);
+                let data = self
+                    .builder
+                    .build_load(ptr_ty, data_ptr, "rsz.g.data")
+                    .unwrap()
+                    .into_pointer_value();
+                if needs_deep {
+                    // Move into the first new slot, clone into the rest.
+                    let te = elem_te.clone().unwrap();
+                    let clone_fn = self.emit_clone_fn_for_type_expr(&te);
+                    let first = unsafe {
+                        self.builder
+                            .build_gep(elem_ty, data, &[cur_len], "rsz.g.first")
+                            .unwrap()
+                    };
+                    let _ = self.builder.build_store(first, fill_val);
+                    let from = self
+                        .builder
+                        .build_int_add(cur_len, one, "rsz.g.from")
+                        .unwrap();
+                    self.emit_index_range_loop(fn_val, from, target, "rsz.g.c", &|cg, idx| {
+                        let slot = unsafe {
+                            cg.builder
+                                .build_gep(elem_ty, data, &[idx], "rsz.g.slot")
+                                .unwrap()
+                        };
+                        let _ = cg
+                            .builder
+                            .build_call(clone_fn, &[first.into(), slot.into()], "");
+                    });
+                } else {
+                    self.emit_index_range_loop(fn_val, cur_len, target, "rsz.g.s", &|cg, idx| {
+                        let slot = unsafe {
+                            cg.builder
+                                .build_gep(elem_ty, data, &[idx], "rsz.g.slot")
+                                .unwrap()
+                        };
+                        let _ = cg.builder.build_store(slot, fill_val);
+                    });
+                }
+                self.builder.build_store(len_p, target).unwrap();
+                self.builder.build_unconditional_branch(join_bb).unwrap();
+
+                self.builder.position_at_end(join_bb);
+                Ok(i64_t.const_zero().into())
+            }
+            // B-2026-08-25-20 — `a.append(b)`: move every element of `b` into
+            // `a`. The parameter is OWNED, so this is a bulk MOVE, not a copy:
+            // the element bytes are memcpy'd across and `b`'s buffer is freed
+            // WITHOUT running any element drop. Running one would free the very
+            // buffers `a` now owns — the double-free this whole family is prone
+            // to — which is why the free here is of the SPINE only.
+            //
+            // `suppress_source_vec_cleanup_for_arg` then disarms `b`'s
+            // scope-exit cleanup. Order is load-bearing and matches every other
+            // move site: the header is read out of `b` FIRST, while its `cap` is
+            // still real, and the suppression's cap-zero lands after.
+            "append" => {
+                if args.len() != 1 {
+                    return Err(format!(
+                        "Vec.append expects 1 argument (the source Vec), got {}",
+                        args.len()
+                    ));
+                }
+                let fn_val = self.current_fn.unwrap();
+                let src_val = self.compile_expr(&args[0].value)?;
+                let BasicValueEnum::StructValue(src_sv) = src_val else {
+                    return Err("Vec.append: the source argument is not a Vec header".to_string());
+                };
+                let src_data = self
+                    .builder
+                    .build_extract_value(src_sv, 0, "app.src.data")
+                    .unwrap()
+                    .into_pointer_value();
+                let src_len = self
+                    .builder
+                    .build_extract_value(src_sv, 1, "app.src.len")
+                    .unwrap()
+                    .into_int_value();
+                self.suppress_source_vec_cleanup_for_arg(&args[0].value);
+                self.disarm_container_bodies_for_arg(&args[0].value);
+
+                let len_p = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 1, "app.len.p")
+                    .unwrap();
+                let cap_p = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 2, "app.cap.p")
+                    .unwrap();
+                let cur_len = self
+                    .builder
+                    .build_load(i64_t, len_p, "app.len")
+                    .unwrap()
+                    .into_int_value();
+                let cur_cap = self
+                    .builder
+                    .build_load(i64_t, cap_p, "app.cap")
+                    .unwrap()
+                    .into_int_value();
+                let needed = self
+                    .builder
+                    .build_int_add(cur_len, src_len, "app.needed")
+                    .unwrap();
+                let grow_bb = self.context.append_basic_block(fn_val, "app.grow");
+                let copy_bb = self.context.append_basic_block(fn_val, "app.copy");
+                let must_grow = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::SGT, needed, cur_cap, "app.cmp")
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(must_grow, grow_bb, copy_bb)
+                    .unwrap();
+                self.builder.position_at_end(grow_bb);
+                let two = i64_t.const_int(2, false);
+                let four = i64_t.const_int(4, false);
+                let doubled = self
+                    .builder
+                    .build_int_mul(cur_cap, two, "app.doubled")
+                    .unwrap();
+                let big = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::SGT, doubled, four, "app.gt4")
+                    .unwrap();
+                let growth_min = self
+                    .builder
+                    .build_select(big, doubled, four, "app.min")
+                    .unwrap()
+                    .into_int_value();
+                let need_more = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::SGT, needed, growth_min, "app.need")
+                    .unwrap();
+                let new_cap = self
+                    .builder
+                    .build_select(need_more, needed, growth_min, "app.new_cap")
+                    .unwrap()
+                    .into_int_value();
+                let elem_size = elem_ty.size_of().unwrap();
+                let bytes = self
+                    .builder
+                    .build_int_mul(new_cap, elem_size, "app.bytes")
+                    .unwrap();
+                let old_data = self
+                    .builder
+                    .build_load(ptr_ty, data_ptr, "app.old")
+                    .unwrap()
+                    .into_pointer_value();
+                let realloc_fn = self.realloc_or_panic_fn_decl();
+                let grown = self
+                    .builder
+                    .build_call(realloc_fn, &[old_data.into(), bytes.into()], "app.new")
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_pointer_value();
+                self.builder.build_store(data_ptr, grown).unwrap();
+                self.builder.build_store(cap_p, new_cap).unwrap();
+                self.builder.build_unconditional_branch(copy_bb).unwrap();
+
+                self.builder.position_at_end(copy_bb);
+                let dst_data = self
+                    .builder
+                    .build_load(ptr_ty, data_ptr, "app.dst")
+                    .unwrap()
+                    .into_pointer_value();
+                let tail = unsafe {
+                    self.builder
+                        .build_gep(elem_ty, dst_data, &[cur_len], "app.tail")
+                        .unwrap()
+                };
+                let copy_bytes = self
+                    .builder
+                    .build_int_mul(src_len, elem_size, "app.copy_bytes")
+                    .unwrap();
+                self.builder
+                    .build_memcpy(tail, 8, src_data, 8, copy_bytes)
+                    .unwrap();
+                // Free the SOURCE SPINE only — its elements now live in `a`.
+                // A null source buffer (an empty `Vec.new()`) is fine: `free`
+                // on null is a no-op.
+                self.builder
+                    .build_call(self.runtime_fns.free_fn, &[src_data.into()], "")
+                    .unwrap();
+                self.builder.build_store(len_p, needed).unwrap();
+                Ok(i64_t.const_zero().into())
+            }
+            // B-2026-08-25-20 — `Vec.capacity()`: a plain load of field 2. No
+            // head-index adjustment (unlike `len` above): the deque's head
+            // offset shortens the LIVE RANGE, not the allocation, and capacity
+            // reports the allocation.
+            "capacity" => {
+                let cap_p = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 2, "vec.cap.ptr")
+                    .unwrap();
+                let cap = self.builder.build_load(i64_t, cap_p, "vec.cap").unwrap();
+                Ok(cap)
+            }
+            // B-2026-08-25-20 — `Vec.reserve(n)` / `Vec.reserve_exact(n)`:
+            // make room for `n` MORE elements. Grows only when `len + n > cap`;
+            // `reserve` rounds the target up to the push path's own growth
+            // curve (`max(cap * 2, 4)`) so an interleaved reserve-then-push
+            // loop does not fight it, while `reserve_exact` takes `len + n`
+            // verbatim.
+            //
+            // Reallocation is the whole operation, so it goes through the same
+            // `karac_realloc_or_panic` the push path uses: `data` is always
+            // null (cap 0) or heap, and `realloc(null, n) == malloc(n)`.
+            // `len` is untouched — the elements do not move, only the buffer.
+            "reserve" | "reserve_exact" => {
+                if args.len() != 1 {
+                    return Err(format!(
+                        "Vec.{method} expects 1 argument (additional elements), got {}",
+                        args.len()
+                    ));
+                }
+                let exact = method == "reserve_exact";
+                let fn_val = self.current_fn.unwrap();
+                let additional = self.compile_expr(&args[0].value)?.into_int_value();
+                let len_p = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 1, "rsv.len.p")
+                    .unwrap();
+                let cap_p = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 2, "rsv.cap.p")
+                    .unwrap();
+                let cur_len = self
+                    .builder
+                    .build_load(i64_t, len_p, "rsv.len")
+                    .unwrap()
+                    .into_int_value();
+                let cur_cap = self
+                    .builder
+                    .build_load(i64_t, cap_p, "rsv.cap")
+                    .unwrap()
+                    .into_int_value();
+                // Clamp a negative argument to 0 — a no-op reserve, matching
+                // the interpreter and `truncate`'s treatment of a negative n.
+                let zero = i64_t.const_zero();
+                let neg = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::SLT, additional, zero, "rsv.neg")
+                    .unwrap();
+                let add0 = self
+                    .builder
+                    .build_select(neg, zero, additional, "rsv.add0")
+                    .unwrap()
+                    .into_int_value();
+                let needed = self
+                    .builder
+                    .build_int_add(cur_len, add0, "rsv.needed")
+                    .unwrap();
+                let grow_bb = self.context.append_basic_block(fn_val, "rsv.grow");
+                let done_bb = self.context.append_basic_block(fn_val, "rsv.done");
+                let must_grow = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::SGT, needed, cur_cap, "rsv.cmp")
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(must_grow, grow_bb, done_bb)
+                    .unwrap();
+
+                self.builder.position_at_end(grow_bb);
+                let new_cap = if exact {
+                    needed
+                } else {
+                    // max(needed, max(cap * 2, 4)) — the push path's curve, so
+                    // reserve never lands BELOW what a push would have chosen.
+                    let two = i64_t.const_int(2, false);
+                    let four = i64_t.const_int(4, false);
+                    let doubled = self
+                        .builder
+                        .build_int_mul(cur_cap, two, "rsv.doubled")
+                        .unwrap();
+                    let big = self
+                        .builder
+                        .build_int_compare(
+                            inkwell::IntPredicate::SGT,
+                            doubled,
+                            four,
+                            "rsv.doubled.gt4",
+                        )
+                        .unwrap();
+                    let growth_min = self
+                        .builder
+                        .build_select(big, doubled, four, "rsv.growth_min")
+                        .unwrap()
+                        .into_int_value();
+                    let need_more = self
+                        .builder
+                        .build_int_compare(
+                            inkwell::IntPredicate::SGT,
+                            needed,
+                            growth_min,
+                            "rsv.need.gt",
+                        )
+                        .unwrap();
+                    self.builder
+                        .build_select(need_more, needed, growth_min, "rsv.new_cap")
+                        .unwrap()
+                        .into_int_value()
+                };
+                let elem_size = elem_ty.size_of().unwrap();
+                let alloc_bytes = self
+                    .builder
+                    .build_int_mul(new_cap, elem_size, "rsv.bytes")
+                    .unwrap();
+                let old_data = self
+                    .builder
+                    .build_load(ptr_ty, data_ptr, "rsv.old_data")
+                    .unwrap()
+                    .into_pointer_value();
+                let realloc_fn = self.realloc_or_panic_fn_decl();
+                let new_data = self
+                    .builder
+                    .build_call(
+                        realloc_fn,
+                        &[old_data.into(), alloc_bytes.into()],
+                        "rsv.new_data",
+                    )
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_pointer_value();
+                self.builder.build_store(data_ptr, new_data).unwrap();
+                self.builder.build_store(cap_p, new_cap).unwrap();
+                self.builder.build_unconditional_branch(done_bb).unwrap();
+
+                self.builder.position_at_end(done_bb);
                 Ok(i64_t.const_zero().into())
             }
             "truncate" => {

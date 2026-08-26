@@ -27246,6 +27246,59 @@ fn main() {
         );
     }
 
+    /// B-2026-08-25-20 — `Vec.resize` / `Vec.append` must be SEEDED
+    /// receiver-mutating in `effectchecker.rs`, or the auto-parallelizer races
+    /// them.
+    ///
+    /// THIS FIXTURE LIVES HERE, NOT IN `tests/codegen.rs`, AND THAT IS THE
+    /// WHOLE REASON IT EXISTS. `run_program_capturing` passes `None` for the
+    /// concurrency analysis, so auto-par never runs under the codegen E2E
+    /// harness and NO fixture there can catch this class — the first draft of
+    /// this test was written in that file and passed against the unseeded
+    /// compiler. This harness passes `Some(&analysis)`, so it sees what
+    /// `karac build` sees.
+    ///
+    /// The failure is not hypothetical and its shape is delicate: an
+    /// `a.append(b)` LATER in the body made an EARLIER `v[4]` read on an
+    /// UNRELATED Vec panic with `vec index out of bounds` at -O2, because
+    /// `method_effects_imply_receiver_mutation` saw `append` as read-only and
+    /// the analyzer co-grouped the statements around a stale branch-capture
+    /// `{ptr,len,cap}` header. Five index reads in one f-string is what makes
+    /// the group big enough to hoist — the trimmed-down version does not
+    /// reproduce, so do not simplify this program.
+    #[test]
+    fn asan_vec_resize_and_append_are_seeded_against_the_auto_parallelizer() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1); v.push(2); v.push(3);
+    v.resize(5, 9);
+    println(f"grow: len {v.len()} [{v[0]},{v[1]},{v[2]},{v[3]},{v[4]}]");
+    let mut a: Vec[i64] = Vec.new();
+    a.push(10);
+    let mut b: Vec[i64] = Vec.new();
+    b.push(30);
+    a.append(b);
+    println(f"append: {a.len()} {a[0]} {a[1]}");
+    let mut p: Vec[String] = Vec.new();
+    p.push("one");
+    let mut q: Vec[String] = Vec.new();
+    q.push("two");
+    p.append(q);
+    p.resize(4, "pad");
+    println(f"heap: {p.len()} {p[0]} {p[1]} {p[2]} {p[3]}");
+}
+"#,
+            &[
+                "grow: len 5 [1,2,3,9,9]",
+                "append: 2 10 30",
+                "heap: 4 one two pad pad",
+            ],
+            "vec_resize_and_append_seeded_against_auto_par",
+        );
+    }
+
     /// B-2026-08-26-12 — an `Option[shared T]` binding handed out of a
     /// VALUE-POSITION BRANCH LEAF (an `if`-expression arm, a `match`-expression
     /// arm, a bare `{ }` block) into an OWNED parameter.

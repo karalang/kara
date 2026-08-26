@@ -45743,3 +45743,72 @@ fn main() {
         "the message should say what the derive would do instead of calling the impl, got: {msg}"
     );
 }
+
+// ── B-2026-08-25-20: the Vec capacity family's signatures ───────
+
+#[test]
+fn vec_capacity_family_accepts_its_specified_signatures() {
+    typecheck_ok(
+        "fn main() {\n\
+             let mut v: Vec[i64] = Vec.new();\n\
+             let c = v.capacity();\n\
+             v.reserve(8);\n\
+             v.reserve_exact(8);\n\
+             v.resize(4, 0);\n\
+             let w: Vec[i64] = Vec.new();\n\
+             v.append(w);\n\
+         }",
+    );
+}
+
+/// Arity and element-type checking, so a wrong call is a diagnostic rather than
+/// a codegen crash. `append` is the interesting one: its parameter is an OWNED
+/// `Vec[T]` with the receiver's element type, so a `Vec[String]` source into a
+/// `Vec[i64]` receiver must be rejected at the argument, not silently coerced.
+#[test]
+fn vec_capacity_family_rejects_wrong_arity_and_element_types() {
+    let cases: &[(&str, &str)] = &[
+        ("v.capacity(1);", "capacity"),
+        ("v.reserve();", "reserve"),
+        ("v.reserve(1, 2);", "reserve"),
+        ("v.resize(4);", "resize"),
+        // The fill value is checked against the ELEMENT type, so this one
+        // surfaces as an assignability mismatch rather than naming `resize` —
+        // the right diagnostic, just a different one.
+        ("v.resize(4, \"s\");", "found 'String'"),
+        ("v.append();", "append"),
+        ("v.append(3);", "append"),
+    ];
+    for (stmt, needle) in cases {
+        let src = format!(
+            "fn main() {{\n\
+                 let mut v: Vec[i64] = Vec.new();\n\
+                 {stmt}\n\
+             }}"
+        );
+        let errs = typecheck_errors(&src);
+        assert!(!errs.is_empty(), "`{stmt}` must be a type error, got none");
+        assert!(
+            errs.iter().any(|e| e.message.contains(needle)),
+            "`{stmt}` should name `{needle}`; got {:?}",
+            errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+}
+
+/// A `Vec[String]` source into a `Vec[i64]` receiver: the element types must
+/// have to agree.
+#[test]
+fn vec_append_rejects_a_mismatched_element_type() {
+    let errs = typecheck_errors(
+        "fn main() {\n\
+             let mut v: Vec[i64] = Vec.new();\n\
+             let w: Vec[String] = Vec.new();\n\
+             v.append(w);\n\
+         }",
+    );
+    assert!(
+        !errs.is_empty(),
+        "appending a Vec[String] to a Vec[i64] must be rejected"
+    );
+}

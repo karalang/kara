@@ -47240,6 +47240,136 @@ fn driver() -> i64 {
         );
     }
 
+    /// B-2026-08-25-20 — the `Vec` capacity family, twinned against the
+    /// interpreter rather than pinned to a string.
+    ///
+    /// TWINNING IS THE POINT HERE, and it is also why every capacity assertion
+    /// inside the program is a `>=`. `capacity()` is a lower-bound query, not
+    /// an allocator promise: the interpreter grows a host `Vec<Value>` on
+    /// Rust's policy and codegen grows on `max(4, cap * 2)`, so the two
+    /// legitimately report different numbers. What both owe is the CONTRACT —
+    /// `capacity() >= len()`, and `>= len() + n` after `reserve(n)` — plus
+    /// identical observable element content, which is what this compares.
+    #[test]
+    fn e2e_vec_capacity_family_agrees_with_the_interpreter() {
+        let cases: &[(&str, &str)] = &[
+            (
+                "reserve keeps len and grows cap",
+                "let mut v: Vec[i64] = Vec.new();\n\
+                 v.reserve(100);\n\
+                 println(f\"{v.len()} {v.capacity() >= 100}\");\n\
+                 let mut i = 0;\n\
+                 while i < 100 { v.push(i); i = i + 1; }\n\
+                 println(f\"{v.len()} {v[0]} {v[99]}\");",
+            ),
+            (
+                "reserve_exact and non-positive no-ops",
+                "let mut v: Vec[i64] = Vec.new();\n\
+                 v.push(1);\n\
+                 v.reserve_exact(7);\n\
+                 println(f\"{v.capacity() >= 8} {v.len()}\");\n\
+                 v.reserve(-5);\n\
+                 v.reserve(0);\n\
+                 println(f\"{v.len()} {v[0]}\");",
+            ),
+            (
+                "resize grows with copies and shrinks like truncate",
+                "let mut v: Vec[i64] = Vec.new();\n\
+                 v.push(1); v.push(2); v.push(3);\n\
+                 v.resize(5, 9);\n\
+                 println(f\"{v.len()} {v[3]} {v[4]}\");\n\
+                 v.resize(2, 0);\n\
+                 println(f\"{v.len()} {v[0]} {v[1]}\");\n\
+                 v.resize(-3, 0);\n\
+                 println(v.len());",
+            ),
+            (
+                "resize deep-copies a heap fill value",
+                "let mut v: Vec[String] = Vec.new();\n\
+                 v.push(\"a\"); v.push(\"b\");\n\
+                 v.resize(5, \"z\");\n\
+                 println(f\"{v.len()} {v[2]} {v[3]} {v[4]}\");\n\
+                 v.resize(1, \"q\");\n\
+                 println(f\"{v.len()} {v[0]}\");",
+            ),
+            (
+                "append moves an owned source",
+                "let mut a: Vec[i64] = Vec.new();\n\
+                 a.push(10); a.push(20);\n\
+                 let mut b: Vec[i64] = Vec.new();\n\
+                 b.push(30); b.push(40);\n\
+                 a.append(b);\n\
+                 println(f\"{a.len()} {a[0]} {a[3]}\");",
+            ),
+            (
+                "append of heap elements, including into an empty vec",
+                "let mut p: Vec[String] = Vec.new();\n\
+                 p.push(\"one\"); p.push(\"two\");\n\
+                 let mut q: Vec[String] = Vec.new();\n\
+                 q.push(\"three\");\n\
+                 p.append(q);\n\
+                 println(f\"{p.len()} {p[0]} {p[2]}\");\n\
+                 let mut e: Vec[String] = Vec.new();\n\
+                 let mut f2: Vec[String] = Vec.new();\n\
+                 f2.push(\"solo\");\n\
+                 e.append(f2);\n\
+                 println(f\"{e.len()} {e[0]}\");",
+            ),
+        ];
+        for (label, body) in cases {
+            let src = format!("fn main() {{\n{body}\n}}\n");
+            let (interp_out, interp_errs, _, _) = karac::run_program_full(&src);
+            assert!(
+                interp_errs.is_empty(),
+                "{label}: interpreter errored: {interp_errs:?}"
+            );
+            let expected = interp_out.join("");
+            if let Some(aot) = run_program(&src) {
+                assert_eq!(
+                    aot, expected,
+                    "{label}: AOT and the interpreter disagree on the Vec \
+                     capacity family"
+                );
+            }
+        }
+    }
+
+    /// The `try_*` half. The row's headline was three missing `try_*` methods;
+    /// the actual missing half was the PANICKING base each one derives from
+    /// (`fallible_alloc.rs` recurses into the base for argument validation and
+    /// return-type synthesis), so this is what proves the derivation closed.
+    #[test]
+    fn e2e_vec_try_reserve_companions_agree_with_the_interpreter() {
+        let src = "fn build() -> Result[bool, AllocError] {\n\
+                       let mut v: Vec[i64] = Vec.new();\n\
+                       v.try_reserve(64)?;\n\
+                       let mut w: Vec[i64] = Vec.new();\n\
+                       w.try_reserve_exact(9)?;\n\
+                       v.try_reserve(0)?;\n\
+                       return Ok(v.capacity() >= 64 and w.capacity() >= 9);\n\
+                   }\n\
+                   fn main() {\n\
+                       match build() {\n\
+                           Ok(n) => { println(f\"ok {n}\"); }\n\
+                           Err(e) => { println(\"alloc failed\"); }\n\
+                       }\n\
+                   }";
+        let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+        assert!(
+            interp_errs.is_empty(),
+            "interpreter errored: {interp_errs:?}"
+        );
+        assert_eq!(interp_out.join(""), "ok true\n");
+        if let Some(aot) = run_program(src) {
+            assert_eq!(
+                aot, "ok true\n",
+                "the fallible reserve companions must lower to real \
+                 `karac_alloc_fallible` + `Result`, not diverge from the \
+                 interpreter"
+            );
+        }
+    }
+
     /// B-2026-08-26-12 — an `if`-EXPRESSION whose arms yield an
     /// `Option[shared]` binding, passed BY VALUE to a function, inside a loop
     /// that rebinds it, corrupts the heap on both compiled backends.

@@ -1534,6 +1534,130 @@ impl<'a> super::TypeChecker<'a> {
                 self.expect_no_args("Vec.is_empty", args, span);
                 Type::Bool
             }
+            // B-2026-08-25-20 — the capacity family. design.md § Fallible
+            // Allocation's panicking/fallible table names `reserve(n)`,
+            // `reserve_exact(n)` and their `try_*` twins; none of the four
+            // existed, and `try_*` could not exist first because
+            // `fallible_alloc.rs` derives every companion from its panicking
+            // base.
+            //
+            // `capacity()` lands WITH them rather than after, because without
+            // it `reserve` is unobservable from Kāra and no test can tell
+            // `v.reserve(1000)` from a no-op.
+            //
+            // WHAT THE NUMBER MEANS. `capacity()` is a LOWER-BOUND query, not a
+            // promise about the allocator: guaranteed `capacity() >= len()`,
+            // and `capacity() >= len() + n` after `reserve(n)`. The exact value
+            // is Reported behavior (design.md § Stability bands) and the two
+            // backends genuinely differ — the interpreter's `Value::Array` is a
+            // host `Vec<Value>` growing on Rust's policy, codegen grows on
+            // `max(4, cap * 2)`. That is why the tests assert `>=` rather than
+            // an exact count, and why a future test that pins an exact capacity
+            // is asserting something neither backend guarantees.
+            "capacity" => {
+                self.expect_no_args("Vec.capacity", args, span);
+                Type::Int(IntSize::I64)
+            }
+            "reserve" | "reserve_exact" => {
+                // `reserve(additional)` — Rust's argument convention, which is
+                // what the rest of this surface already follows by name
+                // (`reserve_exact` / `resize` / `append` are Rust spellings):
+                // the argument is how many MORE elements must fit, not a target
+                // capacity. `reserve` may over-allocate (amortized growth),
+                // `reserve_exact` asks for no slack. Negative and zero are
+                // no-ops rather than errors, matching `truncate`'s clamp.
+                if args.len() != 1 {
+                    self.type_error(
+                        format!(
+                            "Vec.{method} expects 1 argument (additional elements), found {}",
+                            args.len()
+                        ),
+                        *span,
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                } else {
+                    let at = self.infer_expr(&args[0].value);
+                    self.check_assignable(&Type::Int(IntSize::I64), &at, args[0].value.span);
+                }
+                Type::Unit
+            }
+            // B-2026-08-25-20 — `resize(n, val)` / `append(other)`, the other
+            // two panicking bases design.md § Fallible Allocation's table names
+            // and neither backend had.
+            "resize" => {
+                // Set the length to exactly `n`: truncate (dropping the tail,
+                // like `truncate`) when shrinking, or append copies of `val`
+                // when growing. `n < 0` clamps to 0, matching `truncate`.
+                if args.len() != 2 {
+                    self.type_error(
+                        format!(
+                            "Vec.resize expects 2 arguments (new length, fill value), found {}",
+                            args.len()
+                        ),
+                        *span,
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                } else {
+                    let at = self.infer_expr(&args[0].value);
+                    self.check_assignable(&Type::Int(IntSize::I64), &at, args[0].value.span);
+                    let vt = self.infer_expr(&args[1].value);
+                    self.check_assignable(&elem, &vt, args[1].value.span);
+                }
+                Type::Unit
+            }
+            "append" => {
+                // `a.append(b)` moves every element of `b` into `a`. The
+                // parameter is OWNED (a bare `Vec[T]`), not Rust's
+                // `&mut Vec<T>`: Kāra's call sites never write `mut` on a
+                // method argument (design.md Feature 4 Part 1½), so a
+                // borrow-and-drain spelling would leave `b` silently emptied
+                // with nothing at the call site to say so. Consuming `b` makes
+                // the transfer visible in the ownership rules that already
+                // exist — the source is moved, and using it afterward is the
+                // ordinary use-after-move error rather than a surprise.
+                if args.len() != 1 {
+                    self.type_error(
+                        format!(
+                            "Vec.append expects 1 argument (the source Vec), found {}",
+                            args.len()
+                        ),
+                        *span,
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                } else {
+                    let at = self.infer_expr(&args[0].value);
+                    let arg_inner = match &at {
+                        Type::Ref(inner) | Type::MutRef(inner) => (**inner).clone(),
+                        other => other.clone(),
+                    };
+                    match &arg_inner {
+                        Type::Named { name, args: ga } if name == "Vec" && ga.len() == 1 => {
+                            self.check_assignable(&elem, &ga[0], args[0].value.span);
+                        }
+                        Type::Error => {}
+                        other => {
+                            self.type_error(
+                                format!(
+                                    "Vec.append expects a `Vec[T]` with the same element type, found '{}'",
+                                    type_display(other)
+                                ),
+                                args[0].value.span,
+                                TypeErrorKind::TypeMismatch,
+                            );
+                        }
+                    }
+                }
+                Type::Unit
+            }
             "first" => {
                 self.expect_no_args("Vec.first", args, span);
                 option_elem

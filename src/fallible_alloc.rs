@@ -17,13 +17,21 @@
 //!
 //! Only `try_<base>` forms whose panicking `<base>` already exists on a builtin
 //! collection are registered. Companions whose base operation does not exist yet
-//! (`Vec.reserve` / `Vec.reserve_exact` / `Vec.append` / `Vec.resize` /
-//! `String.reserve` / `Map.reserve` / `Box.new` / `Rc.new` / …) are deferred
-//! until that base lands — see the tracker entry. That rule is the whole
-//! explanation for the gap B-2026-08-25-20 reported as three missing `try_*`
-//! methods: the missing half is the PANICKING base, not the companion layer,
-//! which is why `try_extend` was a one-line registration here (its base
+//! (`Vec.append` / `Vec.resize` / `String.reserve` / `Map.reserve` / …) are
+//! deferred until that base lands — see the tracker entry. That rule is the
+//! whole explanation for the gap B-2026-08-25-20 reported as three missing
+//! `try_*` methods: the missing half is the PANICKING base, not the companion
+//! layer, which is why `try_extend` was a one-line registration here (its base
 //! `Vec.extend` already existed) while its two row-mates were not.
+//!
+//! `Vec.reserve` / `Vec.reserve_exact` LEFT that deferred list in the same
+//! change that landed their bases (B-2026-08-25-20), which is what the rule is
+//! for: the base arrives, the companion follows, and nothing here has to know
+//! how the base works. `Box.new` / `Rc.new` are not on the list at all and
+//! never will be — design.md § Fallible Allocation's table has no
+//! `Box`/`Rc`/`Arc` row because Kāra spells heap indirection with `shared` /
+//! `par` type declarations rather than per-use-site wrappers, so there is no
+//! per-allocation constructor to give a `try_` twin (B-2026-08-25-19).
 
 /// Instance methods whose `try_<base>` companion returns
 /// `Result[<base-ret>, AllocError]`. Each base is a panicking, heap-allocating
@@ -43,6 +51,12 @@ pub const TRY_ALLOC_INSTANCE_BASES: &[&str] = &[
     // `extend_from_slice`, so registering it here is the whole of
     // `Vec.try_extend`. B-2026-08-25-20.
     "extend",
+    // B-2026-08-25-20 — the reserve family. These are the row's headline
+    // `try_reserve` / `try_reserve_exact`, and they could only be registered
+    // once their PANICKING bases landed, which is the deferral rule above
+    // working exactly as written rather than an exception to it.
+    "reserve",
+    "reserve_exact",
     "insert", // Map.insert, Set.insert, SortedSet.insert, SortedMap.insert
     "clone",  // Vec/String/Map/SortedMap/Set/SortedSet/VecDeque.clone
 ];
@@ -93,6 +107,8 @@ pub const CODEGEN_FALLIBLE_INSTANCE_BASES: &[&str] = &[
     "push_front",        // VecDeque.try_push_front
     "extend_from_slice", // Vec.try_extend_from_slice
     "extend",            // Vec.try_extend (alias of the above, all phases)
+    "reserve",           // Vec.try_reserve       (B-2026-08-25-20)
+    "reserve_exact",     // Vec.try_reserve_exact (B-2026-08-25-20)
     "clone",             // Vec/VecDeque/String.try_clone (Map/Set rejected at dispatch)
     "insert", // Map/Set/SortedSet.try_insert (routes to compile_map_method / compile_set_method)
 ];

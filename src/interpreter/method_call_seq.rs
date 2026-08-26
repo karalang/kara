@@ -1749,6 +1749,108 @@ impl<'a> super::Interpreter<'a> {
                     return Some(Value::Unit);
                 }
             }
+            // B-2026-08-25-20 — `resize(n, val)`: grow with copies of `val`,
+            // or shrink like `truncate`. The SHRINK leg has to run the dropped
+            // tail's user `Drop` bodies for the same reason `truncate` does
+            // (B-2026-08-03-2) — and only the tail, since the survivors still
+            // belong to the binding and fire at its death.
+            "resize" => {
+                if let Value::Array(ref rc) = obj {
+                    let n = match args.first().map(|a| self.eval_expr_inner(&a.value)) {
+                        Some(Value::Int(n)) => n,
+                        _ => return None,
+                    };
+                    let fill = args
+                        .get(1)
+                        .map(|a| self.eval_expr_inner(&a.value))
+                        .unwrap_or(Value::Unit);
+                    let label = match &object.kind {
+                        ExprKind::Identifier(name) => name.clone(),
+                        _ => "<value>".to_string(),
+                    };
+                    let target = if n < 0 { 0 } else { n as usize };
+                    let removed: Vec<Value> = rc
+                        .read()
+                        .map(|g| g.iter().skip(target).cloned().collect())
+                        .unwrap_or_default();
+                    {
+                        let mut guard = try_write_or_panic(rc, &label);
+                        if target <= guard.len() {
+                            guard.truncate(target);
+                        } else {
+                            while guard.len() < target {
+                                guard.push(fill.clone());
+                            }
+                        }
+                    }
+                    for e in removed {
+                        self.run_discarded_value_user_drops(e);
+                    }
+                    return Some(Value::Unit);
+                }
+            }
+            // B-2026-08-25-20 — `a.append(b)`: move every element of `b` into
+            // `a`, leaving `b` empty. The parameter is OWNED, so `b` is moved
+            // at the call site and the drain is not observable through it — the
+            // clear here keeps the interpreter's `Rc`-shared array from
+            // double-owning the elements if any alias survives.
+            "append" => {
+                if let Value::Array(ref rc) = obj {
+                    let src = match args.first().map(|a| self.eval_expr_inner(&a.value)) {
+                        Some(Value::Array(src_rc)) => src_rc,
+                        _ => return None,
+                    };
+                    let label = match &object.kind {
+                        ExprKind::Identifier(name) => name.clone(),
+                        _ => "<value>".to_string(),
+                    };
+                    let moved: Vec<Value> = src.read().map(|g| g.to_vec()).unwrap_or_default();
+                    try_write_or_panic(&src, "<append source>").clear();
+                    try_write_or_panic(rc, &label).extend(moved);
+                    return Some(Value::Unit);
+                }
+            }
+            // B-2026-08-25-20 — the capacity family. `capacity()` reports the
+            // host `Vec<Value>`'s capacity and `reserve`/`reserve_exact`
+            // forward to the host allocator. The NUMBER is deliberately not
+            // twinned with codegen (which grows on `max(4, cap * 2)`): the
+            // spec makes `capacity()` a lower-bound query, so what both
+            // backends owe is `capacity() >= len()` and `capacity() >= len() +
+            // n` after `reserve(n)` — not an identical count. Forwarding to the
+            // host here is therefore correct rather than merely convenient; the
+            // alternative (hand-rolling codegen's growth curve in the
+            // interpreter) would pin a number the spec does not promise.
+            "capacity" => {
+                if let Value::Array(ref rc) = obj {
+                    let cap = rc.read().map(|g| g.capacity()).unwrap_or(0);
+                    return Some(Value::Int(cap as i128));
+                }
+            }
+            "reserve" | "reserve_exact" => {
+                // `reserve(additional)` — Rust's convention: room for that many
+                // MORE elements. A negative or zero argument is a no-op, not an
+                // error, mirroring `truncate`'s clamp.
+                if let Value::Array(ref rc) = obj {
+                    if let Some(Value::Int(n)) =
+                        args.first().map(|a| self.eval_expr_inner(&a.value))
+                    {
+                        if n > 0 {
+                            let label = match &object.kind {
+                                ExprKind::Identifier(name) => name.clone(),
+                                _ => "<value>".to_string(),
+                            };
+                            let additional = n as usize;
+                            let mut guard = try_write_or_panic(rc, &label);
+                            if method == "reserve_exact" {
+                                guard.reserve_exact(additional);
+                            } else {
+                                guard.reserve(additional);
+                            }
+                        }
+                        return Some(Value::Unit);
+                    }
+                }
+            }
             "truncate" => {
                 // `Vec.truncate(n)` — shorten to at most `n` elements, dropping
                 // the tail (Rust `Vec::truncate` drops them naturally); `n >= len`
