@@ -1793,7 +1793,44 @@ impl<'ctx> super::Codegen<'ctx> {
                 ) || self
                     .type_decls
                     .enum_unit_variants
-                    .contains_key(seg.as_str());
+                    .contains_key(seg.as_str())
+                    // Any enum, not just an all-unit one (B-2026-08-26-33).
+                    // The leaf branch emits `P::Expr(field_expr)`, i.e. exactly
+                    // the `f"{h.u}"` spelling — and that spelling ALREADY
+                    // renders a payload-bearing enum, a tuple-variant enum, a
+                    // generic enum and an `Option` field identically on both
+                    // backends. Only this predicate refused them, which is why
+                    // the refusal was inverted with respect to difficulty: the
+                    // same struct rendered fine NESTED in a `Vec` (that path is
+                    // `emit_struct_debug_display_fn`, which walks fields through
+                    // `emit_display_fn_for_type_expr` and has no such list) and
+                    // the field rendered fine on its own, while interpolating
+                    // the struct itself failed the whole compile.
+                    //
+                    // NON-GENERIC only, and that restriction is load-bearing
+                    // rather than cautious. The leaf branch synthesizes its
+                    // field expression with the BASE's span, so nothing
+                    // downstream can recover the field's own instantiation —
+                    // the nested renderer threads use-site generic args
+                    // explicitly (B-2026-08-19-28) and this path has no
+                    // equivalent. Admitting a generic enum therefore does not
+                    // merely fail, it PANICS the compiler in
+                    // `emit_display_fn_for_type` ("type_name 'T' not yet
+                    // supported"), and admitting `Option[i64]` — seeded in
+                    // `enum_layouts`, so it would otherwise qualify — trades
+                    // this function's accurate "field 'u' has a type … not yet
+                    // supported" for the f-string path's misleading advice to
+                    // bind a struct literal to a `let`. Both stay on the clean
+                    // error until the leaf path can carry an instantiation.
+                    //
+                    // This list has been the narrow half before: B-2026-08-19-23
+                    // widened three sibling lists to the 128-bit widths and
+                    // missed this one, leaving a `u128` field refused after the
+                    // feature had otherwise landed. Same shape, same cause — a
+                    // capability exists one layer down and the leaf list does
+                    // not know about it.
+                    || (p.generic_args.as_ref().is_none_or(|a| a.is_empty())
+                        && self.type_decls.enum_layouts.contains_key(seg.as_str()));
             }
         }
         false

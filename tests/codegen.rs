@@ -104966,6 +104966,124 @@ fn main() {
         );
     }
 
+    /// B-2026-08-26-33 — a `#[derive(Display)]` struct with a PAYLOAD-BEARING
+    /// enum field was refused by `karac build` while `--interp` rendered it,
+    /// and the refusal was inverted with respect to difficulty: the same struct
+    /// rendered fine NESTED in a `Vec`, and the field rendered fine ON ITS OWN
+    /// (`f"{h.u}"`), while interpolating the struct itself failed the whole
+    /// compile — including files where the failing spelling never appeared,
+    /// since the error is raised at emission for the struct.
+    ///
+    /// Codegen has two renderers for the same derived-Display struct.
+    /// `emit_struct_debug_display_fn` (used when nested) walks fields through
+    /// `emit_display_fn_for_type_expr` and handles any type that dispatcher
+    /// knows. `build_struct_display_parts` (used when interpolated directly)
+    /// classified fields with `display_field_is_leaf`, a hand-maintained name
+    /// list that knew about primitives and ALL-UNIT enums only. The
+    /// restriction was a property of the spelling, not of the type.
+    ///
+    /// design.md § Strings already claimed both backends "cover a struct field
+    /// of enum type" — this makes that true rather than adding anything.
+    ///
+    /// Struct-variant, tuple-variant, `String`-payload and user-`impl Display`
+    /// enum fields are all covered; the all-unit field is the control that
+    /// always worked.
+    #[test]
+    fn test_e2e_derived_display_struct_with_payload_enum_field() {
+        assert_eq!(
+            run_program(
+                r#"
+#[derive(Display)]
+enum E { A { n: i64 }, T(i64, i64), S { s: String }, Z }
+#[derive(Display)]
+struct H { u: E }
+enum U { P { n: i64 }, Q }
+impl Display for U {
+    fn to_string(ref self) -> String {
+        match self { P { n } => f"pee{n}", Q => "cue" }
+    }
+}
+#[derive(Display)]
+struct G { u: U }
+fn main() {
+    let a = H { u: E.A { n: 1 } };
+    println(f"{a}")
+    let t = H { u: E.T(1, 2) };
+    println(f"{t}")
+    let s = H { u: E.S { s: "hi" } };
+    println(f"{s}")
+    let z = H { u: E.Z };
+    println(f"{z}")
+    let g = G { u: U.Q };
+    println(f"{g}")
+}
+"#
+            ),
+            Some(
+                "H { u: A { n: 1 } }\nH { u: T(1, 2) }\nH { u: S { s: hi } }\n\
+                 H { u: Z }\nG { u: cue }\n"
+                    .to_string()
+            )
+        );
+    }
+
+    /// B-2026-08-26-33's BOUNDARY, pinned because the first cut of the fix
+    /// crossed it. Admitting every enum in `enum_layouts` to the leaf list also
+    /// admits GENERIC ones — and a generic enum field does not merely fail
+    /// there, it PANICS the compiler (`emit_display_fn_for_type: type_name 'T'
+    /// not yet supported`), because the leaf branch synthesizes its field
+    /// expression with the BASE's span and nothing downstream can recover the
+    /// field's instantiation. `Option[i64]` is seeded in `enum_layouts` and so
+    /// would qualify too, trading this function's accurate diagnostic for the
+    /// f-string path's misleading advice to bind a struct literal to a `let`.
+    ///
+    /// So the predicate admits NON-GENERIC enums only, and these three stay on
+    /// the clean, field-naming error. A regression here would show up as a
+    /// panic or as the wrong message, which is what this asserts.
+    #[test]
+    fn test_generic_and_collection_display_fields_stay_a_clean_error() {
+        for (label, src) in [
+            (
+                "generic enum field",
+                r#"
+#[derive(Display)]
+enum O2[T] { Has { v: T }, Nope }
+#[derive(Display)]
+struct H { u: O2[i64] }
+fn main() { let h = H { u: O2.Has { v: 4 } }; println(f"{h}") }
+"#,
+            ),
+            (
+                "Option field",
+                r#"
+#[derive(Display)]
+struct H { u: Option[i64] }
+fn main() { let h = H { u: Some(3) }; println(f"{h}") }
+"#,
+            ),
+            (
+                "Vec field",
+                r#"
+#[derive(Display)]
+struct H { u: Vec[i64] }
+fn main() { let h = H { u: [1, 2] }; println(f"{h}") }
+"#,
+            ),
+        ] {
+            let err = ir_result(src)
+                .err()
+                .unwrap_or_else(|| panic!("{label}: expected a codegen error, got IR"));
+            assert!(
+                err.contains("whose Display is not yet supported"),
+                "{label}: expected the field-naming diagnostic, got: {err}"
+            );
+            assert!(
+                err.contains("field 'u'"),
+                "{label}: the diagnostic must name the field, got: {err}"
+            );
+        }
+    }
+
     /// B-2026-08-26-29, `Set` leg. Codegen's Set renderer recurses through the
     /// same `emit_display_fn_for_type_expr` dispatcher every other container
     /// uses, so it picked up the user impl for free — while the interpreter's
