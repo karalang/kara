@@ -11878,22 +11878,55 @@ fn test_operators_page_quotes_live_diagnostics() {
     let page = concept_page("operators");
 
     let cases: &[(&str, &str, &str)] = &[
+        // B-2026-08-25-30 — these three now speak the TRAIT language
+        // design.md § Operator Traits mandates, and the comparison pair names
+        // the PARTIAL trait that is actually required.
         (
             "vecadd",
             "fn main() { let a = [1, 2]; let b = [3, 4]; let c = a + b; }",
-            "arithmetic operator requires numeric type",
+            "does not implement trait Add",
+        ),
+        (
+            "vecredirect",
+            "fn main() { let a = [1, 2]; let b = [3, 4]; let c = a + b; }",
+            "use `a.extend(b)`",
+        ),
+        (
+            "distinctadd",
+            "distinct type UserId = i64;\n\
+             fn main() { let a = UserId(3); let c = a + UserId(1); }",
+            "add #[derive(Arithmetic)]",
         ),
         (
             "eqderive",
             "struct Q { x: i64 }\n\
              fn main() { let a = Q { x: 1 }; println(a == Q { x: 1 }); }",
-            "does not implement Eq; add #[derive(Eq)] to use == or !=",
+            "does not implement PartialEq;",
+        ),
+        (
+            // Split from the case above so BOTH halves stay pinned while the
+            // page wraps at 78 columns: the trait named, and the derive advised.
+            "eqderive_advice",
+            "struct Q { x: i64 }\n\
+             fn main() { let a = Q { x: 1 }; println(a == Q { x: 1 }); }",
+            "add #[derive(PartialEq)] to use == or !=",
         ),
         (
             "ordderive",
             "struct Q { x: i64 }\n\
              fn main() { let a = Q { x: 1 }; println(a < Q { x: 2 }); }",
-            "does not implement Ord;",
+            "does not implement PartialOrd;",
+        ),
+        (
+            "ordderive_advice",
+            "struct Q { x: i64 }\n\
+             fn main() { let a = Q { x: 1 }; println(a < Q { x: 2 }); }",
+            "add #[derive(PartialOrd)] to use <, <=, >, or >=",
+        ),
+        (
+            "notint",
+            "fn main() { let a: i64 = 3; println(not a); }",
+            "unary 'not' requires 'bool'",
         ),
         (
             "mixint",

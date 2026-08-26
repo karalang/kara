@@ -2014,6 +2014,74 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// The arithmetic-rejection message, in the TRAIT language design.md
+    /// § Operator Traits mandates: "Diagnostics for a missing impl (e.g.,
+    /// `vec1 + vec2`) speak the trait language — \"type Vec[T] does not
+    /// implement trait Add\" — not operator language".
+    ///
+    /// B-2026-08-25-30. The old wording — "arithmetic operator requires numeric
+    /// type, found 'T'" — told the reader what the compiler CHECKED, never
+    /// which trait was missing nor what to do instead. Both redirects are cheap
+    /// because the type is in hand here:
+    ///
+    ///   • `Vec` / `VecDeque`: § Notably absent says the whole reason
+    ///     `impl Add for Vec[T]` does not exist is to force an explicit method
+    ///     name, which only works if the diagnostic says the name.
+    ///   • a `distinct` type: `#[derive(Arithmetic)]` is the opt-in, and going
+    ///     without it was previously unmentioned.
+    ///
+    /// NOTE ON `concat`: design.md's sentence offers "`vec.concat(other)` or
+    /// `vec.extend(other)`", but `Vec.concat()` in this implementation is the
+    /// OTHER operation — zero-argument, `Vec[String]` only, joining a Vec's own
+    /// elements into one String. Naming it here would send a reader with a
+    /// `Vec[i64]` to "Vec.concat() requires String elements". Only `extend` is
+    /// named, and the spec/implementation divergence is filed separately.
+    ///
+    /// An operator with no entry in the table above keeps the old operator-
+    /// language wording rather than inventing a trait name for it.
+    pub(super) fn arithmetic_rejection_message(
+        &self,
+        op: &BinOp,
+        ty: &Type,
+        right_ty: &Type,
+    ) -> String {
+        let Some(trait_name) = Self::arithmetic_operator_trait(op) else {
+            return format!(
+                "arithmetic operator requires numeric type, found '{}'",
+                type_display(ty)
+            );
+        };
+        // A `String` LEFT operand under `+` reaches this arm only because the
+        // RIGHT one is not a String — `String + String` is accepted a few
+        // branches above. Saying "does not implement trait Add" here would be
+        // FALSE, and falsely specific in a way the old vague wording never was:
+        // String does implement Add, the other operand is the fault. Report the
+        // operand instead. (`String - String` still lands on the missing-impl
+        // message below, which is correct — there is no `Sub` for String.)
+        if matches!(op, BinOp::Add) && is_string_concat_operand(ty) {
+            return format!(
+                "'+' on 'String' requires a 'String' right operand, found '{}'",
+                type_display(right_ty)
+            );
+        }
+        let base = format!(
+            "type '{}' does not implement trait {}",
+            type_display(ty),
+            trait_name
+        );
+        match ty {
+            Type::Named { name, .. } if name == "Vec" || name == "VecDeque" => format!(
+                "{base}; there is deliberately no `impl {trait_name} for {name}[T]` — \
+                 use `a.extend(b)` to append b's elements to a"
+            ),
+            Type::Named { name, .. } if self.env.distinct_types.contains_key(name) => format!(
+                "{base}; add #[derive(Arithmetic)] to '{name}' to use arithmetic \
+                 operators between two '{name}' values, or unwrap explicitly"
+            ),
+            _ => base,
+        }
+    }
+
     /// The binary operator a compound assignment implies — `x += y` means
     /// `x = x + y`, so `+=` checks under `Add`. B-2026-08-14-29: the
     /// `CompoundAssign` arm needs this to route through [`Self::infer_binary`];
@@ -2498,10 +2566,7 @@ impl<'a> super::TypeChecker<'a> {
                     left_ty
                 } else {
                     self.type_error(
-                        format!(
-                            "arithmetic operator requires numeric type, found '{}'",
-                            type_display(&left_ty)
-                        ),
+                        self.arithmetic_rejection_message(op, &left_ty, &right_ty),
                         left.span,
                         TypeErrorKind::InvalidBinaryOp,
                     );
@@ -2527,7 +2592,18 @@ impl<'a> super::TypeChecker<'a> {
                 } else if !self.type_supports_partial_eq(cmp_left) {
                     self.type_error(
                         format!(
-                            "type '{}' does not implement Eq; add #[derive(Eq)] to use == or !=",
+                            // B-2026-08-25-30 — name the PARTIAL trait: the
+                            // desugaring runs through `PartialEq` (the guard
+                            // right above is `type_supports_partial_eq`), and
+                            // `#[derive(PartialEq)]` ALONE compiles. Prescribing
+                            // `Eq` was not merely imprecise — for a type with an
+                            // `f32`/`f64` field it named a derive the language
+                            // deliberately does not offer on floats (`NaN != NaN`
+                            // breaks reflexivity), sending that reader to a dead
+                            // end. design.md: the `Eq` marker "is never named by
+                            // the desugaring".
+                            "type '{}' does not implement PartialEq; add \
+                             #[derive(PartialEq)] to use == or !=",
                             type_display(cmp_left)
                         ),
                         *span,
@@ -2559,8 +2635,13 @@ impl<'a> super::TypeChecker<'a> {
                     // their pre-existing comparison behavior.
                     self.type_error(
                         format!(
-                            "type '{}' does not implement Ord; add #[derive(Ord)] to use \
-                             <, <=, >, or >=",
+                            // B-2026-08-25-30 — the `PartialOrd` sibling of
+                            // the `PartialEq` correction above: the guard is
+                            // `type_supports_partial_ord` and
+                            // `#[derive(PartialOrd)]` alone compiles, on a
+                            // struct/enum and on a distinct type alike.
+                            "type '{}' does not implement PartialOrd; add \
+                             #[derive(PartialOrd)] to use <, <=, >, or >=",
                             type_display(cmp_left)
                         ),
                         *span,
@@ -2581,8 +2662,13 @@ impl<'a> super::TypeChecker<'a> {
                     // declaration-order comparator (B-2026-07-03-7).
                     self.type_error(
                         format!(
-                            "type '{}' does not implement Ord; add #[derive(Ord)] to use \
-                             <, <=, >, or >=",
+                            // B-2026-08-25-30 — the `PartialOrd` sibling of
+                            // the `PartialEq` correction above: the guard is
+                            // `type_supports_partial_ord` and
+                            // `#[derive(PartialOrd)]` alone compiles, on a
+                            // struct/enum and on a distinct type alike.
+                            "type '{}' does not implement PartialOrd; add \
+                             #[derive(PartialOrd)] to use <, <=, >, or >=",
                             type_display(cmp_left)
                         ),
                         *span,
@@ -2759,7 +2845,13 @@ impl<'a> super::TypeChecker<'a> {
             UnaryOp::Not => {
                 if ty != Type::Bool {
                     self.type_error(
-                        format!("unary '!' requires 'bool', found '{}'", type_display(&ty)),
+                        // B-2026-08-25-30 — spell the operator the way the
+                        // user must write it. The PARSER rejects `!` with "the
+                        // `!` operator is not used in Kara; use `not` instead",
+                        // and the typechecker then described the operator they
+                        // DID write correctly using the spelling the parser had
+                        // just refused.
+                        format!("unary 'not' requires 'bool', found '{}'", type_display(&ty)),
                         *span,
                         TypeErrorKind::InvalidUnaryOp,
                     );

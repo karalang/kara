@@ -1414,29 +1414,38 @@ Why your operator call failed
 Four rejections cover nearly every case. Each row is the diagnostic you
 will actually see, followed by the fix.
 
-1.  arithmetic operator requires numeric type, found 'T'
+1.  type 'T' does not implement trait Add
 
     `+ - * / %` are accepted only on the numeric primitives (i8..i64,
     u8..u64, f32, f64, usize, isize) and on `String` for `+`. A struct,
-    enum, Vec, or distinct type reaches this error.
+    enum, Vec, or distinct type reaches this error, which names the trait
+    the operator desugars to (Add, Sub, Mul, Div, Rem).
 
     For a Vec, there is deliberately no `impl Add` — the ambiguity
     between concatenation and elementwise addition is why the language
-    makes you name the method: use `.concat(other)` or `.extend(other)`.
+    makes you name the method: use `a.extend(b)` to append b's elements
+    to a. Note that `Vec.concat()` is a DIFFERENT operation — it takes no
+    argument and joins a `Vec[String]`'s own elements into one String —
+    so it is not the two-Vec join, despite design.md's wording.
 
-    For a `distinct` type, opt in with `#[derive(Arithmetic)]`, which
-    enables the operators between two values of the SAME distinct type.
+    For a `distinct` type the diagnostic says: add #[derive(Arithmetic)]
+    to 'T' to use arithmetic operators between two 'T' values, or unwrap
+    explicitly. That derive enables the operators between two values of
+    the SAME distinct type.
     Cross-type arithmetic stays an error by design — that is what
     `distinct` is for. Without the derive, unwrap: `FloorNum(a.raw() + 1)`.
 
-2.  type 'T' does not implement Eq; add #[derive(Eq)] to use == or !=
-    type 'T' does not implement Ord;
-      add #[derive(Ord)] to use <, <=, >, or >=
+2.  type 'T' does not implement PartialEq;
+      add #[derive(PartialEq)] to use == or !=
+    type 'T' does not implement PartialOrd;
+      add #[derive(PartialOrd)] to use <, <=, >, or >=
 
-    Add the derive. Note that `#[derive(PartialEq)]` alone is sufficient
-    for `==` / `!=`, and `#[derive(PartialOrd)]` alone is sufficient for
-    the ordering operators, even though the messages name the total
-    traits — see the divergence section below.
+    Add the derive the message names. These are the PARTIAL traits on
+    purpose: the desugaring runs through them, and each is sufficient on
+    its own. `Eq` and `Ord` are the total traits — deriving them also
+    works, but they are strictly more than the operator needs, and `Eq`
+    is not derivable at all on a type with an `f32`/`f64` field, since
+    `NaN != NaN` breaks reflexivity.
 
 3.  cannot mix integer types 'i32' and 'i64' in arithmetic — they must match
     cannot mix integer and floating-point operands ('i64' and 'f64')
@@ -1488,18 +1497,17 @@ Measured, not inferred. Each is tracked; see docs/bug-ledger.jsonl.
     `.extend`; it currently reports \"arithmetic operator requires
     numeric type, found 'Vec[i64]'\" and names no trait or method.
 
-  • The equality and ordering diagnostics name the TOTAL trait (`Eq`,
-    `Ord`) though the desugaring runs through the PARTIAL one, and
-    though deriving only the partial trait is enough to compile. The
-    spec is explicit that `Eq` is never named by the desugaring.
-
   • Implicit lossless widening at operator boundaries is NOT
     implemented. design.md says `(x: i32) + (y: i64)` is valid and
     widens to `i64`; the compiler rejects it and asks for a cast.
 
   • Bitwise `Not` on integer primitives is not available — `not` on an
-    integer reports \"unary '!' requires 'bool'\", which also spells the
-    operator with Rust's `!` rather than Kāra's `not`.
+    integer reports \"unary 'not' requires 'bool'\".
+
+  • design.md offers `vec.concat(other)` as one of the two redirects for
+    `vec1 + vec2`, but `Vec.concat()` here is the zero-argument
+    `Vec[String]` join, not a two-Vec concatenation. The diagnostic names
+    only `extend`, which is the one that exists.
 ";
 
 const MODULE_STATE_PAGE: &str = "\

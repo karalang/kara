@@ -9132,8 +9132,10 @@ fn test_distinct_eq_requires_derive() {
     assert!(
         errors
             .iter()
-            .any(|e| e.to_string().contains("does not implement Eq")),
-        "expected Eq gate on `==` for a non-derived distinct type, got: {}",
+            // B-2026-08-25-30 — the gate names the PARTIAL trait, which is
+            // what the desugaring requires and what deriving alone fixes.
+            .any(|e| e.to_string().contains("does not implement PartialEq")),
+        "expected PartialEq gate on `==` for a non-derived distinct type, got: {}",
         errors
             .iter()
             .map(|e| e.to_string())
@@ -9160,8 +9162,9 @@ fn test_distinct_ord_requires_derive() {
     assert!(
         errors
             .iter()
-            .any(|e| e.to_string().contains("does not implement Ord")),
-        "expected Ord gate on `<` for a non-derived distinct type, got: {}",
+            // B-2026-08-25-30 — PartialOrd sibling of the PartialEq change.
+            .any(|e| e.to_string().contains("does not implement PartialOrd")),
+        "expected PartialOrd gate on `<` for a non-derived distinct type, got: {}",
         errors
             .iter()
             .map(|e| e.to_string())
@@ -23890,8 +23893,10 @@ fn operator_on_wrong_or_missing_trait_bound_rejected() {
     assert!(
         errs.iter()
             .filter(|e| e
+                // B-2026-08-25-30 — trait language; `-` under `T: Add` now
+                // names the trait that is actually missing (`Sub`).
                 .message
-                .contains("arithmetic operator requires numeric type"))
+                .contains("does not implement trait"))
             .count()
             >= 2,
         "expected both the wrong-trait (`-` under `T: Add`) and unbounded-`T` \
@@ -32286,8 +32291,11 @@ fn mut_ref_non_numeric_scalar_arithmetic_still_errors() {
         errors
             .iter()
             .any(|e| e.kind == TypeErrorKind::InvalidBinaryOp
+                // B-2026-08-25-30 — the diagnostic now names the trait; the
+                // point of this test is unchanged, that the ORIGINAL
+                // `mut ref bool` is reported rather than a stripped inner type.
                 && e.message
-                    .contains("arithmetic operator requires numeric type")
+                    .contains("does not implement trait Add")
                 && e.message.contains("mut ref bool")),
         "expected InvalidBinaryOp naming 'mut ref bool', got: {errors:?}"
     );
@@ -42184,7 +42192,11 @@ fn compound_assign_checks_the_implied_binary_operation() {
     for (src, want) in [
         (
             "fn main() { let mut s = \"a\"; s += 1i64; println(s); }",
-            "arithmetic operator requires numeric type, found 'String'",
+            // B-2026-08-25-30 — `String` DOES implement Add (`String + String`
+            // is accepted a few branches earlier), so the fault here is the
+            // RIGHT operand. Claiming a missing impl would be false; the
+            // diagnostic names the operand instead.
+            "'+' on 'String' requires a 'String' right operand, found 'i64'",
         ),
         (
             "fn main() { let mut n = 1i64; n += \"a\"; println(n); }",
@@ -42193,7 +42205,8 @@ fn compound_assign_checks_the_implied_binary_operation() {
         (
             "struct Pt { x: i64 }\n\
              fn main() { let mut p = Pt { x: 1i64 }; p += 1i64; println(p.x); }",
-            "arithmetic operator requires numeric type, found 'Pt'",
+            // B-2026-08-25-30 — trait language, per design.md § Operator Traits.
+            "type 'Pt' does not implement trait Add",
         ),
         // The `mut ref` parameter spelling reaches a different inference path
         // for the target, and was equally unchecked.
@@ -42201,7 +42214,8 @@ fn compound_assign_checks_the_implied_binary_operation() {
             "struct Pt { x: i64 }\n\
              fn bump(p: mut ref Pt) { p += 1i64; }\n\
              fn main() { let mut p = Pt { x: 1i64 }; bump(mut p); println(p.x); }",
-            "arithmetic operator requires numeric type, found 'mut ref Pt'",
+            // B-2026-08-25-30 — trait language, per design.md § Operator Traits.
+            "type 'mut ref Pt' does not implement trait Add",
         ),
     ] {
         let errors = typecheck_errors(src);
