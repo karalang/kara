@@ -98,7 +98,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | run-vs-build | 161 | 2 |
 | codegen-gap | 139 | 1 |
 | double-free | 138 | 0 |
-| diagnostics | 108 | 0 |
+| diagnostics | 109 | 1 |
 | false-positive | 97 | 0 |
 | perf | 84 | 0 |
 | other | 61 | 2 |
@@ -113,7 +113,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen | 1040 | 5 |
 | typecheck | 263 | 5 |
 | interp | 180 | 0 |
-| other | 66 | 1 |
+| other | 67 | 2 |
 | ownership | 65 | 0 |
 | cli | 63 | 0 |
 | autopar | 55 | 0 |
@@ -124,9 +124,9 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1582 surfaced · 9 open · 1548 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-26). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1583 surfaced · 10 open · 1548 fixed · 10 wontfix · 1 relocated** (2026-05-20 → 2026-08-26). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (9)
+### Open (10)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -139,6 +139,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1582 surfaced
 | B-2026-08-26-1 | 2026-08-26 | other | low | design.md § Operator Traits § Notably absent prescribes `vec.concat(other)` as one of the two redirects for `vec1 + vec2`, but `Vec.concat()` in this implementation is a DIFFERENT operation: zero-argument and `Vec[String]`-only, joining a Vec's own String elements into one String. There is no two-Vec concatenation method at all -- `a.concat(b)` on a `Vec[i64]` reports `Vec.concat() requires String elements`, `a.concat("-")` reports `Vec.concat() expects 0 argument(s), found 1`, and `append` does not exist. Only `extend` (in-place, any element type) does what the spec sentence promises. | docs/design.md |
 | B-2026-08-26-2 | 2026-08-26 | typecheck | medium | TWO MORE FACILITIES design.md § `Hash` and `Hasher`'s stability paragraph NAMES AS SHIPPED DO NOT EXIST, after B-2026-08-25-22 built the third. (1) `xxh3(bytes)` -- a faster UNKEYED stable digest; nothing in `src/`, `runtime/` or `hash/` implements XXH3, and there is now no fast stable option at all (`StableHash.siphash24` is the only one, and it is the keyed, slower one). (2) "the `crypto` module for cryptographic hashes" -- there is NO cryptographic hash anywhere in the stdlib: no sha256, no blake3, no `crypto` namespace. The second is the consequential one, because `siphash24` is now sitting where a user looking for a digest will find it, and SipHash is a fast keyed PRF, NOT collision-resistant -- a user who substitutes it for a cryptographic hash (signatures, dedup against an adversary, anything where a chosen collision matters) gets something that looks like it works. | roadmap.md |
 | B-2026-08-26-3 | 2026-08-26 | typecheck+codegen | high | `LazyLock[T]` IS A CHECK-ONLY PHANTOM: `let TABLE: LazyLock[i64] = LazyLock.new(|| 40 + 2);` passes `karac check` cleanly and then fails on EVERY execution backend -- `--interp` dies with "path 'LazyLock.new' has no interpreter evaluation rule", and `karac run` (JIT) and `karac build` both reject `TABLE.get()` with "codegen: no handler for method 'get'". It is not a type outside that one special-cased module-binding form either: `fn f(x: LazyLock[i64])` is `undefined type 'LazyLock'`. Until this was found, the live `module_mut_binding` WARNING recommended it by name ("Prefer a context struct, `Mutex`, `Atomic`, `#[thread_local]`, `LazyLock`, or `OnceLock`"), so following the compiler's own advice produced a program that checks and then cannot be run or built. | roadmap.md |
+| B-2026-08-26-4 | 2026-08-26 | other | low | design.md's CANONICAL `?`-operator example calls `input.parse_i64()?` and names `ParseError` -- NEITHER EXISTS: the real API is `i64.parse(s) -> Option[i64]`, which cannot be used with `?` the way the example shows | docs/design.md § `?` operator and cross-error-type propagation |
 
 ### Relocated (1)
 
