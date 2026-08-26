@@ -612,3 +612,54 @@ fn design_md_subscript_trait_v1_caveat_matches_the_resolver() {
          impl the compiler refuses"
     );
 }
+
+/// B-2026-08-26-1 — § Operator Traits' `vec1 + vec2` redirect must name only
+/// methods that exist AND do what the sentence says they do.
+///
+/// The paragraph used to offer "`vec.concat(other)` or `vec.extend(other)`".
+/// `Vec.concat()` is a real method, which is what made this hard to notice: it
+/// is the ZERO-ARGUMENT `Vec[String]` join (`join` with an empty separator),
+/// so a reader with a `Vec[i64]` who followed the spec got
+/// `Vec.concat() requires String elements`, and one with a `Vec[String]` got
+/// `Vec.concat() expects 0 argument(s), found 1`. Neither says "that is not
+/// what this method is for".
+///
+/// This is a PROSE guard rather than a code-block one because the claim lives
+/// in a sentence, not in a fenced example — `scripts/design-conformance.py`
+/// checks the blocks and would never have seen it. The compiler side is
+/// already pinned by `tests/cli.rs::test_operators_page_quotes_live_diagnostics`
+/// ("vecredirect" asserts the live diagnostic says `use \`a.extend(b)\``), so
+/// between the two, spec and implementation cannot drift apart again without a
+/// test failing.
+#[test]
+fn operator_traits_vec_redirect_names_only_extend() {
+    let section = DESIGN_MD
+        .split("**Notably absent:**")
+        .nth(1)
+        .expect("§ Operator Traits must still carry the `Notably absent` paragraph");
+    // Bound the window to the paragraph plus its follow-up note, so a later
+    // unrelated `vec.concat` elsewhere in the document cannot fail this.
+    let window: String = section.chars().take(2200).collect();
+
+    assert!(
+        !window.contains("vec.concat(other)"),
+        "§ Operator Traits offers `vec.concat(other)` as a redirect for \
+         `vec1 + vec2` again. `Vec.concat()` is the zero-argument `Vec[String]` \
+         join, not a two-Vec concatenation — a reader who follows it gets \
+         `Vec.concat() requires String elements`. Name `extend`, which is the \
+         one that does this. (B-2026-08-26-1)"
+    );
+    assert!(
+        window.contains("a.extend(b)"),
+        "the paragraph must still name the method that actually appends one \
+         Vec's elements to another — the whole point of having no \
+         `impl Add for Vec[T]` is that the diagnostic names a real method"
+    );
+    // `append` was the other plausible name a reader might reach for; the
+    // paragraph says outright that it does not exist, so keep that.
+    assert!(
+        window.contains("`append` does not exist"),
+        "the paragraph should keep saying `append` does not exist — it is the \
+         name a Rust reader tries first"
+    );
+}

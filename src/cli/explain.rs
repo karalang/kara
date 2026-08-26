@@ -1496,23 +1496,12 @@ Where the implementation differs from design.md today
 
 Measured, not inferred. Each is tracked; see docs/bug-ledger.jsonl.
 
-  • Missing-impl diagnostics speak OPERATOR language, not trait
-    language. design.md specifies `vec1 + vec2` should report \"type
-    Vec[T] does not implement trait Add\" and point at `.concat` /
-    `.extend`; it currently reports \"arithmetic operator requires
-    numeric type, found 'Vec[i64]'\" and names no trait or method.
-
   • Implicit lossless widening at operator boundaries is NOT
     implemented. design.md says `(x: i32) + (y: i64)` is valid and
     widens to `i64`; the compiler rejects it and asks for a cast.
 
   • Bitwise `Not` on integer primitives is not available — `not` on an
     integer reports \"unary 'not' requires 'bool'\".
-
-  • design.md offers `vec.concat(other)` as one of the two redirects for
-    `vec1 + vec2`, but `Vec.concat()` here is the zero-argument
-    `Vec[String]` join, not a two-Vec concatenation. The diagnostic names
-    only `extend`, which is the one that exists.
 ";
 
 const STABLE_HASH_PAGE: &str = "\
