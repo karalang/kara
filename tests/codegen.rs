@@ -86907,6 +86907,53 @@ fn main() {
     }
 
     #[test]
+    fn e2e_a_shared_struct_comparison_calls_the_impl_on_both_backends() {
+        // B-2026-08-26-25. A `shared struct` was absent from BOTH branches of
+        // the ordering gate — they match `Type::Named` and a shared type is
+        // `Type::Shared` — so `a < b` on one was admitted with NO derive and NO
+        // impl, then failed on both backends ("operator 'Lt' is not defined for
+        // operands of type 'SharedStruct'" / "Binary op Lt: left operand has
+        // non-comparable type PointerType").
+        //
+        // EQUALITY was silently wrong rather than loud: `==` compared
+        // structurally and never reached the `impl PartialEq`, while the
+        // typechecker's own message promised that adding the `impl Eq` marker
+        // would make it dispatch. Both comparators here DISAGREE with structural
+        // comparison on purpose — `eq` always says false for two nodes whose
+        // fields are equal, and `partial_cmp` reverses — so a structural or
+        // declaration-order answer fails this test rather than passing it.
+        let out = run_program(
+            r#"
+shared struct Node { id: i64 }
+impl PartialEq for Node { fn eq(ref self, other: ref Node) -> bool { false } }
+impl Eq for Node {}
+impl PartialOrd for Node {
+    fn partial_cmp(ref self, other: ref Node) -> Option[Ordering] { Some(other.id.cmp(self.id)) }
+}
+fn main() {
+    let a = Node { id: 1 };
+    let b = Node { id: 5 };
+    let c = Node { id: 1 };
+    println(f"{a < b} {a > b}");
+    println(f"{a == c} {a != c}");
+}
+"#,
+        );
+        let out = out.expect("a shared struct with real comparators must build");
+        let lines: Vec<&str> = out.trim().lines().collect();
+        assert_eq!(
+            lines,
+            vec![
+                // reversed: 1 vs 5 compares Greater, so `<` false and `>` true
+                "false true",
+                // `eq` always false, so `==` false and `!=` true — structural
+                // comparison of two `{id: 1}` nodes would print "true false"
+                "false true",
+            ]
+        );
+    }
+
+    #[test]
     fn e2e_partial_ord_alone_drives_the_operators_through_partial_cmp() {
         // design.md § Comparison Traits specifies `a < b` as
         // `PartialOrd.partial_cmp(ref a, ref b).is_lt()` and says the operators

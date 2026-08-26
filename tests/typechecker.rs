@@ -45986,6 +45986,42 @@ fn main() {
     );
 }
 #[test]
+fn a_shared_struct_without_a_comparator_is_refused_rather_than_admitted_unlowered() {
+    // B-2026-08-26-25. The ordering gate's two branches both test `Type::Named`,
+    // and a `shared struct` presents as `Type::Shared` — so it fell through
+    // both and `a < b` was admitted on a shared operand with NO derive and NO
+    // impl at all, failing on both backends afterwards.
+    //
+    // The `#[derive(Ord)]` case is refused too, and that is deliberate rather
+    // than incidental: a DERIVED ordering on a shared type has no lowering on
+    // either backend — measured, the derive alone fails identically to no derive
+    // — so accepting it on the strength of `type_supports_partial_ord` would
+    // have preserved the very divergence this closes. A shared operand needs a
+    // real comparator, and the message says so.
+    for src in [
+        // no derive, no impl
+        r#"
+shared struct Node { id: i64 }
+fn main() { let a = Node { id: 1 }; let b = Node { id: 5 }; println(f"{a < b}"); }
+"#,
+        // derive only — compiles nowhere, so it must not typecheck either
+        r#"
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+shared struct Node { id: i64 }
+fn main() { let a = Node { id: 1 }; let b = Node { id: 5 }; println(f"{a < b}"); }
+"#,
+    ] {
+        let errs = typecheck_errors(src);
+        assert!(
+            errs.iter()
+                .any(|e| e.message.contains("need a hand-written comparator")),
+            "a shared struct with no usable comparator must be refused, not \
+             admitted and left unlowered: {errs:?}"
+        );
+    }
+}
+
+#[test]
 fn partial_cmp_alone_now_drives_the_ordering_operators() {
     // This shape — `impl PartialOrd` with NO `impl Ord` — was REJECTED, and the
     // rejection was correct at the time: design.md § Comparison Traits specifies

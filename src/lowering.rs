@@ -1963,7 +1963,7 @@ impl<'a> Lowerer<'a> {
         // Rust/std convention and desugar `!=` to `!eq(a, b)` on Named
         // operand types. Primitive types always have `ne` registered in the
         // stdlib impl table, so they dispatch directly.
-        if matches!(op, BinOp::NotEq) && matches!(lhs_ty, Type::Named { .. }) {
+        if matches!(op, BinOp::NotEq) && matches!(lhs_ty, Type::Named { .. } | Type::Shared(_)) {
             let eq_call = Expr {
                 span: left.span,
                 kind: call_path(
@@ -2109,7 +2109,23 @@ fn target_type_name(ty: &Type, op: &BinOp, tc: &TypeCheckResult) -> Option<Strin
     if let Some(name) = primitive_type_name(ty) {
         return Some(name);
     }
-    if let Type::Named { name, .. } = ty {
+    // A `shared struct`/`shared enum` presents as `Type::Shared(name)` and is
+    // registered in the same `structs`/`enums` tables, so it resolves like a
+    // named type once it is looked at (B-2026-08-26-25). Until it was, `a < b`
+    // on a shared operand passed `karac check` and reached both backends
+    // unlowered.
+    //
+    // Equality is included, but ONLY because the `!=` rewrite above was widened
+    // to match. Resolving the name here while that rewrite still tested
+    // `Type::Named` alone was measured: `a != b` lowered to a `T.ne(a, b)`
+    // nobody defines, the interpreter reported `path 'Node.ne' has no
+    // interpreter evaluation rule`, and the compiled binary printed a raw `0`
+    // instead of `true`. The two move together or not at all.
+    let named = match ty {
+        Type::Named { name, .. } | Type::Shared(name) => Some(name),
+        _ => None,
+    };
+    if let Some(name) = named {
         // Ordering operators resolve through EITHER trait. design.md
         // § Comparison Traits routes them through `PartialOrd`, so that is the
         // one that matters; `Ord` stays accepted because a type may carry only

@@ -2806,6 +2806,41 @@ impl<'a> super::TypeChecker<'a> {
                         *span,
                         TypeErrorKind::InvalidBinaryOp,
                     );
+                } else if matches!(cmp_left, Type::Shared(name)
+                        if self.env.structs.contains_key(name) || self.env.enums.contains_key(name))
+                    && !self.ordering_operator_dispatches(cmp_left)
+                {
+                    // A `shared struct` / `shared enum` (B-2026-08-26-25). It was
+                    // absent from BOTH branches of this gate — they match
+                    // `Type::Named` and a shared type presents as
+                    // `Type::Shared` — so `a < b` on one was admitted
+                    // unconditionally, with NO derive and NO impl, and then
+                    // failed on both backends: "operator 'Lt' is not defined for
+                    // operands of type 'SharedStruct'" and "Binary op Lt: left
+                    // operand has non-comparable type PointerType".
+                    //
+                    // Note this arm does NOT consult `type_supports_partial_ord`,
+                    // which the sibling branch below does. That predicate accepts
+                    // a `#[derive(Ord)]`, and a derived ordering on a shared type
+                    // has no lowering on either backend — measured: the derive
+                    // alone fails identically to no derive at all. Accepting on
+                    // that basis would keep the divergence this arm exists to
+                    // remove, so a shared operand needs a real comparator, which
+                    // is exactly what `ordering_operator_dispatches` tests.
+                    self.type_error(
+                        format!(
+                            "ordering operators on the shared type '{}' need a \
+                             hand-written comparator; `#[derive(PartialOrd)]` does \
+                             not order a shared type — add `impl PartialOrd for {} \
+                             {{ fn partial_cmp(ref self, other: ref {}) -> \
+                             Option[Ordering] {{ ... }} }}`",
+                            type_display(cmp_left),
+                            type_display(cmp_left),
+                            type_display(cmp_left),
+                        ),
+                        *span,
+                        TypeErrorKind::InvalidBinaryOp,
+                    );
                 } else if matches!(cmp_left, Type::Named { name, .. }
                         if self.env.structs.contains_key(name) || self.env.enums.contains_key(name))
                     && !self.type_supports_partial_ord(cmp_left)
