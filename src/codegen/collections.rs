@@ -408,6 +408,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 // No-ops on a moved binding (its own scope-exit free covers it) /
                 // non-Vec-String / borrowed view.
                 self.free_fresh_owned_str_arg(&args[0].value, elem_val);
+                // B-2026-08-26-32 — the aggregate sibling: a fresh owned
+                // STRUCT key temporary is borrowed by the lookup and then
+                // discarded, so its heap is ours. Lookup sites only; the
+                // insert path MOVES its key into the collection.
+                self.free_fresh_owned_struct_key_arg(&args[0].value, elem_val);
                 Ok(found)
             }
             "remove" => {
@@ -463,6 +468,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 // one freed by `drop_key`; no-ops on a moved binding / non-Vec-
                 // String / borrowed view.
                 self.free_fresh_owned_str_arg(&args[0].value, elem_val);
+                // B-2026-08-26-32 — the aggregate sibling: a fresh owned
+                // STRUCT key temporary is borrowed by the lookup and then
+                // discarded, so its heap is ours. Lookup sites only; the
+                // insert path MOVES its key into the collection.
+                self.free_fresh_owned_struct_key_arg(&args[0].value, elem_val);
                 Ok(existed)
             }
             "clear" => {

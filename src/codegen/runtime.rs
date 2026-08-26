@@ -2342,6 +2342,145 @@ impl<'ctx> super::Codegen<'ctx> {
         self.free_str_vec_buffer_if_heap(val);
     }
 
+    /// B-2026-08-26-32 — the AGGREGATE sibling of
+    /// [`Self::free_fresh_owned_str_arg`], for a map/set KEY that is a fresh
+    /// owned struct temporary.
+    ///
+    /// A lookup BORROWS its key: `get` / `remove` / `contains_key` /
+    /// `Set.contains` hash and compare it and never retain it, so when the key
+    /// expression produced a fresh value nothing else owns, that value dies at
+    /// the call and its heap is ours to free. `insert` is the opposite — the key
+    /// is MOVED into the map and the map's own drop reclaims it — which is why
+    /// this is wired only at the lookup sites and why the insert path must stay
+    /// untouched.
+    ///
+    /// The String key path was already covered by `free_fresh_owned_str_arg` at
+    /// these same call sites; a struct WRAPPING heap had no equivalent, so it
+    /// leaked one allocation per lookup. Measured before the fix, on the row's
+    /// program shape: `Map.get` 135 B/5, `Map.remove`+`contains_key` 216 B/8,
+    /// `Set.contains` 135 B/5, and a `Vec`-field key 160 B/5.
+    ///
+    /// THE DROP IS IMMEDIATE, not scope-exit, and that is load-bearing. The
+    /// natural-looking alternative — registering the temp with
+    /// `track_inline_owned_aggregate_arg` like an ordinary call argument — hoists
+    /// one entry alloca and frees it once when the function returns. Inside a
+    /// loop (which is where lookups live) that frees the LAST key and leaks every
+    /// earlier one, the same entry-alloca/scope-cleanup shape as B-2026-08-25-33.
+    /// Storing and dropping adjacently in one basic block is correct per
+    /// iteration, and the hoisted slot is safe to reuse because nothing outlives
+    /// the store.
+    ///
+    /// `Identifier` keys are deliberately NOT matched: a let-bound key is owned
+    /// by its binding and freed at ITS scope exit, so freeing here would
+    /// double-free. That is what keeps the row's documented workaround
+    /// (`let probe = Item { .. }; m.get(probe)`) correct.
+    pub(super) fn free_fresh_owned_struct_key_arg(
+        &mut self,
+        arg: &crate::ast::Expr,
+        val: BasicValueEnum<'ctx>,
+    ) {
+        let inkwell::types::BasicTypeEnum::StructType(agg_ty) = val.get_type() else {
+            return;
+        };
+        // A String/Vec-shaped key is the `free_fresh_owned_str_arg` path's job;
+        // running both would double-free the same buffer.
+        if agg_ty == self.vec_struct_type() {
+            return;
+        }
+        let Some(cur_fn) = self.current_fn else {
+            return;
+        };
+        let Some(name) = self.fresh_owned_struct_key_type_name(arg) else {
+            // Not a struct temp — it may still be a fresh ENUM-variant temp
+            // owning heap, which leaks the same way.
+            self.free_fresh_owned_enum_key_arg(arg, val, agg_ty, cur_fn);
+            return;
+        };
+        // `shared` keys are RC-managed; their release is the rc machinery's.
+        if self.type_decls.shared_types.contains_key(&name) {
+            return;
+        }
+        let Some(drop_fn) = self.emit_struct_drop_synthesis(&name) else {
+            return; // no heap-bearing field — nothing to free
+        };
+        let slot = self.create_entry_alloca(cur_fn, "map.key.tmp", agg_ty.into());
+        self.builder.build_store(slot, val).unwrap();
+        self.builder
+            .build_call(drop_fn, &[slot.into()], "")
+            .unwrap();
+    }
+
+    /// The ENUM leg of [`Self::free_fresh_owned_struct_key_arg`]: a key that is
+    /// a fresh enum-variant temporary owning heap (`m.get(Tag.Named { s: … })`).
+    ///
+    /// Measured under valgrind while fixing the struct leg, on the identical
+    /// program shape: the struct key lost 0 bytes and the enum key still lost
+    /// 135 B in 5 blocks. Same defect reached through a different payload, not a
+    /// separate bug — which is why it is fixed here rather than filed.
+    ///
+    /// THE SHAPE GATE COMES FIRST, and it is not interchangeable with the name
+    /// lookup. `enum_name_of_expr` also resolves a bare `Identifier` — a
+    /// let-bound enum, whose drop belongs to its binding — so consulting it
+    /// alone would double-free exactly the values the struct leg is careful to
+    /// skip. Only the fresh-temp spellings (`E.V { .. }`, `E.V(..)`, `E.V`) are
+    /// eligible.
+    fn free_fresh_owned_enum_key_arg(
+        &mut self,
+        arg: &crate::ast::Expr,
+        val: BasicValueEnum<'ctx>,
+        agg_ty: inkwell::types::StructType<'ctx>,
+        cur_fn: FunctionValue<'ctx>,
+    ) {
+        if !matches!(
+            &arg.kind,
+            ExprKind::StructLiteral { .. } | ExprKind::Call { .. } | ExprKind::Path { .. }
+        ) {
+            return;
+        }
+        let Some(ename) = self.enum_name_of_expr(arg) else {
+            return;
+        };
+        // `shared` enums release through the RC path, never a value drop.
+        if self
+            .type_decls
+            .enum_layouts
+            .get(&ename)
+            .is_none_or(|l| l.is_shared)
+        {
+            return;
+        }
+        let Some(drop_fn) = self.emit_enum_drop_switch(&ename) else {
+            return; // no heap-bearing payload in any variant
+        };
+        let slot = self.create_entry_alloca(cur_fn, "map.key.etmp", agg_ty.into());
+        self.builder.build_store(slot, val).unwrap();
+        self.builder
+            .build_call(drop_fn, &[slot.into()], "")
+            .unwrap();
+    }
+
+    /// The struct type name of a key expression that yields a FRESH owned
+    /// aggregate — an inline `S { .. }` literal, or a call returning `S`.
+    /// `None` for anything owned elsewhere (an identifier, a field read, an
+    /// index), which is what keeps [`Self::free_fresh_owned_struct_key_arg`]
+    /// from freeing a value someone else will free.
+    fn fresh_owned_struct_key_type_name(&self, arg: &crate::ast::Expr) -> Option<String> {
+        let name = match &arg.kind {
+            ExprKind::StructLiteral { path, .. } => path.last().cloned()?,
+            ExprKind::Call { callee, .. } if self.expr_yields_fresh_owned_temp(arg) => {
+                let ExprKind::Identifier(fn_name) = &callee.kind else {
+                    return None;
+                };
+                self.fn_sig.fn_return_type_names.get(fn_name).cloned()?
+            }
+            _ => return None,
+        };
+        self.type_decls
+            .struct_types
+            .contains_key(&name)
+            .then_some(name)
+    }
+
     /// Is `e` a string concat left as a SURFACE `Binary` — i.e. one the
     /// `String.add` desugar skipped — whose compiled value is a
     /// `{ptr, len, cap}` buffer?

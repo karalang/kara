@@ -1271,6 +1271,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // stored (no-op for a borrowed/literal/scalar key).
         if let Some((_, arg_expr, av)) = arg_pivot {
             self.free_fresh_owned_str_arg(arg_expr, av);
+            // B-2026-08-26-32 — the aggregate sibling. `floor`/`ceiling` compare
+            // the pivot and never store it, exactly like `get`.
+            self.free_fresh_owned_struct_key_arg(arg_expr, av);
         }
 
         let found = self
@@ -2278,6 +2281,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 // source's own scope-exit free covers those). Mirrors `get_or`;
                 // without it `get` leaked one key buffer per call (LSan).
                 self.free_fresh_owned_str_arg(&args[0].value, key_val);
+                // B-2026-08-26-32 — the aggregate sibling: a fresh owned
+                // STRUCT key temporary is borrowed by the lookup and then
+                // discarded, so its heap is ours. Lookup sites only; the
+                // insert path MOVES its key into the collection.
+                self.free_fresh_owned_struct_key_arg(&args[0].value, key_val);
 
                 // B-2026-08-09-2 — a `weak V` value read is an UPGRADE, and it
                 // produces the whole `Option` itself rather than feeding the
@@ -2434,6 +2442,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 // (`m.get_or(w.to_string(), d)`) must be freed — no-ops on a
                 // borrowed view (cap == 0) or a binding/literal key.
                 self.free_fresh_owned_str_arg(&args[0].value, key_val);
+                // B-2026-08-26-32 — the aggregate sibling: a fresh owned
+                // STRUCT key temporary is borrowed by the lookup and then
+                // discarded, so its heap is ours. Lookup sites only; the
+                // insert path MOVES its key into the collection.
+                self.free_fresh_owned_struct_key_arg(&args[0].value, key_val);
 
                 let found_bb = self
                     .context
@@ -2552,6 +2565,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 // stores the incoming key, so a fresh-owned-temp key must be
                 // freed (no-ops on a borrowed view / moved binding / literal).
                 self.free_fresh_owned_str_arg(&args[0].value, key_val);
+                // B-2026-08-26-32 — the aggregate sibling: a fresh owned
+                // STRUCT key temporary is borrowed by the lookup and then
+                // discarded, so its heap is ours. Lookup sites only; the
+                // insert path MOVES its key into the collection.
+                self.free_fresh_owned_struct_key_arg(&args[0].value, key_val);
                 // Build Option[V]: Some(old) if found, None otherwise.
                 let found_bb = self.context.append_basic_block(fn_val, "map.rm.found");
                 let notfound_bb = self.context.append_basic_block(fn_val, "map.rm.notfound");
@@ -2645,6 +2663,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Lookup-only; never stores the key, so free a fresh-owned-temp
                 // key (no-ops on a borrowed view / moved binding / literal).
                 self.free_fresh_owned_str_arg(&args[0].value, key_val);
+                // B-2026-08-26-32 — the aggregate sibling: a fresh owned
+                // STRUCT key temporary is borrowed by the lookup and then
+                // discarded, so its heap is ours. Lookup sites only; the
+                // insert path MOVES its key into the collection.
+                self.free_fresh_owned_struct_key_arg(&args[0].value, key_val);
                 Ok(found.into())
             }
             "clear" => {

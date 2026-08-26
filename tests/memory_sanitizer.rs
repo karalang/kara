@@ -54389,4 +54389,383 @@ fn main() {
             "swap-rotation-heap-bearing-elements",
         );
     }
+    /// B-2026-08-26-32 — `Map.get` with an INLINE TEMPORARY struct key that
+    /// owns heap leaked the temporary: one allocation per lookup.
+    ///
+    /// The key is borrowed for the lookup and then discarded, so nothing takes
+    /// ownership of it — unlike `insert`, where the key is MOVED into the map
+    /// and the map's own drop reclaims it. The three controls below are what
+    /// make this a statement about the lookup path specifically rather than
+    /// about temporaries in general.
+    #[test]
+    fn asan_map_get_with_inline_temporary_struct_key_is_clean() {
+        assert_clean_asan_run(
+            r#"
+#[derive(Hash, Eq, PartialEq)]
+struct Item { id: i64, name: String }
+fn main() {
+    let mut m: Map[Item, i64] = Map.new();
+    m.insert(Item { id: 1i64, name: f"a-padding-padding-padding" }, 7i64);
+    let mut j = 0i64;
+    let mut hits = 0i64;
+    while j < 5i64 {
+        match m.get(Item { id: j, name: f"b-{j}-padding-padding-padding" }) {
+            Some(v) => { hits = hits + v; }
+            None => {}
+        }
+        j = j + 1i64;
+    }
+    println(f"{hits}{m.len()}");
+}
+"#,
+            &["01"],
+            "map-get-inline-temporary-struct-key",
+        );
+    }
+
+    /// CONTROL for the row's "binding the key first is clean" claim — this is
+    /// the documented workaround, and it must stay clean so a fix to the
+    /// inline path cannot be mistaken for having broken the bound path.
+    #[test]
+    fn asan_map_get_with_bound_struct_key_is_clean() {
+        assert_clean_asan_run(
+            r#"
+#[derive(Hash, Eq, PartialEq)]
+struct Item { id: i64, name: String }
+fn main() {
+    let mut m: Map[Item, i64] = Map.new();
+    m.insert(Item { id: 1i64, name: f"a-padding-padding-padding" }, 7i64);
+    let mut j = 0i64;
+    let mut hits = 0i64;
+    while j < 5i64 {
+        let probe = Item { id: j, name: f"b-{j}-padding-padding-padding" };
+        match m.get(probe) {
+            Some(v) => { hits = hits + v; }
+            None => {}
+        }
+        j = j + 1i64;
+    }
+    println(f"{hits}{m.len()}");
+}
+"#,
+            &["01"],
+            "map-get-bound-struct-key",
+        );
+    }
+
+    /// CONTROL: `insert` is unaffected, because the key is MOVED into the map.
+    /// A fix that drops the key temporary unconditionally would double-free
+    /// here, so this is the guard against over-correcting.
+    #[test]
+    fn asan_map_insert_with_inline_temporary_struct_key_is_clean() {
+        assert_clean_asan_run(
+            r#"
+#[derive(Hash, Eq, PartialEq)]
+struct Item { id: i64, name: String }
+fn main() {
+    let mut m: Map[Item, i64] = Map.new();
+    let mut j = 0i64;
+    while j < 8i64 {
+        m.insert(Item { id: j, name: f"k-{j}-padding-padding-padding" }, j);
+        j = j + 1i64;
+    }
+    println(m.len());
+}
+"#,
+            &["8"],
+            "map-insert-inline-temporary-struct-key",
+        );
+    }
+
+    /// The row measured `get` only and asked for these: `remove` and
+    /// `contains_key` take the key the same borrowed-then-discarded way.
+    #[test]
+    fn asan_map_remove_and_contains_key_with_inline_temporary_struct_key_are_clean() {
+        assert_clean_asan_run(
+            r#"
+#[derive(Hash, Eq, PartialEq)]
+struct Item { id: i64, name: String }
+fn main() {
+    let mut m: Map[Item, i64] = Map.new();
+    m.insert(Item { id: 1i64, name: f"a-padding-padding-padding" }, 7i64);
+    let mut j = 0i64;
+    let mut seen = 0i64;
+    while j < 4i64 {
+        if m.contains_key(Item { id: j, name: f"c-{j}-padding-padding-padding" }) {
+            seen = seen + 1i64;
+        }
+        match m.remove(Item { id: j, name: f"d-{j}-padding-padding-padding" }) {
+            Some(v) => { seen = seen + v; }
+            None => {}
+        }
+        j = j + 1i64;
+    }
+    println(f"{seen}{m.len()}");
+}
+"#,
+            &["01"],
+            "map-remove-contains-key-inline-temporary-struct-key",
+        );
+    }
+
+    /// CONTROL for the row's "a `Map[String, _]` looked up with a temporary
+    /// f-string is clean" claim — the one-level String path already drops its
+    /// temporary, so the defect is the struct wrapper, not temporaries as such.
+    #[test]
+    fn asan_map_get_with_inline_temporary_string_key_is_clean() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert(f"a-padding-padding-padding", 7i64);
+    let mut j = 0i64;
+    let mut hits = 0i64;
+    while j < 5i64 {
+        match m.get(f"b-{j}-padding-padding-padding") {
+            Some(v) => { hits = hits + v; }
+            None => {}
+        }
+        j = j + 1i64;
+    }
+    println(f"{hits}{m.len()}");
+}
+"#,
+            &["01"],
+            "map-get-inline-temporary-string-key",
+        );
+    }
+    /// PROBE (B-2026-08-26-32 blast radius): the key temporary produced by a
+    /// FUNCTION CALL rather than an inline literal. Same borrowed-then-discarded
+    /// lifetime, different producing expression.
+    #[test]
+    fn asan_map_get_with_call_produced_struct_key_is_clean() {
+        assert_clean_asan_run(
+            r#"
+#[derive(Hash, Eq, PartialEq)]
+struct Item { id: i64, name: String }
+fn mk(i: i64) -> Item { return Item { id: i, name: f"m-{i}-padding-padding-padding" }; }
+fn main() {
+    let mut m: Map[Item, i64] = Map.new();
+    m.insert(Item { id: 1i64, name: f"a-padding-padding-padding" }, 7i64);
+    let mut j = 0i64;
+    let mut hits = 0i64;
+    while j < 5i64 {
+        match m.get(mk(j)) {
+            Some(v) => { hits = hits + v; }
+            None => {}
+        }
+        j = j + 1i64;
+    }
+    println(f"{hits}{m.len()}");
+}
+"#,
+            &["01"],
+            "map-get-call-produced-struct-key",
+        );
+    }
+
+    /// PROBE: a Set, whose `contains` takes a key the same borrowed way.
+    #[test]
+    fn asan_set_contains_with_inline_temporary_struct_key_is_clean() {
+        assert_clean_asan_run(
+            r#"
+#[derive(Hash, Eq, PartialEq)]
+struct Item { id: i64, name: String }
+fn main() {
+    let mut s: Set[Item] = Set.new();
+    s.insert(Item { id: 1i64, name: f"a-padding-padding-padding" });
+    let mut j = 0i64;
+    let mut seen = 0i64;
+    while j < 5i64 {
+        if s.contains(Item { id: j, name: f"s-{j}-padding-padding-padding" }) {
+            seen = seen + 1i64;
+        }
+        j = j + 1i64;
+    }
+    println(f"{seen}{s.len()}");
+}
+"#,
+            &["01"],
+            "set-contains-inline-temporary-struct-key",
+        );
+    }
+
+    /// PROBE: a key struct whose heap sits behind a `Vec` field rather than a
+    /// `String`, to check the drop is about heap ownership and not about the
+    /// String field specifically.
+    #[test]
+    fn asan_map_get_with_inline_temporary_vec_field_key_is_clean() {
+        assert_clean_asan_run(
+            r#"
+#[derive(Hash, Eq, PartialEq)]
+struct Key { id: i64, parts: Vec[i64] }
+fn main() {
+    let mut m: Map[Key, i64] = Map.new();
+    let mut seed: Vec[i64] = Vec.new();
+    seed.push(1i64);
+    m.insert(Key { id: 1i64, parts: seed }, 7i64);
+    let mut j = 0i64;
+    let mut hits = 0i64;
+    while j < 5i64 {
+        let mut p: Vec[i64] = Vec.new();
+        p.push(j);
+        p.push(j + 1i64);
+        match m.get(Key { id: j, parts: p }) {
+            Some(v) => { hits = hits + v; }
+            None => {}
+        }
+        j = j + 1i64;
+    }
+    println(f"{hits}{m.len()}");
+}
+"#,
+            &["01"],
+            "map-get-inline-temporary-vec-field-key",
+        );
+    }
+    /// B-2026-08-26-32, the remaining lookup sites. The row named `get`, and
+    /// asked for `remove`/`contains_key`; these three take a borrowed key the
+    /// same way and were fixed in the same pass, so they are pinned here rather
+    /// than left to be rediscovered: `Map.get_or`, `Set.remove`, and
+    /// `SortedMap.floor`/`ceiling` (whose pivot is compared and never stored).
+    #[test]
+    fn asan_map_get_or_with_inline_temporary_struct_key_is_clean() {
+        assert_clean_asan_run(
+            r#"
+#[derive(Hash, Eq, PartialEq)]
+struct Item { id: i64, name: String }
+fn main() {
+    let mut m: Map[Item, i64] = Map.new();
+    m.insert(Item { id: 1i64, name: f"a-padding-padding-padding" }, 7i64);
+    let mut j = 0i64;
+    let mut acc = 0i64;
+    while j < 5i64 {
+        acc = acc + m.get_or(Item { id: j, name: f"g-{j}-padding-padding-padding" }, 0i64);
+        j = j + 1i64;
+    }
+    println(f"{acc}{m.len()}");
+}
+"#,
+            &["01"],
+            "map-get-or-inline-temporary-struct-key",
+        );
+    }
+
+    #[test]
+    fn asan_set_remove_with_inline_temporary_struct_key_is_clean() {
+        assert_clean_asan_run(
+            r#"
+#[derive(Hash, Eq, PartialEq)]
+struct Item { id: i64, name: String }
+fn main() {
+    let mut s: Set[Item] = Set.new();
+    s.insert(Item { id: 1i64, name: f"a-padding-padding-padding" });
+    let mut j = 0i64;
+    let mut gone = 0i64;
+    while j < 5i64 {
+        if s.remove(Item { id: j, name: f"r-{j}-padding-padding-padding" }) {
+            gone = gone + 1i64;
+        }
+        j = j + 1i64;
+    }
+    println(f"{gone}{s.len()}");
+}
+"#,
+            &["01"],
+            "set-remove-inline-temporary-struct-key",
+        );
+    }
+    /// B-2026-08-26-32, the `SortedMap` lookup pivot. `floor`/`ceiling` COMPARE
+    /// the pivot and never store it — the same borrowed-then-discarded shape as
+    /// `get` — and share the one `free_fresh_owned_str_arg` call site that the
+    /// aggregate free is paired with. Note the result is the ENTRY pair
+    /// `Option[(Item, i64)]`, whose key is the map's own copy, so freeing the
+    /// pivot cannot touch it.
+    #[test]
+    fn asan_sorted_map_floor_with_inline_temporary_struct_pivot_is_clean() {
+        assert_clean_asan_run(
+            r#"
+#[derive(Hash, Eq, PartialEq, Ord)]
+struct Item { id: i64, name: String }
+fn main() {
+    let mut m: SortedMap[Item, i64] = SortedMap.new();
+    m.insert(Item { id: 5i64, name: f"a-padding-padding-padding" }, 7i64);
+    let mut j = 0i64;
+    let mut acc = 0i64;
+    while j < 4i64 {
+        match m.floor(Item { id: j, name: f"f-{j}-padding-padding-padding" }) {
+            Some(kv) => { acc = acc + kv.1; }
+            None => {}
+        }
+        j = j + 1i64;
+    }
+    println(f"{acc}{m.len()}");
+}
+"#,
+            &["01"],
+            "sorted-map-floor-inline-temporary-struct-pivot",
+        );
+    }
+    /// B-2026-08-26-32, the ENUM key. Found while fixing the struct leg: on the
+    /// identical program shape the struct key lost 0 bytes and the enum key
+    /// still lost 135 B in 5 blocks under valgrind. Same defect, different
+    /// payload — an enum-variant temporary owning heap is borrowed by the
+    /// lookup and discarded exactly like a struct one.
+    #[test]
+    fn asan_map_get_with_inline_temporary_enum_key_is_clean() {
+        assert_clean_asan_run(
+            r#"
+#[derive(Hash, Eq, PartialEq)]
+enum Tag { Named { s: String }, Anon }
+fn main() {
+    let mut m: Map[Tag, i64] = Map.new();
+    m.insert(Tag.Named { s: f"a-padding-padding-padding" }, 7i64);
+    let mut j = 0i64;
+    let mut hits = 0i64;
+    while j < 5i64 {
+        match m.get(Tag.Named { s: f"b-{j}-padding-padding-padding" }) {
+            Some(v) => { hits = hits + v; }
+            None => {}
+        }
+        j = j + 1i64;
+    }
+    println(f"{hits}{m.len()}");
+}
+"#,
+            &["01"],
+            "map-get-inline-temporary-enum-key",
+        );
+    }
+
+    /// CONTROL for the enum leg's shape gate, and the reason it exists.
+    /// `enum_name_of_expr` resolves a bare `Identifier` too, so a fix that
+    /// consulted it without first checking the expression shape would free a
+    /// LET-BOUND enum whose drop belongs to its binding — a double free. This
+    /// is that program; it must stay clean.
+    #[test]
+    fn asan_map_get_with_bound_enum_key_is_clean() {
+        assert_clean_asan_run(
+            r#"
+#[derive(Hash, Eq, PartialEq)]
+enum Tag { Named { s: String }, Anon }
+fn main() {
+    let mut m: Map[Tag, i64] = Map.new();
+    m.insert(Tag.Named { s: f"a-padding-padding-padding" }, 7i64);
+    let mut j = 0i64;
+    let mut hits = 0i64;
+    while j < 5i64 {
+        let probe = Tag.Named { s: f"b-{j}-padding-padding-padding" };
+        match m.get(probe) {
+            Some(v) => { hits = hits + v; }
+            None => {}
+        }
+        j = j + 1i64;
+    }
+    println(f"{hits}{m.len()}");
+}
+"#,
+            &["01"],
+            "map-get-bound-enum-key",
+        );
+    }
 }
