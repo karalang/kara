@@ -11855,16 +11855,33 @@ fn test_explain_concept_module_state_renders_page() {
     assert!(page.contains("The alternatives menu"));
     // design.md pins the exact alternative menu this page exists to
     // spell out; every entry must be present.
+    //
+    // `LazyLock[T]` is NOT in this list any more (B-2026-08-26-3). It is still
+    // named on the page, but in the "these do not exist" section, so a plain
+    // `page.contains("LazyLock[T]")` would keep passing while asserting the
+    // opposite of what the page now says — a stale assertion that reads as a
+    // lie is worse than a missing one. The check below pins the real claim.
     for alt in [
         "Context struct",
         "Atomic[T]",
         "Mutex[T]",
         "#[thread_local]",
-        "LazyLock[T]",
         "OnceLock[T]",
     ] {
         assert!(page.contains(alt), "menu must offer `{alt}`");
     }
+    for absent in ["RwLock[T]", "LazyLock[T]"] {
+        assert!(
+            page.contains(absent),
+            "the page must still NAME `{absent}` — design.md lists it, so a \
+             reader arrives looking for it and needs to be told what it does"
+        );
+    }
+    assert!(
+        page.contains("DO NOT EXIST"),
+        "the page must say plainly that those two are unavailable, not merely \
+         omit them"
+    );
     assert!(page.contains("#[allow(module_mut_binding)]"));
 }
 
