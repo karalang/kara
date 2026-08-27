@@ -816,6 +816,77 @@ fn main() {
     /// argument into the container and the map key is moved by `insert`, so
     /// both are shapes where freeing at the call site would double-free —
     /// they pin that this fires only where the temporary genuinely dies.
+    /// `Vec.contains` frees a fresh-owned needle, and only a fresh one
+    /// (B-2026-08-27-28).
+    ///
+    /// The arm BORROWS its needle -- the scan compares it against each element
+    /// and never stores it -- but it was the one lookup on `Vec` that never
+    /// freed it, while `Set.contains`, `Map.contains_key`, `starts_with` and
+    /// `binary_search` all did. So the leak was a missing call rather than a
+    /// guard declining, and it grew once per call. Measured before the fix:
+    /// 10 bytes in 2 allocations for the `String` needle over two calls, and
+    /// 202 bytes in 4 for the `Vec[String]` needle -- the needle ENTIRELY,
+    /// buffer and elements.
+    ///
+    /// The `Vec` needle leg is what distinguishes this from B-2026-08-27-26:
+    /// there a free FIRED and released only the outer buffer, here none fired
+    /// at all. It also depends on that fix, since the freed needle's own
+    /// elements are drained by it.
+    ///
+    /// THE THREE NON-FRESH LEGS ARE THE POINT OF THE FIXTURE, not padding. A
+    /// bound needle is owned by its binding, a place expression by its
+    /// container, and a literal by rodata -- freeing any of them here would be
+    /// a double-free or a free of static memory, so each is read again AFTER
+    /// the lookup to make a use-after-free observable rather than merely
+    /// possible.
+    #[test]
+    fn asan_vec_contains_frees_only_a_fresh_needle() {
+        assert_clean_asan_run(
+            r#"
+fn name(n: i64) -> String { return f"item{n}"; }
+fn ids(n: i64) -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push(f"item{n}");
+    return v;
+}
+
+fn main() {
+    let mut v: Vec[String] = Vec.new();
+    v.push("item1");
+    v.push("item2");
+
+    // fresh temporaries: freed here
+    println(f"{v.contains(name(1))}");
+    println(f"{v.contains(name(9))}");
+
+    // bound: owned by the binding, must survive the lookup
+    let bound = name(2);
+    println(f"{v.contains(bound)}");
+    println(bound);
+
+    // place expression: owned by its container
+    println(f"{v.contains(v[0])}");
+    println(v[0]);
+
+    // literal: rodata
+    println(f"{v.contains("item1")}");
+
+    // nested container needle, fresh and bound
+    let mut outer: Vec[Vec[String]] = Vec.new();
+    outer.push(ids(1));
+    println(f"{outer.contains(ids(1))}");
+    let held = ids(1);
+    println(f"{outer.contains(held)}");
+    println(held[0]);
+}
+"#,
+            &[
+                "true", "false", "true", "item2", "true", "item1", "true", "true", "true", "item1",
+            ],
+            "asan_vec_contains_frees_only_a_fresh_needle",
+        );
+    }
+
     #[test]
     fn asan_fresh_vec_temp_operand_frees_its_elements() {
         assert_clean_asan_run(

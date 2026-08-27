@@ -8723,6 +8723,29 @@ impl<'ctx> super::Codegen<'ctx> {
                     .builder
                     .build_load(bool_t, result_slot, "vct.load")
                     .unwrap();
+                // B-2026-08-27-28 — `contains` BORROWS its needle: the loop
+                // above compares it against each element and never stores it,
+                // so a fresh-owned temporary needle dies here and its heap is
+                // ours. This arm was the one lookup on `Vec` that never freed
+                // it, while `Set.contains` (B-2026-06-20-12),
+                // `Map.contains_key` (B-2026-06-20-9), `starts_with` and
+                // `binary_search` all did -- so the leak was the absence of a
+                // call, not a guard declining, and it grows once per call.
+                //
+                // Measured before this: `Vec[String].contains(mk_string())`
+                // lost 10 bytes in 2 allocations over two calls, and
+                // `Vec[Vec[String]].contains(mk_vec())` lost 202 bytes in 4 --
+                // the needle ENTIRELY, buffer and elements, which is what
+                // distinguishes this from B-2026-08-27-26 (a free that fires
+                // and releases only the buffer).
+                //
+                // Both helpers self-gate to fresh-temp expressions, so an
+                // identifier, a place expression or a rodata literal is
+                // untouched and a moved binding keeps its own scope-exit free.
+                // The aggregate sibling covers a fresh STRUCT needle, exactly
+                // as the `Set.contains` site pairs them.
+                self.free_fresh_owned_str_arg(&args[0].value, needle_val);
+                self.free_fresh_owned_struct_key_arg(&args[0].value, needle_val);
                 Ok(result)
             }
             // No silent fall-through: a Vec/String method the typechecker
