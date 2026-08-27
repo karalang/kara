@@ -48304,6 +48304,74 @@ fn driver() -> i64 {
     /// bug's fault is a stray refcount decrement THROUGH a freed box, which
     /// writes `-1` where glibc keeps the tcache `fd` word and never calls
     /// `free` twice, so there is nothing at the allocator boundary to catch.
+    /// B-2026-08-27-34 — the branch-leaf retain from B-2026-08-26-12's fix is
+    /// emitted ONCE, not once per use, so the THIRD consumption of the selected
+    /// `Option[shared]` reads through a freed box.
+    ///
+    /// Two reads are balanced and green (`option_shared_through_if_expression_*`
+    /// above covers that shape); the third is not. This has no loop and no
+    /// rebinding at all — it is straight-line code:
+    ///
+    /// ```kara
+    /// let t = if true { a } else { b };
+    /// println(f"{show(t)} {show(t)} {show(t)}");
+    /// ```
+    ///
+    /// `--interp` prints `1 1 1`. `karac build` prints `1 1 <garbage>` and
+    /// exits **0** — a silent wrong answer, not a crash, and the garbage word
+    /// differs run to run. `karac run` (JIT) prints the same garbage and then
+    /// aborts inside the allocator. The control below is the identical program
+    /// with the if-expression removed and is green, so the delta is exactly the
+    /// branch leaf.
+    #[test]
+    #[ignore = "B-2026-08-27-34 — open: the branch-leaf retain is per-binding, not per-use"]
+    fn option_shared_from_a_branch_leaf_survives_a_third_consumption() {
+        let src = "shared struct Node { val: i64 }\n\
+                   fn make(n: i64) -> Option[Node] { return Some(Node { val: n }); }\n\
+                   fn show(t: Option[Node]) -> i64 {\n\
+                       match t { None => { return 0; } Some(n) => { return n.val; } }\n\
+                   }\n\
+                   fn main() {\n\
+                       let a = make(1);\n\
+                       let b = make(2);\n\
+                       let t = if true { a } else { b };\n\
+                       println(f\"{show(t)} {show(t)} {show(t)}\");\n\
+                   }";
+        if let Some(c) = run_program_capturing(src) {
+            assert_eq!(
+                c.stdout, "1 1 1\n",
+                "every read of a branch-leaf `Option[shared]` must see the same value"
+            );
+            assert!(
+                c.status.success(),
+                "process died ({:?}) — stderr: {}",
+                c.status,
+                c.stderr
+            );
+        }
+    }
+
+    /// The control for `option_shared_from_a_branch_leaf_survives_a_third_consumption`:
+    /// the same three reads with no branch leaf between the binding and the
+    /// uses. Green today, and it is what keeps that test's failure attributable
+    /// to the branch leaf rather than to reading an `Option[shared]` three times.
+    #[test]
+    fn option_shared_read_three_times_without_a_branch_leaf() {
+        let src = "shared struct Node { val: i64 }\n\
+                   fn make(n: i64) -> Option[Node] { return Some(Node { val: n }); }\n\
+                   fn show(t: Option[Node]) -> i64 {\n\
+                       match t { None => { return 0; } Some(n) => { return n.val; } }\n\
+                   }\n\
+                   fn main() {\n\
+                       let a = make(1);\n\
+                       println(f\"{show(a)} {show(a)} {show(a)}\");\n\
+                   }";
+        if let Some(c) = run_program_capturing(src) {
+            assert_eq!(c.stdout, "1 1 1\n");
+            assert!(c.status.success(), "stderr: {}", c.stderr);
+        }
+    }
+
     #[test]
     fn option_shared_through_if_expression_survives_a_rebinding_loop() {
         let src = "shared struct Node { val: i64 }\n\
