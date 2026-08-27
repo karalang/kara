@@ -48663,6 +48663,50 @@ fn main() {
         }
     }
 
+    /// Reading an element out of an array LITERAL temporary keeps the value
+    /// the interpreter produces, now that the read clone-then-drops the
+    /// temporary (B-2026-08-27-35).
+    ///
+    /// The leak that row filed is asserted by
+    /// `asan_indexed_array_literal_temp_drops_its_elements`; this is the value
+    /// half, because the fix DEEP-CLONES the element before freeing the array
+    /// around it. Get that order wrong and the program still exits 0 while
+    /// printing freed memory, which no leak count would catch. The rodata and
+    /// moved-binding legs are here for the same reason they are in the ASAN
+    /// fixture: they reach the same drop through different element ownership.
+    #[test]
+    fn test_e2e_indexed_array_literal_temp_reads_the_right_element() {
+        let out = run_program(
+            r#"
+fn mk(n: i64) -> String {
+    return f"item{n}";
+}
+
+fn main() {
+    let n = 3;
+    println(Array[f"aaaa{n}", f"b{n}"][0]);
+    println(Array["aa", "bb"][1]);
+    println(Array[mk(1), mk(2)][1]);
+    println(Array[n, n + 1][1]);
+    let s = f"sssss{n}";
+    let t = f"t{n}";
+    println(Array[s, t][0]);
+    for i in 0..3 {
+        println(Array[f"x{i}", f"y{i}"][1]);
+    }
+    println(f"{Array[f"p{n}", f"q{n}"] == Array[f"p{n}", f"q{n}"]}");
+    println(f"{Array["aa", "bb"] == Array["aa", "cc"]}");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out,
+                "aaaa3\nbb\nitem2\n4\nsssss3\ny0\ny1\ny2\ntrue\nfalse\n"
+            );
+        }
+    }
+
     #[test]
     fn test_e2e_array_index_store() {
         let out = run_program(

@@ -12889,6 +12889,34 @@ impl<'ctx> super::Codegen<'ctx> {
         ) && !self.is_borrow_returning_call_expr(expr)
     }
 
+    /// B-2026-08-27-35 — [`Self::expr_yields_fresh_owned_temp`] widened by the
+    /// one producer shape an `Array[T, N]` has and the general predicate does
+    /// not admit: an array LITERAL (`Array[f"a{n}", f"b{n}"]`).
+    ///
+    /// A literal array is a fresh temporary in exactly the sense the two array
+    /// sites care about — it OWNS its elements. `compile_array_literal` moves
+    /// each element in and suppresses whatever independent cleanup produced it
+    /// (an f-string accumulator's scope-exit free, a bound source's cap), so
+    /// after the literal is built nothing else will ever free those buffers.
+    /// That is the same ownership a `mk(4)` temporary has, reached through a
+    /// different expression kind, and a BOUND literal already relies on it:
+    /// `let a = Array[..]` arms an array-keyed drop over the same elements
+    /// (B-2026-08-23-4), which is what makes dropping an UNBOUND one right
+    /// rather than merely symmetric.
+    ///
+    /// SEPARATE from the general predicate on purpose. That one is asked by
+    /// many unrelated sites, and an `ArrayLiteral` is not universally a fresh
+    /// OWNED temp in their sense — `Array["aa", "bb"]` holds rodata elements,
+    /// so a site that frees a "fresh temp" unconditionally would free static
+    /// memory. Both array sites route their free through
+    /// `emit_drop_fn_for_array` → `vec_element_drain_fn`, whose String arm is
+    /// cap-guarded (`cap > 0`), so a rodata element is a no-op there; that is a
+    /// property of the array drop, not of every consumer, which is why the
+    /// widening lives in its own predicate used by the two sites that hold it.
+    pub(super) fn expr_is_fresh_owned_array_temp(&self, expr: &Expr) -> bool {
+        matches!(&expr.kind, ExprKind::ArrayLiteral(_)) || self.expr_yields_fresh_owned_temp(expr)
+    }
+
     /// Caller-retained roundtrip gate (B-2026-08-01-3 residual): is an
     /// Assign RHS a free-fn call to a top-level USER function returning an
     /// owned (non-borrow) value? For such an RHS — `s = pass(s)`,

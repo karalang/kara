@@ -3021,14 +3021,24 @@ impl<'ctx> super::Codegen<'ctx> {
         // interpreter, the oracle here: indexing does not consume, so `v[i]`
         // stays valid and the read is a copy.
         //
-        // `expr_yields_fresh_owned_temp` is the gate. A BOUND array indexes
+        // `expr_is_fresh_owned_array_temp` is the gate. A BOUND array indexes
         // through the identifier fast path above and never reaches this branch
         // at all, but a place expression that does (a field read, `h.a[0]`) is
         // owned by its parent, whose own drop frees it — dropping here would
         // double-free against the B-2026-08-27-32 field drop.
+        //
+        // B-2026-08-27-35 — the gate also admits an array LITERAL
+        // (`Array[f"a{n}", f"b{n}"][0]`), which owns its elements exactly as a
+        // call temporary does; see the predicate. Measured before that:
+        // BOTH elements leaked (7 bytes in 2 allocations at
+        // `KARAC_OPT_LEVEL=0`). At the default -O2 only ONE leak is reported,
+        // because the non-indexed element is dead and LLVM removes its
+        // `malloc` — which is why the row that filed this read as "only the
+        // indexed element leaks, so the others already have an owner". They
+        // have no owner; they are optimized away.
         let owned_array_temp = if matches!(arr_ty, BasicTypeEnum::ArrayType(_))
             && !matches!(&object.kind, ExprKind::Identifier(_))
-            && self.expr_yields_fresh_owned_temp(object)
+            && self.expr_is_fresh_owned_array_temp(object)
         {
             self.array_te_of_operand(object)
         } else {
@@ -3623,9 +3633,13 @@ impl<'ctx> super::Codegen<'ctx> {
         // the reason documented above, so its clone has no consuming binding
         // either and every consumer that frees a temp-Vec element clone must
         // free this one identically. Gated the same way the lowering is: an
-        // owned (non-borrow) call temp with a non-Copy element.
+        // owned (non-borrow) call temp or array literal (B-2026-08-27-35) with
+        // a non-Copy element. The two gates must stay identical — a shape the
+        // lowering clone-then-drops but this predicate refuses trades N leaked
+        // elements for 1 leaked clone, which is what the literal shape did
+        // for the two statements between the halves of that fix.
         if !matches!(&object.kind, ExprKind::Identifier(_))
-            && self.expr_yields_fresh_owned_temp(object)
+            && self.expr_is_fresh_owned_array_temp(object)
         {
             if let Some((elem_te, _n)) = self.array_te_of_operand(object) {
                 return !super::vec_method::is_trivially_copyable_te(&elem_te);

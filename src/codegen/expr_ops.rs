@@ -8017,12 +8017,20 @@ impl<'ctx> super::Codegen<'ctx> {
         // hoists one entry alloca and frees only the LAST value when the
         // comparison sits in a loop.
         //
-        // `expr_yields_fresh_owned_temp` is the gate, so a bound operand, a
-        // place expression and a literal are untouched -- each is owned
-        // elsewhere and dropping it here would double-free.
+        // `expr_is_fresh_owned_array_temp` is the gate, so a bound operand and
+        // a place expression are untouched -- each is owned elsewhere and
+        // dropping it here would double-free.
+        //
+        // B-2026-08-27-35 -- an array LITERAL operand IS dropped, having been
+        // measured leaking on the same program shape this fixture family
+        // already covered for calls: `Array[f"a{n}", f"b{n}"] ==
+        // Array[f"c{n}", f"d{n}"]` lost all four elements (16 bytes in 4
+        // allocations). The rodata spelling `Array["aa", "bb"]` reaches the
+        // drop too and stays clean through the element drain's `cap > 0`
+        // guard, which is why the predicate can admit both.
         if let Some(drop_fn) = self.emit_drop_fn_for_array(elem_te, n) {
             for (operand, slot) in [(left, l_slot), (right, r_slot)] {
-                if self.expr_yields_fresh_owned_temp(operand) {
+                if self.expr_is_fresh_owned_array_temp(operand) {
                     self.builder
                         .build_call(drop_fn, &[slot.into()], "")
                         .unwrap();

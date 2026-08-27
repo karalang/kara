@@ -241,6 +241,106 @@ fn main() {
         );
     }
 
+    /// An INDEXED array LITERAL temporary drops its elements
+    /// (B-2026-08-27-35).
+    ///
+    /// The producer shape B-2026-08-27-31 left: that row covers a fresh array
+    /// temporary from a CALL (`mk(4)[0]`), and the two were separated only by
+    /// `expr_yields_fresh_owned_temp`, which admits `Call`/`MethodCall` and
+    /// nothing else. A literal owns its elements just as a call temporary does
+    /// -- `compile_array_literal` moves each one in and suppresses whatever
+    /// independent cleanup produced it -- so nothing else was ever going to
+    /// free them.
+    ///
+    /// MEASURE THIS ONE AT `KARAC_OPT_LEVEL=0`, which is what the number below
+    /// is: `println(Array[f"aaaa{n}", f"b{n}"][0])` lost 7 bytes in 2
+    /// allocations, BOTH elements. At the default -O2 the same program reports
+    /// a single 5-byte leak, because the non-indexed element is dead and LLVM
+    /// removes its `malloc` -- reading that asymmetry as ownership ("the other
+    /// elements already have an owner") is what the filing row did, and it is
+    /// an artifact. The suite runs at the default level, so the loop leg is
+    /// what keeps both elements live here.
+    ///
+    /// The RODATA leg is the control the widening is riskiest against:
+    /// `Array["aa", "bb"][0]` reaches the same `emit_drop_fn_for_array`, whose
+    /// String drain is cap-guarded (`cap > 0`), so a static element is a no-op
+    /// rather than a free of unmalloc'd memory. The BOUND-source leg
+    /// (`Array[s, t][0]`) pins the other direction: those elements are MOVED
+    /// into the literal (the bindings' caps are zeroed), so the array is their
+    /// only owner and a drop here is not a double-free.
+    #[test]
+    fn asan_indexed_array_literal_temp_drops_its_elements() {
+        assert_clean_asan_run(
+            r#"
+fn mk(n: i64) -> String { return f"item{n}"; }
+
+fn main() {
+    let n = 3;
+    println(Array[f"aaaa{n}", f"b{n}"][0]);
+    println(Array[f"aaaa{n}", f"b{n}"][1]);
+    println(Array["aa", "bb"][0]);
+    println(Array["aa", f"cc{n}"][1]);
+    println(Array[mk(1), mk(2)][1]);
+    println(Array[n, n + 1][1]);
+    let s = f"sssss{n}";
+    let t = f"t{n}";
+    println(Array[s, t][0]);
+    for i in 0..3 {
+        println(Array[f"x{i}", f"y{i}"][1]);
+    }
+}
+"#,
+            &[
+                "aaaa3", "b3", "aa", "cc3", "item2", "4", "sssss3", "y0", "y1", "y2",
+            ],
+            "asan_indexed_array_literal_temp_drops_its_elements",
+        );
+    }
+
+    /// An array LITERAL operand of `==` drops its elements
+    /// (B-2026-08-27-35, the sibling position).
+    ///
+    /// B-2026-08-27-30 gave the `==` site its array drop and gated it on
+    /// `expr_yields_fresh_owned_temp`, so the CALL operand was covered and the
+    /// literal was not: measured at `KARAC_OPT_LEVEL=0`,
+    /// `Array[f"aaaa{n}", f"b{n}"] == Array[f"cccccc{n}", f"d{n}"]` lost all
+    /// four elements (16 bytes in 4 allocations). Unlike the indexed shape this
+    /// one leaks at the default -O2 too -- the comparator reads every element,
+    /// so none of the allocations is dead.
+    ///
+    /// The rodata leg is the same control as in the sibling fixture and matters
+    /// more here: `Array["aa", "bb"] == Array["aa", "bb"]` was already in
+    /// B-2026-08-27-30's fixture as a shape that must NOT be dropped, and it is
+    /// dropped now -- safely, through the drain's `cap > 0` guard. The mixed
+    /// leg pins that one operand can be droppable and the other not within a
+    /// single comparison.
+    #[test]
+    fn asan_array_literal_eq_operand_drops_its_elements() {
+        assert_clean_asan_run(
+            r#"
+fn mk(n: i64) -> Array[String, 2] { return Array[f"item{n}", f"item{n + 1}"]; }
+
+fn main() {
+    let n = 3;
+    println(f"{Array[f"aaaa{n}", f"b{n}"] == Array[f"cccccc{n}", f"d{n}"]}");
+    println(f"{Array[f"aaaa{n}", f"b{n}"] == Array[f"aaaa{n}", f"b{n}"]}");
+    println(f"{Array["aa", "bb"] == Array["aa", "bb"]}");
+    println(f"{Array[f"item5", f"item6"] == mk(5)}");
+    let p = mk(7);
+    println(f"{Array[f"item7", f"item8"] == p}");
+    println(p[0]);
+    for i in 0..3 {
+        println(f"{Array[f"x{i}", f"y{i}"] == Array[f"x{i}", f"y{i}"]}");
+    }
+}
+"#,
+            &[
+                "false", "true", "true", "true", "true", "item7", "true", "true", "true",
+            ],
+            "asan_array_literal_eq_operand_drops_its_elements",
+        );
+    }
+
     /// A struct FIELD of type `Array[T, N]` has its elements dropped
     /// (B-2026-08-27-32).
     ///
