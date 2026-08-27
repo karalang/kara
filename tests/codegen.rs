@@ -11131,6 +11131,90 @@ fn main() {
         );
     }
 
+    /// B-2026-08-27-48 — the compiled-backend parity target for a struct
+    /// DESTRUCTURED out of an owned TUPLE param: the user `Drop` body fires
+    /// once, caller-side. Codegen already behaved this way; the interpreter
+    /// fired a second time inside the callee (`drop 41` twice under
+    /// `karac run --interp`, once here). Pinning it so the two backends stay
+    /// joined on all three argument shapes — fresh tuple literal, place
+    /// argument, and a place argument spelled like the callee's own param.
+    /// Twin of `tests/interpreter.rs`'s
+    /// `test_tuple_param_destructure_single_caller_fire`.
+    #[test]
+    fn e2e_tuple_param_destructure_single_caller_fire() {
+        let Some(out) = run_program(
+            "struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+             \x20   fn drop(mut ref self) {\n\
+             \x20       println(f\"drop {self.id} {self.name}\")\n\
+             \x20   }\n\
+             }\n\
+             fn take(p: (Res, i64)) {\n\
+             \x20   let (r, n) = p;\n\
+             \x20   println(f\"got {r.id} {n}\");\n\
+             \x20   println(\"take done\");\n\
+             }\n\
+             fn main() {\n\
+             \x20   println(\"a\");\n\
+             \x20   take((Res { id: 5, name: f\"y{5}\" }, 1));\n\
+             \x20   println(\"b\");\n\
+             \x20   let q = (Res { id: 7, name: f\"y{7}\" }, 2);\n\
+             \x20   take(q);\n\
+             \x20   println(\"c\");\n\
+             \x20   let p = (Res { id: 9, name: f\"y{9}\" }, 3);\n\
+             \x20   take(p);\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(out, "a\ngot 5 1\ntake done\ndrop 5 y5\nb\ngot 7 2\ntake done\ndrop 7 y7\nc\ngot 9 3\ntake done\ndrop 9 y9\nend\n");
+    }
+
+    /// B-2026-08-27-48, method leg — the parity target for the same
+    /// destructure inside an IMPL METHOD, tuple and struct pattern alike.
+    /// Both fire once here, which is what made the interpreter's zero-fire
+    /// method shapes visible as a divergence. Twin of
+    /// `tests/interpreter.rs`'s
+    /// `test_method_param_destructure_single_caller_fire`.
+    #[test]
+    fn e2e_method_param_destructure_single_caller_fire() {
+        let Some(out) = run_program(
+            "struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+             \x20   fn drop(mut ref self) {\n\
+             \x20       println(f\"drop {self.id} {self.name}\")\n\
+             \x20   }\n\
+             }\n\
+             struct Holder { r: Res }\n\
+             struct W { v: i64 }\n\
+             impl W {\n\
+             \x20   fn tup(ref self, p: (Res, i64)) {\n\
+             \x20       let (r, n) = p;\n\
+             \x20       println(f\"tup {r.id} {n} {self.v}\");\n\
+             \x20   }\n\
+             \x20   fn strc(ref self, h: Holder) {\n\
+             \x20       let Holder { r } = h;\n\
+             \x20       println(f\"strc {r.id} {self.v}\");\n\
+             \x20   }\n\
+             }\n\
+             fn main() {\n\
+             \x20   let w = W { v: 100 };\n\
+             \x20   println(\"a\");\n\
+             \x20   w.tup((Res { id: 5, name: f\"y{5}\" }, 1));\n\
+             \x20   println(\"b\");\n\
+             \x20   w.strc(Holder { r: Res { id: 7, name: f\"y{7}\" } });\n\
+             \x20   println(\"end\");\n\
+             }\n",
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out,
+            "a\ntup 5 1 100\ndrop 5 y5\nb\nstrc 7 100\ndrop 7 y7\nend\n"
+        );
+    }
+
     /// B-2026-08-01-15 — a whole-move rebind of an owned param
     /// (`let h2 = h;`) is a param VIEW, transitively: a destructure of h2
     /// hits the same param gates as the direct case, and h2's own let-site

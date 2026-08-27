@@ -2117,6 +2117,7 @@ impl<'a> super::Interpreter<'a> {
                 // fires inside closures.
                 self.owned_param_names_stack
                     .push(self.owned_param_names_of_fn(&fn_name));
+                self.owned_param_frame_is_method.push(false);
                 // B-2026-08-09-10 — `moved_out_user_drop_bindings` is keyed by
                 // NAME with no frame scoping, so a callee that moves a payload
                 // out of its own binding silently disarmed an UNRELATED caller
@@ -2133,10 +2134,23 @@ impl<'a> super::Interpreter<'a> {
                 // escape the frame that made it. Not a stack, because the
                 // entries are consulted by bare name from many places; swapping
                 // the whole map is what makes the isolation total.
+                // B-2026-08-27-48 — the three CONTAINER/ELEMENT move sets join
+                // the isolation for the reason B-2026-08-09-10 gave for the
+                // first three: they are keyed by bare NAME with no frame
+                // scoping, so a callee acting on its own param silently
+                // disarmed an unrelated CALLER binding that happened to share
+                // the name. Measured on `fn take(p: (R, i64)) { let (r, n) =
+                // p; … }`: with the caller's local also spelled `p` the
+                // caller's tuple element walk went silent and the body ran
+                // once; renaming it to `q` — nothing else changed — ran it
+                // twice. Two defects cancelling looked like correct code.
                 let saved_moved_out = (
                     std::mem::take(&mut self.moved_out_user_drop_bindings),
                     std::mem::take(&mut self.moved_out_enum_payload_bindings),
                     std::mem::take(&mut self.moved_out_drop_field_bindings),
+                    std::mem::take(&mut self.moved_out_container_bodies_bindings),
+                    std::mem::take(&mut self.moved_out_tuple_elem_bodies),
+                    std::mem::take(&mut self.moved_out_struct_field_bodies),
                 );
                 let result = if contract_fault.is_some() {
                     Ok(Value::Unit)
@@ -2147,8 +2161,12 @@ impl<'a> super::Interpreter<'a> {
                     self.moved_out_user_drop_bindings,
                     self.moved_out_enum_payload_bindings,
                     self.moved_out_drop_field_bindings,
+                    self.moved_out_container_bodies_bindings,
+                    self.moved_out_tuple_elem_bodies,
+                    self.moved_out_struct_field_bodies,
                 ) = saved_moved_out;
                 self.owned_param_names_stack.pop();
+                self.owned_param_frame_is_method.pop();
                 if is_stdlib_wrapper {
                     self.stdlib_wrapper_call_spans.pop();
                 }

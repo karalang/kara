@@ -31763,6 +31763,101 @@ fn test_param_struct_destructure_single_caller_fire() {
     );
 }
 
+/// B-2026-08-27-48 — a struct DESTRUCTURED out of an owned TUPLE param
+/// (`let (r, n) = p;`) fires its user `Drop` body ONCE, not twice. Pre-fix
+/// the interpreter registered Drop slots for the bindings the tuple pattern
+/// introduced, so the element's body ran at the callee block's cleanup ON TOP
+/// of the caller's fire, while both compiled backends ran only the caller's:
+/// `drop 41` twice under `karac run --interp`, once under `karac build`.
+/// `PatternKind::Tuple` now joins `Struct`/`TupleVariant` on the
+/// `let_destructures_owned_param` gate, so the bindings are param views.
+///
+/// Three argument shapes in one program, because they reach the caller's fire
+/// by different routes and the first fix attempt got two of them wrong:
+/// a fresh tuple LITERAL (the row's repro, caller fires via
+/// `run_fresh_temp_arg_drops`), a PLACE argument under a distinct name
+/// (`q`, caller fires via its own tuple element walk), and a place argument
+/// whose name COLLIDES with the callee's param (`p`). The collision case is
+/// the reason `moved_out_container_bodies_bindings` and its two element
+/// siblings are now frame-isolated in `eval_call`: name-keyed and unscoped,
+/// the callee's own move disarmed the caller's identically-spelled binding,
+/// which cancelled this very double-fire and made the shape read as correct.
+/// Twin of `tests/codegen.rs`'s
+/// `e2e_tuple_param_destructure_single_caller_fire`, same source and string.
+#[test]
+fn test_tuple_param_destructure_single_caller_fire() {
+    assert_eq!(
+        run("struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+             \x20   fn drop(mut ref self) {\n\
+             \x20       println(f\"drop {self.id} {self.name}\")\n\
+             \x20   }\n\
+             }\n\
+             fn take(p: (Res, i64)) {\n\
+             \x20   let (r, n) = p;\n\
+             \x20   println(f\"got {r.id} {n}\");\n\
+             \x20   println(\"take done\");\n\
+             }\n\
+             fn main() {\n\
+             \x20   println(\"a\");\n\
+             \x20   take((Res { id: 5, name: f\"y{5}\" }, 1));\n\
+             \x20   println(\"b\");\n\
+             \x20   let q = (Res { id: 7, name: f\"y{7}\" }, 2);\n\
+             \x20   take(q);\n\
+             \x20   println(\"c\");\n\
+             \x20   let p = (Res { id: 9, name: f\"y{9}\" }, 3);\n\
+             \x20   take(p);\n\
+             \x20   println(\"end\");\n\
+             }\n"),
+        "a\ngot 5 1\ntake done\ndrop 5 y5\nb\ngot 7 2\ntake done\ndrop 7 y7\nc\ngot 9 3\ntake done\ndrop 9 y9\nend\n"
+    );
+}
+
+/// B-2026-08-27-48, method leg — the same destructure inside an IMPL METHOD
+/// fires ONCE. This is the guard on the gate's other edge: a method frame's
+/// arguments get no caller-side fire (`run_fresh_temp_arg_drops` is wired
+/// into `eval_call` alone), so retracting the callee's slot there removes the
+/// ONLY fire. An intermediate version of this fix did exactly that and ran
+/// zero bodies for `tup` against one on both compiled backends.
+///
+/// The `strc` half pins a repair this fix carries with it: the STRUCT
+/// destructure has had that hole since B-2026-08-01-12 landed the free-fn
+/// gate without the method distinction, so `let Holder { r } = h;` inside a
+/// method fired zero bodies while both compiled backends fired one. Twin of
+/// `tests/codegen.rs`'s `e2e_method_param_destructure_single_caller_fire`.
+#[test]
+fn test_method_param_destructure_single_caller_fire() {
+    assert_eq!(
+        run("struct Res { id: i64, name: String }\n\
+             impl Drop for Res {\n\
+             \x20   fn drop(mut ref self) {\n\
+             \x20       println(f\"drop {self.id} {self.name}\")\n\
+             \x20   }\n\
+             }\n\
+             struct Holder { r: Res }\n\
+             struct W { v: i64 }\n\
+             impl W {\n\
+             \x20   fn tup(ref self, p: (Res, i64)) {\n\
+             \x20       let (r, n) = p;\n\
+             \x20       println(f\"tup {r.id} {n} {self.v}\");\n\
+             \x20   }\n\
+             \x20   fn strc(ref self, h: Holder) {\n\
+             \x20       let Holder { r } = h;\n\
+             \x20       println(f\"strc {r.id} {self.v}\");\n\
+             \x20   }\n\
+             }\n\
+             fn main() {\n\
+             \x20   let w = W { v: 100 };\n\
+             \x20   println(\"a\");\n\
+             \x20   w.tup((Res { id: 5, name: f\"y{5}\" }, 1));\n\
+             \x20   println(\"b\");\n\
+             \x20   w.strc(Holder { r: Res { id: 7, name: f\"y{7}\" } });\n\
+             \x20   println(\"end\");\n\
+             }\n"),
+        "a\ntup 5 1 100\ndrop 5 y5\nb\nstrc 7 100\ndrop 7 y7\nend\n"
+    );
+}
+
 /// B-2026-08-01-15 — interpreter twin of `tests/codegen.rs`'s
 /// `e2e_param_view_rebind_single_caller_fire`, same source and expected
 /// string. Pre-fix the interpreter fired the destructured field's body a

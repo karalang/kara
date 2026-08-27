@@ -1258,9 +1258,29 @@ impl<'a> super::Interpreter<'a> {
         // propagation happens here (the predicate is consulted before
         // `push_drops_for_stmt` on every let) — a query with a mutation
         // is impure but keeps the gate and the propagation at one site.
+        // B-2026-08-27-48 — retraction is a HAND-OFF, valid only where the
+        // caller fires instead, and a method frame's arguments reach no
+        // caller-side fire. Bailing keeps every method frame registering its
+        // slots; see `owned_param_frame_is_method` for the measurements, the
+        // struct leg included.
+        if self.owned_param_frame_is_method.last().copied() == Some(true) {
+            return false;
+        }
+        // `PatternKind::Tuple` belongs on this list for the same reason
+        // `Struct` does: `let (r, n) = p;` over an owned TUPLE param binds
+        // views of the callee's entry copy, so registering Drop slots for
+        // `r`/`n` fired the element's body a second time under `karac run
+        // --interp` while both compiled backends fired only the caller's.
+        // Measured on the two-fire repro: the extra fire came from the callee
+        // block's `run_cleanup`, the surviving one from the caller's
+        // `run_fresh_temp_arg_drops` — which is exactly codegen's
+        // caller-retains fire, so dropping the callee slot leaves the backends
+        // agreeing at one. `Slice` is deliberately NOT here: an array/slice
+        // pattern over an owned param is a distinct ownership shape and no
+        // measurement backs adding it.
         if !matches!(
             pattern.kind,
-            PatternKind::Struct { .. } | PatternKind::TupleVariant { .. }
+            PatternKind::Struct { .. } | PatternKind::TupleVariant { .. } | PatternKind::Tuple(_)
         ) {
             if let (PatternKind::Binding(bname), ExprKind::Identifier(src)) =
                 (&pattern.kind, &value.kind)

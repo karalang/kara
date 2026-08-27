@@ -532,6 +532,23 @@ pub struct Interpreter<'a> {
     /// caller-side only. Registering Drop slots for the bound fields
     /// double-fired the body under `karac run` only (B-2026-08-01-12).
     pub(crate) owned_param_names_stack: Vec<HashSet<String>>,
+    /// B-2026-08-27-48 — parallel to `owned_param_names_stack`, one entry per
+    /// frame: `true` when that frame is an IMPL METHOD body, `false` for a
+    /// free fn (and for a closure, whose param set is empty anyway).
+    ///
+    /// `let_destructures_owned_param` retracts a destructure's Drop slots, and
+    /// a retraction is a HAND-OFF — correct exactly when someone else fires.
+    /// The someone else is the caller's `run_fresh_temp_arg_drops`, which is
+    /// wired into `eval_call` alone; a method's arguments reach no such fire,
+    /// so retracting inside a method frame removes the ONLY one. Measured:
+    /// `impl W { fn take(ref self, p: (R, i64)) { let (r, n) = p; … } }` ran
+    /// ZERO bodies against one on both compiled backends.
+    ///
+    /// Consulting this also repairs the STRUCT leg's method shape, which has
+    /// fired zero since B-2026-08-01-12 landed the free-fn gate without the
+    /// distinction: `let Holder { r } = h;` inside a method now fires once,
+    /// matching both compiled backends.
+    pub(crate) owned_param_frame_is_method: Vec<bool>,
     /// Bindings whose WHOLE value moved into a variant constructor
     /// (`Ok(h)`, `Some(h)`, `Slot.Held(r)`). Every drop the source would run
     /// — own `impl Drop` body and container walks — is silenced; the enum's
@@ -891,6 +908,7 @@ impl<'a> Interpreter<'a> {
             optres_payload_bodies_tes: HashMap::new(),
             self_param_stack: Vec::new(),
             owned_param_names_stack: Vec::new(),
+            owned_param_frame_is_method: Vec::new(),
             moved_out_user_drop_bindings: HashSet::new(),
             pending_arm_drop_bindings: Vec::new(),
             map_val_bodies_tes: HashMap::new(),

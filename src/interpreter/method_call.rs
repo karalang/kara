@@ -503,12 +503,16 @@ impl<'a> super::Interpreter<'a> {
                 // stack must too or the gates diverge per-backend.
                 self.owned_param_names_stack
                     .push(self.method_owned_param_names(&type_name, method));
+                // A method frame hands its args to no caller-side fire — see
+                // `owned_param_frame_is_method`.
+                self.owned_param_frame_is_method.push(true);
                 let result = if contract_fault.is_some() {
                     Ok(Value::Unit)
                 } else {
                     self.eval_body_growing(&body)
                 };
                 self.owned_param_names_stack.pop();
+                self.owned_param_frame_is_method.pop();
                 if pushed_self_mode {
                     self.self_param_stack.pop();
                 }
