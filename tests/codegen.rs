@@ -11664,6 +11664,88 @@ fn main() {
         }
     }
 
+    /// The NON-`let` binding sites, swept the same way the `let`-RHS forms were
+    /// above. B-2026-08-25-27/-28 cleared the `let` sites and the temporary
+    /// receiver but left these three unverified, and the probe that was
+    /// supposed to clear them could not detect the defect even on a
+    /// known-broken control — so "ok" meant nothing (B-2026-08-27-36).
+    ///
+    /// The MATCH arm was genuinely broken. `pattern_binding_inner_types` is a
+    /// PRE-monomorphization record, so a payload bound inside a generic impl
+    /// held the GENERIC form (`Bag[T]`), and the payload-binding site inserted
+    /// that straight into `enum_inst_var_types` — the FIRST and authoritative
+    /// arm of `enum_inst_type_of_expr`. A generic record there is worse than no
+    /// record: it satisfies the chain and stops the search before the span
+    /// fallback, which is the one arm that resolves through the substitution.
+    /// So `Some(b) => b.inner()` dispatched to the UNMANGLED base prototype and
+    /// SEGFAULTED at `T = String`, while the for-loop binding — which falls
+    /// through to that span fallback — was already correct.
+    ///
+    /// Both legs run at BOTH `i64` and `String`. The scalar leg is not
+    /// decoration: at `T = i64` the match arm was silently CORRECT, because the
+    /// base prototype's layout happens to match.
+    #[test]
+    fn e2e_generic_non_let_binding_instantiation_across_sites() {
+        let sites: &[(&str, &str)] = &[
+            (
+                "for-loop binding",
+                "fn mk(v: Vec[T]) -> Vec[T] { let bags = [Bag { xs: v }]; \
+              let mut out: Vec[T] = Vec.new(); for b in bags { out = b.inner(); } out }",
+            ),
+            (
+                "match pattern binding",
+                "fn mk(v: Vec[T]) -> Vec[T] { let o = Some(Bag { xs: v }); \
+              match o { Some(b) => { b.inner() } None => { Vec.new() } } }",
+            ),
+        ];
+        for (name, mk) in sites {
+            let src = format!(
+                "struct Bag[=T] {{ xs: Vec[T] }}\n\
+                 impl[T: Ord] Bag[T] {{\n    \
+                     fn swap2(mut ref self, i: i64, j: i64) {{ self.xs.swap(i, j); }}\n    \
+                     fn arrange(mut ref self) {{ let n = self.xs.len(); if n > 1 {{ self.swap2(0, n - 1); }} }}\n    \
+                     fn inner(self) -> Vec[T] {{ let mut b = self; b.arrange(); b.xs }}\n    \
+                     {mk}\n\
+                 }}\n\
+                 fn main() {{\n    \
+                     let a = Bag.mk([\"x\", \"y\", \"z\"]); println(a[0]);\n    \
+                     let b = Bag.mk([1, 2, 3]); println(b[0]);\n\
+                 }}\n"
+            );
+            assert_eq!(
+                run_program(&src).as_deref(),
+                Some("z\n3\n"),
+                "non-`let` binding site `{name}` did not round-trip at both T = String and T = i64",
+            );
+        }
+    }
+
+    /// The third non-`let` site, the tuple destructure. Its DISPATCH is clean —
+    /// it reaches the same span fallback the for-loop binding does, and an
+    /// `nm` of the AOT binary shows the `$i64` / `$struct` monomorph siblings
+    /// rather than a bare prototype.
+    ///
+    /// It is pinned here through a NON-CONSUMING sibling chain rather than the
+    /// consuming `b.inner()` the two sites above use, because CONSUMING a
+    /// generic struct destructured out of a tuple PARAM double-frees — a
+    /// separate defect of a different class, filed as its own row. When that
+    /// lands, this should be rewritten to the consuming shape so the site is
+    /// covered by the same oracle as its two siblings.
+    #[test]
+    fn e2e_generic_tuple_destructure_binding_dispatches_to_the_monomorph() {
+        let src = "struct Bag[=T] { xs: Vec[T] }\n\
+                   impl[T: Ord] Bag[T] {\n    \
+                       fn inner_len(ref self) -> i64 { self.xs.len() }\n    \
+                       fn peek(ref self) -> i64 { self.inner_len() }\n    \
+                       fn mk(p: (Bag[T], i64)) -> i64 { let (b, _n) = p; b.peek() }\n\
+                   }\n\
+                   fn main() {\n    \
+                       println(Bag.mk((Bag { xs: [\"x\", \"y\", \"z\"] }, 0)));\n    \
+                       println(Bag.mk((Bag { xs: [1, 2, 3] }, 0)));\n\
+                   }\n";
+        assert_eq!(run_program(src).as_deref(), Some("3\n3\n"));
+    }
+
     /// An ASSOCIATED fn in a generic impl that binds a struct LITERAL to a
     /// local and calls a mutating sibling through it — the third shape of the
     /// wrong-monomorph family, after B-2026-08-25-7's `let mut h = self` and

@@ -683,9 +683,31 @@ impl<'ctx> super::Codegen<'ctx> {
                         .cloned()
                     {
                         if self.is_generic_named_struct_type_expr(&full_te) {
+                            // `pattern_binding_inner_types` is a
+                            // PRE-monomorphization record, so for a payload
+                            // bound inside a generic impl it holds the GENERIC
+                            // form (`Bag[T]`), not the concrete one. Inserting
+                            // that unresolved is worse than inserting nothing:
+                            // `enum_inst_var_types` is the FIRST and
+                            // authoritative arm of `enum_inst_type_of_expr`, so
+                            // a generic record SATISFIES the chain and stops the
+                            // search before the span fallback — the one arm that
+                            // does resolve through the substitution
+                            // (B-2026-08-25-28). The sibling call site then bound
+                            // the impl's params from `T -> T`, `mangle_mono_name`
+                            // mapped the empty subst back to the base name, and
+                            // `b.arranged()` called the UNMANGLED prototype built
+                            // at the all-`i64` base layout: a SEGFAULT at a
+                            // heap-carrying `T`, silently correct at `T = i64`.
+                            // Same rule as the `let` site and the receiver side —
+                            // a record is only useful if its params are CONCRETE.
+                            // B-2026-08-27-36.
+                            let inst = self
+                                .concrete_generic_struct_inst(&full_te)
+                                .unwrap_or(full_te);
                             self.type_decls
                                 .enum_inst_var_types
-                                .insert(name.clone(), full_te);
+                                .insert(name.clone(), inst);
                         }
                     }
                     self.record_var_type_name(name.clone(), type_name);

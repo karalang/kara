@@ -28562,6 +28562,42 @@ fn main() {
     assert_eq!(out, "10\n3\n10\n20\n30\n30\n");
 }
 
+/// Interpreter ORACLE for the non-`let` generic-struct binding sites
+/// (B-2026-08-27-36). The match-arm leg SEGFAULTED under JIT and AOT at
+/// `T = String` while this side was correct throughout — which is what made
+/// the interpreter the oracle rather than a parity check, exactly as it was
+/// for the rest of this family (B-2026-08-25-7/-25/-27/-28).
+///
+/// Both legs run at BOTH `i64` and `String`; the scalar leg was silently
+/// correct on the broken tree, so a scalar-only test proves nothing here.
+///
+/// Twin of `tests/codegen.rs`'s
+/// `e2e_generic_non_let_binding_instantiation_across_sites`.
+#[test]
+fn non_let_generic_binding_sites_dispatch_to_the_monomorph() {
+    for mk in [
+        "fn mk(v: Vec[T]) -> Vec[T] { let bags = [Bag { xs: v }]; \
+         let mut out: Vec[T] = Vec.new(); for b in bags { out = b.inner(); } out }",
+        "fn mk(v: Vec[T]) -> Vec[T] { let o = Some(Bag { xs: v }); \
+         match o { Some(b) => { b.inner() } None => { Vec.new() } } }",
+    ] {
+        let out = run(&format!(
+            "struct Bag[=T] {{ xs: Vec[T] }}\n\
+             impl[T: Ord] Bag[T] {{\n    \
+                 fn swap2(mut ref self, i: i64, j: i64) {{ self.xs.swap(i, j); }}\n    \
+                 fn arrange(mut ref self) {{ let n = self.xs.len(); if n > 1 {{ self.swap2(0, n - 1); }} }}\n    \
+                 fn inner(self) -> Vec[T] {{ let mut b = self; b.arrange(); b.xs }}\n    \
+                 {mk}\n\
+             }}\n\
+             fn main() {{\n    \
+                 let a = Bag.mk([\"x\", \"y\", \"z\"]); println(a[0]);\n    \
+                 let b = Bag.mk([1, 2, 3]); println(b[0]);\n\
+             }}\n"
+        ));
+        assert_eq!(out, "z\n3\n", "site `{mk}` did not round-trip");
+    }
+}
+
 #[test]
 fn test_secret_expose_reads_inner() {
     // `std.secret.Secret[T]` — `Secret.new(v)` wraps a sensitive value and
