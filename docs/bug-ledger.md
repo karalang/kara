@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 305 | 0 |
-| leak | 202 | 2 |
+| leak | 202 | 1 |
 | missing-feature | 186 | 0 |
 | run-vs-build | 176 | 0 |
 | codegen-gap | 143 | 1 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1092 | 4 |
+| codegen | 1092 | 3 |
 | typecheck | 276 | 0 |
 | interp | 191 | 0 |
 | other | 70 | 0 |
@@ -124,15 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1650 surfaced · 4 open · 1620 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-27). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1650 surfaced · 3 open · 1621 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-27). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-27-8 | 2026-08-27 | codegen | low | NLL DROP PLACEMENT IS DISPATCHED ON AN LLVM SYMBOL-NAME PREFIX. `is_container_elem_bodies_fn` decides whether a cleanup action fires at the binding's last use or at scope exit by testing `starts_with("__karac_dropelems_")` (plus `__karac_dropkeys_` since 34c3f54). A bodies-only walker whose emitter picks any other prefix is silently demoted to scope exit — a run-vs-build divergence with no error, no warning and no failing test. NO LIVE INSTANCE TODAY: all four named-binding walkers are covered. This is the latent hazard, and it has already cost one session. | — |
 | B-2026-08-27-21 | 2026-08-27 | codegen | high | A borrowed element loses its method surface under codegen: `.clone()` through a `ref` binding SEGFAULTS, and every String method on one (`starts_with`, `substring`, `clone`) falls through dispatch, while the interpreter runs all of them. | — |
-| B-2026-08-27-29 | 2026-08-27 | codegen | high | A `.clone()` result passed DIRECTLY as a call argument is never freed — `take(a.clone())` leaks one allocation per call, while `take(mk())` and `let c = a.clone(); take(c)` are both clean. Not index-specific; a plain local leaks identically, and it reproduces on a clean checkout. | — |
 | B-2026-08-27-30 | 2026-08-27 | codegen | medium | A fresh `Array[String, N]` TEMPORARY compared with `==` leaks every element -- 26 bytes in 4 allocations under LSan, the same signature B-2026-08-27-26 measured for the `Vec` shape and NOT covered by its fix. | — |
 
 ### Relocated (2)
@@ -165,9 +164,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1650 surfaced
 
 </details>
 
-### Fixed (1620)
+### Fixed (1621)
 
-<details><summary>1620 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1621 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1791,6 +1790,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1650 surfaced
 | B-2026-08-27-26 | codegen | medium | `free_fresh_owned_str_arg` FREES A FRESH TEMPORARY OPERAND'S BUFFER BUT NOT ITS ELEMENTS, so a `Vec[String]` temporary compared with `==` leaks every… | e57bc89 |
 | B-2026-08-27-27 | effect+cli | high | `karac check` ON A PROJECT DOES NOT RUN THE MULTI-FILE EFFECT CHECK THAT `karac build` RUNS, so a project prints "All checks passed." and then fails… | dc939a8 |
 | B-2026-08-27-28 | codegen | medium | `Vec.contains(<fresh Vec temporary>)` LEAKS THE NEEDLE ENTIRELY -- buffer and elements -- because `free_fresh_owned_str_arg` does not fire at that ca… | 4af0901 |
+| B-2026-08-27-29 | codegen | high | A STRUCT `.clone()` passed DIRECTLY as a call argument was never freed — `take(a.clone())` leaked its temporary once per call, unbounded in a loop, w… | 9f3f4fe |
 
 </details>
 
