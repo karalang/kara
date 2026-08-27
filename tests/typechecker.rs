@@ -45669,6 +45669,87 @@ fn main() {
     );
 }
 
+/// B-2026-08-27-33 — the TYPECHECK oracle for the tuple half of the same gate.
+///
+/// One shape over from `derived_ord_satisfies_a_bound_on_a_generic_impl_method`
+/// above, and the same asymmetry: `type_supports_ord` recurses through
+/// `Type::Tuple`, so `fn free[T: Ord](a: T)` has always taken a tuple, while
+/// `Env::bound_satisfied` — the gate METHOD RESOLUTION uses — reached the impl
+/// table, which has no key for a tuple by construction, and answered `false`
+/// for every trait. So `impl[T: Ord] Holder[T]` refused `Holder[(i64, i64)]`
+/// with "`(i64, i64)` does not implement `Ord`" while the free fn beside it
+/// accepted the identical value.
+///
+/// The `Array` and `()` rows are the same hole in the two other shapes
+/// `impl_table_key` returns `None` for, and every one of the eight derive-only
+/// builtins is affected, not just `Ord` — the fixture varies both axes because
+/// a fix keyed to one trait or one shape would pass a narrower one.
+#[test]
+fn ord_bound_on_a_generic_impl_accepts_a_tuple() {
+    typecheck_ok(
+        r#"
+struct Holder[=T] { v: T }
+impl[T: Ord] Holder[T] {
+    fn tag(ref self) -> i64 { 7 }
+}
+struct Hashed[=T] { v: T }
+impl[T: Hash] Hashed[T] {
+    fn tag(ref self) -> i64 { 8 }
+}
+struct Cloned[=T] { v: T }
+impl[T: Clone] Cloned[T] {
+    fn tag(ref self) -> i64 { 9 }
+}
+fn free[T: Ord](a: T) -> i64 { 9 }
+fn main() {
+    let h = Holder { v: (1, 2) };
+    println(h.tag());
+    let n = Holder { v: (1, (2, 3)) };
+    println(n.tag());
+    let s = Holder { v: ("a", 1) };
+    println(s.tag());
+    let a: Holder[Array[i64, 2]] = Holder { v: Array[1, 2] };
+    println(a.tag());
+    let u: Holder[()] = Holder { v: () };
+    println(u.tag());
+    println(Hashed { v: (1, 2) }.tag());
+    println(Cloned { v: (1, 2) }.tag());
+    println(free((1, 2)));
+}
+"#,
+    );
+}
+
+/// B-2026-08-27-33 — the FLOAT carve-out survives the widening above.
+///
+/// `f32`/`f64` are `PartialOrd` but not `Ord` (design.md § Float semantics),
+/// and the composition rule must inherit that rather than restate it: a tuple
+/// containing a bare float is not `Ord`, so the bound is still refused. Both
+/// gates already agreed on this and must continue to — a widening that
+/// composed unconditionally would make `Map[(i64, f64), _]` and
+/// `SortedSet[(i64, f64)]` legal keys, which is the rejection this carve-out
+/// exists to produce.
+#[test]
+fn ord_bound_on_a_generic_impl_still_rejects_a_float_bearing_tuple() {
+    let errs = typecheck_errors(
+        r#"
+struct Holder[=T] { v: T }
+impl[T: Ord] Holder[T] {
+    fn tag(ref self) -> i64 { 7 }
+}
+fn main() {
+    let h = Holder { v: (1, 1.5) };
+    println(h.tag());
+}
+"#,
+    );
+    assert!(
+        errs.iter().any(|e| e.message.contains("Ord")),
+        "a float-bearing tuple must still fail the `T: Ord` bound, got: {:?}",
+        errs.iter().map(|e| e.message.clone()).collect::<Vec<_>>()
+    );
+}
+
 /// B-2026-08-26-10 — a rejection must not deny an impl the author can see, nor
 /// prescribe a derive that would silently discard it.
 ///

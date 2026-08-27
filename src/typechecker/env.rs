@@ -872,18 +872,66 @@ impl TypeEnv {
         // float would fail (and preserving the `f64`-as-`Ord`-key rejection).
         // A non-primitive (or a float against `Eq`/`Ord`/`Hash`) falls through
         // to the impl-table walk, and then to the derive tables below.
-        let prim_all = matches!(
+        //
+        // `()` rides with the scalars rather than with the aggregates below:
+        // every `type_supports_*` helper lists `Type::Unit` on the same arm as
+        // `Type::Int`, `Default` included, so it satisfies the whole builtin
+        // set unconditionally and needs no element to compose from.
+        let scalar_all = matches!(
             ty,
-            Type::Int(_) | Type::UInt(_) | Type::Float(_) | Type::Bool | Type::Char
+            Type::Int(_) | Type::UInt(_) | Type::Float(_) | Type::Bool | Type::Char | Type::Unit
         );
-        let prim_non_float = matches!(ty, Type::Int(_) | Type::UInt(_) | Type::Bool | Type::Char);
+        let scalar_non_float = matches!(
+            ty,
+            Type::Int(_) | Type::UInt(_) | Type::Bool | Type::Char | Type::Unit
+        );
         let builtin_satisfied = match trait_name.as_str() {
-            "Copy" | "Clone" | "Debug" | "PartialEq" | "PartialOrd" | "Default" => prim_all,
-            "Eq" | "Ord" | "Hash" => prim_non_float,
+            "Copy" | "Clone" | "Debug" | "PartialEq" | "PartialOrd" | "Default" => scalar_all,
+            "Eq" | "Ord" | "Hash" => scalar_non_float,
             _ => false,
         };
         if builtin_satisfied {
             return true;
+        }
+        // B-2026-08-27-33 — aggregate SHAPES compose the derive-only builtins
+        // from their elements: `(i64, i64)` is `Ord` exactly when both fields
+        // are. `impl_table_key` returns `None` for a tuple / fixed array / SIMD
+        // vector by construction (`env_add_impl` deliberately never keys them,
+        // and there is no surface syntax for `impl Ord for (i64, i64)`), so
+        // without this arm the impl-table walk below answers `false` for EVERY
+        // trait and the bound is refused outright.
+        //
+        // That is the same divergence B-2026-08-25-35 fixed for `#[derive]`d
+        // named types, one shape over: `impl[T: Ord] W[T]` rejected
+        // `W[(i64, i64)]` while `fn pick[T: Ord](a: T)` accepted the identical
+        // tuple, so the answer depended on which side of the call the bound was
+        // written on. Measured on one build, impl gate REJECT / free-fn gate OK:
+        // tuples under `Ord` / `Eq` / `Hash` / `Clone` / `PartialOrd`, nested
+        // tuples, `(String, i64)`, and `Array[i64, 2]`.
+        //
+        // The recursion goes through `bound_satisfied` itself, so the float
+        // carve-out above composes with it rather than being restated:
+        // `(i64, f64)` stays non-`Ord` and so does `Array[f64, 2]` (measured —
+        // both gates already agreed on those, and still do).
+        //
+        // `Default` is deliberately absent from the trait list: the sibling
+        // `type_supports_default` has no aggregate arm at all (a tuple has no
+        // `default()`), so composing it here would invent an answer the free-fn
+        // gate does not give — a fresh divergence in the opposite direction.
+        if matches!(
+            trait_name.as_str(),
+            "Copy" | "Clone" | "Debug" | "PartialEq" | "PartialOrd" | "Eq" | "Ord" | "Hash"
+        ) {
+            match ty {
+                Type::Tuple(elems) => return elems.iter().all(|e| self.bound_satisfied(e, bound)),
+                Type::Array { element, .. } | Type::Vector { element, .. } => {
+                    return self.bound_satisfied(element, bound)
+                }
+                // `Never` sits on the scalar arm in every `type_supports_*`
+                // helper too — but only for these eight, not for `Default`.
+                Type::Never => return true,
+                _ => {}
+            }
         }
         // B-2026-08-25-35 — named-type `#[derive]` satisfaction. This used to
         // be left to `type_satisfies_bound`, on the reasoning that this env

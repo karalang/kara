@@ -106083,6 +106083,179 @@ fn main() {
         );
     }
 
+    /// Tuple `<` / `<=` / `>` / `>=` and `==` / `!=` on the compiled backend
+    /// (B-2026-08-27-33).
+    ///
+    /// `type_supports_ord` / `type_supports_partial_eq` have recursed through
+    /// `Type::Tuple` since long before this row, so `karac check` accepted
+    /// every line below — and then nothing ran them: `karac build` refused
+    /// ordering with "Unsupported struct binary op: Lt" and the interpreter
+    /// died claiming the typechecker rejects this, which it does not. A
+    /// run-vs-build hole in a shape the checker calls legal, not a rejection.
+    ///
+    /// The comparator was already there and already ordering these exact
+    /// tuples: `emit_cmp_fn_for_type_expr` has had a `TypeKind::Tuple` arm all
+    /// along, which is why `Vec[(i64, i64)].sort()` (the last row) has always
+    /// worked while the bare operator did not. What was missing is the
+    /// operator DISPATCH — it resolves the operand's type by NAME, and a tuple
+    /// has none, so the span-keyed operand table now carries tuples too.
+    ///
+    /// The THREE-element rows are a second, independent defect, and the reason
+    /// arity is varied here rather than fixed at two. A three-scalar tuple
+    /// lowers to `{i64, i64, i64}` — structurally the same LLVM object as the
+    /// `{ptr, i64, i64}` String/Vec header — so `compile_binop`'s field-COUNT
+    /// dispatch sent `(1, 2, 3) == (1, 2, 4)` to the String byte-comparator,
+    /// which extracted field 0 as a pointer and PANICKED the compiler. Two-
+    /// and four-element tuples miss the collision entirely, so a fixture built
+    /// only from pairs passes against it. Exact sibling of B-2026-08-27-18,
+    /// which is the same collision for a three-field user struct, and the
+    /// `nest3` row pins the recursion the way that row's `Nested` does: a
+    /// three-tuple INSIDE a two-tuple walks back into the same dispatch unless
+    /// the equality is driven by the element `TypeExpr`.
+    ///
+    /// The float rows are the deliberate NON-fix, pinned so a later widening
+    /// has to be deliberate. `value_compare` and `karac_cmp_<T>` are both the
+    /// IEEE 754 TOTAL order (NaN last) because every other caller is a sort
+    /// key; that is not what `<` means on an `f64`, so a bare-float element
+    /// declines on BOTH backends rather than being given invented semantics.
+    /// Equality has no such problem — it is IEEE element-wise — so
+    /// `(1, 1.5, 2) == (1, 2.5, 2)` answers here while `(1, 1.5) < (1, 2.5)`
+    /// still refuses to build.
+    #[test]
+    fn test_e2e_tuple_comparison_and_equality() {
+        assert_eq!(
+            run_program(
+                r#"
+fn main() {
+    let a = (1, 2);
+    let b = (1, 3);
+    println(f"{a < b}");
+    println(f"{b < a}");
+    println(f"{a <= a}");
+    println(f"{a >= a}");
+    println(f"{a > b}");
+    println(f"{a == b}");
+    println(f"{a != b}");
+    println(f"{a == a}");
+
+    let sa = ("b", 1);
+    let sb = ("b", 2);
+    let sc = ("c", 0);
+    println(f"{sa < sb}");
+    println(f"{sb < sc}");
+    println(f"{sc < sa}");
+    println(f"{sa == sa}");
+
+    let na = (1, (2, 3));
+    let nb = (1, (2, 4));
+    println(f"{na < nb}");
+    println(f"{na == nb}");
+
+    let t3 = (1, 2, 3);
+    let u3 = (1, 2, 4);
+    println(f"{t3 < u3}");
+    println(f"{t3 == u3}");
+    println(f"{t3 == t3}");
+    println(f"{t3 != u3}");
+
+    let n3a = ((1, 2, 3), 4);
+    let n3b = ((1, 2, 5), 4);
+    println(f"{n3a == n3b}");
+    println(f"{n3a == n3a}");
+
+    let f3a = (1, 1.5, 2);
+    let f3b = (1, 2.5, 2);
+    println(f"{f3a == f3b}");
+
+    let mut v: Vec[(i64, i64)] = Vec.new();
+    v.push((3, 1));
+    v.push((1, 9));
+    v.push((2, 5));
+    v.sort();
+    for e in v {
+        println(f"{e.0}:{e.1}");
+    }
+}
+"#,
+            ),
+            // a<b, b<a, a<=a, a>=a, a>b, a==b, a!=b, a==a,
+            // String-first tuples: sa<sb, sb<sc, sc<sa, sa==sa,
+            // nested: na<nb, na==nb,
+            // three-wide: t3<u3, t3==u3, t3==t3, t3!=u3,
+            // three inside two: n3a==n3b, n3a==n3a,
+            // float element under `==` (IEEE, element-wise),
+            // then the already-working `Vec[(i64, i64)].sort()`.
+            Some(
+                "true\nfalse\ntrue\ntrue\nfalse\nfalse\ntrue\ntrue\n\
+                 true\ntrue\nfalse\ntrue\n\
+                 true\nfalse\n\
+                 true\nfalse\ntrue\ntrue\n\
+                 false\ntrue\n\
+                 false\n\
+                 1:9\n2:5\n3:1\n"
+                    .to_string()
+            )
+        );
+    }
+
+    /// A `T: Ord` bound on a GENERIC IMPL admits a tuple, as the identical
+    /// bound on a free fn always has (B-2026-08-27-33).
+    ///
+    /// `impl[T: Ord] W[T]` refused `W[(i64, i64)]` outright — "`(i64, i64)`
+    /// does not implement `Ord`" — while `fn pick[T: Ord](a: T)` took the same
+    /// tuple, so the answer depended on which side of the call the bound was
+    /// written on. `W.add` never orders anything: the rejection was of a
+    /// correct program on both backends, which is why this is an E2E fixture
+    /// and not only a typecheck one.
+    ///
+    /// The bound and the OPERATOR are separate gates, and this fixture is the
+    /// bound one. It deliberately does NOT order anything through `T`: a
+    /// comparison written against the type PARAMETER (`fn beats(x: T, y: T)
+    /// { x < y }`) lowers to `T.cmp`, and tuples have no `cmp` on any surface
+    /// — the typechecker refuses `(1, 2).cmp((1, 3))` outright, and both
+    /// backends fall through their method dispatch. That gap is what still
+    /// stands between this row and `PriorityQueue[(i64, i64)]`, whose entire
+    /// surface is `impl[T: Ord]` methods, and it is tracked separately.
+    /// Ordering two tuples DIRECTLY is covered by
+    /// `test_e2e_tuple_comparison_and_equality` above.
+    ///
+    /// ONE tuple instantiation, deliberately. The mono mangler maps every
+    /// tuple to the same opaque `$struct` token, so a second tuple
+    /// instantiation of the same generic (`W[(i64, i64)]` beside
+    /// `W[(String, i64)]`) collides on one symbol and fails module
+    /// verification. That is pre-existing and reproduces with the bound
+    /// dropped entirely (`impl[T] W[T]`), so it is not this row's to fix —
+    /// but it is why widening this fixture is not the obvious improvement it
+    /// looks like.
+    #[test]
+    fn test_e2e_ord_bound_on_generic_impl_admits_a_tuple() {
+        assert_eq!(
+            run_program(
+                r#"
+struct W[=T] { v: Vec[T] }
+
+impl[T: Ord] W[T] {
+    fn add(mut ref self, x: T) { self.v.push(x); }
+    fn n(ref self) -> i64 { return self.v.len(); }
+}
+
+fn main() {
+    let mut w: W[(i64, i64)] = W { v: Vec.new() };
+    w.add((1, 2));
+    w.add((3, 4));
+    println(f"{w.n()}");
+
+    let mut u: W[i64] = W { v: Vec.new() };
+    u.add(7);
+    println(f"{u.n()}");
+}
+"#,
+            ),
+            // tuple len, then the scalar control that always worked.
+            Some("2\n1\n".to_string())
+        );
+    }
+
     #[test]
     fn test_e2e_sorted_container_destroys_in_key_order() {
         assert_eq!(

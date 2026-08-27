@@ -598,6 +598,31 @@ impl<'ctx> super::Codegen<'ctx> {
                             }
                         }
                     }
+                    // B-2026-08-27-33 — TUPLE `==` / `!=`, decided by TYPE
+                    // rather than by field count. Must run before
+                    // `compile_binop`, whose struct arm reads a THREE-element
+                    // tuple's `{i64, i64, i64}` as the `{ptr, i64, i64}`
+                    // String/Vec header and panics the compiler extracting
+                    // field 0 as a pointer. Two- and four-element tuples never
+                    // hit that collision, which is what hid it.
+                    if matches!(op, BinOp::Eq | BinOp::NotEq)
+                        && lhs.is_struct_value()
+                        && rhs.is_struct_value()
+                    {
+                        if let Some(te) = self
+                            .tuple_te_of_operand(left)
+                            .or_else(|| self.tuple_te_of_operand(right))
+                        {
+                            if let Some(r) = self.compile_tuple_eq_te(
+                                op,
+                                &te,
+                                lhs.into_struct_value(),
+                                rhs.into_struct_value(),
+                            )? {
+                                return Ok(r);
+                            }
+                        }
+                    }
                     // Ordered comparison (`<`, `<=`, `>`, `>=`) on a
                     // `#[derive(Ord)]` user struct or enum (B-2026-07-03-7):
                     // route to the recursive `karac_cmp_<T>` family — the same
@@ -612,6 +637,35 @@ impl<'ctx> super::Codegen<'ctx> {
                         && lhs.is_struct_value()
                         && rhs.is_struct_value()
                     {
+                        // B-2026-08-27-33 — a TUPLE operand first. It reaches
+                        // here as a struct value like a user struct does, but it
+                        // has no type NAME, so the `type_name_of_expr` dispatch
+                        // below cannot see it and every `(i64, i64) < (i64, i64)`
+                        // fell to `compile_binop`'s "Unsupported struct binary
+                        // op: Lt" — while `karac check` had accepted the program
+                        // (`type_supports_ord` recurses through `Type::Tuple`)
+                        // and `Vec[(i64, i64)].sort()` had ALREADY been ordering
+                        // the same tuples through the very same comparator. The
+                        // static type comes from the span-keyed operand table,
+                        // which `lowering.rs` now fills for tuples too.
+                        //
+                        // No derive gate applies: a tuple has no `impl Ord` to
+                        // be overruled by declaration order (the concern that
+                        // narrowed the named-type dispatch below), and
+                        // left-to-right IS the language's tuple order.
+                        // `te_is_totally_ordered` is the gate instead, and it
+                        // accepts exactly what the interpreter's
+                        // `value_is_totally_ordered` accepts.
+                        if let Some(te) = self
+                            .tuple_te_of_operand(left)
+                            .or_else(|| self.tuple_te_of_operand(right))
+                        {
+                            if self.te_is_totally_ordered(&te) {
+                                if let Some(r) = self.compile_ordered_cmp_te(op, &te, lhs, rhs)? {
+                                    return Ok(r);
+                                }
+                            }
+                        }
                         // Resolve the operand type name. `type_name_of_expr`
                         // covers identifiers / struct literals / field access;
                         // `enum_name_of_expr` additionally resolves bare enum

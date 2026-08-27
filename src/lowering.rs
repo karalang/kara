@@ -967,6 +967,20 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
                 Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
                 other => other,
             };
+            // B-2026-08-27-33 — tuple operands. Unlike the three sequence
+            // shapes below there is no ELEMENT to key on: the comparator
+            // (`emit_cmp_fn_for_type_expr`'s `TypeKind::Tuple` arm) recurses
+            // over the whole tuple, so the entry carries the tuple type itself
+            // and the per-element check is only a validity gate. Every existing
+            // consumer of this table (`vec_elem_te_of_operand` and its two
+            // siblings) matches on a `Path`/`MutSlice` head, so a `Tuple` entry
+            // is inert to all of them.
+            if let Type::Tuple(elems) = peeled {
+                if elems.is_empty() || elems.iter().any(|e| matches!(e, Type::Error)) {
+                    return None;
+                }
+                return Some(((k.0, k.1), TypeChecker::type_to_type_expr(peeled)));
+            }
             let elem = match peeled {
                 Type::Named { name, args } if name == "Vec" && args.len() == 1 => &args[0],
                 Type::Slice { element, .. } => element.as_ref(),

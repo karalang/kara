@@ -5673,7 +5673,95 @@ impl<'ctx> super::Codegen<'ctx> {
             }),
             span: crate::token::Span::default(),
         };
-        let Some(cmp_fn) = self.emit_cmp_fn_for_type_expr(&te) else {
+        self.compile_ordered_cmp_te(op, &te, lhs, rhs)
+    }
+
+    /// Field-wise `==` / `!=` for a TUPLE operand, dispatched on the tuple's
+    /// own `TypeExpr` (B-2026-08-27-33).
+    ///
+    /// `compile_binop_typed`'s struct arm decides what a struct value IS by
+    /// counting its fields, and a THREE-element tuple of scalars lowers to
+    /// `{i64, i64, i64}` — structurally the same LLVM object as the
+    /// `{ptr, i64, i64}` `String`/`Vec` header. So `(1, 2, 3) == (1, 2, 4)`
+    /// was routed to the String byte-comparator, which extracts field 0 as a
+    /// POINTER and panicked the compiler outright ("Found IntValue … but
+    /// expected PointerValue"). Two- and four-element tuples missed the
+    /// collision and compiled fine, which is why the shape hid.
+    ///
+    /// Same defect and same remedy as B-2026-08-12-5 / B-2026-08-27-18 for
+    /// user structs, whose fix was likewise to decide by TYPE rather than by
+    /// shape (`try_compile_struct_eq_typed`). Recursing on the element
+    /// `TypeExpr` — rather than on `compile_binop` as `compile_struct_eq`
+    /// does — is what makes NESTING correct by construction: a nested
+    /// three-element tuple field would otherwise walk straight back into the
+    /// same collision. A non-tuple element delegates to `compile_binop`,
+    /// where the field-count heuristic is right (a `String` element really is
+    /// that header).
+    pub(super) fn compile_tuple_eq_te(
+        &mut self,
+        op: &BinOp,
+        te: &TypeExpr,
+        lhs: inkwell::values::StructValue<'ctx>,
+        rhs: inkwell::values::StructValue<'ctx>,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        let crate::ast::TypeKind::Tuple(elems) = &te.kind else {
+            return Ok(None);
+        };
+        if elems.is_empty() || elems.len() != lhs.get_type().count_fields() as usize {
+            return Ok(None);
+        }
+        let bool_t = self.context.bool_type();
+        let mut result = bool_t.const_int(1, false);
+        for (i, elem_te) in elems.iter().enumerate() {
+            let idx = i as u32;
+            let l_field = self
+                .builder
+                .build_extract_value(lhs, idx, &format!("tup.l{}", idx))
+                .unwrap();
+            let r_field = self
+                .builder
+                .build_extract_value(rhs, idx, &format!("tup.r{}", idx))
+                .unwrap();
+            let field_eq = if matches!(elem_te.kind, crate::ast::TypeKind::Tuple(_)) {
+                match self.compile_tuple_eq_te(
+                    &BinOp::Eq,
+                    elem_te,
+                    l_field.into_struct_value(),
+                    r_field.into_struct_value(),
+                )? {
+                    Some(v) => v,
+                    None => return Ok(None),
+                }
+            } else {
+                self.compile_binop(&BinOp::Eq, l_field, r_field)?
+            };
+            result = self
+                .builder
+                .build_and(result, field_eq.into_int_value(), &format!("tup.eq{}", idx))
+                .unwrap();
+        }
+        let out = if matches!(op, BinOp::NotEq) {
+            self.builder.build_not(result, "tup.ne").unwrap()
+        } else {
+            result
+        };
+        Ok(Some(out.into()))
+    }
+
+    /// The `TypeExpr`-keyed core of [`Self::compile_ordered_user_cmp`], split
+    /// out for the operands that have no type NAME to look up: a TUPLE
+    /// (B-2026-08-27-33), whose comparator `emit_cmp_fn_for_type_expr` builds
+    /// structurally from its `TypeKind::Tuple` arm. Callers own the decision
+    /// that `te` SHOULD be ordered this way — the derive check for a named
+    /// type, `te_is_totally_ordered` for a tuple.
+    pub(super) fn compile_ordered_cmp_te(
+        &mut self,
+        op: &BinOp,
+        te: &TypeExpr,
+        lhs: BasicValueEnum<'ctx>,
+        rhs: BasicValueEnum<'ctx>,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        let Some(cmp_fn) = self.emit_cmp_fn_for_type_expr(te) else {
             return Ok(None);
         };
         let Some(cur_fn) = self.current_fn else {
@@ -7905,6 +7993,67 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
             _ => None,
+        }
+    }
+
+    /// The operand's own `TypeExpr` when `e` is statically a (non-empty)
+    /// TUPLE, else `None` (B-2026-08-27-33). Unlike its three siblings this
+    /// returns the WHOLE type rather than an element: `karac_cmp_<T>` recurses
+    /// over the tuple itself.
+    pub(super) fn tuple_te_of_operand(&self, e: &crate::ast::Expr) -> Option<TypeExpr> {
+        let te = self.seq_eq_operand_te(e)?;
+        match &te.kind {
+            crate::ast::TypeKind::Tuple(elems) if !elems.is_empty() => Some(te),
+            _ => None,
+        }
+    }
+
+    /// `true` when every leaf of `te` carries a TOTAL order, so the
+    /// `karac_cmp_<T>` comparator's answer is the one `<` should give.
+    ///
+    /// The interpreter twin is `value_is_totally_ordered` in
+    /// `interpreter/eval_ops.rs`, and the two must accept the same set: this
+    /// decides whether `<` on a tuple LOWERS at all, and a backend that
+    /// lowered where the other declined would answer a program the other
+    /// refuses to run.
+    ///
+    /// Bare `f32`/`f64` are the exclusion that matters. `emit_cmp_fn_for_type_
+    /// expr` will happily emit a comparator for them — `Body::FloatScalar` is
+    /// the IEEE 754 TOTAL order (NaN last), which is right for the sort key
+    /// every other caller wants and wrong for what `<` means on a float. The
+    /// `F32`/`F64`/`F16`/`Bf16` wrappers exist precisely to supply a total
+    /// order over the same bits, so they qualify.
+    ///
+    /// Everything else declines — `Vec`, `Slice`, named structs/enums — so a
+    /// tuple containing one keeps whatever behaviour it has today rather than
+    /// being pulled in as a side effect of this fix.
+    pub(super) fn te_is_totally_ordered(&self, te: &TypeExpr) -> bool {
+        match &te.kind {
+            crate::ast::TypeKind::Tuple(elems) => {
+                !elems.is_empty() && elems.iter().all(|e| self.te_is_totally_ordered(e))
+            }
+            crate::ast::TypeKind::Path(p) if p.generic_args.is_none() => {
+                let Some(head) = p.segments.first().map(String::as_str) else {
+                    return false;
+                };
+                matches!(
+                    head,
+                    "i8" | "i16"
+                        | "i32"
+                        | "i64"
+                        | "isize"
+                        | "u8"
+                        | "u16"
+                        | "u32"
+                        | "u64"
+                        | "usize"
+                        | "bool"
+                        | "char"
+                        | "String"
+                        | "str"
+                ) || self.is_prelude_total_float_wrapper(head)
+            }
+            _ => false,
         }
     }
 

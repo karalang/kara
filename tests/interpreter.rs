@@ -777,6 +777,73 @@ fn vec_equality_is_content_equality_in_the_interpreter() {
 }
 
 #[test]
+fn tuple_comparison_and_equality_in_the_interpreter() {
+    // B-2026-08-27-33 -- the third member of the family above, and the same
+    // shape as both: `type_supports_ord` / `type_supports_partial_eq` have
+    // recursed through `Type::Tuple` since long before the row, so
+    // `karac check` printed "All checks passed." on this file while the
+    // interpreter died on the catch-all arm whose message claims the
+    // typechecker reports this as a hard error. It does not, and did not.
+    //
+    // Ordering goes through `value_compare`, which is the TOTAL order
+    // `karac_cmp_<T>` implements on the compiled side -- so the two backends
+    // agree by construction rather than by convention, and this is the oracle
+    // for `test_e2e_tuple_comparison_and_equality`.
+    //
+    // Equality is `Value`'s own `PartialEq` (IEEE element-wise), the same
+    // comparator the `Vec` and `Slice` arms above use. That split is why the
+    // float rows differ: `(1, 1.5, 2) == (1, 2.5, 2)` answers, while
+    // `(1, 1.5) < (1, 2.5)` deliberately does NOT lower on either backend --
+    // `value_compare` orders a bare float by `total_cmp` (NaN last) because
+    // every one of its other callers is a sort key, and that is not what `<`
+    // means on an `f64`.
+    //
+    // Arity is varied because the compiled twin has an arity-selective defect
+    // the interpreter does not share (a three-scalar tuple collides with the
+    // `{ptr, i64, i64}` String header there); keeping the two fixtures
+    // row-for-row is what makes them checkable against each other.
+    let src = "fn main() {
+            let a = (1, 2);
+            let b = (1, 3);
+            println(f\"{a < b}\");
+            println(f\"{b < a}\");
+            println(f\"{a <= a}\");
+            println(f\"{a >= a}\");
+            println(f\"{a > b}\");
+            println(f\"{a == b}\");
+            println(f\"{a != b}\");
+            let sa = (\"b\", 1);
+            let sc = (\"c\", 0);
+            println(f\"{sa < sc}\");
+            let na = (1, (2, 3));
+            let nb = (1, (2, 4));
+            println(f\"{na < nb}\");
+            println(f\"{na == nb}\");
+            let t3 = (1, 2, 3);
+            let u3 = (1, 2, 4);
+            println(f\"{t3 < u3}\");
+            println(f\"{t3 == u3}\");
+            println(f\"{t3 == t3}\");
+            let n3a = ((1, 2, 3), 4);
+            let n3b = ((1, 2, 5), 4);
+            println(f\"{n3a == n3b}\");
+            println(f\"{n3a == n3a}\");
+            let f3a = (1, 1.5, 2);
+            let f3b = (1, 2.5, 2);
+            println(f\"{f3a == f3b}\");
+        }";
+    assert_eq!(
+        run_no_errors(src),
+        "true\nfalse\ntrue\ntrue\nfalse\nfalse\ntrue\n\
+         true\n\
+         true\nfalse\n\
+         true\nfalse\ntrue\n\
+         false\ntrue\n\
+         false\n"
+    );
+}
+
+#[test]
 fn slice_equality_is_content_equality_in_the_interpreter() {
     // B-2026-08-27-24 -- the `Vec` sibling's bug one type over, and unfixed by
     // that work. The interpreter had no `Value::Slice` arm in its binop

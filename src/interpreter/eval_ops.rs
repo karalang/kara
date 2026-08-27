@@ -244,6 +244,34 @@ impl<'a> super::Interpreter<'a> {
         false
     }
 
+    /// `true` when every leaf of `v` carries a TOTAL order, so
+    /// `value_compare`'s answer is the one `<` should give.
+    ///
+    /// Bare floats are the exclusion that matters: `value_compare` orders them
+    /// by `total_cmp` (NaN last, `-0.0` before `+0.0`) because every one of its
+    /// other callers is a sort key, and that is NOT what `<` means on an
+    /// `f64`. The `F32`/`F64`/`F16`/`Bf16` wrappers exist precisely to supply a
+    /// total order over the same bits, so they qualify.
+    ///
+    /// Deliberately narrow beyond that: `Vec` / struct / enum leaves decline
+    /// here and keep whatever behaviour they have today, rather than being
+    /// pulled into tuple ordering as a side effect of this fix.
+    fn value_is_totally_ordered(v: &Value) -> bool {
+        match v {
+            Value::Int(_)
+            | Value::Bool(_)
+            | Value::Char(_)
+            | Value::String(_)
+            | Value::Unit
+            | Value::TotalFloat32(_)
+            | Value::TotalFloat64(_)
+            | Value::TotalFloat16(_)
+            | Value::TotalBFloat16(_) => true,
+            Value::Tuple(elems) => elems.iter().all(Self::value_is_totally_ordered),
+            _ => false,
+        }
+    }
+
     /// Q4 literal promotion for the tree-walker (B-2026-07-04-12): when one
     /// operand is a *direct, unsuffixed integer literal* (`ExprKind::Integer(_,
     /// None)`) and the other evaluates to a `Float`, promote the literal's
@@ -810,6 +838,56 @@ impl<'a> super::Interpreter<'a> {
                 };
                 Value::Bool(b)
             }
+            // Tuple ordering (B-2026-08-27-33): lexicographic, left to right,
+            // through the same `value_compare` the derived-`Ord` aggregate arm
+            // directly above uses. That is the TOTAL order codegen's
+            // `karac_cmp_<T>` comparator implements — and
+            // `emit_cmp_fn_for_type_expr` has had a `TypeKind::Tuple` arm all
+            // along, which is why `Vec[(i64, i64)].sort()` already worked on
+            // both backends while the bare operator did not — so the two agree
+            // by construction rather than by convention.
+            //
+            // `type_supports_ord` / `type_supports_partial_ord` have recursed
+            // through `Type::Tuple` since long before this bug, so `karac check`
+            // has always ADMITTED `a < b` on two tuples: the gap was in the two
+            // lowerings, which made it a run-vs-build failure rather than an
+            // honest rejection (measured: the interpreter died on the `_` arm
+            // below, and AOT refused to build with "Unsupported struct binary
+            // op: Lt"). Exactly the shape of the `Vec` / `Slice` equality arms
+            // below (B-2026-08-27-10, B-2026-08-27-24), whose comments record
+            // the same "the message claims the typechecker rejects this; it does
+            // not, and did not" mismatch.
+            //
+            // Gated on `value_is_totally_ordered`: a BARE-float element has no
+            // total order, and `value_compare` deliberately answers the
+            // `total_cmp` order for one (NaN last) — right for a sort key, wrong
+            // for what `<` means on a float. Such a tuple keeps today's
+            // behaviour on both backends rather than being given invented
+            // semantics here; the `F32`/`F64` wrappers, whose whole purpose is
+            // to BE totally ordered, do qualify.
+            (
+                BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq,
+                l @ Value::Tuple(_),
+                r @ Value::Tuple(_),
+            ) if Self::value_is_totally_ordered(&l) && Self::value_is_totally_ordered(&r) => {
+                let ord = super::helpers::value_compare(&l, &r);
+                Value::Bool(match op {
+                    BinOp::Lt => ord.is_lt(),
+                    BinOp::LtEq => ord.is_le(),
+                    BinOp::Gt => ord.is_gt(),
+                    _ => ord.is_ge(),
+                })
+            }
+            // Tuple equality is structural and element-wise — `Value`'s own
+            // `PartialEq`, the same comparator the `Vec` / `Slice` arms below
+            // use. Unlike the ordering arms it needs NO total-order gate: a
+            // float element compares IEEE here (`NaN != NaN`), which is both
+            // what design.md § Float semantics requires and what AOT already
+            // did (measured: `(1, 2) == (1, 3)` printed `false` on the compiled
+            // backend while the interpreter errored on the `_` arm below).
+            (BinOp::Eq, l @ Value::Tuple(_), r @ Value::Tuple(_)) => Value::Bool(l == r),
+            (BinOp::NotEq, l @ Value::Tuple(_), r @ Value::Tuple(_)) => Value::Bool(l != r),
+
             // `shared struct` equality is structural (design.md § Equality
             // Semantics): `Value`'s `PartialEq` recurses through the inner
             // fields (`Arc::ptr_eq` fast path for identical allocations). The
