@@ -250,6 +250,9 @@ fn gate_run_on_package_check(root: &std::path::Path, output: OutputMode) {
             diags.extend(super::build_cmds::cycles_json(&pc.cycles, &pc.tree));
             diags.extend(super::build_cmds::resolve_errors_json(&pc.resolve_errors));
             diags.extend(super::build_cmds::type_errors_json(&pc.type_errors));
+            if let Some(f) = &pc.late_failure {
+                diags.extend(super::build_cmds::late_failure_json(f));
+            }
             println!("{{\"diagnostics\":[{}]}}", diags.join(","));
         }
         OutputMode::Jsonl => {
@@ -265,12 +268,24 @@ fn gate_run_on_package_check(root: &std::path::Path, output: OutputMode) {
             for e in super::build_cmds::type_errors_jsonl(&pc.type_errors) {
                 println!("{e}");
             }
+            if let Some(f) = &pc.late_failure {
+                for e in super::build_cmds::late_failure_jsonl(f) {
+                    println!("{e}");
+                }
+            }
         }
         OutputMode::Text => {
             super::build_cmds::print_parse_errors_text(&pc.parse_errors);
             super::build_cmds::print_cycles_text(&pc.cycles, &pc.tree);
             super::build_cmds::print_resolve_errors_text(&pc.resolve_errors);
             super::build_cmds::print_type_errors_text(&pc.type_errors);
+            // B-2026-08-27-27 — `has_errors()` now counts the flattened
+            // late-phase failure, so this arm must RENDER it. Without the
+            // line, `karac run` on a project with an undeclared effect exits
+            // 1 having printed nothing at all.
+            if let Some(f) = &pc.late_failure {
+                super::build_cmds::print_late_failure_text(f);
+            }
         }
     }
     process::exit(1);
@@ -1563,6 +1578,9 @@ pub(super) fn cmd_check_project(
             diags.extend(super::build_cmds::cycles_json(&pc.cycles, &pc.tree));
             diags.extend(super::build_cmds::resolve_errors_json(&pc.resolve_errors));
             diags.extend(super::build_cmds::type_errors_json(&pc.type_errors));
+            if let Some(f) = &pc.late_failure {
+                diags.extend(super::build_cmds::late_failure_json(f));
+            }
             println!("{{\"diagnostics\":[{}]}}", diags.join(","));
         }
         OutputMode::Jsonl => {
@@ -1578,6 +1596,11 @@ pub(super) fn cmd_check_project(
             for e in super::build_cmds::type_errors_jsonl(&pc.type_errors) {
                 println!("{e}");
             }
+            if let Some(f) = &pc.late_failure {
+                for e in super::build_cmds::late_failure_jsonl(f) {
+                    println!("{e}");
+                }
+            }
         }
         OutputMode::Text => {
             super::build_cmds::print_type_warnings_text(&pc.type_warnings);
@@ -1585,6 +1608,9 @@ pub(super) fn cmd_check_project(
             super::build_cmds::print_cycles_text(&pc.cycles, &pc.tree);
             super::build_cmds::print_resolve_errors_text(&pc.resolve_errors);
             super::build_cmds::print_type_errors_text(&pc.type_errors);
+            if let Some(f) = &pc.late_failure {
+                super::build_cmds::print_late_failure_text(f);
+            }
             if errors == 0 {
                 println!("All checks passed.");
             } else {

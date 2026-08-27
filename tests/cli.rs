@@ -34392,3 +34392,159 @@ fn build_output_is_byte_reproducible_across_processes() {
 
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+// ── `check` runs the late phases `build` runs (B-2026-08-27-27) ──
+//
+// `package_check_on` stopped after the per-module resolve + typecheck, so the
+// FLATTENED passes — effect, ownership, concurrency — ran only under
+// `karac build`. A project could print "All checks passed." and then fail to
+// build, same binary, same sources.
+//
+// The cross-module effect check cannot run per module by construction: it is
+// the flattening that makes a public function's transitive effects visible.
+// So this is not a missing call, it is a missing PASS.
+
+/// A two-module package whose `src/helper.kara` holds `helper_src`.
+fn scratch_effect_package(name: &str, helper_src: &str) -> std::path::PathBuf {
+    let tmp = scratch_project(name);
+    write(&tmp.join("kara.toml"), "[package]\nname = \"effpkg\"\n");
+    write(&tmp.join("src/helper.kara"), helper_src);
+    write(
+        &tmp.join("src/main.kara"),
+        "import helper.{run};\n\nfn main() {\n    println(f\"n={run()}\");\n}\n",
+    );
+    tmp
+}
+
+#[test]
+fn test_check_project_reports_the_multi_file_effect_error_build_reports() {
+    // `run` performs writes(Stdout) via `println` and declares only `panics`.
+    let tmp = scratch_effect_package(
+        "check-multifile-effect",
+        "pub fn run() -> i64 with panics {\n    println(\"hi\");\n    return 1;\n}\n",
+    );
+    let check = karac_bin().current_dir(&tmp).arg("check").output().unwrap();
+    let build = karac_bin().current_dir(&tmp).arg("build").output().unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let c_all = format!(
+        "{}{}",
+        String::from_utf8_lossy(&check.stdout),
+        String::from_utf8_lossy(&check.stderr)
+    );
+    let b_all = format!(
+        "{}{}",
+        String::from_utf8_lossy(&build.stdout),
+        String::from_utf8_lossy(&build.stderr)
+    );
+    // The property is AGREEMENT, not merely that check fails: a check that
+    // failed for some other reason would satisfy a one-sided assertion.
+    assert!(
+        !build.status.success(),
+        "the fixture must still be a build error, or this proves nothing: {b_all}"
+    );
+    assert!(
+        !check.status.success(),
+        "check must fail where build fails; check said: {c_all}"
+    );
+    assert!(
+        c_all.contains("does not declare it"),
+        "check must report the SAME undeclared-effect diagnostic build does: {c_all}"
+    );
+    assert!(
+        !c_all.contains("All checks passed"),
+        "check must not also claim success: {c_all}"
+    );
+}
+
+#[test]
+fn test_check_project_reports_the_multi_file_ownership_error_build_reports() {
+    // The ownership half of the same gap — a use-after-move across the
+    // flattened unit. Filed as an effect bug; the ownership pass was skipped
+    // by the same early return.
+    let tmp = scratch_effect_package(
+        "check-multifile-ownership",
+        "fn take(v: Vec[i64]) -> i64 { return v.len(); }\n\n\
+         pub fn run() -> i64 with allocates(Heap) {\n\
+         \x20   let mut v: Vec[i64] = Vec.new();\n\
+         \x20   v.push(1);\n\
+         \x20   let a = take(v);\n\
+         \x20   let b = take(v);\n\
+         \x20   return a + b;\n}\n",
+    );
+    let check = karac_bin().current_dir(&tmp).arg("check").output().unwrap();
+    let build = karac_bin().current_dir(&tmp).arg("build").output().unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let c_all = format!(
+        "{}{}",
+        String::from_utf8_lossy(&check.stdout),
+        String::from_utf8_lossy(&check.stderr)
+    );
+    let b_all = format!(
+        "{}{}",
+        String::from_utf8_lossy(&build.stdout),
+        String::from_utf8_lossy(&build.stderr)
+    );
+    assert!(
+        !build.status.success(),
+        "the fixture must still be a build error: {b_all}"
+    );
+    assert!(
+        !check.status.success(),
+        "check must fail where build fails; check said: {c_all}"
+    );
+    assert!(
+        c_all.contains("moved here, used again here"),
+        "check must report the move diagnostic: {c_all}"
+    );
+}
+
+#[test]
+fn test_check_project_json_carries_the_late_phase_diagnostic() {
+    // `karac check --output=json` is the Mend loop's entry point and what
+    // `karac fix` consumes, so the finding has to arrive STRUCTURED — with the
+    // file and line:col of the offending declaration. A pre-rendered blob
+    // would satisfy the text tests above and still be useless to the loop.
+    let tmp = scratch_effect_package(
+        "check-multifile-effect-json",
+        "pub fn run() -> i64 with panics {\n    println(\"hi\");\n    return 1;\n}\n",
+    );
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .arg("check")
+        .arg("--output=json")
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("\"phase\":\"effect\""),
+        "the diagnostic must name its phase: {stdout}"
+    );
+    assert!(
+        stdout.contains("helper.kara"),
+        "the diagnostic must name the FILE the error is in: {stdout}"
+    );
+    assert!(
+        stdout.contains("\"line\":1") || stdout.contains("\"line\":2"),
+        "the diagnostic must carry a real line number: {stdout}"
+    );
+}
+
+#[test]
+fn test_check_project_still_passes_a_correct_package() {
+    // The control. Running more passes must not start rejecting projects that
+    // build — the same fixture with the effect DECLARED has to pass both.
+    let tmp = scratch_effect_package(
+        "check-multifile-effect-ok",
+        "pub fn run() -> i64 with panics writes(Stdout) {\n    println(\"hi\");\n    return 1;\n}\n",
+    );
+    let check = karac_bin().current_dir(&tmp).arg("check").output().unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let all = format!(
+        "{}{}",
+        String::from_utf8_lossy(&check.stdout),
+        String::from_utf8_lossy(&check.stderr)
+    );
+    assert!(check.status.success(), "declared effects must pass: {all}");
+    assert!(all.contains("All checks passed"), "{all}");
+}

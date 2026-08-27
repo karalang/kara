@@ -1736,65 +1736,44 @@ impl BuildCodegenStatus {
     }
 }
 
-/// Drive the multi-file codegen path: concatenate all module items into a
-/// single super-program (in topological order, dropping `import`
-/// declarations and the synthetic prelude), run the post-typecheck
-/// pipeline (lower / effect / ownership / concurrency), then codegen +
-/// link. Caller has already verified parse / cycles / resolve / typecheck
-/// passed; this function returns a structured status the caller renders
-/// per output mode.
-///
-/// **Multi-module diagnostics.** Late-phase diagnostics (effect /
-/// ownership / concurrency / codegen / link) for the merged super-
-/// program recover file-of-origin context via a `SpanLookupKey →
-/// module_index` table built at concat time and consulted by
-/// `format_pipeline_errors`. When a span resolves to exactly one
-/// module the diagnostic is prefixed with `file:line:col`; when the
-/// span is absent (e.g., synthesized post-concat) or ambiguous
-/// (collision across modules — rare in practice but possible when
-/// Reject a codegen build under `panic = "unwind"` (phase-8
-/// `panic = "unwind" | "abort"` slice 2). v1's backend is abort-only — it never
-/// emits the invoke / personality / landingpad machinery an unwinding panic
-/// needs (the `unwind` codegen is the v1.x-gated slice 9), so a build that
-/// selects `Unwind` cannot be honored and must fail loudly rather than silently
-/// produce abort-semantics behavior under an unwind-labelled build. Only an
-/// *explicit* `[profile] panic = "unwind"` reaches here: every profile defaults
-/// to `Abort` at v1 ([`crate::manifest::ProfileConfig::panic_strategy`]), so a
-/// normal build (no key, or `panic = "abort"`) passes. `Ok(())` on `Abort`.
-#[cfg(feature = "llvm")]
-pub(super) fn reject_unsupported_panic_strategy(
-    strategy: crate::manifest::PanicStrategy,
-) -> Result<(), String> {
-    match strategy {
-        crate::manifest::PanicStrategy::Abort => Ok(()),
-        crate::manifest::PanicStrategy::Unwind => Err(
-            "`panic = \"unwind\"` is not supported by the v1 backend (abort-only). \
-             The unwinding-panic codegen (invoke / landingpad) is a v1.x feature; \
-             remove the `[profile] panic` key or set `panic = \"abort\"`."
-                .to_string(),
-        ),
-    }
+/// A late-phase rejection from [`run_multi_file_late_phases`]: the phase that
+/// refused and the rendered diagnostics.
+pub(super) struct MultiFileLateFailure {
+    pub(super) phase: String,
+    pub(super) message: String,
+    /// The same findings, structured — what `karac check --output=json` emits
+    /// so `karac fix` and the Mend loop get file/line/column rather than a
+    /// pre-rendered blob (B-2026-08-27-27).
+    pub(super) diags: Vec<LateDiag>,
 }
 
-/// two distinct files have identical leading bytes), the formatter
-/// falls back to the file-less `line:col` form. Per-file
-/// diagnostics for parse / cycles / resolve / typecheck still fire
-/// upstream of this call.
-#[cfg(feature = "llvm")]
-#[allow(clippy::too_many_arguments)]
-pub(super) fn run_multi_file_codegen(
+/// Flatten a project into one super-program and run every pass `karac build`
+/// gates on between the per-module passes and codegen: resolve, typecheck,
+/// lower, EFFECT, OWNERSHIP, concurrency.
+///
+/// B-2026-08-27-27 — extracted from `run_multi_file_codegen` so `karac check`
+/// runs the same passes. It did not: `package_check_on` stopped after the
+/// per-module resolve + typecheck, so a project whose public function performed
+/// an undeclared effect printed "All checks passed." and then failed to build,
+/// with the same binary on the same sources. The ownership half diverged
+/// identically — a use-after-move passed `check` and failed `build`.
+///
+/// That is not merely a missing check. `karac check --output=json` is the entry
+/// point of the Mend loop (CLAUDE.md § "Developing Kāra code"), so an error
+/// class `check` cannot see is one Mend cannot converge on: the loop reports
+/// success and the failure appears only at build.
+///
+/// NOT `#[cfg(feature = "llvm")]`, unlike `run_multi_file_codegen` — `karac
+/// check` has to work in the default build, and none of these passes needs a
+/// backend.
+///
+/// The caller has already verified parse / cycles / resolve / typecheck
+/// PER MODULE; this re-runs resolve and typecheck on the flattened unit because
+/// the flattening is what makes cross-module effects visible at all.
+pub(super) fn run_multi_file_late_phases(
     tree: &ProgramTree,
-    mf: &crate::manifest::Manifest,
-    project_root: &std::path::Path,
-    enable_hot_swap: bool,
-    release: bool,
-    is_wasm: bool,
-    effective_bindings: Option<BindingsMode>,
-    wasm_tools: Option<&crate::componentize::WasmTools>,
-    wasm_threads: bool,
-    crate_type: NativeCrateType,
-    out_path: Option<&str>,
-) -> BuildCodegenStatus {
+    package_name: &str,
+) -> Result<Pipeline, MultiFileLateFailure> {
     // 1. Topological emission order — dependencies before dependents.
     let order = module::emission_order(tree);
 
@@ -1877,7 +1856,7 @@ pub(super) fn run_multi_file_codegen(
         fix_diffs: FxHashMap::default(),
     };
     let mut pipeline = Pipeline {
-        filename: mf.name.clone(),
+        filename: package_name.to_string(),
         target_skipped: std::collections::HashMap::new(),
         // No single source text: `parsed` is a super-program stitched from
         // every module. `filename` is the package NAME, not a path, so it must
@@ -1903,10 +1882,11 @@ pub(super) fn run_multi_file_codegen(
     };
     pipeline.resolve();
     if pipeline.has_resolve_errors() {
-        return BuildCodegenStatus::Failed {
+        return Err(MultiFileLateFailure {
             phase: "resolve".to_string(),
             message: format_pipeline_errors(&pipeline, "resolve", Some(&span_table)),
-        };
+            diags: collect_pipeline_diags(&pipeline, "resolve", Some(&span_table)),
+        });
     }
     pipeline.typecheck();
     if pipeline
@@ -1914,10 +1894,11 @@ pub(super) fn run_multi_file_codegen(
         .as_ref()
         .is_some_and(|t| !t.errors.is_empty())
     {
-        return BuildCodegenStatus::Failed {
+        return Err(MultiFileLateFailure {
             phase: "typecheck".to_string(),
             message: format_pipeline_errors(&pipeline, "typecheck", Some(&span_table)),
-        };
+            diags: collect_pipeline_diags(&pipeline, "typecheck", Some(&span_table)),
+        });
     }
     pipeline.lower();
     pipeline.effectcheck();
@@ -1935,10 +1916,11 @@ pub(super) fn run_multi_file_codegen(
             .iter()
             .any(|err| !crate::effectchecker::kind_is_note(&err.kind))
     }) {
-        return BuildCodegenStatus::Failed {
+        return Err(MultiFileLateFailure {
             phase: "effect".to_string(),
             message: format_pipeline_errors(&pipeline, "effect", Some(&span_table)),
-        };
+            diags: collect_pipeline_diags(&pipeline, "effect", Some(&span_table)),
+        });
     }
     pipeline.ownershipcheck();
     if pipeline
@@ -1946,18 +1928,92 @@ pub(super) fn run_multi_file_codegen(
         .as_ref()
         .is_some_and(|o| !o.errors.is_empty())
     {
-        return BuildCodegenStatus::Failed {
+        return Err(MultiFileLateFailure {
             phase: "ownership".to_string(),
             message: format_pipeline_errors(&pipeline, "ownership", Some(&span_table)),
-        };
+            diags: collect_pipeline_diags(&pipeline, "ownership", Some(&span_table)),
+        });
     }
     pipeline.concurrencycheck();
     if pipeline.has_fatal_errors() {
-        return BuildCodegenStatus::Failed {
+        return Err(MultiFileLateFailure {
             phase: "checks".to_string(),
             message: format_pipeline_errors(&pipeline, "checks", Some(&span_table)),
-        };
+            diags: collect_pipeline_diags(&pipeline, "checks", Some(&span_table)),
+        });
     }
+
+    Ok(pipeline)
+}
+
+/// Drive the multi-file codegen path: concatenate all module items into a
+/// single super-program (in topological order, dropping `import`
+/// declarations and the synthetic prelude), run the post-typecheck
+/// pipeline (lower / effect / ownership / concurrency), then codegen +
+/// link. Caller has already verified parse / cycles / resolve / typecheck
+/// passed; this function returns a structured status the caller renders
+/// per output mode.
+///
+/// **Multi-module diagnostics.** Late-phase diagnostics (effect /
+/// ownership / concurrency / codegen / link) for the merged super-
+/// program recover file-of-origin context via a `SpanLookupKey →
+/// module_index` table built at concat time and consulted by
+/// `format_pipeline_errors`. When a span resolves to exactly one
+/// module the diagnostic is prefixed with `file:line:col`; when the
+/// span is absent (e.g., synthesized post-concat) or ambiguous
+/// (collision across modules — rare in practice but possible when
+/// Reject a codegen build under `panic = "unwind"` (phase-8
+/// `panic = "unwind" | "abort"` slice 2). v1's backend is abort-only — it never
+/// emits the invoke / personality / landingpad machinery an unwinding panic
+/// needs (the `unwind` codegen is the v1.x-gated slice 9), so a build that
+/// selects `Unwind` cannot be honored and must fail loudly rather than silently
+/// produce abort-semantics behavior under an unwind-labelled build. Only an
+/// *explicit* `[profile] panic = "unwind"` reaches here: every profile defaults
+/// to `Abort` at v1 ([`crate::manifest::ProfileConfig::panic_strategy`]), so a
+/// normal build (no key, or `panic = "abort"`) passes. `Ok(())` on `Abort`.
+#[cfg(feature = "llvm")]
+pub(super) fn reject_unsupported_panic_strategy(
+    strategy: crate::manifest::PanicStrategy,
+) -> Result<(), String> {
+    match strategy {
+        crate::manifest::PanicStrategy::Abort => Ok(()),
+        crate::manifest::PanicStrategy::Unwind => Err(
+            "`panic = \"unwind\"` is not supported by the v1 backend (abort-only). \
+             The unwinding-panic codegen (invoke / landingpad) is a v1.x feature; \
+             remove the `[profile] panic` key or set `panic = \"abort\"`."
+                .to_string(),
+        ),
+    }
+}
+
+/// two distinct files have identical leading bytes), the formatter
+/// falls back to the file-less `line:col` form. Per-file
+/// diagnostics for parse / cycles / resolve / typecheck still fire
+/// upstream of this call.
+#[cfg(feature = "llvm")]
+#[allow(clippy::too_many_arguments)]
+pub(super) fn run_multi_file_codegen(
+    tree: &ProgramTree,
+    mf: &crate::manifest::Manifest,
+    project_root: &std::path::Path,
+    enable_hot_swap: bool,
+    release: bool,
+    is_wasm: bool,
+    effective_bindings: Option<BindingsMode>,
+    wasm_tools: Option<&crate::componentize::WasmTools>,
+    wasm_threads: bool,
+    crate_type: NativeCrateType,
+    out_path: Option<&str>,
+) -> BuildCodegenStatus {
+    let pipeline = match run_multi_file_late_phases(tree, &mf.name) {
+        Ok(p) => p,
+        Err(f) => {
+            return BuildCodegenStatus::Failed {
+                phase: f.phase,
+                message: f.message,
+            }
+        }
+    };
 
     // Library-artifact C-ABI honesty gate (additive-interop Slice 2,
     // project-mode `[lib]`): reject a non-transparent, non-boxable export
@@ -2297,137 +2353,130 @@ pub(super) fn run_multi_file_codegen(
 /// `file:line:col`; otherwise it falls back to bare `line:col` so
 /// callers without a table (or with a span absent from the table /
 /// shared across modules) still get a useful location.
-#[cfg(feature = "llvm")]
+// B-2026-08-27-27 — un-gated: `karac check` renders the same late-phase
+// diagnostics through this formatter in the default build, where there is no
+// backend. Nothing here touches one.
+/// One late-phase diagnostic, structured (B-2026-08-27-27).
+///
+/// `format_pipeline_errors` used to render straight to a string, which was
+/// enough while only `karac build` consumed it. `karac check` needs the same
+/// findings as JSON — it is the Mend loop's entry point, and a blob with no
+/// file/line is not something `karac fix` can act on — so the traversal now
+/// produces this and the text renderer sits on top of it. One traversal, so
+/// the two spellings cannot drift.
+pub(super) struct LateDiag {
+    pub(super) file: Option<String>,
+    pub(super) line: usize,
+    pub(super) column: usize,
+    pub(super) message: String,
+}
+
+/// Collect the late-phase errors for `phase`, resolving each span's file
+/// through the module span table when it maps to exactly one module.
+pub(super) fn collect_pipeline_diags(
+    pipeline: &Pipeline,
+    phase: &str,
+    table: Option<&crate::span_visitor::ModuleSpanTable>,
+) -> Vec<LateDiag> {
+    let mut out: Vec<LateDiag> = Vec::new();
+    let file_of = |span: &crate::token::Span| -> Option<String> {
+        table
+            .and_then(|t| t.lookup(span))
+            .map(|p| p.display().to_string())
+    };
+    let push_resolve = |p: &Pipeline, out: &mut Vec<LateDiag>| {
+        if let Some(r) = &p.resolved {
+            for e in &r.errors {
+                out.push(LateDiag {
+                    file: file_of(&e.span),
+                    line: e.span.line,
+                    column: e.span.column,
+                    message: e.message.clone(),
+                });
+            }
+        }
+    };
+    let push_typed = |p: &Pipeline, out: &mut Vec<LateDiag>| {
+        if let Some(t) = &p.typed {
+            for e in &t.errors {
+                out.push(LateDiag {
+                    file: file_of(&e.span),
+                    line: e.span.line,
+                    column: e.span.column,
+                    message: e.message.clone(),
+                });
+            }
+        }
+    };
+    let push_effects = |p: &Pipeline, out: &mut Vec<LateDiag>| {
+        if let Some(e) = &p.effects {
+            for err in &e.errors {
+                out.push(LateDiag {
+                    file: file_of(&err.span),
+                    line: err.span.line,
+                    column: err.span.column,
+                    message: err.message.clone(),
+                });
+            }
+        }
+    };
+    let push_ownership = |p: &Pipeline, out: &mut Vec<LateDiag>| {
+        if let Some(o) = &p.ownership {
+            for err in &o.errors {
+                out.push(LateDiag {
+                    file: file_of(&err.span),
+                    line: err.span.line,
+                    column: err.span.column,
+                    message: err.message.clone(),
+                });
+            }
+        }
+    };
+    match phase {
+        "resolve" => push_resolve(pipeline, &mut out),
+        "typecheck" => push_typed(pipeline, &mut out),
+        "effect" => push_effects(pipeline, &mut out),
+        "ownership" => push_ownership(pipeline, &mut out),
+        // The "checks" branch is reached when `has_fatal_errors` returns true
+        // after a late-phase pass; today that flag is driven by parse +
+        // resolve errors only (concurrency analysis emits structured
+        // decisions, not errors), but we surface every accumulated error here
+        // so the user gets file-context wherever a span is available rather
+        // than the generic "late-phase analysis failed" stub.
+        "checks" => {
+            push_resolve(pipeline, &mut out);
+            push_typed(pipeline, &mut out);
+            push_effects(pipeline, &mut out);
+            push_ownership(pipeline, &mut out);
+        }
+        _ => {}
+    }
+    out
+}
+
+/// Render [`collect_pipeline_diags`] in the text form `karac build` has always
+/// printed. Byte-identical to the pre-B-2026-08-27-27 spelling.
 pub(super) fn format_pipeline_errors(
     pipeline: &Pipeline,
     phase: &str,
     table: Option<&crate::span_visitor::ModuleSpanTable>,
 ) -> String {
+    format_late_diags(phase, &collect_pipeline_diags(pipeline, phase, table))
+}
+
+pub(super) fn format_late_diags(phase: &str, diags: &[LateDiag]) -> String {
     use std::fmt::Write;
     let mut out = format!("multi-file {phase} failed:");
-    let prefix = |span: &crate::token::Span| -> String {
-        if let Some(t) = table {
-            if let Some(p) = t.lookup(span) {
-                return format!("{}:", p.display());
-            }
-        }
-        String::new()
-    };
-    match phase {
-        "resolve" => {
-            if let Some(r) = &pipeline.resolved {
-                for e in &r.errors {
-                    let _ = write!(
-                        &mut out,
-                        "\n  {}{}:{}: {}",
-                        prefix(&e.span),
-                        e.span.line,
-                        e.span.column,
-                        e.message,
-                    );
-                }
-            }
-        }
-        "typecheck" => {
-            if let Some(t) = &pipeline.typed {
-                for e in &t.errors {
-                    let _ = write!(
-                        &mut out,
-                        "\n  {}{}:{}: {}",
-                        prefix(&e.span),
-                        e.span.line,
-                        e.span.column,
-                        e.message,
-                    );
-                }
-            }
-        }
-        "effect" => {
-            if let Some(e) = &pipeline.effects {
-                for err in &e.errors {
-                    let _ = write!(
-                        &mut out,
-                        "\n  {}{}:{}: {}",
-                        prefix(&err.span),
-                        err.span.line,
-                        err.span.column,
-                        err.message,
-                    );
-                }
-            }
-        }
-        "ownership" => {
-            if let Some(o) = &pipeline.ownership {
-                for err in &o.errors {
-                    let _ = write!(
-                        &mut out,
-                        "\n  {}{}:{}: {}",
-                        prefix(&err.span),
-                        err.span.line,
-                        err.span.column,
-                        err.message,
-                    );
-                }
-            }
-        }
-        // The "checks" branch is reached when `has_fatal_errors`
-        // returns true after a late-phase pass; today that flag is
-        // driven by parse + resolve errors only (concurrency analysis
-        // emits structured decisions, not errors), but we surface
-        // every accumulated error here so the user gets file-context
-        // wherever a span is available rather than the generic
-        // "late-phase analysis failed" stub.
-        "checks" => {
-            if let Some(r) = &pipeline.resolved {
-                for e in &r.errors {
-                    let _ = write!(
-                        &mut out,
-                        "\n  {}{}:{}: {}",
-                        prefix(&e.span),
-                        e.span.line,
-                        e.span.column,
-                        e.message,
-                    );
-                }
-            }
-            if let Some(t) = &pipeline.typed {
-                for e in &t.errors {
-                    let _ = write!(
-                        &mut out,
-                        "\n  {}{}:{}: {}",
-                        prefix(&e.span),
-                        e.span.line,
-                        e.span.column,
-                        e.message,
-                    );
-                }
-            }
-            if let Some(e) = &pipeline.effects {
-                for err in &e.errors {
-                    let _ = write!(
-                        &mut out,
-                        "\n  {}{}:{}: {}",
-                        prefix(&err.span),
-                        err.span.line,
-                        err.span.column,
-                        err.message,
-                    );
-                }
-            }
-            if let Some(o) = &pipeline.ownership {
-                for err in &o.errors {
-                    let _ = write!(
-                        &mut out,
-                        "\n  {}{}:{}: {}",
-                        prefix(&err.span),
-                        err.span.line,
-                        err.span.column,
-                        err.message,
-                    );
-                }
-            }
-        }
-        _ => {}
+    for d in diags {
+        let prefix = match &d.file {
+            Some(f) => format!("{f}:"),
+            None => String::new(),
+        };
+        let _ = write!(
+            &mut out,
+            "\n  {}{}:{}: {}",
+            prefix, d.line, d.column, d.message
+        );
     }
     out
 }
@@ -2615,6 +2664,46 @@ pub(super) fn fix_diff_json_tail(
         }
         None => String::new(),
     }
+}
+
+/// B-2026-08-27-27 — the flattened late-phase failure as `check` diagnostics.
+/// `phase` is carried through verbatim ("effect" / "ownership" / …) so a
+/// consumer can tell them apart, and each diagnostic keeps the file and
+/// line:column the span table resolved.
+pub(super) fn late_failure_json(f: &MultiFileLateFailure) -> Vec<String> {
+    f.diags
+        .iter()
+        .map(|d| {
+            format!(
+                "{{\"severity\":\"error\",\"phase\":{},\"file\":{},\"line\":{},\"column\":{},\"message\":{}}}",
+                json_string(&f.phase),
+                json_string(d.file.as_deref().unwrap_or("")),
+                d.line,
+                d.column,
+                json_string(&d.message),
+            )
+        })
+        .collect()
+}
+
+pub(super) fn late_failure_jsonl(f: &MultiFileLateFailure) -> Vec<String> {
+    f.diags
+        .iter()
+        .map(|d| {
+            format!(
+                "{{\"type\":{},\"file\":{},\"line\":{},\"column\":{},\"message\":{}}}",
+                json_string(&format!("{}_error", f.phase)),
+                json_string(d.file.as_deref().unwrap_or("")),
+                d.line,
+                d.column,
+                json_string(&d.message),
+            )
+        })
+        .collect()
+}
+
+pub(super) fn print_late_failure_text(f: &MultiFileLateFailure) {
+    eprintln!("error[{}]: {}", f.phase, f.message);
 }
 
 pub(super) fn resolve_errors_json(per_module: &[ModuleResolveErrors]) -> Vec<String> {
@@ -2931,6 +3020,14 @@ pub(super) struct PackageCheck {
     pub(super) resolve_errors: Vec<ModuleResolveErrors>,
     pub(super) type_errors: Vec<ModuleTypeErrors>,
     pub(super) type_warnings: Vec<ModuleTypeErrors>,
+    /// The flattened LATE-PHASE verdict (effect / ownership / concurrency),
+    /// `None` when those passes were reached and clean — or were skipped
+    /// because an earlier per-module pass already failed (B-2026-08-27-27).
+    ///
+    /// This is what `karac check` was missing. The per-module passes above
+    /// cannot see a cross-module effect at all: the check that catches it runs
+    /// on the flattened super-program, which only `karac build` was building.
+    pub(super) late_failure: Option<MultiFileLateFailure>,
 }
 
 impl PackageCheck {
@@ -2941,16 +3038,22 @@ impl PackageCheck {
             || !self.cycles.is_empty()
             || self.resolve_errors.iter().any(|m| !m.errors.is_empty())
             || self.type_errors.iter().any(|m| !m.errors.is_empty())
+            || self.late_failure.is_some()
     }
 
     /// How many error-severity diagnostics this holds, across every module it
     /// still carries. Used for the caller's summary line, so it counts what was
     /// RENDERED — call it after [`Self::restrict_to_file`], not before.
     pub(super) fn error_count(&self) -> usize {
-        self.parse_errors
-            .iter()
-            .map(|m| m.errors.len())
-            .sum::<usize>()
+        self.late_failure
+            .as_ref()
+            .map(|f| f.diags.len().max(1))
+            .unwrap_or(0)
+            + self
+                .parse_errors
+                .iter()
+                .map(|m| m.errors.len())
+                .sum::<usize>()
             + self.cycles.len()
             + self
                 .resolve_errors
@@ -3091,6 +3194,25 @@ pub(super) fn package_check_on(
             warnings: Vec::new(),
         }
     };
+    // B-2026-08-27-27 — the flattened late phases, the half `karac check` used
+    // to skip. Gated on the per-module passes being clean for the reason the
+    // comment above gives: a half-resolved tree cascades, and `karac build`
+    // reaches these passes under exactly the same condition. Running them here
+    // is what makes this function's own claim true — that answering
+    // differently from `cmd_build_project` "would reintroduce the very
+    // divergence this function exists to remove".
+    let late_failure = if parse_errors.is_empty()
+        && cycles.is_empty()
+        && resolve_errors.is_empty()
+        && diags.errors.is_empty()
+    {
+        let package_name = crate::manifest::load_from_cwd(root)
+            .map(|(_, m)| m.name)
+            .unwrap_or_else(|_| "package".to_string());
+        run_multi_file_late_phases(&tree, &package_name).err()
+    } else {
+        None
+    };
     Ok(PackageCheck {
         tree,
         parse_errors,
@@ -3098,6 +3220,7 @@ pub(super) fn package_check_on(
         resolve_errors,
         type_errors: diags.errors,
         type_warnings: diags.warnings,
+        late_failure,
     })
 }
 
