@@ -1,8 +1,8 @@
 diff --git a/src/cli/diag_json.rs b/src/cli/diag_json.rs
-index 8544afb..39b16c9 100644
+index 6394be4..145bf65 100644
 --- a/src/cli/diag_json.rs
 +++ b/src/cli/diag_json.rs
-@@ -1814,6 +1814,7 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
+@@ -1815,6 +1815,7 @@ pub(super) fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                  crate::typechecker::TypeErrorKind::TypeNotIndexable => "E0275",
                  crate::typechecker::TypeErrorKind::RefOperandUnsupported => "E0283",
                  crate::typechecker::TypeErrorKind::LazyLockRuntimeCapture => "E0284",
@@ -29,7 +29,7 @@ index 50aebd1..8fd4e75 100644
          "E0283",
          ty("RefOperandUnsupported", Some(DiagnosticClass::TypeMismatch)),
 diff --git a/src/typechecker.rs b/src/typechecker.rs
-index 7ad9f31..589d6d8 100644
+index a6bd02b..693ad54 100644
 --- a/src/typechecker.rs
 +++ b/src/typechecker.rs
 @@ -644,6 +644,22 @@ pub enum TypeErrorKind {
@@ -55,7 +55,7 @@ index 7ad9f31..589d6d8 100644
      StringNotIndexable,
      /// `it[i]` applied to an `Iterator[T]` — the value `.chars()`,
      /// `.iter()`, `.map(...)` and friends return. An iterator is a lazy
-@@ -1166,6 +1182,7 @@ impl TypeErrorKind {
+@@ -1176,6 +1192,7 @@ impl TypeErrorKind {
              self,
              TypeErrorKind::InvalidCast
                  | TypeErrorKind::RefOperandUnsupported
@@ -63,7 +63,7 @@ index 7ad9f31..589d6d8 100644
                  | TypeErrorKind::StringNotIndexable
                  | TypeErrorKind::IteratorNotIndexable
                  | TypeErrorKind::TypeNotIndexable
-@@ -1205,6 +1222,7 @@ pub(crate) fn class_for_type_error_kind(
+@@ -1215,6 +1232,7 @@ pub(crate) fn class_for_type_error_kind(
          | TypeErrorKind::AtomicInvalidInnerType
          | TypeErrorKind::InvalidTupleIndex
          | TypeErrorKind::RefOperandUnsupported
@@ -71,7 +71,7 @@ index 7ad9f31..589d6d8 100644
          | TypeErrorKind::StringNotIndexable
          | TypeErrorKind::IteratorNotIndexable
          | TypeErrorKind::TypeNotIndexable
-@@ -2340,6 +2358,19 @@ pub struct TypeChecker<'a> {
+@@ -2351,6 +2369,19 @@ pub struct TypeChecker<'a> {
      pub(super) cast_source_unsigned: FxHashSet<SpanKey>,
      pub(super) weak_elem_store_sites: FxHashSet<SpanKey>,
      pub(super) weak_elem_read_sites: FxHashSet<SpanKey>,
@@ -91,7 +91,7 @@ index 7ad9f31..589d6d8 100644
      /// Element-aware mono-mangle tokens per call site. See the public copy on
      /// `TypeCheckResult` for the consumer doc.
      pub(super) call_type_subs_mangle: FxHashMap<SpanKey, FxHashMap<String, String>>,
-@@ -2624,6 +2655,7 @@ impl<'a> TypeChecker<'a> {
+@@ -2635,6 +2666,7 @@ impl<'a> TypeChecker<'a> {
              cast_source_unsigned: FxHashSet::default(),
              weak_elem_store_sites: FxHashSet::default(),
              weak_elem_read_sites: FxHashSet::default(),
@@ -100,10 +100,28 @@ index 7ad9f31..589d6d8 100644
              pattern_binding_types: FxHashMap::default(),
              pattern_binding_inner_types: FxHashMap::default(),
 diff --git a/src/typechecker/exprs.rs b/src/typechecker/exprs.rs
-index 874d255..26b46b8 100644
+index 874d255..c09afe2 100644
 --- a/src/typechecker/exprs.rs
 +++ b/src/typechecker/exprs.rs
-@@ -4564,6 +4564,8 @@ impl<'a> super::TypeChecker<'a> {
+@@ -1828,6 +1828,17 @@ impl<'a> super::TypeChecker<'a> {
+                 let arg_ty = self.check_expr(&arg.value, param_ty);
+                 self.borrow_context = saved_borrow_ctx;
+                 self.mut_through_param_arg = saved_mut_through;
++                // B-2026-08-26-37 — a call ARGUMENT is a value position exactly
++                // as a `let` initializer is, so the index-move rule applies here
++                // too. Gated on a BY-VALUE parameter: handing `v[i]` to a
++                // `ref T` / `mut ref T` / `Slice[T]` parameter is a borrow, and
++                // a borrow is the remedy the rule points at, not the offence.
++                if !matches!(
++                    param_ty,
++                    Type::Ref(_) | Type::MutRef(_) | Type::Slice { .. }
++                ) {
++                    self.reject_index_move_non_copy(&arg.value, param_ty);
++                }
+                 if apply_call_site_marker {
+                     self.check_call_site_marker(arg, param_ty, &arg_ty);
+                 }
+@@ -4564,6 +4575,8 @@ impl<'a> super::TypeChecker<'a> {
                                  TypeErrorKind::TypeMismatch,
                              );
                          }
@@ -112,7 +130,7 @@ index 874d255..26b46b8 100644
                          return Type::Named {
                              name: "Option".to_string(),
                              args: vec![elem_ty],
-@@ -4655,6 +4657,8 @@ impl<'a> super::TypeChecker<'a> {
+@@ -4655,6 +4668,8 @@ impl<'a> super::TypeChecker<'a> {
                          || matches!(&obj_ty, Type::Ref(inner) | Type::MutRef(inner)
                              if matches!(inner.as_ref(), Type::Str));
                      if is_string {
@@ -121,7 +139,7 @@ index 874d255..26b46b8 100644
                          return Type::Str;
                      }
                      // Range indexing: `collection[a..b]` → `Slice[T]` where T
-@@ -4677,6 +4681,8 @@ impl<'a> super::TypeChecker<'a> {
+@@ -4677,6 +4692,8 @@ impl<'a> super::TypeChecker<'a> {
                          Type::Error => return Type::Error,
                          _ => None,
                      };
@@ -130,7 +148,7 @@ index 874d255..26b46b8 100644
                      return match element_ty {
                          Some(el) => Type::Slice {
                              element: Box::new(el.clone()),
-@@ -4941,6 +4947,8 @@ impl<'a> super::TypeChecker<'a> {
+@@ -4941,6 +4958,8 @@ impl<'a> super::TypeChecker<'a> {
                          // (see the store twin in `infer_method_call`).
                          self.weak_elem_read_sites
                              .insert(SpanKey::from_span(&expr.span));
@@ -140,10 +158,10 @@ index 874d255..26b46b8 100644
                              name: "Option".to_string(),
                              args: vec![(**inner).clone()],
 diff --git a/src/typechecker/items.rs b/src/typechecker/items.rs
-index b644b05..d90ea6b 100644
+index c244b15..c856a7a 100644
 --- a/src/typechecker/items.rs
 +++ b/src/typechecker/items.rs
-@@ -4171,6 +4171,138 @@ impl<'a> super::TypeChecker<'a> {
+@@ -4228,6 +4228,161 @@ impl<'a> super::TypeChecker<'a> {
          self.check_stmt_inner(stmt)
      }
  
@@ -169,7 +187,28 @@ index b644b05..d90ea6b 100644
 +    /// LLM acting on this sentence, so a confident wrong steer (suggesting
 +    /// `.clone()` on a move-only struct, which then fails with `no method
 +    /// 'clone'`) is worse than offering no fix-it at all.
-+    fn reject_index_move_non_copy(&mut self, value: &Expr, ty: &Type) {
++    /// Whether `name` is declared `shared struct` / `shared enum`.
++    ///
++    /// `lower_type_expr` normally yields `Type::Shared(name)` for these, but a
++    /// container's ELEMENT can reach here still spelled `Type::Named` — a
++    /// `shared enum` element of a `Vec` did, which is how the exemption came to
++    /// miss the self-hosted compiler's `Vec[TypeExpr]` entirely. Checking the
++    /// declaration covers both spellings, and the declaration is the thing the
++    /// rule actually cares about.
++    fn name_is_shared_decl(&self, name: &str) -> bool {
++        // Through the ENV, not `program.items`: the items list is this module's
++        // only, and a shared type is routinely declared elsewhere — the
++        // self-hosted compiler's `TypeExpr` lives in `ast.kara` while the reads
++        // are in `codegen.kara`, so an items-only lookup exempted none of them.
++        self.env
++            .structs
++            .get(name)
++            .map(|i| i.is_shared)
++            .or_else(|| self.env.enums.get(name).map(|i| i.is_shared))
++            .unwrap_or(false)
++    }
++
++    pub(super) fn reject_index_move_non_copy(&mut self, value: &Expr, ty: &Type) {
 +        if !matches!(value.kind, ExprKind::Index { .. }) {
 +            return;
 +        }
@@ -227,7 +266,9 @@ index b644b05..d90ea6b 100644
 +        // divergence this row was filed for reachable here: RC decides when
 +        // a shared value is destroyed, so neither backend runs a user `Drop`
 +        // body on the read.
-+        if matches!(ty, Type::Shared(_)) {
++        if matches!(ty, Type::Shared(_))
++            || matches!(ty, Type::Named { name, .. } if self.name_is_shared_decl(name))
++        {
 +            return;
 +        }
 +        // A function value is a fat pointer, and reading one out of a
@@ -282,7 +323,7 @@ index b644b05..d90ea6b 100644
      fn check_stmt_inner(&mut self, stmt: &Stmt) -> Type {
          if let StmtKind::Expr(expr) = &stmt.kind {
              return self.infer_expr(expr);
-@@ -4199,6 +4331,10 @@ impl<'a> super::TypeChecker<'a> {
+@@ -4256,6 +4411,10 @@ impl<'a> super::TypeChecker<'a> {
                      self.record_uninferrable_binding_origin(pattern, &inferred, value);
                      inferred
                  };
@@ -293,7 +334,7 @@ index b644b05..d90ea6b 100644
                  // B-2026-07-31-20 — record the result type of a
                  // `with_provider[R](p, || ...)` RHS for codegen's Let arm
                  // (read as an implicit binding annotation). The intercept in
-@@ -4357,6 +4493,15 @@ impl<'a> super::TypeChecker<'a> {
+@@ -4414,6 +4573,15 @@ impl<'a> super::TypeChecker<'a> {
                  self.in_defer = prev;
              }
              StmtKind::Assign { target, value } => {
