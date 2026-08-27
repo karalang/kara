@@ -99,7 +99,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | codegen-gap | 143 | 0 |
 | double-free | 141 | 0 |
 | diagnostics | 111 | 0 |
-| false-positive | 98 | 0 |
+| false-positive | 99 | 1 |
 | perf | 84 | 0 |
 | other | 63 | 1 |
 | soundness | 62 | 0 |
@@ -111,7 +111,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | surface | total | open |
 |---|---|---|
 | codegen | 1094 | 3 |
-| typecheck | 276 | 0 |
+| typecheck | 277 | 1 |
 | interp | 191 | 0 |
 | other | 70 | 0 |
 | ownership | 65 | 0 |
@@ -124,15 +124,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1652 surfaced · 3 open · 1623 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-27). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1653 surfaced · 4 open · 1623 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-27). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (3)
+### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-27-8 | 2026-08-27 | codegen | low | NLL DROP PLACEMENT IS DISPATCHED ON AN LLVM SYMBOL-NAME PREFIX. `is_container_elem_bodies_fn` decides whether a cleanup action fires at the binding's last use or at scope exit by testing `starts_with("__karac_dropelems_")` (plus `__karac_dropkeys_` since 34c3f54). A bodies-only walker whose emitter picks any other prefix is silently demoted to scope exit — a run-vs-build divergence with no error, no warning and no failing test. NO LIVE INSTANCE TODAY: all four named-binding walkers are covered. This is the latent hazard, and it has already cost one session. | — |
 | B-2026-08-27-31 | 2026-08-27 | codegen | medium | An INDEXED `Array[String, N]` temporary leaks its elements -- `mk(4)[0]` loses 13 bytes in 2 allocations -- a different position from B-2026-08-27-30's `==` operand and not covered by its fix. | — |
 | B-2026-08-27-32 | 2026-08-27 | codegen | medium | A struct FIELD of type `Array[T, N]` with heap elements is never dropped: `struct Holder { a: Array[String, 2] }` leaks 13 bytes in 2 allocations with no comparison, index or temporary anywhere in the program. | — |
+| B-2026-08-27-33 | 2026-08-27 | typecheck | medium | A `T: Ord` bound on a GENERIC IMPL rejects a tuple that the IDENTICAL bound on a free fn accepts: `impl[T: Ord] W[T]` refuses `W[(i64, i64)]` with "`(i64, i64)` does not implement `Ord`", while `fn pick[T: Ord](a: T, b: T)` takes the same tuple and may even call `.cmp()` on it | implementation_checklist/phase-11-stdlib-longtail.md#general-purpose-collections |
 
 ### Relocated (2)
 
