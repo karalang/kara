@@ -105300,6 +105300,82 @@ fn main() {
     /// off an owned-`Vec` table, so `ref Vec[T] == ref Vec[T]` stayed wrong
     /// (answering `true` for differing contents) until the oracle learned to
     /// peel borrows, as the typechecker's own `Eq` arm already does.
+    /// Every three-field user struct compares correctly (B-2026-08-27-18).
+    ///
+    /// `compile_binop` decided "is this a String/Vec?" by COUNTING FIELDS, and
+    /// `{ptr, i64, i64}` has three — so every three-field struct was routed to
+    /// the byte comparator. Three of the shapes below CRASHED the compiler
+    /// (`into_pointer_value()` on a non-pointer field 0) and one answered
+    /// WRONG, which is why they are all in one fixture: a repair that only
+    /// stops the panic leaves the wrong answer standing, and vice versa.
+    ///
+    /// `Shared3` is that fourth shape and the reason the obvious narrower fix
+    /// — checking the three field TYPES instead of the count — does not work.
+    /// User structs get LITERAL, structurally-uniqued LLVM types, so a struct
+    /// whose first field is a POINTER lowers to the SAME `{ptr, i64, i64}`
+    /// type object as a `String`; a `shared` field is the ordinary way to get
+    /// one. It answered `true` for two values differing in their last field,
+    /// because the comparator read field 0 as a data pointer, field 1 as a
+    /// length, and memcmp'd that many bytes of two RC blocks that happened to
+    /// match. No diagnostic, no crash.
+    ///
+    /// `Nested` pins the recursion: `compile_struct_eq` walks fields through
+    /// `compile_binop`, so a three-field struct inside a two-field one reached
+    /// the same dispatch and crashed even though neither struct is three
+    /// fields at the top level. The two- and four-field controls are here so a
+    /// regression that disables the whole struct path fails visibly instead of
+    /// quietly passing the interesting rows.
+    #[test]
+    fn test_e2e_three_field_struct_equality() {
+        assert_eq!(
+            run_program(
+                r#"
+#[derive(PartialEq, Eq)]
+struct Plain3 { a: i64, b: i64, c: i64 }
+#[derive(PartialEq, Eq)]
+struct StrFirst { s: String, x: i64, y: i64 }
+#[derive(PartialEq, Eq)]
+struct StrLast { x: i64, y: i64, s: String }
+#[derive(PartialEq, Eq)]
+shared struct Node { v: i64 }
+#[derive(PartialEq, Eq)]
+struct Shared3 { h: Node, a: i64, b: i64 }
+#[derive(PartialEq, Eq)]
+struct Nested { i: Plain3, z: i64 }
+#[derive(PartialEq, Eq)]
+struct Two { a: i64, b: i64 }
+#[derive(PartialEq, Eq)]
+struct Four { a: i64, b: i64, c: i64, d: i64 }
+
+fn main() {
+    println(f"{Plain3 { a: 1, b: 2, c: 3 } == Plain3 { a: 1, b: 2, c: 3 }}");
+    println(f"{Plain3 { a: 1, b: 2, c: 3 } == Plain3 { a: 1, b: 2, c: 9 }}");
+    println(f"{StrFirst { s: "abc", x: 1, y: 0 } == StrFirst { s: "abc", x: 1, y: 0 }}");
+    println(f"{StrFirst { s: "abc", x: 1, y: 0 } == StrFirst { s: "axc", x: 1, y: 0 }}");
+    println(f"{StrFirst { s: "abc", x: 1, y: 0 } == StrFirst { s: "abc", x: 7, y: 0 }}");
+    println(f"{StrLast { x: 1, y: 2, s: "hi" } == StrLast { x: 1, y: 2, s: "hi" }}");
+    println(f"{StrLast { x: 1, y: 2, s: "hi" } == StrLast { x: 1, y: 2, s: "no" }}");
+    println(f"{Shared3 { h: Node { v: 1 }, a: 5, b: 6 } == Shared3 { h: Node { v: 1 }, a: 5, b: 6 }}");
+    println(f"{Shared3 { h: Node { v: 1 }, a: 5, b: 6 } == Shared3 { h: Node { v: 1 }, a: 5, b: 9 }}");
+    println(f"{Nested { i: Plain3 { a: 1, b: 2, c: 3 }, z: 7 } == Nested { i: Plain3 { a: 1, b: 2, c: 3 }, z: 7 }}");
+    println(f"{Nested { i: Plain3 { a: 1, b: 2, c: 3 }, z: 7 } == Nested { i: Plain3 { a: 1, b: 2, c: 9 }, z: 7 }}");
+    println(f"{Two { a: 1, b: 2 } == Two { a: 1, b: 9 }}");
+    println(f"{Four { a: 1, b: 2, c: 3, d: 4 } == Four { a: 1, b: 2, c: 3, d: 9 }}");
+}
+"#,
+            ),
+            Some(
+                "true\nfalse\n\
+                 true\nfalse\nfalse\n\
+                 true\nfalse\n\
+                 true\nfalse\n\
+                 true\nfalse\n\
+                 false\nfalse\n"
+                    .to_string()
+            )
+        );
+    }
+
     #[test]
     fn test_e2e_vec_equality_compares_contents_not_bytes() {
         assert_eq!(

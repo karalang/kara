@@ -1096,36 +1096,6 @@ impl<'ctx> super::Codegen<'ctx> {
         self.track_struct_var_inst(&name, slot, inst);
     }
 
-    /// True when `struct_name` has a `Vec`-typed field, directly or through a
-    /// nested struct field. B-2026-08-12-5 — the gate for routing `==` to the
-    /// type-directed comparator; see `try_compile_struct_eq_typed`.
-    pub(super) fn struct_has_vec_field_deep(&self, struct_name: &str) -> bool {
-        self.struct_has_vec_field_deep_inner(struct_name, 0)
-    }
-
-    fn struct_has_vec_field_deep_inner(&self, struct_name: &str, depth: u32) -> bool {
-        // A self-referential struct cannot exist by value, but a malformed or
-        // generic registry entry should not spin.
-        if depth > 8 {
-            return false;
-        }
-        let Some(field_tes) = self.type_decls.struct_field_type_exprs.get(struct_name) else {
-            return false;
-        };
-        field_tes.iter().any(|te| match &te.kind {
-            TypeKind::Path(p) => match p.segments.last().map(String::as_str) {
-                Some("Vec") => true,
-                Some(nested) => {
-                    nested != struct_name
-                        && self.type_decls.struct_field_type_exprs.contains_key(nested)
-                        && self.struct_has_vec_field_deep_inner(nested, depth + 1)
-                }
-                None => false,
-            },
-            _ => false,
-        })
-    }
-
     /// B-2026-08-12-5 — compare two structs with the TYPE-directed comparator
     /// `karac_eq_<S>` instead of the shape-directed field walk, when the
     /// struct carries a `Vec` field.
@@ -1153,9 +1123,31 @@ impl<'ctx> super::Codegen<'ctx> {
     /// which is the same bug in the hashing path; the `==` OPERATOR never
     /// picked it up.
     ///
-    /// Gated to structs that actually contain a Vec (directly or nested) so
-    /// the ordinary scalar/String struct comparison keeps its existing inline
-    /// field walk and this cannot regress it.
+    /// B-2026-08-27-18 REMOVED the "only structs that contain a Vec" gate this
+    /// originally carried, because the shape confusion it was narrowed around
+    /// is not confined to Vec fields. `compile_binop` decides "is this a
+    /// String/Vec?" by COUNTING FIELDS, and `{ptr, i64, i64}` has three — so
+    /// EVERY three-field user struct was routed to the byte comparator.
+    /// `struct S3 { a: i64, b: i64, c: i64 }` panicked the compiler
+    /// (`into_pointer_value()` on an `i64`), and the panic recurs through
+    /// `compile_struct_eq`'s per-field recursion, so a three-field struct
+    /// nested inside a two-field one crashed as well.
+    ///
+    /// The narrower repair — checking the three field TYPES rather than the
+    /// count — cannot work, and the reason is worth stating because it is not
+    /// obvious: user structs get LITERAL, structurally-uniqued LLVM types, so
+    /// a struct whose first field is a POINTER lowers to the very same
+    /// `{ptr, i64, i64}` type object as a `String`. A `shared` field is the
+    /// ordinary way to get one, and that case answered WRONG rather than
+    /// crashing. Only the operand's Kāra type name separates the two, which is
+    /// what this function keys on.
+    ///
+    /// So every registered non-shared user struct now routes here. That is a
+    /// widening of `compile_struct_eq`'s remit, not a narrowing: the
+    /// type-directed comparator is what `Set`/`Map` keys of arbitrary struct
+    /// type have always used, and it dispatches per field on the declared
+    /// `TypeExpr`, so nesting is correct by construction rather than by the
+    /// per-field `compile_binop` recursion that carried the same defect.
     pub(super) fn try_compile_struct_eq_typed(
         &mut self,
         op: &BinOp,
@@ -1169,7 +1161,6 @@ impl<'ctx> super::Codegen<'ctx> {
             .or_else(|| self.type_name_of_expr(right))?;
         if !self.type_decls.struct_types.contains_key(name.as_str())
             || self.type_decls.shared_types.contains_key(name.as_str())
-            || !self.struct_has_vec_field_deep(&name)
         {
             return None;
         }

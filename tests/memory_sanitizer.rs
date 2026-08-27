@@ -748,6 +748,54 @@ mod memory_sanitizer_tests {
     /// builds two vecs that nothing else holds, and their only reference is the
     /// alloca the comparison made. Both legs are here so a leak on the
     /// temporary path can't hide behind a clean bound-operand run.
+    /// Comparing a three-field struct with heap fields neither leaks nor
+    /// double-frees (B-2026-08-27-18).
+    ///
+    /// The fix routes EVERY user struct `==` through `karac_eq_<S>`, which
+    /// takes pointers, so both operands are spilled to allocas. Spilling a
+    /// value that owns heap is the shape that grows a second owner, and the
+    /// widened gate means structs that never took this path before now do —
+    /// so the risk is a regression in the ordinary case, not just the fixed
+    /// one.
+    ///
+    /// The `shared` field is the leg that pins refcounting: `Shared3` is the
+    /// shape whose `{ptr, i64, i64}` layout made it compare WRONG before the
+    /// fix, and a comparison must read through the RC pointer without
+    /// retaining or releasing it. Temporaries are compared alongside bound
+    /// values because only the temporary has no binding to free it.
+    #[test]
+    fn asan_three_field_struct_equality_is_ownership_neutral() {
+        assert_clean_asan_run(
+            r#"
+#[derive(PartialEq, Eq)]
+shared struct Node { v: i64 }
+#[derive(PartialEq, Eq)]
+struct Shared3 { h: Node, a: i64, b: i64 }
+#[derive(PartialEq, Eq)]
+struct Str3 { s: String, x: i64, y: i64 }
+
+fn mk(n: i64) -> Str3 {
+    return Str3 { s: f"item{n}", x: n, y: 0 };
+}
+
+fn main() {
+    let p = Shared3 { h: Node { v: 1 }, a: 5, b: 6 };
+    let q = Shared3 { h: Node { v: 1 }, a: 5, b: 9 };
+    println(f"{p == q}");
+    println(f"{p.h.v}");
+
+    let u = mk(1);
+    let v = mk(1);
+    println(f"{u == v}");
+    println(f"{mk(2) == mk(2)}");
+    println(u.s);
+}
+"#,
+            &["false", "1", "true", "true", "item1"],
+            "asan_three_field_struct_equality_is_ownership_neutral",
+        );
+    }
+
     #[test]
     fn asan_vec_equality_borrows_both_operands() {
         assert_clean_asan_run(

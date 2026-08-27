@@ -638,10 +638,24 @@ impl<'ctx> super::Codegen<'ctx> {
                     // sent Vec fields to the String byte-compare and read
                     // `len` BYTES of an ELEMENT buffer. Must run before
                     // `compile_binop`, which is where that walk lives.
+                    //
+                    // B-2026-08-27-18 dropped the `!llvm_ty_is_vec_struct`
+                    // guard that used to sit here. User structs get LITERAL
+                    // (structurally uniqued) LLVM types, so a struct whose
+                    // first field is any POINTER — a `shared` field is the
+                    // ordinary way to get one — lowers to the very same
+                    // `{ptr, i64, i64}` object as `vec_struct_type()`, and the
+                    // guard excluded it from the type-directed comparator that
+                    // is the only thing able to compare it correctly. Measured:
+                    // `struct T3 { h: Node, a: i64, b: i64 }` with
+                    // `shared struct Node` answered TRUE for two values
+                    // differing in `b`. `try_compile_struct_eq_typed` decides
+                    // by the operand's TYPE NAME and returns `None` for a real
+                    // `String`/`Vec`, so the guard was redundant as well as
+                    // wrong.
                     if matches!(op, BinOp::Eq | BinOp::NotEq)
                         && lhs.is_struct_value()
                         && rhs.is_struct_value()
-                        && !self.llvm_ty_is_vec_struct(lhs.get_type())
                     {
                         if let Some(r) = self.try_compile_struct_eq_typed(
                             op,
