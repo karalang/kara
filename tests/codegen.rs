@@ -12872,6 +12872,41 @@ fn main() {
         assert_eq!(out, "read 7\nafter swap 9\n", "got: {out:?}");
     }
 
+    /// B-2026-08-26-36 — a `ref` binding over a TENSOR element, the shape
+    /// `std.autograd`'s tape actually holds (`Vec[Tensor[f32, [?]]]`), read
+    /// through a struct field exactly as `TensorVar.grad_at` reads it.
+    ///
+    /// Asserts the VALUES, not merely that it compiles, and that is the whole
+    /// point of the test. The first attempt at this feature bound a borrowed
+    /// tensor as a `ref_params` shim AND registered `tensor_var_infos`, which
+    /// left one indirection too many: `tensor_ptr_for_var` loads through the
+    /// shim via `get_data_ptr` and then loads again, reading the control
+    /// block's first word as a pointer. It did not fail loudly — it compiled
+    /// and printed denormal garbage (`0.000…15956413663` where `2 4 8` was
+    /// expected). A test that only checked for successful compilation would
+    /// have passed on the broken version.
+    #[test]
+    fn test_e2e_ref_binding_over_a_tensor_element() {
+        let Some(out) = run_program(
+            r#"
+shared struct Tape { mut grads: Vec[Tensor[f32, [?]]] }
+fn main() {
+    let tp: Tape = Tape { grads: Vec.new() };
+    let z: Tensor[f32, [?]] = Tensor.from([2.0, 4.0, 8.0]);
+    tp.grads.push(z);
+    let g = ref tp.grads[0];
+    println(f"{g[0]} {g[1]} {g[2]}");
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out, "2 4 8\n",
+            "borrowed tensor element must read the container's own block; got: {out:?}"
+        );
+    }
+
     #[test]
     fn test_e2e_vec_swap_relocates_without_running_drop_bodies() {
         let Some(out) = run_program(

@@ -12169,6 +12169,50 @@ impl<'ctx> super::Codegen<'ctx> {
         };
 
         let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+
+        // A borrowed TENSOR element is NOT bound as a ref shim. Tensors use the
+        // by-value ref ABI (`ref_return_is_value_abi`), so a `Vec[Tensor]` slot
+        // holds the control-block POINTER, and a tensor binding's alloca is
+        // expected to hold that pointer directly — which is exactly how the
+        // `ref Tensor` accessor path (`let r = h.view()`) binds one.
+        //
+        // Load through the element slot here and take that path, registering
+        // `tensor_var_infos` and NOT `ref_params`. Registering both is the trap
+        // this arm exists to avoid: `tensor_ptr_for_var` calls `get_data_ptr`,
+        // which already loads through a `ref_params` shim, and then loads
+        // AGAIN — reading the control block's first word as a pointer. That
+        // does not fail loudly; it compiles and yields denormal garbage
+        // (`10 / 2 / 4` came back as `0.000…15956413663`). One indirection,
+        // registered in one place.
+        //
+        // No `FreeTensor` cleanup is pushed: the container owns the block, and
+        // freeing a borrow would double-free it.
+        if let Some(te) = &elem_te {
+            if let Some(info) = self.tensor_var_info_from_type_expr(te) {
+                let block = self
+                    .builder
+                    .build_load(ptr_ty, elem_ptr, &format!("{name}.tblk"))
+                    .map_err(|e| e.to_string())?
+                    .into_pointer_value();
+                let slot = self
+                    .builder
+                    .build_alloca(ptr_ty, name)
+                    .map_err(|e| e.to_string())?;
+                self.builder
+                    .build_store(slot, block)
+                    .map_err(|e| e.to_string())?;
+                self.variables.insert(
+                    name.clone(),
+                    VarSlot {
+                        ptr: slot,
+                        ty: ptr_ty.into(),
+                    },
+                );
+                self.accel.tensor_var_infos.insert(name.clone(), info);
+                return Ok(true);
+            }
+        }
+
         let shim = self
             .builder
             .build_alloca(ptr_ty, &format!("{name}.refshim"))

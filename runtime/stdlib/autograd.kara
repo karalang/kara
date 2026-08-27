@@ -377,7 +377,7 @@ impl TensorVar {
     #[must_use]
     pub fn value(ref self) -> Tensor[f32, [?]] {
         let tp = self.tape;
-        let v = tp.values[self.idx];
+        let v = ref tp.values[self.idx];
         v + 0.0
     }
 
@@ -386,7 +386,7 @@ impl TensorVar {
     #[must_use = "the gradient is the whole point of reverse-mode AD"]
     pub fn grad(ref self) -> Tensor[f32, [?]] {
         let tp = self.tape;
-        let g = tp.grads[self.idx];
+        let g = ref tp.grads[self.idx];
         g + 0.0
     }
 
@@ -395,7 +395,7 @@ impl TensorVar {
     #[must_use = "the gradient is the whole point of reverse-mode AD"]
     pub fn grad_at(ref self, i: i64) -> f32 {
         let tp = self.tape;
-        let g = tp.grads[self.idx];
+        let g = ref tp.grads[self.idx];
         g[i]
     }
 
@@ -404,8 +404,8 @@ impl TensorVar {
     #[must_use = "autograd ops build a graph node; discarding it drops the computation"]
     pub fn add(ref self, other: ref TensorVar) -> TensorVar {
         let tp = self.tape;
-        let av = tp.values[self.idx];
-        let bv = tp.values[other.idx];
+        let av = ref tp.values[self.idx];
+        let bv = ref tp.values[other.idx];
         let v: Tensor[f32, [?]] = av + bv;
         let zg: Tensor[f32, [?]] = v * 0.0;
         tp.values.push(v);
@@ -418,8 +418,8 @@ impl TensorVar {
     #[must_use = "autograd ops build a graph node; discarding it drops the computation"]
     pub fn sub(ref self, other: ref TensorVar) -> TensorVar {
         let tp = self.tape;
-        let av = tp.values[self.idx];
-        let bv = tp.values[other.idx];
+        let av = ref tp.values[self.idx];
+        let bv = ref tp.values[other.idx];
         let v: Tensor[f32, [?]] = av - bv;
         let zg: Tensor[f32, [?]] = v * 0.0;
         tp.values.push(v);
@@ -432,8 +432,8 @@ impl TensorVar {
     #[must_use = "autograd ops build a graph node; discarding it drops the computation"]
     pub fn mul(ref self, other: ref TensorVar) -> TensorVar {
         let tp = self.tape;
-        let av = tp.values[self.idx];
-        let bv = tp.values[other.idx];
+        let av = ref tp.values[self.idx];
+        let bv = ref tp.values[other.idx];
         let v: Tensor[f32, [?]] = av * bv;
         let zg: Tensor[f32, [?]] = v * 0.0;
         tp.values.push(v);
@@ -446,7 +446,7 @@ impl TensorVar {
     #[must_use = "autograd ops build a graph node; discarding it drops the computation"]
     pub fn neg(ref self) -> TensorVar {
         let tp = self.tape;
-        let sv = tp.values[self.idx];
+        let sv = ref tp.values[self.idx];
         let v: Tensor[f32, [?]] = sv * -1.0;
         let zg: Tensor[f32, [?]] = v * 0.0;
         tp.values.push(v);
@@ -460,7 +460,7 @@ impl TensorVar {
     #[must_use = "autograd ops build a graph node; discarding it drops the computation"]
     pub fn relu(ref self) -> TensorVar {
         let tp = self.tape;
-        let sv = tp.values[self.idx];
+        let sv = ref tp.values[self.idx];
         let v: Tensor[f32, [?]] = sv.map(|e| if e > 0.0 { e } else { 0.0 });
         let zg: Tensor[f32, [?]] = v * 0.0;
         tp.values.push(v);
@@ -474,7 +474,7 @@ impl TensorVar {
     #[must_use = "autograd ops build a graph node; discarding it drops the computation"]
     pub fn sigmoid(ref self) -> TensorVar {
         let tp = self.tape;
-        let sv = tp.values[self.idx];
+        let sv = ref tp.values[self.idx];
         let v: Tensor[f32, [?]] = sv.map(|e| 1.0 / (1.0 + (0.0 - e).exp()));
         let zg: Tensor[f32, [?]] = v * 0.0;
         tp.values.push(v);
@@ -487,7 +487,7 @@ impl TensorVar {
     #[must_use = "autograd ops build a graph node; discarding it drops the computation"]
     pub fn tanh(ref self) -> TensorVar {
         let tp = self.tape;
-        let sv = tp.values[self.idx];
+        let sv = ref tp.values[self.idx];
         let v: Tensor[f32, [?]] = sv.map(|e| e.tanh());
         let zg: Tensor[f32, [?]] = v * 0.0;
         tp.values.push(v);
@@ -516,7 +516,7 @@ impl TensorVar {
     #[must_use = "autograd ops build a graph node; discarding it drops the computation"]
     pub fn softmax(ref self) -> TensorVar {
         let tp = self.tape;
-        let sv = tp.values[self.idx];
+        let sv = ref tp.values[self.idx];
         let mx = sv.max();
         let shifted: Tensor[f32, [?]] = sv - mx;
         let ex: Tensor[f32, [?]] = shifted.map(|e| e.exp());
@@ -537,7 +537,7 @@ impl TensorVar {
     #[must_use = "autograd ops build a graph node; discarding it drops the computation"]
     pub fn gelu(ref self) -> TensorVar {
         let tp = self.tape;
-        let sv = tp.values[self.idx];
+        let sv = ref tp.values[self.idx];
         let v: Tensor[f32, [?]] = sv.map(|e| {
             // B-2026-08-14-12: `c` is annotated so the whole kernel runs at the
             // element width. Unannotated, the literal defaults to f64 and the
@@ -564,7 +564,7 @@ impl TensorVar {
     #[must_use = "autograd ops build a graph node; discarding it drops the computation"]
     pub fn sum(ref self) -> TensorVar {
         let tp = self.tape;
-        let sv = tp.values[self.idx];
+        let sv = ref tp.values[self.idx];
         let s = sv.sum();
         let v: Tensor[f32, [?]] = Tensor.full([1], s);
         let zg: Tensor[f32, [?]] = v * 0.0;
@@ -583,7 +583,7 @@ impl TensorVar {
     #[must_use = "autograd ops build a graph node; discarding it drops the computation"]
     pub fn mean(ref self) -> TensorVar {
         let tp = self.tape;
-        let sv = tp.values[self.idx];
+        let sv = ref tp.values[self.idx];
         let total = sv.sum();
         let ones: Tensor[f32, [?]] = sv * 0.0 + 1.0;
         let n = ones.sum();
@@ -620,8 +620,8 @@ impl TensorVar {
     #[must_use = "a loss is only useful once you call backward() and read a gradient"]
     pub fn bce(ref self, target: ref TensorVar) -> TensorVar {
         let tp = self.tape;
-        let p = tp.values[self.idx];
-        let t = tp.values[target.idx];
+        let p = ref tp.values[self.idx];
+        let t = ref tp.values[target.idx];
         let logp: Tensor[f32, [?]] = p.map(|e| e.ln());
         let log1mp: Tensor[f32, [?]] = p.map(|e| (1.0 - e).ln());
         let term: Tensor[f32, [?]] = t * logp + (1.0 - t) * log1mp;
@@ -648,8 +648,8 @@ impl TensorVar {
     #[must_use = "a loss is only useful once you call backward() and read a gradient"]
     pub fn cross_entropy(ref self, target: ref TensorVar) -> TensorVar {
         let tp = self.tape;
-        let x = tp.values[self.idx];
-        let t = tp.values[target.idx];
+        let x = ref tp.values[self.idx];
+        let t = ref tp.values[target.idx];
         let mx = x.max();
         let shifted: Tensor[f32, [?]] = x - mx;
         let ex: Tensor[f32, [?]] = shifted.map(|e| e.exp());
@@ -673,57 +673,57 @@ impl TensorVar {
     /// node's gradient before it is read. Single-use per forward graph.
     pub fn backward(ref self) {
         let tp = self.tape;
-        let seed = tp.grads[self.idx];
+        let seed = ref tp.grads[self.idx];
         tp.grads[self.idx] = seed + 1.0;
         let n = tp.kind.len();
         let mut i = n - 1;
         while i >= 0 {
-            let g = tp.grads[i];
+            let g = ref tp.grads[i];
             let k = tp.kind[i];
             let a = tp.pa[i];
             let b = tp.pb[i];
             match k {
                 1 => {
-                    let ga = tp.grads[a];
+                    let ga = ref tp.grads[a];
                     tp.grads[a] = ga + g;
-                    let gb = tp.grads[b];
+                    let gb = ref tp.grads[b];
                     tp.grads[b] = gb + g;
                 }
                 2 => {
-                    let ga = tp.grads[a];
+                    let ga = ref tp.grads[a];
                     tp.grads[a] = ga + g;
-                    let gb = tp.grads[b];
+                    let gb = ref tp.grads[b];
                     tp.grads[b] = gb - g;
                 }
                 3 => {
-                    let vb = tp.values[b];
-                    let ga = tp.grads[a];
+                    let vb = ref tp.values[b];
+                    let ga = ref tp.grads[a];
                     tp.grads[a] = ga + g * vb;
-                    let va = tp.values[a];
-                    let gb = tp.grads[b];
+                    let va = ref tp.values[a];
+                    let gb = ref tp.grads[b];
                     tp.grads[b] = gb + g * va;
                 }
                 5 => {
-                    let ga = tp.grads[a];
+                    let ga = ref tp.grads[a];
                     tp.grads[a] = ga - g;
                 }
                 6 => {
                     // ReLU: pass the gradient where the INPUT was positive.
-                    let xa = tp.values[a];
+                    let xa = ref tp.values[a];
                     let mask: Tensor[f32, [?]] = xa.map(|e| if e > 0.0 { 1.0 } else { 0.0 });
-                    let ga = tp.grads[a];
+                    let ga = ref tp.grads[a];
                     tp.grads[a] = ga + g * mask;
                 }
                 7 => {
                     // Sigmoid: s·(1 − s) on the OUTPUT s (this node's value).
-                    let sv = tp.values[i];
-                    let ga = tp.grads[a];
+                    let sv = ref tp.values[i];
+                    let ga = ref tp.grads[a];
                     tp.grads[a] = ga + g * sv * (1.0 - sv);
                 }
                 8 => {
                     // Tanh: 1 − t² on the OUTPUT t (this node's value).
-                    let tv = tp.values[i];
-                    let ga = tp.grads[a];
+                    let tv = ref tp.values[i];
+                    let ga = ref tp.grads[a];
                     tp.grads[a] = ga + g * (1.0 - tv * tv);
                 }
                 9 => {
@@ -731,32 +731,32 @@ impl TensorVar {
                     // gradient (`g` is this node's `[1]` grad) back to the
                     // parent's shape via `xa * 0.0 + gs`.
                     let gs = g[0];
-                    let xa = tp.values[a];
-                    let ga = tp.grads[a];
+                    let xa = ref tp.values[a];
+                    let ga = ref tp.grads[a];
                     tp.grads[a] = ga + (xa * 0.0 + gs);
                 }
                 10 => {
                     // Mean: d(mean(x))/dx_i = 1/N — broadcast g_scalar/N back to
                     // the parent's shape. N = (xa*0 + 1).sum(), shape-agnostic.
-                    let xa = tp.values[a];
+                    let xa = ref tp.values[a];
                     let ones: Tensor[f32, [?]] = xa * 0.0 + 1.0;
                     let n = ones.sum();
                     let gs = g[0] / n;
-                    let ga = tp.grads[a];
+                    let ga = ref tp.grads[a];
                     tp.grads[a] = ga + (xa * 0.0 + gs);
                 }
                 11 => {
                     // Softmax: dense-Jacobian VJP grad_x = s ⊙ (g − Σ(g ⊙ s)),
                     // s = this node's stored output (the softmax values).
-                    let sv = tp.values[i];
+                    let sv = ref tp.values[i];
                     let gs = g * sv;
                     let dot = gs.sum();
-                    let ga = tp.grads[a];
+                    let ga = ref tp.grads[a];
                     tp.grads[a] = ga + sv * (g - dot);
                 }
                 12 => {
                     // GELU (tanh approx): per-element derivative on the INPUT x.
-                    let xa = tp.values[a];
+                    let xa = ref tp.values[a];
                     let dmask: Tensor[f32, [?]] = xa.map(|e| {
                         // B-2026-08-14-12 — annotated for the same reason as
                         // the forward pass above: without it `c` is f64, the
@@ -771,36 +771,36 @@ impl TensorVar {
                         let du = c * (1.0 + 0.134145 * e * e);
                         0.5 * (1.0 + t) + 0.5 * e * (1.0 - t * t) * du
                     });
-                    let ga = tp.grads[a];
+                    let ga = ref tp.grads[a];
                     tp.grads[a] = ga + g * dmask;
                 }
                 13 => {
                     // BCE: dL/dp = (p − t) / (p·(1−p)) / N into `self` (a); the
                     // target (b) is a constant label — no gradient propagated.
-                    let p = tp.values[a];
-                    let t = tp.values[b];
+                    let p = ref tp.values[a];
+                    let t = ref tp.values[b];
                     let ones: Tensor[f32, [?]] = p * 0.0 + 1.0;
                     let nf = ones.sum();
                     let num: Tensor[f32, [?]] = p - t;
                     let den: Tensor[f32, [?]] = p * (1.0 - p);
                     let per: Tensor[f32, [?]] = num / den;
                     let gs = g[0] / nf;
-                    let ga = tp.grads[a];
+                    let ga = ref tp.grads[a];
                     tp.grads[a] = ga + per * gs;
                 }
                 14 => {
                     // Softmax cross-entropy (logits): dL/dx = (softmax(x) − t)·g
                     // into `self` (a), recomputing softmax from the stored input;
                     // the target distribution (b) is constant.
-                    let x = tp.values[a];
-                    let t = tp.values[b];
+                    let x = ref tp.values[a];
+                    let t = ref tp.values[b];
                     let mx = x.max();
                     let shifted: Tensor[f32, [?]] = x - mx;
                     let ex: Tensor[f32, [?]] = shifted.map(|e| e.exp());
                     let denom = ex.sum();
                     let s: Tensor[f32, [?]] = ex / denom;
                     let gs = g[0];
-                    let ga = tp.grads[a];
+                    let ga = ref tp.grads[a];
                     tp.grads[a] = ga + (s - t) * gs;
                 }
                 _ => {}
@@ -873,7 +873,7 @@ impl MatVar {
     #[must_use]
     pub fn value(ref self) -> Tensor[f32, [?, ?]] {
         let tp = self.tape;
-        let v = tp.values[self.idx];
+        let v = ref tp.values[self.idx];
         v + 0.0
     }
 
@@ -881,7 +881,7 @@ impl MatVar {
     #[must_use = "the gradient is the whole point of reverse-mode AD"]
     pub fn grad(ref self) -> Tensor[f32, [?, ?]] {
         let tp = self.tape;
-        let g = tp.grads[self.idx];
+        let g = ref tp.grads[self.idx];
         g + 0.0
     }
 
@@ -889,7 +889,7 @@ impl MatVar {
     #[must_use = "the gradient is the whole point of reverse-mode AD"]
     pub fn grad_at(ref self, i: i64, j: i64) -> f32 {
         let tp = self.tape;
-        let g = tp.grads[self.idx];
+        let g = ref tp.grads[self.idx];
         g[i, j]
     }
 
@@ -898,8 +898,8 @@ impl MatVar {
     #[must_use = "autograd ops build a graph node; discarding it drops the computation"]
     pub fn add(ref self, other: ref MatVar) -> MatVar {
         let tp = self.tape;
-        let av = tp.values[self.idx];
-        let bv = tp.values[other.idx];
+        let av = ref tp.values[self.idx];
+        let bv = ref tp.values[other.idx];
         let v: Tensor[f32, [?, ?]] = av + bv;
         let zg: Tensor[f32, [?, ?]] = v * 0.0;
         tp.values.push(v);
@@ -913,8 +913,8 @@ impl MatVar {
     #[must_use = "autograd ops build a graph node; discarding it drops the computation"]
     pub fn matmul(ref self, other: ref MatVar) -> MatVar {
         let tp = self.tape;
-        let av = tp.values[self.idx];
-        let bv = tp.values[other.idx];
+        let av = ref tp.values[self.idx];
+        let bv = ref tp.values[other.idx];
         let v: Tensor[f32, [?, ?]] = av.matmul(bv);
         let zg: Tensor[f32, [?, ?]] = v * 0.0;
         tp.values.push(v);
@@ -929,33 +929,33 @@ impl MatVar {
     /// `matmul` applies the transpose-product pair.
     pub fn backward(ref self) {
         let tp = self.tape;
-        let seed = tp.grads[self.idx];
+        let seed = ref tp.grads[self.idx];
         tp.grads[self.idx] = seed + 1.0;
         let n = tp.kind.len();
         let mut i = n - 1;
         while i >= 0 {
-            let g = tp.grads[i];
+            let g = ref tp.grads[i];
             let k = tp.kind[i];
             let a = tp.pa[i];
             let b = tp.pb[i];
             match k {
                 1 => {
-                    let ga = tp.grads[a];
+                    let ga = ref tp.grads[a];
                     tp.grads[a] = ga + g;
-                    let gb = tp.grads[b];
+                    let gb = ref tp.grads[b];
                     tp.grads[b] = gb + g;
                 }
                 11 => {
                     // C = A · B → grad_A = grad_C · Bᵀ, grad_B = Aᵀ · grad_C.
-                    let av = tp.values[a];
-                    let bv = tp.values[b];
+                    let av = ref tp.values[a];
+                    let bv = ref tp.values[b];
                     let bt: Tensor[f32, [?, ?]] = bv.transpose();
                     let g_a: Tensor[f32, [?, ?]] = g.matmul(bt);
-                    let ga = tp.grads[a];
+                    let ga = ref tp.grads[a];
                     tp.grads[a] = ga + g_a;
                     let at: Tensor[f32, [?, ?]] = av.transpose();
                     let g_b: Tensor[f32, [?, ?]] = at.matmul(g);
-                    let gb = tp.grads[b];
+                    let gb = ref tp.grads[b];
                     tp.grads[b] = gb + g_b;
                 }
                 _ => {}

@@ -121,11 +121,11 @@ pub fn cosine_similarity_matrix[Q, N, D](
     let mut i = 0;
     while i < q {
         // Chained fused combines; row-view reuse is clean since B-2026-07-20-6.
-        let qrow = qrows[i];
+        let qrow = ref qrows[i];
         let nq = qrow.zip_with(qrow, |x, y| x * y).sum().sqrt();
         let mut j = 0;
         while j < n {
-            let crow = crows[j];
+            let crow = ref crows[j];
             let d = qrow.zip_with(crow, |x, y| x * y).sum();
             let nr = crow.zip_with(crow, |x, y| x * y).sum().sqrt();
             out[i, j] = d / (nq * nr);
