@@ -125,16 +125,6 @@ mod memory_sanitizer_tests {
         run_under_asan_opts(src, label, false, false, true)
     }
 
-    /// B-2026-08-08-16 — the flip's own guard. Every other fixture in this file
-    /// now compiles with auto-par, but a fixture that quietly stops being
-    /// parallelized still passes while covering nothing, and the same is true
-    /// of the whole suite if the analysis ever returns empty. This asserts the
-    /// harness's pipeline actually produces parallel groups, so "999 green with
-    /// auto-par on" keeps meaning what it says.
-    ///
-    /// Deliberately checks the ANALYSIS rather than the emitted object: it is
-    /// the thing the harness threads into codegen, it needs no linker or
-    /// symbol-table reading, and it fails for the one reason worth failing for.
     /// A fresh `Array[T, N]` temporary compared with `==` drops its elements
     /// (B-2026-08-27-30).
     ///
@@ -189,6 +179,160 @@ fn main() {
         );
     }
 
+    /// An INDEXED fresh `Array[T, N]` temporary drops its elements
+    /// (B-2026-08-27-31).
+    ///
+    /// The `==`-operand position got this in B-2026-08-27-30; this is the same
+    /// array with no header and no owner, reached one expression kind over.
+    /// Measured before the fix: `mk(4)[0]` over `Array[String, 2]` lost 13
+    /// bytes in 2 allocations -- BOTH elements, the indexed one included.
+    ///
+    /// Lowered exactly as `compile_inline_temp_vec_index_ex` lowers the `Vec`
+    /// temporary it is the peer of -- read the element, DEEP-CLONE it, drop the
+    /// whole temporary -- which is why the `Vec` spelling of this program was
+    /// already clean. The clone is what makes dropping the indexed element
+    /// safe, and it is also what the interpreter does: indexing does not
+    /// consume, so the read is a copy. The clone in turn has no consuming
+    /// binding, so `expr_is_inline_temp_vec_heap_index` admits the shape and
+    /// every owning consumer frees it -- without that half the fix trades 2
+    /// leaked elements for 1 leaked clone.
+    ///
+    /// The BOUND legs are the controls, and they are not decoration: a bound
+    /// array is owned by its binding, so a drop here would double-free. Each is
+    /// read back after the indexing so a wrong drop surfaces as a
+    /// use-after-free rather than staying latent. `Array[i64, N]` pins the
+    /// element policy (`vec_element_drain_fn`, shared with the `Vec` drain) --
+    /// a scalar element clones nothing and drops nothing.
+    ///
+    /// An `Array[Vec[..], N]` TEMPORARY is deliberately absent: reading an
+    /// element out of one needs either a nested index or an indexed-receiver
+    /// method call, and both are separate v1 codegen gaps ("requires the
+    /// indexed container to be a named variable"). That element type is
+    /// covered as a struct FIELD in the sibling fixture below, which reaches
+    /// the same `emit_drop_fn_for_array` with the same element policy.
+    ///
+    /// The loop leg pins that the drop is emitted at the READ rather than
+    /// registered at scope exit: a scope-exit registration hoists one entry
+    /// alloca and frees only the last iteration's value, which is the
+    /// B-2026-08-25-33 shape `free_fresh_owned_struct_key_arg` documents.
+    #[test]
+    fn asan_indexed_fresh_array_temp_drops_its_elements() {
+        assert_clean_asan_run(
+            r#"
+fn mk(n: i64) -> Array[String, 2] { return Array[f"item{n}", f"item{n + 1}"]; }
+fn mknum(n: i64) -> Array[i64, 2] { return Array[n, n + 1]; }
+
+fn main() {
+    println(mk(4)[0]);
+    println(mk(4)[1]);
+    println(mknum(9)[1]);
+    for i in 0..3 {
+        println(mk(i)[0]);
+    }
+    let p = mk(1);
+    println(p[0]);
+    println(p[1]);
+}
+"#,
+            &[
+                "item4", "item5", "10", "item0", "item1", "item2", "item1", "item2",
+            ],
+            "asan_indexed_fresh_array_temp_drops_its_elements",
+        );
+    }
+
+    /// A struct FIELD of type `Array[T, N]` has its elements dropped
+    /// (B-2026-08-27-32).
+    ///
+    /// Unlike its two siblings this needs no temporary, no comparison and no
+    /// index to leak -- the owner is an ordinary binding whose drop was simply
+    /// incomplete. `struct Holder { a: Array[String, 2] }` lost 13 bytes in 2
+    /// allocations on the program below with the last two lines deleted.
+    ///
+    /// EVERY classifier in `emit_struct_drop_synthesis_impl` missed it, for two
+    /// independent reasons: the name-based pass reads the field's last path
+    /// segment and an array `TypeExpr` is `TypeKind::Array`, not a `Path`; and
+    /// the type-driven nested-aggregate pass destructures a `StructType` while
+    /// an array lowers to `ArrayType`. So the field was classified no-cleanup
+    /// twice over.
+    ///
+    /// THE BY-VALUE-PARAM LEG IS THE ONE THAT MATTERS. Widening a drop obliges
+    /// the move sites to widen with it, and here that is not a theoretical
+    /// pairing: with the drop landed alone, `fn take(h: Holder) -> String {
+    /// return h.a[0]; }` turned this row's 13-byte leak into a
+    /// HEAP-USE-AFTER-FREE -- the callee's scope-exit drop freed the very
+    /// element it had just handed back. The paired half is
+    /// `vec_index_elem_type_expr`'s array arm, which is what makes
+    /// `maybe_defensive_copy_param_arg` deep-clone the read; the `Vec` twin of
+    /// that program was already clean through exactly that resolver. The leg
+    /// stays in this fixture because it fails LOUDLY (exit code, not a leak
+    /// count) the moment the drop is widened without the copy.
+    ///
+    /// The move-out leg is the other direction of the same pairing: `let taken
+    /// = h.a;` moves the field, so `h`'s drop must not free it too.
+    /// `Array[i64, 2]` pins that a scalar element still classifies as
+    /// no-cleanup, `Array[Vec[i64], 2]` that the element policy is shared with
+    /// the `Vec` drain rather than keyed on `String`, and `Vec[Holder]` that
+    /// the field drop is reached through a container's element drain and not
+    /// only at a bare scope exit.
+    #[test]
+    fn asan_array_struct_field_drops_its_elements() {
+        assert_clean_asan_run(
+            r#"
+fn mk(n: i64) -> Array[String, 2] { return Array[f"item{n}", f"item{n + 1}"]; }
+fn mkv(n: i64) -> Array[Vec[i64], 2] {
+    let mut x: Vec[i64] = Vec.new();
+    x.push(n);
+    let mut y: Vec[i64] = Vec.new();
+    y.push(n + 1);
+    return Array[x, y];
+}
+
+struct Holder { a: Array[String, 2] }
+struct Nums { ns: Array[i64, 2] }
+struct VHold { vs: Array[Vec[i64], 2] }
+
+fn take(h: Holder) -> String { return h.a[0]; }
+
+fn main() {
+    let h = Holder { a: mk(7) };
+    println(h.a[0]);
+    println(h.a[1]);
+    println(h.a[0]);
+
+    println(take(Holder { a: mk(3) }));
+
+    let moved = Holder { a: mk(5) };
+    let taken = moved.a;
+    println(taken[0]);
+
+    let n = Nums { ns: Array[10, 20] };
+    println(n.ns[1]);
+
+    let vh = VHold { vs: mkv(2) };
+    println(vh.vs[0].len());
+
+    let mut v: Vec[Holder] = Vec.new();
+    v.push(Holder { a: mk(1) });
+    v.push(Holder { a: mk(3) });
+    println(v.len());
+}
+"#,
+            &["item7", "item8", "item7", "item3", "item5", "20", "1", "2"],
+            "asan_array_struct_field_drops_its_elements",
+        );
+    }
+
+    /// B-2026-08-08-16 — the flip's own guard. Every other fixture in this file
+    /// now compiles with auto-par, but a fixture that quietly stops being
+    /// parallelized still passes while covering nothing, and the same is true
+    /// of the whole suite if the analysis ever returns empty. This asserts the
+    /// harness's pipeline actually produces parallel groups, so "999 green with
+    /// auto-par on" keeps meaning what it says.
+    ///
+    /// Deliberately checks the ANALYSIS rather than the emitted object: it is
+    /// the thing the harness threads into codegen, it needs no linker or
+    /// symbol-table reading, and it fails for the one reason worth failing for.
     #[test]
     fn asan_harness_actually_parallelizes() {
         let src = "fn work(n: i64) -> i64 { let mut t = 0; for i in 0..n { t = t + i; } t }\n\

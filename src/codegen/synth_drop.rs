@@ -1565,6 +1565,29 @@ impl<'ctx> super::Codegen<'ctx> {
             /// consume site neutralizes the SOURCE tag (`zero_struct_field_move_cap`'s
             /// Option arm) so a consumed leaf's own free isn't doubled here.
             OptionInline,
+            /// B-2026-08-27-32 — a field whose declared type is
+            /// `Array[T, N]` with a literal extent and a heap element type.
+            ///
+            /// EVERY classifier above misses it, and for two independent
+            /// reasons. The name-based pass reads `struct_field_type_names`,
+            /// which is the last path segment of the field's `TypeExpr` — but
+            /// an array is `TypeKind::Array { element, size }`, not a `Path`,
+            /// so the entry is `None` and no arm matches. The type-driven
+            /// nested-aggregate pass then requires the field's LLVM type to be
+            /// a `StructType`, and an array lowers to `ArrayType`, so it
+            /// `continue`s before asking anything. The field was therefore
+            /// classified no-cleanup and its elements were freed by nobody:
+            /// `struct Holder { a: Array[String, 2] }` leaked 13 bytes in 2
+            /// allocations with no comparison, index or temporary in the
+            /// program at all.
+            ///
+            /// Freed via the field's own `karac_drop_Array_<T>_<N>`
+            /// (`emit_drop_fn_for_array`, added by B-2026-08-27-30's fix for
+            /// the `==`-operand position). Classified only when that returns
+            /// `Some`, so an `Array[i64, N]` field adds nothing — the element
+            /// policy is `vec_element_drain_fn`'s, shared with the `Vec` drain,
+            /// exactly as it is on the comparison path.
+            ArrayField,
         }
         let mut kinds: Vec<FieldDrop> = field_kinds
             .iter()
@@ -1884,6 +1907,10 @@ impl<'ctx> super::Codegen<'ctx> {
         // the generic case stays out until it is measured on its own; the
         // non-generic answer is the one leg 1 verified.
         let mut option_drops: Vec<Option<FunctionValue<'ctx>>> = vec![None; kinds.len()];
+        // B-2026-08-27-32 — the `ArrayField` element type + extent, parallel to
+        // `option_drops` and for the same reason: the local `FieldDrop` enum
+        // cannot carry a `TypeExpr`.
+        let mut array_drops: Vec<Option<(TypeExpr, u32)>> = vec![None; kinds.len()];
         let struct_non_generic = self
             .type_decls
             .struct_generic_params
@@ -2183,6 +2210,53 @@ impl<'ctx> super::Codegen<'ctx> {
                 .collect();
             for idx in gpu_idxs {
                 kinds[idx] = FieldDrop::GpuBufferFree;
+            }
+        }
+        // B-2026-08-27-32 — `Array[T, N]` fields with a heap element type.
+        //
+        // Runs LAST among the classifiers, so it only ever promotes a field
+        // every other pass left `None` — which for an array field is all of
+        // them, since the name-based pass sees `None` (an array `TypeExpr` is
+        // `TypeKind::Array`, not a `Path`, so there is no last segment to
+        // match) and the nested-aggregate pass skips it (`ArrayType`, not the
+        // `StructType` it destructures). Phase 1 collects the candidates and
+        // phase 2 synthesizes, the same split the nested-struct and Option
+        // passes use: `emit_drop_fn_for_array` needs `&mut self`, which cannot
+        // co-borrow `kinds`.
+        //
+        // The field TypeExpr is resolved through the active mono `subst` first,
+        // so a generic parent's `Array[T, 2]` sees this monomorph's element
+        // type rather than the erased param — the same resolution every pass
+        // above does for the same reason.
+        {
+            let array_fields: Vec<(usize, TypeExpr, u32)> = self
+                .type_decls
+                .struct_field_type_exprs
+                .get(struct_name)
+                .map(|ftes| {
+                    ftes.iter()
+                        .enumerate()
+                        .filter(|(idx, _)| kinds.get(*idx) == Some(&FieldDrop::None))
+                        .filter_map(|(idx, fte)| {
+                            let rte = match subst {
+                                Some(sb) => {
+                                    crate::codegen::helpers::subst_type_params_in_type_expr(fte, sb)
+                                }
+                                None => fte.clone(),
+                            };
+                            let (elem_te, n) = self.array_elem_and_len(&rte)?;
+                            Some((idx, elem_te, n))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            for (idx, elem_te, n) in array_fields {
+                // `None` = the element owns no heap (`Array[i64, N]`), so the
+                // field genuinely needs no cleanup and stays `None`.
+                if self.emit_drop_fn_for_array(&elem_te, n).is_some() {
+                    kinds[idx] = FieldDrop::ArrayField;
+                    array_drops[idx] = Some((elem_te, n));
+                }
             }
         }
         if kinds.iter().all(|k| *k == FieldDrop::None) {
@@ -2897,6 +2971,30 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.current_fn = Some(drop_fn);
                     self.emit_tuple_elem_drops(field_ptr, fst, &elem_tes);
                     self.current_fn = saved_fn;
+                }
+                FieldDrop::ArrayField => {
+                    // B-2026-08-27-32 — GEP the `[N x T]` field and hand it to
+                    // the array's own element-walking drop. Memoized: the
+                    // classification pass already emitted it, so this is a
+                    // cache hit that touches no IR until the call.
+                    let Some((elem_te, n)) = array_drops[field_idx].clone() else {
+                        continue;
+                    };
+                    let Some(array_drop_fn) = self.emit_drop_fn_for_array(&elem_te, n) else {
+                        continue;
+                    };
+                    let field_ptr = self
+                        .builder
+                        .build_struct_gep(
+                            st,
+                            p_arg,
+                            field_idx as u32,
+                            &format!("drop.field{field_idx}.arr.p"),
+                        )
+                        .unwrap();
+                    self.builder
+                        .build_call(array_drop_fn, &[field_ptr.into()], "")
+                        .unwrap();
                 }
                 FieldDrop::NestedStruct => {
                     // #18 — route the nested struct field through its own

@@ -3004,6 +3004,37 @@ impl<'ctx> super::Codegen<'ctx> {
             (tmp, arr_val.get_type())
         };
 
+        // B-2026-08-27-31 — a FRESH-TEMPORARY `Array[T, N]` being indexed owns
+        // its elements and nothing else will ever free them: unlike the `Vec`
+        // and `Slice` siblings an array is a by-value `[N x T]` with no header,
+        // so the temp materialized above is the only handle that ever existed.
+        // Measured before this: `mk(4)[0]` over `Array[String, 2]` lost 13
+        // bytes in 2 allocations — BOTH elements, the indexed one included.
+        //
+        // Handled exactly as `compile_inline_temp_vec_index_ex` handles the
+        // `Vec` temporary it is the peer of, which is why that path is already
+        // clean on the same shape: read the element, DEEP-CLONE it, then drop
+        // the whole temporary. The clone is what makes dropping the indexed
+        // element safe — the load below shallow-aliases the element's buffer
+        // for a non-Copy element type, so freeing the array without it would
+        // hand back a dangling `{ptr,len,cap}`. It also matches the
+        // interpreter, the oracle here: indexing does not consume, so `v[i]`
+        // stays valid and the read is a copy.
+        //
+        // `expr_yields_fresh_owned_temp` is the gate. A BOUND array indexes
+        // through the identifier fast path above and never reaches this branch
+        // at all, but a place expression that does (a field read, `h.a[0]`) is
+        // owned by its parent, whose own drop frees it — dropping here would
+        // double-free against the B-2026-08-27-32 field drop.
+        let owned_array_temp = if matches!(arr_ty, BasicTypeEnum::ArrayType(_))
+            && !matches!(&object.kind, ExprKind::Identifier(_))
+            && self.expr_yields_fresh_owned_temp(object)
+        {
+            self.array_te_of_operand(object)
+        } else {
+            None
+        };
+
         // Bounds check: panic if index >= array_length.
         if let BasicTypeEnum::ArrayType(at) = arr_ty {
             let len = i64_t.const_int(at.len() as u64, false);
@@ -3038,6 +3069,32 @@ impl<'ctx> super::Codegen<'ctx> {
                 .builder
                 .build_load(elem_ty, elem_ptr, "arr.elem")
                 .unwrap();
+            // B-2026-08-27-31 — clone-then-drop a fresh temporary (see above).
+            if let Some((elem_te, n)) = owned_array_temp {
+                if let Some(drop_fn) = self.emit_drop_fn_for_array(&elem_te, n) {
+                    let fn_val = self.current_fn.unwrap();
+                    // Deep-clone first: the load above shallow-aliases the
+                    // element's buffer, which the drop is about to free.
+                    let out = if super::vec_method::is_trivially_copyable_te(&elem_te) {
+                        val
+                    } else {
+                        let src = self.create_entry_alloca(fn_val, "arr.elem.src", elem_ty);
+                        self.builder.build_store(src, val).unwrap();
+                        let dst = self.create_entry_alloca(fn_val, "arr.elem.clone", elem_ty);
+                        let clone_fn = self.emit_clone_fn_for_type_expr(&elem_te);
+                        self.builder
+                            .build_call(clone_fn, &[src.into(), dst.into()], "")
+                            .unwrap();
+                        self.builder
+                            .build_load(elem_ty, dst, "arr.elem.cloned")
+                            .unwrap()
+                    };
+                    self.builder
+                        .build_call(drop_fn, &[arr_ptr.into()], "")
+                        .unwrap();
+                    return Ok(out);
+                }
+            }
             Ok(val)
         } else if let BasicTypeEnum::VectorType(vt) = arr_ty {
             // SIMD lane read `v[i] -> T` (design.md § Portable SIMD). The slot
@@ -3561,6 +3618,19 @@ impl<'ctx> super::Codegen<'ctx> {
         // predicate still listed only two of the three sources, `v.clone()[i]`
         // over a `Vec[String]` read correctly and dropped its temp buffer, and
         // leaked the element clone once per evaluation).
+        // B-2026-08-27-31 — the `Array[T, N]` peer of the Vec shapes below.
+        // `compile_index` clone-then-drops a fresh array temporary for exactly
+        // the reason documented above, so its clone has no consuming binding
+        // either and every consumer that frees a temp-Vec element clone must
+        // free this one identically. Gated the same way the lowering is: an
+        // owned (non-borrow) call temp with a non-Copy element.
+        if !matches!(&object.kind, ExprKind::Identifier(_))
+            && self.expr_yields_fresh_owned_temp(object)
+        {
+            if let Some((elem_te, _n)) = self.array_te_of_operand(object) {
+                return !super::vec_method::is_trivially_copyable_te(&elem_te);
+            }
+        }
         let Some((vec_te, _owns)) = self.inline_index_recv_vec_te(object) else {
             return false;
         };
@@ -3627,7 +3697,21 @@ impl<'ctx> super::Codegen<'ctx> {
                     .into_iter()
                     .nth(idx)?;
                 let field_te = self.resolve_generic_field_te(recv, struct_name.as_str(), &field_te);
+                // B-2026-08-27-32 — an `Array[E, N]` FIELD resolves to `E` the
+                // same way a `Vec[E]` field resolves through the peel above.
+                //
+                // This is the move site PAIRED with that row's drop widening,
+                // and it is not optional: teaching the struct drop to walk an
+                // array field's elements means `h.a[i]` now aliases memory this
+                // frame will free, so every consumer that takes ownership of
+                // the read must deep-clone it first. Measured while the drop
+                // stood alone: `fn take(h: Holder) -> String { return h.a[0]; }`
+                // turned a 13-byte leak into a heap-use-after-free -- the
+                // callee's scope-exit drop freed the element the caller was
+                // handed. The `Vec` twin of that program was already clean,
+                // through exactly this resolver.
                 vec_inner_type_expr(&field_te)
+                    .or_else(|| self.array_elem_and_len(&field_te).map(|(elem, _n)| elem))
             }
             _ => None,
         }
