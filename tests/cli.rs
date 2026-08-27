@@ -34416,6 +34416,12 @@ fn scratch_effect_package(name: &str, helper_src: &str) -> std::path::PathBuf {
     tmp
 }
 
+/// GATED ON `llvm`: the property is that `check` AGREES with `build`, and the
+/// fixture's anti-vacuity assert requires `build` to actually fail. A no-llvm
+/// `karac build` exits SUCCESS with "requires the llvm feature" before it ever
+/// reaches this pass, so the assert fires on CI's default leg and the
+/// agreement it is testing cannot be observed there at all.
+#[cfg(feature = "llvm")]
 #[test]
 fn test_check_project_reports_the_multi_file_effect_error_build_reports() {
     // `run` performs writes(Stdout) via `println` and declares only `panics`.
@@ -34456,6 +34462,12 @@ fn test_check_project_reports_the_multi_file_effect_error_build_reports() {
     );
 }
 
+/// GATED ON `llvm`: the property is that `check` AGREES with `build`, and the
+/// fixture's anti-vacuity assert requires `build` to actually fail. A no-llvm
+/// `karac build` exits SUCCESS with "requires the llvm feature" before it ever
+/// reaches this pass, so the assert fires on CI's default leg and the
+/// agreement it is testing cannot be observed there at all.
+#[cfg(feature = "llvm")]
 #[test]
 fn test_check_project_reports_the_multi_file_ownership_error_build_reports() {
     // The ownership half of the same gap — a use-after-move across the
