@@ -29,7 +29,7 @@ index 50aebd1..8fd4e75 100644
          "E0283",
          ty("RefOperandUnsupported", Some(DiagnosticClass::TypeMismatch)),
 diff --git a/src/typechecker.rs b/src/typechecker.rs
-index 7ad9f31..42fe264 100644
+index 7ad9f31..589d6d8 100644
 --- a/src/typechecker.rs
 +++ b/src/typechecker.rs
 @@ -644,6 +644,22 @@ pub enum TypeErrorKind {
@@ -71,11 +71,76 @@ index 7ad9f31..42fe264 100644
          | TypeErrorKind::StringNotIndexable
          | TypeErrorKind::IteratorNotIndexable
          | TypeErrorKind::TypeNotIndexable
+@@ -2340,6 +2358,19 @@ pub struct TypeChecker<'a> {
+     pub(super) cast_source_unsigned: FxHashSet<SpanKey>,
+     pub(super) weak_elem_store_sites: FxHashSet<SpanKey>,
+     pub(super) weak_elem_read_sites: FxHashSet<SpanKey>,
++    /// B-2026-08-26-21 — index expressions whose read produces a FRESH
++    /// value rather than an alias of a stored element: a range slice
++    /// (`s[a..b]`, `v[a..b]`), a `Column` positional read
++    /// (`c[i] -> Option[T]`), and a `weak` element upgrade
++    /// (`w[i] -> Option[T]`). The index-move rejection must NOT fire on
++    /// these: nothing is moved out of the container, because nothing in
++    /// the container is what the expression evaluates to.
++    ///
++    /// Marked POSITIVELY at each such return, so the rejection is
++    /// fail-safe by construction — an index path nobody thought to
++    /// classify goes unmarked and is simply not rejected. A missed
++    /// rejection is recoverable; a false one blocks valid code.
++    pub(super) index_read_is_fresh_value: FxHashSet<SpanKey>,
+     /// Element-aware mono-mangle tokens per call site. See the public copy on
+     /// `TypeCheckResult` for the consumer doc.
+     pub(super) call_type_subs_mangle: FxHashMap<SpanKey, FxHashMap<String, String>>,
+@@ -2624,6 +2655,7 @@ impl<'a> TypeChecker<'a> {
+             cast_source_unsigned: FxHashSet::default(),
+             weak_elem_store_sites: FxHashSet::default(),
+             weak_elem_read_sites: FxHashSet::default(),
++            index_read_is_fresh_value: FxHashSet::default(),
+             call_type_subs_mangle: FxHashMap::default(),
+             pattern_binding_types: FxHashMap::default(),
+             pattern_binding_inner_types: FxHashMap::default(),
+diff --git a/src/typechecker/exprs.rs b/src/typechecker/exprs.rs
+index 874d255..dccc1a7 100644
+--- a/src/typechecker/exprs.rs
++++ b/src/typechecker/exprs.rs
+@@ -4564,6 +4564,7 @@ impl<'a> super::TypeChecker<'a> {
+                                 TypeErrorKind::TypeMismatch,
+                             );
+                         }
++                        self.index_read_is_fresh_value.insert(SpanKey::from_span(&expr.span));
+                         return Type::Named {
+                             name: "Option".to_string(),
+                             args: vec![elem_ty],
+@@ -4655,6 +4656,7 @@ impl<'a> super::TypeChecker<'a> {
+                         || matches!(&obj_ty, Type::Ref(inner) | Type::MutRef(inner)
+                             if matches!(inner.as_ref(), Type::Str));
+                     if is_string {
++                        self.index_read_is_fresh_value.insert(SpanKey::from_span(&expr.span));
+                         return Type::Str;
+                     }
+                     // Range indexing: `collection[a..b]` → `Slice[T]` where T
+@@ -4677,6 +4679,8 @@ impl<'a> super::TypeChecker<'a> {
+                         Type::Error => return Type::Error,
+                         _ => None,
+                     };
++                    self.index_read_is_fresh_value
++                        .insert(SpanKey::from_span(&expr.span));
+                     return match element_ty {
+                         Some(el) => Type::Slice {
+                             element: Box::new(el.clone()),
+@@ -4941,6 +4945,7 @@ impl<'a> super::TypeChecker<'a> {
+                         // (see the store twin in `infer_method_call`).
+                         self.weak_elem_read_sites
+                             .insert(SpanKey::from_span(&expr.span));
++                        self.index_read_is_fresh_value.insert(SpanKey::from_span(&expr.span));
+                         return Type::Named {
+                             name: "Option".to_string(),
+                             args: vec![(**inner).clone()],
 diff --git a/src/typechecker/items.rs b/src/typechecker/items.rs
-index b644b05..3de0cd7 100644
+index b644b05..6767c6a 100644
 --- a/src/typechecker/items.rs
 +++ b/src/typechecker/items.rs
-@@ -4171,6 +4171,74 @@ impl<'a> super::TypeChecker<'a> {
+@@ -4171,6 +4171,98 @@ impl<'a> super::TypeChecker<'a> {
          self.check_stmt_inner(stmt)
      }
  
@@ -105,7 +170,31 @@ index b644b05..3de0cd7 100644
 +        if !matches!(value.kind, ExprKind::Index { .. }) {
 +            return;
 +        }
++        // Not every `expr[i]` is an element alias. A range slice
++        // (`s[a..b]`, `v[a..b]`), a `Column` positional read and a `weak`
++        // element upgrade all CONSTRUCT a value rather than name one that
++        // is already in the container — nothing is moved out, so there is
++        // nothing to reject. Index inference marks each of those; anything
++        // unmarked is treated as not-an-alias too, which keeps a path
++        // nobody classified from being rejected by accident.
++        if self
++            .index_read_is_fresh_value
++            .contains(&SpanKey::from_span(&value.span))
++        {
++            return;
++        }
 +        if matches!(ty, Type::Error | Type::Never) || self.is_copy_type_during_check(ty) {
++            return;
++        }
++        // A `shared` handle is exempt for the same reason the marked
++        // paths are: reading one out of a container RETAINS it, leaving
++        // the container's slot intact. The rule exists because a container
++        // is not partially movable — there is no `Vec` with a hole in it —
++        // and an RC handle copy makes no hole. Nor is the `Drop`-body
++        // divergence this row was filed for reachable here: RC decides when
++        // a shared value is destroyed, so neither backend runs a user `Drop`
++        // body on the read.
++        if matches!(ty, Type::Shared(_)) {
 +            return;
 +        }
 +        let has_clone = self.type_supports_clone(ty);
@@ -150,7 +239,7 @@ index b644b05..3de0cd7 100644
      fn check_stmt_inner(&mut self, stmt: &Stmt) -> Type {
          if let StmtKind::Expr(expr) = &stmt.kind {
              return self.infer_expr(expr);
-@@ -4199,6 +4267,10 @@ impl<'a> super::TypeChecker<'a> {
+@@ -4199,6 +4291,10 @@ impl<'a> super::TypeChecker<'a> {
                      self.record_uninferrable_binding_origin(pattern, &inferred, value);
                      inferred
                  };
@@ -161,7 +250,7 @@ index b644b05..3de0cd7 100644
                  // B-2026-07-31-20 — record the result type of a
                  // `with_provider[R](p, || ...)` RHS for codegen's Let arm
                  // (read as an implicit binding annotation). The intercept in
-@@ -4357,6 +4429,15 @@ impl<'a> super::TypeChecker<'a> {
+@@ -4357,6 +4453,15 @@ impl<'a> super::TypeChecker<'a> {
                  self.in_defer = prev;
              }
              StmtKind::Assign { target, value } => {

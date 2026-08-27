@@ -203,7 +203,7 @@ fn main() {{
     let mut rules: Vec[Rule] = Vec.new();
     rules.push(Rule {{ name: \"any\", check: always() }});
     let w: String = \"x\";
-    let r = rules[0];
+    let r = ref rules[0];
     println((r.check)(w));
 }}
 "
@@ -220,7 +220,7 @@ fn builds_inline_capturing_closure_stored_anywhere() {
     let mut rules: Vec[Rule] = Vec.new();
     rules.push(Rule { name: "inline", check: |s| (s.len() as i64) >= n });
     let w: String = "password1";
-    let r = rules[0];
+    let r = ref rules[0];
     println((r.check)(w));"#,
     ));
 }
@@ -234,7 +234,7 @@ fn refused_fresh_call_in_pushed_struct_literal() {
         r#"    let mut rules: Vec[Rule] = Vec.new();
     rules.push(Rule { name: "min8", check: min_len(8) });
     let w: String = "password1";
-    let r = rules[0];
+    let r = ref rules[0];
     println((r.check)(w));"#,
     ));
 }

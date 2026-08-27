@@ -1648,7 +1648,7 @@ fn main() {
     let mut rules: Vec[Rule] = Vec.new();
     rules.push(Rule { name: "min8", check: min_len(8) });
     let w: String = "password1";
-    let r = rules[0];
+    let r = ref rules[0];
     println((r.check)(w));
 }
 "#;
