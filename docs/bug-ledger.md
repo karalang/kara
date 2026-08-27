@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 296 | 2 |
+| miscompile | 298 | 3 |
 | leak | 198 | 0 |
 | missing-feature | 185 | 2 |
 | run-vs-build | 171 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1070 | 2 |
+| codegen | 1072 | 3 |
 | typecheck | 270 | 1 |
 | interp | 189 | 1 |
 | other | 70 | 0 |
@@ -124,16 +124,17 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1624 surfaced · 4 open · 1594 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-27). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1626 surfaced · 5 open · 1595 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-27). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (5)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-26-21 | 2026-08-26 | codegen+interp | medium | A RELOCATING element store (`b.xs[i] = b.xs[j]`, then `b.xs[j] = t`) runs the displaced element's user `Drop` BODY, even though the value is being moved to another slot rather than destroyed. A two-element swap of a `Drop` type prints FIVE drop bodies, all during the swap and none at scope exit; the correct sequence is one body per element when it finally dies. | — |
 | B-2026-08-26-36 | 2026-08-26 | parser | high | `ref` IN EXPRESSION POSITION IS SPECIFIED BUT UNIMPLEMENTED: design.md shows `let r = ref some_function();` (§ Binding-extension exception) and `let p: ref i32 = ref 42;`, and the parser rejects both with "'ref' is a reserved keyword and cannot be used as an identifier". This BLOCKS the B-2026-08-26-21 index-move rejection, whose only fix-it for a `Clone`-less element type is the borrow spelling. | — |
 | B-2026-08-26-37 | 2026-08-26 | typecheck | low | The index-move rule covers only a `let` initializer and an assignment RHS; OTHER value positions still read a non-`Copy` element by value and silently clone. Measured: `take(b.xs[0])` where `fn take(it: Item)` compiles and runs, and `b.xs[0]` survives it. | — |
-| B-2026-08-27-4 | 2026-08-27 | codegen | high | A `shared` STRUCT USED AS A MAP/SET KEY IS MATCHED BY POINTER IDENTITY ON THE COMPILED BACKENDS AND STRUCTURALLY BY THE INTERPRETER. `m.contains_key(twin)` answers `true` on `--interp` and `false` on both `karac run` and `karac build`, for a `twin` with identical field values and a `#[derive(Hash, Eq, PartialEq)]` on the shared struct. `remove` and `get` follow: the compiled lookup silently misses an entry that is present. A wrong ANSWER, not a leak. | — |
+| B-2026-08-27-5 | 2026-08-27 | codegen | medium | `==` ON A `shared struct` WITH A NICHE-ENCODED `Option[shared T]` FIELD COMPARES RAW POINTERS, so two structurally-equal values answer `false` on the compiled backends and `true` on the interpreter. `try_compile_struct_eq_typed` routes a struct to the TYPE-directed comparator only when it has a Vec field AND is not shared; everything else falls to the SHAPE-directed field walk, which does not know a niche slot holds a bare pointer instead of the 4-i64 Option layout. | — |
+| B-2026-08-27-6 | 2026-08-27 | codegen | medium | A PLAIN (non-shared) ENUM USED AS A MAP/SET KEY WITH A HEAP-BEARING PAYLOAD COMPARES ITS PAYLOAD WORDS INSTEAD OF RECURSING, so `Map[S, V]` where `enum S { A { s: String } }` misses a structurally-equal key on the compiled backends and finds it on the interpreter. `emit_eq_fn_for_type_expr` has arms for tuples, `Vec`, and STRUCTS, but none for enums -- an enum key falls to the byte-compare fallback, which for a `String` payload compares two distinct heap POINTERS. | — |
 
 ### Relocated (2)
 
@@ -165,9 +166,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1624 surfaced
 
 </details>
 
-### Fixed (1594)
+### Fixed (1595)
 
-<details><summary>1594 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1595 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1765,6 +1766,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1624 surfaced
 | B-2026-08-27-1 | typecheck+interp+codegen | high | TWO `impl From[X] for T` FOR THE SAME TARGET SILENTLY RUN THE WRONG ONE: `?` and `.into()` resolve the conversion by target name only (`T.from`), so… | 0dffbc0 |
 | B-2026-08-27-2 | codegen+interp | medium | `Map.remove(k)` DESTROYS AN ENTRY'S KEY IN PLACE AND RUNS NO `Drop` BODY FOR IT | eca034b |
 | B-2026-08-27-3 | codegen | medium | `Map.remove` LEAKS A STRUCT KEY'S HEAP FIELDS -- one allocation per removal | 0170c65 |
+| B-2026-08-27-4 | codegen | high | A `shared` STRUCT USED AS A MAP/SET KEY IS MATCHED BY POINTER IDENTITY ON THE COMPILED BACKENDS AND STRUCTURALLY BY THE INTERPRETER | 393424d |
 
 </details>
 
