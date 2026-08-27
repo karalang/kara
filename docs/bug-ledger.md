@@ -96,7 +96,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | leak | 204 | 2 |
 | missing-feature | 186 | 0 |
 | run-vs-build | 176 | 0 |
-| codegen-gap | 143 | 1 |
+| codegen-gap | 143 | 0 |
 | double-free | 141 | 0 |
 | diagnostics | 111 | 0 |
 | false-positive | 98 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1094 | 4 |
+| codegen | 1094 | 3 |
 | typecheck | 276 | 0 |
 | interp | 191 | 0 |
 | other | 70 | 0 |
@@ -124,14 +124,13 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1652 surfaced · 4 open · 1622 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-27). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1652 surfaced · 3 open · 1623 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-27). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-27-8 | 2026-08-27 | codegen | low | NLL DROP PLACEMENT IS DISPATCHED ON AN LLVM SYMBOL-NAME PREFIX. `is_container_elem_bodies_fn` decides whether a cleanup action fires at the binding's last use or at scope exit by testing `starts_with("__karac_dropelems_")` (plus `__karac_dropkeys_` since 34c3f54). A bodies-only walker whose emitter picks any other prefix is silently demoted to scope exit — a run-vs-build divergence with no error, no warning and no failing test. NO LIVE INSTANCE TODAY: all four named-binding walkers are covered. This is the latent hazard, and it has already cost one session. | — |
-| B-2026-08-27-21 | 2026-08-27 | codegen | high | A borrowed element loses its method surface under codegen: `.clone()` through a `ref` binding SEGFAULTS, and every String method on one (`starts_with`, `substring`, `clone`) falls through dispatch, while the interpreter runs all of them. | — |
 | B-2026-08-27-31 | 2026-08-27 | codegen | medium | An INDEXED `Array[String, N]` temporary leaks its elements -- `mk(4)[0]` loses 13 bytes in 2 allocations -- a different position from B-2026-08-27-30's `==` operand and not covered by its fix. | — |
 | B-2026-08-27-32 | 2026-08-27 | codegen | medium | A struct FIELD of type `Array[T, N]` with heap elements is never dropped: `struct Holder { a: Array[String, 2] }` leaks 13 bytes in 2 allocations with no comparison, index or temporary anywhere in the program. | — |
 
@@ -165,9 +164,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1652 surfaced
 
 </details>
 
-### Fixed (1622)
+### Fixed (1623)
 
-<details><summary>1622 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1623 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1784,6 +1783,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1652 surfaced
 | B-2026-08-27-18 | codegen | high | `==` ON A USER STRUCT WITH EXACTLY THREE FIELDS PANICS THE COMPILER, so `struct S3 { a: i64, b: i64, c: i64 }` and `S3 { . | 9b8d435 |
 | B-2026-08-27-19 | codegen | medium | AN ENUM WHOSE PAYLOAD STRUCT IS NOT WORD-ALIGNED IS TREATED AS HAVING NO HEAP PAYLOAD, so `==` on it silently compares payload WORDS: `enum Holder {… | 8d2eb56 |
 | B-2026-08-27-20 | codegen | high | A NESTED index store whose RHS is a named local double-frees under codegen (`d[0][1] = x`), while the same store from a temporary (`d[0][1] = f"zz"`)… | c5bb992 |
+| B-2026-08-27-21 | codegen | high | A `ref` element binding did not dispatch methods like the value it borrows, in two independent ways: `.clone()` on an element read THROUGH one (`let… | 367edc1 |
 | B-2026-08-27-22 | codegen | high | `.clone()` on an element of an SoA-laid-out container returns the wrong data under codegen — element 5 reads back the cold group at indices 1 and 2 (… | d01aea8 |
 | B-2026-08-27-23 | typecheck | high | A tuple (`(i64, String)`) and `Option[T]` have NO `.clone()`, so the index-move rejection outlaws reading such an element by value with no replacemen… | 94711002536753 |
 | B-2026-08-27-24 | typecheck+interp+codegen | medium | `Slice[T] == Slice[T]` IS ACCEPTED BY `karac check`, DIES IN THE INTERPRETER WITH A DIAGNOSTIC THAT BLAMES THE TYPECHECKER, AND IS REFUSED BY CODEGEN… | f056dbf |
