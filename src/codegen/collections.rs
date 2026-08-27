@@ -436,26 +436,28 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.builder.build_store(elem_slot, elem_val).unwrap();
                 // val_size = 0 → dummy out slot is shared; contents irrelevant.
                 let dummy = self.create_entry_alloca(fn_val, "set.dummy", i8_t.into());
+                // B-2026-08-27-3 — the ELEMENT's own destructor, when it owns
+                // heap the `drop_key` flag cannot describe (a struct element
+                // with a `String` field, a `Vec[String]` element). See the Map
+                // path; a Set's element is the key half, so it is the same
+                // defect with the same fix.
+                let elem_mem = self.map_key_mem_drop_fn_for_var(var_name);
                 // `drop_key` releases the bucket's STORED element buffer (the
-                // tombstone would orphan it) when the element is a heap
+                // tombstone would orphan it) when the element IS a heap
                 // `{ptr,len,cap}`, e.g. `Set[String]` / `Set[Vec[T]]`. Set
                 // lowers to `Map[T, ()]` (val_size = 0), so there is no value
-                // half to drop.
-                let drop_key = self
-                    .context
-                    .i32_type()
-                    .const_int(u64::from(self.llvm_ty_is_vec_struct(elem_ty)), false);
+                // half to drop. Forced off when `elem_mem` exists — that fn
+                // owns the whole element side, outer buffer included.
+                let drop_key = self.context.i32_type().const_int(
+                    u64::from(elem_mem.is_none() && self.llvm_ty_is_vec_struct(elem_ty)),
+                    false,
+                );
                 // B-2026-08-27-2 — a Set's ELEMENT is the key half, so it has
                 // the same body debt a Map key does: `remove` destroys it in
                 // place, and the body has to run before the buffer free. Same
                 // runtime variant the Map path uses (Set.remove already lowers
                 // to `remove_old` with a dummy out slot).
-                let elem_body = self
-                    .mapset
-                    .map_val_bodies_tes
-                    .get(var_name)
-                    .cloned()
-                    .and_then(|te| self.emit_map_key_one_drop_body_fn(&te));
+                let elem_body = self.map_key_one_entry_drop_fn_for_var(var_name);
                 let existed = match elem_body {
                     Some(eb) => self
                         .builder
@@ -505,13 +507,69 @@ impl<'ctx> super::Codegen<'ctx> {
                 Ok(existed)
             }
             "clear" => {
-                self.builder
-                    .build_call(
-                        self.runtime_fns.karac_map_clear_fn,
-                        &[set_handle.into()],
-                        "",
-                    )
-                    .unwrap();
+                // B-2026-08-27-3 — this arm called plain `karac_map_clear`,
+                // which zeroes the status bytes and nothing else. Every live
+                // element's heap was orphaned on the spot: the clear leaves no
+                // occupied slot, and the eventual set-free walks only occupied
+                // slots, so nothing ever reclaims it. Measured on `Set[String]`
+                // (the BARE heap element the `drop_key` flag has always
+                // covered elsewhere) as well as on a struct element — this arm
+                // simply never asked for either.
+                //
+                // The Map twin of these four steps is `maps.rs`'s `clear` arm,
+                // and the order is the same one teardown uses: bodies first
+                // (they read what follows frees), then the element MEMORY
+                // walk, then the shared-half rc_dec, then the bucket storage.
+                //
+                // `emit_map_val_user_drop_bodies_fn`, not the `_key_` twin:
+                // a Set's element is ALREADY in the key half, so the value
+                // entry point is the one that walks it (the key entry point
+                // declines for Set/SortedSet rather than emit the same walk
+                // twice under a second name). Same fn the binding-death path
+                // registers for this receiver.
+                if let Some(bodies) = self
+                    .mapset
+                    .map_val_bodies_tes
+                    .get(var_name)
+                    .cloned()
+                    .and_then(|te| self.emit_map_val_user_drop_bodies_fn(&te))
+                {
+                    self.builder
+                        .build_call(bodies, &[handle_ptr.into()], "")
+                        .unwrap();
+                }
+                let elem_mem = self.map_key_mem_drop_fn_for_var(var_name);
+                if let Some(elem_fn) = elem_mem {
+                    self.emit_map_key_drop_fn_walk(set_handle, elem_fn);
+                }
+                if let Some(heap_ty) = self.map_key_shared_heap_type_for(var_name) {
+                    self.emit_map_shared_half_rc_dec_walk(set_handle, heap_ty, false);
+                }
+                // A Set is `Map[T, ()]` — val_size is 0, so the value flag is
+                // always 0 and only the key half can own bucket storage.
+                let elem_is_vec = elem_mem.is_none() && self.llvm_ty_is_vec_struct(elem_ty);
+                if elem_is_vec {
+                    let i32_t = self.context.i32_type();
+                    self.builder
+                        .build_call(
+                            self.runtime_fns.karac_map_clear_with_drop_vec_fn,
+                            &[
+                                set_handle.into(),
+                                i32_t.const_int(1, false).into(),
+                                i32_t.const_int(0, false).into(),
+                            ],
+                            "",
+                        )
+                        .unwrap();
+                } else {
+                    self.builder
+                        .build_call(
+                            self.runtime_fns.karac_map_clear_fn,
+                            &[set_handle.into()],
+                            "",
+                        )
+                        .unwrap();
+                }
                 Ok(i64_t.const_int(0, false).into())
             }
             // B-2026-08-26-22 — `Set.reserve` / `Set.try_reserve`. A `Set` is a

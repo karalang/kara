@@ -54888,4 +54888,272 @@ fn main() {
             "map-get-bound-enum-key",
         );
     }
+
+    /// B-2026-08-27-3 — `Map.remove` LEAKED A STRUCT KEY'S HEAP FIELDS, one
+    /// allocation per removal.
+    ///
+    /// `remove` tombstones the bucket, and the map's own teardown only walks
+    /// OCCUPIED slots, so whatever the vacated slot still owned is orphaned.
+    /// The runtime releases the stored key through the `drop_key` FLAG, which
+    /// codegen sets from `llvm_ty_is_vec_struct(key_ty)` — true for a key that
+    /// IS a heap `{ptr,len,cap}` (`Map[String, V]`), false for a STRUCT key
+    /// that merely OWNS one. The flag was doing what it says; what was missing
+    /// was a path for the other key shape.
+    #[test]
+    fn asan_map_remove_releases_a_struct_keys_heap_fields() {
+        assert_clean_asan_run(
+            r#"
+#[derive(Hash, Eq, PartialEq)]
+struct K { id: i64, name: String }
+fn main() {
+    let mut m: Map[K, i64] = Map.new();
+    let mut i = 0i64;
+    while i < 40i64 {
+        m.insert(K { id: i, name: f"key-{i}-padding-padding-padding" }, i);
+        m.remove(K { id: i, name: f"key-{i}-padding-padding-padding" });
+        i = i + 1i64;
+    }
+    println(f"{m.len()}");
+}
+"#,
+            &["0"],
+            "map-remove-struct-key-heap-fields",
+        );
+    }
+
+    /// PROBE (B-2026-08-27-3 blast radius): `Set.remove`. A Set's element IS
+    /// the key half, so the same flag governs it.
+    #[test]
+    fn asan_set_remove_releases_a_struct_elements_heap_fields() {
+        assert_clean_asan_run(
+            r#"
+#[derive(Hash, Eq, PartialEq)]
+struct K { id: i64, name: String }
+fn main() {
+    let mut s: Set[K] = Set.new();
+    let mut i = 0i64;
+    while i < 40i64 {
+        s.insert(K { id: i, name: f"key-{i}-padding-padding-padding" });
+        s.remove(K { id: i, name: f"key-{i}-padding-padding-padding" });
+        i = i + 1i64;
+    }
+    println(f"{s.len()}");
+}
+"#,
+            &["0"],
+            "set-remove-struct-elem-heap-fields",
+        );
+    }
+
+    /// PROBE (B-2026-08-27-3 blast radius): `SortedMap.remove`.
+    #[test]
+    fn asan_sorted_map_remove_releases_a_struct_keys_heap_fields() {
+        assert_clean_asan_run(
+            r#"
+#[derive(Hash, Eq, PartialEq, Ord, PartialOrd)]
+struct K { id: i64, name: String }
+fn main() {
+    let mut m: SortedMap[K, i64] = SortedMap.new();
+    let mut i = 0i64;
+    while i < 40i64 {
+        m.insert(K { id: i, name: f"key-{i}-padding-padding-padding" }, i);
+        m.remove(K { id: i, name: f"key-{i}-padding-padding-padding" });
+        i = i + 1i64;
+    }
+    println(f"{m.len()}");
+}
+"#,
+            &["0"],
+            "sorted-map-remove-struct-key-heap-fields",
+        );
+    }
+
+    /// PROBE (B-2026-08-27-3 blast radius): `m.clear()`. It vacates every
+    /// bucket at once and is governed by the same `drop_key` flag.
+    #[test]
+    fn asan_map_clear_releases_struct_keys_heap_fields() {
+        assert_clean_asan_run(
+            r#"
+#[derive(Hash, Eq, PartialEq)]
+struct K { id: i64, name: String }
+fn main() {
+    let mut m: Map[K, i64] = Map.new();
+    let mut i = 0i64;
+    while i < 40i64 {
+        m.insert(K { id: i, name: f"key-{i}-padding-padding-padding" }, i);
+        i = i + 1i64;
+    }
+    m.clear();
+    println(f"{m.len()}");
+}
+"#,
+            &["0"],
+            "map-clear-struct-key-heap-fields",
+        );
+    }
+
+    /// CONTROL that isolates the row to the STRUCT key shape: the same 40
+    /// insert/remove pairs over a BARE `String` key, which the `drop_key` flag
+    /// already covers. It was clean when the row was filed and must stay clean
+    /// — a fix that started freeing through both the flag and a new key path
+    /// would double-free exactly here.
+    #[test]
+    fn asan_map_remove_with_a_bare_string_key_stays_clean() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    let mut i = 0i64;
+    while i < 40i64 {
+        m.insert(f"key-{i}-padding-padding-padding", i);
+        m.remove(f"key-{i}-padding-padding-padding");
+        i = i + 1i64;
+    }
+    println(f"{m.len()}");
+}
+"#,
+            &["0"],
+            "map-remove-bare-string-key-control",
+        );
+    }
+
+    /// PROBE (B-2026-08-27-3 blast radius): `Set.clear`. Unlike `Map.clear`,
+    /// this arm calls plain `karac_map_clear` — no flags, no walks — so it is
+    /// worth asking whether even the BARE heap element it already claims to
+    /// cover survives.
+    #[test]
+    fn asan_set_clear_releases_bare_string_elements() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut s: Set[String] = Set.new();
+    let mut i = 0i64;
+    while i < 40i64 {
+        s.insert(f"key-{i}-padding-padding-padding");
+        i = i + 1i64;
+    }
+    s.clear();
+    println(f"{s.len()}");
+}
+"#,
+            &["0"],
+            "set-clear-bare-string-elements",
+        );
+    }
+
+    /// PROBE (B-2026-08-27-3 blast radius): `Set.clear` over a STRUCT element.
+    #[test]
+    fn asan_set_clear_releases_struct_elements_heap_fields() {
+        assert_clean_asan_run(
+            r#"
+#[derive(Hash, Eq, PartialEq)]
+struct K { id: i64, name: String }
+fn main() {
+    let mut s: Set[K] = Set.new();
+    let mut i = 0i64;
+    while i < 40i64 {
+        s.insert(K { id: i, name: f"key-{i}-padding-padding-padding" });
+        i = i + 1i64;
+    }
+    s.clear();
+    println(f"{s.len()}");
+}
+"#,
+            &["0"],
+            "set-clear-struct-elem-heap-fields",
+        );
+    }
+
+    /// PROBE (B-2026-08-27-3 blast radius): `SortedSet.remove`.
+    #[test]
+    fn asan_sorted_set_remove_releases_a_struct_elements_heap_fields() {
+        assert_clean_asan_run(
+            r#"
+#[derive(Hash, Eq, PartialEq, Ord, PartialOrd)]
+struct K { id: i64, name: String }
+fn main() {
+    let mut s: SortedSet[K] = SortedSet.new();
+    let mut i = 0i64;
+    while i < 40i64 {
+        s.insert(K { id: i, name: f"key-{i}-padding-padding-padding" });
+        s.remove(K { id: i, name: f"key-{i}-padding-padding-padding" });
+        i = i + 1i64;
+    }
+    println(f"{s.len()}");
+}
+"#,
+            &["0"],
+            "sorted-set-remove-struct-elem-heap-fields",
+        );
+    }
+
+    /// PROBE (B-2026-08-27-3 blast radius): a `Vec[String]` KEY — the shape
+    /// where the `drop_key` flag and a per-key drop fn BOTH apply. The flag
+    /// sees a `{ptr,len,cap}` and frees the outer buffer; the elements below it
+    /// need the walk. This is the one shape where a careless fix double-frees,
+    /// so it is worth having on record in both directions.
+    #[test]
+    fn asan_map_remove_releases_a_vec_string_keys_elements() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut m: Map[Vec[String], i64] = Map.new();
+    let mut i = 0i64;
+    while i < 20i64 {
+        let mut k: Vec[String] = Vec.new();
+        k.push(f"key-{i}-padding-padding-padding");
+        let mut probe: Vec[String] = Vec.new();
+        probe.push(f"key-{i}-padding-padding-padding");
+        m.insert(k, i);
+        m.remove(probe);
+        i = i + 1i64;
+    }
+    println(f"{m.len()}");
+}
+"#,
+            &["0"],
+            "map-remove-vec-string-key-elements",
+        );
+    }
+
+    /// B-2026-08-27-3 adjacency, held as a CONTROL: a `shared` KEY must stay
+    /// refcount-balanced across `remove`.
+    ///
+    /// The per-key drop fn declines for a shared half by construction —
+    /// teardown gives the count back through the rc_dec WALK instead, and
+    /// `remove` runs no walk — so this is the one key shape the fix
+    /// deliberately does NOT route through `map_key_mem_drop_fn_for_var`. It
+    /// is balanced today and the test exists to keep it that way: a later
+    /// widening that let the drop fn answer for a shared key would over-release
+    /// a count the map never took.
+    ///
+    /// The key is removed through the SAME binding it was inserted with, not a
+    /// structurally-equal twin. That is not stylistic: on the compiled backends
+    /// a `shared` key is matched by POINTER IDENTITY, so a twin finds nothing
+    /// and this would measure an empty `remove`. (The interpreter matches it
+    /// structurally — a real run-vs-build divergence, filed separately as
+    /// B-2026-08-27-4; it is out of scope here and must not be smuggled into a
+    /// leak fixture.)
+    #[test]
+    fn asan_map_remove_with_a_shared_key_is_balanced() {
+        assert_clean_asan_run(
+            r#"
+#[derive(Hash, Eq, PartialEq)]
+shared struct K { id: i64, name: String }
+fn main() {
+    let mut m: Map[K, i64] = Map.new();
+    let mut i = 0i64;
+    while i < 20i64 {
+        let k = K { id: i, name: f"key-{i}-padding-padding-padding" };
+        m.insert(k, i);
+        m.remove(k);
+        i = i + 1i64;
+    }
+    println(f"{m.len()}");
+}
+"#,
+            &["0"],
+            "map-remove-shared-key-balanced",
+        );
+    }
 }

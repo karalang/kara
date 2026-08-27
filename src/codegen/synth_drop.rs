@@ -7699,24 +7699,28 @@ impl<'ctx> super::Codegen<'ctx> {
         self.emit_map_half_user_drop_bodies_fn(map_te, false)
     }
 
-    /// The ONE-KEY form of the key-half bodies walk (B-2026-08-27-2).
+    /// The KEY `TypeExpr` of a map/set receiver, from either side table that
+    /// can hold it.
     ///
-    /// The table walk above is what a map's teardown needs; `Map.remove(k)`
-    /// destroys a SINGLE entry, so it needs the same two calls the walk makes
-    /// per element — the type's own `drop` body and its field bodies — applied
-    /// to one key blob. The result is handed to
-    /// `karac_map_remove_old_with_key_drop_fn`, which invokes it in place after
-    /// locating the bucket and before freeing the key: the only window where
-    /// the key's fields are still readable.
+    /// `map_key_type_exprs` (Map/SortedMap) and `set_elem_type_exprs`
+    /// (Set/SortedSet, whose element IS the key half) are the primaries: they
+    /// are registered for every typed binding, so they answer for a key with NO
+    /// user `Drop` — the shape B-2026-08-27-3 is about. The two are the same
+    /// pair `track_map_var_with_val_drop` reads on its Map and Set paths.
     ///
-    /// BODY-ONLY, like every `dropelems`/`dropkeys` function: the key's memory
-    /// stays the runtime's to release through `drop_key`. Returns `None` when
-    /// the key type runs no body at all, which is the signal to keep using the
-    /// plain `karac_map_remove_old` and pass no function pointer.
-    pub(super) fn emit_map_key_one_drop_body_fn(
-        &mut self,
-        map_te: &TypeExpr,
-    ) -> Option<FunctionValue<'ctx>> {
+    /// `map_val_bodies_tes` holds the whole MAP's `TypeExpr` and is populated
+    /// ONLY when some half runs a body, so it cannot stand alone here; it is
+    /// kept as the fallback because it is what the B-2026-08-27-2 body lookup
+    /// used, and dropping it could silently narrow which receivers run their
+    /// key bodies.
+    pub(super) fn map_key_te_for_var(&self, var_name: &str) -> Option<TypeExpr> {
+        if let Some(k) = self.mapset.map_key_type_exprs.get(var_name) {
+            return Some(k.clone());
+        }
+        if let Some(e) = self.mapset.set_elem_type_exprs.get(var_name) {
+            return Some(e.clone());
+        }
+        let map_te = self.mapset.map_val_bodies_tes.get(var_name)?;
         let TypeKind::Path(p) = &map_te.kind else {
             return None;
         };
@@ -7724,31 +7728,155 @@ impl<'ctx> super::Codegen<'ctx> {
             Some("Map") | Some("SortedMap") | Some("Set") | Some("SortedSet") => {}
             _ => return None,
         }
-        let key_te = match p.generic_args.as_ref().and_then(|a| a.first())? {
-            crate::ast::GenericArg::Type(t) => t.clone(),
-            _ => return None,
-        };
-        let TypeKind::Path(kp) = &key_te.kind else {
-            return None;
-        };
-        let kname = kp.segments.last()?.clone();
+        // Generic arg 0 is the key half; a Set's element lives there too.
+        match p.generic_args.as_ref()?.first()? {
+            crate::ast::GenericArg::Type(t) => Some(t.clone()),
+            _ => None,
+        }
+    }
 
-        let owns_body = self
-            .program_snapshot
-            .as_deref()
-            .is_some_and(|prog| prog.drop_method_keys.contains_key(&kname));
-        let field_bodies =
-            self.emit_user_drop_field_bodies_fn(&kname, &std::collections::HashMap::new());
-        let own_body = if owns_body {
-            self.module.get_function(&format!("{kname}.drop"))
-        } else {
-            None
+    /// The per-key MEMORY releaser for a map/set receiver — the same
+    /// `karac_drop_<K>` that map TEARDOWN hands to
+    /// [`Self::emit_map_key_drop_fn_walk`], resolved by receiver name so the
+    /// single-entry paths (`remove` / `clear`) can reach it.
+    ///
+    /// ITS PRESENCE IS WHAT TURNS THE `drop_key` FLAG OFF (B-2026-08-27-3).
+    /// That is not a new rule: `emit_free_one_map_handle` and the two
+    /// `track_map_var_with_val_drop` call sites already force `key_is_vec =
+    /// false` whenever a key drop fn exists, because the fn owns the WHOLE key
+    /// side including the outer buffer. The remove/clear paths were the sites
+    /// that never asked for the fn, so they were left describing a struct key
+    /// with a flag that only ever meant "the key IS a heap `{ptr,len,cap}`" —
+    /// true for `Map[String, V]`, false for `Map[K, V]` where `K { s: String }`,
+    /// and so silently a no-op for every key that merely OWNS heap.
+    pub(super) fn map_key_mem_drop_fn_for_var(
+        &mut self,
+        var_name: &str,
+    ) -> Option<FunctionValue<'ctx>> {
+        let kte = self.map_key_te_for_var(var_name)?;
+        self.map_val_drop_fn_for_type_expr(&kte)
+    }
+
+    /// [`Self::emit_map_key_one_entry_drop_fn`] resolved by receiver name.
+    pub(super) fn map_key_one_entry_drop_fn_for_var(
+        &mut self,
+        var_name: &str,
+    ) -> Option<FunctionValue<'ctx>> {
+        let kte = self.map_key_te_for_var(var_name)?;
+        self.emit_map_key_one_entry_drop_fn(&kte)
+    }
+
+    /// The COMPLETE key-side destructor for ONE entry: the key type's own
+    /// `drop` body, then its field bodies, then its MEMORY release — or, for a
+    /// `shared` key, the refcount dec that stands in for all three (see the
+    /// first branch of the body).
+    ///
+    /// The table walks a map's teardown uses are what `Map.remove(k)` cannot
+    /// use, because it destroys a SINGLE entry; this applies the same work to
+    /// one key blob. The result is handed to
+    /// `karac_map_remove_old_with_key_drop_fn`, which invokes it in place after
+    /// locating the bucket and before freeing the key: the only window where
+    /// the key's fields are still readable.
+    ///
+    /// NOT body-only — and deliberately unlike the `dropelems`/`dropkeys`
+    /// family it used to belong to, which is why it is no longer named after
+    /// them. Teardown can afford to keep bodies and memory apart because each
+    /// is its own walk over the table (`emit_map_half_user_drop_bodies_fn`,
+    /// then `emit_map_key_drop_fn_walk`); a single entry has exactly ONE
+    /// callback slot in the runtime, so both halves ride in it. Ordering is
+    /// forced and is the whole reason the two cannot simply be swapped: a
+    /// `drop` body READS the fields the memory release then frees.
+    ///
+    /// B-2026-08-27-2 shipped the bodies half. B-2026-08-27-3 added the memory
+    /// half, which is why this returns `Some` for a key that owns heap and runs
+    /// no body at all — the common case, and the one that leaked. `None` means
+    /// the key owes nothing beyond what the `drop_key` flag already covers,
+    /// and the caller stays on the plain `karac_map_remove_old`.
+    pub(super) fn emit_map_key_one_entry_drop_fn(
+        &mut self,
+        key_te: &TypeExpr,
+    ) -> Option<FunctionValue<'ctx>> {
+        // A `shared` KEY releases through its REFCOUNT and through NOTHING
+        // ELSE — checked first because it excludes every other half below.
+        // `map_val_drop_fn_for_type_expr` already returns `None` for a shared
+        // half on purpose: at teardown and at `clear` the count is given back
+        // by `emit_map_shared_half_rc_dec_walk`, and a drop fn there would
+        // double-dec. `remove` runs no such walk, so the one place the count
+        // can come back is here — and this is the ONLY caller that adds it.
+        // `map_key_mem_drop_fn_for_var`, which the `clear` arms use, must keep
+        // declining for shared or those sites would over-release.
+        //
+        // The BODY rides inside the dec rather than beside it. `emit_rc_dec`
+        // runs `__karac_rc_drop_<K>` — user body included — on the zero edge,
+        // so calling the body here as well printed it TWICE (measured: the
+        // compiled backends emitted `dropK 1` twice against the interpreter's
+        // once). Deferring to the dec is also the only correct reading of the
+        // semantics: a shared key's body must not run while another reference
+        // to it is still live, and the count is what knows that.
+        if let Some(heap_ty) = self.shared_heap_type_for_type_expr(key_te) {
+            let fn_name = format!("__karac_keydtor1_{}", Self::display_mangle_te(key_te));
+            if let Some(f) = self.module.get_function(&fn_name) {
+                return Some(f);
+            }
+            let ptr_ty = self.context.ptr_type(AddressSpace::default());
+            let saved_bb = self.builder.get_insert_block();
+            let saved_fn = self.current_fn;
+            let f = self.module.add_function(
+                &fn_name,
+                self.context.void_type().fn_type(&[ptr_ty.into()], false),
+                Some(Linkage::Internal),
+            );
+            let entry = self.context.append_basic_block(f, "entry");
+            self.builder.position_at_end(entry);
+            self.current_fn = Some(f);
+            let kptr = f.get_nth_param(0).unwrap().into_pointer_value();
+            // LOAD first: the key blob HOLDS the rc pointer, it is not the rc
+            // object. `emit_rc_dec` geps field 0 of the heap type off what it
+            // is handed, so passing the blob address decrements the map's own
+            // bucket bytes — no count released and the table quietly corrupted
+            // (measured: the leak did not move). The teardown walk loads for
+            // exactly this reason.
+            let obj = self
+                .builder
+                .build_load(ptr_ty, kptr, "keydtor1.shared.ptr")
+                .unwrap()
+                .into_pointer_value();
+            self.emit_refcount_dec_by_type(heap_ty, obj);
+            self.builder.build_return(None).unwrap();
+            self.current_fn = saved_fn;
+            if let Some(bb) = saved_bb {
+                self.builder.position_at_end(bb);
+            }
+            return Some(f);
+        }
+        // Bodies: only a NAMED type can carry an `impl Drop` or body-bearing
+        // fields. A `Vec[String]` / tuple key reaches the memory half below
+        // with no body half, which is exactly why this no longer bails out on
+        // a non-Path key the way the body-only predecessor did.
+        let (own_body, field_bodies) = match &key_te.kind {
+            TypeKind::Path(kp) => {
+                let kname = kp.segments.last().cloned().unwrap_or_default();
+                let owns_body = self
+                    .program_snapshot
+                    .as_deref()
+                    .is_some_and(|prog| prog.drop_method_keys.contains_key(&kname));
+                let fields =
+                    self.emit_user_drop_field_bodies_fn(&kname, &std::collections::HashMap::new());
+                let own = if owns_body {
+                    self.module.get_function(&format!("{kname}.drop"))
+                } else {
+                    None
+                };
+                (own, fields)
+            }
+            _ => (None, None),
         };
-        if own_body.is_none() && field_bodies.is_none() {
+        let mem_drop = self.map_val_drop_fn_for_type_expr(key_te);
+        if own_body.is_none() && field_bodies.is_none() && mem_drop.is_none() {
             return None;
         }
 
-        let fn_name = format!("__karac_dropkey1_{}", Self::display_mangle_te(&key_te));
+        let fn_name = format!("__karac_keydtor1_{}", Self::display_mangle_te(key_te));
         if let Some(f) = self.module.get_function(&fn_name) {
             return Some(f);
         }
@@ -7768,6 +7896,10 @@ impl<'ctx> super::Codegen<'ctx> {
             self.builder.build_call(b, &[kptr.into()], "").unwrap();
         }
         if let Some(b) = field_bodies {
+            self.builder.build_call(b, &[kptr.into()], "").unwrap();
+        }
+        // LAST, and only after both body calls: it frees what they read.
+        if let Some(b) = mem_drop {
             self.builder.build_call(b, &[kptr.into()], "").unwrap();
         }
         self.builder.build_return(None).unwrap();

@@ -105239,6 +105239,102 @@ fn main() {
         );
     }
 
+    /// B-2026-08-27-3 — the compiled twin of
+    /// `removing_a_shared_key_releases_it_through_the_refcount`, same bytes.
+    ///
+    /// The `shared` key is the one key shape whose release is a REFCOUNT DEC
+    /// rather than a drop fn, and `remove` was giving back nothing at all — the
+    /// control block and everything under it leaked, one per removal
+    /// (`asan_map_remove_with_a_shared_key_is_balanced` holds that half).
+    ///
+    /// Two shapes because the dec is conditional and only the count knows which
+    /// outcome is due. With no other reference the body runs AT the remove;
+    /// with a live alias it must wait for that alias's own end. Both were
+    /// wrong in the same way at one point in this fix: calling the body BESIDE
+    /// the dec instead of leaving it inside `emit_rc_dec`'s zero edge printed
+    /// `dropK` twice here and would have run it early there.
+    #[test]
+    fn test_e2e_remove_releases_a_shared_key_through_the_refcount() {
+        assert_eq!(
+            run_program(
+                r#"
+#[derive(Hash, Eq, PartialEq)]
+shared struct K { id: i64 }
+impl Drop for K { fn drop(mut ref self) { println(f"dropK {self.id}") } }
+fn main() {
+    let mut m: Map[K, i64] = Map.new();
+    let k = K { id: 1 };
+    m.insert(k, 1);
+    println("--before--");
+    m.remove(k);
+    println("--after--");
+}
+"#
+            ),
+            Some("--before--\ndropK 1\n--after--\n".to_string())
+        );
+        assert_eq!(
+            run_program(
+                r#"
+#[derive(Hash, Eq, PartialEq)]
+shared struct K { id: i64 }
+impl Drop for K { fn drop(mut ref self) { println(f"dropK {self.id}") } }
+fn main() {
+    let mut m: Map[K, i64] = Map.new();
+    let k = K { id: 1 };
+    let keep = k;
+    m.insert(k, 1);
+    println("--before--");
+    m.remove(keep);
+    println("--after-remove--");
+    println(f"keep still {keep.id}");
+    println("--end--");
+}
+"#
+            ),
+            Some("--before--\n--after-remove--\nkeep still 1\ndropK 1\n--end--\n".to_string())
+        );
+    }
+
+    /// B-2026-08-27-3 — the compiled twin of
+    /// `clearing_a_set_runs_its_elements_drop_body`, same bytes.
+    ///
+    /// `Set.clear` is its own codegen arm, and it called plain
+    /// `karac_map_clear` — which zeroes the status bytes and does nothing
+    /// else. So it ran no element bodies (the gap B-2026-08-26-41 closed for
+    /// `Map.clear` but could not reach here) AND released no element memory
+    /// (B-2026-08-27-3 proper). The two are one arm's worth of missing work,
+    /// which is why they are fixed together: the leak is invisible to this
+    /// test and the missing body is invisible to a sanitizer, so neither
+    /// assertion alone would have found both.
+    ///
+    /// The element walk comes from `emit_map_val_user_drop_bodies_fn`, NOT the
+    /// `_key_` twin, even though a Set's element lives in the key half: the
+    /// key-half entry point declines for `Set`/`SortedSet` on purpose, rather
+    /// than emit the same walk a second time under a second name. Reaching for
+    /// the name that matches the HALF is the natural mistake here and it
+    /// silently emits nothing.
+    #[test]
+    fn test_e2e_set_clear_runs_the_element_drop_body() {
+        assert_eq!(
+            run_program(
+                r#"
+#[derive(Hash, Eq, PartialEq)]
+struct E { n: i64 }
+impl Drop for E { fn drop(mut ref self) { println(f"dropE {self.n}") } }
+fn main() {
+    let mut s: Set[E] = Set.new();
+    s.insert(E { n: 1 });
+    println("--before--");
+    s.clear();
+    println(f"--after len={s.len()}--");
+}
+"#
+            ),
+            Some("--before--\ndropE 1\n--after len=0--\n".to_string())
+        );
+    }
+
     /// B-2026-08-27-2 — the compiled twin of
     /// `removing_an_entry_runs_the_key_or_element_drop_body`, same bytes.
     ///

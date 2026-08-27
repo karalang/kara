@@ -725,6 +725,76 @@ fn removing_an_entry_runs_the_key_or_element_drop_body() {
 }
 
 #[test]
+fn removing_a_shared_key_releases_it_through_the_refcount() {
+    // B-2026-08-27-3, the `shared` key half. `remove` gave back nothing: the
+    // per-key drop fn declines for a shared half by design (teardown and
+    // `clear` release it through the rc_dec WALK, and a drop fn there would
+    // double-dec), and `remove` runs no walk — so the count the map took at
+    // `insert` was never returned and the whole control block leaked.
+    //
+    // Both directions are asserted because the fix is a REFCOUNT dec, not an
+    // unconditional destruction, and only the count knows which one is due:
+    // with no other reference the body runs AT the remove; with a live alias
+    // it must wait for that alias's own end. Running the body beside the dec
+    // rather than inside it satisfies the first and breaks the second — and
+    // prints twice in the first, which is what it did when measured.
+    // Codegen twin: `test_e2e_remove_releases_a_shared_key_through_the_refcount`.
+    let last = "#[derive(Hash, Eq, PartialEq)]
+        shared struct K { id: i64 }
+        impl Drop for K { fn drop(mut ref self) { println(f\"dropK {self.id}\"); } }
+        fn main() {
+            let mut m: Map[K, i64] = Map.new();
+            let k = K { id: 1 };
+            m.insert(k, 1);
+            println(\"--before--\");
+            m.remove(k);
+            println(\"--after--\");
+        }";
+    assert_eq!(run_no_errors(last), "--before--\ndropK 1\n--after--\n");
+
+    let aliased = "#[derive(Hash, Eq, PartialEq)]
+        shared struct K { id: i64 }
+        impl Drop for K { fn drop(mut ref self) { println(f\"dropK {self.id}\"); } }
+        fn main() {
+            let mut m: Map[K, i64] = Map.new();
+            let k = K { id: 1 };
+            let keep = k;
+            m.insert(k, 1);
+            println(\"--before--\");
+            m.remove(keep);
+            println(\"--after-remove--\");
+            println(f\"keep still {keep.id}\");
+            println(\"--end--\");
+        }";
+    assert_eq!(
+        run_no_errors(aliased),
+        "--before--\n--after-remove--\nkeep still 1\ndropK 1\n--end--\n"
+    );
+}
+
+#[test]
+fn clearing_a_set_runs_its_elements_drop_body() {
+    // B-2026-08-27-3 (found while fixing the leak). `Map.clear` got the key
+    // and value body walks in B-2026-08-26-41; `Set.clear` is a different
+    // codegen arm and got neither, so the compiled backends dropped nothing
+    // while the interpreter — which runs the same element walk for every
+    // container — printed the body. A run-vs-build divergence, and the
+    // interpreter is the side that was already right; this pins it as the
+    // oracle. Codegen twin: `test_e2e_set_clear_runs_the_element_drop_body`.
+    let src = "#[derive(Hash, Eq, PartialEq, Ord)]
+        struct E { n: i64 }
+        impl Drop for E { fn drop(mut ref self) { println(f\"dropE {self.n}\"); } }
+        fn main() {
+            let mut s: Set[E] = Set.new();
+            s.insert(E { n: 1 });
+            println(\"--before--\");
+            s.clear();
+            println(f\"--after len={s.len()}--\");
+        }";
+    assert_eq!(run_no_errors(src), "--before--\ndropE 1\n--after len=0--\n");
+}
+
+#[test]
 fn a_moved_map_key_runs_its_drop_body_exactly_once() {
     // The half of B-2026-08-26-41 that had to move WITH the walk. Before it,
     // a BOUND-LOCAL key moved into a map ran its body at the MOVE SITE — the

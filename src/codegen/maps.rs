@@ -2548,26 +2548,32 @@ impl<'ctx> super::Codegen<'ctx> {
                 let key_slot = self.create_entry_alloca(fn_val, "map.remove.key", key_ty);
                 let old_slot = self.create_entry_alloca(fn_val, "map.remove.old", val_ty);
                 self.builder.build_store(key_slot, key_val).unwrap();
+                // B-2026-08-27-3 — the KEY's own destructor, when it owns heap
+                // the `drop_key` flag below cannot describe. `remove`
+                // tombstones the bucket and teardown only ever walks OCCUPIED
+                // slots, so anything the vacated slot still owned is orphaned
+                // for good.
+                let key_mem = self.map_key_mem_drop_fn_for_var(var_name);
                 // `drop_key` releases the bucket's STORED key buffer (the
-                // tombstone would orphan it) when the key is a heap
+                // tombstone would orphan it) when the key IS a heap
                 // `{ptr,len,cap}`. The value is moved out into the returned
                 // `Some(old)`, so the runtime never frees it.
-                let drop_key = self
-                    .context
-                    .i32_type()
-                    .const_int(u64::from(self.llvm_ty_is_vec_struct(key_ty)), false);
-                // B-2026-08-27-2 — when the KEY type runs a user `Drop`, take
-                // the variant that hands the runtime a body to invoke on the
-                // stored key. `remove` destroys that key in place (the value
-                // moves out to the caller and drops there, which is already
-                // right), so its body has to run between locating the bucket
-                // and freeing it — a window only the runtime is inside.
-                let key_body = self
-                    .mapset
-                    .map_val_bodies_tes
-                    .get(var_name)
-                    .cloned()
-                    .and_then(|te| self.emit_map_key_one_drop_body_fn(&te));
+                //
+                // Forced OFF when `key_mem` exists, because that fn owns the
+                // whole key side including the outer buffer — the same
+                // exclusion `emit_free_one_map_handle` applies at teardown.
+                // Both would fire on a `Map[Vec[String], V]` key, where the
+                // flag and the fn each see a `{ptr,len,cap}`: a double free.
+                let drop_key = self.context.i32_type().const_int(
+                    u64::from(key_mem.is_none() && self.llvm_ty_is_vec_struct(key_ty)),
+                    false,
+                );
+                // B-2026-08-27-2 — the KEY's user `Drop` body rides in the same
+                // callback. `remove` destroys the key in place (the value moves
+                // out to the caller and drops there, which is already right), so
+                // both halves have to run between locating the bucket and
+                // freeing it — a window only the runtime is inside.
+                let key_body = self.map_key_one_entry_drop_fn_for_var(var_name);
                 let found = match key_body {
                     Some(kb) => self
                         .builder
@@ -2719,7 +2725,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 // map-free frees only occupied slots, and a clear leaves
                 // none). Shared-typed halves get a refcount-dec walk first,
                 // mirroring the scope-exit `FreeMapHandle` cleanup.
-                let key_is_vec = self.llvm_ty_is_vec_struct(key_ty);
+                // B-2026-08-27-3 — the per-key MEMORY releaser, when the key
+                // owns heap the flag cannot describe. Its presence forces
+                // `key_is_vec` off (it owns the whole key side, outer buffer
+                // included), exactly as at teardown.
+                let key_mem = self.map_key_mem_drop_fn_for_var(var_name);
+                let key_is_vec = key_mem.is_none() && self.llvm_ty_is_vec_struct(key_ty);
                 let val_is_vec = self.llvm_ty_is_vec_struct(val_ty);
                 // B-2026-08-03-2 (class 1) — every entry is destroyed here, so
                 // every VALUE's user Drop BODY must run. This arm did all the
@@ -2755,6 +2766,16 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.builder
                         .build_call(bodies, &[handle_ptr.into()], "")
                         .unwrap();
+                }
+                // B-2026-08-27-3 — the key-half MEMORY walk, the clear
+                // sibling of the one `emit_free_one_map_handle` runs at
+                // teardown. AFTER the body walks above (which read the fields
+                // this frees) and BEFORE the bucket-storage release below.
+                // Without it `m.clear()` orphaned every struct key's heap: the
+                // clear leaves no occupied slot, so the eventual map-free —
+                // which walks only occupied slots — never sees them again.
+                if let Some(key_fn) = key_mem {
+                    self.emit_map_key_drop_fn_walk(map_handle, key_fn);
                 }
                 if let Some(heap_ty) = self.map_val_shared_heap_type_for(var_name) {
                     self.emit_map_shared_half_rc_dec_walk(map_handle, heap_ty, true);
