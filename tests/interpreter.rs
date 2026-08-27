@@ -732,6 +732,51 @@ fn container_element_drop_order_is_the_containers_own_iteration_order() {
 }
 
 #[test]
+fn vec_equality_is_content_equality_in_the_interpreter() {
+    // B-2026-08-27-10. The interpreter had NO `Array` arm in its binop
+    // dispatcher, so `Vec[T] == Vec[T]` fell to the catch-all whose message
+    // says "this is a type error the typechecker reports as a hard error".
+    // That claim was false: `karac check` printed "All checks passed." on the
+    // same file, deliberately -- `type_supports_partial_eq` has recursed into
+    // a `Vec`'s element since B-2026-08-18-6, and design.md § Conditional
+    // `impl` Blocks specifies `impl[T: Eq] Eq for Vec[T]` outright.
+    //
+    // So the interpreter was the half that had to move. Asserting the ANSWERS
+    // rather than the absence of an error is what makes this a regression test
+    // for the compiled backends too: they were silently WRONG here, not
+    // erroring, and this is the oracle their E2E twin
+    // (`test_e2e_vec_equality_compares_contents_not_bytes`) is checked against.
+    let src = "fn cmp_ref(a: ref Vec[i64], b: ref Vec[i64]) -> bool { return a == b; }
+        fn main() {
+            let mut a: Vec[i64] = Vec.new();
+            a.push(1);
+            a.push(2);
+            let mut c: Vec[i64] = Vec.new();
+            c.push(1);
+            c.push(9);
+            let mut d: Vec[i64] = Vec.new();
+            d.push(1);
+            println(f\"{a == a}\");
+            println(f\"{a == c}\");
+            println(f\"{a == d}\");
+            println(f\"{a != c}\");
+            println(f\"{cmp_ref(a, c)}\");
+            let mut p: Vec[String] = Vec.new();
+            p.push(\"hello\");
+            let mut q: Vec[String] = Vec.new();
+            q.push(\"hello\");
+            println(f\"{p == q}\");
+        }";
+    // `a == c` is the leg that answered TRUE on the compiled backends: both
+    // vecs have length 2, and the string comparison they fell into memcmp'd
+    // two BYTES of the i64 element buffers, which are `01 00` in both.
+    assert_eq!(
+        run_no_errors(src),
+        "true\nfalse\nfalse\ntrue\nfalse\ntrue\n"
+    );
+}
+
+#[test]
 fn a_sorted_container_destroys_its_elements_in_key_order() {
     // B-2026-08-27-7's other half — the escape hatch, pinned. design.md § Map
     // sends code that needs a defined order to `SortedMap`/`SortedSet`, and

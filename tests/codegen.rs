@@ -105279,6 +105279,71 @@ fn main() {
     /// interleaved pass — and `V4` first because key 1 holds the value inserted
     /// last, which is the detail an insertion-ordered value walk would get
     /// backwards while still printing the right multiset.
+    /// `Vec[T] == Vec[T]` compares CONTENTS on the compiled backends
+    /// (B-2026-08-27-10).
+    ///
+    /// The whole matrix in one program because the defect was shape-selective
+    /// in a way a single case hides. `compile_binop`'s struct path dispatched
+    /// on LLVM FIELD COUNT, and `String` and `Vec` are both
+    /// `{ ptr, i64, i64 }` — so a `Vec` was compared AS A STRING:
+    /// `len_eq && memcmp(min(len))` over the element buffer, reading `len`
+    /// BYTES of what are `len` ELEMENTS.
+    ///
+    /// That reads as two unrelated bugs unless both legs are present.
+    /// `[1,2] == [1,9]` answered TRUE (the leading two bytes of both `i64`
+    /// buffers are `01 00`), while two `Vec[String]` with equal contents
+    /// answered FALSE (it compared the low bytes of two heap pointers). The
+    /// differing-LENGTH and empty cases answered correctly throughout, which
+    /// is why a test built from those alone would have passed against the bug.
+    ///
+    /// The `ref` leg is here because it was a SECOND miss: the first fix keyed
+    /// off an owned-`Vec` table, so `ref Vec[T] == ref Vec[T]` stayed wrong
+    /// (answering `true` for differing contents) until the oracle learned to
+    /// peel borrows, as the typechecker's own `Eq` arm already does.
+    #[test]
+    fn test_e2e_vec_equality_compares_contents_not_bytes() {
+        assert_eq!(
+            run_program(
+                r#"
+fn cmp_ref(a: ref Vec[i64], b: ref Vec[i64]) -> bool { return a == b; }
+fn main() {
+    let mut a: Vec[i64] = Vec.new();
+    a.push(1);
+    a.push(2);
+    let mut b: Vec[i64] = Vec.new();
+    b.push(1);
+    b.push(2);
+    let mut c: Vec[i64] = Vec.new();
+    c.push(1);
+    c.push(9);
+    let mut d: Vec[i64] = Vec.new();
+    d.push(1);
+    let e: Vec[i64] = Vec.new();
+    println(f"{a == b}");
+    println(f"{a == c}");
+    println(f"{a == d}");
+    println(f"{e == a}");
+    println(f"{a != c}");
+    println(f"{cmp_ref(a, c)}");
+    let mut p: Vec[String] = Vec.new();
+    p.push("hello");
+    p.push("world");
+    let mut q: Vec[String] = Vec.new();
+    q.push("hello");
+    q.push("world");
+    let mut r: Vec[String] = Vec.new();
+    r.push("hello");
+    r.push("there");
+    println(f"{p == q}");
+    println(f"{p == r}");
+}
+"#,
+            ),
+            // a==b, a==c, a==d, e==a, a!=c, cmp_ref(a,c), p==q, p==r
+            Some("true\nfalse\nfalse\nfalse\ntrue\nfalse\ntrue\nfalse\n".to_string())
+        );
+    }
+
     #[test]
     fn test_e2e_sorted_container_destroys_in_key_order() {
         assert_eq!(

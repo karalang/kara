@@ -6049,6 +6049,7 @@ impl<'ctx> Codegen<'ctx> {
                 vector_method_call_spans: HashSet::new(),
                 expr_struct_type_names: HashMap::new(),
                 user_ord_typed_exprs: HashMap::new(),
+                vec_eq_elem_types: HashMap::new(),
                 raw_pointer_pointee_types: HashMap::new(),
                 concrete_named_type_exprs: HashMap::new(),
                 vec_index_borrow_spans: FxHashSet::default(),
@@ -7362,6 +7363,7 @@ impl<'ctx> Codegen<'ctx> {
         // cascade to dispatch to the user's compiled `Type.cmp` via
         // direct call.
         self.span_tables.user_ord_typed_exprs = program.user_ord_typed_exprs.clone();
+        self.span_tables.vec_eq_elem_types = program.vec_eq_elem_types.clone();
 
         // Surface TypeExpr per heap-owning temporary expression. Keyed by
         // span; `materialize_owned_temp` consults it to scope-drop unnamed
@@ -8784,6 +8786,7 @@ impl<'ctx> Codegen<'ctx> {
         let mut t_vector_method_call_spans = tp.vector_method_call_spans.clone();
         let mut t_expr_struct_type_names = tp.expr_struct_type_names.clone();
         let mut t_user_ord_typed_exprs = tp.user_ord_typed_exprs.clone();
+        let mut t_vec_eq_elem_types = tp.vec_eq_elem_types.clone();
         let mut t_owned_temp_drops = tp.owned_temp_drops.clone();
         let mut t_raw_pointer_pointee_types = tp.raw_pointer_pointee_types.clone();
         let mut t_enum_inst_type_exprs = tp.enum_inst_type_exprs.clone();
@@ -8854,6 +8857,10 @@ impl<'ctx> Codegen<'ctx> {
                 std::mem::swap(
                     &mut self.span_tables.user_ord_typed_exprs,
                     &mut t_user_ord_typed_exprs,
+                );
+                std::mem::swap(
+                    &mut self.span_tables.vec_eq_elem_types,
+                    &mut t_vec_eq_elem_types,
                 );
                 std::mem::swap(&mut self.drop_rc.owned_temp_drops, &mut t_owned_temp_drops);
                 std::mem::swap(

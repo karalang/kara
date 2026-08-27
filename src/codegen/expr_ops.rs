@@ -7764,6 +7764,62 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Element `TypeExpr` when `e` is statically a `Vec[T]`, else `None`
+    /// (B-2026-08-27-10) — the operand oracle for the bare-`Vec` `==` / `!=`
+    /// intercept in `compile_expr`'s Binary arm.
+    ///
+    /// The table is type-exact and covers a BORROWED operand: the lowering
+    /// pass peels `ref` / `mut ref` when it builds it, matching the
+    /// typechecker's `Eq` arm, which calls `strip_refs_for_compare` on both
+    /// sides before admitting the comparison. Type-exactness is what makes the
+    /// intercept safe to place ahead of `compile_binop` — an LLVM-shape test
+    /// cannot tell a `Vec` from a `String` (both `{ ptr, i64, i64 }`), which is
+    /// how this bug arose, and `var_elem_type_exprs` cannot tell a `Vec` from a
+    /// `Slice` or a `VecDeque`, so neither is usable here.
+    pub(super) fn vec_elem_te_of_operand(&self, e: &crate::ast::Expr) -> Option<TypeExpr> {
+        self.span_tables
+            .vec_eq_elem_types
+            .get(&(e.span.offset, e.span.length))
+            .cloned()
+    }
+
+    /// `a == b` / `a != b` on two `Vec[T]` values, routed to the shared
+    /// content comparator `karac_eq_Vec_<T>` (B-2026-08-27-10).
+    ///
+    /// That function takes POINTERS to the two `{ ptr, len, cap }` control
+    /// blocks, so the loaded struct values are spilled to allocas first. This
+    /// is the same function the `#[derive(PartialEq)]` struct-field path
+    /// reaches via `emit_eq_fn_for_struct`, which is what makes the bare
+    /// operator and the wrapped field agree by construction rather than by
+    /// two implementations that happen to match.
+    pub(super) fn compile_vec_eq(
+        &mut self,
+        op: &BinOp,
+        elem_te: &TypeExpr,
+        lhs: inkwell::values::StructValue<'ctx>,
+        rhs: inkwell::values::StructValue<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let eq_fn = self.emit_eq_fn_for_vec(elem_te);
+        let vec_ty = self.vec_struct_type();
+        let l_slot = self.builder.build_alloca(vec_ty, "veceq.l").unwrap();
+        self.builder.build_store(l_slot, lhs).unwrap();
+        let r_slot = self.builder.build_alloca(vec_ty, "veceq.r").unwrap();
+        self.builder.build_store(r_slot, rhs).unwrap();
+        let r = self
+            .builder
+            .build_call(eq_fn, &[l_slot.into(), r_slot.into()], "veceq.call")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        let out = if matches!(op, BinOp::NotEq) {
+            self.builder.build_not(r, "veceq.ne").unwrap()
+        } else {
+            r
+        };
+        Ok(out.into())
+    }
+
     pub(super) fn compile_string_binop(
         &self,
         op: &BinOp,

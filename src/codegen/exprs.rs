@@ -483,6 +483,60 @@ impl<'ctx> super::Codegen<'ctx> {
                     if let Some(r) = self.try_compile_enum_operand_eq(op, left, right, lhs, rhs) {
                         return r;
                     }
+                    // Structural `==` / `!=` on a BARE `Vec[T]` operand
+                    // (B-2026-08-27-10). Must precede `compile_binop`, whose
+                    // struct path dispatches on LLVM FIELD COUNT: `String` and
+                    // `Vec` are both `{ ptr, i64, i64 }`, so a `Vec == Vec`
+                    // landed in `compile_string_binop` and was compared AS A
+                    // STRING — `len_eq && memcmp(min(len))` over the ELEMENT
+                    // buffer, reading `len` BYTES of what are `len` ELEMENTS.
+                    // Measured: `[1,2] == [1,9]` answered TRUE (the first two
+                    // bytes of both i64 buffers are `01 00`), and two
+                    // `Vec[String]` with equal contents answered FALSE (it
+                    // compared two heap pointers' low bytes).
+                    //
+                    // The correct comparator already existed and was already
+                    // reachable one layer up: wrapping the SAME vec in a
+                    // one-field `#[derive(PartialEq)]` struct routes through
+                    // `emit_eq_fn_for_struct` → `emit_eq_fn_for_vec` and
+                    // answers correctly on all three backends. Only the bare
+                    // operator missed it. design.md § Conditional `impl`
+                    // Blocks specifies `impl[T: Eq] Eq for Vec[T]` as
+                    // `self.len() == other.len() and zip.all(a == b)`, which
+                    // is what `emit_eq_fn_for_vec` implements, so this routes
+                    // to the spec's comparator rather than inventing one.
+                    if matches!(op, BinOp::Eq | BinOp::NotEq)
+                        && lhs.is_struct_value()
+                        && rhs.is_struct_value()
+                    {
+                        if let Some(elem_te) = self
+                            .vec_elem_te_of_operand(left)
+                            .or_else(|| self.vec_elem_te_of_operand(right))
+                        {
+                            let result = self.compile_vec_eq(
+                                op,
+                                &elem_te,
+                                lhs.into_struct_value(),
+                                rhs.into_struct_value(),
+                            )?;
+                            // The same fresh-owned operand frees the fall-
+                            // through path runs for a String-shaped `Eq`
+                            // (B-2026-08-11-24, below). Returning early skips
+                            // them, and a `Vec` IS String-shaped, so without
+                            // this an operand that is a fresh temporary --
+                            // `ids() == ids()` -- leaked both element buffers
+                            // (measured: 192 bytes in 2 allocations under LSan,
+                            // where the pre-intercept build was clean).
+                            // `free_fresh_owned_str_arg` self-gates to
+                            // fresh-owned Call/MethodCall shapes with a
+                            // `cap > 0` backstop, so identifiers, places and
+                            // borrowed operands are untouched. After the call,
+                            // which reads both buffers.
+                            self.free_fresh_owned_str_arg(left, lhs);
+                            self.free_fresh_owned_str_arg(right, rhs);
+                            return Ok(result);
+                        }
+                    }
                     // Shared-struct structural `==` / `!=` (C1, B-2026-06-19-9).
                     // A `shared struct` is an RC heap pointer, so it misses the
                     // value-wise struct path above; recover the struct name from

@@ -694,6 +694,20 @@ pub type ExprStructTypeNamesTable = std::collections::HashMap<(usize, usize), St
 /// logic (reverse order, custom tiebreaks) the cascade can't reproduce.
 pub type UserOrdTypedExprsTable = std::collections::HashMap<(usize, usize), String>;
 
+/// Element `TypeExpr` for every expression whose Kāra type is `Vec[T]`,
+/// keyed by `(span.offset, span.length)` — the operand oracle for the
+/// bare-`Vec` `==` / `!=` intercept in codegen (B-2026-08-27-10).
+///
+/// A `ref Vec[T]` / `mut ref Vec[T]` operand records the SAME element type as
+/// an owned one: the typechecker's `Eq` arm auto-derefs both sides
+/// (`strip_refs_for_compare`) before it decides the comparison is legal, so
+/// the two shapes are one case at the operator and must be one case here.
+/// This is deliberately NOT folded into `OwnedTempDropsTable`, which carries
+/// the same `Vec` entries for owned expressions only: that table drives
+/// scope-exit drops, and teaching it about borrows would free a buffer the
+/// borrow does not own.
+pub type VecEqElemTypesTable = std::collections::HashMap<(usize, usize), TypeExpr>;
+
 /// Borrow form for a pattern binding under a `ref` / `mut ref` scrutinee.
 /// `Ref` corresponds to a `ref T` scrutinee mode; `MutRef` to `mut ref T`.
 /// Owned bindings have no entry in `PatternBindingBorrowModesTable` —
@@ -1130,6 +1144,12 @@ pub struct Program {
     /// derive-equivalent field cascade, preserving custom orderings
     /// (e.g. reverse, multi-key tiebreaks).
     pub user_ord_typed_exprs: UserOrdTypedExprsTable,
+    /// Set by the lowering pass from `TypeCheckResult.expr_types`: element
+    /// `TypeExpr` per `Vec[T]`-typed expression (borrows peeled). Lets the
+    /// `==` / `!=` intercept route a bare `Vec` operand to the content
+    /// comparator instead of `compile_binop`'s field-count dispatch, which
+    /// mistook a `Vec` for a `String`. See [`VecEqElemTypesTable`].
+    pub vec_eq_elem_types: VecEqElemTypesTable,
     /// Set by the lowering pass from `TypeCheckResult.expr_types`: surface
     /// `TypeExpr` per heap-owning *temporary* expression (Vec/String,
     /// Map/Set, shared-struct RC box). Consumed by codegen's

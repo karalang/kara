@@ -823,6 +823,24 @@ impl<'a> super::Interpreter<'a> {
                 Value::Bool(l != r)
             }
 
+            // `Vec[T]` equality is CONTENT equality (B-2026-08-27-10).
+            // design.md § Conditional `impl` Blocks specifies
+            // `impl[T: Eq] Eq for Vec[T]` as `self.len() == other.len() and
+            // zip.all(a == b)`, and the typechecker has admitted a `Vec[T]`
+            // operand since B-2026-08-18-6 (`type_supports_partial_eq`
+            // recurses into the element) -- so `karac check` passed and the
+            // interpreter then died on the `_` arm below, whose message
+            // asserts the typechecker rejects this. It does not, and did not.
+            //
+            // `Value`'s own `PartialEq` is the comparator: it recurses
+            // element-wise with an `Arc::ptr_eq` fast path, exactly as the
+            // `SharedStruct` arms above use it, and it is already what a
+            // `#[derive(PartialEq)]` struct with a `Vec` field compares
+            // through -- which is why that shape always worked while the bare
+            // operator did not.
+            (BinOp::Eq, l @ Value::Array(_), r @ Value::Array(_)) => Value::Bool(l == r),
+            (BinOp::NotEq, l @ Value::Array(_), r @ Value::Array(_)) => Value::Bool(l != r),
+
             // No valid program reaches here — the typechecker rejects every
             // ill-typed operand combination as a hard error. The one way in is
             // `karac run`, which deliberately demotes typecheck errors to

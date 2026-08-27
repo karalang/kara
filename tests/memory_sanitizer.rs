@@ -734,6 +734,44 @@ mod memory_sanitizer_tests {
     ///
     /// Controls from the row, both always clean and both still exercised
     /// elsewhere: `Vec.filled(3, "x".to_string())` and a `push` loop.
+    /// `Vec[T] == Vec[T]` borrows both operands and frees neither
+    /// (B-2026-08-27-10).
+    ///
+    /// `karac_eq_Vec_<T>` takes POINTERS to the two `{ ptr, len, cap }` control
+    /// blocks, so the intercept spills the loaded struct values into allocas
+    /// before the call. Spilling a heap-owning value is exactly the shape that
+    /// grows a second owner if the callee or the call site frees it, and the
+    /// heap-element case (`Vec[String]`) is where a stray free shows up as a
+    /// double-free rather than as a wrong answer.
+    ///
+    /// The TEMPORARY operands matter more than the bound ones: `ids() == ids()`
+    /// builds two vecs that nothing else holds, and their only reference is the
+    /// alloca the comparison made. Both legs are here so a leak on the
+    /// temporary path can't hide behind a clean bound-operand run.
+    #[test]
+    fn asan_vec_equality_borrows_both_operands() {
+        assert_clean_asan_run(
+            r#"
+fn ids() -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push("alpha");
+    v.push("beta");
+    return v;
+}
+fn main() {
+    let a = ids();
+    let b = ids();
+    println(f"{a == b}");
+    println(f"{ids() == ids()}");
+    println(a[0]);
+    println(b[1]);
+}
+"#,
+            &["true", "true", "alpha", "beta"],
+            "asan_vec_equality_borrows_both_operands",
+        );
+    }
+
     #[test]
     fn asan_vec_filled_fstring_value_is_not_double_freed() {
         assert_clean_asan_run(

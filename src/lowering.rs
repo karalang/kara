@@ -940,6 +940,40 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
     // detectable on their own (slice 1) — the entry only *adds* the element
     // type, so a missing entry degrades to slice-1 behavior, never a leak
     // regression. See `docs/spikes/general-owned-temp-tracking.md` (slice 2).
+    // Element `TypeExpr` for every `Vec[T]`-typed expression, borrows peeled
+    // (B-2026-08-27-10). Codegen's `==` / `!=` intercept reads this to route a
+    // bare `Vec` operand to `karac_eq_Vec_<T>`; without it the operand fell
+    // through to `compile_binop`'s struct path, which dispatches on LLVM FIELD
+    // COUNT and so compared the `Vec` as a `String` (both are
+    // `{ ptr, i64, i64 }`).
+    //
+    // Peeling `Ref`/`MutRef` mirrors the typechecker's own `Eq` arm, which
+    // calls `strip_refs_for_compare` on both operands before deciding the
+    // comparison is legal — a `ref Vec[T]` is the same comparison as an owned
+    // one, and was wrong in exactly the same way.
+    program.vec_eq_elem_types = tc
+        .expr_types
+        .iter()
+        .filter_map(|(k, ty)| {
+            let peeled = match ty {
+                Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
+                other => other,
+            };
+            let Type::Named { name, args } = peeled else {
+                return None;
+            };
+            if name != "Vec" || args.len() != 1 {
+                return None;
+            }
+            // An `Error` element means inference already failed; emitting a
+            // comparator for it would bake that in, so leave the site on the
+            // pre-existing path where the real diagnostic is reported.
+            if matches!(args[0], Type::Error) {
+                return None;
+            }
+            Some(((k.0, k.1), TypeChecker::type_to_type_expr(&args[0])))
+        })
+        .collect();
     program.owned_temp_drops = tc
         .expr_types
         .iter()
