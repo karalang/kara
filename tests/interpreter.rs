@@ -38882,6 +38882,138 @@ fn user_enum_does_not_hijack_the_builtin_bare_none() {
     );
 }
 
+// ── B-2026-08-27-46: a synthesized receiver must not adopt another span's type ──
+
+#[test]
+fn variant_literal_cmp_receiver_is_not_retagged_to_the_call_result_enum() {
+    // B-2026-08-27-46. `.cmp()` on a bare enum-variant LITERAL answered a
+    // CONSTANT — `E.A.cmp(E.B)`, `E.B.cmp(E.A)` and `E.A.cmp(E.A)` all returned
+    // the same `Ordering` (measured: `2 2 2`, constant Greater) — while both
+    // compiled backends answered correctly. Silent: `karac check` passed and
+    // the program exited 0.
+    //
+    // The receiver never reached the `cmp` arm as an `E`. `lowering.rs`'s
+    // `rewrite_enum_literal_method_call` materializes the literal receiver into
+    // `{ let __karac_elm_N = E.A; __karac_elm_N.cmp(other) }` and gives the
+    // synthesized identifier the ORIGINAL CALLEE's span — at which the
+    // typechecker had recorded the enclosing call's RESULT type, `Ordering`.
+    // `retag_bare_unit_variant` read that and rewrote the receiver to
+    // `Ordering.A`, a variant `Ordering` does not declare; `value_compare` then
+    // compared two unrelated enums and returned the same answer every time.
+    //
+    // Asserting all three orderings is the point: a fix that returns a
+    // different constant still passes a one-pair test.
+    assert_eq!(
+        run_no_errors(
+            "#[derive(Ord, Eq)]
+             enum E { A, B }
+             fn tag(o: Ordering) -> i64 {
+                 if o.is_lt() { return 0; }
+                 if o.is_eq() { return 1; }
+                 return 2;
+             }
+             fn main() {
+                 let a = E.A;
+                 let b = E.B;
+                 println(f\"{tag(E.A.cmp(E.B))} {tag(E.B.cmp(E.A))} {tag(E.A.cmp(E.A))}\");
+                 println(f\"{tag(a.cmp(b))} {tag(b.cmp(a))} {tag(a.cmp(a))}\");
+                 println(f\"{tag(a.cmp(E.B))} {tag(b.cmp(E.A))} {tag(a.cmp(E.A))}\");
+             }"
+        ),
+        // Bound receiver and literal ARGUMENT were always correct; the literal
+        // RECEIVER row is the one that was wrong. All three must now agree.
+        "0 2 1\n0 2 1\n0 2 1\n"
+    );
+}
+
+#[test]
+fn variant_literal_receiver_survives_a_method_returning_a_colliding_enum() {
+    // The same defect with `cmp` swapped out, which is what shows it was never
+    // about `cmp`: the trigger is a method on a variant literal whose RETURN
+    // type is a `Named` type. Here `Color.Red.to_fruit()` records `Fruit` at
+    // the callee span, and `Fruit` also declares `Red` — so the receiver was
+    // retagged to `Fruit.Red` and dispatch then failed outright with
+    // "method 'to_fruit' not found on type 'Fruit'". Loud rather than silent,
+    // but the same single cause.
+    //
+    // Both variants are exercised because the retag rewrote the enum name and
+    // kept the variant, so a fixture using only one variant cannot tell a
+    // correct receiver from a retagged one that happens to dispatch.
+    assert_eq!(
+        run_no_errors(
+            "enum Color { Red, Green }
+             enum Fruit { Red, Apple }
+             impl Color {
+                 fn to_fruit(self) -> Fruit {
+                     match self { Red => return Fruit.Apple, Green => return Fruit.Red, }
+                 }
+             }
+             fn fruit_tag(f: Fruit) -> i64 {
+                 match f { Red => return 0, Apple => return 1, }
+             }
+             fn main() {
+                 println(fruit_tag(Color.Red.to_fruit()));
+                 println(fruit_tag(Color.Green.to_fruit()));
+             }"
+        ),
+        "1\n0\n"
+    );
+}
+
+#[test]
+fn variant_literal_receiver_with_a_struct_returning_method_does_not_ice() {
+    // The third shape the same cause took, and the worst-behaved: when the
+    // method returns a STRUCT, the recorded `Named` type names no enum at all,
+    // so the receiver was retagged to an enum name that does not exist, the
+    // call produced `Value::Unit`, and the following field read PANICKED the
+    // interpreter — `internal error: entered unreachable code: field access
+    // ...: receiver was Value::Unit not Struct/SharedStruct`, a message that
+    // blames the typechecker or a wrong-variant codepath when both were right.
+    // A raw panic also violates the standing never-panic diagnostics rule, so
+    // this leg is worth pinning on its own rather than folding into the enum
+    // one above.
+    assert_eq!(
+        run_no_errors(
+            "enum Color { Red, Green }
+             struct Tag { n: i64 }
+             impl Color {
+                 fn to_tag(self) -> Tag {
+                     match self { Red => return Tag { n: 1 }, Green => return Tag { n: 2 }, }
+                 }
+             }
+             fn main() {
+                 println(Color.Red.to_tag().n);
+                 println(Color.Green.to_tag().n);
+             }"
+        ),
+        "1\n2\n"
+    );
+}
+
+#[test]
+fn variant_literal_receiver_with_a_primitive_returning_method_still_works() {
+    // The leg that always worked, kept as the boundary marker: a primitive
+    // return type records `Type::Int`, which is not `Named`, so the retag
+    // declined and the receiver survived. This is why B-2026-07-13-4 — the
+    // commit that introduced the literal-receiver lowering, with a fixture
+    // whose method returns `i64` — passed while three sibling return types
+    // were broken. It passes both before and after the fix by design; its job
+    // is to stop a future narrowing of the retag from being mistaken for a
+    // complete answer to this bug.
+    assert_eq!(
+        run_no_errors(
+            "enum Color { Red, Green }
+             impl Color {
+                 fn code(self) -> i64 {
+                     match self { Red => return 10, Green => return 20, }
+                 }
+             }
+             fn main() { println(Color.Red.code()); println(Color.Green.code()); }"
+        ),
+        "10\n20\n"
+    );
+}
+
 // ── B-2026-08-19-20: Stats refusals are runtime errors, not raw panics ──
 
 #[test]

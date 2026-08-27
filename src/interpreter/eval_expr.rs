@@ -41,10 +41,12 @@ impl<'a> super::Interpreter<'a> {
     /// codegen's winning impl to the interpreter.
     ///
     /// Silent (returns `v` unchanged) when the value is not a unit variant,
-    /// when `expr_types` has no entry for the span (it is populated sparsely),
-    /// or when the recorded enum already matches — so the overwhelmingly common
-    /// non-colliding case costs one map lookup and nothing else.
-    fn retag_bare_unit_variant(&self, v: Value, span: &crate::token::Span) -> Value {
+    /// when the identifier is not spelled as the variant name itself
+    /// (B-2026-08-27-46, below), when `expr_types` has no entry for the span (it
+    /// is populated sparsely), or when the recorded enum already matches — so
+    /// the overwhelmingly common non-colliding case costs one map lookup and
+    /// nothing else.
+    fn retag_bare_unit_variant(&self, v: Value, name: &str, span: &crate::token::Span) -> Value {
         let Value::EnumVariant {
             enum_name,
             variant,
@@ -53,6 +55,35 @@ impl<'a> super::Interpreter<'a> {
         else {
             return v;
         };
+        // B-2026-08-27-46 — retag ONLY a reference spelled as the bare variant
+        // name itself. That is the entire set `register_items`' last-write-wins
+        // can get wrong: the collision is over `env["A"]`, so the identifier
+        // being read has to BE `A`. Every other identifier — a `let` binding, a
+        // parameter, a compiler-synthesized temp — holds a value that was
+        // produced by some other expression which already took its own trip
+        // through this retag (or came from a qualified `Enum.Variant` path,
+        // which is unambiguous by construction), so adopting a span-recorded
+        // type here can only overwrite a correct answer with an unrelated one.
+        //
+        // It did exactly that. `lowering.rs`'s `rewrite_enum_literal_method_call`
+        // materializes `E.A.cmp(other)` into `{ let __karac_elm_N = E.A;
+        // __karac_elm_N.cmp(other) }` and gives the synthesized identifier the
+        // ORIGINAL callee's span — a span the typechecker recorded the enclosing
+        // CALL's result type at (`Ordering`), not the receiver's. This lookup
+        // then read `Ordering`, found `env["Ordering.A"]` absent (no such
+        // variant), and retagged the receiver in place to `Ordering.A` — a
+        // variant `Ordering` does not declare. `value_compare` compared that
+        // against a well-formed `E.B` and returned a CONSTANT for every operand
+        // pair, so `E.A.cmp(E.B)`, `E.B.cmp(E.A)` and `E.A.cmp(E.A)` all
+        // answered the same `Ordering` under the interpreter while both
+        // compiled backends answered correctly. Silent, and `karac check`
+        // passed. Gating on the spelling closes the whole class rather than the
+        // one lowering that exposed it: a synthesized node is free to reuse a
+        // source span, because this channel no longer reads one it wasn't
+        // written for.
+        if name != variant {
+            return v;
+        }
         let Some(recorded) = self
             .typecheck_result
             .expr_types
@@ -66,6 +97,16 @@ impl<'a> super::Interpreter<'a> {
         };
         if want == enum_name {
             return v;
+        }
+        // Fail safe on the recorded type as well: never adopt an enum that does
+        // not declare this variant. Only decisive when `want` is a KNOWN enum —
+        // an unrecognized name (the prelude's `Option`/`Result` need not appear
+        // in `enum_info`) keeps the pre-existing behaviour, so this narrows the
+        // retag without withdrawing it from the builtin case it was built for.
+        if let Some(info) = self.typecheck_result.enum_info.get(want) {
+            if !info.variants.iter().any(|(n, _)| n == variant) {
+                return v;
+            }
         }
         // Prefer the qualified binding when one exists (every user enum has one
         // since B-2026-08-19-16) — it is the exact value the enum registered,
@@ -294,7 +335,7 @@ impl<'a> super::Interpreter<'a> {
                 .env
                 .get(name)
                 .map(Self::deref_elem_ref)
-                .map(|v| self.retag_bare_unit_variant(v, &expr.span))
+                .map(|v| self.retag_bare_unit_variant(v, name, &expr.span))
                 .unwrap_or_else(|| {
                     // A bare identifier that names a struct / enum / union, used in
                     // value position, is a `Type` pseudovalue (comptime reflection,

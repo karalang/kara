@@ -106871,6 +106871,81 @@ fn main() {
         );
     }
 
+    /// B-2026-08-27-46 — a method on a bare enum-variant LITERAL agrees with
+    /// the compiled backends.
+    ///
+    /// The interpreter alone was wrong here, so the compiled side of this twin
+    /// was green before the fix and is not the regression signal — the ORACLE
+    /// is. `run_program_full` runs the interpreter, and it is that half which
+    /// returned a constant `Ordering` for every operand pair (measured:
+    /// `2 2 2`) while the AOT binary returned `0 2 1`. Twinning is still the
+    /// right shape: the defect was a run-vs-build divergence, so the assertion
+    /// that closes it is the two backends agreeing, not either one in
+    /// isolation.
+    ///
+    /// The literal receiver is the whole subject, so every row uses one; the
+    /// bound-receiver row is carried only as the control that was always
+    /// correct. `to_fruit` and `to_tag` are here because `cmp` was never
+    /// special — the trigger is any method on a variant literal whose return
+    /// type is `Named`, and those two are the enum-valued and struct-valued
+    /// shapes of it.
+    #[test]
+    fn test_e2e_method_on_enum_variant_literal_receiver() {
+        let src = r#"
+#[derive(Ord, Eq)]
+enum E { A, B }
+
+enum Color { Red, Green }
+enum Fruit { Red, Apple }
+
+impl Color {
+    fn to_fruit(self) -> Fruit {
+        match self { Red => return Fruit.Apple, Green => return Fruit.Red, }
+    }
+}
+
+fn fruit_tag(f: Fruit) -> i64 {
+    match f { Red => return 0, Apple => return 1, }
+}
+
+fn tag(o: Ordering) -> i64 {
+    if o.is_lt() { return 0; }
+    if o.is_eq() { return 1; }
+    return 2;
+}
+
+fn main() {
+    println(f"01 {tag(E.A.cmp(E.B))} {tag(E.B.cmp(E.A))} {tag(E.A.cmp(E.A))}");
+    let a = E.A;
+    let b = E.B;
+    println(f"02 {tag(a.cmp(b))} {tag(b.cmp(a))} {tag(a.cmp(a))}");
+    println(f"03 {tag(a.cmp(E.B))} {tag(b.cmp(E.A))}");
+    println(f"04 {fruit_tag(Color.Red.to_fruit())} {fruit_tag(Color.Green.to_fruit())}");
+}
+"#;
+        let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+        assert!(
+            interp_errs.is_empty(),
+            "interpreter errors: {interp_errs:?}"
+        );
+        let expected = interp_out.join("");
+        // Anti-vacuity, and it is doing real work on this fixture: the failure
+        // mode was a CONSTANT ordering, so "all three answers equal" is exactly
+        // the wrong output. Pinning row 01 in full is what distinguishes a
+        // working comparator from one that returns the same `Ordering` three
+        // times, and row 04 pins that the enum-valued method dispatched on the
+        // receiver's own type rather than on the retagged one.
+        assert!(
+            expected.contains("01 0 2 1") && expected.contains("04 1 0"),
+            "interpreter oracle is wrong for a variant-literal receiver: {expected:?}"
+        );
+        let Some(aot) = run_program(src) else { return };
+        assert_eq!(
+            aot, expected,
+            "compiled method call on an enum-variant literal must match the interpreter",
+        );
+    }
+
     /// A tuple carrying a TYPE PARAMETER — `(T, i64)` at `T = i64` and
     /// `T = String` — orders through `.cmp` in a monomorph (B-2026-08-27-41).
     ///
