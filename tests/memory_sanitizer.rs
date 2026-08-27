@@ -54736,6 +54736,85 @@ fn main() {
         );
     }
 
+    /// B-2026-08-27-21 leg 1 — `.clone()` on an element read THROUGH a `ref`
+    /// binding (`let row = ref d[0]; row[0].clone()`) segfaulted under codegen
+    /// while `--interp` returned the element.
+    ///
+    /// The ref binding registered its two element tables against DIFFERENT
+    /// types: `vec_elem_types[row]` correctly held the inner element
+    /// (`String`), while `var_elem_type_exprs[row]` held the binding's OWN type
+    /// (`Vec[String]`). `compile_indexed_receiver_method` registers the synth
+    /// receiver for `row[0]` from the TypeExpr half, so the synth for a
+    /// `String` element was registered as a `Vec[String]` whose slot pointed at
+    /// the String's `{ptr, len, cap}` — `clone` then read "aa"'s header as a
+    /// Vec header, took `len = 2` as an element COUNT, and cloned two `String`s
+    /// out of the letter bytes.
+    ///
+    /// This asserts the MEMORY half of that repair; `tests/codegen.rs` asserts
+    /// the value. Both matter: the aliasing borrow means a spurious free here
+    /// would be a double free of a buffer the container still owns.
+    #[test]
+    fn asan_clone_of_element_through_ref_binding_is_clean() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut d: Vec[Vec[String]] = Vec.new();
+    let mut a: Vec[String] = Vec.new();
+    a.push(f"payload_aaaaaaaaaaaaaaaaaaaa{1}");
+    a.push(f"payload_bbbbbbbbbbbbbbbbbbbb{2}");
+    d.push(a);
+    let row = ref d[0];
+    let mut t = 0i64;
+    let mut i = 0i64;
+    while i < 20i64 {
+        let c: String = row[0].clone();
+        t = t + c.len();
+        i = i + 1i64;
+    }
+    println(f"{t}");
+}
+"#,
+            &["580"],
+            "clone-elem-through-ref-binding",
+        );
+    }
+
+    /// B-2026-08-27-21 leg 2 — a `ref` binding to a STRING element
+    /// (`let s = ref names[i]`) had no `string_vars` registration at all, so
+    /// every String method on it hit the loud "no handler for method" arm under
+    /// codegen while `--interp` ran all of them.
+    ///
+    /// The registration added for it is dispatch metadata only, and this is the
+    /// fixture that proves it: `s` borrows a buffer the Vec owns, so a
+    /// scope-exit free queued on `s` would double-free it. `.clone()` is
+    /// included because it is the one method here that legitimately allocates —
+    /// its result is owned and must be freed exactly once, while the borrowed
+    /// receiver must not be freed at all.
+    #[test]
+    fn asan_string_methods_through_ref_binding_are_clean() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut d: Vec[String] = Vec.new();
+    d.push(f"payload_hhhhhhhhhhhhhhhhhhhh{1}");
+    d.push(f"payload_wwwwwwwwwwwwwwwwwwww{2}");
+    let s = ref d[0];
+    let mut t = 0i64;
+    let mut i = 0i64;
+    while i < 20i64 {
+        let c: String = s.clone();
+        t = t + c.len() + s.len() + s.substring(0, 3).len();
+        i = i + 1i64;
+    }
+    println(f"{t}");
+    println(f"{d[1]}");
+}
+"#,
+            &["1220", "payload_wwwwwwwwwwwwwwwwwwww2"],
+            "string-methods-through-ref-binding",
+        );
+    }
+
     #[test]
     fn asan_self_rooted_index_assign_from_sibling_element_is_not_double_freed() {
         assert_clean_asan_run(

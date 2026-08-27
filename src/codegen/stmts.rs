@@ -12270,11 +12270,56 @@ impl<'ctx> super::Codegen<'ctx> {
             // `compile_vec_index` itself needs no change: it is name-keyed and
             // reaches the buffer through `get_data_ptr`, which already loads
             // through a `ref_params` shim.
+            //
+            // `var_elem_type_exprs` is the TypeExpr twin of that table and
+            // carries the same meaning — the binding's ELEMENT type, not the
+            // binding's own type. Registering `te` itself here made the two
+            // disagree for a Vec element (`vec_elem_types[r] = String` beside
+            // `var_elem_type_exprs[r] = Vec[String]`), and the reader that
+            // consumes the TypeExpr half is `compile_indexed_receiver_method`:
+            // it registers the synth for `r[0]` from this entry, so the synth
+            // for a `String` element was registered as a `Vec[String]`. Its
+            // slot pointed at the String's `{ptr, len, cap}`, so `r[0].clone()`
+            // read "aa"'s header AS a Vec header, took `len = 2` as an element
+            // COUNT, and cloned two `String`s out of the letter bytes —
+            // SIGSEGV in `karac_string_clone` (B-2026-08-27-21), while the
+            // interpreter returned "aa".
+            //
+            // `.len()` / `.starts_with()` / `.substring()` on the same receiver
+            // survived it, which is why this looked method-specific: they never
+            // read the element TypeExpr, and Vec's `len` happens to load the
+            // same word String's does. `clone` is the method that consumes it.
             if let Some(inner_te) = super::helpers::vec_inner_type_expr(&te) {
                 let inner_ll = self.llvm_type_for_type_expr(&inner_te);
                 self.var_types.vec_elem_types.insert(name.clone(), inner_ll);
+                self.var_types
+                    .var_elem_type_exprs
+                    .insert(name.clone(), inner_te);
+            } else if self.is_string_type_expr(&te) {
+                // A borrowed STRING element (`let s = ref names[i]` over a
+                // `Vec[String]`) — the second half of B-2026-08-27-21, and a
+                // plain missing registration rather than a wrong one. String
+                // method dispatch is gated on `string_vars`, which nothing here
+                // ever inserted, so `s.starts_with(..)` / `.substring(..)` /
+                // `.clone()` all reached the loud "no handler for method" arm
+                // under codegen while `--interp` ran every one of them.
+                //
+                // These are the exact two registrations
+                // `register_var_from_type_expr` makes for a String binding, and
+                // they are dispatch metadata only — no scope-exit free is
+                // queued by either, which is what makes them safe on a borrow
+                // whose buffer the container owns. `var_elem_type_exprs` is
+                // deliberately NOT written: presence there reads as "this
+                // binding is a Vec/Slice/Map" to that table's many consumers,
+                // and a String is none of them (the registrar omits it for the
+                // same reason).
+                self.var_types
+                    .vec_elem_types
+                    .insert(name.clone(), self.context.i8_type().into());
+                self.var_types.string_vars.insert(name.clone());
+            } else {
+                self.var_types.var_elem_type_exprs.insert(name.clone(), te);
             }
-            self.var_types.var_elem_type_exprs.insert(name.clone(), te);
         }
         Ok(true)
     }

@@ -12848,6 +12848,89 @@ fn main() {
         assert_eq!(out, "5\n4\n", "ref must observe the swap; got: {out:?}");
     }
 
+    /// B-2026-08-27-21 leg 1 — a METHOD on an element read through a `ref`
+    /// binding. `let row = ref d[0]; row[0].clone()` SIGSEGV'd under codegen
+    /// while `--interp` returned "aa".
+    ///
+    /// The sibling test above pins the plain read `r[j]`, which the same fix
+    /// for B-2026-08-26-36 made work by registering `vec_elem_types[r]` with
+    /// the INNER element type. `var_elem_type_exprs[r]` — the TypeExpr twin of
+    /// that table, and the one `compile_indexed_receiver_method` reads to
+    /// register a synth receiver — kept the binding's OWN type instead, so the
+    /// two disagreed. The synth for a `String` element was registered as a
+    /// `Vec[String]` over a slot pointing at the String's `{ptr, len, cap}`:
+    /// `clone` read "aa"'s header as a Vec header, took `len = 2` as an element
+    /// COUNT, and cloned two `String`s out of the letter bytes.
+    ///
+    /// `.len()` / `.starts_with()` / `.substring()` / `.to_string()` on the
+    /// same receiver all returned correctly throughout, which is what made this
+    /// look method-specific rather than table-specific: none of them reads the
+    /// element TypeExpr, and Vec's `len` happens to load the same word String's
+    /// does. They are asserted here alongside `clone` so a future regression
+    /// that breaks them is not mistaken for this one.
+    #[test]
+    fn test_e2e_method_on_an_element_through_a_ref_binding() {
+        let Some(out) = run_program(
+            r#"
+fn main() {
+    let mut d: Vec[Vec[String]] = Vec.new();
+    let mut a: Vec[String] = Vec.new();
+    a.push("aa");
+    a.push("bb");
+    d.push(a);
+    let row = ref d[0];
+    let c: String = row[0].clone();
+    println(c);
+    println(row[0].len());
+    println(row[0].starts_with("a"));
+    println(row[1].substring(0, 1));
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out, "aa\n2\ntrue\nb\n",
+            "clone through a borrow; got: {out:?}"
+        );
+    }
+
+    /// B-2026-08-27-21 leg 2 — a `ref` binding to a STRING element. Distinct
+    /// from leg 1: nothing was registered WRONG here, `string_vars` was simply
+    /// never written for the shim, so String method dispatch had no entry for
+    /// it and every method fell through to the loud "no handler for method"
+    /// arm under codegen while `--interp` ran all of them.
+    ///
+    /// The borrow must stay a borrow: `d[0]` is printed after the reads to pin
+    /// that the container's buffer is neither moved out of nor freed by the
+    /// binding (`tests/memory_sanitizer.rs` asserts the same shape under ASAN).
+    #[test]
+    fn test_e2e_string_methods_through_a_ref_binding() {
+        let Some(out) = run_program(
+            r#"
+fn main() {
+    let mut d: Vec[String] = Vec.new();
+    d.push("hello");
+    d.push("world");
+    let s = ref d[0];
+    println(s.len());
+    println(s.starts_with("he"));
+    println(s.substring(0, 2));
+    let c: String = s.clone();
+    println(c);
+    println(s.to_uppercase());
+    println(d[0]);
+}
+"#,
+        ) else {
+            return;
+        };
+        assert_eq!(
+            out, "5\ntrue\nhe\nhello\nHELLO\nhello\n",
+            "String methods through a borrow; got: {out:?}"
+        );
+    }
+
     /// B-2026-08-26-36 — a `ref` binding over a STRUCT FIELD container
     /// (`b.xs[i]`), which is the shape `std.autograd`'s tape reads take and
     /// therefore the one the `E_INDEX_MOVE_NON_COPY` fix-it will lean on.
