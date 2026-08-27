@@ -54594,6 +54594,94 @@ fn main() {
         );
     }
 
+    /// B-2026-08-27-29 — a `.clone()` passed DIRECTLY as a call argument must
+    /// free its temporary. It did not: an owned by-value aggregate param is
+    /// callee-owned by ENTRY COPY (`make_aggregate_param_callee_owned_inst`),
+    /// so the callee duplicates the struct's heap fields into its own frame and
+    /// frees only that copy — while the caller's clone, having no binding,
+    /// matched no arm of `track_inline_owned_aggregate_arg_inst` and was
+    /// registered for nothing. Measured at 680 bytes over 20 allocations here:
+    /// the cloned `String` field, once per iteration, unbounded in a loop.
+    ///
+    /// The neighbouring shapes were already clean, which is why no fixture
+    /// covered this: `take(mk())` (a fn-call temp) has its own arm, and
+    /// `let c = a.clone(); take(c)` is a binding whose `let`-path drop fires.
+    /// Only the inline spelling leaked — the exact spelling B-2026-08-26-21's
+    /// diagnostic points authors at, which is how it surfaced.
+    #[test]
+    fn asan_struct_clone_call_argument_frees_temp() {
+        assert_clean_asan_run(
+            r#"
+#[derive(Clone)]
+struct It { id: i64, name: String }
+fn take(x: It) -> i64 { return x.name.len(); }
+fn main() {
+    let a = It { id: 1, name: f"payload_aaaaaaaaaaaaaaaaaaaaaaaa{1}" };
+    let mut t = 0i64;
+    let mut i = 0i64;
+    while i < 20i64 { t = t + take(a.clone()); i = i + 1i64; }
+    println(f"{t}");
+}
+"#,
+            &["660"],
+            "asan-struct-clone-call-arg",
+        );
+    }
+
+    /// B-2026-08-27-29, INDEX-RECEIVER spelling — `take(v[i].clone())`. The
+    /// element read is a borrow and the clone an independent copy of it, so the
+    /// temporary is the caller's exactly as the identifier form's is. Covered
+    /// alongside it because this is the form B-2026-08-26-21's migration
+    /// produces: the rule rejects `let x = v[i]` for a non-`Copy` element and
+    /// names `.clone()` as one of the two remedies.
+    #[test]
+    fn asan_struct_clone_of_element_call_argument_frees_temp() {
+        assert_clean_asan_run(
+            r#"
+#[derive(Clone)]
+struct It { id: i64, name: String }
+fn take(x: It) -> i64 { return x.name.len(); }
+fn main() {
+    let mut v: Vec[It] = Vec.new();
+    v.push(It { id: 1, name: f"payload_aaaaaaaaaaaaaaaaaaaaaaaa{1}" });
+    let mut t = 0i64;
+    let mut i = 0i64;
+    while i < 20i64 { t = t + take(v[0].clone()); i = i + 1i64; }
+    println(f"{t}");
+}
+"#,
+            &["660"],
+            "asan-elem-clone-call-arg",
+        );
+    }
+
+    /// The other half of B-2026-08-27-29's measurement, pinned so the fix stays
+    /// scoped: a `String` / `Vec` clone in the same position was ALREADY clean
+    /// and must stay so. Those pass their `{ptr,len,cap}` header by value and
+    /// the callee frees it directly — there is no entry copy to orphan an
+    /// original, which is why the leak was struct-specific despite the shape
+    /// looking identical in source.
+    #[test]
+    fn asan_string_and_vec_clone_call_arguments_stay_clean() {
+        assert_clean_asan_run(
+            r#"
+fn take_s(s: String) -> i64 { return s.len(); }
+fn take_v(v: Vec[i64]) -> i64 { return v.len(); }
+fn main() {
+    let a: String = f"payload_aaaaaaaaaaaaaaaaaaaaaaaa{1}";
+    let mut b: Vec[i64] = Vec.new();
+    b.push(1); b.push(2); b.push(3);
+    let mut t = 0i64;
+    let mut i = 0i64;
+    while i < 20i64 { t = t + take_s(a.clone()) + take_v(b.clone()); i = i + 1i64; }
+    println(f"{t}");
+}
+"#,
+            &["720"],
+            "asan-string-vec-clone-call-arg",
+        );
+    }
+
     #[test]
     fn asan_self_rooted_index_assign_from_sibling_element_is_not_double_freed() {
         assert_clean_asan_run(

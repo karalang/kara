@@ -3282,6 +3282,64 @@ impl<'ctx> super::Codegen<'ctx> {
         self.emit_user_drop_field_bodies_fn(type_name, &std::collections::HashMap::new())
     }
 
+    /// The struct type name of an argument expression that materializes a FRESH
+    /// owned struct temporary — the shapes whose heap this frame must free.
+    ///
+    /// Two of them, and they are the same value with two spellings. A struct
+    /// LITERAL (`f(S { name: g() })`) is the original. A top-level `.clone()`
+    /// (`f(a.clone())`) is the one B-2026-08-27-29 was: `clone` deep-copies the
+    /// receiver's heap into a value with no binding, and the callee's entry copy
+    /// (`make_aggregate_param_callee_owned_inst`) duplicates it AGAIN into the
+    /// callee's frame — so the callee frees only its own copy and the caller's
+    /// clone is orphaned. Measured on `take(a.clone())` over `It { id: i64,
+    /// name: String }` as 34 bytes per call, the cloned `String` field, once per
+    /// iteration.
+    ///
+    /// A `String` / `Vec` clone in the same position is CLEAN and stays out of
+    /// this: those pass their `{ptr,len,cap}` header by value and the callee
+    /// frees it directly, with no entry copy to orphan an original. The helper
+    /// never sees them — the caller early-returns on `vec_struct_type`.
+    ///
+    /// The receiver must be an IDENTIFIER of known struct type, which is what
+    /// makes the answer a name rather than a guess: every drop registered below
+    /// is keyed off it, and `clone`'s result is the receiver's own type by
+    /// definition. A field / index / call receiver declines into the status-quo
+    /// leak rather than into a name this frame cannot verify.
+    fn owned_struct_temp_arg_name(&self, arg: &Expr) -> Option<String> {
+        let is_struct = |n: &str| self.type_decls.struct_types.contains_key(n);
+        match &arg.kind {
+            ExprKind::StructLiteral { path, .. } => {
+                path.last().filter(|n| is_struct(n.as_str())).cloned()
+            }
+            ExprKind::MethodCall { object, method, .. } if method == "clone" => {
+                let name = match &object.kind {
+                    ExprKind::Identifier(var) => {
+                        self.var_types.var_type_names.get(var.as_str()).cloned()?
+                    }
+                    // `f(v[i].clone())` — the element read is a borrow and the
+                    // clone is an independent copy of it, so the temporary is
+                    // this frame's exactly as the identifier form's is. This is
+                    // the spelling B-2026-08-26-21's diagnostic points authors
+                    // at, which is why it is covered rather than left to the
+                    // status-quo leak.
+                    ExprKind::Index {
+                        object: base,
+                        index,
+                    } if !matches!(&index.kind, ExprKind::Range { .. }) => {
+                        let te = self.vec_index_elem_type_expr(base)?;
+                        let TypeKind::Path(p) = &te.kind else {
+                            return None;
+                        };
+                        p.segments.last()?.clone()
+                    }
+                    _ => return None,
+                };
+                Some(name).filter(|n| is_struct(n.as_str()))
+            }
+            _ => None,
+        }
+    }
+
     /// Register the caller-side drop for an inline owned-**aggregate** call
     /// argument — a fresh temp with no consuming binding that the callee owns
     /// by deep-copy (`make_aggregate_param_callee_owned`, the #14 model: the
@@ -3625,12 +3683,24 @@ impl<'ctx> super::Codegen<'ctx> {
             {
                 self.track_discarded_tuple_elem_bodies(tuple_elems, val);
             }
-        } else if let ExprKind::StructLiteral { path, .. } = &arg.kind {
-            if let Some(name) = path
-                .last()
-                .filter(|n| self.type_decls.struct_types.contains_key(n.as_str()))
-                .cloned()
+        } else if let Some(name) = self.owned_struct_temp_arg_name(arg) {
             {
+                // MEMORY ONLY for a `.clone()` temp, and the reason is parity
+                // rather than caution. A clone temp runs no user `Drop` body on
+                // EITHER backend today: this arm's body registrations are
+                // literal-shaped, and the interpreter's twin
+                // (`run_fresh_temp_arg_drops`) resolves a type name for a struct
+                // literal / fn call / variant ctor and returns `None` for a
+                // method call. So the two agree, and registering the body here
+                // alone would trade B-2026-08-27-29's leak for a run-vs-build
+                // divergence — the strictly worse defect. Whether a clone temp
+                // SHOULD run a body is a separate question about a shape both
+                // backends currently skip; the free is not, and the free is what
+                // this row is.
+                let clone_temp = matches!(
+                    &arg.kind,
+                    ExprKind::MethodCall { method, .. } if method == "clone"
+                );
                 // Register the caller-temp's struct drop when the struct carries
                 // heap. A DIRECT Vec/String field is LLVM-visible
                 // (`aggregate_has_heap_field`) and registered on the proven path —
@@ -3677,7 +3747,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     .as_deref()
                     .map(|p| p.drop_method_keys.contains_key(&name))
                     .unwrap_or(false);
-                if has_user_drop && !self.type_decls.shared_types.contains_key(&name) {
+                if has_user_drop && !clone_temp && !self.type_decls.shared_types.contains_key(&name)
+                {
                     let slot = self.create_entry_alloca(cur_fn, "__owned_agg_tmp", agg_ty.into());
                     self.builder.build_store(slot, val).unwrap();
                     if arg_escapes_frame {
@@ -3721,7 +3792,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // whose own drop runs it. Registering both would print the body
                 // twice for `let p = pass(Holder { .. })`. Memory follows the
                 // buffer; bodies follow the value.
-                let field_bodies_fn = if arg_escapes_frame {
+                let field_bodies_fn = if arg_escapes_frame || clone_temp {
                     None
                 } else {
                     self.field_bodies_fn_for_owned_temp(&name)
