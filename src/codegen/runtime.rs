@@ -2339,7 +2339,58 @@ impl<'ctx> super::Codegen<'ctx> {
         {
             return;
         }
+        // B-2026-08-27-26 — free the ELEMENTS before the buffer when the
+        // operand is a `Vec` whose element type owns heap of its own.
+        //
+        // `free_str_vec_buffer_if_heap` releases the outer `{ptr, len, cap}`
+        // buffer and nothing else, which is the whole allocation for a
+        // `String` and only the outer array for a `Vec[String]` or a
+        // `Vec[Vec[T]]`. Measured before this: a fresh `Vec[String]` operand
+        // lost 26 bytes in 4 allocations (the four element strings) and a
+        // fresh `Vec[Vec[i64]]` lost 64 bytes in 2 (the two inner buffers),
+        // while the `String` control stayed clean -- so the leak is the
+        // element type's, not the operand's.
+        //
+        // The whole-Vec drop replaces the buffer free rather than joining it:
+        // `karac_drop_Vec_<T>` walks the elements AND releases the buffer, so
+        // running both would double-free. It resolves through
+        // `emit_drop_fn_for_type_expr`, the same memory-side family every
+        // other element drain funnels through, which is what makes a nested
+        // `Vec[Vec[T]]` recurse correctly rather than needing its own case.
+        //
+        // Only fires when the element genuinely needs draining
+        // (`vec_element_drain_fn` is `None` for a scalar element), so a
+        // `Vec[i64]` keeps the cheap buffer free it has always had.
+        if let Some(elem_te) = self.vec_elem_te_of_operand(arg) {
+            if self.vec_element_drain_fn(&elem_te).is_some() {
+                if let Some(cur_fn) = self.current_fn {
+                    let vec_te = Self::vec_te_of_elem(&elem_te);
+                    let drop_fn = self.emit_drop_fn_for_type_expr(&vec_te);
+                    let slot = self.create_entry_alloca(cur_fn, "freearg.vec.tmp", val.get_type());
+                    self.builder.build_store(slot, val).unwrap();
+                    self.builder
+                        .build_call(drop_fn, &[slot.into()], "")
+                        .unwrap();
+                    return;
+                }
+            }
+        }
         self.free_str_vec_buffer_if_heap(val);
+    }
+
+    /// Wrap an element `TypeExpr` back into the `Vec[T]` that carries it.
+    ///
+    /// `vec_eq_elem_types` stores the ELEMENT type, because that is what every
+    /// other consumer of it wants; the drop family is keyed on the container.
+    fn vec_te_of_elem(elem_te: &TypeExpr) -> TypeExpr {
+        TypeExpr {
+            kind: TypeKind::Path(crate::ast::PathExpr {
+                segments: vec!["Vec".to_string()],
+                generic_args: Some(vec![crate::ast::GenericArg::Type(elem_te.clone())]),
+                span: elem_te.span,
+            }),
+            span: elem_te.span,
+        }
     }
 
     /// B-2026-08-26-32 — the AGGREGATE sibling of

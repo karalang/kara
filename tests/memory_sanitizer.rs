@@ -796,6 +796,65 @@ fn main() {
         );
     }
 
+    /// A fresh `Vec` temporary operand frees its ELEMENTS, not only its
+    /// buffer (B-2026-08-27-26).
+    ///
+    /// `free_fresh_owned_str_arg` released the outer `{ptr, len, cap}` buffer
+    /// and nothing else. That is the whole allocation for a `String`, which is
+    /// what it was written for, and only the outer array for a container whose
+    /// elements own heap. Measured before the fix: the `Vec[String]` leg lost
+    /// 26 bytes in 4 allocations (the four element strings) and the
+    /// `Vec[Vec[i64]]` leg lost 64 bytes in 2 (the two inner buffers).
+    ///
+    /// The `String` leg is the control that must stay clean, and it is not
+    /// decoration: the fix REPLACES the buffer free with a whole-`Vec` drop
+    /// rather than adding to it, since `karac_drop_Vec_<T>` releases the
+    /// buffer as well and running both would double-free. A regression that
+    /// re-added the buffer free would show up here rather than as a leak.
+    ///
+    /// `push` and the map key are the consuming siblings. `push` MOVES its
+    /// argument into the container and the map key is moved by `insert`, so
+    /// both are shapes where freeing at the call site would double-free —
+    /// they pin that this fires only where the temporary genuinely dies.
+    #[test]
+    fn asan_fresh_vec_temp_operand_frees_its_elements() {
+        assert_clean_asan_run(
+            r#"
+fn ids(n: i64) -> Vec[String] {
+    let mut v: Vec[String] = Vec.new();
+    v.push(f"item{n}");
+    v.push(f"item{n + 1}");
+    return v;
+}
+fn rows(n: i64) -> Vec[Vec[i64]] {
+    let mut r: Vec[i64] = Vec.new();
+    r.push(n);
+    r.push(n + 1);
+    let mut v: Vec[Vec[i64]] = Vec.new();
+    v.push(r);
+    return v;
+}
+fn name(n: i64) -> String { return f"item{n}"; }
+
+fn main() {
+    println(f"{ids(1) == ids(1)}");
+    println(f"{rows(1) == rows(1)}");
+    println(f"{name(1) == name(1)}");
+
+    let mut outer: Vec[Vec[String]] = Vec.new();
+    outer.push(ids(1));
+    println(outer[0][0]);
+
+    let mut m: Map[Vec[String], i64] = Map.new();
+    m.insert(ids(3), 10);
+    println(f"{m.get(ids(3))}");
+}
+"#,
+            &["true", "true", "true", "item1", "Some(10)"],
+            "asan_fresh_vec_temp_operand_frees_its_elements",
+        );
+    }
+
     #[test]
     fn asan_vec_equality_borrows_both_operands() {
         assert_clean_asan_run(
