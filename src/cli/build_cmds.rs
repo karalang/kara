@@ -1391,7 +1391,30 @@ pub(super) fn cmd_build_project(
     let mut codegen_status: BuildCodegenStatus = BuildCodegenStatus::Skipped;
     if !cfg!(feature = "llvm") {
         // Mirror the single-file `cmd_build` no-llvm fallback (line ~2393).
-        codegen_status = BuildCodegenStatus::NoLlvmFeature;
+        //
+        // The late phases STILL RUN here, even though no object can be emitted.
+        // Without llvm, codegen is what is unavailable — effect, ownership and
+        // concurrency checking are not, and `run_multi_file_late_phases` is
+        // deliberately un-gated for exactly this reason. Skipping them left a
+        // check-vs-build split on the default feature leg once B-2026-08-27-27
+        // taught `karac check` to run them: `check` reported an undeclared
+        // effect or a use-after-move and `build` exited 0 on the same sources,
+        // which is the same divergence that row closed, pointing the other way.
+        if parse_errors.is_empty()
+            && cycles.is_empty()
+            && resolve_errors.is_empty()
+            && type_errors.is_empty()
+        {
+            if let Err(f) = run_multi_file_late_phases(&tree, &mf.name) {
+                codegen_status = BuildCodegenStatus::Failed {
+                    phase: f.phase,
+                    message: f.message,
+                };
+            }
+        }
+        if !matches!(codegen_status, BuildCodegenStatus::Failed { .. }) {
+            codegen_status = BuildCodegenStatus::NoLlvmFeature;
+        }
     } else if parse_errors.is_empty()
         && cycles.is_empty()
         && resolve_errors.is_empty()
