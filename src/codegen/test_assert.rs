@@ -110,7 +110,24 @@ impl<'ctx> super::Codegen<'ctx> {
         let l_val = self.compile_expr(&args[0].value)?;
         let r_val = self.compile_expr(&args[1].value)?;
 
-        let eq_bv = self.compile_binop(&BinOp::Eq, l_val, r_val)?;
+        // B-2026-08-27-17 — route two ENUM operands through the same decision
+        // the `==` operator site makes. `compile_binop` dispatches an aggregate
+        // by shape and would send an enum to the word-wise `compile_struct_eq`,
+        // comparing a heap-owning payload's POINTER words: an assertion over
+        // two structurally-equal enums then passed on the interpreter and
+        // failed compiled. Unlike `Vec.contains`, this site HAS the operand
+        // expressions, so it can reach the operator's own path rather than
+        // needing the pointer comparator.
+        let eq_bv = match self.try_compile_enum_operand_eq(
+            &BinOp::Eq,
+            &args[0].value,
+            &args[1].value,
+            l_val,
+            r_val,
+        ) {
+            Some(r) => r?,
+            None => self.compile_binop(&BinOp::Eq, l_val, r_val)?,
+        };
         let eq_i1 = eq_bv.into_int_value();
 
         let cur_fn = self

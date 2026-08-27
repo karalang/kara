@@ -480,47 +480,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     // arg. The instantiation also feeds `compile_enum_eq` so the
                     // `Some` payload rebuilds as a `String`, not an opaque word.
                     // Unresolvable operands and scalar enums keep the cheaper path.
-                    if matches!(op, BinOp::Eq | BinOp::NotEq)
-                        && lhs.is_struct_value()
-                        && rhs.is_struct_value()
-                    {
-                        if let Some(en) = self
-                            .enum_name_of_expr(left)
-                            .or_else(|| self.enum_name_of_expr(right))
-                        {
-                            // Resolve the operands' instantiation, but only
-                            // trust one whose outer name matches `en` — cheap
-                            // defense-in-depth so a stale/foreign span-table
-                            // entry can never route a different enum's type to
-                            // `compile_enum_eq` (which would rebuild the payload
-                            // at the wrong type). f-string interpolation spans
-                            // are now absolute (B-2026-06-09-1), so the former
-                            // cross-f-string collision no longer occurs; the
-                            // name-keyed `enum_inst_var_types` remains the
-                            // primary resolver for identifier operands. An
-                            // unresolved/foreign inst degrades to the word-wise
-                            // path.
-                            let inst = self
-                                .enum_inst_type_of_expr(left)
-                                .or_else(|| self.enum_inst_type_of_expr(right))
-                                .filter(|t| match &t.kind {
-                                    crate::ast::TypeKind::Path(p) => {
-                                        p.segments.last().map(String::as_str) == Some(en.as_str())
-                                    }
-                                    _ => false,
-                                });
-                            let heap = self.enum_has_heap_payload(&en)
-                                || self.instantiated_enum_has_heap_payload(&en, inst.as_ref());
-                            if heap {
-                                return self.compile_enum_eq(
-                                    op,
-                                    &en,
-                                    inst.as_ref(),
-                                    lhs.into_struct_value(),
-                                    rhs.into_struct_value(),
-                                );
-                            }
-                        }
+                    if let Some(r) = self.try_compile_enum_operand_eq(op, left, right, lhs, rhs) {
+                        return r;
                     }
                     // Shared-struct structural `==` / `!=` (C1, B-2026-06-19-9).
                     // A `shared struct` is an RC heap pointer, so it misses the

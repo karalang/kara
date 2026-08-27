@@ -991,6 +991,176 @@ fn eq_on_a_shared_struct_reads_a_niche_option_field_as_a_niche() {
 }
 
 #[test]
+fn assert_eq_compares_an_enum_by_content() {
+    // B-2026-08-27-17 — `assert_eq` / `assert_ne` compared an ENUM by its
+    // payload WORDS, so an assertion over two structurally-equal enums PASSED on
+    // the interpreter and FAILED compiled. A test asserting enum equality got the
+    // wrong verdict, which is worse than a wrong value: it makes a correct
+    // program look broken, and for `assert_ne` a broken one look correct.
+    //
+    // `test_assert.rs` compiled its two operands and called `compile_binop`
+    // directly. That dispatches an aggregate by shape and sent the enum to the
+    // word-wise `compile_struct_eq` — a heap-pointer compare for any payload
+    // owning heap. The `==` OPERATOR site had a structural path all along
+    // (`compile_enum_eq`), selected by running `enum_name_of_expr` over the
+    // operand EXPRESSIONS; the assertion helper simply never consulted it.
+    //
+    // The fix lifts that decision into one helper both sites call, so "how a
+    // compiled `==` on an enum is decided" has a single definition. Unlike
+    // `Vec.contains` (B-2026-08-27-13), this site HAS the operand expressions, so
+    // it can reach the operator's own path rather than needing the pointer
+    // comparator.
+    //
+    // EVERY PAYLOAD IS BUILT BY A FUNCTION CALL, never a literal: two identical
+    // string literals can fold to one global, and a pointer compare would then
+    // answer `true` and hide the defect. The struct, string and int lines are
+    // controls that were already correct — `compile_struct_eq` recurses per
+    // FIELD, and only an enum's fields are raw payload words.
+    //
+    // Codegen twin: `test_e2e_assert_eq_compares_an_enum_by_content`.
+    // The interpreter was already right, so this pins it as the oracle.
+    let src = r#"
+#[derive(Hash, Eq, PartialEq)]
+enum E { A(String), Pair(i64, String), B }
+#[derive(Hash, Eq, PartialEq)]
+struct S { a: i64, s: String }
+
+fn mk(n: i64) -> String { return f"v{n}"; }
+
+fn main() {
+    assert_eq(E.A(mk(1)), E.A(mk(1)));
+    println(f"eq-payload ok");
+    assert_ne(E.A(mk(1)), E.A(mk(2)));
+    println(f"ne-payload ok");
+    assert_eq(E.Pair(7, mk(3)), E.Pair(7, mk(3)));
+    println(f"eq-tuple ok");
+    assert_ne(E.Pair(7, mk(3)), E.Pair(7, mk(4)));
+    println(f"ne-tuple ok");
+    assert_eq(E.B, E.B);
+    println(f"eq-unit ok");
+    assert_ne(E.A(mk(1)), E.B);
+    println(f"ne-tag ok");
+
+    let a: Option[String] = Some(mk(5));
+    let b: Option[String] = Some(mk(5));
+    let c: Option[String] = Some(mk(6));
+    assert_eq(a, b);
+    println(f"eq-generic ok");
+    assert_ne(a, c);
+    println(f"ne-generic ok");
+
+    assert_eq(S { a: 1, s: mk(7) }, S { a: 1, s: mk(7) });
+    println(f"eq-struct ok");
+    assert_eq(mk(8), mk(8));
+    println(f"eq-string ok");
+    assert_eq(1, 1);
+    println(f"eq-int ok");
+}
+"#;
+    assert_eq!(
+        run_no_errors(src),
+        "eq-payload ok\nne-payload ok\neq-tuple ok\nne-tuple ok\n\
+         eq-unit ok\nne-tag ok\neq-generic ok\nne-generic ok\n\
+         eq-struct ok\neq-string ok\neq-int ok\n"
+    );
+}
+
+#[test]
+fn enum_eq_handles_a_boxed_or_wide_generic_payload() {
+    // B-2026-08-27-16 — `==` on a generic enum whose argument OVERFLOWS its
+    // erased payload allotment PANICKED THE COMPILER, and a wide inline payload
+    // was compared by its words.
+    //
+    // `compile_enum_eq` packed offsets sequentially from the RESOLVED field
+    // widths. That is right only while every field still fits the allotment the
+    // erased layout reserved; when it does not,
+    // `coerce_to_payload_words` heap-BOXED the field into one word at
+    // construction, so the sequential sum indexed past an area that never held
+    // those words and `build_extract_value` returned an unwrapped `Err`.
+    // `boxed` and `boxed2` are that shape — `enum Box1[T] { One(T) }` allots `T`
+    // ONE word, so a `String` does not fit. Before the fix this fixture did not
+    // produce a wrong answer; `karac build` aborted.
+    //
+    // `wide` is the second defect: a field over three words fell to a
+    // best-effort word-wise compare, so `struct Big { a: i64, b: i64, s: String }`
+    // (five words) compared the `String`'s heap POINTER and `x == y` answered
+    // `false` for equal contents.
+    //
+    // THE `-tag` LINES ARE THE SOUNDNESS CASE, and they are why the payload walk
+    // is now gated on tag equality. The switch dispatches on the LEFT tag, so
+    // with mismatched tags it still entered that variant's block and read the
+    // RIGHT operand's words as that variant's payload. That was harmless while
+    // those reads were integer extracts feeding an `icmp` — the tag conjunction
+    // discarded the answer — but the fix DEREFERENCES a field (a boxed payload
+    // is `inttoptr` + load, a rebuilt one is loaded through by its comparator),
+    // and an uninitialised word from a unit variant is a wild pointer.
+    // `Box1.One(s) == Box1.Nil` segfaulted under the JIT. One line per read
+    // mode, since each dereferences differently.
+    //
+    // `opt-scalar` is the control: a payload that fits its allotment and is
+    // wholly inline was correct before and must stay so.
+    //
+    // Codegen twin: `test_e2e_enum_eq_handles_a_boxed_or_wide_generic_payload`. The interpreter was already right,
+    // so this pins it as the oracle.
+    let src = r#"
+#[derive(Hash, Eq, PartialEq)]
+enum Box1[T] { One(T), Nil }
+#[derive(Hash, Eq, PartialEq)]
+enum Pair2[T] { P(T, i64), Nil }
+#[derive(Hash, Eq, PartialEq)]
+struct Big { a: i64, b: i64, s: String }
+#[derive(Hash, Eq, PartialEq)]
+enum H { W(Big), N }
+
+fn mk(n: i64) -> String { return f"v{n}"; }
+
+fn main() {
+    let a: Box1[String] = Box1.One(mk(1));
+    let b: Box1[String] = Box1.One(mk(1));
+    let c: Box1[String] = Box1.One(mk(2));
+    println(f"boxed={a == b}");
+    println(f"boxed-ne={a == c}");
+    println(f"boxed-tag={a == Box1.Nil}");
+
+    let d: Pair2[String] = Pair2.P(mk(3), 7);
+    let e: Pair2[String] = Pair2.P(mk(3), 7);
+    let g: Pair2[String] = Pair2.P(mk(4), 7);
+    let h: Pair2[String] = Pair2.P(mk(3), 8);
+    println(f"boxed2={d == e}");
+    println(f"boxed2-ne-s={d == g}");
+    println(f"boxed2-ne-n={d == h}");
+    println(f"boxed2-tag={d == Pair2.Nil}");
+
+    let i: H = H.W(Big { a: 1, b: 2, s: mk(5) });
+    let j: H = H.W(Big { a: 1, b: 2, s: mk(5) });
+    let k: H = H.W(Big { a: 1, b: 2, s: mk(6) });
+    let l: H = H.W(Big { a: 1, b: 9, s: mk(5) });
+    println(f"wide={i == j}");
+    println(f"wide-ne-s={i == k}");
+    println(f"wide-ne-b={i == l}");
+    println(f"wide-tag={i == H.N}");
+
+    let m: Option[String] = Some(mk(7));
+    let n: Option[String] = Some(mk(7));
+    println(f"opt={m == n}");
+    let q: Option[String] = None;
+    println(f"opt-tag={m == q}");
+    let o: Option[i64] = Some(5);
+    let p: Option[i64] = Some(5);
+    println(f"opt-scalar={o == p}");
+}
+"#;
+    assert_eq!(
+        run_no_errors(src),
+        "boxed=true\nboxed-ne=false\nboxed-tag=false\n\
+         boxed2=true\nboxed2-ne-s=false\nboxed2-ne-n=false\n\
+         boxed2-tag=false\nwide=true\nwide-ne-s=false\n\
+         wide-ne-b=false\nwide-tag=false\nopt=true\n\
+         opt-tag=false\nopt-scalar=true\n"
+    );
+}
+
+#[test]
 fn vec_contains_matches_an_enum_element_by_content() {
     // B-2026-08-27-13 — `Vec.contains` compared an ENUM element by its raw
     // payload words, reaching neither of the compiler's two structural enum

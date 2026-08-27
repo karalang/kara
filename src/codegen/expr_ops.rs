@@ -7452,59 +7452,75 @@ impl<'ctx> super::Codegen<'ctx> {
             // the user-enum layout builder lays variants out (declarations.rs),
             // so the concrete path is unchanged while the generic path gets
             // the right field widths.
-            let mut running = 0usize;
+            // OFFSETS COME FROM THE ERASED LAYOUT (B-2026-08-27-16), not from
+            // a running sum of the RESOLVED widths. Summing resolved widths is
+            // right only while every field still FITS the allotment the layout
+            // reserved; when it does not, `coerce_to_payload_words` heap-BOXED
+            // the field into a single word at construction, so the sum walks
+            // past the end of an area that never held those words and
+            // `build_extract_value` returns `Err` — an unwrapped compiler
+            // PANIC on `Box1[String] == Box1[String]`, not a wrong answer.
+            // The erased table is what construction wrote against, so it
+            // answers both questions: where a field starts, and (by a field
+            // overflowing its allotment) whether it was boxed. Same rule the
+            // map/set comparator follows in `enum_structural_key_plan`.
+            let offsets = self
+                .type_decls
+                .enum_layouts
+                .get(enum_name)
+                .and_then(|l| l.field_word_offsets.get(vname))
+                .cloned()
+                .unwrap_or_default();
+            let area_words = lhs.get_type().count_fields().saturating_sub(1) as usize;
             let mut peq = bool_t.const_int(1, false);
-            for fty in field_types.iter() {
-                let n = self.payload_word_count_for_type_expr(fty, enum_name, vname);
-                let start = running;
-                running += n;
-                let feq = if n <= 3 {
-                    // Rebuild the field from its ≤3 payload words at its declared
-                    // LLVM type, then recurse — String/Vec compare by content.
-                    let zero = i64_t.const_zero();
-                    let mut lw = [zero, zero, zero];
-                    let mut rw = [zero, zero, zero];
-                    for (j, slot) in lw.iter_mut().enumerate().take(n) {
-                        *slot = self
-                            .builder
-                            .build_extract_value(lhs, (start + 1 + j) as u32, "l.w")
-                            .unwrap()
-                            .into_int_value();
-                    }
-                    for (j, slot) in rw.iter_mut().enumerate().take(n) {
-                        *slot = self
-                            .builder
-                            .build_extract_value(rhs, (start + 1 + j) as u32, "r.w")
-                            .unwrap()
-                            .into_int_value();
-                    }
-                    let fty_llvm = self.llvm_type_for_type_expr(fty);
-                    let lv =
-                        self.rebuild_value_from_payload_words(fty_llvm, lw[0], lw[1], lw[2])?;
-                    let rv =
-                        self.rebuild_value_from_payload_words(fty_llvm, rw[0], rw[1], rw[2])?;
-                    self.compile_binop(&BinOp::Eq, lv, rv)?.into_int_value()
+            for (fi, fty) in field_types.iter().enumerate() {
+                let actual = self.payload_word_count_for_type_expr(fty, enum_name, vname);
+                // No recorded offsets (a layout this walk cannot see): fall
+                // back to the old sequential assumption for this field only.
+                let (start, allotted) = offsets.get(fi).copied().unwrap_or((0, actual));
+                let boxed = actual > allotted;
+                let n = if boxed { 1 } else { actual };
+                let feq = if start + n > area_words {
+                    // Unaddressable either way. Compare the words the area DOES
+                    // hold rather than unwrapping an out-of-range extract — a
+                    // conservative answer beats aborting the build.
+                    self.enum_payload_words_eq(lhs, rhs, start, area_words.saturating_sub(start))
                 } else {
-                    // Wide payload (>3 words): best-effort word-wise compare.
-                    let mut acc = bool_t.const_int(1, false);
-                    for j in 0..n {
-                        let lw = self
-                            .builder
-                            .build_extract_value(lhs, (start + 1 + j) as u32, "l.w")
-                            .unwrap()
-                            .into_int_value();
-                        let rw = self
-                            .builder
-                            .build_extract_value(rhs, (start + 1 + j) as u32, "r.w")
-                            .unwrap()
-                            .into_int_value();
-                        let w_eq = self
-                            .builder
-                            .build_int_compare(IntPredicate::EQ, lw, rw, "w.eq")
-                            .unwrap();
-                        acc = self.builder.build_and(acc, w_eq, "w.and").unwrap();
+                    // ONE COMPARATOR FOR EVERY FIELD (B-2026-08-27-16). The
+                    // field is materialised as a POINTER and handed to
+                    // `emit_eq_fn_for_type_expr` — the same family `Map`/`Set`
+                    // keys go through. Two reasons beyond tidiness:
+                    //
+                    // * It cannot be routed to the wrong comparator. The old
+                    //   path rebuilt a VALUE and called `compile_binop`, which
+                    //   dispatches an aggregate by FIELD COUNT — so a user
+                    //   struct with exactly three fields (`{ i64, i64, String }`)
+                    //   is indistinguishable from a `String`'s
+                    //   `{ptr, len, cap}` there and lands in
+                    //   `compile_string_binop`, which reads field 0 as a
+                    //   pointer and panics. Filed separately; this route does
+                    //   not depend on the outcome.
+                    // * The two enum comparators in this compiler now agree by
+                    //   CONSTRUCTION rather than by parallel maintenance, which
+                    //   is the property whose absence produced this whole
+                    //   cluster of rows.
+                    let lp = self.enum_field_value_ptr(lhs, fty, start, n, boxed, "l")?;
+                    let rp = self.enum_field_value_ptr(rhs, fty, start, n, boxed, "r")?;
+                    match (lp, rp) {
+                        (Some(lp), Some(rp)) => {
+                            let eq_fn = self.emit_eq_fn_for_type_expr(fty);
+                            self.builder
+                                .build_call(eq_fn, &[lp.into(), rp.into()], "enumeq.f")
+                                .unwrap()
+                                .try_as_basic_value()
+                                .unwrap_basic()
+                                .into_int_value()
+                        }
+                        // Nothing could be materialised (an unrebuildable
+                        // shape): fall back to the word compare this site used
+                        // for every wide payload before.
+                        _ => self.enum_payload_words_eq(lhs, rhs, start, n),
                     }
-                    acc
                 };
                 peq = self.builder.build_and(peq, feq, "peq").unwrap();
             }
@@ -7519,11 +7535,28 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.build_unconditional_branch(merge_bb).unwrap();
         incomings.push((bool_t.const_int(1, false), default_bb));
 
-        // Terminate the entry block with the tag switch.
-        self.builder.position_at_end(entry_bb);
+        // THE PAYLOAD WALK RUNS ONLY WHEN THE TAGS MATCH (B-2026-08-27-16).
+        // The switch dispatches on the LEFT tag, so with mismatched tags it
+        // would still enter that variant's block and read the RIGHT operand's
+        // payload words as if they held that variant's payload. When those
+        // reads were integer extracts feeding an `icmp`, garbage was harmless
+        // — the `tag_eq` conjunction discarded the answer. Now a field can be
+        // DEREFERENCED (a boxed payload is `inttoptr` + load), and an
+        // uninitialised word from a unit variant is a wild pointer:
+        // `Box1.One(s) == Box1.Nil` segfaulted under the JIT and read out of
+        // bounds under AOT. Gating here is also what the map/set comparator
+        // does, so the two agree structurally as well as in result.
+        let dispatch_bb = self.context.append_basic_block(fn_val, "enumeq.dispatch");
+        self.builder.position_at_end(dispatch_bb);
         self.builder
             .build_switch(l_tag, default_bb, &cases)
             .unwrap();
+
+        self.builder.position_at_end(entry_bb);
+        self.builder
+            .build_conditional_branch(tag_eq, dispatch_bb, merge_bb)
+            .unwrap();
+        incomings.push((bool_t.const_int(0, false), entry_bb));
 
         // Merge: payload_eq = phi over the per-variant results; final = tag_eq && payload_eq.
         self.builder.position_at_end(merge_bb);
@@ -7540,6 +7573,182 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_and(tag_eq, payload_eq, "enum.eq")
             .unwrap();
         Ok(self.finish_eq_bool(op, eq))
+    }
+
+    /// Materialise one payload field of an enum aggregate as a POINTER its own
+    /// comparator can read (B-2026-08-27-16).
+    ///
+    /// A boxed field needs no copy at all — the payload word IS a pointer to
+    /// the value at its real LLVM type, which is how `reconstruct_payload_value`
+    /// reads one back. Otherwise the field is rebuilt from its words (the ≤3
+    /// case through `rebuild_value_from_payload_words`, wider aggregates
+    /// through the recursive `reconstruct_struct_from_words`) and spilled to an
+    /// entry-block slot. `None` when the shape cannot be rebuilt, leaving the
+    /// caller to fall back to a word compare.
+    fn enum_field_value_ptr(
+        &mut self,
+        agg: inkwell::values::StructValue<'ctx>,
+        fty: &TypeExpr,
+        start: usize,
+        n: usize,
+        boxed: bool,
+        side: &str,
+    ) -> Result<Option<PointerValue<'ctx>>, String> {
+        let ty = self.llvm_type_for_type_expr(fty);
+        if boxed {
+            let w = self
+                .builder
+                .build_extract_value(agg, (start + 1) as u32, &format!("{side}.boxw"))
+                .unwrap()
+                .into_int_value();
+            let p = self
+                .builder
+                .build_int_to_ptr(
+                    w,
+                    self.context.ptr_type(AddressSpace::default()),
+                    &format!("{side}.boxp"),
+                )
+                .unwrap();
+            return Ok(Some(p));
+        }
+        let words = self.extract_enum_payload_words(agg, start, n, side);
+        let val: BasicValueEnum<'ctx> = if n <= 3 {
+            let zero = self.context.i64_type().const_zero();
+            let w = |i: usize| words.get(i).copied().unwrap_or(zero);
+            self.rebuild_value_from_payload_words(ty, w(0), w(1), w(2))?
+        } else if let BasicTypeEnum::StructType(st) = ty {
+            self.reconstruct_struct_from_words(st, &words)?.into()
+        } else {
+            return Ok(None);
+        };
+        let Some(fn_val) = self.current_fn else {
+            return Ok(None);
+        };
+        let slot = self.create_entry_alloca(fn_val, &format!("enumeq.{side}.f"), ty);
+        self.builder.build_store(slot, val).unwrap();
+        Ok(Some(slot))
+    }
+
+    /// THE ONE PLACE that decides whether a compiled `==` / `!=` on two ENUM
+    /// operands takes the variant-aware structural comparator (B-2026-08-27-17).
+    ///
+    /// Lifted out of `compile_expr`'s `Binary` arm so that every site
+    /// comparing two enum values reaches the same decision. It did not, and
+    /// that was the bug: `assert_eq` / `assert_ne` compiled their operands and
+    /// called `compile_binop` directly, which dispatches an aggregate by shape
+    /// and sent an enum to the word-wise `compile_struct_eq` — a heap-pointer
+    /// compare for any payload owning heap. A Kāra test asserting two
+    /// structurally-equal enums therefore PASSED on the interpreter and FAILED
+    /// compiled, which is the worst way for this to go wrong: it flips a
+    /// verdict rather than a value.
+    ///
+    /// Returns `None` when the operands are not a heap-payload enum, leaving
+    /// the caller on its existing path — the word-wise compare is sound for
+    /// unit and scalar-payload enums, and cheaper.
+    ///
+    /// Two routes to "has a heap payload": the bare-name
+    /// `enum_has_heap_payload` (concrete enums — `Msg { Text(String) }`), and,
+    /// for a GENERIC operand whose instantiation the lowering pass recorded
+    /// (`Option[String]`, `Result[_, String]`),
+    /// `instantiated_enum_has_heap_payload` resolving the type argument. The
+    /// instantiation also feeds `compile_enum_eq` so the `Some` payload
+    /// rebuilds as a `String` rather than an opaque word.
+    pub(super) fn try_compile_enum_operand_eq(
+        &mut self,
+        op: &BinOp,
+        left: &Expr,
+        right: &Expr,
+        lhs: BasicValueEnum<'ctx>,
+        rhs: BasicValueEnum<'ctx>,
+    ) -> Option<Result<BasicValueEnum<'ctx>, String>> {
+        if !matches!(op, BinOp::Eq | BinOp::NotEq) {
+            return None;
+        }
+        if !(lhs.is_struct_value() && rhs.is_struct_value()) {
+            return None;
+        }
+        let en = self
+            .enum_name_of_expr(left)
+            .or_else(|| self.enum_name_of_expr(right))?;
+        // Resolve the operands' instantiation, but only trust one whose outer
+        // name matches `en` — cheap defense-in-depth so a stale/foreign
+        // span-table entry can never route a different enum's type to
+        // `compile_enum_eq` (which would rebuild the payload at the wrong
+        // type). f-string interpolation spans are now absolute
+        // (B-2026-06-09-1), so the former cross-f-string collision no longer
+        // occurs; the name-keyed `enum_inst_var_types` remains the primary
+        // resolver for identifier operands. An unresolved/foreign inst
+        // degrades to the word-wise path.
+        let inst = self
+            .enum_inst_type_of_expr(left)
+            .or_else(|| self.enum_inst_type_of_expr(right))
+            .filter(|t| match &t.kind {
+                TypeKind::Path(p) => p.segments.last().map(String::as_str) == Some(en.as_str()),
+                _ => false,
+            });
+        let heap = self.enum_has_heap_payload(&en)
+            || self.instantiated_enum_has_heap_payload(&en, inst.as_ref());
+        if !heap {
+            return None;
+        }
+        Some(self.compile_enum_eq(
+            op,
+            &en,
+            inst.as_ref(),
+            lhs.into_struct_value(),
+            rhs.into_struct_value(),
+        ))
+    }
+
+    /// Extract `n` consecutive payload words of an enum aggregate, starting at
+    /// payload word `start` (LLVM field `start + 1`, since the tag is field 0).
+    fn extract_enum_payload_words(
+        &self,
+        agg: inkwell::values::StructValue<'ctx>,
+        start: usize,
+        n: usize,
+        side: &str,
+    ) -> Vec<inkwell::values::IntValue<'ctx>> {
+        (0..n)
+            .map(|j| {
+                self.builder
+                    .build_extract_value(agg, (start + 1 + j) as u32, &format!("{side}.w"))
+                    .unwrap()
+                    .into_int_value()
+            })
+            .collect()
+    }
+
+    /// Word-wise equality over `n` payload words — the conservative answer for
+    /// a field this walk cannot address or rebuild. Correct whenever the whole
+    /// field is inline scalar data; a pointer compare when it is not, which is
+    /// why every branch that CAN do better does.
+    fn enum_payload_words_eq(
+        &self,
+        lhs: inkwell::values::StructValue<'ctx>,
+        rhs: inkwell::values::StructValue<'ctx>,
+        start: usize,
+        n: usize,
+    ) -> inkwell::values::IntValue<'ctx> {
+        let mut acc = self.context.bool_type().const_int(1, false);
+        for j in 0..n {
+            let lw = self
+                .builder
+                .build_extract_value(lhs, (start + 1 + j) as u32, "l.w")
+                .unwrap()
+                .into_int_value();
+            let rw = self
+                .builder
+                .build_extract_value(rhs, (start + 1 + j) as u32, "r.w")
+                .unwrap()
+                .into_int_value();
+            let w_eq = self
+                .builder
+                .build_int_compare(IntPredicate::EQ, lw, rw, "w.eq")
+                .unwrap();
+            acc = self.builder.build_and(acc, w_eq, "w.and").unwrap();
+        }
+        acc
     }
 
     /// Wrap a boolean equality result for `op` (negate for `!=`).
