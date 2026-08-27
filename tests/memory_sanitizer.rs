@@ -946,7 +946,7 @@ fn main() {
     /// Measured leaking 26 bytes in 4 allocations — the four element Strings,
     /// the same signature B-2026-08-27-26 records for the `Vec[String]` shape
     /// of the identical defect, which is that a temporary operand has no owner
-    /// to run its element drops. It is filed as B-2026-08-27-29 rather than
+    /// to run its element drops. It is filed as B-2026-08-27-30 rather than
     /// pinned green here; a bound operand of the same type is clean, which is
     /// what these legs assert.
     #[test]
