@@ -38,7 +38,7 @@ fn checksum(buf: ref Vec[u8]) -> i64 {
     h
 }
 
-pub fn run() with panics {
+pub fn run() with panics writes(Stdout) {
     let w = grid_w();
     let h = grid_h();
     let s = default_slope();
