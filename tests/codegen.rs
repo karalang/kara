@@ -106013,6 +106013,83 @@ fn main() {
         );
     }
 
+    /// B-2026-08-27-20 — a NESTED index store whose RHS is a NAMED LOCAL
+    /// double-freed under codegen, while the same store from a TEMPORARY was
+    /// clean and the interpreter was right in both. One binding was the whole
+    /// difference.
+    ///
+    /// The move-suppression that keeps the source from freeing a buffer the
+    /// container now owns was gated on the target's object being an `Identifier`
+    /// (`v[i] = x`) or a `FieldAccess` (`h.xs[j] = t`). For `d[0][1] = x` the
+    /// object is ITSELF an `Index`, so it matched neither arm and never ran: the
+    /// store released the displaced element and moved `x`'s buffer into the slot,
+    /// then `x`'s scope-exit cleanup freed that same buffer.
+    ///
+    /// `str` is the failing shape. `deep` is the three-level form, which the same
+    /// arm has to cover because `vec_index_elem_type_expr` peels one Vec layer per
+    /// index level — a fix that special-cased two levels would pass `str` and
+    /// still abort here.
+    ///
+    /// `int` and `whole` are the controls, and they are why this survived. `int`
+    /// stores a scalar into `Vec[Vec[i64]]`: nothing is owned, so no suppression
+    /// is due and over-suppressing would be invisible. `whole` replaces an entire
+    /// inner Vec (`outer[0] = nb`), which takes the `Identifier` arm that already
+    /// worked. Between them they pin that the new arm neither under- nor
+    /// over-reaches.
+    ///
+    /// Every payload is built by `mk(n)` rather than written as a literal: two
+    /// identical string literals can fold to one global, and a double free of a
+    /// shared global does not necessarily abort, so distinct allocations are what
+    /// make the defect reachable at all.
+    #[test]
+    fn test_e2e_nested_index_store_from_a_named_local_is_balanced() {
+        assert_eq!(
+            run_program(
+                r#"
+fn mk(n: i64) -> String { return f"v{n}"; }
+
+fn main() {
+    let mut r: Vec[String] = Vec.new();
+    r.push(mk(1)); r.push(mk(2));
+    let mut d: Vec[Vec[String]] = Vec.new();
+    d.push(r);
+    let x: String = mk(3);
+    d[0][1] = x;
+    println(f"str={d[0][1]}");
+
+    let mut i0: Vec[i64] = Vec.new();
+    i0.push(1); i0.push(2);
+    let mut di: Vec[Vec[i64]] = Vec.new();
+    di.push(i0);
+    let n: i64 = 9;
+    di[0][1] = n;
+    println(f"int={di[0][1]}");
+
+    let mut inner: Vec[String] = Vec.new();
+    inner.push(mk(4));
+    let mut mid: Vec[Vec[String]] = Vec.new();
+    mid.push(inner);
+    let mut top: Vec[Vec[Vec[String]]] = Vec.new();
+    top.push(mid);
+    let y: String = mk(5);
+    top[0][0][0] = y;
+    println(f"deep={top[0][0][0]}");
+
+    let mut vv: Vec[String] = Vec.new();
+    vv.push(mk(6));
+    let mut outer: Vec[Vec[String]] = Vec.new();
+    outer.push(vv);
+    let mut nb: Vec[String] = Vec.new();
+    nb.push(mk(7));
+    outer[0] = nb;
+    println(f"whole={outer[0][0]}");
+}
+"#
+            ),
+            Some("str=v3\nint=9\ndeep=v5\nwhole=v7\n".to_string())
+        );
+    }
+
     /// B-2026-08-27-19 — `==` on an enum was gated on a DROP classification, so
     /// an enum the drop path deliberately declines to own compared its payload
     /// WORDS.

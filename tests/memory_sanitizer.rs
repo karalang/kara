@@ -55008,6 +55008,51 @@ fn main() {
         );
     }
 
+    /// B-2026-08-27-20 — a NESTED index store whose RHS is a NAMED LOCAL
+    /// double-freed: the store released the displaced element and moved the
+    /// local's buffer into the slot, then the local's own scope-exit cleanup
+    /// freed that same buffer.
+    ///
+    /// The move-suppression that prevents this was gated on the target's object
+    /// being an `Identifier` or a `FieldAccess`. For `d[0][1] = x` the object is
+    /// ITSELF an `Index`, so it matched neither and the suppression never ran.
+    /// A single-level `v[i] = x` was safe only because the `Identifier` arm
+    /// covers it.
+    ///
+    /// THE LOOP IS WHAT MAKES THIS TEST WORTH ITS RUNTIME. A suppression fix
+    /// can fail in two opposite directions, and one run of one store cannot
+    /// tell them apart: suppress too little and the buffer is freed twice
+    /// (ASAN), suppress too much and every stored local leaks (LSan, which runs
+    /// on Linux CI but NOT on macOS). Five iterations each move a fresh local
+    /// in and displace the previous one, so a leak accumulates to five blocks
+    /// rather than hiding as one.
+    ///
+    /// Padded payloads so each allocation is a distinct heap block rather than
+    /// a small-string optimisation or a folded literal.
+    #[test]
+    fn asan_nested_index_store_from_a_named_local_is_balanced() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut r: Vec[String] = Vec.new();
+    r.push(f"a-padding-padding-padding");
+    r.push(f"b-padding-padding-padding");
+    let mut d: Vec[Vec[String]] = Vec.new();
+    d.push(r);
+    let mut j = 0;
+    while j < 5 {
+        let x: String = f"x-{j}-padding-padding-padding";
+        d[0][1] = x;
+        j = j + 1;
+    }
+    println(f"{d[0][1]}{d.len()}");
+}
+"#,
+            &["x-4-padding-padding-padding1"],
+            "nested-index-store-from-named-local",
+        );
+    }
+
     /// B-2026-08-27-6 — the MATCHING sibling of the two tests around it, and
     /// the shape neither of them reached: both probe with keys that genuinely
     /// differ from the inserted one, so the successful-lookup path through the

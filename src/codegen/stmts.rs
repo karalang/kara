@@ -10059,6 +10059,27 @@ impl<'ctx> super::Codegen<'ctx> {
                                     || self.tensor_var_info_from_type_expr(&te).is_some()
                             })
                         }
+                        // B-2026-08-27-20 — a NESTED index destination
+                        // (`d[0][1] = x` for `d: Vec[Vec[String]]`). The target's
+                        // object is ITSELF an `Index`, so neither arm above
+                        // matched and the move went unsuppressed: the store
+                        // released the displaced element and moved `x`'s buffer
+                        // into the slot, then `x`'s own scope-exit cleanup freed
+                        // that same buffer — `free(): double free detected in
+                        // tcache 2`. The single-level `v[i] = x` was safe only
+                        // because the `Identifier` arm covers it, and every
+                        // existing fixture for the nested store writes a
+                        // TEMPORARY, which owns nothing to suppress. Same
+                        // predicate as the field-rooted arm;
+                        // `vec_index_elem_type_expr` already peels one Vec layer
+                        // per index level, so deeper nestings resolve too.
+                        ExprKind::Index { .. } => {
+                            self.vec_index_elem_type_expr(object).is_some_and(|te| {
+                                self.is_string_type_expr(&te)
+                                    || self.extract_vec_elem_type(&te).is_some()
+                                    || self.tensor_var_info_from_type_expr(&te).is_some()
+                            })
+                        }
                         _ => false,
                     };
                     if target_owns_heap_vec_elem {
