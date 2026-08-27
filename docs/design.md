@@ -1755,6 +1755,10 @@ self.table.entry(key).or_insert_with(Vec.new).push(row);
 
 **Iteration order is unspecified and varies across process runs** — the default hasher is DoS-resistant and seeded fresh per process (see [§ `Hash` and `Hasher`](#hash-and-hasher) stability policy), so bucket placement and therefore iteration order differ from one run to the next. Code that depends on a stable iteration order — sorted output, snapshot testing, cross-run reproducibility — should use `SortedMap[K, V]` (sorted by key) instead. `Set[T]` inherits the same property.
 
+**Element destruction order is the same unspecified order.** When a `Map`/`Set` dies, each element whose type has a user [`Drop`](#part-8-drop--user-defined-destructors) impl runs its `drop` body exactly once, but the *sequence* those bodies run in is the container's iteration order — unspecified, varying per process, and free to differ between the interpreter and the compiled backends. This is the destruction case of the rule above, not a separate one: the elements are visited by walking the table, so whatever order the walk produces is the order the bodies run in. A program whose output depends on that sequence is depending on unspecified behaviour, exactly as one that prints a bare `for (k, v) in m` is.
+
+Two things *are* guaranteed, and they are what code may rely on. Every live element's body runs exactly once — no element is skipped, none runs twice. And `SortedMap`/`SortedSet` destroy in **key order**, which is seed-independent and identical on every backend, so they are the escape hatch here for the same reason they are for iteration. Keys are destroyed before values within a map, per the binding-death order.
+
 **`Set[T]` where `T: Hash + Eq`**
 
 | Method | Signature | Notes |

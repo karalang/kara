@@ -216,6 +216,24 @@ the DoS-resistance the default exists to provide. `Map[K, V, FxBuildHasher]`
 opts out deliberately (unkeyed, stable across runs of one binary) — see
 `runtime/stdlib/hash.kara` for what that gives up.
 
+**This covers element DESTRUCTION order too, and that is the half that bites**
+(B-2026-08-27-7). When a `Map`/`Set` dies, each element's user `Drop` body runs
+exactly once, but the SEQUENCE is the container's iteration order — unspecified,
+per-process, and a different permutation on each backend. The reason it hides is
+that a program cannot sort its way out: with `for (k, v) in m` the author chose
+to observe the order and can sort at the use site, whereas drop bodies are
+sequenced by the runtime with no use site to intervene at. So a kata that prints
+from a container element's `Drop` breaks the A/B rule with nothing in the source
+that looks order-dependent. `SortedMap`/`SortedSet` destroy in KEY order,
+seed-independent and identical on every backend (measured) — they are the escape
+hatch here exactly as they are for iteration. Within a map, keys are destroyed
+before values.
+
+The corollary for tests is the one above, unchanged: assert that each body fired
+**once**, never the sequence. Every walker test in the tree does this
+deliberately — which is also why an ORDER regression in one of them is invisible,
+so an A/B fixture is the only thing that catches that class.
+
 ## Coding Standards
 
 - Idiomatic Rust; follow `rustfmt` conventions.

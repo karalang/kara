@@ -105204,6 +105204,59 @@ fn main() {
     /// silent under a sanitizer that never sees a second `Drop` as an error.
     /// This test's exact expectation is what catches it: the collision shows up
     /// as a repeated `dropV` with `dropK` missing.
+    /// B-2026-08-27-7 — the ESCAPE HATCH, pinned across backends.
+    ///
+    /// Element destruction order in a `Map`/`Set` is unspecified and a
+    /// different permutation on each backend (design.md § Map), so no test can
+    /// assert it and none does — every walker test in the tree asserts COUNTS.
+    /// That is exactly why an order regression in one of them is invisible, and
+    /// it is why this test exists: `SortedMap`/`SortedSet` are what design.md
+    /// points code needing a defined order at, so their destruction order is
+    /// the one an assertion can pin, and pinning it is what keeps the advice
+    /// true.
+    ///
+    /// Every literal here is seed-independent and was measured identical on all
+    /// three surfaces — `karac run --interp`, the JIT, and this AOT build — at
+    /// seeds 1 and 7. Interpreter twin:
+    /// `a_sorted_container_destroys_its_elements_in_key_order`.
+    ///
+    /// Keys are inserted DESCENDING (`5 - i`, `50 - j`) so key order and
+    /// insertion order disagree; inserting ascending would let a walk that
+    /// ignored the ordering pass. The keys all fire before the values because
+    /// the two halves are separate walks over the table rather than one
+    /// interleaved pass — and `V4` first because key 1 holds the value inserted
+    /// last, which is the detail an insertion-ordered value walk would get
+    /// backwards while still printing the right multiset.
+    #[test]
+    fn test_e2e_sorted_container_destroys_in_key_order() {
+        assert_eq!(
+            run_program(
+                r#"
+#[derive(Hash, Eq, PartialEq, Ord, PartialOrd)]
+struct K { id: i64 }
+struct V { id: i64 }
+impl Drop for K { fn drop(mut ref self) { println(f"K{self.id}") } }
+impl Drop for V { fn drop(mut ref self) { println(f"V{self.id}") } }
+fn main() {
+    { let mut m: SortedMap[K, V] = SortedMap.new();
+      let mut i = 1;
+      while i <= 4 { m.insert(K { id: 5 - i }, V { id: i }); i = i + 1; }
+      println("--map--"); }
+    { let mut s: SortedSet[K] = SortedSet.new();
+      let mut j = 1;
+      while j <= 4 { s.insert(K { id: 50 - j }); j = j + 1; }
+      println("--set--"); }
+}
+"#
+            ),
+            Some(
+                "K1\nK2\nK3\nK4\nV4\nV3\nV2\nV1\n--map--\n\
+                 K46\nK47\nK48\nK49\n--set--\n"
+                    .to_string()
+            )
+        );
+    }
+
     #[test]
     fn test_e2e_user_impl_drop_on_a_map_key_fires() {
         assert_eq!(

@@ -681,6 +681,86 @@ fn a_user_impl_drop_on_a_map_key_fires_like_one_on_a_value() {
 }
 
 #[test]
+fn container_element_drop_order_is_the_containers_own_iteration_order() {
+    // B-2026-08-27-7. The drop walk read STORAGE (`MapData::iter`), which is
+    // insertion-ordered, while every other read path goes through the seeded
+    // permutation `iter_observable` (B-2026-08-21-6). One run therefore printed
+    // `iter 1 3 5 6 4 2` and then `drop 1 2 3 4 5 6` over the SAME map: two
+    // walks of one container disagreeing with each other.
+    //
+    // The stability was the damage, not the disagreement. design.md § Map says
+    // element destruction order is unspecified and per-process, and the
+    // compiled backends deliver that (bucket order). The interpreter handed out
+    // a STABLE insertion order instead, so a program that came to depend on it
+    // looked correct under `karac run` and reordered under `karac build` — the
+    // dependency only became visible at the backend boundary, which is the
+    // worst place to find it.
+    //
+    // THE ASSERTION IS SELF-RELATIVE ON PURPOSE, and that is what makes it
+    // runnable at all: it compares the program's own two walks rather than
+    // pinning either to a literal, so it holds on every seed and every run
+    // without asserting hash order — the thing CLAUDE.md § `Map`/`Set`
+    // iteration order forbids. Eight elements, so a regression survives only on
+    // the 1-in-40320 of seeds whose hash order happens to equal insertion order.
+    let src = "struct V { id: i64 }
+        impl Drop for V { fn drop(mut ref self) { println(f\"drop {self.id}\"); } }
+        fn main() {
+            let mut a: Map[i64, V] = Map.new();
+            let mut i = 1;
+            while i <= 8 { a.insert(i, V { id: i }); i = i + 1; }
+            for (k, v) in a { println(f\"iter {k}\"); }
+        }";
+    let out = run_no_errors(src);
+    let seq = |tag: &str| -> Vec<String> {
+        out.lines()
+            .filter_map(|l| l.strip_prefix(tag))
+            .map(|s| s.trim().to_string())
+            .collect()
+    };
+    let iterated = seq("iter ");
+    let dropped = seq("drop ");
+    assert_eq!(iterated.len(), 8, "all eight entries iterated: {out}");
+    assert_eq!(
+        dropped.len(),
+        8,
+        "each element's body fires exactly once: {out}"
+    );
+    assert_eq!(
+        dropped, iterated,
+        "elements must be destroyed in the container's own iteration order: {out}"
+    );
+}
+
+#[test]
+fn a_sorted_container_destroys_its_elements_in_key_order() {
+    // B-2026-08-27-7's other half — the escape hatch, pinned. design.md § Map
+    // sends code that needs a defined order to `SortedMap`/`SortedSet`, and
+    // that advice has to hold for DESTRUCTION as well as iteration or it is
+    // useless to anyone with an RAII element type.
+    //
+    // Unlike the sibling test above this one CAN assert literals: key order is
+    // seed-independent, so it is identical on every run and on every backend
+    // (measured against `karac build` and the JIT at seeds 1/3/7). Values are
+    // inserted at `9 - i` so key order and insertion order DISAGREE — inserting
+    // them in ascending order would let a walk that ignored the ordering pass.
+    let src = "struct V { id: i64 }
+        impl Drop for V { fn drop(mut ref self) { println(f\"drop {self.id}\"); } }
+        fn main() {
+            let mut a: SortedMap[i64, V] = SortedMap.new();
+            let mut i = 1;
+            while i <= 8 { a.insert(9 - i, V { id: i }); i = i + 1; }
+            println(\"--\");
+        }";
+    // The `--` lands LAST, not first: the map's last use is the final insert,
+    // so NLL ends its live range there and the whole walk fires before the
+    // println — design.md's "drop at the end of each value's live range".
+    assert_eq!(
+        run_no_errors(src),
+        "drop 8\ndrop 7\ndrop 6\ndrop 5\ndrop 4\ndrop 3\ndrop 2\ndrop 1\n--\n"
+    );
+}
+
+#[test]
 fn removing_an_entry_runs_the_key_or_element_drop_body() {
     // B-2026-08-27-2 — the site B-2026-08-26-41 deliberately left out.
     // `remove` destroys an entry's KEY in place while its VALUE moves out into

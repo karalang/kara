@@ -1676,10 +1676,12 @@ impl<'a> super::Interpreter<'a> {
         key_half: bool,
     ) {
         let vals: Vec<Value> = match field_value {
+            // OBSERVABLE order, not storage order — see the note on
+            // `run_map_half_user_drops`.
             Value::Map(entries) => entries
                 .read()
                 .unwrap()
-                .iter()
+                .iter_observable()
                 .map(|(k, v)| if key_half { k.clone() } else { v.clone() })
                 .collect(),
             Value::SortedMap(entries) => {
@@ -1691,7 +1693,9 @@ impl<'a> super::Interpreter<'a> {
             }
             // A Set's element IS the key half — walked as the value; the key
             // pass declines so it does not fire each element's body twice.
-            Value::Set(items) if !key_half => items.read().unwrap().items().to_vec(),
+            Value::Set(items) if !key_half => {
+                items.read().unwrap().iter_observable().cloned().collect()
+            }
             Value::SortedSet(items) if !key_half => items.keys().map(|k| k.0.clone()).collect(),
             Value::Set(_) | Value::SortedSet(_) => return,
             _ => return,
@@ -2703,9 +2707,28 @@ impl<'a> super::Interpreter<'a> {
     }
 
     /// The walk half: run each stored VALUE's user `impl Drop` body for a
-    /// dying `Map` binding. Insertion order — codegen's walk is bucket
-    /// order, and the two differ exactly as `for (k, v) in m` already does
-    /// (unordered-map semantics); parity tests are order-insensitive.
+    /// dying `Map` binding.
+    ///
+    /// OBSERVABLE order (`iter_observable`), not storage order — B-2026-08-27-7.
+    /// design.md § Map now states that an unordered container destroys its
+    /// elements in the same unspecified, per-process order it iterates them, so
+    /// this walk must go through the same permutation every other read path
+    /// does. It previously called `iter()` and walked STORAGE, which is
+    /// insertion-ordered; that was written when the interpreter iterated in
+    /// insertion order too, and B-2026-08-21-6's seeded walk (`iter_observable`)
+    /// left it behind. The result was a single interpreter run printing
+    /// `iter 1 3 5 6 4 2` and then `drop 1 2 3 4 5 6` over the SAME map —
+    /// self-contradictory, and worse, a STABLE order the compiled backends
+    /// never reproduce, so a program that came to depend on it looked correct
+    /// under `karac run` and reordered under `karac build`.
+    ///
+    /// The two backends still produce DIFFERENT permutations of each other:
+    /// this sorts by seeded hash, the compiled walk follows bucket placement.
+    /// That is within spec and is the point — both are now unspecified and
+    /// both vary per process, so the dependency surfaces on the first pair of
+    /// runs instead of at the backend boundary. `SortedMap`/`SortedSet` are the
+    /// escape hatch and DO agree exactly, on every seed (measured).
+    /// Parity tests stay order-insensitive.
     /// Returns `true` when the binding resolved to a Map (walked or not) so
     /// the caller stops — a Map is not a `drop_target` shape.
     /// B-2026-08-01-23 — fire the Drop bodies of STRUCT elements reachable
@@ -2749,15 +2772,15 @@ impl<'a> super::Interpreter<'a> {
     }
 
     fn run_map_half_user_drops(&mut self, name: &str, key_half: bool) -> bool {
-        // SortedMap shares the walk (same declared-V gate); its values come
-        // out in key order vs the Map's insertion order — the same
-        // ordered-vs-unordered difference `for (k, v) in m` already has, so
-        // parity tests stay order-insensitive.
+        // SortedMap shares the walk (same declared-V gate) but not the
+        // ordering question: its entries come out in KEY order, which is
+        // seed-independent and identical on every backend — the defined order
+        // design.md points at for code that needs one.
         let vals: Vec<Value> = match self.env.get(name) {
             Some(Value::Map(entries)) => entries
                 .read()
                 .unwrap()
-                .iter()
+                .iter_observable()
                 .map(|(k, v)| if key_half { k.clone() } else { v.clone() })
                 .collect(),
             Some(Value::SortedMap(entries)) => {
@@ -2770,7 +2793,9 @@ impl<'a> super::Interpreter<'a> {
             // Set-elements leg (B-2026-07-30-11): the walked values are the
             // ELEMENTS — the key half of the same table shape. So the key pass
             // must decline, or each element's body fires twice.
-            Some(Value::Set(items)) if !key_half => items.read().unwrap().items().to_vec(),
+            Some(Value::Set(items)) if !key_half => {
+                items.read().unwrap().iter_observable().cloned().collect()
+            }
             Some(Value::SortedSet(items)) if !key_half => items.into_keys().map(|k| k.0).collect(),
             Some(Value::Set(_)) | Some(Value::SortedSet(_)) => return true,
             _ => return false,
