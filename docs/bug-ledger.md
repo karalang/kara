@@ -92,7 +92,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 308 | 1 |
+| miscompile | 309 | 1 |
 | leak | 206 | 0 |
 | missing-feature | 187 | 0 |
 | run-vs-build | 182 | 3 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1108 | 3 |
+| codegen | 1109 | 3 |
 | typecheck | 278 | 0 |
 | interp | 197 | 1 |
 | other | 70 | 0 |
@@ -124,16 +124,16 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1669 surfaced · 4 open · 1639 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-27). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1670 surfaced · 4 open · 1640 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-27). Do not edit this block by hand; edit the ledger and regenerate._
 
 ### Open (4)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
-| B-2026-08-27-40 | 2026-08-27 | codegen | high | A TUPLE TYPE ARGUMENT does not survive the monomorphization substitution channel, which is keyed by type NAME. A nested generic call silently loses the binding and erases `T` to the i64 default -- SILENT WRONG ANSWER on the compiled backend, correct under the interpreter -- and two distinct tuple instantiations of one generic collide on a single mono symbol | implementation_checklist/phase-11-stdlib-longtail.md#general-purpose-collections |
 | B-2026-08-27-47 | 2026-08-27 | codegen | medium | CODEGEN'S `.cmp()` RECEIVER SURFACE IS NARROWER THAN THE TYPECHECKER ADMITS: a struct LITERAL receiver (`P { .. }.cmp(q)`), a CALL-RESULT receiver (`mk(1).cmp(mk(2))`) and an `Option[T]` receiver (`x.cmp(y)`) all pass `karac check` and run correctly under `--interp`, and all three refuse to build. Loud, not silent -- `karac build` errors -- but a run-vs-build split in a shape the checker calls legal. | — |
 | B-2026-08-27-48 | 2026-08-27 | interp | medium | The INTERPRETER fires a user `Drop` body TWICE for a struct DESTRUCTURED out of a TUPLE PARAM, where the compiled backends fire it once: `fn take(p: (R, i64)) -> i64 { let (r, n) = p; r.id + n }` prints `drop 41` twice under `karac run --interp` and once under `karac build`. Isolated to the destructuring -- a bare struct param and a tuple param read by FIELD are both correct -- so the param's own drop and the binding's drop both fire. The interpreter-side twin of B-2026-08-27-37, which was codegen's DOUBLE FREE on the same source shape | — |
 | B-2026-08-27-49 | 2026-08-27 | codegen | medium | A FIELD READ ON A BLOCK-EXPRESSION RECEIVER never lowers: `{ let x = make(); x }.n` fails `karac build` with "codegen: cannot resolve field 'n' on this receiver (its type was not recorded for codegen)", while `karac check` accepts it and the interpreter answers it. Binding the block to a local first (`let t = { ... }; t.n`) builds and runs. It reaches ordinary source through a LOWERING: `rewrite_enum_literal_method_call` rewrites `Color.Red.to_tag().n` into exactly this shape, so a program containing no block at all fails to build with a diagnostic naming a receiver the author never wrote. | — |
+| B-2026-08-27-50 | 2026-08-27 | codegen | high | A GENERIC FN'S CONTAINER PARAM BOUND TO A FIELD-ACCESS ARGUMENT loses its ELEMENT TYPE, because every resolver that recovers an element keys on the argument's BINDING NAME and a field access has none. `swap01(mut self.xs)` from a generic-impl method swaps 8 bytes of a 16-byte tuple element -- SILENT wrong answer on the compiled backends, correct under the interpreter -- and SEGFAULTS at a String element. NOT tuple-specific, which is what separates it from B-2026-08-27-40 | — |
 
 ### Relocated (2)
 
@@ -165,9 +165,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1669 surfaced
 
 </details>
 
-### Fixed (1639)
+### Fixed (1640)
 
-<details><summary>1639 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1640 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1804,6 +1804,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1669 surfaced
 | B-2026-08-27-37 | codegen | high | Destructuring a GENERIC struct out of a TUPLE PARAM and consuming its heap-carrying field DOUBLE-FREES under JIT and AOT while the interpreter is cor… | bd5dbc2 |
 | B-2026-08-27-38 | interp+codegen | medium | Tuple comparison operators NEVER LOWERED on either backend, while `karac check` accepted them: `let a = (1, 2); let b = (1, 3); a < b` passed the typ… | 01d6784 |
 | B-2026-08-27-39 | codegen | medium | A THREE-element tuple `==` PANICS THE COMPILER: `(1, 2, 3) == (1, 2, 4)` lowers to `{i64, i64, i64}`, structurally the same LLVM object as the `{ptr,… | 01d6784 |
+| B-2026-08-27-40 | codegen | high | A TUPLE TYPE ARGUMENT does not survive the monomorphization substitution channel, which is keyed by type NAME | 3cfbd1e |
 | B-2026-08-27-41 | typecheck+interp+codegen | medium | `.cmp()` on a tuple has no dispatch on ANY surface -- the typechecker refuses `(1, 2).cmp((1, 3))` outright, and both backends fall through their met… | 31cf904 |
 | B-2026-08-27-42 | interp+codegen | low | `Array[T, N]` ORDERING operators never lower, while `karac check` accepts them: `a < b` on two `Array[i64, 2]` passes the typechecker and then fails… | 2955b94 |
 | B-2026-08-27-43 | codegen | high | AN ARM-LOCAL BINDING HANDED OUT OF A BRANCH LEAF LOSES ITS OWNER, so the FIRST consumption of the selected `Option[shared]` reads through a freed box | 9f62ac6 |
