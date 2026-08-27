@@ -816,6 +816,58 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// B-2026-08-27-40, free-function leg — bind a bare-`T` param to a TUPLE
+    /// argument's `TypeExpr`.
+    ///
+    /// The explicit-args loop in `compile_generic_call` covers an IMPL METHOD,
+    /// whose type args arrive from the receiver's recorded instantiation. A
+    /// free generic function has no receiver: `pick[T](a: T, b: T)` binds `T`
+    /// from `infer_type_args`, which sees only the LLVM shape. Every tuple
+    /// lowers to the opaque `"struct"` token there, so `pick((1, 2), …)` and
+    /// `pick((1.5, 2.5), …)` both mangled `pick$struct` and the second call
+    /// failed module verification against the first's signature — repro B of
+    /// this row, one call shape over.
+    ///
+    /// The argument's type comes from `seq_eq_operand_types`, the span-keyed
+    /// table lowering fills from `tc.expr_types` for EVERY typed expression, so
+    /// a call argument is on record exactly like a comparison operand is. Only
+    /// a param SPELLED as a bare type param is considered — a container param
+    /// (`v: Vec[T]`) binds its element through the resolvers above, and reading
+    /// the whole-argument type here would bind `T` to the container.
+    fn resolve_structural_param_substs(
+        &self,
+        func: &Function,
+        args: &[CallArg],
+        structural: &mut Vec<(String, TypeExpr)>,
+    ) {
+        let Some(gp) = &func.generic_params else {
+            return;
+        };
+        let is_param = |n: &str| gp.params.iter().any(|p| !p.is_const && p.name == n);
+        for (param, arg) in func.params.iter().zip(args.iter()) {
+            let peeled = match &param.ty.kind {
+                TypeKind::Ref(inner) | TypeKind::MutRef(inner) => inner.as_ref(),
+                _ => &param.ty,
+            };
+            let TypeKind::Path(path) = &peeled.kind else {
+                continue;
+            };
+            if path.segments.len() != 1 || path.generic_args.is_some() {
+                continue;
+            }
+            let pname = &path.segments[0];
+            if !is_param(pname) {
+                continue;
+            }
+            let Some(te) = self.tuple_te_of_operand(&arg.value) else {
+                continue;
+            };
+            if Self::type_expr_is_structural_type_arg(&te) {
+                structural.push((pname.clone(), te));
+            }
+        }
+    }
+
     /// Element-aware mangle token for a generic param whose concrete binding is a
     /// builtin collection, mirroring the typechecker's `type_to_mono_mangle_token`
     /// (`String`, `Vec_i64`, `Vec_String`, `VecDeque_i64`, …). Built from the
@@ -867,8 +919,199 @@ impl<'ctx> super::Codegen<'ctx> {
             TypeKind::Ref(inner) | TypeKind::MutRef(inner) => {
                 Self::mono_mangle_token_for_type_expr(inner)
             }
+            // B-2026-08-27-40 — a tuple has no head name, so without this arm
+            // every tuple collapsed to the same `"e"` token and two tuple
+            // instantiations of one generic shared a symbol. Spelled to match
+            // the typechecker's `type_to_mono_mangle_token`, which has carried
+            // the identical `tup_<a>_<b>` rendering all along — the two are
+            // twins over `Type` and `TypeExpr` and must agree.
+            TypeKind::Tuple(elems) => {
+                let parts: Vec<String> = elems
+                    .iter()
+                    .map(Self::mono_mangle_token_for_type_expr)
+                    .collect();
+                format!("tup_{}", parts.join("_"))
+            }
             _ => "e".to_string(),
         }
+    }
+
+    /// Is `te` a type argument the NAME channel structurally cannot carry?
+    ///
+    /// The substitution channel that flows a generic binding from a call site
+    /// into a monomorph body is keyed by type NAME
+    /// (`mono_state.type_subst_names`, built from `TypeKind::Path` segments).
+    /// That is total over named types and empty over the rest, and a TUPLE is
+    /// the shape where the difference is observable: `Bag[(i64, i64)]` binds
+    /// `T`'s LLVM type correctly at the OUTER call (the explicit-args loop
+    /// lowers any `TypeExpr`) but records no name, so a monomorph body that
+    /// calls another method on `self` re-derives the receiver's instantiation
+    /// through the name map, finds nothing, and emits the callee with an EMPTY
+    /// substitution — `T` then falls to the `i64` unknown-name default and a
+    /// 16-byte element is swapped 8 bytes at a time (B-2026-08-27-40).
+    ///
+    /// Deliberately narrow: `Tuple` only, not the whole non-`Path` complement.
+    /// `Array` is the near neighbour and is NOT included — it reaches codegen
+    /// through the const-generic size axis as well, so admitting it here would
+    /// need its own measurement rather than an argument by analogy (its own
+    /// gap is tracked as B-2026-08-27-42). `FnType` / `Pointer` / `Frozen` /
+    /// `ImplTrait` have no monomorph-key convention at all today.
+    fn type_expr_is_structural_type_arg(te: &TypeExpr) -> bool {
+        matches!(te.kind, TypeKind::Tuple(_))
+    }
+
+    /// Fold nameless type arguments (see
+    /// [`Self::type_expr_is_structural_type_arg`]) into the element-aware
+    /// substitution map, which — unlike the name map — can express them.
+    ///
+    /// `subst_type_exprs` becomes `mono_state.type_subst_type_exprs` for the
+    /// body, and both `concrete_generic_struct_inst` (which re-renders a
+    /// generic-struct param's instantiation for the `enum_inst_var_types`
+    /// record a nested method call reads) and `subst_monomorph_type_params`
+    /// (which resolves a generic FIELD's type inside the body) already consult
+    /// it in preference to the head-only name map. So one insert here is what
+    /// carries the tuple through both, and no consumer needed widening.
+    ///
+    /// `or_insert` so a binding an earlier resolver recorded always wins and
+    /// every pre-existing instantiation keeps the entry it had.
+    fn merge_structural_type_arg_substs(
+        structural: Vec<(String, TypeExpr)>,
+        subst_type_exprs: &mut HashMap<String, TypeExpr>,
+    ) {
+        for (pname, te) in structural {
+            subst_type_exprs.entry(pname).or_insert(te);
+        }
+    }
+
+    /// Append the NAMELESS-type-argument axis to a mangled mono name:
+    /// `$<param>_st_<token>` for a generic param bound to a tuple.
+    ///
+    /// `mangle_mono_name` disambiguates a type argument either by the LLVM
+    /// token or, when that token is the opaque `"struct"`, by the concrete NAME
+    /// from `subst_names`. A tuple lowers to `"struct"` and has no name, so
+    /// both fell through and every tuple instantiation of one generic landed on
+    /// the same symbol. That is not a silent collision like the collection one
+    /// it sits beside — the second instantiation fails module verification
+    /// (`Call parameter type does not match function signature`, repro B of
+    /// B-2026-08-27-40) — but it is the same defect, and the same axis shape
+    /// fixes it.
+    ///
+    /// TWO SOURCES, in order. The `TypeExpr` is preferred because it is exact
+    /// and readable (`tup_i64_i64`); the LLVM SHAPE is the fallback for a
+    /// binding that reached `subst` without ever passing through a `TypeExpr` —
+    /// a tuple FORWARDED between two generic functions (`outer[U](a: U)` whose
+    /// body calls `pick(a, b)`). There the argument's static type is the
+    /// caller's own type PARAM, so no resolver can name it and the tuple only
+    /// exists as `{i64, i64}` in the subst; `infer_type_args` gets the body
+    /// right and only the SYMBOL collides, which is why the fallback needs to
+    /// mangle and nothing more. The named-type control (`outer("aa", "bb")`
+    /// beside `outer(1, 2)`) has always worked — `subst_names` carries `String`
+    /// and `i64` through the forward — so this is the one shape the name
+    /// channel cannot reach.
+    ///
+    /// The fallback is strictly weaker than the `TypeExpr` source and known to
+    /// be: `(i64, i64)` and `(u64, u64)` lower to the same `{i64, i64}` and
+    /// still share a symbol under it. That is the same erasure
+    /// `llvm_type_to_mangle_str` has everywhere else, it is only reachable on
+    /// the forwarding path (a direct call takes the exact `TypeExpr` source),
+    /// and it is a strict improvement on the collapse it replaces, where EVERY
+    /// tuple shared one symbol.
+    ///
+    /// Gated so no pre-existing symbol changes: the `TypeExpr` source requires
+    /// a structural entry, and all three resolvers that write that map require
+    /// a `TypeKind::Path` on the value they record, so none of them can produce
+    /// a tuple; the shape source additionally requires NO `subst_names` entry,
+    /// and every named type has one.
+    fn append_structural_type_param_mangle(
+        &self,
+        mut mangled: String,
+        func: &Function,
+        subst: &HashMap<String, BasicTypeEnum<'ctx>>,
+        subst_names: &HashMap<String, String>,
+        subst_type_exprs: &HashMap<String, TypeExpr>,
+    ) -> String {
+        use std::fmt::Write as _;
+        let Some(gp) = &func.generic_params else {
+            return mangled;
+        };
+        for param in &gp.params {
+            if param.is_const {
+                continue;
+            }
+            let token = match subst_type_exprs.get(&param.name) {
+                Some(te) if Self::type_expr_is_structural_type_arg(te) => {
+                    Self::mono_mangle_token_for_type_expr(te)
+                }
+                // Fallback: a STRUCT-shaped binding whose `subst_names` entry
+                // does not name a real type. "Absent" is not the right test and
+                // measuring it is what showed why: on the forwarding path the
+                // name channel records the CALLER's own type-param spelling
+                // (`T -> "U"`), because flattening `U` through an empty
+                // `type_subst_names` leaves it as itself. That is a placeholder,
+                // not a type — `mangle_mono_name` ignores it and emits the bare
+                // `$struct` token — so treating it as a name kept the fallback
+                // from firing on the one shape it exists for. Requiring the name
+                // to RESOLVE is what keeps user structs, enums, builtin
+                // containers and scalars on the paths that already disambiguate
+                // them while letting a placeholder fall through.
+                _ if subst_names
+                    .get(&param.name)
+                    .is_none_or(|n| !self.mangle_name_is_resolved(n)) =>
+                {
+                    match subst.get(&param.name) {
+                        Some(BasicTypeEnum::StructType(st)) => self.llvm_struct_shape_token(*st),
+                        _ => continue,
+                    }
+                }
+                _ => continue,
+            };
+            let _ = write!(mangled, "${}_st_{}", param.name, token);
+        }
+        mangled
+    }
+
+    /// Does `name` name a real type, as opposed to an unresolved generic-param
+    /// placeholder left in `subst_names`?
+    ///
+    /// Built on [`Self::is_known_concrete_type`] — the scalar spellings plus the
+    /// declared struct/enum tables — widened by the two BUILTIN CONTAINER
+    /// families it does not cover: the handle-shaped ones
+    /// ([`Self::is_builtin_container_mangle_name`]) and the `{ptr,i64,i64}` ones
+    /// (`Vec` / `VecDeque`; `String` is already concrete). Both are named types
+    /// that an EXISTING mangle axis disambiguates, so the structural axis must
+    /// leave them alone.
+    ///
+    /// THE `{ptr,i64,i64}` FAMILY IS THE HALF THAT BITES, and it did:
+    /// `append_collection_type_param_mangle` handles those element-awarely, so a
+    /// structural token on top is a SECOND copy of the same identity
+    /// (`driver$T_ct_String$T_st_sh3_ptr_i64_i64`) — which broke the same five
+    /// per-mono destructor tests that read the emitted symbol, the very tests
+    /// `is_builtin_container_mangle_name`'s own doc records breaking under
+    /// B-2026-08-13-9 for the identical double-append. Being the second author
+    /// to trip that wire is why this predicate names the family explicitly
+    /// rather than reaching for "anything not a user type".
+    fn mangle_name_is_resolved(&self, name: &str) -> bool {
+        self.is_known_concrete_type(name)
+            || Self::is_builtin_container_mangle_name(name)
+            || matches!(name, "Vec" | "VecDeque")
+    }
+
+    /// A shape token for an anonymous LLVM struct — `sh2_i64_i64`, leading with
+    /// the field COUNT so that a nested aggregate cannot alias a flat one of
+    /// the same leaf sequence (`{ {i64, i64}, i64 }` vs `{ i64, i64, i64 }`,
+    /// which is exactly the arity collision this row's fixtures cover). Fields
+    /// recurse; anything that is not an int/float/pointer/struct maps to the
+    /// same `opaque` spelling `llvm_type_to_mangle_str` uses.
+    fn llvm_struct_shape_token(&self, st: inkwell::types::StructType<'ctx>) -> String {
+        let parts: Vec<String> = st
+            .get_field_types()
+            .into_iter()
+            .map(|f| match f {
+                BasicTypeEnum::StructType(inner) => self.llvm_struct_shape_token(inner),
+                other => self.llvm_type_to_mangle_str(other),
+            })
+            .collect();
+        format!("sh{}_{}", parts.len(), parts.join("_"))
     }
 
     /// Append the builtin-collection element-disambiguation axis to a mangled
@@ -1508,6 +1751,13 @@ impl<'ctx> super::Codegen<'ctx> {
         // (fork F2) once codegen body lowering needs const-param
         // identifier resolution.
         let mut const_subst: HashMap<String, crate::prelude::ConstValue> = HashMap::new();
+        // B-2026-08-27-40 — the STRUCTURAL half of the loop below. A type
+        // argument that is a tuple has no NAME, so the `TypeKind::Path` arm
+        // cannot record it and the whole name channel skips it; collected here
+        // and merged into the element-aware `subst_type_exprs` once that map
+        // exists (it is built further down, by resolvers that must read live
+        // var side-tables first). See `merge_structural_type_arg_substs`.
+        let mut structural_type_args: Vec<(String, TypeExpr)> = Vec::new();
         if let (Some(explicit), Some(gp)) = (explicit_generic_args, &generic_fn.generic_params) {
             for (param, arg) in gp.params.iter().zip(explicit.iter()) {
                 match arg {
@@ -1527,6 +1777,8 @@ impl<'ctx> super::Codegen<'ctx> {
                                     .unwrap_or_else(|| seg.clone());
                                 subst_names.insert(param.name.clone(), resolved);
                             }
+                        } else if Self::type_expr_is_structural_type_arg(t) {
+                            structural_type_args.push((param.name.clone(), t.clone()));
                         }
                     }
                     GenericArg::Const(e) => {
@@ -1603,6 +1855,18 @@ impl<'ctx> super::Codegen<'ctx> {
             &mut subst_type_exprs,
         );
 
+        // B-2026-08-27-40, free-function leg: an impl method's tuple type args
+        // arrive through the explicit-args loop above; a free generic fn has no
+        // receiver to read them from, so recover them from the ARGUMENTS.
+        // Pushed after the explicit ones so those still win the `or_insert`.
+        self.resolve_structural_param_substs(&generic_fn, args, &mut structural_type_args);
+
+        // B-2026-08-27-40: fold in the NAMELESS type arguments captured from the
+        // explicit-args loop above. Runs after the three resolvers so a binding
+        // any of them recorded still wins (`or_insert`), which keeps every
+        // existing instantiation on exactly the entry it had.
+        Self::merge_structural_type_arg_substs(structural_type_args, &mut subst_type_exprs);
+
         // Per-layout-monomorphization axis — forward layout-flow inference
         // (`docs/spikes/per-layout-monomorphization.md`). The layout half of
         // the monomorph key: each layout-carrying param's active `LayoutId`,
@@ -1651,6 +1915,17 @@ impl<'ctx> super::Codegen<'ctx> {
             &subst_names,
             &subst_type_exprs,
             call_span,
+        );
+        // B-2026-08-27-40 — the NAMELESS-type-argument axis. A tuple lowers to
+        // the opaque `$struct` token and has no `subst_names` entry to
+        // disambiguate it, so `W[(i64, i64)]` and `W[(String, i64)]` collided on
+        // one `W.add$struct` symbol.
+        let mangled = self.append_structural_type_param_mangle(
+            mangled,
+            &generic_fn,
+            &subst,
+            &subst_names,
+            &subst_type_exprs,
         );
         // B-2026-08-06-25 — a type argument that is ITSELF a generic
         // instantiation (`Box[Box[i64]]` vs `Box[Box[String]]`) mangles only

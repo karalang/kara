@@ -959,6 +959,75 @@ fn slice_ordering_in_the_interpreter() {
 }
 
 #[test]
+fn tuple_type_arg_through_a_nested_generic_call_in_the_interpreter() {
+    // B-2026-08-27-40 -- the ORACLE for
+    // `test_e2e_tuple_type_arg_survives_a_nested_generic_call`, kept
+    // row-for-row with it so each is the other's check.
+    //
+    // The interpreter was never wrong here, and that is the point: it carries
+    // a generic binding as a `Value`, not as a NAME, so a type argument with
+    // no name costs it nothing. The compiled backend threaded the binding
+    // through `type_subst_names` and silently dropped the tuple at the first
+    // nested call -- `T` fell to the `i64` default and a 16-byte element was
+    // swapped 8 bytes at a time. This fixture is what pins the answer the
+    // compiled twin has to match; without it, "both backends agree" could be
+    // satisfied by both being wrong.
+    let src = r#"
+struct Bag[=T] { xs: Vec[T] }
+
+impl[T] Bag[T] {
+    fn sw(mut ref self, i: i64, j: i64) { self.xs.swap(i, j); }
+    fn mid(mut ref self) { self.sw(0, 1); }
+    fn outer(mut ref self) { self.mid(); }
+    fn at(ref self, i: i64) -> T { return self.xs[i]; }
+}
+
+fn main() {
+    let mut p: Bag[(i64, i64)] = Bag { xs: Vec.new() };
+    p.xs.push((1, 10));
+    p.xs.push((2, 20));
+    p.outer();
+    let p0 = p.at(0);
+    let p1 = p.at(1);
+    println(f"{p0.0}:{p0.1} {p1.0}:{p1.1}");
+
+    let mut t: Bag[(i64, i64, i64)] = Bag { xs: Vec.new() };
+    t.xs.push((1, 2, 3));
+    t.xs.push((4, 5, 6));
+    t.outer();
+    let t0 = t.at(0);
+    let t1 = t.at(1);
+    println(f"{t0.0},{t0.1},{t0.2} {t1.0},{t1.1},{t1.2}");
+
+    let mut s: Bag[(String, i64)] = Bag { xs: Vec.new() };
+    s.xs.push(("x" + "y", 1));
+    s.xs.push(("p" + "q", 2));
+    s.outer();
+    let s0 = s.at(0);
+    let s1 = s.at(1);
+    println(f"{s0.0}:{s0.1} {s1.0}:{s1.1}");
+
+    let mut n: Bag[((i64, i64), i64)] = Bag { xs: Vec.new() };
+    n.xs.push(((1, 2), 3));
+    n.xs.push(((4, 5), 6));
+    n.outer();
+    let n0 = n.at(0);
+    println(f"{n0.0.0},{n0.0.1},{n0.1}");
+
+    let mut c: Bag[i64] = Bag { xs: Vec.new() };
+    c.xs.push(1);
+    c.xs.push(2);
+    c.outer();
+    println(f"{c.at(0)} {c.at(1)}");
+}
+"#;
+    assert_eq!(
+        run_no_errors(src),
+        "2:20 1:10\n4,5,6 1,2,3\npq:2 xy:1\n4,5,6\n2 1\n"
+    );
+}
+
+#[test]
 fn slice_equality_is_content_equality_in_the_interpreter() {
     // B-2026-08-27-24 -- the `Vec` sibling's bug one type over, and unfixed by
     // that work. The interpreter had no `Value::Slice` arm in its binop

@@ -106727,14 +106727,216 @@ fn main() {
     /// Ordering two tuples DIRECTLY is covered by
     /// `test_e2e_tuple_comparison_and_equality` above.
     ///
-    /// ONE tuple instantiation, deliberately. The mono mangler maps every
-    /// tuple to the same opaque `$struct` token, so a second tuple
-    /// instantiation of the same generic (`W[(i64, i64)]` beside
-    /// `W[(String, i64)]`) collides on one symbol and fails module
-    /// verification. That is pre-existing and reproduces with the bound
-    /// dropped entirely (`impl[T] W[T]`), so it is not this row's to fix —
-    /// but it is why widening this fixture is not the obvious improvement it
-    /// looks like.
+    /// TWO tuple instantiations, which this fixture could not carry when it
+    /// was written: the mono mangler mapped every tuple to the same opaque
+    /// `$struct` token, so a second one collided on a single symbol and failed
+    /// module verification. That was a separate defect from this row's bound
+    /// gate — it reproduced with the bound dropped entirely (`impl[T] W[T]`)
+    /// — and it is fixed under B-2026-08-27-40, whose
+    /// `test_e2e_two_tuple_instantiations_of_one_generic_get_distinct_symbols`
+    /// is the dedicated fixture. Widening here keeps the two rows' surfaces
+    /// crossed: the bound must admit a tuple AND the tuple must reach its own
+    /// symbol.
+    /// B-2026-08-27-40, forwarding leg — a tuple type argument FORWARDED from
+    /// one generic function into another.
+    ///
+    /// Neither of the two sources that carry a tuple into the substitution can
+    /// reach this shape: `outer[U](a: U, b: U)` calling `pick(a, b)` passes an
+    /// argument whose static type is the caller's own type PARAM, so there is
+    /// no receiver instantiation to read and no tuple in `expr_types` to
+    /// recover. `infer_type_args` still binds `T` correctly from the LLVM
+    /// value, so the BODY was always right — only the SYMBOL collided, and the
+    /// second instantiation failed module verification against the first's
+    /// signature. The mangle's LLVM-shape fallback is what separates them.
+    ///
+    /// The `String` row is the control: the name channel carries `U -> "String"`
+    /// straight through the forward, so that spelling has always worked, and it
+    /// must keep working — the fallback fires only where the recorded name does
+    /// not resolve to a type.
+    ///
+    /// Three tuple shapes with three distinct LLVM shapes (`{i64,i64}`,
+    /// `{double,double}`, `{i64,i64,i64}`), which is what the fallback keys on.
+    /// Two tuples that differ only in SIGNEDNESS (`(i64, i64)` vs `(u64, u64)`)
+    /// lower to one LLVM shape and would still share a symbol here; that is the
+    /// documented limit of the fallback, and it is unreachable on the direct
+    /// call path, which takes the exact `TypeExpr` instead.
+    #[test]
+    fn test_e2e_tuple_type_arg_forwarded_between_generic_fns_gets_distinct_symbols() {
+        assert_eq!(
+            run_program(
+                r#"
+fn pick[T](a: T, b: T) -> T { return a; }
+fn outer[U](a: U, b: U) -> U { return pick(a, b); }
+
+fn main() {
+    let x = outer((1, 2), (3, 4));
+    println(f"{x.0}:{x.1}");
+    let y = outer((1.5, 2.5), (3.5, 4.5));
+    println(f"{y.0}:{y.1}");
+    let t = outer((1, 2, 3), (4, 5, 6));
+    println(f"{t.0},{t.1},{t.2}");
+    let s = outer("aa", "bb");
+    println(f"{s}");
+}
+"#,
+            ),
+            Some("1:2\n1.5:2.5\n1,2,3\naa\n".to_string())
+        );
+    }
+
+    /// B-2026-08-27-40 — A TUPLE TYPE ARGUMENT MUST SURVIVE A NESTED GENERIC
+    /// CALL. `Bag[(i64, i64)]`'s outer call bound `T`'s LLVM type correctly,
+    /// but the binding was recorded ONLY in the name channel
+    /// (`type_subst_names`), and a tuple has no name — so the inner
+    /// `self.sw(..)` re-derived the receiver's instantiation, found nothing,
+    /// and emitted the callee with an EMPTY substitution. `T` then fell to the
+    /// `i64` unknown-name default and the 16-byte element was swapped 8 bytes
+    /// at a time.
+    ///
+    /// ONE METHOD CALLING ANOTHER ON `self` is the trigger, which is why this
+    /// hid for so long: a direct `b.sw(0, 1)` from `main` was always correct,
+    /// and every generic-impl fixture in this file is single-level. `mid` sits
+    /// between `outer` and `sw` so the fixture also covers depth > 2.
+    ///
+    /// Four shapes, because the pre-fix failure mode differs by shape and no
+    /// single one of them would have caught the others — all measured against
+    /// the pre-fix compiler rather than argued:
+    ///
+    /// - `(i64, i64)` — wrong answer (`10:1 2:20` for `2:20 1:10`).
+    /// - `(i64, i64, i64)` — wrong answer, and arity-selective: three scalars
+    ///   are the `{ptr, i64, i64}` String-header shape.
+    /// - `(String, i64)` — SEGFAULT at run time, not a wrong answer.
+    /// - `((i64, i64), i64)` — wrong answer through a nested tuple.
+    ///
+    /// and with all four in one file the pre-fix compiler does not get that
+    /// far at all: three tuple instantiations of `Bag` collide on one mono
+    /// symbol and it panics with `ExtractOutOfRange`. The `Bag[i64]` control
+    /// is the shape that always worked, and it must keep working — the name
+    /// channel still serves it.
+    ///
+    /// Oracle: `tuple_type_arg_through_a_nested_generic_call_in_the_interpreter`
+    /// runs this program verbatim, and the ASAN twin
+    /// `asan_tuple_type_arg_with_a_heap_element_through_a_nested_generic_call`
+    /// covers the `(String, i64)` row that used to crash.
+    #[test]
+    fn test_e2e_tuple_type_arg_survives_a_nested_generic_call() {
+        assert_eq!(
+            run_program(
+                r#"
+struct Bag[=T] { xs: Vec[T] }
+
+impl[T] Bag[T] {
+    fn sw(mut ref self, i: i64, j: i64) { self.xs.swap(i, j); }
+    fn mid(mut ref self) { self.sw(0, 1); }
+    fn outer(mut ref self) { self.mid(); }
+    fn at(ref self, i: i64) -> T { return self.xs[i]; }
+}
+
+fn main() {
+    let mut p: Bag[(i64, i64)] = Bag { xs: Vec.new() };
+    p.xs.push((1, 10));
+    p.xs.push((2, 20));
+    p.outer();
+    let p0 = p.at(0);
+    let p1 = p.at(1);
+    println(f"{p0.0}:{p0.1} {p1.0}:{p1.1}");
+
+    let mut t: Bag[(i64, i64, i64)] = Bag { xs: Vec.new() };
+    t.xs.push((1, 2, 3));
+    t.xs.push((4, 5, 6));
+    t.outer();
+    let t0 = t.at(0);
+    let t1 = t.at(1);
+    println(f"{t0.0},{t0.1},{t0.2} {t1.0},{t1.1},{t1.2}");
+
+    let mut s: Bag[(String, i64)] = Bag { xs: Vec.new() };
+    s.xs.push(("x" + "y", 1));
+    s.xs.push(("p" + "q", 2));
+    s.outer();
+    let s0 = s.at(0);
+    let s1 = s.at(1);
+    println(f"{s0.0}:{s0.1} {s1.0}:{s1.1}");
+
+    let mut n: Bag[((i64, i64), i64)] = Bag { xs: Vec.new() };
+    n.xs.push(((1, 2), 3));
+    n.xs.push(((4, 5), 6));
+    n.outer();
+    let n0 = n.at(0);
+    println(f"{n0.0.0},{n0.0.1},{n0.1}");
+
+    let mut c: Bag[i64] = Bag { xs: Vec.new() };
+    c.xs.push(1);
+    c.xs.push(2);
+    c.outer();
+    println(f"{c.at(0)} {c.at(1)}");
+}
+"#,
+            ),
+            Some("2:20 1:10\n4,5,6 1,2,3\npq:2 xy:1\n4,5,6\n2 1\n".to_string())
+        );
+    }
+
+    /// B-2026-08-27-40, repro B — the MANGLING half of the same cause, loud
+    /// where the one above is silent. Every tuple lowers to the opaque
+    /// `$struct` token and has no `subst_names` entry to disambiguate it, so
+    /// two tuple instantiations of one generic shared a single symbol and the
+    /// second failed module verification:
+    ///
+    /// ```text
+    /// Call parameter type does not match function signature!
+    ///   ... call void @"W.add$struct"(ptr %s, { { ptr, i64, i64 }, i64 } ...)
+    /// ```
+    ///
+    /// Kept separate from the fixture above even though that one now also
+    /// carries three tuple instantiations: this is the row's own minimal
+    /// repro, it fails at a different phase (module verification, not the
+    /// run), and a future change that fixes the substitution channel without
+    /// the mangle axis would still pass the other test's shapes one at a time.
+    ///
+    /// BOTH CALL SHAPES, because they bind the type argument through different
+    /// channels and only one of them was covered by the row's own repro. An
+    /// impl method takes its type args from the receiver's recorded
+    /// instantiation; a FREE generic fn has no receiver and binds from
+    /// `infer_type_args`, which sees only the LLVM shape — where every tuple is
+    /// the same opaque `struct`. So `pick((1, 2), …)` beside
+    /// `pick((1.5, 2.5), …)` collided on `pick$struct` for the same reason
+    /// `W.add$struct` did, and fixing the method half alone left it standing.
+    /// `(1.5, 2.5)` is deliberately a same-ARITY, same-size tuple: it differs
+    /// from `(1, 2)` only in element type, so nothing but the mangle axis can
+    /// separate the two.
+    #[test]
+    fn test_e2e_two_tuple_instantiations_of_one_generic_get_distinct_symbols() {
+        assert_eq!(
+            run_program(
+                r#"
+struct W[=T] { v: Vec[T] }
+
+impl[T] W[T] {
+    fn add(mut ref self, x: T) { self.v.push(x); }
+}
+
+fn pick[T](a: T, b: T) -> T { return a; }
+
+fn main() {
+    let mut w: W[(i64, i64)] = W { v: Vec.new() };
+    w.add((1, 2));
+    let mut s: W[(String, i64)] = W { v: Vec.new() };
+    s.add(("a", 1));
+    println(f"{w.v.len()} {s.v.len()}");
+
+    let x = pick((1, 2), (3, 4));
+    println(f"{x.0}:{x.1}");
+    let y = pick((1.5, 2.5), (3.5, 4.5));
+    println(f"{y.0}:{y.1}");
+    let z = pick(("a", 1), ("b", 2));
+    println(f"{z.0}:{z.1}");
+}
+"#,
+            ),
+            Some("1 1\n1:2\n1.5:2.5\na:1\n".to_string())
+        );
+    }
+
     #[test]
     fn test_e2e_ord_bound_on_generic_impl_admits_a_tuple() {
         assert_eq!(
@@ -106753,14 +106955,19 @@ fn main() {
     w.add((3, 4));
     println(f"{w.n()}");
 
+    let mut x: W[(String, i64)] = W { v: Vec.new() };
+    x.add(("a", 1));
+    println(f"{x.n()}");
+
     let mut u: W[i64] = W { v: Vec.new() };
     u.add(7);
     println(f"{u.n()}");
 }
 "#,
             ),
-            // tuple len, then the scalar control that always worked.
-            Some("2\n1\n".to_string())
+            // two distinct tuple instantiations, then the scalar control that
+            // always worked.
+            Some("2\n1\n1\n".to_string())
         );
     }
 

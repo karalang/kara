@@ -56315,6 +56315,53 @@ fn main() {
     /// conventional `{tag, w0, w1, w2}` (32 bytes). `Tiny`'s whole heap box is
     /// `{i64 rc, ptr next}` = 16 bytes, so a 32-byte read from offset 8 runs
     /// 24 bytes past the end of the allocation.
+    /// B-2026-08-27-40 — the heap-carrying row of
+    /// `test_e2e_tuple_type_arg_survives_a_nested_generic_call`, which is the
+    /// one that SEGFAULTED rather than merely answering wrong. A
+    /// `(String, i64)` element is 32 bytes; with `T` fallen back to the `i64`
+    /// default the nested `self.sw(..)` swapped 8 of them, splicing a String
+    /// header across two elements and leaving a pointer field holding a
+    /// length. The crash is what that read produced, so a green run here is
+    /// the claim that the element stride is right — and LSan additionally
+    /// covers the ownership half, since every element carries a genuinely
+    /// heap-owned String (built by `+`, not a static literal, which would let
+    /// a shallow alias stay readable by luck).
+    ///
+    /// The loop runs the whole build-swap-read cycle repeatedly so a per-call
+    /// imbalance accumulates past the noise floor rather than showing up once.
+    #[test]
+    fn asan_tuple_type_arg_with_a_heap_element_through_a_nested_generic_call() {
+        assert_clean_asan_run(
+            r#"
+struct Bag[=T] { xs: Vec[T] }
+
+impl[T] Bag[T] {
+    fn sw(mut ref self, i: i64, j: i64) { self.xs.swap(i, j); }
+    fn mid(mut ref self) { self.sw(0, 1); }
+    fn outer(mut ref self) { self.mid(); }
+    fn at(ref self, i: i64) -> T { return self.xs[i]; }
+}
+
+fn main() {
+    let mut n = 0i64;
+    let mut i = 0i64;
+    while i < 40i64 {
+        let mut s: Bag[(String, i64)] = Bag { xs: Vec.new() };
+        s.xs.push(("x" + "y", 1i64));
+        s.xs.push(("p" + "q", 2i64));
+        s.outer();
+        let s0 = s.at(0);
+        n = n + s0.1;
+        i = i + 1i64;
+    }
+    println(f"{n}");
+}
+"#,
+            &["80"],
+            "tuple-type-arg-heap-element-nested-generic-call",
+        );
+    }
+
     #[test]
     fn asan_probe_shared_struct_niche_option_field_eq() {
         assert_clean_asan_run(
