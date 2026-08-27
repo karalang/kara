@@ -3906,9 +3906,20 @@ Same blanket rule applies — implement `TryFrom`, get `TryInto` for free. Same 
 
 ```kara
 fn parse_and_store(input: String) -> Result[(), AppError] {
-    let n = input.parse_i64()?;   // ParseError — requires From[ParseError] for AppError
-    store(n)?                    // DbError    — requires From[DbError] for AppError
+    let n = parse_setting(input)?;   // ParseError — requires From[ParseError] for AppError
+    store(n)?                        // DbError    — requires From[DbError] for AppError
     Ok(())
+}
+```
+
+**A fallible step needs an error VALUE to convert.** `?` converts between error *types*, so every step it propagates must return a `Result` carrying one. The built-in numeric parse does not: `i64.parse(s)` returns `Option[i64]` — the form the stdin skeleton under [Standard I/O Surface](#standard-io-surface) uses — and an absent `Option` carries no payload for `From` to convert. Lifting it into an error type the caller's `From` impls know about is what makes such a step propagable:
+
+```kara
+fn parse_setting(input: String) -> Result[i64, ParseError] {
+    match i64.parse(input.trim()) {
+        Some(n) => Ok(n),
+        None => Err(ParseError { input: input }),
+    }
 }
 ```
 

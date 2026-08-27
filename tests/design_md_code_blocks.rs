@@ -838,3 +838,118 @@ fn string_method_exists(name: &str) -> bool {
     }
     false
 }
+
+/// design.md's canonical `?` example must be REALIZABLE. B-2026-08-26-4.
+///
+/// That row: § Conversion Traits is the section that teaches cross-error-type
+/// propagation, and its worked example opened
+///
+/// ```text
+/// let n = input.parse_i64()?;   // ParseError — requires From[ParseError] for AppError
+/// ```
+///
+/// where NEITHER name resolves. `parse_i64` exists in the tree only as the
+/// internal runtime symbol `karac_runtime_parse_i64`, never as a user-facing
+/// method, so a reader copying the section that teaches `?` got
+/// `no method 'parse_i64' on type 'String'` — the copy did not merely
+/// misbehave, it did not compile.
+///
+/// The real API is a different SHAPE, not a different spelling, which is why
+/// the repair was not a rename: `i64.parse(s)` returns `Option[i64]`, and an
+/// absent `Option` carries no error VALUE, so it cannot demonstrate the `From`
+/// conversion the section exists to explain. The document contained both forms
+/// and only one of them was real.
+///
+/// WHAT THIS PINS, and why it is not "the block parses". A spec fragment
+/// legitimately names types and functions it does not define — `AppError`,
+/// `store` and `DbError` are the reader's to write, and a fragment that
+/// defined them would stop being a fragment. What a reader CANNOT supply is a
+/// method on a BUILT-IN type. So the blocks are typechecked against a preamble
+/// giving exactly the user-level names the section itself establishes; every
+/// name still unresolved after that is a call into the language, and has to
+/// exist. Under that rule the old example fails on `parse_i64` and the current
+/// one passes — both verified directly, not assumed.
+///
+/// The `impl From` block is taken FROM the document rather than restated here,
+/// so this cannot quietly drift from the section it guards.
+///
+/// TYPECHECKS is deliberately as far as this goes, and the reason is worth
+/// knowing before anyone strengthens it: the example does not RUN correctly
+/// today. Its shape — two `impl From[X] for AppError` for one target, which is
+/// exactly what the section's own two comment lines call for — dispatches to
+/// the wrong impl on both backends, filed as B-2026-08-27-1. Asserting output
+/// here would either fail or, worse, pin the wrong answer. When that row is
+/// fixed, extending this to an end-to-end run is the natural next step.
+#[test]
+fn design_md_question_operator_example_is_realizable() {
+    let blocks = kara_blocks(DESIGN_MD);
+    let pick = |needle: &str| -> String {
+        blocks
+            .iter()
+            .find(|(_, b)| b.contains(needle))
+            .map(|(_, b)| b.to_string())
+            .unwrap_or_else(|| {
+                panic!(
+                    "§ Conversion Traits' `{needle}` block has moved or been renamed — \
+                     re-anchor this test rather than deleting it"
+                )
+            })
+    };
+    let from_impl = pick("Effectful From impl");
+    let propagate = pick("fn parse_and_store");
+    let bridge = pick("fn parse_setting");
+
+    // Exactly the names the section leans on but never defines. Deliberately
+    // minimal: anything added here is a name the reader would have to invent,
+    // so the smaller it stays, the more the test is really checking the
+    // document. `log_error` takes `ref` because the doc's `From` body logs the
+    // error and THEN moves it into `AppError.Parse`; an owned parameter would
+    // move it twice. `ParseError`/`DbError` are structs rather than enums
+    // because v1 allows only one level of enum nesting — an `enum ParseError`
+    // inside `AppError.Parse` is rejected by E_ENUM_NESTED_ENUM_PAYLOAD.
+    let preamble = "struct ParseError { input: String }\n\
+                    struct DbError { code: i64 }\n\
+                    enum AppError { Parse(ParseError), Db(DbError) }\n\
+                    fn log_error(e: ref ParseError) with writes(Log) { println(\"parse failed\"); }\n\
+                    fn store(n: i64) -> Result[(), DbError] { Ok(()) }\n\
+                    impl From[DbError] for AppError { fn from(e: DbError) -> AppError { AppError.Db(e) } }\n\
+                    fn main() { println(\"ok\"); }\n";
+
+    let src = format!("{preamble}\n{from_impl}\n{propagate}\n{bridge}\n");
+    let mut parsed = karac::parse(&src);
+    assert!(
+        parsed.errors.is_empty(),
+        "§ Conversion Traits' `?` blocks must parse:\n{:?}\n--- source ---\n{src}",
+        parsed
+            .errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+    );
+    karac::prepare_for_resolve(&mut parsed.program);
+    let resolved = karac::resolve(&parsed.program);
+    assert!(
+        resolved.errors.is_empty(),
+        "§ Conversion Traits' `?` example names something that does not \
+         resolve:\n{:?}\n--- source ---\n{src}",
+        resolved
+            .errors
+            .iter()
+            .map(|e| e.message.clone())
+            .collect::<Vec<_>>()
+    );
+    let checked = karac::typecheck(&parsed.program, &resolved);
+    assert!(
+        checked.errors.is_empty(),
+        "§ Conversion Traits' `?` example does not typecheck. It is the \
+         canonical example for a core language feature and the first thing a \
+         reader copies, so a call it makes into the language must exist \
+         (B-2026-08-26-4 was `input.parse_i64()`, which never did):\n{:?}\n\
+         --- source ---\n{src}",
+        checked
+            .errors
+            .iter()
+            .map(|e| e.message.clone())
+            .collect::<Vec<_>>()
+    );
+}
