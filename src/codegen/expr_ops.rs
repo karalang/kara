@@ -7185,7 +7185,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// instantiation `TypeExpr`. `Option[String]` against `Option[+T]` yields
     /// `{ "T" => String }`. Empty when `inst` is absent / has no type args, in
     /// which case `subst_type_params` is the identity (the concrete path).
-    fn enum_param_subst(
+    pub(super) fn enum_param_subst(
         &self,
         enum_name: &str,
         inst: Option<&TypeExpr>,

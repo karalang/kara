@@ -20,11 +20,53 @@ use inkwell::AddressSpace;
 use inkwell::IntPredicate;
 
 /// B-2026-08-27-6 — one `(discriminant, variant name, payload fields)` row for
-/// the structural ENUM-key walk, where each field is `(LLVM field index within
-/// the enum's `{tag, w0, w1, …}` area, the field's declared `TypeExpr`)`.
-/// Aliased because the inline tuple trips `clippy::type_complexity`, the same
-/// reason `synth_drop.rs` aliases `EnumPayloadBodyTargets`.
-type EnumKeyPlan = Vec<(u64, String, Vec<(u32, TypeExpr)>)>;
+/// the structural ENUM-key walk. Aliased because the inline tuple trips
+/// `clippy::type_complexity`, the same reason `synth_drop.rs` aliases
+/// `EnumPayloadBodyTargets`.
+type EnumKeyPlan = Vec<(u64, String, Vec<EnumKeyField>)>;
+
+/// One resolved payload field of an enum variant, as the structural key walk
+/// needs to read it.
+pub(super) struct EnumKeyField {
+    /// LLVM field index of the field's FIRST word within the enum's
+    /// `{tag, w0, w1, …}` area (the tag is index 0, so this is `start + 1`).
+    idx: u32,
+    /// How many payload words the field occupies.
+    words: usize,
+    /// How to turn those words back into something the field's own comparator
+    /// can read.
+    read: EnumFieldRead,
+    /// The field's type with the enum's generic parameters substituted away.
+    te: TypeExpr,
+}
+
+/// How to present a payload field to its own comparator (B-2026-08-27-12).
+///
+/// Payload words are a word-EXPANDED image, not a memcpy of the value:
+/// `coerce_to_payload_words` writes one i64 stream per source field. Whether a
+/// pointer into those words IS a pointer to the field decides between these.
+pub(super) enum EnumFieldRead {
+    /// The word image is bit-identical to the LLVM value, so a pointer to the
+    /// first word is already a pointer to the field. Covers every scalar,
+    /// `String`/`Vec`/`Slice`, a Map/Set handle, a `shared` pointer, and any
+    /// struct whose fields happen to land on word boundaries — which is to say
+    /// nearly everything, so the walk stays a pair of GEPs in the common case.
+    Direct,
+    /// The word image is NOT the value: a `struct { a: i32, b: i32 }` spends
+    /// two words where LLVM packs eight bytes, so every field after the first
+    /// sits at the wrong offset. Load the words and rebuild the aggregate
+    /// through `reconstruct_struct_from_words` — the same helper a match arm
+    /// binds a payload with — into a stack slot, then compare that.
+    Rebuild,
+    /// The field did not FIT its allotted words, so `coerce_to_payload_words`
+    /// heap-boxed it and stored the box pointer in the first word. This is the
+    /// normal state of a GENERIC enum whose argument is wider than the erased
+    /// layout reserved: `enum Box1[T] { One(T) }` allots `T` one word, and a
+    /// `String` needs three. The box holds the value at its real LLVM type
+    /// (that is how `reconstruct_payload_value` reads it back), so the deboxed
+    /// pointer is already what the child comparator wants — no rebuild.
+    Boxed,
+}
 
 impl<'ctx> super::Codegen<'ctx> {
     // ── Map codegen ───────────────────────────────────────────────
@@ -945,10 +987,9 @@ impl<'ctx> super::Codegen<'ctx> {
             TypeKind::Path(p)
                 if p.segments.len() == 1
                     && !self.type_decls.shared_types.contains_key(&p.segments[0])
-                    && self.enum_structural_key_plan(&p.segments[0]).is_some() =>
+                    && self.enum_structural_key_plan(te).is_some() =>
             {
-                let enum_name = p.segments[0].clone();
-                self.emit_hash_fn_for_enum(&enum_name)
+                self.emit_hash_fn_for_enum(te)
             }
             // B-2026-08-27-4 — the eq twin's sibling; the two must move
             // together or equal keys land in different buckets.
@@ -1017,10 +1058,9 @@ impl<'ctx> super::Codegen<'ctx> {
             TypeKind::Path(p)
                 if p.segments.len() == 1
                     && !self.type_decls.shared_types.contains_key(&p.segments[0])
-                    && self.enum_structural_key_plan(&p.segments[0]).is_some() =>
+                    && self.enum_structural_key_plan(te).is_some() =>
             {
-                let enum_name = p.segments[0].clone();
-                self.emit_eq_fn_for_enum(&enum_name)
+                self.emit_eq_fn_for_enum(te)
             }
             // B-2026-08-27-4 — a `shared struct` / `shared enum` KEY. Without
             // this arm it fell to the byte-compare fallback below, which for a
@@ -1517,7 +1557,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // same structural walk. Keeping the byte compare here while the
             // plain enum recursed would break the very parity this arm exists
             // to hold: a heap-bearing payload would compare its POINTER words.
-            let inner = match self.enum_structural_key_plan(name) {
+            let inner = match self.enum_structural_key_plan(&Self::bare_type_expr(name)) {
                 Some(plan) => self.emit_enum_area_eq_fn(&area_name, area_ty, &plan),
                 None => self.emit_eq_fn_for_type(&format!("{name}__area"), area_ty.into()),
             };
@@ -1626,7 +1666,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.hash_hasher.mangle_suffix()
             );
             // The eq twin's sibling, on the same rule as everywhere else here.
-            let inner = match self.enum_structural_key_plan(name) {
+            let inner = match self.enum_structural_key_plan(&Self::bare_type_expr(name)) {
                 Some(plan) => self.emit_enum_area_hash_fn(&area_name, area_ty, &plan),
                 None => self.emit_hash_fn_for_type(&format!("{name}__area"), area_ty.into()),
             };
@@ -1883,55 +1923,148 @@ impl<'ctx> super::Codegen<'ctx> {
         eq_fn
     }
 
+    /// A bare `TypeExpr` naming `name` with no generic arguments — for call
+    /// sites that hold only a type NAME but need the TypeExpr-keyed plan (the
+    /// `shared` legs, whose enums are never generic).
+    fn bare_type_expr(name: &str) -> TypeExpr {
+        TypeExpr {
+            kind: TypeKind::Path(PathExpr {
+                segments: vec![name.to_string()],
+                generic_args: None,
+                span: crate::token::Span::default(),
+            }),
+            span: crate::token::Span::default(),
+        }
+    }
+
     /// Per-variant payload plan for the structural ENUM-key walk:
-    /// `(tag, variant, [(llvm field index, field TypeExpr)])`, sorted by
-    /// discriminant so the emitted block layout is reproducible run to run
-    /// (`layout.tags` is a `HashMap` and preserves no useful order).
+    /// `(tag, variant, [EnumKeyField])`, sorted by discriminant so the emitted
+    /// block layout is reproducible run to run (`layout.tags` is a `HashMap`
+    /// and preserves no useful order).
     ///
-    /// `None` means the enum must KEEP the byte-compare fallback. Two reasons,
-    /// neither of them about enums as such — both are about the payload-WORD
-    /// image being readable as the field's own type:
+    /// Takes the full instantiation `TypeExpr` rather than a bare name, because
+    /// a GENERIC enum's payload types come from its type ARGUMENTS
+    /// (B-2026-08-27-12): `Option[String]`'s `Some(T)` is a `String` here and a
+    /// `Vec[i64]` in the next instantiation, and both compile against the same
+    /// erased all-i64 base layout. `enum_param_subst` + `subst_type_params`
+    /// resolve them, exactly as `compile_enum_eq` does for the `==` operator.
     ///
-    /// * The enum is GENERIC. Its payload `TypeExpr` is the parameter itself
-    ///   and the layout is the erased all-i64 base, so there is no concrete
-    ///   type to recurse into; worse, the name would resolve against a USER
-    ///   type that happens to share it — the B-2026-08-03-5 hazard the drop
-    ///   walker guards the same way.
-    /// * A payload field's word image is not bit-identical to its LLVM value
-    ///   ([`Self::payload_words_match_llvm_layout`]), so a pointer into the
-    ///   words is not a pointer to that type.
+    /// WORD OFFSETS ARE RECOMPUTED SEQUENTIALLY, not read from
+    /// `layout.field_word_offsets`, for the reason `compile_enum_eq` records:
+    /// a seeded generic layout stores a variant's whole payload span as ONE
+    /// entry (`Some` -> `(0, 3)`), which says nothing about where a field
+    /// begins once `T` is known. Packing from word 0 by each resolved field's
+    /// own width is what `declare_enums` itself does (`running += n`), so the
+    /// concrete path is bit-identical and the generic path becomes right.
+    ///
+    /// `None` means the enum must KEEP the byte-compare fallback:
+    ///
+    /// * A field type still names a generic PARAMETER after substitution --
+    ///   the enum was reached without its arguments, so there is nothing
+    ///   concrete to recurse into, and resolving the name anyway would find a
+    ///   USER type that happens to share it (the B-2026-08-03-5 hazard the drop
+    ///   walker guards identically).
+    /// * A variant's words overflow the payload AREA. That means
+    ///   `coerce_to_payload_words` heap-BOXED the payload and the words hold a
+    ///   box pointer rather than the value, so neither read mode applies.
+    /// * A field needs [`EnumFieldRead::Rebuild`] but its LLVM type is not a
+    ///   struct, so `reconstruct_struct_from_words` cannot rebuild it.
     ///
     /// Declining is per-ENUM, never per-field: a walk that skipped one field it
     /// could not read would answer `true` for two values differing only there,
     /// which is a worse answer than the byte compare it replaces.
-    pub(super) fn enum_structural_key_plan(&self, enum_name: &str) -> Option<EnumKeyPlan> {
-        let layout = self.type_decls.enum_layouts.get(enum_name)?;
-        if !self.enum_generic_param_names(enum_name).is_empty() {
+    pub(super) fn enum_structural_key_plan(&self, te: &TypeExpr) -> Option<EnumKeyPlan> {
+        let TypeKind::Path(path) = &te.kind else {
             return None;
-        }
-        let variants = self.enum_variant_field_type_exprs(enum_name);
+        };
+        let enum_name = path.segments.first()?.clone();
+        let layout = self.type_decls.enum_layouts.get(&enum_name)?;
+        // Payload words available after the tag (LLVM field 0).
+        let area_words = layout.llvm_type.count_fields().saturating_sub(1) as usize;
+        let params = self.enum_generic_param_names(&enum_name);
+        let subst = self.enum_param_subst(&enum_name, Some(te));
+        let variants = self.enum_variant_field_type_exprs(&enum_name);
         if variants.is_empty() {
             return None;
         }
         let mut plan: EnumKeyPlan = Vec::with_capacity(variants.len());
         for (tag, vname, tes) in variants {
+            // The ERASED layout's offsets, because they are what CONSTRUCTION
+            // wrote against: `try_compile_enum_variant` reads this same table
+            // to place each field, and for a generic enum the allotment is
+            // sized from the parameter, not from today's argument.
             let offsets = layout.field_word_offsets.get(&vname)?;
             if offsets.len() != tes.len() {
                 return None;
             }
-            let mut fields: Vec<(u32, TypeExpr)> = Vec::with_capacity(tes.len());
+            let mut fields: Vec<EnumKeyField> = Vec::with_capacity(tes.len());
             for (fi, te) in tes.iter().enumerate() {
-                if !self.payload_words_match_llvm_layout(te) {
+                let fty = Self::subst_type_params(te, &subst);
+                if Self::type_expr_mentions_param(&fty, &params) {
+                    return None;
+                }
+                let (start, allotted) = offsets[fi];
+                let actual = self.payload_word_count_for_type_expr(&fty, &enum_name, &vname);
+                if actual == 0 || start >= area_words {
                     return None;
                 }
                 // The tag is LLVM field 0, so payload word `w` is field `w + 1`
                 // — the addressing `emit_enum_drop_switch` already uses.
-                fields.push(((offsets[fi].0 + 1) as u32, te.clone()));
+                let idx = (start + 1) as u32;
+                // OVERFLOWING ITS ALLOTMENT IS THE BOXING SIGNAL, the same
+                // `want > field_words.len()` test `reconstruct_payload_value`
+                // unpacks with. For a concrete enum the two are equal by
+                // construction, so this arm is generic-only.
+                let (read, words) = if actual > allotted {
+                    (EnumFieldRead::Boxed, 1)
+                } else if self.payload_words_match_llvm_layout(&fty) {
+                    (EnumFieldRead::Direct, actual)
+                } else if self.llvm_type_for_type_expr(&fty).is_struct_type() {
+                    (EnumFieldRead::Rebuild, actual)
+                } else {
+                    return None;
+                };
+                if start + words > area_words {
+                    return None;
+                }
+                fields.push(EnumKeyField {
+                    idx,
+                    words,
+                    read,
+                    te: fty,
+                });
             }
             plan.push((tag, vname, fields));
         }
         plan.sort_by_key(|(tag, _, _)| *tag);
         Some(plan)
+    }
+
+    /// True when `te` still names one of `params` anywhere in its spelling --
+    /// the enum's own generic parameters, which substitution should have
+    /// replaced. A leftover means the enum was reached without its arguments.
+    fn type_expr_mentions_param(te: &TypeExpr, params: &[String]) -> bool {
+        if params.is_empty() {
+            return false;
+        }
+        match &te.kind {
+            TypeKind::Path(p) => {
+                if p.segments.len() == 1 && params.contains(&p.segments[0]) {
+                    return true;
+                }
+                p.generic_args
+                    .iter()
+                    .flat_map(|a| a.iter())
+                    .any(|a| match a {
+                        GenericArg::Type(t) => Self::type_expr_mentions_param(t, params),
+                        _ => false,
+                    })
+            }
+            TypeKind::Tuple(elems) => elems
+                .iter()
+                .any(|t| Self::type_expr_mentions_param(t, params)),
+            _ => false,
+        }
     }
 
     /// True when the payload-WORD image of `te` is bit-identical to its LLVM
@@ -2028,6 +2161,103 @@ impl<'ctx> super::Codegen<'ctx> {
         td.get_abi_size(&struct_ty) <= word * 8
     }
 
+    /// Materialise a pointer to one payload field of an enum area, ready to
+    /// hand to that field's own comparator (B-2026-08-27-12).
+    ///
+    /// [`EnumFieldRead::Direct`] is a plain GEP: the words already ARE the
+    /// value. [`EnumFieldRead::Rebuild`] loads the field's words and rebuilds
+    /// the aggregate through `reconstruct_struct_from_words` — the maintained
+    /// reader for this word stream, shared with match-arm binding — then spills
+    /// it to `slot`, which the caller allocated in the function's entry block.
+    /// A `None` slot with a `Rebuild` field is a caller bug and falls back to
+    /// the GEP rather than panicking mid-emit.
+    fn enum_field_ptr(
+        &mut self,
+        area_ty: inkwell::types::StructType<'ctx>,
+        base: PointerValue<'ctx>,
+        f: &EnumKeyField,
+        slot: Option<PointerValue<'ctx>>,
+        name: &str,
+    ) -> PointerValue<'ctx> {
+        let gep = self
+            .builder
+            .build_struct_gep(area_ty, base, f.idx, name)
+            .unwrap();
+        let i64_t = self.context.i64_type();
+        if matches!(f.read, EnumFieldRead::Boxed) {
+            let w = self
+                .builder
+                .build_load(i64_t, gep, &format!("{name}.box"))
+                .unwrap()
+                .into_int_value();
+            return self
+                .builder
+                .build_int_to_ptr(
+                    w,
+                    self.context.ptr_type(AddressSpace::default()),
+                    &format!("{name}.boxp"),
+                )
+                .unwrap();
+        }
+        let (EnumFieldRead::Rebuild, Some(slot)) = (&f.read, slot) else {
+            return gep;
+        };
+        let words: Vec<IntValue<'ctx>> = (0..f.words)
+            .map(|j| {
+                let wp = self
+                    .builder
+                    .build_struct_gep(area_ty, base, f.idx + j as u32, &format!("{name}.w{j}"))
+                    .unwrap();
+                self.builder
+                    .build_load(i64_t, wp, &format!("{name}.wv{j}"))
+                    .unwrap()
+                    .into_int_value()
+            })
+            .collect();
+        let llvm_ty = self.llvm_type_for_type_expr(&f.te);
+        let BasicTypeEnum::StructType(st) = llvm_ty else {
+            return gep;
+        };
+        match self.reconstruct_struct_from_words(st, &words) {
+            Ok(v) => {
+                self.builder.build_store(slot, v).unwrap();
+                slot
+            }
+            Err(_) => gep,
+        }
+    }
+
+    /// Entry-block stack slots for every [`EnumFieldRead::Rebuild`] field in
+    /// `plan`, indexed `[variant][field]`. Allocated up front and in the ENTRY
+    /// block so the slots are ordinary promotable allocas rather than one
+    /// stack growth per variant block.
+    fn enum_rebuild_slots(
+        &mut self,
+        f: FunctionValue<'ctx>,
+        plan: &EnumKeyPlan,
+    ) -> Vec<Vec<Option<PointerValue<'ctx>>>> {
+        plan.iter()
+            .enumerate()
+            .map(|(vi, (_, vname, fields))| {
+                fields
+                    .iter()
+                    .enumerate()
+                    .map(|(fi, fld)| match fld.read {
+                        EnumFieldRead::Direct | EnumFieldRead::Boxed => None,
+                        EnumFieldRead::Rebuild => {
+                            let ty = self.llvm_type_for_type_expr(&fld.te);
+                            Some(self.create_entry_alloca(
+                                f,
+                                &format!("enum.rb.{vname}.{vi}_{fi}"),
+                                ty,
+                            ))
+                        }
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
     /// Structural EQ for a plain (non-shared) ENUM key: compare tags, then walk
     /// the LIVE variant's declared payload fields through the same child
     /// comparators the struct arm uses (B-2026-08-27-6).
@@ -2044,21 +2274,29 @@ impl<'ctx> super::Codegen<'ctx> {
     /// [`Self::emit_hash_fn_for_enum`] is the required twin: equal keys that
     /// hash differently never meet in the same bucket, so an equality-only fix
     /// would change nothing observable.
-    pub(super) fn emit_eq_fn_for_enum(&mut self, enum_name: &str) -> FunctionValue<'ctx> {
-        let fn_name = format!("karac_eq_{enum_name}");
+    pub(super) fn emit_eq_fn_for_enum(&mut self, te: &TypeExpr) -> FunctionValue<'ctx> {
+        // INSTANTIATION-QUALIFIED, unlike `mangled_type_name`, which drops the
+        // arguments: `Option[String]` and `Option[i64]` share one erased
+        // layout, and once the walk resolves payload types per instantiation
+        // they need one comparator each or the first emitted would answer for
+        // both (B-2026-08-27-12). `display_mangle_te` renders a non-generic
+        // enum as its bare name, so concrete enums keep the name they had.
+        let key = Self::display_mangle_te(te);
+        let fn_name = format!("karac_eq_{key}");
         if let Some(f) = self.module.get_function(&fn_name) {
             return f;
         }
-        if let Some(f) = self.try_emit_user_impl_eq_fn(enum_name, &fn_name) {
+        if let Some(f) = self.try_emit_user_impl_eq_fn(&key, &fn_name) {
             return f;
         }
+        let head = Self::mangled_type_name(te);
         let (Some(plan), Some(layout)) = (
-            self.enum_structural_key_plan(enum_name),
-            self.type_decls.enum_layouts.get(enum_name).cloned(),
+            self.enum_structural_key_plan(te),
+            self.type_decls.enum_layouts.get(&head).cloned(),
         ) else {
             // Reached only if a caller skipped the dispatcher's plan guard.
             let key_ty = self.context.i64_type().into();
-            return self.emit_eq_fn_for_type(enum_name, key_ty);
+            return self.emit_eq_fn_for_type(&key, key_ty);
         };
         self.emit_enum_area_eq_fn(&fn_name, layout.llvm_type, &plan)
     }
@@ -2095,7 +2333,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .map(|(_, _, fields)| {
                 fields
                     .iter()
-                    .map(|(_, te)| self.emit_eq_fn_for_type_expr(te))
+                    .map(|f| self.emit_eq_fn_for_type_expr(&f.te))
                     .collect()
             })
             .collect();
@@ -2115,6 +2353,11 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(entry_bb);
         let a_ptr = eq_fn.get_nth_param(0).unwrap().into_pointer_value();
         let b_ptr = eq_fn.get_nth_param(1).unwrap().into_pointer_value();
+        // One pair of entry-block slots per `Rebuild` field; `Direct` fields
+        // get `None` and never touch the stack.
+        let a_slots = self.enum_rebuild_slots(eq_fn, plan);
+        let b_slots = self.enum_rebuild_slots(eq_fn, plan);
+        self.builder.position_at_end(entry_bb);
         let ta_p = self
             .builder
             .build_struct_gep(area_ty, a_ptr, 0, "eqe.ta.p")
@@ -2164,15 +2407,21 @@ impl<'ctx> super::Codegen<'ctx> {
 
         for (vi, (bb, (_, vname, fields))) in bbs.into_iter().zip(plan.iter()).enumerate() {
             self.builder.position_at_end(bb);
-            for (fi, ((idx, _), child)) in fields.iter().zip(child_fns[vi].iter()).enumerate() {
-                let fa = self
-                    .builder
-                    .build_struct_gep(area_ty, a_ptr, *idx, &format!("eqe.{vname}.a{fi}"))
-                    .unwrap();
-                let fb = self
-                    .builder
-                    .build_struct_gep(area_ty, b_ptr, *idx, &format!("eqe.{vname}.b{fi}"))
-                    .unwrap();
+            for (fi, (fld, child)) in fields.iter().zip(child_fns[vi].iter()).enumerate() {
+                let fa = self.enum_field_ptr(
+                    area_ty,
+                    a_ptr,
+                    fld,
+                    a_slots[vi][fi],
+                    &format!("eqe.{vname}.a{fi}"),
+                );
+                let fb = self.enum_field_ptr(
+                    area_ty,
+                    b_ptr,
+                    fld,
+                    b_slots[vi][fi],
+                    &format!("eqe.{vname}.b{fi}"),
+                );
                 let ok = self
                     .builder
                     .build_call(
@@ -2206,20 +2455,23 @@ impl<'ctx> super::Codegen<'ctx> {
     /// seeds the digest (as `emit_hash_fn_for_vec` seeds with `len`), then the
     /// live variant's payload fields fold in through the same FxHash tail-mix
     /// the struct and tuple combiners use.
-    pub(super) fn emit_hash_fn_for_enum(&mut self, enum_name: &str) -> FunctionValue<'ctx> {
-        let fn_name = format!("karac_hash_{enum_name}{}", self.hash_hasher.mangle_suffix());
+    pub(super) fn emit_hash_fn_for_enum(&mut self, te: &TypeExpr) -> FunctionValue<'ctx> {
+        // Instantiation-qualified for the reason the eq twin documents.
+        let key = Self::display_mangle_te(te);
+        let fn_name = format!("karac_hash_{key}{}", self.hash_hasher.mangle_suffix());
         if let Some(f) = self.module.get_function(&fn_name) {
             return f;
         }
-        if let Some(f) = self.try_emit_user_impl_hash_fn(enum_name, &fn_name) {
+        if let Some(f) = self.try_emit_user_impl_hash_fn(&key, &fn_name) {
             return f;
         }
+        let head = Self::mangled_type_name(te);
         let (Some(plan), Some(layout)) = (
-            self.enum_structural_key_plan(enum_name),
-            self.type_decls.enum_layouts.get(enum_name).cloned(),
+            self.enum_structural_key_plan(te),
+            self.type_decls.enum_layouts.get(&head).cloned(),
         ) else {
             let key_ty = self.context.i64_type().into();
-            return self.emit_hash_fn_for_type(enum_name, key_ty);
+            return self.emit_hash_fn_for_type(&key, key_ty);
         };
         self.emit_enum_area_hash_fn(&fn_name, layout.llvm_type, &plan)
     }
@@ -2251,7 +2503,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .map(|(_, _, fields)| {
                 fields
                     .iter()
-                    .map(|(_, te)| self.emit_hash_fn_for_type_expr(te))
+                    .map(|f| self.emit_hash_fn_for_type_expr(&f.te))
                     .collect()
             })
             .collect();
@@ -2264,6 +2516,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let exit_bb = self.context.append_basic_block(hash_fn, "he.exit");
         self.builder.position_at_end(entry_bb);
         let key_ptr = hash_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let slots = self.enum_rebuild_slots(hash_fn, plan);
+        self.builder.position_at_end(entry_bb);
         let tag_p = self
             .builder
             .build_struct_gep(area_ty, key_ptr, 0, "he.tag.p")
@@ -2298,11 +2552,14 @@ impl<'ctx> super::Codegen<'ctx> {
         for (vi, (bb, (_, vname, fields))) in bbs.into_iter().zip(plan.iter()).enumerate() {
             self.builder.position_at_end(bb);
             let mut state = init_state;
-            for (fi, ((idx, _), child)) in fields.iter().zip(child_fns[vi].iter()).enumerate() {
-                let fp = self
-                    .builder
-                    .build_struct_gep(area_ty, key_ptr, *idx, &format!("he.{vname}.p{fi}"))
-                    .unwrap();
+            for (fi, (fld, child)) in fields.iter().zip(child_fns[vi].iter()).enumerate() {
+                let fp = self.enum_field_ptr(
+                    area_ty,
+                    key_ptr,
+                    fld,
+                    slots[vi][fi],
+                    &format!("he.{vname}.p{fi}"),
+                );
                 let fh = self
                     .builder
                     .build_call(*child, &[fp.into()], &format!("he.{vname}.h{fi}"))

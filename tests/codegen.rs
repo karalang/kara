@@ -105822,6 +105822,116 @@ fn main() {
         );
     }
 
+    /// B-2026-08-27-12 — the two payload shapes B-2026-08-27-6's structural enum
+    /// key walk DECLINED, so they kept the byte compare it replaced and stayed
+    /// wrong: a GENERIC enum key, and a payload struct whose word image is not its
+    /// LLVM layout.
+    ///
+    /// BOTH ARE ONE CAUSE — reading a payload by pointer-casting into its words
+    /// only works where the words ARE the value. Three ways they are not, and the
+    /// three read modes that answer them:
+    ///
+    ///   * `subword` — `struct { a: i32, b: i32, s: String }` spends three word
+    ///     runs where LLVM packs the two `i32`s into eight bytes, so `s` sits at
+    ///     byte 8 by the word stream and byte 8 by LLVM only by luck; field `b`
+    ///     does not. Rebuilt from its words through the same helper a match arm
+    ///     binds a payload with. `subword-ne-b` is the line that catches a walk
+    ///     reading `b` out of `a`'s padding.
+    ///   * `opt` / `res` — the payload type is the enum's PARAMETER, resolved by
+    ///     substituting the instantiation, exactly as `compile_enum_eq` does.
+    ///   * `boxed` / `boxed2` — `enum Box1[T] { One(T) }` allots `T` ONE word from
+    ///     its erased layout, so a `String` argument does not fit and construction
+    ///     heap-BOXES it. The word holds a box pointer, not the value.
+    ///
+    /// `inst-a` and `inst-b` are the collision guard. `mangled_type_name` drops
+    /// generic arguments, so `Option[String]` and `Option[i64]` would share one
+    /// `karac_eq_Option`; once the comparator resolves payloads per instantiation,
+    /// whichever was emitted first would answer for both. Two live maps of
+    /// different instantiations in one program is what makes that observable.
+    ///
+    /// The `-ne` lines are not padding: a comparator that answered `true`
+    /// unconditionally passes every positive assertion above them. `dedup` and
+    /// `removed` check that hash moved with eq — equal keys that hash differently
+    /// never meet in the same bucket.
+    #[test]
+    fn test_e2e_a_generic_or_sub_word_enum_key_is_matched_by_content() {
+        assert_eq!(
+            run_program(
+                r#"
+#[derive(Hash, Eq, PartialEq)]
+struct TwoNarrow { a: i32, b: i32, s: String }
+#[derive(Hash, Eq, PartialEq)]
+enum Holder { W(TwoNarrow), N }
+#[derive(Hash, Eq, PartialEq)]
+enum Box1[T] { One(T), Nil }
+#[derive(Hash, Eq, PartialEq)]
+enum Pair2[T] { P(T, i64), Nil }
+
+fn main() {
+    let mut m: Map[Holder, i64] = Map.new();
+    m.insert(Holder.W(TwoNarrow { a: 1, b: 2, s: f"zz" }), 7);
+    println(f"subword={m.contains_key(Holder.W(TwoNarrow { a: 1, b: 2, s: f"zz" }))}");
+    println(f"subword-ne-s={m.contains_key(Holder.W(TwoNarrow { a: 1, b: 2, s: f"zy" }))}");
+    println(f"subword-ne-b={m.contains_key(Holder.W(TwoNarrow { a: 1, b: 3, s: f"zz" }))}");
+
+    let mut o: Map[Option[String], i64] = Map.new();
+    o.insert(Some(f"kk"), 1);
+    o.insert(None, 2);
+    println(f"opt={o.contains_key(Some(f"kk"))}");
+    println(f"opt-ne={o.contains_key(Some(f"kj"))}");
+    println(f"opt-none={o.contains_key(None)}");
+
+    let mut r: Map[Result[String, i64], i64] = Map.new();
+    r.insert(Ok(f"rr"), 1);
+    r.insert(Err(9), 2);
+    println(f"res-ok={r.contains_key(Ok(f"rr"))}");
+    println(f"res-ok-ne={r.contains_key(Ok(f"rq"))}");
+    println(f"res-err={r.contains_key(Err(9))}");
+
+    let mut b: Map[Box1[String], i64] = Map.new();
+    b.insert(Box1.One(f"bb"), 1);
+    println(f"boxed={b.contains_key(Box1.One(f"bb"))}");
+    println(f"boxed-ne={b.contains_key(Box1.One(f"bc"))}");
+
+    let mut p: Map[Pair2[String], i64] = Map.new();
+    p.insert(Pair2.P(f"pp", 3), 1);
+    println(f"boxed2={p.contains_key(Pair2.P(f"pp", 3))}");
+    println(f"boxed2-ne-s={p.contains_key(Pair2.P(f"pq", 3))}");
+    println(f"boxed2-ne-n={p.contains_key(Pair2.P(f"pp", 4))}");
+
+    let mut i: Map[Option[i64], i64] = Map.new();
+    i.insert(Some(5), 1);
+    println(f"scalar={i.contains_key(Some(5))}");
+    println(f"scalar-ne={i.contains_key(Some(6))}");
+
+    let mut two: Map[Option[String], i64] = Map.new();
+    two.insert(Some(f"aa"), 1);
+    let mut three: Map[Option[i64], i64] = Map.new();
+    three.insert(Some(7), 1);
+    println(f"inst-a={two.contains_key(Some(f"aa"))}");
+    println(f"inst-b={three.contains_key(Some(7))}");
+
+    let mut s: Set[Box1[String]] = Set.new();
+    s.insert(Box1.One(f"dup"));
+    s.insert(Box1.One(f"dup"));
+    println(f"dedup={s.len()}");
+    b.remove(Box1.One(f"bb"));
+    println(f"removed={b.len()}");
+}
+"#
+            ),
+            Some(
+                "subword=true\nsubword-ne-s=false\nsubword-ne-b=false\n\
+                 opt=true\nopt-ne=false\nopt-none=true\nres-ok=true\n\
+                 res-ok-ne=false\nres-err=true\nboxed=true\n\
+                 boxed-ne=false\nboxed2=true\nboxed2-ne-s=false\n\
+                 boxed2-ne-n=false\nscalar=true\nscalar-ne=false\n\
+                 inst-a=true\ninst-b=true\ndedup=1\nremoved=0\n"
+                    .to_string()
+            )
+        );
+    }
+
     /// B-2026-08-27-6 — a plain (non-shared) ENUM key with a heap-bearing
     /// payload was compared by its payload WORDS instead of recursing, so the
     /// compiled backends missed a structurally-equal key the interpreter found.
