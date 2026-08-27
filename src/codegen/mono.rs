@@ -294,9 +294,17 @@ impl<'ctx> super::Codegen<'ctx> {
             };
             match head {
                 "Vec" | "VecDeque" => {
-                    if let (Some(pn), Some(&elem)) = (
+                    // B-2026-08-27-50: the name-keyed lookup misses a
+                    // STRUCT-FIELD argument, which has no binding to index by.
+                    // The fallback fires only when the identifier arm found
+                    // nothing, so an identifier argument keeps its exact
+                    // previous binding.
+                    if let (Some(pn), Some(elem)) = (
                         param_at(0),
-                        arg_ident.and_then(|n| self.var_types.vec_elem_types.get(n)),
+                        arg_ident
+                            .and_then(|n| self.var_types.vec_elem_types.get(n))
+                            .copied()
+                            .or_else(|| self.field_arg_container_elem_llvm(&arg.value)),
                     ) {
                         subst.entry(pn).or_insert(elem);
                     }
@@ -318,10 +326,13 @@ impl<'ctx> super::Codegen<'ctx> {
                     // shared `infer_elem_from_source` stays identifier-only
                     // deliberately — it has three other callers whose behaviour
                     // should not shift for this fix.
+                    // B-2026-08-27-50 adds the struct-field fallback, on the
+                    // same footing as the fresh-rvalue one beside it.
                     if let (Some(pn), Some(elem)) = (
                         param_at(0),
                         self.infer_elem_from_source(&arg.value)
-                            .or_else(|| self.fresh_container_arg_elem_llvm(&arg.value)),
+                            .or_else(|| self.fresh_container_arg_elem_llvm(&arg.value))
+                            .or_else(|| self.field_arg_container_elem_llvm(&arg.value)),
                     ) {
                         subst.entry(pn).or_insert(elem);
                     }
@@ -668,7 +679,22 @@ impl<'ctx> super::Codegen<'ctx> {
     fn fresh_container_arg_elem_llvm(&self, arg: &Expr) -> Option<BasicTypeEnum<'ctx>> {
         // A plain identifier is already served by `infer_elem_from_source`,
         // which is consulted first; this is only the fresh-rvalue fallback.
-        if matches!(&arg.kind, ExprKind::Identifier(_)) {
+        //
+        // A struct FIELD is excluded for a different reason: it is a PLACE, not
+        // a fresh rvalue, and answering for one here would quietly widen what
+        // this helper claims. B-2026-08-27-50 gave `arg_container_elem_type_expr`
+        // a `FieldAccess` arm, and without this guard that arm would leak
+        // through and make a borrowed field report as a fresh temporary. Today
+        // the single caller reads only the TYPE, so the leak would be harmless;
+        // it is excluded anyway, because the next caller to ask this helper the
+        // OWNERSHIP question it is named for would get a wrong answer, and the
+        // wrong answer's direction is a caller-side free of a buffer the struct
+        // still owns. `field_arg_container_elem_llvm`, one link further down the
+        // same `or_else` chain, answers for a field deliberately.
+        if matches!(
+            &arg.kind,
+            ExprKind::Identifier(_) | ExprKind::FieldAccess { .. }
+        ) {
             return None;
         }
         let te = self.arg_container_elem_type_expr(arg)?;
@@ -728,8 +754,42 @@ impl<'ctx> super::Codegen<'ctx> {
                 let ret = self.fn_sig.fn_return_type_exprs.get(fname.as_str())?;
                 vec_inner_type_expr(ret)
             }
+            // B-2026-08-27-50 — a STRUCT-FIELD container argument
+            // (`swap01(mut self.xs)`, `head(b.items)`). Every arm above keys on
+            // a BINDING NAME to index a var side-table, and a field access has
+            // none, so all of them declined and `T` fell to the `i64`
+            // unknown-name default: an 8-byte swap over a 16-byte tuple element
+            // (silent wrong answer) and a segfault at a String one.
+            //
+            // The element is recoverable without a name.
+            // `vec_index_elem_type_expr` already resolves exactly this shape for
+            // an INDEX read (`self.xs[i]`) — receiver's struct type, the field's
+            // declared `Vec[E]`, the receiver's recorded instantiation for a
+            // generic field, then one Vec (or Array) peel. `self.xs` as an
+            // ARGUMENT wants the identical answer, so this delegates rather than
+            // restating the resolution and risking the two drifting apart.
+            ExprKind::FieldAccess { .. } => self.vec_index_elem_type_expr(arg),
             _ => None,
         }
+    }
+
+    /// The element LLVM type of a STRUCT-FIELD container argument — the
+    /// type-side twin of the `FieldAccess` arm of
+    /// [`Self::arg_container_elem_type_expr`] (B-2026-08-27-50).
+    ///
+    /// Deliberately resolved THROUGH that helper rather than from a parallel
+    /// lookup, so the NAME and the TYPE this argument binds for `T` come from
+    /// one source and cannot disagree. That split is the documented failure mode
+    /// of this whole family: name bound with the type still defaulted gives
+    /// `Function return type does not match operand type of return inst`, and
+    /// type bound with the name still the literal `"T"` gives a shared
+    /// `karac_clone_T` specialized to whichever mono was lowered first.
+    fn field_arg_container_elem_llvm(&self, arg: &Expr) -> Option<BasicTypeEnum<'ctx>> {
+        if !matches!(arg.kind, ExprKind::FieldAccess { .. }) {
+            return None;
+        }
+        let elem_te = self.arg_container_elem_type_expr(arg)?;
+        Some(self.llvm_type_for_type_expr(&elem_te))
     }
 
     /// `subst_type_exprs` (+ head-name `subst_names`). Without this the mono
@@ -2606,6 +2666,36 @@ impl<'ctx> super::Codegen<'ctx> {
                         ExprKind::SelfValue => Some("self"),
                         _ => None,
                     };
+                    // B-2026-08-27-52 — the read-only `ref` sibling of the
+                    // `mut_ref_place` arm above, and the MONO half of
+                    // B-2026-07-12-1. That row gave the non-generic call path an
+                    // in-place borrow for a struct-FIELD argument to a `ref`
+                    // param, for exactly the reason it matters here: the
+                    // fall-through `materialize_rvalue_for_ref_arg` shallow-copies
+                    // the field's `{ptr,len,cap}` header into a temp and queues a
+                    // scope-exit FREE of that buffer, but the field is still owned
+                    // by the receiver, so the owner's own field drop doubles it.
+                    // The generic path never got that arm: `mut_ref_place` is
+                    // computed only when `mut_ref_flags[i]` is set, so
+                    // `vlen(self.xs)` against `v: ref Vec[T]` aborted with glibc
+                    // `free(): double free detected` under AOT and the JIT while
+                    // the interpreter was correct — a silent run/build divergence,
+                    // and the `mut ref` spelling of the same call was already
+                    // clean because it took the arm above.
+                    //
+                    // Gated on the compiled value's LLVM shape rather than on a
+                    // re-lowering of the field: `*v` is the field header already
+                    // in hand, so `{ptr,len,cap}` IS the confirmed double-free
+                    // class (`Vec` / `String`). That mirrors the non-generic
+                    // arm's `field_ty == vec_struct_type()` restriction, which
+                    // exists so an `Option[shared T]` field still reaches its
+                    // RC-inc and a niche/enum field keeps the copy path.
+                    let ref_place =
+                        if mut_ref_place.is_none() && self.llvm_ty_is_vec_struct(v.get_type()) {
+                            self.mut_ref_place_arg_ptr(&args[i].value)
+                        } else {
+                            None
+                        };
                     let ptr: BasicValueEnum<'ctx> = if let Some(var_name) = ident_name {
                         if let Some(ptr) = self.get_data_ptr(var_name) {
                             ptr.into()
@@ -2614,7 +2704,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     } else if let Some(elem_ptr) = self.ref_arg_index_borrow_ptr(&args[i].value)? {
                         elem_ptr.into()
-                    } else if let Some(place_ptr) = mut_ref_place {
+                    } else if let Some(place_ptr) = mut_ref_place.or(ref_place) {
                         place_ptr.into()
                     } else {
                         self.materialize_rvalue_for_ref_arg(*v, i)

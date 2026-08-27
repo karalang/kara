@@ -11897,6 +11897,167 @@ fn main() {
         assert_eq!(run_program(string_elem).as_deref(), Some("7 abc\n"));
     }
 
+    /// B-2026-08-27-50 — a generic callee's CONTAINER param bound to a
+    /// STRUCT-FIELD argument (`swap01(mut self.xs)`, `vlen(b.items)`).
+    ///
+    /// Every codegen resolver that recovers a container argument's element
+    /// keys on the argument's BINDING NAME, and a field access has none, so
+    /// all of them declined and `T` fell to the `i64` unknown-name default:
+    /// an 8-byte swap over a 16-byte tuple element (a SILENT wrong answer —
+    /// `10:1 2:20` for `2:20 1:10`) and a SEGFAULT at a String element.
+    ///
+    /// The precondition is narrower than "a field access", which is why the
+    /// last two cases are here: the TYPECHECKER's `call_type_subs` frame also
+    /// binds `T`, and when it does, a field argument was always fine. It comes
+    /// back empty in exactly two situations, and each one alone is enough —
+    /// the element type is NAMELESS (a tuple, the B-2026-08-27-40 channel
+    /// limit), or the call sits inside a GENERIC IMPL, where the binding is
+    /// self-referential and deliberately dropped. Hence `Bag[String]` in an
+    /// impl method breaks while the same `Bag[String]` from `main` does not.
+    ///
+    /// Verified RED: every `mut ref` case below returns the pre-fix wrong
+    /// answer on an unmodified tree, and `02_string`'s AOT binary exits 139.
+    #[test]
+    fn e2e_container_param_bound_to_a_struct_field_argument() {
+        // (a) tuple element, generic impl — the row's own repro. An 8-byte
+        // swap over a 16-byte element, silent on both compiled backends.
+        let tuple_in_impl = "struct Bag[=T] { xs: Vec[T] }\n\
+             fn swap01[T](v: mut ref Vec[T]) { v.swap(0, 1); }\n\
+             impl[T] Bag[T] {\n\
+                 fn go(mut ref self) { swap01(mut self.xs); }\n\
+                 fn at(ref self, i: i64) -> T { return self.xs[i]; }\n\
+             }\n\
+             fn main() {\n\
+                 let mut a: Bag[(i64, i64)] = Bag { xs: Vec.new() };\n\
+                 a.xs.push((1, 10)); a.xs.push((2, 20)); a.go();\n\
+                 let z0 = a.at(0); let z1 = a.at(1);\n\
+                 println(f\"{z0.0}:{z0.1} {z1.0}:{z1.1}\");\n\
+             }\n";
+        assert_eq!(run_program(tuple_in_impl).as_deref(), Some("2:20 1:10\n"));
+        // (b) a NAMED element in the same impl — pre-fix this SEGFAULTED, so
+        // a nameless element is not what makes the shape fail.
+        let string_in_impl = "struct Bag[=T] { xs: Vec[T] }\n\
+             fn swap01[T](v: mut ref Vec[T]) { v.swap(0, 1); }\n\
+             impl[T] Bag[T] {\n\
+                 fn go(mut ref self) { swap01(mut self.xs); }\n\
+                 fn at(ref self, i: i64) -> T { return self.xs[i]; }\n\
+             }\n\
+             fn main() {\n\
+                 let mut a: Bag[String] = Bag { xs: Vec.new() };\n\
+                 a.xs.push(\"aa\"); a.xs.push(\"bb\"); a.go();\n\
+                 println(f\"{a.at(0)} {a.at(1)}\");\n\
+             }\n";
+        assert_eq!(run_program(string_in_impl).as_deref(), Some("bb aa\n"));
+        // (c) NO impl and a NON-generic struct — the receiver's genericity is
+        // not the trigger either; the nameless tuple element empties the frame
+        // on its own.
+        let tuple_plain_struct = "struct Bag { xs: Vec[(i64, i64)] }\n\
+             fn swap01[T](v: mut ref Vec[T]) { v.swap(0, 1); }\n\
+             fn main() {\n\
+                 let mut a: Bag = Bag { xs: Vec.new() };\n\
+                 a.xs.push((1, 10)); a.xs.push((2, 20));\n\
+                 swap01(mut a.xs);\n\
+                 let z0 = a.xs[0]; let z1 = a.xs[1];\n\
+                 println(f\"{z0.0}:{z0.1} {z1.0}:{z1.1}\");\n\
+             }\n";
+        assert_eq!(
+            run_program(tuple_plain_struct).as_deref(),
+            Some("2:20 1:10\n")
+        );
+        // (d) a generic struct, tuple element, called from `main` rather than
+        // from an impl method.
+        let tuple_generic_from_main = "struct Bag[=T] { xs: Vec[T] }\n\
+             fn swap01[T](v: mut ref Vec[T]) { v.swap(0, 1); }\n\
+             fn main() {\n\
+                 let mut a: Bag[(i64, i64)] = Bag { xs: Vec.new() };\n\
+                 a.xs.push((1, 10)); a.xs.push((2, 20));\n\
+                 swap01(mut a.xs);\n\
+                 let z0 = a.xs[0]; let z1 = a.xs[1];\n\
+                 println(f\"{z0.0}:{z0.1} {z1.0}:{z1.1}\");\n\
+             }\n";
+        assert_eq!(
+            run_program(tuple_generic_from_main).as_deref(),
+            Some("2:20 1:10\n")
+        );
+        // (e) the LOUD half: a callee that RETURNS the element. With `T`
+        // unbound the mono returned `i64` against a `{i64,i64}` operand and
+        // module verification hard-failed, so this program did not build at
+        // all. Where the callee returns nothing the LLVM signature is a bare
+        // `ptr` and there is no mismatch to catch — which is why the swap
+        // above was silent and this was not.
+        let returning = "struct Bag[=T] { xs: Vec[T] }\n\
+             fn first[T](v: ref Vec[T]) -> T { return v[0]; }\n\
+             impl[T] Bag[T] {\n\
+                 fn head(ref self) -> T { return first(self.xs); }\n\
+             }\n\
+             fn main() {\n\
+                 let mut a: Bag[(i64, i64)] = Bag { xs: Vec.new() };\n\
+                 a.xs.push((1, 10)); a.xs.push((2, 20));\n\
+                 let h = a.head();\n\
+                 println(f\"{h.0}:{h.1}\");\n\
+             }\n";
+        assert_eq!(run_program(returning).as_deref(), Some("1:10\n"));
+        // (f) the IDENTIFIER-argument control: correct before the fix and
+        // after, so it pins the diagnosis to the argument's shape rather than
+        // to the generic callee or the tuple element.
+        let ident_control = "fn swap01[T](v: mut ref Vec[T]) { v.swap(0, 1); }\n\
+             fn main() {\n\
+                 let mut t: Vec[(i64, i64)] = Vec.new();\n\
+                 t.push((1, 10)); t.push((2, 20));\n\
+                 swap01(mut t);\n\
+                 let z0 = t[0]; let z1 = t[1];\n\
+                 println(f\"{z0.0}:{z0.1} {z1.0}:{z1.1}\");\n\
+             }\n";
+        assert_eq!(run_program(ident_control).as_deref(), Some("2:20 1:10\n"));
+    }
+
+    /// B-2026-08-27-52 — the MONO half of B-2026-07-12-1. That row gave the
+    /// non-generic call path an in-place borrow for a struct-FIELD argument to
+    /// a `ref` param; the generic path computes a place pointer only when the
+    /// param is `mut ref`, so a read-only `ref` container param fell through to
+    /// `materialize_rvalue_for_ref_arg`, which shallow-copies the field's
+    /// `{ptr,len,cap}` header into a temp and queues a scope-exit FREE of it.
+    /// The receiver still owns that buffer, so its own field drop doubled the
+    /// free: `free(): double free detected in tcache 2`, abort, on both
+    /// compiled backends while the interpreter was correct.
+    ///
+    /// The `mut ref` spelling of the identical call was already clean (it took
+    /// the arm above), and so was the non-generic callee — which is what
+    /// isolates this to the generic path. Guarded under ASAN too; these cases
+    /// pin the run/build agreement.
+    #[test]
+    fn e2e_ref_container_param_borrows_a_struct_field_in_place() {
+        // Generic callee, generic impl receiver, String element.
+        let generic_impl = "struct Bag[=T] { xs: Vec[T] }\n\
+             fn vlen[T](v: ref Vec[T]) -> i64 { return v.len(); }\n\
+             impl[T] Bag[T] {\n\
+                 fn go(ref self) -> i64 { return vlen(self.xs); }\n\
+             }\n\
+             fn main() {\n\
+                 let mut a: Bag[String] = Bag { xs: Vec.new() };\n\
+                 a.xs.push(\"aa\"); println(f\"{a.go()}\");\n\
+             }\n";
+        assert_eq!(run_program(generic_impl).as_deref(), Some("1\n"));
+        // Generic callee, PLAIN struct, called from `main` — no impl and no
+        // generic receiver, so the generic CALLEE is what routes it here.
+        let generic_callee_plain = "struct Bag { xs: Vec[String] }\n\
+             fn vlen[T](v: ref Vec[T]) -> i64 { return v.len(); }\n\
+             fn main() {\n\
+                 let mut a: Bag = Bag { xs: Vec.new() };\n\
+                 a.xs.push(\"aa\"); println(f\"{vlen(a.xs)}\");\n\
+             }\n";
+        assert_eq!(run_program(generic_callee_plain).as_deref(), Some("1\n"));
+        // The NON-generic callee control: clean before the fix (B-2026-07-12-1
+        // covers it), so it pins the gap to the mono path.
+        let nongeneric_control = "struct Bag { xs: Vec[String] }\n\
+             fn vlen(v: ref Vec[String]) -> i64 { return v.len(); }\n\
+             fn main() {\n\
+                 let mut a: Bag = Bag { xs: Vec.new() };\n\
+                 a.xs.push(\"aa\"); println(f\"{vlen(a.xs)}\");\n\
+             }\n";
+        assert_eq!(run_program(nongeneric_control).as_deref(), Some("1\n"));
+    }
+
     /// An ASSOCIATED fn in a generic impl that binds a struct LITERAL to a
     /// local and calls a mutating sibling through it — the third shape of the
     /// wrong-monomorph family, after B-2026-08-25-7's `let mut h = self` and

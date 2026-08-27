@@ -56384,4 +56384,159 @@ fn main() {
             "shared-niche-option-field-eq-probe",
         );
     }
+
+    /// B-2026-08-27-52 — a struct-FIELD container argument bound to a
+    /// read-only `ref` param of a GENERIC callee.
+    ///
+    /// The mono argument path computes an in-place place pointer only when the
+    /// param is `mut ref`; a plain `ref` fell through to
+    /// `materialize_rvalue_for_ref_arg`, which shallow-copies the field's
+    /// `{ptr,len,cap}` header into a temp and queues a scope-exit FREE of that
+    /// buffer. The receiver still owns it, so the owner's own field drop
+    /// doubled the free — `free(): double free detected in tcache 2` and abort
+    /// on both compiled backends, while the interpreter printed the right
+    /// answer. B-2026-07-12-1 fixed exactly this for the NON-generic call path;
+    /// the generic one never got the arm.
+    ///
+    /// Both spellings of the receiver are covered, because they reach the arm
+    /// by different routes: `self` inside a generic impl (which parses as
+    /// `SelfValue`, not `Identifier`) and a plain local struct. The `mut ref`
+    /// case is here as the control that was already clean — it takes the arm
+    /// above, so a regression that removed the new one would leave it passing.
+    #[test]
+    fn asan_ref_container_param_borrows_a_struct_field_in_place() {
+        for (label, prog, want) in [
+            (
+                "ref-field-generic-impl",
+                r#"
+struct Bag[=T] { xs: Vec[T] }
+fn vlen[T](v: ref Vec[T]) -> i64 { return v.len(); }
+impl[T] Bag[T] {
+    fn go(ref self) -> i64 { return vlen(self.xs); }
+}
+fn main() {
+    let mut a: Bag[String] = Bag { xs: Vec.new() };
+    a.xs.push("aa"); a.xs.push("bb");
+    println(f"len={a.go()}");
+}
+"#,
+                "len=2",
+            ),
+            (
+                "ref-field-plain-struct",
+                r#"
+struct Bag { xs: Vec[String] }
+fn vlen[T](v: ref Vec[T]) -> i64 { return v.len(); }
+fn main() {
+    let mut a: Bag = Bag { xs: Vec.new() };
+    a.xs.push("aa"); a.xs.push("bb");
+    println(f"len={vlen(a.xs)}");
+}
+"#,
+                "len=2",
+            ),
+            (
+                "ref-field-tuple-element",
+                r#"
+struct Bag[=T] { xs: Vec[T] }
+fn vlen[T](v: ref Vec[T]) -> i64 { return v.len(); }
+impl[T] Bag[T] {
+    fn go(ref self) -> i64 { return vlen(self.xs); }
+}
+fn main() {
+    let mut a: Bag[(i64, String)] = Bag { xs: Vec.new() };
+    a.xs.push((1, "aa"));
+    println(f"len={a.go()}");
+}
+"#,
+                "len=1",
+            ),
+            (
+                "mut-ref-field-control",
+                r#"
+struct Bag[=T] { xs: Vec[T] }
+fn swap01[T](v: mut ref Vec[T]) { v.swap(0, 1); }
+impl[T] Bag[T] {
+    fn go(mut ref self) { swap01(mut self.xs); }
+}
+fn main() {
+    let mut a: Bag[String] = Bag { xs: Vec.new() };
+    a.xs.push("aa"); a.xs.push("bb"); a.go();
+    println(f"len={a.xs.len()} [{a.xs[0]}]");
+}
+"#,
+                "len=2 [bb]",
+            ),
+        ] {
+            assert_clean_asan_run(prog, &[want], label);
+        }
+    }
+
+    /// B-2026-08-27-50 — the element-type half of the same family, under ASAN.
+    ///
+    /// A generic callee's container param bound to a struct-field argument left
+    /// `T` at the `i64` unknown-name default, so a `Vec[String]` element was
+    /// swapped 8 bytes at a time through a 24-byte control block. The
+    /// user-visible symptom was a SEGFAULT, but the underlying operation is a
+    /// partial overwrite of a live heap pointer, so it belongs here as well as
+    /// in the E2E suite — a shape that merely corrupted without crashing would
+    /// pass there and fail here.
+    #[test]
+    fn asan_container_param_bound_to_a_struct_field_argument() {
+        for (label, prog, want) in [
+            (
+                "field-arg-string-element",
+                r#"
+struct Bag[=T] { xs: Vec[T] }
+fn swap01[T](v: mut ref Vec[T]) { v.swap(0, 1); }
+impl[T] Bag[T] {
+    fn go(mut ref self) { swap01(mut self.xs); }
+    fn at(ref self, i: i64) -> T { return self.xs[i]; }
+}
+fn main() {
+    let mut a: Bag[String] = Bag { xs: Vec.new() };
+    a.xs.push("aa"); a.xs.push("bb"); a.go();
+    println(f"[{a.at(0)} {a.at(1)}]");
+}
+"#,
+                "[bb aa]",
+            ),
+            (
+                "field-arg-heap-bearing-tuple-element",
+                r#"
+struct Bag[=T] { xs: Vec[T] }
+fn swap01[T](v: mut ref Vec[T]) { v.swap(0, 1); }
+impl[T] Bag[T] {
+    fn go(mut ref self) { swap01(mut self.xs); }
+    fn at(ref self, i: i64) -> T { return self.xs[i]; }
+}
+fn main() {
+    let mut a: Bag[(String, i64)] = Bag { xs: Vec.new() };
+    a.xs.push(("aa", 1)); a.xs.push(("bb", 2)); a.go();
+    let z0 = a.at(0); let z1 = a.at(1);
+    println(f"[{z0.0}:{z0.1} {z1.0}:{z1.1}]");
+}
+"#,
+                "[bb:2 aa:1]",
+            ),
+            (
+                "field-arg-returning-callee",
+                r#"
+struct Bag[=T] { xs: Vec[T] }
+fn first[T](v: ref Vec[T]) -> T { return v[0]; }
+impl[T] Bag[T] {
+    fn head(ref self) -> T { return first(self.xs); }
+}
+fn main() {
+    let mut a: Bag[String] = Bag { xs: Vec.new() };
+    a.xs.push("aa"); a.xs.push("bb");
+    println(f"[{a.head()}]");
+}
+"#,
+                "[aa]",
+            ),
+        ] {
+            assert_clean_asan_run(prog, &[want], label);
+        }
+    }
 }

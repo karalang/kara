@@ -29174,6 +29174,100 @@ fn main() { let (s, n) = passthru((f"abc", 7)); println(f"{n} {s}"); }
     );
 }
 
+/// B-2026-08-27-50 / -52 — the interpreter ORACLE for a container argument
+/// spelled as a STRUCT FIELD. Every case here was already correct under the
+/// tree walk; they are the reference the compiled backends were measured
+/// against, and they hold the A/B rule in place for the shapes that used to
+/// diverge (a silent 8-byte swap over a 16-byte tuple element, a segfault at a
+/// String element, a module-verification failure on the returning callee, and
+/// a `free(): double free` on the read-only `ref` spelling).
+#[test]
+fn container_argument_from_a_struct_field_round_trips() {
+    // The row's own repro: a nameless tuple element, inside a generic impl.
+    assert_eq!(
+        run(r#"
+struct Bag[=T] { xs: Vec[T] }
+fn swap01[T](v: mut ref Vec[T]) { v.swap(0, 1); }
+impl[T] Bag[T] {
+    fn go(mut ref self) { swap01(mut self.xs); }
+    fn at(ref self, i: i64) -> T { return self.xs[i]; }
+}
+fn main() {
+    let mut a: Bag[(i64, i64)] = Bag { xs: Vec.new() };
+    a.xs.push((1, 10)); a.xs.push((2, 20)); a.go();
+    let z0 = a.at(0); let z1 = a.at(1);
+    println(f"{z0.0}:{z0.1} {z1.0}:{z1.1}");
+}
+"#),
+        "2:20 1:10\n"
+    );
+    // A NAMED element in the same impl — the compiled backends segfaulted.
+    assert_eq!(
+        run(r#"
+struct Bag[=T] { xs: Vec[T] }
+fn swap01[T](v: mut ref Vec[T]) { v.swap(0, 1); }
+impl[T] Bag[T] {
+    fn go(mut ref self) { swap01(mut self.xs); }
+    fn at(ref self, i: i64) -> T { return self.xs[i]; }
+}
+fn main() {
+    let mut a: Bag[String] = Bag { xs: Vec.new() };
+    a.xs.push("aa"); a.xs.push("bb"); a.go();
+    println(f"{a.at(0)} {a.at(1)}");
+}
+"#),
+        "bb aa\n"
+    );
+    // No impl, non-generic struct, nameless element.
+    assert_eq!(
+        run(r#"
+struct Bag { xs: Vec[(i64, i64)] }
+fn swap01[T](v: mut ref Vec[T]) { v.swap(0, 1); }
+fn main() {
+    let mut a: Bag = Bag { xs: Vec.new() };
+    a.xs.push((1, 10)); a.xs.push((2, 20));
+    swap01(mut a.xs);
+    let z0 = a.xs[0]; let z1 = a.xs[1];
+    println(f"{z0.0}:{z0.1} {z1.0}:{z1.1}");
+}
+"#),
+        "2:20 1:10\n"
+    );
+    // The RETURNING callee — the loud half, which failed module verification.
+    assert_eq!(
+        run(r#"
+struct Bag[=T] { xs: Vec[T] }
+fn first[T](v: ref Vec[T]) -> T { return v[0]; }
+impl[T] Bag[T] {
+    fn head(ref self) -> T { return first(self.xs); }
+}
+fn main() {
+    let mut a: Bag[(i64, i64)] = Bag { xs: Vec.new() };
+    a.xs.push((1, 10)); a.xs.push((2, 20));
+    let h = a.head();
+    println(f"{h.0}:{h.1}");
+}
+"#),
+        "1:10\n"
+    );
+    // The read-only `ref` spelling (-51): the compiled backends aborted with
+    // `free(): double free detected` where the tree walk was always correct.
+    assert_eq!(
+        run(r#"
+struct Bag[=T] { xs: Vec[T] }
+fn vlen[T](v: ref Vec[T]) -> i64 { return v.len(); }
+impl[T] Bag[T] {
+    fn go(ref self) -> i64 { return vlen(self.xs); }
+}
+fn main() {
+    let mut a: Bag[String] = Bag { xs: Vec.new() };
+    a.xs.push("aa"); println(f"{a.go()}");
+}
+"#),
+        "1\n"
+    );
+}
+
 #[test]
 fn test_secret_expose_reads_inner() {
     // `std.secret.Secret[T]` — `Secret.new(v)` wraps a sensitive value and
