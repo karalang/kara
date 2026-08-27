@@ -95,7 +95,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | miscompile | 305 | 2 |
 | leak | 199 | 1 |
 | missing-feature | 186 | 2 |
-| run-vs-build | 176 | 3 |
+| run-vs-build | 176 | 2 |
 | codegen-gap | 143 | 1 |
 | double-free | 141 | 1 |
 | diagnostics | 111 | 0 |
@@ -115,18 +115,18 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | interp | 191 | 2 |
 | other | 70 | 0 |
 | ownership | 65 | 0 |
-| cli | 64 | 1 |
+| cli | 64 | 0 |
 | autopar | 55 | 0 |
 | parser | 42 | 0 |
 | runtime | 32 | 0 |
 | resolver | 27 | 0 |
-| effect | 26 | 1 |
+| effect | 26 | 0 |
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1647 surfaced · 11 open · 1610 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-27). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1647 surfaced · 10 open · 1611 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-27). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (11)
+### Open (10)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
@@ -140,7 +140,6 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1647 surfaced
 | B-2026-08-27-24 | 2026-08-27 | typecheck+interp+codegen | medium | `Slice[T] == Slice[T]` IS ACCEPTED BY `karac check`, DIES IN THE INTERPRETER WITH A DIAGNOSTIC THAT BLAMES THE TYPECHECKER, AND IS REFUSED BY CODEGEN AS "a reference type" -- the same three-way disagreement B-2026-08-27-10 fixed for `Vec`, on the sibling type, and unfixed by that work. | — |
 | B-2026-08-27-25 | 2026-08-27 | typecheck+codegen | medium | `Array[T, N] == Array[T, N]` IS ACCEPTED BY `karac check`, ANSWERS CORRECTLY UNDER THE INTERPRETER, AND FAILS TO COMPILE: codegen reports "left operand has non-comparable type ArrayType" and blames a typechecker gap that is not one. | — |
 | B-2026-08-27-26 | 2026-08-27 | codegen | medium | `free_fresh_owned_str_arg` FREES A FRESH TEMPORARY OPERAND'S BUFFER BUT NOT ITS ELEMENTS, so a `Vec[String]` temporary compared with `==` leaks every element String -- measured 26 bytes in 4 allocations under LSan, IDENTICALLY before and after B-2026-08-27-10. | — |
-| B-2026-08-27-27 | 2026-08-27 | effect+cli | high | `karac check` ON A PROJECT DOES NOT RUN THE MULTI-FILE EFFECT CHECK THAT `karac build` RUNS, so a project prints "All checks passed." and then fails to build with an undeclared-effect error -- measured with ONE binary on `examples/slipstream`. | — |
 
 ### Relocated (2)
 
@@ -172,9 +171,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1647 surfaced
 
 </details>
 
-### Fixed (1610)
+### Fixed (1611)
 
-<details><summary>1610 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1611 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1788,6 +1787,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1647 surfaced
 | B-2026-08-27-17 | codegen | high | `assert_eq` / `assert_ne` COMPARE AN ENUM'S PAYLOAD WORDS INSTEAD OF ITS CONTENTS, so a Kara test asserting two structurally-equal enums with heap pa… | 752e0b9 |
 | B-2026-08-27-18 | codegen | high | `==` ON A USER STRUCT WITH EXACTLY THREE FIELDS PANICS THE COMPILER, so `struct S3 { a: i64, b: i64, c: i64 }` and `S3 { . | 9b8d435 |
 | B-2026-08-27-19 | codegen | medium | AN ENUM WHOSE PAYLOAD STRUCT IS NOT WORD-ALIGNED IS TREATED AS HAVING NO HEAP PAYLOAD, so `==` on it silently compares payload WORDS: `enum Holder {… | 8d2eb56 |
+| B-2026-08-27-27 | effect+cli | high | `karac check` ON A PROJECT DOES NOT RUN THE MULTI-FILE EFFECT CHECK THAT `karac build` RUNS, so a project prints "All checks passed." and then fails… | dc939a8 |
 
 </details>
 
