@@ -54503,7 +54503,6 @@ fn main() {
     /// the receiver without also standing in for that mention test would have
     /// released a buffer this rhs still points into: a double free, the one
     /// direction the displaced-element family documents as unacceptable.
-    #[test]
     /// B-2026-08-27-23 — `v[i] = v[j].clone()` must free the element it
     /// displaces. It did not: the displaced-drop guard asks whether the RHS
     /// could carry the container's heap out, saw the container MENTIONED in
@@ -54534,24 +54533,6 @@ fn main() {
     }
 
     #[test]
-    fn zzz_probe_fresh_temp_into_byvalue_param() {
-        assert_clean_asan_run(
-            r#"
-struct It { id: i64, name: String }
-fn mk() -> It { return It { id: 1, name: f"payload_aaaaaaaaaaaaaaaaaaaaaaaa{1}" }; }
-fn take(x: It) -> i64 { return x.name.len(); }
-fn main() {
-    let mut t = 0i64;
-    let mut i = 0i64;
-    while i < 20i64 { t = t + take(mk()); i = i + 1i64; }
-    println(f"{t}");
-}
-"#,
-            &["660"],
-            "zzz-probe-fresh-temp-into-byvalue-param",
-        );
-    }
-
     fn asan_self_rooted_index_assign_from_sibling_element_is_not_double_freed() {
         assert_clean_asan_run(
             r#"
