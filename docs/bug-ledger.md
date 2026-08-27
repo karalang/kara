@@ -93,7 +93,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | class | total | open |
 |---|---|---|
 | miscompile | 305 | 0 |
-| leak | 205 | 1 |
+| leak | 205 | 0 |
 | missing-feature | 186 | 0 |
 | run-vs-build | 176 | 0 |
 | codegen-gap | 143 | 0 |
@@ -110,7 +110,7 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1097 | 3 |
+| codegen | 1097 | 2 |
 | typecheck | 277 | 1 |
 | interp | 191 | 0 |
 | other | 70 | 0 |
@@ -124,15 +124,14 @@ distinguish "bugs flattening" from "we stopped writing them down."
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1656 surfaced · 4 open · 1626 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-27). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1656 surfaced · 3 open · 1627 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-27). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (4)
+### Open (3)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-27-33 | 2026-08-27 | typecheck | medium | A `T: Ord` bound on a GENERIC IMPL rejects a tuple that the IDENTICAL bound on a free fn accepts: `impl[T: Ord] W[T]` refuses `W[(i64, i64)]` with "`(i64, i64)` does not implement `Ord`", while `fn pick[T: Ord](a: T, b: T)` takes the same tuple and may even call `.cmp()` on it | implementation_checklist/phase-11-stdlib-longtail.md#general-purpose-collections |
 | B-2026-08-27-34 | 2026-08-27 | codegen | high | 3454927 (B-2026-08-26-12) EMITS THE BRANCH-LEAF RETAIN ONCE PER BINDING, NOT ONCE PER USE, so the THIRD consumption of an `Option[shared]` selected by a value-position branch reads through a freed box. Eight lines, no loop: `let t = if true { a } else { b };` then three `show(t)` calls prints `1 1 1` under `--interp` and `1 1 <garbage>` under `karac build` -- WHICH EXITS 0. Two uses are balanced and green; the boundary is exactly the third. The fix's own fixtures all consume the value once, so the axis was never covered. | — |
-| B-2026-08-27-35 | 2026-08-27 | codegen | medium | An indexed array LITERAL temporary leaks the element it hands back -- `Array[f"a{n}", f"b{n}"][0]` loses 2 bytes in 1 allocation -- a different mechanism from B-2026-08-27-31 and not covered by its fix. | — |
 | B-2026-08-27-36 | 2026-08-27 | codegen | medium | UNVERIFIED, not clean: the NON-`let` binding sites (for-loop binding, match pattern binding, tuple destructure) were never cleared of the wrong-monomorph defect B-2026-08-25-27/-28 fixed everywhere else — the probe that would clear them cannot reproduce the defect even on a KNOWN-BROKEN form | implementation_checklist/phase-11-stdlib-longtail.md#general-purpose-collections |
 
 ### Relocated (2)
@@ -165,9 +164,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1656 surfaced
 
 </details>
 
-### Fixed (1626)
+### Fixed (1627)
 
-<details><summary>1626 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1627 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1797,6 +1796,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1656 surfaced
 | B-2026-08-27-30 | codegen | medium | A fresh `Array[String, N]` TEMPORARY compared with `==` leaks every element -- 26 bytes in 4 allocations under LSan, the same signature B-2026-08-27-… | c1c1f35 |
 | B-2026-08-27-31 | codegen | medium | An INDEXED `Array[String, N]` temporary leaks its elements -- `mk(4)[0]` loses 13 bytes in 2 allocations -- a different position from B-2026-08-27-30… | 9c06c13 |
 | B-2026-08-27-32 | codegen | medium | A struct FIELD of type `Array[T, N]` with heap elements is never dropped: `struct Holder { a: Array[String, 2] }` leaks 13 bytes in 2 allocations wit… | 9c06c13 |
+| B-2026-08-27-35 | codegen | medium | An array LITERAL temporary leaks ALL of its elements -- indexed (`Array[f"a{n}", f"b{n}"][0]`, 7 bytes in 2 allocations) and as an `==` operand (16 b… | 5313f90 |
 
 </details>
 
