@@ -5767,12 +5767,22 @@ impl<'ctx> super::Codegen<'ctx> {
         let Some(cur_fn) = self.current_fn else {
             return Ok(None);
         };
-        let ls = lhs.into_struct_value();
-        let rs = rhs.into_struct_value();
-        let a_slot = self.create_entry_alloca(cur_fn, "ord.a", ls.get_type().into());
-        let b_slot = self.create_entry_alloca(cur_fn, "ord.b", rs.get_type().into());
-        self.builder.build_store(a_slot, ls).unwrap();
-        self.builder.build_store(b_slot, rs).unwrap();
+        // Spill both operands so the comparator (which takes POINTERS, like
+        // every `karac_cmp_<T>`) has addresses to read. Typed off the VALUE
+        // rather than off `into_struct_value()` since B-2026-08-27-42: an
+        // `Array[T, N]` operand arrives as an LLVM ArrayValue, not a
+        // StructValue, and the old spelling panicked on it before the array
+        // dispatch could ever be reached. A POINTER operand declines instead
+        // of being stored as a pointer-sized word — every caller guards on a
+        // by-value operand, and storing the address would silently compare
+        // addresses.
+        if lhs.is_pointer_value() || rhs.is_pointer_value() {
+            return Ok(None);
+        }
+        let a_slot = self.create_entry_alloca(cur_fn, "ord.a", lhs.get_type());
+        let b_slot = self.create_entry_alloca(cur_fn, "ord.b", rhs.get_type());
+        self.builder.build_store(a_slot, lhs).unwrap();
+        self.builder.build_store(b_slot, rhs).unwrap();
         let ord = self
             .builder
             .build_call(cmp_fn, &[a_slot.into(), b_slot.into()], "ord.cmp")
@@ -8006,6 +8016,17 @@ impl<'ctx> super::Codegen<'ctx> {
             crate::ast::TypeKind::Tuple(elems) if !elems.is_empty() => Some(te),
             _ => None,
         }
+    }
+
+    /// The whole `Array[T, N]` `TypeExpr` when `e` is statically one with a
+    /// literal extent, else `None` (B-2026-08-27-42) — the array sibling of
+    /// [`Self::tuple_te_of_operand`], and the ORDERING counterpart to
+    /// [`Self::array_te_of_operand`], which projects out `(element, N)` for
+    /// the equality path. Ordering needs the container type itself, because
+    /// `emit_cmp_fn_for_type_expr` keys its comparator on it.
+    pub(super) fn array_operand_te(&self, e: &crate::ast::Expr) -> Option<TypeExpr> {
+        let te = self.seq_eq_operand_te(e)?;
+        self.array_elem_and_len(&te).map(|_| te)
     }
 
     /// `true` when every leaf of `te` carries a TOTAL order, so the

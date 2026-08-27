@@ -8878,57 +8878,93 @@ impl<'ctx> super::Codegen<'ctx> {
                 children: Vec<FunctionValue<'c>>,
                 tuple_llvm: inkwell::types::StructType<'c>,
             },
+            /// Fixed-extent `Array[T, N]` (B-2026-08-27-42). The `VecLike`
+            /// sibling's loop minus the header: N is a compile-time constant
+            /// and both operands have the SAME type, so there is no length
+            /// word to load and no length tiebreak to emit.
+            Array {
+                child: FunctionValue<'c>,
+                array_llvm: inkwell::types::ArrayType<'c>,
+                n: u32,
+            },
         }
-        let body = match &te.kind {
-            TypeKind::Tuple(elems) if !elems.is_empty() => {
-                let mut children = Vec::with_capacity(elems.len());
-                for e in elems {
-                    children.push(self.emit_cmp_fn_for_type_expr(e)?);
-                }
-                let field_tys: Vec<BasicTypeEnum> = elems
-                    .iter()
-                    .map(|e| self.llvm_type_for_type_expr(e))
-                    .collect();
-                Body::Tuple {
-                    children,
-                    tuple_llvm: self.context.struct_type(&field_tys, false),
-                }
+        // `Array[T, N]` — checked BEFORE the shape match because both of the
+        // type's surface spellings have to land here: a source-written
+        // annotation parses as `Path("Array", [Type(T), Const(N)])` and an
+        // inference-recovered one rebuilds as `TypeKind::Array { .. }`.
+        // `array_elem_and_len` is the existing helper that accepts either, and
+        // is what the equality twin `emit_eq_fn_for_array` (B-2026-08-27-25)
+        // already keys on — so the two operations agree about what an array
+        // IS by sharing the recognizer rather than by restating it.
+        //
+        // Without this arm, `Path` fell to `_ => return None` and every
+        // `a < b` on two arrays reached `compile_binop`'s "non-comparable
+        // type ArrayType" while `karac check` had accepted the program
+        // (`type_supports_ord` recurses through `Type::Array`). The tuple
+        // sibling had a comparator already and needed only a dispatch line;
+        // this one needed the comparator too, which is why it outlived the
+        // tuple fix (B-2026-08-27-33) by a day.
+        let array_parts = self.array_elem_and_len(te);
+        let body = if let Some((elem_te, n)) = array_parts {
+            let child = self.emit_cmp_fn_for_type_expr(&elem_te)?;
+            let elem_llvm = self.llvm_type_for_type_expr(&elem_te);
+            Body::Array {
+                child,
+                array_llvm: elem_llvm.array_type(n),
+                n,
             }
-            TypeKind::Path(p) => {
-                let head = p.segments.first().map(String::as_str).unwrap_or("");
-                match head {
-                    "i8" | "i16" | "i32" | "i64" | "isize" => Body::IntScalar { signed: true },
-                    "u8" | "u16" | "u32" | "u64" | "usize" | "bool" | "char" => {
-                        Body::IntScalar { signed: false }
+        } else {
+            match &te.kind {
+                TypeKind::Tuple(elems) if !elems.is_empty() => {
+                    let mut children = Vec::with_capacity(elems.len());
+                    for e in elems {
+                        children.push(self.emit_cmp_fn_for_type_expr(e)?);
                     }
-                    "f32" | "f64" => Body::FloatScalar,
-                    // B-2026-08-27-11 — `?`, not `expect`. The arm is keyed on
-                    // the bare NAME, and a user may declare a type of that name
-                    // (prelude names are not reserved), in which case
-                    // `total_float_wrapper_widths` now declines. Panicking on a
-                    // shadowed name would turn a legal program into a compiler
-                    // crash; declining routes it to the ordinary body instead.
-                    _ if self.is_prelude_total_float_wrapper(head) => {
-                        let (_ft, int_ty, top) = self.total_float_wrapper_widths(head)?;
-                        Body::TotalFloatScalar { int_ty, top }
+                    let field_tys: Vec<BasicTypeEnum> = elems
+                        .iter()
+                        .map(|e| self.llvm_type_for_type_expr(e))
+                        .collect();
+                    Body::Tuple {
+                        children,
+                        tuple_llvm: self.context.struct_type(&field_tys, false),
                     }
-                    // Both String spellings (the 3p discipline).
-                    "String" | "str" => Body::Str,
-                    "Vec" | "VecDeque" => {
-                        let elem_te = match p.generic_args.as_ref()?.first()? {
-                            GenericArg::Type(t) => t.clone(),
-                            _ => return None,
-                        };
-                        let child = self.emit_cmp_fn_for_type_expr(&elem_te)?;
-                        Body::VecLike {
-                            child,
-                            elem_llvm: self.llvm_type_for_type_expr(&elem_te),
+                }
+                TypeKind::Path(p) => {
+                    let head = p.segments.first().map(String::as_str).unwrap_or("");
+                    match head {
+                        "i8" | "i16" | "i32" | "i64" | "isize" => Body::IntScalar { signed: true },
+                        "u8" | "u16" | "u32" | "u64" | "usize" | "bool" | "char" => {
+                            Body::IntScalar { signed: false }
                         }
+                        "f32" | "f64" => Body::FloatScalar,
+                        // B-2026-08-27-11 — `?`, not `expect`. The arm is keyed on
+                        // the bare NAME, and a user may declare a type of that name
+                        // (prelude names are not reserved), in which case
+                        // `total_float_wrapper_widths` now declines. Panicking on a
+                        // shadowed name would turn a legal program into a compiler
+                        // crash; declining routes it to the ordinary body instead.
+                        _ if self.is_prelude_total_float_wrapper(head) => {
+                            let (_ft, int_ty, top) = self.total_float_wrapper_widths(head)?;
+                            Body::TotalFloatScalar { int_ty, top }
+                        }
+                        // Both String spellings (the 3p discipline).
+                        "String" | "str" => Body::Str,
+                        "Vec" | "VecDeque" => {
+                            let elem_te = match p.generic_args.as_ref()?.first()? {
+                                GenericArg::Type(t) => t.clone(),
+                                _ => return None,
+                            };
+                            let child = self.emit_cmp_fn_for_type_expr(&elem_te)?;
+                            Body::VecLike {
+                                child,
+                                elem_llvm: self.llvm_type_for_type_expr(&elem_te),
+                            }
+                        }
+                        _ => return None,
                     }
-                    _ => return None,
                 }
+                _ => return None,
             }
-            _ => return None,
         };
 
         let fn_ty = i64_t.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
@@ -9309,6 +9345,95 @@ impl<'ctx> super::Codegen<'ctx> {
                     next_bb = cont_bb;
                 }
                 self.builder.position_at_end(next_bb);
+                self.builder.build_return(Some(&zero)).unwrap();
+            }
+            // B-2026-08-27-42 — `Array[T, N]`: walk the elements in order and
+            // return the first non-`Equal` result, else `Equal`. Structurally
+            // the `VecLike` body above with both length halves deleted: N is a
+            // compile-time constant and two arrays that reach here have the
+            // SAME type, so there is no `min_len` to compute and no length
+            // tiebreak to fall through to.
+            //
+            // A COUNTED loop rather than the unrolled chain `Body::Tuple` uses,
+            // for the same reason `emit_eq_fn_for_array` loops: a tuple's
+            // arity is small by construction and its element types differ, so
+            // it needs one comparator call per field; an array's extent is
+            // arbitrary (`Array[i64, 4096]`) and every element shares ONE
+            // comparator, so unrolling would emit N copies of an identical
+            // call for no gain.
+            //
+            // The GEP is the two-index form against the ARRAY type, exactly as
+            // in the equality twin: LLVM computes the element stride itself,
+            // so a padded element type cannot desynchronize the walk from the
+            // real layout.
+            Body::Array {
+                child,
+                array_llvm,
+                n,
+            } => {
+                let extent = i64_t.const_int(u64::from(n), false);
+                let idx = self.create_entry_alloca(cmp_fn, "ai", i64_t.into());
+                self.builder.build_store(idx, i64_t.const_zero()).unwrap();
+                let cond_bb = self.context.append_basic_block(cmp_fn, "arr.cond");
+                let body_bb = self.context.append_basic_block(cmp_fn, "arr.body");
+                let neq_bb = self.context.append_basic_block(cmp_fn, "arr.neq");
+                let incr_bb = self.context.append_basic_block(cmp_fn, "arr.incr");
+                let done_bb = self.context.append_basic_block(cmp_fn, "arr.done");
+                self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+                self.builder.position_at_end(cond_bb);
+                let cur = self
+                    .builder
+                    .build_load(i64_t, idx, "arr.cur")
+                    .unwrap()
+                    .into_int_value();
+                let in_range = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::SLT, cur, extent, "arr.inr")
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(in_range, body_bb, done_bb)
+                    .unwrap();
+
+                self.builder.position_at_end(body_bb);
+                let zero_idx = i64_t.const_zero();
+                let a_elem = unsafe {
+                    self.builder
+                        .build_in_bounds_gep(array_llvm, a_ptr, &[zero_idx, cur], "arr.a")
+                        .unwrap()
+                };
+                let b_elem = unsafe {
+                    self.builder
+                        .build_in_bounds_gep(array_llvm, b_ptr, &[zero_idx, cur], "arr.b")
+                        .unwrap()
+                };
+                let r = self
+                    .builder
+                    .build_call(child, &[a_elem.into(), b_elem.into()], "arr.elcmp")
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_int_value();
+                let nz = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::NE, r, zero, "arr.nz")
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(nz, neq_bb, incr_bb)
+                    .unwrap();
+
+                self.builder.position_at_end(neq_bb);
+                self.builder.build_return(Some(&r)).unwrap();
+
+                self.builder.position_at_end(incr_bb);
+                let next = self
+                    .builder
+                    .build_int_add(cur, i64_t.const_int(1, false), "arr.next")
+                    .unwrap();
+                self.builder.build_store(idx, next).unwrap();
+                self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+                self.builder.position_at_end(done_bb);
                 self.builder.build_return(Some(&zero)).unwrap();
             }
         }

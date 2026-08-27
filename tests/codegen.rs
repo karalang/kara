@@ -106440,6 +106440,113 @@ fn main() {
         );
     }
 
+    /// `Array[T, N]` ordering on the compiled backend (B-2026-08-27-42) — the
+    /// half the tuple sibling above left behind.
+    ///
+    /// Same run-vs-build shape and same cause one level down:
+    /// `type_supports_ord` recurses through `Type::Array`, so `karac check`
+    /// accepted every line here, and then neither backend ran them. The
+    /// DIFFERENCE from the tuple is what had to be built. A tuple already had
+    /// its comparator (`emit_cmp_fn_for_type_expr`'s `TypeKind::Tuple` arm)
+    /// and needed only a dispatch line; an array had none, so this row needed
+    /// the emitter as well — which is why it outlived B-2026-08-27-33 by a day
+    /// rather than being folded into it.
+    ///
+    /// It also fails from a different PLACE, which is why the dispatch is its
+    /// own block rather than a line inside the struct-operand one: an array
+    /// lowers to an LLVM `[N x T]`, not a struct, so it never entered that
+    /// block at all and hit "non-comparable type ArrayType" instead of the
+    /// tuple's "Unsupported struct binary op: Lt".
+    ///
+    /// Rows chosen for what each pins:
+    ///
+    ///   * The `String` array is the heap element — the comparator must route
+    ///     through the per-element `karac_cmp_String`, not compare the pointer
+    ///     words. This is the array analogue of the defect B-2026-08-27-25
+    ///     fixed for array EQUALITY.
+    ///   * `[2, 0, 0]` vs `[1, 9, 9]` pins that the FIRST differing element
+    ///     decides and the walk then stops: a comparator that folded all three
+    ///     would answer the opposite way.
+    ///   * The tuple-element array crosses the two comparators, so a
+    ///     regression in either shows up here.
+    ///   * `Vec[Array[i64, 2]].sort()` is the bonus the emitter buys. Unlike
+    ///     the tuple sibling's sort row — which worked BEFORE its fix and is
+    ///     there as a control — this one did NOT: with no comparator for an
+    ///     array there was nothing for `sort()` to route to either, so the
+    ///     operator and the sort were one gap and are fixed by one arm.
+    ///
+    /// Twinned against the interpreter, whose `value_compare` has had an Array
+    /// arm since B-2026-06-30-15 — so that side needed only the dispatch, and
+    /// the two backends order through comparators written to the same rule.
+    #[test]
+    fn test_e2e_array_ordering_and_equality() {
+        let src = r#"
+fn main() {
+    let a: Array[i64, 2] = Array[1, 2];
+    let b: Array[i64, 2] = Array[1, 3];
+    let c: Array[i64, 2] = Array[1, 2];
+    println(f"{a < b}");
+    println(f"{b < a}");
+    println(f"{a < c}");
+    println(f"{a <= c}");
+    println(f"{a >= c}");
+    println(f"{b > a}");
+    println(f"{a > b}");
+    println(f"{a == c}");
+    println(f"{a != b}");
+
+    let s: Array[String, 2] = Array["aa", "bb"];
+    let t: Array[String, 2] = Array["aa", "bc"];
+    println(f"{s < t}");
+    println(f"{t < s}");
+    println(f"{s <= s}");
+
+    let p: Array[i64, 3] = Array[2, 0, 0];
+    let q: Array[i64, 3] = Array[1, 9, 9];
+    println(f"{p < q}");
+    println(f"{q < p}");
+
+    let u: Array[char, 2] = Array['a', 'b'];
+    let w: Array[char, 2] = Array['a', 'c'];
+    println(f"{u < w}");
+
+    let ta: Array[(i64, i64), 2] = Array[(1, 2), (3, 4)];
+    let tb: Array[(i64, i64), 2] = Array[(1, 2), (3, 5)];
+    println(f"{ta < tb}");
+    println(f"{tb < ta}");
+
+    let mut v: Vec[Array[i64, 2]] = Vec.new();
+    v.push(Array[2, 1]);
+    v.push(Array[1, 9]);
+    v.push(Array[1, 2]);
+    v.sort();
+    let mut i = 0;
+    while i < v.len() {
+        let e = ref v[i];
+        println(f"{e[0]},{e[1]}");
+        i = i + 1;
+    }
+}
+"#;
+        let expected = "true\nfalse\nfalse\ntrue\ntrue\ntrue\nfalse\ntrue\ntrue\n\
+                        true\nfalse\ntrue\n\
+                        false\ntrue\n\
+                        true\n\
+                        true\nfalse\n\
+                        1,2\n1,9\n2,1\n";
+        assert_eq!(run_program(src), Some(expected.to_string()));
+        let (interp_out, interp_errs, _, _) = karac::run_program_full(src);
+        assert!(
+            interp_errs.is_empty(),
+            "interpreter errored on the twin: {interp_errs:?}"
+        );
+        assert_eq!(
+            interp_out.join(""),
+            expected,
+            "interpreter twin must agree with the compiled backend"
+        );
+    }
+
     /// A `T: Ord` bound on a GENERIC IMPL admits a tuple, as the identical
     /// bound on a free fn always has (B-2026-08-27-33).
     ///

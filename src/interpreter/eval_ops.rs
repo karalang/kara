@@ -272,6 +272,29 @@ impl<'a> super::Interpreter<'a> {
         }
     }
 
+    /// `true` when every ELEMENT of an `Array[T, N]` value carries a total
+    /// order (B-2026-08-27-42) — the per-element gate the array ordering arm
+    /// uses, and the twin of codegen's `te_is_totally_ordered(<element>)`.
+    ///
+    /// Separate from `value_is_totally_ordered` rather than an arm inside it,
+    /// because `Value::Array` is how BOTH a `Vec[T]` and an `Array[T, N]` are
+    /// represented here. An arm there would make a tuple holding a `Vec`
+    /// report as totally ordered and lower on this backend, while codegen's
+    /// `te_is_totally_ordered` declines a `Vec` outright — a divergence
+    /// manufactured by the fix. Keeping the recursion out of the shared
+    /// predicate and asking only at the array dispatch is what avoids it, at
+    /// the cost of declining a NESTED array; codegen declines that too, for
+    /// the same reason and by the same construction.
+    fn array_elems_totally_ordered(v: &Value) -> bool {
+        match v {
+            Value::Array(items) => items
+                .read()
+                .map(|xs| xs.iter().all(Self::value_is_totally_ordered))
+                .unwrap_or(false),
+            _ => false,
+        }
+    }
+
     /// Q4 literal promotion for the tree-walker (B-2026-07-04-12): when one
     /// operand is a *direct, unsuffixed integer literal* (`ExprKind::Integer(_,
     /// None)`) and the other evaluates to a `Float`, promote the literal's
@@ -870,6 +893,50 @@ impl<'a> super::Interpreter<'a> {
                 l @ Value::Tuple(_),
                 r @ Value::Tuple(_),
             ) if Self::value_is_totally_ordered(&l) && Self::value_is_totally_ordered(&r) => {
+                let ord = super::helpers::value_compare(&l, &r);
+                Value::Bool(match op {
+                    BinOp::Lt => ord.is_lt(),
+                    BinOp::LtEq => ord.is_le(),
+                    BinOp::Gt => ord.is_gt(),
+                    _ => ord.is_ge(),
+                })
+            }
+            // `Array[T, N]` ordering (B-2026-08-27-42): lexicographic,
+            // element by element, through the same `value_compare` the tuple
+            // arm above and the derived-`Ord` aggregate arm both use — and
+            // `value_compare` has had an Array arm since B-2026-06-30-15, so
+            // this is a dispatch line, not a comparator.
+            //
+            // Codegen's twin is `emit_cmp_fn_for_type_expr`'s `Array` arm,
+            // which had to be WRITTEN: unlike the tuple case there was no
+            // existing comparator to route to, which is why the array outlived
+            // the tuple fix by a day. `karac check` accepted `a < b` on two
+            // arrays throughout (`type_supports_ord` recurses through
+            // `Type::Array`), so this was a run-vs-build failure rather than
+            // an honest rejection: the interpreter died on the `_` arm below,
+            // whose message claims the typechecker rejects this — it does not,
+            // and did not — while `karac build` refused with "non-comparable
+            // type ArrayType".
+            //
+            // Gated PER ELEMENT rather than on the container, and that is
+            // load-bearing: `Value::Array` is ALSO how a `Vec` is represented
+            // here, so `value_is_totally_ordered` must keep declining it (a
+            // tuple holding a Vec stays unordered on both backends, as today).
+            // Asking each element instead accepts exactly what codegen's
+            // element-keyed gate accepts. A nested array therefore declines on
+            // both — a real remainder, deliberately symmetric.
+            //
+            // A `Vec` operand cannot legitimately arrive: `Vec[T] < Vec[T]` is
+            // a hard type error (the operand is a `Type::Named`, which the
+            // comparison gate holds to a `PartialOrd` derive). Only `karac
+            // run`, which demotes typecheck errors, can route one here, and an
+            // already-rejected program answering rather than erroring on the
+            // degraded path is not a divergence worth guarding against.
+            (
+                BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq,
+                l @ Value::Array(_),
+                r @ Value::Array(_),
+            ) if Self::array_elems_totally_ordered(&l) && Self::array_elems_totally_ordered(&r) => {
                 let ord = super::helpers::value_compare(&l, &r);
                 Value::Bool(match op {
                     BinOp::Lt => ord.is_lt(),

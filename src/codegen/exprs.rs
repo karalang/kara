@@ -623,6 +623,50 @@ impl<'ctx> super::Codegen<'ctx> {
                             }
                         }
                     }
+                    // B-2026-08-27-42 — ordered comparison on an
+                    // `Array[T, N]`. Its own block rather than a line inside
+                    // the struct-operand block below, because an array does
+                    // not lower to a struct: it is an LLVM `[N x T]`, so
+                    // `is_struct_value()` is false and the whole block is
+                    // skipped. That is why `a < b` on two arrays reached
+                    // `compile_binop`'s "non-comparable type ArrayType" rather
+                    // than the "Unsupported struct binary op" the tuple
+                    // sibling hit — a different error from a different place,
+                    // for one and the same missing dispatch.
+                    //
+                    // `karac check` has always ADMITTED the program:
+                    // `type_supports_ord` recurses through `Type::Array`, and
+                    // B-2026-08-27-33 extended the generic-impl bound gate to
+                    // match. Array EQUALITY was given its comparator by
+                    // B-2026-08-27-25; ordering is the half that was left.
+                    //
+                    // Gated on the ELEMENT rather than on the array type, and
+                    // deliberately so: `te_is_totally_ordered` declines an
+                    // `Array` by design, and the interpreter's twin
+                    // `value_is_totally_ordered` declines a `Value::Array`,
+                    // because that value ALSO represents a `Vec` there and no
+                    // value-shape test can separate them. Asking the element
+                    // instead keeps the two gates accepting exactly the same
+                    // set — including declining a NESTED array on both, which
+                    // is a real remainder and not an accident.
+                    if matches!(op, BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq)
+                        && lhs.is_array_value()
+                        && rhs.is_array_value()
+                    {
+                        if let Some(te) = self
+                            .array_operand_te(left)
+                            .or_else(|| self.array_operand_te(right))
+                        {
+                            let elem_ok = self
+                                .array_elem_and_len(&te)
+                                .is_some_and(|(elem, _)| self.te_is_totally_ordered(&elem));
+                            if elem_ok {
+                                if let Some(r) = self.compile_ordered_cmp_te(op, &te, lhs, rhs)? {
+                                    return Ok(r);
+                                }
+                            }
+                        }
+                    }
                     // Ordered comparison (`<`, `<=`, `>`, `>=`) on a
                     // `#[derive(Ord)]` user struct or enum (B-2026-07-03-7):
                     // route to the recursive `karac_cmp_<T>` family — the same

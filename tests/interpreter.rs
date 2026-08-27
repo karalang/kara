@@ -844,6 +844,60 @@ fn tuple_comparison_and_equality_in_the_interpreter() {
 }
 
 #[test]
+fn array_ordering_in_the_interpreter() {
+    // B-2026-08-27-42 -- the `Array[T, N]` sibling of the tuple test above,
+    // and the same shape a level down: `type_supports_ord` recurses through
+    // `Type::Array`, so `karac check` printed "All checks passed." while the
+    // interpreter died on the catch-all arm whose message claims the
+    // typechecker reports this as a hard error. It does not, and did not.
+    //
+    // Ordering goes through `value_compare`, which has had an Array arm since
+    // B-2026-06-30-15 -- so unlike the compiled twin, which needed the
+    // comparator WRITTEN, this side needed only the dispatch. Both order by
+    // the same rule, which is what makes this the oracle for
+    // `test_e2e_array_ordering_and_equality`.
+    //
+    // The last two rows are the deliberate NON-fix, pinned so a later widening
+    // has to be deliberate. A NESTED array declines on both backends, and for
+    // a reason specific to this backend: `Value::Array` is how a `Vec` is
+    // represented here too, so no value-shape test can tell the two apart, and
+    // admitting the element would make a tuple holding a `Vec` orderable here
+    // while codegen still refuses it. Declining is what keeps the two gates
+    // accepting the same set. A bare-float element declines for the sibling
+    // reason the tuple test records: `value_compare` orders a float by
+    // `total_cmp` (NaN last), which is a sort key's order, not `<`'s.
+    let src = "fn main() {
+            let a: Array[i64, 2] = Array[1, 2];
+            let b: Array[i64, 2] = Array[1, 3];
+            let c: Array[i64, 2] = Array[1, 2];
+            println(f\"{a < b}\");
+            println(f\"{b < a}\");
+            println(f\"{a < c}\");
+            println(f\"{a <= c}\");
+            println(f\"{a >= c}\");
+            println(f\"{b > a}\");
+            println(f\"{a == c}\");
+            let s: Array[String, 2] = Array[\"aa\", \"bb\"];
+            let t: Array[String, 2] = Array[\"aa\", \"bc\"];
+            println(f\"{s < t}\");
+            println(f\"{t < s}\");
+            let p: Array[i64, 3] = Array[2, 0, 0];
+            let q: Array[i64, 3] = Array[1, 9, 9];
+            println(f\"{p < q}\");
+            let ta: Array[(i64, i64), 2] = Array[(1, 2), (3, 4)];
+            let tb: Array[(i64, i64), 2] = Array[(1, 2), (3, 5)];
+            println(f\"{ta < tb}\");
+        }";
+    assert_eq!(
+        run_no_errors(src),
+        "true\nfalse\nfalse\ntrue\ntrue\ntrue\ntrue\n\
+         true\nfalse\n\
+         false\n\
+         true\n"
+    );
+}
+
+#[test]
 fn slice_equality_is_content_equality_in_the_interpreter() {
     // B-2026-08-27-24 -- the `Vec` sibling's bug one type over, and unfixed by
     // that work. The interpreter had no `Value::Slice` arm in its binop
