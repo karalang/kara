@@ -140,10 +140,10 @@ index 874d255..26b46b8 100644
                              name: "Option".to_string(),
                              args: vec![(**inner).clone()],
 diff --git a/src/typechecker/items.rs b/src/typechecker/items.rs
-index b644b05..a366a9a 100644
+index b644b05..d90ea6b 100644
 --- a/src/typechecker/items.rs
 +++ b/src/typechecker/items.rs
-@@ -4171,6 +4171,186 @@ impl<'a> super::TypeChecker<'a> {
+@@ -4171,6 +4171,138 @@ impl<'a> super::TypeChecker<'a> {
          self.check_stmt_inner(stmt)
      }
  
@@ -169,54 +169,6 @@ index b644b05..a366a9a 100644
 +    /// LLM acting on this sentence, so a confident wrong steer (suggesting
 +    /// `.clone()` on a move-only struct, which then fails with `no method
 +    /// 'clone'`) is worse than offering no fix-it at all.
-+    /// Whether an index expression's object is a collection carrying a
-+    /// `layout` block — i.e. one stored as struct-of-arrays.
-+    ///
-+    /// A layout is declared against the collection BINDING
-+    /// (`layout entities: Vec[Entity] { group pos { x, y } ... }`), so the
-+    /// object's root identifier is the name to match.
-+    fn index_object_has_soa_layout(&self, object: &Expr) -> bool {
-+        let mut e = object;
-+        loop {
-+            match &e.kind {
-+                ExprKind::Identifier(n) => {
-+                    return self
-+                        .program
-+                        .items
-+                        .iter()
-+                        .any(|it| matches!(it, Item::LayoutDef(l) if l.name == *n));
-+                }
-+                ExprKind::FieldAccess { object, .. } | ExprKind::Index { object, .. } => {
-+                    e = object;
-+                }
-+                _ => return false,
-+            }
-+        }
-+    }
-+
-+    /// Whether any `layout` block groups `Vec[<struct_name>]`.
-+    fn struct_has_soa_layout(&self, struct_name: &str) -> bool {
-+        self.program.items.iter().any(|it| {
-+            let Item::LayoutDef(l) = it else { return false };
-+            let crate::ast::TypeKind::Path(p) = &l.collection_type.kind else {
-+                return false;
-+            };
-+            p.segments.len() == 1
-+                && p.segments[0] == "Vec"
-+                && p.generic_args.as_ref().is_some_and(|ga| {
-+                    ga.iter().any(|arg| match arg {
-+                        crate::ast::GenericArg::Type(t) => match &t.kind {
-+                            crate::ast::TypeKind::Path(ep) => {
-+                                ep.segments.len() == 1 && ep.segments[0] == *struct_name
-+                            }
-+                            _ => false,
-+                        },
-+                        _ => false,
-+                    })
-+                })
-+        })
-+    }
-+
 +    fn reject_index_move_non_copy(&mut self, value: &Expr, ty: &Type) {
 +        if !matches!(value.kind, ExprKind::Index { .. }) {
 +            return;
@@ -330,7 +282,7 @@ index b644b05..a366a9a 100644
      fn check_stmt_inner(&mut self, stmt: &Stmt) -> Type {
          if let StmtKind::Expr(expr) = &stmt.kind {
              return self.infer_expr(expr);
-@@ -4199,6 +4379,10 @@ impl<'a> super::TypeChecker<'a> {
+@@ -4199,6 +4331,10 @@ impl<'a> super::TypeChecker<'a> {
                      self.record_uninferrable_binding_origin(pattern, &inferred, value);
                      inferred
                  };
@@ -341,7 +293,7 @@ index b644b05..a366a9a 100644
                  // B-2026-07-31-20 — record the result type of a
                  // `with_provider[R](p, || ...)` RHS for codegen's Let arm
                  // (read as an implicit binding annotation). The intercept in
-@@ -4357,6 +4541,15 @@ impl<'a> super::TypeChecker<'a> {
+@@ -4357,6 +4493,15 @@ impl<'a> super::TypeChecker<'a> {
                  self.in_defer = prev;
              }
              StmtKind::Assign { target, value } => {

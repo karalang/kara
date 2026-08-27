@@ -92,12 +92,12 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | class | total | open |
 |---|---|---|
-| miscompile | 304 | 2 |
+| miscompile | 305 | 3 |
 | leak | 198 | 0 |
-| missing-feature | 185 | 2 |
+| missing-feature | 186 | 2 |
 | run-vs-build | 173 | 1 |
-| codegen-gap | 142 | 0 |
-| double-free | 140 | 0 |
+| codegen-gap | 143 | 1 |
+| double-free | 141 | 1 |
 | diagnostics | 111 | 1 |
 | false-positive | 98 | 0 |
 | perf | 84 | 0 |
@@ -110,28 +110,27 @@ distinguish "bugs flattening" from "we stopped writing them down."
 
 | surface | total | open |
 |---|---|---|
-| codegen | 1083 | 5 |
-| typecheck | 273 | 4 |
+| codegen | 1086 | 8 |
+| typecheck | 274 | 5 |
 | interp | 190 | 1 |
 | other | 70 | 0 |
 | ownership | 65 | 0 |
 | cli | 63 | 0 |
 | autopar | 55 | 0 |
-| parser | 42 | 1 |
+| parser | 42 | 0 |
 | runtime | 32 | 0 |
 | resolver | 27 | 0 |
 | effect | 25 | 0 |
 | lexer | 8 | 0 |
 ## Current state
 
-_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1639 surfaced · 9 open · 1604 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-27). Do not edit this block by hand; edit the ledger and regenerate._
+_Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1643 surfaced · 12 open · 1605 fixed · 10 wontfix · 2 relocated** (2026-05-20 → 2026-08-27). Do not edit this block by hand; edit the ledger and regenerate._
 
-### Open (9)
+### Open (12)
 
 | id | date | surface | sev | title | tracker |
 |---|---|---|---|---|---|
 | B-2026-08-26-21 | 2026-08-26 | codegen+interp | medium | A RELOCATING element store (`b.xs[i] = b.xs[j]`, then `b.xs[j] = t`) runs the displaced element's user `Drop` BODY, even though the value is being moved to another slot rather than destroyed. A two-element swap of a `Drop` type prints FIVE drop bodies, all during the swap and none at scope exit; the correct sequence is one body per element when it finally dies. | — |
-| B-2026-08-26-36 | 2026-08-26 | parser | high | `ref` IN EXPRESSION POSITION IS SPECIFIED BUT UNIMPLEMENTED: design.md shows `let r = ref some_function();` (§ Binding-extension exception) and `let p: ref i32 = ref 42;`, and the parser rejects both with "'ref' is a reserved keyword and cannot be used as an identifier". This BLOCKS the B-2026-08-26-21 index-move rejection, whose only fix-it for a `Clone`-less element type is the borrow spelling. | — |
 | B-2026-08-26-37 | 2026-08-26 | typecheck | low | The index-move rule covers only a `let` initializer and an assignment RHS; OTHER value positions still read a non-`Copy` element by value and silently clone. Measured: `take(b.xs[0])` where `fn take(it: Item)` compiles and runs, and `b.xs[0]` survives it. | — |
 | B-2026-08-27-8 | 2026-08-27 | codegen | low | NLL DROP PLACEMENT IS DISPATCHED ON AN LLVM SYMBOL-NAME PREFIX. `is_container_elem_bodies_fn` decides whether a cleanup action fires at the binding's last use or at scope exit by testing `starts_with("__karac_dropelems_")` (plus `__karac_dropkeys_` since 34c3f54). A bodies-only walker whose emitter picks any other prefix is silently demoted to scope exit — a run-vs-build divergence with no error, no warning and no failing test. NO LIVE INSTANCE TODAY: all four named-binding walkers are covered. This is the latent hazard, and it has already cost one session. | — |
 | B-2026-08-27-10 | 2026-08-27 | typecheck+codegen | high | `Vec[T] == Vec[T]` IS ACCEPTED BY `karac check` AND `karac build`, EXECUTED BY BOTH COMPILED BACKENDS, AND REJECTED AT RUNTIME BY THE INTERPRETER -- which reports it as a type error the typechecker was supposed to have caught. Worse, the compiled answer is WRONG for heap elements: two `Vec[String]` with identical contents compare `false`. So the same program either dies on `--interp` or silently answers incorrectly under `karac build`. | — |
@@ -139,6 +138,10 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1639 surfaced
 | B-2026-08-27-15 | 2026-08-27 | typecheck | low | THE PRELUDE-SHADOW LINT DOES NOT EXIST. design.md refers to it in three places as shipped behaviour -- "a lint warning flags the most-likely-unintended cases", "the standard prelude-shadow lint", "the lint flagged at § Module System — Prelude catches accidental shadowing" -- but declaring `struct F64`, `struct Map` or `struct Option` produces NO diagnostic: `karac check` prints "All checks passed." | — |
 | B-2026-08-27-18 | 2026-08-27 | codegen | high | `==` ON A USER STRUCT WITH EXACTLY THREE FIELDS PANICS THE COMPILER, so `struct S3 { a: i64, b: i64, c: i64 }` and `S3 { .. } == S3 { .. }` aborts `karac build` with an unwrap failure in `compile_string_binop`. `compile_binop` dispatches an aggregate by FIELD COUNT -- `field_count == vec_struct_type().count_fields()` -- and a `String`'s `{ptr, len, cap}` also has three, so any three-field struct is routed to the string comparator, which reads field 0 as a pointer. | — |
 | B-2026-08-27-19 | 2026-08-27 | codegen | medium | AN ENUM WHOSE PAYLOAD STRUCT IS NOT WORD-ALIGNED IS TREATED AS HAVING NO HEAP PAYLOAD, so `==` on it silently compares payload WORDS: `enum Holder { W(TwoNarrow) }` with `struct TwoNarrow { a: i32, b: i32, s: String }` answers `false` for two structurally-equal values on the compiled backends and `true` on the interpreter. `enum_drop_kind_for_type_expr` requires `struct_payload_word_aligned` before classifying a struct payload `NestedStruct`, so a struct with two consecutive sub-word fields classifies `None`, and `enum_has_heap_payload` -- which gates the structural `==` path -- then reports false. | — |
+| B-2026-08-27-20 | 2026-08-27 | codegen | high | A NESTED index store whose RHS is a named local double-frees under codegen (`d[0][1] = x`), while the same store from a temporary (`d[0][1] = f"zz"`) is clean and the interpreter is correct in both. One binding is the whole difference. | — |
+| B-2026-08-27-21 | 2026-08-27 | codegen | high | A borrowed element loses its method surface under codegen: `.clone()` through a `ref` binding SEGFAULTS, and every String method on one (`starts_with`, `substring`, `clone`) falls through dispatch, while the interpreter runs all of them. | — |
+| B-2026-08-27-22 | 2026-08-27 | codegen | high | `.clone()` on an element of an SoA-laid-out container returns the wrong data under codegen — element 5 reads back the cold group at indices 1 and 2 (`100 1000 200 2000` for `5 50 500 5000`). The interpreter and the AoS build are both correct. | — |
+| B-2026-08-27-23 | 2026-08-27 | typecheck | high | A tuple (`(i64, String)`) and `Option[T]` have NO `.clone()`, so the index-move rejection outlaws reading such an element by value with no replacement available. This is the remaining blocker on landing B-2026-08-26-21. | — |
 
 ### Relocated (2)
 
@@ -170,9 +173,9 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1639 surfaced
 
 </details>
 
-### Fixed (1604)
+### Fixed (1605)
 
-<details><summary>1604 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
+<details><summary>1605 fixed — compact index (one-line titles; full write-up + cross-refs live in `bug-ledger.jsonl`, grep by id). The regression test is the durable artifact.</summary>
 
 | id | surface | sev | title | fix |
 |---|---|---|---|---|
@@ -1763,6 +1766,7 @@ _Generated from `bug-ledger.jsonl` by `scripts/bug-curve.py` — **1639 surfaced
 | B-2026-08-26-33 | codegen | medium | A `#[derive(Display)]` STRUCT WITH A PAYLOAD-BEARING ENUM FIELD IS REFUSED BY `karac build` -- and the refusal is INVERTED with respect to difficulty… | 7b5f733 |
 | B-2026-08-26-34 | codegen | medium | `Vec.swap` HAD NO CODEGEN ARM: `karac build` hard-errored "Vec/String method 'swap' is not yet supported in codegen" on a program `karac run` execute… | 4d75c59 |
 | B-2026-08-26-35 | interp | medium | `Vec.swap` with an out-of-range index SILENTLY DID NOTHING in the interpreter: `v.swap(0, 99)` on a two-element Vec left the vector untouched and exi… | 4d75c59 |
+| B-2026-08-26-36 | parser | high | `ref` IN EXPRESSION POSITION IS SPECIFIED BUT UNIMPLEMENTED: design.md shows `let r = ref some_function();` (§ Binding-extension exception) and `let… | 0eb4e2f |
 | B-2026-08-26-38 | codegen | medium | A `StringSlice` BOUND BY A MATCH PATTERN LOST EVERY METHOD BUT `to_string` under `karac build` -- `match head(s) { Some(v) => v.len() }` over an `Opt… | d5056cd |
 | B-2026-08-26-39 | codegen | medium | THE `Error return trace` SECTION IS NONDETERMINISTIC ON THE COMPILED BACKENDS: the same AOT binary, same input, same pinned `KARAC_HASH_SEED`, emits… | 7c10fdf |
 | B-2026-08-26-40 | typecheck | low | A WRONG-ARITY CALL TO AN ASSOCIATED FUNCTION IS REPORTED AS IF THE FUNCTION DID NOT EXIST: `String.with_capacity()` and `String.with_capacity(1i64, 2… | 9d530ad |
